@@ -1,7 +1,7 @@
 # InstaEditLogin v2
 
 Microservizio multi-piattaforma di autenticazione OAuth 2.0 e publishing contenuti.
-Supporta **6 piattaforme social** con gestione unificata di token e API.
+Supporta **5 piattaforme social** con gestione unificata di token e API.
 
 ## Piattaforme Supportate
 
@@ -11,8 +11,6 @@ Supporta **6 piattaforme social** con gestione unificata di token e API.
 | **TikTok**        | ✅    | ✅      | Video publishing via TikTok API v2        |
 | **Twitter / X**   | ✅    | ✅      | Tweets testuali via X API v2              |
 | **YouTube**       | ✅    | ✅      | Upload video via YouTube Data API v3      |
-| **LinkedIn**      | ✅    | ✅      | Share post via LinkedIn API               |
-| **Pinterest**     | ✅    | ✅      | Creazione Pin via Pinterest API v5        |
 
 Tutte le piattaforme oltre a Meta sono **opzionali**: si attivano solo se le relative credenziali sono configurate nel `.env`.
 
@@ -30,7 +28,7 @@ Tutte le piattaforme oltre a Meta sono **opzionali**: si attivano solo se le rel
 - Go 1.26+
 - PostgreSQL 15+
 - Meta App ID e App Secret (obbligatori — da [developers.facebook.com](https://developers.facebook.com))
-- Credenziali opzionali per TikTok, Twitter, YouTube, LinkedIn, Pinterest
+- Credenziali opzionali per TikTok, Twitter, YouTube
 
 ### Setup
 
@@ -65,9 +63,7 @@ instaedit-login/
 │       ├── facebook_oauth.go   # Provider Meta (Facebook + Instagram)
 │       ├── tiktok_oauth.go     # Provider TikTok
 │       ├── twitter_oauth.go    # Provider Twitter/X
-│       ├── youtube_oauth.go    # Provider YouTube
-│       ├── linkedin_oauth.go   # Provider LinkedIn
-│       └── pinterest_oauth.go  # Provider Pinterest
+│       └── youtube_oauth.go    # Provider YouTube
 └── pkg/api/routes.go           # Router platform-agnostico
 ```
 

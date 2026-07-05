@@ -42,16 +42,6 @@ type Config struct {
 	YouTubeClientSecret string
 	YouTubeRedirectURI  string
 
-	// LinkedIn OAuth
-	LinkedInClientID     string
-	LinkedInClientSecret string
-	LinkedInRedirectURI  string
-
-	// Pinterest OAuth
-	PinterestAppID       string
-	PinterestAppSecret   string
-	PinterestRedirectURI string
-
 	// Encryption
 	EncryptionKey string
 
@@ -89,12 +79,6 @@ func Load() (*Config, error) {
 		YouTubeClientID:     getEnv("YOUTUBE_CLIENT_ID", ""),
 		YouTubeClientSecret: getEnv("YOUTUBE_CLIENT_SECRET", ""),
 		YouTubeRedirectURI:  getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
-		LinkedInClientID:    getEnv("LINKEDIN_CLIENT_ID", ""),
-		LinkedInClientSecret: getEnv("LINKEDIN_CLIENT_SECRET", ""),
-		LinkedInRedirectURI:  getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
-		PinterestAppID:      getEnv("PINTEREST_APP_ID", ""),
-		PinterestAppSecret:  getEnv("PINTEREST_APP_SECRET", ""),
-		PinterestRedirectURI: getEnv("PINTEREST_REDIRECT_URI", "http://localhost:8080/api/v1/auth/pinterest/callback"),
 		EncryptionKey:       getEnv("ENCRYPTION_KEY", ""),
 		JWTSecret:           getEnv("JWT_SECRET", ""),
 		LogLevel:            getEnv("LOG_LEVEL", "info"),

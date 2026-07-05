@@ -106,32 +106,6 @@ func main() {
 		slog.Info("YouTube OAuth provider skipped (no credentials)")
 	}
 
-	// LinkedIn (optional)
-	if cfg.LinkedInClientID != "" {
-		linkedinSvc, err := services.NewLinkedInOAuthService(cfg, userRepo, tokenRepo)
-		if err != nil {
-			slog.Warn("Failed to create LinkedIn OAuth service", "error", err)
-		} else {
-			platforms[linkedinSvc.GetPlatform()] = linkedinSvc
-			slog.Info("LinkedIn OAuth provider registered")
-		}
-	} else {
-		slog.Info("LinkedIn OAuth provider skipped (no credentials)")
-	}
-
-	// Pinterest (optional)
-	if cfg.PinterestAppID != "" {
-		pinterestSvc, err := services.NewPinterestOAuthService(cfg, userRepo, tokenRepo)
-		if err != nil {
-			slog.Warn("Failed to create Pinterest OAuth service", "error", err)
-		} else {
-			platforms[pinterestSvc.GetPlatform()] = pinterestSvc
-			slog.Info("Pinterest OAuth provider registered")
-		}
-	} else {
-		slog.Info("Pinterest OAuth provider skipped (no credentials)")
-	}
-
 	// Setup HTTP router
 	router := api.NewRouter(platforms, userRepo)
 	handler := router.Setup()
