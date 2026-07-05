@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { PlatformPills } from "./PlatformPills";
 import { DemoModal } from "./DemoModal";
 
@@ -24,12 +25,12 @@ export function Hero() {
         </p>
 
         <div className="flex gap-3 justify-center flex-wrap mb-[72px]">
-          <a
-            href="#"
+          <Link
+            to="/login"
             className="inline-flex items-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-black text-white no-underline hover:-translate-y-[1px] hover:bg-neutral-900 transition-all"
           >
             Inizia gratis
-          </a>
+          </Link>
           <button
             onClick={() => setDemoOpen(true)}
             className="inline-flex items-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-white text-black border border-black no-underline hover:-translate-y-[1px] hover:bg-neutral-50 transition-all cursor-pointer"

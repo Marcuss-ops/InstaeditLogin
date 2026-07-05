@@ -1,58 +1,62 @@
 import { useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { Menu, X } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const links = [
-  { href: "#funzioni", label: "Funzioni" },
-  { href: "#come-funziona", label: "Come funziona" },
-  { href: "#prezzi", label: "Prezzi" },
+  { href: "/#funzioni", label: "Funzioni" },
+  { href: "/#come-funziona", label: "Come funziona" },
+  { href: "/#prezzi", label: "Prezzi" },
 ];
 
 export function Nav() {
   const [open, setOpen] = useState(false);
+  const location = useLocation();
+  const isHome = location.pathname === "/";
 
-  const scrollTo = (e: React.MouseEvent<HTMLAnchorElement>, id: string) => {
+  const scrollTo = (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    const id = href.split("#")[1];
+    if (!id || !isHome) return;
     e.preventDefault();
     setOpen(false);
-    document.querySelector(id)?.scrollIntoView({ behavior: "smooth" });
+    document.querySelector(`#${id}`)?.scrollIntoView({ behavior: "smooth" });
   };
 
   return (
     <nav className="sticky top-0 z-50 bg-white/85 backdrop-blur-xl border-b border-neutral-100">
       <div className="max-w-[1100px] mx-auto px-6 h-16 flex items-center justify-between gap-4">
-        <a href="#" className="font-extrabold text-[19px] tracking-tight no-underline text-black">
+        <Link to="/" className="font-extrabold text-[19px] tracking-tight no-underline text-black">
           SocialSync
-        </a>
+        </Link>
 
         {/* Desktop links */}
         <div className="hidden md:flex items-center gap-7">
           {links.map((l) => (
-            <a
+            <Link
               key={l.href}
-              href={l.href}
+              to={l.href}
               onClick={(e) => scrollTo(e, l.href)}
               className="text-sm font-medium text-black/70 hover:text-black transition-colors no-underline"
             >
               {l.label}
-            </a>
+            </Link>
           ))}
-          <a
-            href="#accedi"
-            onClick={(e) => scrollTo(e, "#accedi")}
+          <Link
+            to="/login"
             className="text-sm font-medium text-black/70 hover:text-black transition-colors no-underline"
           >
             Accedi
-          </a>
+          </Link>
         </div>
 
         {/* Desktop CTA */}
         <div className="hidden md:block">
-          <a
-            href="#"
+          <Link
+            to="/login"
             className="inline-flex items-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-black text-white no-underline hover:-translate-y-[1px] hover:bg-neutral-900 transition-all"
           >
             Inizia gratis
-          </a>
+          </Link>
         </div>
 
         {/* Mobile toggle */}
@@ -73,28 +77,29 @@ export function Nav() {
         )}
       >
         {links.map((l) => (
-          <a
+          <Link
             key={l.href}
-            href={l.href}
-            onClick={(e) => scrollTo(e, l.href)}
+            to={l.href}
+            onClick={(e) => { scrollTo(e, l.href); setOpen(false); }}
             className="py-3.5 text-sm font-medium border-b border-neutral-100 last:border-b-0 no-underline text-black"
           >
             {l.label}
-          </a>
+          </Link>
         ))}
-        <a
-          href="#accedi"
-          onClick={(e) => scrollTo(e, "#accedi")}
+        <Link
+          to="/login"
+          onClick={() => setOpen(false)}
           className="py-3.5 text-sm font-medium border-b border-neutral-100 last:border-b-0 no-underline text-black"
         >
           Accedi
-        </a>
-        <a
-          href="#"
+        </Link>
+        <Link
+          to="/login"
+          onClick={() => setOpen(false)}
           className="mt-3 inline-flex items-center justify-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-black text-white no-underline"
         >
           Inizia gratis
-        </a>
+        </Link>
       </div>
     </nav>
   );
