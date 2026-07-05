@@ -99,7 +99,7 @@ func (s *FacebookOAuthService) HandleCallback(code string) (*models.PlatformProf
 // Publish publishes content to Instagram via the Meta Graph API.
 func (s *FacebookOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
 	// First, get the Instagram business account for this user
-	accounts, err := s.getInstagramAccounts(accessToken, platformUserID)
+	accounts, err := s.getInstagramAccounts(ctx, accessToken, platformUserID)
 	if err != nil || len(accounts) == 0 {
 		return nil, fmt.Errorf("no Instagram business account found for user %s", platformUserID)
 	}
@@ -141,7 +141,7 @@ func (s *FacebookOAuthService) exchangeCodeForToken(code string) (*models.MetaTo
 		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
 	if err != nil {
 		return nil, fmt.Errorf("token exchange request failed: %w", err)
 	}
@@ -177,7 +177,7 @@ func (s *FacebookOAuthService) exchangeForLongLivedToken(shortLivedToken string)
 		return nil, fmt.Errorf("failed to create long-lived token request: %w", err)
 	}
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
 	if err != nil {
 		return nil, fmt.Errorf("long-lived token request failed: %w", err)
 	}
@@ -205,7 +205,12 @@ func (s *FacebookOAuthService) getUserInfo(accessToken string) (*models.Platform
 	params.Set("fields", "id,name,email")
 	params.Set("access_token", accessToken)
 
-	resp, err := s.httpClient.Get("https://graph.facebook.com/v19.0/me?" + params.Encode())
+	req, err := http.NewRequest("GET", "https://graph.facebook.com/v19.0/me?"+params.Encode(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create user info request: %w", err)
+	}
+
+	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user info: %w", err)
 	}
@@ -237,12 +242,17 @@ func (s *FacebookOAuthService) getUserInfo(accessToken string) (*models.Platform
 	}, nil
 }
 
-func (s *FacebookOAuthService) getInstagramAccounts(accessToken, metaUserID string) ([]*models.PlatformAccount, error) {
+func (s *FacebookOAuthService) getInstagramAccounts(ctx context.Context, accessToken, metaUserID string) ([]*models.PlatformAccount, error) {
 	params := url.Values{}
 	params.Set("fields", "instagram_business_account{id,username}")
 	params.Set("access_token", accessToken)
 
-	resp, err := s.httpClient.Get("https://graph.facebook.com/v19.0/" + metaUserID + "?" + params.Encode())
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://graph.facebook.com/v19.0/"+metaUserID+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create instagram accounts request: %w", err)
+	}
+
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get instagram accounts: %w", err)
 	}
@@ -282,12 +292,12 @@ func (s *FacebookOAuthService) publishPhoto(ctx context.Context, accessToken, in
 		"caption":    caption,
 	}
 
-	containerID, err := s.createMediaContainer(accessToken, instagramUserID, body)
+	containerID, err := s.createMediaContainer(ctx, accessToken, instagramUserID, body)
 	if err != nil {
 		return "", err
 	}
 
-	return s.publishMediaContainer(accessToken, instagramUserID, containerID)
+	return s.publishMediaContainer(ctx, accessToken, instagramUserID, containerID)
 }
 
 func (s *FacebookOAuthService) publishVideo(ctx context.Context, accessToken, instagramUserID, videoURL, caption string) (string, error) {
@@ -297,27 +307,32 @@ func (s *FacebookOAuthService) publishVideo(ctx context.Context, accessToken, in
 		"caption":    caption,
 	}
 
-	containerID, err := s.createMediaContainer(accessToken, instagramUserID, body)
+	containerID, err := s.createMediaContainer(ctx, accessToken, instagramUserID, body)
 	if err != nil {
 		return "", err
 	}
 
-	// Poll until container is ready
-	if err := s.waitForContainerReady(accessToken, containerID); err != nil {
+	if err := s.waitForContainerReady(ctx, accessToken, containerID); err != nil {
 		return "", err
 	}
 
-	return s.publishMediaContainer(accessToken, instagramUserID, containerID)
+	return s.publishMediaContainer(ctx, accessToken, instagramUserID, containerID)
 }
 
-func (s *FacebookOAuthService) createMediaContainer(accessToken, instagramUserID string, body map[string]string) (string, error) {
+func (s *FacebookOAuthService) createMediaContainer(ctx context.Context, accessToken, instagramUserID string, body map[string]string) (string, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal body: %w", err)
 	}
 
-	url := fmt.Sprintf("https://graph.facebook.com/v19.0/%s/media?access_token=%s", instagramUserID, accessToken)
-	resp, err := s.httpClient.Post(url, "application/json", strings.NewReader(string(jsonBody)))
+	reqURL := fmt.Sprintf("https://graph.facebook.com/v19.0/%s/media?access_token=%s", instagramUserID, accessToken)
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(string(jsonBody)))
+	if err != nil {
+		return "", fmt.Errorf("failed to create media container request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("media container request failed: %w", err)
 	}
@@ -342,12 +357,18 @@ func (s *FacebookOAuthService) createMediaContainer(accessToken, instagramUserID
 	return result.ID, nil
 }
 
-func (s *FacebookOAuthService) publishMediaContainer(accessToken, instagramUserID, containerID string) (string, error) {
+func (s *FacebookOAuthService) publishMediaContainer(ctx context.Context, accessToken, instagramUserID, containerID string) (string, error) {
 	body := map[string]string{"creation_id": containerID}
 	jsonBody, _ := json.Marshal(body)
 
-	url := fmt.Sprintf("https://graph.facebook.com/v19.0/%s/media_publish?access_token=%s", instagramUserID, accessToken)
-	resp, err := s.httpClient.Post(url, "application/json", strings.NewReader(string(jsonBody)))
+	reqURL := fmt.Sprintf("https://graph.facebook.com/v19.0/%s/media_publish?access_token=%s", instagramUserID, accessToken)
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(string(jsonBody)))
+	if err != nil {
+		return "", fmt.Errorf("failed to create media publish request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("media publish request failed: %w", err)
 	}
@@ -372,13 +393,23 @@ func (s *FacebookOAuthService) publishMediaContainer(accessToken, instagramUserI
 	return result.ID, nil
 }
 
-func (s *FacebookOAuthService) waitForContainerReady(accessToken, containerID string) error {
+func (s *FacebookOAuthService) waitForContainerReady(ctx context.Context, accessToken, containerID string) error {
 	maxAttempts := 30
 	for i := 0; i < maxAttempts; i++ {
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("container polling cancelled: %w", ctx.Err())
+		case <-time.After(2 * time.Second):
+		}
 
-		url := fmt.Sprintf("https://graph.facebook.com/v19.0/%s?fields=status_code&access_token=%s", containerID, accessToken)
-		resp, err := s.httpClient.Get(url)
+		reqURL := fmt.Sprintf("https://graph.facebook.com/v19.0/%s?fields=status_code&access_token=%s", containerID, accessToken)
+		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+		if err != nil {
+			slog.Warn("Container status check request failed, retrying", "error", err, "attempt", i+1)
+			continue
+		}
+
+		resp, err := s.httpClient.Do(req)
 		if err != nil {
 			slog.Warn("Container status check failed, retrying", "error", err, "attempt", i+1)
 			continue
