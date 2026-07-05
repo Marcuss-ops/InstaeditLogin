@@ -1,0 +1,40 @@
+# Environment variables (contains secrets!)
+.env
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Build output directory
+/build/
+/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Dependency directories
+vendor/
+
+# Build output
+build/
+dist/
+
+# Logs
+*.log
+
+# Docker
+docker-compose.override.yml
