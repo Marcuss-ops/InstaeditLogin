@@ -14,13 +14,16 @@ type Config struct {
 	ServerPort string
 	ServerHost string
 
-	// Database
-	DBHost     string
-	DBPort     string
-	DBUser     string
-	DBPassword string
-	DBName     string
-	DBSSLMode  string
+	// Database (PostgreSQL)
+	// Use DATABASE_URL for full connection string (e.g. Supabase), OR individual fields below.
+	// DATABASE_URL takes precedence.
+	DatabaseURL string
+	DBHost      string
+	DBPort      string
+	DBUser      string
+	DBPassword  string
+	DBName      string
+	DBSSLMode   string
 
 	// Meta OAuth
 	MetaAppID       string
@@ -61,6 +64,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		ServerPort:          getEnv("SERVER_PORT", "8080"),
 		ServerHost:          getEnv("SERVER_HOST", "0.0.0.0"),
+		DatabaseURL:         getEnv("DATABASE_URL", ""),
 		DBHost:              getEnv("DB_HOST", "localhost"),
 		DBPort:              getEnv("DB_PORT", "5432"),
 		DBUser:              getEnv("DB_USER", "instaedit"),
@@ -121,7 +125,11 @@ func (c *Config) validate() error {
 }
 
 // DSN returns the PostgreSQL connection string.
+// If DATABASE_URL is set (e.g. from Supabase), it is returned directly.
 func (c *Config) DSN() string {
+	if c.DatabaseURL != "" {
+		return c.DatabaseURL
+	}
 	return fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		c.DBHost, c.DBPort, c.DBUser, c.DBPassword, c.DBName, c.DBSSLMode,
