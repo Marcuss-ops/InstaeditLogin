@@ -98,8 +98,11 @@ func Load() (*Config, error) {
 // validate checks that required configuration values are present.
 // Only Meta is mandatory; other platforms are optional.
 func (c *Config) validate() error {
-	if c.DBPassword == "" {
-		return fmt.Errorf("DB_PASSWORD is required")
+	// Database: DATABASE_URL takes precedence; fallback to individual params
+	if c.DatabaseURL == "" {
+		if c.DBPassword == "" {
+			return fmt.Errorf("DB_PASSWORD is required (or set DATABASE_URL)")
+		}
 	}
 	if c.MetaAppID == "" {
 		return fmt.Errorf("META_APP_ID is required")
