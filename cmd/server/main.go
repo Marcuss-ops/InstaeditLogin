@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,108 +10,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
-	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/app"
 )
 
 func main() {
-	cfg, err := config.Load()
+	handler, cleanup, err := app.InitHandler()
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
-
-	logLevel := slog.LevelInfo
-	if cfg.LogLevel == "debug" {
-		logLevel = slog.LevelDebug
-	}
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
-	slog.SetDefault(logger)
-
-	slog.Info("Starting InstaEditLogin server v2.0.0...")
-
-	// Connect to PostgreSQL
-	db, err := database.Connect(cfg)
-	if err != nil {
-		slog.Error("Failed to connect to database", "error", err)
+		fmt.Fprintf(os.Stderr, "Failed to initialize: %v\n", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	defer cleanup()
 
-	slog.Info("Database connection established")
-
-	// Run migrations
-	if err := database.Migrate(db); err != nil {
-		slog.Error("Failed to run migrations", "error", err)
-		os.Exit(1)
-	}
-
-	slog.Info("Database migrations completed")
-
-	// Initialize repositories
-	userRepo := repository.NewUserRepository(db)
-	tokenRepo := repository.NewTokenRepository(db)
-
-	// Initialize all platform providers
-	platforms := make(map[string]services.PlatformService)
-
-	// Meta / Facebook + Instagram (always required)
-	metaSvc, err := services.NewFacebookOAuthService(cfg, userRepo, tokenRepo)
-	if err != nil {
-		slog.Error("Failed to create Meta OAuth service", "error", err)
-		os.Exit(1)
-	}
-	platforms[metaSvc.GetPlatform()] = metaSvc
-	slog.Info("Meta/Facebook OAuth provider registered")
-
-	// TikTok (optional — only if credentials are set)
-	if cfg.TikTokClientKey != "" {
-		tiktokSvc, err := services.NewTikTokOAuthService(cfg, userRepo, tokenRepo)
-		if err != nil {
-			slog.Warn("Failed to create TikTok OAuth service", "error", err)
-		} else {
-			platforms[tiktokSvc.GetPlatform()] = tiktokSvc
-			slog.Info("TikTok OAuth provider registered")
-		}
-	} else {
-		slog.Info("TikTok OAuth provider skipped (no credentials)")
-	}
-
-	// Twitter/X (optional)
-	if cfg.TwitterClientID != "" {
-		twitterSvc, err := services.NewTwitterOAuthService(cfg, userRepo, tokenRepo)
-		if err != nil {
-			slog.Warn("Failed to create Twitter OAuth service", "error", err)
-		} else {
-			platforms[twitterSvc.GetPlatform()] = twitterSvc
-			slog.Info("Twitter OAuth provider registered")
-		}
-	} else {
-		slog.Info("Twitter OAuth provider skipped (no credentials)")
-	}
-
-	// YouTube (optional)
-	if cfg.YouTubeClientID != "" {
-		youtubeSvc, err := services.NewYouTubeOAuthService(cfg, userRepo, tokenRepo)
-		if err != nil {
-			slog.Warn("Failed to create YouTube OAuth service", "error", err)
-		} else {
-			platforms[youtubeSvc.GetPlatform()] = youtubeSvc
-			slog.Info("YouTube OAuth provider registered")
-		}
-	} else {
-		slog.Info("YouTube OAuth provider skipped (no credentials)")
-	}
-
-	// Setup HTTP router
-	router := api.NewRouter(platforms, userRepo)
-	handler := router.Setup()
-
-	// Create HTTP server
 	srv := &http.Server{
-		Addr:         fmt.Sprintf("%s:%s", cfg.ServerHost, cfg.ServerPort),
+		Addr:         ":8080",
 		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -127,7 +37,6 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
