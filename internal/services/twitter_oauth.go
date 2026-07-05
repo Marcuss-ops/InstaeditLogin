@@ -70,13 +70,61 @@ func (s *TwitterOAuthService) HandleCallback(code string) (*models.PlatformProfi
 	}
 
 	tokenData := &models.TokenData{
-		AccessToken: tokenResp.AccessToken,
-		TokenType:   models.TokenTypeBearer,
-		ExpiresIn:   tokenResp.ExpiresIn,
-		Scopes:      strings.Split(tokenResp.Scope, " "),
+		AccessToken:  tokenResp.AccessToken,
+		RefreshToken: tokenResp.RefreshToken,
+		TokenType:    models.TokenTypeBearer,
+		ExpiresIn:    tokenResp.ExpiresIn,
+		Scopes:       strings.Split(tokenResp.Scope, " "),
 	}
 
 	return profile, tokenData, nil
+}
+
+// RefreshOAuthToken exchanges a Twitter refresh token for a new access token.
+func (s *TwitterOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+	if refreshToken == "" {
+		return nil, fmt.Errorf("twitter RefreshOAuthToken: empty refresh token")
+	}
+	slog.Info("Twitter: refreshing access token")
+	body := url.Values{}
+	body.Set("client_id", s.cfg.TwitterClientID)
+	body.Set("refresh_token", refreshToken)
+	body.Set("grant_type", "refresh_token")
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.twitter.com/2/oauth2/token",
+		strings.NewReader(body.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(s.cfg.TwitterClientID, s.cfg.TwitterClientSecret)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("twitter refresh request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("twitter refresh failed (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var tr twitterTokenResponse
+	if err := json.Unmarshal(respBody, &tr); err != nil {
+		return nil, fmt.Errorf("twitter refresh parse: %w", err)
+	}
+	refresh := tr.RefreshToken
+	if refresh == "" {
+		refresh = refreshToken
+	}
+	return &models.TokenData{
+		AccessToken:  tr.AccessToken,
+		RefreshToken: refresh,
+		TokenType:    models.TokenTypeBearer,
+		ExpiresIn:    tr.ExpiresIn,
+		Scopes:       strings.Split(tr.Scope, " "),
+	}, nil
 }
 
 func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
@@ -133,10 +181,11 @@ func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platform
 // --- Private ---
 
 type twitterTokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int64  `json:"expires_in"`
-	Scope       string `json:"scope"`
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	Scope        string `json:"scope"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 func (s *TwitterOAuthService) exchangeCodeForToken(code string) (*twitterTokenResponse, error) {

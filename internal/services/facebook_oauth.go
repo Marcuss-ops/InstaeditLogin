@@ -86,6 +86,8 @@ func (s *FacebookOAuthService) HandleCallback(code string) (*models.PlatformProf
 		Name:           metaUser.Name,
 	}
 
+	// Meta does not issue OAuth refresh tokens; TokenHelper falls back to
+	// fb_exchange_token using the current access token when refresh is needed.
 	tokenData := &models.TokenData{
 		AccessToken: longLived.AccessToken,
 		TokenType:   models.TokenTypeLongLived,
@@ -94,6 +96,26 @@ func (s *FacebookOAuthService) HandleCallback(code string) (*models.PlatformProf
 	}
 
 	return profile, tokenData, nil
+}
+
+// RefreshOAuthToken extends a long-lived Meta token using fb_exchange_token.
+// The argument is the current long-lived access token; a fresh long-lived
+// token (~60 days) is returned. If Meta rejects the exchange (e.g. the
+// previous token has been expired for > 24 hours) the caller must re-authenticate.
+func (s *FacebookOAuthService) RefreshOAuthToken(ctx context.Context, currentToken string) (*models.TokenData, error) {
+	if currentToken == "" {
+		return nil, fmt.Errorf("meta RefreshOAuthToken: empty current token")
+	}
+	slog.Info("Meta: refreshing long-lived token via fb_exchange_token")
+	longLived, err := s.exchangeForLongLivedToken(currentToken)
+	if err != nil {
+		return nil, fmt.Errorf("meta refresh failed: %w", err)
+	}
+	return &models.TokenData{
+		AccessToken: longLived.AccessToken,
+		TokenType:   models.TokenTypeLongLived,
+		ExpiresIn:   longLived.ExpiresIn,
+	}, nil
 }
 
 // Publish publishes content to Instagram via the Meta Graph API.

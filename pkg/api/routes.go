@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -13,18 +15,25 @@ import (
 
 // Router handles HTTP routing and request dispatching for all platforms.
 type Router struct {
-	platforms map[string]services.PlatformService
-	userRepo  *repository.UserRepository
+	platforms  map[string]services.PlatformService
+	userRepo   *repository.UserRepository
+	auth       *auth.Manager
+	strictAuth bool
 }
 
-// NewRouter creates a new Router with platform providers.
+// NewRouter creates a new Router with platform providers and an auth manager.
+// strictAuth controls whether protected endpoints require a valid JWT.
 func NewRouter(
 	platforms map[string]services.PlatformService,
 	userRepo *repository.UserRepository,
+	authMgr *auth.Manager,
+	strictAuth bool,
 ) *Router {
 	return &Router{
-		platforms: platforms,
-		userRepo:  userRepo,
+		platforms:  platforms,
+		userRepo:   userRepo,
+		auth:       authMgr,
+		strictAuth: strictAuth,
 	}
 }
 
@@ -35,8 +44,8 @@ func (r *Router) Setup() http.Handler {
 	mux.HandleFunc("GET /api/v1/health", r.handleHealth)
 	mux.HandleFunc("GET /api/v1/auth/{provider}/login", r.handleLogin)
 	mux.HandleFunc("GET /api/v1/auth/{provider}/callback", r.handleCallback)
-	mux.HandleFunc("POST /api/v1/posts/publish", r.handlePublishPost)
-	mux.HandleFunc("GET /api/v1/accounts", r.handleListAccounts)
+	mux.HandleFunc("POST /api/v1/posts/publish", r.protected(r.handlePublishPost))
+	mux.HandleFunc("GET /api/v1/accounts", r.protected(r.handleListAccounts))
 
 	return r.loggingMiddleware(mux)
 }
@@ -107,11 +116,20 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	jwtToken, _, jwtExp, err := r.auth.Issue(user.ID)
+	if err != nil {
+		slog.Error("Failed to issue JWT", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to issue session token")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":   "authenticated",
-		"provider": provider,
-		"user_id":  user.ID,
-		"name":     user.Name,
+		"status":         "authenticated",
+		"provider":       provider,
+		"user_id":        user.ID,
+		"name":           user.Name,
+		"jwt_token":      jwtToken,
+		"jwt_expires_at": jwtExp.UTC().Format(time.RFC3339),
 		"account": map[string]interface{}{
 			"id":               account.ID,
 			"platform":         account.Platform,
@@ -130,6 +148,15 @@ type PublishRequest struct {
 	Title       string `json:"title"`
 }
 
+// protected wraps a handler so that the JWT middleware runs first.
+// In strict mode, missing/invalid Authorization causes a 401. In lenient
+// (rollback) mode, the handler is allowed to read user_id from body/query.
+func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		r.auth.Middleware(r.strictAuth, next).ServeHTTP(w, req)
+	}
+}
+
 func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
 	var pubReq PublishRequest
 	if err := json.NewDecoder(req.Body).Decode(&pubReq); err != nil {
@@ -137,7 +164,8 @@ func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if pubReq.UserID == 0 {
+	userID := resolveUserID(req, pubReq.UserID, r.strictAuth)
+	if userID == 0 {
 		writeError(w, http.StatusBadRequest, "user_id is required")
 		return
 	}
@@ -151,20 +179,21 @@ func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	accounts, err := r.userRepo.ListPlatformAccountsByUser(pubReq.UserID, pubReq.Platform)
+	accounts, err := r.userRepo.ListPlatformAccountsByUser(userID, pubReq.Platform)
 	if err != nil || len(accounts) == 0 {
 		writeError(w, http.StatusNotFound, "no "+pubReq.Platform+" account linked to this user")
 		return
 	}
 	account := accounts[0]
 
-	// Try bearer token first, then long-lived
-	oauthToken, err := p.GetDecryptedToken(account.ID, models.TokenTypeBearer)
+	// Try bearer token first (refresh-capable), then long-lived (Meta).
+	oauthToken, err := p.EnsureFreshToken(req.Context(), account.ID, models.TokenTypeBearer, p.RefreshOAuthToken)
 	if err != nil {
-		oauthToken, err = p.GetDecryptedToken(account.ID, models.TokenTypeLongLived)
-		if err != nil {
-			slog.Error("Failed to get decrypted token", "error", err, "user_id", pubReq.UserID, "platform", pubReq.Platform)
-			writeError(w, http.StatusUnauthorized, "no valid token found: "+err.Error())
+		if oauthToken, err = p.EnsureFreshToken(req.Context(), account.ID, models.TokenTypeLongLived, p.RefreshOAuthToken); err != nil {
+			slog.Error("Failed to obtain a usable token after refresh",
+				"error", err, "user_id", userID, "platform", pubReq.Platform)
+			writeError(w, http.StatusUnauthorized,
+				"no valid token (refresh failed; please re-authenticate): "+err.Error())
 			return
 		}
 	}
@@ -202,14 +231,16 @@ func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
-	userIDStr := req.URL.Query().Get("user_id")
-	if userIDStr == "" {
-		writeError(w, http.StatusBadRequest, "user_id query parameter required")
-		return
+	fallback := int64(0)
+	if s := req.URL.Query().Get("user_id"); s != "" {
+		var n int64
+		if _, err := fmt.Sscanf(s, "%d", &n); err == nil {
+			fallback = n
+		}
 	}
-	var userID int64
-	if _, err := fmt.Sscanf(userIDStr, "%d", &userID); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid user_id")
+	userID := resolveUserID(req, fallback, r.strictAuth)
+	if userID == 0 {
+		writeError(w, http.StatusBadRequest, "user_id query parameter required")
 		return
 	}
 
@@ -239,6 +270,19 @@ func (r *Router) loggingMiddleware(next http.Handler) http.Handler {
 		)
 		next.ServeHTTP(w, req)
 	})
+}
+
+// resolveUserID prefers the JWT-authenticated user id placed in context by
+// the middleware. In lenient (non-strict) mode it falls back to a value
+// provided in the body/query for backwards compatibility during the rollout.
+func resolveUserID(req *http.Request, fallback int64, strict bool) int64 {
+	if uid, ok := auth.UserIDFromContext(req.Context()); ok && uid > 0 {
+		return uid
+	}
+	if strict {
+		return 0
+	}
+	return fallback
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

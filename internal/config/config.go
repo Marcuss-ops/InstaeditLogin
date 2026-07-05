@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -49,7 +51,9 @@ type Config struct {
 	EncryptionKey string
 
 	// JWT
-	JWTSecret string
+	JWTSecret     string
+	JWTTTLHours   int
+	StrictJWTAuth bool
 
 	// Logging
 	LogLevel string
@@ -85,6 +89,8 @@ func Load() (*Config, error) {
 		YouTubeRedirectURI:  getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
 		EncryptionKey:       getEnv("ENCRYPTION_KEY", ""),
 		JWTSecret:           getEnv("JWT_SECRET", ""),
+		JWTTTLHours:         getEnvInt("JWT_TTL_HOURS", 168),
+		StrictJWTAuth:       getEnvBool("STRICT_JWT_AUTH", false),
 		LogLevel:            getEnv("LOG_LEVEL", "info"),
 	}
 
@@ -143,6 +149,30 @@ func (c *Config) DSN() string {
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
+	}
+	return fallback
+}
+
+// getEnvInt reads an integer environment variable with a default fallback.
+// Invalid values silently fall back to the default.
+func getEnvInt(key string, fallback int) int {
+	if value, ok := os.LookupEnv(key); ok {
+		if n, err := strconv.Atoi(value); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+// getEnvBool reads a boolean environment variable (true/1/yes/on) with a default fallback.
+func getEnvBool(key string, fallback bool) bool {
+	if value, ok := os.LookupEnv(key); ok {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "true", "1", "yes", "on":
+			return true
+		case "false", "0", "no", "off":
+			return false
+		}
 	}
 	return fallback
 }

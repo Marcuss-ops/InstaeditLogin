@@ -32,13 +32,14 @@ type PlatformAccount struct {
 
 // Token represents an encrypted OAuth token stored in the database.
 type Token struct {
-	ID                int64      `json:"id"`
-	PlatformAccountID int64      `json:"platform_account_id"`
-	TokenType         string     `json:"token_type"`
-	EncryptedToken    []byte     `json:"-"`
-	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
-	Scopes            []string   `json:"scopes"`
-	CreatedAt         time.Time  `json:"created_at"`
+	ID                    int64      `json:"id"`
+	PlatformAccountID     int64      `json:"platform_account_id"`
+	TokenType             string     `json:"token_type"`
+	EncryptedToken        []byte     `json:"-"`
+	EncryptedRefreshToken []byte     `json:"-"`
+	ExpiresAt             *time.Time `json:"expires_at,omitempty"`
+	Scopes                []string   `json:"scopes"`
+	CreatedAt             time.Time  `json:"created_at"`
 }
 
 // Token types
@@ -66,11 +67,14 @@ type PlatformProfile struct {
 }
 
 // TokenData is the encrypted token returned by HandleCallback.
+// RefreshToken is populated when the platform issues one (YouTube, Twitter, TikTok).
+// Meta long-lived tokens do not produce a refresh token.
 type TokenData struct {
-	AccessToken string
-	TokenType   string
-	ExpiresIn   int64
-	Scopes      []string
+	AccessToken  string
+	RefreshToken string
+	TokenType    string
+	ExpiresIn    int64
+	Scopes       []string
 }
 
 // PublishPayload is the content to publish on a platform.

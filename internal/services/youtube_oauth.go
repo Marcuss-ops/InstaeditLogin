@@ -70,16 +70,63 @@ func (s *YouTubeOAuthService) HandleCallback(code string) (*models.PlatformProfi
 	}
 
 	tokenData := &models.TokenData{
-		AccessToken: tokenResp.AccessToken,
-		TokenType:   models.TokenTypeBearer,
-		ExpiresIn:   tokenResp.ExpiresIn,
-		Scopes:      strings.Split(tokenResp.Scope, " "),
-	}
-	if tokenResp.RefreshToken != "" {
-		tokenData.Scopes = append(tokenData.Scopes, "refresh_token:"+tokenResp.RefreshToken)
+		AccessToken:  tokenResp.AccessToken,
+		RefreshToken: tokenResp.RefreshToken,
+		TokenType:    models.TokenTypeBearer,
+		ExpiresIn:    tokenResp.ExpiresIn,
+		Scopes:       strings.Split(tokenResp.Scope, " "),
 	}
 
 	return profile, tokenData, nil
+}
+
+// RefreshOAuthToken exchanges a YouTube refresh token for a new access token.
+func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+	if refreshToken == "" {
+		return nil, fmt.Errorf("youtube RefreshOAuthToken: empty refresh token")
+	}
+	slog.Info("YouTube: refreshing access token")
+	body := url.Values{}
+	body.Set("client_id", s.cfg.YouTubeClientID)
+	body.Set("client_secret", s.cfg.YouTubeClientSecret)
+	body.Set("refresh_token", refreshToken)
+	body.Set("grant_type", "refresh_token")
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://oauth2.googleapis.com/token",
+		strings.NewReader(body.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("youtube refresh request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("youtube refresh failed (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var tr youtubeTokenResponse
+	if err := json.Unmarshal(respBody, &tr); err != nil {
+		return nil, fmt.Errorf("youtube refresh parse: %w", err)
+	}
+	// Google may issue a new refresh token in some flows; preserve the existing
+	// one if not returned so the caller keeps using the original credential.
+	refresh := tr.RefreshToken
+	if refresh == "" {
+		refresh = refreshToken
+	}
+	return &models.TokenData{
+		AccessToken:  tr.AccessToken,
+		RefreshToken: refresh,
+		TokenType:    models.TokenTypeBearer,
+		ExpiresIn:    tr.ExpiresIn,
+		Scopes:       strings.Split(tr.Scope, " "),
+	}, nil
 }
 
 const youtubeUploadChunkSize = 256 * 1024 // 256 KiB minimum for resumable uploads

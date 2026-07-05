@@ -63,6 +63,8 @@ func Migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_tokens_platform_account_id ON tokens(platform_account_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_platform_accounts_user_id ON platform_accounts(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_platform_accounts_platform ON platform_accounts(platform)`,
+		// Migration 002: refresh token storage for OAuth token rotation
+		`ALTER TABLE tokens ADD COLUMN IF NOT EXISTS encrypted_refresh_token BYTEA`,
 	}
 
 	for i, migration := range migrations {
