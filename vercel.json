@@ -2,5 +2,10 @@
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/index.go" }
   ],
-  "buildCommand": "echo 'Using serverless functions (api/index.go)'"
+  "functions": {
+    "api/index.go": {
+      "memory": 512,
+      "maxDuration": 30
+    }
+  }
 }
