@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index.go" }
+  ],
+  "buildCommand": "echo 'Using serverless functions (api/index.go)'"
+}
