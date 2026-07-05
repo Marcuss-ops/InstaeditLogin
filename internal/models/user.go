@@ -2,55 +2,94 @@ package models
 
 import "time"
 
-// User represents an authenticated Meta user.
+// Platform constants identify supported social platforms.
+const (
+	PlatformMeta      = "meta"
+	PlatformTikTok    = "tiktok"
+	PlatformTwitter   = "twitter"
+	PlatformYouTube   = "youtube"
+	PlatformLinkedIn  = "linkedin"
+	PlatformPinterest = "pinterest"
+)
+
+// User represents an application user (platform-agnostic).
 type User struct {
-	ID         int64     `json:"id"`
-	Email      string    `json:"email,omitempty"`
-	MetaUserID string    `json:"meta_user_id"`
-	Name       string    `json:"name"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID        int64     `json:"id"`
+	Email     string    `json:"email,omitempty"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// InstagramAccount represents an Instagram Business/Creator account
-// linked to a Meta user.
-type InstagramAccount struct {
-	ID              int64     `json:"id"`
-	UserID          int64     `json:"user_id"`
-	InstagramUserID string    `json:"instagram_user_id"`
-	Username        string    `json:"username"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+// PlatformAccount links a User to a social platform profile.
+type PlatformAccount struct {
+	ID             int64     `json:"id"`
+	UserID         int64     `json:"user_id"`
+	Platform       string    `json:"platform"`
+	PlatformUserID string    `json:"platform_user_id"`
+	Username       string    `json:"username"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // Token represents an encrypted OAuth token stored in the database.
-// The token itself is AES-256 encrypted at rest.
 type Token struct {
-	ID             int64     `json:"id"`
-	UserID         int64     `json:"user_id"`
-	AccountID      *int64    `json:"account_id,omitempty"`
-	TokenType      string    `json:"token_type"`
-	EncryptedToken []byte    `json:"-"` // Never expose in JSON
-	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
-	Scopes         []string  `json:"scopes"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID                int64      `json:"id"`
+	PlatformAccountID int64      `json:"platform_account_id"`
+	TokenType         string     `json:"token_type"`
+	EncryptedToken    []byte     `json:"-"`
+	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
+	Scopes            []string   `json:"scopes"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
 // Token types
 const (
-	TokenTypeShortLived  = "short_lived"
-	TokenTypeLongLived   = "long_lived"
-	TokenTypePageAccess  = "page_access"
-	TokenTypeInstagram   = "instagram"
+	TokenTypeShortLived = "short_lived"
+	TokenTypeLongLived  = "long_lived"
+	TokenTypePageAccess = "page_access"
+	TokenTypeBearer     = "bearer"
 )
 
 // OAuthToken represents a decrypted token ready for API use.
 type OAuthToken struct {
-	AccessToken string    `json:"access_token"`
-	TokenType   string    `json:"token_type"`
+	AccessToken string     `json:"access_token"`
+	TokenType   string     `json:"token_type"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	Scopes      []string  `json:"scopes,omitempty"`
+	Scopes      []string   `json:"scopes,omitempty"`
 }
+
+// PlatformProfile is returned by HandleCallback with user and account info.
+type PlatformProfile struct {
+	PlatformUserID string
+	Username       string
+	Email          string
+	Name           string
+}
+
+// TokenData is the encrypted token returned by HandleCallback.
+type TokenData struct {
+	AccessToken string
+	TokenType   string
+	ExpiresIn   int64
+	Scopes      []string
+}
+
+// PublishPayload is the content to publish on a platform.
+type PublishPayload struct {
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	VideoURL string `json:"video_url,omitempty"`
+	Title    string `json:"title,omitempty"`
+}
+
+// PublishResult is returned after successful content publishing.
+type PublishResult struct {
+	PlatformMediaID string `json:"platform_media_id"`
+	PlatformURL     string `json:"platform_url,omitempty"`
+}
+
+// --- Legacy Meta-specific types (kept for facebook_oauth.go refactoring) ---
 
 // MetaTokenResponse is the response from Meta's OAuth token exchange endpoint.
 type MetaTokenResponse struct {

@@ -2,29 +2,29 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// Router handles HTTP routing and request dispatching.
+// Router handles HTTP routing and request dispatching for all platforms.
 type Router struct {
-	cfg          *config.Config
-	oauthService *services.FacebookOAuthService
-	metaService  *services.MetaService
-	userRepo     *repository.UserRepository
+	platforms map[string]services.PlatformService
+	userRepo  *repository.UserRepository
 }
 
-// NewRouter creates a new Router.
-func NewRouter(cfg *config.Config, oauth *services.FacebookOAuthService, meta *services.MetaService, userRepo *repository.UserRepository) *Router {
+// NewRouter creates a new Router with platform providers.
+func NewRouter(
+	platforms map[string]services.PlatformService,
+	userRepo *repository.UserRepository,
+) *Router {
 	return &Router{
-		cfg:          cfg,
-		oauthService: oauth,
-		metaService:  meta,
-		userRepo:     userRepo,
+		platforms: platforms,
+		userRepo:  userRepo,
 	}
 }
 
@@ -32,42 +32,52 @@ func NewRouter(cfg *config.Config, oauth *services.FacebookOAuthService, meta *s
 func (r *Router) Setup() http.Handler {
 	mux := http.NewServeMux()
 
-	// Health check
 	mux.HandleFunc("GET /api/v1/health", r.handleHealth)
-
-	// Auth routes
-	mux.HandleFunc("GET /api/v1/auth/login", r.handleLogin)
-	mux.HandleFunc("GET /api/v1/auth/callback", r.handleCallback)
-
-	// Post publishing
+	mux.HandleFunc("GET /api/v1/auth/{provider}/login", r.handleLogin)
+	mux.HandleFunc("GET /api/v1/auth/{provider}/callback", r.handleCallback)
 	mux.HandleFunc("POST /api/v1/posts/publish", r.handlePublishPost)
+	mux.HandleFunc("GET /api/v1/accounts", r.handleListAccounts)
 
-	// Wrap with logging middleware
 	return r.loggingMiddleware(mux)
 }
 
-// handleHealth returns a simple health check response.
 func (r *Router) handleHealth(w http.ResponseWriter, req *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status":  "ok",
-		"service": "InstaEditLogin",
-		"version": "1.0.0",
+	platforms := make([]string, 0, len(r.platforms))
+	for p := range r.platforms {
+		platforms = append(platforms, p)
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":    "ok",
+		"service":   "InstaEditLogin",
+		"version":   "2.0.0",
+		"platforms": platforms,
 	})
 }
 
-// handleLogin redirects the user to Meta's OAuth login page.
 func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
-	state := req.URL.Query().Get("state")
-	if state == "" {
-		state = "default"
+	provider := req.PathValue("provider")
+	p, ok := r.platforms[provider]
+	if !ok {
+		writeError(w, http.StatusNotFound, "unsupported provider: "+provider)
+		return
 	}
 
-	loginURL := r.oauthService.GetLoginURL(state)
-	http.Redirect(w, req, loginURL, http.StatusFound)
+	state := req.URL.Query().Get("state")
+	if state == "" {
+		state = provider + "_default"
+	}
+
+	http.Redirect(w, req, p.GetLoginURL(state), http.StatusFound)
 }
 
-// handleCallback processes the OAuth callback from Meta.
 func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
+	provider := req.PathValue("provider")
+	p, ok := r.platforms[provider]
+	if !ok {
+		writeError(w, http.StatusNotFound, "unsupported provider: "+provider)
+		return
+	}
+
 	code := req.URL.Query().Get("code")
 	if code == "" {
 		writeError(w, http.StatusBadRequest, "missing authorization code")
@@ -75,31 +85,51 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	}
 
 	state := req.URL.Query().Get("state")
-	slog.Info("OAuth callback received", "state", state)
+	slog.Info("OAuth callback received", "provider", provider, "state", state)
 
-	user, err := r.oauthService.HandleCallback(code)
+	profile, tokenData, err := p.HandleCallback(code)
 	if err != nil {
-		slog.Error("OAuth callback failed", "error", err)
+		slog.Error("OAuth callback failed", "provider", provider, "error", err)
 		writeError(w, http.StatusInternalServerError, "authentication failed: "+err.Error())
 		return
 	}
 
+	user, account, err := r.userRepo.FindOrCreateUserByPlatform(profile, provider)
+	if err != nil {
+		slog.Error("Failed to upsert user", "provider", provider, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save user: "+err.Error())
+		return
+	}
+
+	if err := p.SaveEncryptedToken(account.ID, tokenData); err != nil {
+		slog.Error("Failed to save token", "provider", provider, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save token: "+err.Error())
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":  "authenticated",
-		"user_id": user.ID,
-		"name":    user.Name,
+		"status":   "authenticated",
+		"provider": provider,
+		"user_id":  user.ID,
+		"name":     user.Name,
+		"account": map[string]interface{}{
+			"id":               account.ID,
+			"platform":         account.Platform,
+			"platform_user_id": account.PlatformUserID,
+			"username":         account.Username,
+		},
 	})
 }
 
-// PublishRequest is the request body for publishing content.
 type PublishRequest struct {
 	UserID      int64  `json:"user_id"`
+	Platform    string `json:"platform"`
 	MediaURL    string `json:"media_url"`
 	Caption     string `json:"caption"`
-	ContentType string `json:"content_type"` // "image" or "video"
+	ContentType string `json:"content_type"`
+	Title       string `json:"title"`
 }
 
-// handlePublishPost publishes content to Instagram via Meta API.
 func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
 	var pubReq PublishRequest
 	if err := json.NewDecoder(req.Body).Decode(&pubReq); err != nil {
@@ -111,50 +141,95 @@ func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "user_id is required")
 		return
 	}
-	if pubReq.MediaURL == "" {
-		writeError(w, http.StatusBadRequest, "media_url is required")
+	if pubReq.Platform == "" {
+		pubReq.Platform = models.PlatformMeta
+	}
+
+	p, ok := r.platforms[pubReq.Platform]
+	if !ok {
+		writeError(w, http.StatusNotFound, "unsupported platform: "+pubReq.Platform)
 		return
 	}
 
-	// Get decrypted token for the user
-	oauthToken, err := r.oauthService.GetDecryptedToken(pubReq.UserID, "long_lived")
-	if err != nil {
-		slog.Error("Failed to get decrypted token", "error", err, "user_id", pubReq.UserID)
-		writeError(w, http.StatusUnauthorized, "no valid token found: "+err.Error())
-		return
-	}
-
-	// Get user's Instagram accounts
-	accounts, err := r.userRepo.ListInstagramAccountsByUser(pubReq.UserID)
+	accounts, err := r.userRepo.ListPlatformAccountsByUser(pubReq.UserID, pubReq.Platform)
 	if err != nil || len(accounts) == 0 {
-		writeError(w, http.StatusNotFound, "no Instagram account linked to this user")
+		writeError(w, http.StatusNotFound, "no "+pubReq.Platform+" account linked to this user")
 		return
 	}
+	account := accounts[0]
 
-	instagramUserID := accounts[0].InstagramUserID
+	// Try bearer token first, then long-lived
+	oauthToken, err := p.GetDecryptedToken(account.ID, models.TokenTypeBearer)
+	if err != nil {
+		oauthToken, err = p.GetDecryptedToken(account.ID, models.TokenTypeLongLived)
+		if err != nil {
+			slog.Error("Failed to get decrypted token", "error", err, "user_id", pubReq.UserID, "platform", pubReq.Platform)
+			writeError(w, http.StatusUnauthorized, "no valid token found: "+err.Error())
+			return
+		}
+	}
 
-	// Publish based on content type
-	var mediaID string
+	payload := models.PublishPayload{
+		Text:  pubReq.Caption,
+		Title: pubReq.Title,
+	}
+
 	switch pubReq.ContentType {
 	case "video", "reel":
-		mediaID, err = r.metaService.PublishVideo(oauthToken.AccessToken, instagramUserID, pubReq.MediaURL, pubReq.Caption)
+		payload.VideoURL = pubReq.MediaURL
+	case "image", "photo":
+		payload.ImageURL = pubReq.MediaURL
+	case "text":
+		// text-only post
 	default:
-		mediaID, err = r.metaService.PublishPhoto(oauthToken.AccessToken, instagramUserID, pubReq.MediaURL, pubReq.Caption)
+		writeError(w, http.StatusBadRequest, "content_type must be one of: image, video, text")
+		return
 	}
 
+	result, err := p.Publish(req.Context(), oauthToken.AccessToken, account.PlatformUserID, payload)
 	if err != nil {
-		slog.Error("Failed to publish content", "error", err)
+		slog.Error("Failed to publish", "error", err, "platform", pubReq.Platform)
 		writeError(w, http.StatusInternalServerError, "failed to publish: "+err.Error())
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":   "published",
-		"media_id": mediaID,
+		"status":            "published",
+		"platform":          pubReq.Platform,
+		"platform_media_id": result.PlatformMediaID,
+		"platform_url":      result.PlatformURL,
 	})
 }
 
-// loggingMiddleware logs all incoming HTTP requests.
+func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
+	userIDStr := req.URL.Query().Get("user_id")
+	if userIDStr == "" {
+		writeError(w, http.StatusBadRequest, "user_id query parameter required")
+		return
+	}
+	var userID int64
+	if _, err := fmt.Sscanf(userIDStr, "%d", &userID); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid user_id")
+		return
+	}
+
+	platform := req.URL.Query().Get("platform")
+
+	accounts, err := r.userRepo.ListPlatformAccountsByUser(userID, platform)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list accounts: "+err.Error())
+		return
+	}
+
+	if accounts == nil {
+		accounts = []*models.PlatformAccount{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"accounts": accounts,
+	})
+}
+
 func (r *Router) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		slog.Info("HTTP request",
@@ -166,7 +241,6 @@ func (r *Router) loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// writeJSON writes a JSON response.
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -175,8 +249,6 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	}
 }
 
-// writeError writes a JSON error response.
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
-

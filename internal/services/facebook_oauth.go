@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,13 +17,12 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-// FacebookOAuthService handles the OAuth 2.0 flow with Meta/Facebook.
+// FacebookOAuthService implements OAuthProvider and ContentPublisher for Meta/Facebook.
 type FacebookOAuthService struct {
-	cfg          *config.Config
-	userRepo     *repository.UserRepository
-	tokenRepo    *repository.TokenRepository
-	encryptor    *crypto.Encryptor
-	httpClient   *http.Client
+	cfg        *config.Config
+	userRepo   *repository.UserRepository
+	*TokenHelper
+	httpClient *http.Client
 }
 
 // NewFacebookOAuthService creates a new FacebookOAuthService.
@@ -34,13 +34,15 @@ func NewFacebookOAuthService(cfg *config.Config, userRepo *repository.UserReposi
 	}
 
 	return &FacebookOAuthService{
-		cfg:        cfg,
-		userRepo:   userRepo,
-		tokenRepo:  tokenRepo,
-		encryptor:  encryptor,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		cfg:         cfg,
+		userRepo:    userRepo,
+		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
+		httpClient:  &http.Client{Timeout: 30 * time.Second},
 	}, nil
 }
+
+// GetPlatform returns the platform identifier.
+func (s *FacebookOAuthService) GetPlatform() string { return models.PlatformMeta }
 
 // GetLoginURL builds the Meta OAuth login URL for user redirection.
 func (s *FacebookOAuthService) GetLoginURL(state string) string {
@@ -54,8 +56,79 @@ func (s *FacebookOAuthService) GetLoginURL(state string) string {
 	return "https://www.facebook.com/v19.0/dialog/oauth?" + params.Encode()
 }
 
-// ExchangeCodeForToken exchanges an OAuth authorization code for a short-lived access token.
-func (s *FacebookOAuthService) ExchangeCodeForToken(code string) (*models.MetaTokenResponse, error) {
+// HandleCallback processes the full OAuth callback for Meta/Facebook.
+func (s *FacebookOAuthService) HandleCallback(code string) (*models.PlatformProfile, *models.TokenData, error) {
+	// Step 1: Exchange code for short-lived token
+	slog.Info("Meta: exchanging code for short-lived token")
+	shortLived, err := s.exchangeCodeForToken(code)
+	if err != nil {
+		return nil, nil, fmt.Errorf("step 1 (code exchange): %w", err)
+	}
+
+	// Step 2: Exchange for long-lived token
+	slog.Info("Meta: exchanging for long-lived token")
+	longLived, err := s.exchangeForLongLivedToken(shortLived.AccessToken)
+	if err != nil {
+		return nil, nil, fmt.Errorf("step 2 (long-lived exchange): %w", err)
+	}
+
+	// Step 3: Fetch user info
+	slog.Info("Meta: fetching user info")
+	metaUser, err := s.getUserInfo(longLived.AccessToken)
+	if err != nil {
+		return nil, nil, fmt.Errorf("step 3 (user info): %w", err)
+	}
+
+	profile := &models.PlatformProfile{
+		PlatformUserID: metaUser.PlatformUserID,
+		Username:       metaUser.Username,
+		Email:          metaUser.Email,
+		Name:           metaUser.Name,
+	}
+
+	tokenData := &models.TokenData{
+		AccessToken: longLived.AccessToken,
+		TokenType:   models.TokenTypeLongLived,
+		ExpiresIn:   longLived.ExpiresIn,
+		Scopes:      []string{"instagram_basic", "instagram_content_publish", "pages_show_list"},
+	}
+
+	return profile, tokenData, nil
+}
+
+// Publish publishes content to Instagram via the Meta Graph API.
+func (s *FacebookOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+	// First, get the Instagram business account for this user
+	accounts, err := s.getInstagramAccounts(accessToken, platformUserID)
+	if err != nil || len(accounts) == 0 {
+		return nil, fmt.Errorf("no Instagram business account found for user %s", platformUserID)
+	}
+
+	instagramUserID := accounts[0].PlatformUserID
+	slog.Info("Meta: publishing content", "instagram_user_id", instagramUserID)
+
+	var mediaID string
+
+	if payload.VideoURL != "" {
+		mediaID, err = s.publishVideo(ctx, accessToken, instagramUserID, payload.VideoURL, payload.Text)
+	} else if payload.ImageURL != "" {
+		mediaID, err = s.publishPhoto(ctx, accessToken, instagramUserID, payload.ImageURL, payload.Text)
+	} else {
+		return nil, fmt.Errorf("media url required (image_url or video_url)")
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to publish: %w", err)
+	}
+
+	return &models.PublishResult{
+		PlatformMediaID: mediaID,
+	}, nil
+}
+
+// --- Private Meta-specific methods ---
+
+func (s *FacebookOAuthService) exchangeCodeForToken(code string) (*models.MetaTokenResponse, error) {
 	params := url.Values{}
 	params.Set("client_id", s.cfg.MetaAppID)
 	params.Set("client_secret", s.cfg.MetaAppSecret)
@@ -91,8 +164,7 @@ func (s *FacebookOAuthService) ExchangeCodeForToken(code string) (*models.MetaTo
 	return &tokenResp, nil
 }
 
-// ExchangeForLongLivedToken exchanges a short-lived token for a long-lived one.
-func (s *FacebookOAuthService) ExchangeForLongLivedToken(shortLivedToken string) (*models.MetaLongLivedTokenResponse, error) {
+func (s *FacebookOAuthService) exchangeForLongLivedToken(shortLivedToken string) (*models.MetaLongLivedTokenResponse, error) {
 	params := url.Values{}
 	params.Set("grant_type", "fb_exchange_token")
 	params.Set("client_id", s.cfg.MetaAppID)
@@ -128,15 +200,12 @@ func (s *FacebookOAuthService) ExchangeForLongLivedToken(shortLivedToken string)
 	return &tokenResp, nil
 }
 
-// GetUserInfo fetches the Meta user profile using an access token.
-func (s *FacebookOAuthService) GetUserInfo(accessToken string) (*models.User, error) {
+func (s *FacebookOAuthService) getUserInfo(accessToken string) (*models.PlatformProfile, error) {
 	params := url.Values{}
 	params.Set("fields", "id,name,email")
 	params.Set("access_token", accessToken)
 
-	resp, err := s.httpClient.Get(
-		"https://graph.facebook.com/v19.0/me?" + params.Encode(),
-	)
+	resp, err := s.httpClient.Get("https://graph.facebook.com/v19.0/me?" + params.Encode())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user info: %w", err)
 	}
@@ -160,22 +229,20 @@ func (s *FacebookOAuthService) GetUserInfo(accessToken string) (*models.User, er
 		return nil, fmt.Errorf("failed to parse user info: %w", err)
 	}
 
-	return &models.User{
-		MetaUserID: result.ID,
-		Name:       result.Name,
-		Email:      result.Email,
+	return &models.PlatformProfile{
+		PlatformUserID: result.ID,
+		Username:       result.Name,
+		Email:          result.Email,
+		Name:           result.Name,
 	}, nil
 }
 
-// GetInstagramAccounts fetches Instagram Business accounts linked to a Meta user.
-func (s *FacebookOAuthService) GetInstagramAccounts(accessToken, metaUserID string) ([]*models.InstagramAccount, error) {
+func (s *FacebookOAuthService) getInstagramAccounts(accessToken, metaUserID string) ([]*models.PlatformAccount, error) {
 	params := url.Values{}
 	params.Set("fields", "instagram_business_account{id,username}")
 	params.Set("access_token", accessToken)
 
-	resp, err := s.httpClient.Get(
-		"https://graph.facebook.com/v19.0/" + metaUserID + "?" + params.Encode(),
-	)
+	resp, err := s.httpClient.Get("https://graph.facebook.com/v19.0/" + metaUserID + "?" + params.Encode())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get instagram accounts: %w", err)
 	}
@@ -186,9 +253,6 @@ func (s *FacebookOAuthService) GetInstagramAccounts(accessToken, metaUserID stri
 		return nil, fmt.Errorf("failed to read instagram accounts: %w", err)
 	}
 
-	slog.Debug("Instagram accounts response", "body", string(body))
-
-	// Parse the nested response
 	var result struct {
 		InstagramBusinessAccount struct {
 			ID       string `json:"id"`
@@ -196,9 +260,7 @@ func (s *FacebookOAuthService) GetInstagramAccounts(accessToken, metaUserID stri
 		} `json:"instagram_business_account"`
 	}
 
-	// Try parsing; if the field is absent, return empty slice
 	if err := json.Unmarshal(body, &result); err != nil {
-		// Might not have an Instagram business account linked
 		return nil, nil
 	}
 
@@ -206,139 +268,139 @@ func (s *FacebookOAuthService) GetInstagramAccounts(accessToken, metaUserID stri
 		return nil, nil
 	}
 
-	return []*models.InstagramAccount{{
-		InstagramUserID: result.InstagramBusinessAccount.ID,
-		Username:        result.InstagramBusinessAccount.Username,
+	return []*models.PlatformAccount{{
+		Platform:       models.PlatformMeta,
+		PlatformUserID: result.InstagramBusinessAccount.ID,
+		Username:       result.InstagramBusinessAccount.Username,
 	}}, nil
 }
 
-// HandleCallback processes the full OAuth callback flow:
-// 1. Exchange code for short-lived token
-// 2. Exchange for long-lived token
-// 3. Fetch user info
-// 4. Fetch Instagram accounts
-// 5. Encrypt and save tokens
-// 6. Return the user
-func (s *FacebookOAuthService) HandleCallback(code string) (*models.User, error) {
-	// Step 1: Exchange code for short-lived token
-	slog.Info("Exchanging code for short-lived token")
-	shortLived, err := s.ExchangeCodeForToken(code)
+func (s *FacebookOAuthService) publishPhoto(ctx context.Context, accessToken, instagramUserID, imageURL, caption string) (string, error) {
+	body := map[string]string{
+		"media_type": "IMAGE",
+		"image_url":  imageURL,
+		"caption":    caption,
+	}
+
+	containerID, err := s.createMediaContainer(accessToken, instagramUserID, body)
 	if err != nil {
-		return nil, fmt.Errorf("step 1 (code exchange): %w", err)
+		return "", err
 	}
 
-	// Step 2: Exchange for long-lived token
-	slog.Info("Exchanging for long-lived token")
-	longLived, err := s.ExchangeForLongLivedToken(shortLived.AccessToken)
-	if err != nil {
-		return nil, fmt.Errorf("step 2 (long-lived exchange): %w", err)
-	}
-
-	// Step 3: Fetch user info
-	slog.Info("Fetching user info")
-	metaUser, err := s.GetUserInfo(longLived.AccessToken)
-	if err != nil {
-		return nil, fmt.Errorf("step 3 (user info): %w", err)
-	}
-
-	// Step 4: Find or create user in DB
-	existingUser, err := s.userRepo.FindByMetaUserID(metaUser.MetaUserID)
-	if err != nil {
-		return nil, fmt.Errorf("step 4 (find user): %w", err)
-	}
-
-	var user *models.User
-	if existingUser != nil {
-		// Update existing user
-		existingUser.Name = metaUser.Name
-		existingUser.Email = metaUser.Email
-		if err := s.userRepo.Update(existingUser); err != nil {
-			return nil, fmt.Errorf("step 4 (update user): %w", err)
-		}
-		user = existingUser
-	} else {
-		// Create new user
-		metaUser.Email = coalesce(metaUser.Email, "")
-		metaUser.Name = coalesce(metaUser.Name, "")
-		if err := s.userRepo.Create(metaUser); err != nil {
-			return nil, fmt.Errorf("step 4 (create user): %w", err)
-		}
-		user = metaUser
-	}
-
-	// Step 5: Encrypt and save long-lived token
-	encryptedToken, err := s.encryptor.Encrypt(longLived.AccessToken)
-	if err != nil {
-		return nil, fmt.Errorf("step 5 (encrypt token): %w", err)
-	}
-
-	expiresAt := time.Now().Add(time.Duration(longLived.ExpiresIn) * time.Second)
-	token := &models.Token{
-		UserID:         user.ID,
-		TokenType:      models.TokenTypeLongLived,
-		EncryptedToken: encryptedToken,
-		ExpiresAt:      &expiresAt,
-		Scopes:         []string{"instagram_basic", "instagram_content_publish", "pages_show_list"},
-	}
-
-	if err := s.tokenRepo.SaveToken(token); err != nil {
-		return nil, fmt.Errorf("step 5 (save token): %w", err)
-	}
-
-	// Step 6: Fetch and save Instagram accounts
-	accounts, err := s.GetInstagramAccounts(longLived.AccessToken, user.MetaUserID)
-	if err != nil {
-		slog.Warn("Failed to fetch Instagram accounts (non-fatal)", "error", err)
-	} else {
-		for _, acc := range accounts {
-			acc.UserID = user.ID
-			existing, _ := s.userRepo.FindInstagramAccount(acc.InstagramUserID)
-			if existing == nil {
-				if err := s.userRepo.CreateInstagramAccount(acc); err != nil {
-					slog.Warn("Failed to save Instagram account", "error", err)
-				}
-			}
-		}
-	}
-
-	slog.Info("OAuth callback completed successfully", "user_id", user.ID)
-	return user, nil
+	return s.publishMediaContainer(accessToken, instagramUserID, containerID)
 }
 
-// GetDecryptedToken retrieves and decrypts a user's token for API use.
-func (s *FacebookOAuthService) GetDecryptedToken(userID int64, tokenType string) (*models.OAuthToken, error) {
-	token, err := s.tokenRepo.FindLatestToken(userID, tokenType)
+func (s *FacebookOAuthService) publishVideo(ctx context.Context, accessToken, instagramUserID, videoURL, caption string) (string, error) {
+	body := map[string]string{
+		"media_type": "REELS",
+		"video_url":  videoURL,
+		"caption":    caption,
+	}
+
+	containerID, err := s.createMediaContainer(accessToken, instagramUserID, body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find token: %w", err)
-	}
-	if token == nil {
-		return nil, fmt.Errorf("no token found for user %d (type: %s)", userID, tokenType)
+		return "", err
 	}
 
-	// Check expiration
-	if token.ExpiresAt != nil && time.Now().After(*token.ExpiresAt) {
-		return nil, fmt.Errorf("token expired at %s", token.ExpiresAt.Format(time.RFC3339))
+	// Poll until container is ready
+	if err := s.waitForContainerReady(accessToken, containerID); err != nil {
+		return "", err
 	}
 
-	decrypted, err := s.encryptor.Decrypt(token.EncryptedToken)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt token: %w", err)
-	}
-
-	return &models.OAuthToken{
-		AccessToken: decrypted,
-		TokenType:   token.TokenType,
-		ExpiresAt:   token.ExpiresAt,
-		Scopes:      token.Scopes,
-	}, nil
+	return s.publishMediaContainer(accessToken, instagramUserID, containerID)
 }
 
-// coalesce returns the first non-empty string.
-func coalesce(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
+func (s *FacebookOAuthService) createMediaContainer(accessToken, instagramUserID string, body map[string]string) (string, error) {
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal body: %w", err)
+	}
+
+	url := fmt.Sprintf("https://graph.facebook.com/v19.0/%s/media?access_token=%s", instagramUserID, accessToken)
+	resp, err := s.httpClient.Post(url, "application/json", strings.NewReader(string(jsonBody)))
+	if err != nil {
+		return "", fmt.Errorf("media container request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read media container response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("media container failed (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("failed to parse media container response: %w", err)
+	}
+
+	return result.ID, nil
+}
+
+func (s *FacebookOAuthService) publishMediaContainer(accessToken, instagramUserID, containerID string) (string, error) {
+	body := map[string]string{"creation_id": containerID}
+	jsonBody, _ := json.Marshal(body)
+
+	url := fmt.Sprintf("https://graph.facebook.com/v19.0/%s/media_publish?access_token=%s", instagramUserID, accessToken)
+	resp, err := s.httpClient.Post(url, "application/json", strings.NewReader(string(jsonBody)))
+	if err != nil {
+		return "", fmt.Errorf("media publish request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read media publish response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("media publish failed (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("failed to parse media publish response: %w", err)
+	}
+
+	return result.ID, nil
+}
+
+func (s *FacebookOAuthService) waitForContainerReady(accessToken, containerID string) error {
+	maxAttempts := 30
+	for i := 0; i < maxAttempts; i++ {
+		time.Sleep(2 * time.Second)
+
+		url := fmt.Sprintf("https://graph.facebook.com/v19.0/%s?fields=status_code&access_token=%s", containerID, accessToken)
+		resp, err := s.httpClient.Get(url)
+		if err != nil {
+			slog.Warn("Container status check failed, retrying", "error", err, "attempt", i+1)
+			continue
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		var result struct {
+			StatusCode string `json:"status_code"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			continue
+		}
+
+		switch result.StatusCode {
+		case "FINISHED":
+			return nil
+		case "ERROR":
+			return fmt.Errorf("container processing failed: %s", string(body))
 		}
 	}
-	return ""
+
+	return fmt.Errorf("container not ready after %d attempts", maxAttempts)
 }

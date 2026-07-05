@@ -18,20 +18,19 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
-// FindByMetaUserID finds a user by their Meta user ID.
-func (r *UserRepository) FindByMetaUserID(metaUserID string) (*models.User, error) {
+// FindByEmail finds a user by their email address.
+func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
 	user := &models.User{}
 	err := r.db.QueryRow(
-		`SELECT id, email, meta_user_id, name, created_at, updated_at 
-		 FROM users WHERE meta_user_id = $1`,
-		metaUserID,
-	).Scan(&user.ID, &user.Email, &user.MetaUserID, &user.Name, &user.CreatedAt, &user.UpdatedAt)
+		`SELECT id, email, name, created_at, updated_at FROM users WHERE email = $1`,
+		email,
+	).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to find user by meta_user_id: %w", err)
+		return nil, fmt.Errorf("failed to find user by email: %w", err)
 	}
 	return user, nil
 }
@@ -40,10 +39,9 @@ func (r *UserRepository) FindByMetaUserID(metaUserID string) (*models.User, erro
 func (r *UserRepository) FindByID(id int64) (*models.User, error) {
 	user := &models.User{}
 	err := r.db.QueryRow(
-		`SELECT id, email, meta_user_id, name, created_at, updated_at 
-		 FROM users WHERE id = $1`,
+		`SELECT id, email, name, created_at, updated_at FROM users WHERE id = $1`,
 		id,
-	).Scan(&user.ID, &user.Email, &user.MetaUserID, &user.Name, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -57,10 +55,8 @@ func (r *UserRepository) FindByID(id int64) (*models.User, error) {
 // Create inserts a new user into the database.
 func (r *UserRepository) Create(user *models.User) error {
 	err := r.db.QueryRow(
-		`INSERT INTO users (email, meta_user_id, name) 
-		 VALUES ($1, $2, $3) 
-		 RETURNING id, created_at, updated_at`,
-		user.Email, user.MetaUserID, user.Name,
+		`INSERT INTO users (email, name) VALUES ($1, $2) RETURNING id, created_at, updated_at`,
+		user.Email, user.Name,
 	).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
 
 	if err != nil {
@@ -72,8 +68,7 @@ func (r *UserRepository) Create(user *models.User) error {
 // Update updates an existing user.
 func (r *UserRepository) Update(user *models.User) error {
 	_, err := r.db.Exec(
-		`UPDATE users SET email = $1, name = $2, updated_at = $3 
-		 WHERE id = $4`,
+		`UPDATE users SET email = $1, name = $2, updated_at = $3 WHERE id = $4`,
 		user.Email, user.Name, time.Now(), user.ID,
 	)
 	if err != nil {
@@ -82,58 +77,150 @@ func (r *UserRepository) Update(user *models.User) error {
 	return nil
 }
 
-// FindInstagramAccount finds an Instagram account by its Instagram user ID.
-func (r *UserRepository) FindInstagramAccount(instagramUserID string) (*models.InstagramAccount, error) {
-	account := &models.InstagramAccount{}
+// FindPlatformAccount finds a platform account by platform and platform user ID.
+func (r *UserRepository) FindPlatformAccount(platform, platformUserID string) (*models.PlatformAccount, error) {
+	account := &models.PlatformAccount{}
 	err := r.db.QueryRow(
-		`SELECT id, user_id, instagram_user_id, username, created_at, updated_at 
-		 FROM instagram_accounts WHERE instagram_user_id = $1`,
-		instagramUserID,
-	).Scan(&account.ID, &account.UserID, &account.InstagramUserID, &account.Username, &account.CreatedAt, &account.UpdatedAt)
+		`SELECT id, user_id, platform, platform_user_id, username, created_at, updated_at
+		 FROM platform_accounts WHERE platform = $1 AND platform_user_id = $2`,
+		platform, platformUserID,
+	).Scan(&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID,
+		&account.Username, &account.CreatedAt, &account.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to find instagram account: %w", err)
+		return nil, fmt.Errorf("failed to find platform account: %w", err)
 	}
 	return account, nil
 }
 
-// CreateInstagramAccount inserts a new Instagram account.
-func (r *UserRepository) CreateInstagramAccount(account *models.InstagramAccount) error {
+// CreatePlatformAccount inserts a new platform account.
+func (r *UserRepository) CreatePlatformAccount(account *models.PlatformAccount) error {
 	err := r.db.QueryRow(
-		`INSERT INTO instagram_accounts (user_id, instagram_user_id, username) 
-		 VALUES ($1, $2, $3) 
-		 RETURNING id, created_at, updated_at`,
-		account.UserID, account.InstagramUserID, account.Username,
+		`INSERT INTO platform_accounts (user_id, platform, platform_user_id, username)
+		 VALUES ($1, $2, $3, $4) RETURNING id, created_at, updated_at`,
+		account.UserID, account.Platform, account.PlatformUserID, account.Username,
 	).Scan(&account.ID, &account.CreatedAt, &account.UpdatedAt)
 
 	if err != nil {
-		return fmt.Errorf("failed to create instagram account: %w", err)
+		return fmt.Errorf("failed to create platform account: %w", err)
 	}
 	return nil
 }
 
-// ListInstagramAccountsByUser returns all Instagram accounts for a user.
-func (r *UserRepository) ListInstagramAccountsByUser(userID int64) ([]*models.InstagramAccount, error) {
-	rows, err := r.db.Query(
-		`SELECT id, user_id, instagram_user_id, username, created_at, updated_at
-		 FROM instagram_accounts WHERE user_id = $1 ORDER BY created_at DESC`,
-		userID,
-	)
+// ListPlatformAccountsByUser returns all platform accounts for a user, optionally filtered by platform.
+func (r *UserRepository) ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error) {
+	var rows *sql.Rows
+	var err error
+
+	if platform == "" {
+		rows, err = r.db.Query(
+			`SELECT id, user_id, platform, platform_user_id, username, created_at, updated_at
+			 FROM platform_accounts WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+	} else {
+		rows, err = r.db.Query(
+			`SELECT id, user_id, platform, platform_user_id, username, created_at, updated_at
+			 FROM platform_accounts WHERE user_id = $1 AND platform = $2 ORDER BY created_at DESC`,
+			userID, platform)
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to list instagram accounts: %w", err)
+		return nil, fmt.Errorf("failed to list platform accounts: %w", err)
 	}
 	defer rows.Close()
 
-	var accounts []*models.InstagramAccount
+	var accounts []*models.PlatformAccount
 	for rows.Next() {
-		a := &models.InstagramAccount{}
-		if err := rows.Scan(&a.ID, &a.UserID, &a.InstagramUserID, &a.Username, &a.CreatedAt, &a.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("failed to scan instagram account: %w", err)
+		a := &models.PlatformAccount{}
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Platform, &a.PlatformUserID, &a.Username, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan platform account: %w", err)
 		}
 		accounts = append(accounts, a)
 	}
 	return accounts, nil
+}
+
+// FindOrCreateUserByPlatform finds an existing user linked to the given platform profile,
+// or creates a new user with a linked platform account if none exists.
+func (r *UserRepository) FindOrCreateUserByPlatform(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error) {
+	// Try to find existing platform account
+	existing, err := r.FindPlatformAccount(platform, profile.PlatformUserID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to find platform account: %w", err)
+	}
+
+	if existing != nil {
+		// Update username if changed
+		user, err := r.FindByID(existing.UserID)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Update user info
+		if profile.Name != "" || profile.Email != "" {
+			user.Name = coalesceStr(profile.Name, user.Name)
+			user.Email = coalesceStr(profile.Email, user.Email)
+			_ = r.Update(user)
+		}
+		// Update platform account username
+		if profile.Username != "" && profile.Username != existing.Username {
+			existing.Username = profile.Username
+			_, _ = r.db.Exec(
+				`UPDATE platform_accounts SET username = $1, updated_at = $2 WHERE id = $3`,
+				profile.Username, time.Now(), existing.ID,
+			)
+		}
+		return user, existing, nil
+	}
+
+	// Create new user and platform account in a transaction
+	tx, err := r.db.Begin()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+
+	user := &models.User{
+		Email: profile.Email,
+		Name:  profile.Name,
+	}
+	err = tx.QueryRow(
+		`INSERT INTO users (email, name) VALUES ($1, $2) RETURNING id, created_at, updated_at`,
+		user.Email, user.Name,
+	).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create user: %w", err)
+	}
+
+	account := &models.PlatformAccount{
+		UserID:         user.ID,
+		Platform:       platform,
+		PlatformUserID: profile.PlatformUserID,
+		Username:       profile.Username,
+	}
+	err = tx.QueryRow(
+		`INSERT INTO platform_accounts (user_id, platform, platform_user_id, username)
+		 VALUES ($1, $2, $3, $4) RETURNING id, created_at, updated_at`,
+		account.UserID, account.Platform, account.PlatformUserID, account.Username,
+	).Scan(&account.ID, &account.CreatedAt, &account.UpdatedAt)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create platform account: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return user, account, nil
+}
+
+// coalesceStr returns the first non-empty string.
+func coalesceStr(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

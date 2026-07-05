@@ -17,13 +17,12 @@ func NewTokenRepository(db *sql.DB) *TokenRepository {
 	return &TokenRepository{db: db}
 }
 
-// SaveToken saves a new encrypted token for a user.
+// SaveToken saves a new encrypted token for a platform account.
 func (r *TokenRepository) SaveToken(token *models.Token) error {
 	err := r.db.QueryRow(
-		`INSERT INTO tokens (user_id, account_id, token_type, encrypted_token, expires_at, scopes)
-		 VALUES ($1, $2, $3, $4, $5, $6)
-		 RETURNING id, created_at`,
-		token.UserID, token.AccountID, token.TokenType, token.EncryptedToken,
+		`INSERT INTO tokens (platform_account_id, token_type, encrypted_token, expires_at, scopes)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
+		token.PlatformAccountID, token.TokenType, token.EncryptedToken,
 		token.ExpiresAt, token.Scopes,
 	).Scan(&token.ID, &token.CreatedAt)
 
@@ -33,16 +32,16 @@ func (r *TokenRepository) SaveToken(token *models.Token) error {
 	return nil
 }
 
-// FindLatestToken finds the most recent token for a user of a given type.
-func (r *TokenRepository) FindLatestToken(userID int64, tokenType string) (*models.Token, error) {
+// FindLatestToken finds the most recent token for a platform account of a given type.
+func (r *TokenRepository) FindLatestToken(platformAccountID int64, tokenType string) (*models.Token, error) {
 	token := &models.Token{}
 	err := r.db.QueryRow(
-		`SELECT id, user_id, account_id, token_type, encrypted_token, expires_at, scopes, created_at
+		`SELECT id, platform_account_id, token_type, encrypted_token, expires_at, scopes, created_at
 		 FROM tokens 
-		 WHERE user_id = $1 AND token_type = $2
+		 WHERE platform_account_id = $1 AND token_type = $2
 		 ORDER BY created_at DESC LIMIT 1`,
-		userID, tokenType,
-	).Scan(&token.ID, &token.UserID, &token.AccountID, &token.TokenType,
+		platformAccountID, tokenType,
+	).Scan(&token.ID, &token.PlatformAccountID, &token.TokenType,
 		&token.EncryptedToken, &token.ExpiresAt, &token.Scopes, &token.CreatedAt)
 
 	if err == sql.ErrNoRows {
@@ -63,11 +62,11 @@ func (r *TokenRepository) DeleteToken(tokenID int64) error {
 	return nil
 }
 
-// DeleteAllTokensForUser removes all tokens for a given user.
-func (r *TokenRepository) DeleteAllTokensForUser(userID int64) error {
-	_, err := r.db.Exec(`DELETE FROM tokens WHERE user_id = $1`, userID)
+// DeleteAllTokensForPlatformAccount removes all tokens for a given platform account.
+func (r *TokenRepository) DeleteAllTokensForPlatformAccount(platformAccountID int64) error {
+	_, err := r.db.Exec(`DELETE FROM tokens WHERE platform_account_id = $1`, platformAccountID)
 	if err != nil {
-		return fmt.Errorf("failed to delete tokens for user: %w", err)
+		return fmt.Errorf("failed to delete tokens for platform account: %w", err)
 	}
 	return nil
 }

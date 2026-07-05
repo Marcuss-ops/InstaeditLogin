@@ -27,6 +27,31 @@ type Config struct {
 	MetaAppSecret   string
 	MetaRedirectURI string
 
+	// TikTok OAuth
+	TikTokClientKey    string
+	TikTokClientSecret string
+	TikTokRedirectURI  string
+
+	// Twitter/X OAuth
+	TwitterClientID     string
+	TwitterClientSecret string
+	TwitterRedirectURI  string
+
+	// YouTube OAuth
+	YouTubeClientID     string
+	YouTubeClientSecret string
+	YouTubeRedirectURI  string
+
+	// LinkedIn OAuth
+	LinkedInClientID     string
+	LinkedInClientSecret string
+	LinkedInRedirectURI  string
+
+	// Pinterest OAuth
+	PinterestAppID       string
+	PinterestAppSecret   string
+	PinterestRedirectURI string
+
 	// Encryption
 	EncryptionKey string
 
@@ -44,20 +69,35 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		ServerPort:      getEnv("SERVER_PORT", "8080"),
-		ServerHost:      getEnv("SERVER_HOST", "0.0.0.0"),
-		DBHost:          getEnv("DB_HOST", "localhost"),
-		DBPort:          getEnv("DB_PORT", "5432"),
-		DBUser:          getEnv("DB_USER", "instaedit"),
-		DBPassword:      getEnv("DB_PASSWORD", ""),
-		DBName:          getEnv("DB_NAME", "instaedit_login"),
-		DBSSLMode:       getEnv("DB_SSLMODE", "disable"),
-		MetaAppID:       getEnv("META_APP_ID", ""),
-		MetaAppSecret:   getEnv("META_APP_SECRET", ""),
-		MetaRedirectURI: getEnv("META_REDIRECT_URI", "http://localhost:8080/api/v1/auth/callback"),
-		EncryptionKey:   getEnv("ENCRYPTION_KEY", ""),
-		JWTSecret:       getEnv("JWT_SECRET", ""),
-		LogLevel:        getEnv("LOG_LEVEL", "info"),
+		ServerPort:          getEnv("SERVER_PORT", "8080"),
+		ServerHost:          getEnv("SERVER_HOST", "0.0.0.0"),
+		DBHost:              getEnv("DB_HOST", "localhost"),
+		DBPort:              getEnv("DB_PORT", "5432"),
+		DBUser:              getEnv("DB_USER", "instaedit"),
+		DBPassword:          getEnv("DB_PASSWORD", ""),
+		DBName:              getEnv("DB_NAME", "instaedit_login"),
+		DBSSLMode:           getEnv("DB_SSLMODE", "disable"),
+		MetaAppID:           getEnv("META_APP_ID", ""),
+		MetaAppSecret:       getEnv("META_APP_SECRET", ""),
+		MetaRedirectURI:     getEnv("META_REDIRECT_URI", "http://localhost:8080/api/v1/auth/meta/callback"),
+		TikTokClientKey:     getEnv("TIKTOK_CLIENT_KEY", ""),
+		TikTokClientSecret:  getEnv("TIKTOK_CLIENT_SECRET", ""),
+		TikTokRedirectURI:   getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
+		TwitterClientID:     getEnv("TWITTER_CLIENT_ID", ""),
+		TwitterClientSecret: getEnv("TWITTER_CLIENT_SECRET", ""),
+		TwitterRedirectURI:  getEnv("TWITTER_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
+		YouTubeClientID:     getEnv("YOUTUBE_CLIENT_ID", ""),
+		YouTubeClientSecret: getEnv("YOUTUBE_CLIENT_SECRET", ""),
+		YouTubeRedirectURI:  getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
+		LinkedInClientID:    getEnv("LINKEDIN_CLIENT_ID", ""),
+		LinkedInClientSecret: getEnv("LINKEDIN_CLIENT_SECRET", ""),
+		LinkedInRedirectURI:  getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
+		PinterestAppID:      getEnv("PINTEREST_APP_ID", ""),
+		PinterestAppSecret:  getEnv("PINTEREST_APP_SECRET", ""),
+		PinterestRedirectURI: getEnv("PINTEREST_REDIRECT_URI", "http://localhost:8080/api/v1/auth/pinterest/callback"),
+		EncryptionKey:       getEnv("ENCRYPTION_KEY", ""),
+		JWTSecret:           getEnv("JWT_SECRET", ""),
+		LogLevel:            getEnv("LOG_LEVEL", "info"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -68,6 +108,7 @@ func Load() (*Config, error) {
 }
 
 // validate checks that required configuration values are present.
+// Only Meta is mandatory; other platforms are optional.
 func (c *Config) validate() error {
 	if c.DBPassword == "" {
 		return fmt.Errorf("DB_PASSWORD is required")

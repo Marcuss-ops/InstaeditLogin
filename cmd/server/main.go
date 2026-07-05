@@ -19,13 +19,11 @@ import (
 )
 
 func main() {
-	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Setup structured logger
 	logLevel := slog.LevelInfo
 	if cfg.LogLevel == "debug" {
 		logLevel = slog.LevelDebug
@@ -33,7 +31,7 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)
 
-	slog.Info("Starting InstaEditLogin server...")
+	slog.Info("Starting InstaEditLogin server v2.0.0...")
 
 	// Connect to PostgreSQL
 	db, err := database.Connect(cfg)
@@ -57,16 +55,85 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	tokenRepo := repository.NewTokenRepository(db)
 
-	// Initialize services
-	metaService := services.NewMetaService(cfg)
-	oauthService, err := services.NewFacebookOAuthService(cfg, userRepo, tokenRepo)
+	// Initialize all platform providers
+	platforms := make(map[string]services.PlatformService)
+
+	// Meta / Facebook + Instagram (always required)
+	metaSvc, err := services.NewFacebookOAuthService(cfg, userRepo, tokenRepo)
 	if err != nil {
-		slog.Error("Failed to create OAuth service", "error", err)
+		slog.Error("Failed to create Meta OAuth service", "error", err)
 		os.Exit(1)
+	}
+	platforms[metaSvc.GetPlatform()] = metaSvc
+	slog.Info("Meta/Facebook OAuth provider registered")
+
+	// TikTok (optional — only if credentials are set)
+	if cfg.TikTokClientKey != "" {
+		tiktokSvc, err := services.NewTikTokOAuthService(cfg, userRepo, tokenRepo)
+		if err != nil {
+			slog.Warn("Failed to create TikTok OAuth service", "error", err)
+		} else {
+			platforms[tiktokSvc.GetPlatform()] = tiktokSvc
+			slog.Info("TikTok OAuth provider registered")
+		}
+	} else {
+		slog.Info("TikTok OAuth provider skipped (no credentials)")
+	}
+
+	// Twitter/X (optional)
+	if cfg.TwitterClientID != "" {
+		twitterSvc, err := services.NewTwitterOAuthService(cfg, userRepo, tokenRepo)
+		if err != nil {
+			slog.Warn("Failed to create Twitter OAuth service", "error", err)
+		} else {
+			platforms[twitterSvc.GetPlatform()] = twitterSvc
+			slog.Info("Twitter OAuth provider registered")
+		}
+	} else {
+		slog.Info("Twitter OAuth provider skipped (no credentials)")
+	}
+
+	// YouTube (optional)
+	if cfg.YouTubeClientID != "" {
+		youtubeSvc, err := services.NewYouTubeOAuthService(cfg, userRepo, tokenRepo)
+		if err != nil {
+			slog.Warn("Failed to create YouTube OAuth service", "error", err)
+		} else {
+			platforms[youtubeSvc.GetPlatform()] = youtubeSvc
+			slog.Info("YouTube OAuth provider registered")
+		}
+	} else {
+		slog.Info("YouTube OAuth provider skipped (no credentials)")
+	}
+
+	// LinkedIn (optional)
+	if cfg.LinkedInClientID != "" {
+		linkedinSvc, err := services.NewLinkedInOAuthService(cfg, userRepo, tokenRepo)
+		if err != nil {
+			slog.Warn("Failed to create LinkedIn OAuth service", "error", err)
+		} else {
+			platforms[linkedinSvc.GetPlatform()] = linkedinSvc
+			slog.Info("LinkedIn OAuth provider registered")
+		}
+	} else {
+		slog.Info("LinkedIn OAuth provider skipped (no credentials)")
+	}
+
+	// Pinterest (optional)
+	if cfg.PinterestAppID != "" {
+		pinterestSvc, err := services.NewPinterestOAuthService(cfg, userRepo, tokenRepo)
+		if err != nil {
+			slog.Warn("Failed to create Pinterest OAuth service", "error", err)
+		} else {
+			platforms[pinterestSvc.GetPlatform()] = pinterestSvc
+			slog.Info("Pinterest OAuth provider registered")
+		}
+	} else {
+		slog.Info("Pinterest OAuth provider skipped (no credentials)")
 	}
 
 	// Setup HTTP router
-	router := api.NewRouter(cfg, oauthService, metaService, userRepo)
+	router := api.NewRouter(platforms, userRepo)
 	handler := router.Setup()
 
 	// Create HTTP server
@@ -78,7 +145,6 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start server in a goroutine
 	go func() {
 		slog.Info("Server listening", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
