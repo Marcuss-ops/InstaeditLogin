@@ -127,7 +127,11 @@ func (s *TikTokOAuthService) Publish(ctx context.Context, accessToken, platformU
 
 	// Poll for status
 	for i := 0; i < 30; i++ {
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("tiktok publish cancelled: %w", ctx.Err())
+		case <-time.After(2 * time.Second):
+		}
 
 		req, _ := http.NewRequestWithContext(ctx, "GET",
 			"https://open.tiktokapis.com/v2/post/publish/status/fetch/",
@@ -189,7 +193,7 @@ func (s *TikTokOAuthService) exchangeCodeForToken(code string) (*tiktokTokenResp
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
 	if err != nil {
 		return nil, fmt.Errorf("token request: %w", err)
 	}
@@ -208,10 +212,13 @@ func (s *TikTokOAuthService) exchangeCodeForToken(code string) (*tiktokTokenResp
 }
 
 func (s *TikTokOAuthService) getUserInfo(accessToken string) (*models.PlatformProfile, error) {
-	req, _ := http.NewRequest("GET", "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name", nil)
+	req, err := http.NewRequest("GET", "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name", nil)
+	if err != nil {
+		return nil, fmt.Errorf("user info request creation: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
 	if err != nil {
 		return nil, fmt.Errorf("user info request: %w", err)
 	}

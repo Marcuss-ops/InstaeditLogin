@@ -439,7 +439,7 @@ func (s *YouTubeOAuthService) exchangeCodeForToken(code string) (*youtubeTokenRe
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
 	if err != nil {
 		return nil, fmt.Errorf("token request: %w", err)
 	}
@@ -458,11 +458,14 @@ func (s *YouTubeOAuthService) exchangeCodeForToken(code string) (*youtubeTokenRe
 }
 
 func (s *YouTubeOAuthService) getUserInfo(accessToken string) (*models.PlatformProfile, error) {
-	req, _ := http.NewRequest("GET",
+	req, err := http.NewRequest("GET",
 		"https://www.googleapis.com/oauth2/v2/userinfo", nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
-	resp, err := s.httpClient.Do(req)
+	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
 	if err != nil {
 		return nil, err
 	}
