@@ -6,21 +6,42 @@
 
 @layer base {
   body {
-    background-color: #050505;
+    background-color: #000000;
     color: #f5f5f7;
   }
 }
 
 .text-glow {
-  text-shadow: 0 0 15px rgba(255, 255, 255, 0.55), 0 0 30px rgba(255, 255, 255, 0.25);
+  text-shadow: 0 0 15px rgba(255, 255, 255, 0.4), 0 0 30px rgba(255, 255, 255, 0.15);
 }
 
 .brand-glow {
-  text-shadow: 0 0 15px rgba(10, 132, 255, 0.6), 0 0 30px rgba(10, 132, 255, 0.3);
+  text-shadow: 0 0 20px rgba(139, 92, 246, 0.6), 0 0 40px rgba(139, 92, 246, 0.3);
 }
 
 .box-glow {
-  box-shadow: 0 0 20px rgba(10, 132, 255, 0.15);
+  box-shadow: 0 0 25px rgba(139, 92, 246, 0.25);
+}
+
+.neon-border {
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.neon-border:hover {
+  border-color: rgba(139, 92, 246, 0.4);
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, #ffffff 30%, #a78bfa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.text-gradient-cyan {
+  background: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 @keyframes modalIn {
