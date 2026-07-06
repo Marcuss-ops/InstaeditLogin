@@ -5,9 +5,9 @@ import { DemoModal } from "./DemoModal";
 
 const portfolioVideos = [
   { id: "K9bbXKdXBPc", title: "Luffy's Gear 5 Awakening", score: 99, remark: "Outstanding hook, viral audio pattern" },
-  { id: "uTkE5Gk9s6A", title: "Premium Motion Edit", score: 97, remark: "Ultra-fast cuts, high retention pacing" },
+  { id: "uTkE5Gk9s6A", title: "Premium Production Edit", score: 97, remark: "Ultra-fast cuts, high retention pacing" },
   { id: "HihqIP9e7Z4", title: "Cinematic Pacing Showcase", score: 98, remark: "Perfect sound transitions, high watchtime" },
-  { id: "Uee5VFsmlLo", title: "Advanced Visual Color Edit", score: 96, remark: "Stunning grading, high visual engagement" }
+  { id: "_KzMwN31QCk", title: "Viral Anime Montage", score: 99, remark: "Flawless transitions and visual flow" }
 ];
 
 export function Hero() {
@@ -54,7 +54,7 @@ export function Hero() {
             See how we turn raw footage into high-retention viral content.
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-7">
+          <div className="grid grid-cols-1 gap-8 max-w-[560px] mx-auto">
             {portfolioVideos.map((video) => (
               <div 
                 key={video.id} 

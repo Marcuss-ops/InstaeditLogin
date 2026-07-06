@@ -18,7 +18,7 @@ export function Steps() {
   ];
 
   return (
-    <section id="how-it-works" className="py-24 bg-[#050505] text-white">
+    <section id="how-it-works" className="py-24 bg-black text-white">
       <div className="max-w-[1100px] mx-auto px-6">
         <div className="text-center max-w-[640px] mx-auto mb-14">
           <h2 className="text-[clamp(32px,4.5vw,44px)] font-extrabold tracking-[-0.02em] mb-3 text-white text-glow">

@@ -1,4 +1,4 @@
-import { Calendar, Layout, BarChart3, Users, Shield } from "lucide-react";
+import { Calendar, Layout, BarChart3, Users, Shield, Globe } from "lucide-react";
 
 const features = [
   {
@@ -21,11 +21,16 @@ const features = [
     title: "Engagement-focused hook & pacing",
     desc: "We design hooks, subtitles, sound design, and zoom-cuts to maximize your retention rates.",
   },
+  {
+    icon: <Globe size={20} />,
+    title: "Global translation (100+ languages)",
+    desc: "We translate and subtitle your videos into over 100 languages to reach a worldwide audience.",
+  },
 ];
 
 export function Features() {
   return (
-    <section id="features" className="py-24 bg-[#09090b] border-y border-neutral-900 text-white">
+    <section id="features" className="py-24 bg-black border-y border-neutral-900 text-white">
       <div className="max-w-[1100px] mx-auto px-6">
         <div className="text-center max-w-[640px] mx-auto mb-14">
           <h2 className="text-[clamp(32px,4.5vw,44px)] font-extrabold tracking-[-0.02em] mb-3 text-white text-glow">
@@ -36,7 +41,7 @@ export function Features() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {features.map((f) => (
             <div
               key={f.title}
