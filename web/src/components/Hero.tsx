@@ -16,10 +16,6 @@ export function Hero() {
   return (
     <>
       <section className="hero reveal">
-        <div className="eyebrow">
-          <span className="pulse-dot" aria-hidden="true"></span>
-          New • AI Virality Engine v2
-        </div>
         <h1>
           1 long video.<br />
           10 viral shorts.<br />
