@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #030308;
+  --bg: #000000;
   --bg2: #0a0a12;
   --glass: rgba(255, 255, 255, 0.06);
   --border: rgba(255, 255, 255, 0.12);
@@ -36,10 +36,45 @@
   }
 }
 
+nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  backdrop-filter: blur(16px);
+  background: rgba(0, 0, 0, 0.7);
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .logo {
   font-weight: 700;
   font-size: 18px;
   letter-spacing: -0.3px;
+}
+
+.nav-links {
+  display: flex;
+  gap: 28px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.nav-links a {
+  color: inherit;
+  text-decoration: none;
+  transition: color .2s;
+}
+
+.nav-links a:hover {
+  color: var(--text);
 }
 
 .gradient {
@@ -77,6 +112,13 @@
   box-shadow: 0 0 32px rgba(123, 97, 255, 0.45);
 }
 
+.hero {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 120px 20px 80px;
+  text-align: center;
+}
+
 .eyebrow {
   display: inline-flex;
   gap: 8px;
@@ -88,6 +130,43 @@
   font-size: 12px;
   color: var(--muted);
   margin-bottom: 24px;
+}
+
+.hero p {
+  max-width: 680px;
+  margin: 0 auto 36px;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.hero-ctas {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.section {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 80px 20px;
+}
+
+.section-head {
+  text-align: center;
+  margin-bottom: 48px;
+}
+
+.section-head h2 {
+  font-size: clamp(28px, 4vw, 42px);
+  font-weight: 750;
+  letter-spacing: -1px;
+  margin-bottom: 8px;
+  color: white;
+}
+
+.section-head p {
+  color: var(--muted);
 }
 
 .card {
@@ -123,6 +202,32 @@
   z-index: 10;
 }
 
+.card-body {
+  padding: 18px 20px;
+}
+
+.card-title {
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+
+.card-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.card-meta span {
+  color: #8b5cf6;
+}
+
+.pills {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 32px;
+}
+
 .pill {
   padding: 8px 16px;
   border-radius: 999px;
@@ -130,6 +235,32 @@
   border: 1px solid var(--border);
   font-size: 13px;
   color: var(--muted);
+}
+
+.compatible {
+  margin-top: 60px;
+  padding: 24px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 32px;
+  justify-content: center;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-top: 40px;
+}
+
+@media(max-width: 900px) {
+  .steps {
+    grid-template-columns: 1fr;
+  }
 }
 
 .step {
@@ -153,6 +284,29 @@
   color: white;
 }
 
+.step h3 {
+  margin-bottom: 8px;
+  font-size: 18px;
+}
+
+.step p {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin-top: 40px;
+}
+
+@media(max-width: 900px) {
+  .features {
+    grid-template-columns: 1fr;
+  }
+}
+
 .feature {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02));
   border: 1px solid var(--border);
@@ -164,13 +318,23 @@
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: rgba(10, 132, 255, 0.15);
-  border: 1px solid rgba(10, 132, 255, 0.3);
+  background: rgba(255, 0, 0, 0.15);
+  border: 1px solid rgba(255, 0, 0, 0.3);
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 14px;
   color: var(--blue);
+}
+
+.feature h4 {
+  font-size: 15px;
+  margin-bottom: 6px;
+}
+
+.feature p {
+  font-size: 13px;
+  color: var(--muted);
 }
 
 .guarantee {
@@ -187,6 +351,29 @@
   gap: 10px;
   align-items: center;
   justify-content: center;
+}
+
+.cta {
+  text-align: center;
+  padding: 100px 20px;
+  background: radial-gradient(600px circle at 50% 0%, rgba(123, 97, 255, 0.15), transparent 70%);
+}
+
+.cta h2 {
+  font-size: clamp(32px, 5vw, 54px);
+  font-weight: 800;
+  letter-spacing: -1.5px;
+  margin-bottom: 24px;
+  color: white;
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 30px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  background-color: var(--bg);
 }
 
 @keyframes modalIn {
