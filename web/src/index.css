@@ -642,6 +642,32 @@ footer {
   background-color: var(--bg);
 }
 
+.footer-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.footer-link {
+  color: var(--muted);
+  text-decoration: none;
+  transition: color .2s;
+}
+
+.footer-link:hover {
+  color: var(--text);
+}
+
+.footer-divider {
+  color: var(--border);
+  opacity: 0.8;
+  user-select: none;
+}
+
 @keyframes modalIn {
   from {
     transform: translateY(8px);
