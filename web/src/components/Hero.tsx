@@ -23,7 +23,7 @@ export function Hero() {
         <h1>
           1 long video.<br />
           10 viral shorts.<br />
-          <span className="gradient">Created in minutes.</span>
+          <span className="text-white">Created in minutes.</span>
         </h1>
         <p>
           We are a team of top-tier video editors. We transform your raw files into 
