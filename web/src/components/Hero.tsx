@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { PlatformPills } from "./PlatformPills";
 import { DemoModal } from "./DemoModal";
 
 const portfolioVideos = [
@@ -68,11 +67,6 @@ export function Hero() {
               </div>
             </div>
           ))}
-        </div>
-        <PlatformPills />
-        <div className="compatible">
-          <span>COMPATIBLE WITH</span>
-          <span>Instagram Reels • Facebook Videos • TikTok Shorts • YouTube Shorts • X Media</span>
         </div>
       </section>
 
