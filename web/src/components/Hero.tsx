@@ -10,18 +10,15 @@ export function Hero() {
     <section className="pt-24 pb-10 text-center">
       <div className="max-w-[1100px] mx-auto px-6">
         <h1 className="text-[clamp(44px,8vw,76px)] font-extrabold tracking-[-0.03em] leading-[0.95] mb-6 text-black">
-          Log in{" "}
-          <span className="text-[#0A84FF]">once.</span>{" "}
-          Post{" "}
-          <span className="text-[#0A84FF]">everywhere.</span>
+          High-quality videos in{" "}
+          <span className="text-[#0A84FF]">minutes.</span>{" "}
+          Not{" "}
+          <span className="text-[#0A84FF]">hours.</span>
         </h1>
 
         <p className="text-[clamp(16px,2.1vw,19px)] text-neutral-700 max-w-[740px] mx-auto mb-8 leading-relaxed">
-          Connect{" "}
-          <span className="text-[#0A84FF] font-semibold">once</span>{" "}
-          using secure OAuth to Instagram, Facebook, TikTok, YouTube, and X — then
-          upload once, and SocialSync publishes{" "}
-          <span className="text-[#0A84FF] font-semibold">everywhere</span>.
+          We are a dedicated group of professional editors who edit, polish, and optimize your videos.
+          Get premium quality content for TikTok, Reels, YouTube, and X in minutes, not hours.
         </p>
 
         <div className="flex gap-3 justify-center flex-wrap mb-[72px]">
@@ -29,7 +26,7 @@ export function Hero() {
             to="/login"
             className="inline-flex items-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-black text-white no-underline hover:-translate-y-[1px] hover:bg-neutral-900 transition-all"
           >
-            Get started for free
+            Get started
           </Link>
           <button
             onClick={() => setDemoOpen(true)}
@@ -47,7 +44,7 @@ export function Hero() {
                 <span className="w-2 h-2 rounded-full bg-neutral-300" />
                 <span className="w-2 h-2 rounded-full bg-neutral-300" />
               </div>
-              <span className="text-[12px] text-neutral-500 font-medium">New post</span>
+              <span className="text-[12px] text-neutral-500 font-medium">New editing request</span>
             </div>
             <div className="py-8 px-6 text-center">
               <div className="w-12 h-12 mx-auto mb-3.5 rounded-[10px] bg-neutral-100 grid place-items-center">
@@ -57,9 +54,9 @@ export function Hero() {
                   <line x1="12" y1="3" x2="12" y2="15" />
                 </svg>
               </div>
-              <p className="mb-3.5 font-semibold text-sm text-black">summer-2026.mp4</p>
-              <div className="h-1.5 bg-neutral-100 rounded-full max-w-[220px] mx-auto overflow-hidden">
-                <div className="w-[68%] h-full bg-[#0A84FF] animate-pulse rounded-full" />
+              <p className="mb-3.5 font-semibold text-sm text-black">Project: summer-promo.mp4</p>
+              <div className="flex items-center justify-center gap-1.5 text-xs text-[#0A84FF] font-semibold bg-blue-50/50 py-1.5 px-3 rounded-lg max-w-[180px] mx-auto animate-pulse">
+                <span>Team is editing...</span>
               </div>
             </div>
           </div>
@@ -69,7 +66,7 @@ export function Hero() {
         {/* Platforms row */}
         <div className="mt-20 py-7 border-y border-neutral-100">
           <div className="flex items-center justify-center gap-8 flex-wrap">
-            <span className="text-[13px] text-neutral-400 font-medium">Compatible with</span>
+            <span className="text-[13px] text-neutral-400 font-medium">Premium editing for</span>
             <div className="flex gap-7 flex-wrap items-center justify-center">
               {["Instagram", "Facebook", "TikTok", "YouTube", "X"].map((p) => (
                 <span key={p} className="text-[15px] font-semibold tracking-tight text-black/55">

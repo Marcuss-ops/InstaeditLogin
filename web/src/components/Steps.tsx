@@ -2,18 +2,18 @@ export function Steps() {
   const items = [
     {
       num: 1,
-      title: "Connect",
-      desc: "Secure OAuth. Connect all your accounts in 60 seconds. No passwords saved.",
+      title: "Upload assets",
+      desc: "Submit your raw footage, ideas, and style guidelines to our portal in seconds.",
     },
     {
       num: 2,
-      title: "Upload",
-      desc: "One upload for videos, images, and text. Add hashtags and mentions once.",
+      title: "Professional editing",
+      desc: "Our specialized video editors cut, color-grade, animate, and sound-design your videos.",
     },
     {
       num: 3,
-      title: "Publish",
-      desc: "SocialSync adapts formats, crops, and publishes everywhere, instantly or scheduled.",
+      title: "Review & publish",
+      desc: "Review the draft, request unlimited revisions, then export and publish directly to your socials.",
     },
   ];
 

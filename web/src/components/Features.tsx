@@ -2,24 +2,24 @@ import { Calendar, Layout, BarChart3, Users, Shield } from "lucide-react";
 
 const features = [
   {
+    icon: <Users size={20} />,
+    title: "Top 1% Hand-vetted editors",
+    desc: "Your projects are matched with elite, professional video editors.",
+  },
+  {
     icon: <Calendar size={20} />,
-    title: "Editorial calendar",
-    desc: "drag and drop scheduling",
+    title: "Ultra-fast delivery",
+    desc: "Get your fully polished video drafts back in minutes or hours, not days.",
   },
   {
     icon: <Layout size={20} />,
-    title: "Auto-adaptation",
-    desc: "9:16, 1:1, 16:9 in one click",
+    title: "Multi-format scaling",
+    desc: "We auto-crop and optimize for Reels, TikToks, Shorts, and YouTube in a single request.",
   },
   {
     icon: <BarChart3 size={20} />,
-    title: "Unified Analytics",
-    desc: "performance in a single dashboard",
-  },
-  {
-    icon: <Users size={20} />,
-    title: "Team & Approvals",
-    desc: "drafts, comments, and roles",
+    title: "Engagement-focused hook & pacing",
+    desc: "We design hooks, subtitles, sound design, and zoom-cuts to maximize your retention rates.",
   },
 ];
 
@@ -29,10 +29,10 @@ export function Features() {
       <div className="max-w-[1100px] mx-auto px-6">
         <div className="text-center max-w-[640px] mx-auto mb-14">
           <h2 className="text-[clamp(32px,4.5vw,44px)] font-extrabold tracking-[-0.02em] mb-3 text-black">
-            Everything you need, nothing more
+            High-quality editing. Simplified.
           </h2>
           <p className="text-neutral-500 text-[17px]">
-            Clean design, inspired by Notion and Figma. Fast, minimal, powerful.
+            Clean design, premium results. Zero communication friction.
           </p>
         </div>
 
@@ -57,7 +57,7 @@ export function Features() {
         <div className="mt-14 max-w-[860px] mx-auto bg-white border border-neutral-100 rounded-xl py-4.5 px-5.5 flex items-center justify-center gap-3 text-center flex-wrap">
           <Shield size={18} className="text-[#0A84FF] shrink-0" />
           <p className="text-sm font-medium text-neutral-700">
-            Official OAuth. We do not store passwords. Revoke access at any time.
+            100% Satisfaction Guarantee. We edit until you love the result. Cancel at any time.
           </p>
         </div>
       </div>

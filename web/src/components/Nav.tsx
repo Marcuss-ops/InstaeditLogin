@@ -26,7 +26,7 @@ export function Nav() {
     <nav className="sticky top-0 z-50 bg-white/85 backdrop-blur-xl border-b border-neutral-100">
       <div className="max-w-[1100px] mx-auto px-6 h-16 flex items-center justify-between gap-4">
         <Link to="/" className="font-extrabold text-[19px] tracking-tight no-underline text-black">
-          SocialSync
+          InstaEdit
         </Link>
 
         {/* Desktop links */}
