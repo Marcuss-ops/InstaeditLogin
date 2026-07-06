@@ -23,9 +23,9 @@ export function Nav() {
   };
 
   return (
-    <nav className="sticky top-0 z-50 bg-white/85 backdrop-blur-xl border-b border-neutral-100">
+    <nav className="sticky top-0 z-50 bg-[#050505]/85 backdrop-blur-xl border-b border-neutral-900">
       <div className="max-w-[1100px] mx-auto px-6 h-16 flex items-center justify-between gap-4">
-        <Link to="/" className="font-extrabold text-[19px] tracking-tight no-underline text-black">
+        <Link to="/" className="font-extrabold text-[19px] tracking-tight no-underline text-white hover:text-neutral-200 transition-colors">
           InstaEdit
         </Link>
 
@@ -36,14 +36,14 @@ export function Nav() {
               key={l.href}
               to={l.href}
               onClick={(e) => scrollTo(e, l.href)}
-              className="text-sm font-medium text-black/70 hover:text-black transition-colors no-underline"
+              className="text-sm font-medium text-neutral-400 hover:text-white transition-colors no-underline"
             >
               {l.label}
             </Link>
           ))}
           <Link
             to="/login"
-            className="text-sm font-medium text-black/70 hover:text-black transition-colors no-underline"
+            className="text-sm font-medium text-neutral-400 hover:text-white transition-colors no-underline"
           >
             Login
           </Link>
@@ -53,16 +53,16 @@ export function Nav() {
         <div className="hidden md:block">
           <Link
             to="/login"
-            className="inline-flex items-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-black text-white no-underline hover:-translate-y-[1px] hover:bg-neutral-900 transition-all"
+            className="inline-flex items-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-white text-black no-underline hover:-translate-y-[1px] hover:bg-neutral-100 hover:shadow-[0_0_15px_rgba(255,255,255,0.4)] transition-all"
           >
-            Get started for free
+            Get started
           </Link>
         </div>
 
         {/* Mobile toggle */}
         <button
           onClick={() => setOpen(!open)}
-          className="md:hidden p-2"
+          className="md:hidden p-2 text-white"
           aria-label="Menu"
         >
           {open ? <X size={24} /> : <Menu size={24} />}
@@ -72,7 +72,7 @@ export function Nav() {
       {/* Mobile menu */}
       <div
         className={cn(
-          "md:hidden border-b border-neutral-100 bg-white flex-col px-6 pb-4 pt-2 gap-0",
+          "md:hidden border-b border-neutral-900 bg-[#050505] flex-col px-6 pb-4 pt-2 gap-0",
           open ? "flex" : "hidden"
         )}
       >
@@ -81,7 +81,7 @@ export function Nav() {
             key={l.href}
             to={l.href}
             onClick={(e) => { scrollTo(e, l.href); setOpen(false); }}
-            className="py-3.5 text-sm font-medium border-b border-neutral-100 last:border-b-0 no-underline text-black"
+            className="py-3.5 text-sm font-medium border-b border-neutral-900 last:border-b-0 no-underline text-neutral-300 hover:text-white"
           >
             {l.label}
           </Link>
@@ -89,16 +89,16 @@ export function Nav() {
         <Link
           to="/login"
           onClick={() => setOpen(false)}
-          className="py-3.5 text-sm font-medium border-b border-neutral-100 last:border-b-0 no-underline text-black"
+          className="py-3.5 text-sm font-medium border-b border-neutral-900 last:border-b-0 no-underline text-neutral-300 hover:text-white"
         >
           Login
         </Link>
         <Link
           to="/login"
           onClick={() => setOpen(false)}
-          className="mt-3 inline-flex items-center justify-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-black text-white no-underline"
+          className="mt-3 inline-flex items-center justify-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-white text-black no-underline hover:shadow-[0_0_15px_rgba(255,255,255,0.3)] transition-all"
         >
-          Get started for free
+          Get started
         </Link>
       </div>
     </nav>

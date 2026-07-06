@@ -17,10 +17,10 @@ export function DemoModal({ open, onClose }: Props) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-white rounded-xl max-w-[800px] w-full overflow-hidden shadow-[0_20px_60px_rgba(0,0,0,0.3)] animate-[modalIn_0.2s_ease]">
-        <div className="flex justify-between items-center py-3.5 px-[18px] border-b border-neutral-100">
-          <h3 className="text-[15px] font-semibold text-black">InstaEdit — Quick Demo</h3>
-          <button onClick={onClose} className="text-[22px] leading-none p-1 cursor-pointer border-0 bg-transparent" aria-label="Close">
+      <div className="bg-[#0c0c0e] border border-neutral-900 rounded-xl max-w-[800px] w-full overflow-hidden shadow-[0_0_30px_rgba(10,132,255,0.15)] animate-[modalIn_0.2s_ease]">
+        <div className="flex justify-between items-center py-3.5 px-[18px] border-b border-neutral-900 text-white">
+          <h3 className="text-[15px] font-semibold text-white text-glow">InstaEdit — Quick Demo</h3>
+          <button onClick={onClose} className="text-[22px] leading-none p-1 cursor-pointer border-0 bg-transparent text-white" aria-label="Close">
             <X size={22} />
           </button>
         </div>

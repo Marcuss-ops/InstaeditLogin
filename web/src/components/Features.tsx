@@ -25,13 +25,13 @@ const features = [
 
 export function Features() {
   return (
-    <section id="features" className="py-24 bg-neutral-100 border-y border-neutral-200">
+    <section id="features" className="py-24 bg-[#09090b] border-y border-neutral-900 text-white">
       <div className="max-w-[1100px] mx-auto px-6">
         <div className="text-center max-w-[640px] mx-auto mb-14">
-          <h2 className="text-[clamp(32px,4.5vw,44px)] font-extrabold tracking-[-0.02em] mb-3 text-black">
+          <h2 className="text-[clamp(32px,4.5vw,44px)] font-extrabold tracking-[-0.02em] mb-3 text-white text-glow">
             High-quality editing. Simplified.
           </h2>
-          <p className="text-neutral-500 text-[17px]">
+          <p className="text-neutral-400 text-[17px]">
             Clean design, premium results. Zero communication friction.
           </p>
         </div>
@@ -40,23 +40,23 @@ export function Features() {
           {features.map((f) => (
             <div
               key={f.title}
-              className="bg-white border border-neutral-100 rounded-xl p-6 flex gap-4 items-start"
+              className="bg-[#0c0c0e] border border-neutral-900 rounded-xl p-6 flex gap-4 items-start hover:border-neutral-800 transition-colors"
             >
-              <div className="w-10 h-10 min-w-10 rounded-[10px] bg-neutral-100 grid place-items-center text-black">
+              <div className="w-10 h-10 min-w-10 rounded-[10px] bg-neutral-900 border border-neutral-800 grid place-items-center text-[#0A84FF] brand-glow">
                 {f.icon}
               </div>
               <div>
-                <h4 className="mt-0.5 mb-1.5 text-[17px] font-bold text-black">{f.title}</h4>
-                <p className="text-neutral-500 text-sm leading-relaxed">{f.desc}</p>
+                <h4 className="mt-0.5 mb-1.5 text-[17px] font-bold text-white">{f.title}</h4>
+                <p className="text-neutral-400 text-sm leading-relaxed">{f.desc}</p>
               </div>
             </div>
           ))}
         </div>
 
         {/* Security banner */}
-        <div className="mt-14 max-w-[860px] mx-auto bg-white border border-neutral-100 rounded-xl py-4.5 px-5.5 flex items-center justify-center gap-3 text-center flex-wrap">
-          <Shield size={18} className="text-[#0A84FF] shrink-0" />
-          <p className="text-sm font-medium text-neutral-700">
+        <div className="mt-14 max-w-[860px] mx-auto bg-[#0c0c0e] border border-neutral-900 rounded-xl py-4.5 px-5.5 flex items-center justify-center gap-3 text-center flex-wrap">
+          <Shield size={18} className="text-[#0A84FF] shrink-0 brand-glow" />
+          <p className="text-sm font-medium text-neutral-300">
             100% Satisfaction Guarantee. We edit until you love the result. Cancel at any time.
           </p>
         </div>

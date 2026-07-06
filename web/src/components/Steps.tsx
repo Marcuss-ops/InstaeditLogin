@@ -18,14 +18,14 @@ export function Steps() {
   ];
 
   return (
-    <section id="how-it-works" className="py-24">
+    <section id="how-it-works" className="py-24 bg-[#050505] text-white">
       <div className="max-w-[1100px] mx-auto px-6">
         <div className="text-center max-w-[640px] mx-auto mb-14">
-          <h2 className="text-[clamp(32px,4.5vw,44px)] font-extrabold tracking-[-0.02em] mb-3 text-black">
+          <h2 className="text-[clamp(32px,4.5vw,44px)] font-extrabold tracking-[-0.02em] mb-3 text-white text-glow">
             How it works
           </h2>
-          <p className="text-neutral-500 text-[17px]">
-            Three simple steps. From login to publishing.
+          <p className="text-neutral-400 text-[17px]">
+            Three simple steps. From upload to publishing.
           </p>
         </div>
 
@@ -33,13 +33,13 @@ export function Steps() {
           {items.map((item) => (
             <div
               key={item.num}
-              className="bg-white border border-neutral-100 rounded-xl p-7 hover:-translate-y-[2px] hover:shadow-[0_8px_24px_rgba(0,0,0,0.05)] transition-all"
+              className="bg-[#0c0c0e] border border-neutral-900 rounded-xl p-7 hover:-translate-y-[2px] hover:border-neutral-800 hover:shadow-[0_0_20px_rgba(255,255,255,0.03)] transition-all"
             >
-              <span className="inline-flex w-7 h-7 rounded-lg bg-neutral-100 items-center justify-center text-[13px] font-bold mb-4 text-black">
+              <span className="inline-flex w-7 h-7 rounded-lg bg-neutral-900 border border-neutral-800 items-center justify-center text-[13px] font-bold mb-4 text-[#0A84FF] brand-glow">
                 {item.num}
               </span>
-              <h3 className="text-xl font-bold tracking-tight mb-2 text-black">{item.title}</h3>
-              <p className="text-neutral-500 text-[15px] leading-relaxed">{item.desc}</p>
+              <h3 className="text-xl font-bold tracking-tight mb-2 text-white">{item.title}</h3>
+              <p className="text-neutral-400 text-[15px] leading-relaxed">{item.desc}</p>
             </div>
           ))}
         </div>

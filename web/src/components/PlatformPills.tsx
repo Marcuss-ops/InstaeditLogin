@@ -49,7 +49,7 @@ export function PlatformPills() {
       {platforms.map((p) => (
         <div
           key={p.name}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 border border-neutral-100 rounded-xl bg-white text-[13px] font-medium hover:-translate-y-[1px] hover:border-neutral-300 hover:shadow-[0_4px_12px_rgba(0,0,0,0.04)] transition-all cursor-default"
+          className="flex items-center justify-center gap-2 py-2.5 px-3 border border-neutral-900 rounded-xl bg-[#0c0c0e] text-[13px] text-neutral-300 font-medium hover:-translate-y-[1px] hover:border-neutral-700 hover:shadow-[0_0_15px_rgba(255,255,255,0.02)] transition-all cursor-default"
         >
           {p.svg}
           {p.name}
