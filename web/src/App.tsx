@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Nav } from "./components/Nav";
 import { Hero } from "./components/Hero";
+import { PromiseBanner } from "./components/PromiseBanner";
 import { Features } from "./components/Features";
 import { Monetize } from "./components/Monetize";
 import { CTA } from "./components/CTA";
@@ -21,6 +22,7 @@ function LandingPage() {
       <Nav />
       <main>
         <Hero />
+        <PromiseBanner />
         <Features />
         <Monetize />
         <CTA />
