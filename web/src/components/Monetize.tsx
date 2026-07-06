@@ -26,7 +26,7 @@ const streams = [
 const stats = [
   { value: "$4.8K", label: "Avg. monthly creator earnings" },
   { value: "6.4×", label: "Watch-time vs. raw footage" },
-  { value: "1,200+", label: "Brand deals unlocked monthly" },
+  { value: "3,200", label: "Videos Created This Month" },
 ];
 
 export function Monetize() {
