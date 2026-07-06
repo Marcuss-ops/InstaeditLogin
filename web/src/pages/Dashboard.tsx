@@ -7,7 +7,7 @@ export function Dashboard() {
       <div className="max-w-[1100px] mx-auto px-6 w-full">
         <div className="py-6">
           <Link to="/" className="text-sm font-medium text-neutral-500 hover:text-black transition-colors no-underline">
-            ← Torna alla home
+            ← Back to home
           </Link>
         </div>
 
@@ -19,35 +19,35 @@ export function Dashboard() {
             Dashboard
           </h1>
           <p className="text-neutral-500 text-[17px] mb-10 text-center max-w-[480px]">
-            I tuoi account connessi appariranno qui dopo il login OAuth.
+            Your connected accounts will appear here after OAuth login.
           </p>
 
           {/* Placeholder cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full max-w-[800px]">
             {[
-              { icon: <Calendar size={22} />, title: "Calendario", desc: "Pianifica i tuoi post" },
-              { icon: <BarChart3 size={22} />, title: "Analytics", desc: "Performance unificate" },
-              { icon: <Layout size={22} />, title: "Post", desc: "Crea e pubblica contenuti" },
+              { icon: <Calendar size={22} />, title: "Calendar", desc: "Schedule your posts" },
+              { icon: <BarChart3 size={22} />, title: "Analytics", desc: "Unified performance" },
+              { icon: <Layout size={22} />, title: "Posts", desc: "Create and publish content" },
             ].map((card) => (
               <div
                 key={card.title}
                 className="bg-white border border-neutral-200 rounded-xl p-6 flex flex-col items-center text-center gap-3 hover:shadow-[0_8px_24px_rgba(0,0,0,0.04)] transition-all"
               >
-                <div className="w-12 h-12 rounded-xl bg-neutral-100 flex items-center justify-center text-black">
-                  {card.icon}
-                </div>
-                <div>
-                  <h3 className="font-bold text-[15px] text-black mb-1">{card.title}</h3>
-                  <p className="text-[13px] text-neutral-500">{card.desc}</p>
-                </div>
-              </div>
+                 <div className="w-12 h-12 rounded-xl bg-neutral-100 flex items-center justify-center text-black">
+                   {card.icon}
+                 </div>
+                 <div>
+                   <h3 className="font-bold text-[15px] text-black mb-1">{card.title}</h3>
+                   <p className="text-[13px] text-neutral-500">{card.desc}</p>
+                 </div>
+               </div>
             ))}
           </div>
 
           <p className="mt-12 text-[13px] text-neutral-400">
-            Connetti un account dalla{" "}
+            Connect an account from the{" "}
             <Link to="/login" className="text-[#0A84FF] font-medium hover:underline">
-              pagina di login
+              login page
             </Link>
           </p>
         </div>

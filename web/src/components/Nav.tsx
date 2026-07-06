@@ -4,9 +4,9 @@ import { Menu, X } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const links = [
-  { href: "/#funzioni", label: "Funzioni" },
-  { href: "/#come-funziona", label: "Come funziona" },
-  { href: "/#prezzi", label: "Prezzi" },
+  { href: "/#features", label: "Features" },
+  { href: "/#how-it-works", label: "How it works" },
+  { href: "/#pricing", label: "Pricing" },
 ];
 
 export function Nav() {
@@ -45,7 +45,7 @@ export function Nav() {
             to="/login"
             className="text-sm font-medium text-black/70 hover:text-black transition-colors no-underline"
           >
-            Accedi
+            Login
           </Link>
         </div>
 
@@ -55,7 +55,7 @@ export function Nav() {
             to="/login"
             className="inline-flex items-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-black text-white no-underline hover:-translate-y-[1px] hover:bg-neutral-900 transition-all"
           >
-            Inizia gratis
+            Get started for free
           </Link>
         </div>
 
@@ -91,14 +91,14 @@ export function Nav() {
           onClick={() => setOpen(false)}
           className="py-3.5 text-sm font-medium border-b border-neutral-100 last:border-b-0 no-underline text-black"
         >
-          Accedi
+          Login
         </Link>
         <Link
           to="/login"
           onClick={() => setOpen(false)}
           className="mt-3 inline-flex items-center justify-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-black text-white no-underline"
         >
-          Inizia gratis
+          Get started for free
         </Link>
       </div>
     </nav>

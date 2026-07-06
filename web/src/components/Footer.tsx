@@ -8,10 +8,10 @@ export function Footer() {
             Privacy
           </a>
           <a href="#" className="text-neutral-400 no-underline hover:text-black transition-colors">
-            Termini
+            Terms
           </a>
           <a href="#" className="text-neutral-400 no-underline hover:text-black transition-colors">
-            Contatti
+            Contact
           </a>
         </div>
       </div>

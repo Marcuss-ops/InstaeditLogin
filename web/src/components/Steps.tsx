@@ -2,30 +2,30 @@ export function Steps() {
   const items = [
     {
       num: 1,
-      title: "Connetti",
-      desc: "OAuth sicuro. Colleghi tutti i tuoi account in 60 secondi. Nessuna password salvata.",
+      title: "Connect",
+      desc: "Secure OAuth. Connect all your accounts in 60 seconds. No passwords saved.",
     },
     {
       num: 2,
-      title: "Carica",
-      desc: "Un solo upload per video, foto e testo. Aggiungi hashtag e menzioni una volta.",
+      title: "Upload",
+      desc: "One upload for videos, images, and text. Add hashtags and mentions once.",
     },
     {
       num: 3,
-      title: "Pubblica",
-      desc: "SocialSync adatta formati, ritaglia e pubblica ovunque, in simultanea o programmato.",
+      title: "Publish",
+      desc: "SocialSync adapts formats, crops, and publishes everywhere, instantly or scheduled.",
     },
   ];
 
   return (
-    <section id="come-funziona" className="py-24">
+    <section id="how-it-works" className="py-24">
       <div className="max-w-[1100px] mx-auto px-6">
         <div className="text-center max-w-[640px] mx-auto mb-14">
           <h2 className="text-[clamp(32px,4.5vw,44px)] font-extrabold tracking-[-0.02em] mb-3 text-black">
-            Come funziona
+            How it works
           </h2>
           <p className="text-neutral-500 text-[17px]">
-            Tre passaggi, zero complicazioni. Dal primo login alla pubblicazione.
+            Three simple steps. From login to publishing.
           </p>
         </div>
 

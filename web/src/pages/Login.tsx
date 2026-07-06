@@ -6,7 +6,7 @@ const providers = [
   {
     id: "meta",
     name: "Instagram & Facebook",
-    description: "Connetti Instagram Business e Pagine Facebook",
+    description: "Connect Instagram Business and Facebook Pages",
     color: "from-blue-500 to-purple-500",
     icon: (
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
@@ -17,7 +17,7 @@ const providers = [
   {
     id: "tiktok",
     name: "TikTok",
-    description: "Pubblica video direttamente sul tuo profilo TikTok",
+    description: "Publish videos directly to your TikTok profile",
     color: "from-gray-800 to-gray-900",
     icon: (
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
@@ -28,7 +28,7 @@ const providers = [
   {
     id: "twitter",
     name: "X (Twitter)",
-    description: "Pubblica tweet e media sul tuo profilo X",
+    description: "Publish tweets and media to your X profile",
     color: "from-neutral-700 to-neutral-900",
     icon: (
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
@@ -39,7 +39,7 @@ const providers = [
   {
     id: "youtube",
     name: "YouTube",
-    description: "Carica video sul tuo canale YouTube",
+    description: "Upload videos to your YouTube channel",
     color: "from-red-500 to-red-600",
     icon: (
       <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
@@ -56,16 +56,16 @@ export function Login() {
         {/* Back to home */}
         <div className="py-6">
           <Link to="/" className="text-sm font-medium text-neutral-500 hover:text-black transition-colors no-underline">
-            ← Torna alla home
+            ← Back to home
           </Link>
         </div>
 
         <div className="flex flex-col items-center justify-center py-12">
           <h1 className="text-[clamp(28px,4vw,40px)] font-extrabold tracking-[-0.02em] mb-3 text-black text-center">
-            Connetti i tuoi account
+            Connect your accounts
           </h1>
           <p className="text-neutral-500 text-[17px] mb-10 text-center max-w-[480px]">
-            Scegli una piattaforma per iniziare. Login OAuth sicuro — non salviamo mai le tue password.
+            Choose a platform to get started. Secure OAuth login — we never save your passwords.
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-[640px]">
@@ -97,7 +97,7 @@ export function Login() {
           {/* Security note */}
           <div className="mt-10 flex items-center gap-2 text-[13px] text-neutral-400">
             <Shield size={14} className="text-[#0A84FF]" />
-            <span>OAuth ufficiale • Nessuna password salvata • Revoca in qualsiasi momento</span>
+            <span>Official OAuth • No passwords saved • Revoke access at any time</span>
           </div>
         </div>
       </div>

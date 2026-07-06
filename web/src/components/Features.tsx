@@ -3,36 +3,36 @@ import { Calendar, Layout, BarChart3, Users, Shield } from "lucide-react";
 const features = [
   {
     icon: <Calendar size={20} />,
-    title: "Calendario editoriale",
-    desc: "trascina e pianifica",
+    title: "Editorial calendar",
+    desc: "drag and drop scheduling",
   },
   {
     icon: <Layout size={20} />,
-    title: "Adattamento automatico",
-    desc: "9:16, 1:1, 16:9 in un click",
+    title: "Auto-adaptation",
+    desc: "9:16, 1:1, 16:9 in one click",
   },
   {
     icon: <BarChart3 size={20} />,
-    title: "Analytics unificate",
-    desc: "performance in un'unica dashboard",
+    title: "Unified Analytics",
+    desc: "performance in a single dashboard",
   },
   {
     icon: <Users size={20} />,
-    title: "Team e approvazioni",
-    desc: "bozze, commenti, ruoli",
+    title: "Team & Approvals",
+    desc: "drafts, comments, and roles",
   },
 ];
 
 export function Features() {
   return (
-    <section id="funzioni" className="py-24 bg-neutral-100 border-y border-neutral-200">
+    <section id="features" className="py-24 bg-neutral-100 border-y border-neutral-200">
       <div className="max-w-[1100px] mx-auto px-6">
         <div className="text-center max-w-[640px] mx-auto mb-14">
           <h2 className="text-[clamp(32px,4.5vw,44px)] font-extrabold tracking-[-0.02em] mb-3 text-black">
-            Tutto ciò che serve, niente di più
+            Everything you need, nothing more
           </h2>
           <p className="text-neutral-500 text-[17px]">
-            Design pulito, ispirato a Notion e Figma. Veloce, minimal, potente.
+            Clean design, inspired by Notion and Figma. Fast, minimal, powerful.
           </p>
         </div>
 
@@ -57,7 +57,7 @@ export function Features() {
         <div className="mt-14 max-w-[860px] mx-auto bg-white border border-neutral-100 rounded-xl py-4.5 px-5.5 flex items-center justify-center gap-3 text-center flex-wrap">
           <Shield size={18} className="text-[#0A84FF] shrink-0" />
           <p className="text-sm font-medium text-neutral-700">
-            OAuth ufficiale. Non memorizziamo password. Revoca accessi in qualsiasi momento.
+            Official OAuth. We do not store passwords. Revoke access at any time.
           </p>
         </div>
       </div>

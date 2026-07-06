@@ -17,11 +17,11 @@ export function Hero() {
         </h1>
 
         <p className="text-[clamp(16px,2.1vw,19px)] text-neutral-700 max-w-[740px] mx-auto mb-8 leading-relaxed">
-          Ti connetti{" "}
-          <span className="text-[#0A84FF] font-semibold">una volta</span>{" "}
-          con OAuth sicuro a Instagram, Facebook, TikTok, YouTube e X — poi
-          carichi una volta sola e SocialSync pubblica{" "}
-          <span className="text-[#0A84FF] font-semibold">ovunque</span>.
+          Connect{" "}
+          <span className="text-[#0A84FF] font-semibold">once</span>{" "}
+          using secure OAuth to Instagram, Facebook, TikTok, YouTube, and X — then
+          upload once, and SocialSync publishes{" "}
+          <span className="text-[#0A84FF] font-semibold">everywhere</span>.
         </p>
 
         <div className="flex gap-3 justify-center flex-wrap mb-[72px]">
@@ -29,13 +29,13 @@ export function Hero() {
             to="/login"
             className="inline-flex items-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-black text-white no-underline hover:-translate-y-[1px] hover:bg-neutral-900 transition-all"
           >
-            Inizia gratis
+            Get started for free
           </Link>
           <button
             onClick={() => setDemoOpen(true)}
             className="inline-flex items-center gap-2 px-[18px] py-[10px] rounded-xl text-sm font-semibold bg-white text-black border border-black no-underline hover:-translate-y-[1px] hover:bg-neutral-50 transition-all cursor-pointer"
           >
-            Guarda demo
+            Watch demo
           </button>
         </div>
 
@@ -47,7 +47,7 @@ export function Hero() {
                 <span className="w-2 h-2 rounded-full bg-neutral-300" />
                 <span className="w-2 h-2 rounded-full bg-neutral-300" />
               </div>
-              <span className="text-[12px] text-neutral-500 font-medium">Nuovo post</span>
+              <span className="text-[12px] text-neutral-500 font-medium">New post</span>
             </div>
             <div className="py-8 px-6 text-center">
               <div className="w-12 h-12 mx-auto mb-3.5 rounded-[10px] bg-neutral-100 grid place-items-center">
@@ -57,7 +57,7 @@ export function Hero() {
                   <line x1="12" y1="3" x2="12" y2="15" />
                 </svg>
               </div>
-              <p className="mb-3.5 font-semibold text-sm text-black">estate-2026.mp4</p>
+              <p className="mb-3.5 font-semibold text-sm text-black">summer-2026.mp4</p>
               <div className="h-1.5 bg-neutral-100 rounded-full max-w-[220px] mx-auto overflow-hidden">
                 <div className="w-[68%] h-full bg-[#0A84FF] animate-pulse rounded-full" />
               </div>
@@ -69,7 +69,7 @@ export function Hero() {
         {/* Platforms row */}
         <div className="mt-20 py-7 border-y border-neutral-100">
           <div className="flex items-center justify-center gap-8 flex-wrap">
-            <span className="text-[13px] text-neutral-400 font-medium">Compatibile con</span>
+            <span className="text-[13px] text-neutral-400 font-medium">Compatible with</span>
             <div className="flex gap-7 flex-wrap items-center justify-center">
               {["Instagram", "Facebook", "TikTok", "YouTube", "X"].map((p) => (
                 <span key={p} className="text-[15px] font-semibold tracking-tight text-black/55">
