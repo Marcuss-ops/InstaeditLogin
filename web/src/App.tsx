@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Nav } from "./components/Nav";
 import { Hero } from "./components/Hero";
-import { Steps } from "./components/Steps";
 import { Features } from "./components/Features";
 import { Monetize } from "./components/Monetize";
 import { CTA } from "./components/CTA";
@@ -22,7 +21,6 @@ function LandingPage() {
       <Nav />
       <main>
         <Hero />
-        <Steps />
         <Features />
         <Monetize />
         <CTA />
