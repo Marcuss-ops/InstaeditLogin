@@ -14,98 +14,70 @@ export function Hero() {
   const [demoOpen, setDemoOpen] = useState(false);
 
   return (
-    <section className="pt-28 pb-10 text-center bg-black text-white overflow-hidden">
-      <div className="max-w-[1100px] mx-auto px-6 relative">
-        {/* Glow background accent */}
-        <div className="absolute top-[-20%] left-[50%] -translate-x-[50%] w-[500px] h-[500px] rounded-full bg-violet-600/10 blur-[120px] pointer-events-none" />
-
-        <h1 className="text-[clamp(44px,7.5vw,78px)] font-extrabold tracking-[-0.03em] leading-[0.9] mb-8 text-gradient text-glow">
+    <>
+      <section className="hero">
+        <div className="eyebrow">New • AI Virality Engine v2</div>
+        <h1>
           1 long video.<br />
           10 viral shorts.<br />
-          <span className="text-gradient-cyan brand-glow">Created in minutes.</span>
+          <span className="gradient">Created in minutes.</span>
         </h1>
-
-        <p className="text-[clamp(16px,2vw,19px)] text-neutral-400 max-w-[700px] mx-auto mb-10 leading-relaxed">
+        <p>
           We are a team of top-tier video editors. We transform your raw files into 
           highly engaging, captioned, multi-format viral videos in minutes, not hours.
         </p>
-
-        <div className="flex gap-4.5 justify-center flex-wrap mb-24">
-          <Link
-            to="/login"
-            className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl text-sm font-bold bg-white text-black no-underline hover:-translate-y-[1px] hover:shadow-[0_0_25px_rgba(255,255,255,0.45)] transition-all"
-          >
-            Get started now
+        <div className="hero-ctas">
+          <Link className="btn btn-primary" to="/login">
+            Get started now →
           </Link>
-          <button
-            onClick={() => setDemoOpen(true)}
-            className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl text-sm font-bold bg-[#0c0c0e] text-white border border-neutral-900 no-underline hover:-translate-y-[1px] hover:border-violet-500/40 hover:shadow-[0_0_20px_rgba(139,92,246,0.15)] transition-all cursor-pointer"
-          >
-            Watch quick demo
+          <button className="btn cursor-pointer" onClick={() => setDemoOpen(true)}>
+            ◎ Watch quick demo
           </button>
+          <a className="btn hover:border-[#5865F2] hover:text-[#5865F2]" href="https://discord.gg/instaedit" target="_blank" rel="noopener noreferrer">
+            <svg viewBox="0 0 127.14 96.36" fill="currentColor" className="w-4 h-4 shrink-0">
+              <path d="M107.7,8.07A105.15,105.15,0,0,0,77.26,0a77.19,77.19,0,0,0-3.3,6.83A96.67,96.67,0,0,0,53.22,6.83,77.19,77.19,0,0,0,49.88,0,105.15,105.15,0,0,0,19.44,8.07C3.66,31.58-1.86,54.65,1,77.53A105.73,105.73,0,0,0,32,96.36a77.7,77.7,0,0,0,7.14-11.59A68.52,68.52,0,0,1,28.8,79.52c.9-.66,1.8-1.34,2.66-2a75.58,75.58,0,0,0,74.22,0c.87.69,1.76,1.37,2.66,2a68.52,68.52,0,0,1-10.37,5.25,77.7,77.7,0,0,0,7.14,11.59,105.73,105.73,0,0,0,31-18.83C129,54.65,123.51,31.58,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53S36.18,40.36,42.45,40.36,53.83,46,53.83,53,48.72,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.24,60,73.24,53S78.41,40.36,84.69,40.36,96.07,46,96.07,53,91,65.69,84.69,65.69Z" />
+            </svg>
+            Chat on Discord
+          </a>
         </div>
+      </section>
 
-        {/* Video Portfolio Grid */}
-        <div className="max-w-[1000px] mx-auto my-24 relative">
-          <h2 className="text-3xl font-extrabold tracking-tight text-white mb-2 text-glow">
-            Our Video Portfolio
-          </h2>
-          <p className="text-neutral-500 text-sm mb-12">
-            See how we turn raw footage into high-retention viral content.
-          </p>
-
-          <div className="grid grid-cols-1 gap-8 max-w-[560px] mx-auto">
-            {portfolioVideos.map((video) => (
-              <div 
-                key={video.id} 
-                className="bg-[#09090b] border border-neutral-900 rounded-2xl p-5 hover:border-violet-600/30 hover:shadow-[0_0_30px_rgba(139,92,246,0.12)] transition-all group text-left relative overflow-hidden"
-              >
-                {/* Virality score badge */}
-                <div className="absolute top-8 right-8 z-10 flex items-center gap-1.5 bg-[#10b981]/10 border border-[#10b981]/30 py-1.5 px-3 rounded-full shadow-[0_0_15px_rgba(16,185,129,0.15)]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] animate-pulse" />
-                  <span className="text-[11px] font-bold text-[#10b981] tracking-tight">
-                    {video.score} Virality Score
-                  </span>
-                </div>
-
-                <div className="overflow-hidden rounded-xl aspect-video mb-4 bg-black border border-neutral-900 group-hover:border-neutral-800 transition-colors">
-                  <iframe
-                    className="w-full h-full border-0"
-                    src={`https://www.youtube.com/embed/${video.id}`}
-                    title={video.title}
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                    allowFullScreen
-                  />
-                </div>
-                <h3 className="font-bold text-base text-neutral-100 group-hover:text-white transition-colors mb-1">
-                  {video.title}
-                </h3>
-                <p className="text-xs text-neutral-500 font-medium">
-                  <span className="text-[#a78bfa] font-semibold">AI Insights: </span>
-                  {video.remark}
-                </p>
+      <section className="section">
+        <div className="section-head">
+          <h2>Our Video Portfolio</h2>
+          <p>See how we turn raw footage into high-retention viral content.</p>
+        </div>
+        <div className="flex flex-col gap-6 max-w-[560px] mx-auto">
+          {portfolioVideos.map((video) => (
+            <div key={video.id} className="card">
+              <div className="thumb">
+                <div className="badge">{video.score} Virality Score</div>
+                <iframe
+                  className="w-full h-full border-0 absolute inset-0"
+                  src={`https://www.youtube.com/embed/${video.id}`}
+                  title={video.title}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                />
               </div>
-            ))}
-          </div>
-          <PlatformPills />
-        </div>
-
-        {/* Platforms row */}
-        <div className="mt-24 py-8 border-y border-neutral-900/60">
-          <div className="flex items-center justify-center gap-8 flex-wrap">
-            <span className="text-[13px] text-neutral-500 font-medium tracking-wide">COMPATIBLE WITH</span>
-            <div className="flex gap-8 flex-wrap items-center justify-center">
-              {["Instagram Reels", "Facebook Videos", "TikTok Shorts", "YouTube Shorts", "X Media"].map((p) => (
-                <span key={p} className="text-[14px] font-bold tracking-tight text-neutral-500 hover:text-white transition-colors cursor-default">
-                  {p}
-                </span>
-              ))}
+              <div className="card-body">
+                <div className="card-title text-left text-white">{video.title}</div>
+                <div className="card-meta text-left text-neutral-400">
+                  <span className="text-[#8b5cf6] font-semibold">AI Insights: </span>
+                  {video.remark}
+                </div>
+              </div>
             </div>
-          </div>
+          ))}
         </div>
-      </div>
+        <PlatformPills />
+        <div className="compatible">
+          <span>COMPATIBLE WITH</span>
+          <span>Instagram Reels • Facebook Videos • TikTok Shorts • YouTube Shorts • X Media</span>
+        </div>
+      </section>
 
       <DemoModal open={demoOpen} onClose={() => setDemoOpen(false)} />
-    </section>
+    </>
   );
 }

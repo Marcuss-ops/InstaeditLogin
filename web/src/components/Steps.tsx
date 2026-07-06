@@ -13,36 +13,24 @@ export function Steps() {
     {
       num: 3,
       title: "Review & publish",
-      desc: "Review the draft, request unlimited revisions, then export and publish directly to your socials.",
+      desc: "Review the draft, request unlimited revisions, then export directly to your socials.",
     },
   ];
 
   return (
-    <section id="how-it-works" className="py-24 bg-black text-white">
-      <div className="max-w-[1100px] mx-auto px-6">
-        <div className="text-center max-w-[640px] mx-auto mb-14">
-          <h2 className="text-[clamp(32px,4.5vw,44px)] font-extrabold tracking-[-0.02em] mb-3 text-white text-glow">
-            How it works
-          </h2>
-          <p className="text-neutral-400 text-[17px]">
-            Three simple steps. From upload to publishing.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {items.map((item) => (
-            <div
-              key={item.num}
-              className="bg-[#0c0c0e] border border-neutral-900 rounded-xl p-7 hover:-translate-y-[2px] hover:border-neutral-800 hover:shadow-[0_0_20px_rgba(255,255,255,0.03)] transition-all"
-            >
-              <span className="inline-flex w-7 h-7 rounded-lg bg-neutral-900 border border-neutral-800 items-center justify-center text-[13px] font-bold mb-4 text-[#0A84FF] brand-glow">
-                {item.num}
-              </span>
-              <h3 className="text-xl font-bold tracking-tight mb-2 text-white">{item.title}</h3>
-              <p className="text-neutral-400 text-[15px] leading-relaxed">{item.desc}</p>
-            </div>
-          ))}
-        </div>
+    <section className="section" id="how">
+      <div className="section-head">
+        <h2>How it works</h2>
+        <p>Three simple steps. From upload to publishing.</p>
+      </div>
+      <div className="steps">
+        {items.map((item) => (
+          <div key={item.num} className="step">
+            <div className="step-num">{item.num}</div>
+            <h3 className="text-white font-bold">{item.title}</h3>
+            <p>{item.desc}</p>
+          </div>
+        ))}
       </div>
     </section>
   );
