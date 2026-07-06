@@ -550,24 +550,16 @@ nav {
 }
 
 .stat .stat-value {
-  font-size: clamp(32px, 5vw, 48px);
+  font-size: clamp(40px, 6vw, 60px);
   font-weight: 800;
   letter-spacing: -1.5px;
-  background: linear-gradient(135deg, var(--blue), var(--violet));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: white;
   margin-bottom: 6px;
 }
 
 .stat .stat-label {
   font-size: 13px;
   color: var(--muted);
-}
-
-.monetize-cta {
-  text-align: center;
-  margin-top: 36px;
 }
 
 .cta h2 {

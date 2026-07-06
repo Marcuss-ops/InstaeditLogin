@@ -1,4 +1,3 @@
-import { Link } from "react-router-dom";
 import { TrendingUp, Repeat, Handshake, Link2, Wallet } from "lucide-react";
 
 const streams = [
@@ -25,9 +24,9 @@ const streams = [
 ];
 
 const stats = [
-  { value: "$2.4K", label: "Avg. monthly creator earnings" },
-  { value: "3.2×", label: "Watch-time vs. raw footage" },
-  { value: "100+", label: "Brand deals unlocked monthly" },
+  { value: "$4.8K", label: "Avg. monthly creator earnings" },
+  { value: "6.4×", label: "Watch-time vs. raw footage" },
+  { value: "1,200+", label: "Brand deals unlocked monthly" },
 ];
 
 export function Monetize() {
@@ -67,12 +66,6 @@ export function Monetize() {
             <div className="stat-label">{s.label}</div>
           </div>
         ))}
-      </div>
-
-      <div className="monetize-cta">
-        <Link className="btn btn-primary" to="/login">
-          Start earning today →
-        </Link>
       </div>
     </section>
   );
