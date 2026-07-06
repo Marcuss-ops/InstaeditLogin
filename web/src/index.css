@@ -1,14 +1,25 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #000000;
+  --bg: #030308;
   --bg2: #0a0a12;
   --glass: rgba(255, 255, 255, 0.06);
   --border: rgba(255, 255, 255, 0.12);
   --text: #e8e8ef;
   --muted: #9aa0aa;
-  --blue: #FF0000;
+  --blue: #0A84FF;
   --violet: #7B61FF;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+::selection {
+  background: rgba(123, 97, 255, 0.35);
+  color: var(--text);
 }
 
 @theme {
@@ -28,11 +39,35 @@
     position: fixed;
     inset: -20%;
     background:
-      radial-gradient(600px circle at 20% 10%, rgba(255, 0, 0, 0.25), transparent 60%),
+      radial-gradient(600px circle at 20% 10%, rgba(10, 132, 255, 0.25), transparent 60%),
       radial-gradient(500px circle at 80% 20%, rgba(123, 97, 255, 0.22), transparent 60%),
-      radial-gradient(400px circle at 50% 90%, rgba(255, 0, 0, 0.15), transparent 60%);
+      radial-gradient(400px circle at 50% 90%, rgba(10, 132, 255, 0.15), transparent 60%);
     filter: blur(40px);
     z-index: -1;
+    animation: bgShift 18s ease-in-out infinite alternate;
+    pointer-events: none;
+  }
+
+  h1 {
+    font-size: clamp(40px, 7vw, 84px);
+    font-weight: 800;
+    letter-spacing: -2px;
+    line-height: 0.95;
+    margin-bottom: 24px;
+  }
+
+  @keyframes bgShift {
+    from { transform: translate3d(0, 0, 0) scale(1); }
+    to { transform: translate3d(-2%, 1%, 0) scale(1.05); }
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .reveal {
+    animation: fadeUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 }
 
@@ -41,7 +76,7 @@ nav {
   top: 0;
   z-index: 50;
   backdrop-filter: blur(16px);
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(3, 3, 8, 0.7);
   border-bottom: 1px solid var(--border);
 }
 
@@ -117,6 +152,33 @@ nav {
   margin: 0 auto;
   padding: 120px 20px 80px;
   text-align: center;
+}
+
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #2ed573;
+  box-shadow: 0 0 0 0 rgba(46, 213, 115, 0.7);
+  animation: pulseRing 1.8s ease-out infinite;
+}
+
+@keyframes pulseRing {
+  0% { box-shadow: 0 0 0 0 rgba(46, 213, 115, 0.7); }
+  70% { box-shadow: 0 0 0 8px rgba(46, 213, 115, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(46, 213, 115, 0); }
+}
+
+.portfolio-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+}
+
+@media (max-width: 800px) {
+  .portfolio-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .eyebrow {
@@ -318,8 +380,8 @@ nav {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: rgba(255, 0, 0, 0.15);
-  border: 1px solid rgba(255, 0, 0, 0.3);
+  background: rgba(10, 132, 255, 0.15);
+  border: 1px solid rgba(10, 132, 255, 0.3);
   display: flex;
   align-items: center;
   justify-content: center;

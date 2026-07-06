@@ -10,7 +10,7 @@ import { Dashboard } from "./pages/Dashboard";
 
 function LandingPage() {
   return (
-    <div className="min-h-screen bg-white text-black antialiased">
+    <div className="min-h-screen antialiased">
       <Nav />
       <main>
         <Hero />

@@ -15,8 +15,11 @@ export function Hero() {
 
   return (
     <>
-      <section className="hero">
-        <div className="eyebrow">New • AI Virality Engine v2</div>
+      <section className="hero reveal">
+        <div className="eyebrow">
+          <span className="pulse-dot" aria-hidden="true"></span>
+          New • AI Virality Engine v2
+        </div>
         <h1>
           1 long video.<br />
           10 viral shorts.<br />
@@ -47,7 +50,7 @@ export function Hero() {
           <h2>Our Video Portfolio</h2>
           <p>See how we turn raw footage into high-retention viral content.</p>
         </div>
-        <div className="flex flex-col gap-6 max-w-[560px] mx-auto">
+        <div className="portfolio-grid">
           {portfolioVideos.map((video) => (
             <div key={video.id} className="card">
               <div className="thumb">
