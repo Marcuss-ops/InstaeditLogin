@@ -1,9 +1,19 @@
 import { useState } from "react";
+import { Nav } from "./Nav";
+import { Footer } from "./Footer";
 
 export function TikTokSection() {
   return (
-    <section>
-      <div className="section">
+    <div className="min-h-screen antialiased isolate">
+      <div className="ambient-orbs" aria-hidden="true">
+        <div className="orb orb-1"></div>
+        <div className="orb orb-2"></div>
+        <div className="orb orb-3"></div>
+        <div className="orb orb-4"></div>
+        <div className="orb orb-5"></div>
+      </div>
+      <Nav />
+      <main className="section">
         {/* Hero */}
         <div className="section-head" style={{ marginBottom: 48 }}>
           <h2>
@@ -71,8 +81,9 @@ export function TikTokSection() {
 
         {/* FAQ */}
         <FaqSection />
-      </div>
-    </section>
+      </main>
+      <Footer />
+    </div>
   );
 }
 

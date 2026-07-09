@@ -6,6 +6,7 @@ import { Features } from "./components/Features";
 import { Monetize } from "./components/Monetize";
 import { CTA } from "./components/CTA";
 import { Footer } from "./components/Footer";
+import { TikTokSection } from "./components/TikTokSection";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { PrivacyPolicy } from "./pages/PrivacyPolicy";
@@ -43,6 +44,7 @@ function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/terms" element={<TermsOfService />} />
+        <Route path="/tiktok" element={<TikTokSection />} />
       </Routes>
     </BrowserRouter>
   );
