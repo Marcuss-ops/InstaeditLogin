@@ -664,6 +664,20 @@ footer {
   user-select: none;
 }
 
+/* Legal pages */
+.legal-section ul {
+  padding-left: 22px;
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legal-section li {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
 @keyframes modalIn {
   from {
     transform: translateY(8px);
@@ -672,5 +686,199 @@ footer {
   to {
     transform: translateY(0);
     opacity: 1;
+  }
+}
+
+/* TikTok Section */
+.text-gradient {
+  background: linear-gradient(135deg, var(--blue), var(--violet));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.comparison-table th {
+  padding: 16px 20px;
+  text-align: left;
+  font-weight: 650;
+  color: white;
+}
+
+.comparison-table td {
+  padding: 14px 20px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+
+.comparison-table .check {
+  color: #2ed573;
+  font-weight: 600;
+}
+
+.comparison-table .cross {
+  color: #ff5f56;
+}
+
+.comparison-wrap {
+  background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  overflow-x: auto;
+  max-width: 720px;
+  margin: 0 auto 64px;
+}
+
+.code-snippet-wrap {
+  background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02));
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  max-width: 720px;
+  margin: 0 auto 64px;
+}
+
+.code-snippet-bar {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.code-snippet-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.code-snippet-pre {
+  padding: 20px 24px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+  background: transparent;
+  overflow-x: auto;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.code-snippet-pre .code-key {
+  color: var(--blue);
+}
+
+.code-snippet-pre .code-val {
+  color: #2ed573;
+}
+
+.faq-item {
+  border-bottom: 1px solid var(--border);
+}
+
+.faq-question {
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 550;
+  padding: 18px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  text-align: left;
+  gap: 16px;
+}
+
+.faq-question:hover {
+  color: white;
+}
+
+.faq-answer {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease, padding 0.3s ease;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.faq-answer.open {
+  max-height: 300px;
+  padding-bottom: 18px;
+}
+
+.faq-arrow {
+  transition: transform 0.25s ease;
+  min-width: 16px;
+}
+
+.faq-arrow.open {
+  transform: rotate(180deg);
+}
+
+.how-step {
+  background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02));
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 28px 24px;
+  text-align: center;
+  transition: transform .3s, border-color .3s;
+}
+
+.how-step:hover {
+  transform: translateY(-4px);
+  border-color: rgba(123,97,255,0.4);
+}
+
+.how-step-num {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--blue), var(--violet));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+  color: white;
+  margin-bottom: 16px;
+}
+
+.tiktok-how-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  max-width: 900px;
+  margin: 0 auto 64px;
+}
+
+.tiktok-features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  max-width: 900px;
+  margin: 0 auto 64px;
+}
+
+@media (max-width: 900px) {
+  .tiktok-how-grid,
+  .tiktok-features-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .comparison-table th,
+  .comparison-table td {
+    padding: 12px 14px;
+    font-size: 13px;
   }
 }

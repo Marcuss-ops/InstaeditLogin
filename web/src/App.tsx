@@ -6,8 +6,11 @@ import { Features } from "./components/Features";
 import { Monetize } from "./components/Monetize";
 import { CTA } from "./components/CTA";
 import { Footer } from "./components/Footer";
+import { TikTokSection } from "./components/TikTokSection";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
+import { PrivacyPolicy } from "./pages/PrivacyPolicy";
+import { TermsOfService } from "./pages/TermsOfService";
 
 function LandingPage() {
   return (
@@ -25,6 +28,7 @@ function LandingPage() {
         <PromiseBanner />
         <Features />
         <Monetize />
+        <TikTokSection />
         <CTA />
       </main>
       <Footer />
@@ -39,6 +43,8 @@ function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Login />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route path="/terms" element={<TermsOfService />} />
       </Routes>
     </BrowserRouter>
   );
