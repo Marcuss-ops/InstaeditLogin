@@ -19,6 +19,16 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 )
 
+// authModeLabel returns a short banner used in the startup log line so an
+// operator can immediately tell whether the server is in strict mode (safe
+// default) or legacy fallback (rollback window, accepts user_id from body).
+func authModeLabel(strict bool) string {
+	if strict {
+		return "strict (Bearer required)"
+	}
+	return "legacy (publish trusts user_id — rollback only)"
+}
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -111,9 +121,20 @@ func main() {
 	}
 
 	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours)
-	router := api.NewRouter(platforms, userRepo, authMgr, cfg.StrictJWTAuth)
-	slog.Info("JWT authentication configured",
-		"ttl_hours", cfg.JWTTTLHours, "strict_mode", cfg.StrictJWTAuth)
+	// Auto-add the configured FrontendURL to the CORS allowlist when none
+	// was provided via CORS_ALLOWED_ORIGINS, so a single env var is enough
+	// for local dev. Production deployments still set the explicit list.
+	corsOrigins := cfg.AllowedCORSOrigins
+	if len(corsOrigins) == 0 && cfg.FrontendURL != "" {
+		corsOrigins = []string{cfg.FrontendURL}
+	}
+	router := api.NewRouter(platforms, userRepo, authMgr, cfg.StrictJWTAuth, cfg.FrontendURL, corsOrigins)
+	slog.Info("Router configured",
+		"jwt_ttl_hours", cfg.JWTTTLHours,
+		"strict_jwt_auth", cfg.StrictJWTAuth,
+		"auth_mode", authModeLabel(cfg.StrictJWTAuth),
+		"frontend_url", cfg.FrontendURL,
+		"cors_origins", corsOrigins)
 	handler := router.Setup()
 
 	// Vercel injects PORT; fall back to config or 8080

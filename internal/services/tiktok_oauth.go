@@ -15,6 +15,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // TikTokOAuthService implements OAuthProvider and ContentPublisher for TikTok.
@@ -79,7 +80,14 @@ func (s *TikTokOAuthService) HandleCallback(code string) (*models.PlatformProfil
 }
 
 // RefreshOAuthToken exchanges a TikTok refresh token for a new access token.
-func (s *TikTokOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+func (s *TikTokOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (result *models.TokenData, err error) {
+	defer func() {
+		if err != nil {
+			metrics.RecordTokenRefreshError(models.PlatformTikTok)
+		} else {
+			metrics.RecordTokenRefreshSuccess(models.PlatformTikTok)
+		}
+	}()
 	if refreshToken == "" {
 		return nil, fmt.Errorf("tiktok RefreshOAuthToken: empty refresh token")
 	}
@@ -125,19 +133,42 @@ func (s *TikTokOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken
 	}, nil
 }
 
-func (s *TikTokOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+func (s *TikTokOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
+	start := time.Now()
+	defer func() {
+		metrics.ObservePublishLatency(models.PlatformTikTok, time.Since(start).Seconds())
+		if err != nil {
+			metrics.RecordPublishError(models.PlatformTikTok, metrics.ErrorKind(err))
+		} else {
+			metrics.RecordPublishSuccess(models.PlatformTikTok)
+		}
+	}()
 	if payload.VideoURL == "" {
 		return nil, fmt.Errorf("tiktok requires a video_url for publishing")
 	}
 
 	slog.Info("TikTok: initiating video publish")
 
-	// Step 1: Initialize upload
+	// Step 1: Initialize upload.
+	//
+	// TikTok expects a nested `post_info` object that carries caption/title,
+	// privacy_level, and the disable_* toggle flags. Caption (carried in
+	// payload.Text per the shared PublishPayload) is truncated to TikTok's
+	// 4000-character limit. Empty privacy_level falls back to
+	// PUBLIC_TO_EVERYONE so callers don't have to set it explicitly.
+	postInfo := map[string]interface{}{
+		"title":           truncateTikTokTitle(payload.Text),
+		"privacy_level":   normalizeTikTokPrivacyLevel(payload.PrivacyLevel),
+		"disable_comment": modeIsDisabled(payload.CommentMode),
+		"disable_duet":    modeIsDisabled(payload.DuetMode),
+	}
+
 	initBody := map[string]interface{}{
 		"source_info": map[string]string{
-			"source":      "PULL_FROM_URL",
-			"video_url":   payload.VideoURL,
+			"source":    "PULL_FROM_URL",
+			"video_url": payload.VideoURL,
 		},
+		"post_info": postInfo,
 	}
 
 	jsonBody, _ := json.Marshal(initBody)
@@ -225,6 +256,53 @@ type tiktokTokenResponse struct {
 	ExpiresIn    int64  `json:"expires_in"`
 	Scope        string `json:"scope"`
 	RefreshToken string `json:"refresh_token"`
+}
+
+// tikTokTitleMaxRunes is TikTok's documented per-post title/caption limit.
+const tikTokTitleMaxRunes = 4000
+
+// truncateTikTokTitle truncates a caption to TikTok's 4000-rune limit,
+// counting Unicode code points so we don't accidentally slice a multi-byte
+// sequence in the middle.
+func truncateTikTokTitle(s string) string {
+	runes := []rune(s)
+	if len(runes) <= tikTokTitleMaxRunes {
+		return s
+	}
+	return string(runes[:tikTokTitleMaxRunes])
+}
+
+// normalizeTikTokPrivacyLevel returns a valid TikTok privacy_level enum.
+// Empty input or unknown values fall back to PUBLIC_TO_EVERYONE — the
+// permissive-but-safe default that's already what the open API returns for
+// unconfigured creator accounts.
+func normalizeTikTokPrivacyLevel(level string) string {
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case "PUBLIC_TO_EVERYONE":
+		return "PUBLIC_TO_EVERYONE"
+	case "MUTUAL_FOLLOW_FRIENDS":
+		return "MUTUAL_FOLLOW_FRIENDS"
+	case "SELF_ONLY":
+		return "SELF_ONLY"
+	case "":
+		return "PUBLIC_TO_EVERYONE"
+	default:
+		slog.Warn("TikTok: unrecognized privacy_level, defaulting to PUBLIC_TO_EVERYONE", "input", level)
+		return "PUBLIC_TO_EVERYONE"
+	}
+}
+
+// modeIsDisabled interprets a user-facing "mode" string into the boolean
+// flag TikTok expects. Empty / unknown / affirmative values default to
+// disabled = false so calls without explicit configuration still behave as
+// "comments allowed" and "duets allowed".
+func modeIsDisabled(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "no_comments", "no_duet", "disabled", "off", "false", "0":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *TikTokOAuthService) exchangeCodeForToken(code string) (*tiktokTokenResponse, error) {

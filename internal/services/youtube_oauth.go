@@ -16,6 +16,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // YouTubeOAuthService implements OAuthProvider and ContentPublisher for YouTube.
@@ -81,7 +82,14 @@ func (s *YouTubeOAuthService) HandleCallback(code string) (*models.PlatformProfi
 }
 
 // RefreshOAuthToken exchanges a YouTube refresh token for a new access token.
-func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (result *models.TokenData, err error) {
+	defer func() {
+		if err != nil {
+			metrics.RecordTokenRefreshError(models.PlatformYouTube)
+		} else {
+			metrics.RecordTokenRefreshSuccess(models.PlatformYouTube)
+		}
+	}()
 	if refreshToken == "" {
 		return nil, fmt.Errorf("youtube RefreshOAuthToken: empty refresh token")
 	}
@@ -132,7 +140,16 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 const youtubeUploadChunkSize = 256 * 1024 // 256 KiB minimum for resumable uploads
 
 // Publish uploads a video to YouTube using the resumable upload protocol.
-func (s *YouTubeOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+func (s *YouTubeOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
+	start := time.Now()
+	defer func() {
+		metrics.ObservePublishLatency(models.PlatformYouTube, time.Since(start).Seconds())
+		if err != nil {
+			metrics.RecordPublishError(models.PlatformYouTube, metrics.ErrorKind(err))
+		} else {
+			metrics.RecordPublishSuccess(models.PlatformYouTube)
+		}
+	}()
 	if payload.VideoURL == "" {
 		return nil, fmt.Errorf("youtube requires video_url for publishing")
 	}

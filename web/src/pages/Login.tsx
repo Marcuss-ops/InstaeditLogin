@@ -1,78 +1,166 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, Shield } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, Shield } from "lucide-react";
 import { API_BASE_URL } from "../lib/supabase";
+import { PROVIDERS } from "../lib/providers";
+import { probeBackend, subscribeToVisibility, type ProbeResult } from "../lib/auth";
+import { clearProbeCache, readProbeCache, writeProbeCache } from "../lib/probe-cache";
+import { useLongPress } from "../lib/use-long-press";
+import { bannerCopy, shortHost, statusLabel } from "../lib/probe-display";
 
-const providers = [
-  {
-    id: "meta",
-    name: "Instagram & Facebook",
-    description: "Connect Instagram Business and Facebook Pages",
-    color: "from-blue-500 to-purple-500",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-        <path d="M13.5 22v-8h2.7l.4-3.2H13.5V8.5c0-.9.3-1.5 1.6-1.5h1.7V4.1c-.3 0-1.3-.1-2.5-.1-2.5 0-4.2 1.5-4.2 4.3v2.5H7.3V14h2.8v8h3.4z" />
-      </svg>
-    ),
-  },
-  {
-    id: "tiktok",
-    name: "TikTok",
-    description: "Publish videos directly to your TikTok profile",
-    color: "from-gray-800 to-gray-900",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-        <path d="M19.6 8.2c-1.2 0-2.3-.4-3.2-1.1v6.4c0 3.5-2.8 6.3-6.3 6.3S3.8 17 3.8 13.5 6.6 7.2 10.1 7.2c.4 0 .7 0 1 .1v2.8c-.3-.1-.7-.2-1-.2-1.9 0-3.5 1.6-3.5 3.6s1.6 3.5 3.5 3.5 3.5-1.6 3.5-3.5V3.5h2.7c.3 1.2 1.3 2.2 2.5 2.5v2.2z" />
-      </svg>
-    ),
-  },
-  {
-    id: "twitter",
-    name: "X (Twitter)",
-    description: "Publish tweets and media to your X profile",
-    color: "from-neutral-700 to-neutral-900",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-        <path d="M17.5 4.5h3.1l-6.8 7.8 8 10.6h-6.3l-4.9-6.4-5.6 6.4H2l7.3-8.3L1.7 4.5h6.4l4.4 5.9 5-5.9z" />
-      </svg>
-    ),
-  },
-  {
-    id: "youtube",
-    name: "YouTube",
-    description: "Upload videos to your YouTube channel",
-    color: "from-red-500 to-red-600",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-        <path d="M21.6 7.2c-.2-.8-.8-1.4-1.6-1.6-1.6-.4-8-.4-8-.4s-6.4 0-8 .4c-.8.2-1.4.8-1.6 1.6C2 8.8 2 12 2 12s0 3.2.4 4.8c.2.8.8 1.4 1.6 1.6 1.6.4 8 .4 8 .4s6.4 0 8-.4c.8-.2 1.4-.8 1.6-1.6.4-1.6.4-4.8.4-4.8s0-3.2-.4-4.8zM10 15.2V8.8l5.2 3.2-5.2 3.2z" />
-      </svg>
-    ),
-  },
-];
+type ProbeState =
+  | { kind: "loading" }
+  | { kind: "ready"; result: ProbeResult };
 
 export function Login() {
+  // Hydrate the initial state from the sessionStorage cache (TTL 5min,
+  // see web/src/lib/probe-cache.ts) so a user bouncing between / and
+  // /login doesn't see a "Checking…" flash on every mount, and we
+  // avoid hitting /api/v1/health for cache-fresh tabs.
+  const [probe, setProbe] = useState<ProbeState>(() => {
+    const cached = readProbeCache();
+    return cached !== null
+      ? { kind: "ready", result: cached.backend }
+      : { kind: "loading" };
+  });
+  // Tracks the last known health so we can avoid spamming /api/v1/health
+  // on every tab-switch when the backend is already confirmed healthy.
+  // Seeded from the cache so a hydrated "ready/healthy" tab is treated
+  // like one that just probed and succeeded — the tab-focus re-probe
+  // (subscribeToVisibility) correctly stays quiet until the user
+  // explicitly retries or the cache is older than TTL.
+  const lastHealthyRef = useRef<boolean>(readProbeCache()?.backend.ok === true);
+
+  const runProbe = useCallback(async () => {
+    setProbe({ kind: "loading" });
+    const result = await probeBackend();
+    lastHealthyRef.current = result.ok;
+    // Only cache successful probes — a failure must never wipe the
+    // last known-good snapshot (see probe-cache.ts invariants).
+    if (result.ok) {
+      writeProbeCache({ lastOkAt: Date.now(), backend: result });
+    }
+    setProbe({ kind: "ready", result });
+  }, []);
+
+  // Dev affordance: right-click or long-press the status pill to bypass
+  // the 5-minute probe cache TTL and force an immediate fresh probe.
+  // Clears the sessionStorage entry first so the new result, whatever
+  // it is, becomes the new "last known good".
+  const forceReprobe = useCallback(() => {
+    clearProbeCache();
+    void runProbe();
+  }, [runProbe]);
+
+  useEffect(() => {
+    // Skip the initial /health call when the cache hydrated us. The
+    // effect re-runs once probe completes (probe.kind: loading→ready)
+    // and just re-wires the visibility listener — no extra probe.
+    if (probe.kind === "loading") {
+      void runProbe();
+    }
+    // Self-healing: re-probe after a tab regains focus, but only when the
+    // last known result was degraded. This avoids hitting /health on every
+    // alt-tab while a healthy tab is also fine.
+    return subscribeToVisibility(() => {
+      if (lastHealthyRef.current) {
+        return;
+      }
+      void runProbe();
+    });
+  }, [runProbe, probe.kind]);
+
+  // Derive failureCopy next to degraded rather than referring to it, so
+  // TypeScript can narrow `probe.result` to its failure variant in the
+  // SAME expression (bannerCopy's parameter type is `Extract<ProbeResult,
+  // { ok: false }>` and would not accept the union). Behaviorally
+  // identical: failureCopy is non-null exactly when `degraded` is true.
+  const failureCopy =
+    probe.kind === "ready" && !probe.result.ok
+      ? bannerCopy(probe.result)
+      : null;
+  const degraded = failureCopy !== null;
+
   return (
     <div className="min-h-screen bg-neutral-50 flex flex-col">
       <div className="max-w-[1100px] mx-auto px-6 w-full">
-        {/* Back to home */}
-        <div className="py-6">
-          <Link to="/" className="text-sm font-medium text-neutral-500 hover:text-black transition-colors no-underline">
+        {/* Top bar */}
+        <div className="flex items-center justify-between py-6">
+          <Link
+            to="/"
+            className="text-sm font-medium text-neutral-500 hover:text-black transition-colors no-underline"
+          >
             ← Back to home
           </Link>
+          <BackendStatusPill probe={probe} onRetry={runProbe} forceReprobe={forceReprobe} />
         </div>
 
         <div className="flex flex-col items-center justify-center py-12">
           <h1 className="text-[clamp(28px,4vw,40px)] font-extrabold tracking-[-0.02em] mb-3 text-black text-center">
-            Connect your accounts
+            Sign in to InstaEdit
           </h1>
-          <p className="text-neutral-500 text-[17px] mb-10 text-center max-w-[480px]">
-            Choose a platform to get started. Secure OAuth login — we never save your passwords.
+          <p className="text-neutral-500 text-[17px] mb-8 text-center max-w-[480px]">
+            Choose a platform to connect. Secure OAuth{degraded ? null : " — no passwords, no data shared without your consent"}.
           </p>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-[640px]">
-            {providers.map((p) => (
+          {degraded && (
+            <div
+              role="alert"
+              aria-live="polite"
+              className="w-full max-w-[640px] mb-6 bg-red-50 border border-red-200 rounded-xl p-5"
+            >
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={20} className="text-red-500 mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  {failureCopy && (
+                    <>
+                      <p className="text-red-700 font-bold text-[15px] mb-1">
+                        {failureCopy.title}
+                      </p>
+                      <p className="text-red-700/90 text-[13px] leading-relaxed mb-3">
+                        {failureCopy.body}
+                      </p>
+                      <p className="text-neutral-700 text-[13px] leading-relaxed mb-3">
+                        <strong className="font-semibold">How to fix:</strong>{" "}
+                        {failureCopy.hint}
+                      </p>
+                    </>
+                  )}
+                  <p className="text-neutral-500 text-[12px] mt-3 font-mono break-all">
+                    Probed URL: {probe.kind === "ready" ? probe.result.url : API_BASE_URL}
+                  </p>
+                  <div className="flex items-center gap-3 mt-4">
+                    <button
+                      type="button"
+                      onClick={() => void runProbe()}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white text-[13px] font-semibold hover:bg-red-700 transition-colors"
+                    >
+                      Retry probe
+                    </button>
+                    <Link
+                      to="/status"
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-red-300 text-red-700 text-[13px] font-semibold hover:bg-red-50 transition-colors no-underline"
+                    >
+                      Open system status →
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div
+            className={`grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-[640px] ${
+              degraded ? "opacity-60 pointer-events-none" : ""
+            }`}
+            aria-disabled={degraded}
+          >
+            {PROVIDERS.map((p) => (
               <a
                 key={p.id}
-                href={`${API_BASE_URL}/api/v1/auth/${p.id}/login`}
+                href={degraded ? undefined : `${API_BASE_URL}/api/v1/auth/${p.id}/login`}
+                tabIndex={degraded ? -1 : 0}
+                aria-disabled={degraded}
                 className="group relative bg-white border border-neutral-200 rounded-xl p-5 no-underline text-black hover:border-neutral-400 hover:shadow-[0_8px_24px_rgba(0,0,0,0.06)] hover:-translate-y-[2px] transition-all overflow-hidden"
               >
                 {/* Gradient bar on hover */}
@@ -94,6 +182,13 @@ export function Login() {
             ))}
           </div>
 
+          {degraded && (
+            <p className="mt-6 text-[13px] text-neutral-500 max-w-[480px] text-center">
+              Provider buttons are temporarily disabled while the backend is unreachable. They will re-enable
+              automatically when the connection comes back.
+            </p>
+          )}
+
           {/* Security note */}
           <div className="mt-10 flex items-center gap-2 text-[13px] text-neutral-400">
             <Shield size={14} className="text-[#0A84FF]" />
@@ -102,5 +197,69 @@ export function Login() {
         </div>
       </div>
     </div>
+  );
+}
+
+function BackendStatusPill({
+  probe,
+  onRetry,
+  forceReprobe,
+}: {
+  probe: ProbeState;
+  onRetry: () => void;
+  forceReprobe: () => void;
+}) {
+  const longPress = useLongPress(forceReprobe);
+  // Tooltip explaining the dev affordance. Drawn into the title attr
+  // on every state so hovering always surfaces the hint.
+  const forceHint =
+    "Right-click or long-press to force re-probe (bypass 5min cache TTL)";
+
+  if (probe.kind === "loading") {
+    return (
+      <span
+        {...longPress}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-100 border border-neutral-200 text-neutral-600 text-[12px] font-medium select-none"
+        aria-live="polite"
+        title={forceHint}
+      >
+        <Loader2 size={12} className="animate-spin" />
+        Checking connection…
+      </span>
+    );
+  }
+  if (probe.result.ok) {
+    return (
+      <span
+        {...longPress}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-green-50 border border-green-200 text-green-700 text-[12px] font-medium select-none"
+        title={`OAuth backend reachable at ${probe.result.url} — ${forceHint}`}
+      >
+        <CheckCircle2 size={12} />
+        Connected to {shortHost(probe.result.url)}
+      </span>
+    );
+  }
+  // Degraded: pill becomes a clickable escape-hatch to /status so a user
+  // stuck on /login can immediately see the full diagnostic surface.
+  // Right-click / long-press on the same pill forces a re-probe without
+  // navigating (the link's onClick still runs after long-press, which
+  // is fine — user gets a re-probe AND a navigation to /status).
+  return (
+    <Link
+      to="/status"
+      {...longPress}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-50 border border-red-200 text-red-700 text-[12px] font-medium hover:bg-red-100 transition-colors no-underline select-none"
+      title={`Backend at ${probe.result.url} is unreachable — ${forceHint}`}
+      onClick={(e) => {
+        // Allow the link to navigate even though we want to also re-probe
+        // on return. (No preventDefault — let React Router handle it.)
+        e;
+        onRetry();
+      }}
+    >
+      <AlertTriangle size={12} />
+      {statusLabel(probe.result)} →
+    </Link>
   );
 }

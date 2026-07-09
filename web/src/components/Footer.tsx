@@ -6,6 +6,10 @@ export function Footer() {
       <div className="footer-inner">
         <span>&copy; 2026 InstaEdit, Inc.</span>
         <span className="footer-divider" aria-hidden="true">|</span>
+        <Link to="/status" className="footer-link">
+          System status
+        </Link>
+        <span className="footer-divider" aria-hidden="true">|</span>
         <Link to="/privacy" className="footer-link">
           Privacy Policy
         </Link>

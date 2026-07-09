@@ -100,13 +100,30 @@ func (m *Manager) Verify(raw string) (int64, error) {
 
 // Middleware returns a handler that enforces JWT auth.
 //
-// Behavior:
-//   - If Authorization header is missing or invalid AND strict is true → 401
-//   - If Authorization header is missing or invalid AND strict is false →
-//     request continues (legacy mode) with a warning log
-//   - On valid token: user id is set in the request context
+// Two modes are supported, selected by the `strict` flag (wired at startup
+// from the STRICT_JWT_AUTH env var; default true since the SPA ships JWT-aware):
 //
-// Use UserIDFromContext to retrieve it downstream.
+//   STRICT MODE (default; STRICT_JWT_AUTH=true):
+//     - Missing Authorization header           → 401 missing authorization header
+//     - Authorization header without Bearer  → 401 invalid authorization header
+//     - Bearer with invalid/expired JWT       → 401 invalid or expired token
+//     - Bearer with valid JWT                  → user_id placed in ctx, calls next
+//
+//   LEGACY FALLBACK (STRICT_JWT_AUTH=false):
+//     Reserved for the AUTH MIGRATION ROLLBACK WINDOW. When the JWT-aware
+//     frontend is being rolled out, the old SPA clients don't send
+//     Authorization and would otherwise be locked out. In legacy mode the
+//     middleware accepts the request and emits a slog.Warn line so ops can
+//     measure how many legacy callers are still hitting the API.
+//
+//     SECURITY: in legacy mode `resolveUserID` falls back to the
+//     `user_id` field on the request body/query, which means anyone who
+//     knows an integer id can publish as that user. NEVER run legacy mode
+//     in production once the new frontend is fully rolled out.
+//
+// Use UserIDFromContext to retrieve the authenticated user id downstream.
+// The boolean is false when the request reached the handler without the
+// middleware having run (or having accepted a legacy request).
 func (m *Manager) Middleware(strict bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")

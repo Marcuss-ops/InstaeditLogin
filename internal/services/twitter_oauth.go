@@ -15,6 +15,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // TwitterOAuthService implements OAuthProvider and ContentPublisher for Twitter/X.
@@ -81,7 +82,14 @@ func (s *TwitterOAuthService) HandleCallback(code string) (*models.PlatformProfi
 }
 
 // RefreshOAuthToken exchanges a Twitter refresh token for a new access token.
-func (s *TwitterOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+func (s *TwitterOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (result *models.TokenData, err error) {
+	defer func() {
+		if err != nil {
+			metrics.RecordTokenRefreshError(models.PlatformTwitter)
+		} else {
+			metrics.RecordTokenRefreshSuccess(models.PlatformTwitter)
+		}
+	}()
 	if refreshToken == "" {
 		return nil, fmt.Errorf("twitter RefreshOAuthToken: empty refresh token")
 	}
@@ -127,7 +135,16 @@ func (s *TwitterOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 	}, nil
 }
 
-func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
+	start := time.Now()
+	defer func() {
+		metrics.ObservePublishLatency(models.PlatformTwitter, time.Since(start).Seconds())
+		if err != nil {
+			metrics.RecordPublishError(models.PlatformTwitter, metrics.ErrorKind(err))
+		} else {
+			metrics.RecordPublishSuccess(models.PlatformTwitter)
+		}
+	}()
 	if payload.Text == "" && payload.ImageURL == "" {
 		return nil, fmt.Errorf("twitter requires text or image_url")
 	}
@@ -162,19 +179,19 @@ func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platform
 		return nil, fmt.Errorf("twitter tweet returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var result struct {
+	var parsed struct {
 		Data struct {
 			ID   string `json:"id"`
 			Text string `json:"text"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, fmt.Errorf("twitter tweet parse: %w", err)
 	}
 
 	return &models.PublishResult{
-		PlatformMediaID: result.Data.ID,
-		PlatformURL:     "https://twitter.com/i/status/" + result.Data.ID,
+		PlatformMediaID: parsed.Data.ID,
+		PlatformURL:     "https://twitter.com/i/status/" + parsed.Data.ID,
 	}, nil
 }
 

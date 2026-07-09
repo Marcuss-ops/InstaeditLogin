@@ -90,9 +90,162 @@ instaedit-login/
 }
 ```
 
+## Generazione dei secret
+
+Prima di avviare il server, genera i due secret locali (`JWT_SECRET` ed
+`ENCRYPTION_KEY`) con valori conformi alle policy di `validate()`:
+
+```bash
+# JWT_SECRET: deve essere almeno 32 byte
+#   (HS256 richiede una chiave ≥ output hash, RFC 7518 §3.2)
+openssl rand -hex 32
+
+# ENCRYPTION_KEY: deve decodificare esattamente a 32 byte (AES-256-GCM)
+openssl rand -base64 32
+```
+
+I `*_CLIENT_SECRET` delle piattaforme opzionali (TikTok, Twitter, YouTube)
+vengono rilasciati dalle rispettive console sviluppatore (vedi i link sopra
+in `## Piattaforme Supportate`) e devono essere ≥32 caratteri in copia-incolla
+— un valore più corto fa fallire l'avvio.
+
+> ⚠️ **Conserva i secret in modo sicuro**: non committare `.env`, non
+> riusare lo stesso secret su due ambienti (dev/staging/prod), ruotalo
+> immediatamente se viene esposto.
+
+## Autenticazione JWT & Rollout
+
+L'API emette un JWT HS256 al termine del flusso OAuth (`/api/v1/auth/{provider}/callback`)
+e lo restituisce:
+
+- come **redirect** verso `${FRONTEND_URL}/auth/callback?jwt=...&provider=...&user_id=...&expires_at=...`
+  per i browser (l'app React lo cattura e lo salva in `localStorage`), oppure
+- come **JSON** `{ jwt_token, ... }` se `FRONTEND_URL` non è configurato (curl,
+  Postman, integrazioni server-to-server).
+
+Il middleware (`internal/auth.Middleware`) decide se la `Authorization: Bearer <jwt>`
+è obbligatoria o facoltativa in base a `STRICT_JWT_AUTH`.
+
+### Modalità strict (default — `STRICT_JWT_AUTH=true`)
+
+- Authorization mancante → **401** `missing authorization header`
+- Header non in formato `Bearer` → **401** `invalid authorization header`
+- JWT scaduto o firma invalida → **401** `invalid or expired token`
+- JWT valido → `user_id` inserito nel contesto della richiesta e l'handler gira
+
+Il client deve allegare `Authorization: Bearer <jwt>` ad ogni chiamata a
+`/api/v1/posts/publish` e `/api/v1/accounts`. La SPA lo fa automaticamente via
+`authedFetch()` in `web/src/lib/auth.ts`.
+
+All'avvio il server logga:
+```
+msg="Router configured" auth_mode="strict (Bearer required)" strict_jwt_auth=true
+```
+
+> 🚨 **LEGGI QUESTO PRIMA DI DISATTIVARE LA STRICT MODE** 🚨
+>
+> `STRICT_JWT_AUTH=false` ripristina il comportamento rollback in cui
+> chiunque conosca un `user_id` intero può pubblicare o listare gli account
+> di quell'utente senza possedere la sessione. Impostalo su `false` **SOLO**
+> durante la finestra di rollout del frontend JWT-aware e rimettilo a `true`
+> non appena la SPA serve il 100% del traffico. **Non lasciarlo mai `false`
+> in produzione** — leggi anche "Come chiudere la finestra di rollout"
+> più sotto.
+
+### Modalità legacy (`STRICT_JWT_AUTH=false`) — SOLO durante il rollout
+
+Quando la SPA JWT-aware non serve ancora il 100% del traffico si può
+temporaneamente abbassare la guardia. In modalità legacy:
+
+- il middleware **non** blocca le richieste senza `Authorization`
+- `resolveUserID` accetta `user_id` dal **body** JSON o dalla **query string**
+- ogni chiamata senza JWT emette un `slog.Warn`:
+  ```
+  msg="auth: invalid JWT but STRICT_JWT_AUTH is off; allowing legacy request"
+  ```
+
+### Come chiudere la finestra di rollout
+
+1. Verificare che `slog` non emetta più warning `STRICT_JWT_AUTH is off` (vuol
+   dire che 100% del traffico porta il bearer).
+2. Mettere `STRICT_JWT_AUTH=true` nel `.env` (o rimuovere la riga per fare
+   affidamento sul default) e riavviare il server.
+3. Opzionale: rimuovere la `user_id` field dai DTO `PublishRequest` /
+   handleListAccounts una volta spenti tutti i client legacy.
+
+## Deployment
+
+Quando fai deploy del frontend React su Vercel (o piattaforma analoga),
+`VITE_API_BASE_URL` deve puntare al backend Go **live** — non più a
+localhost. I tre pitfall operativi che provocano il 404
+`DEPLOYMENT_NOT_FOUND` al primo click OAuth li riassumo qui di seguito.
+
+### 1. Puntare a un deployment Vercel defunto
+
+L'antipattern più frequente: lasciare `VITE_API_BASE_URL` impostato su un
+vecchio alias frontend Vercel (es. `https://vecchio-progetto.vercel.app`)
+pensando che quello sia il backend. In realtà è un alias dello **stesso
+frontend** ormai rimosso/cancellato/scaduto — Vercel risponde con la pagina
+HTML standard `DEPLOYMENT_NOT_FOUND` invece di fare da proxy API.
+
+**Sintomo**: `/status` col probe banner rosso che cita "Vercel stale
+deployment" (motivo `vercel_stale_deploy`). Cliccando un bottone OAuth il
+browser naviga alla URL ma riceve una pagina di errore invece del redirect
+verso Meta/TikTok/etc.
+
+**Fix**: `VITE_API_BASE_URL` deve essere l'URL diretto del backend
+Go — Railway / Render / Fly.io / custom domain (es.
+`https://api.example.com`). MAI un sottodominio `*.vercel.app`.
+
+### 2. Dimenticare di redeploy dopo aver cambiato l'env
+
+Le env var `VITE_*` vengono **baked dentro il bundle JS** al momento del
+`vite build`. Cambiare `VITE_API_BASE_URL` (o qualsiasi altra `VITE_*`) nel
+dashboard Vercel **NON** aggiorna il deployment corrente — serve un rebuild
+esplicito.
+
+**Sintomo**: la modifica env è stata salvata (la vedi nella tab
+Environment Variables), ma la pagina `/login` mostra ancora il banner rosso
+con la URL vecchia. Il probe torna green solo dopo il redeploy.
+
+**Fix**: dopo ogni cambio di `VITE_API_BASE_URL` (o altra `VITE_*`),
+Vercel → **Deployments** → menu `⋯` sul corrente → **Redeploy**. Spunta
+anche **Clear Build Cache** se vuoi essere sicuro che il bundle JS
+precedente non sia riusato da qualche cache CDN.
+
+### 3. Confondere frontend origin con backend origin
+
+Domanda frequente: "Vercel mi ha dato `https://instaedit-xyz.vercel.app`
+come URL del frontend. Posso usare quello come `VITE_API_BASE_URL`?".
+**No** — quel URL serve **il tuo stesso frontend** (asset statici), non
+il backend. Vercel restituisce 404 per ogni `/api/v1/auth/.../*` perché
+non c'è nessun run-time che risponde a quei path.
+
+**Sintomo**: `VITE_API_BASE_URL` finisce in `https://*.vercel.app/api/v1/...`
+e ogni probe restituisce 404 — sia `/health` che `/auth/{provider}/login`.
+
+**Fix**: i due URL vivono su host **diversi**. Il frontend è Vercel (asset
+statici, `vercel.json` → `dist/`), il backend è un servizio long-running
+separato (Go + Postgres, deployato su Railway/Render/Fly.io/VPS). Esempio:
+frontend su `https://instaedit.vercel.app`, backend su
+`https://instaedit-api.fly.dev`. Metti il secondo in `VITE_API_BASE_URL`.
+
+> 📖 La pagina `/status` linka a questa sezione dal banner rosso di
+> degraded — se la probe fallisce con uno qualsiasi dei tre pitfall sopra,
+> vieni direttamente qui dopo un click.
+
 ## Sicurezza
 
 - Token OAuth **mai** salvati in chiaro (AES-256-GCM)
+- `ENCRYPTION_KEY` con **esattamente** 32 byte decodificati (validato allo
+  startup; un messaggio d'errore mostra entrambi i numeri, es. "got 16;
+  expected 32")
+- `JWT_SECRET` con **almeno** 32 byte (RFC 7518 §3.2; validato allo startup)
+- `META_APP_SECRET` **e** tutti i `*_CLIENT_SECRET` opzionali (TikTok/Twitter/
+  YouTube) con almeno **32 caratteri** (validato allo startup)
+- Modalità strict JWT (`STRICT_JWT_AUTH=true`, default) blocca ogni richiesta
+  a `/api/v1/posts/publish` e `/api/v1/accounts` senza `Authorization: Bearer
+  <jwt>` valido
 - `.env` escluso da git
 - HTTPS richiesto in produzione
-- Chiave di cifratura validata (32 byte base64)
+- Per i dettagli sui secret minimi vedi `## Generazione dei secret` in alto

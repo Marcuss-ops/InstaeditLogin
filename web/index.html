@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" href="/favicon-32x32.png" sizes="32x32" />
+    <!-- Legacy / pre-parse fallback: a real subset of clients (older headless
+         browsers, crawlers, social previews) probes /favicon.ico explicitly
+         before parsing <link rel="icon"> declarations. Shipping the actual
+         ICO file under public/ kills the spurious 404 in console without
+         changing anything for the modern browsers that already use the SVG
+         above. -->
+    <link rel="alternate icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="preconnect" href="https://fonts.googleapis.com">

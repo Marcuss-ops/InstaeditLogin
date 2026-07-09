@@ -78,11 +78,28 @@ type TokenData struct {
 }
 
 // PublishPayload is the content to publish on a platform.
+//
+// Text is reused as the caption/description across providers (Meta `caption`,
+// YouTube snippet.description, TikTok post_info.title). Privacy/Comment/Duet
+// fields are TikTok-specific at the moment but live here so the router
+// doesn't need to know which platform supports what.
 type PublishPayload struct {
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
 	VideoURL string `json:"video_url,omitempty"`
 	Title    string `json:"title,omitempty"`
+
+	// PrivacyLevel controls who can view the post. TikTok-only.
+	// Empty value falls back to PUBLIC_TO_EVERYONE inside the TikTok service.
+	PrivacyLevel string `json:"privacy_level,omitempty"`
+
+	// CommentMode controls whether comments are allowed on the post. TikTok-only.
+	// Accepted: "allow_all" / "allow" (default) or "no_comments" / "disabled".
+	CommentMode string `json:"comment_mode,omitempty"`
+
+	// DuetMode controls whether others can create duets from the post. TikTok-only.
+	// Accepted: "allow" (default) or "no_duet" / "disabled".
+	DuetMode string `json:"duet_mode,omitempty"`
 }
 
 // PublishResult is returned after successful content publishing.
