@@ -25,8 +25,15 @@ const validMetaSecret32 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 32 a's
 // its minimum-acceptable length so each subtest overrides exactly one field
 // and failures point at a single cause. Optional OAuth platforms are
 // intentionally left empty → disabled (passes by default).
+//
+// AppEnv is seeded to "dev" so the AppEnv switch in validate() passes —
+// tests that exercise credential lengths don't have to know about the
+// AppEnv check. Tests that DO want to exercise AppEnv validation
+// (TestValidate_AppEnv, TestLoad_AppEnv_*) assert on the env-var-driven
+// path explicitly.
 func minimalValidConfig(jwtSecret string) *Config {
 	return &Config{
+		AppEnv:        "dev",
 		DatabaseURL:   "postgres://x",
 		MetaAppID:     "meta-id",
 		MetaAppSecret: validMetaSecret32,
