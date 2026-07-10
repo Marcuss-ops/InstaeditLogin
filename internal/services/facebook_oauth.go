@@ -38,7 +38,7 @@ func NewFacebookOAuthService(cfg *config.Config, userRepo *repository.UserReposi
 		cfg:         cfg,
 		userRepo:    userRepo,
 		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
-		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		httpClient:  NewHTTPClient(),
 	}, nil
 }
 

@@ -37,7 +37,7 @@ func NewTikTokOAuthService(cfg *config.Config, userRepo *repository.UserReposito
 		cfg:         cfg,
 		userRepo:    userRepo,
 		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
-		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		httpClient:  NewHTTPClient(),
 	}, nil
 }
 
