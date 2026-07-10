@@ -2,6 +2,9 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,22 +44,48 @@ func NewTwitterOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepos
 func (s *TwitterOAuthService) GetPlatform() string { return models.PlatformTwitter }
 
 func (s *TwitterOAuthService) GetLoginURL(state string) string {
+	// Generate a cryptographically random PKCE code_verifier (64 bytes → 86 chars base64url)
+	// and embed it in the state parameter so it survives the OAuth redirect round-trip.
+	// Format: <original_state>.<verifier> — parsed back in HandleCallback via LastIndex.
+	verifierBytes := make([]byte, 64)
+	var verifier string
+	if _, err := rand.Read(verifierBytes); err != nil {
+		slog.Error("Twitter: failed to generate PKCE code_verifier, falling back to unsafe default", "error", err)
+		verifier = "challenge"
+	} else {
+		verifier = base64.RawURLEncoding.EncodeToString(verifierBytes)
+	}
+
+	// Derive code_challenge via S256: SHA-256 hash of code_verifier, base64url-encoded.
+	hash := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(hash[:])
+
 	params := url.Values{}
 	params.Set("client_id", s.cfg.TwitterClientID)
 	params.Set("redirect_uri", s.cfg.TwitterRedirectURI)
-	params.Set("state", state)
+	params.Set("state", state+"."+verifier)
 	params.Set("scope", "tweet.read tweet.write users.read offline.access")
 	params.Set("response_type", "code")
-	params.Set("code_challenge", "challenge")
-	params.Set("code_challenge_method", "plain")
+	params.Set("code_challenge", challenge)
+	params.Set("code_challenge_method", "S256")
 
 	return "https://twitter.com/i/oauth2/authorize?" + params.Encode()
 }
 
-func (s *TwitterOAuthService) HandleCallback(ctx context.Context, code string) (*models.PlatformProfile, *models.TokenData, error) {
+func (s *TwitterOAuthService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	slog.Info("Twitter: exchanging code for token")
 
-	tokenResp, err := s.exchangeCodeForToken(ctx, code)
+	// Extract the PKCE code_verifier from the state parameter.
+	// Format set in GetLoginURL: <original_state>.<verifier>
+	verifier := ""
+	if idx := strings.LastIndex(state, "."); idx != -1 {
+		verifier = state[idx+1:]
+	}
+	if verifier == "" {
+		return nil, nil, fmt.Errorf("twitter PKCE: missing code_verifier in state")
+	}
+
+	tokenResp, err := s.exchangeCodeForToken(ctx, code, verifier)
 	if err != nil {
 		return nil, nil, fmt.Errorf("twitter token exchange: %w", err)
 	}
@@ -188,13 +217,13 @@ type twitterTokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-func (s *TwitterOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*twitterTokenResponse, error) {
+func (s *TwitterOAuthService) exchangeCodeForToken(ctx context.Context, code, verifier string) (*twitterTokenResponse, error) {
 	body := url.Values{}
 	body.Set("client_id", s.cfg.TwitterClientID)
 	body.Set("code", code)
 	body.Set("grant_type", "authorization_code")
 	body.Set("redirect_uri", s.cfg.TwitterRedirectURI)
-	body.Set("code_verifier", "challenge")
+	body.Set("code_verifier", verifier)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.twitter.com/2/oauth2/token",
 		strings.NewReader(body.Encode()))

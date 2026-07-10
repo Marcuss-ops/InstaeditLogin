@@ -55,7 +55,7 @@ func (s *FacebookOAuthService) GetLoginURL(state string) string {
 }
 
 // HandleCallback processes the full OAuth callback for Meta/Facebook.
-func (s *FacebookOAuthService) HandleCallback(ctx context.Context, code string) (*models.PlatformProfile, *models.TokenData, error) {
+func (s *FacebookOAuthService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	// Step 1: Exchange code for short-lived token
 	slog.Info("Meta: exchanging code for short-lived token")
 	shortLived, err := s.exchangeCodeForToken(ctx, code)

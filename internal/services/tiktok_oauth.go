@@ -92,7 +92,7 @@ func (s *TikTokOAuthService) GetLoginURL(state string) string {
 	return loginURL
 }
 
-func (s *TikTokOAuthService) HandleCallback(ctx context.Context, code string) (*models.PlatformProfile, *models.TokenData, error) {
+func (s *TikTokOAuthService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	slog.Info("TikTok: exchanging code for token", "code_prefix", maskCode(code))
 
 	tokenResp, err := s.exchangeCodeForToken(ctx, code)

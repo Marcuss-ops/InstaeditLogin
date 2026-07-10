@@ -111,7 +111,7 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	state := req.URL.Query().Get("state")
 	slog.Info("OAuth callback received", "provider", provider, "state", state)
 
-	profile, tokenData, err := p.HandleCallback(req.Context(), code)
+	profile, tokenData, err := p.HandleCallback(req.Context(), state, code)
 	if err != nil {
 		slog.Error("OAuth callback failed", "provider", provider, "error", err)
 		metrics.RecordOAuthLoginError(provider, metrics.ErrorKind(err))

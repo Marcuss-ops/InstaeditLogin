@@ -53,7 +53,7 @@ func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 	return "https://accounts.google.com/o/oauth2/v2/auth?" + params.Encode()
 }
 
-func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, code string) (*models.PlatformProfile, *models.TokenData, error) {
+func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	slog.Info("YouTube: exchanging code for token")
 
 	tokenResp, err := s.exchangeCodeForToken(ctx, code)
