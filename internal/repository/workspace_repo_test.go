@@ -177,7 +177,14 @@ func TestWorkspaceListByOwner_MultipleRows(t *testing.T) {
 	if got[1].ID != 1 || got[1].Name != "First" {
 		t.Errorf("second row: %+v", got[1])
 	}
-}func TestWorkspaceListByOwner_EmptyResultReturnsEmptySlice(t *testing.T) {
+}
+
+// TestWorkspaceListByOwner_NoResultsHasZeroLen locks in that an empty
+// result set is treated as "no rows" by callers (len==0). The returned
+// slice may be nil or non-nil; callers MUST use len()==0 as the empty
+// contract, NOT got == nil. If you change this to a non-nil
+// invariant, add a json.Marshal regression test.
+func TestWorkspaceListByOwner_NoResultsHasZeroLen(t *testing.T) {
 	db, mock := newMockWorkspaceDB(t)
 	repo := repository.NewWorkspaceRepository(db)
 
@@ -193,13 +200,6 @@ func TestWorkspaceListByOwner_MultipleRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByOwner: %v", err)
 	}
-	// Repo currently returns nil slice for empty result (standard
-	// database/sql idiom: leave var unwritten when rows.Next() never
-	// fires). The empty-slice policy is documented in HANDOFF-LINUX
-	// section 11: callers must treat len()==0 as the empty contract,
-	// and JSON encoding handles nil vs []T{} identically. Don't
-	// re-introduce a nil-vs-non-nil assertion here — that's an
-	// implementation choice, not a correctness rule.
 	if len(got) != 0 {
 		t.Errorf("len: want 0, got %d", len(got))
 	}

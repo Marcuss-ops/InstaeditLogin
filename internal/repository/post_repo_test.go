@@ -3,7 +3,9 @@ package repository_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,8 +27,15 @@ func regexMatcher() sqlmock.QueryMatcher {
 		if err == nil && re.MatchString(actualSQL) {
 			return nil
 		}
-		// Fall back to exact match (sqlmock default).
-		return sqlmock.QueryMatcherEqual(expectedSQL, actualSQL)
+		// Fall back to exact-string equality. We do NOT call
+		// sqlmock.QueryMatcherEqual here because it's a var (QueryMatcher
+		// interface), not a function — invoking it as `sqlmock.QueryMatcherEqual(a, b)`
+		// is a compile error. The plain `==` is what sqlmock's default
+		// matcher does internally.
+		if expectedSQL == actualSQL {
+			return nil
+		}
+		return fmt.Errorf("sqlmock: query mismatch (regex or exact)\nwant: %s\ngot:  %s", expectedSQL, actualSQL)
 	})
 }
 
@@ -162,7 +171,7 @@ func TestPostCreate_TargetInsertFails_RollsBack(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from failing INSERT, got nil")
 	}
-	if !contains(err.Error(), "unique violation") {
+	if !strings.Contains(err.Error(), "unique violation") {
 		t.Errorf("error should preserve underlying message: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -183,7 +192,7 @@ func TestPostCreate_BeginTxFails_NoCommitOrRollback(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from Begin, got nil")
 	}
-	if !contains(err.Error(), "failed to begin create-post tx") {
+	if !strings.Contains(err.Error(), "failed to begin create-post tx") {
 		t.Errorf("error message: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -231,10 +240,10 @@ func TestPostUpdate_ZeroRowsAffected_ReturnsTenantIsolationError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected tenant-isolation error, got nil")
 	}
-	if !contains(err.Error(), "post not found or unauthorized") {
+	if !strings.Contains(err.Error(), "post not found or unauthorized") {
 		t.Errorf("error should signal tenant isolation miss: %v", err)
 	}
-	if !contains(err.Error(), "id=999") || !contains(err.Error(), "workspace_id=7") {
+	if !strings.Contains(err.Error(), "id=999") || !strings.Contains(err.Error(), "workspace_id=7") {
 		t.Errorf("error should include id/workspace_id for debuggability: %v", err)
 	}
 }
@@ -256,7 +265,7 @@ func TestPostUpdate_ExecErrorPropagates(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !contains(err.Error(), "failed to update post") {
+	if !strings.Contains(err.Error(), "failed to update post") {
 		t.Errorf("error should be wrapped: %v", err)
 	}
 }
@@ -301,8 +310,66 @@ func TestPostUpdateStatus_ZeroRowsAffected_ReturnsGhostError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected ghost-state error, got nil")
 	}
-	if !contains(err.Error(), "post_target not found") {
+	if !strings.Contains(err.Error(), "post_target not found") {
 		t.Errorf("error should signal stale id: %v", err)
+	}
+}
+
+// TestPostSave_Happy asserts that PostRepository.Save (the worker's
+// "add another platform to an existing post" code path) correctly sets
+// target.ID from RETURNING. Distinct from PostRepository.Create which is
+// a tx-wrapped multi-row insert; Save is a single INSERT with no tx.
+func TestPostSave_Happy(t *testing.T) {
+	db, mock := newMockPostDBExact(t)
+	repo := repository.NewPostRepository(db)
+
+	mock.ExpectQuery(
+		`INSERT INTO post_targets (post_id, platform_account_id, status)
+		 VALUES ($1, $2, $3)
+		 RETURNING id`,
+	).WithArgs(int64(100), int64(20), models.PostStatusScheduled).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(456)))
+
+	tgt := &models.PostTarget{
+		PostID:            100,
+		PlatformAccountID: 20,
+		Status:            models.PostStatusScheduled,
+	}
+	if err := repo.Save(tgt); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if tgt.ID != 456 {
+		t.Errorf("ID: want 456, got %d", tgt.ID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestPostSave_DBError(t *testing.T) {
+	db, mock := newMockPostDBExact(t)
+	repo := repository.NewPostRepository(db)
+
+	mock.ExpectQuery(
+		`INSERT INTO post_targets (post_id, platform_account_id, status)
+		 VALUES ($1, $2, $3)
+		 RETURNING id`,
+	).WithArgs(int64(100), int64(20), models.PostStatusScheduled).
+		WillReturnError(errors.New("unique violation on (post_id, platform_account_id)"))
+
+	err := repo.Save(&models.PostTarget{
+		PostID:            100,
+		PlatformAccountID: 20,
+		Status:            models.PostStatusScheduled,
+	})
+	if err == nil {
+		t.Fatal("expected error from Save, got nil")
+	}
+	if !strings.Contains(err.Error(), "unique violation") {
+		t.Errorf("error should preserve underlying message: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
 	}
 }
 
