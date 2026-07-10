@@ -392,3 +392,83 @@ func TestLoad_ConfigValidationErrors(t *testing.T) {
 		}
 	})
 }
+
+func TestValidate_AppEnv(t *testing.T) {
+	// APP_ENV must be one of dev|staging|production. Anything else is
+	// rejected so a typo (e.g. "prod", "PRODUCTION", "stage") can't masquerade
+	// as a non-production deploy and accidentally bypass the
+	// STRICT_JWT_AUTH fail-fast in main.go (which keys off "production").
+	tests := []struct {
+		name      string
+		env       string
+		wantErr   bool
+		errSubstr string
+	}{
+		{name: "dev passes", env: "dev", wantErr: false},
+		{name: "staging passes", env: "staging", wantErr: false},
+		{name: "production passes", env: "production", wantErr: false},
+		// Common typos / different casing
+		{name: "prod (typo) fails", env: "prod", wantErr: true, errSubstr: "APP_ENV must be one of dev|staging|production"},
+		{name: "PRODUCTION (upper-cased) fails", env: "PRODUCTION", wantErr: true, errSubstr: "APP_ENV must be one of dev|staging|production"},
+		{name: "stage (typo) fails", env: "stage", wantErr: true, errSubstr: "APP_ENV must be one of dev|staging|production"},
+		{name: "preview (not in allowlist) fails", env: "preview", wantErr: true, errSubstr: "got \"preview\""},
+		{name: "empty fails", env: "", wantErr: true, errSubstr: "got \"\""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalValidConfig(validJWTSecret())
+			cfg.AppEnv = tc.env
+			err := cfg.validate()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.errSubstr)
+				}
+				if tc.errSubstr != "" && !strings.Contains(err.Error(), tc.errSubstr) {
+					t.Fatalf("expected error containing %q, got %q", tc.errSubstr, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLoad_AppEnv_PropagatesValue(t *testing.T) {
+	// Ensures the APP_ENV env var actually reaches Config.AppEnv (not just
+	// get consumed silently by getEnv defaults). Without this we couldn't
+	// trust that main.go's fail-fast guard reads the right value.
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("META_APP_ID", "meta-id")
+	t.Setenv("META_APP_SECRET", strings.Repeat("a", 32))
+	t.Setenv("ENCRYPTION_KEY", minValid32ByteBase64Key)
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
+	t.Setenv("APP_ENV", "staging")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() should succeed with APP_ENV=staging, got %v", err)
+	}
+	if cfg.AppEnv != "staging" {
+		t.Fatalf("AppEnv: want staging, got %q", cfg.AppEnv)
+	}
+}
+
+func TestLoad_AppEnv_BogusFails(t *testing.T) {
+	// End-to-end: a bogus APP_ENV makes Load() fail. Validates that the
+	// config validation runs against user-supplied values, not just the
+	// minimalValidConfig fixture used by struct-direct tests.
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("META_APP_ID", "meta-id")
+	t.Setenv("META_APP_SECRET", strings.Repeat("a", 32))
+	t.Setenv("ENCRYPTION_KEY", minValid32ByteBase64Key)
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
+	t.Setenv("APP_ENV", "bogus")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "APP_ENV must be one of") {
+		t.Fatalf("Load() with APP_ENV=bogus should fail; got %v", err)
+	}
+}

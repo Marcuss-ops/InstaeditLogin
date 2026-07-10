@@ -46,6 +46,19 @@ func main() {
 
 	slog.Info("Starting InstaEditLogin server v2.0.0...")
 
+	slog.Info("Environment", "app_env", cfg.AppEnv, "auth_mode", authModeLabel(cfg.StrictJWTAuth))
+
+	// Fail-fast security guard: in production, JWT auth MUST be strict so
+	// the server can't be tricked into trusting user_id from request bodies
+	// (legacy mode). Without this check a misconfigured production deploy
+	// would accept any user_id sent in /api/v1/posts/publish — a privilege-
+	// escalation vector.
+	if cfg.AppEnv == "production" && !cfg.StrictJWTAuth {
+		slog.Error("SECURITY: STRICT_JWT_AUTH must be enabled in production. Refusing to start with non-strict auth. Set STRICT_JWT_AUTH=true explicitly, or change APP_ENV to 'dev'/'staging' for non-prod deploys.",
+			"app_env", cfg.AppEnv, "strict_jwt_auth", cfg.StrictJWTAuth)
+		os.Exit(1)
+	}
+
 	db, err := database.Connect(cfg)
 	if err != nil {
 		slog.Error("Failed to connect to database", "error", err)

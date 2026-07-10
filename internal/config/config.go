@@ -103,6 +103,13 @@ type Config struct {
 	// Logging
 	LogLevel string
 
+	// AppEnv is the deployment environment. Must be one of "dev",
+	// "staging", "production". The "production" value triggers
+	// fail-fast checks on insecure defaults (see cmd/server/main.go
+	// for STRICT_JWT_AUTH). Default "dev" so missing env-var on local
+	// shouldn't surprise developers.
+	AppEnv string
+
 	// Background worker tuning.
 	PublishWorkerIntervalSeconds int
 
@@ -170,6 +177,7 @@ func Load() (*Config, error) {
 		JWTTTLHours:         getEnvInt("JWT_TTL_HOURS", 168),
 		StrictJWTAuth:       getEnvBool("STRICT_JWT_AUTH", true),
 		LogLevel:                     getEnv("LOG_LEVEL", "info"),
+		AppEnv:                       getEnv("APP_ENV", "dev"),
 		PublishWorkerIntervalSeconds: getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
 
 		SupabaseURL:        getEnv("SUPABASE_URL", ""),
@@ -204,6 +212,16 @@ func Load() (*Config, error) {
 // surfaces the most upstream misconfiguration first, so the operator
 // fixes one thing at a time.
 func (c *Config) validate() error {
+	// APP_ENV is a deployment-environment flag — checked first because a
+	// misconfigured production deploy must fail fast before any DB
+	// connection or key material is touched.
+	switch c.AppEnv {
+	case "dev", "staging", "production":
+		// ok
+	default:
+		return fmt.Errorf("APP_ENV must be one of dev|staging|production (got %q)", c.AppEnv)
+	}
+
 	// Database: DATABASE_URL takes precedence; fallback to individual params.
 	if c.DatabaseURL == "" {
 		if c.DBPassword == "" {
