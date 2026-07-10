@@ -80,6 +80,11 @@ type Config struct {
 	YouTubeClientSecret string
 	YouTubeRedirectURI  string
 
+	// LinkedIn OAuth
+	LinkedInClientID     string
+	LinkedInClientSecret string
+	LinkedInRedirectURI  string
+
 	// Encryption
 	EncryptionKey string
 
@@ -122,6 +127,9 @@ func Load() (*Config, error) {
 		YouTubeClientID:     getEnv("YOUTUBE_CLIENT_ID", ""),
 		YouTubeClientSecret: getEnv("YOUTUBE_CLIENT_SECRET", ""),
 		YouTubeRedirectURI:  getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
+		LinkedInClientID:     getEnv("LINKEDIN_CLIENT_ID", ""),
+		LinkedInClientSecret: getEnv("LINKEDIN_CLIENT_SECRET", ""),
+		LinkedInRedirectURI:  getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
 		EncryptionKey:       getEnv("ENCRYPTION_KEY", ""),
 		JWTSecret:           getEnv("JWT_SECRET", ""),
 		JWTTTLHours:         getEnvInt("JWT_TTL_HOURS", 168),
@@ -205,6 +213,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateOptionalPlatform("YOUTUBE", c.YouTubeClientID, c.YouTubeClientSecret); err != nil {
+		return err
+	}
+	if err := c.validateOptionalPlatform("LINKEDIN", c.LinkedInClientID, c.LinkedInClientSecret); err != nil {
 		return err
 	}
 

@@ -31,7 +31,8 @@ export function Nav() {
         <button
           onClick={() => setOpen(!open)}
           className="md:hidden p-2 text-white"
-          aria-label="Menu"
+          aria-label="Toggle menu"
+          data-testid="mobile-menu-toggle"
         >
           {open ? <X size={24} /> : <Menu size={24} />}
         </button>
@@ -39,6 +40,7 @@ export function Nav() {
 
       {/* Mobile menu */}
       <div
+        data-testid="mobile-menu"
         className={cn(
           "md:hidden border-t border-white/12 bg-[rgba(3,3,8,0.95)] backdrop-blur-[16px] flex-col px-5 pb-4 pt-2 gap-0",
           open ? "flex" : "hidden"

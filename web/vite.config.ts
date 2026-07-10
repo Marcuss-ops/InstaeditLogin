@@ -59,14 +59,13 @@ function verifyApiBaseUrlPlugin() {
 export default defineConfig({
   plugins: [react(), tailwindcss(), verifyApiBaseUrlPlugin()],
   test: {
-    // happy-dom is ~2x faster than jsdom and provides everything probe-cache
-    // needs (window, sessionStorage, JSON, Map). We don't render React in
-    // the unit tests we have today; if we add component tests later we may
-    // want to switch to jsdom for better component-fixture support.
-    environment: 'happy-dom',
+    // jsdom for React component tests (Nav, DemoModal, etc.).
+    // Component rendering uses jsdom; set via test.environment in vitest config.
+    environment: 'jsdom',
     // Run tests in-process per file to keep logs readable; switch to
     // 'threads' (default) if a future test suite becomes slow.
     globals: false,
+    setupFiles: ['./vitest.setup.ts'],
     include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.ts'],
   },
 })

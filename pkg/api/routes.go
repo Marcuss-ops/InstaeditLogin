@@ -15,7 +15,6 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
@@ -23,11 +22,18 @@ import (
 // Router handles HTTP routing and request dispatching for all platforms.
 type Router struct {
 	platforms     map[string]services.PlatformService
-	userRepo      *repository.UserRepository
+	userRepo      UserStore
 	auth          *auth.Manager
 	strictAuth    bool
 	frontendURL   string
 	allowedOrigin []string
+}
+
+// UserStore abstracts the user/account persistence layer so tests can
+// inject a mock without a real database.
+type UserStore interface {
+	FindOrCreateUserByPlatform(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error)
+	ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error)
 }
 
 // NewRouter creates a new Router with platform providers and an auth manager.
@@ -37,7 +43,7 @@ type Router struct {
 // returns JSON (useful for non-browser clients).
 func NewRouter(
 	platforms map[string]services.PlatformService,
-	userRepo *repository.UserRepository,
+	userRepo UserStore,
 	authMgr *auth.Manager,
 	strictAuth bool,
 	frontendURL string,

@@ -120,6 +120,18 @@ func main() {
 		slog.Info("YouTube OAuth provider skipped (no credentials)")
 	}
 
+	if cfg.LinkedInClientID != "" {
+		linkedinSvc, err := services.NewLinkedInOAuthService(cfg, tokenRepo)
+		if err != nil {
+			slog.Warn("Failed to create LinkedIn OAuth service", "error", err)
+		} else {
+			platforms[linkedinSvc.GetPlatform()] = linkedinSvc
+			slog.Info("LinkedIn OAuth provider registered")
+		}
+	} else {
+		slog.Info("LinkedIn OAuth provider skipped (no credentials)")
+	}
+
 	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours)
 	// Auto-add the configured FrontendURL to the CORS allowlist when none
 	// was provided via CORS_ALLOWED_ORIGINS, so a single env var is enough
