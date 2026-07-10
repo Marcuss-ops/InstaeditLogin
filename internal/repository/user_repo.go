@@ -142,6 +142,33 @@ func (r *UserRepository) ListPlatformAccountsByUser(userID int64, platform strin
 	return accounts, nil
 }
 
+// FindPlatformAccountByID fetches a platform account by internal id, or
+// (nil, nil) when no row matches. (nil, nil) matches the rest of the
+// repository layer's not-found convention so callers can write
+//
+//	if pa == nil { /* skip — row vanished */ }
+//
+// without inspecting sql.ErrNoRows.
+//
+// Used by background workers (publish worker) that need to look up an
+// account knowing only its id, typically from a post_targets join row.
+func (r *UserRepository) FindPlatformAccountByID(id int64) (*models.PlatformAccount, error) {
+	account := &models.PlatformAccount{}
+	err := r.db.QueryRow(
+		`SELECT id, user_id, platform, platform_user_id, username, created_at, updated_at
+		 FROM platform_accounts
+		 WHERE id = $1`, id,
+	).Scan(&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID,
+		&account.Username, &account.CreatedAt, &account.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to find platform account by id: %w", err)
+	}
+	return account, nil
+}
+
 // FindOrCreateUserByPlatform finds an existing user linked to the given platform profile,
 // or creates a new user with a linked platform account if none exists.
 func (r *UserRepository) FindOrCreateUserByPlatform(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error) {

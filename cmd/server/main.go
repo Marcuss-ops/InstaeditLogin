@@ -16,6 +16,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 )
 
@@ -173,9 +174,39 @@ func main() {
 		}
 	}()
 
+	// Spawn the publish worker goroutine: picks up scheduled post_targets
+	// whose scheduled_at <= NOW() and dispatches them through the per-platform
+	// PlatformService implementations registered above. Cancelled before
+	// srv.Shutdown drains in-flight HTTP requests so the worker gets first
+	// dibs on DB connections during graceful shutdown.
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		publishWorker := worker.NewPublishWorker(
+			repository.NewPostRepository(db),
+			repository.NewUserRepository(db),
+			platforms,
+			time.Duration(cfg.PublishWorkerIntervalSeconds)*time.Second,
+			slog.Default(),
+		)
+		if err := publishWorker.Run(workerCtx); err != nil && err != context.Canceled {
+			slog.Error("publish worker exited with error", "error", err)
+		}
+	}()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
+
+	slog.Info("Shutting down: cancelling publish worker first")
+	workerCancel()
+	select {
+	case <-workerDone:
+		slog.Info("publish worker drained cleanly")
+	case <-time.After(15 * time.Second):
+		slog.Warn("publish worker drain timeout, continuing shutdown")
+	}
 
 	slog.Info("Shutting down server...")
 

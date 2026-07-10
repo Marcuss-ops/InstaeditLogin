@@ -102,6 +102,9 @@ type Config struct {
 
 	// Logging
 	LogLevel string
+
+	// Background worker tuning.
+	PublishWorkerIntervalSeconds int
 }
 
 // Load reads configuration from environment variables.
@@ -145,7 +148,8 @@ func Load() (*Config, error) {
 		JWTSecret:           getEnv("JWT_SECRET", ""),
 		JWTTTLHours:         getEnvInt("JWT_TTL_HOURS", 168),
 		StrictJWTAuth:       getEnvBool("STRICT_JWT_AUTH", true),
-		LogLevel:            getEnv("LOG_LEVEL", "info"),
+		LogLevel:                     getEnv("LOG_LEVEL", "info"),
+		PublishWorkerIntervalSeconds: getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
 	}
 
 	if err := cfg.validate(); err != nil {
