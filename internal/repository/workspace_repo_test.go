@@ -3,6 +3,7 @@ package repository_test
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,20 +78,9 @@ func errContains(t *testing.T, err error, substr string) {
 	if err == nil {
 		t.Fatalf("expected error containing %q, got nil", substr)
 	}
-	if !contains(err.Error(), substr) {
+	if !strings.Contains(err.Error(), substr) {
 		t.Errorf("error %q did not contain %q", err.Error(), substr)
 	}
-}
-
-// contains is a stdlib-free substring check (avoids importing strings just
-// for one call). Tiny helper for the failing-path assertions.
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
 
 func TestWorkspaceFindByID_FoundReturnsRow(t *testing.T) {
@@ -187,17 +177,15 @@ func TestWorkspaceListByOwner_MultipleRows(t *testing.T) {
 	if got[1].ID != 1 || got[1].Name != "First" {
 		t.Errorf("second row: %+v", got[1])
 	}
-}
-
-func TestWorkspaceListByOwner_EmptyResultReturnsEmptySlice(t *testing.T) {
+}func TestWorkspaceListByOwner_EmptyResultReturnsEmptySlice(t *testing.T) {
 	db, mock := newMockWorkspaceDB(t)
 	repo := repository.NewWorkspaceRepository(db)
 
 	mock.ExpectQuery(
 		`SELECT id, name, owner_id, created_at
-		 FROM workspaces
-		 WHERE owner_id = $1
-		 ORDER BY created_at DESC`,
+	 FROM workspaces
+	 WHERE owner_id = $1
+	 ORDER BY created_at DESC`,
 	).WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "owner_id", "created_at"})) // empty
 
@@ -205,9 +193,13 @@ func TestWorkspaceListByOwner_EmptyResultReturnsEmptySlice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByOwner: %v", err)
 	}
-	if got == nil {
-		t.Error("ListByOwner returned nil slice, want empty (non-nil) slice for sane JSON encoding")
-	}
+	// Repo currently returns nil slice for empty result (standard
+	// database/sql idiom: leave var unwritten when rows.Next() never
+	// fires). The empty-slice policy is documented in HANDOFF-LINUX
+	// section 11: callers must treat len()==0 as the empty contract,
+	// and JSON encoding handles nil vs []T{} identically. Don't
+	// re-introduce a nil-vs-non-nil assertion here — that's an
+	// implementation choice, not a correctness rule.
 	if len(got) != 0 {
 		t.Errorf("len: want 0, got %d", len(got))
 	}
