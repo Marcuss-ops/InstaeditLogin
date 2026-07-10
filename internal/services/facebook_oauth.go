@@ -58,24 +58,24 @@ func (s *FacebookOAuthService) GetLoginURL(state string) string {
 }
 
 // HandleCallback processes the full OAuth callback for Meta/Facebook.
-func (s *FacebookOAuthService) HandleCallback(code string) (*models.PlatformProfile, *models.TokenData, error) {
+func (s *FacebookOAuthService) HandleCallback(ctx context.Context, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	// Step 1: Exchange code for short-lived token
 	slog.Info("Meta: exchanging code for short-lived token")
-	shortLived, err := s.exchangeCodeForToken(code)
+	shortLived, err := s.exchangeCodeForToken(ctx, code)
 	if err != nil {
 		return nil, nil, fmt.Errorf("step 1 (code exchange): %w", err)
 	}
 
 	// Step 2: Exchange for long-lived token
 	slog.Info("Meta: exchanging for long-lived token")
-	longLived, err := s.exchangeForLongLivedToken(shortLived.AccessToken)
+	longLived, err := s.exchangeForLongLivedToken(ctx, shortLived.AccessToken)
 	if err != nil {
 		return nil, nil, fmt.Errorf("step 2 (long-lived exchange): %w", err)
 	}
 
 	// Step 3: Fetch user info
 	slog.Info("Meta: fetching user info")
-	metaUser, err := s.getUserInfo(longLived.AccessToken)
+	metaUser, err := s.getUserInfo(ctx, longLived.AccessToken)
 	if err != nil {
 		return nil, nil, fmt.Errorf("step 3 (user info): %w", err)
 	}
@@ -115,7 +115,7 @@ func (s *FacebookOAuthService) RefreshOAuthToken(ctx context.Context, currentTok
 		return nil, fmt.Errorf("meta RefreshOAuthToken: empty current token")
 	}
 	slog.Info("Meta: refreshing long-lived token via fb_exchange_token")
-	longLived, err := s.exchangeForLongLivedToken(currentToken)
+	longLived, err := s.exchangeForLongLivedToken(ctx, currentToken)
 	if err != nil {
 		return nil, fmt.Errorf("meta refresh failed: %w", err)
 	}
@@ -167,20 +167,20 @@ func (s *FacebookOAuthService) Publish(ctx context.Context, accessToken, platfor
 
 // --- Private Meta-specific methods ---
 
-func (s *FacebookOAuthService) exchangeCodeForToken(code string) (*models.MetaTokenResponse, error) {
+func (s *FacebookOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*models.MetaTokenResponse, error) {
 	params := url.Values{}
 	params.Set("client_id", s.cfg.MetaAppID)
 	params.Set("client_secret", s.cfg.MetaAppSecret)
 	params.Set("redirect_uri", s.cfg.MetaRedirectURI)
 	params.Set("code", code)
 
-	req, err := http.NewRequest("GET",
+	req, err := http.NewRequestWithContext(ctx, "GET",
 		"https://graph.facebook.com/v19.0/oauth/access_token?"+params.Encode(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
 
-	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token exchange request failed: %w", err)
 	}
@@ -203,20 +203,20 @@ func (s *FacebookOAuthService) exchangeCodeForToken(code string) (*models.MetaTo
 	return &tokenResp, nil
 }
 
-func (s *FacebookOAuthService) exchangeForLongLivedToken(shortLivedToken string) (*models.MetaLongLivedTokenResponse, error) {
+func (s *FacebookOAuthService) exchangeForLongLivedToken(ctx context.Context, shortLivedToken string) (*models.MetaLongLivedTokenResponse, error) {
 	params := url.Values{}
 	params.Set("grant_type", "fb_exchange_token")
 	params.Set("client_id", s.cfg.MetaAppID)
 	params.Set("client_secret", s.cfg.MetaAppSecret)
 	params.Set("fb_exchange_token", shortLivedToken)
 
-	req, err := http.NewRequest("GET",
+	req, err := http.NewRequestWithContext(ctx, "GET",
 		"https://graph.facebook.com/v19.0/oauth/access_token?"+params.Encode(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create long-lived token request: %w", err)
 	}
 
-	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("long-lived token request failed: %w", err)
 	}
@@ -239,17 +239,17 @@ func (s *FacebookOAuthService) exchangeForLongLivedToken(shortLivedToken string)
 	return &tokenResp, nil
 }
 
-func (s *FacebookOAuthService) getUserInfo(accessToken string) (*models.PlatformProfile, error) {
+func (s *FacebookOAuthService) getUserInfo(ctx context.Context, accessToken string) (*models.PlatformProfile, error) {
 	params := url.Values{}
 	params.Set("fields", "id,name,email")
 	params.Set("access_token", accessToken)
 
-	req, err := http.NewRequest("GET", "https://graph.facebook.com/v19.0/me?"+params.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://graph.facebook.com/v19.0/me?"+params.Encode(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user info request: %w", err)
 	}
 
-	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user info: %w", err)
 	}

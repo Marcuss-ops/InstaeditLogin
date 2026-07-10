@@ -43,27 +43,68 @@ func NewTikTokOAuthService(cfg *config.Config, userRepo *repository.UserReposito
 
 func (s *TikTokOAuthService) GetPlatform() string { return models.PlatformTikTok }
 
+// maskClientKey restituisce una versione mascherata della client key per i log.
+// Mostra solo i primi 4 caratteri per chiavi corte, oppure primi/ultimi 4 per
+// chiavi lunghe, in modo da non esporre mai l'intera chiave.
+func maskClientKey(key string) string {
+	if len(key) <= 8 {
+		return "***"
+	}
+	if len(key) <= 16 {
+		return key[:4] + "..."
+	}
+	return key[:4] + "..." + key[len(key)-4:]
+}
+
+// maskCode restituisce i primi caratteri di un OAuth code per i log.
+func maskCode(code string) string {
+	if len(code) <= 8 {
+		return "***"
+	}
+	return code[:4] + "..."
+}
+
+// truncateForLog restituisce una versione troncata di una stringa per i log,
+// evitando di riversare corpi di risposta potenzialmente grandi o sensibili.
+func truncateForLog(s string, maxLen int) string {
+	if maxLen <= 0 {
+		maxLen = 200
+	}
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 func (s *TikTokOAuthService) GetLoginURL(state string) string {
 	params := url.Values{}
 	params.Set("client_key", s.cfg.TikTokClientKey)
 	params.Set("redirect_uri", s.cfg.TikTokRedirectURI)
 	params.Set("state", state)
+	// user.info.basic: lettura profilo
+	// video.publish: pubblicazione diretta su TikTok
+	// Aggiungi video.upload se vuoi anche l'upload come draft da editare in app.
 	params.Set("scope", "user.info.basic,video.publish")
 	params.Set("response_type", "code")
 
-	return "https://www.tiktok.com/v2/auth/authorize/?" + params.Encode()
+	loginURL := "https://www.tiktok.com/v2/auth/authorize/?" + params.Encode()
+	slog.Info("TikTok: built login URL",
+		"redirect_uri", s.cfg.TikTokRedirectURI,
+		"client_key_prefix", maskClientKey(s.cfg.TikTokClientKey),
+		"scope", params.Get("scope"))
+	return loginURL
 }
 
-func (s *TikTokOAuthService) HandleCallback(code string) (*models.PlatformProfile, *models.TokenData, error) {
-	slog.Info("TikTok: exchanging code for token")
+func (s *TikTokOAuthService) HandleCallback(ctx context.Context, code string) (*models.PlatformProfile, *models.TokenData, error) {
+	slog.Info("TikTok: exchanging code for token", "code_prefix", maskCode(code))
 
-	tokenResp, err := s.exchangeCodeForToken(code)
+	tokenResp, err := s.exchangeCodeForToken(ctx, code)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tiktok token exchange: %w", err)
 	}
 
 	slog.Info("TikTok: fetching user info")
-	profile, err := s.getUserInfo(tokenResp.AccessToken)
+	profile, err := s.getUserInfo(ctx, tokenResp.AccessToken)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tiktok user info: %w", err)
 	}
@@ -305,7 +346,7 @@ func modeIsDisabled(mode string) bool {
 	}
 }
 
-func (s *TikTokOAuthService) exchangeCodeForToken(code string) (*tiktokTokenResponse, error) {
+func (s *TikTokOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*tiktokTokenResponse, error) {
 	body := url.Values{}
 	body.Set("client_key", s.cfg.TikTokClientKey)
 	body.Set("client_secret", s.cfg.TikTokClientSecret)
@@ -313,14 +354,14 @@ func (s *TikTokOAuthService) exchangeCodeForToken(code string) (*tiktokTokenResp
 	body.Set("grant_type", "authorization_code")
 	body.Set("redirect_uri", s.cfg.TikTokRedirectURI)
 
-	req, err := http.NewRequest("POST", "https://open.tiktokapis.com/v2/oauth/token/",
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://open.tiktokapis.com/v2/oauth/token/",
 		strings.NewReader(body.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token request: %w", err)
 	}
@@ -328,6 +369,11 @@ func (s *TikTokOAuthService) exchangeCodeForToken(code string) (*tiktokTokenResp
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		slog.Error("TikTok: token exchange failed",
+			"status", resp.StatusCode,
+			"response", truncateForLog(string(respBody), 200),
+			"client_key_prefix", maskClientKey(s.cfg.TikTokClientKey),
+			"redirect_uri", s.cfg.TikTokRedirectURI)
 		return nil, fmt.Errorf("token exchange failed (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
@@ -338,14 +384,14 @@ func (s *TikTokOAuthService) exchangeCodeForToken(code string) (*tiktokTokenResp
 	return &tr, nil
 }
 
-func (s *TikTokOAuthService) getUserInfo(accessToken string) (*models.PlatformProfile, error) {
-	req, err := http.NewRequest("GET", "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name", nil)
+func (s *TikTokOAuthService) getUserInfo(ctx context.Context, accessToken string) (*models.PlatformProfile, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name", nil)
 	if err != nil {
 		return nil, fmt.Errorf("user info request creation: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
-	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("user info request: %w", err)
 	}

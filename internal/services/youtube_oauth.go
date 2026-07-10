@@ -56,16 +56,16 @@ func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 	return "https://accounts.google.com/o/oauth2/v2/auth?" + params.Encode()
 }
 
-func (s *YouTubeOAuthService) HandleCallback(code string) (*models.PlatformProfile, *models.TokenData, error) {
+func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	slog.Info("YouTube: exchanging code for token")
 
-	tokenResp, err := s.exchangeCodeForToken(code)
+	tokenResp, err := s.exchangeCodeForToken(ctx, code)
 	if err != nil {
 		return nil, nil, fmt.Errorf("youtube token exchange: %w", err)
 	}
 
 	slog.Info("YouTube: fetching user info")
-	profile, err := s.getUserInfo(tokenResp.AccessToken)
+	profile, err := s.getUserInfo(ctx, tokenResp.AccessToken)
 	if err != nil {
 		return nil, nil, fmt.Errorf("youtube user info: %w", err)
 	}
@@ -488,7 +488,7 @@ type youtubeTokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-func (s *YouTubeOAuthService) exchangeCodeForToken(code string) (*youtubeTokenResponse, error) {
+func (s *YouTubeOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*youtubeTokenResponse, error) {
 	body := url.Values{}
 	body.Set("client_id", s.cfg.YouTubeClientID)
 	body.Set("client_secret", s.cfg.YouTubeClientSecret)
@@ -496,14 +496,14 @@ func (s *YouTubeOAuthService) exchangeCodeForToken(code string) (*youtubeTokenRe
 	body.Set("grant_type", "authorization_code")
 	body.Set("redirect_uri", s.cfg.YouTubeRedirectURI)
 
-	req, err := http.NewRequest("POST", "https://oauth2.googleapis.com/token",
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://oauth2.googleapis.com/token",
 		strings.NewReader(body.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token request: %w", err)
 	}
@@ -521,15 +521,15 @@ func (s *YouTubeOAuthService) exchangeCodeForToken(code string) (*youtubeTokenRe
 	return &tr, nil
 }
 
-func (s *YouTubeOAuthService) getUserInfo(accessToken string) (*models.PlatformProfile, error) {
-	req, err := http.NewRequest("GET",
+func (s *YouTubeOAuthService) getUserInfo(ctx context.Context, accessToken string) (*models.PlatformProfile, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
 		"https://www.googleapis.com/oauth2/v2/userinfo", nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
-	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

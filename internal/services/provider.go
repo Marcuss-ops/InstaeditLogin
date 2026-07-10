@@ -19,7 +19,7 @@ type OAuthProvider interface {
 	// 2. Fetch user profile
 	// 3. Fetch platform accounts (if applicable)
 	// Returns the profile and token data.
-	HandleCallback(code string) (*models.PlatformProfile, *models.TokenData, error)
+	HandleCallback(ctx context.Context, code string) (*models.PlatformProfile, *models.TokenData, error)
 
 	// RefreshOAuthToken obtains a fresh access token from the platform.
 	// For YouTube/Twitter/TikTok the argument is a refresh token; for Meta,

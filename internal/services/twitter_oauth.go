@@ -56,16 +56,16 @@ func (s *TwitterOAuthService) GetLoginURL(state string) string {
 	return "https://twitter.com/i/oauth2/authorize?" + params.Encode()
 }
 
-func (s *TwitterOAuthService) HandleCallback(code string) (*models.PlatformProfile, *models.TokenData, error) {
+func (s *TwitterOAuthService) HandleCallback(ctx context.Context, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	slog.Info("Twitter: exchanging code for token")
 
-	tokenResp, err := s.exchangeCodeForToken(code)
+	tokenResp, err := s.exchangeCodeForToken(ctx, code)
 	if err != nil {
 		return nil, nil, fmt.Errorf("twitter token exchange: %w", err)
 	}
 
 	slog.Info("Twitter: fetching user info")
-	profile, err := s.getUserInfo(tokenResp.AccessToken)
+	profile, err := s.getUserInfo(ctx, tokenResp.AccessToken)
 	if err != nil {
 		return nil, nil, fmt.Errorf("twitter user info: %w", err)
 	}
@@ -205,7 +205,7 @@ type twitterTokenResponse struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-func (s *TwitterOAuthService) exchangeCodeForToken(code string) (*twitterTokenResponse, error) {
+func (s *TwitterOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*twitterTokenResponse, error) {
 	body := url.Values{}
 	body.Set("client_id", s.cfg.TwitterClientID)
 	body.Set("code", code)
@@ -213,7 +213,7 @@ func (s *TwitterOAuthService) exchangeCodeForToken(code string) (*twitterTokenRe
 	body.Set("redirect_uri", s.cfg.TwitterRedirectURI)
 	body.Set("code_verifier", "challenge")
 
-	req, err := http.NewRequest("POST", "https://api.twitter.com/2/oauth2/token",
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.twitter.com/2/oauth2/token",
 		strings.NewReader(body.Encode()))
 	if err != nil {
 		return nil, err
@@ -221,7 +221,7 @@ func (s *TwitterOAuthService) exchangeCodeForToken(code string) (*twitterTokenRe
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(s.cfg.TwitterClientID, s.cfg.TwitterClientSecret)
 
-	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token request: %w", err)
 	}
@@ -239,15 +239,15 @@ func (s *TwitterOAuthService) exchangeCodeForToken(code string) (*twitterTokenRe
 	return &tr, nil
 }
 
-func (s *TwitterOAuthService) getUserInfo(accessToken string) (*models.PlatformProfile, error) {
-	req, err := http.NewRequest("GET",
+func (s *TwitterOAuthService) getUserInfo(ctx context.Context, accessToken string) (*models.PlatformProfile, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
 		"https://api.twitter.com/2/users/me?user.fields=id,name,username", nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
-	resp, err := s.httpClient.Do(req.WithContext(context.Background()))
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
