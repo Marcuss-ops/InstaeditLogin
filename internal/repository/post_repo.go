@@ -93,7 +93,7 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 // guard against any caller passing a post.id from a workspace they don't
 // own.
 func (r *PostRepository) Update(post *models.Post) error {
-	_, err := r.db.Exec(
+	result, err := r.db.Exec(
 		`UPDATE posts
 		 SET title = $1, caption = $2, media_url = $3, scheduled_at = $4, status = $5
 		 WHERE id = $6 AND workspace_id = $7`,
@@ -102,6 +102,16 @@ func (r *PostRepository) Update(post *models.Post) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update post: %w", err)
+	}
+	// RowsAffected = 0 means either id doesn't exist OR workspace_id doesn't
+	// match (tenant-isolation miss). Surface as a real error so the API
+	// layer can map to 404/403 instead of silently leaving stale state.
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("post not found or unauthorized (id=%d, workspace_id=%d)", post.ID, post.WorkspaceID)
 	}
 	return nil
 }
@@ -213,7 +223,7 @@ func (r *PostRepository) Save(target *models.PostTarget) error {
 // Persists status, platform_post_id, error_message, published_at atomically
 // (single UPDATE).
 func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
-	_, err := r.db.Exec(
+	result, err := r.db.Exec(
 		`UPDATE post_targets
 		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4
 		 WHERE id = $5`,
@@ -222,6 +232,16 @@ func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update post_target status: %w", err)
+	}
+	// RowsAffected = 0 means the post_target id is stale or invalid. The
+	// worker would otherwise see nil error and assume the transition
+	// happened, leaving a ghost target in the pending queue.
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("post_target not found (id=%d)", target.ID)
 	}
 	return nil
 }
