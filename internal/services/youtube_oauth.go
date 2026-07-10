@@ -22,13 +22,12 @@ import (
 // YouTubeOAuthService implements OAuthProvider and ContentPublisher for YouTube.
 type YouTubeOAuthService struct {
 	cfg        *config.Config
-	userRepo   *repository.UserRepository
 	*TokenHelper
 	httpClient *http.Client
 }
 
 // NewYouTubeOAuthService creates a new YouTubeOAuthService.
-func NewYouTubeOAuthService(cfg *config.Config, userRepo *repository.UserRepository, tokenRepo *repository.TokenRepository) (*YouTubeOAuthService, error) {
+func NewYouTubeOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepository) (*YouTubeOAuthService, error) {
 	encryptor, err := crypto.NewEncryptor(cfg.EncryptionKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create encryptor: %w", err)
@@ -36,7 +35,6 @@ func NewYouTubeOAuthService(cfg *config.Config, userRepo *repository.UserReposit
 
 	return &YouTubeOAuthService{
 		cfg:         cfg,
-		userRepo:    userRepo,
 		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
 		httpClient:  NewHTTPClient(),
 	}, nil

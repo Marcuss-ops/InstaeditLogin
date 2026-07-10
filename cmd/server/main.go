@@ -76,7 +76,7 @@ func main() {
 	tokenRepo := repository.NewTokenRepository(db)
 	platforms := make(map[string]services.PlatformService)
 
-	metaSvc, err := services.NewFacebookOAuthService(cfg, userRepo, tokenRepo)
+	metaSvc, err := services.NewFacebookOAuthService(cfg, tokenRepo)
 	if err != nil {
 		slog.Error("Failed to create Meta OAuth service", "error", err)
 		os.Exit(1)
@@ -85,7 +85,7 @@ func main() {
 	slog.Info("Meta/Facebook OAuth provider registered")
 
 	if cfg.TikTokClientKey != "" {
-		tiktokSvc, err := services.NewTikTokOAuthService(cfg, userRepo, tokenRepo)
+		tiktokSvc, err := services.NewTikTokOAuthService(cfg, tokenRepo)
 		if err != nil {
 			slog.Warn("Failed to create TikTok OAuth service", "error", err)
 		} else {
@@ -97,7 +97,7 @@ func main() {
 	}
 
 	if cfg.TwitterClientID != "" {
-		twitterSvc, err := services.NewTwitterOAuthService(cfg, userRepo, tokenRepo)
+		twitterSvc, err := services.NewTwitterOAuthService(cfg, tokenRepo)
 		if err != nil {
 			slog.Warn("Failed to create Twitter OAuth service", "error", err)
 		} else {
@@ -109,7 +109,7 @@ func main() {
 	}
 
 	if cfg.YouTubeClientID != "" {
-		youtubeSvc, err := services.NewYouTubeOAuthService(cfg, userRepo, tokenRepo)
+		youtubeSvc, err := services.NewYouTubeOAuthService(cfg, tokenRepo)
 		if err != nil {
 			slog.Warn("Failed to create YouTube OAuth service", "error", err)
 		} else {

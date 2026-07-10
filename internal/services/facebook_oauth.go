@@ -21,14 +21,13 @@ import (
 // FacebookOAuthService implements OAuthProvider and ContentPublisher for Meta/Facebook.
 type FacebookOAuthService struct {
 	cfg        *config.Config
-	userRepo   *repository.UserRepository
 	*TokenHelper
 	httpClient *http.Client
 }
 
 // NewFacebookOAuthService creates a new FacebookOAuthService.
 // Returns an error if the encryption key is invalid.
-func NewFacebookOAuthService(cfg *config.Config, userRepo *repository.UserRepository, tokenRepo *repository.TokenRepository) (*FacebookOAuthService, error) {
+func NewFacebookOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepository) (*FacebookOAuthService, error) {
 	encryptor, err := crypto.NewEncryptor(cfg.EncryptionKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create encryptor: %w", err)
@@ -36,7 +35,6 @@ func NewFacebookOAuthService(cfg *config.Config, userRepo *repository.UserReposi
 
 	return &FacebookOAuthService{
 		cfg:         cfg,
-		userRepo:    userRepo,
 		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
 		httpClient:  NewHTTPClient(),
 	}, nil

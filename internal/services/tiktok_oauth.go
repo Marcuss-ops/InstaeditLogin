@@ -21,13 +21,12 @@ import (
 // TikTokOAuthService implements OAuthProvider and ContentPublisher for TikTok.
 type TikTokOAuthService struct {
 	cfg        *config.Config
-	userRepo   *repository.UserRepository
 	*TokenHelper
 	httpClient *http.Client
 }
 
 // NewTikTokOAuthService creates a new TikTokOAuthService.
-func NewTikTokOAuthService(cfg *config.Config, userRepo *repository.UserRepository, tokenRepo *repository.TokenRepository) (*TikTokOAuthService, error) {
+func NewTikTokOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepository) (*TikTokOAuthService, error) {
 	encryptor, err := crypto.NewEncryptor(cfg.EncryptionKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create encryptor: %w", err)
@@ -35,7 +34,6 @@ func NewTikTokOAuthService(cfg *config.Config, userRepo *repository.UserReposito
 
 	return &TikTokOAuthService{
 		cfg:         cfg,
-		userRepo:    userRepo,
 		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
 		httpClient:  NewHTTPClient(),
 	}, nil

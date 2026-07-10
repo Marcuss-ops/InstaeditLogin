@@ -21,13 +21,12 @@ import (
 // TwitterOAuthService implements OAuthProvider and ContentPublisher for Twitter/X.
 type TwitterOAuthService struct {
 	cfg        *config.Config
-	userRepo   *repository.UserRepository
 	*TokenHelper
 	httpClient *http.Client
 }
 
 // NewTwitterOAuthService creates a new TwitterOAuthService.
-func NewTwitterOAuthService(cfg *config.Config, userRepo *repository.UserRepository, tokenRepo *repository.TokenRepository) (*TwitterOAuthService, error) {
+func NewTwitterOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepository) (*TwitterOAuthService, error) {
 	encryptor, err := crypto.NewEncryptor(cfg.EncryptionKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create encryptor: %w", err)
@@ -35,7 +34,6 @@ func NewTwitterOAuthService(cfg *config.Config, userRepo *repository.UserReposit
 
 	return &TwitterOAuthService{
 		cfg:         cfg,
-		userRepo:    userRepo,
 		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
 		httpClient:  NewHTTPClient(),
 	}, nil
