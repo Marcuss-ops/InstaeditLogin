@@ -75,6 +75,13 @@ type Config struct {
 	TwitterClientSecret string
 	TwitterRedirectURI  string
 
+	// Twitter/X OAuth 1.0a (static credentials for direct publishing —
+	// bypasses OAuth 2.0 user login; all posts go to the owner's account).
+	TwitterAPIKey            string
+	TwitterAPIKeySecret      string
+	TwitterAccessToken       string
+	TwitterAccessTokenSecret string
+
 	// YouTube OAuth
 	YouTubeClientID     string
 	YouTubeClientSecret string
@@ -124,6 +131,10 @@ func Load() (*Config, error) {
 		TwitterClientID:     getEnv("TWITTER_CLIENT_ID", ""),
 		TwitterClientSecret: getEnv("TWITTER_CLIENT_SECRET", ""),
 		TwitterRedirectURI:  getEnv("TWITTER_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
+		TwitterAPIKey:            getEnv("TWITTER_API_KEY", ""),
+		TwitterAPIKeySecret:      getEnv("TWITTER_API_KEY_SECRET", ""),
+		TwitterAccessToken:       getEnv("TWITTER_ACCESS_TOKEN", ""),
+		TwitterAccessTokenSecret: getEnv("TWITTER_ACCESS_TOKEN_SECRET", ""),
 		YouTubeClientID:     getEnv("YOUTUBE_CLIENT_ID", ""),
 		YouTubeClientSecret: getEnv("YOUTUBE_CLIENT_SECRET", ""),
 		YouTubeRedirectURI:  getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
