@@ -13,8 +13,19 @@ export function Nav() {
   return (
     <nav className="sticky top-0 z-50 backdrop-blur-[16px] bg-[rgba(3,3,8,0.7)] border-b border-white/12">
       <div className="max-w-[1200px] mx-auto px-5 h-16 flex items-center justify-between gap-4">
-        <Link to="/" className="font-bold text-[18px] tracking-[-0.3px] text-white no-underline">
-          InstaEdit
+        <Link to="/" className="flex items-center gap-2.5 font-bold text-[18px] tracking-[-0.3px] text-white no-underline group">
+          {/* Logo icon */}
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" className="shrink-0" aria-hidden="true">
+            <rect width="28" height="28" rx="7" fill="url(#logo-grad)" />
+            <path d="M14.5 5L7 15h5l-1.5 8L21 13h-5l1.5-8h-3z" fill="white" fillOpacity="0.95" />
+            <defs>
+              <linearGradient id="logo-grad" x1="0" y1="0" x2="28" y2="28">
+                <stop stopColor="#0A84FF" />
+                <stop offset="1" stopColor="#7B61FF" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <span className="group-hover:text-white/90 transition-colors">InstaEdit</span>
         </Link>
 
         {/* Desktop links */}
