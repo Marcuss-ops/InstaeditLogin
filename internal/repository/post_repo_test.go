@@ -219,18 +219,17 @@ func TestPostUpdate_HappyReturnsNil(t *testing.T) {
 	if err := repo.Update(post); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-}
-
-func TestPostUpdate_ZeroRowsAffected_ReturnsTenantIsolationError(t *testing.T) {
-	// The whole point of fix(repo): surface rows-affected = 0 as a real error
-	// so cross-workspace updates don't silently succeed.
+}func TestPostUpdate_ZeroRowsAffected_WrapsErrPostUnauthorized(t *testing.T) {
+	// The whole point of feat(repo): surface rows-affected = 0 as a real
+	// error so cross-workspace updates don't silently succeed AND so the
+	// API layer can map the typed sentinel via errors.Is to 404.
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
 	mock.ExpectExec(
 		`UPDATE posts
-		 SET title = $1, caption = $2, media_url = $3, scheduled_at = $4, status = $5
-		 WHERE id = $6 AND workspace_id = $7`,
+	 SET title = $1, caption = $2, media_url = $3, scheduled_at = $4, status = $5
+	 WHERE id = $6 AND workspace_id = $7`,
 	).WithArgs("x", "", "", (*time.Time)(nil), models.PostStatusDraft, int64(999), int64(7)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
@@ -240,11 +239,11 @@ func TestPostUpdate_ZeroRowsAffected_ReturnsTenantIsolationError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected tenant-isolation error, got nil")
 	}
-	if !strings.Contains(err.Error(), "post not found or unauthorized") {
-		t.Errorf("error should signal tenant isolation miss: %v", err)
+	if !errors.Is(err, repository.ErrPostUnauthorized) {
+		t.Errorf("error must wrap repository.ErrPostUnauthorized sentinel, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "id=999") || !strings.Contains(err.Error(), "workspace_id=7") {
-		t.Errorf("error should include id/workspace_id for debuggability: %v", err)
+	if !strings.Contains(err.Error(), "id=999") {
+		t.Errorf("error should retain id in message for debuggability: %v", err)
 	}
 }
 
@@ -289,18 +288,17 @@ func TestPostUpdateStatus_Happy(t *testing.T) {
 	if err := repo.UpdateStatus(tgt); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
-}
-
-func TestPostUpdateStatus_ZeroRowsAffected_ReturnsGhostError(t *testing.T) {
+}func TestPostUpdateStatus_ZeroRowsAffected_WrapsErrPostTargetNotFound(t *testing.T) {
 	// Same defensive check as Update: a 0-rows-affected response means the
 	// target id is stale and the worker would otherwise see a phantom OK.
+	// Sentinel (ErrPostTargetNotFound) lets the worker drop the phantom.
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
 	mock.ExpectExec(
 		`UPDATE post_targets
-		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4
-		 WHERE id = $5`,
+	 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4
+	 WHERE id = $5`,
 	).WithArgs(models.PostStatusFailed, "", "publish error", (*time.Time)(nil), int64(999)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
@@ -310,8 +308,11 @@ func TestPostUpdateStatus_ZeroRowsAffected_ReturnsGhostError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected ghost-state error, got nil")
 	}
-	if !strings.Contains(err.Error(), "post_target not found") {
-		t.Errorf("error should signal stale id: %v", err)
+	if !errors.Is(err, repository.ErrPostTargetNotFound) {
+		t.Errorf("error must wrap repository.ErrPostTargetNotFound sentinel, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "id=999") {
+		t.Errorf("error should retain id in message for debuggability: %v", err)
 	}
 }
 

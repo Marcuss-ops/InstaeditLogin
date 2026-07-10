@@ -105,13 +105,17 @@ func (r *PostRepository) Update(post *models.Post) error {
 	}
 	// RowsAffected = 0 means either id doesn't exist OR workspace_id doesn't
 	// match (tenant-isolation miss). Surface as a real error so the API
-	// layer can map to 404/403 instead of silently leaving stale state.
+	// layer can map to 404 instead of silently leaving stale state.
+	// Used as ErrPostUnauthorized (not ErrPostNotFound) because the two
+	// cases are indistinguishable from a single UPDATE statement; mapping
+	// both to 404 via the sentinel prevents leaking workspace existence
+	// to cross-tenant probes.
 	n, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("failed to read rows affected: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("post not found or unauthorized (id=%d, workspace_id=%d)", post.ID, post.WorkspaceID)
+		return fmt.Errorf("%w: id=%d", ErrPostUnauthorized, post.ID)
 	}
 	return nil
 }
@@ -235,13 +239,14 @@ func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
 	}
 	// RowsAffected = 0 means the post_target id is stale or invalid. The
 	// worker would otherwise see nil error and assume the transition
-	// happened, leaving a ghost target in the pending queue.
+	// happened, leaving a ghost target in the pending queue. Sentinel
+	// (ErrPostTargetNotFound) lets the worker drop the phantom attempt.
 	n, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("failed to read rows affected: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("post_target not found (id=%d)", target.ID)
+		return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, target.ID)
 	}
 	return nil
 }
