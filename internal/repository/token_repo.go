@@ -2,7 +2,6 @@ package repository
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
