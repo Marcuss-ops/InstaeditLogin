@@ -293,10 +293,13 @@ func (s *FacebookOAuthService) getInstagramAccounts(ctx context.Context, accessT
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("failed to parse instagram accounts response: %w", err)
 	}
 
 	if result.InstagramBusinessAccount.ID == "" {
+		slog.Warn("Meta: no Instagram Business Account linked to this user",
+			"meta_user_id", metaUserID,
+			"response", truncateForLog(string(body), 200))
 		return nil, nil
 	}
 
