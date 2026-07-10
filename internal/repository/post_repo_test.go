@@ -214,12 +214,17 @@ func TestPostUpdate_HappyReturnsNil(t *testing.T) {
 
 	post := &models.Post{
 		ID: 100, WorkspaceID: 1, Title: "new", Caption: "cap",
-		MediaURL: "url", ScheduledAt: &now, Status: models.PostStatusScheduled,
+		MediaURL: "url", ScheduledAt: &now,		Status:      models.PostStatusScheduled,
 	}
 	if err := repo.Update(post); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-}func TestPostUpdate_ZeroRowsAffected_WrapsErrPostUnauthorized(t *testing.T) {
+}
+
+// TestPostUpdate_ZeroRowsAffected_WrapsErrPostUnauthorized covers the
+// rows-affected=0 path: the wrapper must carry the typed sentinel so
+// pkg/api can map via errors.Is, AND must retain id context for log lines.
+func TestPostUpdate_ZeroRowsAffected_WrapsErrPostUnauthorized(t *testing.T) {
 	// The whole point of feat(repo): surface rows-affected = 0 as a real
 	// error so cross-workspace updates don't silently succeed AND so the
 	// API layer can map the typed sentinel via errors.Is to 404.
@@ -288,7 +293,12 @@ func TestPostUpdateStatus_Happy(t *testing.T) {
 	if err := repo.UpdateStatus(tgt); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
-}func TestPostUpdateStatus_ZeroRowsAffected_WrapsErrPostTargetNotFound(t *testing.T) {
+}
+
+// TestPostUpdateStatus_ZeroRowsAffected_WrapsErrPostTargetNotFound
+// covers rows-affected=0 on post_target: the wrapper must carry the
+// sentinel so the worker drops the phantom status transition.
+func TestPostUpdateStatus_ZeroRowsAffected_WrapsErrPostTargetNotFound(t *testing.T) {
 	// Same defensive check as Update: a 0-rows-affected response means the
 	// target id is stale and the worker would otherwise see a phantom OK.
 	// Sentinel (ErrPostTargetNotFound) lets the worker drop the phantom.
