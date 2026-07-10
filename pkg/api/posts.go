@@ -45,6 +45,7 @@ type CreatePostResp struct {
 	WorkspaceID int64                  `json:"workspace_id"`
 	Status      models.PostStatus      `json:"status"`
 	CreatedAt   string                 `json:"created_at"` // RFC 3339
+	ScheduledAt string                 `json:"scheduled_at,omitempty"` // RFC 3339; empty for drafts
 	Targets     []CreatePostTargetResp `json:"targets"`
 }
 
@@ -78,6 +79,7 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var body CreatePostReq
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<20) // 1 MB cap (DoS guard)
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
@@ -158,8 +160,9 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Echo back the assigned IDs (post.id, target.id) so the caller can
-	// poll status / link to the future worker fan-out.
+	// Echo back the assigned IDs (post.id, target.id) plus the persisted
+	// scheduled_at so the client can confirm what was stored (omitted for
+	// drafts since the optional JSON field is hidden via `omitempty`).
 	targetResponses := make([]CreatePostTargetResp, len(targets))
 	for i, t := range targets {
 		targetResponses[i] = CreatePostTargetResp{
@@ -168,11 +171,16 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 			Status:            t.Status,
 		}
 	}
+	var scheduledAtStr string
+	if post.ScheduledAt != nil {
+		scheduledAtStr = post.ScheduledAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+	}
 	writeJSON(w, http.StatusCreated, CreatePostResp{
 		ID:          post.ID,
 		WorkspaceID: post.WorkspaceID,
 		Status:      post.Status,
 		CreatedAt:   post.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"),
+		ScheduledAt: scheduledAtStr,
 		Targets:     targetResponses,
 	})
 }

@@ -53,6 +53,7 @@ func (r *Router) handleCreateWorkspace(w http.ResponseWriter, req *http.Request)
 	}
 
 	var body CreateWorkspaceReq
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<20) // 1 MB cap (DoS guard)
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return

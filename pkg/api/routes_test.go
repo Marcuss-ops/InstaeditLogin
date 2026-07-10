@@ -169,6 +169,20 @@ func newTestRouter(
 	)
 }
 
+// issueTestJWT issues a JWT for the given userID using the test secret.
+// Mirrors the pattern in TestHandlePublishPost_WithJWT_StrictMode and is
+// used by the protected-endpoint tests (workspaces + posts) so that
+// `requireUserID` can read back the authenticated user from context.
+func issueTestJWT(t *testing.T, userID int64) string {
+	t.Helper()
+	authMgr := auth.NewManager(testJWTSecret, 24)
+	tok, _, _, err := authMgr.Issue(userID)
+	if err != nil {
+		t.Fatalf("issue jwt: %v", err)
+	}
+	return tok
+}
+
 // successCallback returns canned HandleCallback results.
 var successCallback = func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	return &models.PlatformProfile{
@@ -839,11 +853,12 @@ func TestHandleCreateWorkspace_Happy(t *testing.T) {
 			return nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "", WithWorkspaceStore(wsStore))
+	r := newTestRouter(svc, store, true, "", WithWorkspaceStore(wsStore))
 
 	body := `{"name":"My Workspace"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -867,11 +882,12 @@ func TestHandleCreateWorkspace_MissingName_422(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
-	r := newTestRouter(svc, store, false, "", WithWorkspaceStore(wsStore))
+	r := newTestRouter(svc, store, true, "", WithWorkspaceStore(wsStore))
 
 	body := `{}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -884,10 +900,11 @@ func TestHandleCreateWorkspace_MalformedJSON_400(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
-	r := newTestRouter(svc, store, false, "", WithWorkspaceStore(wsStore))
+	r := newTestRouter(svc, store, true, "", WithWorkspaceStore(wsStore))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -896,6 +913,7 @@ func TestHandleCreateWorkspace_MalformedJSON_400(t *testing.T) {
 	}
 }
 
+// NotConfigured_501 fires BEFORE requireUserID, so no JWT context needed.
 func TestHandleCreateWorkspace_NotConfigured_501(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
@@ -920,13 +938,13 @@ func TestHandleGetWorkspace_CrossOwner_404(t *testing.T) {
 			return &models.Workspace{ID: id, Name: "Other", OwnerID: 999}, nil // not caller (1)
 		},
 	}
-	r := newTestRouter(svc, store, false, "", WithWorkspaceStore(wsStore))
+	r := newTestRouter(svc, store, true, "", WithWorkspaceStore(wsStore))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/42", nil)
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
-	// 404 (not 403) to avoid leaking existence of other users' workspaces.
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
 	}
@@ -954,7 +972,7 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 			return nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "",
+	r := newTestRouter(svc, store, true, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -962,6 +980,7 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 	body := `{"workspace_id":1,"title":"hello","caption":"world","targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -970,9 +989,10 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 	}
 
 	var resp struct {
-		ID          int64    `json:"id"`
-		WorkspaceID int64    `json:"workspace_id"`
-		Status      string   `json:"status"`
+		ID          int64  `json:"id"`
+		WorkspaceID int64  `json:"workspace_id"`
+		Status      string `json:"status"`
+		ScheduledAt string `json:"scheduled_at,omitempty"`
 		Targets     []struct {
 			ID                int64  `json:"id"`
 			PlatformAccountID int64  `json:"platform_account_id"`
@@ -985,8 +1005,65 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 	if resp.ID != 100 {
 		t.Fatalf("id: want 100, got %d", resp.ID)
 	}
+	if resp.Status != "draft" {
+		t.Fatalf("status: want draft, got %s", resp.Status)
+	}
+	if resp.ScheduledAt != "" {
+		t.Fatalf("scheduled_at: want empty for draft, got %s", resp.ScheduledAt)
+	}
 	if len(resp.Targets) != 1 || resp.Targets[0].ID != 200 || resp.Targets[0].PlatformAccountID != 10 {
 		t.Fatalf("targets count/id/pa wrong: %+v", resp.Targets)
+	}
+}
+
+// TestHandleCreatePost_HappyWithScheduledAt verifies the happy path of
+// the scheduling feature: when scheduled_at is provided the auto-status
+// transition `draft -> scheduled` happens, AND the response echoes back
+// scheduled_at so the client can confirm what was stored.
+func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			return &models.Workspace{ID: id, Name: "Mine", OwnerID: 1}, nil
+		},
+	}
+	postStore := &mockPostStore{
+		createFn: func(p *models.Post, _ []*models.PostTarget) error {
+			p.ID = 100
+			p.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, true, "",
+		WithWorkspaceStore(wsStore),
+		WithPostStore(postStore),
+	)
+
+	body := `{"workspace_id":1,"title":"future post","media_url":"https://cdn/img.png","scheduled_at":"2030-01-01T00:00:00Z","targets":[{"platform_account_id":10}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		ID          int64  `json:"id"`
+		Status      string `json:"status"`
+		ScheduledAt string `json:"scheduled_at"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp.Status != "scheduled" {
+		t.Fatalf("status: want scheduled, got %s", resp.Status)
+	}
+	if resp.ScheduledAt != "2030-01-01T00:00:00Z" {
+		t.Fatalf("scheduled_at: want 2030-01-01T00:00:00Z, got %s", resp.ScheduledAt)
 	}
 }
 
@@ -995,7 +1072,7 @@ func TestHandleCreatePost_MissingWorkspaceID_422(t *testing.T) {
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	postStore := &mockPostStore{}
-	r := newTestRouter(svc, store, false, "",
+	r := newTestRouter(svc, store, true, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -1003,6 +1080,7 @@ func TestHandleCreatePost_MissingWorkspaceID_422(t *testing.T) {
 	body := `{"targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -1016,7 +1094,7 @@ func TestHandleCreatePost_NoTargets_422(t *testing.T) {
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	postStore := &mockPostStore{}
-	r := newTestRouter(svc, store, false, "",
+	r := newTestRouter(svc, store, true, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -1024,6 +1102,7 @@ func TestHandleCreatePost_NoTargets_422(t *testing.T) {
 	body := `{"workspace_id":1}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -1037,7 +1116,7 @@ func TestHandleCreatePost_BadTargetID_422(t *testing.T) {
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	postStore := &mockPostStore{}
-	r := newTestRouter(svc, store, false, "",
+	r := newTestRouter(svc, store, true, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -1045,6 +1124,7 @@ func TestHandleCreatePost_BadTargetID_422(t *testing.T) {
 	body := `{"workspace_id":1,"targets":[{"platform_account_id":0}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -1061,8 +1141,8 @@ func TestHandleCreatePost_CrossOwnerWorkspace_403(t *testing.T) {
 			return &models.Workspace{ID: id, Name: "Other", OwnerID: 999}, nil
 		},
 	}
-	postStore := &mockPostStore{} // createFn is nil → if invoked, returns nil silently, so check would fail differently
-	r := newTestRouter(svc, store, false, "",
+	postStore := &mockPostStore{}
+	r := newTestRouter(svc, store, true, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -1070,6 +1150,7 @@ func TestHandleCreatePost_CrossOwnerWorkspace_403(t *testing.T) {
 	body := `{"workspace_id":1,"targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -1083,7 +1164,6 @@ func TestHandleGetPost_CrossOwner_404(t *testing.T) {
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{
 		findByIDFn: func(id int64) (*models.Workspace, error) {
-			// Post belongs to workspace 1, owned by user 999 (not caller)
 			return &models.Workspace{ID: id, Name: "Other", OwnerID: 999}, nil
 		},
 	}
@@ -1098,16 +1178,16 @@ func TestHandleGetPost_CrossOwner_404(t *testing.T) {
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "",
+	r := newTestRouter(svc, store, true, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/100", nil)
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
-	// 404 (not 403) to avoid differential leak.
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
 	}
