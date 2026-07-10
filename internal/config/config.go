@@ -105,6 +105,27 @@ type Config struct {
 
 	// Background worker tuning.
 	PublishWorkerIntervalSeconds int
+
+	// Supabase Storage (alternative to AWS S3). When SUPABASE_URL +
+	// SUPABASE_SERVICE_KEY + SUPABASE_BUCKET are all set, presigned upload
+	// URLs use the Supabase Storage REST API. Otherwise the endpoint
+	// /api/v1/storage/upload-url returns 501 in production.
+	SupabaseURL        string
+	SupabaseServiceKey string
+	SupabaseBucket     string
+
+	// AWS S3 (alternative to Supabase Storage). When AWS_REGION +
+	// AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY + AWS_S3_BUCKET are all
+	// set, presigned upload URLs use AWS SigV4-signed PUT URLs.
+	AWSRegion          string
+	AWSAccessKeyID     string
+	AWSSecretAccessKey string
+	AWSBucket          string
+
+	// MaxUploadBytes caps the size of any single file the client may
+	// upload. Default 200 MiB (200*1024*1024). Configurable so a deploy
+	// with stricter storage quotas can dial it down without rebuilding.
+	MaxUploadBytes int64
 }
 
 // Load reads configuration from environment variables.
@@ -150,6 +171,17 @@ func Load() (*Config, error) {
 		StrictJWTAuth:       getEnvBool("STRICT_JWT_AUTH", true),
 		LogLevel:                     getEnv("LOG_LEVEL", "info"),
 		PublishWorkerIntervalSeconds: getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
+
+		SupabaseURL:        getEnv("SUPABASE_URL", ""),
+		SupabaseServiceKey: getEnv("SUPABASE_SERVICE_KEY", ""),
+		SupabaseBucket:     getEnv("SUPABASE_BUCKET", ""),
+
+		AWSRegion:          getEnv("AWS_REGION", ""),
+		AWSAccessKeyID:     getEnv("AWS_ACCESS_KEY_ID", ""),
+		AWSSecretAccessKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
+		AWSBucket:          getEnv("AWS_S3_BUCKET", ""),
+
+		MaxUploadBytes: getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -305,6 +337,19 @@ func splitCSV(s string) []string {
 func getEnvInt(key string, fallback int) int {
 	if value, ok := os.LookupEnv(key); ok {
 		if n, err := strconv.Atoi(value); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+// getEnvInt64 reads a 64-bit integer environment variable with a default
+// fallback. Used for byte sizes (e.g. STORAGE_MAX_UPLOAD_BYTES) where
+// int range is insufficient at >2 GB. Invalid values silently fall back
+// to the default.
+func getEnvInt64(key string, fallback int64) int64 {
+	if value, ok := os.LookupEnv(key); ok {
+		if n, err := strconv.ParseInt(value, 10, 64); err == nil {
 			return n
 		}
 	}

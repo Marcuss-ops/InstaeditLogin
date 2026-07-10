@@ -141,7 +141,30 @@ func main() {
 	if len(corsOrigins) == 0 && cfg.FrontendURL != "" {
 		corsOrigins = []string{cfg.FrontendURL}
 	}
-	router := api.NewRouter(platforms, userRepo, authMgr, cfg.StrictJWTAuth, cfg.FrontendURL, corsOrigins)
+
+	// Build the optional router options for storage. The provider is
+	// selected at startup via env vars: Supabase (URL+KEY+BUCKET) OR
+	// AWS S3 (REGION+KEY_ID+SECRET+BUCKET). When neither is fully set
+	// the storage handlers return 501 Not Implemented so the rest of
+	// the server still boots.
+	opts := []api.RouterOption{}
+	if cfg.SupabaseURL != "" && cfg.SupabaseServiceKey != "" && cfg.SupabaseBucket != "" {
+		opts = append(opts,
+			api.WithStorageProvider(services.NewSupabaseProvider(
+				cfg.SupabaseURL, cfg.SupabaseServiceKey, cfg.SupabaseBucket, slog.Default())),
+			api.WithMaxUploadBytes(cfg.MaxUploadBytes))
+		slog.Info("storage provider: Supabase configured", "bucket", cfg.SupabaseBucket)
+	} else if cfg.AWSRegion != "" && cfg.AWSAccessKeyID != "" && cfg.AWSSecretAccessKey != "" && cfg.AWSBucket != "" {
+		opts = append(opts,
+			api.WithStorageProvider(services.NewS3Provider(
+				cfg.AWSRegion, cfg.AWSBucket, cfg.AWSAccessKeyID, cfg.AWSSecretAccessKey, slog.Default())),
+			api.WithMaxUploadBytes(cfg.MaxUploadBytes))
+		slog.Info("storage provider: AWS S3 configured", "bucket", cfg.AWSBucket, "region", cfg.AWSRegion)
+	} else {
+		slog.Warn("storage provider: none configured (set SUPABASE_URL+SUPABASE_SERVICE_KEY+SUPABASE_BUCKET OR AWS_REGION+AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY+AWS_S3_BUCKET for /api/v1/storage/upload-url)")
+	}
+
+	router := api.NewRouter(platforms, userRepo, authMgr, cfg.StrictJWTAuth, cfg.FrontendURL, corsOrigins, opts...)
 	slog.Info("Router configured",
 		"jwt_ttl_hours", cfg.JWTTTLHours,
 		"strict_jwt_auth", cfg.StrictJWTAuth,

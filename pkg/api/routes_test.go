@@ -138,6 +138,31 @@ func (m *mockPostStore) ListByPost(postID int64) ([]models.PostTarget, error) {
 	return m.listByPostFn(postID)
 }
 
+// mockStorageProvider implements StorageProvider with configurable function
+// fields. Captures SignUpload args so tests can assert key construction
+// (user_id scoping, UUID4 uniqueness, name sanitization).
+type mockStorageProvider struct {
+	grant              *services.UploadGrant
+	err                error
+	capturedUserID     int64
+	capturedKey        string
+	capturedContentType string
+	capturedSize       int64
+}
+
+func (m *mockStorageProvider) Provider() string { return "mock" }
+
+func (m *mockStorageProvider) SignUpload(ctx context.Context, userID int64, key, contentType string, sizeBytes int64, ttl time.Duration) (*services.UploadGrant, error) {
+	m.capturedUserID = userID
+	m.capturedKey = key
+	m.capturedContentType = contentType
+	m.capturedSize = sizeBytes
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.grant, nil
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1190,5 +1215,158 @@ func TestHandleGetPost_CrossOwner_404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleCreateUploadURL tests
+// ---------------------------------------------------------------------------
+
+// NotConfigured_501 fires BEFORE requireUserID, so no JWT context needed.
+func TestHandleCreateUploadURL_NotConfigured_501(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, false, "") // no WithStorageProvider
+
+	body := `{"filename":"test.mp4","content_type":"video/mp4","size_bytes":1024}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("want 501, got %d", w.Code)
+	}
+}
+
+func TestHandleCreateUploadURL_MissingJWT_401(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	storage := &mockStorageProvider{}
+	r := newTestRouter(svc, store, true, "", WithStorageProvider(storage))
+
+	body := `{"filename":"test.mp4","content_type":"video/mp4","size_bytes":1024}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", w.Code)
+	}
+}
+
+func TestHandleCreateUploadURL_InvalidContentType_422(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	storage := &mockStorageProvider{}
+	r := newTestRouter(svc, store, true, "", WithStorageProvider(storage))
+
+	// text/html is in no allowlist (imagine XSS surface area).
+	body := `{"filename":"xss.html","content_type":"text/html","size_bytes":1024}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleCreateUploadURL_TooLarge_422(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	storage := &mockStorageProvider{}
+	// Cap at 1000 bytes so the test is deterministic without MB numbers.
+	r := newTestRouter(svc, store, true, "",
+		WithStorageProvider(storage),
+		WithMaxUploadBytes(1000),
+	)
+
+	body := `{"filename":"huge.mp4","content_type":"video/mp4","size_bytes":99999999}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleCreateUploadURL_MissingFilename_422(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	storage := &mockStorageProvider{}
+	r := newTestRouter(svc, store, true, "", WithStorageProvider(storage))
+
+	body := `{"content_type":"video/mp4","size_bytes":1024}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", w.Code)
+	}
+}
+
+func TestHandleCreateUploadURL_Happy_200(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	storage := &mockStorageProvider{
+		grant: &services.UploadGrant{
+			UploadURL: "https://example.supabase.co/storage/v1/upload/sign/bucket/key?token=xyz",
+			MediaURL:  "https://example.supabase.co/storage/v1/object/public/bucket/key",
+			ExpiresAt: time.Now().Add(15 * time.Minute),
+		},
+	}
+	r := newTestRouter(svc, store, true, "", WithStorageProvider(storage))
+
+	body := `{"filename":"test.mp4","content_type":"video/mp4","size_bytes":1024000}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		UploadURL string    `json:"upload_url"`
+		MediaURL  string    `json:"media_url"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp.UploadURL == "" {
+		t.Error("upload_url should be non-empty")
+	}
+	if resp.MediaURL == "" {
+		t.Error("media_url should be non-empty")
+	}
+	if resp.ExpiresAt.IsZero() {
+		t.Error("expires_at should be set")
+	}
+	// Key must be scoped under user_id=1 (the JWT uid).
+	if storage.capturedUserID != 1 {
+		t.Errorf("user_id capture: want 1, got %d", storage.capturedUserID)
+	}
+	if !strings.HasPrefix(storage.capturedKey, "uploads/1/") {
+		t.Errorf("key prefix: want uploads/1/, got %q", storage.capturedKey)
+	}
+	// content_type forwarded verbatim.
+	if storage.capturedContentType != "video/mp4" {
+		t.Errorf("content_type capture: want video/mp4, got %q", storage.capturedContentType)
+	}
+	if storage.capturedSize != 1024000 {
+		t.Errorf("size_bytes capture: want 1024000, got %d", storage.capturedSize)
 	}
 }

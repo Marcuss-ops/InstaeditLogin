@@ -21,14 +21,16 @@ import (
 
 // Router handles HTTP routing and request dispatching for all platforms.
 type Router struct {
-	platforms      map[string]services.PlatformService
-	userRepo       UserStore
-	auth           *auth.Manager
-	strictAuth     bool
-	frontendURL    string
-	allowedOrigin  []string
-	workspaceStore WorkspaceStore
-	postStore      PostStore
+	platforms       map[string]services.PlatformService
+	userRepo        UserStore
+	auth            *auth.Manager
+	strictAuth      bool
+	frontendURL     string
+	allowedOrigin   []string
+	workspaceStore  WorkspaceStore
+	postStore       PostStore
+	storageProvider StorageProvider
+	maxUploadBytes  int64
 }
 
 // UserStore abstracts the user/account persistence layer so tests can
@@ -85,6 +87,10 @@ func (r *Router) Setup() http.Handler {
 	mux.HandleFunc("POST /api/v1/posts", r.protected(r.handleCreatePost))
 	mux.HandleFunc("GET /api/v1/workspaces/{id}/posts", r.protected(r.handleListWorkspacePosts))
 	mux.HandleFunc("GET /api/v1/posts/{id}", r.protected(r.handleGetPost))
+
+	// Presigned upload URLs for heavy media files (commit feat(storage):
+	// presigned upload URLs per video pesanti / immagini grandi).
+	mux.HandleFunc("POST /api/v1/storage/upload-url", r.protected(r.handleCreateUploadURL))
 
 	return r.corsMiddleware(r.loggingMiddleware(mux))
 }
