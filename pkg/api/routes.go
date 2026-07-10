@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -222,32 +224,53 @@ func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "user_id is required")
 		return
 	}
+
+	result, err := r.publishContent(req.Context(), userID, &pubReq)
+	if err != nil {
+		var pe *publishError
+		if errors.As(err, &pe) {
+			writeError(w, pe.status, pe.message)
+		} else {
+			slog.Error("Failed to publish", "error", err, "platform", pubReq.Platform)
+			writeError(w, http.StatusInternalServerError, "failed to publish: "+err.Error())
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":            "published",
+		"platform":          pubReq.Platform,
+		"platform_media_id": result.PlatformMediaID,
+		"platform_url":      result.PlatformURL,
+	})
+}
+
+// publishContent resolves the platform, account, and token, builds the
+// payload, and calls the platform's Publish method. All the publish
+// business logic lives here so handlePublishPost stays a thin handler.
+func (r *Router) publishContent(ctx context.Context, userID int64, pubReq *PublishRequest) (*models.PublishResult, error) {
 	if pubReq.Platform == "" {
 		pubReq.Platform = models.PlatformMeta
 	}
 
 	p, ok := r.platforms[pubReq.Platform]
 	if !ok {
-		writeError(w, http.StatusNotFound, "unsupported platform: "+pubReq.Platform)
-		return
+		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("unsupported platform: %s", pubReq.Platform)}
 	}
 
 	accounts, err := r.userRepo.ListPlatformAccountsByUser(userID, pubReq.Platform)
 	if err != nil || len(accounts) == 0 {
-		writeError(w, http.StatusNotFound, "no "+pubReq.Platform+" account linked to this user")
-		return
+		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("no %s account linked to this user", pubReq.Platform)}
 	}
 	account := accounts[0]
 
 	// Try bearer token first (refresh-capable), then long-lived (Meta).
-	oauthToken, err := p.EnsureFreshToken(req.Context(), account.ID, models.TokenTypeBearer, p.RefreshOAuthToken)
+	oauthToken, err := p.EnsureFreshToken(ctx, account.ID, models.TokenTypeBearer, p.RefreshOAuthToken)
 	if err != nil {
-		if oauthToken, err = p.EnsureFreshToken(req.Context(), account.ID, models.TokenTypeLongLived, p.RefreshOAuthToken); err != nil {
+		if oauthToken, err = p.EnsureFreshToken(ctx, account.ID, models.TokenTypeLongLived, p.RefreshOAuthToken); err != nil {
 			slog.Error("Failed to obtain a usable token after refresh",
 				"error", err, "user_id", userID, "platform", pubReq.Platform)
-			writeError(w, http.StatusUnauthorized,
-				"no valid token (refresh failed; please re-authenticate): "+err.Error())
-			return
+			return nil, &publishError{http.StatusUnauthorized, "no valid token (refresh failed; please re-authenticate): " + err.Error()}
 		}
 	}
 
@@ -267,24 +290,21 @@ func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
 	case "text":
 		// text-only post
 	default:
-		writeError(w, http.StatusBadRequest, "content_type must be one of: image, video, text")
-		return
+		return nil, &publishError{http.StatusBadRequest, "content_type must be one of: image, video, text"}
 	}
 
-	result, err := p.Publish(req.Context(), oauthToken.AccessToken, account.PlatformUserID, payload)
-	if err != nil {
-		slog.Error("Failed to publish", "error", err, "platform", pubReq.Platform)
-		writeError(w, http.StatusInternalServerError, "failed to publish: "+err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":            "published",
-		"platform":          pubReq.Platform,
-		"platform_media_id": result.PlatformMediaID,
-		"platform_url":      result.PlatformURL,
-	})
+	return p.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
 }
+
+// publishError is an error that carries an HTTP status code so the handler
+// can return the appropriate response without leaking HTTP details into the
+// business logic.
+type publishError struct {
+	status  int
+	message string
+}
+
+func (e *publishError) Error() string { return e.message }
 
 func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
 	fallback := int64(0)
