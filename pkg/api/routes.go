@@ -67,6 +67,7 @@ func (r *Router) Setup() http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/{provider}/login", r.handleLogin)
 	mux.HandleFunc("GET /api/v1/auth/{provider}/callback", r.handleCallback)
 	mux.HandleFunc("POST /api/v1/posts/publish", r.protected(r.handlePublishPost))
+	mux.HandleFunc("POST /api/v1/posts/publish-all", r.protected(r.handlePublishAll))
 	mux.HandleFunc("GET /api/v1/accounts", r.protected(r.handleListAccounts))
 	mux.HandleFunc("GET /api/v1/metrics", r.handleMetrics)
 
@@ -151,13 +152,6 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 
 	expiresAt := jwtExp.UTC().Format(time.RFC3339)
 
-	// When FrontendURL is configured, redirect the browser to the SPA callback
-	// page. The JWT is passed via query string; the SPA is responsible for
-	// moving it out of the URL into localStorage and redirecting again with
-	// replace:true (so it never lands in browser history).
-	//
-	// When FrontendURL is empty, fall back to the original JSON response so
-	// non-browser clients (curl, Postman, Go integration tests) keep working.
 	if r.frontendURL != "" {
 		q := url.Values{}
 		q.Set("jwt", jwtToken)
@@ -197,25 +191,77 @@ type PublishRequest struct {
 	Title        string `json:"title"`
 
 	// TikTok-specific post options. Ignored by other platforms.
-	// PrivacyLevel: "PUBLIC_TO_EVERYONE" | "MUTUAL_FOLLOW_FRIENDS" | "SELF_ONLY"
-	// CommentMode:   "allow_all" (default) | "no_comments"
-	// DuetMode:      "allow" (default) | "no_duet"
 	PrivacyLevel string `json:"privacy_level,omitempty"`
 	CommentMode  string `json:"comment_mode,omitempty"`
 	DuetMode     string `json:"duet_mode,omitempty"`
 }
 
 // protected wraps a handler so that the JWT middleware runs first.
-//
-// In strict mode (default), missing/invalid Authorization causes a 401 and
-// the handler is never reached. In legacy rollback mode (STRICT_JWT_AUTH=false)
-// the handler still runs; the resolved user id comes from the JWT context
-// when present, or from `user_id` in the body/query otherwise — see
-// resolveUserID for the precedence rules.
 func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		r.auth.Middleware(r.strictAuth, next).ServeHTTP(w, req)
 	}
+}
+
+func (r *Router) handlePublishAll(w http.ResponseWriter, req *http.Request) {
+	var pubReq PublishRequest
+	if err := json.NewDecoder(req.Body).Decode(&pubReq); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	userID := resolveUserID(req, pubReq.UserID, r.strictAuth)
+	if userID == 0 {
+		writeError(w, http.StatusBadRequest, "user_id is required")
+		return
+	}
+
+	// Validate content_type once before iterating platforms.
+	if pubReq.ContentType != "text" && pubReq.ContentType != "image" && pubReq.ContentType != "photo" && pubReq.ContentType != "video" && pubReq.ContentType != "reel" {
+		writeError(w, http.StatusBadRequest, "content_type must be one of: image, video, text")
+		return
+	}
+
+	// Fetch ALL connected platform accounts for this user.
+	accounts, err := r.userRepo.ListPlatformAccountsByUser(userID, "")
+	if err != nil || len(accounts) == 0 {
+		writeError(w, http.StatusNotFound, "no connected accounts found for this user")
+		return
+	}
+
+	type platformResult struct {
+		Platform        string `json:"platform"`
+		Status          string `json:"status"`
+		PlatformMediaID string `json:"platform_media_id,omitempty"`
+		PlatformURL     string `json:"platform_url,omitempty"`
+		Error           string `json:"error,omitempty"`
+	}
+	results := make([]platformResult, 0, len(accounts))
+	successCount, failCount := 0, 0
+
+	for _, acc := range accounts {
+		result, err := r.publishToAccount(req.Context(), acc, &pubReq)
+		pr := platformResult{Platform: acc.Platform}
+		if err != nil {
+			pr.Status = "error"
+			pr.Error = err.Error()
+			failCount++
+			slog.Warn("publish-all: failed for platform", "platform", acc.Platform, "error", err)
+		} else {
+			pr.Status = "published"
+			pr.PlatformMediaID = result.PlatformMediaID
+			pr.PlatformURL = result.PlatformURL
+			successCount++
+		}
+		results = append(results, pr)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":        "completed",
+		"success_count": successCount,
+		"fail_count":    failCount,
+		"results":       results,
+	})
 }
 
 func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
@@ -252,15 +298,13 @@ func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
 }
 
 // publishContent resolves the platform, account, and token, builds the
-// payload, and calls the platform's Publish method. All the publish
-// business logic lives here so handlePublishPost stays a thin handler.
+// payload, and calls the platform's Publish method.
 func (r *Router) publishContent(ctx context.Context, userID int64, pubReq *PublishRequest) (*models.PublishResult, error) {
 	if pubReq.Platform == "" {
 		pubReq.Platform = models.PlatformMeta
 	}
 
-	p, ok := r.platforms[pubReq.Platform]
-	if !ok {
+	if _, ok := r.platforms[pubReq.Platform]; !ok {
 		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("unsupported platform: %s", pubReq.Platform)}
 	}
 
@@ -268,14 +312,25 @@ func (r *Router) publishContent(ctx context.Context, userID int64, pubReq *Publi
 	if err != nil || len(accounts) == 0 {
 		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("no %s account linked to this user", pubReq.Platform)}
 	}
-	account := accounts[0]
+
+	return r.publishToAccount(ctx, accounts[0], pubReq)
+}
+
+// publishToAccount handles token refresh and publishing for a specific
+// platform account that has already been fetched. Used by both
+// publishContent (single-platform) and handlePublishAll (multi-platform).
+func (r *Router) publishToAccount(ctx context.Context, account *models.PlatformAccount, pubReq *PublishRequest) (*models.PublishResult, error) {
+	p, ok := r.platforms[account.Platform]
+	if !ok {
+		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("unsupported platform: %s", account.Platform)}
+	}
 
 	// Try bearer token first (refresh-capable), then long-lived (Meta).
 	oauthToken, err := p.EnsureFreshToken(ctx, account.ID, models.TokenTypeBearer, p.RefreshOAuthToken)
 	if err != nil {
 		if oauthToken, err = p.EnsureFreshToken(ctx, account.ID, models.TokenTypeLongLived, p.RefreshOAuthToken); err != nil {
 			slog.Error("Failed to obtain a usable token after refresh",
-				"error", err, "user_id", userID, "platform", pubReq.Platform)
+				"error", err, "platform", account.Platform)
 			return nil, &publishError{http.StatusUnauthorized, "no valid token (refresh failed; please re-authenticate): " + err.Error()}
 		}
 	}
@@ -354,16 +409,8 @@ func (r *Router) loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// handleMetrics serves the Prometheus exposition format. By default the
-// endpoint is open so scrapers (Prometheus, Datadog agents, etc.) running
-// inside the VPC can read it without coordination. Set
-// METRICS_BASIC_AUTH_USER + METRICS_BASIC_AUTH_PASS in the environment to
-// gate the endpoint with HTTP Basic Auth (constant-time comparison).
+// handleMetrics serves the Prometheus exposition format.
 func (r *Router) handleMetrics(w http.ResponseWriter, req *http.Request) {
-	// Both env vars must be configured; otherwise the endpoint is open
-	// (this matches the Prometheus "scrape from inside the VPC" default).
-	// Only gate when BOTH are set so a half-configured deployment doesn't
-	// accidentally accept Authorization headers with an empty cred half.
 	user := os.Getenv("METRICS_BASIC_AUTH_USER")
 	pass := os.Getenv("METRICS_BASIC_AUTH_PASS")
 	if user != "" && pass != "" {
@@ -380,9 +427,6 @@ func (r *Router) handleMetrics(w http.ResponseWriter, req *http.Request) {
 }
 
 // corsMiddleware adds CORS headers for browser clients (the React SPA).
-// We allow the configured frontend origin (and any extra origins from
-// CORS_ALLOWED_ORIGINS) and only expose headers/methods the API actually
-// uses. Preflight OPTIONS requests are short-circuited with 204.
 func (r *Router) corsMiddleware(next http.Handler) http.Handler {
 	allowed := make(map[string]struct{}, len(r.allowedOrigin))
 	for _, o := range r.allowedOrigin {
@@ -408,16 +452,6 @@ func (r *Router) corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// resolveUserID prefers the authenticated user id placed in the request
-// context by the JWT middleware. In strict mode that's the only source: if
-// no JWT was presented, middleware already rejected with 401 and this
-// function should never see user_id == 0 here. The defensive `if strict`
-// branch therefore returns 0.
-//
-// In LEGACY mode (STRICT_JWT_AUTH=false) the function falls back to the
-// caller-provided value (typically the `user_id` JSON field or query
-// parameter). This is what lets old clients that don't send Authorization
-// headers keep working during the migration window.
 func resolveUserID(req *http.Request, fallback int64, strict bool) int64 {
 	if uid, ok := auth.UserIDFromContext(req.Context()); ok && uid > 0 {
 		return uid

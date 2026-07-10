@@ -598,3 +598,167 @@ func TestHandlePublishPost_WithJWT_StrictMode(t *testing.T) {
 		t.Fatalf("userID from context: want 42, got %d", capturedUserID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// handlePublishAll tests
+// ---------------------------------------------------------------------------
+
+func TestHandlePublishAll_NoAccounts(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{
+		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
+			return nil, nil
+		},
+	}
+	r := newTestRouter(svc, store, false, "")
+
+	body := `{"user_id":1,"content_type":"text","caption":"hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlePublishAll_InvalidContentType(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, false, "")
+
+	body := `{"user_id":1,"content_type":"bogus","caption":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlePublishAll_Success_AllPlatforms(t *testing.T) {
+	svc := &mockPlatformService{
+		platform: "meta",
+		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
+		},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: "id-" + platformUserID}, nil
+		},
+	}
+	store := &mockUserStore{
+		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
+			// handlePublishAll calls with platform="" to get all accounts.
+			// publishToAccount does NOT call ListPlatformAccountsByUser again.
+			return []*models.PlatformAccount{
+				{ID: 10, UserID: 1, Platform: "meta", PlatformUserID: "fb-123", Username: "fbuser"},
+				{ID: 11, UserID: 1, Platform: "twitter", PlatformUserID: "tw-456", Username: "twuser"},
+			}, nil
+		},
+	}
+	r := newTestRouter(svc, store, false, "")
+
+	body := `{"user_id":1,"content_type":"text","caption":"hello world"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Status  string `json:"status"`
+		Results []struct {
+			Platform string `json:"platform"`
+			Status   string `json:"status"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp.Status != "completed" {
+		t.Fatalf("status: want completed, got %s", resp.Status)
+	}
+	if len(resp.Results) != 2 {
+		t.Fatalf("results count: want 2, got %d", len(resp.Results))
+	}
+	for _, r := range resp.Results {
+		if r.Status != "published" {
+			t.Errorf("platform %s: want published, got %s", r.Platform, r.Status)
+		}
+	}
+}
+
+func TestHandlePublishAll_PartialFailures(t *testing.T) {
+	svc := &mockPlatformService{
+		platform: "meta",
+		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
+		},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			if platformUserID == "tw-456" {
+				return nil, fmt.Errorf("twitter api error")
+			}
+			return &models.PublishResult{PlatformMediaID: "ok"}, nil
+		},
+	}
+	store := &mockUserStore{
+		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
+			return []*models.PlatformAccount{
+				{ID: 10, UserID: 1, Platform: "meta", PlatformUserID: "fb-123", Username: "fbuser"},
+				{ID: 11, UserID: 1, Platform: "twitter", PlatformUserID: "tw-456", Username: "twuser"},
+			}, nil
+		},
+	}
+	r := newTestRouter(svc, store, false, "")
+
+	body := `{"user_id":1,"content_type":"text","caption":"hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Status  string `json:"status"`
+		Results []struct {
+			Platform string `json:"platform"`
+			Status   string `json:"status"`
+			Error    string `json:"error,omitempty"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp.Status != "completed" {
+		t.Fatalf("status: want completed, got %s", resp.Status)
+	}
+
+	var metaOK, twitterFail bool
+	for _, r := range resp.Results {
+		switch r.Platform {
+		case "meta":
+			if r.Status == "published" {
+				metaOK = true
+			}
+		case "twitter":
+			if r.Status == "error" && r.Error != "" {
+				twitterFail = true
+			}
+		}
+	}
+	if !metaOK {
+		t.Error("meta should have published successfully")
+	}
+	if !twitterFail {
+		t.Error("twitter should have failed")
+	}
+}
