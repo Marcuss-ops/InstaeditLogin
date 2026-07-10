@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { X } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -7,6 +8,15 @@ interface Props {
 }
 
 export function DemoModal({ open, onClose }: Props) {
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [open, onClose]);
+
   return (
     <div
       className={cn(
