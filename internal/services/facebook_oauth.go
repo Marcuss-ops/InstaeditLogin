@@ -15,7 +15,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
-	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // FacebookOAuthService implements OAuthProvider and ContentPublisher for Meta/Facebook.
@@ -102,13 +101,7 @@ func (s *FacebookOAuthService) HandleCallback(ctx context.Context, code string) 
 // token (~60 days) is returned. If Meta rejects the exchange (e.g. the
 // previous token has been expired for > 24 hours) the caller must re-authenticate.
 func (s *FacebookOAuthService) RefreshOAuthToken(ctx context.Context, currentToken string) (result *models.TokenData, err error) {
-	defer func() {
-		if err != nil {
-			metrics.RecordTokenRefreshError(models.PlatformMeta)
-		} else {
-			metrics.RecordTokenRefreshSuccess(models.PlatformMeta)
-		}
-	}()
+	defer RecordTokenRefreshMetrics(models.PlatformMeta, &err)
 	if currentToken == "" {
 		return nil, fmt.Errorf("meta RefreshOAuthToken: empty current token")
 	}
@@ -126,15 +119,7 @@ func (s *FacebookOAuthService) RefreshOAuthToken(ctx context.Context, currentTok
 
 // Publish publishes content to Instagram via the Meta Graph API.
 func (s *FacebookOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
-	start := time.Now()
-	defer func() {
-		metrics.ObservePublishLatency(models.PlatformMeta, time.Since(start).Seconds())
-		if err != nil {
-			metrics.RecordPublishError(models.PlatformMeta, metrics.ErrorKind(err))
-		} else {
-			metrics.RecordPublishSuccess(models.PlatformMeta)
-		}
-	}()
+	defer RecordPublishMetrics(models.PlatformMeta, time.Now(), &err)
 	// First, get the Instagram business account for this user
 	accounts, err := s.getInstagramAccounts(ctx, accessToken, platformUserID)
 	if err != nil || len(accounts) == 0 {

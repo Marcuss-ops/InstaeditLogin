@@ -15,7 +15,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
-	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // TikTokOAuthService implements OAuthProvider and ContentPublisher for TikTok.
@@ -120,13 +119,7 @@ func (s *TikTokOAuthService) HandleCallback(ctx context.Context, code string) (*
 
 // RefreshOAuthToken exchanges a TikTok refresh token for a new access token.
 func (s *TikTokOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (result *models.TokenData, err error) {
-	defer func() {
-		if err != nil {
-			metrics.RecordTokenRefreshError(models.PlatformTikTok)
-		} else {
-			metrics.RecordTokenRefreshSuccess(models.PlatformTikTok)
-		}
-	}()
+	defer RecordTokenRefreshMetrics(models.PlatformTikTok, &err)
 	if refreshToken == "" {
 		return nil, fmt.Errorf("tiktok RefreshOAuthToken: empty refresh token")
 	}
@@ -173,15 +166,7 @@ func (s *TikTokOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken
 }
 
 func (s *TikTokOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
-	start := time.Now()
-	defer func() {
-		metrics.ObservePublishLatency(models.PlatformTikTok, time.Since(start).Seconds())
-		if err != nil {
-			metrics.RecordPublishError(models.PlatformTikTok, metrics.ErrorKind(err))
-		} else {
-			metrics.RecordPublishSuccess(models.PlatformTikTok)
-		}
-	}()
+	defer RecordPublishMetrics(models.PlatformTikTok, time.Now(), &err)
 	if payload.VideoURL == "" {
 		return nil, fmt.Errorf("tiktok requires a video_url for publishing")
 	}

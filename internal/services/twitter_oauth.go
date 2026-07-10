@@ -15,7 +15,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
-	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // TwitterOAuthService implements OAuthProvider and ContentPublisher for Twitter/X.
@@ -81,13 +80,7 @@ func (s *TwitterOAuthService) HandleCallback(ctx context.Context, code string) (
 
 // RefreshOAuthToken exchanges a Twitter refresh token for a new access token.
 func (s *TwitterOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (result *models.TokenData, err error) {
-	defer func() {
-		if err != nil {
-			metrics.RecordTokenRefreshError(models.PlatformTwitter)
-		} else {
-			metrics.RecordTokenRefreshSuccess(models.PlatformTwitter)
-		}
-	}()
+	defer RecordTokenRefreshMetrics(models.PlatformTwitter, &err)
 	if refreshToken == "" {
 		return nil, fmt.Errorf("twitter RefreshOAuthToken: empty refresh token")
 	}
@@ -134,15 +127,7 @@ func (s *TwitterOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 }
 
 func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
-	start := time.Now()
-	defer func() {
-		metrics.ObservePublishLatency(models.PlatformTwitter, time.Since(start).Seconds())
-		if err != nil {
-			metrics.RecordPublishError(models.PlatformTwitter, metrics.ErrorKind(err))
-		} else {
-			metrics.RecordPublishSuccess(models.PlatformTwitter)
-		}
-	}()
+	defer RecordPublishMetrics(models.PlatformTwitter, time.Now(), &err)
 	if payload.Text == "" && payload.ImageURL == "" {
 		return nil, fmt.Errorf("twitter requires text or image_url")
 	}
