@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -65,14 +66,27 @@ func (r *UserRepository) Create(user *models.User) error {
 	return nil
 }
 
-// Update updates an existing user.
+// Update updates an existing user. Returns ErrUserNotFound (wrapped with
+// id context) when the user id does not match any row — the API layer
+// can map this sentinel to 404 via errors.Is.
+//
+// NOTE: UserRepository.Update is NOT tenant-scoped (no workspace_id
+// clause), unlike PostRepository.Update. Zero rows is unambiguous: the
+// user is gone. No ErrUserUnauthorized variant exists for this layer.
 func (r *UserRepository) Update(user *models.User) error {
-	_, err := r.db.Exec(
+	result, err := r.db.Exec(
 		`UPDATE users SET email = $1, name = $2, updated_at = $3 WHERE id = $4`,
 		user.Email, user.Name, time.Now(), user.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update user: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrUserNotFound, user.ID)
 	}
 	return nil
 }

@@ -41,4 +41,20 @@ var (
 	// or invalid. Workers depend on this signal to drop otherwise-phantom
 	// updates from the pending queue.
 	ErrPostTargetNotFound = errors.New("post_target not found")
+
+	// ErrUserNotFound is returned by UserRepository.Update when zero rows
+	// match — the user id does not exist. Unlike PostRepository.Update,
+	// UserRepository.Update is NOT tenant-scoped (no workspace_id clause
+	// in the WHERE), so a 0-row match is unambiguous: the row is gone.
+	// Surface as 404 at the API layer.
+	ErrUserNotFound = errors.New("user not found")
+
+	// ErrTokenNotFound is returned by TokenRepository DELETE methods
+	// (DeleteToken, DeleteAllTokensForPlatformAccount) when zero rows
+	// match. For DeleteToken the token id is stale; for
+	// DeleteAllTokensForPlatformAccount the account simply had no tokens
+	// (idempotent no-op). Callers in logout / revoke flows can use
+	// errors.Is to treat this as non-fatal in the bulk case. Surface as
+	// 404 at the API layer for the single-token path.
+	ErrTokenNotFound = errors.New("token not found")
 )

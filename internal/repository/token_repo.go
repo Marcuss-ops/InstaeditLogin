@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -77,20 +78,42 @@ func (r *TokenRepository) FindLatestToken(platformAccountID int64, tokenType str
 	return token, nil
 }
 
-// DeleteToken deletes a token by ID.
+// DeleteToken deletes a single token by ID. Returns ErrTokenNotFound
+// (wrapped with id context) when no row matches — the API layer can
+// map to 404 via errors.Is. Used by revoke / disconnect flows that
+// should fail loudly on stale ids.
 func (r *TokenRepository) DeleteToken(tokenID int64) error {
-	_, err := r.db.Exec(`DELETE FROM tokens WHERE id = $1`, tokenID)
+	result, err := r.db.Exec(`DELETE FROM tokens WHERE id = $1`, tokenID)
 	if err != nil {
 		return fmt.Errorf("failed to delete token: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrTokenNotFound, tokenID)
 	}
 	return nil
 }
 
-// DeleteAllTokensForPlatformAccount removes all tokens for a given platform account.
+// DeleteAllTokensForPlatformAccount removes all tokens for a given
+// platform account. Returns ErrTokenNotFound (wrapped with
+// platform_account_id context) when zero rows match — this is the
+// legitimate "account has no tokens" idempotent case, e.g. on user
+// logout. Callers in revoke/disconnect flows should use
+// errors.Is(err, ErrTokenNotFound) to treat this as non-fatal.
 func (r *TokenRepository) DeleteAllTokensForPlatformAccount(platformAccountID int64) error {
-	_, err := r.db.Exec(`DELETE FROM tokens WHERE platform_account_id = $1`, platformAccountID)
+	result, err := r.db.Exec(`DELETE FROM tokens WHERE platform_account_id = $1`, platformAccountID)
 	if err != nil {
 		return fmt.Errorf("failed to delete tokens for platform account: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: platform_account_id=%d", ErrTokenNotFound, platformAccountID)
 	}
 	return nil
 }
