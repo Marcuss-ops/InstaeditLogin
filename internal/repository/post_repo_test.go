@@ -141,7 +141,7 @@ func TestPostCreate_EmptyTargets_OKSkipsTargetInserts(t *testing.T) {
 	}
 }
 
-func TestPostCreate_TargetInsertFails_RollsBack(t *testing.T) {
+func TestPostRepository_Create_TxRollback(t *testing.T) {
 	// Critical tx test: second INSERT fails → tx.Rollback called (no orphan
 	// post visible, no orphan target visible).
 	db, mock := newMockPostDBExact(t)
@@ -200,7 +200,7 @@ func TestPostCreate_BeginTxFails_NoCommitOrRollback(t *testing.T) {
 	}
 }
 
-func TestPostUpdate_HappyReturnsNil(t *testing.T) {
+func TestPostRepository_Update_Success(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -221,10 +221,10 @@ func TestPostUpdate_HappyReturnsNil(t *testing.T) {
 	}
 }
 
-// TestPostUpdate_ZeroRowsAffected_WrapsErrPostUnauthorized covers the
-// rows-affected=0 path: the wrapper must carry the typed sentinel so
-// pkg/api can map via errors.Is, AND must retain id context for log lines.
-func TestPostUpdate_ZeroRowsAffected_WrapsErrPostUnauthorized(t *testing.T) {
+// TestPostRepository_Update_NotFound covers the rows-affected=0 path:
+// the wrapper must carry the typed sentinel so pkg/api can map via
+// errors.Is, AND must retain id context for log lines.
+func TestPostRepository_Update_NotFound(t *testing.T) {
 	// The whole point of feat(repo): surface rows-affected = 0 as a real
 	// error so cross-workspace updates don't silently succeed AND so the
 	// API layer can map the typed sentinel via errors.Is to 404.
@@ -295,10 +295,10 @@ func TestPostUpdateStatus_Happy(t *testing.T) {
 	}
 }
 
-// TestPostUpdateStatus_ZeroRowsAffected_WrapsErrPostTargetNotFound
-// covers rows-affected=0 on post_target: the wrapper must carry the
-// sentinel so the worker drops the phantom status transition.
-func TestPostUpdateStatus_ZeroRowsAffected_WrapsErrPostTargetNotFound(t *testing.T) {
+// TestPostRepository_UpdateStatus_StaleTarget covers rows-affected=0
+// on post_target: the wrapper must carry the sentinel so the worker
+// drops the phantom status transition.
+func TestPostRepository_UpdateStatus_StaleTarget(t *testing.T) {
 	// Same defensive check as Update: a 0-rows-affected response means the
 	// target id is stale and the worker would otherwise see a phantom OK.
 	// Sentinel (ErrPostTargetNotFound) lets the worker drop the phantom.
