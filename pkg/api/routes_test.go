@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -78,6 +79,65 @@ func (m *mockUserStore) ListPlatformAccountsByUser(userID int64, platform string
 	return m.listFn(userID, platform)
 }
 
+// mockWorkspaceStore implements WorkspaceStore with configurable function fields.
+type mockWorkspaceStore struct {
+	createFn    func(*models.Workspace) error
+	findByIDFn  func(id int64) (*models.Workspace, error)
+	listByOwner func(ownerID int64) ([]models.Workspace, error)
+}
+
+func (m *mockWorkspaceStore) Create(w *models.Workspace) error {
+	if m.createFn == nil {
+		return nil
+	}
+	return m.createFn(w)
+}
+func (m *mockWorkspaceStore) FindByID(id int64) (*models.Workspace, error) {
+	if m.findByIDFn == nil {
+		return nil, nil
+	}
+	return m.findByIDFn(id)
+}
+func (m *mockWorkspaceStore) ListByOwner(ownerID int64) ([]models.Workspace, error) {
+	if m.listByOwner == nil {
+		return nil, nil
+	}
+	return m.listByOwner(ownerID)
+}
+
+// mockPostStore implements PostStore with configurable function fields.
+type mockPostStore struct {
+	createFn     func(*models.Post, []*models.PostTarget) error
+	findByIDFn   func(id int64) (*models.Post, error)
+	listByWsFn   func(workspaceID int64) ([]models.Post, error)
+	listByPostFn func(postID int64) ([]models.PostTarget, error)
+}
+
+func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget) error {
+	if m.createFn == nil {
+		return nil
+	}
+	return m.createFn(post, targets)
+}
+func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
+	if m.findByIDFn == nil {
+		return nil, nil
+	}
+	return m.findByIDFn(id)
+}
+func (m *mockPostStore) ListByWorkspace(workspaceID int64) ([]models.Post, error) {
+	if m.listByWsFn == nil {
+		return nil, nil
+	}
+	return m.listByWsFn(workspaceID)
+}
+func (m *mockPostStore) ListByPost(postID int64) ([]models.PostTarget, error) {
+	if m.listByPostFn == nil {
+		return nil, nil
+	}
+	return m.listByPostFn(postID)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -91,6 +151,7 @@ func newTestRouter(
 	store *mockUserStore,
 	strictAuth bool,
 	frontendURL string,
+	opts ...RouterOption,
 ) *Router {
 	platforms := map[string]services.PlatformService{
 		"meta":    platformSvc,
@@ -104,6 +165,7 @@ func newTestRouter(
 		strictAuth,
 		frontendURL,
 		nil,
+		opts...,
 	)
 }
 
@@ -760,5 +822,293 @@ func TestHandlePublishAll_PartialFailures(t *testing.T) {
 	}
 	if !twitterFail {
 		t.Error("twitter should have failed")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleCreateWorkspace tests
+// ---------------------------------------------------------------------------
+
+func TestHandleCreateWorkspace_Happy(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{
+		createFn: func(w *models.Workspace) error {
+			w.ID = 42
+			w.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, false, "", WithWorkspaceStore(wsStore))
+
+	body := `{"name":"My Workspace"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp models.Workspace
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp.Name != "My Workspace" {
+		t.Fatalf("name: want My Workspace, got %s", resp.Name)
+	}
+	if resp.ID != 42 {
+		t.Fatalf("id: want 42, got %d", resp.ID)
+	}
+}
+
+func TestHandleCreateWorkspace_MissingName_422(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{}
+	r := newTestRouter(svc, store, false, "", WithWorkspaceStore(wsStore))
+
+	body := `{}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", w.Code)
+	}
+}
+
+func TestHandleCreateWorkspace_MalformedJSON_400(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{}
+	r := newTestRouter(svc, store, false, "", WithWorkspaceStore(wsStore))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", w.Code)
+	}
+}
+
+func TestHandleCreateWorkspace_NotConfigured_501(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, false, "") // no WithWorkspaceStore
+
+	body := `{"name":"My Workspace"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("want 501, got %d", w.Code)
+	}
+}
+
+func TestHandleGetWorkspace_CrossOwner_404(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			return &models.Workspace{ID: id, Name: "Other", OwnerID: 999}, nil // not caller (1)
+		},
+	}
+	r := newTestRouter(svc, store, false, "", WithWorkspaceStore(wsStore))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/42", nil)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	// 404 (not 403) to avoid leaking existence of other users' workspaces.
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handleCreatePost tests
+// ---------------------------------------------------------------------------
+
+func TestHandleCreatePost_Happy(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			return &models.Workspace{ID: id, Name: "Mine", OwnerID: 1}, nil
+		},
+	}
+	postStore := &mockPostStore{
+		createFn: func(p *models.Post, tgts []*models.PostTarget) error {
+			p.ID = 100
+			p.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			for i, target := range tgts {
+				target.ID = int64(200 + i)
+			}
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, false, "",
+		WithWorkspaceStore(wsStore),
+		WithPostStore(postStore),
+	)
+
+	body := `{"workspace_id":1,"title":"hello","caption":"world","targets":[{"platform_account_id":10}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		ID          int64    `json:"id"`
+		WorkspaceID int64    `json:"workspace_id"`
+		Status      string   `json:"status"`
+		Targets     []struct {
+			ID                int64  `json:"id"`
+			PlatformAccountID int64  `json:"platform_account_id"`
+			Status            string `json:"status"`
+		} `json:"targets"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp.ID != 100 {
+		t.Fatalf("id: want 100, got %d", resp.ID)
+	}
+	if len(resp.Targets) != 1 || resp.Targets[0].ID != 200 || resp.Targets[0].PlatformAccountID != 10 {
+		t.Fatalf("targets count/id/pa wrong: %+v", resp.Targets)
+	}
+}
+
+func TestHandleCreatePost_MissingWorkspaceID_422(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{}
+	postStore := &mockPostStore{}
+	r := newTestRouter(svc, store, false, "",
+		WithWorkspaceStore(wsStore),
+		WithPostStore(postStore),
+	)
+
+	body := `{"targets":[{"platform_account_id":10}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", w.Code)
+	}
+}
+
+func TestHandleCreatePost_NoTargets_422(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{}
+	postStore := &mockPostStore{}
+	r := newTestRouter(svc, store, false, "",
+		WithWorkspaceStore(wsStore),
+		WithPostStore(postStore),
+	)
+
+	body := `{"workspace_id":1}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", w.Code)
+	}
+}
+
+func TestHandleCreatePost_BadTargetID_422(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{}
+	postStore := &mockPostStore{}
+	r := newTestRouter(svc, store, false, "",
+		WithWorkspaceStore(wsStore),
+		WithPostStore(postStore),
+	)
+
+	body := `{"workspace_id":1,"targets":[{"platform_account_id":0}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", w.Code)
+	}
+}
+
+func TestHandleCreatePost_CrossOwnerWorkspace_403(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			return &models.Workspace{ID: id, Name: "Other", OwnerID: 999}, nil
+		},
+	}
+	postStore := &mockPostStore{} // createFn is nil → if invoked, returns nil silently, so check would fail differently
+	r := newTestRouter(svc, store, false, "",
+		WithWorkspaceStore(wsStore),
+		WithPostStore(postStore),
+	)
+
+	body := `{"workspace_id":1,"targets":[{"platform_account_id":10}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleGetPost_CrossOwner_404(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	wsStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			// Post belongs to workspace 1, owned by user 999 (not caller)
+			return &models.Workspace{ID: id, Name: "Other", OwnerID: 999}, nil
+		},
+	}
+	postStore := &mockPostStore{
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{
+				ID:          id,
+				WorkspaceID: 1,
+				Title:       "secret",
+				Status:      models.PostStatusDraft,
+				CreatedAt:   time.Now(),
+			}, nil
+		},
+	}
+	r := newTestRouter(svc, store, false, "",
+		WithWorkspaceStore(wsStore),
+		WithPostStore(postStore),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/100", nil)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	// 404 (not 403) to avoid differential leak.
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", w.Code)
 	}
 }

@@ -21,12 +21,14 @@ import (
 
 // Router handles HTTP routing and request dispatching for all platforms.
 type Router struct {
-	platforms     map[string]services.PlatformService
-	userRepo      UserStore
-	auth          *auth.Manager
-	strictAuth    bool
-	frontendURL   string
-	allowedOrigin []string
+	platforms      map[string]services.PlatformService
+	userRepo       UserStore
+	auth           *auth.Manager
+	strictAuth     bool
+	frontendURL    string
+	allowedOrigin  []string
+	workspaceStore WorkspaceStore
+	postStore      PostStore
 }
 
 // UserStore abstracts the user/account persistence layer so tests can
@@ -48,8 +50,9 @@ func NewRouter(
 	strictAuth bool,
 	frontendURL string,
 	allowedOrigins []string,
+	opts ...RouterOption,
 ) *Router {
-	return &Router{
+	r := &Router{
 		platforms:     platforms,
 		userRepo:      userRepo,
 		auth:          authMgr,
@@ -57,6 +60,10 @@ func NewRouter(
 		frontendURL:   frontendURL,
 		allowedOrigin: allowedOrigins,
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // Setup registers all HTTP routes and returns the handler.
@@ -70,6 +77,14 @@ func (r *Router) Setup() http.Handler {
 	mux.HandleFunc("POST /api/v1/posts/publish-all", r.protected(r.handlePublishAll))
 	mux.HandleFunc("GET /api/v1/accounts", r.protected(r.handleListAccounts))
 	mux.HandleFunc("GET /api/v1/metrics", r.handleMetrics)
+
+	// Workspaces + posts CRUD (commit feat(api): endpoints workspaces e posts)
+	mux.HandleFunc("GET /api/v1/workspaces", r.protected(r.handleListWorkspaces))
+	mux.HandleFunc("POST /api/v1/workspaces", r.protected(r.handleCreateWorkspace))
+	mux.HandleFunc("GET /api/v1/workspaces/{id}", r.protected(r.handleGetWorkspace))
+	mux.HandleFunc("POST /api/v1/posts", r.protected(r.handleCreatePost))
+	mux.HandleFunc("GET /api/v1/workspaces/{id}/posts", r.protected(r.handleListWorkspacePosts))
+	mux.HandleFunc("GET /api/v1/posts/{id}", r.protected(r.handleGetPost))
 
 	return r.corsMiddleware(r.loggingMiddleware(mux))
 }
