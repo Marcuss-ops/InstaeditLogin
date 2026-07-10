@@ -206,11 +206,113 @@ Dopo che il flow locale funziona, per andare in produzione:
 
 ---
 
+## 12. Dev vs Prod database isolation
+
+**Regola d'oro**: una query di dev non deve MAI toccare righe di produzione. Le tre risorse da tenere separate:
+
+| Risorsa | DEV (`APP_ENV=dev`) | PROD (`APP_ENV=production`) |
+|---------|---------------------|----------------------------|
+| Supabase project | `instaedit-dev` (free tier) | `instaedit-prod` (paid plan) |
+| `DATABASE_URL` | `postgresql://postgres:[DEV-PW]@aws-0-eu-west-1.pooler.supabase.com:6543/postgres` | `postgresql://postgres:[PROD-PW]@aws-1-us-east-1.pooler.supabase.com:6543/postgres` |
+| `SUPABASE_BUCKET` | `instaedit-dev-uploads` | `instaedit-prod-uploads` |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:4173` (no pubblici!) | `https://app.example.com,https://www.app.example.com` (no localhost!) |
+| `JWT_SECRET` | un valore generato localmente | un valore separato, generato sul server di deploy |
+| `ENCRYPTION_KEY` | un valore generato localmente | un valore separato (i token persistiti sono criptati con questa chiave!) |
+| Meta OAuth app | una app Meta separata in Development mode | una app Meta separata in Live mode |
+
+### Perché tre Supabase project e non uno con due branch?
+
+Supabase **non supporta database branching** come Neon (richiede restauro da backup). Un dev che lancia `TRUNCATE posts CASCADE` su un db condiviso cancella anche i post di produzione. Due Supabase project separati sono l'unica opzione che protegge da questo.
+
+### Come passare da dev a prod
+
+**Opzione A — file `.env` per environment (consigliata per setup locale)**:
+```bash
+cp .env.example .env.dev
+# modifica .env.dev con i valori dev (Supabase dev, localhost CORS, APP_ENV=dev)
+cp .env.example .env.prod
+# modifica .env.prod con i valori prod (Supabase prod, dominio pubblico CORS, APP_ENV=production)
+
+# swap in base a cosa vuoi lanciare:
+ln -sf .env.dev .env && go run cmd/server/main.go   # ora gira in dev
+ln -sf .env.prod .env && go run cmd/server/main.go  # ora gira in prod
+```
+
+**Opzione B — env vars sul servizio di deploy**:
+Su Railway / Render / Fly, configura due env group:
+- `env:dev` con tutti i valori dev
+- `env:prod` con tutti i valori prod
+
+Il servizio di deploy carica il gruppo giusto in base al branch che promuovi (main = prod, ogni PR = preview con env:dev).
+
+**Opzione C — secret manager**:
+1Password, AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault: ogni secret ha un ID tipo `instaedit-login/database-url/dev` e `instaedit-login/database-url/prod`. Il deploy script scarica il gruppo giusto in base a `APP_ENV`.
+
+### Naming convention per i secret store (`_DEV_KEY` / `_PROD_KEY`)
+
+Quando hai un secret che varia per environment (in particolare le chiavi service-role Supabase, le chiavi AWS, le chiavi di cifra), usa SEMPRE un suffisso nel nome del secret:
+
+| Tipo | Secret ID nel manager | Valore |
+|------|----------------------|--------|
+| DB password | `instaedit-login/db-password/dev` | `[DEV-PASSWORD]` |
+| DB password | `instaedit-login/db-password/prod` | `[PROD-PASSWORD]` |
+| Supabase service-role key | `instaedit-login/supabase-service-key/dev` | `eyJ...DEV` |
+| Supabase service-role key | `instaedit-login/supabase-service-key/prod` | `eyJ...PROD` |
+| JWT secret | `instaedit-login/jwt-secret/dev` | `[32-byte dev]` |
+| JWT secret | `instaedit-login/jwt-secret/prod` | `[32-byte prod, ≥64 byte]` |
+| Encryption key | `instaedit-login/encryption-key/dev` | `[32-byte base64 dev]` |
+| Encryption key | `instaedit-login/encryption-key/prod` | `[32-byte base64 prod]` |
+
+Il suffisso `_DEV_KEY` / `_PROD_KEY` nel prompt dell'utente si riferisce a questa convenzione di naming (separare le due chiavi Supabase Service Key con un suffisso). Nel `.env` vero e proprio il backend legge un unico `SUPABASE_SERVICE_KEY`; il suffisso vive solo nel tuo secret store.
+
+### Cosa succede se mischi gli ambienti
+
+| Errore | Conseguenza |
+|--------|-------------|
+| Dev backend punta al DB prod | Un dev che fa testing vede post di utenti reali (privacy issue). L'opposto (prod DB password nel .env dev) cancella dati di prod. |
+| Prod CORS include `http://localhost:5173` | Un attacker può hostare un sito su un dominio che 302-reindirizza al localhost dev per rubare JWT locali, ma più realisticamente: i dev possono accidentalmente vedere dati prod dal loro laptop. |
+| Encryption key condivisa | Se la chiave dev è leaked, **tutti i token OAuth di prod sono decifrabili** (encryption_at_rest non è più una protezione). Genera sempre chiavi separate. |
+| JWT secret condiviso | Un JWT firmato dev viene accettato anche dal backend prod → escalation orizzontale di privilegi. |
+| CORS troppi origins | Più origini = più superficie d'attacco. Lista minima necessaria. |
+
+### Verifica post-deploy
+
+Dopo ogni deploy, esegui uno smoke test di isolamento:
+
+```bash
+# (1) Backend conferma APP_ENV in startup
+curl -sS https://api.example.com/api/v1/health | python -m json.tool
+# Atteso: il log precedente mostra "app_env":"production" + "auth_mode":"strict"
+
+# (2) CORS blocca origine non in allowlist
+curl -sI -H "Origin: https://evil.example.com" https://api.example.com/api/v1/health | grep -i access-control
+# Atteso: NESSUNA riga `Access-Control-Allow-Origin` (rifiuto)
+
+# (3) CORS accetta origine autorizzata
+curl -sI -H "Origin: https://app.example.com" https://api.example.com/api/v1/health | grep -i access-control
+# Atteso: `Access-Control-Allow-Origin: https://app.example.com`
+
+# (4) Database NON è quello di dev
+psql "$DATABASE_URL" -c "SELECT current_database();"
+# Atteso: il db name contiene "prod" (NON "dev" / NON "instaedit_login" usato in locale)
+
+# (5) Fail-fast non scatta (prova con APP_ENV=production)
+APP_ENV=production STRICT_JWT_AUTH=true DATABASE_URL=... go run cmd/server/main.go
+# Atteso: il server parte (STRICT_JWT_AUTH=true soddisfa il guard)
+```
+
+### `.env.example` aggiornato
+
+La sezione "APP_ENV", "Supabase Storage", e "CORS origins" del file `.env.example` in questo repo è stata aggiornata con esempi dev/prod side-by-side per supportare questa sezione. Leggi i commenti del file prima di copiare in `.env`.
+
+---
+
 ## File di riferimento
 
-- `internal/config/config.go` — env validation fail-fast
+- `internal/config/config.go` — env validation fail-fast + `EnforceProductionInvariants` (TODO: da estrarre)
 - `internal/auth/jwt.go` — middleware strict/legacy modes
 - `pkg/api/routes.go` — router + CORS config
+- `cmd/server/main.go` — fail-fast guard `APP_ENV=production && !STRICT_JWT_AUTH`
 - `web/src/lib/auth.ts` — `authedFetch()`, `probeBackend()`, JWT helpers
 - `web/src/lib/probe-cache.ts` — cache 5min per /health + force-clear
 - `web/src/lib/probe-display.ts` — banner copy per ogni `ProbeFailureReason`
@@ -218,5 +320,6 @@ Dopo che il flow locale funziona, per andare in produzione:
 - `web/scripts/verify-api-base-url.ts` — build-time validator
 - `web/scripts/generate-favicon-ico.mjs` — prebuild ICO generator
 - `README.md` — sezione "Deployment" con i 3 pitfall
+- `.env.example` — template con sezioni dev/prod commentate (sezione 12 di HANDOFF)
 
 Buon login! 🚀
