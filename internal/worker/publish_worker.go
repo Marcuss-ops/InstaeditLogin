@@ -236,10 +236,13 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		return fmt.Errorf("publish: %w", err)
 	}
 
-	// 7. Transition: publishing → published
+	// 7. Transition: publishing → published. PostTarget.PublishedAt is
+	// *time.Time (nullable per existing token.ExpiresAt convention), so
+	// we capture time.Now() into a local before taking its address.
 	target.Status = models.PostStatusPublished
 	target.PlatformPostID = result.PlatformMediaID
-	target.PublishedAt = time.Now()
+	now := time.Now()
+	target.PublishedAt = &now
 	if err := w.postRepo.UpdateStatus(target); err != nil {
 		return fmt.Errorf("transition to published: %w", err)
 	}
