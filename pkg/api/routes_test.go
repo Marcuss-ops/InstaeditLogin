@@ -83,7 +83,8 @@ func (m *mockUserStore) ListPlatformAccountsByUser(userID int64, platform string
 type mockWorkspaceStore struct {
 	createFn    func(*models.Workspace) error
 	findByIDFn  func(id int64) (*models.Workspace, error)
-	listByOwner func(ownerID int64) ([]models.Workspace, error)
+	listByOwnerFn func(ownerID int64) ([]models.Workspace, error)
+	deleteFn    func(id int64) error
 }
 
 func (m *mockWorkspaceStore) Create(w *models.Workspace) error {
@@ -99,25 +100,41 @@ func (m *mockWorkspaceStore) FindByID(id int64) (*models.Workspace, error) {
 	return m.findByIDFn(id)
 }
 func (m *mockWorkspaceStore) ListByOwner(ownerID int64) ([]models.Workspace, error) {
-	if m.listByOwner == nil {
+	if m.listByOwnerFn == nil {
 		return nil, nil
 	}
-	return m.listByOwner(ownerID)
+	return m.listByOwnerFn(ownerID)
+}
+
+func (m *mockWorkspaceStore) Delete(id int64) error {
+	if m.deleteFn == nil {
+		return nil
+	}
+	return m.deleteFn(id)
 }
 
 // mockPostStore implements PostStore with configurable function fields.
 type mockPostStore struct {
 	createFn     func(*models.Post, []*models.PostTarget) error
 	findByIDFn   func(id int64) (*models.Post, error)
-	listByWsFn   func(workspaceID int64) ([]models.Post, error)
+	updateFn     func(*models.Post) error
+	listByWorkspaceFn   func(workspaceID int64) ([]models.Post, error)
 	listByPostFn func(postID int64) ([]models.PostTarget, error)
+	saveFn       func(*models.PostTarget) error
 }
 
 func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget) error {
-	if m.createFn == nil {
-		return nil
+	if m.createFn != nil {
+		return m.createFn(post, targets)
 	}
-	return m.createFn(post, targets)
+	// Default behavior matches posts_test.go expectations: assign IDs so
+	// callers can assert post.ID=100 and target IDs without explicit override.
+	post.ID = 100
+	for i, target := range targets {
+		target.ID = int64(1000 + i)
+		target.PostID = 100
+	}
+	return nil
 }
 func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
 	if m.findByIDFn == nil {
@@ -125,17 +142,34 @@ func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
 	}
 	return m.findByIDFn(id)
 }
+
+func (m *mockPostStore) Update(post *models.Post) error {
+	if m.updateFn == nil {
+		return nil
+	}
+	return m.updateFn(post)
+}
 func (m *mockPostStore) ListByWorkspace(workspaceID int64) ([]models.Post, error) {
-	if m.listByWsFn == nil {
+	if m.listByWorkspaceFn == nil {
 		return nil, nil
 	}
-	return m.listByWsFn(workspaceID)
+	return m.listByWorkspaceFn(workspaceID)
 }
 func (m *mockPostStore) ListByPost(postID int64) ([]models.PostTarget, error) {
 	if m.listByPostFn == nil {
 		return nil, nil
 	}
 	return m.listByPostFn(postID)
+}
+
+func (m *mockPostStore) Save(target *models.PostTarget) error {
+	if m.saveFn == nil {
+		// Default behavior matches posts_test.go expectations: assign ID so
+		// callers can assert target.ID=999 without explicit override.
+		target.ID = 999
+		return nil
+	}
+	return m.saveFn(target)
 }
 
 // mockStorageProvider implements StorageProvider with configurable function

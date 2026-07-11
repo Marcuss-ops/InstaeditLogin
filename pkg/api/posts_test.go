@@ -15,57 +15,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// mockPostStore is a configurable PostStore mock used by the new /posts
-// endpoint tests. Function fields default to safe no-ops if unset.
-type mockPostStore struct {
-	createFn          func(p *models.Post, targets []*models.PostTarget) error
-	findByIDFn        func(id int64) (*models.Post, error)
-	updateFn          func(p *models.Post) error
-	listByWorkspaceFn func(workspaceID int64) ([]models.Post, error)
-	saveFn            func(t *models.PostTarget) error
-}
-
-func (m *mockPostStore) Create(p *models.Post, targets []*models.PostTarget) error {
-	if m.createFn != nil {
-		return m.createFn(p, targets)
-	}
-	p.ID = 100
-	for i, tgt := range targets {
-		tgt.ID = int64(1000 + i)
-		tgt.PostID = 100
-	}
-	return nil
-}
-
-func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
-	if m.findByIDFn != nil {
-		return m.findByIDFn(id)
-	}
-	return &models.Post{ID: id, WorkspaceID: 1, Title: "default"}, nil
-}
-
-func (m *mockPostStore) Update(p *models.Post) error {
-	if m.updateFn != nil {
-		return m.updateFn(p)
-	}
-	return nil
-}
-
-func (m *mockPostStore) ListByWorkspace(workspaceID int64) ([]models.Post, error) {
-	if m.listByWorkspaceFn != nil {
-		return m.listByWorkspaceFn(workspaceID)
-	}
-	return nil, nil
-}
-
-func (m *mockPostStore) Save(t *models.PostTarget) error {
-	if m.saveFn != nil {
-		return m.saveFn(t)
-	}
-	t.ID = 999
-	return nil
-}
-
 // newPostsTestRouter builds a Router wired with a noop workspace store and
 // the supplied postStore. Use for /posts endpoint tests.
 func newPostsTestRouter(
@@ -75,12 +24,12 @@ func newPostsTestRouter(
 	return NewRouter(
 		map[string]services.PlatformService{},
 		&mockUserStore{},
-		&mockWorkspaceStore{},
-		postStore,
 		auth.NewManager(testJWTSecret, 24),
 		strictAuth,
 		"",
 		nil,
+		WithWorkspaceStore(&mockWorkspaceStore{}),
+		WithPostStore(postStore),
 	)
 }
 

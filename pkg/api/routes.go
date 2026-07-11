@@ -29,15 +29,17 @@ import (
 // metrics) are migrated to chi.Mux.Method registrations; behaviour is
 // identical (httptest in pkg/api/routes_test.go still passes).
 type Router struct {
-	mux           *chi.Mux
-	platforms     map[string]services.PlatformService
-	userRepo      UserStore
-	workspaceRepo WorkspaceStore
-	postRepo      PostStore
-	auth          *auth.Manager
-	strictAuth    bool
-	frontendURL   string
-	allowedOrigin []string
+	mux             *chi.Mux
+	platforms       map[string]services.PlatformService
+	userRepo        UserStore
+	workspaceRepo   WorkspaceStore
+	postRepo        PostStore
+	auth            *auth.Manager
+	strictAuth      bool
+	frontendURL     string
+	allowedOrigin   []string
+	storageProvider StorageProvider
+	maxUploadBytes  int64
 }
 
 // UserStore abstracts the user/account persistence layer so tests can
@@ -65,6 +67,7 @@ type PostStore interface {
 	Update(post *models.Post) error
 	ListByWorkspace(workspaceID int64) ([]models.Post, error)
 	Save(target *models.PostTarget) error
+	ListByPost(postID int64) ([]models.PostTarget, error)
 }
 
 // noopWorkspaceStore / noopPostStore are zero-dependency defaults used when
@@ -88,6 +91,9 @@ func (noopPostStore) ListByWorkspace(int64) ([]models.Post, error) {
 	return []models.Post{}, nil
 }
 func (noopPostStore) Save(*models.PostTarget) error { return nil }
+func (noopPostStore) ListByPost(int64) ([]models.PostTarget, error) {
+	return []models.PostTarget{}, nil
+}
 
 // NewRouter creates a new Router with platform providers, repos, and an auth
 // manager.
@@ -107,29 +113,30 @@ func (noopPostStore) Save(*models.PostTarget) error { return nil }
 func NewRouter(
 	platforms map[string]services.PlatformService,
 	userRepo UserStore,
-	workspaceRepo WorkspaceStore,
-	postRepo PostStore,
 	authMgr *auth.Manager,
 	strictAuth bool,
 	frontendURL string,
 	allowedOrigins []string,
+	opts ...RouterOption,
 ) *Router {
-	if workspaceRepo == nil {
-		workspaceRepo = noopWorkspaceStore{}
-	}
-	if postRepo == nil {
-		postRepo = noopPostStore{}
-	}
-	return &Router{
+	r := &Router{
 		platforms:     platforms,
 		userRepo:      userRepo,
-		workspaceRepo: workspaceRepo,
-		postRepo:      postRepo,
 		auth:          authMgr,
 		strictAuth:    strictAuth,
 		frontendURL:   frontendURL,
 		allowedOrigin: allowedOrigins,
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	if r.workspaceRepo == nil {
+		r.workspaceRepo = noopWorkspaceStore{}
+	}
+	if r.postRepo == nil {
+		r.postRepo = noopPostStore{}
+	}
+	return r
 }
 
 // Setup registers all HTTP routes on a chi.Mux and returns the handler.
@@ -138,13 +145,13 @@ func NewRouter(
 func (r *Router) Setup() http.Handler {
 	r.mux = chi.NewRouter()
 
-	r.mux.Method("GET", "/api/v1/health", r.handleHealth)
-	r.mux.Method("GET", "/api/v1/auth/{provider}/login", r.handleLogin)
-	r.mux.Method("GET", "/api/v1/auth/{provider}/callback", r.handleCallback)
+	r.mux.Method("GET", "/api/v1/health", http.HandlerFunc(r.handleHealth))
+	r.mux.Method("GET", "/api/v1/auth/{provider}/login", http.HandlerFunc(r.handleLogin))
+	r.mux.Method("GET", "/api/v1/auth/{provider}/callback", http.HandlerFunc(r.handleCallback))
 	r.mux.Method("POST", "/api/v1/posts/publish", r.protected(r.handlePublishPost))
 	r.mux.Method("POST", "/api/v1/posts/publish-all", r.protected(r.handlePublishAll))
 	r.mux.Method("GET", "/api/v1/accounts", r.protected(r.handleListAccounts))
-	r.mux.Method("GET", "/api/v1/metrics", r.handleMetrics)
+	r.mux.Method("GET", "/api/v1/metrics", http.HandlerFunc(r.handleMetrics))
 
 	// New CRUD endpoints under chi sub-routers.
 	r.mux.Route("/api/v1/workspaces", func(sr chi.Router) {
