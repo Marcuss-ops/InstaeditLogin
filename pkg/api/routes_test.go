@@ -1422,3 +1422,100 @@ func TestHandleCreateUploadURL_Happy_200(t *testing.T) {
 		t.Errorf("size_bytes capture: want 1024000, got %d", storage.capturedSize)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// requireUserOrDefault tests
+// ---------------------------------------------------------------------------
+
+// TestRequireUserOrDefault locks in the lenient-default contract shared
+// by handleCreateWorkspace, handleListWorkspaces, handleDeleteWorkspace,
+// handleCreatePost, and handleGetPost. The helper centralizes what used
+// to be 5 copies of the same 10-line block:
+//
+//	userID := resolveUserID(req, 0, r.strictAuth)
+//	if userID == 0 {
+//	    if r.strictAuth { writeError(w, 401, ...); return }
+//	    userID = 1  // synthetic fallback
+//	}
+//
+// Any future "simplification" that changes this behaviour (e.g. returning
+// 400 instead of 401 in strict mode, changing the synthetic userID from 1
+// to 0, or removing the fallback entirely) must update this test in
+// lockstep with HANDOFF-LINUX.md §13.2 and the requireUserOrDefault
+// docstring in pkg/api/handlers.go.
+func TestRequireUserOrDefault(t *testing.T) {
+	const syntheticUserID = int64(1)
+	cases := []struct {
+		name           string
+		strictAuth     bool
+		withJWT        bool // attach a Bearer JWT to the request
+		jwtUserID      int64
+		wantUserID     int64
+		wantOk         bool
+		wantStatusCode int // 0 = no response written by requireUserOrDefault
+	}{
+		{
+			name:       "strict + JWT present returns JWT uid and ok=true",
+			strictAuth: true,
+			withJWT:    true,
+			jwtUserID:  42,
+			wantUserID: 42,
+			wantOk:     true,
+		},
+		{
+			name:           "strict + JWT absent writes 401 and returns ok=false",
+			strictAuth:     true,
+			withJWT:        false,
+			wantUserID:     0,
+			wantOk:         false,
+			wantStatusCode: http.StatusUnauthorized,
+		},
+		{
+			name:       "lenient + JWT present returns JWT uid and ok=true",
+			strictAuth: false,
+			withJWT:    true,
+			jwtUserID:  42,
+			wantUserID: 42,
+			wantOk:     true,
+		},
+		{
+			name:       "lenient + JWT absent falls back to synthetic userID=1",
+			strictAuth: false,
+			withJWT:    false,
+			wantUserID: syntheticUserID,
+			wantOk:     true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// requireUserOrDefault only reads r.strictAuth, so a
+			// partial Router is sufficient.
+			r := &Router{strictAuth: c.strictAuth}
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if c.withJWT {
+				// Use auth.WithUserID to inject the userID into
+				// the request context the same way auth.Middleware
+				// would after a successful JWT verify. This keeps
+				// every test case shaped the same (no special
+				// middleware-routing branch) and isolates the
+				// requireUserOrDefault contract from the
+				// auth.Middleware contract (which has its own
+				// dedicated tests).
+				req = req.WithContext(auth.WithUserID(req.Context(), c.jwtUserID))
+			}
+
+			w := httptest.NewRecorder()
+			gotUID, gotOk := requireUserOrDefault(w, req, r)
+			if gotUID != c.wantUserID {
+				t.Errorf("userID: want %d, got %d", c.wantUserID, gotUID)
+			}
+			if gotOk != c.wantOk {
+				t.Errorf("ok: want %v, got %v", c.wantOk, gotOk)
+			}
+			if c.wantStatusCode != 0 && w.Code != c.wantStatusCode {
+				t.Errorf("status: want %d, got %d", c.wantStatusCode, w.Code)
+			}
+		})
+	}
+}

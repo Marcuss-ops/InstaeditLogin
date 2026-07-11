@@ -46,17 +46,9 @@ func (r *Router) handleCreateWorkspace(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
 		return
 	}
-	userID := resolveUserID(req, 0, r.strictAuth)
-	if userID == 0 {
-		if r.strictAuth {
-			writeError(w, http.StatusUnauthorized, "user identity required")
-			return
-		}
-		// Lenient / legacy-fallback: when STRICT_JWT_AUTH=false and no JWT
-		// is present, default to a synthetic user id (1) so the handler
-		// stays testable. In production STRICT_JWT_AUTH defaults to true,
-		// so this branch is unreachable.
-		userID = 1
+	userID, ok := requireUserOrDefault(w, req, r)
+	if !ok {
+		return
 	}
 	var body CreateWorkspaceRequest
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
@@ -85,17 +77,9 @@ func (r *Router) handleListWorkspaces(w http.ResponseWriter, req *http.Request) 
 		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
 		return
 	}
-	userID := resolveUserID(req, 0, r.strictAuth)
-	if userID == 0 {
-		if r.strictAuth {
-			writeError(w, http.StatusUnauthorized, "user identity required")
-			return
-		}
-		// Lenient / legacy-fallback: when STRICT_JWT_AUTH=false and no JWT
-		// is present, default to a synthetic user id (1) so the handler
-		// stays testable. In production STRICT_JWT_AUTH defaults to true,
-		// so this branch is unreachable.
-		userID = 1
+	userID, ok := requireUserOrDefault(w, req, r)
+	if !ok {
+		return
 	}
 	list, err := r.workspaceStore.ListByOwner(userID)
 	if err != nil {
@@ -163,17 +147,9 @@ func (r *Router) handleDeleteWorkspace(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid workspace id: "+err.Error())
 		return
 	}
-	userID := resolveUserID(req, 0, r.strictAuth)
-	if userID == 0 {
-		if r.strictAuth {
-			writeError(w, http.StatusUnauthorized, "user identity required")
-			return
-		}
-		// Lenient / legacy-fallback: when STRICT_JWT_AUTH=false and no JWT
-		// is present, default to a synthetic user id (1) so the handler
-		// stays testable. In production STRICT_JWT_AUTH defaults to true,
-		// so this branch is unreachable.
-		userID = 1
+	userID, ok := requireUserOrDefault(w, req, r)
+	if !ok {
+		return
 	}
 	// Pre-check existence + ownership so we can return 404 vs 403 distinctly.
 	existing, err := r.workspaceStore.FindByID(id)

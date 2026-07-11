@@ -99,17 +99,9 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
 		return
 	}
-	userID := resolveUserID(req, 0, r.strictAuth)
-	if userID == 0 {
-		if r.strictAuth {
-			writeError(w, http.StatusUnauthorized, "user identity required")
-			return
-		}
-		// Lenient / legacy-fallback: when STRICT_JWT_AUTH=false and no JWT
-		// is present, default to a synthetic user id (1) so the handler
-		// stays testable. In production STRICT_JWT_AUTH defaults to true,
-		// so this branch is unreachable.
-		userID = 1
+	userID, ok := requireUserOrDefault(w, req, r)
+	if !ok {
+		return
 	}
 	var body CreatePostRequest
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
@@ -322,13 +314,9 @@ func (r *Router) handleGetPost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
 		return
 	}
-	userID := resolveUserID(req, 0, r.strictAuth)
-	if userID == 0 {
-		if r.strictAuth {
-			writeError(w, http.StatusUnauthorized, "user identity required")
-			return
-		}
-		userID = 1
+	userID, ok := requireUserOrDefault(w, req, r)
+	if !ok {
+		return
 	}
 	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
 	if err != nil {

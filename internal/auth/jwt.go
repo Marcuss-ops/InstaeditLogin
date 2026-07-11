@@ -170,6 +170,20 @@ func UserIDFromContext(ctx context.Context) (int64, bool) {
 	return v, ok
 }
 
+// WithUserID returns a derived context carrying the given user id. The
+// inverse of UserIDFromContext.
+//
+// SECURITY: test-only. Calling this from a production handler silently
+// bypasses JWT auth — the request reaches the handler with a
+// context-asserted user id but no real authentication. Production
+// handlers MUST obtain the user id from Middleware (via the Authorization
+// header) so the JWT is verified. Only call WithUserID from *_test.go
+// files (e.g. to test resolveUserID / requireUserOrDefault without
+// standing up a full JWT round-trip).
+func WithUserID(ctx context.Context, userID int64) context.Context {
+	return context.WithValue(ctx, userIDKey, userID)
+}
+
 func randomJTI() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {

@@ -638,11 +638,51 @@ func parsePathIDAsInt64(w http.ResponseWriter, req *http.Request, paramName stri
 // requireUserID resolves the caller's user_id from JWT context (or the
 // fallback in non-strict mode) and writes 401 if absent. Returns
 // (userID, true) on success.
+//
+// This is the STRICT-ONLY variant: it never falls back to a synthetic
+// user id, regardless of r.strictAuth. For the lenient-default contract
+// used by the workspace + post handlers, use requireUserOrDefault
+// instead. The two helpers sit next to each other so a maintainer can
+// compare them in one place.
 func requireUserID(w http.ResponseWriter, req *http.Request, r *Router) (int64, bool) {
 	userID := resolveUserID(req, 0, r.strictAuth)
 	if userID == 0 {
 		writeError(w, http.StatusUnauthorized, "missing user identity")
 		return 0, false
+	}
+	return userID, true
+}
+
+// requireUserOrDefault resolves the caller's user_id from JWT context.
+// In strict mode (STRICT_JWT_AUTH=true) it writes 401 and returns
+// ok=false when no JWT is present. In lenient mode (STRICT_JWT_AUTH=false)
+// it falls back to a synthetic user id (1) so the handler stays
+// testable without a real JWT. Production should run with strict=true;
+// lenient is the legacy/rollback window the SPA exploit (see
+// HANDOFF-LINUX.md §13.2).
+//
+// Used by the 5 workspace/post handlers that own the lenient-default
+// contract: handleCreateWorkspace, handleListWorkspaces,
+// handleDeleteWorkspace, handleCreatePost, handleGetPost. The publish +
+// listAccounts handlers use resolveUserID directly because they have a
+// different contract (400 + body/query-supplied user_id); handleGetWorkspace
+// uses it for a cross-owner predicate (no fallback needed). Neither of
+// those callers belongs in this helper.
+//
+// Returns (userID, true) on success; the caller should bail if ok is
+// false (the 401 response is already written).
+func requireUserOrDefault(w http.ResponseWriter, req *http.Request, r *Router) (int64, bool) {
+	userID := resolveUserID(req, 0, r.strictAuth)
+	if userID == 0 {
+		if r.strictAuth {
+			writeError(w, http.StatusUnauthorized, "user identity required")
+			return 0, false
+		}
+		// Lenient / legacy-fallback: when STRICT_JWT_AUTH=false and no
+		// JWT is present, default to a synthetic user id (1) so the
+		// handler stays testable. In production STRICT_JWT_AUTH
+		// defaults to true, so this branch is unreachable.
+		return 1, true
 	}
 	return userID, true
 }
