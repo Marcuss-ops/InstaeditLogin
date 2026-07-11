@@ -595,6 +595,116 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
 // concurrent writers against a real database. Use testcontainers-go + a
 // real Postgres to exercise that, since sqlmock serializes queries globally
 // on its internal gomock controller.
+// TestPostClaimScheduledTarget_Success covers the verdict §10 atomic-claim
+// happy path: a single row in 'scheduled' is transitioned to 'publishing'
+// and the function returns (true, nil). The UPDATE statement must include
+// the AND status='scheduled' guard (the logical lock that prevents two
+// workers from both claiming the same row).
+func TestPostClaimScheduledTarget_Success(t *testing.T) {
+	db, mock := newMockPostDBExact(t)
+	repo := repository.NewPostRepository(db)
+
+	mock.ExpectExec(
+		`UPDATE post_targets
+		 SET status = 'publishing'
+		 WHERE id = $1 AND status = 'scheduled'`,
+	).WithArgs(int64(200)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	claimed, err := repo.ClaimScheduledTarget(200)
+	if err != nil {
+		t.Fatalf("ClaimScheduledTarget: %v", err)
+	}
+	if !claimed {
+		t.Errorf("claimed: want true, got false (RowsAffected=1 should mean the claim won)")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// TestPostClaimScheduledTarget_AlreadyClaimed covers the verdict §10
+// loser path: when another worker already transitioned the row to
+// 'publishing' (or any non-'scheduled' status), the UPDATE matches
+// zero rows and the function returns (false, nil). The 'losing'
+// worker is expected to skip publishing (no error, no Publish call).
+func TestPostClaimScheduledTarget_AlreadyClaimed(t *testing.T) {
+	db, mock := newMockPostDBExact(t)
+	repo := repository.NewPostRepository(db)
+
+	mock.ExpectExec(
+		`UPDATE post_targets
+		 SET status = 'publishing'
+		 WHERE id = $1 AND status = 'scheduled'`,
+	).WithArgs(int64(200)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	claimed, err := repo.ClaimScheduledTarget(200)
+	if err != nil {
+		t.Fatalf("ClaimScheduledTarget: %v (must NOT error when another worker already claimed; the loser path is a normal skip)", err)
+	}
+	if claimed {
+		t.Errorf("claimed: want false, got true (RowsAffected=0 should mean the claim was lost)")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// TestPostClaimScheduledTarget_DBError covers the path where the DB
+// itself is unreachable / errors out. The function must surface the
+// error to the worker (so the tick can log and continue to the next
+// target) rather than silently returning false (which would mask
+// infrastructure issues as a phantom claim-loss).
+func TestPostClaimScheduledTarget_DBError(t *testing.T) {
+	db, mock := newMockPostDBExact(t)
+	repo := repository.NewPostRepository(db)
+
+	mock.ExpectExec(
+		`UPDATE post_targets
+		 SET status = 'publishing'
+		 WHERE id = $1 AND status = 'scheduled'`,
+	).WithArgs(int64(200)).
+		WillReturnError(errors.New("connection lost"))
+
+	claimed, err := repo.ClaimScheduledTarget(200)
+	if err == nil {
+		t.Fatal("expected DB error to propagate, got nil")
+	}
+	if claimed {
+		t.Errorf("claimed: want false on DB error, got true")
+	}
+	if !strings.Contains(err.Error(), "failed to claim post_target") {
+		t.Errorf("error should be wrapped: %v", err)
+	}
+}
+
+// TestPostClaimScheduledTarget_RowsAffectedReadError covers the rare
+// race where the UPDATE itself succeeds but the follow-up
+// RowsAffected() call fails (e.g. connection interrupted between
+// Exec and RowsAffected). The function must surface the error
+// rather than returning a misleading (false, nil) that would let
+// the worker proceed as if another worker had claimed.
+func TestPostClaimScheduledTarget_RowsAffectedReadError(t *testing.T) {
+	db, mock := newMockPostDBExact(t)
+	repo := repository.NewPostRepository(db)
+
+	mock.ExpectExec(
+		`UPDATE post_targets
+		 SET status = 'publishing'
+		 WHERE id = $1 AND status = 'scheduled'`,
+	).WithArgs(int64(200)).
+		WillReturnResult(sqlmock.NewErrorResult(errors.New("rows affected read failed")))
+
+	_, err := repo.ClaimScheduledTarget(200)
+	if err == nil {
+		t.Fatal("expected RowsAffected error to propagate, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to read rows affected") {
+		t.Errorf("error should preserve 'read rows affected' context: %v", err)
+	}
+}
+
 func TestPostCreate_ConcurrentGoroutines_NoSharedState(t *testing.T) {
 	const numGoroutines = 5
 	var wg sync.WaitGroup

@@ -251,6 +251,37 @@ func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
 	return nil
 }
 
+// ClaimScheduledTarget atomically transitions a post_target from
+// status='scheduled' to status='publishing', returning true on claim
+// success and false if the target was already claimed by another
+// worker (or the id is invalid).
+//
+// Verdict §10: this is the atomic-claim primitive that unblocks
+// running 2+ worker replicas without double-publishes. The single
+// UPDATE statement uses WHERE status='scheduled' as a logical
+// lock — the database's row-level locking guarantees that exactly
+// one worker's UPDATE returns RowsAffected==1 and the rest return
+// RowsAffected==0 (the row is no longer in 'scheduled' state from
+// the loser's perspective). The 'publishing' row is then invisible
+// to the next ListPending sweep (which filters status='scheduled'),
+// so the losing worker never re-picks it.
+func (r *PostRepository) ClaimScheduledTarget(id int64) (bool, error) {
+	result, err := r.db.Exec(
+		`UPDATE post_targets
+		 SET status = 'publishing'
+		 WHERE id = $1 AND status = 'scheduled'`,
+		id,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to claim post_target: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	return n == 1, nil
+}
+
 // ListByPost returns the full fan-out set for a given post, ordered by id
 // ASC (insertion order). Returns (nil, nil) if the post has no targets
 // (the empty slice path through Scan-loop).

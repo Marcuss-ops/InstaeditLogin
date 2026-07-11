@@ -25,9 +25,14 @@ type PublisherPostStore interface {
 	ListPending(before time.Time) ([]models.PostTarget, error)
 	// FindByID loads the parent post for the publish payload (caption/title/media_url).
 	FindByID(id int64) (*models.Post, error)
-	// UpdateStatus persists the status transitions (scheduled→publishing→
-	// published|failed). Internal RowsAffected check ensures we never update
-	// a row that already moved on (defensive against double-publish).
+	// ClaimScheduledTarget atomically transitions a target from
+	// status='scheduled' to 'publishing'. Returns true on claim, false
+	// if already claimed by another worker (verdict §10 — this is
+	// the atomic primitive that unblocks 2+ worker replicas).
+	ClaimScheduledTarget(id int64) (bool, error)
+	// UpdateStatus persists the status transitions (publishing→
+	// published|failed). The claim guarantees only the winning worker
+	// reaches this step, so no atomic check is needed here.
 	UpdateStatus(target *models.PostTarget) error
 }
 
@@ -152,57 +157,59 @@ func (w *PublishWorker) tick(ctx context.Context) (processed, succeeded, failed 
 
 // publishTarget drives the per-target 3-step status transition:
 //
-//  1. Load parent Post (caption/title/media_url for the publish payload)
+//  1. ATOMIC CLAIM: scheduled → publishing (verdict §10). The single
+//     UPDATE in ClaimScheduledTarget uses WHERE status='scheduled' as
+//     a logical lock so only ONE worker wins. The loser sees a
+//     `claimed=false` return and skips — no double-publish.
+//  2. Load parent Post (caption/title/media_url for the publish payload)
 //     AND PlatformAccount (platform name + platform_user_id for dispatch).
-//  2. Transition status → `publishing` (logical lock against double-publish).
-//     If the platform is unknown we go straight to `failed`.
+//     Safe to do AFTER the claim: if either is missing, we transition
+//     to 'failed' (we own the row), so the next tick won't re-pick it.
 //  3. Refresh OAuth token (try Bearer, fall back to LongLived for Meta-style
 //     providers). On failure: status → `failed` with error_message.
 //  4. Publish via the per-platform PlatformService.Publish.
 //     On success: status → `published` with platform_post_id + published_at.
 //     On failure: status → `failed` with error_message.
 //
-// Any error path before status=publishing is terminal-failed and returns early
-// so the next tick doesn't re-pick the same target.
+// The 'failed' transitions only happen AFTER a successful claim, so two
+// workers running in parallel won't redundantly write 'failed' to the
+// same row (the loser would have already returned with claimed=false).
 func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTarget) error {
-	// 1. Load parent Post
+	// 1. ATOMIC CLAIM: scheduled → publishing. If another worker
+	// already claimed this target, claim returns false and we skip.
+	claimed, err := w.postRepo.ClaimScheduledTarget(target.ID)
+	if err != nil {
+		return fmt.Errorf("claim target %d: %w", target.ID, err)
+	}
+	if !claimed {
+		w.logger.Info("target already claimed by another worker, skipping",
+			"target_id", target.ID, "post_id", target.PostID)
+		return nil // not an error — just skip
+	}
+
+	// 2. Load parent Post
 	post, err := w.postRepo.FindByID(target.PostID)
 	if err != nil {
-		return fmt.Errorf("load post %d: %w", target.PostID, err)
+		return w.markFailed(target, fmt.Sprintf("load post %d: %v", target.PostID, err))
 	}
 	if post == nil {
 		// Vanished record — cannot publish. Mark failed so we don't loop forever.
-		target.Status = models.PostStatusFailed
-		target.ErrorMessage = fmt.Sprintf("post %d not found", target.PostID)
-		_ = w.postRepo.UpdateStatus(target)
-		return fmt.Errorf("post %d not found", target.PostID)
+		return w.markFailed(target, fmt.Sprintf("post %d not found", target.PostID))
 	}
 
-	// 2. Load PlatformAccount
+	// 3. Load PlatformAccount
 	account, err := w.userRepo.FindPlatformAccountByID(target.PlatformAccountID)
 	if err != nil {
-		return fmt.Errorf("load account %d: %w", target.PlatformAccountID, err)
+		return w.markFailed(target, fmt.Sprintf("load account %d: %v", target.PlatformAccountID, err))
 	}
 	if account == nil {
-		target.Status = models.PostStatusFailed
-		target.ErrorMessage = fmt.Sprintf("platform_account %d not found", target.PlatformAccountID)
-		_ = w.postRepo.UpdateStatus(target)
-		return fmt.Errorf("platform_account %d not found", target.PlatformAccountID)
+		return w.markFailed(target, fmt.Sprintf("platform_account %d not found", target.PlatformAccountID))
 	}
 
-	// 3. Resolve platform service
+	// 4. Resolve platform service
 	p, ok := w.platforms[account.Platform]
 	if !ok {
-		target.Status = models.PostStatusFailed
-		target.ErrorMessage = "no platform service registered for: " + account.Platform
-		_ = w.postRepo.UpdateStatus(target)
-		return errors.New("unsupported platform: " + account.Platform)
-	}
-
-	// 4. Transition: scheduled → publishing (logical lock)
-	target.Status = models.PostStatusPublishing
-	if err := w.postRepo.UpdateStatus(target); err != nil {
-		return fmt.Errorf("transition to publishing: %w", err)
+		return w.markFailed(target, "no platform service registered for: "+account.Platform)
 	}
 
 	// 5. Refresh token. Try Bearer first (refresh-capable), then LongLived
@@ -211,10 +218,7 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	if err != nil {
 		oauthToken, err = p.EnsureFreshToken(ctx, account.ID, models.TokenTypeLongLived, p.RefreshOAuthToken)
 		if err != nil {
-			target.Status = models.PostStatusFailed
-			target.ErrorMessage = "token refresh failed: " + err.Error()
-			_ = w.postRepo.UpdateStatus(target)
-			return fmt.Errorf("token refresh: %w", err)
+			return w.markFailed(target, "token refresh failed: "+err.Error())
 		}
 	}
 
@@ -230,10 +234,7 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	}
 	result, err := p.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
 	if err != nil {
-		target.Status = models.PostStatusFailed
-		target.ErrorMessage = err.Error()
-		_ = w.postRepo.UpdateStatus(target)
-		return fmt.Errorf("publish: %w", err)
+		return w.markFailed(target, err.Error())
 	}
 
 	// 7. Transition: publishing → published. PostTarget.PublishedAt is
@@ -247,4 +248,20 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		return fmt.Errorf("transition to published: %w", err)
 	}
 	return nil
+}
+
+// markFailed transitions the target to status='failed' with the given
+// reason and returns a wrapped error. The caller is expected to have
+// already successfully claimed the target (via ClaimScheduledTarget)
+// — the 'failed' write is only legal AFTER the claim, otherwise two
+// workers could both redundantly update the same row.
+//
+// The UpdateStatus error is intentionally ignored (logged at the
+// caller's warning level) so the returned error reflects the original
+// failure reason rather than the bookkeeping error.
+func (w *PublishWorker) markFailed(target *models.PostTarget, reason string) error {
+	target.Status = models.PostStatusFailed
+	target.ErrorMessage = reason
+	_ = w.postRepo.UpdateStatus(target)
+	return errors.New(reason)
 }
