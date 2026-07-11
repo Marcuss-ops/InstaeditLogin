@@ -1519,3 +1519,57 @@ func TestRequireUserOrDefault(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// CORS middleware tests
+// ---------------------------------------------------------------------------
+
+// newCORSTestRouter is a 1-line helper for tests that need to control
+// allowedOrigins (which newTestRouter hardcodes to nil). The CORS
+// middleware only echoes the Allow-Origin / Allow-Methods headers when
+// the request Origin matches an entry in allowedOrigins, so testing
+// those headers requires a non-nil allowlist.
+func newCORSTestRouter(allowedOrigins []string) *Router {
+	return NewRouter(
+		map[string]services.PlatformService{},
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		false,
+		"",
+		allowedOrigins,
+	)
+}
+
+// TestCorsMiddleware_AllowMethodsIncludesPutPatchDelete locks in the
+// preflight header for the verdict §2 fix: browser-initiated DELETE
+// /api/v1/workspaces/{id} requires Access-Control-Allow-Methods to
+// include DELETE (and PUT/PATCH for future endpoints). The previous
+// header was "GET, POST, OPTIONS" which caused the preflight to fail
+// for any non-GET/POST request, silently breaking workspace deletion
+// from the SPA. Any future "simplification" that drops one of these
+// methods from the allow list must update this test in lockstep with
+// HANDOFF-LINUX.md §2.
+func TestCorsMiddleware_AllowMethodsIncludesPutPatchDelete(t *testing.T) {
+	// Build a minimal router with a non-empty allowedOrigins so the
+	// CORS middleware actually echoes the headers (per the corsMiddleware
+	// contract in handlers.go: unknown origins get NO Allow-Origin
+	// header, which would make the preflight useless to test).
+	r := newCORSTestRouter([]string{"https://instaedit.org"})
+
+	// Browser preflight: OPTIONS with an allowed Origin header.
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces/123", nil)
+	req.Header.Set("Origin", "https://instaedit.org")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("preflight status: want 204, got %d", w.Code)
+	}
+
+	methods := w.Header().Get("Access-Control-Allow-Methods")
+	for _, want := range []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
+		if !strings.Contains(methods, want) {
+			t.Errorf("Access-Control-Allow-Methods %q missing %q (browser preflight for %s will fail in production)", methods, want, want)
+		}
+	}
+}
