@@ -1,42 +1,32 @@
-# Environment variables (contains secrets!)
-.env
-
-# Go build artifacts
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
-go.work
-
-# Build output directory
-/build/
-/dist/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
 *~
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Dependency directories
-vendor/
-
+/build/
 # Build output
-build/
-dist/
-
-# Logs
-*.log
-
+# Build output directory
+# Dependency directories
+/dist/
+*.dll
 # Docker
 docker-compose.override.yml
+.DS_Store
+*.dylib
+.env
+# Environment variables (contains secrets!)
+*.exe
+*.exe~
+# Go build artifacts
+go.work
+# IDE
+.idea/
+*.log
+# Logs
+# OS files
+*.out
+*.so
+*.swo
+*.swp
+*.test
+Thumbs.db
+vendor/
 .vercel
-.env*
+.vscode/
+
