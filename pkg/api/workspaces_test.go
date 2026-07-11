@@ -14,45 +14,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// mockWorkspaceStore is a configurable WorkspaceStore mock used by the new
-// /workspaces endpoint tests. Function fields default to safe no-ops if
-// unset, so each test only overrides what it exercises.
-type mockWorkspaceStore struct {
-	createFn      func(w *models.Workspace) error
-	findByIDFn    func(id int64) (*models.Workspace, error)
-	listByOwnerFn func(ownerID int64) ([]models.Workspace, error)
-	deleteFn      func(id int64) error
-}
-
-func (m *mockWorkspaceStore) Create(w *models.Workspace) error {
-	if m.createFn != nil {
-		return m.createFn(w)
-	}
-	w.ID = 42
-	return nil
-}
-
-func (m *mockWorkspaceStore) FindByID(id int64) (*models.Workspace, error) {
-	if m.findByIDFn != nil {
-		return m.findByIDFn(id)
-	}
-	return &models.Workspace{ID: id, Name: "default", OwnerID: 1}, nil
-}
-
-func (m *mockWorkspaceStore) ListByOwner(ownerID int64) ([]models.Workspace, error) {
-	if m.listByOwnerFn != nil {
-		return m.listByOwnerFn(ownerID)
-	}
-	return nil, nil
-}
-
-func (m *mockWorkspaceStore) Delete(id int64) error {
-	if m.deleteFn != nil {
-		return m.deleteFn(id)
-	}
-	return nil
-}
-
 // newWorkspaceTestRouter builds a Router wired with the supplied
 // workspaceStore + a noop post/user store. Use for /workspaces endpoint
 // tests only.
@@ -63,12 +24,12 @@ func newWorkspaceTestRouter(
 	return NewRouter(
 		map[string]services.PlatformService{},
 		&mockUserStore{},
-		workspaceStore,
-		&mockPostStore{},
 		auth.NewManager(testJWTSecret, 24),
 		strictAuth,
 		"",
 		nil,
+		WithWorkspaceStore(workspaceStore),
+		WithPostStore(&mockPostStore{}),
 	)
 }
 

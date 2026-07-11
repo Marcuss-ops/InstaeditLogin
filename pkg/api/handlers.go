@@ -7,29 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
-
-// WorkspaceStore abstracts the workspace persistence layer so the API
-// handlers can be wired against the production WorkspaceRepository or
-// against a mock in tests. Mirrors `repository.WorkspaceRepository`
-// (excludes Db Tx methods that don't belong at the HTTP boundary).
-type WorkspaceStore interface {
-	Create(w *models.Workspace) error
-	FindByID(id int64) (*models.Workspace, error)
-	ListByOwner(ownerID int64) ([]models.Workspace, error)
-}
-
-// PostStore abstracts the post + post_targets persistence layer. Mirrors
-// the `repository.PostRepository` methods used by handlers (excludes
-// ListScheduled/ListPending which belong to the publishing worker).
-type PostStore interface {
-	Create(post *models.Post, targets []*models.PostTarget) error
-	FindByID(id int64) (*models.Post, error)
-	ListByWorkspace(workspaceID int64) ([]models.Post, error)
-	ListByPost(postID int64) ([]models.PostTarget, error)
-}
 
 // StorageProvider abstracts presigned-URL minting so the API layer stays
 // storage-agnostic. Production wires services.NewSupabaseProvider or
@@ -55,7 +34,7 @@ type RouterOption func(*Router)
 // rollouts where the workspace domain isn't wired yet.
 func WithWorkspaceStore(repo WorkspaceStore) RouterOption {
 	return func(r *Router) {
-		r.workspaceStore = repo
+		r.workspaceRepo = repo
 	}
 }
 
@@ -63,7 +42,7 @@ func WithWorkspaceStore(repo WorkspaceStore) RouterOption {
 // Without it, the post handlers return 501 Not Implemented.
 func WithPostStore(repo PostStore) RouterOption {
 	return func(r *Router) {
-		r.postStore = repo
+		r.postRepo = repo
 	}
 }
 
