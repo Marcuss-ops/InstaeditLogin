@@ -10,3 +10,6 @@ Procfile
 .dockerignore
 instaedit-server
 *_test.go
+vendor/
+tmp/
+coverage/

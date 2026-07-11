@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.26-alpine AS builder
+FROM golang:1.23-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -16,7 +16,7 @@ RUN apk --no-cache add ca-certificates && \
 
 # Copy the compiled binary and set ownership
 COPY --from=builder /app/instaedit-server .
-RUN chown appuser:appuser ./instaedit-server
+RUN chown -R appuser:appuser /app
 
 # Run as non-root user
 USER appuser
