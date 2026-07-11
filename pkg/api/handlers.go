@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -233,9 +235,19 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	state := req.URL.Query().Get("state")
-	if state == "" {
-		state = provider + "_default"
+	// Verdict §2 CSRF protection: generate a cryptographically
+	// random state token, store it in a per-provider HttpOnly+
+	// Secure+SameSite=Lax cookie, and pass it to the OAuth
+	// provider. The client's ?state= query param is IGNORED —
+	// the server is the only party that can authoritatively
+	// bind the state to this browser session. The cookie is
+	// verified (constant-time) and deleted (single-use) on
+	// callback by verifyOAuthState.
+	state, err := generateOAuthState(w, provider)
+	if err != nil {
+		slog.Error("failed to generate oauth state", "provider", provider, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to start oauth flow")
+		return
 	}
 
 	http.Redirect(w, req, p.GetLoginURL(state), http.StatusFound)
@@ -260,7 +272,23 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	}
 
 	state := req.URL.Query().Get("state")
-	slog.Info("OAuth callback received", "provider", provider, "state", state)
+	if state == "" {
+		writeError(w, http.StatusBadRequest, "missing state parameter")
+		return
+	}
+
+	// Verdict §2 CSRF protection: verify the state matches the
+	// per-provider cookie set by handleLogin. Mismatch (or missing
+	// cookie) aborts the flow before any code exchange. The state
+	// itself is NOT logged (it's now a random token that an
+	// attacker could replay from logs).
+	if err := verifyOAuthState(w, req, provider, state); err != nil {
+		slog.Warn("oauth state verification failed", "provider", provider, "error", err)
+		writeError(w, http.StatusBadRequest, "invalid state: "+err.Error())
+		return
+	}
+
+	slog.Info("OAuth callback received", "provider", provider)
 
 	profile, tokenData, err := p.HandleCallback(req.Context(), state, code)
 	if err != nil {
@@ -685,6 +713,112 @@ func requireUserOrDefault(w http.ResponseWriter, req *http.Request, r *Router) (
 		return 1, true
 	}
 	return userID, true
+}
+
+// OAuth state CSRF protection (verdict §2). The state token is the
+// single binding between an OAuth login initiated by handleLogin and
+// the callback handled by handleCallback. Without a server-generated
+// random state, an attacker can start an OAuth flow, complete it
+// against their own account, and trick the victim's browser into
+// completing a flow the attacker started (login CSRF).
+//
+// The flow:
+//  1. handleLogin calls generateOAuthState, which emits a 32-byte
+//     random token (base64 URL-safe → 43 chars) and stores it in a
+//     per-provider HttpOnly+Secure+SameSite=Lax cookie.
+//  2. The browser follows the provider's redirect, authorizes the
+//     app, and comes back to /api/v1/auth/{provider}/callback with
+//     the same state in the query string.
+//  3. handleCallback calls verifyOAuthState, which reads the cookie,
+//     constant-time compares it to the state query param, and
+//     deletes the cookie (single-use). On mismatch (or missing
+//     cookie) the flow aborts with 400 BEFORE any code exchange.
+//
+// Per-provider cookie names prevent a race where a user opens two
+// tabs and starts two OAuth flows in parallel — each provider has
+// its own cookie so the flows don't clobber each other.
+//
+// Applied to ALL 5 platforms (meta, tiktok, youtube, twitter,
+// linkedin) via this single router-level helper — the platform
+// services don't need to know about the state, they just receive it
+// in HandleCallback.
+const (
+	oauthStateCookiePrefix = "oauth_state_"
+	oauthStateMaxAge       = 10 * time.Minute
+)
+
+// OAuthStateCookieName returns the per-provider cookie name used to
+// store the OAuth state token. Exported so tests can set the cookie
+// when simulating the post-login callback flow.
+func OAuthStateCookieName(provider string) string {
+	return oauthStateCookiePrefix + provider
+}
+
+// generateOAuthState emits a 32-byte cryptographically random state
+// token, sets it in a per-provider HttpOnly+Secure+SameSite=Lax
+// cookie, and returns the token. The caller passes the returned
+// token to the OAuth provider as the state query param.
+//
+// Cookie security attributes:
+//   - HttpOnly: blocks JS access (defeats XSS exfiltration).
+//   - Secure: only sent over HTTPS. In tests httptest.NewRequest
+//     doesn't set TLS, but the cookie is still emitted; the test
+//     just doesn't enforce the Secure flag.
+//   - SameSite=Lax: blocks cross-site POST (defeats CSRF on the
+//     login endpoint while still allowing the top-level redirect).
+//   - Path=/: scoped to the API root so the callback can read it.
+//   - MaxAge=10m: OAuth flows should complete quickly; longer = wider
+//     attack window for a leaked state token.
+func generateOAuthState(w http.ResponseWriter, provider string) (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("oauth state rand failed: %w", err)
+	}
+	state := base64.RawURLEncoding.EncodeToString(b)
+	http.SetCookie(w, &http.Cookie{
+		Name:     OAuthStateCookieName(provider),
+		Value:    state,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(oauthStateMaxAge.Seconds()),
+	})
+	return state, nil
+}
+
+// verifyOAuthState reads the per-provider state cookie and constant-
+// time compares it to the state query param from the callback URL.
+// On match the cookie is deleted (single-use, via both MaxAge=-1 and
+// Expires=epoch for older-browser compatibility). On mismatch
+// (missing cookie, mismatched value) it returns a non-nil error and
+// the caller MUST abort the OAuth flow before any code exchange.
+//
+// The error messages do NOT leak the expected state value (only the
+// provider name + a generic reason), so a probe of the callback
+// endpoint cannot extract the cookie value via the error response.
+func verifyOAuthState(w http.ResponseWriter, req *http.Request, provider, stateParam string) error {
+	c, err := req.Cookie(OAuthStateCookieName(provider))
+	if err != nil {
+		return fmt.Errorf("oauth state cookie missing for provider %q (may have expired or been already-used)", provider)
+	}
+	if subtle.ConstantTimeCompare([]byte(c.Value), []byte(stateParam)) != 1 {
+		return fmt.Errorf("oauth state mismatch for provider %q (CSRF protection)", provider)
+	}
+	// Single-use: delete the cookie. MaxAge=-1 is the idiomatic Go
+	// way to instruct the browser to delete; Expires=epoch adds
+	// compatibility with older browsers that only honor Expires.
+	http.SetCookie(w, &http.Cookie{
+		Name:     OAuthStateCookieName(provider),
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(1, 0),
+	})
+	return nil
 }
 
 // logAndError logs err with structured context and writes a 500 JSON

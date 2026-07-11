@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,11 +29,18 @@ type mockPlatformService struct {
 	saveTokenFn    func(platformAccountID int64, tokenData *models.TokenData) error
 	ensureFreshFn  func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error)
 	refreshFn      func(ctx context.Context, refreshToken string) (*models.TokenData, error)
+	// handleCallbackCalls counts HandleCallback invocations. Used by
+	// the verdict-§2 reject tests to prove the platform's code-
+	// exchange code does NOT run when the state verification fails
+	// (otherwise an attacker could complete a code exchange with a
+	// forged state).
+	handleCallbackCalls int
 }
 
 func (m *mockPlatformService) GetPlatform() string                            { return m.platform }
 func (m *mockPlatformService) GetLoginURL(state string) string                { return m.loginURL + "?state=" + state }
 func (m *mockPlatformService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
+	m.handleCallbackCalls++
 	if m.handleCallback == nil {
 		return nil, nil, fmt.Errorf("HandleCallback not implemented")
 	}
@@ -281,6 +289,22 @@ var successFindOrCreate = func(profile *models.PlatformProfile, platform string)
 		nil
 }
 
+// setOAuthStateCookieForTest sets the per-provider oauth state cookie
+// on a request, simulating what handleLogin does. The callback's
+// verifyOAuthState helper reads this cookie to constant-time-compare
+// it against the state query param. Used by the handleCallback tests
+// to set up a valid post-login state.
+func setOAuthStateCookieForTest(req *http.Request, provider, state string) {
+	req.AddCookie(&http.Cookie{
+		Name:     OAuthStateCookieName(provider),
+		Value:    state,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 // ---------------------------------------------------------------------------
 // handleLogin tests
 // ---------------------------------------------------------------------------
@@ -301,9 +325,54 @@ func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
 	if !strings.HasPrefix(loc, "https://auth.example.com/oauth?state=") {
 		t.Fatalf("unexpected redirect: %s", loc)
 	}
-	// Default state should be provider + "_default".
-	if !strings.Contains(loc, "state=meta_default") {
-		t.Fatalf("expected default state meta_default in redirect: %s", loc)
+	// Verdict §2: state must be a server-generated random base64
+	// URL-safe token (32 random bytes → 43 chars), NOT the old
+	// "meta_default" placeholder. Also verify the state in the
+	// redirect matches the oauth_state_meta cookie (the binding
+	// that defeats login CSRF).
+	_, after, ok := strings.Cut(loc, "state=")
+	if !ok {
+		t.Fatalf("state= not found in redirect: %s", loc)
+	}
+	stateParam, _, _ := strings.Cut(after, "&")
+	if stateParam == "meta_default" {
+		t.Fatalf("state should be a random token, not the old meta_default placeholder: %s", loc)
+	}
+	if len(stateParam) != 43 {
+		t.Fatalf("state length: want 43 chars (32 bytes base64 URL-safe), got %d (%q)", len(stateParam), stateParam)
+	}
+	if _, err := base64.RawURLEncoding.DecodeString(stateParam); err != nil {
+		t.Fatalf("state must be base64 URL-safe: %v (state=%q)", err, stateParam)
+	}
+	// Cookie must be set with the same state value.
+	var cookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateCookieName("meta") {
+			cookie = c
+			break
+		}
+	}
+	if cookie == nil {
+		t.Fatal("oauth_state_meta cookie not set (verdict §2 CSRF protection requires the server to bind the state to a browser session)")
+	}
+	if cookie.Value != stateParam {
+		t.Errorf("cookie state != redirect state: cookie=%q, redirect=%q", cookie.Value, stateParam)
+	}
+	if !cookie.HttpOnly {
+		t.Error("oauth state cookie must be HttpOnly (XSS exfiltration defense)")
+	}
+	if !cookie.Secure {
+		t.Error("oauth state cookie must be Secure (HTTPS-only)")
+	}
+	if cookie.SameSite != http.SameSiteLaxMode {
+		t.Errorf("oauth state cookie SameSite: want Lax, got %v", cookie.SameSite)
+	}
+	// MaxAge: must be 600s (10 minutes per the oauthStateMaxAge
+	// constant). A future "simplification" that drops MaxAge would
+	// make the cookie a session cookie (effectively forever) and
+	// silently widen the CSRF attack window.
+	if cookie.MaxAge != int(oauthStateMaxAge.Seconds()) {
+		t.Errorf("oauth state cookie MaxAge: want %d, got %d (must match oauthStateMaxAge)", int(oauthStateMaxAge.Seconds()), cookie.MaxAge)
 	}
 }
 
@@ -321,7 +390,14 @@ func TestHandleLogin_UnsupportedProvider(t *testing.T) {
 	}
 }
 
-func TestHandleLogin_UsesCustomState(t *testing.T) {
+// TestHandleLogin_IgnoresClientState locks in the verdict §2 contract:
+// the server is the only party that can authoritatively bind the OAuth
+// state to a browser session, so the client's ?state= query param is
+// IGNORED. The redirect uses a server-generated random token, and the
+// oauth_state_{provider} cookie stores the same token. This defeats
+// login CSRF (an attacker can no longer pre-compute a state and trick
+// the victim's browser into completing their flow).
+func TestHandleLogin_IgnoresClientState(t *testing.T) {
 	svc := &mockPlatformService{platform: "twitter", loginURL: "https://auth.twitter.com/auth"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, false, "")
@@ -331,8 +407,17 @@ func TestHandleLogin_UsesCustomState(t *testing.T) {
 	r.Setup().ServeHTTP(w, req)
 
 	loc := w.Header().Get("Location")
-	if !strings.Contains(loc, "state=my-custom-state") {
-		t.Fatalf("expected custom state in redirect, got: %s", loc)
+	if strings.Contains(loc, "state=my-custom-state") {
+		t.Fatalf("server should IGNORE the client's ?state= (verdict §2); redirect leaked the client value: %s", loc)
+	}
+	// And the redirect should still carry a server-generated random state.
+	_, after, ok := strings.Cut(loc, "state=")
+	if !ok {
+		t.Fatalf("state= not found in redirect: %s", loc)
+	}
+	stateParam, _, _ := strings.Cut(after, "&")
+	if len(stateParam) != 43 {
+		t.Fatalf("server-generated state length: want 43, got %d (%q)", len(stateParam), stateParam)
 	}
 }
 
@@ -378,7 +463,8 @@ func TestHandleCallback_HandleCallbackError(t *testing.T) {
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, false, "")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/twitter/callback?code=bad&state=s", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/twitter/callback?code=bad&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "twitter", "test-state")
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -399,7 +485,8 @@ func TestHandleCallback_FindOrCreateError(t *testing.T) {
 	}
 	r := newTestRouter(svc, store, false, "")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=s", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "meta", "test-state")
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -421,7 +508,8 @@ func TestHandleCallback_SaveTokenError(t *testing.T) {
 	}
 	r := newTestRouter(svc, store, false, "")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=s", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "meta", "test-state")
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -440,7 +528,8 @@ func TestHandleCallback_Success_JSONResponse(t *testing.T) {
 	}
 	r := newTestRouter(svc, store, false, "") // empty frontendURL → JSON
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=s", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "meta", "test-state")
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -473,7 +562,8 @@ func TestHandleCallback_Success_FrontendRedirect(t *testing.T) {
 	}
 	r := newTestRouter(svc, store, false, "https://app.example.com")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=s", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "meta", "test-state")
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -1571,5 +1661,183 @@ func TestCorsMiddleware_AllowMethodsIncludesPutPatchDelete(t *testing.T) {
 		if !strings.Contains(methods, want) {
 			t.Errorf("Access-Control-Allow-Methods %q missing %q (browser preflight for %s will fail in production)", methods, want, want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OAuth state CSRF protection (verdict §2) tests
+// ---------------------------------------------------------------------------
+
+// TestHandleLogin_StateIsRandomAcrossRequests locks in the
+// cryptographic-randomness requirement: two consecutive logins
+// produce different state tokens. A static or predictable state
+// (like the old "meta_default") would let an attacker pre-compute
+// a valid state and trick a victim's browser into completing
+// their flow.
+func TestHandleLogin_StateIsRandomAcrossRequests(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta", loginURL: "https://auth.example.com/oauth"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, false, "")
+
+	extractState := func(w *httptest.ResponseRecorder) string {
+		loc := w.Header().Get("Location")
+		_, after, ok := strings.Cut(loc, "state=")
+		if !ok {
+			t.Fatalf("state= not found in redirect: %s", loc)
+		}
+		stateParam, _, _ := strings.Cut(after, "&")
+		return stateParam
+	}
+
+	w1 := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w1, httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/login", nil))
+	w2 := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/login", nil))
+
+	s1 := extractState(w1)
+	s2 := extractState(w2)
+	if s1 == s2 {
+		t.Errorf("two logins produced the SAME state %q (must be cryptographically random to defeat pre-computation)", s1)
+	}
+	if len(s1) != 43 || len(s2) != 43 {
+		t.Errorf("states should be 43 chars (32 bytes base64 URL-safe); got %d and %d", len(s1), len(s2))
+	}
+}
+
+// TestHandleCallback_RejectsMissingStateCookie_400 locks in the
+// CSRF protection: a callback with a state query param but no
+// matching cookie MUST be rejected (otherwise an attacker could
+// trigger a callback with an arbitrary state value).
+func TestHandleCallback_RejectsMissingStateCookie_400(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta", handleCallback: successCallback}
+	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
+	r := newTestRouter(svc, store, false, "")
+
+	// No setOAuthStateCookieForTest — simulating an attacker who
+	// triggers the callback without ever going through handleLogin.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=anything", nil)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 (missing state cookie), got %d: %s", w.Code, w.Body.String())
+	}
+	// The platform's HandleCallback MUST NOT have been called — the
+	// state check must run BEFORE the code exchange, otherwise an
+	// attacker who triggers a callback with a forged state would
+	// still complete a code exchange against the platform.
+	if svc.handleCallbackCalls != 0 {
+		t.Errorf("platform HandleCallback called %d time(s) despite state verification failure (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
+	}
+	// The state cookie MUST NOT be deleted on verification failure
+	// (the legitimate user can retry; deleting would lock them out
+	// for the 10-minute MaxAge window).
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateCookieName("meta") && c.MaxAge < 0 {
+			t.Errorf("state cookie was deleted on verification failure (should persist so the legitimate user can retry): %+v", c)
+		}
+	}
+	if !strings.Contains(w.Body.String(), "invalid state") {
+		t.Errorf("response body should explain the state failure; got %q", w.Body.String())
+	}
+}
+
+// TestHandleCallback_RejectsMismatchedState_400 locks in the
+// constant-time comparison: a callback whose state query param
+// does NOT match the cookie MUST be rejected. The mismatch
+// simulates an attacker who started a flow against their own
+// account (getting a real cookie+state pair) and then tried to
+// replay a different state value.
+func TestHandleCallback_RejectsMismatchedState_400(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta", handleCallback: successCallback}
+	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
+	r := newTestRouter(svc, store, false, "")
+
+	// Cookie says "cookie-state", but query says "different-state" → mismatch.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=different-state", nil)
+	setOAuthStateCookieForTest(req, "meta", "cookie-state")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 (state mismatch), got %d: %s", w.Code, w.Body.String())
+	}
+	// The platform's HandleCallback MUST NOT have been called on
+	// state mismatch (otherwise an attacker who started a flow
+	// against their own account could replay a different state
+	// and still complete a code exchange).
+	if svc.handleCallbackCalls != 0 {
+		t.Errorf("platform HandleCallback called %d time(s) despite state mismatch (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
+	}
+	// The state cookie MUST NOT be deleted on mismatch (retry-friendly).
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateCookieName("meta") && c.MaxAge < 0 {
+			t.Errorf("state cookie was deleted on mismatch (should persist so the legitimate user can retry): %+v", c)
+		}
+	}
+	if !strings.Contains(w.Body.String(), "invalid state") {
+		t.Errorf("response body should explain the state mismatch; got %q", w.Body.String())
+	}
+}
+
+// TestHandleCallback_RejectsMissingStateParam_400: a callback with
+// no state query param at all must be rejected (the platform
+// can't echo back a state it never received).
+func TestHandleCallback_RejectsMissingStateParam_400(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta", handleCallback: successCallback}
+	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
+	r := newTestRouter(svc, store, false, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc", nil)
+	setOAuthStateCookieForTest(req, "meta", "any-state")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 (missing state query param), got %d: %s", w.Code, w.Body.String())
+	}
+	// The platform's HandleCallback MUST NOT have been called on
+	// missing state (the verify step is what protects the code
+	// exchange; a missing state param must short-circuit before
+	// any platform API call).
+	if svc.handleCallbackCalls != 0 {
+		t.Errorf("platform HandleCallback called %d time(s) despite missing state (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
+	}
+	if !strings.Contains(w.Body.String(), "missing state") {
+		t.Errorf("response body should mention 'missing state'; got %q", w.Body.String())
+	}
+}
+
+// TestHandleCallback_DeletesStateCookieAfterUse locks in the
+// single-use contract: a successful callback MUST delete the
+// oauth_state_{provider} cookie so it can't be replayed. The
+// deletion is signaled by Set-Cookie with MaxAge<0.
+func TestHandleCallback_DeletesStateCookieAfterUse(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta", handleCallback: successCallback}
+	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
+	r := newTestRouter(svc, store, false, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "meta", "test-state")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	// The response must include a Set-Cookie that deletes the
+	// oauth_state_meta cookie (MaxAge<0).
+	var deletionCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateCookieName("meta") {
+			deletionCookie = c
+			break
+		}
+	}
+	if deletionCookie == nil {
+		t.Fatal("oauth_state_meta cookie not deleted after successful callback (single-use contract violated)")
+	}
+	if deletionCookie.MaxAge >= 0 {
+		t.Errorf("oauth_state_meta deletion cookie MaxAge: want <0, got %d (cookie would persist and be replayable)", deletionCookie.MaxAge)
 	}
 }
