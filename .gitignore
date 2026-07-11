@@ -40,3 +40,7 @@ vendor/
 /bin/
 go.work.sum
 secrets/
+
+# --- restored project-universal Round 2b (post-cleanup 2026-07-11) ---
+coverage.html
+coverage.out
