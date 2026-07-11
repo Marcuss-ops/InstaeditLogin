@@ -287,6 +287,386 @@ func TestMapRepoError_AllSentinalMappings(t *testing.T) {
 	}
 }
 
+// --- createPostResponse.MarshalJSON contract tests (HANDOFF-LINUX.md §13.3) ---
+//
+// The MarshalJSON on createPostResponse emits a dual-shape payload: the post
+// fields are promoted to the top level (so a flat-decode consumer works) AND
+// the same *models.Post is reachable under a nested "post" key (so the
+// nested-decode consumer works). These tests lock both decoder paths in so
+// a future "simplification" can't silently break one of them. Any change
+// to the dual-shape contract MUST update HANDOFF-LINUX.md §13.3 and the
+// createPostResponse docstring in pkg/api/posts.go in lockstep.
+
+// TestCreatePostResponse_FlatDecoder_PopulatesTopLevelFields locks in the
+// flat-decode contract used by the routes_test.go helper that calls
+// json.NewDecoder(w.Body).Decode(&flat{}) where flat is a struct with the
+// post fields at the top level. If MarshalJSON ever drops the top-level
+// promotion, this test fails before the SPA breaks in production.
+func TestCreatePostResponse_FlatDecoder_PopulatesTopLevelFields(t *testing.T) {
+	scheduledAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	createdAt := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	post := &models.Post{
+		ID:          100,
+		WorkspaceID: 1,
+		Title:       "hello",
+		Caption:     "world",
+		MediaURL:    "https://cdn.example.com/x.jpg",
+		ScheduledAt: &scheduledAt,
+		Status:      models.PostStatusScheduled,
+		CreatedAt:   createdAt,
+	}
+	targets := []*models.PostTarget{
+		{ID: 200, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusScheduled},
+		{ID: 201, PostID: 100, PlatformAccountID: 11, Status: models.PostStatusScheduled},
+	}
+	raw, err := json.Marshal(createPostResponse{post: post, targets: targets})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var flat struct {
+		ID          int64             `json:"id"`
+		WorkspaceID int64             `json:"workspace_id"`
+		Title       string            `json:"title"`
+		Caption     string            `json:"caption"`
+		MediaURL    string            `json:"media_url"`
+		ScheduledAt *time.Time        `json:"scheduled_at"`
+		Status      models.PostStatus `json:"status"`
+		CreatedAt   time.Time         `json:"created_at"`
+	}
+	if err := json.Unmarshal(raw, &flat); err != nil {
+		t.Fatalf("unmarshal flat: %v (raw=%s)", err, string(raw))
+	}
+	if flat.ID != post.ID {
+		t.Errorf("id: want %d, got %d", post.ID, flat.ID)
+	}
+	if flat.WorkspaceID != post.WorkspaceID {
+		t.Errorf("workspace_id: want %d, got %d", post.WorkspaceID, flat.WorkspaceID)
+	}
+	if flat.Title != post.Title {
+		t.Errorf("title: want %q, got %q", post.Title, flat.Title)
+	}
+	if flat.Caption != post.Caption {
+		t.Errorf("caption: want %q, got %q", post.Caption, flat.Caption)
+	}
+	if flat.MediaURL != post.MediaURL {
+		t.Errorf("media_url: want %q, got %q", post.MediaURL, flat.MediaURL)
+	}
+	if flat.ScheduledAt == nil || !flat.ScheduledAt.Equal(*post.ScheduledAt) {
+		t.Errorf("scheduled_at: want %v, got %v", post.ScheduledAt, flat.ScheduledAt)
+	}
+	if flat.Status != post.Status {
+		t.Errorf("status: want %q, got %q", post.Status, flat.Status)
+	}
+	if !flat.CreatedAt.Equal(post.CreatedAt) {
+		t.Errorf("created_at: want %v, got %v", post.CreatedAt, flat.CreatedAt)
+	}
+}
+
+// TestCreatePostResponse_NestedDecoder_PopulatesPostAndTargets locks in the
+// nested-decode contract used by TestPostsAPI_Create_Happy_ReturnsPostPlusTargets
+// (which decodes into {Post *models.Post; Targets []*models.PostTarget}).
+// If MarshalJSON ever drops the "post" key or the "targets" key, this test
+// fails before the SPA's nested-decode path breaks in production.
+func TestCreatePostResponse_NestedDecoder_PopulatesPostAndTargets(t *testing.T) {
+	scheduledAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	createdAt := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	post := &models.Post{
+		ID:          100,
+		WorkspaceID: 1,
+		Title:       "hello",
+		Caption:     "world",
+		MediaURL:    "https://cdn.example.com/x.jpg",
+		ScheduledAt: &scheduledAt,
+		Status:      models.PostStatusScheduled,
+		CreatedAt:   createdAt,
+	}
+	targets := []*models.PostTarget{
+		{ID: 200, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusScheduled},
+		{ID: 201, PostID: 100, PlatformAccountID: 11, Status: models.PostStatusScheduled},
+	}
+	raw, err := json.Marshal(createPostResponse{post: post, targets: targets})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var nested struct {
+		Post    *models.Post         `json:"post"`
+		Targets []*models.PostTarget `json:"targets"`
+	}
+	if err := json.Unmarshal(raw, &nested); err != nil {
+		t.Fatalf("unmarshal nested: %v (raw=%s)", err, string(raw))
+	}
+	if nested.Post == nil {
+		t.Fatalf("nested.post is nil (raw=%s)", string(raw))
+	}
+	if nested.Post.ID != post.ID {
+		t.Errorf("post.id: want %d, got %d", post.ID, nested.Post.ID)
+	}
+	if nested.Post.WorkspaceID != post.WorkspaceID {
+		t.Errorf("post.workspace_id: want %d, got %d", post.WorkspaceID, nested.Post.WorkspaceID)
+	}
+	if nested.Post.Title != post.Title {
+		t.Errorf("post.title: want %q, got %q", post.Title, nested.Post.Title)
+	}
+	if nested.Post.Status != post.Status {
+		t.Errorf("post.status: want %q, got %q", post.Status, nested.Post.Status)
+	}
+	if nested.Post.ScheduledAt == nil || !nested.Post.ScheduledAt.Equal(*post.ScheduledAt) {
+		t.Errorf("post.scheduled_at: want %v, got %v", post.ScheduledAt, nested.Post.ScheduledAt)
+	}
+	if !nested.Post.CreatedAt.Equal(post.CreatedAt) {
+		t.Errorf("post.created_at: want %v, got %v", post.CreatedAt, nested.Post.CreatedAt)
+	}
+	if len(nested.Targets) != 2 {
+		t.Fatalf("targets length: want 2, got %d", len(nested.Targets))
+	}
+	if nested.Targets[0].ID != 200 || nested.Targets[0].PlatformAccountID != 10 {
+		t.Errorf("targets[0]: want {ID:200,PlatformAccountID:10}, got %+v", nested.Targets[0])
+	}
+	if nested.Targets[1].ID != 201 || nested.Targets[1].PlatformAccountID != 11 {
+		t.Errorf("targets[1]: want {ID:201,PlatformAccountID:11}, got %+v", nested.Targets[1])
+	}
+}
+
+// TestCreatePostResponse_DualShape_FlatAndNestedAgree is the belt-and-
+// suspenders test: it decodes the SAME payload into BOTH a flat struct
+// and a nested struct and asserts that the values agree. This catches a
+// "simplification" that, e.g., removes the top-level promotion but leaves
+// the nested "post" key alone (the individual tests would still pass on
+// the nested side; this test fails on the flat side).
+func TestCreatePostResponse_DualShape_FlatAndNestedAgree(t *testing.T) {
+	scheduledAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	createdAt := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	post := &models.Post{
+		ID:          999,
+		WorkspaceID: 7,
+		Title:       "dual-shape",
+		Caption:     "contract",
+		MediaURL:    "https://cdn.example.com/y.jpg",
+		ScheduledAt: &scheduledAt,
+		Status:      models.PostStatusDraft,
+		CreatedAt:   createdAt,
+	}
+	raw, err := json.Marshal(createPostResponse{post: post, targets: nil})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var flat struct {
+		ID          int64             `json:"id"`
+		WorkspaceID int64             `json:"workspace_id"`
+		Title       string            `json:"title"`
+		Status      models.PostStatus `json:"status"`
+		ScheduledAt *time.Time        `json:"scheduled_at"`
+		CreatedAt   time.Time         `json:"created_at"`
+	}
+	var nested struct {
+		Post *models.Post `json:"post"`
+	}
+	if err := json.Unmarshal(raw, &flat); err != nil {
+		t.Fatalf("unmarshal flat: %v", err)
+	}
+	if err := json.Unmarshal(raw, &nested); err != nil {
+		t.Fatalf("unmarshal nested: %v", err)
+	}
+	if nested.Post == nil {
+		t.Fatal("nested.post is nil")
+	}
+	if flat.ID != nested.Post.ID {
+		t.Errorf("id: flat=%d, nested=%d (must be equal)", flat.ID, nested.Post.ID)
+	}
+	if flat.WorkspaceID != nested.Post.WorkspaceID {
+		t.Errorf("workspace_id: flat=%d, nested=%d (must be equal)", flat.WorkspaceID, nested.Post.WorkspaceID)
+	}
+	if flat.Title != nested.Post.Title {
+		t.Errorf("title: flat=%q, nested=%q (must be equal)", flat.Title, nested.Post.Title)
+	}
+	if flat.Status != nested.Post.Status {
+		t.Errorf("status: flat=%q, nested=%q (must be equal)", flat.Status, nested.Post.Status)
+	}
+	if (flat.ScheduledAt == nil) != (nested.Post.ScheduledAt == nil) {
+		t.Errorf("scheduled_at nilness diverges: flat=%v, nested=%v", flat.ScheduledAt, nested.Post.ScheduledAt)
+	} else if flat.ScheduledAt != nil && !flat.ScheduledAt.Equal(*nested.Post.ScheduledAt) {
+		t.Errorf("scheduled_at: flat=%v, nested=%v", flat.ScheduledAt, nested.Post.ScheduledAt)
+	}
+	if !flat.CreatedAt.Equal(nested.Post.CreatedAt) {
+		t.Errorf("created_at: flat=%v, nested=%v", flat.CreatedAt, nested.Post.CreatedAt)
+	}
+}
+
+// TestCreatePostResponse_Targets_TopLevelKey_PreservesOrder locks in two
+// aspects of the targets encoding:
+//   1. "targets" lives at the TOP level of the response, not inside the
+//      nested "post" object (otherwise a flat-decode consumer looking
+//      for `resp.targets` would silently get nothing).
+//   2. The targets slice is JSON-encoded in slice order, preserving
+//      per-target IDs, platform_account_ids, statuses, and error
+//      messages. A future "sort by id" optimization would break the
+//      documented ordering and the per-platform error reporting.
+func TestCreatePostResponse_Targets_TopLevelKey_PreservesOrder(t *testing.T) {
+	post := &models.Post{
+		ID:          1,
+		WorkspaceID: 1,
+		Status:      models.PostStatusScheduled,
+		CreatedAt:   time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	targets := []*models.PostTarget{
+		{ID: 200, PostID: 1, PlatformAccountID: 10, Status: models.PostStatusScheduled},
+		{ID: 201, PostID: 1, PlatformAccountID: 11, Status: models.PostStatusDraft},
+		{ID: 202, PostID: 1, PlatformAccountID: 12, Status: models.PostStatusFailed, ErrorMessage: "rate limited"},
+	}
+	raw, err := json.Marshal(createPostResponse{post: post, targets: targets})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// (1) Structural check: "targets" is at the top level, not nested
+	// under "post".
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("unmarshal top: %v", err)
+	}
+	postRaw, ok := top["post"]
+	if !ok {
+		t.Fatalf("top-level 'post' key missing (raw=%s)", string(raw))
+	}
+	var postObj map[string]json.RawMessage
+	if err := json.Unmarshal(postRaw, &postObj); err != nil {
+		t.Fatalf("unmarshal nested 'post': %v", err)
+	}
+	if _, hasNestedTargets := postObj["targets"]; hasNestedTargets {
+		t.Errorf("nested 'post' has its own 'targets' key (would create a contract ambiguity): %s", string(postRaw))
+	}
+
+	// (2) Order + per-target fields preserved.
+	var asNested struct {
+		Targets []*models.PostTarget `json:"targets"`
+	}
+	if err := json.Unmarshal(raw, &asNested); err != nil {
+		t.Fatalf("unmarshal nested targets: %v", err)
+	}
+	if len(asNested.Targets) != 3 {
+		t.Fatalf("targets length: want 3, got %d (raw=%s)", len(asNested.Targets), string(raw))
+	}
+	for i, want := range targets {
+		got := asNested.Targets[i]
+		if got.ID != want.ID {
+			t.Errorf("targets[%d].ID: want %d, got %d", i, want.ID, got.ID)
+		}
+		if got.PlatformAccountID != want.PlatformAccountID {
+			t.Errorf("targets[%d].PlatformAccountID: want %d, got %d", i, want.PlatformAccountID, got.PlatformAccountID)
+		}
+		if got.Status != want.Status {
+			t.Errorf("targets[%d].Status: want %q, got %q", i, want.Status, got.Status)
+		}
+		if got.ErrorMessage != want.ErrorMessage {
+			t.Errorf("targets[%d].ErrorMessage: want %q, got %q", i, want.ErrorMessage, got.ErrorMessage)
+		}
+	}
+}
+
+// TestCreatePostResponse_StructuralKeys_ExactlyTheseAndNoMore is the
+// defense-in-depth assertion: after the dual-shape contract is in place,
+// the set of top-level keys is FIXED. A future "simplification" that
+// adds, renames, or removes a top-level key would silently break the
+// flat-decode consumer (which expects a known set of fields) and/or the
+// nested-decode consumer (which looks up exactly "post" and "targets").
+// This test forces any such change to be a conscious one.
+func TestCreatePostResponse_StructuralKeys_ExactlyTheseAndNoMore(t *testing.T) {
+	post := &models.Post{
+		ID:          1,
+		WorkspaceID: 1,
+		Status:      models.PostStatusDraft,
+		CreatedAt:   time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	raw, err := json.Marshal(createPostResponse{post: post, targets: nil})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("unmarshal top: %v", err)
+	}
+	// The contract says: 8 promoted post fields + 2 envelope keys.
+	// Any drift from this set is a contract change and must update
+	// HANDOFF-LINUX.md §13.3 + the createPostResponse docstring in
+	// pkg/api/posts.go in lockstep.
+	wantKeys := map[string]bool{
+		"id":           true,
+		"workspace_id": true,
+		"title":        true,
+		"caption":      true,
+		"media_url":    true,
+		"scheduled_at": true,
+		"status":       true,
+		"created_at":   true,
+		"post":         true,
+		"targets":      true,
+	}
+	for k := range top {
+		if !wantKeys[k] {
+			t.Errorf("unexpected top-level key %q in createPostResponse (would break the dual-shape contract); raw=%s", k, string(raw))
+		}
+	}
+	for k := range wantKeys {
+		if _, ok := top[k]; !ok {
+			t.Errorf("missing required top-level key %q in createPostResponse (would break the dual-shape contract); raw=%s", k, string(raw))
+		}
+	}
+}
+
+// TestCreatePostResponse_ScheduledAt_NilFlatIsNullNestedIsOmitted locks
+// in a subtle asymmetry: when a post has no scheduled_at, the top-level
+// "scheduled_at" is JSON `null` (because MarshalJSON writes a nil
+// *time.Time from the map[string]interface{}), but the nested "post"
+// object OMITS the "scheduled_at" key entirely (because models.Post's
+// tag is `json:"scheduled_at,omitempty"` on a *time.Time).
+//
+// This is a real consumer-facing quirk: a flat-decode client that uses
+// `var s *time.Time` will see `nil` (and JSON `null`), but a
+// nested-decode client using the same `*time.Time` will also see `nil`
+// because the key is absent and Go's json package leaves the pointer
+// as its zero value. The behaviour is therefore *consistent at the Go
+// level* but the wire shape is asymmetric. This test pins the wire
+// shape so a future refactor that "fixes" the asymmetry is forced to
+// make the choice consciously and update HANDOFF-LINUX.md §13.3.
+func TestCreatePostResponse_ScheduledAt_NilFlatIsNullNestedIsOmitted(t *testing.T) {
+	post := &models.Post{
+		ID:          1,
+		WorkspaceID: 1,
+		Status:      models.PostStatusDraft,
+		CreatedAt:   time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		// ScheduledAt deliberately nil.
+	}
+	raw, err := json.Marshal(createPostResponse{post: post, targets: nil})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("unmarshal top: %v", err)
+	}
+	// Top-level "scheduled_at" must be present and equal to JSON null
+	// (NOT absent — the key is in the contract set per the structural
+	// test above).
+	flatRaw, ok := top["scheduled_at"]
+	if !ok {
+		t.Fatalf("top-level 'scheduled_at' key missing (raw=%s)", string(raw))
+	}
+	if string(flatRaw) != "null" {
+		t.Errorf("top-level 'scheduled_at' for nil schedule: want null, got %s", string(flatRaw))
+	}
+	// Nested "post" must OMIT the "scheduled_at" key (omitempty wins).
+	postRaw, ok := top["post"]
+	if !ok {
+		t.Fatalf("top-level 'post' key missing (raw=%s)", string(raw))
+	}
+	var postObj map[string]json.RawMessage
+	if err := json.Unmarshal(postRaw, &postObj); err != nil {
+		t.Fatalf("unmarshal nested 'post': %v", err)
+	}
+	if _, hasIt := postObj["scheduled_at"]; hasIt {
+		t.Errorf("nested 'post' has 'scheduled_at' for nil schedule; expected it to be omitted (omitempty); raw=%s", string(postRaw))
+	}
+}
+
 var errBoomAPI = errBoom{}
 
 // errBoom is a generic non-sentinel error for the mapRepoError test.
