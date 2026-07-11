@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.26-alpine AS builder
+FROM golang:alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -11,7 +11,7 @@ FROM alpine:3.21
 WORKDIR /app
 
 # Install certificates and create a non-root user
-RUN apk --no-cache add ca-certificates && \
+RUN apk --no-cache add ca-certificates wget && \
     adduser -D -g '' appuser
 
 # Copy the compiled binary and set ownership
