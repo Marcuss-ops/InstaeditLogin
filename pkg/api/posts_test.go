@@ -19,14 +19,32 @@ import (
 // all test files in this package). This file only declares its own
 // test helpers; it does NOT redeclare the struct.
 
-// newPostsTestRouter builds a Router wired with a noop workspace store
-// and the supplied postStore. Use for /posts endpoint tests. Matches the
-// variadic-options NewRouter signature in handlers.go (6 positional +
-// options).
+// newPostsTestRouter builds a Router wired with the supplied postStore
+// and (optionally) a custom workspace store. Use for /posts endpoint
+// tests. Matches the variadic-options NewRouter signature in handlers.go
+// (6 positional + options).
+//
+// wsStore is variadic for backward compat: existing callers that don't
+// need a custom workspace store (i.e. the post is never read back, or
+// the default FindByID returning a workspace owned by user 1 is fine)
+// pass nothing. Tests that exercise cross-tenant behaviour (e.g.
+// TestPostsAPI_Get_CrossOwner_404) pass a mockWorkspaceStore with a
+// findByIDFn that returns a non-owner.
 func newPostsTestRouter(
 	postStore *mockPostStore,
 	strictAuth bool,
+	wsStore ...WorkspaceStore,
 ) *Router {
+	// Only wsStore[0] is consulted. The variadic exists for BACKWARD
+	// COMPAT with existing 2-arg callers (the workspace store is an
+	// optional override). If a future test genuinely needs to wire two
+	// workspace stores, change the signature to take an explicit
+	// pointer-or-default helper (or a *_test.go-local router builder)
+	// rather than extending this variadic.
+	var ws WorkspaceStore = &mockWorkspaceStore{}
+	if len(wsStore) > 0 && wsStore[0] != nil {
+		ws = wsStore[0]
+	}
 	return NewRouter(
 		map[string]services.PlatformService{},
 		&mockUserStore{},
@@ -34,7 +52,7 @@ func newPostsTestRouter(
 		strictAuth,
 		"",
 		nil,
-		WithWorkspaceStore(&mockWorkspaceStore{}),
+		WithWorkspaceStore(ws),
 		WithPostStore(postStore),
 	)
 }
@@ -260,6 +278,115 @@ func TestPostsAPI_Schedule_ErrPostUnauthorized_403(t *testing.T) {
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("want 403, got %d", w.Code)
+	}
+}
+
+// TestPostsAPI_Create_NoTargets_422 verifies the handleCreatePost
+// validation guard "at least one target is required" → 422 (NOT 400,
+// per the 422-vs-400 contract in HANDOFF-LINUX.md §13.1: the JSON parses
+// fine, the field is just semantically missing). This test was lost
+// when the remote's posts_test.go overwrote the local one in the merge;
+// the validation logic in handleCreatePost is correct (see lines
+// guarding `len(body.Targets) == 0`) but had no test coverage. This
+// locks the contract in — including the exact error message clients
+// see, so any future rewording is forced to update the test in lockstep.
+func TestPostsAPI_Create_NoTargets_422(t *testing.T) {
+	r := newPostsTestRouter(&mockPostStore{}, false)
+	body := `{"workspace_id":1}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("at least one target is required")) {
+		t.Errorf("response body should mention the missing-target error so clients can display it; got %q", w.Body.String())
+	}
+}
+
+// TestPostsAPI_Create_BadTargetID_422 verifies the per-target validation
+// guard: a target with platform_account_id==0 must be rejected with 422
+// (the platform_account_id is required, so "missing" → 422 per §13.1).
+// The 422 is emitted with an index in the error message so the client
+// can identify which target was bad. Companion to
+// TestPostsAPI_Create_NoTargets_422: together they cover the two
+// "missing required field" cases for the CreatePostRequest. The body
+// assertion locks the exact error message (including the index) so a
+// future reword or removal is forced to update the test in lockstep.
+func TestPostsAPI_Create_BadTargetID_422(t *testing.T) {
+	r := newPostsTestRouter(&mockPostStore{}, false)
+	body := `{"workspace_id":1,"targets":[{"platform_account_id":0}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("targets[0].platform_account_id is required")) {
+		t.Errorf("response body should mention the per-target index for client error reporting; got %q", w.Body.String())
+	}
+}
+
+// TestPostsAPI_Get_CrossOwner_404 verifies handleGetPost's cross-tenant
+// isolation: when the post's workspace is owned by a different user, the
+// handler returns 404 (NOT 403) to prevent workspace-existence leaks
+// across tenants. The post exists and is findable, the workspace exists
+// and is findable, but ws.OwnerID (999) != caller's userID (the lenient
+// default of 1) → 404. Companion to TestHandleGetPost_CrossOwner_404
+// in routes_test.go (which uses the strict mode + JWT path); this test
+// uses the lenient path so the two together cover both auth modes.
+//
+// The test proves the 404 came from the CROSS-OWNER path (not from a
+// post-not-found or workspace-lookup-error path) via two assertions:
+//   1. workspaceStore.findByIDFn was called exactly once (a "post not
+//      found" from `p == nil` would short-circuit BEFORE the workspace
+//      lookup; a "failed to get post" would not reach the workspace at
+//      all).
+//   2. The response body is the cross-owner "post not found" string —
+//      NOT the "failed to get post: " prefix that mapRepoError would
+//      produce for a FindByID error.
+func TestPostsAPI_Get_CrossOwner_404(t *testing.T) {
+	wsCalled := int64(0)
+	r := newPostsTestRouter(
+		&mockPostStore{
+			findByIDFn: func(id int64) (*models.Post, error) {
+				return &models.Post{
+					ID:          id,
+					WorkspaceID: 1,
+					Title:       "secret",
+					Status:      models.PostStatusDraft,
+					CreatedAt:   time.Now(),
+				}, nil
+			},
+		},
+		false,
+		&mockWorkspaceStore{
+			findByIDFn: func(id int64) (*models.Workspace, error) {
+				wsCalled++
+				return &models.Workspace{ID: id, Name: "Other", OwnerID: 999}, nil
+			},
+		},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/100", nil)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+	// (1) The workspace WAS looked up — proves we got past the post
+	// not-found short-circuit and into the cross-tenant check.
+	if wsCalled != 1 {
+		t.Errorf("workspaceStore.findByIDFn call count: want 1, got %d (404 must come from the cross-owner check, not an earlier short-circuit)", wsCalled)
+	}
+	// (2) The body is the cross-owner "post not found" — not the
+	// mapRepoError "failed to get post: ..." prefix.
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"error":"post not found"`)) {
+		t.Errorf("response body should be the cross-owner 404 message, not a mapRepoError 'failed to get post' message; got %q", w.Body.String())
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("failed to get post")) {
+		t.Errorf("response body looks like a mapRepoError 'failed to get post' 404, not the cross-owner 404; got %q", w.Body.String())
 	}
 }
 
