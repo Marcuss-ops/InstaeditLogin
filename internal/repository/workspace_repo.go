@@ -92,3 +92,29 @@ func (r *WorkspaceRepository) ListByOwner(ownerID int64) ([]models.Workspace, er
 	}
 	return workspaces, nil
 }
+
+// Delete removes the workspace with the given id. Returns
+// ErrWorkspaceNotFound wrapped with id context when zero rows match — the
+// API layer maps this to 404 via errors.Is (consistent with the post_repo
+// audit pattern). Mirrors the rows-affected surface from
+// commit d89d56a ("fix(repo): surface rows-affected in Update + ...").
+//
+// Note: the handler in pkg/api/workspaces.go performs the ownership check
+// (OwnerID == userID) BEFORE calling this method, because the SQL DELETE
+// statement alone cannot distinguish "id wrong" from "wrong owner". The
+// handler pre-loads via FindByID and verifies; this method only enforces
+// that the row actually existed at delete time.
+func (r *WorkspaceRepository) Delete(id int64) error {
+	result, err := r.db.Exec(`DELETE FROM workspaces WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete workspace: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrWorkspaceNotFound, id)
+	}
+	return nil
+}

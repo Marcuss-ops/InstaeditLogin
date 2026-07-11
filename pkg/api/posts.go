@@ -1,274 +1,239 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
-	"log/slog"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-// CreatePostTargetReq is one element of the targets array in
-// POST /api/v1/posts. platform_account_id is the FK to platform_accounts
-// (which itself references users via user_id).
-type CreatePostTargetReq struct {
-	PlatformAccountID int64 `json:"platform_account_id"`
+// CreatePostRequest is the JSON body for POST /posts/.
+type CreatePostRequest struct {
+	WorkspaceID int64                `json:"workspace_id"`
+	Title       string               `json:"title,omitempty"`
+	Caption     string               `json:"caption,omitempty"`
+	MediaURL    string               `json:"media_url,omitempty"`
+	ScheduledAt *time.Time           `json:"scheduled_at,omitempty"`
+	Status      models.PostStatus    `json:"status,omitempty"`
+	Targets     []PostTargetRequest  `json:"targets,omitempty"`
 }
 
-// CreatePostReq is the body schema for POST /api/v1/posts.
-//
-// Validation per user spec:
-//   - workspace_id > 0 (required)
-//   - targets has at least 1 element (required)
-//   - each target.platform_account_id > 0
-//
-// Workspace ownership is enforced by looking up the workspace and
-// matching its OwnerID against the authenticated user_id before
-// invoking the postStore.Create atomic transaction.
-type CreatePostReq struct {
-	WorkspaceID int64                 `json:"workspace_id"`
-	Title       string                `json:"title,omitempty"`
-	Caption     string                `json:"caption,omitempty"`
-	MediaURL    string                `json:"media_url,omitempty"`
-	ScheduledAt string                `json:"scheduled_at,omitempty"` // RFC 3339; parsed after validation
-	Targets     []CreatePostTargetReq `json:"targets"`
-}
-
-// CreatePostResp is the response shape for POST /api/v1/posts. Compact:
-// the client submitted the request and primarily needs the auto-generated
-// IDs (post.id + each target.id) plus the status (assigned by the repo).
-// scheduled_at is reflected back so the client can confirm what was stored.
-type CreatePostResp struct {
-	ID          int64                  `json:"id"`
-	WorkspaceID int64                  `json:"workspace_id"`
-	Status      models.PostStatus      `json:"status"`
-	CreatedAt   string                 `json:"created_at"` // RFC 3339
-	ScheduledAt string                 `json:"scheduled_at,omitempty"` // RFC 3339; empty for drafts
-	Targets     []CreatePostTargetResp `json:"targets"`
-}
-
-// CreatePostTargetResp echoes each created target's auto-assigned id.
-type CreatePostTargetResp struct {
-	ID                int64             `json:"id"`
+// PostTargetRequest is one row in CreatePostRequest.Targets.
+type PostTargetRequest struct {
 	PlatformAccountID int64             `json:"platform_account_id"`
-	Status            models.PostStatus `json:"status"`
+	Status            models.PostStatus `json:"status,omitempty"`
 }
 
-// handleCreatePost (POST /api/v1/posts, protected) creates a post and
-// its initial fan-out of PostTargets inside a single atomic transaction
-// (delegated to PostStore.Create).
-//
-// Body schema (see CreatePostReq). Validation:
-//   - workspace_id > 0           → 422
-//   - targets has len >= 1        → 422
-//   - each target.platform > 0    → 422 (with index reported)
-//   - workspace owned by caller   → 403
-//   - malformed JSON              → 400
-//   - missing repo (501)            handled by per-store nil check
-//   - RFC 3339 scheduled_at       → 400 if unparseable
-func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
-	if r.postStore == nil || r.workspaceStore == nil {
-		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
-		return
-	}
-	userID, ok := requireUserID(w, req, r)
-	if !ok {
-		return
-	}
+// SchedulePostRequest is the JSON body for POST /posts/{id}/schedule.
+type SchedulePostRequest struct {
+	ScheduledAt time.Time `json:"scheduled_at"`
+}
 
-	var body CreatePostReq
-	req.Body = http.MaxBytesReader(w, req.Body, 1<<20) // 1 MB cap (DoS guard)
+// AddTargetRequest is the JSON body for POST /posts/{id}/targets.
+type AddTargetRequest struct {
+	PlatformAccountID int64             `json:"platform_account_id"`
+	Status            models.PostStatus `json:"status,omitempty"`
+}
+
+// mapRepoError translates a repository sentinel into the corresponding HTTP
+// status. Per the current API contract: ErrPostUnauthorized -> 403 (the
+// operator has chosen to surface "exists but not yours" for admin debugging;
+// a future hardening pass could switch this to 404 to prevent
+// workspace-existence leaks across tenants — see errors.go doc). All other
+// sentinels and sql.ErrNoRows map to 404. Unknown errors fall through to 500.
+func mapRepoError(err error) (int, string) {
+	switch {
+	case err == nil:
+		return http.StatusOK, ""
+	case errors.Is(err, repository.ErrPostUnauthorized):
+		return http.StatusForbidden, err.Error()
+	case errors.Is(err, repository.ErrPostNotFound):
+		return http.StatusNotFound, err.Error()
+	case errors.Is(err, repository.ErrPostTargetNotFound):
+		return http.StatusNotFound, err.Error()
+	case errors.Is(err, sql.ErrNoRows):
+		return http.StatusNotFound, "post not found"
+	default:
+		return http.StatusInternalServerError, err.Error()
+	}
+}
+
+// handleCreatePost creates a post (and any initial targets) within a workspace.
+// Status defaults to "draft" if the caller doesn't specify one.
+func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
+	userID := resolveUserID(req, 0, r.strictAuth)
+	if userID == 0 {
+		writeError(w, http.StatusUnauthorized, "user identity required")
+		return
+	}
+	var body CreatePostRequest
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-
-	// User-spec validation (semantic → 422)
-	if body.WorkspaceID <= 0 {
-		writeError(w, http.StatusUnprocessableEntity, "workspace_id is required and must be > 0")
+	if body.WorkspaceID == 0 {
+		writeError(w, http.StatusBadRequest, "workspace_id is required")
 		return
 	}
-	if len(body.Targets) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "at least 1 target is required")
+	if body.Status == "" {
+		body.Status = models.PostStatusDraft
+	}
+	if !body.Status.IsValid() {
+		writeError(w, http.StatusBadRequest, "status must be one of: draft, scheduled, publishing, published, failed")
 		return
 	}
-	for i, t := range body.Targets {
-		if t.PlatformAccountID <= 0 {
-			writeError(w, http.StatusUnprocessableEntity,
-				"targets["+strconv.Itoa(i)+"].platform_account_id is required and must be > 0")
-			return
-		}
-	}
-
-	// scheduled_at parsed AFTER validation but BEFORE the repo insert.
-	// We accept a string from JSON so a malformed timestamp can be
-	// reported as 400 rather than a generic decode failure.
-	var scheduledAt *time.Time
-	if body.ScheduledAt != "" {
-		t, err := time.Parse(time.RFC3339, body.ScheduledAt)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid scheduled_at: "+err.Error())
-			return
-		}
-		scheduledAt = &t
-	}
-
-	// Tenant isolation: only the workspace owner can create posts in it.
-	ws, err := r.workspaceStore.FindByID(body.WorkspaceID)
-	if err != nil {
-		logAndError(w, "failed to lookup workspace", err, "workspace_id", body.WorkspaceID)
-		return
-	}
-	if ws == nil {
-		// 404 (not 403) to avoid leaking existence of other users' workspaces.
-		writeError(w, http.StatusNotFound, "workspace not found")
-		return
-	}
-	if ws.OwnerID != userID {
-		slog.Warn("post create: workspace cross-owner access denied",
-			"user_id", userID, "workspace_id", body.WorkspaceID, "owner_id", ws.OwnerID)
-		writeError(w, http.StatusForbidden, "workspace not owned by current user")
-		return
-	}
-
-	// Build the domain entities; the repo.Create call will atomically
-	// insert the post + each target in one tx.
 	post := &models.Post{
 		WorkspaceID: body.WorkspaceID,
 		Title:       body.Title,
 		Caption:     body.Caption,
 		MediaURL:    body.MediaURL,
-		Status:      models.PostStatusDraft,
+		ScheduledAt: body.ScheduledAt,
+		Status:      body.Status,
 	}
-	if scheduledAt != nil {
-		post.ScheduledAt = scheduledAt
-		post.Status = models.PostStatusScheduled
-	}
-	targets := make([]*models.PostTarget, len(body.Targets))
-	for i, t := range body.Targets {
-		targets[i] = &models.PostTarget{
-			PlatformAccountID: t.PlatformAccountID,
-			Status:            models.PostStatusScheduled,
+	targets := make([]*models.PostTarget, 0, len(body.Targets))
+	for _, t := range body.Targets {
+		status := t.Status
+		if status == "" {
+			status = models.PostStatusScheduled
 		}
+		targets = append(targets, &models.PostTarget{PlatformAccountID: t.PlatformAccountID, Status: status})
 	}
-
-	if err := r.postStore.Create(post, targets); err != nil {
-		logAndError(w, "failed to create post", err,
-			"user_id", userID, "workspace_id", body.WorkspaceID)
+	if err := r.postRepo.Create(post, targets); err != nil {
+		status, msg := mapRepoError(err)
+		writeError(w, status, "failed to create post: "+msg)
 		return
 	}
-
-	// Echo back the assigned IDs (post.id, target.id) plus the persisted
-	// scheduled_at so the client can confirm what was stored (omitted for
-	// drafts since the optional JSON field is hidden via `omitempty`).
-	targetResponses := make([]CreatePostTargetResp, len(targets))
-	for i, t := range targets {
-		targetResponses[i] = CreatePostTargetResp{
-			ID:                t.ID,
-			PlatformAccountID: t.PlatformAccountID,
-			Status:            t.Status,
-		}
-	}
-	var scheduledAtStr string
-	if post.ScheduledAt != nil {
-		scheduledAtStr = post.ScheduledAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
-	}
-	writeJSON(w, http.StatusCreated, CreatePostResp{
-		ID:          post.ID,
-		WorkspaceID: post.WorkspaceID,
-		Status:      post.Status,
-		CreatedAt:   post.CreatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"),
-		ScheduledAt: scheduledAtStr,
-		Targets:     targetResponses,
-	})
+	writeJSON(w, http.StatusCreated, map[string]interface{}{"post": post, "targets": targets})
 }
 
-// handleListWorkspacePosts (GET /api/v1/workspaces/{id}/posts, protected)
-// lists every post in a workspace the caller owns. 403 if not owned.
-// Posts are NOT joined with their targets here — call ListByPost on the
-// returned ID for fan-out inspection.
-func (r *Router) handleListWorkspacePosts(w http.ResponseWriter, req *http.Request) {
-	if r.postStore == nil || r.workspaceStore == nil {
-		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
-		return
-	}
-	userID, ok := requireUserID(w, req, r)
-	if !ok {
-		return
-	}
-
-	id, ok := parsePathIDAsInt64(w, req, "id")
-	if !ok {
-		return
-	}
-
-	ws, err := r.workspaceStore.FindByID(id)
+// handleAddTarget appends a post_target to an existing post.
+// Pre-checks the post exists so ErrPostTargetNotFound is the only sentinel
+// the handler can produce on success path.
+func (r *Router) handleAddTarget(w http.ResponseWriter, req *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
 	if err != nil {
-		logAndError(w, "failed to find workspace", err, "id", id)
+		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
 		return
 	}
-	if ws == nil {
-		writeError(w, http.StatusNotFound, "workspace not found")
+	var body AddTargetRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if ws.OwnerID != userID {
-		slog.Warn("posts list: workspace cross-owner access denied",
-			"user_id", userID, "workspace_id", id, "owner_id", ws.OwnerID)
-		writeError(w, http.StatusForbidden, "workspace not owned by current user")
+	if body.PlatformAccountID == 0 {
+		writeError(w, http.StatusBadRequest, "platform_account_id is required")
 		return
 	}
+	existing, err := r.postRepo.FindByID(id)
+	if err != nil || existing == nil {
+		status, msg := mapRepoError(err)
+		if status == http.StatusOK {
+			status = http.StatusNotFound
+			msg = "post not found"
+		}
+		writeError(w, status, msg)
+		return
+	}
+	status := body.Status
+	if status == "" {
+		status = models.PostStatusScheduled
+	}
+	target := &models.PostTarget{PostID: id, PlatformAccountID: body.PlatformAccountID, Status: status}
+	if err := r.postRepo.Save(target); err != nil {
+		status2, msg := mapRepoError(err)
+		writeError(w, status2, "failed to add target: "+msg)
+		return
+	}
+	writeJSON(w, http.StatusCreated, target)
+}
 
-	posts, err := r.postStore.ListByWorkspace(id)
+// handleSchedulePost sets Status=scheduled and ScheduledAt on an existing post.
+// Reads the existing post first to populate WorkspaceID (tenant-isolation
+// predicate) so the repo's UPDATE statement matches the row.
+func (r *Router) handleSchedulePost(w http.ResponseWriter, req *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
 	if err != nil {
-		logAndError(w, "failed to list posts", err, "workspace_id", id)
+		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
+		return
+	}
+	var body SchedulePostRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if body.ScheduledAt.IsZero() {
+		writeError(w, http.StatusBadRequest, "scheduled_at is required")
+		return
+	}
+	existing, err := r.postRepo.FindByID(id)
+	if err != nil || existing == nil {
+		status, msg := mapRepoError(err)
+		if status == http.StatusOK {
+			status = http.StatusNotFound
+			msg = "post not found"
+		}
+		writeError(w, status, msg)
+		return
+	}
+	post := &models.Post{
+		ID:          id,
+		WorkspaceID: existing.WorkspaceID,
+		Title:       existing.Title,
+		Caption:     existing.Caption,
+		MediaURL:    existing.MediaURL,
+		ScheduledAt: &body.ScheduledAt,
+		Status:      models.PostStatusScheduled,
+	}
+	if err := r.postRepo.Update(post); err != nil {
+		status, msg := mapRepoError(err)
+		writeError(w, status, "failed to schedule: "+msg)
+		return
+	}
+	writeJSON(w, http.StatusOK, post)
+}
+
+// handleGetPost fetches a post by id (without its targets).
+func (r *Router) handleGetPost(w http.ResponseWriter, req *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
+		return
+	}
+	p, err := r.postRepo.FindByID(id)
+	if err != nil {
+		status, msg := mapRepoError(err)
+		writeError(w, status, "failed to get post: "+msg)
+		return
+	}
+	if p == nil {
+		writeError(w, http.StatusNotFound, "post not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// handleListByWorkspace lists posts in a given workspace.
+func (r *Router) handleListByWorkspace(w http.ResponseWriter, req *http.Request) {
+	wid, err := strconv.ParseInt(chi.URLParam(req, "wid"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid workspace id: "+err.Error())
+		return
+	}
+	posts, err := r.postRepo.ListByWorkspace(wid)
+	if err != nil {
+		status, msg := mapRepoError(err)
+		writeError(w, status, "failed to list posts: "+msg)
 		return
 	}
 	if posts == nil {
 		posts = []models.Post{}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"posts": posts})
-}
-
-// handleGetPost (GET /api/v1/posts/{id}, protected) fetches a single post.
-// Cross-owner access is reported as 404 (not 403) by design — same
-// security rationale as handleGetWorkspace.
-func (r *Router) handleGetPost(w http.ResponseWriter, req *http.Request) {
-	if r.postStore == nil || r.workspaceStore == nil {
-		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
-		return
-	}
-	userID, ok := requireUserID(w, req, r)
-	if !ok {
-		return
-	}
-
-	id, ok := parsePathIDAsInt64(w, req, "id")
-	if !ok {
-		return
-	}
-
-	post, err := r.postStore.FindByID(id)
-	if err != nil {
-		logAndError(w, "failed to find post", err, "id", id)
-		return
-	}
-	if post == nil {
-		writeError(w, http.StatusNotFound, "post not found")
-		return
-	}
-	// Tenant isolation: the post's workspace's owner must match caller.
-	ws, err := r.workspaceStore.FindByID(post.WorkspaceID)
-	if err != nil {
-		logAndError(w, "failed to lookup workspace for post", err, "workspace_id", post.WorkspaceID)
-		return
-	}
-	if ws == nil || ws.OwnerID != userID {
-		slog.Warn("post get: cross-owner access denied",
-			"user_id", userID, "post_id", id, "workspace_id", post.WorkspaceID)
-		writeError(w, http.StatusNotFound, "post not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, post)
 }

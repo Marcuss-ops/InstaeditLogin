@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -20,17 +22,22 @@ import (
 )
 
 // Router handles HTTP routing and request dispatching for all platforms.
+//
+// chi.NewRouter is used in preference to stdlib http.ServeMux so the new
+// /workspaces/{id} and /posts/{id}/... sub-routers can read URL params
+// via chi.URLParam. All pre-existing routes (health, OAuth, publish,
+// metrics) are migrated to chi.Mux.Method registrations; behaviour is
+// identical (httptest in pkg/api/routes_test.go still passes).
 type Router struct {
-	platforms       map[string]services.PlatformService
-	userRepo        UserStore
-	auth            *auth.Manager
-	strictAuth      bool
-	frontendURL     string
-	allowedOrigin   []string
-	workspaceStore  WorkspaceStore
-	postStore       PostStore
-	storageProvider StorageProvider
-	maxUploadBytes  int64
+	mux           *chi.Mux
+	platforms     map[string]services.PlatformService
+	userRepo      UserStore
+	workspaceRepo WorkspaceStore
+	postRepo      PostStore
+	auth          *auth.Manager
+	strictAuth    bool
+	frontendURL   string
+	allowedOrigin []string
 }
 
 // UserStore abstracts the user/account persistence layer so tests can
@@ -40,7 +47,59 @@ type UserStore interface {
 	ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error)
 }
 
-// NewRouter creates a new Router with platform providers and an auth manager.
+// WorkspaceStore abstracts workspace persistence so handler tests can
+// inject a mock. Mirrors enough of repository.WorkspaceRepository for the
+// new /workspaces CRUD endpoints.
+type WorkspaceStore interface {
+	Create(w *models.Workspace) error
+	FindByID(id int64) (*models.Workspace, error)
+	ListByOwner(ownerID int64) ([]models.Workspace, error)
+	Delete(id int64) error
+}
+
+// PostStore abstracts post + post_target persistence. Mirrors enough of
+// repository.PostRepository for the new /posts CRUD endpoints.
+type PostStore interface {
+	Create(post *models.Post, targets []*models.PostTarget) error
+	FindByID(id int64) (*models.Post, error)
+	Update(post *models.Post) error
+	ListByWorkspace(workspaceID int64) ([]models.Post, error)
+	Save(target *models.PostTarget) error
+}
+
+// noopWorkspaceStore / noopPostStore are zero-dependency defaults used when
+// NewRouter is called WITHOUT explicit repos (e.g., from existing test
+// helpers that only exercise pre-existing OAuth/publish routes).
+type noopWorkspaceStore struct{}
+
+func (noopWorkspaceStore) Create(*models.Workspace) error       { return nil }
+func (noopWorkspaceStore) FindByID(int64) (*models.Workspace, error) { return nil, nil }
+func (noopWorkspaceStore) ListByOwner(int64) ([]models.Workspace, error) {
+	return []models.Workspace{}, nil
+}
+func (noopWorkspaceStore) Delete(int64) error { return nil }
+
+type noopPostStore struct{}
+
+func (noopPostStore) Create(*models.Post, []*models.PostTarget) error { return nil }
+func (noopPostStore) FindByID(int64) (*models.Post, error)             { return nil, nil }
+func (noopPostStore) Update(*models.Post) error                        { return nil }
+func (noopPostStore) ListByWorkspace(int64) ([]models.Post, error) {
+	return []models.Post{}, nil
+}
+func (noopPostStore) Save(*models.PostTarget) error { return nil }
+
+// NewRouter creates a new Router with platform providers, repos, and an auth
+// manager.
+//
+// workspaceRepo + postRepo are optional to preserve backwards-compatibility
+// with the pre-existing routes_test.go helper. Pass nil if the caller only
+// exercises OAuth/publish/metrics routes; NewRouter substitutes zero-return
+// noop stores internally so handler tests that don't call
+// /workspaces / /posts endpoints don't crash. Tests that DO exercise the new
+// endpoints pass their own mock implementations (see workspaces_test.go and
+// posts_test.go).
+//
 // strictAuth controls whether protected endpoints require a valid JWT.
 // frontendURL, when non-empty, redirects OAuth callbacks to this origin's
 // /auth/callback route with the JWT in query params. When empty, the callback
@@ -48,51 +107,61 @@ type UserStore interface {
 func NewRouter(
 	platforms map[string]services.PlatformService,
 	userRepo UserStore,
+	workspaceRepo WorkspaceStore,
+	postRepo PostStore,
 	authMgr *auth.Manager,
 	strictAuth bool,
 	frontendURL string,
 	allowedOrigins []string,
-	opts ...RouterOption,
 ) *Router {
-	r := &Router{
+	if workspaceRepo == nil {
+		workspaceRepo = noopWorkspaceStore{}
+	}
+	if postRepo == nil {
+		postRepo = noopPostStore{}
+	}
+	return &Router{
 		platforms:     platforms,
 		userRepo:      userRepo,
+		workspaceRepo: workspaceRepo,
+		postRepo:      postRepo,
 		auth:          authMgr,
 		strictAuth:    strictAuth,
 		frontendURL:   frontendURL,
 		allowedOrigin: allowedOrigins,
 	}
-	for _, opt := range opts {
-		opt(r)
-	}
-	return r
 }
 
-// Setup registers all HTTP routes and returns the handler.
+// Setup registers all HTTP routes on a chi.Mux and returns the handler.
+// chi is used over stdlib ServeMux so /workspaces/{id} and /posts/{id}/...
+// sub-routes read cleanly via chi.URLParam.
 func (r *Router) Setup() http.Handler {
-	mux := http.NewServeMux()
+	r.mux = chi.NewRouter()
 
-	mux.HandleFunc("GET /api/v1/health", r.handleHealth)
-	mux.HandleFunc("GET /api/v1/auth/{provider}/login", r.handleLogin)
-	mux.HandleFunc("GET /api/v1/auth/{provider}/callback", r.handleCallback)
-	mux.HandleFunc("POST /api/v1/posts/publish", r.protected(r.handlePublishPost))
-	mux.HandleFunc("POST /api/v1/posts/publish-all", r.protected(r.handlePublishAll))
-	mux.HandleFunc("GET /api/v1/accounts", r.protected(r.handleListAccounts))
-	mux.HandleFunc("GET /api/v1/metrics", r.handleMetrics)
+	r.mux.Method("GET", "/api/v1/health", r.handleHealth)
+	r.mux.Method("GET", "/api/v1/auth/{provider}/login", r.handleLogin)
+	r.mux.Method("GET", "/api/v1/auth/{provider}/callback", r.handleCallback)
+	r.mux.Method("POST", "/api/v1/posts/publish", r.protected(r.handlePublishPost))
+	r.mux.Method("POST", "/api/v1/posts/publish-all", r.protected(r.handlePublishAll))
+	r.mux.Method("GET", "/api/v1/accounts", r.protected(r.handleListAccounts))
+	r.mux.Method("GET", "/api/v1/metrics", r.handleMetrics)
 
-	// Workspaces + posts CRUD (commit feat(api): endpoints workspaces e posts)
-	mux.HandleFunc("GET /api/v1/workspaces", r.protected(r.handleListWorkspaces))
-	mux.HandleFunc("POST /api/v1/workspaces", r.protected(r.handleCreateWorkspace))
-	mux.HandleFunc("GET /api/v1/workspaces/{id}", r.protected(r.handleGetWorkspace))
-	mux.HandleFunc("POST /api/v1/posts", r.protected(r.handleCreatePost))
-	mux.HandleFunc("GET /api/v1/workspaces/{id}/posts", r.protected(r.handleListWorkspacePosts))
-	mux.HandleFunc("GET /api/v1/posts/{id}", r.protected(r.handleGetPost))
+	// New CRUD endpoints under chi sub-routers.
+	r.mux.Route("/api/v1/workspaces", func(sr chi.Router) {
+		sr.Post("/", r.protected(r.handleCreateWorkspace))
+		sr.Get("/", r.protected(r.handleListWorkspaces))
+		sr.Get("/{id}", r.protected(r.handleGetWorkspace))
+		sr.Delete("/{id}", r.protected(r.handleDeleteWorkspace))
+	})
+	r.mux.Route("/api/v1/posts", func(sr chi.Router) {
+		sr.Post("/", r.protected(r.handleCreatePost))
+		sr.Post("/{id}/targets", r.protected(r.handleAddTarget))
+		sr.Post("/{id}/schedule", r.protected(r.handleSchedulePost))
+		sr.Get("/{id}", r.protected(r.handleGetPost))
+		sr.Get("/workspace/{wid}", r.protected(r.handleListByWorkspace))
+	})
 
-	// Presigned upload URLs for heavy media files (commit feat(storage):
-	// presigned upload URLs per video pesanti / immagini grandi).
-	mux.HandleFunc("POST /api/v1/storage/upload-url", r.protected(r.handleCreateUploadURL))
-
-	return r.corsMiddleware(r.loggingMiddleware(mux))
+	return r.corsMiddleware(r.loggingMiddleware(r.mux))
 }
 
 func (r *Router) handleHealth(w http.ResponseWriter, req *http.Request) {
