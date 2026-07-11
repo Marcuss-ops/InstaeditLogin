@@ -1,0 +1,1 @@
+web: ./instaedit-server
