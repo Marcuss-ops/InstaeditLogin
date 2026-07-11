@@ -5,3 +5,8 @@
 .gitignore
 web/
 *.md
+Dockerfile
+Procfile
+.dockerignore
+instaedit-server
+*_test.go
