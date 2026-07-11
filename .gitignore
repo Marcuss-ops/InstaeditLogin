@@ -30,3 +30,13 @@ vendor/
 .vercel
 .vscode/
 
+
+# --- restored project-universal (post-cleanup 2026-07-11) ---
+*.gen.go
+*.pb.go
+*.pprof
+*.prof
+*.so.*
+/bin/
+go.work.sum
+secrets/
