@@ -15,8 +15,14 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// newPostsTestRouter builds a Router wired with a noop workspace store and
-// the supplied postStore. Use for /posts endpoint tests.
+// mockPostStore is defined in routes_test.go (canonical, shared across
+// all test files in this package). This file only declares its own
+// test helpers; it does NOT redeclare the struct.
+
+// newPostsTestRouter builds a Router wired with a noop workspace store
+// and the supplied postStore. Use for /posts endpoint tests. Matches the
+// variadic-options NewRouter signature in handlers.go (6 positional +
+// options).
 func newPostsTestRouter(
 	postStore *mockPostStore,
 	strictAuth bool,
@@ -77,8 +83,12 @@ func TestPostsAPI_Create_ErrPostUnauthorized_403(t *testing.T) {
 		},
 	}, false)
 
+	// Body must include at least one valid target so the handler's
+	// no-targets 422 guard doesn't preempt the createFn. The test's
+	// intent is to verify ErrPostUnauthorized → 403 mapping, not
+	// target validation; the target here is a no-op data point.
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts",
-		bytes.NewReader([]byte(`{"workspace_id":1}`)))
+		bytes.NewReader([]byte(`{"workspace_id":1,"targets":[{"platform_account_id":10}]}`)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)

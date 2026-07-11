@@ -73,7 +73,7 @@ export function bannerCopy(result: Extract<ProbeResult, { ok: false }>): BannerC
         title: "Cannot reach the backend",
         body: `The browser couldn't reach ${shortHost(result.url)}. The host is down, firewalled, or its CORS preflight refused the request.`,
         hint:
-          "Verify the backend is running and add this frontend's origin (https://instaedit.org) to CORS_ALLOWED_ORIGINS on the backend.",
+          `Verify the backend is running and add this frontend's origin (${window.location.origin}) to CORS_ALLOWED_ORIGINS on the backend.`,
       };
   }
 }

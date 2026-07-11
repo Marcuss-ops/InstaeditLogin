@@ -307,19 +307,112 @@ La sezione "APP_ENV", "Supabase Storage", e "CORS origins" del file `.env.exampl
 
 ---
 
+## 13. Contract API (leggi prima di toccare gli handler `/workspaces` e `/posts`)
+
+Tre dettagli del contract API che sono **bloccanti** — una modifica sbagliata rompe i test o la UI. Aggiunti di recente (vedi `pkg/api/posts.go` e `pkg/api/workspaces.go`).
+
+### 13.1 422 vs 400 — quando usare quale
+
+I handler `/workspaces` e `/posts` seguono una convenzione a due livelli:
+
+- **400 Bad Request** = il body non è parseable come JSON, OPPURE un valore parseable è invalido (es. `status="bogus"` non corrisponde a nessun valore di `models.PostStatus`).
+- **422 Unprocessable Entity** = il JSON è parseato OK, ma un campo semanticamente richiesto manca (es. `workspace_id=0`, `name=""`, `targets=[]`, oppure un target con `platform_account_id=0`).
+
+Esempi concreti:
+
+| Body | Risposta |
+|------|----------|
+| `POST /workspaces` con `{}` | 422 "name is required" |
+| `POST /workspaces` con `"not json"` | 400 "invalid request body: ..." |
+| `POST /posts` con `{"title":"x"}` (manca `workspace_id`) | 422 "workspace_id is required" |
+| `POST /posts` con `{"workspace_id":1}` (manca `targets`) | 422 "at least one target is required" |
+| `POST /posts` con `{"workspace_id":1,"targets":[{"platform_account_id":0}]}` | 422 "targets[0].platform_account_id is required" |
+| `POST /posts` con `{"workspace_id":1,"status":"bogus"}` | 400 "status must be one of: draft, scheduled, publishing, published, failed" |
+
+**Perché due livelli**: la SPA distingue "fix del tuo payload" (422 → mostra validation error sul form) da "fix della tua integrazione" (400 → logga un bug). Non collassare i due.
+
+I test in `pkg/api/routes_test.go::TestHandleCreateWorkspace_MissingName_422`, `TestHandleCreatePost_MissingWorkspaceID_422`, `TestHandleCreatePost_NoTargets_422`, `TestHandleCreatePost_BadTargetID_422`, e il `TestPostsAPI_Create_BadStatus_400` in `pkg/api/posts_test.go` lockano il contract — qualsiasi regressione qui rompe `go test ./pkg/api/...`.
+
+### 13.2 Lenient-auth: fallback `userID=1` (solo test/legacy)
+
+Quando `STRICT_JWT_AUTH=false` (default per il dev locale e la finestra di rollback legacy), i handler workspace/post usano `userID=1` come fallback se né il JWT né un body/query `user_id` sono presenti. È una scelta **di test/legacy**, NON di produzione:
+
+- Il guard fail-fast in `cmd/server/main.go` rifiuta di partire con `APP_ENV=production && !STRICT_JWT_AUTH`, quindi in produzione il branch lenient è irraggiungibile.
+- Il fallback permette ai test di chiamare gli endpoint senza wirare un JWT issuer, mantenendo il test suite compatto.
+- Se devi aggiungere un nuovo handler che usa l'identità utente, replica il pattern in `handleCreatePost` / `handleCreateWorkspace` (vedi `pkg/api/posts.go` e `pkg/api/workspaces.go`):
+
+```go
+userID := resolveUserID(req, 0, r.strictAuth)
+if userID == 0 {
+    if r.strictAuth {
+        writeError(w, http.StatusUnauthorized, "user identity required")
+        return
+    }
+    // Lenient / legacy-fallback: when STRICT_JWT_AUTH=false and no JWT
+    // is present, default to a synthetic user id (1) so the handler
+    // stays testable. In production STRICT_JWT_AUTH defaults to true,
+    // so this branch is unreachable.
+    userID = 1
+}
+```
+
+**NON** introdurre un nuovo helper che legge un body fallback (`pubReq.UserID`) come fa `handlePublishPost` — i handler workspace/post non leggono un body fallback per design. I test esistenti in `pkg/api/posts_test.go` e `pkg/api/workspaces_test.go` usano `strictAuth=false` e si aspettano il fallback a 1.
+
+### 13.3 `createPostResponse` dual-shape (top-level + "post" key annidato)
+
+`handleCreatePost` restituisce `201` con un body che soddisfa **due** decoder di test diversi (uno flat, uno nested):
+
+```json
+{
+    "id": 100,
+    "workspace_id": 1,
+    "title": "hello",
+    "caption": "world",
+    "media_url": "",
+    "scheduled_at": null,
+    "status": "draft",
+    "created_at": "2024-01-01T00:00:00Z",
+    "post": {
+        "id": 100, "workspace_id": 1, "title": "hello", "caption": "world",
+        "media_url": "", "scheduled_at": null, "status": "draft",
+        "created_at": "2024-01-01T00:00:00Z"
+    },
+    "targets": [
+        {"id": 200, "post_id": 100, "platform_account_id": 10, "status": "scheduled"}
+    ]
+}
+```
+
+I campi flat (`id`, `workspace_id`, `status`, `scheduled_at`, ecc.) E la chiave annidata `"post"` puntano allo stesso `*models.Post`. Implementato da un `MarshalJSON` custom su `createPostResponse` in `pkg/api/posts.go` — la response è un `map[string]interface{}` costruito esplicitamente, NON uno struct con promotion embedded (che causerebbe un compile error Go "duplicate field Post" se provi anche a esporre una chiave "post").
+
+**Perché due shape?**
+
+- `pkg/api/routes_test.go::TestHandleCreatePost_Happy` decodifica in uno struct flat: `{ID, WorkspaceID, Status, ScheduledAt, Targets}`.
+- `pkg/api/posts_test.go::TestPostsAPI_Create_Happy_ReturnsPostPlusTargets` decodifica in uno struct nested: `{Post, Targets}`.
+
+Entrambi i test devono passare. Qualsiasi refactor che "semplifichi" la response (es. tornando a solo `{post, targets}`) rompe silenziosamente uno dei due decoder.
+
+Se devi cambiare la response shape, aggiorna **entrambi** i test file + il docstring su `createPostResponse.MarshalJSON` in `pkg/api/posts.go` in lockstep. Il test del nome `TestHandleCreatePost_Happy` (flat) e `TestPostsAPI_Create_Happy_ReturnsPostPlusTargets` (nested) sono i lock-in.
+
+---
+
 ## File di riferimento
 
 - `internal/config/config.go` — env validation fail-fast + `EnforceProductionInvariants` (TODO: da estrarre)
 - `internal/auth/jwt.go` — middleware strict/legacy modes
-- `pkg/api/routes.go` — router + CORS config
-- `cmd/server/main.go` — fail-fast guard `APP_ENV=production && !STRICT_JWT_AUTH`
+- `pkg/api/handlers.go` — `Router` struct, `NewRouter`, `Setup`, CORS + logging middleware, pre-existing routes (health, OAuth, publish, listAccounts, metrics)
+- `pkg/api/workspaces.go` — `/api/v1/workspaces` CRUD handlers; 422 vs 400 contract (§13.1); lenient-auth fallback (§13.2)
+- `pkg/api/posts.go` — `/api/v1/posts` CRUD handlers; 422 vs 400 contract (§13.1); lenient-auth fallback (§13.2); `createPostResponse` dual-shape (§13.3)
+- `pkg/api/storage.go` — `/api/v1/storage/upload-url` handler
+- `cmd/server/main.go` — fail-fast guard `APP_ENV=production && !STRICT_JWT_AUTH`; auto-migrate on boot
 - `web/src/lib/auth.ts` — `authedFetch()`, `probeBackend()`, JWT helpers
 - `web/src/lib/probe-cache.ts` — cache 5min per /health + force-clear
-- `web/src/lib/probe-display.ts` — banner copy per ogni `ProbeFailureReason`
+- `web/src/lib/probe-display.ts` — banner copy per ogni `ProbeFailureReason`; hint uses `window.location.origin`
 - `web/src/pages/Status.tsx` — UI completa del probe + fallback banner
-- `web/scripts/verify-api-base-url.ts` — build-time validator
+- `web/scripts/verify-api-base-url.ts` — build-time validator per `VITE_API_BASE_URL`
 - `web/scripts/generate-favicon-ico.mjs` — prebuild ICO generator
 - `README.md` — sezione "Deployment" con i 3 pitfall
 - `.env.example` — template con sezioni dev/prod commentate (sezione 12 di HANDOFF)
+- `HANDOFF-LINUX.md` §13 — contract API (422/400, lenient-auth, dual-shape)
 
 Buon login! 🚀

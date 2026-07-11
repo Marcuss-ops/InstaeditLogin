@@ -79,12 +79,15 @@ func (m *mockUserStore) ListPlatformAccountsByUser(userID int64, platform string
 	return m.listFn(userID, platform)
 }
 
-// mockWorkspaceStore implements WorkspaceStore with configurable function fields.
+// mockWorkspaceStore implements WorkspaceStore with configurable function
+// fields. Long-form names (listByOwnerFn, etc.) let workspaces_test.go
+// reuse this single struct without redeclaring — Go's test files share a
+// package-level namespace and would otherwise reject duplicates.
 type mockWorkspaceStore struct {
-	createFn    func(*models.Workspace) error
-	findByIDFn  func(id int64) (*models.Workspace, error)
+	createFn      func(*models.Workspace) error
+	findByIDFn    func(id int64) (*models.Workspace, error)
 	listByOwnerFn func(ownerID int64) ([]models.Workspace, error)
-	deleteFn    func(id int64) error
+	deleteFn      func(id int64) error
 }
 
 func (m *mockWorkspaceStore) Create(w *models.Workspace) error {
@@ -94,10 +97,20 @@ func (m *mockWorkspaceStore) Create(w *models.Workspace) error {
 	return m.createFn(w)
 }
 func (m *mockWorkspaceStore) FindByID(id int64) (*models.Workspace, error) {
-	if m.findByIDFn == nil {
-		return nil, nil
+	if m.findByIDFn != nil {
+		return m.findByIDFn(id)
 	}
-	return m.findByIDFn(id)
+	// Default behavior: return a real workspace owned by user 1 so the new
+	// workspace-ownership checks in handleCreatePost / handleGetPost pass
+	// for tests that don't wire findByIDFn explicitly. Tests that need
+	// cross-owner behavior (e.g. TestHandleCreatePost_CrossOwnerWorkspace_403)
+	// configure findByIDFn to return a workspace owned by 999.
+	return &models.Workspace{
+		ID:        id,
+		Name:      "default",
+		OwnerID:   1,
+		CreatedAt: time.Now(),
+	}, nil
 }
 func (m *mockWorkspaceStore) ListByOwner(ownerID int64) ([]models.Workspace, error) {
 	if m.listByOwnerFn == nil {
@@ -105,7 +118,6 @@ func (m *mockWorkspaceStore) ListByOwner(ownerID int64) ([]models.Workspace, err
 	}
 	return m.listByOwnerFn(ownerID)
 }
-
 func (m *mockWorkspaceStore) Delete(id int64) error {
 	if m.deleteFn == nil {
 		return nil
@@ -114,35 +126,51 @@ func (m *mockWorkspaceStore) Delete(id int64) error {
 }
 
 // mockPostStore implements PostStore with configurable function fields.
+// Update (used by handleSchedulePost) and Save (used by handleAddTarget)
+// are part of the unified PostStore interface in handlers.go; their
+// no-op fallback lets each test override only what it exercises.
+// Long-form name (listByWorkspaceFn) lets posts_test.go reuse this
+// single struct without redeclaring — Go's test files share a
+// package-level namespace and would otherwise reject duplicates.
 type mockPostStore struct {
-	createFn     func(*models.Post, []*models.PostTarget) error
-	findByIDFn   func(id int64) (*models.Post, error)
-	updateFn     func(*models.Post) error
-	listByWorkspaceFn   func(workspaceID int64) ([]models.Post, error)
-	listByPostFn func(postID int64) ([]models.PostTarget, error)
-	saveFn       func(*models.PostTarget) error
+	createFn          func(*models.Post, []*models.PostTarget) error
+	findByIDFn        func(id int64) (*models.Post, error)
+	updateFn          func(*models.Post) error
+	listByWorkspaceFn func(workspaceID int64) ([]models.Post, error)
+	saveFn            func(*models.PostTarget) error
 }
 
 func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget) error {
 	if m.createFn != nil {
 		return m.createFn(post, targets)
 	}
-	// Default behavior matches posts_test.go expectations: assign IDs so
-	// callers can assert post.ID=100 and target IDs without explicit override.
+	// Default behavior: assign deterministic IDs and a recent created_at so
+	// the handler's 201 response can be decoded by tests that don't
+	// override createFn (mirrors the real DB RETURNING clause semantics).
 	post.ID = 100
-	for i, target := range targets {
-		target.ID = int64(1000 + i)
-		target.PostID = 100
+	post.CreatedAt = time.Now()
+	for i, t := range targets {
+		t.ID = int64(200 + i)
+		t.PostID = post.ID
 	}
 	return nil
 }
 func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
-	if m.findByIDFn == nil {
-		return nil, nil
+	if m.findByIDFn != nil {
+		return m.findByIDFn(id)
 	}
-	return m.findByIDFn(id)
+	// Default behavior: return a real (draft) post for any id so handlers
+	// that pre-load the post (handleAddTarget, handleSchedulePost) work
+	// without each test wiring findByIDFn explicitly. Tests that need a
+	// 404 still configure findByIDFn to return sql.ErrNoRows.
+	return &models.Post{
+		ID:          id,
+		WorkspaceID: 1,
+		Title:       "default",
+		Status:      models.PostStatusDraft,
+		CreatedAt:   time.Now(),
+	}, nil
 }
-
 func (m *mockPostStore) Update(post *models.Post) error {
 	if m.updateFn == nil {
 		return nil
@@ -155,18 +183,8 @@ func (m *mockPostStore) ListByWorkspace(workspaceID int64) ([]models.Post, error
 	}
 	return m.listByWorkspaceFn(workspaceID)
 }
-func (m *mockPostStore) ListByPost(postID int64) ([]models.PostTarget, error) {
-	if m.listByPostFn == nil {
-		return nil, nil
-	}
-	return m.listByPostFn(postID)
-}
-
 func (m *mockPostStore) Save(target *models.PostTarget) error {
 	if m.saveFn == nil {
-		// Default behavior matches posts_test.go expectations: assign ID so
-		// callers can assert target.ID=999 without explicit override.
-		target.ID = 999
 		return nil
 	}
 	return m.saveFn(target)

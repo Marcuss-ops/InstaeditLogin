@@ -14,9 +14,14 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
+// mockWorkspaceStore is defined in routes_test.go (canonical, shared
+// across all test files in this package). This file only declares its
+// own test helpers; it does NOT redeclare the struct.
+
 // newWorkspaceTestRouter builds a Router wired with the supplied
 // workspaceStore + a noop post/user store. Use for /workspaces endpoint
-// tests only.
+// tests only. Matches the variadic-options NewRouter signature in
+// handlers.go (6 positional + options).
 func newWorkspaceTestRouter(
 	workspaceStore *mockWorkspaceStore,
 	strictAuth bool,
@@ -69,14 +74,17 @@ func TestWorkspacesAPI_Create_Happy(t *testing.T) {
 	}
 }
 
-func TestWorkspacesAPI_Create_MissingName_400(t *testing.T) {
+// 422 (not 400) per the current contract: the JSON parsed fine; the
+// field is just semantically missing. Aligns with the routes_test.go
+// spec (TestHandleCreateWorkspace_MissingName_422).
+func TestWorkspacesAPI_Create_MissingName_422(t *testing.T) {
 	r := newWorkspaceTestRouter(&mockWorkspaceStore{}, false)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", bytes.NewReader([]byte(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", w.Code)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d", w.Code)
 	}
 }
 
