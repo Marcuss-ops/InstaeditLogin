@@ -16,6 +16,12 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// SessionCookieName is the HttpOnly cookie name that the dashboard SPA
+// receives from POST /api/v1/auth/exchange (Taglio 1.2). The cookie value
+// is a JWT signed by Manager.Issue, identical in format to the Bearer token
+// used by API-key clients. The middleware (below) accepts either form.
+const SessionCookieName = "session"
+
 // contextKey is unexported so external packages cannot collide with our keys.
 type contextKey string
 
@@ -97,39 +103,58 @@ func (m *Manager) Verify(raw string) (int64, error) {
 	return claims.UserID, nil
 }
 
-// Middleware returns a handler that enforces JWT auth. The contract is
-// strictly: every request MUST carry an Authorization: Bearer <jwt> header
-// with a valid HS256 token. Anything else (missing header, wrong scheme,
-// expired/invalid token) is rejected with 401 before the handler runs.
+// Middleware returns a handler that enforces auth. The contract is
+// strictly: every request MUST carry a valid session — either an
+// `Authorization: Bearer <jwt>` header (API-key / machine clients) OR a
+// `Cookie: session=<jwt>` cookie (dashboard SPA, set by
+// /api/v1/auth/exchange after Taglio 1.2).
 //
-// After Taglio 1.1 THERE IS NO LEGACY MODE. Identity never comes from the
-// request body, never from the query string, and never from a synthetic
-// fallback user id. When API-key auth (Taglio 1.2) is added, that path
-// will sit in front of this middleware so the JWT context key is still
-// the only source of user identity for downstream handlers.
+// Anything else (missing both, wrong scheme, expired/invalid token) is
+// rejected with 401 before the handler runs.
+//
+// Identity never comes from the request body, never from the query string,
+// and never from a synthetic fallback user id. When API-key auth is added
+// (Taglio 1.2+), API keys live in their own database table and their
+// resolved user id is dropped into the same context key by a separate
+// middleware sitting in front of this one.
 //
 // Use UserIDFromContext to retrieve the authenticated user id downstream.
 func (m *Manager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		if header == "" {
-			http.Error(w, "missing authorization header", http.StatusUnauthorized)
+		// 1) Authorization: Bearer wins when present (API-key / non-browser
+		//    clients; preserves the existing test suite which sets this
+		//    header via withBearerJWT).
+		if header := r.Header.Get("Authorization"); header != "" {
+			const prefix = "Bearer "
+			if !strings.HasPrefix(header, prefix) {
+				http.Error(w, "invalid authorization header", http.StatusUnauthorized)
+				return
+			}
+			raw := strings.TrimSpace(header[len(prefix):])
+			userID, err := m.Verify(raw)
+			if err != nil {
+				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+				return
+			}
+			m.putUser(r, w, next, userID)
 			return
 		}
-		const prefix = "Bearer "
-		if !strings.HasPrefix(header, prefix) {
-			http.Error(w, "invalid authorization header", http.StatusUnauthorized)
-			return
+		// 2) Fallback: HttpOnly session cookie set by /api/v1/auth/exchange
+		//    (Taglio 1.2). The browser attaches it via credentials:'include'.
+		if c, err := r.Cookie(SessionCookieName); err == nil && c.Value != "" {
+			userID, err := m.Verify(c.Value)
+			if err == nil && userID > 0 {
+				m.putUser(r, w, next, userID)
+				return
+			}
 		}
-		raw := strings.TrimSpace(header[len(prefix):])
-		userID, err := m.Verify(raw)
-		if err != nil {
-			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
-			return
-		}
-		ctx := context.WithValue(r.Context(), userIDKey, userID)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		http.Error(w, "missing or invalid session", http.StatusUnauthorized)
 	})
+}
+
+func (m *Manager) putUser(r *http.Request, w http.ResponseWriter, next http.Handler, userID int64) {
+	ctx := context.WithValue(r.Context(), userIDKey, userID)
+	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // UserIDFromContext returns the authenticated user id placed by Middleware.
@@ -147,9 +172,9 @@ func UserIDFromContext(ctx context.Context) (int64, bool) {
 // bypasses JWT auth — the request reaches the handler with a
 // context-asserted user id but no real authentication. Production
 // handlers MUST obtain the user id from Middleware (via the Authorization
-// header) so the JWT is verified. Only call WithUserID from *_test.go
-// files (e.g. to test requireUserID / handleCreatePost without standing
-// up a full JWT round-trip).
+// header OR the session cookie) so the JWT is verified. Only call
+// WithUserID from *_test.go files (e.g. to test requireUserID /
+// handleCreatePost without standing up a full JWT round-trip).
 func WithUserID(ctx context.Context, userID int64) context.Context {
 	return context.WithValue(ctx, userIDKey, userID)
 }

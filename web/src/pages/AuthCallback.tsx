@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { setSession } from "../lib/auth";
+import { API_BASE_URL } from "../lib/supabase";
+import { clearSessionCache } from "../lib/auth";
 
 type CallbackStatus = "processing" | "success" | "error";
 
@@ -11,28 +12,62 @@ export function AuthCallback() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const jwt = params.get("jwt");
+    const code = params.get("code");
     const provider = params.get("provider") ?? "";
-    const userId = params.get("user_id") ?? "";
-    const name = params.get("name") ?? "";
-    const username = params.get("username") ?? "";
-    const expiresAt = params.get("expires_at") ?? "";
 
-    if (!jwt || !userId || !expiresAt) {
+    if (!code) {
       setStatus("error");
       setError(
-        "The OAuth callback did not include a valid session. Please try again from the login page.",
+        "The OAuth callback did not include a one-time code. Please try again from the login page.",
       );
       return;
     }
 
-    setSession(jwt, userId, expiresAt, name || username);
-
-    // Replace history so the JWT-bearing URL never lands in browser history.
-    navigate("/dashboard", {
-      replace: true,
-      state: { provider, username, expiresAt },
-    });
+    (async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/v1/auth/exchange`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code }),
+          },
+        );
+        if (response.status === 204) {
+          // Session cookie is set. Force a fresh /api/v1/auth/me fetch on
+          // the next page that needs it.
+          clearSessionCache();
+          setStatus("success");
+          // Replace history so the ?code= URL never lands in browser history.
+          navigate("/dashboard", {
+            replace: true,
+            state: { provider },
+          });
+          return;
+        }
+        let detail = `HTTP ${response.status}`;
+        try {
+          const data = (await response.json()) as { error?: string };
+          if (data?.error) {
+            detail = data.error;
+          }
+        } catch {
+          // body wasn't JSON
+        }
+        setStatus("error");
+        setError(
+          `Could not finalize sign-in: ${detail}. Please try again from the login page.`,
+        );
+      } catch (err) {
+        setStatus("error");
+        setError(
+          err instanceof Error
+            ? `Could not reach the backend: ${err.message}`
+            : "Could not reach the backend.",
+        );
+      }
+    })();
   }, [navigate]);
 
   return (
@@ -46,6 +81,17 @@ export function AuthCallback() {
             </h1>
             <p className="text-[15px] text-neutral-500">
               Securing your session and loading your connected accounts.
+            </p>
+          </>
+        )}
+
+        {status === "success" && (
+          <>
+            <h1 className="text-2xl font-bold tracking-[-0.02em] text-black mb-2">
+              Signed in.
+            </h1>
+            <p className="text-[15px] text-neutral-500">
+              Redirecting to your dashboard…
             </p>
           </>
         )}

@@ -1,64 +1,106 @@
 /**
- * Auth helpers for the InstaEdit SPA.
+ * Auth helpers for the InstaEdit SPA (Taglio 1.2).
  *
- * The OAuth callback (backend /api/v1/auth/{provider}/callback) issues a JWT
- * and redirects the browser here with the token in the URL query string.
- * /auth/callback reads it from window.location, stores it in localStorage
- * under JWT_STORAGE_KEY, then replaces the history entry so the token never
- * lands in browser history. From then on authedFetch() attaches it as a
- * Bearer header on every API call.
+ * Migration notes:
+ *   - The OAuth callback (backend /api/v1/auth/{provider}/callback) no
+ *     longer returns the JWT in the URL. It returns a single-use code.
+ *   - /auth/callback POSTs that code to /api/v1/auth/exchange, which sets
+ *     a HttpOnly Secure SameSite=None `session` cookie carrying the JWT.
+ *   - The SPA then fetches /api/v1/auth/me on every page load to learn who
+ *     is logged in (no localStorage, no JWT in JS).
+ *   - authedFetch attaches credentials: 'include' so the browser sends the
+ *     session cookie. The backend middleware reads the cookie when no
+ *     Authorization: Bearer header is set.
+ *   - logout POSTs to /api/v1/auth/logout (which clears the cookie) and
+ *     then hard-navigates to /login.
  */
 
 import { API_BASE_URL } from "./supabase";
 
-const JWT_STORAGE_KEY = "instaedit_jwt";
-const USER_STORAGE_KEY = "instaedit_user";
-const EXPIRES_STORAGE_KEY = "instaedit_jwt_expires_at";
-
-export type StoredSession = {
-  jwt: string;
-  userId: string;
-  expiresAt: string;
+export type Session = {
+  userId: number;
   name: string;
+  username: string;
+  expiresAt: string;
 };
 
-export function getJwt(): string | null {
-  return localStorage.getItem(JWT_STORAGE_KEY);
-}
+let sessionCache: Session | null | undefined = undefined;
+let sessionPromise: Promise<Session | null> | null = null;
 
-export function getSession(): StoredSession | null {
-  const jwt = getJwt();
-  const userId = localStorage.getItem(USER_STORAGE_KEY);
-  const expiresAt = localStorage.getItem(EXPIRES_STORAGE_KEY);
-  const name = localStorage.getItem("instaedit_name") ?? "";
-  if (!jwt || !userId || !expiresAt) {
-    return null;
+/**
+ * Fetches the current session from /api/v1/auth/me. Returns null on 401
+ * (no session) or any non-2xx. The result is cached in module-scope memory
+ * for the lifetime of the SPA so a router re-render doesn't re-fetch.
+ *
+ * Use the cached version when navigating client-side; call clearSessionCache()
+ * after logout so the next fetchSession re-reads the server.
+ */
+export async function fetchSession(): Promise<Session | null> {
+  if (sessionCache !== undefined) {
+    return sessionCache;
   }
-  return { jwt, userId, expiresAt, name };
+  if (sessionPromise) {
+    return sessionPromise;
+  }
+  sessionPromise = (async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
+        method: "GET",
+        credentials: "include",
+      });
+      if (response.status === 401) {
+        sessionCache = null;
+        return null;
+      }
+      if (!response.ok) {
+        sessionCache = null;
+        return null;
+      }
+      const data = (await response.json()) as { user_id: number };
+      // The backend currently returns just user_id. The SPA can fetch
+      // richer profile data from /api/v1/accounts. For the dashboard
+      // greeting we fall back to a generic label if name is unknown.
+      sessionCache = {
+        userId: data.user_id,
+        name: "",
+        username: "",
+        expiresAt: "",
+      };
+      return sessionCache;
+    } catch {
+      sessionCache = null;
+      return null;
+    } finally {
+      sessionPromise = null;
+    }
+  })();
+  return sessionPromise;
 }
 
-export function setSession(jwt: string, userId: string, expiresAt: string, name: string): void {
-  localStorage.setItem(JWT_STORAGE_KEY, jwt);
-  localStorage.setItem(USER_STORAGE_KEY, userId);
-  localStorage.setItem(EXPIRES_STORAGE_KEY, expiresAt);
-  localStorage.setItem("instaedit_name", name);
-}
-
-export function clearSession(): void {
-  localStorage.removeItem(JWT_STORAGE_KEY);
-  localStorage.removeItem(USER_STORAGE_KEY);
-  localStorage.removeItem(EXPIRES_STORAGE_KEY);
-  localStorage.removeItem("instaedit_name");
+/**
+ * Clears the in-memory session cache so the next fetchSession re-reads
+ * /api/v1/auth/me. Call this from the Login page after the user signs out
+ * of another tab, or after the exchange flow, to ensure stale data is
+ * flushed.
+ */
+export function clearSessionCache(): void {
+  sessionCache = undefined;
+  sessionPromise = null;
 }
 
 /**
  * Performs an authenticated fetch against the Go backend.
  *
- * Behavior:
- *  - prepends API_BASE_URL
- *  - injects Authorization: Bearer <jwt> when a token is stored
- *  - throws AuthError when the server returns 401 (caller decides how to react)
- *  - throws ApiError with the server-provided message when 4xx/5xx
+ * Behavior (Taglio 1.2):
+ *   - prepends API_BASE_URL
+ *   - sends credentials: 'include' so the HttpOnly session cookie
+ *     (set by /api/v1/auth/exchange) is attached automatically
+ *   - DOES NOT inject Authorization: Bearer anymore — the cookie path
+ *     is the source of truth for the dashboard SPA. API-key clients
+ *     (machine-to-machine) can still pass their own Authorization
+ *     header in `init.headers`.
+ *   - throws AuthError when the server returns 401
+ *   - throws ApiError with the server-provided message when 4xx/5xx
  */
 export class AuthError extends Error {
   constructor() {
@@ -80,12 +122,8 @@ export async function authedFetch(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  const jwt = getJwt();
   const headers = new Headers(init.headers);
 
-  if (jwt) {
-    headers.set("Authorization", `Bearer ${jwt}`);
-  }
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -93,10 +131,11 @@ export async function authedFetch(
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers,
+    credentials: "include",
   });
 
   if (response.status === 401) {
-    clearSession();
+    clearSessionCache();
     throw new AuthError();
   }
 
@@ -117,16 +156,25 @@ export async function authedFetch(
 }
 
 /**
- * Logs the user out: clears the stored JWT and bounces to /login with a flag
- * the Login page can read via useSearchParams (or just show a notice).
+ * Logs the user out: tells the backend to clear the HttpOnly session
+ * cookie, then hard-navigates to /login. Best-effort: a network failure
+ * here is swallowed (the cookie will expire naturally on the server).
  */
-export function logout(redirectTo: string = "/login"): void {
-  clearSession();
+export async function logout(redirectTo: string = "/login"): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch {
+    // network is down, but we still want to navigate the user out
+  }
+  clearSessionCache();
   window.location.href = redirectTo;
 }
 
 // ----------------------------------------------------------------------------
-// Backend health probe
+// Backend health probe (unchanged)
 // ----------------------------------------------------------------------------
 
 export type ProbeFailureReason =
@@ -143,24 +191,6 @@ export type ProbeResult =
 const HEALTH_PATH = "/api/v1/health";
 const DEFAULT_TIMEOUT_MS = 5000;
 
-/**
- * Pings the backend's /api/v1/health endpoint to learn if the configured
- * API_BASE_URL is reachable and actually serving the InstaEdit API.
- *
- * Used by /login to render a status pill and (when the backend is dead) a
- * red banner with deployment-fix guidance. Used by /dashboard to surface
- * a clear "backend offline" state distinct from "no accounts yet".
- *
- * Reasons:
- *  - not_found   → backend answered but /api/v1/health was 404. Almost
- *                  certainly a stale URL (e.g. a deleted Vercel project).
- *  - http_error  → non-2xx, non-404 status from backend.
- *  - unreachable → fetch threw (network/CORS/the host is dead).
- *  - timeout     → no response within timeoutMs.
- *
- * An optional AbortSignal lets callers cancel an in-flight probe (e.g. when
- * /dashboard user spam-clicks the Retry button).
- */
 export async function probeBackend(
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
   externalSignal?: AbortSignal,
@@ -169,7 +199,6 @@ export async function probeBackend(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  // Forward external signal to our internal one without requiring AbortSignal.any().
   const onExternalAbort = () => controller.abort();
   if (externalSignal) {
     if (externalSignal.aborted) {
@@ -180,18 +209,13 @@ export async function probeBackend(
   }
 
   try {
-    const response = await fetch(url, { method: "GET", signal: controller.signal });
+    const response = await fetch(url, { method: "GET", signal: controller.signal, credentials: "include" });
     clearTimeout(timer);
 
     if (response.ok) {
       return { ok: true, url: API_BASE_URL, status: response.status };
-    }    if (response.status === 404) {
-      // Vercel edge returns 404 with body `DEPLOYMENT_NOT_FOUND` when a
-      // deployment has been removed or expired. When the configured
-      // VITE_API_BASE_URL points at a *.vercel.app host, that is the
-      // overwhelmingly likely cause — surface a dedicated reason so the
-      // banner can recommend the specific fix (update env var on
-      // Vercel + redeploy) instead of the generic "URL stale" wording.
+    }
+    if (response.status === 404) {
       if (isVercelAppHost(API_BASE_URL)) {
         return {
           ok: false,
@@ -230,7 +254,6 @@ export async function probeBackend(
         message: "Backend did not respond within the timeout window.",
       };
     }
-    // Fetch TypeError is the canonical "network or CORS preflight refused".
     return {
       ok: false,
       url: API_BASE_URL,
@@ -246,43 +269,23 @@ export async function probeBackend(
   }
 }
 
-/**
- * Returns a teardown function that re-runs `onChange` whenever the tab regains
- * focus or becomes visible. Useful for self-healing: a developer noticing the
- * backend 404 can start the server, switch back to the tab, and the UI snaps
- * to "connected" without a hard reload.
- */
 export function subscribeToVisibility(onChange: () => void): () => void {
-	if (typeof window === "undefined") {
-		return () => {};
-	}
-	const handler = () => {
-		if (document.visibilityState === "visible") {
-			onChange();
-		}
-	};
-	window.addEventListener("focus", onChange);
-	document.addEventListener("visibilitychange", handler);
-	return () => {
-		window.removeEventListener("focus", onChange);
-		document.removeEventListener("visibilitychange", handler);
-	};
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  const handler = () => {
+    if (document.visibilityState === "visible") {
+      onChange();
+    }
+  };
+  window.addEventListener("focus", onChange);
+  document.addEventListener("visibilitychange", handler);
+  return () => {
+    window.removeEventListener("focus", onChange);
+    document.removeEventListener("visibilitychange", handler);
+  };
 }
 
-/**
- * Returns true if the given URL's hostname is `vercel.app` or any subdomain
- * of it (e.g. `instaedit-login-abc123.vercel.app`).
- *
- * Used internally by probeBackend's 404 handler to switch the failure
- * reason to `vercel_stale_deploy`; also exported because the unit tests in
- * `auth.test.ts` assert on this predicate directly. Production callers
- * should go through probeBackend instead of invoking this directly.
- *
- * Case-insensitive on the hostname; scheme/port/path are irrelevant.
- * Invalid URLs (those rejected by `new URL`) return false rather than
- * throwing — the caller can treat them as "definitely not Vercel" and
- * fall through to the generic `not_found` path.
- */
 export function isVercelAppHost(rawUrl: string): boolean {
   try {
     const hostname = new URL(rawUrl).hostname.toLowerCase();
@@ -293,77 +296,69 @@ export function isVercelAppHost(rawUrl: string): boolean {
 }
 
 // ----------------------------------------------------------------------------
-// Auth boundary probe
+// Auth boundary probe (unchanged behavior, just credentials: 'include')
 // ----------------------------------------------------------------------------
 
 export type AuthBoundaryFailureReason = "cors" | "not_401" | "unreachable" | "timeout";
 
 export type AuthBoundaryResult =
-	| { ok: true; status: number }
-	| {
-			ok: false;
-			status: number | null;
-			reason: AuthBoundaryFailureReason;
-			message: string;
-	  };
+  | { ok: true; status: number }
+  | {
+      ok: false;
+      status: number | null;
+      reason: AuthBoundaryFailureReason;
+      message: string;
+    };
 
-/**
- * Pings a JWT-protected route WITHOUT a Bearer token. The healthy expected
- * response is HTTP 401 — but it must come back with valid CORS headers.
- *
- * Use this alongside probeBackend() to catch the subtle
- * "/health returns 200 but /api/v1/accounts CORS fails" class of bug. A
- * blocked fetch surfaces as reason="cors". A 200/500 from the protected
- * route surfaces as reason="not_401".
- */
 export async function probeAuthBoundary(
-	timeoutMs: number = DEFAULT_TIMEOUT_MS,
-	externalSignal?: AbortSignal,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  externalSignal?: AbortSignal,
 ): Promise<AuthBoundaryResult> {
-	const url = `${API_BASE_URL}/api/v1/accounts`;
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
-	const onExternalAbort = () => controller.abort();
-	if (externalSignal) {
-		if (externalSignal.aborted) {
-			controller.abort();
-		} else {
-			externalSignal.addEventListener("abort", onExternalAbort);
-		}
-	}
+  const url = `${API_BASE_URL}/api/v1/accounts`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      externalSignal.addEventListener("abort", onExternalAbort);
+    }
+  }
 
-	try {
-		const response = await fetch(url, { method: "GET", signal: controller.signal });
-		clearTimeout(timer);
-		if (response.status === 401) {
-			return { ok: true, status: 401 };
-		}
-		return {
-			ok: false,
-			status: response.status,
-			reason: "not_401",
-			message:
-				"Protected endpoint answered without rejecting the unauthenticated request. The auth middleware may be mis-wired or CORS is bleating through incorrectly.",
-		};  } catch {
-		clearTimeout(timer);
-		if (controller.signal.aborted) {
-			return {
-				ok: false,
-				status: null,
-				reason: "timeout",
-				message: "Auth-boundary probe timed out before responding.",
-			};
-		}
-		return {
-			ok: false,
-			status: null,
-			reason: "cors",
-			message:
-				"Browser blocked the protected-route probe — almost always a CORS preflight failure. Add this origin to CORS_ALLOWED_ORIGINS on the backend.",
-		};
-	} finally {
-		if (externalSignal) {
-			externalSignal.removeEventListener("abort", onExternalAbort);
-		}
-	}
+  try {
+    const response = await fetch(url, { method: "GET", signal: controller.signal, credentials: "include" });
+    clearTimeout(timer);
+    if (response.status === 401) {
+      return { ok: true, status: 401 };
+    }
+    return {
+      ok: false,
+      status: response.status,
+      reason: "not_401",
+      message:
+        "Protected endpoint answered without rejecting the unauthenticated request. The auth middleware may be mis-wired or CORS is bleating through incorrectly.",
+    };
+  } catch {
+    clearTimeout(timer);
+    if (controller.signal.aborted) {
+      return {
+        ok: false,
+        status: null,
+        reason: "timeout",
+        message: "Auth-boundary probe timed out before responding.",
+      };
+    }
+    return {
+      ok: false,
+      status: null,
+      reason: "cors",
+      message:
+        "Browser blocked the protected-route probe — almost always a CORS preflight failure. Add this origin to CORS_ALLOWED_ORIGINS on the backend.",
+    };
+  } finally {
+    if (externalSignal) {
+      externalSignal.removeEventListener("abort", onExternalAbort);
+    }
+  }
 }

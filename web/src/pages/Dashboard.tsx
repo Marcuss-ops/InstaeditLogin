@@ -7,8 +7,8 @@ import {
   ApiError,
   AuthError,
   authedFetch,
-  getJwt,
-  getSession,
+  clearSessionCache,
+  fetchSession,
   logout,
   probeBackend,
   type ProbeResult,
@@ -63,7 +63,7 @@ export function Dashboard() {
   // race two responses into the state machine.
   const abortRef = useRef<AbortController | null>(null);
 
-  const loadAccounts = useCallback(async () => {
+  const loadAccounts = useCallback(async (nameFallback = "") => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -91,11 +91,10 @@ export function Dashboard() {
       }
       const data = (await response.json()) as { accounts: PlatformAccount[] };
       const accounts = data.accounts ?? [];
-      const name = getSession()?.name ?? "";
       setState(
         accounts.length === 0
-          ? { kind: "empty", name }
-          : { kind: "ready", name, accounts },
+          ? { kind: "empty", name: nameFallback }
+          : { kind: "ready", name: nameFallback, accounts },
       );
     } catch (err) {
       if (controller.signal.aborted) {
@@ -115,14 +114,22 @@ export function Dashboard() {
   }, [navigate]);
 
   useEffect(() => {
-    if (!getJwt()) {
-      navigate("/login", { replace: true });
-      return;
-    }
-    const session = getSession();
-    setSessionName(session?.name ?? "");
-    void loadAccounts();
+    let cancelled = false;
+    void (async () => {
+      // Taglio 1.2: identity arrives via the HttpOnly session cookie,
+      // not localStorage. Probe /api/v1/auth/me to learn who the user is.
+      const session = await fetchSession();
+      if (cancelled) return;
+      if (!session) {
+        clearSessionCache();
+        navigate("/login", { replace: true });
+        return;
+      }
+      setSessionName(session.name ?? "");
+      void loadAccounts(session.name ?? "");
+    })();
     return () => {
+      cancelled = true;
       abortRef.current?.abort();
     };
   }, [loadAccounts, navigate]);

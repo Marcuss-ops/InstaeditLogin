@@ -4,11 +4,13 @@ import "time"
 
 // Platform constants identify supported social platforms.
 const (
-	PlatformMeta     = "meta"
-	PlatformTikTok   = "tiktok"
-	PlatformTwitter  = "twitter"
-	PlatformYouTube  = "youtube"
-	PlatformLinkedIn = "linkedin"
+	PlatformInstagram = "instagram"
+	PlatformFacebook  = "facebook"
+	PlatformThreads   = "threads"
+	PlatformTikTok    = "tiktok"
+	PlatformTwitter   = "twitter"
+	PlatformYouTube   = "youtube"
+	PlatformLinkedIn  = "linkedin"
 )
 
 // User represents an application user (platform-agnostic).
@@ -130,7 +132,7 @@ type PublishResult struct {
 	PlatformURL     string `json:"platform_url,omitempty"`
 }
 
-// --- Legacy Meta-specific types (kept for facebook_oauth.go refactoring) ---
+// --- Meta Graph API response types (shared across Instagram / Facebook / Threads) ---
 
 // MetaTokenResponse is the response from Meta's OAuth token exchange endpoint.
 type MetaTokenResponse struct {
@@ -139,9 +141,29 @@ type MetaTokenResponse struct {
 	ExpiresIn   int64  `json:"expires_in"`
 }
 
-// MetaLongLivedTokenResponse is the response from Meta's long-lived token endpoint.
+// MetaLongLivedTokenResponse is the response from Meta's long-lived token
+// endpoint (fb_exchange_token), shared across all Meta-family providers.
 type MetaLongLivedTokenResponse struct {
 	AccessToken string `json:"access_token"`
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int64  `json:"expires_in"`
+}
+
+// MetaPage represents a Facebook Page returned by GET /me/accounts.
+type MetaPage struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	AccessToken string `json:"access_token"`
+	Category    string `json:"category"`
+}
+
+// MetaAccountsResponse is the response from GET /me/accounts.
+type MetaAccountsResponse struct {
+	Data   []MetaPage `json:"data"`
+	Paging struct {
+		Cursors struct {
+			Before string `json:"before"`
+			After  string `json:"after"`
+		} `json:"cursors"`
+	} `json:"paging"`
 }

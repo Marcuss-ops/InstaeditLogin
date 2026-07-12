@@ -78,13 +78,45 @@ func main() {
 	tokenRepo := repository.NewTokenRepository(db)
 	registry := services.NewPlatformRegistry()
 
-	metaSvc, err := services.NewFacebookOAuthService(cfg, tokenRepo)
+	// Instagram: registers when INSTAGRAM_REDIRECT_URI is configured.
+	// Uses the shared Meta OAuth credentials (META_APP_ID / META_APP_SECRET).
+	instagramSvc, err := services.NewInstagramOAuthService(cfg, tokenRepo)
 	if err != nil {
-		slog.Error("Failed to create Meta OAuth service", "error", err)
+		slog.Error("Failed to create Instagram OAuth service", "error", err)
 		os.Exit(1)
 	}
-	registry.RegisterPlatformService(metaSvc.Name(), metaSvc)
-	slog.Info("Meta/Facebook OAuth provider registered")
+	if instagramSvc != nil {
+		registry.RegisterPlatformService(instagramSvc.Name(), instagramSvc)
+		slog.Info("Instagram OAuth provider registered")
+	} else {
+		slog.Info("Instagram OAuth provider skipped (INSTAGRAM_REDIRECT_URI not set)")
+	}
+
+	// Facebook: registers when FACEBOOK_REDIRECT_URI is configured.
+	facebookSvc, err := services.NewFacebookOAuthService(cfg, tokenRepo)
+	if err != nil {
+		slog.Error("Failed to create Facebook OAuth service", "error", err)
+		os.Exit(1)
+	}
+	if facebookSvc != nil {
+		registry.RegisterPlatformService(facebookSvc.Name(), facebookSvc)
+		slog.Info("Facebook OAuth provider registered")
+	} else {
+		slog.Info("Facebook OAuth provider skipped (FACEBOOK_REDIRECT_URI not set)")
+	}
+
+	// Threads: registers when THREADS_REDIRECT_URI is configured.
+	threadsSvc, err := services.NewThreadsOAuthService(cfg, tokenRepo)
+	if err != nil {
+		slog.Error("Failed to create Threads OAuth service", "error", err)
+		os.Exit(1)
+	}
+	if threadsSvc != nil {
+		registry.RegisterPlatformService(threadsSvc.Name(), threadsSvc)
+		slog.Info("Threads OAuth provider registered")
+	} else {
+		slog.Info("Threads OAuth provider skipped (THREADS_REDIRECT_URI not set)")
+	}
 
 	if cfg.TikTokClientKey != "" {
 		tiktokSvc, err := services.NewTikTokOAuthService(cfg, tokenRepo)
@@ -135,6 +167,8 @@ func main() {
 	}
 
 	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours)
+	oneTimeCodes := api.NewOneTimeCodeStore(60 * time.Second)
+	defer oneTimeCodes.Stop()
 
 	// Auto-add the configured FrontendURL to the CORS allowlist when none
 	// was provided via CORS_ALLOWED_ORIGINS, so a single env var is enough
@@ -165,7 +199,8 @@ func main() {
 	} else {
 		slog.Warn("storage provider: none configured (set SUPABASE_URL+SUPABASE_SERVICE_KEY+SUPABASE_BUCKET OR AWS_REGION+AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY+AWS_S3_BUCKET for /api/v1/storage/upload-url)")
 	}
-	router := api.NewRouter(registry, userRepo, authMgr, cfg.FrontendURL, corsOrigins, opts...)
+	router := api.NewRouter(registry, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
+		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)
 	slog.Info("Router configured",
 		"jwt_ttl_hours", cfg.JWTTTLHours,
 		"auth", "strict (JWT bearer required)",

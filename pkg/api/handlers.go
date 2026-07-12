@@ -33,6 +33,7 @@ type Router struct {
 	storageProvider StorageProvider
 	auditLogStore   AuditLogStore
 	auth            *auth.Manager
+	oneTimeCodes    *OneTimeCodeStore
 	frontendURL     string
 	allowedOrigin   []string
 	maxUploadBytes  int64
@@ -75,13 +76,20 @@ type RouterOption func(*Router)
 func WithWorkspaceStore(repo WorkspaceStore) RouterOption {
 	return func(r *Router) { r.workspaceStore = repo }
 }
-func WithPostStore(repo PostStore) RouterOption { return func(r *Router) { r.postStore = repo } }
+func WithPostStore(repo PostStore) RouterOption {
+	return func(r *Router) { r.postStore = repo }
+}
 func WithStorageProvider(p StorageProvider) RouterOption {
 	return func(r *Router) { r.storageProvider = p }
 }
-func WithMaxUploadBytes(n int64) RouterOption { return func(r *Router) { r.maxUploadBytes = n } }
+func WithMaxUploadBytes(n int64) RouterOption {
+	return func(r *Router) { r.maxUploadBytes = n }
+}
 func WithAuditLogStore(store AuditLogStore) RouterOption {
 	return func(r *Router) { r.auditLogStore = store }
+}
+func WithOneTimeCodeStore(s *OneTimeCodeStore) RouterOption {
+	return func(r *Router) { r.oneTimeCodes = s }
 }
 
 func NewRouter(
@@ -93,8 +101,9 @@ func NewRouter(
 	opts ...RouterOption,
 ) *Router {
 	r := &Router{
-		registry: registry, userRepo: userRepo, auth: authMgr,
-		frontendURL: frontendURL, allowedOrigin: allowedOrigins,
+		registry:     registry, userRepo: userRepo, auth: authMgr,
+		oneTimeCodes: NewOneTimeCodeStore(60 * time.Second),
+		frontendURL:  frontendURL, allowedOrigin: allowedOrigins,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -107,6 +116,9 @@ func (r *Router) Setup() http.Handler {
 	r.mux.Method(http.MethodGet, "/api/v1/health", http.HandlerFunc(r.handleHealth))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login", http.HandlerFunc(r.handleLogin))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(r.handleCallback))
+	r.mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(r.handleExchangeCode))
+	r.mux.Method(http.MethodGet, "/api/v1/auth/me", r.protected(r.handleMe))
+	r.mux.Method(http.MethodPost, "/api/v1/auth/logout", http.HandlerFunc(r.handleLogout))
 	r.mux.Method(http.MethodPost, "/api/v1/posts/publish", r.protected(r.handlePublishPost))
 	r.mux.Method(http.MethodPost, "/api/v1/posts/publish-all", r.protected(r.handlePublishAll))
 	r.mux.Method(http.MethodGet, "/api/v1/accounts", r.protected(r.handleListAccounts))
@@ -198,32 +210,121 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to save token: "+err.Error())
 		return
 	}
-	jwtToken, _, jwtExp, err := r.auth.Issue(user.ID)
+	// Taglio 1.2: do NOT return the JWT in the URL or the response body.
+	// Instead, generate a one-time code bound to {userID, name, username, jwtExp},
+	// redirect the browser to /auth/callback?code=...&provider=..., and let
+	// the SPA POST that code to /api/v1/auth/exchange which sets the
+	// HttpOnly session cookie.
+	expiresAt := time.Now().Add(24 * time.Hour)
+	var authCode string
+	authCode, err = r.oneTimeCodes.Generate(ExchangePayload{
+		UserID:    user.ID,
+		Name:      user.Name,
+		Username:  account.Username,
+		ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to issue one-time code")
+		return
+	}
+	if r.frontendURL != "" {
+		q := url.Values{}
+		q.Set("code", authCode)
+		q.Set("provider", provider)
+		http.Redirect(w, req, strings.TrimRight(r.frontendURL, "/")+"/auth/callback?"+q.Encode(), http.StatusFound)
+		return
+	}
+	// No frontend configured (test/CLI mode): return the code in the body
+	// so the caller can manually POST it to /api/v1/auth/exchange.
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":     "code_issued",
+		"provider":   provider,
+		"code":       authCode,
+		"user_id":    user.ID,
+		"name":       user.Name,
+		"account_id": account.ID,
+	})
+}
+
+// handleExchangeCode exchanges a one-time code (from /auth/callback?code=...)
+// for an HttpOnly session cookie. The code is single-use and 60s TTL; on
+// success the cookie is set and 204 is returned. The SPA's /auth/callback
+// page calls this immediately on mount, then redirects to /dashboard.
+func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if body.Code == "" {
+		writeError(w, http.StatusBadRequest, "missing code")
+		return
+	}
+	payload, err := r.oneTimeCodes.Consume(body.Code)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid or expired code")
+		return
+	}
+	jwtToken, _, _, err := r.auth.Issue(payload.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to issue session token")
 		return
 	}
 	metrics.IncJWTIssued()
-	expiresAt := jwtExp.UTC().Format(time.RFC3339)
-	if r.frontendURL != "" {
-		q := url.Values{}
-		q.Set("jwt", jwtToken)
-		q.Set("provider", provider)
-		q.Set("user_id", fmt.Sprintf("%d", user.ID))
-		q.Set("name", user.Name)
-		q.Set("username", account.Username)
-		q.Set("expires_at", expiresAt)
-		http.Redirect(w, req, strings.TrimRight(r.frontendURL, "/")+"/auth/callback?"+q.Encode(), http.StatusFound)
+	// SameSite=None is required because the SPA is on a different host
+	// (Vercel) than the API backend. Secure=true is required by browsers
+	// for SameSite=None. HttpOnly keeps the JWT out of document.cookie
+	// so an XSS in the SPA cannot exfiltrate it.
+	sameSite := http.SameSiteNoneMode
+	http.SetCookie(w, &http.Cookie{
+		Name:     auth.SessionCookieName,
+		Value:    jwtToken,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: sameSite,
+		MaxAge:   int(time.Until(payload.ExpiresAt).Seconds()),
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMe returns the current user identity. Used by the SPA on every page
+// load to learn who's logged in (no JWT in localStorage anymore).
+func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
+	userID, ok := requireUserID(w, req, r)
+	if !ok {
 		return
 	}
+	// For now return just the user_id; the SPA can call /api/v1/accounts
+	// for richer profile data. Future: extend the userRepo with FindByID.
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "authenticated", "provider": provider, "user_id": user.ID,
-		"name": user.Name, "jwt_token": jwtToken, "jwt_expires_at": expiresAt,
-		"account": map[string]interface{}{
-			"id": account.ID, "platform": account.Platform,
-			"platform_user_id": account.PlatformUserID, "username": account.Username,
-		},
+		"user_id": userID,
 	})
+}
+
+// handleLogout clears the session cookie. 204 on success.
+func (r *Router) handleLogout(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     auth.SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteNoneMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(1, 0),
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type PublishRequest struct {
@@ -317,7 +418,7 @@ func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) publishContent(ctx context.Context, userID int64, pubReq *PublishRequest) (*models.PublishResult, error) {
 	if pubReq.Platform == "" {
-		pubReq.Platform = models.PlatformMeta
+		pubReq.Platform = models.PlatformInstagram
 	}
 	if _, ok := r.registry.OAuth(pubReq.Platform); !ok {
 		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("unsupported platform: %s", pubReq.Platform)}
@@ -429,8 +530,11 @@ func (r *Router) corsMiddleware(next http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-				w.Header().Set("Access-Control-Allow-Credentials", "false")
+				// Taglio 1.2: include Cookie so the browser is allowed to
+				// send the HttpOnly session cookie. Access-Control-Allow-Credentials
+				// is required when the browser uses credentials:'include'.
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Cookie")
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
 				w.Header().Set("Access-Control-Max-Age", "600")
 			}
 		}
