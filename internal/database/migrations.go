@@ -15,14 +15,6 @@ var migrationFiles embed.FS
 // sorts them lexicographically, and executes each against the database.
 // Every statement is idempotent (CREATE IF NOT EXISTS, ADD COLUMN IF NOT EXISTS,
 // DO-block guarded CREATE TYPE).
-//
-// Current migration set (lexical order):
-//
-//	001_init.sql                  — users, platform_accounts, tokens + initial indices
-//	002_add_refresh_token.sql     — tokens.encrypted_refresh_token BYTEA
-//	003_posts_workspaces.sql      — workspaces, platform_accounts.workspace_id,
-//	                                 posts, post_targets, post_status ENUM
-//	004_composite_token_index.sql — tokens(platform_account_id, token_type)
 func RunMigrations(db *sql.DB) error {
 	entries, err := migrationFiles.ReadDir("migrations")
 	if err != nil {

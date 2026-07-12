@@ -201,6 +201,11 @@ func main() {
 	// worker shares the same CredentialVault as the HTTP router so
 	// concurrent refreshes (e.g. worker tick + dashboard publish-now
 	// button) serialise on the same Postgres advisory lock.
+	//
+	// Taglio 5.x: runOnce calls only tick() — the publish DRIVER's
+	// 3-step transition queued → publishing → published|failed.
+	// The async publishing → published|failed side is owned by the
+	// separate ReconcileWorker goroutine spawned below.
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	workerDone := make(chan struct{})
 	go func() {
@@ -215,6 +220,39 @@ func main() {
 		)
 		if err := publishWorker.Run(workerCtx); err != nil && err != context.Canceled {
 			slog.Error("publish worker exited with error", "error", err)
+		}
+	}()
+
+	// Taglio 5.x: spawn the RECONCILE worker goroutine — independent
+	// cadence from the publish driver, same shape as the outbox
+	// dispatcher (background goroutine + ctx-cancellable Run + Done
+	// channel for parallel shutdown drains). Polls ListPublishing
+	// (post_targets WHERE status='publishing' AND platform_post_id IS
+	// NOT NULL) every cfg.ReconcileWorkerIntervalSeconds (default 5s)
+	// and calls AsyncPublisher.Reconcile on each row — the canonical
+	// platform-decoupled state-transition detector that wraps
+	// CheckPublishStatus and decides published | failed | in-flight.
+	//
+	// Multi-replica safety lives at the platform's per-publish_id
+	// state idempotency (and post_targets.provider_idempotency_key
+	// for providers that use the Idempotency-Key model); two
+	// reconcilers racing the same row will both write the same
+	// terminal state on the same UpdateStatus and the second UPDATE
+	// is a no-op.
+	reconcileCtx, reconcileCancel := context.WithCancel(context.Background())
+	reconcileDone := make(chan struct{})
+	go func() {
+		defer close(reconcileDone)
+		reconcileWorker := worker.NewReconcileWorker(
+			repository.NewPostRepository(db),
+			repository.NewUserRepository(db),
+			capRouter,
+			vault,
+			time.Duration(cfg.ReconcileWorkerIntervalSeconds)*time.Second,
+			slog.Default(),
+		)
+		if err := reconcileWorker.Run(reconcileCtx); err != nil && err != context.Canceled {
+			slog.Error("reconcile worker exited with error", "error", err)
 		}
 	}()
 
@@ -254,20 +292,30 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	// Two independent drains — the publish worker and the outbox
-	// dispatcher have no shared shutdown dependency. Cancelling in
-	// parallel + giving each its own 15s budget is simpler (and
-	// race-free) vs a single join-channel that could fire the 15s
-	// timeout while one half is mid-MarkProcessed but the other has
-	// already closed.
-	slog.Info("Shutting down: cancelling publish worker + outbox dispatcher in parallel")
+	// THREE independent drains — the publish worker, the reconcile
+	// worker, and the outbox dispatcher have no shared shutdown
+	// dependency. Cancelling in parallel + giving each its own 15s
+	// budget is race-free vs a single join-channel that could fire
+	// the 15s timeout while one goroutine is mid-MarkProcessed but
+	// another has already closed. (Same shape as the prior 2-way
+	// version; adding the third goroutine stacks another 15s budget
+	// on the shutdown path — fast on graceful drain, only stretches
+	// on hard hangs.)
+	slog.Info("Shutting down: cancelling publish worker + reconcile worker + outbox dispatcher in parallel")
 	workerCancel()
+	reconcileCancel()
 	dispatcherCancel()
 	select {
 	case <-workerDone:
 		slog.Info("publish worker drained cleanly")
 	case <-time.After(15 * time.Second):
 		slog.Warn("publish worker drain timeout, continuing shutdown")
+	}
+	select {
+	case <-reconcileDone:
+		slog.Info("reconcile worker drained cleanly")
+	case <-time.After(15 * time.Second):
+		slog.Warn("reconcile worker drain timeout, continuing shutdown")
 	}
 	select {
 	case <-dispatcherDone:

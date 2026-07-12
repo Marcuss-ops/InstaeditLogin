@@ -41,6 +41,7 @@ var migrationsToTest = []string{
 	"005_account_lifecycle.sql",
 	"006_media_assets.sql",
 	"011_target_provider_state.sql",
+	"012_add_post_status_enum.sql",
 	"012_async_threads_support.sql",
 }
 

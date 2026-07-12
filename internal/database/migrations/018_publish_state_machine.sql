@@ -1,50 +1,13 @@
 -- 018_publish_state_machine.sql
 -- Zernio Milestone publish-state-machine: extend post_targets with the
--- retry-aware column set agreed in the strategist pass, AND add the
--- 'retrying' value to the post_status enum.
+-- retry-aware column set.
 --
--- Why a dedicated migration rather than folding into 012 or 017:
--- every additive SQL change goes through its own migration file, so a
--- future operator reading git log can pinpoint "this is when the
--- retry-aware fields were added". The pieces (records + transitions
--- + worker logic + outbox) land in sequence as per the project's
--- one-migration-per-piece rule.
+-- The 'retrying' post_status enum value was extracted to
+-- 018_add_retrying_enum.sql so ALTER TYPE ADD VALUE runs in its own
+-- transaction (PostgreSQL error 55P04).
 --
 -- =========================================================================
--- 1. Extend the post_status enum with 'retrying'.
---    The DO-block pattern (idempotent pg_enum check) is the same one
---    012_async_threads_support.sql used for 'queued' / 'waiting_provider'
---    / 'partially_published'. Migration re-runs are no-ops once the value
---    has been added in a previous run.
---
--- Lifecycle, post-commit-018:
---
---   draft → queued → publishing → published
---                              → partially_published
---                              → waiting_provider
---                              → retrying ───→ (after next_attempt_at) ─→ publishing
---                              → failed
---
--- 'retrying' is NOT a terminal state — when next_attempt_at <= now, the
--- worker picks the target up and transitions back to 'publishing' (via
--- the POST-style claim query, see Commit 4). 'retrying' is fully covered
--- by IsActive(now) on the worker side: target.IsTerminal() returns
--- false for 'retrying', so the worker treats it like any other
--- in-flight state.
--- =========================================================================
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_enum
-        WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = 'post_status')
-          AND enumlabel = 'retrying'
-    ) THEN
-        ALTER TYPE post_status ADD VALUE 'retrying';
-    END IF;
-END $$;
-
--- =========================================================================
--- 2. Extend post_targets with the retry-aware column set.
+-- 1. Extend post_targets with the retry-aware column set.
 --
 -- All columns are NULLABLE / default to 0 so the change is fully
 -- backward-compatible for existing rows: they pick up progress=0,

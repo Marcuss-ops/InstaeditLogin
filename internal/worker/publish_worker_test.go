@@ -1,3 +1,13 @@
+// Package worker unit-tests for PublishWorker — the *driver* branch
+// of the async-publishing pipeline (queued → publishing →
+// published|failed). Reconciler tests now live in
+// reconcile_worker_test.go (Taglio 5.x split).
+//
+// Shared test fixtures (mockUserStore, mockProvider, mockAsyncProvider,
+// mockCredentialVault, newTestWorker, scheduledTarget,
+// publishingTarget) are in mocks_test.go. This file owns mockPostStore
+// (the driver-only repository mock) and the publishTarget /
+// runOnce / computeProviderIdempotencyKey unit tests.
 package worker
 
 import (
@@ -12,43 +22,46 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
+// ------------------------------------------------------------------
+// mockPostStore — driver-only repository mock. Distinct from
+// mockReconcilePostStore (reconcile_worker_test.go) because the
+// driver's surface (ListPending, ClaimQueuedTarget, FindByID,
+// SetProviderIdempotencyKey) is different from the reconciler's
+// (ListPublishing, UpdatePublishState). The interface split
+// (PublisherPostStore vs ReconcilePostStore) compiles-in the
+// invariant that each goroutine only exercises its own surface.
+// ------------------------------------------------------------------
 
-// mockPostStore is a PublisherPostStore with configurable function fields
-// and call counters. The counters let each test assert the exact ordering
-// of repository calls (e.g. Claim must happen BEFORE FindByID).
-//
-// Taglio 4.2: added listPublishingFn, updatePublishStateFn, and counters
-// for the new reconciler goroutine's data path.
+// mockPostStore is a PublisherPostStore with configurable function
+// fields and call counters. The counters let each test assert the
+// exact ordering of repository calls (e.g. Claim must happen BEFORE
+// FindByID).
 //
 // Taglio 4.7 LEVEL 2: added setKeyFn + setKeyCalls + setKeyIDs +
 // setKeyVals for the SetProviderIdempotencyKey interface method.
 // Default behaviour (no setKeyFn configured) is no-op return nil so
 // tests that don't exercise the stamp path continue to pass.
+//
+// Taglio 5.x: dropped listPublishingFn + updatePublishStateFn +
+// related counters. Those moved to mockReconcilePostStore
+// (reconcile_worker_test.go) on the Reconciler's surface.
 type mockPostStore struct {
 	// Call counters — one per method, incremented on every invocation.
 	// Tests assert on the relative ordering (e.g. claimCalls > 0 before
 	// findByIDCalls is allowed) and the final counts.
-	claimCalls              int
-	findByIDCalls           int
-	updateCalls             int
-	listPendingCalls        int
-	listPublishingCalls     int
-	updatePublishStateCalls int
-	setKeyCalls             int
+	claimCalls int
+	findByIDCalls int
+	updateCalls int
+	listPendingCalls int
+	setKeyCalls int
 
 	// Function fields — each test overrides only what it exercises.
 	listPendingFn        func(before time.Time) ([]models.PostTarget, error)
-	listPublishingFn     func() ([]models.PostTarget, error)
 	claimFn              func(id int64) (bool, error)
 	findByIDFn           func(id int64) (*models.Post, error)
 	updateStatusFn       func(*models.PostTarget) error
-	updatePublishStateFn func(id int64, providerState string) error
 	// setKeyFn lets a test simulate ErrProviderIdempotencyConflict
 	// from the repository's SetProviderIdempotencyKey call. Default
 	// (nil) returns nil — the worker's happy path.
@@ -60,12 +73,6 @@ type mockPostStore struct {
 	// (not pointers) so later mutations to the caller's target
 	// don't leak into the captured snapshot.
 	updateTargets []models.PostTarget
-
-	// Captured UpdatePublishState calls — used by reconciler tests to
-	// verify the worker is recording the platform's current state
-	// on every poll.
-	updatePublishStateIDs    []int64
-	updatePublishStateValues []string
 
 	// Captured SetProviderIdempotencyKey calls — (id, key) pairs in
 	// invocation order. Tests verify the deterministic SHA-256
@@ -81,14 +88,6 @@ func (m *mockPostStore) ListPending(before time.Time) ([]models.PostTarget, erro
 		return nil, nil
 	}
 	return m.listPendingFn(before)
-}
-
-func (m *mockPostStore) ListPublishing() ([]models.PostTarget, error) {
-	m.listPublishingCalls++
-	if m.listPublishingFn == nil {
-		return nil, nil
-	}
-	return m.listPublishingFn()
 }
 
 func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
@@ -121,20 +120,10 @@ func (m *mockPostStore) UpdateStatus(target *models.PostTarget) error {
 	return m.updateStatusFn(target)
 }
 
-func (m *mockPostStore) UpdatePublishState(id int64, providerState string) error {
-	m.updatePublishStateCalls++
-	m.updatePublishStateIDs = append(m.updatePublishStateIDs, id)
-	m.updatePublishStateValues = append(m.updatePublishStateValues, providerState)
-	if m.updatePublishStateFn == nil {
-		return nil
-	}
-	return m.updatePublishStateFn(id, providerState)
-}
-
 // SetProviderIdempotencyKey (Taglio 4.7 LEVEL 2) — captures the
-// (id, key) tuple for assertion. Default behaviour is no-op so tests
-// that don't exercise the stamp path continue to pass without
-// configuring a setKeyFn.
+// (id, key) tuple for assertion. Default behaviour is no-op so
+// tests that don't exercise the stamp path continue to pass
+// without configuring a setKeyFn.
 func (m *mockPostStore) SetProviderIdempotencyKey(id int64, key string) error {
 	m.setKeyCalls++
 	m.setKeyIDs = append(m.setKeyIDs, id)
@@ -145,244 +134,10 @@ func (m *mockPostStore) SetProviderIdempotencyKey(id int64, key string) error {
 	return m.setKeyFn(id, key)
 }
 
-// mockUserStore is a PublisherUserStore with a configurable lookup.
-type mockUserStore struct {
-	findPlatformAccountFn func(id int64) (*models.PlatformAccount, error)
-}
-
-func (m *mockUserStore) FindPlatformAccountByID(id int64) (*models.PlatformAccount, error) {
-	if m.findPlatformAccountFn == nil {
-		return nil, errors.New("FindPlatformAccountByID not implemented in this test")
-	}
-	return m.findPlatformAccountFn(id)
-}
-
-// mockProvider is the SYNC-ONLY platform provider mock. It satisfies
-// services.OAuthProvider (via the embedded base) and services.Publisher,
-// but NOT services.AsyncPublisher. Use for tests that exercise
-// sync-only platforms (Instagram, YouTube) where the publish() call
-// completes the publish synchronously and there is no async state
-// machine to drive.
-//
-// For TikTok-style async platforms, use mockAsyncProvider below.
-type mockProvider struct {
-	baseMockProvider
-	publishFn func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
-	// Call counter — used to prove the loser branch of the claim
-	// never reaches the platform API (no Publish call when claim=false).
-	publishCalls int
-	// capturedPayload holds the last Publish() payload the worker
-	// forwarded. Tests assert on fields like payload.IdempotencyKey
-	// (the Taglio 4.7 LEVEL 2 stamp-and-forward invariant).
-	capturedPayload *models.PublishPayload
-}
-
-// baseMockProvider holds the shared OAuthProvider methods. Embedded so
-// mockProvider and mockAsyncProvider both satisfy services.OAuthProvider
-// without duplicating the methods.
-type baseMockProvider struct {
-	platform string
-}
-
-func (b *baseMockProvider) Name() string { return b.platform }
-
-func (m *mockProvider) GetLoginURL(state string) string {
-	panic("GetLoginURL not used in worker tests")
-}
-func (m *mockProvider) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
-	panic("HandleCallback not used in worker tests")
-}
-func (m *mockProvider) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
-	panic("RefreshOAuthToken not used in worker tests — wire via mockCredentialVault.renewFn if needed")
-}
-func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
-	m.publishCalls++
-	// Capture the payload by pointer so tests can read payload
-	// fields (IdempotencyKey, etc.) after publishTarget returns.
-	m.capturedPayload = &payload
-	if m.publishFn == nil {
-		return nil, errors.New("Publish not implemented in this test")
-	}
-	return m.publishFn(ctx, accessToken, platformUserID, payload)
-}
-
-// mockAsyncProvider (Taglio 4.2) satisfies services.AsyncPublisher in
-// addition to Publisher. The router will register it under the
-// AsyncPublisher capability; the reconciler goroutine will pick it up
-// on every tick to drive the 4-step state machine.
-//
-// Use for tests that exercise async platforms (TikTok today). For
-// sync platforms use mockProvider instead.
-type mockAsyncProvider struct {
-	baseMockProvider
-	publishFn         func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
-	startPublishFn    func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (string, string, error)
-	checkStatusFn     func(ctx context.Context, accessToken, publishID string) (string, error)
-	continuePublishFn func(ctx context.Context, accessToken, publishID string) error
-	reconcileFn       func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error)
-	publishCalls      int
-	startPublishCalls int
-	checkStatusCalls  int
-	continueCalls     int
-	reconcileCalls    int
-	capturedPayload   *models.PublishPayload
-}
-
-func (m *mockAsyncProvider) GetLoginURL(state string) string {
-	panic("GetLoginURL not used in worker tests")
-}
-func (m *mockAsyncProvider) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
-	panic("HandleCallback not used in worker tests")
-}
-func (m *mockAsyncProvider) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
-	panic("RefreshOAuthToken not used in worker tests — wire via mockCredentialVault.renewFn if needed")
-}
-func (m *mockAsyncProvider) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
-	m.publishCalls++
-	m.capturedPayload = &payload
-	if m.publishFn == nil {
-		return nil, errors.New("Publish not implemented in this test")
-	}
-	return m.publishFn(ctx, accessToken, platformUserID, payload)
-}
-
-// StartPublish (Taglio 4.2, async only) — default: derive publish_id
-// from the configured publishFn (the real TikTok StartPublish returns a
-// publish_id synchronously). Tests that need a specific publish_id can
-// set startPublishFn directly.
-func (m *mockAsyncProvider) StartPublish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (string, string, error) {
-	m.startPublishCalls++
-	if m.startPublishFn != nil {
-		return m.startPublishFn(ctx, accessToken, platformUserID, payload)
-	}
-	if m.publishFn != nil {
-		res, err := m.publishFn(ctx, accessToken, platformUserID, payload)
-		if err != nil {
-			return "", "", err
-		}
-		return res.PlatformMediaID, "PROCESSING_UPLOAD", nil
-	}
-	return "default-publish-id", "PROCESSING_UPLOAD", nil
-}
-
-// CheckPublishStatus (Taglio 4.2, async only) — single GET, no polling.
-func (m *mockAsyncProvider) CheckPublishStatus(ctx context.Context, accessToken, publishID string) (string, error) {
-	m.checkStatusCalls++
-	if m.checkStatusFn == nil {
-		return "", errors.New("CheckPublishStatus not implemented in this test")
-	}
-	return m.checkStatusFn(ctx, accessToken, publishID)
-}
-
-// ContinuePublish (Taglio 4.2, async only) — PULL_FROM_URL no-op.
-func (m *mockAsyncProvider) ContinuePublish(ctx context.Context, accessToken, publishID string) error {
-	m.continueCalls++
-	if m.continuePublishFn == nil {
-		return nil // PULL_FROM_URL: no-op default
-	}
-	return m.continuePublishFn(ctx, accessToken, publishID)
-}
-
-// Reconcile (Taglio 4.2, async only) — terminal-state detector.
-func (m *mockAsyncProvider) Reconcile(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
-	m.reconcileCalls++
-	if m.reconcileFn != nil {
-		return m.reconcileFn(ctx, accessToken, publishID)
-	}
-	// Default: derive from CheckPublishStatus — matches the real
-	// TikTokOAuthService.Reconcile which is a thin wrapper.
-	state, err := m.CheckPublishStatus(ctx, accessToken, publishID)
-	if err != nil {
-		return nil, err
-	}
-	if state == "PUBLISH_COMPLETE" {
-		return &models.PublishResult{PlatformMediaID: publishID}, nil
-	}
-	if state == "FAILED" {
-		return nil, errors.New("tiktok publish failed: publish_id=" + publishID)
-	}
-	return nil, nil
-}
-
-// mockCredentialVault is a credentials.VaultAPI. The worker only calls
-// Renew (via the vault field on PublishWorker), so Save / Get / Revoke /
-// Rotate are stubbed (panic if accidentally called).
-//
-// Taglio 2.2: renamed from mockTokenService. The `renewFn` signature
-// now takes a credentials.TokenRefresher (plain function) rather than
-// a services.OAuthProvider — the vault has zero knowledge of per-platform
-// types, so the worker adapts OAuthProvider.RefreshOAuthToken into a
-// closure at the call site. The test never needs to call the refresher
-// itself; it just returns a valid token.
-type mockCredentialVault struct {
-	renewFn     func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error)
-	ensureCalls int
-}
-
-func (m *mockCredentialVault) Save(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
-	panic("Save not used in worker tests")
-}
-func (m *mockCredentialVault) Get(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
-	panic("Get not used in worker tests")
-}
-func (m *mockCredentialVault) Renew(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
-	m.ensureCalls++
-	if m.renewFn == nil {
-		return nil, errors.New("Renew not implemented in this test")
-	}
-	return m.renewFn(ctx, accountID, tokenType, refresh)
-}
-func (m *mockCredentialVault) Revoke(ctx context.Context, platformAccountID int64) error {
-	panic("Revoke not used in worker tests")
-}
-func (m *mockCredentialVault) Rotate(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
-	return m.Save(ctx, platformAccountID, tokenData)
-}
-
-// newTestWorker builds a PublishWorker wired with the given mocks.
-// interval is small (10ms) but irrelevant — the tests call publishTarget
-// directly rather than driving the Run loop.
-//
-// The provider can be a mockProvider (sync) or a mockAsyncProvider
-// (async) — the router registers whichever capability set the value
-// structurally satisfies.
-func newTestWorker(posts *mockPostStore, users *mockUserStore, name string, svc any, vault *mockCredentialVault) *PublishWorker {
-	router := services.NewCapabilityRouter()
-	router.Register(name, svc)
-	return NewPublishWorker(
-		posts,
-		users,
-		router,
-		vault,
-		10*time.Millisecond,
-		nil, // inherit slog.Default()
-	)
-}
-
-// helper — builds a scheduled target the worker can pick up.
-func scheduledTarget() *models.PostTarget {
-	return &models.PostTarget{
-		ID:                200,
-		PostID:            100,
-		PlatformAccountID: 10,
-		Status:            models.PostStatusScheduled,
-	}
-}
-
-// helper — builds a publishing target the reconciler can pick up.
-func publishingTarget() *models.PostTarget {
-	return &models.PostTarget{
-		ID:                300,
-		PostID:            100,
-		PlatformAccountID: 10,
-		Status:            models.PostStatusPublishing,
-		PlatformPostID:    "publish-id-abc",
-	}
-}
-
-// ---------------------------------------------------------------------------
-// publishTarget tests (sync platforms — the pre-4.2 behavior)
-// ---------------------------------------------------------------------------
+// ------------------------------------------------------------------
+// publishTarget tests (sync platforms — the pre-4.2 behaviour /
+// driver surface)
+// ------------------------------------------------------------------
 
 // TestPublishTarget_HappyPath_ClaimThenPublishToPublished covers the
 // verdict §10 success path: claim wins → load post → load account →
@@ -522,8 +277,10 @@ func TestPublishTarget_ForwardsIdempotencyKeyOnPayload(t *testing.T) {
 // TestPublishTarget_AsyncPlatform_StatusStaysPublishing (Taglio 4.2):
 // when the platform has the AsyncPublisher capability, the publish()
 // call returns immediately with a publish_id and the worker must
-// KEEP the target in status='publishing' (not transition to 'published').
-// The reconciler goroutine will later drive the state machine.
+// KEEP the target in status='publishing' (not transition to
+// 'published'). The ReconcilerWorker goroutine will later drive the
+// state machine. (Taglio 5.x: the goroutine is in its own Run loop
+// now, not inside the driver's runOnce.)
 func TestPublishTarget_AsyncPlatform_StatusStaysPublishing(t *testing.T) {
 	posts := &mockPostStore{
 		claimFn: func(id int64) (bool, error) { return true, nil },
@@ -588,18 +345,22 @@ func TestPublishTarget_AsyncPlatform_StatusStaysPublishing(t *testing.T) {
 		t.Error("published_at: want nil (publish not yet complete), got non-nil")
 	}
 	// No CheckPublishStatus / Reconcile calls happen in the publishTarget path.
-	// Those are the reconciler's job.
+	// Those are the ReconcilerWorker's job.
 	if svc.checkStatusCalls != 0 {
 		t.Errorf("CheckPublishStatus calls in publishTarget: want 0, got %d (only reconciler should call this)", svc.checkStatusCalls)
 	}
+	if svc.reconcileCalls != 0 {
+		t.Errorf("Reconcile calls in publishTarget: want 0 (reconciler owns that path), got %d", svc.reconcileCalls)
+	}
 }
 
-// TestPublishTarget_PayloadIdempotencyKeyCarriesAcrossRetries is the
-// Taglio 4.7 LEVEL 2 deterministic-key invariant: the SAME (post_id,
-// platform_account_id) tuple MUST produce the SAME key on every
-// publishTarget call. The mock here bypasses the SetProviderIdempotencyKey
-// stamp by pre-setting target.ProviderIdempotencyKey so the "already
-// stamped" branch runs and we can observe the reuse path.
+// TestPublishTarget_PayloadIdempotencyKeyCarriesAcrossRetries is
+// the Taglio 4.7 LEVEL 2 deterministic-key invariant: the SAME
+// (post_id, platform_account_id) tuple MUST produce the SAME key
+// on every publishTarget call. The mock here bypasses the
+// SetProviderIdempotencyKey stamp by pre-setting
+// target.ProviderIdempotencyKey so the "already stamped" branch
+// runs and we can observe the reuse path.
 func TestPublishTarget_PayloadIdempotencyKeyCarriesAcrossRetries(t *testing.T) {
 	wantKey := computeProviderIdempotencyKey(100, 10)
 	posts := &mockPostStore{
@@ -656,10 +417,11 @@ func TestPublishTarget_PayloadIdempotencyKeyCarriesAcrossRetries(t *testing.T) {
 
 // TestPublishTarget_SetKeyConflict_PromotesToFailed covers the
 // ErrProviderIdempotencyConflict path: the worker MUST promote the
-// target to status='failed' (not leave it in 'publishing' anymore) so
-// the row drops out of BOTH 'tick' and 'tickReconcile' filter sets.
-// Leaving the row in 'publishing' would be a permanent infinite polling
-// loop (no other worker can re-claim it because verdict-§10 owned the row).
+// target to status='failed' (not leave it in 'publishing' anymore)
+// so the row drops out of BOTH the driver's tick filter AND the
+// ReconcilerWorker's tickReconcile filter. Leaving the row in
+// 'publishing' would be a permanent infinite polling loop (no
+// other worker can re-claim it because verdict-§10 owned the row).
 //
 // The setKeyFn injects a fake ErrProviderIdempotencyConflict-shaped
 // error to avoid importing the real repository package.
@@ -672,7 +434,7 @@ func TestPublishTarget_SetKeyConflict_PromotesToFailed(t *testing.T) {
 		setKeyFn: func(id int64, key string) error {
 			// Wrap with %w so errors.Is(err, repository.ErrProviderIdempotencyConflict)
 			// matches the real sentinel inside the worker's promote-to-failed
-			// branch (the same dispatch the production pq.Error path triggers).
+			// branch.
 			return fmt.Errorf("%w: account already has a target with this key",
 				repository.ErrProviderIdempotencyConflict)
 		},
@@ -712,8 +474,7 @@ func TestPublishTarget_SetKeyConflict_PromotesToFailed(t *testing.T) {
 	}
 	// CRITICAL: on conflict, the worker MUST call UpdateStatus with
 	// status='failed' so the row drops out of both 'publishing' filter
-	// sets (tick + tickReconcile). Without this, the row is stuck and
-	// tickReconcile's forever-poll loop wastes cycles on it.
+	// sets (driver's tick + ReconcilerWorker's tickReconcile).
 	if posts.updateCalls != 1 {
 		t.Errorf("UpdateStatus calls under conflict: want 1 (promote-to-failed), got %d", posts.updateCalls)
 	}
@@ -794,11 +555,11 @@ func TestPublishTarget_ClaimLoss_SkipsWithoutPublish(t *testing.T) {
 	}
 }
 
-// TestPublishTarget_ClaimFiresBeforeFindByID asserts the claim-first
-// ordering invariant using a call ordering tracker. A regression that
-// reordered the two steps (e.g. "preload post then claim" to optimize
-// for the loser path) would break the double-publish guarantee if
-// the post load also had a side-effect (e.g. logging payload).
+// TestPublishTarget_ClaimFiresBeforeFindByID asserts the
+// claim-first ordering invariant using a call ordering tracker. A
+// regression that reordered the two steps would break the
+// double-publish guarantee if the post load also had a side-effect
+// (e.g. logging payload).
 func TestPublishTarget_ClaimFiresBeforeFindByID(t *testing.T) {
 	var order []string
 	posts := &mockPostStore{
@@ -854,11 +615,11 @@ func TestPublishTarget_ClaimFiresBeforeFindByID(t *testing.T) {
 	}
 }
 
-// TestPublishTarget_ClaimFiresBeforeAnySideEffectOnLoss combines the
-// "no side effects on claim loss" + "ordering" guarantees into a
-// single observable invariant: the FIRST repo call on every claim
-// must be ClaimQueuedTarget. This is the simplest expression of
-// the verdict §10 contract.
+// TestPublishTarget_ClaimFiresBeforeAnySideEffectOnLoss combines
+// the "no side effects on claim loss" + "ordering" guarantees into
+// a single observable invariant: the FIRST repo call on every
+// claim must be ClaimQueuedTarget. This is the simplest
+// expression of the verdict §10 contract.
 func TestPublishTarget_ClaimFiresBeforeAnySideEffectOnLoss(t *testing.T) {
 	var order []string
 	posts := &mockPostStore{
@@ -903,8 +664,7 @@ func TestPublishTarget_ClaimFiresBeforeAnySideEffectOnLoss(t *testing.T) {
 // TestPublishTarget_ClaimError_Propagates covers the path where
 // ClaimQueuedTarget itself returns an error (DB unreachable, etc.).
 // The error must surface so the tick can log + continue to the next
-// target. It MUST NOT silently look like a claim-loss (which would
-// swallow infrastructure errors and delay retry until the next tick).
+// target.
 func TestPublishTarget_ClaimError_Propagates(t *testing.T) {
 	posts := &mockPostStore{
 		claimFn: func(id int64) (bool, error) {
@@ -935,9 +695,7 @@ func TestPublishTarget_ClaimError_Propagates(t *testing.T) {
 // TestPublishTarget_PostNotFound_AfterClaim_MarksFailed covers the
 // "vanished parent post" failure mode. The claim already won (so
 // the row is in 'publishing' state), the worker MUST mark the
-// target 'failed' so the next tick won't re-pick it. It must NOT
-// silently skip (a silent skip would leave a row stuck in
-// 'publishing' forever).
+// target 'failed' so the next tick won't re-pick it.
 func TestPublishTarget_PostNotFound_AfterClaim_MarksFailed(t *testing.T) {
 	posts := &mockPostStore{
 		claimFn:    func(id int64) (bool, error) { return true, nil },
@@ -960,12 +718,9 @@ func TestPublishTarget_PostNotFound_AfterClaim_MarksFailed(t *testing.T) {
 	if posts.updateTargets[0].ErrorMessage == "" {
 		t.Error("ErrorMessage should be populated on the failed transition (for debugging)")
 	}
-	// No platform API call — no post means nothing to publish.
 	if svc.publishCalls != 0 {
 		t.Errorf("Publish called despite vanished post: %d", svc.publishCalls)
 	}
-	// SetProviderIdempotencyKey comes AFTER FindByID — vanished
-	// post means we never reach it.
 	if posts.setKeyCalls != 0 {
 		t.Errorf("SetProviderIdempotencyKey called despite vanished post: %d", posts.setKeyCalls)
 	}
@@ -974,8 +729,7 @@ func TestPublishTarget_PostNotFound_AfterClaim_MarksFailed(t *testing.T) {
 // TestPublishTarget_PlatformPublishError_MarksFailed covers the
 // platform API failure path. The claim already won (so the row is
 // in 'publishing' state); a platform error MUST transition the
-// target to 'failed' with the error message, so the next tick
-// doesn't re-pick it.
+// target to 'failed' with the error message.
 func TestPublishTarget_PlatformPublishError_MarksFailed(t *testing.T) {
 	posts := &mockPostStore{
 		claimFn: func(id int64) (bool, error) { return true, nil },
@@ -1017,7 +771,6 @@ func TestPublishTarget_PlatformPublishError_MarksFailed(t *testing.T) {
 	if final.PublishedAt != nil {
 		t.Error("PublishedAt should remain nil on failure (a failed target has no published_at)")
 	}
-	// Taglio 4.7 LEVEL 2: stamp fired before the publish call.
 	if posts.setKeyCalls != 1 {
 		t.Errorf("SetProviderIdempotencyKey calls: want 1, got %d", posts.setKeyCalls)
 	}
@@ -1025,18 +778,7 @@ func TestPublishTarget_PlatformPublishError_MarksFailed(t *testing.T) {
 
 // TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes is the
 // end-to-end verdict §10 invariant: when two workers race the
-// claim, EXACTLY ONE Publish call is observed. This is the
-// double-publish-prevention guarantee in its strongest form — the
-// atomic-claim's whole reason to exist.
-//
-// Note: this is a logic-level test (the mocks are in-memory, no
-// real DB). The real atomicity is provided by the database's
-// row-level locking on the UPDATE. This test verifies that the
-// worker treats a "loser" mock-return as expected — and that the
-// worker code does not bypass the claim. The SQL-level
-// concurrency proof is the repository test
-// (TestPostClaimQueuedTarget_Success/AlreadyClaimed) plus
-// the WHERE-status='scheduled' guard in the actual UPDATE.
+// claim, EXACTLY ONE Publish call is observed.
 func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 	t.Parallel()
 
@@ -1093,10 +835,7 @@ func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 	wA := newTestWorker(postsA, usersA, "instagram", svcA, vaultA)
 
 	// Worker B: identical happy path wiring (if B ever won, B
-	// would also reach Publish). The whole point of the test is
-	// that the mutex makes A win and B lose — and B's mocks use
-	// counters (not t.Error) so a stray B call would still let
-	// the test report publishHits correctly.
+	// would also reach Publish).
 	postsB := &mockPostStore{
 		claimFn: func(id int64) (bool, error) {
 			mu.Lock()
@@ -1141,17 +880,9 @@ func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 	if publishHits != 1 {
 		t.Errorf("Publish calls: want 1 (verdict §10: only the claim winner may publish), got %d", publishHits)
 	}
-	// And exactly one claim won.
 	if claimedBy != "A" && claimedBy != "B" {
 		t.Errorf("claimedBy: want A or B, got %q", claimedBy)
 	}
-	// The losing worker's downstream methods must not have been
-	// called. We assert on the call counters (not t.Error in the
-	// mocks) so the assertion order doesn't matter and a test
-	// failure in the counters is the single source of truth.
-	// (One of A/B will be the loser depending on goroutine
-	// scheduling; the loser's findByIDCalls + renewCalls +
-	// publishCalls + updateCalls must all be 0.)
 	winnerPosts, loserPosts := postsA, postsB
 	winnerSvc, loserSvc := svcA, svcB
 	winnerVault, loserVault := vaultA, vaultB
@@ -1160,7 +891,7 @@ func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 		winnerSvc, loserSvc = svcB, svcA
 		winnerVault, loserVault = vaultB, vaultA
 	}
-	_ = winnerPosts // winner's call counts are exercised by the happy-path test
+	_ = winnerPosts
 	_ = winnerSvc
 	_ = winnerVault
 	if loserPosts.findByIDCalls != 0 {
@@ -1180,453 +911,103 @@ func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Taglio 4.2: reconciler tests (tickReconcile + reconcileTarget)
-// ---------------------------------------------------------------------------
+// ------------------------------------------------------------------
+// runOnce test — Taglio 5.x: runOnce calls tick() ONLY. Reconcile is
+// its own goroutine now (ReconcileWorker.Run).
+// ------------------------------------------------------------------
 
-// TestReconcileTarget_PublishComplete_TransitionsToPublished covers the
-// happy terminal state: Reconcile returns (*PublishResult, nil)
-// corresponding to PUBLISH_COMPLETE upstream, the reconciler must
-// transition the target from 'publishing' to 'published' with a
-// non-nil published_at. The mock's CheckPublishStatus must NOT be
-// reached — Reconcile is the new entrypoint and wraps it.
-func TestReconcileTarget_PublishComplete_TransitionsToPublished(t *testing.T) {
-	posts := &mockPostStore{}
-	users := &mockUserStore{
-		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
-			return &models.PlatformAccount{ID: 10, Platform: "tiktok", PlatformUserID: "tt-1"}, nil
+// TestRunOnce_TickOnly asserts the new runOnce() body: it should
+// call tick() — and ONLY tick(). The reconciler is no longer
+// invoked from this goroutine.
+//
+// Positive assertion:
+//   - ListPending called once
+//   - Reconciler methods (CheckPublishStatus, Reconcile) NEVER
+//     reached from runOnce on the driver goroutine — the claim
+//     was taken on a sync platform so no async-publish side.
+func TestRunOnce_TickOnly(t *testing.T) {
+	posts := &mockPostStore{
+		listPendingFn: func(before time.Time) ([]models.PostTarget, error) {
+			return []models.PostTarget{
+				{ID: 1, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusScheduled},
+			}, nil
 		},
-	}
-	svc := &mockAsyncProvider{
-		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
-			return &models.PublishResult{PlatformMediaID: publishID}, nil
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{ID: 100, Caption: "x"}, nil
 		},
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		setKeyFn: func(id int64, key string) error { return nil },
 	}
-	vault := &mockCredentialVault{
-		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "t"}, nil
-		},
-	}
-	w := newTestWorker(posts, users, "tiktok", svc, vault)
-
-	reconciled, wasFailed, err := w.reconcileTarget(context.Background(), publishingTarget())
-	if err != nil {
-		t.Fatalf("reconcileTarget: %v", err)
-	}
-	if !reconciled {
-		t.Error("reconciled: want true (success result is a terminal transition), got false")
-	}
-	if wasFailed {
-		t.Error("wasFailed: want false (success, not failure)")
-	}
-	// UpdateStatus should have been called once with status=published.
-	if posts.updateCalls != 1 {
-		t.Errorf("UpdateStatus calls: want 1, got %d", posts.updateCalls)
-	}
-	final := posts.updateTargets[0]
-	if final.Status != models.PostStatusPublished {
-		t.Errorf("final status: want published, got %q", final.Status)
-	}
-	if final.PublishedAt == nil {
-		t.Error("published_at: want non-nil, got nil (reconciler must stamp publish time on success)")
-	}
-	if final.PlatformPostID != "publish-id-abc" {
-		t.Errorf("platform_post_id: want publish-id-abc (carried over), got %q", final.PlatformPostID)
-	}
-	// UpdatePublishState must have been called once with terminal label
-	// "PUBLISH_COMPLETE" — the post-refactor worker writes this only on
-	// terminal transitions, not on in-flight ticks.
-	if posts.updatePublishStateCalls != 1 {
-		t.Errorf("UpdatePublishState calls: want 1 (record terminal state), got %d", posts.updatePublishStateCalls)
-	}
-	if len(posts.updatePublishStateValues) != 1 || posts.updatePublishStateValues[0] != "PUBLISH_COMPLETE" {
-		t.Errorf("UpdatePublishState values: want [PUBLISH_COMPLETE], got %v", posts.updatePublishStateValues)
-	}
-	// Reconcile called exactly once. CheckPublishStatus MUST NOT be reached
-	// (Reconcile is the new entrypoint; the old in-flight string path is
-	// gone from reconcileTarget).
-	if svc.reconcileCalls != 1 {
-		t.Errorf("Reconcile calls: want 1, got %d", svc.reconcileCalls)
-	}
-	if svc.checkStatusCalls != 0 {
-		t.Errorf("CheckPublishStatus calls: want 0 (worker no longer calls it directly), got %d", svc.checkStatusCalls)
-	}
-}
-
-// TestReconcileTarget_Failed_TransitionsToFailed covers the failure
-// terminal state: Reconcile returns (nil, err) for FAILED-state AND
-// for transient 5xx (both collapse to terminal per the interface
-// contract). The reconciler must transition to 'failed' with the error
-// message.
-func TestReconcileTarget_Failed_TransitionsToFailed(t *testing.T) {
-	posts := &mockPostStore{}
-	users := &mockUserStore{
-		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
-			return &models.PlatformAccount{ID: 10, Platform: "tiktok", PlatformUserID: "tt-1"}, nil
-		},
-	}
-	svc := &mockAsyncProvider{
-		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
-			return nil, errors.New("publish failed: tiktok returned status FAILED")
-		},
-	}
-	vault := &mockCredentialVault{
-		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "t"}, nil
-		},
-	}
-	w := newTestWorker(posts, users, "tiktok", svc, vault)
-
-	reconciled, wasFailed, err := w.reconcileTarget(context.Background(), publishingTarget())
-	if err != nil {
-		t.Fatalf("reconcileTarget: %v", err)
-	}
-	if !reconciled || !wasFailed {
-		t.Errorf("reconciled=%v wasFailed=%v: want (true, true)", reconciled, wasFailed)
-	}
-	// UpdateStatus should have been called once with status=failed.
-	if posts.updateCalls != 1 {
-		t.Errorf("UpdateStatus calls: want 1, got %d", posts.updateCalls)
-	}
-	final := posts.updateTargets[0]
-	if final.Status != models.PostStatusFailed {
-		t.Errorf("final status: want failed, got %q", final.Status)
-	}
-	if final.ErrorMessage == "" {
-		t.Error("ErrorMessage should be populated with the failure reason for debugging")
-	}
-	if final.PublishedAt != nil {
-		t.Error("PublishedAt should remain nil on failure")
-	}
-	// provider_state was recorded with terminal "FAILED".
-	if posts.updatePublishStateCalls != 1 {
-		t.Errorf("UpdatePublishState calls: want 1 (record terminal state), got %d", posts.updatePublishStateCalls)
-	}
-	if len(posts.updatePublishStateValues) != 1 || posts.updatePublishStateValues[0] != "FAILED" {
-		t.Errorf("UpdatePublishState values: want [FAILED], got %v", posts.updatePublishStateValues)
-	}
-	if svc.reconcileCalls != 1 {
-		t.Errorf("Reconcile calls: want 1, got %d", svc.reconcileCalls)
-	}
-}
-
-// TestReconcileTarget_InFlight_LeavesStatusUnchanged covers the
-// in-flight case: Reconcile returns (nil, nil) — the platform's
-// PublishID is still in PROCESSING_UPLOAD/PENDING_PUBLISH/IN_REVIEW.
-// The reconciler MUST leave status='publishing' and try again next
-// tick. UpdatePublishState is intentionally NOT called on in-flight
-// (no state string is exposed through Reconcile's contract; the
-// column becomes a terminal-state log rather than a per-tick snapshot).
-func TestReconcileTarget_InFlight_LeavesStatusUnchanged(t *testing.T) {
-	posts := &mockPostStore{}
-	users := &mockUserStore{
-		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
-			return &models.PlatformAccount{ID: 10, Platform: "tiktok", PlatformUserID: "tt-1"}, nil
-		},
-	}
-	svc := &mockAsyncProvider{
-		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
-			return nil, nil // in-flight
-		},
-	}
-	vault := &mockCredentialVault{
-		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "t"}, nil
-		},
-	}
-	w := newTestWorker(posts, users, "tiktok", svc, vault)
-
-	reconciled, wasFailed, err := w.reconcileTarget(context.Background(), publishingTarget())
-	if err != nil {
-		t.Fatalf("reconcileTarget: %v", err)
-	}
-	if reconciled || wasFailed {
-		t.Errorf("reconciled=%v wasFailed=%v: want (false, false) for in-flight", reconciled, wasFailed)
-	}
-	// CRITICAL: no UpdateStatus call — the row is still in-flight.
-	if posts.updateCalls != 0 {
-		t.Errorf("UpdateStatus calls: want 0 (in-flight, no transition), got %d", posts.updateCalls)
-	}
-	// UpdatePublishState is intentionally NOT called on in-flight
-	// (the worker has no state string to write — Reconcile hides it).
-	if posts.updatePublishStateCalls != 0 {
-		t.Errorf("UpdatePublishState calls: want 0 (in-flight, terminal-state log only), got %d", posts.updatePublishStateCalls)
-	}
-	if svc.reconcileCalls != 1 {
-		t.Errorf("Reconcile calls: want 1, got %d", svc.reconcileCalls)
-	}
-}
-
-// TestReconcileTarget_SyncPlatform_LeavesAlone covers the case
-// where the platform doesn't have the AsyncPublisher capability
-// (e.g. Instagram, YouTube — they complete their publish in the
-// original tick's publishTarget() call, no polling needed).
-// The reconciler must not touch these targets.
-func TestReconcileTarget_SyncPlatform_LeavesAlone(t *testing.T) {
-	posts := &mockPostStore{}
 	users := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
 			return &models.PlatformAccount{ID: 10, Platform: "instagram", PlatformUserID: "fb-1"}, nil
 		},
 	}
-	// Instagram mockProvider has NO AsyncPublisher methods, so the
-	// router.AsyncPublisher lookup returns (nil, false) and the
-	// reconciler should no-op.
+	// Sync platform — Publish happens inline, no async branch.
 	svc := &mockProvider{
 		baseMockProvider: baseMockProvider{platform: "instagram"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: "media-1"}, nil
+		},
 	}
-	vault := &mockCredentialVault{}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "t"}, nil
+		},
+	}
 	w := newTestWorker(posts, users, "instagram", svc, vault)
 
-	reconciled, wasFailed, err := w.reconcileTarget(context.Background(), publishingTarget())
-	if err != nil {
-		t.Fatalf("reconcileTarget: %v", err)
-	}
-	if reconciled || wasFailed {
-		t.Errorf("reconciled=%v wasFailed=%v: want (false, false) for sync platform", reconciled, wasFailed)
-	}
-	// No DB writes for sync platforms.
-	if posts.updateCalls != 0 {
-		t.Errorf("UpdateStatus calls: want 0 (sync platform, no transition), got %d", posts.updateCalls)
-	}
-	if posts.updatePublishStateCalls != 0 {
-		t.Errorf("UpdatePublishState calls: want 0 (sync platform, no polling), got %d", posts.updatePublishStateCalls)
-	}
-	// No platform API calls.
-	if svc.publishCalls != 0 {
-		t.Errorf("Publish calls: want 0 (sync platform, no polling), got %d", svc.publishCalls)
-	}
-	// No token refresh either (the sync-platform short-circuit happens
-	// before the vault.Renew call).
-	if vault.ensureCalls != 0 {
-		t.Errorf("Renew calls: want 0 (sync platform, no token refresh), got %d", vault.ensureCalls)
-	}
-}
+	w.runOnce(context.Background())
 
-// TestReconcileTarget_OrphanAccount_MarksFailed covers the
-// "platform_account disappeared" failure mode: FindPlatformAccountByID
-// returns (nil, nil). The reconciler must mark the target 'failed'
-// so it doesn't loop forever.
-func TestReconcileTarget_OrphanAccount_MarksFailed(t *testing.T) {
-	posts := &mockPostStore{}
-	users := &mockUserStore{
-		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
-			return nil, nil // vanished
-		},
+	// ListPending called once (tick ran).
+	if posts.listPendingCalls != 1 {
+		t.Errorf("ListPending calls: want 1 (tick ran), got %d", posts.listPendingCalls)
 	}
-	svc := &mockAsyncProvider{baseMockProvider: baseMockProvider{platform: "tiktok"}}
-	vault := &mockCredentialVault{}
-	w := newTestWorker(posts, users, "tiktok", svc, vault)
-
-	reconciled, wasFailed, err := w.reconcileTarget(context.Background(), publishingTarget())
-	if err != nil {
-		t.Fatalf("reconcileTarget: %v", err)
-	}
-	if !reconciled || !wasFailed {
-		t.Errorf("reconciled=%v wasFailed=%v: want (true, true) for orphan account", reconciled, wasFailed)
+	if svc.publishCalls != 1 {
+		t.Errorf("Publish calls: want 1 (sync path), got %d", svc.publishCalls)
 	}
 	if posts.updateCalls != 1 {
-		t.Errorf("UpdateStatus calls: want 1, got %d", posts.updateCalls)
+		t.Errorf("UpdateStatus calls: want 1 (publishing→published), got %d", posts.updateCalls)
 	}
-	final := posts.updateTargets[0]
-	if final.Status != models.PostStatusFailed {
-		t.Errorf("final status: want failed, got %q", final.Status)
+	if posts.updateTargets[0].Status != models.PostStatusPublished {
+		t.Errorf("final status: want published, got %q", posts.updateTargets[0].Status)
 	}
-	if final.ErrorMessage == "" {
-		t.Error("ErrorMessage should explain why the target was failed (orphan account)")
-	}
+	// Reconciler NEVER reached from the driver's goroutine — the
+	// mockAsyncProvider would never be wired here (the test uses
+	// mockProvider for sync). For the async-platform negative
+	// assertion, run an async-platform variant below.
 }
 
-// TestReconcileTarget_TransientError_TerminalFailure covers the
-// post-refactor behavioural change: under Reconcile's contract, ANY
-// error from Reconcile — including transient 5xx — is terminal.
-// The platform impl collapses both FAILED-state and transient errors
-// into (nil, err); the worker treats that as a 'failed' transition.
-// (Pre-refactor: transient errors left the target alone for next
-// tick. The reviewer's documented choice was to trust Reconcile's
-// contract; per-target retry is the outbox dispatcher's job at the
-// platform-decoupled level.)
-func TestReconcileTarget_TransientError_TerminalFailure(t *testing.T) {
-	posts := &mockPostStore{}
-	users := &mockUserStore{
-		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
-			return &models.PlatformAccount{ID: 10, Platform: "tiktok", PlatformUserID: "tt-1"}, nil
-		},
-	}
-	svc := &mockAsyncProvider{
-		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
-			return nil, errors.New("502 bad gateway from tiktok")
-		},
-	}
-	vault := &mockCredentialVault{
-		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "t"}, nil
-		},
-	}
-	w := newTestWorker(posts, users, "tiktok", svc, vault)
-
-	reconciled, wasFailed, err := w.reconcileTarget(context.Background(), publishingTarget())
-	if err != nil {
-		t.Fatalf("reconcileTarget: %v (reconciler surface error must NOT propagate as tick error)", err)
-	}
-	if !reconciled || !wasFailed {
-		t.Errorf("reconciled=%v wasFailed=%v: want (true, true) — transient errors are terminal under Reconcile's contract", reconciled, wasFailed)
-	}
-	// The transient error trades in for status='failed' + error_message
-	// populated, so the row drops out of BOTH tick + tickReconcile
-	// filter sets. Retry is the dispatcher's job at the outbox level.
-	if posts.updateCalls != 1 {
-		t.Errorf("UpdateStatus calls: want 1 (transition publishing→failed), got %d", posts.updateCalls)
-	}
-	final := posts.updateTargets[0]
-	if final.Status != models.PostStatusFailed {
-		t.Errorf("final status: want failed, got %q", final.Status)
-	}
-	if !strings.Contains(final.ErrorMessage, "502") {
-		t.Errorf("ErrorMessage should propagate the platform error: %q", final.ErrorMessage)
-	}
-	if posts.updatePublishStateCalls != 1 {
-		t.Errorf("UpdatePublishState calls: want 1 (terminal-state log), got %d", posts.updatePublishStateCalls)
-	}
-	if len(posts.updatePublishStateValues) != 1 || posts.updatePublishStateValues[0] != "FAILED" {
-		t.Errorf("UpdatePublishState values: want [FAILED], got %v", posts.updatePublishStateValues)
-	}
-}
-
-// TestTickReconcile_IteratesAllPublishingTargets covers the tickReconcile
-// goroutine: it should call ListPublishing, then iterate every returned
-// target through reconcileTarget (which delegates to Reconcile).
-// Reconcile returning (nil, nil) on every target = all in-flight.
-func TestTickReconcile_IteratesAllPublishingTargets(t *testing.T) {
-	posts := &mockPostStore{
-		listPublishingFn: func() ([]models.PostTarget, error) {
-			return []models.PostTarget{
-				{ID: 1, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-1"},
-				{ID: 2, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-2"},
-				{ID: 3, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-3"},
-			}, nil
-		},
-	}
-	users := &mockUserStore{
-		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
-			return &models.PlatformAccount{ID: 10, Platform: "tiktok", PlatformUserID: "tt-1"}, nil
-		},
-	}
-	// Reconcile returns (nil, nil) for in-flight on every call.
-	svc := &mockAsyncProvider{
-		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
-			return nil, nil
-		},
-	}
-	vault := &mockCredentialVault{
-		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "t"}, nil
-		},
-	}
-	w := newTestWorker(posts, users, "tiktok", svc, vault)
-
-	reconciled, failed, err := w.tickReconcile(context.Background())
-	if err != nil {
-		t.Fatalf("tickReconcile: %v", err)
-	}
-	// All 3 targets are in-flight → none reconciled, none failed.
-	if reconciled != 0 {
-		t.Errorf("reconciled: want 0 (all in-flight), got %d", reconciled)
-	}
-	if failed != 0 {
-		t.Errorf("failed: want 0 (all in-flight), got %d", failed)
-	}
-	// ListPublishing called once.
-	if posts.listPublishingCalls != 1 {
-		t.Errorf("ListPublishing calls: want 1, got %d", posts.listPublishingCalls)
-	}
-	// Reconcile called 3 times — once per target.
-	if svc.reconcileCalls != 3 {
-		t.Errorf("Reconcile calls: want 3 (one per target), got %d", svc.reconcileCalls)
-	}
-	// UpdatePublishState NOT called on in-flight (terminal-state log only,
-	// not per-tick snapshot). UpdateStatus NOT called either — none
-	// transitioned.
-	if posts.updatePublishStateCalls != 0 {
-		t.Errorf("UpdatePublishState calls: want 0 (in-flight, no terminal log yet), got %d", posts.updatePublishStateCalls)
-	}
-	if posts.updateCalls != 0 {
-		t.Errorf("UpdateStatus calls: want 0 (all in-flight), got %d", posts.updateCalls)
-	}
-}
-
-// TestTickReconcile_EmptyList_NoOp covers the "nothing to do" path.
-func TestTickReconcile_EmptyList_NoOp(t *testing.T) {
-	posts := &mockPostStore{
-		listPublishingFn: func() ([]models.PostTarget, error) {
-			return nil, nil
-		},
-	}
-	users := &mockUserStore{}
-	svc := &mockAsyncProvider{baseMockProvider: baseMockProvider{platform: "tiktok"}}
-	vault := &mockCredentialVault{}
-	w := newTestWorker(posts, users, "tiktok", svc, vault)
-
-	reconciled, failed, err := w.tickReconcile(context.Background())
-	if err != nil {
-		t.Fatalf("tickReconcile: %v", err)
-	}
-	if reconciled != 0 || failed != 0 {
-		t.Errorf("counters: want (0, 0), got (%d, %d)", reconciled, failed)
-	}
-	if svc.reconcileCalls != 0 {
-		t.Errorf("Reconcile calls: want 0 (empty list), got %d", svc.reconcileCalls)
-	}
-}
-
-// TestTickReconcile_ListError_Propagates covers the "DB unreachable"
-// path. tickReconcile must surface the error so the caller can log it.
-func TestTickReconcile_ListError_Propagates(t *testing.T) {
-	posts := &mockPostStore{
-		listPublishingFn: func() ([]models.PostTarget, error) {
-			return nil, errors.New("db down")
-		},
-	}
-	users := &mockUserStore{}
-	svc := &mockAsyncProvider{baseMockProvider: baseMockProvider{platform: "tiktok"}}
-	vault := &mockCredentialVault{}
-	w := newTestWorker(posts, users, "tiktok", svc, vault)
-
-	_, _, err := w.tickReconcile(context.Background())
-	if err == nil {
-		t.Fatal("expected list error to propagate, got nil")
-	}
-}
-
-// TestRunOnce_BothTicksAndReconcile covers the new runOnce() method:
-// it should call BOTH tick() AND tickReconcile() in sequence on
-// every interval. The mock's Reconcile returns success, exercising
-// the publishing→published transition end-to-end.
-func TestRunOnce_BothTicksAndReconcile(t *testing.T) {
+// TestRunOnce_TickOnly_AsyncPlatform_NoReconcile asserts the new
+// shape on an ASYNC platform: the driver publishes (returning a
+// publish_id, status stays 'publishing'). The driver must NOT
+// invoke Reconcile — that's the ReconcilerWorker's Run-loop job now.
+//
+// This is the regression guard against re-introducing the old
+// runOnce which called tickReconcile (.ListPublishing + .Reconcile).
+func TestRunOnce_TickOnly_AsyncPlatform_NoReconcile(t *testing.T) {
 	posts := &mockPostStore{
 		listPendingFn: func(before time.Time) ([]models.PostTarget, error) {
-			return nil, nil // nothing to publish
-		},
-		listPublishingFn: func() ([]models.PostTarget, error) {
 			return []models.PostTarget{
-				{ID: 1, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusPublishing, PlatformPostID: "p-1"},
+				{ID: 1, PostID: 100, PlatformAccountID: 10, Status: models.PostStatusScheduled},
 			}, nil
 		},
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{ID: 100, Caption: "x", MediaURL: "https://cdn.example.com/v.mp4"}, nil
+		},
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		setKeyFn: func(id int64, key string) error { return nil },
 	}
 	users := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
 			return &models.PlatformAccount{ID: 10, Platform: "tiktok", PlatformUserID: "tt-1"}, nil
 		},
 	}
+	// TikTok-style async provider.
 	svc := &mockAsyncProvider{
 		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
-			return &models.PublishResult{PlatformMediaID: publishID}, nil
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: "tiktok-publish-id"}, nil
 		},
 	}
 	vault := &mockCredentialVault{
@@ -1638,37 +1019,41 @@ func TestRunOnce_BothTicksAndReconcile(t *testing.T) {
 
 	w.runOnce(context.Background())
 
-	// tick + reconcile both ran.
+	// Driver tick fired.
 	if posts.listPendingCalls != 1 {
-		t.Errorf("ListPending calls: want 1 (tick ran), got %d", posts.listPendingCalls)
+		t.Errorf("ListPending calls: want 1, got %d", posts.listPendingCalls)
 	}
-	if posts.listPublishingCalls != 1 {
-		t.Errorf("ListPublishing calls: want 1 (reconcile ran), got %d", posts.listPublishingCalls)
+	if svc.publishCalls != 1 {
+		t.Errorf("Publish calls: want 1, got %d", svc.publishCalls)
 	}
-	// The publishing target was reconciled and transitioned to published.
-	if posts.updateCalls != 1 {
-		t.Errorf("UpdateStatus calls: want 1 (publishing→published), got %d", posts.updateCalls)
+	// Drive left the row in 'publishing' with the publish_id stamped.
+	if posts.updateTargets[0].Status != models.PostStatusPublishing {
+		t.Errorf("final status: want publishing (async, reconciler owns terminal), got %q", posts.updateTargets[0].Status)
 	}
-	if len(posts.updateTargets) != 1 || posts.updateTargets[0].Status != models.PostStatusPublished {
-		t.Errorf("final status: want published, got %+v", posts.updateTargets)
+	if posts.updateTargets[0].PlatformPostID != "tiktok-publish-id" {
+		t.Errorf("platform_post_id: want tiktok-publish-id, got %q", posts.updateTargets[0].PlatformPostID)
 	}
-	// Reconcile reached (1 call), CheckPublishStatus NOT reached
-	// directly (Reconcile is the new entrypoint).
-	if svc.reconcileCalls != 1 {
-		t.Errorf("Reconcile calls: want 1, got %d", svc.reconcileCalls)
+	// Reconciler NEVER reached from the driver's runOnce. Loop
+	// back over the assertion: the async mock's Reconcile,
+	// CheckPublishStatus, StartPublish counters must all be 0 here.
+	if svc.reconcileCalls != 0 {
+		t.Errorf("Reconcile calls in driver runOnce: want 0 (reconciler owns Reconcile), got %d", svc.reconcileCalls)
 	}
 	if svc.checkStatusCalls != 0 {
-		t.Errorf("CheckPublishStatus calls: want 0 (worker delegates to Reconcile), got %d", svc.checkStatusCalls)
+		t.Errorf("CheckPublishStatus calls in driver runOnce: want 0 (reconciler owns status-check path), got %d", svc.checkStatusCalls)
+	}
+	if svc.startPublishCalls != 0 {
+		t.Errorf("StartPublish calls in driver runOnce: want 0 (per-platform timing — driver uses Publish via the canonical path), got %d", svc.startPublishCalls)
 	}
 }
 
-// ---------------------------------------------------------------------------
+// ------------------------------------------------------------------
 // computeProviderIdempotencyKey unit tests
-// ---------------------------------------------------------------------------
+// ------------------------------------------------------------------
 
 // TestComputeProviderIdempotencyKey_Deterministic covers the
-// Taglio 4.7 LEVEL 2 invariant: same (post_id, platform_account_id) →
-// same hex prefix, every time. Retries reuse the same key.
+// Taglio 4.7 LEVEL 2 invariant: same (post_id, platform_account_id)
+// → same hex prefix, every time. Retries reuse the same key.
 func TestComputeProviderIdempotencyKey_Deterministic(t *testing.T) {
 	k1 := computeProviderIdempotencyKey(100, 10)
 	k2 := computeProviderIdempotencyKey(100, 10)

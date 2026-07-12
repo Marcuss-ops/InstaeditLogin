@@ -84,6 +84,14 @@ type Config struct {
 
 	// Background worker tuning.
 	PublishWorkerIntervalSeconds int
+	// Taglio 5.x — independent tick interval for the new
+	// ReconcileWorker goroutine. The driver (PublishWorker) ticks
+	// at PublishWorkerIntervalSeconds (default 30s); the reconciler
+	// ticks faster (default 5s) so an async publish's
+	// publishing→published transition is observed promptly without
+	// coupling to the driver's cadence. Both run as separate
+	// goroutines on independent contexts with parallel shutdown.
+	ReconcileWorkerIntervalSeconds int
 
 	// S3-compatible storage (mandatory).
 	S3Endpoint  string
@@ -134,6 +142,7 @@ func Load() (*Config, error) {
 		LogLevel:                     getEnv("LOG_LEVEL", "info"),
 		AppEnv:                       getEnv("APP_ENV", "dev"),
 		PublishWorkerIntervalSeconds: getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
+		ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
 		S3Endpoint:                   getEnv("S3_ENDPOINT", ""),
 		S3Bucket:                     getEnv("S3_BUCKET", ""),
 		S3AccessKey:                  getEnv("S3_ACCESS_KEY", ""),
