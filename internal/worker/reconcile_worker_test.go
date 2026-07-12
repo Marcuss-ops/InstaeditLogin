@@ -42,13 +42,15 @@ type mockReconcilePostStore struct {
 
 	// Call counters — one per method, incremented on every invocation.
 	listPublishingCalls     int
+	claimPublishingCalls    int
 	updateCalls             int
 	updatePublishStateCalls int
 
 	// Function fields — each test overrides only what it exercises.
-	listPublishingFn     func() ([]models.PostTarget, error)
-	updateStatusFn       func(*models.PostTarget) error
-	updatePublishStateFn func(id int64, providerState string) error
+	listPublishingFn       func() ([]models.PostTarget, error)
+	claimPublishingFn      func(id int64) (bool, error)
+	updateStatusFn         func(*models.PostTarget) error
+	updatePublishStateFn   func(id int64, providerState string) error
 
 	// Captured targets from UpdateStatus — lets tests inspect the
 	// final status (published vs failed) and assert on the worker
@@ -72,6 +74,16 @@ func (m *mockReconcilePostStore) ListPublishing() ([]models.PostTarget, error) {
 		return nil, nil
 	}
 	return m.listPublishingFn()
+}
+
+func (m *mockReconcilePostStore) ClaimPublishingTarget(id int64) (bool, error) {
+	m.mu.Lock()
+	m.claimPublishingCalls++
+	m.mu.Unlock()
+	if m.claimPublishingFn == nil {
+		return true, nil // default: claim always succeeds
+	}
+	return m.claimPublishingFn(id)
 }
 
 func (m *mockReconcilePostStore) UpdateStatus(target *models.PostTarget) error {
@@ -136,6 +148,10 @@ func TestReconcileTarget_PublishComplete_TransitionsToPublished(t *testing.T) {
 	}
 	if wasFailed {
 		t.Error("wasFailed: want false (success, not failure)")
+	}
+	// FASE 1.1: claim must fire exactly once before any downstream work.
+	if posts.claimPublishingCalls != 1 {
+		t.Errorf("ClaimPublishingTarget calls: want 1, got %d", posts.claimPublishingCalls)
 	}
 	// UpdateStatus should have been called once with status=published.
 	if posts.updateCalls != 1 {
@@ -203,6 +219,9 @@ func TestReconcileTarget_Failed_TransitionsToFailed(t *testing.T) {
 	if !reconciled || !wasFailed {
 		t.Errorf("reconciled=%v wasFailed=%v: want (true, true)", reconciled, wasFailed)
 	}
+	if posts.claimPublishingCalls != 1 {
+		t.Errorf("ClaimPublishingTarget calls: want 1, got %d", posts.claimPublishingCalls)
+	}
 	if posts.updateCalls != 1 {
 		t.Errorf("UpdateStatus calls: want 1, got %d", posts.updateCalls)
 	}
@@ -261,6 +280,9 @@ func TestReconcileTarget_InFlight_LeavesStatusUnchanged(t *testing.T) {
 	if reconciled || wasFailed {
 		t.Errorf("reconciled=%v wasFailed=%v: want (false, false) for in-flight", reconciled, wasFailed)
 	}
+	if posts.claimPublishingCalls != 1 {
+		t.Errorf("ClaimPublishingTarget calls: want 1 (claim always fires first), got %d", posts.claimPublishingCalls)
+	}
 	if posts.updateCalls != 0 {
 		t.Errorf("UpdateStatus calls: want 0 (in-flight, no transition), got %d", posts.updateCalls)
 	}
@@ -300,6 +322,9 @@ func TestReconcileTarget_SyncPlatform_LeavesAlone(t *testing.T) {
 	if reconciled || wasFailed {
 		t.Errorf("reconciled=%v wasFailed=%v: want (false, false) for sync platform", reconciled, wasFailed)
 	}
+	if posts.claimPublishingCalls != 1 {
+		t.Errorf("ClaimPublishingTarget calls: want 1 (claim always fires first), got %d", posts.claimPublishingCalls)
+	}
 	if posts.updateCalls != 0 {
 		t.Errorf("UpdateStatus calls: want 0 (sync platform, no transition), got %d", posts.updateCalls)
 	}
@@ -336,6 +361,9 @@ func TestReconcileTarget_OrphanAccount_MarksFailed(t *testing.T) {
 	if !reconciled || !wasFailed {
 		t.Errorf("reconciled=%v wasFailed=%v: want (true, true) for orphan account", reconciled, wasFailed)
 	}
+	if posts.claimPublishingCalls != 1 {
+		t.Errorf("ClaimPublishingTarget calls: want 1 (claim always fires first), got %d", posts.claimPublishingCalls)
+	}
 	if posts.updateCalls != 1 {
 		t.Errorf("UpdateStatus calls: want 1, got %d", posts.updateCalls)
 	}
@@ -345,6 +373,54 @@ func TestReconcileTarget_OrphanAccount_MarksFailed(t *testing.T) {
 	}
 	if final.ErrorMessage == "" {
 		t.Error("ErrorMessage should explain why the target was failed (orphan account)")
+	}
+}
+
+// TestReconcileTarget_ClaimLoss_SkipsWithoutSideEffects covers the
+// FASE 1.1 claim-loss path: when ClaimPublishingTarget returns false
+// (another reconciler replica already claimed the row via SKIP LOCKED),
+// the reconciler MUST skip the target without loading the account,
+// refreshing the token, or calling Reconcile.
+func TestReconcileTarget_ClaimLoss_SkipsWithoutSideEffects(t *testing.T) {
+	posts := &mockReconcilePostStore{
+		claimPublishingFn: func(id int64) (bool, error) {
+			return false, nil // another reconciler already claimed
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			t.Error("FindPlatformAccountByID called despite claim loss")
+			return nil, nil
+		},
+	}
+	svc := &mockAsyncProvider{baseMockProvider: baseMockProvider{platform: "tiktok"}}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			t.Error("Renew called despite claim loss")
+			return nil, nil
+		},
+	}
+	w := newTestReconcileWorker(posts, users, "tiktok", svc, vault)
+
+	reconciled, wasFailed, err := w.reconcileTarget(context.Background(), publishingTarget())
+	if err != nil {
+		t.Fatalf("reconcileTarget: claim-loss should be nil (skip, not failure), got %v", err)
+	}
+	if reconciled || wasFailed {
+		t.Errorf("reconciled=%v wasFailed=%v: want (false, false) on claim loss", reconciled, wasFailed)
+	}
+	if posts.claimPublishingCalls != 1 {
+		t.Errorf("ClaimPublishingTarget calls: want 1, got %d", posts.claimPublishingCalls)
+	}
+	// No downstream calls.
+	if posts.updateCalls != 0 {
+		t.Errorf("UpdateStatus calls: want 0 (claim-loss skips), got %d", posts.updateCalls)
+	}
+	if svc.reconcileCalls != 0 {
+		t.Errorf("Reconcile calls: want 0 (claim-loss skips), got %d", svc.reconcileCalls)
+	}
+	if vault.ensureCalls != 0 {
+		t.Errorf("Renew calls: want 0 (claim-loss skips), got %d", vault.ensureCalls)
 	}
 }
 
@@ -383,6 +459,9 @@ func TestReconcileTarget_TransientError_TerminalFailure(t *testing.T) {
 	}
 	if !reconciled || !wasFailed {
 		t.Errorf("reconciled=%v wasFailed=%v: want (true, true) — transient errors are terminal under Reconcile's contract", reconciled, wasFailed)
+	}
+	if posts.claimPublishingCalls != 1 {
+		t.Errorf("ClaimPublishingTarget calls: want 1 (claim always fires first), got %d", posts.claimPublishingCalls)
 	}
 	if posts.updateCalls != 1 {
 		t.Errorf("UpdateStatus calls: want 1 (transition publishing→failed), got %d", posts.updateCalls)

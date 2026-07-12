@@ -59,16 +59,29 @@ const DefaultReconcileInterval = 5 * time.Second
 //
 // Distinct from PublisherPostStore because the driver needs the
 // claim/find-by-id/stamp-key surface while the reconciler needs
-// only the read/status-transition surface. Splitting the
-// interfaces compiles-in the invariant that the reconciler never
-// accidentally writes the publish path (no claim here, no
+// only the read/status-transition surface plus its own claim.
+// Splitting the interfaces compiles-in the invariant that the
+// reconciler never accidentally writes the publish path (no
 // payload load, no idempotency-key stamp).
+//
+// FASE 1.1 — SKIP LOCKED: ClaimPublishingTarget is the reconciler's
+// atomic row-ownership check. Before calling AsyncPublisher.Reconcile,
+// the reconciler claims the row so two reconciler replicas racing
+// the same publishing target don't both spend an API call.
 type ReconcilePostStore interface {
 	// ListPublishing returns post_targets whose status='publishing'
 	// AND platform_post_id IS NOT NULL. Ordered by id ASC for
 	// stable iteration (reconciler picks the same rows every tick
 	// until they transition out of 'publishing').
 	ListPublishing() ([]models.PostTarget, error)
+	// ClaimPublishingTarget (FASE 1.1) atomically claims a
+	// publishing target via SELECT FOR UPDATE SKIP LOCKED.
+	// Returns true if the claim was acquired (row existed + was
+	// lockable), false if another reconciler already claimed the
+	// row or the id is invalid. Does NOT transition status — the
+	// row stays in 'publishing'. Status transitions are still
+	// done by UpdateStatus after Reconcile returns.
+	ClaimPublishingTarget(id int64) (bool, error)
 	// UpdateStatus persists the publishing→published|failed
 	// transitions the reconciler writes. Idempotent on terminal
 	// states (two reconcilers racing the same row will both write
@@ -203,15 +216,14 @@ func (w *ReconcileWorker) runOnce(ctx context.Context) {
 // Reconcile contract) it transitions to 'failed'; on any
 // in-flight state it leaves the target alone for the next tick.
 //
-// Safety: this goroutine does NOT claim the row before reading it.
-// That's safe because the only thing the reconciler MUTATES on a
-// publishing target is status (terminal transitions) and
-// provider_state (terminal-state log). The status transition is
-// idempotent — if two reconcilers racing from different replicas
-// hit the same target at the same tick, the second UPDATE simply
-// overwrites the first with the same terminal state. (The publish
-// driver's ClaimQueuedTarget already prevents two workers from
-// racing the queued→publishing transition.)
+// Safety: this goroutine claims each row via ClaimPublishingTarget
+// before reading it (FASE 1.1 — SKIP LOCKED). If another reconciler
+// replica already claimed the row, we skip it. The winner has
+// exclusive ownership for the duration of the reconcileTarget call.
+// On terminal transitions (published|failed), UpdateStatus is
+// idempotent — if two reconcilers somehow both claim the same row
+// (degenerate race), the second UPDATE simply overwrites the first
+// with the same terminal state.
 func (w *ReconcileWorker) tickReconcile(ctx context.Context) (reconciled, failed int, err error) {
 	publishing, err := w.postRepo.ListPublishing()
 	if err != nil {
@@ -280,6 +292,21 @@ func (w *ReconcileWorker) tickReconcile(ctx context.Context) (reconciled, failed
 // wasFailed let the caller increment per-tick counters without
 // parsing the error.
 func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.PostTarget) (reconciled bool, wasFailed bool, err error) {
+	// FASE 1.1 — SKIP LOCKED: claim the publishing row before
+	// doing any work. If another reconciler replica already claimed
+	// this row, we skip it — the winner will drive the state
+	// machine to completion. This prevents two replicas from
+	// spending duplicate API calls on the same publish_id.
+	claimed, claimErr := w.postRepo.ClaimPublishingTarget(target.ID)
+	if claimErr != nil {
+		return false, false, fmt.Errorf("claim publishing target %d: %w", target.ID, claimErr)
+	}
+	if !claimed {
+		// Another reconciler owns this row — skip, it'll be
+		// processed by the winner.
+		return false, false, nil
+	}
+
 	// 1. Load platform account.
 	account, err := w.userRepo.FindPlatformAccountByID(target.PlatformAccountID)
 	if err != nil {

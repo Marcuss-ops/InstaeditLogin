@@ -386,53 +386,180 @@ func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
 }
 
 // ClaimQueuedTarget atomically transitions a post_target from
-// status='queued' to status='publishing', returning true on claim
+// status='queued' to status='publishing' using SELECT FOR UPDATE
+// SKIP LOCKED inside an explicit transaction. Returns true on claim
 // success and false if the target was already claimed by another
-// worker (or the id is invalid).
+// worker (row locked → SKIP LOCKED returns no rows) or the id is
+// invalid (no row matches).
 //
-// Verdict §10: this is the atomic-claim primitive that unblocks
-// running 2+ worker replicas without double-publishes. The single
-// UPDATE statement uses WHERE status='queued' as a logical
-// lock — the database's row-level locking guarantees that exactly
-// one worker's UPDATE returns RowsAffected==1 and the rest return
-// RowsAffected==0 (the row is no longer in 'scheduled' state from
-// the loser's perspective). The 'publishing' row is then invisible
-// to the next ListPending sweep (which filters status='queued'),
-// so the losing worker never re-picks it.
+// Verdict §10 (FASE 1.1 — SKIP LOCKED): the SELECT FOR UPDATE SKIP
+// LOCKED + UPDATE pattern inside a single explicit transaction
+// guarantees that 2+ worker replicas racing the same row NEVER
+// block on each other. The first worker to SELECT locks the row;
+// the loser's SELECT returns immediately with no rows (SKIP
+// LOCKED), and the function returns (false, nil) — no row-level
+// wait, no deadlock risk, no connection-pool exhaustion under
+// multi-replica contention.
+//
+// The explicit transaction is REQUIRED for FOR UPDATE to acquire
+// a row lock (PostgreSQL only honours FOR UPDATE inside a
+// transaction block). The tx is scoped to the claim operation
+// only — BEGIN → SELECT FOR UPDATE SKIP LOCKED → UPDATE → COMMIT.
 func (r *PostRepository) ClaimQueuedTarget(id int64) (bool, error) {
-	result, err := r.db.Exec(
-		`UPDATE post_targets
-		 SET status = 'publishing'
-		 WHERE id = $1 AND status = 'queued'`,
+	tx, err := r.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("failed to begin claim tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// SELECT ... FOR UPDATE SKIP LOCKED: if another tx already holds
+	// a row lock on this row, SKIP LOCKED returns immediately with
+	// zero rows instead of blocking. The caller sees (false, nil)
+	// and moves to the next target without stalling.
+	var foundID int64
+	err = tx.QueryRow(
+		`SELECT id FROM post_targets
+		 WHERE id = $1 AND status = 'queued'
+		 FOR UPDATE SKIP LOCKED`,
+		id,
+	).Scan(&foundID)
+	if err == sql.ErrNoRows {
+		// Row either doesn't exist, isn't in 'queued' status, or is
+		// locked by another tx — in all cases we didn't win the claim.
+		_ = tx.Rollback()
+		err = nil // prevent deferred double-rollback
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to select for update: %w", err)
+	}
+
+	// Row locked — we own it. Transition status.
+	_, err = tx.Exec(
+		`UPDATE post_targets SET status = 'publishing' WHERE id = $1`,
 		id,
 	)
 	if err != nil {
-		return false, fmt.Errorf("failed to claim post_target: %w", err)
+		return false, fmt.Errorf("failed to update claimed target: %w", err)
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("failed to read rows affected: %w", err)
+
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("failed to commit claim: %w", err)
 	}
-	return n == 1, nil
+	return true, nil
 }
 
 // ClaimWaitingProviderTarget atomically transitions a post_target from
-// status='waiting_provider' to status='publishing'.
+// status='waiting_provider' to status='publishing' using SELECT FOR
+// UPDATE SKIP LOCKED (same pattern as ClaimQueuedTarget — see that
+// method's docstring for the FASE 1.1 rationale).
 func (r *PostRepository) ClaimWaitingProviderTarget(id int64) (bool, error) {
-	result, err := r.db.Exec(
-		`UPDATE post_targets
-		 SET status = 'publishing'
-		 WHERE id = $1 AND status = 'waiting_provider'`,
+	tx, err := r.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("failed to begin claim-waiting tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var foundID int64
+	err = tx.QueryRow(
+		`SELECT id FROM post_targets
+		 WHERE id = $1 AND status = 'waiting_provider'
+		 FOR UPDATE SKIP LOCKED`,
+		id,
+	).Scan(&foundID)
+	if err == sql.ErrNoRows {
+		_ = tx.Rollback()
+		err = nil // prevent deferred double-rollback
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to select for update (waiting): %w", err)
+	}
+
+	_, err = tx.Exec(
+		`UPDATE post_targets SET status = 'publishing' WHERE id = $1`,
 		id,
 	)
 	if err != nil {
-		return false, fmt.Errorf("failed to claim waiting target: %w", err)
+		return false, fmt.Errorf("failed to update claimed waiting target: %w", err)
 	}
-	n, err := result.RowsAffected()
+
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("failed to commit claim-waiting: %w", err)
+	}
+	return true, nil
+}
+
+// ClaimPublishingTarget (FASE 1.1 — SKIP LOCKED for ReconcileWorker)
+// atomically claims a post_target that is in status='publishing' with
+// a non-null platform_post_id. Uses the same SELECT FOR UPDATE SKIP
+// LOCKED + UPDATE pattern as ClaimQueuedTarget.
+//
+// This is the reconciler's claim primitive: before calling
+// AsyncPublisher.Reconcile, the reconciler claims the row so two
+// reconciler replicas racing the same publishing target don't both
+// spend an API call on the same publish_id. The first reconciler wins
+// the claim; the loser sees (false, nil) and skips.
+//
+// Note: unlike ClaimQueuedTarget, this does NOT transition the status
+// — the row stays in 'publishing'. The claim is a pure row-lock
+// ownership check ("I'm working on this row, nobody else touch it")
+// scoped to the duration of the transaction. The status transition
+// (publishing → published|failed) is still done by UpdateStatus after
+// Reconcile returns.
+func (r *PostRepository) ClaimPublishingTarget(id int64) (bool, error) {
+	tx, err := r.db.Begin()
 	if err != nil {
-		return false, fmt.Errorf("failed to read rows affected: %w", err)
+		return false, fmt.Errorf("failed to begin claim-publishing tx: %w", err)
 	}
-	return n == 1, nil
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var foundID int64
+	err = tx.QueryRow(
+		`SELECT id FROM post_targets
+		 WHERE id = $1 AND status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
+		 FOR UPDATE SKIP LOCKED`,
+		id,
+	).Scan(&foundID)
+	if err == sql.ErrNoRows {
+		_ = tx.Rollback()
+		err = nil // prevent deferred double-rollback
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to select for update (publishing): %w", err)
+	}
+
+	// Claim acquired — commit the tx to release the row lock. The
+	// reconciler proceeds with Reconcile OUTSIDE the tx because
+	// holding a row lock across an HTTP call to a platform API
+	// would be a connection-leak antipattern.
+	//
+	// IMPORTANT (FASE 1.1 design note): this is a BEST-EFFORT claim.
+	// Between this COMMIT and the Reconcile API call, another
+	// reconciler replica COULD claim the same row (the lock is
+	// released). The claim reduces wasted API calls but does NOT
+	// serialise Reconcile — two reconcilers racing the same row
+	// may both call the platform. Terminal-state updates are
+	// idempotent (same status, same UPDATE is a no-op), so this
+	// is safe. The real protection against double-publish is the
+	// post_targets.status column, not the claim.
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("failed to commit claim-publishing: %w", err)
+	}
+	return true, nil
 }
 
 // ListByPost returns the full fan-out set for a given post, ordered by id

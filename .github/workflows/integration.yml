@@ -1,15 +1,14 @@
 name: integration
 
+# Least-privilege: checkout + build + test don't need write or
+# deploy scopes. The default GITHUB_TOKEN is broader.
+permissions:
+  contents: read
+
 # Runs the integration tests against real ephemeral Postgres containers
-# via testcontainers-go. Covers BOTH the database package (migrations +
-# meta→Instagram rename tests) AND the worker package (PublishWorker +
-# ReconcileWorker two-goroutine pipeline tests). Triggered on every
-# push/PR that touches any test-shaping code, the shared testutil
-# helper, the workflow file itself, or Go module files.
-#
-# Path-trigger strategy: explicit `paths` list keeps CI minutes focused
-# on changes that could actually break integration behavior. Frontend-
-# only, docs-only, and seed-only PRs don't need to pay for Docker.
+# via testcontainers-go, covering both internal/database and
+# internal/worker. Triggered on push/PR that touches test-shaping
+# code or deps; Docker is pre-installed on ubuntu-runners.
 on:
   push:
     branches: [main]
@@ -35,16 +34,23 @@ on:
       - '.github/workflows/integration.yml'
   workflow_dispatch:
 
-# GitHub-hosted ubuntu runners ship with Docker pre-installed —
-# testcontainers just works without setup-docker. The Postgres image
-# (currently postgres:17-alpine) is sourced from the testutil helper
-# at internal/testutil/postgres/postgres.go — bumping the version
-# there is the single source of truth.
+# Postgres image (currently postgres:17-alpine) is sourced from the
+# testutil helper — bumping the version there is the single source
+# of truth.
 
 jobs:
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    # Cancel in-progress runs in the same group so a fast follow-up
+    # push doesn't spawn a duplicate runner re-pulling postgres:17-alpine.
+    # Group by workflow + (PR number OR ref): on PR events `github.ref`
+    # is `refs/pull/N/merge` and CHANGES per commit, so the PR number
+    # is needed to keep consecutive PR pushes in the same group.
+    concurrency:
+      group: integration-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
 
     steps:
       - uses: actions/checkout@v4
@@ -53,10 +59,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           # Drive the Go version from go.mod (currently 1.25.0) so a
-          # future go.mod bump propagates to CI without touching this
-          # file. Avoids the Go-pinning drift that the previous
-          # db-integration.yml had (hardcoded `1.23` while go.mod was
-          # 1.25.0).
+          # future bump propagates here automatically. Avoids the prior
+          # hardcode-drift bug (db-integration.yml had `1.23` while
+          # go.mod was 1.25.0).
           go-version-file: go.mod
           cache: true
 
@@ -64,10 +69,8 @@ jobs:
         run: go build ./...
 
       - name: Run database + worker integration tests (testcontainers postgres:17-alpine)
-        # Delegates to the Makefile target so the test command lives in
-        # ONE place — the canonical command matches what a developer
-        # runs locally (`make test-integration`). If the command
-        # changes, edit the Makefile, not this workflow.
+        # Delegates to the Makefile — single source of truth for the
+        # test command. Edit `make test-integration`, not this step.
         run: make test-integration
 
       - name: Dump test summary on failure
