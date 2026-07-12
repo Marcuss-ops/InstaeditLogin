@@ -15,6 +15,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/providers"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
@@ -89,74 +90,20 @@ func main() {
 	// repository directly — they go through this vault.
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
 
-	// Taglio 2.1: the composite PlatformService is gone. The CapabilityRouter
-	// holds providers by name and dispatches per-capability lookups
-	// (OAuth / Publisher / AccountDiscoverer / ContentValidator /
-	// PublishReconciler). The router uses type assertions on Register so each
-	// provider only carries the methods it actually supports.
-	capRouter := services.NewCapabilityRouter()
-
-	// Facebook: registers when FACEBOOK_REDIRECT_URI is configured.
-	// Uses the shared Meta OAuth credentials (META_APP_ID / META_APP_SECRET).
-	facebookSvc, err := services.NewFacebookOAuthService(cfg)
+	// Taglio 2.5: all platform-specific registration is encapsulated
+	// in providers.BuildRegistry. The returned *CapabilityRegistry is a
+	// type alias for *services.CapabilityRouter, so api.NewRouter
+	// and worker.NewPublishWorker accept it without any import change.
+	// Per-platform "registered / skipped" log lines are gone (the
+	// single `platforms:` summary in the Router-configured line below
+	// is enough for operators).
+	registry, err := providers.BuildRegistry(cfg)
 	if err != nil {
-		slog.Error("Failed to create Facebook OAuth service", "error", err)
+		slog.Error("Failed to build provider registry", "error", err)
 		os.Exit(1)
 	}
-	if facebookSvc != nil {
-		capRouter.Register(facebookSvc.Name(), facebookSvc)
-		slog.Info("Facebook OAuth provider registered", "capabilities", describeCapabilities(facebookSvc))
-	} else {
-		slog.Info("Facebook OAuth provider skipped (FACEBOOK_REDIRECT_URI not set)")
-	}
-
-	if cfg.TikTokClientKey != "" {
-		tiktokSvc, err := services.NewTikTokOAuthService(cfg)
-		if err != nil {
-			slog.Warn("Failed to create TikTok OAuth service", "error", err)
-		} else {
-			capRouter.Register(tiktokSvc.Name(), tiktokSvc)
-			slog.Info("TikTok OAuth provider registered", "capabilities", describeCapabilities(tiktokSvc))
-		}
-	} else {
-		slog.Info("TikTok OAuth provider skipped (no credentials)")
-	}
-
-	if cfg.TwitterClientID != "" {
-		twitterSvc, err := services.NewTwitterOAuthService(cfg)
-		if err != nil {
-			slog.Warn("Failed to create Twitter OAuth service", "error", err)
-		} else {
-			capRouter.Register(twitterSvc.Name(), twitterSvc)
-			slog.Info("Twitter OAuth provider registered", "capabilities", describeCapabilities(twitterSvc))
-		}
-	} else {
-		slog.Info("Twitter OAuth provider skipped (no credentials)")
-	}
-
-	if cfg.YouTubeClientID != "" {
-		youtubeSvc, err := services.NewYouTubeOAuthService(cfg)
-		if err != nil {
-			slog.Warn("Failed to create YouTube OAuth service", "error", err)
-		} else {
-			capRouter.Register(youtubeSvc.Name(), youtubeSvc)
-			slog.Info("YouTube OAuth provider registered", "capabilities", describeCapabilities(youtubeSvc))
-		}
-	} else {
-		slog.Info("YouTube OAuth provider skipped (no credentials)")
-	}
-
-	if cfg.LinkedInClientID != "" {
-		linkedinSvc, err := services.NewLinkedInOAuthService(cfg)
-		if err != nil {
-			slog.Warn("Failed to create LinkedIn OAuth service", "error", err)
-		} else {
-			capRouter.Register(linkedinSvc.Name(), linkedinSvc)
-			slog.Info("LinkedIn OAuth provider registered", "capabilities", describeCapabilities(linkedinSvc))
-		}
-	} else {
-		slog.Info("LinkedIn OAuth provider skipped (no credentials)")
-	}
+	capRouter := registry
+	_ = services.NewCapabilityRouter // keep the import alive for tests; harmless at runtime
 
 	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours)
 	oneTimeCodes := api.NewOneTimeCodeStore(60 * time.Second)
@@ -272,27 +219,4 @@ func main() {
 	slog.Info("Server stopped")
 }
 
-// describeCapabilities returns a human-readable list of the small
-// capability interfaces a provider value implements. It exists purely
-// for the startup log so operators can see at a glance which providers
-// support which surfaces (e.g. Facebook has AccountDiscoverer, TikTok
-// has PublishReconciler, LinkedIn does not).
-func describeCapabilities(p any) string {
-	out := []string{}
-	if _, ok := p.(services.OAuthProvider); ok {
-		out = append(out, "OAuth")
-	}
-	if _, ok := p.(services.AccountDiscoverer); ok {
-		out = append(out, "Discover")
-	}
-	if _, ok := p.(services.ContentValidator); ok {
-		out = append(out, "Validate")
-	}
-	if _, ok := p.(services.Publisher); ok {
-		out = append(out, "Publish")
-	}
-	if _, ok := p.(services.PublishReconciler); ok {
-		out = append(out, "Reconcile")
-	}
-	return fmt.Sprintf("%v", out)
-}
+
