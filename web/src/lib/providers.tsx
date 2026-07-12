@@ -59,7 +59,7 @@ export const PROVIDERS: ProviderMeta[] = [
   {
     id: "instagram",
     name: "Instagram",
-    description: "Connect your Instagram Business account",
+    description: "Image and Reel publishing to Instagram Business",
     color: "from-[#E1306C] to-[#C13584]",
     iconBg: "from-[#E1306C] to-[#C13584]",
     glowColor: "rgba(225,48,108,0.35)",
@@ -69,7 +69,7 @@ export const PROVIDERS: ProviderMeta[] = [
   {
     id: "facebook",
     name: "Facebook",
-    description: "Publish to your Facebook Pages",
+    description: "Text and image publishing to Facebook Pages",
     color: "from-[#0A84FF] to-[#0866FF]",
     iconBg: "from-[#0A84FF] to-[#0866FF]",
     glowColor: "rgba(10,132,255,0.35)",
@@ -79,7 +79,7 @@ export const PROVIDERS: ProviderMeta[] = [
   {
     id: "threads",
     name: "Threads",
-    description: "Publish text and images to Threads",
+    description: "Text and image publishing to Threads",
     color: "from-[#000000] to-[#333333]",
     iconBg: "from-[#000000] to-[#333333]",
     glowColor: "rgba(0,0,0,0.25)",
@@ -89,7 +89,7 @@ export const PROVIDERS: ProviderMeta[] = [
   {
     id: "tiktok",
     name: "TikTok",
-    description: "Publish videos directly to your TikTok profile",
+    description: "Video publishing with privacy and comment/duet/stitch controls",
     color: "from-[#ff0050] to-[#00f2ea]",
     iconBg: "from-[#ff0050] to-[#00f2ea]",
     glowColor: "rgba(255,0,80,0.35)",
@@ -99,7 +99,7 @@ export const PROVIDERS: ProviderMeta[] = [
   {
     id: "twitter",
     name: "X (Twitter)",
-    description: "Publish tweets and media to your X profile",
+    description: "Text and single-image publishing to X (Twitter)",
     color: "from-[#e8e8ef] to-[#9aa0aa]",
     iconBg: "from-[#2a2a32] to-[#1a1a22]",
     glowColor: "rgba(200,200,210,0.2)",
@@ -109,7 +109,7 @@ export const PROVIDERS: ProviderMeta[] = [
   {
     id: "youtube",
     name: "YouTube",
-    description: "Upload videos to your YouTube channel",
+    description: "Video upload with title, description, and privacy settings",
     color: "from-[#ff0000] to-[#cc0000]",
     iconBg: "from-[#ff0000] to-[#cc0000]",
     glowColor: "rgba(255,0,0,0.35)",
@@ -119,7 +119,7 @@ export const PROVIDERS: ProviderMeta[] = [
   {
     id: "linkedin",
     name: "LinkedIn",
-    description: "Publish posts and articles to your LinkedIn profile",
+    description: "Text and single-image publishing to your personal LinkedIn profile",
     color: "from-[#0A66C2] to-[#004182]",
     iconBg: "from-[#0A66C2] to-[#004182]",
     glowColor: "rgba(10,102,194,0.35)",

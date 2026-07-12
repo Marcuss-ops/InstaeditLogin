@@ -37,10 +37,8 @@ import (
 //   - ResourceDiscoverer (= AccountDiscoverer — Facebook Pages the user
 //     manages; the OAuth-connect handler surfaces them, today the
 //     pick is implicit via pages[0])
-//   - ContentValidator (text or image required — text goes to /feed,
-//     image to /photos). Note: video uploads on Pages use a separate
-//     /videos endpoint and are NOT covered by the current Publisher
-//     implementation; reels/videos would be a follow-up.
+//   - ContentValidator (text or image on Page)
+//   - Publisher (Page feed / Page photo, dispatched on pages[0] today)
 //   - Publisher (Page feed / Page photo, dispatched on pages[0] today
 //     — to be replaced by explicit page-id selection in a follow-up)
 //   - AccountManager (Validate / Revoke — non-interface helpers used
@@ -127,9 +125,8 @@ func (s *FacebookOAuthService) RefreshOAuthToken(ctx context.Context, currentTok
 	}, nil
 }
 
-// ValidateContent enforces Facebook's "text OR image" rule before
-// dispatching the publish call. Empty payloads would otherwise fail
-// deep inside the Graph API with a 400.
+// ValidateContent enforces Facebook's minimum requirements: text or image on a Page.
+// Taglio 5d: minimum feature set = text + image on Page.
 func (s *FacebookOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.Text == "" && payload.ImageURL == "" {
 		return fmt.Errorf("facebook requires either text or media")

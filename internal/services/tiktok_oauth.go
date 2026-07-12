@@ -19,7 +19,7 @@ import (
 //
 // Capabilities exposed (Taglio 4.2):
 //   - OAuthProvider (login flow)
-//   - ContentValidator (video required; caption ≤ 4000 runes)
+//   - ContentValidator (video + privacy + comment/duet/stitch)
 //   - Publisher (Publisher.Publish = thin wrapper that calls StartPublish
 //     and returns immediately with the publish_id, for backward compat
 //     with the existing Publisher contract used by the worker's tick)
@@ -118,10 +118,9 @@ func (s *TikTokOAuthService) HandleCallback(ctx context.Context, state, code str
 	return profile, tokenData, nil
 }
 
-// ValidateContent enforces TikTok's hard requirements: a video,
-// a privacy_level (mandatory — no default), and caption ≤ 4000 runes.
-// Taglio 4b: privacy_level is now required — empty/unrecognized values
-// return a validation_error instead of silently defaulting to PUBLIC_TO_EVERYONE.
+// ValidateContent enforces TikTok's minimum requirements: video,
+// privacy level, and comment/duet/stitch toggles.
+// Taglio 5d: minimum feature set = video + privacy + comment/duet/stitch.
 func (s *TikTokOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.VideoURL == "" {
 		return fmt.Errorf("tiktok requires a video for publishing")
