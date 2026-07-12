@@ -346,6 +346,98 @@ func TestHasKey(t *testing.T) {
 	}
 }
 
+// TestNeedsRotation (Blocco #2.2) covers the lazy re-encrypt trigger
+// the vault consults on every read. The table cases pin each branch
+// of the NeedsRotation contract:
+//
+//   - too-short payload → rotation needed (treat as legacy/garbage)
+//   - legacy format (no v0x01 prefix) → rotation needed (migrate to v1)
+//   - v1 envelope stamped with active key → no rotation
+//   - v1 envelope stamped with a stale key id → rotation needed
+//   - v1 envelope stamped with an unknown key id → rotation needed
+//     (the row is unreadable; the rotate-then-rewrite cycle moves
+//     it onto the active key without an explicit decrypt first)
+func TestNeedsRotation(t *testing.T) {
+	enc1, err := NewEncryptor(1, map[uint32]string{1: testKey1})
+	if err != nil {
+		t.Fatalf("NewEncryptor v1: %v", err)
+	}
+	ct1, err := enc1.Encrypt("hello")
+	if err != nil {
+		t.Fatalf("Encrypt v1: %v", err)
+	}
+	// Encryptor with both keys, active=v2.
+	enc2, err := NewEncryptor(2, map[uint32]string{1: testKey1, 2: testKey2})
+	if err != nil {
+		t.Fatalf("NewEncryptor v2: %v", err)
+	}
+	ct2, err := enc2.Encrypt("hello")
+	if err != nil {
+		t.Fatalf("Encrypt v2: %v", err)
+	}
+	// Force a v1 envelope stamped with an unknown key id by
+	// overwriting the key id bytes in ct1.
+	ctUnknown := append([]byte{}, ct1...)
+	binary.BigEndian.PutUint32(ctUnknown[1:5], 99)
+
+	tests := []struct {
+		name string
+		enc  *Encryptor
+		data []byte
+		want bool
+	}{
+		{"too-short payload triggers rotation", enc2, []byte{0x01, 0x02, 0x03}, true},
+		{"legacy format (no v0x01 prefix) triggers rotation", enc2, []byte("legacy-ciphertext-bytes-12"), true},
+		{"v1 envelope with active key id → no rotation", enc2, ct2, false},
+		{"v1 envelope with stale key id (key 1, active 2) → rotation", enc2, ct1, true},
+		{"v1 envelope with unknown key id → rotation", enc2, ctUnknown, true},
+		{"v1 envelope with active key id when only one key in map → no rotation", enc1, ct1, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.enc.NeedsRotation(tc.data); got != tc.want {
+				t.Fatalf("NeedsRotation: want %v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+
+// TestNeedsRotation_LegacyCollisionNonce constructs a legacy
+// ciphertext whose nonce starts with 0x01 (the envelope version
+// byte). NeedsRotation's first byte check is true → it returns
+// "rotation needed". This is correct: the row will be re-encrypted
+// under the active key on the next read, migrating it from the
+// legacy format to the v1 envelope in the process. The idempotence
+// guarantee holds: the second read sees a v1 envelope stamped with
+// the active key → no further rotation.
+func TestNeedsRotation_LegacyCollisionNonce(t *testing.T) {
+	enc, err := NewEncryptor(1, map[uint32]string{1: testKey1})
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
+	// Build a legacy single-key ciphertext with a forced-collision nonce.
+	block, err := aes.NewCipher(mustDecode(testKey1))
+	if err != nil {
+		t.Fatalf("aes.NewCipher: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("cipher.NewGCM: %v", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	nonce[0] = envelopeVersion
+	if _, err := io.ReadFull(rand.Reader, nonce[1:]); err != nil {
+		t.Fatalf("rand: %v", err)
+	}
+	legacyCT := gcm.Seal(nonce, nonce, []byte("collision"), nil)
+	if legacyCT[0] != envelopeVersion {
+		t.Fatalf("test setup: expected nonce-prefixed legacy CT to start with 0x01")
+	}
+	if !enc.NeedsRotation(legacyCT) {
+		t.Fatal("NeedsRotation must return true for legacy CT whose nonce collides with the v1 prefix")
+	}
+}
+
 // mustDecode inverts base64.StdEncoding.EncodeToString. Test-only
 // helper.
 func mustDecode(s string) []byte {

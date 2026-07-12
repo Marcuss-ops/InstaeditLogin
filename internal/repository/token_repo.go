@@ -116,3 +116,45 @@ func (r *TokenRepository) DeleteAllTokensForPlatformAccount(platformAccountID in
 	}
 	return nil
 }
+
+// UpdateCiphertexts atomically replaces the encrypted_token column
+// for a single token row, with optimistic-concurrency guarding: the
+// UPDATE only fires if the row's current encrypted_token still
+// matches oldEncrypted. This is the lazy re-encrypt primitive the
+// vault uses on the Get() path when a row is stamped with a
+// non-active key id (or a legacy pre-Sprint-5.3 ciphertext).
+//
+// Concurrency contract: two workers reading the same stale row
+// race here. Worker A wins the UPDATE (its oldEncrypted matches),
+// row is now stamped with the active key. Worker B's UPDATE
+// affects 0 rows (its oldEncrypted no longer matches the new
+// state) and the method returns a "ciphertext stale" error.
+// The vault logs and ignores that error — the row was already
+// upgraded by A, so B's work is redundant.
+//
+// Returning the error is also a debugging signal: a non-zero rate
+// of "ciphertext stale" errors means many concurrent re-encrypts
+// are racing, which suggests a hot key (or a bug in the rotation
+// flow). Operators should see the log line and know what to look
+// at.
+func (r *TokenRepository) UpdateCiphertexts(tokenID int64, oldEncrypted, newEncrypted []byte) error {
+	result, err := r.db.Exec(
+		`UPDATE tokens SET encrypted_token = $1 WHERE id = $2 AND encrypted_token = $3`,
+		newEncrypted, tokenID, oldEncrypted,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update ciphertext: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		// Either the row was deleted (rare, possible) or another
+		// worker already upgraded the ciphertext. Both are
+		// non-fatal for the vault's Get() caller, which swallows
+		// this specific error.
+		return fmt.Errorf("ciphertext stale: another re-encrypt already applied (id=%d)", tokenID)
+	}
+	return nil
+}

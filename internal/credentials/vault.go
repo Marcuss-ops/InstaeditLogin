@@ -26,6 +26,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -49,14 +50,16 @@ type TokenRefresher func(ctx context.Context, refreshToken string) (*models.Toke
 
 // TokenStore is the storage-layer interface the vault depends on. It is
 // intentionally narrower than repository.TokenRepository: the vault only
-// needs Save / Read / DeleteAll-for-account, not the per-id delete used
-// by admin tooling. Defining the interface here (alongside the consumer)
-// lets the vault stay decoupled from the concrete repository package —
-// tests inject an in-memory mock, and the production wiring in main.go
-// adapts *repository.TokenRepository to this 3-method contract.
+// needs Save / Read / UpdateCiphertexts (Blocco #2.2 lazy re-encrypt) /
+// DeleteAll-for-account, not the per-id delete used by admin tooling.
+// Defining the interface here (alongside the consumer) lets the vault
+// stay decoupled from the concrete repository package — tests inject an
+// in-memory mock, and the production wiring in main.go adapts
+// *repository.TokenRepository to this 4-method contract.
 type TokenStore interface {
 	SaveToken(token *models.Token) error
 	FindLatestToken(platformAccountID int64, tokenType string) (*models.Token, error)
+	UpdateCiphertexts(tokenID int64, oldEncrypted, newEncrypted []byte) error
 	DeleteAllTokensForPlatformAccount(platformAccountID int64) error
 }
 
@@ -155,6 +158,24 @@ func (v *CredentialVault) Rotate(ctx context.Context, platformAccountID int64, t
 // Expired tokens return an error containing "expired" so callers can
 // react by calling Renew. A missing token (account has never logged
 // in) returns a descriptive error too.
+//
+// Blocco #2.2 — lazy re-encrypt: after a successful decrypt, if the
+// stored ciphertext is stamped with a non-active key id (or is in
+// the pre-Sprint-5.3 legacy format), the vault transparently
+// re-encrypts the same plaintext under the active key and persists
+// the new ciphertext. The persist is conditional on
+// `WHERE encrypted_token = $old` (idempotent + race-safe): if two
+// workers attempt to re-encrypt the same row concurrently, only
+// the first one's UPDATE fires; the second sees 0 affected rows
+// and the vault logs+ignores that specific error. The decrypted
+// value is still returned to the caller either way — the read path
+// is the source of truth, the write is a best-effort upgrade.
+//
+// Encryption errors during the re-encrypt step are NOT surfaced to
+// the caller: a failure to write the new ciphertext is a
+// background-consistency concern, not a read failure. The next
+// read on this row will retry the re-encrypt. Slog-warn gives
+// operators a breadcrumb if it persists.
 func (v *CredentialVault) Get(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -172,6 +193,35 @@ func (v *CredentialVault) Get(ctx context.Context, platformAccountID int64, toke
 	decrypted, err := v.encryptor.Decrypt(stored.EncryptedToken)
 	if err != nil {
 		return nil, fmt.Errorf("vault: failed to decrypt access token: %w", err)
+	}
+	// Lazy re-encrypt: idempotent + race-safe (see godoc).
+	if v.encryptor.NeedsRotation(stored.EncryptedToken) {
+		newCiphertext, reencErr := v.encryptor.Encrypt(decrypted)
+		if reencErr != nil {
+			// Best-effort: log and continue. The read still
+			// succeeds; a future read will retry the re-encrypt.
+			slog.Warn("vault: lazy re-encrypt failed (will retry on next read)",
+				"token_id", stored.ID, "error", reencErr)
+		} else if err := v.store.UpdateCiphertexts(stored.ID, stored.EncryptedToken, newCiphertext); err != nil {
+			// Log-level split (Blocco #2.2 follow-up):
+			//   - "ciphertext stale" is the EXPECTED race-loser
+			//     case (concurrent workers, only one wins the
+			//     optimistic-concurrency UPDATE). High rate
+			//     under load → Debug (operators can re-enable
+			//     for forensic investigation, default off in prod).
+			//   - Anything else is a real DB error worth a
+			//     breadcrumb at Warn level.
+			// The read still returns the decrypted value either
+			// way — the persist is a best-effort background
+			// upgrade, not part of the read contract.
+			if strings.Contains(err.Error(), "ciphertext stale") {
+				slog.Debug("vault: lazy re-encrypt race-loser (another worker already upgraded)",
+					"token_id", stored.ID)
+			} else {
+				slog.Warn("vault: lazy re-encrypt persist failed (read still returned)",
+					"token_id", stored.ID, "error", err)
+			}
+		}
 	}
 	return &models.OAuthToken{
 		AccessToken: decrypted,

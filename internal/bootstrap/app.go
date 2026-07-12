@@ -89,10 +89,25 @@ func Wire(ctx context.Context) (*App, error) {
 		return nil, fmt.Errorf("connect db: %w", err)
 	}
 
-	enc, err := crypto.NewEncryptor(1, map[uint32]string{1: cfg.EncryptionKey})
+	// Blocco #2.2 — multi-key support. Wire() consumes the
+	// post-validated EncryptionKeys map + ActiveEncryptionKeyID
+	// regardless of which env-var surface the operator used:
+	//   - ENCRYPTION_KEY (legacy single-key) → resolveEncryptionConfig
+	//     promotes it into EncryptionKeys[1] with active=1
+	//   - ENCRYPTION_KEYS + ACTIVE_ENCRYPTION_KEY_ID (multi-key) →
+	//     the parsed CSV + the operator-chosen active id
+	// This is the only call site in the codebase that constructs
+	// the Encryptor from the Config — every other consumer reads
+	// the already-validated *crypto.Encryptor through the App
+	// struct or a narrower interface.
+	enc, err := crypto.NewEncryptor(cfg.ActiveEncryptionKeyID, cfg.EncryptionKeys)
 	if err != nil {
 		return nil, fmt.Errorf("init encryptor: %w", err)
 	}
+	slog.Info("encryption configured",
+		"active_key_id", cfg.ActiveEncryptionKeyID,
+		"key_count", len(cfg.EncryptionKeys),
+		"key_ids", config.SortedKeyIDs(cfg.EncryptionKeys))
 
 	userRepo := repository.NewUserRepository(db)
 	tokenRepo := repository.NewTokenRepository(db)

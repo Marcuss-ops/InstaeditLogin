@@ -147,6 +147,42 @@ func (e *Encryptor) HasKey(keyID uint32) bool {
 	return ok
 }
 
+// NeedsRotation reports whether a stored ciphertext should be
+// re-encrypted under the active key. Blocco #2.2 lazy re-encrypt:
+// the vault's Get() path calls this on every read; if true, the
+// vault decrypts + re-encrypts + persists the new ciphertext
+// atomically (idempotent UPDATE WHERE encrypted_token = $old
+// guards against concurrent re-encrypts).
+//
+// Returns true when:
+//   - payload is too short to be a v1 envelope
+//   - payload doesn't carry the v0x01 envelope prefix (legacy
+//     single-key ciphertexts; rotating re-wraps them as v1)
+//   - the embedded key id is not the active key id
+//
+// The 1/256 chance of a legacy nonce starting with 0x01 is
+// NOT a rotation trigger here: a payload with the v0x01 prefix
+// whose embedded key id == active is NOT stale, even if the
+// "true" history was a legacy ciphertext with a collision
+// nonce. The vault's Decrypt() already handles that ambiguity
+// via the legacy fallback; re-encrypting a successfully-decrypted
+// v1 envelope with the active key is a no-op idempotent rewrite.
+func (e *Encryptor) NeedsRotation(cipherData []byte) bool {
+	if len(cipherData) < envelopeHeaderSize {
+		// Too short to be a v1 envelope → either garbage or
+		// a legacy ciphertext (nonce + ct only). Either way,
+		// re-encrypting is a safe upgrade.
+		return true
+	}
+	if cipherData[0] != envelopeVersion {
+		// Legacy format (no envelope prefix). Re-encrypt to
+		// migrate the row to the v1 envelope format.
+		return true
+	}
+	embedded := binary.BigEndian.Uint32(cipherData[1 : 1+keyIDSize])
+	return embedded != e.activeKeyID
+}
+
 // Encrypt encrypts plaintext with the active key. The returned
 // envelope is self-describing: the receiving Decrypt call can
 // dispatch to the right key without external state.

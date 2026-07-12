@@ -609,3 +609,313 @@ func TestLoad_AppEnv_BogusFails(t *testing.T) {
 		t.Fatalf("Load() with APP_ENV=bogus should fail; got %v", err)
 	}
 }
+
+// ---- Blocco #2.2 — multi-key encryption tests ----
+
+// twoDistinctKeys returns two syntactically-distinct valid 32-byte
+// base64 keys (key1 != key2) so multi-key tests can stamp ciphertexts
+// under different ids.
+func twoDistinctKeys() (string, string) {
+	raw1 := make([]byte, 32)
+	raw2 := make([]byte, 32)
+	for i := range raw1 {
+		raw1[i] = byte(i)
+		raw2[i] = byte(i + 1)
+	}
+	return base64.StdEncoding.EncodeToString(raw1), base64.StdEncoding.EncodeToString(raw2)
+}
+
+// TestValidate_EncryptionLegacyPromotesToMultiKey is the backward-compat
+// promise: when only ENCRYPTION_KEY is set, the post-validate Config
+// exposes EncryptionKeys={1: key} and ActiveEncryptionKeyID=1 so the
+// downstream callers (bootstrap.Wire → crypto.NewEncryptor) see the
+// same struct shape regardless of which env-var surface the operator
+// used.
+func TestValidate_EncryptionLegacyPromotesToMultiKey(t *testing.T) {
+	cfg := minimalValidConfig(validJWTSecret())
+	cfg.EncryptionKey = minValid32ByteBase64Key
+	cfg.EncryptionKeysRaw = ""
+	cfg.ActiveEncryptionKeyIDRaw = ""
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("legacy single-key validate() should succeed; got %v", err)
+	}
+	if cfg.ActiveEncryptionKeyID != 1 {
+		t.Fatalf("legacy promotion: want ActiveEncryptionKeyID=1, got %d", cfg.ActiveEncryptionKeyID)
+	}
+	if got, ok := cfg.EncryptionKeys[1]; !ok || got != minValid32ByteBase64Key {
+		t.Fatalf("legacy promotion: want EncryptionKeys[1]=%q, got %q (present=%v)", minValid32ByteBase64Key, got, ok)
+	}
+	if len(cfg.EncryptionKeys) != 1 {
+		t.Fatalf("legacy promotion: want exactly 1 key in map, got %d", len(cfg.EncryptionKeys))
+	}
+}
+
+// TestValidate_EncryptionMultiKey_HappyPath exercises the full
+// multi-key path: ENCRYPTION_KEYS with 2 entries + ACTIVE_ENCRYPTION_KEY_ID
+// pointing at id=2. validate() must populate EncryptionKeys correctly
+// and select the active id.
+func TestValidate_EncryptionMultiKey_HappyPath(t *testing.T) {
+	key1, key2 := twoDistinctKeys()
+	cfg := minimalValidConfig(validJWTSecret())
+	cfg.EncryptionKey = "" // legacy path disabled
+	cfg.EncryptionKeysRaw = "1:" + key1 + ",2:" + key2
+	cfg.ActiveEncryptionKeyIDRaw = "2"
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("multi-key validate() should succeed; got %v", err)
+	}
+	if cfg.ActiveEncryptionKeyID != 2 {
+		t.Fatalf("want ActiveEncryptionKeyID=2, got %d", cfg.ActiveEncryptionKeyID)
+	}
+	if got := cfg.EncryptionKeys[1]; got != key1 {
+		t.Fatalf("EncryptionKeys[1]: want %q, got %q", key1, got)
+	}
+	if got := cfg.EncryptionKeys[2]; got != key2 {
+		t.Fatalf("EncryptionKeys[2]: want %q, got %q", key2, got)
+	}
+	if len(cfg.EncryptionKeys) != 2 {
+		t.Fatalf("want exactly 2 keys in map, got %d", len(cfg.EncryptionKeys))
+	}
+}
+
+// TestValidate_EncryptionMultiKey_SingleEntry verifies that the
+// multi-key path also accepts a single-entry CSV (effectively the
+// same as the legacy path, but routed through the new code). The
+// "promotion" behavior is identical, just with the active id
+// pinned to whatever the operator set.
+func TestValidate_EncryptionMultiKey_SingleEntry(t *testing.T) {
+	key1, _ := twoDistinctKeys()
+	cfg := minimalValidConfig(validJWTSecret())
+	cfg.EncryptionKey = ""
+	cfg.EncryptionKeysRaw = "1:" + key1
+	cfg.ActiveEncryptionKeyIDRaw = "1"
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("single-entry multi-key validate() should succeed; got %v", err)
+	}
+	if cfg.ActiveEncryptionKeyID != 1 {
+		t.Fatalf("want ActiveEncryptionKeyID=1, got %d", cfg.ActiveEncryptionKeyID)
+	}
+	if len(cfg.EncryptionKeys) != 1 {
+		t.Fatalf("want exactly 1 key in map, got %d", len(cfg.EncryptionKeys))
+	}
+}
+
+// TestValidate_EncryptionMultiKey_Errors pins every malformed-input
+// branch of the multi-key parser. Each row is a separate subtest so
+// a failure points at exactly one cause.
+func TestValidate_EncryptionMultiKey_Errors(t *testing.T) {
+	key1, key2 := twoDistinctKeys()
+	shortKey := base64.StdEncoding.EncodeToString(make([]byte, 16))
+
+	tests := []struct {
+		name          string
+		keysRaw       string
+		activeRaw     string
+		wantErrSubstr string
+	}{
+		{
+			// Empty ENCRYPTION_KEYS with no legacy fallback → required-error
+			// (the legacy fallback is also empty in this subtest).
+			name:          "empty ENCRYPTION_KEYS + no legacy → required",
+			keysRaw:       "",
+			activeRaw:     "",
+			wantErrSubstr: "ENCRYPTION_KEY is required",
+		},
+		{
+			// Missing colon → format error.
+			name:          "missing colon in entry",
+			keysRaw:       "1" + key1, // no colon
+			activeRaw:     "1",
+			wantErrSubstr: "must be in the form 'id:base64key'",
+		},
+		{
+			// Trailing colon (id present, key empty).
+			name:          "trailing colon in entry",
+			keysRaw:       "1:",
+			activeRaw:     "1",
+			wantErrSubstr: "must be in the form 'id:base64key'",
+		},
+		{
+			// Leading colon (id empty, key present).
+			name:          "leading colon in entry",
+			keysRaw:       ":" + key1,
+			activeRaw:     "1",
+			wantErrSubstr: "must be in the form 'id:base64key'",
+		},
+		{
+			// Non-numeric id.
+			name:          "non-numeric id",
+			keysRaw:       "abc:" + key1,
+			activeRaw:     "1",
+			wantErrSubstr: "is not a uint32",
+		},
+		{
+			// Negative id (parse fails).
+			name:          "negative id (parse fails)",
+			keysRaw:       "-1:" + key1,
+			activeRaw:     "1",
+			wantErrSubstr: "is not a uint32",
+		},
+		{
+			// Key too short.
+			name:          "key too short (16 bytes)",
+			keysRaw:       "1:" + shortKey,
+			activeRaw:     "1",
+			wantErrSubstr: "must be exactly 32 bytes (got 16)",
+		},
+		{
+			// Invalid base64.
+			name:          "invalid base64 in key",
+			keysRaw:       "1:@@@not-base64@@@",
+			activeRaw:     "1",
+			wantErrSubstr: "not valid base64",
+		},
+		{
+			// Duplicate id.
+			name:          "duplicate key id in CSV",
+			keysRaw:       "1:" + key1 + ",1:" + key2,
+			activeRaw:     "1",
+			wantErrSubstr: "duplicate key id 1",
+		},
+		{
+			// Empty active id with non-empty ENCRYPTION_KEYS.
+			name:          "empty ACTIVE_ENCRYPTION_KEY_ID",
+			keysRaw:       "1:" + key1,
+			activeRaw:     "",
+			wantErrSubstr: "ACTIVE_ENCRYPTION_KEY_ID is required",
+		},
+		{
+			// Non-numeric active id.
+			name:          "non-numeric ACTIVE_ENCRYPTION_KEY_ID",
+			keysRaw:       "1:" + key1,
+			activeRaw:     "abc",
+			wantErrSubstr: "is not a uint32",
+		},
+		{
+			// Active id not in map.
+			name:          "ACTIVE_ENCRYPTION_KEY_ID not in map",
+			keysRaw:       "1:" + key1 + ",2:" + key2,
+			activeRaw:     "5",
+			wantErrSubstr: "ACTIVE_ENCRYPTION_KEY_ID=5 not in ENCRYPTION_KEYS",
+		},
+		{
+			// Empty entry (trailing comma).
+			name:          "empty entry (trailing comma)",
+			keysRaw:       "1:" + key1 + ",",
+			activeRaw:     "1",
+			wantErrSubstr: "entry 2 is empty",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalValidConfig(validJWTSecret())
+			cfg.EncryptionKey = "" // disable legacy fallback so multi-key path is exercised
+			cfg.EncryptionKeysRaw = tc.keysRaw
+			cfg.ActiveEncryptionKeyIDRaw = tc.activeRaw
+
+			err := cfg.validate()
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErrSubstr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErrSubstr) {
+				t.Fatalf("expected error containing %q, got %q", tc.wantErrSubstr, err.Error())
+			}
+			// Post-failure invariant: EncryptionKeys must NOT be
+			// partially populated. A failed validate() should leave
+			// the map nil so the caller doesn't accidentally use a
+			// half-built config.
+			if cfg.EncryptionKeys != nil {
+				t.Fatalf("validate() failure must leave EncryptionKeys nil, got %v", cfg.EncryptionKeys)
+			}
+		})
+	}
+}
+
+// TestValidate_EncryptionAmbiguousConfig covers the operator-error
+// case where both ENCRYPTION_KEY and ENCRYPTION_KEYS are set. The
+// behaviour is reject — silently picking one is exactly the kind
+// of "magic choice" that breaks deployments at 2am.
+func TestValidate_EncryptionAmbiguousConfig(t *testing.T) {
+	_, key2 := twoDistinctKeys()
+	cfg := minimalValidConfig(validJWTSecret())
+	cfg.EncryptionKey = minValid32ByteBase64Key // legacy set
+	cfg.EncryptionKeysRaw = "2:" + key2         // multi-key also set
+	cfg.ActiveEncryptionKeyIDRaw = "2"
+
+	err := cfg.validate()
+	if err == nil {
+		t.Fatal("validate() must reject ambiguous config (both ENCRYPTION_KEY and ENCRYPTION_KEYS set)")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("expected 'ambiguous' in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "EITHER") {
+		t.Fatalf("error message should guide the operator (EITHER/OR); got: %v", err)
+	}
+}
+
+// TestLoad_EncryptionMultiKey_E2E exercises the end-to-end Load()
+// path with ENCRYPTION_KEYS+ACTIVE_ENCRYPTION_KEY_ID set. Confirms
+// the env vars reach the post-validate struct intact.
+func TestLoad_EncryptionMultiKey_E2E(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("META_APP_ID", "meta-id")
+	t.Setenv("META_APP_SECRET", strings.Repeat("a", 32))
+	// Legacy is unset.
+	t.Setenv("ENCRYPTION_KEY", "")
+	key1, key2 := twoDistinctKeys()
+	t.Setenv("ENCRYPTION_KEYS", "1:"+key1+",2:"+key2)
+	t.Setenv("ACTIVE_ENCRYPTION_KEY_ID", "2")
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
+	t.Setenv("S3_ENDPOINT", "https://s3.example.com")
+	t.Setenv("S3_BUCKET", "test-bucket")
+	t.Setenv("S3_ACCESS_KEY", "test-access-key")
+	t.Setenv("S3_SECRET_KEY", "test-secret-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with multi-key env vars should succeed; got %v", err)
+	}
+	if cfg.ActiveEncryptionKeyID != 2 {
+		t.Fatalf("post-Load ActiveEncryptionKeyID: want 2, got %d", cfg.ActiveEncryptionKeyID)
+	}
+	if len(cfg.EncryptionKeys) != 2 {
+		t.Fatalf("post-Load EncryptionKeys: want 2 entries, got %d", len(cfg.EncryptionKeys))
+	}
+	if cfg.EncryptionKeys[1] != key1 || cfg.EncryptionKeys[2] != key2 {
+		t.Fatalf("post-Load EncryptionKeys contents mismatch")
+	}
+}
+
+// TestLoad_EncryptionLegacyE2E confirms the legacy path still works
+// through Load() (not just validate()). This is the
+// backward-compat promise from the user spec: a pre-Blocco #2.2
+// deployment with only ENCRYPTION_KEY set continues to boot.
+func TestLoad_EncryptionLegacyE2E(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("META_APP_ID", "meta-id")
+	t.Setenv("META_APP_SECRET", strings.Repeat("a", 32))
+	t.Setenv("ENCRYPTION_KEY", minValid32ByteBase64Key)
+	// Multi-key vars unset.
+	t.Setenv("ENCRYPTION_KEYS", "")
+	t.Setenv("ACTIVE_ENCRYPTION_KEY_ID", "")
+	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
+	t.Setenv("S3_ENDPOINT", "https://s3.example.com")
+	t.Setenv("S3_BUCKET", "test-bucket")
+	t.Setenv("S3_ACCESS_KEY", "test-access-key")
+	t.Setenv("S3_SECRET_KEY", "test-secret-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with legacy env vars should succeed; got %v", err)
+	}
+	if cfg.ActiveEncryptionKeyID != 1 {
+		t.Fatalf("legacy Load: want ActiveEncryptionKeyID=1, got %d", cfg.ActiveEncryptionKeyID)
+	}
+	if got, ok := cfg.EncryptionKeys[1]; !ok || got != minValid32ByteBase64Key {
+		t.Fatalf("legacy Load: EncryptionKeys[1] mismatch (present=%v, val=%q)", ok, got)
+	}
+}
