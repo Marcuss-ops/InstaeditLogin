@@ -1,12 +1,19 @@
-# InstaEditLogin — Local Development Stack
+# InstaEditLogin — Local Development Stack (Blocco #2.1)
+#
+# Three services modeled on the production deploy topology:
+#   db       — Postgres 15 (unchanged)
+#   migrate  — runs cmd/migrate once, then exits 0 on success
+#   api      — runs cmd/api indefinitely (HTTP server only)
+#   worker   — runs cmd/worker indefinitely (5 background goroutines)
+#
 # Usage:
 #   cp .env.dev.example .env.dev
 #   docker compose up --build
 #
-# Services:
-#   db:       PostgreSQL 15
-#   backend:  Go API server (auto-reload via go run)
-#   frontend: Vite React dev server
+# Migration ordering: db is the dependency for migrate. migrate is the
+# dependency for api + worker (depends_on with service_completed_successfully).
+# This mirrors the production contract (Railway pre-deploy job / k8s
+# initContainer / helm pre-install hook).
 
 services:
   db:
@@ -26,14 +33,11 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
-    image: golang:1.23-alpine
-    container_name: instaedit-backend
-    working_dir: /app
-    volumes:
-      - .:/app
-    ports:
-      - "8080:8080"
+  migrate:
+    build:
+      context: .
+      target: migrate
+    container_name: instaedit-migrate
     env_file:
       - .env.dev
     environment:
@@ -41,25 +45,90 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: >
-      sh -c "go run cmd/server/main.go"
+    # cmd/migrate exits 0 on success, 1 on failure. The
+    # service_completed_successfully condition below keeps api + worker
+    # blocked until the migration succeeds.
+    restart: "no"
 
-  frontend:
-    image: node:20-alpine
-    container_name: instaedit-frontend
-    working_dir: /app/web
-    volumes:
-      - ./web:/app/web
-    ports:
-      - "5173:5173"
+  api:
+    build:
+      context: .
+      target: api
+    container_name: instaedit-api
     env_file:
       - .env.dev
     environment:
-      - VITE_API_BASE_URL=http://localhost:8080
+      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      - PORT=8080
+    ports:
+      - "8080:8080"
     depends_on:
-      - backend
-    command: >
-      sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      target: worker
+    container_name: instaedit-worker
+    env_file:
+      - .env.dev
+    environment:
+      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Legacy dev-only convenience service for users who want the single-process
+  # shape. Not started by default; `docker compose --profile legacy up`
+  # to start it. Disables the api/worker services above so PORT 8080
+  # isn't double-bound.
+  server:
+    profiles: ["legacy"]
+    build:
+      context: .
+      target: server
+    container_name: instaedit-server
+    env_file:
+      - .env.dev
+    environment:
+      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      - PORT=8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   instaedit_pg_data:
+
+# ──────────────────────────────────────────────────────────────────
+# Frontend service — unchanged from the Blocco #2.1 baseline shape.
+# ──────────────────────────────────────────────────────────────────
+# (Kept separate from the api/worker/migrate block above so a frontend
+#  refresh doesn't require rediscovering the wire-up.)
+#
+#   frontend:
+#     image: node:20-alpine
+#     container_name: instaedit-frontend
+#     working_dir: /app/web
+#     volumes:
+#       - ./web:/app/web
+#     ports:
+#       - "5173:5173"
+#     env_file:
+#       - .env.dev
+#     environment:
+#       - VITE_API_BASE_URL=http://localhost:8080
+#     depends_on:
+#       - api
+#     command: >
+#       sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+#
+# Uncomment the frontend block above if you also want the SPA auto-reload
+# in dev. The api/worker/migrate shape above is the Blocco #2.1 default.
