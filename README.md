@@ -25,7 +25,7 @@ provider (in questo caso `/api/v1/auth/{anything}` risponde 404).
 - **Linguaggio:** Go 1.23+
 - **Database:** PostgreSQL
 - **Sicurezza:** AES-256-GCM per token a riposo, JWT per sessioni
-- **Pattern:** Interface-based providers (OAuthProvider + ContentPublisher + TokenManager)
+- **Pattern:** Small capability interfaces (OAuthProvider, AccountDiscoverer, ContentValidator, Publisher, AsyncPublisher) — Taglio 2a
 
 ## Avvio Rapido
 
@@ -66,7 +66,7 @@ instaedit-login/
 │   ├── repository/             # CRUD unificato (User, PlatformAccount, Token)
 │   ├── crypto/                 # AES-256-GCM encrypt/decrypt
 │   └── services/
-│       ├── provider.go         # OAuthProvider + ContentPublisher + TokenManager
+│       ├── provider.go         # Small capability interfaces + CapabilityRouter
 │       ├── token_helper.go     # Token encryption/retrieval condiviso
 │       ├── facebook_oauth.go   # Provider Meta (Facebook + Instagram)
 │       ├── tiktok_oauth.go     # Provider TikTok

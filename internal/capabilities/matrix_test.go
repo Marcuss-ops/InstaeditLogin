@@ -39,19 +39,17 @@ func TestMatrix_For_UnknownPlatform_FailClosed(t *testing.T) {
 }
 
 func TestIntersect_ZeroMeansNoPreference(t *testing.T) {
-	// (beta) 0=no-preference: theory=0, real=N -> N wins.
-	t1 := models.CapabilitySet{MaxCaptionRunes: 0}
-	r1 := models.CapabilitySet{MaxCaptionRunes: 5000}
-	got := models.Intersect(t1, r1)
+	// Scenario B: theory=0, real=N -> N wins.
+	got := models.Intersect(models.CapabilitySet{MaxCaptionRunes: 0}, models.CapabilitySet{MaxCaptionRunes: 5000})
 	if got.MaxCaptionRunes != 5000 {
-		t.Errorf("0=no-preference: theory=0 real=5000 -> want 5000, got %d", got.MaxCaptionRunes)
+		t.Errorf("(beta) theory=0 real=5000 -> want 5000, got %d", got.MaxCaptionRunes)
 	}
-	// theory=N, real=0 -> N wins.
+	// Scenario C: theory=N, real=0 -> N wins.
 	got = models.Intersect(models.CapabilitySet{MaxCaptionRunes: 4000}, models.CapabilitySet{MaxCaptionRunes: 0})
 	if got.MaxCaptionRunes != 4000 {
-		t.Errorf("0=no-preference: theory=4000 real=0 -> want 4000, got %d", got.MaxCaptionRunes)
+		t.Errorf("(beta) theory=4000 real=0 -> want 4000, got %d", got.MaxCaptionRunes)
 	}
-	// both non-zero -> min wins.
+	// Scenario A: both non-zero -> min wins.
 	got = models.Intersect(models.CapabilitySet{MaxCaptionRunes: 4000}, models.CapabilitySet{MaxCaptionRunes: 1000})
 	if got.MaxCaptionRunes != 1000 {
 		t.Errorf("both non-zero: min wins; want 1000, got %d", got.MaxCaptionRunes)
@@ -66,7 +64,7 @@ func TestValidatePayload_CaptionRuneCap(t *testing.T) {
 	if err := c.ValidatePayload(models.PublishPayload{Text: "this is way too long for the cap"}); err == nil {
 		t.Error("5-rune cap should reject long text")
 	}
-	// 0=no-cap
+	// 0=no-cap.
 	open := models.CapabilitySet{MaxCaptionRunes: 0}
 	if err := open.ValidatePayload(models.PublishPayload{Text: "any length at all is fine here"}); err != nil {
 		t.Errorf("0=no-cap should accept any text, got: %v", err)

@@ -10,9 +10,9 @@
 //
 // Level 2 (real per-account caps) reuses this same Matrix type:
 // the worker computes effective = Intersect(theoretical, real) and
-// pipes it into PrePublishCheckWithEffective. The matrix itself does
-// not grow -- Level 2 is a discoverer + repository-cache + worker-side
-// intersect.
+// pipes it into PrePublishCheckWithEffective. The matrix itself
+// does not grow -- Level 2 is a discoverer + repository-cache +
+// worker-side intersect.
 package capabilities
 
 import (
@@ -69,67 +69,26 @@ func (m *Matrix) For(platform string) models.CapabilitySet {
 	return WithDefaults(platform)
 }
 
-// WithDefaults provides hardcoded per-platform fallbacks. The
-// default branch (unknown platform) is FAIL-CLOSED: rejects all
-// payloads until the operator adds the platform to capabilities.json.
-// Accepting everything silently is far worse than the operator
-// seeing a publish failure with a clear error.
+// WithDefaults is the FAIL-CLOSED safety net used when the matrix
+// is nil (e.g. before BuildRegistry wires it) or when an unknown
+// platform name is looked up. Per the L1 close-out, the JSON in
+// config/capabilities.json is the SINGLE source of truth for
+// per-platform caps; WithDefaults intentionally returns the same
+// fail-closed shape for every platform name (known and unknown
+// alike) to eliminate the prior implementation's per-platform
+// hardcoded duplication of the JSON. If a caller hits this
+// function, they are missing the matrix wiring -- fix it by
+// setting CapabilitiesMatrixPath in config and confirming the
+// registry's SetMatrix call succeeds; otherwise the safety net
+// here rejects all non-text-only payloads.
+//
+// Production path: BuildRegistry loads from cfg.CapabilitiesMatrixPath
+// and calls router.SetMatrix(matrix). The router.PrePublishCheck /
+// router.Validator paths then read from matrix.For(platform) and
+// never fall through to this function in the happy path. WithDefaults
+// remains the only fallback for unit tests and dev servers that
+// don't wire a matrix file.
 func WithDefaults(platform string) models.CapabilitySet {
-	switch platform {
-	case models.PlatformTwitter:
-		return models.CapabilitySet{
-			TextOnly:        true,
-			SupportsImages:  true,
-			SupportsVideo:   true,
-			MaxMediaCount:   4,
-			MaxCaptionRunes: 280,
-		}
-	case models.PlatformInstagram:
-		return models.CapabilitySet{
-			SupportsImages:   true,
-			SupportsVideo:    true,
-			SupportsCarousel: true,
-			SupportsStories:  true,
-			MaxMediaCount:    10,
-			MaxCaptionRunes:  2200,
-		}
-	case models.PlatformFacebook:
-		return models.CapabilitySet{
-			SupportsImages:  true,
-			SupportsVideo:   true,
-			SupportsStories: true,
-			MaxMediaCount:   1,
-			MaxCaptionRunes: 63206,
-		}
-	case models.PlatformThreads:
-		return models.CapabilitySet{
-			SupportsImages:  true,
-			SupportsVideo:   true,
-			MaxCaptionRunes: 500,
-		}
-	case models.PlatformYoutube:
-		return models.CapabilitySet{
-			SupportsVideo:   true,
-			MaxVideoSeconds: 60,
-			MaxCaptionRunes: 5000,
-		}
-	case models.PlatformLinkedin:
-		return models.CapabilitySet{
-			SupportsImages:  true,
-			SupportsVideo:   true,
-			MaxMediaCount:   9,
-			MaxCaptionRunes: 3000,
-			PrivacyLevels:   []string{"PUBLIC", "CONNECTIONS_ONLY"},
-		}
-	case models.PlatformTiktok:
-		return models.CapabilitySet{
-			SupportsVideo:   true,
-			MaxVideoSeconds: 600,
-			MaxCaptionRunes: 4000,
-			PrivacyLevels:   []string{"PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"},
-		}
-	default:
-		// FAIL-CLOSED: TextOnly only, no media, no privacy levels.
-		return models.CapabilitySet{TextOnly: true}
-	}
+	_ = platform
+	return models.CapabilitySet{TextOnly: true}
 }
