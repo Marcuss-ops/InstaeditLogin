@@ -453,6 +453,334 @@ func (r *PostRepository) ClaimQueuedTarget(id int64) (bool, error) {
 	return true, nil
 }
 
+// ClaimQueuedTargetWithLease (SPRINT 5.2, P1#10) extends ClaimQueuedTarget
+// with a per-replica lease stamp so a crashed worker doesn't leak the
+// row forever. The lease is a (lease_owner_id, leased_until) tuple;
+// the heartbeat goroutine (UpdatePublishProgress) extends leased_until
+// every heartbeat tick; ReclaimExpiredLeases (called by the
+// reconciler) takes over rows whose leased_until <= NOW() and whose
+// lease_owner_id is not the calling replica.
+//
+// The atomic UPDATE is the SAME shape as ClaimQueuedTarget — single
+// SQL statement that flips status AND stamps the lease fields. The
+// lease TTL is supplied as a duration; the SQL converts it to an
+// INTERVAL via NOW() + $N * INTERVAL '1 second'.
+//
+// Returns true on claim success and false if:
+//   - The row is locked by another tx (SKIP LOCKED).
+//   - The row's status is not 'queued' (someone else already claimed).
+//   - The id is invalid (no row matches).
+//
+// On success the caller is the SOLE owner of the row for at least
+// `leaseTTL`. The heartbeat goroutine must extend the lease before
+// `leaseTTL` elapses; failure to do so lets the reconciler
+// reclaim the row on its next tick.
+func (r *PostRepository) ClaimQueuedTargetWithLease(id int64, ownerID string, leaseTTL time.Duration) (bool, error) {
+	if ownerID == "" {
+		return false, fmt.Errorf("ClaimQueuedTargetWithLease: ownerID is empty")
+	}
+	if leaseTTL <= 0 {
+		return false, fmt.Errorf("ClaimQueuedTargetWithLease: leaseTTL must be positive (got %v)", leaseTTL)
+	}
+	leaseSeconds := int(leaseTTL.Seconds())
+	if leaseSeconds < 1 {
+		leaseSeconds = 1
+	}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("failed to begin claim-with-lease tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var foundID int64
+	err = tx.QueryRow(
+		`SELECT id FROM post_targets
+		 WHERE id = $1 AND status = 'queued'
+		 FOR UPDATE SKIP LOCKED`,
+		id,
+	).Scan(&foundID)
+	if err == sql.ErrNoRows {
+		_ = tx.Rollback()
+		err = nil
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to select for update (lease): %w", err)
+	}
+
+	// Atomic claim + lease stamp. leased_until = NOW() + leaseTTL
+	// (computed in seconds; works for TTLs from 1s to ~68 years).
+	_, err = tx.Exec(
+		`UPDATE post_targets
+		 SET status = 'publishing',
+		     lease_owner_id = $2,
+		     leased_until = NOW() + ($3 || ' seconds')::INTERVAL,
+		     heartbeat_at = NOW()
+		 WHERE id = $1`,
+		id, ownerID, fmt.Sprintf("%d", leaseSeconds),
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to update claimed target with lease: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("failed to commit claim-with-lease: %w", err)
+	}
+	return true, nil
+}
+
+// UpdatePublishProgress (SPRINT 5.2) is the heartbeat goroutine's
+// per-tick writer. CAS on lease_owner_id: only the row's current
+// owner can stamp progress. Updates:
+//   - upload_offset (bytes uploaded so far) — for chunked-upload
+//     resume after a crash.
+//   - provider_state (opaque platform state string) — for
+//     observability of where the upload is on the platform side.
+//   - heartbeat_at (now) — observability for the lease monitoring.
+//   - leased_until (now + leaseTTL) — extends the lease for another
+//     heartbeat cycle.
+//
+// Returns nil on success. If the CAS fails (lease_owner_id has
+// changed → another replica took over via reclaim), the heartbeat
+// goroutine exits silently — the next Mark* will also see the new
+// owner and the heartbeat's stale writes would fail. This is the
+// canonical "ownership transfer" race the user spec called out:
+// the heartbeating replica stops writing when the lease flips.
+func (r *PostRepository) UpdatePublishProgress(id int64, ownerID string, uploadOffset int64, providerState string, leaseTTL time.Duration) error {
+	if ownerID == "" {
+		return fmt.Errorf("UpdatePublishProgress: ownerID is empty")
+	}
+	if leaseTTL <= 0 {
+		return fmt.Errorf("UpdatePublishProgress: leaseTTL must be positive (got %v)", leaseTTL)
+	}
+	leaseSeconds := int(leaseTTL.Seconds())
+	if leaseSeconds < 1 {
+		leaseSeconds = 1
+	}
+	_, err := r.db.Exec(
+		`UPDATE post_targets
+		 SET upload_offset = $3,
+		     provider_state = $4,
+		     heartbeat_at = NOW(),
+		     leased_until = NOW() + ($5 || ' seconds')::INTERVAL
+		 WHERE id = $1 AND lease_owner_id = $2`,
+		id, ownerID, uploadOffset, providerState, fmt.Sprintf("%d", leaseSeconds),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update publish progress: %w", err)
+	}
+	return nil
+}
+
+// ReleaseLease (SPRINT 5.2) clears the lease fields on a terminal
+// transition (published|failed|dlq). CAS on lease_owner_id so only
+// the current owner can release — a reclaimed row's new owner
+// can't be clobbered by a stale release from the crashed original.
+//
+// Idempotent: returns nil on RowsAffected = 0 (the row is already
+// lease-cleared, e.g. on a prior terminal write).
+func (r *PostRepository) ReleaseLease(id int64, ownerID string) error {
+	if ownerID == "" {
+		return fmt.Errorf("ReleaseLease: ownerID is empty")
+	}
+	_, err := r.db.Exec(
+		`UPDATE post_targets
+		 SET lease_owner_id = NULL,
+		     leased_until = NULL,
+		     heartbeat_at = NULL
+		 WHERE id = $1 AND lease_owner_id = $2`,
+		id, ownerID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to release lease: %w", err)
+	}
+	return nil
+}
+
+// MarkDeadLetter (SPRINT 5.2) transitions a target to status='dlq'
+// when max_attempts is exhausted on a transient error, OR when a
+// terminal-class error (4xx non-429) is classified. CAS on
+// lease_owner_id + clear lease in the same UPDATE. The row is
+// terminal: no further transitions, the publish driver and
+// reconciler both filter status IN ('queued', 'waiting_provider',
+// 'publishing') and therefore skip it.
+//
+// lastError is persisted to error_message for operator visibility.
+// last_error_code is set to 'DLQ' for consistency with
+// MarkRateLimited ('RATE_LIMITED') — dashboards can filter by
+// stable code without parsing the human prose of error_message.
+// completed_at is set to NOW() so the DLQ-triage query
+// (WHERE status='dlq' AND completed_at > now() - interval '7d')
+// can find recent rows. The webhook runtime (SPRINT 4.2) emits a
+// post.failed event on this transition so the workspace owner's
+// webhook endpoint gets notified.
+func (r *PostRepository) MarkDeadLetter(id int64, ownerID string, lastError string) error {
+	if ownerID == "" {
+		return fmt.Errorf("MarkDeadLetter: ownerID is empty")
+	}
+	res, err := r.db.Exec(
+		`UPDATE post_targets
+		 SET status = 'dlq',
+		     lease_owner_id = NULL,
+		     leased_until = NULL,
+		     heartbeat_at = NULL,
+		     error_message = $3,
+		     last_error_code = 'DLQ',
+		     completed_at = NOW()
+		 WHERE id = $1 AND lease_owner_id = $2`,
+		id, ownerID, lastError,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark dead letter: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		// Either id is stale, lease_owner_id changed, or the row
+		// is already DLQ'd. Idempotent: not an error.
+		return nil
+	}
+	return nil
+}
+
+// MarkRetrying (SPRINT 5.2) increments attempt_count + stamps
+// next_retry_at + clears the lease. CAS on lease_owner_id. The
+// publish driver re-picks the row on its next tick when
+// next_retry_at <= NOW() (the existing ListPending filter is
+// extended to include next_retry_at in commit 2's publish_worker
+// rewrite).
+//
+// backoff is the AWS-decorrelated-jitter delay computed by the
+// worker. The supplied time.Time is the next-attempt absolute
+// timestamp (now + backoff).
+func (r *PostRepository) MarkRetrying(id int64, ownerID string, lastError string, nextAttemptAt time.Time) error {
+	if ownerID == "" {
+		return fmt.Errorf("MarkRetrying: ownerID is empty")
+	}
+	res, err := r.db.Exec(
+		`UPDATE post_targets
+		 SET attempt_count = attempt_count + 1,
+		     next_retry_at = $3,
+		     lease_owner_id = NULL,
+		     leased_until = NULL,
+		     heartbeat_at = NULL,
+		     error_message = $4
+		 WHERE id = $1 AND lease_owner_id = $2`,
+		id, ownerID, nextAttemptAt, lastError,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark retrying: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return nil
+	}
+	return nil
+}
+
+// MarkRateLimited (SPRINT 5.2) handles the platform's 429/Retry-After
+// response. Stamps next_retry_at and rate_limit_reset_at to the
+// platform's hint, clears the lease, and (critically) does NOT
+// increment attempt_count. Rate-limit is not a fault — the
+// platform explicitly told us when to come back, so retrying
+// sooner is the right behavior. attempt_count stays bounded by
+// actual transient failures (5xx, network), not by platform
+// throttling.
+//
+// The publish driver re-picks the row when next_retry_at <= NOW()
+// (the existing ListPending filter, when extended in commit 2,
+// handles this). status stays 'queued' so the next claim is
+// permitted by ClaimQueuedTargetWithLease's WHERE clause.
+func (r *PostRepository) MarkRateLimited(id int64, ownerID string, retryAfter time.Time) error {
+	if ownerID == "" {
+		return fmt.Errorf("MarkRateLimited: ownerID is empty")
+	}
+	res, err := r.db.Exec(
+		`UPDATE post_targets
+		 SET next_retry_at = $3,
+		     rate_limit_reset_at = $3,
+		     lease_owner_id = NULL,
+		     leased_until = NULL,
+		     heartbeat_at = NULL,
+		     last_error_code = 'RATE_LIMITED'
+		 WHERE id = $1 AND lease_owner_id = $2`,
+		id, ownerID, retryAfter,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark rate limited: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return nil
+	}
+	return nil
+}
+
+// ReclaimExpiredLeases (SPRINT 5.2) takes over rows whose lease
+// expired. The reconciler calls this on every tick as the first
+// step of its work loop. A row is reclaimable if:
+//   - leased_until <= NOW() (the lease is past its TTL)
+//   - lease_owner_id != $myWorkerID (I'm not the one holding the
+//     expired lease; reclaiming my own would be a no-op)
+//   - status IN ('publishing', 'queued') (DLQ and published are
+//     terminal; the publish driver only picks up queued/waiting_provider)
+//
+// On reclaim the row is reset to status='queued' (a crashed
+// mid-publish row becomes pending so the driver re-picks it),
+// lease fields are cleared, and next_retry_at = NOW() so the
+// driver picks it up immediately on the next tick (no
+// next_retry_at wait for crash-recovery).
+//
+// NOTE: attempt_count is INTENTIONALLY NOT bumped on reclaim. A
+// crash is not a "real" attempt — the platform never saw a publish
+// call (or saw one that returned mid-flight). The next
+// MarkRetrying on this row is the one that increments. This keeps
+// attempt_count bounded by actual transient failures (5xx,
+// network) and not by replica crash/restart cycles.
+//
+// Returns the number of rows reclaimed. A replica running
+// ReclaimExpiredLeases with a unique myWorkerID can safely share
+// the table with peers — the WHERE lease_owner_id != $myWorkerID
+// filter ensures two replicas don't fight over the same row
+// (the second replica's reclaim finds lease_owner_id = NULL
+// already and is a no-op).
+func (r *PostRepository) ReclaimExpiredLeases(myWorkerID string) (int64, error) {
+	res, err := r.db.Exec(
+		`UPDATE post_targets
+		 SET status = 'queued',
+		     lease_owner_id = NULL,
+		     leased_until = NULL,
+		     heartbeat_at = NULL,
+		     next_retry_at = NOW()
+		 WHERE leased_until IS NOT NULL
+		   AND leased_until <= NOW()
+		   AND lease_owner_id IS NOT NULL
+		   AND lease_owner_id <> $1
+		   AND status IN ('publishing', 'queued')`,
+		myWorkerID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to reclaim expired leases: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	return n, nil
+}
+
 // ClaimWaitingProviderTarget atomically transitions a post_target from
 // status='waiting_provider' to status='publishing' using SELECT FOR
 // UPDATE SKIP LOCKED (same pattern as ClaimQueuedTarget — see that
@@ -566,11 +894,13 @@ func (r *PostRepository) ClaimPublishingTarget(id int64) (bool, error) {
 // ASC (insertion order). Returns (nil, nil) if the post has no targets
 // (the empty slice path through Scan-loop). Includes the
 // provider_idempotency_key column added by migration 022 — pre-022
-// rows expose NULL.
+// rows expose NULL. Includes the completed_at column added by migration
+// 035 (SPRINT 5.2) so DLQ-triage queries can filter on terminal
+// timestamps.
 func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
 		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
-		       provider_state, container_id, provider_idempotency_key
+		       provider_state, container_id, provider_idempotency_key, completed_at
 		 FROM post_targets
 		 WHERE post_id = $1
 		 ORDER BY id ASC`,
@@ -581,59 +911,64 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	}
 	defer rows.Close()
 
-	var targets []models.PostTarget
-	for rows.Next() {
-		t := models.PostTarget{}
-		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
-			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
-			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey); err != nil {
-			return nil, fmt.Errorf("failed to scan post_target: %w", err)
+		var targets []models.PostTarget
+		for rows.Next() {
+			t := models.PostTarget{}
+			if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+				&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+				&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
+				return nil, fmt.Errorf("failed to scan post_target: %w", err)
+			}
+			targets = append(targets, t)
 		}
-		targets = append(targets, t)
+		return targets, nil
 	}
-	return targets, nil
-}
 
-// ListPublishing (Taglio 4.2) returns post_targets whose status='publishing'
-// AND platform_post_id IS NOT NULL. These are the targets the reconciler
-// goroutine needs to poll for async state transitions (TikTok's
-// PROCESSING_UPLOAD → PUBLISH_COMPLETE flow).
-//
-// The non-null platform_post_id filter is essential: a target that
-// transitions to 'publishing' but has not yet been assigned a
-// publish_id (e.g. still in the synchronous Publish() call) must NOT
-// be picked up by the reconciler — there's no publish_id to query
-// status against.
-//
-// Ordered by id ASC for stable iteration; this lets the reconciler
-// check the same target on every tick without flapping. Includes the
-// provider_idempotency_key column added by migration 022 so retries
-// from the reconciler reuse the same key already stamped at claim time.
-func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
-	rows, err := r.db.Query(
-		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
-		        provider_state, container_id, provider_idempotency_key
-		 FROM post_targets
-		 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
-		 ORDER BY id ASC`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list publishing post_targets: %w", err)
-	}
-	defer rows.Close()
-
-	var targets []models.PostTarget
-	for rows.Next() {
-		t := models.PostTarget{}
-		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
-			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
-			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey); err != nil {
-			return nil, fmt.Errorf("failed to scan post_target: %w", err)
+	// ListPublishing (Taglio 4.2) returns post_targets whose status='publishing'
+	// AND platform_post_id IS NOT NULL. These are the targets the reconciler
+	// goroutine needs to poll for async state transitions (TikTok's
+	// PROCESSING_UPLOAD → PUBLISH_COMPLETE flow).
+	//
+	// The non-null platform_post_id filter is essential: a target that
+	// transitions to 'publishing' but has not yet been assigned a
+	// publish_id (e.g. still in the synchronous Publish() call) must NOT
+	// be picked up by the reconciler — there's no publish_id to query
+	// status against.
+	//
+	// Ordered by id ASC for stable iteration; this lets the reconciler
+	// check the same target on every tick without flapping. Includes the
+	// provider_idempotency_key column added by migration 022 so retries
+	// from the reconciler reuse the same key already stamped at claim time.
+	// Includes the completed_at column added by migration 035 so the
+	// reconciler can detect rows that were DLQ'd while the reconciler
+	// held a stale read (defensive — ListPublishing filters on
+	// status='publishing' so DLQ'd rows are naturally excluded, but the
+	// field is included for consistency with ListByPost).
+	func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
+		rows, err := r.db.Query(
+			`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
+			        provider_state, container_id, provider_idempotency_key, completed_at
+			 FROM post_targets
+			 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
+			 ORDER BY id ASC`,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list publishing post_targets: %w", err)
 		}
-		targets = append(targets, t)
+		defer rows.Close()
+
+		var targets []models.PostTarget
+		for rows.Next() {
+			t := models.PostTarget{}
+			if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+				&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+				&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
+				return nil, fmt.Errorf("failed to scan post_target: %w", err)
+			}
+			targets = append(targets, t)
+		}
+		return targets, nil
 	}
-	return targets, nil
-}
 
 // UpdatePublishState (Taglio 4.2) updates only the provider_state column
 // on a post_target. Used by the reconciler to record the current
@@ -667,12 +1002,13 @@ func (r *PostRepository) UpdatePublishState(id int64, providerState string) erro
 // re-checking and would still race on scheduled_at boundaries. Includes
 // the provider_idempotency_key column added by migration 022 so the
 // worker can read the existing key (preserved across retries) without
-// an extra round-trip.
+// an extra round-trip. Includes the completed_at column added by
+// migration 035 (SPRINT 5.2) for consistency with ListByPost/ListPublishing.
 func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
 		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
 		        pt.platform_post_id, pt.error_message, pt.published_at,
-		        pt.provider_state, pt.container_id, pt.provider_idempotency_key
+		        pt.provider_state, pt.container_id, pt.provider_idempotency_key, pt.completed_at
 		 FROM post_targets pt
 		 JOIN posts p ON p.id = pt.post_id
 		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider') AND p.scheduled_at <= $1
@@ -689,7 +1025,7 @@ func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, err
 		t := models.PostTarget{}
 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
 			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
-			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey); err != nil {
+			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
 		}
 		targets = append(targets, t)

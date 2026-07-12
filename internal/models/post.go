@@ -54,6 +54,16 @@ const (
 	// ListPending SELECT) and resumes the pipeline.
 	PostStatusRetrying PostStatus = "retrying"
 
+	// PostStatusDLQ (SPRINT 5.2, migration 035) — terminal dead-letter
+	// queue. The row exhausted max_attempts (default 5) on transient
+	// errors and was sent to the DLQ for operator triage. No further
+	// transitions; the publish driver + reconciler both filter on
+	// status IN ('queued', 'waiting_provider', 'publishing') and
+	// therefore never re-pick a DLQ'd row. The webhook runtime emits
+	// a post.failed event when a row lands in DLQ so the workspace
+	// owner gets notified via their endpoint subscription.
+	PostStatusDLQ PostStatus = "dlq"
+
 	// Deprecated: use PostStatusQueued instead.
 	PostStatusScheduled = PostStatusQueued
 )
@@ -68,7 +78,8 @@ func (s PostStatus) IsValid() bool {
 		PostStatusPartiallyPublished,
 		PostStatusFailed,
 		PostStatusWaitingProvider,
-		PostStatusRetrying:
+		PostStatusRetrying,
+		PostStatusDLQ:
 		return true
 	default:
 		return false
@@ -76,8 +87,11 @@ func (s PostStatus) IsValid() bool {
 }
 
 // IsTerminal reports whether s is a terminal state (no further transitions).
+// PostStatusDLQ (SPRINT 5.2) is terminal — no automatic transition out.
+// PostStatusPublished / PostStatusPartiallyPublished / PostStatusFailed
+// remain terminal as before.
 func (s PostStatus) IsTerminal() bool {
-	return s == PostStatusPublished || s == PostStatusPartiallyPublished || s == PostStatusFailed
+	return s == PostStatusPublished || s == PostStatusPartiallyPublished || s == PostStatusFailed || s == PostStatusDLQ
 }
 
 // String returns the underlying string value.
@@ -166,6 +180,15 @@ type PostTarget struct {
 	// Diagnostic / observability columns.
 	ErrorMessage  string     `json:"error_message,omitempty"`
 	PublishedAt   *time.Time `json:"published_at,omitempty"`
+	// CompletedAt (SPRINT 5.2, migration 035) is the catch-all
+	// timestamp a row reached a TERMINAL non-success state
+	// (status='dlq' or status='failed' after exhausting
+	// max_attempts). published_at remains the canonical
+	// success-state timestamp; completed_at is what dashboards
+	// join on for "rows that ended in the last N days" queries
+	// (e.g. DLQ-triage weekly report). Nullable for pre-migration
+	// rows and for rows that are still in progress.
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 	ProviderState string     `json:"provider_state,omitempty"`
 	ContainerID   string     `json:"container_id,omitempty"`
 	// last_error_code (migration 018) is the short stable code —
