@@ -31,6 +31,11 @@ const validMetaSecret32 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 32 a's
 // AppEnv check. Tests that DO want to exercise AppEnv validation
 // (TestValidate_AppEnv, TestLoad_AppEnv_*) assert on the env-var-driven
 // path explicitly.
+//
+// Taglio 2.4 follow-up: S3_* fields are seeded with syntactically-valid
+// placeholders so the S3 mandatory check (Taglio 3.1) passes. The values
+// don't need to be real AWS credentials — validate() only checks for
+// non-emptiness, not reachability.
 func minimalValidConfig(jwtSecret string) *Config {
 	return &Config{
 		AppEnv:        "dev",
@@ -39,6 +44,10 @@ func minimalValidConfig(jwtSecret string) *Config {
 		MetaAppSecret: validMetaSecret32,
 		EncryptionKey: minValid32ByteBase64Key,
 		JWTSecret:     jwtSecret,
+		S3Endpoint:    "https://s3.example.com",
+		S3Bucket:      "test-bucket",
+		S3AccessKey:   "test-access-key",
+		S3SecretKey:   "test-secret-key",
 	}
 }
 
@@ -461,22 +470,15 @@ func TestLoad_AppEnv_PropagatesValue(t *testing.T) {
 	if cfg.AppEnv != "staging" {
 		t.Fatalf("AppEnv: want staging, got %q", cfg.AppEnv)
 	}
-}
-
-// TestValidate_NoOAuthPlatformsValid (Taglio 2.4) proves that a
+} // TestValidate_NoOAuthPlatformsValid (Taglio 2.4) proves that a
 // config with EVERY OAuth platform empty (Meta AppID+Secret empty,
 // no TikTok/Twitter/YouTube/LinkedIn creds) still passes validate().
 // The server is then expected to start with zero registered providers;
 // /api/v1/auth/{anything} returns 404 for every {anything}.
 func TestValidate_NoOAuthPlatformsValid(t *testing.T) {
-	cfg := &Config{
-		AppEnv:        "dev",
-		DatabaseURL:   "postgres://x",
-		EncryptionKey: minValid32ByteBase64Key,
-		JWTSecret:     validJWTSecret(),
-		// No META_APP_ID, no META_APP_SECRET, no TikTok/Twitter/
-		// YouTube/LinkedIn credentials. Every redirect URI empty.
-	}
+	cfg := minimalValidConfig(validJWTSecret())
+	cfg.MetaAppID = ""
+	cfg.MetaAppSecret = ""
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with zero OAuth platforms should succeed; got %v", err)
 	}
@@ -488,15 +490,11 @@ func TestValidate_NoOAuthPlatformsValid(t *testing.T) {
 // spec: "il server deve avviarsi anche con un solo provider
 // configurato (es. solo YouTube o solo LinkedIn)".
 func TestValidate_OnlyYouTubeValid(t *testing.T) {
-	cfg := &Config{
-		AppEnv:              "dev",
-		DatabaseURL:         "postgres://x",
-		EncryptionKey:       minValid32ByteBase64Key,
-		JWTSecret:           validJWTSecret(),
-		YouTubeClientID:     "yt-id",
-		YouTubeClientSecret: validMetaSecret32,
-		// MetaAppID empty, MetaAppSecret empty, no other platforms.
-	}
+	cfg := minimalValidConfig(validJWTSecret())
+	cfg.MetaAppID = ""
+	cfg.MetaAppSecret = ""
+	cfg.YouTubeClientID = "yt-id"
+	cfg.YouTubeClientSecret = validMetaSecret32
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with only YouTube configured should succeed; got %v", err)
 	}
@@ -505,14 +503,11 @@ func TestValidate_OnlyYouTubeValid(t *testing.T) {
 // TestValidate_OnlyLinkedInValid (Taglio 2.4) is the second
 // canonical example: server starts with only LinkedIn configured.
 func TestValidate_OnlyLinkedInValid(t *testing.T) {
-	cfg := &Config{
-		AppEnv:               "dev",
-		DatabaseURL:          "postgres://x",
-		EncryptionKey:        minValid32ByteBase64Key,
-		JWTSecret:            validJWTSecret(),
-		LinkedInClientID:     "li-id",
-		LinkedInClientSecret: validMetaSecret32,
-	}
+	cfg := minimalValidConfig(validJWTSecret())
+	cfg.MetaAppID = ""
+	cfg.MetaAppSecret = ""
+	cfg.LinkedInClientID = "li-id"
+	cfg.LinkedInClientSecret = validMetaSecret32
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with only LinkedIn configured should succeed; got %v", err)
 	}
