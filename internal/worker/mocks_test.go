@@ -20,6 +20,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
@@ -71,6 +72,7 @@ func (b *baseMockProvider) Name() string { return b.platform }
 //
 // For TikTok-style async platforms, use mockAsyncProvider below.
 type mockProvider struct {
+	mu sync.Mutex
 	baseMockProvider
 	publishFn func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
 	// publishCalls counter — used to prove the loser branch of the
@@ -93,10 +95,10 @@ func (m *mockProvider) RefreshOAuthToken(ctx context.Context, refreshToken strin
 	panic("RefreshOAuthToken not used in worker tests — wire via mockCredentialVault.renewFn if needed")
 }
 func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+	m.mu.Lock()
 	m.publishCalls++
-	// Capture the payload by pointer so tests can read payload
-	// fields (IdempotencyKey, etc.) after publishTarget returns.
 	m.capturedPayload = &payload
+	m.mu.Unlock()
 	if m.publishFn == nil {
 		return nil, errors.New("Publish not implemented in this test")
 	}
@@ -111,6 +113,7 @@ func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID 
 // Use for tests that exercise async platforms (TikTok today). For
 // sync platforms use mockProvider instead.
 type mockAsyncProvider struct {
+	mu sync.Mutex
 	baseMockProvider
 	publishFn         func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
 	startPublishFn    func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (string, string, error)
@@ -135,8 +138,10 @@ func (m *mockAsyncProvider) RefreshOAuthToken(ctx context.Context, refreshToken 
 	panic("RefreshOAuthToken not used in worker tests — wire via mockCredentialVault.renewFn if needed")
 }
 func (m *mockAsyncProvider) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+	m.mu.Lock()
 	m.publishCalls++
 	m.capturedPayload = &payload
+	m.mu.Unlock()
 	if m.publishFn == nil {
 		return nil, errors.New("Publish not implemented in this test")
 	}
@@ -148,7 +153,9 @@ func (m *mockAsyncProvider) Publish(ctx context.Context, accessToken, platformUs
 // a publish_id synchronously). Tests that need a specific publish_id
 // can set startPublishFn directly.
 func (m *mockAsyncProvider) StartPublish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (string, string, error) {
+	m.mu.Lock()
 	m.startPublishCalls++
+	m.mu.Unlock()
 	if m.startPublishFn != nil {
 		return m.startPublishFn(ctx, accessToken, platformUserID, payload)
 	}
@@ -164,7 +171,9 @@ func (m *mockAsyncProvider) StartPublish(ctx context.Context, accessToken, platf
 
 // CheckPublishStatus (Taglio 4.2, async only) — single GET, no polling.
 func (m *mockAsyncProvider) CheckPublishStatus(ctx context.Context, accessToken, publishID string) (string, error) {
+	m.mu.Lock()
 	m.checkStatusCalls++
+	m.mu.Unlock()
 	if m.checkStatusFn == nil {
 		return "", errors.New("CheckPublishStatus not implemented in this test")
 	}
@@ -173,7 +182,9 @@ func (m *mockAsyncProvider) CheckPublishStatus(ctx context.Context, accessToken,
 
 // ContinuePublish (Taglio 4.2, async only) — PULL_FROM_URL no-op.
 func (m *mockAsyncProvider) ContinuePublish(ctx context.Context, accessToken, publishID string) error {
+	m.mu.Lock()
 	m.continueCalls++
+	m.mu.Unlock()
 	if m.continuePublishFn != nil {
 		return m.continuePublishFn(ctx, accessToken, publishID)
 	}
@@ -182,7 +193,9 @@ func (m *mockAsyncProvider) ContinuePublish(ctx context.Context, accessToken, pu
 
 // Reconcile (Taglio 4.2, async only) — terminal-state detector.
 func (m *mockAsyncProvider) Reconcile(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
+	m.mu.Lock()
 	m.reconcileCalls++
+	m.mu.Unlock()
 	if m.reconcileFn != nil {
 		return m.reconcileFn(ctx, accessToken, publishID)
 	}
@@ -218,6 +231,7 @@ func (m *mockAsyncProvider) Reconcile(ctx context.Context, accessToken, publishI
 // The test never needs to call the refresher itself; it just returns
 // a valid token.
 type mockCredentialVault struct {
+	mu          sync.Mutex
 	renewFn     func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error)
 	ensureCalls int
 }
@@ -229,7 +243,9 @@ func (m *mockCredentialVault) Get(ctx context.Context, platformAccountID int64, 
 	panic("Get not used in worker tests")
 }
 func (m *mockCredentialVault) Renew(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+	m.mu.Lock()
 	m.ensureCalls++
+	m.mu.Unlock()
 	if m.renewFn == nil {
 		return nil, errors.New("Renew not implemented in this test")
 	}

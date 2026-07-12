@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
 // instagramTestCfg returns a minimal config for Instagram OAuth tests.
@@ -331,4 +332,384 @@ func TestInstagramHandleCallback_ReadsBody(t *testing.T) {
 	}
 	// Verify the /me handler was actually called (sanity check that the flow ran).
 	_ = bodyRead
+}
+
+// =========================================================================
+// Publisher tests (Taglio 4.4): Instagram media container + media_publish
+// =========================================================================
+
+// TestInstagramPublisherCreatesMediaContainer verifies that Publish sends a
+// POST to /{igUserID}/media with the correct image_url and returns the
+// container_id from that call (which is then passed to media_publish).
+func TestInstagramPublisherCreatesMediaContainer(t *testing.T) {
+	const igUserID = "17841400000000001"
+	const containerID = "17912345678901234"
+	const mediaID = "18098765432109876"
+	const imageURL = "https://cdn.example.com/photo.jpg"
+
+	var capturedImageURL, capturedAccessToken string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v19.0/"+igUserID+"/media", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST /media, got %s", r.Method)
+		}
+		capturedImageURL = r.URL.Query().Get("image_url")
+		capturedAccessToken = r.URL.Query().Get("access_token")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"id": containerID})
+	})
+	mux.HandleFunc("/v19.0/"+igUserID+"/media_publish", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST /media_publish, got %s", r.Method)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"id": mediaID})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestInstagramService(srv)
+
+	result, err := svc.Publish(context.Background(), "ig-access-token", igUserID,
+		models.PublishPayload{ImageURL: imageURL})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if capturedImageURL != imageURL {
+		t.Errorf("image_url: want %q, got %q", imageURL, capturedImageURL)
+	}
+	if capturedAccessToken != "ig-access-token" {
+		t.Errorf("access_token on /media: want 'ig-access-token', got %q", capturedAccessToken)
+	}
+	if result.PlatformMediaID != mediaID {
+		t.Errorf("PlatformMediaID: want %q, got %q", mediaID, result.PlatformMediaID)
+	}
+}
+
+// TestInstagramPublishesMediaContainer verifies that after creating the
+// container, Publish calls /media_publish with the creation_id returned
+// from the container step.
+func TestInstagramPublishesMediaContainer(t *testing.T) {
+	const igUserID = "17841400000000002"
+	const containerID = "17922222222222222"
+	const mediaID = "18033333333333333"
+
+	var capturedCreationID, capturedAccessToken string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v19.0/"+igUserID+"/media", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": containerID})
+	})
+	mux.HandleFunc("/v19.0/"+igUserID+"/media_publish", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST /media_publish, got %s", r.Method)
+		}
+		capturedCreationID = r.URL.Query().Get("creation_id")
+		capturedAccessToken = r.URL.Query().Get("access_token")
+		json.NewEncoder(w).Encode(map[string]string{"id": mediaID})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestInstagramService(srv)
+
+	result, err := svc.Publish(context.Background(), "ig-token", igUserID,
+		models.PublishPayload{ImageURL: "https://cdn.example.com/img.jpg"})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if capturedCreationID != containerID {
+		t.Errorf("creation_id: want %q, got %q", containerID, capturedCreationID)
+	}
+	if capturedAccessToken != "ig-token" {
+		t.Errorf("access_token on /media_publish: want 'ig-token', got %q", capturedAccessToken)
+	}
+	if result.PlatformMediaID != mediaID {
+		t.Errorf("PlatformMediaID: want %q, got %q", mediaID, result.PlatformMediaID)
+	}
+}
+
+// TestInstagramPublishReturnsMediaID verifies that Publish returns the
+// correct PlatformMediaID (from media_publish) and PlatformURL in the
+// standard Instagram format https://www.instagram.com/p/{mediaID}.
+func TestInstagramPublishReturnsMediaID(t *testing.T) {
+	const igUserID = "17841400000000003"
+	const containerID = "179-cid"
+	const mediaID = "180-mid"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v19.0/"+igUserID+"/media", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": containerID})
+	})
+	mux.HandleFunc("/v19.0/"+igUserID+"/media_publish", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": mediaID})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestInstagramService(srv)
+
+	result, err := svc.Publish(context.Background(), "tok", igUserID,
+		models.PublishPayload{ImageURL: "https://cdn.example.com/photo.jpg"})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if result.PlatformMediaID != mediaID {
+		t.Errorf("PlatformMediaID: want %q, got %q", mediaID, result.PlatformMediaID)
+	}
+	expectedURL := "https://www.instagram.com/p/" + mediaID
+	if result.PlatformURL != expectedURL {
+		t.Errorf("PlatformURL: want %q, got %q", expectedURL, result.PlatformURL)
+	}
+}
+
+// TestInstagramPublishesImageWithCaption verifies that when PublishPayload.Text
+// is set, it is forwarded as the 'caption' parameter to the media container
+// endpoint.
+func TestInstagramPublishesImageWithCaption(t *testing.T) {
+	const igUserID = "17841400000000004"
+	const caption = "Sunset over the mountains 🌄"
+	const containerID = "179-caption"
+	const mediaID = "180-caption"
+
+	var capturedCaption string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v19.0/"+igUserID+"/media", func(w http.ResponseWriter, r *http.Request) {
+		capturedCaption = r.URL.Query().Get("caption")
+		json.NewEncoder(w).Encode(map[string]string{"id": containerID})
+	})
+	mux.HandleFunc("/v19.0/"+igUserID+"/media_publish", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": mediaID})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestInstagramService(srv)
+
+	result, err := svc.Publish(context.Background(), "tok", igUserID,
+		models.PublishPayload{ImageURL: "https://cdn.example.com/sunset.jpg", Text: caption})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if capturedCaption != caption {
+		t.Errorf("caption: want %q, got %q", caption, capturedCaption)
+	}
+	if result.PlatformMediaID != mediaID {
+		t.Errorf("PlatformMediaID: want %q, got %q", mediaID, result.PlatformMediaID)
+	}
+}
+
+// TestInstagramPublishesVideoPost verifies that Publish sends video_url
+// (instead of image_url) when the payload carries a VideoURL.
+func TestInstagramPublishesVideoPost(t *testing.T) {
+	const igUserID = "17841400000000005"
+	const videoURL = "https://cdn.example.com/reel.mp4"
+	const containerID = "179-video"
+	const mediaID = "180-video"
+
+	var capturedVideoURL string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v19.0/"+igUserID+"/media", func(w http.ResponseWriter, r *http.Request) {
+		capturedVideoURL = r.URL.Query().Get("video_url")
+		if img := r.URL.Query().Get("image_url"); img != "" {
+			t.Errorf("image_url should be empty when video_url is set, got %q", img)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"id": containerID})
+	})
+	mux.HandleFunc("/v19.0/"+igUserID+"/media_publish", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": mediaID})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestInstagramService(srv)
+
+	result, err := svc.Publish(context.Background(), "tok", igUserID,
+		models.PublishPayload{VideoURL: videoURL})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if capturedVideoURL != videoURL {
+		t.Errorf("video_url: want %q, got %q", videoURL, capturedVideoURL)
+	}
+	if result.PlatformMediaID != mediaID {
+		t.Errorf("PlatformMediaID: want %q, got %q", mediaID, result.PlatformMediaID)
+	}
+}
+
+// TestInstagramPublisherRejectsEmptyPayload verifies that Publish returns
+// an error when both ImageURL and VideoURL are empty (ValidateContent rejects
+// text-only posts — Instagram requires media).
+func TestInstagramPublisherRejectsEmptyPayload(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+
+	svc := newTestInstagramService(srv)
+
+	_, err := svc.Publish(context.Background(), "tok", "ig-user-123",
+		models.PublishPayload{})
+	if err == nil {
+		t.Fatal("expected error for empty payload (no media), got nil")
+	}
+	if !strings.Contains(err.Error(), "media") {
+		t.Errorf("error should mention media requirement: %v", err)
+	}
+}
+
+// TestInstagramPublisherRejectsEmptyIGUserID verifies that Publish returns
+// an error when platformUserID (the IG business account id) is empty.
+func TestInstagramPublisherRejectsEmptyIGUserID(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+
+	svc := newTestInstagramService(srv)
+
+	_, err := svc.Publish(context.Background(), "tok", "",
+		models.PublishPayload{ImageURL: "https://cdn.example.com/img.jpg"})
+	if err == nil {
+		t.Fatal("expected error for empty platform_user_id, got nil")
+	}
+	if !strings.Contains(err.Error(), "platform_user_id") {
+		t.Errorf("error should mention platform_user_id: %v", err)
+	}
+}
+
+// TestInstagramMediaContainerHTTPError verifies that Publish surfaces errors
+// from the /media container creation step, including 4xx and 5xx responses.
+func TestInstagramMediaContainerHTTPError(t *testing.T) {
+	tests := []struct {
+		status     int
+		statusText string
+	}{
+		{http.StatusBadRequest, "400 Bad Request"},
+		{http.StatusUnauthorized, "401 Unauthorized"},
+		{http.StatusInternalServerError, "500 Internal Server Error"},
+		{http.StatusBadGateway, "502 Bad Gateway"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.statusText, func(t *testing.T) {
+			const igUserID = "17841400000000006"
+			mux := http.NewServeMux()
+			mux.HandleFunc("/v19.0/"+igUserID+"/media", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				w.Write([]byte(`{"error":{"message":"Container creation failed"}}`))
+			})
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
+
+			svc := newTestInstagramService(srv)
+
+			_, err := svc.Publish(context.Background(), "tok", igUserID,
+				models.PublishPayload{ImageURL: "https://cdn.example.com/img.jpg"})
+			if err == nil {
+				t.Fatalf("expected error for status %d, got nil", tc.status)
+			}
+			if !strings.Contains(err.Error(), "container") {
+				t.Errorf("error should mention container: %v", err)
+			}
+		})
+	}
+}
+
+// TestInstagramMediaPublishHTTPError verifies that Publish surfaces errors
+// from the /media_publish step when the container was created successfully
+// but the publish itself fails.
+func TestInstagramMediaPublishHTTPError(t *testing.T) {
+	const igUserID = "17841400000000007"
+	const containerID = "179-publish-err"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v19.0/"+igUserID+"/media", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": containerID})
+	})
+	mux.HandleFunc("/v19.0/"+igUserID+"/media_publish", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(`{"error":{"message":"Publishing failed"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestInstagramService(srv)
+
+	_, err := svc.Publish(context.Background(), "tok", igUserID,
+		models.PublishPayload{ImageURL: "https://cdn.example.com/img.jpg"})
+	if err == nil {
+		t.Fatal("expected error from /media_publish 502, got nil")
+	}
+	if !strings.Contains(err.Error(), "media_publish") {
+		t.Errorf("error should mention media_publish: %v", err)
+	}
+}
+
+// TestInstagramPublishPassesAccessToken verifies that the access_token is
+// passed to both the /media and /media_publish endpoints.
+func TestInstagramPublishPassesAccessToken(t *testing.T) {
+	const igUserID = "17841400000000008"
+	const accessToken = "ig-page-access-token-xyz"
+	const containerID = "179-token"
+	const mediaID = "180-token"
+
+	var mediaAccessToken, publishAccessToken string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v19.0/"+igUserID+"/media", func(w http.ResponseWriter, r *http.Request) {
+		mediaAccessToken = r.URL.Query().Get("access_token")
+		json.NewEncoder(w).Encode(map[string]string{"id": containerID})
+	})
+	mux.HandleFunc("/v19.0/"+igUserID+"/media_publish", func(w http.ResponseWriter, r *http.Request) {
+		publishAccessToken = r.URL.Query().Get("access_token")
+		json.NewEncoder(w).Encode(map[string]string{"id": mediaID})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestInstagramService(srv)
+
+	_, err := svc.Publish(context.Background(), accessToken, igUserID,
+		models.PublishPayload{ImageURL: "https://cdn.example.com/img.jpg"})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if mediaAccessToken != accessToken {
+		t.Errorf("access_token on /media: want %q, got %q", accessToken, mediaAccessToken)
+	}
+	if publishAccessToken != accessToken {
+		t.Errorf("access_token on /media_publish: want %q, got %q", accessToken, publishAccessToken)
+	}
+}
+
+// TestInstagramPublishesImageOnlyNoCaption verifies that Publish works when
+// only an image URL is provided (no caption, no text) — the minimum valid
+// Instagram post.
+func TestInstagramPublishesImageOnlyNoCaption(t *testing.T) {
+	const igUserID = "17841400000000009"
+	const containerID = "179-nocap"
+	const mediaID = "180-nocap"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v19.0/"+igUserID+"/media", func(w http.ResponseWriter, r *http.Request) {
+		if caption := r.URL.Query().Get("caption"); caption != "" {
+			t.Errorf("caption should be empty when not provided, got %q", caption)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"id": containerID})
+	})
+	mux.HandleFunc("/v19.0/"+igUserID+"/media_publish", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": mediaID})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestInstagramService(srv)
+
+	result, err := svc.Publish(context.Background(), "tok", igUserID,
+		models.PublishPayload{ImageURL: "https://cdn.example.com/photo.jpg"})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if result.PlatformMediaID != mediaID {
+		t.Errorf("PlatformMediaID: want %q, got %q", mediaID, result.PlatformMediaID)
+	}
 }

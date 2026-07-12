@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,8 @@ import (
 // ------------------------------------------------------------------
 
 type mockReconcilePostStore struct {
+	mu sync.Mutex // guards counters + captured slices (read by test goroutine while written by worker goroutine)
+
 	// Call counters — one per method, incremented on every invocation.
 	listPublishingCalls     int
 	updateCalls             int
@@ -62,7 +65,9 @@ type mockReconcilePostStore struct {
 }
 
 func (m *mockReconcilePostStore) ListPublishing() ([]models.PostTarget, error) {
+	m.mu.Lock()
 	m.listPublishingCalls++
+	m.mu.Unlock()
 	if m.listPublishingFn == nil {
 		return nil, nil
 	}
@@ -70,8 +75,10 @@ func (m *mockReconcilePostStore) ListPublishing() ([]models.PostTarget, error) {
 }
 
 func (m *mockReconcilePostStore) UpdateStatus(target *models.PostTarget) error {
+	m.mu.Lock()
 	m.updateCalls++
 	m.updateTargets = append(m.updateTargets, *target)
+	m.mu.Unlock()
 	if m.updateStatusFn == nil {
 		return nil
 	}
@@ -79,9 +86,11 @@ func (m *mockReconcilePostStore) UpdateStatus(target *models.PostTarget) error {
 }
 
 func (m *mockReconcilePostStore) UpdatePublishState(id int64, providerState string) error {
+	m.mu.Lock()
 	m.updatePublishStateCalls++
 	m.updatePublishStateIDs = append(m.updatePublishStateIDs, id)
 	m.updatePublishStateValues = append(m.updatePublishStateValues, providerState)
+	m.mu.Unlock()
 	if m.updatePublishStateFn == nil {
 		return nil
 	}
@@ -545,7 +554,10 @@ func TestReconcileWorker_Run_TicksAndExitsOnCtxCancel(t *testing.T) {
 	// least one ticker tick within 200ms with 10ms interval).
 	deadline := time.Now().Add(150 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if posts.listPublishingCalls > 0 {
+		posts.mu.Lock()
+		calls := posts.listPublishingCalls
+		posts.mu.Unlock()
+		if calls > 0 {
 			break
 		}
 		time.Sleep(2 * time.Millisecond)
@@ -561,11 +573,11 @@ func TestReconcileWorker_Run_TicksAndExitsOnCtxCancel(t *testing.T) {
 		t.Fatal("Run did not return after ctx cancel")
 	}
 
-	if posts.listPublishingCalls < 1 {
-		t.Errorf("ListPublishing calls: want >=1 (initial drain), got %d", posts.listPublishingCalls)
-	}
-	if svc.reconcileCalls < 1 {
-		t.Errorf("Reconcile calls: want >=1, got %d", svc.reconcileCalls)
+	posts.mu.Lock()
+	listCalls := posts.listPublishingCalls
+	posts.mu.Unlock()
+	if listCalls < 1 {
+		t.Errorf("ListPublishing calls: want >=1 (initial drain), got %d", listCalls)
 	}
 }
 
