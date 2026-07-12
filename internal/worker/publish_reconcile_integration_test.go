@@ -54,15 +54,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	_ "github.com/lib/pq"
-	tpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
@@ -70,6 +66,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/postgres"
 )
 
 // rewriteTransport is a custom http.RoundTripper that rewrites the
@@ -148,14 +145,12 @@ type rig struct {
 // server on a failed setup.
 func setupWorkerRig(t *testing.T, cfg *config.Config, handlerBuilder func(*atomic.Int32) http.Handler) *rig {
 	t.Helper()
-	requireDocker(t)
-
 	// Postgres (testcontainer). Register DB cleanup FIRST so even
 	// fatal failures during Migrate / NewEncryptor / NewServer /
 	// seed / router setup tear down the testcontainer. Subsequent
 	// ts.Close is registered AFTER this so t.Cleanup runs in LIFO
 	// order: ts.Close → cleanupDB.
-	db, cleanupDB := startTestPostgres(t)
+	db, cleanupDB := postgres.StartTestPostgres(t, postgres.WithDatabase("instaedit_test_worker"))
 	t.Cleanup(cleanupDB)
 
 	if err := database.Migrate(db); err != nil {
@@ -282,70 +277,6 @@ func runWorkerPair(rig *rig) *workerPair {
 		recCancel: recCancel,
 		wg:        wg,
 	}
-}
-
-// requireDocker short-circuits the test if Docker isn't available so
-// dev environments without Docker don't see false failures. Mirrors
-// internal/database/migrations_integration_test.go::requireDocker —
-// the helpers can't be shared because the test packages differ.
-func requireDocker(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker not on PATH: %v", err)
-	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skipf("docker daemon not reachable: %v", err)
-	}
-}
-
-// startTestPostgres spins up an ephemeral Postgres 16-alpine via
-// testcontainers-go. Returns the *sql.DB and a cleanup function that
-// terminates the container. Mirrors the helper in
-// internal/database/migrations_integration_test.go for the same
-// package-reuse reason as requireDocker.
-func startTestPostgres(t *testing.T) (*sql.DB, func()) {
-	t.Helper()
-	ctx := context.Background()
-
-	pgC, err := tpostgres.Run(ctx,
-		"postgres:16-alpine",
-		tpostgres.WithDatabase("instaedit_test_worker"),
-		tpostgres.WithUsername("test"),
-		tpostgres.WithPassword("test"),
-	)
-	if err != nil {
-		t.Fatalf("start postgres container: %v", err)
-	}
-
-	dsn, err := pgC.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("ConnectionString: %v", err)
-	}
-
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	// Retry db.Ping with a short backoff. testcontainers' built-in
-	// log-based readiness check can fire BEFORE the TCP listener is
-	// bound on some Docker configs — same race as the migrations
-	// integration test, same backoff pattern.
-	pingDeadline := time.Now().Add(15 * time.Second)
-	for attempt := 1; ; attempt++ {
-		if pingErr := db.Ping(); pingErr == nil {
-			break
-		}
-		if time.Now().After(pingDeadline) {
-			t.Fatalf("db.Ping: timeout after %d attempts over 15s", attempt)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	cleanup := func() {
-		_ = db.Close()
-		_ = pgC.Terminate(ctx)
-	}
-	return db, cleanup
 }
 
 // seedTestFixtures inserts the bare minimum fixture set the test

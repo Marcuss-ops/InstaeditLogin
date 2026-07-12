@@ -10,6 +10,8 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/postgres"
 )
 
 // insertPlatformAccount inserts a platform_accounts row and returns its id.
@@ -88,8 +90,7 @@ func countPlatform(t *testing.T, db *sql.DB, platform string) int {
 // TestMigrationMetaToInstagram is the main scenario: before the migration,
 // one account has platform='meta'; after the migration, it's 'instagram'.
 func TestMigrationMetaToInstagram(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {
@@ -116,8 +117,7 @@ func TestMigrationMetaToInstagram(t *testing.T) {
 // TestMigrationDoesNotChangeOtherPlatforms verifies that youtube, tiktok, and
 // twitter accounts are untouched by the migration.
 func TestMigrationDoesNotChangeOtherPlatforms(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {
@@ -159,8 +159,7 @@ func TestMigrationDoesNotChangeOtherPlatforms(t *testing.T) {
 // TestMigrationPreservesAccountID verifies that the platform_accounts.id
 // does not change after the migration.
 func TestMigrationPreservesAccountID(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {
@@ -194,8 +193,7 @@ func TestMigrationPreservesAccountID(t *testing.T) {
 // TestMigrationPreservesTokens verifies that tokens associated with a
 // meta account are still reachable after the migration.
 func TestMigrationPreservesTokens(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {
@@ -228,8 +226,7 @@ func TestMigrationPreservesTokens(t *testing.T) {
 // TestMigrationPreservesPostTargets verifies that post_targets linked to
 // a meta account remain reachable and unchanged after the migration.
 func TestMigrationPreservesPostTargets(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {
@@ -269,8 +266,7 @@ func TestMigrationPreservesPostTargets(t *testing.T) {
 // TestMigrationLeavesNoMetaAccounts verifies that after the migration,
 // SELECT COUNT(*) WHERE platform='meta' returns 0.
 func TestMigrationLeavesNoMetaAccounts(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {
@@ -306,8 +302,7 @@ func TestMigrationLeavesNoMetaAccounts(t *testing.T) {
 // TestMigrationCanRunTwiceSafely verifies that applying the migration a
 // second time is idempotent (no errors, no data corruption).
 func TestMigrationCanRunTwiceSafely(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {
@@ -340,8 +335,7 @@ func TestMigrationCanRunTwiceSafely(t *testing.T) {
 // detects a UNIQUE(platform, platform_user_id) collision and aborts
 // cleanly without modifying any data.
 func TestMigrationHandlesMetaInstagramCollision(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {

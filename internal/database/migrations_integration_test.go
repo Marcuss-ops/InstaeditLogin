@@ -7,19 +7,15 @@
 package database
 
 import (
-	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"sort"
 	"testing"
-	"time"
 
-	_ "github.com/lib/pq"
-	tpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/postgres"
 )
 
 // migrationsToTest is the closed set this file exercises. Matches the
@@ -114,8 +110,7 @@ var requiredColumns = []struct{ Table, Column string }{
 // the migration runner against an empty database must succeed without
 // any error message. If this fails, the other tests don't run.
 func TestMigrations_001To012_AppliesCleanly(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {
@@ -132,8 +127,7 @@ func TestMigrations_001To012_AppliesCleanly(t *testing.T) {
 // This test catches schema drift: if a future migration accidentally
 // drops an active value OR adds a third alias, CI fails.
 func TestPostStatus_HasExpectedSevenValues(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {
@@ -186,8 +180,7 @@ func TestPostStatus_HasExpectedSevenValues(t *testing.T) {
 // layer reaches for must exist after migrations 001→012. Drift would
 // show up here with a clear FAIL message naming the missing column.
 func TestColumns_AllExpectedPresent(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	if err := RunMigrations(db); err != nil {
@@ -239,8 +232,7 @@ func TestColumns_AllExpectedPresent(t *testing.T) {
 // `ALTER TABLE foo ADD bar` without `IF NOT EXISTS` and the second
 // migration (different one) drops-and-readds bar under another name.
 func TestMigrations_OrderIndependent(t *testing.T) {
-	requireDocker(t)
-	db, cleanup := startTestPostgres(t)
+	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 
 	// 1. canonical first-pass
@@ -282,69 +274,6 @@ func TestMigrations_OrderIndependent(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────
 //  helpers
 // ────────────────────────────────────────────────────────────────────
-
-// requireDocker short-circuits the test if Docker isn't available so
-// dev environments without Docker don't see false failures.
-func requireDocker(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker not on PATH: %v", err)
-	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skipf("docker daemon not reachable: %v", err)
-	}
-}
-
-// startTestPostgres spins up an ephemeral Postgres 16-alpine via
-// testcontainers-go. Returns the *sql.DB and a cleanup function that
-// terminates the container.
-func startTestPostgres(t *testing.T) (*sql.DB, func()) {
-	t.Helper()
-	ctx := context.Background()
-
-	pgC, err := tpostgres.Run(ctx,
-		"postgres:16-alpine",
-		tpostgres.WithDatabase("instaedit_test"),
-		tpostgres.WithUsername("test"),
-		tpostgres.WithPassword("test"),
-	)
-	if err != nil {
-		t.Fatalf("start postgres container: %v", err)
-	}
-
-	dsn, err := pgC.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("ConnectionString: %v", err)
-	}
-
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	// Retry db.Ping with a short backoff. testcontainers' built-in
-	// log-based readiness check ("database system is ready to accept
-	// connections") can fire BEFORE the TCP listener is actually
-	// bound on some Docker configs — the first Ping() then hits
-	// "connection reset by peer". Subsequent pings (typically within
-	// 1–3 attempts) succeed once the listener is up.
-	pingDeadline := time.Now().Add(15 * time.Second)
-	for attempt := 1; ; attempt++ {
-		pingErr := db.Ping()
-		if pingErr == nil {
-			break
-		}
-		if time.Now().After(pingDeadline) {
-			t.Fatalf("db.Ping: %v (after %d attempts over 15s)", pingErr, attempt)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-
-	cleanup := func() {
-		_ = db.Close()
-		_ = pgC.Terminate(ctx)
-	}
-	return db, cleanup
-}
 
 // readMigrationBodies reads each migration's SQL body via the
 // same `embed.FS` package the runner uses. Internal-package access
