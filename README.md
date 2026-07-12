@@ -269,7 +269,7 @@ frontend su `https://instaedit.vercel.app`, backend su
   expected 32")
 - `JWT_SECRET` con **almeno** 32 byte (RFC 7518 §3.2; validato allo startup)
 - Tutti i `*_CLIENT_SECRET` (META_APP_SECRET + TIKTOK_CLIENT_SECRET +
-  TWITTER_CLIENT_SECRET + YOUTUBE_CLIENT_SECRET + LINKEDIN_CLIENT_SECRET)
+  X_CLIENT_SECRET + YOUTUBE_CLIENT_SECRET + LINKEDIN_CLIENT_SECRET)
   con almeno **32 caratteri** quando l'env var è settata (validato allo
   startup; un valore vuoto = piattaforma disabilitata, Taglio 2.4)
 - Auth JWT (Taglio 1.1): blocca ogni richiesta a `/api/v1/posts/publish`

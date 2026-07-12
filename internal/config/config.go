@@ -95,14 +95,7 @@ type Config struct {
 	// MaxUploadBytes caps the size of any single file upload.
 	MaxUploadBytes int64
 
-	// CapabilitiesMatrixPath is the path to the JSON file holding the
-	// theoretical per-platform capability matrix (Taglio 5.0 LEVEL 1).
-	// The file is the SINGLE source of truth for theoretical caps;
-	// every provider's ValidateContent reads from it via the router's
-	// PrePublishCheck. Empty path triggers a startup warn and falls
-	// back to capabilities.WithDefaults (fail-closed for unknown
-	// platforms).
-	CapabilitiesMatrixPath string
+
 }
 
 // Load reads configuration from environment variables.
@@ -149,7 +142,6 @@ func Load() (*Config, error) {
 		S3SecretKey:                  getEnv("S3_SECRET_KEY", ""),
 		S3Region:                     getEnv("S3_REGION", ""),
 		MaxUploadBytes:               getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
-		CapabilitiesMatrixPath:       getEnv("CAPABILITIES_MATRIX_PATH", "config/capabilities.json"),
 	}
 
 	if err := cfg.validate(); err != nil {
