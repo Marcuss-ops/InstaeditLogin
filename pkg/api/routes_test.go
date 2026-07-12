@@ -13,6 +13,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -20,51 +21,72 @@ import (
 // Mocks
 // ---------------------------------------------------------------------------
 
-// mockPlatformService lets each test override only the methods it cares about.
-type mockPlatformService struct {
-	platform            string
-	loginURL            string
-	handleCallback      func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error)
-	publishFn           func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
-	saveTokenFn         func(platformAccountID int64, tokenData *models.TokenData) error
-	ensureFreshFn       func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error)
-	refreshFn           func(ctx context.Context, refreshToken string) (*models.TokenData, error)
+// mockProvider implements the two capabilities the API router consumes:
+// OAuthProvider (Name, GetLoginURL, HandleCallback, RefreshOAuthToken) and
+// Publisher (Name, Publish). The real per-platform structs (Facebook, X,
+// TikTok, …) implement both, so the single mock struct mirrors that.
+//
+// Taglio 2.1: TokenManager methods (SaveEncryptedToken, GetDecryptedToken,
+// EnsureFreshToken) moved off the provider and onto the shared
+// services.TokenStorage. Those moves are reflected in mockTokenService below.
+type mockProvider struct {
+	platform       string
+	loginURL       string
+	handleCallback func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error)
+	publishFn      func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
+	refreshFn      func(ctx context.Context, refreshToken string) (*models.TokenData, error)
+
 	handleCallbackCalls int
+	publishCalls        int
 }
 
-func (m *mockPlatformService) Name() string                    { return m.platform }
-func (m *mockPlatformService) GetLoginURL(state string) string { return m.loginURL + "?state=" + state }
-func (m *mockPlatformService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
+func (m *mockProvider) Name() string { return m.platform }
+func (m *mockProvider) GetLoginURL(state string) string {
+	return m.loginURL + "?state=" + state
+}
+func (m *mockProvider) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	m.handleCallbackCalls++
 	if m.handleCallback == nil {
 		return nil, nil, fmt.Errorf("HandleCallback not implemented")
 	}
 	return m.handleCallback(ctx, state, code)
 }
-func (m *mockPlatformService) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+func (m *mockProvider) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
 	if m.refreshFn != nil {
 		return m.refreshFn(ctx, refreshToken)
 	}
 	return nil, fmt.Errorf("refresh not implemented")
 }
-func (m *mockPlatformService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+	m.publishCalls++
 	if m.publishFn == nil {
 		return nil, fmt.Errorf("Publish not implemented")
 	}
 	return m.publishFn(ctx, accessToken, platformUserID, payload)
 }
-func (m *mockPlatformService) SaveEncryptedToken(platformAccountID int64, tokenData *models.TokenData) error {
+
+// mockTokenService implements services.TokenStorage. The Router uses it
+// for SaveEncryptedToken (handleCallback) and EnsureFreshToken
+// (handlePublishPost / handlePublishAll). The default (nil fields)
+// returns success on SaveEncryptedToken and an error on EnsureFreshToken,
+// which is what most tests want.
+type mockTokenService struct {
+	saveTokenFn   func(platformAccountID int64, tokenData *models.TokenData) error
+	ensureFreshFn func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error)
+}
+
+func (m *mockTokenService) SaveEncryptedToken(platformAccountID int64, tokenData *models.TokenData) error {
 	if m.saveTokenFn != nil {
 		return m.saveTokenFn(platformAccountID, tokenData)
 	}
 	return nil
 }
-func (m *mockPlatformService) GetDecryptedToken(platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
-	return nil, fmt.Errorf("not implemented")
+func (m *mockTokenService) GetDecryptedToken(platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
+	return nil, fmt.Errorf("GetDecryptedToken not used in API tests")
 }
-func (m *mockPlatformService) EnsureFreshToken(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error) {
+func (m *mockTokenService) EnsureFreshToken(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
 	if m.ensureFreshFn == nil {
-		return nil, fmt.Errorf("EnsureFreshToken not implemented")
+		return nil, fmt.Errorf("EnsureFreshToken not implemented (override via mockTokenService.ensureFreshFn)")
 	}
 	return m.ensureFreshFn(ctx, accountID, tokenType, refresh)
 }
@@ -142,12 +164,25 @@ func (m *mockWorkspaceStore) Delete(id int64) error {
 }
 
 // mockPostStore implements PostStore with configurable function fields.
+// Taglio 2.1: the PostStore interface grew several methods (FindWithTargets,
+// List, Delete, Retry/Cancel/Publish actions, media-asset helpers) that
+// the test files in this package don't exercise. The defaults are no-ops
+// (return nil/empty) so tests only need to wire the field they care about.
 type mockPostStore struct {
 	createFn          func(*models.Post, []*models.PostTarget) error
 	findByIDFn        func(id int64) (*models.Post, error)
+	findWithTargetsFn func(id int64) (*models.Post, []models.PostTarget, []models.MediaAsset, error)
 	updateFn          func(*models.Post) error
 	listByWorkspaceFn func(workspaceID int64) ([]models.Post, error)
+	listFn            func(filter repository.PostFilter) (*repository.PagedPosts, error)
+	deleteFn          func(id int64) error
 	saveFn            func(*models.PostTarget) error
+	retryPostFn       func(id int64) error
+	cancelPostFn      func(id int64) error
+	publishPostFn     func(id int64) error
+	retryTargetFn     func(id int64) error
+	addMediaAssetFn   func(*models.MediaAsset) error
+	listMediaAssetsFn func(postID int64) ([]models.MediaAsset, error)
 }
 
 func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget) error {
@@ -174,6 +209,13 @@ func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
 		CreatedAt:   time.Now(),
 	}, nil
 }
+func (m *mockPostStore) FindWithTargets(id int64) (*models.Post, []models.PostTarget, []models.MediaAsset, error) {
+	if m.findWithTargetsFn != nil {
+		return m.findWithTargetsFn(id)
+	}
+	p, _ := m.FindByID(id)
+	return p, nil, nil, nil
+}
 func (m *mockPostStore) Update(post *models.Post) error {
 	if m.updateFn == nil {
 		return nil
@@ -186,11 +228,59 @@ func (m *mockPostStore) ListByWorkspace(workspaceID int64) ([]models.Post, error
 	}
 	return m.listByWorkspaceFn(workspaceID)
 }
+func (m *mockPostStore) List(filter repository.PostFilter) (*repository.PagedPosts, error) {
+	if m.listFn == nil {
+		return &repository.PagedPosts{}, nil
+	}
+	return m.listFn(filter)
+}
+func (m *mockPostStore) Delete(id int64) error {
+	if m.deleteFn == nil {
+		return nil
+	}
+	return m.deleteFn(id)
+}
 func (m *mockPostStore) Save(target *models.PostTarget) error {
 	if m.saveFn == nil {
 		return nil
 	}
 	return m.saveFn(target)
+}
+func (m *mockPostStore) RetryPost(id int64) error {
+	if m.retryPostFn == nil {
+		return nil
+	}
+	return m.retryPostFn(id)
+}
+func (m *mockPostStore) CancelPost(id int64) error {
+	if m.cancelPostFn == nil {
+		return nil
+	}
+	return m.cancelPostFn(id)
+}
+func (m *mockPostStore) PublishPost(id int64) error {
+	if m.publishPostFn == nil {
+		return nil
+	}
+	return m.publishPostFn(id)
+}
+func (m *mockPostStore) RetryTarget(id int64) error {
+	if m.retryTargetFn == nil {
+		return nil
+	}
+	return m.retryTargetFn(id)
+}
+func (m *mockPostStore) AddMediaAsset(asset *models.MediaAsset) error {
+	if m.addMediaAssetFn == nil {
+		return nil
+	}
+	return m.addMediaAssetFn(asset)
+}
+func (m *mockPostStore) ListMediaAssets(postID int64) ([]models.MediaAsset, error) {
+	if m.listMediaAssetsFn == nil {
+		return nil, nil
+	}
+	return m.listMediaAssetsFn(postID)
 }
 
 // mockStorageProvider implements StorageProvider with configurable function fields.
@@ -227,34 +317,44 @@ func withBearerJWT(t *testing.T, req *http.Request, userID int64) {
 	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, userID))
 }
 
-// newTestRouter builds a Router wired with a mock platform and store.
-// Taglio 1.2: handleCallback now requires a OneTimeCodeStore to issue the
-// one-time exchange code; tests that exercise handleCallback would otherwise
-// nil-panic. We default-wire a fresh store here so every existing caller
-// keeps working without per-test boilerplate. Tests that need a closed or
-// pre-populated store can still override via WithOneTimeCodeStore in opts.
+// newTestRouter builds a Router wired with a mock provider and store.
+//
+// Taglio 2.1: the Router takes a CapabilityRouter (per-capability lookups)
+// plus a TokenStorage (via WithTokenService). The default token service is
+// a no-op mock that succeeds on save and errors on ensure-fresh — that is
+// what most tests (login, callback happy path, workspace, post CRUD) want.
+// Tests that exercise the publish path or want to force a token-save error
+// override via WithTokenService(&mockTokenService{...}) in opts.
+//
+// We register the mock under several platform names because the publish
+// worker / publish-all paths iterate over a user's accounts which can be
+// any platform; the mock answers the same way for all of them.
 func newTestRouter(
-	platformSvc *mockPlatformService,
+	platformSvc *mockProvider,
 	store *mockUserStore,
 	frontendURL string,
 	opts ...RouterOption,
 ) *Router {
-	registry := services.NewPlatformRegistry()
-	registry.RegisterPlatformService(platformSvc.Name(), platformSvc)
-	registry.RegisterPlatformService("instagram", platformSvc)
-	registry.RegisterPlatformService("tiktok", platformSvc)
-	registry.RegisterPlatformService("twitter", platformSvc)
+	capRouter := services.NewCapabilityRouter()
+	capRouter.Register(platformSvc.Name(), platformSvc)
+	capRouter.Register("instagram", platformSvc)
+	capRouter.Register("tiktok", platformSvc)
+	capRouter.Register("twitter", platformSvc)
 	otc := NewOneTimeCodeStore(60 * time.Second)
 	// Note: the sweeper goroutine leaks until the test binary exits —
 	// acceptable for unit tests; the 1s ticker has no observable effect
 	// on test behaviour and the OS reclaims everything on process exit.
+	defaultTokenSvc := &mockTokenService{}
 	return NewRouter(
-		registry,
+		capRouter,
 		store,
 		auth.NewManager(testJWTSecret, 24),
 		frontendURL,
 		nil,
-		append([]RouterOption{WithOneTimeCodeStore(otc)}, opts...)...,
+		append([]RouterOption{
+			WithOneTimeCodeStore(otc),
+			WithTokenService(defaultTokenSvc),
+		}, opts...)...,
 	)
 }
 
@@ -303,7 +403,7 @@ func setOAuthStateCookieForTest(req *http.Request, provider, state string) {
 // ---------------------------------------------------------------------------
 
 func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
+	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -361,7 +461,7 @@ func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
 }
 
 func TestHandleLogin_UnsupportedProvider(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram", loginURL: "https://auth.example.com"}
+	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -376,7 +476,7 @@ func TestHandleLogin_UnsupportedProvider(t *testing.T) {
 }
 
 func TestHandleLogin_IgnoresClientState(t *testing.T) {
-	svc := &mockPlatformService{platform: "twitter", loginURL: "https://auth.twitter.com/auth"}
+	svc := &mockProvider{platform: "twitter", loginURL: "https://auth.twitter.com/auth"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -404,7 +504,7 @@ func TestHandleLogin_IgnoresClientState(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleCallback_MissingCode(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -419,7 +519,7 @@ func TestHandleCallback_MissingCode(t *testing.T) {
 }
 
 func TestHandleCallback_UnsupportedProvider(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -434,7 +534,7 @@ func TestHandleCallback_UnsupportedProvider(t *testing.T) {
 }
 
 func TestHandleCallback_HandleCallbackError(t *testing.T) {
-	svc := &mockPlatformService{
+	svc := &mockProvider{
 		platform: "twitter",
 		handleCallback: func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 			return nil, nil, fmt.Errorf("platform auth error")
@@ -455,8 +555,8 @@ func TestHandleCallback_HandleCallbackError(t *testing.T) {
 }
 
 func TestHandleCallback_FindOrCreateError(t *testing.T) {
-	svc := &mockPlatformService{
-		platform:       "meta",
+	svc := &mockProvider{
+		platform:       "instagram",
 		handleCallback: successCallback,
 	}
 	store := &mockUserStore{
@@ -477,18 +577,24 @@ func TestHandleCallback_FindOrCreateError(t *testing.T) {
 	}
 }
 
+// TestHandleCallback_SaveTokenError asserts that an error from the
+// TokenStorage.SaveEncryptedToken call (used to be on the per-provider
+// TokenManager before Taglio 2.1) surfaces as a 500. The test wires a
+// mockTokenService with a saveTokenFn that errors.
 func TestHandleCallback_SaveTokenError(t *testing.T) {
-	svc := &mockPlatformService{
-		platform:       "meta",
+	svc := &mockProvider{
+		platform:       "instagram",
 		handleCallback: successCallback,
-		saveTokenFn: func(platformAccountID int64, tokenData *models.TokenData) error {
-			return fmt.Errorf("token save error")
-		},
 	}
 	store := &mockUserStore{
 		findOrCreateFn: successFindOrCreate,
 	}
-	r := newTestRouter(svc, store, "")
+	tokenSvc := &mockTokenService{
+		saveTokenFn: func(platformAccountID int64, tokenData *models.TokenData) error {
+			return fmt.Errorf("token save error")
+		},
+	}
+	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "instagram", "test-state")
@@ -502,8 +608,8 @@ func TestHandleCallback_SaveTokenError(t *testing.T) {
 }
 
 func TestHandleCallback_Success_JSONResponse(t *testing.T) {
-	svc := &mockPlatformService{
-		platform:       "meta",
+	svc := &mockProvider{
+		platform:       "instagram",
 		handleCallback: successCallback,
 	}
 	store := &mockUserStore{
@@ -532,7 +638,7 @@ func TestHandleCallback_Success_JSONResponse(t *testing.T) {
 		t.Fatalf("status: want code_issued, got %v", body["status"])
 	}
 	if body["provider"] != "instagram" {
-		t.Fatalf("provider: want meta, got %v", body["provider"])
+		t.Fatalf("provider: want instagram, got %v", body["provider"])
 	}
 	if body["code"] == nil || body["code"] == "" {
 		t.Fatal("expected one-time code in response (Taglio 1.2: JWT never in body)")
@@ -543,8 +649,8 @@ func TestHandleCallback_Success_JSONResponse(t *testing.T) {
 }
 
 func TestHandleCallback_Success_FrontendRedirect(t *testing.T) {
-	svc := &mockPlatformService{
-		platform:       "meta",
+	svc := &mockProvider{
+		platform:       "instagram",
 		handleCallback: successCallback,
 	}
 	store := &mockUserStore{
@@ -582,11 +688,11 @@ func TestHandleCallback_Success_FrontendRedirect(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandlePublishPost_MissingJWT_401(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
-	body := `{"platform":"meta","content_type":"text","caption":"hello"}`
+	body := `{"platform":"instagram","content_type":"text","caption":"hello"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -598,7 +704,7 @@ func TestHandlePublishPost_MissingJWT_401(t *testing.T) {
 }
 
 func TestHandlePublishPost_InvalidJSON(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -614,7 +720,7 @@ func TestHandlePublishPost_InvalidJSON(t *testing.T) {
 }
 
 func TestHandlePublishPost_UnsupportedPlatform(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -631,7 +737,7 @@ func TestHandlePublishPost_UnsupportedPlatform(t *testing.T) {
 }
 
 func TestHandlePublishPost_NoAccountLinked(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
 			return nil, nil
@@ -639,7 +745,7 @@ func TestHandlePublishPost_NoAccountLinked(t *testing.T) {
 	}
 	r := newTestRouter(svc, store, "")
 
-	body := `{"platform":"meta","content_type":"text","caption":"hi"}`
+	body := `{"platform":"instagram","content_type":"text","caption":"hi"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -652,12 +758,7 @@ func TestHandlePublishPost_NoAccountLinked(t *testing.T) {
 }
 
 func TestHandlePublishPost_TokenRefreshFailed(t *testing.T) {
-	svc := &mockPlatformService{
-		platform: "twitter",
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error) {
-			return nil, fmt.Errorf("refresh failed: token expired")
-		},
-	}
+	svc := &mockProvider{platform: "twitter"}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
 			return []*models.PlatformAccount{
@@ -665,7 +766,12 @@ func TestHandlePublishPost_TokenRefreshFailed(t *testing.T) {
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "")
+	tokenSvc := &mockTokenService{
+		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+			return nil, fmt.Errorf("refresh failed: token expired")
+		},
+	}
+	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
 
 	body := `{"platform":"twitter","content_type":"text","caption":"hi"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
@@ -680,22 +786,22 @@ func TestHandlePublishPost_TokenRefreshFailed(t *testing.T) {
 }
 
 func TestHandlePublishPost_BadContentType(t *testing.T) {
-	svc := &mockPlatformService{
-		platform: "instagram",
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
-		},
-	}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
 			return []*models.PlatformAccount{
-				{ID: 10, UserID: 1, Platform: "meta", PlatformUserID: "fb-123", Username: "fbuser"},
+				{ID: 10, UserID: 1, Platform: "instagram", PlatformUserID: "fb-123", Username: "fbuser"},
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "")
+	tokenSvc := &mockTokenService{
+		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
 
-	body := `{"platform":"meta","content_type":"unknown","caption":"hi"}`
+	body := `{"platform":"instagram","content_type":"unknown","caption":"hi"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -708,28 +814,29 @@ func TestHandlePublishPost_BadContentType(t *testing.T) {
 }
 
 func TestHandlePublishPost_Success(t *testing.T) {
-	svc := &mockPlatformService{
-		platform: "instagram",
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "fresh-token", TokenType: "bearer"}, nil
-		},
-		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
-			if accessToken != "fresh-token" {
-				return nil, fmt.Errorf("unexpected token: %s", accessToken)
-			}
-			return &models.PublishResult{PlatformMediaID: "media-456", PlatformURL: "https://example.com/post/1"}, nil
-		},
-	}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
 			return []*models.PlatformAccount{
-				{ID: 10, UserID: 1, Platform: "meta", PlatformUserID: "fb-123", Username: "fbuser"},
+				{ID: 10, UserID: 1, Platform: "instagram", PlatformUserID: "fb-123", Username: "fbuser"},
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "")
+	tokenSvc := &mockTokenService{
+		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "fresh-token", TokenType: "bearer"}, nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
+	// plumb the publish fn through the mockProvider
+	svc.publishFn = func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+		if accessToken != "fresh-token" {
+			return nil, fmt.Errorf("unexpected token: %s", accessToken)
+		}
+		return &models.PublishResult{PlatformMediaID: "media-456", PlatformURL: "https://example.com/post/1"}, nil
+	}
 
-	body := `{"platform":"meta","content_type":"video","media_url":"https://cdn.example.com/video.mp4","caption":"Check this out"}`
+	body := `{"platform":"instagram","content_type":"video","media_url":"https://cdn.example.com/video.mp4","caption":"Check this out"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -753,25 +860,25 @@ func TestHandlePublishPost_Success(t *testing.T) {
 }
 
 func TestHandlePublishPost_PublishError(t *testing.T) {
-	svc := &mockPlatformService{
-		platform: "instagram",
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
-		},
-		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
-			return nil, fmt.Errorf("publish failed: 500 internal error")
-		},
-	}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
 			return []*models.PlatformAccount{
-				{ID: 10, UserID: 1, Platform: "meta", PlatformUserID: "fb-123", Username: "fbuser"},
+				{ID: 10, UserID: 1, Platform: "instagram", PlatformUserID: "fb-123", Username: "fbuser"},
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "")
+	tokenSvc := &mockTokenService{
+		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
+		},
+	}
+	svc.publishFn = func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+		return nil, fmt.Errorf("publish failed: 500 internal error")
+	}
+	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
 
-	body := `{"platform":"meta","content_type":"text","caption":"test"}`
+	body := `{"platform":"instagram","content_type":"text","caption":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -785,26 +892,26 @@ func TestHandlePublishPost_PublishError(t *testing.T) {
 
 func TestHandlePublishPost_BodyUserIDIgnored_TrustsJWT(t *testing.T) {
 	var capturedUserID int64
-	svc := &mockPlatformService{
-		platform: "instagram",
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
-		},
-		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
-			return &models.PublishResult{PlatformMediaID: "jwt-ok"}, nil
-		},
-	}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
 			capturedUserID = userID
 			return []*models.PlatformAccount{
-				{ID: 10, UserID: userID, Platform: "meta", PlatformUserID: "fb-42", Username: "jwtuser"},
+				{ID: 10, UserID: userID, Platform: "instagram", PlatformUserID: "fb-42", Username: "jwtuser"},
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "")
+	tokenSvc := &mockTokenService{
+		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
+		},
+	}
+	svc.publishFn = func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+		return &models.PublishResult{PlatformMediaID: "jwt-ok"}, nil
+	}
+	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
 
-	body := `{"user_id":999,"platform":"meta","content_type":"text","caption":"jwt test"}`
+	body := `{"user_id":999,"platform":"instagram","content_type":"text","caption":"jwt test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -824,7 +931,7 @@ func TestHandlePublishPost_BodyUserIDIgnored_TrustsJWT(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandlePublishAll_MissingJWT_401(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -840,7 +947,7 @@ func TestHandlePublishAll_MissingJWT_401(t *testing.T) {
 }
 
 func TestHandlePublishAll_NoAccounts(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
 			return nil, nil
@@ -861,7 +968,7 @@ func TestHandlePublishAll_NoAccounts(t *testing.T) {
 }
 
 func TestHandlePublishAll_InvalidContentType(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -878,24 +985,24 @@ func TestHandlePublishAll_InvalidContentType(t *testing.T) {
 }
 
 func TestHandlePublishAll_Success_AllPlatforms(t *testing.T) {
-	svc := &mockPlatformService{
-		platform: "instagram",
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
-		},
-		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
-			return &models.PublishResult{PlatformMediaID: "id-" + platformUserID}, nil
-		},
-	}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
 			return []*models.PlatformAccount{
-				{ID: 10, UserID: 1, Platform: "meta", PlatformUserID: "fb-123", Username: "fbuser"},
+				{ID: 10, UserID: 1, Platform: "instagram", PlatformUserID: "fb-123", Username: "fbuser"},
 				{ID: 11, UserID: 1, Platform: "twitter", PlatformUserID: "tw-456", Username: "twuser"},
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "")
+	tokenSvc := &mockTokenService{
+		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
+		},
+	}
+	svc.publishFn = func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+		return &models.PublishResult{PlatformMediaID: "id-" + platformUserID}, nil
+	}
+	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
 
 	body := `{"content_type":"text","caption":"hello world"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
@@ -932,27 +1039,27 @@ func TestHandlePublishAll_Success_AllPlatforms(t *testing.T) {
 }
 
 func TestHandlePublishAll_PartialFailures(t *testing.T) {
-	svc := &mockPlatformService{
-		platform: "instagram",
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
-		},
-		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
-			if platformUserID == "tw-456" {
-				return nil, fmt.Errorf("twitter api error")
-			}
-			return &models.PublishResult{PlatformMediaID: "ok"}, nil
-		},
-	}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
 			return []*models.PlatformAccount{
-				{ID: 10, UserID: 1, Platform: "meta", PlatformUserID: "fb-123", Username: "fbuser"},
+				{ID: 10, UserID: 1, Platform: "instagram", PlatformUserID: "fb-123", Username: "fbuser"},
 				{ID: 11, UserID: 1, Platform: "twitter", PlatformUserID: "tw-456", Username: "twuser"},
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "")
+	tokenSvc := &mockTokenService{
+		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
+		},
+	}
+	svc.publishFn = func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+		if platformUserID == "tw-456" {
+			return nil, fmt.Errorf("twitter api error")
+		}
+		return &models.PublishResult{PlatformMediaID: "ok"}, nil
+	}
+	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
 
 	body := `{"content_type":"text","caption":"hello"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
@@ -983,7 +1090,7 @@ func TestHandlePublishAll_PartialFailures(t *testing.T) {
 	var metaOK, twitterFail bool
 	for _, r := range resp.Results {
 		switch r.Platform {
-		case "meta":
+		case "instagram":
 			if r.Status == "published" {
 				metaOK = true
 			}
@@ -994,7 +1101,7 @@ func TestHandlePublishAll_PartialFailures(t *testing.T) {
 		}
 	}
 	if !metaOK {
-		t.Error("meta should have published successfully")
+		t.Error("instagram should have published successfully")
 	}
 	if !twitterFail {
 		t.Error("twitter should have failed")
@@ -1006,7 +1113,7 @@ func TestHandlePublishAll_PartialFailures(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleCreateWorkspace_Happy(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{
 		createFn: func(w *models.Workspace) error {
@@ -1041,7 +1148,7 @@ func TestHandleCreateWorkspace_Happy(t *testing.T) {
 }
 
 func TestHandleCreateWorkspace_MissingName_422(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	r := newTestRouter(svc, store, "", WithWorkspaceStore(wsStore))
@@ -1059,7 +1166,7 @@ func TestHandleCreateWorkspace_MissingName_422(t *testing.T) {
 }
 
 func TestHandleCreateWorkspace_MalformedJSON_400(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	r := newTestRouter(svc, store, "", WithWorkspaceStore(wsStore))
@@ -1076,7 +1183,7 @@ func TestHandleCreateWorkspace_MalformedJSON_400(t *testing.T) {
 }
 
 func TestHandleCreateWorkspace_MissingJWT_401(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "") // no WithWorkspaceStore
 
@@ -1092,7 +1199,7 @@ func TestHandleCreateWorkspace_MissingJWT_401(t *testing.T) {
 }
 
 func TestHandleGetWorkspace_CrossOwner_404(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{
 		findByIDFn: func(id int64) (*models.Workspace, error) {
@@ -1116,7 +1223,7 @@ func TestHandleGetWorkspace_CrossOwner_404(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleCreatePost_Happy(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{
 		findByIDFn: func(id int64) (*models.Workspace, error) {
@@ -1178,7 +1285,7 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 }
 
 func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{
 		findByIDFn: func(id int64) (*models.Workspace, error) {
@@ -1225,7 +1332,7 @@ func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 }
 
 func TestHandleCreatePost_MissingWorkspaceID_422(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	postStore := &mockPostStore{}
@@ -1247,7 +1354,7 @@ func TestHandleCreatePost_MissingWorkspaceID_422(t *testing.T) {
 }
 
 func TestHandleCreatePost_NoTargets_422(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	postStore := &mockPostStore{}
@@ -1269,7 +1376,7 @@ func TestHandleCreatePost_NoTargets_422(t *testing.T) {
 }
 
 func TestHandleCreatePost_BadTargetID_422(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	postStore := &mockPostStore{}
@@ -1291,7 +1398,7 @@ func TestHandleCreatePost_BadTargetID_422(t *testing.T) {
 }
 
 func TestHandleCreatePost_CrossOwnerWorkspace_403(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{
 		findByIDFn: func(id int64) (*models.Workspace, error) {
@@ -1317,7 +1424,7 @@ func TestHandleCreatePost_CrossOwnerWorkspace_403(t *testing.T) {
 }
 
 func TestHandleGetPost_CrossOwner_404(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{
 		findByIDFn: func(id int64) (*models.Workspace, error) {
@@ -1355,7 +1462,7 @@ func TestHandleGetPost_CrossOwner_404(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleCreateUploadURL_NotConfigured_501(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -1372,7 +1479,7 @@ func TestHandleCreateUploadURL_NotConfigured_501(t *testing.T) {
 }
 
 func TestHandleCreateUploadURL_MissingJWT_401(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	storage := &mockStorageProvider{}
 	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
@@ -1389,7 +1496,7 @@ func TestHandleCreateUploadURL_MissingJWT_401(t *testing.T) {
 }
 
 func TestHandleCreateUploadURL_InvalidContentType_422(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	storage := &mockStorageProvider{}
 	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
@@ -1407,7 +1514,7 @@ func TestHandleCreateUploadURL_InvalidContentType_422(t *testing.T) {
 }
 
 func TestHandleCreateUploadURL_TooLarge_422(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	storage := &mockStorageProvider{}
 	r := newTestRouter(svc, store, "",
@@ -1428,7 +1535,7 @@ func TestHandleCreateUploadURL_TooLarge_422(t *testing.T) {
 }
 
 func TestHandleCreateUploadURL_MissingFilename_422(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	storage := &mockStorageProvider{}
 	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
@@ -1446,7 +1553,7 @@ func TestHandleCreateUploadURL_MissingFilename_422(t *testing.T) {
 }
 
 func TestHandleCreateUploadURL_Happy_200(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram"}
+	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	storage := &mockStorageProvider{
 		grant: &services.UploadGrant{
@@ -1505,7 +1612,7 @@ func TestHandleCreateUploadURL_Happy_200(t *testing.T) {
 
 func newCORSTestRouter(allowedOrigins []string) *Router {
 	return NewRouter(
-		services.NewPlatformRegistry(),
+		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),
 		"",
@@ -1539,7 +1646,7 @@ func TestCorsMiddleware_AllowMethodsIncludesPutPatchDelete(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleLogin_StateIsRandomAcrossRequests(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
+	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
@@ -1569,7 +1676,7 @@ func TestHandleLogin_StateIsRandomAcrossRequests(t *testing.T) {
 }
 
 func TestHandleCallback_RejectsMissingStateCookie_400(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram", handleCallback: successCallback}
+	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
 	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
 	r := newTestRouter(svc, store, "")
 
@@ -1595,7 +1702,7 @@ func TestHandleCallback_RejectsMissingStateCookie_400(t *testing.T) {
 }
 
 func TestHandleCallback_RejectsMismatchedState_400(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram", handleCallback: successCallback}
+	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
 	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
 	r := newTestRouter(svc, store, "")
 
@@ -1622,7 +1729,7 @@ func TestHandleCallback_RejectsMismatchedState_400(t *testing.T) {
 }
 
 func TestHandleCallback_RejectsMissingStateParam_400(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram", handleCallback: successCallback}
+	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
 	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
 	r := newTestRouter(svc, store, "")
 
@@ -1644,7 +1751,7 @@ func TestHandleCallback_RejectsMissingStateParam_400(t *testing.T) {
 }
 
 func TestHandleCallback_DeletesStateCookieAfterUse(t *testing.T) {
-	svc := &mockPlatformService{platform: "instagram", handleCallback: successCallback}
+	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
 	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
 	r := newTestRouter(svc, store, "")
 

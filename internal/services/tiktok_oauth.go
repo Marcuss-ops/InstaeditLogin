@@ -12,37 +12,40 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-// TikTokOAuthService implements OAuthProvider and ContentPublisher for TikTok.
+// TikTokOAuthService implements the TikTok provider. Taglio 2.1: each
+// provider only carries the methods it actually supports — no more
+// composition onto a single monolithic PlatformService.
+//
+// Capabilities exposed:
+//   - OAuthProvider (login flow)
+//   - ContentValidator (video_url required; caption ≤ 4000 runes)
+//   - Publisher (async video init + poll)
+//   - PublishReconciler (poll the publish status post-init)
+//   - AccountManager (Validate / Revoke — non-interface helpers)
 type TikTokOAuthService struct {
-	cfg *config.Config
-	*TokenHelper
+	cfg        *config.Config
 	httpClient *http.Client
 }
 
-// NewTikTokOAuthService creates a new TikTokOAuthService.
-func NewTikTokOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepository) (*TikTokOAuthService, error) {
-	encryptor, err := crypto.NewEncryptor(cfg.EncryptionKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create encryptor: %w", err)
+// NewTikTokOAuthService creates a new TikTokOAuthService. Taglio 2.1:
+// the constructor no longer takes a tokenRepo.
+func NewTikTokOAuthService(cfg *config.Config) (*TikTokOAuthService, error) {
+	if cfg.TikTokClientKey == "" {
+		return nil, nil // provider disabled
 	}
-
 	return &TikTokOAuthService{
-		cfg:         cfg,
-		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
-		httpClient:  NewHTTPClient(),
+		cfg:        cfg,
+		httpClient: NewHTTPClient(),
 	}, nil
 }
 
+// Name returns the platform identifier.
 func (s *TikTokOAuthService) Name() string { return models.PlatformTikTok }
 
 // maskClientKey restituisce una versione mascherata della client key per i log.
-// Mostra solo i primi 4 caratteri per chiavi corte, oppure primi/ultimi 4 per
-// chiavi lunghe, in modo da non esporre mai l'intera chiave.
 func maskClientKey(key string) string {
 	if len(key) <= 8 {
 		return "***"
@@ -61,8 +64,7 @@ func maskCode(code string) string {
 	return code[:4] + "..."
 }
 
-// truncateForLog restituisce una versione troncata di una stringa per i log,
-// evitando di riversare corpi di risposta potenzialmente grandi o sensibili.
+// truncateForLog restituisce una versione troncata di una stringa per i log.
 func truncateForLog(s string, maxLen int) string {
 	if maxLen <= 0 {
 		maxLen = 200
@@ -78,9 +80,6 @@ func (s *TikTokOAuthService) GetLoginURL(state string) string {
 	params.Set("client_key", s.cfg.TikTokClientKey)
 	params.Set("redirect_uri", s.cfg.TikTokRedirectURI)
 	params.Set("state", state)
-	// user.info.basic: lettura profilo
-	// video.publish: pubblicazione diretta su TikTok
-	// Aggiungi video.upload se vuoi anche l'upload come draft da editare in app.
 	params.Set("scope", "user.info.basic,video.publish")
 	params.Set("response_type", "code")
 
@@ -117,6 +116,19 @@ func (s *TikTokOAuthService) HandleCallback(ctx context.Context, state, code str
 	return profile, tokenData, nil
 }
 
+// ValidateContent enforces TikTok's hard requirements: a video_url and
+// caption not exceeding 4000 runes. Privacy/comment/duet modes are
+// validated separately by the public-API normalisation functions below.
+func (s *TikTokOAuthService) ValidateContent(payload models.PublishPayload) error {
+	if payload.VideoURL == "" {
+		return fmt.Errorf("tiktok requires a video_url for publishing")
+	}
+	if n := len([]rune(payload.Text)); n > tikTokTitleMaxRunes {
+		return fmt.Errorf("tiktok caption exceeds %d-rune limit (got %d)", tikTokTitleMaxRunes, n)
+	}
+	return nil
+}
+
 // Validate calls the TikTok user info endpoint to verify the access token.
 func (s *TikTokOAuthService) Validate(ctx context.Context, accessToken, platformUserID string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET",
@@ -139,8 +151,7 @@ func (s *TikTokOAuthService) Validate(ctx context.Context, accessToken, platform
 	return nil
 }
 
-// Revoke is not supported by the TikTok API. The caller should proceed with
-// local token deletion.
+// Revoke is not supported by the TikTok API.
 func (s *TikTokOAuthService) Revoke(ctx context.Context, accessToken string) error {
 	return ErrRevokeUnsupported
 }
@@ -193,21 +204,17 @@ func (s *TikTokOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken
 	}, nil
 }
 
+// Publish initiates a TikTok video publish and returns the publish_id.
+// TikTok's flow is async: the initial POST returns immediately and the
+// caller (the publish worker) reconciles via ReconcilePublish.
 func (s *TikTokOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
 	defer RecordPublishMetrics(models.PlatformTikTok, time.Now(), &err)
-	if payload.VideoURL == "" {
-		return nil, fmt.Errorf("tiktok requires a video_url for publishing")
+	if err := s.ValidateContent(payload); err != nil {
+		return nil, err
 	}
 
 	slog.Info("TikTok: initiating video publish")
 
-	// Step 1: Initialize upload.
-	//
-	// TikTok expects a nested `post_info` object that carries caption/title,
-	// privacy_level, and the disable_* toggle flags. Caption (carried in
-	// payload.Text per the shared PublishPayload) is truncated to TikTok's
-	// 4000-character limit. Empty privacy_level falls back to
-	// PUBLIC_TO_EVERYONE so callers don't have to set it explicitly.
 	postInfo := map[string]interface{}{
 		"title":           truncateTikTokTitle(payload.Text),
 		"privacy_level":   normalizeTikTokPrivacyLevel(payload.PrivacyLevel),
@@ -256,17 +263,34 @@ func (s *TikTokOAuthService) Publish(ctx context.Context, accessToken, platformU
 	publishID := initResult.Data.PublishID
 	slog.Info("TikTok: publish initialized", "publish_id", publishID)
 
-	// Poll for status
+	// Return publish_id as the platform_media_id so the publish worker
+	// can reconcile later. The PublishReconciler contract says callers
+	// pass the platform_media_id back to ReconcilePublish.
+	return &models.PublishResult{
+		PlatformMediaID: publishID,
+	}, nil
+}
+
+// ReconcilePublish polls the TikTok status endpoint for a previously
+// initiated publish_id. The publish worker calls this when a target
+// has been moved to status='publishing' but Publish returned a
+// publish_id (no terminal platform_media_id yet).
+//
+// Behaviour:
+//   - PUBLISH_COMPLETE → returns the publish_id as platform_media_id
+//   - FAILED → returns an error
+//   - any other state → returns an error indicating "still in flight"
+//     (the worker re-tries on the next tick)
+func (s *TikTokOAuthService) ReconcilePublish(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
 	for i := 0; i < 30; i++ {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("tiktok publish cancelled: %w", ctx.Err())
+			return nil, fmt.Errorf("tiktok reconcile cancelled: %w", ctx.Err())
 		case <-time.After(2 * time.Second):
 		}
 
 		req, _ := http.NewRequestWithContext(ctx, "GET",
-			"https://open.tiktokapis.com/v2/post/publish/status/fetch/",
-			nil)
+			"https://open.tiktokapis.com/v2/post/publish/status/fetch/", nil)
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 		q := req.URL.Query()
 		q.Set("publish_id", publishID)
@@ -289,15 +313,15 @@ func (s *TikTokOAuthService) Publish(ctx context.Context, accessToken, platformU
 			continue
 		}
 
-		if statusResult.Data.Status == "PUBLISH_COMPLETE" {
+		switch statusResult.Data.Status {
+		case "PUBLISH_COMPLETE":
 			return &models.PublishResult{PlatformMediaID: publishID}, nil
-		}
-		if statusResult.Data.Status == "FAILED" {
+		case "FAILED":
 			return nil, fmt.Errorf("tiktok publish failed: %s", string(body))
 		}
 	}
 
-	return nil, fmt.Errorf("tiktok publish timed out")
+	return nil, fmt.Errorf("tiktok reconcile timed out for publish_id %s", publishID)
 }
 
 // --- Private ---
@@ -313,9 +337,6 @@ type tiktokTokenResponse struct {
 // tikTokTitleMaxRunes is TikTok's documented per-post title/caption limit.
 const tikTokTitleMaxRunes = 4000
 
-// truncateTikTokTitle truncates a caption to TikTok's 4000-rune limit,
-// counting Unicode code points so we don't accidentally slice a multi-byte
-// sequence in the middle.
 func truncateTikTokTitle(s string) string {
 	runes := []rune(s)
 	if len(runes) <= tikTokTitleMaxRunes {
@@ -324,10 +345,6 @@ func truncateTikTokTitle(s string) string {
 	return string(runes[:tikTokTitleMaxRunes])
 }
 
-// normalizeTikTokPrivacyLevel returns a valid TikTok privacy_level enum.
-// Empty input or unknown values fall back to PUBLIC_TO_EVERYONE — the
-// permissive-but-safe default that's already what the open API returns for
-// unconfigured creator accounts.
 func normalizeTikTokPrivacyLevel(level string) string {
 	switch strings.ToUpper(strings.TrimSpace(level)) {
 	case "PUBLIC_TO_EVERYONE":
@@ -344,10 +361,6 @@ func normalizeTikTokPrivacyLevel(level string) string {
 	}
 }
 
-// modeIsDisabled interprets a user-facing "mode" string into the boolean
-// flag TikTok expects. Empty / unknown / affirmative values default to
-// disabled = false so calls without explicit configuration still behave as
-// "comments allowed" and "duets allowed".
 func modeIsDisabled(mode string) bool {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "no_comments", "no_duet", "disabled", "off", "false", "0":

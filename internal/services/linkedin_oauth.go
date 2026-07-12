@@ -12,29 +12,32 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-// LinkedInOAuthService implements OAuthProvider and ContentPublisher for LinkedIn.
+// LinkedInOAuthService implements the LinkedIn provider. Taglio 2.1:
+// each provider only carries the methods it actually supports — no more
+// composition onto a single monolithic PlatformService.
+//
+// Capabilities exposed:
+//   - OAuthProvider (OAuth 2.0 with OpenID Connect userinfo)
+//   - ContentValidator (text required)
+//   - Publisher (POST /rest/posts with article link)
+//   - AccountManager (Validate / Revoke)
 type LinkedInOAuthService struct {
-	cfg *config.Config
-	*TokenHelper
+	cfg        *config.Config
 	httpClient *http.Client
 }
 
-// NewLinkedInOAuthService creates a new LinkedInOAuthService.
-func NewLinkedInOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepository) (*LinkedInOAuthService, error) {
-	encryptor, err := crypto.NewEncryptor(cfg.EncryptionKey)
-	if err != nil {
-		return nil, fmt.Errorf("linkedin: failed to create encryptor: %w", err)
+// NewLinkedInOAuthService creates a new LinkedInOAuthService. Taglio 2.1:
+// the constructor no longer takes a tokenRepo.
+func NewLinkedInOAuthService(cfg *config.Config) (*LinkedInOAuthService, error) {
+	if cfg.LinkedInClientID == "" {
+		return nil, nil // provider disabled
 	}
-
 	return &LinkedInOAuthService{
-		cfg:         cfg,
-		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
-		httpClient:  NewHTTPClient(),
+		cfg:        cfg,
+		httpClient: NewHTTPClient(),
 	}, nil
 }
 
@@ -75,6 +78,14 @@ func (s *LinkedInOAuthService) HandleCallback(ctx context.Context, state, code s
 	return profile, tokenData, nil
 }
 
+// ValidateContent enforces the "text required" rule for a LinkedIn post.
+func (s *LinkedInOAuthService) ValidateContent(payload models.PublishPayload) error {
+	if payload.Text == "" {
+		return fmt.Errorf("linkedin requires text content")
+	}
+	return nil
+}
+
 // Validate calls the LinkedIn OpenID Connect userinfo endpoint to verify
 // the access token.
 func (s *LinkedInOAuthService) Validate(ctx context.Context, accessToken, platformUserID string) error {
@@ -98,8 +109,7 @@ func (s *LinkedInOAuthService) Validate(ctx context.Context, accessToken, platfo
 	return nil
 }
 
-// Revoke is not supported by the LinkedIn OAuth 2.0 implementation. The
-// caller should proceed with local token deletion.
+// Revoke is not supported by the LinkedIn OAuth 2.0 implementation.
 func (s *LinkedInOAuthService) Revoke(ctx context.Context, accessToken string) error {
 	return ErrRevokeUnsupported
 }
@@ -112,14 +122,12 @@ func (s *LinkedInOAuthService) RefreshOAuthToken(ctx context.Context, refreshTok
 
 func (s *LinkedInOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
 	defer RecordPublishMetrics(models.PlatformLinkedIn, time.Now(), &err)
-	if payload.Text == "" {
-		return nil, fmt.Errorf("linkedin requires text content")
+	if err := s.ValidateContent(payload); err != nil {
+		return nil, err
 	}
 
 	slog.Info("LinkedIn: publishing post via /rest/posts")
 
-	// LinkedIn Posts API: POST https://api.linkedin.com/rest/posts
-	// Version 202606, main-feed distribution, public visibility.
 	postBody := map[string]interface{}{
 		"author":     "urn:li:person:" + platformUserID,
 		"commentary": payload.Text,
@@ -130,9 +138,6 @@ func (s *LinkedInOAuthService) Publish(ctx context.Context, accessToken, platfor
 		"lifecycleState": "PUBLISHED",
 	}
 
-	// When a media_url is provided, attach it as an article link (infoproduct page).
-	// The router maps pubReq.MediaURL to payload.ImageURL (for image/photo content_type)
-	// or payload.VideoURL (for video/reel). Use whichever is non-empty.
 	articleSource := payload.ImageURL
 	if articleSource == "" {
 		articleSource = payload.VideoURL
@@ -177,13 +182,10 @@ func (s *LinkedInOAuthService) Publish(ctx context.Context, accessToken, platfor
 		return nil, fmt.Errorf("linkedin post returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// The /rest/posts response includes the post URN in the x-linkedin-id header
-	// and the response body.
 	var parsed struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		// Fall back to the header if body parse fails.
 		parsed.ID = resp.Header.Get("x-linkedin-id")
 	}
 
@@ -235,8 +237,6 @@ func (s *LinkedInOAuthService) exchangeCodeForToken(ctx context.Context, code st
 	return &tr, nil
 }
 
-// getUserInfo fetches the LinkedIn profile via OpenID Connect userinfo endpoint.
-// Returns sub as PlatformUserID, name, email.
 func (s *LinkedInOAuthService) getUserInfo(ctx context.Context, accessToken string) (*models.PlatformProfile, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		"https://api.linkedin.com/v2/userinfo", nil)

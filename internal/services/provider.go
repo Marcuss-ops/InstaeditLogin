@@ -1,3 +1,14 @@
+// Package services defines the small capability interfaces a social-platform
+// provider can implement, plus the CapabilityRouter that holds providers by
+// platform name and dispatches per-capability lookups.
+//
+// Taglio 2.1 replaces the old composite PlatformService (OAuthProvider +
+// Publisher + TokenManager) with five narrow interfaces so each provider
+// implements only what its platform actually supports. The token-encryption
+// logic was lifted out of the per-provider concern entirely and now lives
+// in a shared TokenService (internal/services/token_service.go) — every
+// provider shares the same encrypted token schema, so the logic was
+// infrastructure, not capability.
 package services
 
 import (
@@ -9,16 +20,18 @@ import (
 
 // ---------------------------------------------------------------------------
 // Capability interfaces — each provider registers as many as it supports.
-// The PlatformRegistry routes calls by platform name to the right capability.
+// The CapabilityRouter routes calls by platform name to the right capability.
 // ---------------------------------------------------------------------------
 
 // NameProvider returns the platform identifier. Every provider implements this.
 type NameProvider interface {
-	// Name returns the platform constant (e.g. "meta", "tiktok").
+	// Name returns the platform constant (e.g. "meta", "tiktok", "youtube").
 	Name() string
 }
 
-// OAuthProvider handles the OAuth authentication flow for a platform.
+// OAuthProvider handles the OAuth login flow: build login URL, exchange the
+// authorization code for a token, fetch the user profile, refresh the token
+// when it expires. Every provider that supports user login implements this.
 type OAuthProvider interface {
 	NameProvider
 
@@ -37,7 +50,28 @@ type OAuthProvider interface {
 	RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error)
 }
 
-// Publisher publishes content to a social platform.
+// AccountDiscoverer discovers sub-accounts on the platform (e.g. Meta: the
+// Facebook Pages a user manages, or the Instagram Business Account linked to
+// a Facebook user). NOT implemented by all providers — only Meta-family.
+type AccountDiscoverer interface {
+	// DiscoverAccounts returns the list of platform accounts the user has
+	// access to publish to. Returns an empty slice (no error) if the user
+	// has no sub-accounts on this platform.
+	DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*models.PlatformAccount, error)
+}
+
+// ContentValidator validates that a publish payload is acceptable for the
+// platform (e.g. YouTube requires video_url, LinkedIn requires text).
+// Every provider implements this so handlePublishPost can short-circuit
+// before the per-platform Publish call.
+type ContentValidator interface {
+	// ValidateContent returns nil if the payload can be published, or a
+	// descriptive error if a field is missing or out of range.
+	ValidateContent(payload models.PublishPayload) error
+}
+
+// Publisher publishes content to the platform. Every provider that
+// supports publishing implements this.
 type Publisher interface {
 	NameProvider
 
@@ -45,182 +79,139 @@ type Publisher interface {
 	Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
 }
 
-// TokenManager handles token encryption, storage, retrieval, and refresh.
-type TokenManager interface {
-	// SaveEncryptedToken encrypts and persists a token for a platform account.
-	SaveEncryptedToken(platformAccountID int64, tokenData *models.TokenData) error
-
-	// GetDecryptedToken retrieves and decrypts the latest token for a platform account.
-	GetDecryptedToken(platformAccountID int64, tokenType string) (*models.OAuthToken, error)
-
-	// EnsureFreshToken returns a non-expired access token, automatically
-	// calling refresh when the stored token is expired or about to expire.
-	// The refresher is the provider's RefreshOAuthToken.
-	EnsureFreshToken(ctx context.Context, accountID int64, tokenType string, refresh TokenRefresher) (*models.OAuthToken, error)
+// PublishReconciler reconciles a publish after the fact (e.g. polls for
+// status when the initial response is async). NOT implemented by all
+// providers — only TikTok today, but the interface is here so other
+// async platforms can opt in without changing the worker.
+type PublishReconciler interface {
+	// ReconcilePublish polls the platform for the final state of a previously
+	// initiated publish. publishID is the value returned from the initial
+	// Publish call (or stored on the post_target).
+	ReconcilePublish(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error)
 }
 
-// TokenRefresher is the function signature used to obtain a fresh access token.
-// Providers implement it via RefreshOAuthToken and pass their method inline.
-type TokenRefresher func(ctx context.Context, refreshToken string) (*models.TokenData, error)
-
-// ErrRevokeUnsupported is returned by Revoke when a platform does not offer a
-// token revocation endpoint.
+// ErrRevokeUnsupported is returned by provider-specific Revoke helpers when
+// a platform does not offer a token revocation endpoint. Kept here so
+// provider methods that aren't on a capability interface (Validate /
+// Revoke) can still signal "not supported" without inventing a per-provider
+// error type.
 var ErrRevokeUnsupported = fmt.Errorf("provider does not support token revocation")
 
-// PlatformService combines OAuthProvider + Publisher + TokenManager into
-// a single value. It is the legacy compatibility interface kept so
-// existing consumers (Router, PublishWorker) can still do a single map
-// lookup. New code should prefer PlatformRegistry.
-//
-// DEPRECATED: prefer PlatformRegistry with capability-specific lookups.
-// Kept for backward compatibility with the map[string]PlatformService
-// contract in main.go, handlers.go, and worker.go.
-type PlatformService interface {
-	OAuthProvider
-	Publisher
-	TokenManager
-}
-
 // ---------------------------------------------------------------------------
-// PlatformRegistry — the single source of truth for platform dispatch.
-// Replaces ad-hoc map[string]PlatformService with capability-aware routing.
+// CapabilityRouter — the single source of truth for platform dispatch.
+// Replaces the old map[string]PlatformService with capability-aware routing.
 // ---------------------------------------------------------------------------
 
-// PlatformRegistry holds all registered providers, keyed by platform name.
-// Each provider struct (e.g. FacebookOAuthService) typically satisfies all
-// three capability interfaces (OAuthProvider, Publisher, TokenManager), so
-// it registers the same value under each capability map.
-type PlatformRegistry struct {
-	oauth   map[string]OAuthProvider
-	publish map[string]Publisher
-	tokens  map[string]TokenManager
+// CapabilityRouter holds all registered providers, keyed by platform name.
+// Each provider struct (e.g. FacebookOAuthService) typically satisfies 3-4
+// of the five capability interfaces; the router discovers them by type
+// assertion on Register.
+type CapabilityRouter struct {
+	providers map[string]*capabilities
 }
 
-// NewPlatformRegistry creates an empty registry.
-func NewPlatformRegistry() *PlatformRegistry {
-	return &PlatformRegistry{
-		oauth:   make(map[string]OAuthProvider),
-		publish: make(map[string]Publisher),
-		tokens:  make(map[string]TokenManager),
+// capabilities is the per-platform bucket. Each field is nil if the
+// registered provider does not satisfy that interface — callers must
+// use the (X, ok) pattern to handle the absence.
+type capabilities struct {
+	oauth    OAuthProvider
+	discover AccountDiscoverer
+	validate ContentValidator
+	publish  Publisher
+	recon    PublishReconciler
+}
+
+// NewCapabilityRouter creates an empty router.
+func NewCapabilityRouter() *CapabilityRouter {
+	return &CapabilityRouter{
+		providers: make(map[string]*capabilities),
 	}
 }
 
-// RegisterPlatformService is a convenience that registers the same value
-// for all three capabilities. Use when the provider struct implements the
-// full PlatformService interface (all current providers do).
+// Register stores p under name, type-asserting each capability it satisfies.
+// Providers that don't implement a capability simply have a nil for that
+// slot — callers must check with the (X, ok) pattern. This avoids the
+// PlatformService-of-everything problem where every provider is forced to
+// satisfy OAuth + Publish + Token just to be a member of the registry.
 //
-// Rules:
-//   - name MUST match the provider's Name() return value.
-//   - Registering the same name twice logs a warning and skips (first-write-wins).
-func (r *PlatformRegistry) RegisterPlatformService(name string, ps PlatformService) {
-	r.oauth[name] = ps
-	r.publish[name] = ps
-	r.tokens[name] = ps
+// Re-registering the same name overwrites the previous entry. Callers
+// that want to refuse duplicates can check Names() first.
+func (r *CapabilityRouter) Register(name string, p any) {
+	entry := &capabilities{}
+	if o, ok := p.(OAuthProvider); ok {
+		entry.oauth = o
+	}
+	if d, ok := p.(AccountDiscoverer); ok {
+		entry.discover = d
+	}
+	if v, ok := p.(ContentValidator); ok {
+		entry.validate = v
+	}
+	if pub, ok := p.(Publisher); ok {
+		entry.publish = pub
+	}
+	if rec, ok := p.(PublishReconciler); ok {
+		entry.recon = rec
+	}
+	r.providers[name] = entry
 }
 
-// RegisterOAuth registers an OAuth-capable provider independently.
-func (r *PlatformRegistry) RegisterOAuth(name string, p OAuthProvider) {
-	r.oauth[name] = p
+// OAuth returns the OAuthProvider for name, or false.
+func (r *CapabilityRouter) OAuth(name string) (OAuthProvider, bool) {
+	e, ok := r.providers[name]
+	if !ok || e == nil || e.oauth == nil {
+		return nil, false
+	}
+	return e.oauth, true
 }
 
-// RegisterPublisher registers a publishing-capable provider independently.
-func (r *PlatformRegistry) RegisterPublisher(name string, p Publisher) {
-	r.publish[name] = p
+// Discoverer returns the AccountDiscoverer for name, or false.
+func (r *CapabilityRouter) Discoverer(name string) (AccountDiscoverer, bool) {
+	e, ok := r.providers[name]
+	if !ok || e == nil || e.discover == nil {
+		return nil, false
+	}
+	return e.discover, true
 }
 
-// RegisterTokenManager registers a token-managing provider independently.
-func (r *PlatformRegistry) RegisterTokenManager(name string, tm TokenManager) {
-	r.tokens[name] = tm
+// Validator returns the ContentValidator for name, or false.
+func (r *CapabilityRouter) Validator(name string) (ContentValidator, bool) {
+	e, ok := r.providers[name]
+	if !ok || e == nil || e.validate == nil {
+		return nil, false
+	}
+	return e.validate, true
 }
 
-// OAuth returns the OAuthProvider for the named platform, or false.
-func (r *PlatformRegistry) OAuth(name string) (OAuthProvider, bool) {
-	p, ok := r.oauth[name]
-	return p, ok
+// Publisher returns the Publisher for name, or false.
+func (r *CapabilityRouter) Publisher(name string) (Publisher, bool) {
+	e, ok := r.providers[name]
+	if !ok || e == nil || e.publish == nil {
+		return nil, false
+	}
+	return e.publish, true
 }
 
-// Publisher returns the Publisher for the named platform, or false.
-func (r *PlatformRegistry) Publisher(name string) (Publisher, bool) {
-	p, ok := r.publish[name]
-	return p, ok
+// Reconciler returns the PublishReconciler for name, or false.
+func (r *CapabilityRouter) Reconciler(name string) (PublishReconciler, bool) {
+	e, ok := r.providers[name]
+	if !ok || e == nil || e.recon == nil {
+		return nil, false
+	}
+	return e.recon, true
 }
 
-// TokenManager returns the TokenManager for the named platform, or false.
-func (r *PlatformRegistry) TokenManager(name string) (TokenManager, bool) {
-	tm, ok := r.tokens[name]
-	return tm, ok
+// Names returns the list of registered platform names. The order is
+// non-deterministic (Go map iteration).
+func (r *CapabilityRouter) Names() []string {
+	out := make([]string, 0, len(r.providers))
+	for name := range r.providers {
+		out = append(out, name)
+	}
+	return out
 }
 
-// Resolve returns the full PlatformService for the named platform by
-// asserting that the same concrete value was registered for all three
-// capabilities. This is the backward-compat bridge: consumers that need
-// the monolith (OAuth + Publish + Token) call this. Returns (nil, false)
-// when any capability is missing or when different values were registered
-// for different capabilities.
-func (r *PlatformRegistry) Resolve(name string) (PlatformService, error) {
-	oa, okO := r.oauth[name]
-	pub, okP := r.publish[name]
-	tm, okT := r.tokens[name]
-	if !okO || !okP || !okT {
-		return nil, fmt.Errorf("platform %q: not fully registered (oauth=%v publish=%v token=%v)", name, okO, okP, okT)
-	}
-	// All three must point to the same concrete PlatformService — the
-	// registry guarantees this when RegisterPlatformService was used, but
-	// independent RegisterOAuth/RegisterPublisher/RegisterTokenManager calls
-	// could break the invariant.
-	ps, ok := oa.(PlatformService)
-	if !ok {
-		return nil, fmt.Errorf("platform %q: OAuthProvider is not a PlatformService", name)
-	}
-	if ps != pub {
-		return nil, fmt.Errorf("platform %q: Publisher and OAuthProvider are different values", name)
-	}
-	if ps != tm {
-		return nil, fmt.Errorf("platform %q: TokenManager and OAuthProvider are different values", name)
-	}
-	return ps, nil
-}
-
-// MustResolve is like Resolve but panics on error. Use only in main() where
-// startup failures are fatal.
-func (r *PlatformRegistry) MustResolve(name string) PlatformService {
-	ps, err := r.Resolve(name)
-	if err != nil {
-		panic("PlatformRegistry.MustResolve: " + err.Error())
-	}
-	return ps
-}
-
-// Platforms returns the list of registered platform names.
-func (r *PlatformRegistry) Platforms() []string {
-	seen := make(map[string]struct{}, len(r.oauth))
-	for name := range r.oauth {
-		seen[name] = struct{}{}
-	}
-	for name := range r.publish {
-		seen[name] = struct{}{}
-	}
-	for name := range r.tokens {
-		seen[name] = struct{}{}
-	}
-	names := make([]string, 0, len(seen))
-	for name := range seen {
-		names = append(names, name)
-	}
-	return names
-}
-
-// Len returns the number of registered platforms (at least one capability).
-func (r *PlatformRegistry) Len() int {
-	seen := make(map[string]struct{})
-	for name := range r.oauth {
-		seen[name] = struct{}{}
-	}
-	for name := range r.publish {
-		seen[name] = struct{}{}
-	}
-	for name := range r.tokens {
-		seen[name] = struct{}{}
-	}
-	return len(seen)
+// Len returns the number of registered providers.
+func (r *CapabilityRouter) Len() int {
+	return len(r.providers)
 }

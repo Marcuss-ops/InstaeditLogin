@@ -20,11 +20,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 )
 
-// authModeLabel removed in Taglio 1.1: the JWT middleware is strict by
-// construction (every protected request must carry a valid Bearer token,
-// no synthetic fallback, no body/query user_id). The startup log no
-// longer needs a "mode" banner.
-
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -42,10 +37,6 @@ func main() {
 	slog.Info("Starting InstaEditLogin server v2.0.0...")
 
 	slog.Info("Environment", "app_env", cfg.AppEnv, "auth", "strict (JWT Bearer required on every protected route)")
-
-	// Taglio 1.1: the legacy-mode fail-fast guard is gone. There is no
-	// fallback that trusts request bodies/queries — the JWT middleware is
-	// strict by construction in every environment.
 
 	db, err := database.Connect(cfg)
 	if err != nil {
@@ -76,91 +67,72 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 	tokenRepo := repository.NewTokenRepository(db)
-	registry := services.NewPlatformRegistry()
 
-	// Instagram: registers when INSTAGRAM_REDIRECT_URI is configured.
-	// Uses the shared Meta OAuth credentials (META_APP_ID / META_APP_SECRET).
-	instagramSvc, err := services.NewInstagramOAuthService(cfg, tokenRepo)
-	if err != nil {
-		slog.Error("Failed to create Instagram OAuth service", "error", err)
-		os.Exit(1)
-	}
-	if instagramSvc != nil {
-		registry.RegisterPlatformService(instagramSvc.Name(), instagramSvc)
-		slog.Info("Instagram OAuth provider registered")
-	} else {
-		slog.Info("Instagram OAuth provider skipped (INSTAGRAM_REDIRECT_URI not set)")
-	}
+	// Taglio 2.1: the composite PlatformService is gone. The CapabilityRouter
+	// holds providers by name and dispatches per-capability lookups
+	// (OAuth / Publisher / AccountDiscoverer / ContentValidator /
+	// PublishReconciler). The router uses type assertions on Register so each
+	// provider only carries the methods it actually supports.
+	capRouter := services.NewCapabilityRouter()
+	tokenSvc := services.NewTokenService(enc, tokenRepo)
 
 	// Facebook: registers when FACEBOOK_REDIRECT_URI is configured.
-	facebookSvc, err := services.NewFacebookOAuthService(cfg, tokenRepo)
+	// Uses the shared Meta OAuth credentials (META_APP_ID / META_APP_SECRET).
+	facebookSvc, err := services.NewFacebookOAuthService(cfg)
 	if err != nil {
 		slog.Error("Failed to create Facebook OAuth service", "error", err)
 		os.Exit(1)
 	}
 	if facebookSvc != nil {
-		registry.RegisterPlatformService(facebookSvc.Name(), facebookSvc)
-		slog.Info("Facebook OAuth provider registered")
+		capRouter.Register(facebookSvc.Name(), facebookSvc)
+		slog.Info("Facebook OAuth provider registered", "capabilities", describeCapabilities(facebookSvc))
 	} else {
 		slog.Info("Facebook OAuth provider skipped (FACEBOOK_REDIRECT_URI not set)")
 	}
 
-	// Threads: registers when THREADS_REDIRECT_URI is configured.
-	threadsSvc, err := services.NewThreadsOAuthService(cfg, tokenRepo)
-	if err != nil {
-		slog.Error("Failed to create Threads OAuth service", "error", err)
-		os.Exit(1)
-	}
-	if threadsSvc != nil {
-		registry.RegisterPlatformService(threadsSvc.Name(), threadsSvc)
-		slog.Info("Threads OAuth provider registered")
-	} else {
-		slog.Info("Threads OAuth provider skipped (THREADS_REDIRECT_URI not set)")
-	}
-
 	if cfg.TikTokClientKey != "" {
-		tiktokSvc, err := services.NewTikTokOAuthService(cfg, tokenRepo)
+		tiktokSvc, err := services.NewTikTokOAuthService(cfg)
 		if err != nil {
 			slog.Warn("Failed to create TikTok OAuth service", "error", err)
 		} else {
-			registry.RegisterPlatformService(tiktokSvc.Name(), tiktokSvc)
-			slog.Info("TikTok OAuth provider registered")
+			capRouter.Register(tiktokSvc.Name(), tiktokSvc)
+			slog.Info("TikTok OAuth provider registered", "capabilities", describeCapabilities(tiktokSvc))
 		}
 	} else {
 		slog.Info("TikTok OAuth provider skipped (no credentials)")
 	}
 
 	if cfg.TwitterClientID != "" {
-		twitterSvc, err := services.NewTwitterOAuthService(cfg, tokenRepo)
+		twitterSvc, err := services.NewTwitterOAuthService(cfg)
 		if err != nil {
 			slog.Warn("Failed to create Twitter OAuth service", "error", err)
 		} else {
-			registry.RegisterPlatformService(twitterSvc.Name(), twitterSvc)
-			slog.Info("Twitter OAuth provider registered")
+			capRouter.Register(twitterSvc.Name(), twitterSvc)
+			slog.Info("Twitter OAuth provider registered", "capabilities", describeCapabilities(twitterSvc))
 		}
 	} else {
 		slog.Info("Twitter OAuth provider skipped (no credentials)")
 	}
 
 	if cfg.YouTubeClientID != "" {
-		youtubeSvc, err := services.NewYouTubeOAuthService(cfg, tokenRepo)
+		youtubeSvc, err := services.NewYouTubeOAuthService(cfg)
 		if err != nil {
 			slog.Warn("Failed to create YouTube OAuth service", "error", err)
 		} else {
-			registry.RegisterPlatformService(youtubeSvc.Name(), youtubeSvc)
-			slog.Info("YouTube OAuth provider registered")
+			capRouter.Register(youtubeSvc.Name(), youtubeSvc)
+			slog.Info("YouTube OAuth provider registered", "capabilities", describeCapabilities(youtubeSvc))
 		}
 	} else {
 		slog.Info("YouTube OAuth provider skipped (no credentials)")
 	}
 
 	if cfg.LinkedInClientID != "" {
-		linkedinSvc, err := services.NewLinkedInOAuthService(cfg, tokenRepo)
+		linkedinSvc, err := services.NewLinkedInOAuthService(cfg)
 		if err != nil {
 			slog.Warn("Failed to create LinkedIn OAuth service", "error", err)
 		} else {
-			registry.RegisterPlatformService(linkedinSvc.Name(), linkedinSvc)
-			slog.Info("LinkedIn OAuth provider registered")
+			capRouter.Register(linkedinSvc.Name(), linkedinSvc)
+			slog.Info("LinkedIn OAuth provider registered", "capabilities", describeCapabilities(linkedinSvc))
 		}
 	} else {
 		slog.Info("LinkedIn OAuth provider skipped (no credentials)")
@@ -183,7 +155,9 @@ func main() {
 	// AWS S3 (REGION+KEY_ID+SECRET+BUCKET). When neither is fully set
 	// the storage handlers return 501 Not Implemented so the rest of
 	// the server still boots.
-	opts := []api.RouterOption{}
+	opts := []api.RouterOption{
+		api.WithTokenService(tokenSvc),
+	}
 	if cfg.SupabaseURL != "" && cfg.SupabaseServiceKey != "" && cfg.SupabaseBucket != "" {
 		opts = append(opts,
 			api.WithStorageProvider(services.NewSupabaseProvider(
@@ -199,13 +173,14 @@ func main() {
 	} else {
 		slog.Warn("storage provider: none configured (set SUPABASE_URL+SUPABASE_SERVICE_KEY+SUPABASE_BUCKET OR AWS_REGION+AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY+AWS_S3_BUCKET for /api/v1/storage/upload-url)")
 	}
-	router := api.NewRouter(registry, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
+	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)
 	slog.Info("Router configured",
 		"jwt_ttl_hours", cfg.JWTTTLHours,
 		"auth", "strict (JWT bearer required)",
 		"frontend_url", cfg.FrontendURL,
-		"cors_origins", corsOrigins)
+		"cors_origins", corsOrigins,
+		"platforms", capRouter.Names())
 	handler := router.Setup()
 
 	// Vercel injects PORT; fall back to config or 8080
@@ -234,9 +209,9 @@ func main() {
 
 	// Spawn the publish worker goroutine: picks up scheduled post_targets
 	// whose scheduled_at <= NOW() and dispatches them through the per-platform
-	// PlatformService implementations registered above. Cancelled before
-	// srv.Shutdown drains in-flight HTTP requests so the worker gets first
-	// dibs on DB connections during graceful shutdown.
+	// Publisher / OAuthProvider implementations registered above. Taglio 2.1:
+	// the worker takes the CapabilityRouter + a TokenStorage (so the
+	// EnsureFreshToken path is shared with the HTTP router).
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	workerDone := make(chan struct{})
 	go func() {
@@ -244,7 +219,8 @@ func main() {
 		publishWorker := worker.NewPublishWorker(
 			repository.NewPostRepository(db),
 			repository.NewUserRepository(db),
-			registry,
+			capRouter,
+			tokenSvc,
 			time.Duration(cfg.PublishWorkerIntervalSeconds)*time.Second,
 			slog.Default(),
 		)
@@ -276,4 +252,29 @@ func main() {
 	}
 
 	slog.Info("Server stopped")
+}
+
+// describeCapabilities returns a human-readable list of the small
+// capability interfaces a provider value implements. It exists purely
+// for the startup log so operators can see at a glance which providers
+// support which surfaces (e.g. Facebook has AccountDiscoverer, TikTok
+// has PublishReconciler, LinkedIn does not).
+func describeCapabilities(p any) string {
+	out := []string{}
+	if _, ok := p.(services.OAuthProvider); ok {
+		out = append(out, "OAuth")
+	}
+	if _, ok := p.(services.AccountDiscoverer); ok {
+		out = append(out, "Discover")
+	}
+	if _, ok := p.(services.ContentValidator); ok {
+		out = append(out, "Validate")
+	}
+	if _, ok := p.(services.Publisher); ok {
+		out = append(out, "Publish")
+	}
+	if _, ok := p.(services.PublishReconciler); ok {
+		out = append(out, "Reconcile")
+	}
+	return fmt.Sprintf("%v", out)
 }

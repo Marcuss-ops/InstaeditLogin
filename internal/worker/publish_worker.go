@@ -1,7 +1,7 @@
 // Package worker implements background processes that run alongside the
 // HTTP server: the publish worker drives the scheduled-post fan-out, picking
 // up post_targets whose scheduled_at <= NOW() and dispatching them through
-// the appropriate per-platform implementation via the PlatformRegistry.
+// the appropriate per-platform implementation via the CapabilityRouter.
 package worker
 
 import (
@@ -54,18 +54,21 @@ type PublisherUserStore interface {
 type PublishWorker struct {
 	postRepo PublisherPostStore
 	userRepo PublisherUserStore
-	registry *services.PlatformRegistry
+	router   *services.CapabilityRouter
+	tokenSvc services.TokenStorage
 	interval time.Duration
 	logger   *slog.Logger
 }
 
 // NewPublishWorker wires the dependencies. interval <= 0 falls back to a safe
 // default of 30s to prevent tight loops from misconfiguration. nil logger
-// inherits slog.Default().
+// inherits slog.Default(). router and tokenSvc must be non-nil; a nil will
+// panic on the first tick (fail-fast for misconfigured wiring).
 func NewPublishWorker(
 	postRepo PublisherPostStore,
 	userRepo PublisherUserStore,
-	registry *services.PlatformRegistry,
+	router *services.CapabilityRouter,
+	tokenSvc services.TokenStorage,
 	interval time.Duration,
 	logger *slog.Logger,
 ) *PublishWorker {
@@ -78,7 +81,8 @@ func NewPublishWorker(
 	return &PublishWorker{
 		postRepo: postRepo,
 		userRepo: userRepo,
-		registry: registry,
+		router:   router,
+		tokenSvc: tokenSvc,
 		interval: interval,
 		logger:   logger,
 	}
@@ -206,17 +210,22 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		return w.markFailed(target, fmt.Sprintf("platform_account %d not found", target.PlatformAccountID))
 	}
 
-	// 4. Resolve platform service
-	p, err := w.registry.Resolve(account.Platform)
-	if err != nil {
-		return w.markFailed(target, "no platform service registered for: "+account.Platform)
+	// 4. Resolve platform capabilities. We need the OAuthProvider (for
+	// token refresh) AND the Publisher (for the actual call). A platform
+	// missing either cannot be published to.
+	oauth, oauthOK := w.router.OAuth(account.Platform)
+	publisher, pubOK := w.router.Publisher(account.Platform)
+	if !oauthOK || !pubOK {
+		return w.markFailed(target, fmt.Sprintf("platform %q missing capability (oauth=%v publish=%v)", account.Platform, oauthOK, pubOK))
 	}
 
-	// 5. Refresh token. Try Bearer first (refresh-capable), then LongLived
-	// (Meta-style re-exchange). Mirrors the pattern in routes.go publishContent.
-	oauthToken, err := p.EnsureFreshToken(ctx, account.ID, models.TokenTypeBearer, p.RefreshOAuthToken)
+	// 5. Refresh token via TokenStorage. Try Bearer first (refresh-capable),
+	// then LongLived (Meta-style re-exchange). The OAuthProvider is the
+	// refresher — the token service calls oauth.RefreshOAuthToken when
+	// within the expiry grace window.
+	oauthToken, err := w.tokenSvc.EnsureFreshToken(ctx, account.ID, models.TokenTypeBearer, oauth)
 	if err != nil {
-		oauthToken, err = p.EnsureFreshToken(ctx, account.ID, models.TokenTypeLongLived, p.RefreshOAuthToken)
+		oauthToken, err = w.tokenSvc.EnsureFreshToken(ctx, account.ID, models.TokenTypeLongLived, oauth)
 		if err != nil {
 			return w.markFailed(target, "token refresh failed: "+err.Error())
 		}
@@ -232,7 +241,7 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	if post.MediaURL != "" {
 		payload.VideoURL = post.MediaURL
 	}
-	result, err := p.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
+	result, err := publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
 	if err != nil {
 		return w.markFailed(target, err.Error())
 	}

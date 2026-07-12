@@ -17,8 +17,14 @@ import (
 
 // newPostsTestRouter builds a Router wired with the supplied postStore
 // and (optionally) a custom workspace store.
+//
+// Taglio 2.1: the Router takes a CapabilityRouter (per-capability lookups)
+// instead of the old PlatformRegistry. These tests don't exercise the
+// publish path so a default no-op mockTokenService is enough; the
+// CapabilityRouter is also empty since no test in this file invokes a
+// provider.
 func newPostsTestRouter(
-	postStore *mockPostStore,
+	postStore PostStore,
 	wsStore ...WorkspaceStore,
 ) *Router {
 	var ws WorkspaceStore = &mockWorkspaceStore{}
@@ -26,13 +32,14 @@ func newPostsTestRouter(
 		ws = wsStore[0]
 	}
 	return NewRouter(
-		services.NewPlatformRegistry(),
+		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		nil,
 		WithWorkspaceStore(ws),
 		WithPostStore(postStore),
+		WithTokenService(&mockTokenService{}),
 	)
 }
 
@@ -51,6 +58,7 @@ func TestPostsAPI_Create_Happy_ReturnsPostPlusTargets(t *testing.T) {
 	body := `{"workspace_id":1,"title":"hi","caption":"world","targets":[{"platform_account_id":10},{"platform_account_id":11}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
@@ -82,6 +90,7 @@ func TestPostsAPI_Create_ErrPostUnauthorized_403(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts",
 		bytes.NewReader([]byte(`{"workspace_id":1,"targets":[{"platform_account_id":10}]}`)))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
@@ -94,6 +103,7 @@ func TestPostsAPI_Create_BadStatus_400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts",
 		bytes.NewReader([]byte(`{"workspace_id":1,"status":"bogus"}`)))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -120,6 +130,7 @@ func TestPostsAPI_Get_Found_200(t *testing.T) {
 		},
 	})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/123", nil)
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -132,6 +143,7 @@ func TestPostsAPI_Get_NotFound_404(t *testing.T) {
 		findByIDFn: func(id int64) (*models.Post, error) { return nil, sql.ErrNoRows },
 	})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/999", nil)
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -146,6 +158,7 @@ func TestPostsAPI_ListByWorkspace_Happy(t *testing.T) {
 		},
 	})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/workspace/1", nil)
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -167,6 +180,7 @@ func TestPostsAPI_AddTarget_Happy(t *testing.T) {
 	body := `{"platform_account_id":42}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/100/targets", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
@@ -181,6 +195,7 @@ func TestPostsAPI_AddTarget_PostNotFound_404(t *testing.T) {
 	body := `{"platform_account_id":42}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/999/targets", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -195,6 +210,7 @@ func TestPostsAPI_AddTarget_ErrPostUnauthorized_403(t *testing.T) {
 	body := `{"platform_account_id":42}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/100/targets", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
@@ -209,6 +225,7 @@ func TestPostsAPI_Schedule_Happy(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{"scheduled_at": ts})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/100/schedule", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -232,6 +249,7 @@ func TestPostsAPI_Schedule_PostNotFound_404(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{"scheduled_at": ts})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/999/schedule", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -248,6 +266,7 @@ func TestPostsAPI_Schedule_ErrPostUnauthorized_403(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{"scheduled_at": ts})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/100/schedule", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
@@ -260,6 +279,7 @@ func TestPostsAPI_Create_NoTargets_422(t *testing.T) {
 	body := `{"workspace_id":1}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusUnprocessableEntity {
@@ -275,6 +295,7 @@ func TestPostsAPI_Create_BadTargetID_422(t *testing.T) {
 	body := `{"workspace_id":1,"targets":[{"platform_account_id":0}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusUnprocessableEntity {
@@ -307,6 +328,7 @@ func TestPostsAPI_Get_CrossOwner_404(t *testing.T) {
 		},
 	)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/100", nil)
+	withBearerJWT(t, req, 42)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {

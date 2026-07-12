@@ -20,19 +20,21 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 type Router struct {
 	mux             *chi.Mux
-	registry        *services.PlatformRegistry
+	capabilities    *services.CapabilityRouter
 	userRepo        UserStore
 	workspaceStore  WorkspaceStore
 	postStore       PostStore
 	storageProvider StorageProvider
 	auditLogStore   AuditLogStore
 	auth            *auth.Manager
+	tokenSvc        services.TokenStorage
 	oneTimeCodes    *OneTimeCodeStore
 	frontendURL     string
 	allowedOrigin   []string
@@ -57,9 +59,18 @@ type WorkspaceStore interface {
 type PostStore interface {
 	Create(post *models.Post, targets []*models.PostTarget) error
 	FindByID(id int64) (*models.Post, error)
+	FindWithTargets(id int64) (*models.Post, []models.PostTarget, []models.MediaAsset, error)
 	Update(post *models.Post) error
 	ListByWorkspace(workspaceID int64) ([]models.Post, error)
+	List(filter repository.PostFilter) (*repository.PagedPosts, error)
+	Delete(id int64) error
 	Save(target *models.PostTarget) error
+	RetryPost(id int64) error
+	CancelPost(id int64) error
+	PublishPost(id int64) error
+	RetryTarget(id int64) error
+	AddMediaAsset(asset *models.MediaAsset) error
+	ListMediaAssets(postID int64) ([]models.MediaAsset, error)
 }
 
 type StorageProvider interface {
@@ -92,8 +103,18 @@ func WithOneTimeCodeStore(s *OneTimeCodeStore) RouterOption {
 	return func(r *Router) { r.oneTimeCodes = s }
 }
 
+// WithTokenService injects the token-encryption/refresh service. The
+// Router REQUIRES this to be set (via main.go) before serving
+// handleCallback / handlePublishPost / handlePublishAll — the call
+// sites panic with a nil-pointer dereference if it's missing, which is
+// the desired fail-fast behaviour for a misconfigured main.go. Tests
+// inject a mockTokenService via this same option.
+func WithTokenService(s services.TokenStorage) RouterOption {
+	return func(r *Router) { r.tokenSvc = s }
+}
+
 func NewRouter(
-	registry *services.PlatformRegistry,
+	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
 	authMgr *auth.Manager,
 	frontendURL string,
@@ -101,9 +122,12 @@ func NewRouter(
 	opts ...RouterOption,
 ) *Router {
 	r := &Router{
-		registry:     registry, userRepo: userRepo, auth: authMgr,
-		oneTimeCodes: NewOneTimeCodeStore(60 * time.Second),
-		frontendURL:  frontendURL, allowedOrigin: allowedOrigins,
+		capabilities:  capRouter,
+		userRepo:      userRepo,
+		auth:          authMgr,
+		oneTimeCodes:  NewOneTimeCodeStore(60 * time.Second),
+		frontendURL:   frontendURL,
+		allowedOrigin: allowedOrigins,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -135,12 +159,20 @@ func (r *Router) Setup() http.Handler {
 		sr.Delete("/{id}", r.protected(r.handleDeleteWorkspace))
 	})
 	r.mux.Route("/api/v1/posts", func(sr chi.Router) {
+		sr.Get("/", r.protected(r.handleListPosts))
 		sr.Post("/", r.protected(r.handleCreatePost))
-		sr.Post("/{id}/targets", r.protected(r.handleAddTarget))
-		sr.Post("/{id}/schedule", r.protected(r.handleSchedulePost))
-		sr.Get("/{id}", r.protected(r.handleGetPost))
 		sr.Get("/workspace/{wid}", r.protected(r.handleListByWorkspace))
+		sr.Get("/{id}", r.protected(r.handleGetPost))
+		sr.Patch("/{id}", r.protected(r.handleUpdatePost))
+		sr.Delete("/{id}", r.protected(r.handleDeletePost))
+		sr.Post("/{id}/publish", r.protected(r.handlePublishPostAction))
+		sr.Post("/{id}/schedule", r.protected(r.handleSchedulePost))
+		sr.Post("/{id}/cancel", r.protected(r.handleCancelPost))
+		sr.Post("/{id}/retry", r.protected(r.handleRetryPost))
+		sr.Get("/{id}/targets", r.protected(r.handleGetPostTargets))
+		sr.Post("/{id}/targets", r.protected(r.handleAddTarget))
 	})
+	r.mux.Method(http.MethodPost, "/api/v1/post-targets/{id}/retry", r.protected(r.handleRetryTarget))
 	return r.corsMiddleware(r.loggingMiddleware(r.mux))
 }
 
@@ -148,14 +180,16 @@ func (r *Router) Setup() http.Handler {
 
 func (r *Router) handleHealth(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "ok", "service": "InstaEditLogin", "version": "2.0.0",
-		"platforms": r.registry.Platforms(),
+		"status":    "ok",
+		"service":   "InstaEditLogin",
+		"version":   "2.0.0",
+		"platforms": r.capabilities.Names(),
 	})
 }
 
 func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	provider := req.PathValue("provider")
-	p, ok := r.registry.OAuth(provider)
+	p, ok := r.capabilities.OAuth(provider)
 	if !ok {
 		writeError(w, http.StatusNotFound, "unsupported provider: "+provider)
 		return
@@ -170,7 +204,7 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	provider := req.PathValue("provider")
-	p, ok := r.registry.OAuth(provider)
+	p, ok := r.capabilities.OAuth(provider)
 	if !ok {
 		writeError(w, http.StatusNotFound, "unsupported provider: "+provider)
 		return
@@ -201,12 +235,10 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to save user: "+err.Error())
 		return
 	}
-	ps, err := r.registry.Resolve(provider)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "platform configuration error")
-		return
-	}
-	if err := ps.SaveEncryptedToken(account.ID, tokenData); err != nil {
+	// Taglio 2.1: token persistence moved out of the per-provider concern
+	// into the shared TokenStorage. The provider's only job is the OAuth
+	// flow; encrypt-and-store is now an infrastructure call.
+	if err := r.tokenSvc.SaveEncryptedToken(account.ID, tokenData); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save token: "+err.Error())
 		return
 	}
@@ -420,7 +452,7 @@ func (r *Router) publishContent(ctx context.Context, userID int64, pubReq *Publi
 	if pubReq.Platform == "" {
 		pubReq.Platform = models.PlatformInstagram
 	}
-	if _, ok := r.registry.OAuth(pubReq.Platform); !ok {
+	if _, ok := r.capabilities.OAuth(pubReq.Platform); !ok {
 		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("unsupported platform: %s", pubReq.Platform)}
 	}
 	accounts, err := r.userRepo.ListPlatformAccountsByUser(userID, pubReq.Platform)
@@ -431,13 +463,18 @@ func (r *Router) publishContent(ctx context.Context, userID int64, pubReq *Publi
 }
 
 func (r *Router) publishToAccount(ctx context.Context, account *models.PlatformAccount, pubReq *PublishRequest) (*models.PublishResult, error) {
-	p, err := r.registry.Resolve(account.Platform)
-	if err != nil {
+	// Taglio 2.1: per-capability lookups. We need the OAuthProvider (for
+	// token refresh via TokenStorage) AND the Publisher (for the actual
+	// call). A platform missing either cannot be published to.
+	oauth, oauthOK := r.capabilities.OAuth(account.Platform)
+	publisher, pubOK := r.capabilities.Publisher(account.Platform)
+	if !oauthOK || !pubOK {
 		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("unsupported platform: %s", account.Platform)}
 	}
-	oauthToken, err := p.EnsureFreshToken(ctx, account.ID, models.TokenTypeBearer, p.RefreshOAuthToken)
+	// Try Bearer first (refresh-capable), then LongLived (Meta-style re-exchange).
+	oauthToken, err := r.tokenSvc.EnsureFreshToken(ctx, account.ID, models.TokenTypeBearer, oauth)
 	if err != nil {
-		if oauthToken, err = p.EnsureFreshToken(ctx, account.ID, models.TokenTypeLongLived, p.RefreshOAuthToken); err != nil {
+		if oauthToken, err = r.tokenSvc.EnsureFreshToken(ctx, account.ID, models.TokenTypeLongLived, oauth); err != nil {
 			return nil, &publishError{http.StatusUnauthorized, "no valid token: " + err.Error()}
 		}
 	}
@@ -454,7 +491,7 @@ func (r *Router) publishToAccount(ctx context.Context, account *models.PlatformA
 	default:
 		return nil, &publishError{http.StatusBadRequest, "content_type must be one of: image, video, text"}
 	}
-	return p.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
+	return publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
 }
 
 type publishError struct {

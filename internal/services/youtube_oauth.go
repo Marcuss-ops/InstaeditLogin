@@ -13,29 +13,32 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-// YouTubeOAuthService implements OAuthProvider and ContentPublisher for YouTube.
+// YouTubeOAuthService implements the YouTube provider. Taglio 2.1:
+// each provider only carries the methods it actually supports — no more
+// composition onto a single monolithic PlatformService.
+//
+// Capabilities exposed:
+//   - OAuthProvider (Google OAuth 2.0 with offline access)
+//   - ContentValidator (video_url required)
+//   - Publisher (resumable upload protocol)
+//   - AccountManager (Validate / Revoke)
 type YouTubeOAuthService struct {
-	cfg *config.Config
-	*TokenHelper
+	cfg        *config.Config
 	httpClient *http.Client
 }
 
-// NewYouTubeOAuthService creates a new YouTubeOAuthService.
-func NewYouTubeOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepository) (*YouTubeOAuthService, error) {
-	encryptor, err := crypto.NewEncryptor(cfg.EncryptionKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create encryptor: %w", err)
+// NewYouTubeOAuthService creates a new YouTubeOAuthService. Taglio 2.1:
+// the constructor no longer takes a tokenRepo.
+func NewYouTubeOAuthService(cfg *config.Config) (*YouTubeOAuthService, error) {
+	if cfg.YouTubeClientID == "" {
+		return nil, nil // provider disabled
 	}
-
 	return &YouTubeOAuthService{
-		cfg:         cfg,
-		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
-		httpClient:  NewHTTPClient(),
+		cfg:        cfg,
+		httpClient: NewHTTPClient(),
 	}, nil
 }
 
@@ -76,6 +79,14 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
 	}
 
 	return profile, tokenData, nil
+}
+
+// ValidateContent enforces the YouTube video-required rule.
+func (s *YouTubeOAuthService) ValidateContent(payload models.PublishPayload) error {
+	if payload.VideoURL == "" {
+		return fmt.Errorf("youtube requires video_url for publishing")
+	}
+	return nil
 }
 
 // Validate calls the Google userinfo endpoint to verify the access token.
@@ -161,8 +172,6 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 	if err := json.Unmarshal(respBody, &tr); err != nil {
 		return nil, fmt.Errorf("youtube refresh parse: %w", err)
 	}
-	// Google may issue a new refresh token in some flows; preserve the existing
-	// one if not returned so the caller keeps using the original credential.
 	refresh := tr.RefreshToken
 	if refresh == "" {
 		refresh = refreshToken
@@ -176,18 +185,17 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 	}, nil
 }
 
-const youtubeUploadChunkSize = 256 * 1024 // 256 KiB minimum for resumable uploads
+const youtubeUploadChunkSize = 256 * 1024
 
 // Publish uploads a video to YouTube using the resumable upload protocol.
 func (s *YouTubeOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
 	defer RecordPublishMetrics(models.PlatformYouTube, time.Now(), &err)
-	if payload.VideoURL == "" {
-		return nil, fmt.Errorf("youtube requires video_url for publishing")
+	if err := s.ValidateContent(payload); err != nil {
+		return nil, err
 	}
 
 	slog.Info("YouTube: starting resumable video upload", "source", payload.VideoURL)
 
-	// Step 1: Get video size and content type from source URL
 	fileSize, contentType, err := s.headVideo(ctx, payload.VideoURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect source video: %w", err)
@@ -197,7 +205,6 @@ func (s *YouTubeOAuthService) Publish(ctx context.Context, accessToken, platform
 	}
 	slog.Info("YouTube: source video info", "size", fileSize, "content_type", contentType)
 
-	// Step 2: Build video metadata
 	metadata := map[string]interface{}{
 		"snippet": map[string]string{
 			"title":       defaultVideoTitle(payload),
@@ -208,14 +215,12 @@ func (s *YouTubeOAuthService) Publish(ctx context.Context, accessToken, platform
 		},
 	}
 
-	// Step 3: Initiate the resumable upload session
 	uploadURL, err := s.initiateResumableSession(ctx, accessToken, metadata, fileSize, contentType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initiate resumable session: %w", err)
 	}
 	slog.Debug("YouTube: resumable session initiated", "upload_url", uploadURL)
 
-	// Step 4: Stream the video from source to YouTube via the upload URL
 	videoID, err := s.uploadVideoChunks(ctx, uploadURL, payload.VideoURL, fileSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stream video: %w", err)
@@ -231,7 +236,6 @@ func (s *YouTubeOAuthService) Publish(ctx context.Context, accessToken, platform
 
 // --- Upload helpers ---
 
-// headVideo fetches Content-Length and Content-Type from the source video URL.
 func (s *YouTubeOAuthService) headVideo(ctx context.Context, videoURL string) (size int64, contentType string, err error) {
 	req, err := http.NewRequestWithContext(ctx, "HEAD", videoURL, nil)
 	if err != nil {
@@ -245,14 +249,12 @@ func (s *YouTubeOAuthService) headVideo(ctx context.Context, videoURL string) (s
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Some servers don't support HEAD; try a range request instead
 		return s.headViaRange(ctx, videoURL)
 	}
 
 	return resp.ContentLength, resp.Header.Get("Content-Type"), nil
 }
 
-// headViaRange uses a byte-range request to get file size when HEAD fails.
 func (s *YouTubeOAuthService) headViaRange(ctx context.Context, videoURL string) (int64, string, error) {
 	req, _ := http.NewRequestWithContext(ctx, "GET", videoURL, nil)
 	req.Header.Set("Range", "bytes=0-0")
@@ -267,7 +269,6 @@ func (s *YouTubeOAuthService) headViaRange(ctx context.Context, videoURL string)
 		return 0, "", fmt.Errorf("unable to determine video size (status %d)", resp.StatusCode)
 	}
 
-	// Content-Range: bytes 0-0/123456 → total is 123456
 	contentRange := resp.Header.Get("Content-Range")
 	parts := strings.Split(contentRange, "/")
 	if len(parts) != 2 {
@@ -282,7 +283,6 @@ func (s *YouTubeOAuthService) headViaRange(ctx context.Context, videoURL string)
 	return total, resp.Header.Get("Content-Type"), nil
 }
 
-// initiateResumableSession starts a resumable upload and returns the upload URL.
 func (s *YouTubeOAuthService) initiateResumableSession(ctx context.Context, accessToken string, metadata map[string]interface{}, fileSize int64, contentType string) (string, error) {
 	jsonMeta, err := json.Marshal(metadata)
 	if err != nil {
@@ -319,9 +319,7 @@ func (s *YouTubeOAuthService) initiateResumableSession(ctx context.Context, acce
 	return uploadURL, nil
 }
 
-// uploadVideoChunks streams the video from sourceURL to the resumable upload URL in 256KiB chunks.
 func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, sourceURL string, fileSize int64) (string, error) {
-	// Download the source video
 	req, err := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
 	if err != nil {
 		return "", err
@@ -336,7 +334,6 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 		return "", fmt.Errorf("source video returned status %d", resp.StatusCode)
 	}
 
-	// If fileSize is 0 from HEAD, use Content-Length from the GET response
 	if fileSize <= 0 {
 		fileSize = resp.ContentLength
 	}
@@ -378,7 +375,6 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 
 			slog.Warn("YouTube: chunk upload failed, attempting recovery", "byte", uploaded, "retry", retries, "error", uploadErr)
 
-			// Try to recover via status query
 			resumedAt, qErr := s.queryUploadStatus(ctx, uploadURL, fileSize)
 			if qErr != nil {
 				resp.Body.Close()
@@ -386,7 +382,6 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 			}
 			slog.Info("YouTube: resuming upload from byte", "resumed_at", resumedAt)
 
-			// Close current body and re-download from resumed position
 			resp.Body.Close()
 			req2, _ := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
 			req2.Header.Set("Range", fmt.Sprintf("bytes=%d-", resumedAt))
@@ -415,8 +410,6 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 	return "", fmt.Errorf("upload completed but no video ID returned")
 }
 
-// putChunk uploads a single chunk to the resumable upload URL.
-// Returns an empty string on 308 (more to upload) or the video ID on 200/201.
 func (s *YouTubeOAuthService) putChunk(ctx context.Context, uploadURL string, data []byte, contentRange string, expectedLen int64) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "PUT", uploadURL, bytes.NewReader(data))
 	if err != nil {
@@ -444,7 +437,6 @@ func (s *YouTubeOAuthService) putChunk(ctx context.Context, uploadURL string, da
 		return result.ID, nil
 
 	case 308:
-		// Resumable upload in progress, more chunks needed
 		return "", nil
 
 	default:
@@ -452,7 +444,6 @@ func (s *YouTubeOAuthService) putChunk(ctx context.Context, uploadURL string, da
 	}
 }
 
-// queryUploadStatus checks how many bytes were successfully uploaded.
 func (s *YouTubeOAuthService) queryUploadStatus(ctx context.Context, uploadURL string, fileSize int64) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, "PUT", uploadURL, http.NoBody)
 	if err != nil {
@@ -471,13 +462,11 @@ func (s *YouTubeOAuthService) queryUploadStatus(ctx context.Context, uploadURL s
 		return 0, fmt.Errorf("unexpected status query response: %d", resp.StatusCode)
 	}
 
-	// Range: bytes=0-524287
 	rangeHeader := resp.Header.Get("Range")
 	if rangeHeader == "" {
 		return 0, nil
 	}
 
-	// Remove "bytes=" prefix and get the end byte
 	parts := strings.SplitN(rangeHeader, "=", 2)
 	if len(parts) != 2 {
 		return 0, fmt.Errorf("malformed Range header: %s", rangeHeader)
@@ -495,7 +484,6 @@ func (s *YouTubeOAuthService) queryUploadStatus(ctx context.Context, uploadURL s
 	return lastByte + 1, nil
 }
 
-// defaultVideoTitle returns a fallback title if none is provided.
 func defaultVideoTitle(payload models.PublishPayload) string {
 	if payload.Title != "" {
 		return payload.Title

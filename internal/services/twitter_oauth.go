@@ -15,38 +15,38 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-// TwitterOAuthService implements OAuthProvider and ContentPublisher for Twitter/X.
+// TwitterOAuthService implements the X / Twitter provider. Taglio 2.1:
+// each provider only carries the methods it actually supports — no more
+// composition onto a single monolithic PlatformService.
+//
+// Capabilities exposed:
+//   - OAuthProvider (OAuth 2.0 PKCE flow, no more 1.0a static keys since Taglio 1.3)
+//   - ContentValidator (text or image required)
+//   - Publisher (POST /2/tweets with user Bearer)
+//   - AccountManager (Validate / Revoke)
 type TwitterOAuthService struct {
-	cfg *config.Config
-	*TokenHelper
+	cfg        *config.Config
 	httpClient *http.Client
 }
 
-// NewTwitterOAuthService creates a new TwitterOAuthService.
-func NewTwitterOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepository) (*TwitterOAuthService, error) {
-	encryptor, err := crypto.NewEncryptor(cfg.EncryptionKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create encryptor: %w", err)
+// NewTwitterOAuthService creates a new TwitterOAuthService. Taglio 2.1:
+// the constructor no longer takes a tokenRepo.
+func NewTwitterOAuthService(cfg *config.Config) (*TwitterOAuthService, error) {
+	if cfg.TwitterClientID == "" {
+		return nil, nil // provider disabled
 	}
-
 	return &TwitterOAuthService{
-		cfg:         cfg,
-		TokenHelper: NewTokenHelper(encryptor, tokenRepo),
-		httpClient:  NewHTTPClient(),
+		cfg:        cfg,
+		httpClient: NewHTTPClient(),
 	}, nil
 }
 
 func (s *TwitterOAuthService) Name() string { return models.PlatformTwitter }
 
 func (s *TwitterOAuthService) GetLoginURL(state string) string {
-	// Generate a cryptographically random PKCE code_verifier (64 bytes → 86 chars base64url)
-	// and embed it in the state parameter so it survives the OAuth redirect round-trip.
-	// Format: <original_state>.<verifier> — parsed back in HandleCallback via LastIndex.
 	verifierBytes := make([]byte, 64)
 	var verifier string
 	if _, err := rand.Read(verifierBytes); err != nil {
@@ -56,7 +56,6 @@ func (s *TwitterOAuthService) GetLoginURL(state string) string {
 		verifier = base64.RawURLEncoding.EncodeToString(verifierBytes)
 	}
 
-	// Derive code_challenge via S256: SHA-256 hash of code_verifier, base64url-encoded.
 	hash := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(hash[:])
 
@@ -75,8 +74,6 @@ func (s *TwitterOAuthService) GetLoginURL(state string) string {
 func (s *TwitterOAuthService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	slog.Info("Twitter: exchanging code for token")
 
-	// Extract the PKCE code_verifier from the state parameter.
-	// Format set in GetLoginURL: <original_state>.<verifier>
 	verifier := ""
 	if idx := strings.LastIndex(state, "."); idx != -1 {
 		verifier = state[idx+1:]
@@ -105,6 +102,14 @@ func (s *TwitterOAuthService) HandleCallback(ctx context.Context, state, code st
 	}
 
 	return profile, tokenData, nil
+}
+
+// ValidateContent enforces the "text or image" rule for a tweet.
+func (s *TwitterOAuthService) ValidateContent(payload models.PublishPayload) error {
+	if payload.Text == "" && payload.ImageURL == "" {
+		return fmt.Errorf("twitter requires text or image_url")
+	}
+	return nil
 }
 
 // Validate calls the Twitter /2/users/me endpoint to verify the access token.
@@ -206,8 +211,8 @@ func (s *TwitterOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 
 func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
 	defer RecordPublishMetrics(models.PlatformTwitter, time.Now(), &err)
-	if payload.Text == "" && payload.ImageURL == "" {
-		return nil, fmt.Errorf("twitter requires text or image_url")
+	if err := s.ValidateContent(payload); err != nil {
+		return nil, err
 	}
 
 	slog.Info("Twitter: publishing tweet")
@@ -224,12 +229,9 @@ func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platform
 		return nil, fmt.Errorf("twitter tweet request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-
 	// Taglio 1.3: X is OAuth 2.0 PKCE only. The OAuth 1.0a static-credential
 	// branch was removed — every publish now uses the user-context Bearer
-	// token from the database. Static API keys cannot publish as someone
-	// other than the original key owner, so they were never a valid path for
-	// a multi-tenant dashboard.
+	// token from the database.
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := s.httpClient.Do(req)
