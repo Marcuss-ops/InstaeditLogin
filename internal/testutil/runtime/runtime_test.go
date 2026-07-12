@@ -250,6 +250,60 @@ func TestWaitReady_DefaultResolution(t *testing.T) {
 			t.Errorf("WaitReadyDefaultBackoff: want 200ms, got %v", runtime.WaitReadyDefaultBackoff)
 		}
 	})
+
+	t.Run("ZeroDefaults_Behavioral", func(t *testing.T) {
+		// Pass deadline=0 + backoff=0 + a 2-attempt-fail-then-succeed
+		// ping. With correct default-resolution: deadline=15s,
+		// backoff=200ms. The loop sleeps 200ms between the 2 attempts
+		// and the second attempt succeeds. Total wall-clock ~200ms.
+		//
+		// With BROKEN default-resolution:
+		//   - If backoff=0 means "no sleep": loop runs 2 attempts
+		//     with no sleep between them, wall-clock ~0ms
+		//     (microseconds). Lower-bound assertion fails.
+		//   - If deadline=0 means "no time allowed": the deadline
+		//     check fires after the first failed attempt and
+		//     t.Fatalf is called. The test fails loudly via Fatalf
+		//     (not a value mismatch — an unmissable failure).
+		//
+		// Behavioral complement to the DefaultsAreSensible constant-
+		// check subtest: that one would still pass if the resolution
+		// code were entirely removed (the constants are still 15s/
+		// 200ms, just not USED). This one actually exercises the
+		// resolution path — it's the only subtest that would catch
+		// a regression like "someone deletes the `if deadline <= 0`
+		// block".
+		calls := 0
+		start := time.Now()
+		runtime.WaitReady(t, func() error {
+			calls++
+			if calls < 2 {
+				return errors.New("transient")
+			}
+			return nil
+		}, 0, 0)
+		elapsed := time.Since(start)
+
+		if calls != 2 {
+			t.Errorf("ping calls: want 2, got %d (deadline=0 + backoff=0 should resolve to defaults, allowing the 2nd attempt to succeed within WaitReadyDefaultDeadline=15s)", calls)
+		}
+
+		// With correct resolution: 1 default backoff (200ms)
+		// between the 2 attempts. Allow 150ms..700ms slack
+		// (50ms floor for goroutine scheduling jitter; 500ms
+		// ceiling catches "deadline=0 resolved to 15s but
+		// ping stalled" or other regression shapes).
+		minExpected := 150 * time.Millisecond
+		maxExpected := 700 * time.Millisecond
+		if elapsed < minExpected {
+			t.Errorf("elapsed: want >= %v (= 1 default backoff - 50ms slack), got %v (backoff=0 must have resolved to WaitReadyDefaultBackoff=200ms)",
+				minExpected, elapsed)
+		}
+		if elapsed > maxExpected {
+			t.Errorf("elapsed: want <= %v (1 default backoff + 500ms ceiling), got %v (possible default-resolution regression)",
+				maxExpected, elapsed)
+		}
+	})
 }
 
 // TestWaitReadyMatch_SuccessOnFirstAttempt: a match that returns
@@ -464,6 +518,43 @@ func TestWaitReadyMatch_DefaultResolution(t *testing.T) {
 		}
 		if runtime.WaitReadyDefaultBackoff != 200*time.Millisecond {
 			t.Errorf("WaitReadyDefaultBackoff: want 200ms, got %v", runtime.WaitReadyDefaultBackoff)
+		}
+	})
+
+	t.Run("ZeroDefaults_Behavioral", func(t *testing.T) {
+		// Behavioral complement to DefaultsAreSensible — see the
+		// WaitReady ZeroDefaults_Behavioral subtest for the full
+		// reasoning. Same shape: deadline=0 + backoff=0 + a
+		// 2-attempt-fail-then-succeed match. Wall-clock assertion
+		// proves both deadline and backoff resolutions are wired
+		// into the loop, not just declared as constants.
+		calls := 0
+		start := time.Now()
+		runtime.WaitReadyMatch(t, func() (bool, error) {
+			calls++
+			if calls < 2 {
+				return false, nil
+			}
+			return true, nil
+		}, 0, 0)
+		elapsed := time.Since(start)
+
+		if calls != 2 {
+			t.Errorf("match calls: want 2, got %d (deadline=0 + backoff=0 should resolve to defaults, allowing the 2nd attempt to match within WaitReadyDefaultDeadline=15s)", calls)
+		}
+
+		// With correct resolution: 1 default backoff (200ms)
+		// between the 2 attempts. Same slack as the WaitReady
+		// version: 150ms..700ms.
+		minExpected := 150 * time.Millisecond
+		maxExpected := 700 * time.Millisecond
+		if elapsed < minExpected {
+			t.Errorf("elapsed: want >= %v (= 1 default backoff - 50ms slack), got %v (backoff=0 must have resolved to WaitReadyDefaultBackoff=200ms)",
+				minExpected, elapsed)
+		}
+		if elapsed > maxExpected {
+			t.Errorf("elapsed: want <= %v (1 default backoff + 500ms ceiling), got %v (possible default-resolution regression)",
+				maxExpected, elapsed)
 		}
 	})
 }
