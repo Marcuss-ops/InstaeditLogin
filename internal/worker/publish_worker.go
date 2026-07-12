@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
@@ -51,24 +52,30 @@ type PublisherUserStore interface {
 // processing, ctx-cancellable. The 3-step status transition (`scheduled` →
 // `publishing` → `published | failed`) acts as a logical lock so two worker
 // instances (future-sh) cannot double-publish the same target.
+//
+// Taglio 2.2: the worker depends on the CapabilityRouter (per-capability
+// lookups: OAuthProvider for refresh, Publisher for the actual call) and a
+// CredentialVault (for the encrypt + store + refresh-with-advisory-lock).
+// The OAuthProvider is adapted to a credentials.TokenRefresher closure
+// at the call site so the vault has zero knowledge of per-platform types.
 type PublishWorker struct {
 	postRepo PublisherPostStore
 	userRepo PublisherUserStore
 	router   *services.CapabilityRouter
-	tokenSvc services.TokenStorage
+	vault    credentials.VaultAPI
 	interval time.Duration
 	logger   *slog.Logger
 }
 
 // NewPublishWorker wires the dependencies. interval <= 0 falls back to a safe
 // default of 30s to prevent tight loops from misconfiguration. nil logger
-// inherits slog.Default(). router and tokenSvc must be non-nil; a nil will
+// inherits slog.Default(). router and vault must be non-nil; a nil will
 // panic on the first tick (fail-fast for misconfigured wiring).
 func NewPublishWorker(
 	postRepo PublisherPostStore,
 	userRepo PublisherUserStore,
 	router *services.CapabilityRouter,
-	tokenSvc services.TokenStorage,
+	vault credentials.VaultAPI,
 	interval time.Duration,
 	logger *slog.Logger,
 ) *PublishWorker {
@@ -82,7 +89,7 @@ func NewPublishWorker(
 		postRepo: postRepo,
 		userRepo: userRepo,
 		router:   router,
-		tokenSvc: tokenSvc,
+		vault:    vault,
 		interval: interval,
 		logger:   logger,
 	}
@@ -169,9 +176,10 @@ func (w *PublishWorker) tick(ctx context.Context) (processed, succeeded, failed 
 //     AND PlatformAccount (platform name + platform_user_id for dispatch).
 //     Safe to do AFTER the claim: if either is missing, we transition
 //     to 'failed' (we own the row), so the next tick won't re-pick it.
-//  3. Refresh OAuth token (try Bearer, fall back to LongLived for Meta-style
-//     providers). On failure: status → `failed` with error_message.
-//  4. Publish via the per-platform PlatformService.Publish.
+//  3. Refresh OAuth token via the CredentialVault (which serialises
+//     concurrent refreshes with a Postgres advisory lock).
+//     On failure: status → `failed` with error_message.
+//  4. Publish via the platform's Publisher capability.
 //     On success: status → `published` with platform_post_id + published_at.
 //     On failure: status → `failed` with error_message.
 //
@@ -219,13 +227,16 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		return w.markFailed(target, fmt.Sprintf("platform %q missing capability (oauth=%v publish=%v)", account.Platform, oauthOK, pubOK))
 	}
 
-	// 5. Refresh token via TokenStorage. Try Bearer first (refresh-capable),
-	// then LongLived (Meta-style re-exchange). The OAuthProvider is the
-	// refresher — the token service calls oauth.RefreshOAuthToken when
-	// within the expiry grace window.
-	oauthToken, err := w.tokenSvc.EnsureFreshToken(ctx, account.ID, models.TokenTypeBearer, oauth)
+	// 5. Refresh token via the CredentialVault. The provider's
+	// RefreshOAuthToken method is adapted to a credentials.TokenRefresher
+	// closure so the vault only knows the function signature. Try Bearer
+	// first (refresh-capable), then LongLived (Meta-style re-exchange).
+	refresher := credentials.TokenRefresher(func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+		return oauth.RefreshOAuthToken(ctx, refreshToken)
+	})
+	oauthToken, err := w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
 	if err != nil {
-		oauthToken, err = w.tokenSvc.EnsureFreshToken(ctx, account.ID, models.TokenTypeLongLived, oauth)
+		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher)
 		if err != nil {
 			return w.markFailed(target, "token refresh failed: "+err.Error())
 		}

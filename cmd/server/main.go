@@ -12,6 +12,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
@@ -56,6 +57,9 @@ func main() {
 
 	// One-shot backfill: migrate any YouTube refresh tokens stored as legacy
 	// "refresh_token:..." scopes into the dedicated encrypted_refresh_token column.
+	// The backfill uses the encryptor directly (not the vault) because it
+	// predates the vault and is a startup-time one-shot — a one-off
+	// migration that touches rows the vault has no business reading.
 	enc, err := crypto.NewEncryptor(cfg.EncryptionKey)
 	if err != nil {
 		slog.Error("Failed to initialize encryptor for backfill", "error", err)
@@ -68,13 +72,19 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	tokenRepo := repository.NewTokenRepository(db)
 
+	// Taglio 2.2: the central CredentialVault. It owns the encryptor +
+	// the *sql.DB (for pg_advisory_xact_lock during refresh) + the
+	// TokenStore interface (adapted from *repository.TokenRepository).
+	// No provider or consumer is allowed to import the internal
+	// repository directly — they go through this vault.
+	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
+
 	// Taglio 2.1: the composite PlatformService is gone. The CapabilityRouter
 	// holds providers by name and dispatches per-capability lookups
 	// (OAuth / Publisher / AccountDiscoverer / ContentValidator /
 	// PublishReconciler). The router uses type assertions on Register so each
 	// provider only carries the methods it actually supports.
 	capRouter := services.NewCapabilityRouter()
-	tokenSvc := services.NewTokenService(enc, tokenRepo)
 
 	// Facebook: registers when FACEBOOK_REDIRECT_URI is configured.
 	// Uses the shared Meta OAuth credentials (META_APP_ID / META_APP_SECRET).
@@ -156,7 +166,7 @@ func main() {
 	// the storage handlers return 501 Not Implemented so the rest of
 	// the server still boots.
 	opts := []api.RouterOption{
-		api.WithTokenService(tokenSvc),
+		api.WithCredentialVault(vault),
 	}
 	if cfg.SupabaseURL != "" && cfg.SupabaseServiceKey != "" && cfg.SupabaseBucket != "" {
 		opts = append(opts,
@@ -209,9 +219,10 @@ func main() {
 
 	// Spawn the publish worker goroutine: picks up scheduled post_targets
 	// whose scheduled_at <= NOW() and dispatches them through the per-platform
-	// Publisher / OAuthProvider implementations registered above. Taglio 2.1:
-	// the worker takes the CapabilityRouter + a TokenStorage (so the
-	// EnsureFreshToken path is shared with the HTTP router).
+	// Publisher / OAuthProvider implementations registered above. The
+	// worker shares the same CredentialVault as the HTTP router so
+	// concurrent refreshes (e.g. worker tick + dashboard publish-now
+	// button) serialise on the same Postgres advisory lock.
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	workerDone := make(chan struct{})
 	go func() {
@@ -220,7 +231,7 @@ func main() {
 			repository.NewPostRepository(db),
 			repository.NewUserRepository(db),
 			capRouter,
-			tokenSvc,
+			vault,
 			time.Duration(cfg.PublishWorkerIntervalSeconds)*time.Second,
 			slog.Default(),
 		)

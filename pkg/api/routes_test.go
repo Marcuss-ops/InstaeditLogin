@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -28,7 +28,7 @@ import (
 //
 // Taglio 2.1: TokenManager methods (SaveEncryptedToken, GetDecryptedToken,
 // EnsureFreshToken) moved off the provider and onto the shared
-// services.TokenStorage. Those moves are reflected in mockTokenService below.
+// credentials.VaultAPI. The mock is unchanged by Taglio 2.2.
 type mockProvider struct {
 	platform       string
 	loginURL       string
@@ -65,30 +65,51 @@ func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID 
 	return m.publishFn(ctx, accessToken, platformUserID, payload)
 }
 
-// mockTokenService implements services.TokenStorage. The Router uses it
-// for SaveEncryptedToken (handleCallback) and EnsureFreshToken
-// (handlePublishPost / handlePublishAll). The default (nil fields)
-// returns success on SaveEncryptedToken and an error on EnsureFreshToken,
-// which is what most tests want.
-type mockTokenService struct {
-	saveTokenFn   func(platformAccountID int64, tokenData *models.TokenData) error
-	ensureFreshFn func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error)
+// mockCredentialVault implements credentials.VaultAPI for tests. The
+// default (nil fields) returns success on Save and Revoke, an error
+// on Get, and an error on Renew — that is what most tests (login,
+// callback happy path, workspace, post CRUD) want. Tests that
+// exercise the publish path or want to force a save/get/renew error
+// override the relevant field in the constructor and pass via
+// WithCredentialVault in opts.
+//
+// Taglio 2.2: renamed from mockTokenService. The `renewFn` field
+// receives a credentials.TokenRefresher (plain function) rather than
+// a services.OAuthProvider interface — the vault no longer knows
+// about per-platform types.
+type mockCredentialVault struct {
+	saveFn   func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error
+	getFn    func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error)
+	renewFn  func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error)
+	revokeFn func(ctx context.Context, platformAccountID int64) error
 }
 
-func (m *mockTokenService) SaveEncryptedToken(platformAccountID int64, tokenData *models.TokenData) error {
-	if m.saveTokenFn != nil {
-		return m.saveTokenFn(platformAccountID, tokenData)
+func (m *mockCredentialVault) Save(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
+	if m.saveFn != nil {
+		return m.saveFn(ctx, platformAccountID, tokenData)
 	}
 	return nil
 }
-func (m *mockTokenService) GetDecryptedToken(platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
-	return nil, fmt.Errorf("GetDecryptedToken not used in API tests")
-}
-func (m *mockTokenService) EnsureFreshToken(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
-	if m.ensureFreshFn == nil {
-		return nil, fmt.Errorf("EnsureFreshToken not implemented (override via mockTokenService.ensureFreshFn)")
+func (m *mockCredentialVault) Get(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
+	if m.getFn != nil {
+		return m.getFn(ctx, platformAccountID, tokenType)
 	}
-	return m.ensureFreshFn(ctx, accountID, tokenType, refresh)
+	return nil, fmt.Errorf("Get not implemented in this test mock (override via mockCredentialVault.getFn)")
+}
+func (m *mockCredentialVault) Renew(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+	if m.renewFn == nil {
+		return nil, fmt.Errorf("Renew not implemented (override via mockCredentialVault.renewFn)")
+	}
+	return m.renewFn(ctx, accountID, tokenType, refresh)
+}
+func (m *mockCredentialVault) Revoke(ctx context.Context, platformAccountID int64) error {
+	if m.revokeFn != nil {
+		return m.revokeFn(ctx, platformAccountID)
+	}
+	return nil
+}
+func (m *mockCredentialVault) Rotate(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
+	return m.Save(ctx, platformAccountID, tokenData)
 }
 
 // mockUserStore implements UserStore with configurable function fields.
@@ -164,25 +185,17 @@ func (m *mockWorkspaceStore) Delete(id int64) error {
 }
 
 // mockPostStore implements PostStore with configurable function fields.
-// Taglio 2.1: the PostStore interface grew several methods (FindWithTargets,
-// List, Delete, Retry/Cancel/Publish actions, media-asset helpers) that
-// the test files in this package don't exercise. The defaults are no-ops
-// (return nil/empty) so tests only need to wire the field they care about.
 type mockPostStore struct {
 	createFn          func(*models.Post, []*models.PostTarget) error
 	findByIDFn        func(id int64) (*models.Post, error)
-	findWithTargetsFn func(id int64) (*models.Post, []models.PostTarget, []models.MediaAsset, error)
 	updateFn          func(*models.Post) error
 	listByWorkspaceFn func(workspaceID int64) ([]models.Post, error)
-	listFn            func(filter repository.PostFilter) (*repository.PagedPosts, error)
 	deleteFn          func(id int64) error
 	saveFn            func(*models.PostTarget) error
 	retryPostFn       func(id int64) error
 	cancelPostFn      func(id int64) error
 	publishPostFn     func(id int64) error
 	retryTargetFn     func(id int64) error
-	addMediaAssetFn   func(*models.MediaAsset) error
-	listMediaAssetsFn func(postID int64) ([]models.MediaAsset, error)
 }
 
 func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget) error {
@@ -209,13 +222,6 @@ func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
 		CreatedAt:   time.Now(),
 	}, nil
 }
-func (m *mockPostStore) FindWithTargets(id int64) (*models.Post, []models.PostTarget, []models.MediaAsset, error) {
-	if m.findWithTargetsFn != nil {
-		return m.findWithTargetsFn(id)
-	}
-	p, _ := m.FindByID(id)
-	return p, nil, nil, nil
-}
 func (m *mockPostStore) Update(post *models.Post) error {
 	if m.updateFn == nil {
 		return nil
@@ -227,12 +233,6 @@ func (m *mockPostStore) ListByWorkspace(workspaceID int64) ([]models.Post, error
 		return nil, nil
 	}
 	return m.listByWorkspaceFn(workspaceID)
-}
-func (m *mockPostStore) List(filter repository.PostFilter) (*repository.PagedPosts, error) {
-	if m.listFn == nil {
-		return &repository.PagedPosts{}, nil
-	}
-	return m.listFn(filter)
 }
 func (m *mockPostStore) Delete(id int64) error {
 	if m.deleteFn == nil {
@@ -269,18 +269,6 @@ func (m *mockPostStore) RetryTarget(id int64) error {
 		return nil
 	}
 	return m.retryTargetFn(id)
-}
-func (m *mockPostStore) AddMediaAsset(asset *models.MediaAsset) error {
-	if m.addMediaAssetFn == nil {
-		return nil
-	}
-	return m.addMediaAssetFn(asset)
-}
-func (m *mockPostStore) ListMediaAssets(postID int64) ([]models.MediaAsset, error) {
-	if m.listMediaAssetsFn == nil {
-		return nil, nil
-	}
-	return m.listMediaAssetsFn(postID)
 }
 
 // mockStorageProvider implements StorageProvider with configurable function fields.
@@ -319,16 +307,13 @@ func withBearerJWT(t *testing.T, req *http.Request, userID int64) {
 
 // newTestRouter builds a Router wired with a mock provider and store.
 //
-// Taglio 2.1: the Router takes a CapabilityRouter (per-capability lookups)
-// plus a TokenStorage (via WithTokenService). The default token service is
-// a no-op mock that succeeds on save and errors on ensure-fresh — that is
-// what most tests (login, callback happy path, workspace, post CRUD) want.
-// Tests that exercise the publish path or want to force a token-save error
-// override via WithTokenService(&mockTokenService{...}) in opts.
-//
-// We register the mock under several platform names because the publish
-// worker / publish-all paths iterate over a user's accounts which can be
-// any platform; the mock answers the same way for all of them.
+// Taglio 2.2: the Router takes a CapabilityRouter (per-capability lookups)
+// plus a CredentialVault (via WithCredentialVault). The default vault
+// is a no-op mock that succeeds on save/revoke and errors on get/renew —
+// that is what most tests (login, callback happy path, workspace, post
+// CRUD) want. Tests that exercise the publish path or want to force a
+// save/renew error override via WithCredentialVault(&mockCredentialVault{...})
+// in opts.
 func newTestRouter(
 	platformSvc *mockProvider,
 	store *mockUserStore,
@@ -344,7 +329,7 @@ func newTestRouter(
 	// Note: the sweeper goroutine leaks until the test binary exits —
 	// acceptable for unit tests; the 1s ticker has no observable effect
 	// on test behaviour and the OS reclaims everything on process exit.
-	defaultTokenSvc := &mockTokenService{}
+	defaultVault := &mockCredentialVault{}
 	return NewRouter(
 		capRouter,
 		store,
@@ -353,7 +338,7 @@ func newTestRouter(
 		nil,
 		append([]RouterOption{
 			WithOneTimeCodeStore(otc),
-			WithTokenService(defaultTokenSvc),
+			WithCredentialVault(defaultVault),
 		}, opts...)...,
 	)
 }
@@ -370,15 +355,15 @@ func issueTestJWT(t *testing.T, userID int64) string {
 
 var successCallback = func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	return &models.PlatformProfile{
-			PlatformUserID: "pf-123",
-			Username:       "testuser",
-			Name:           "Test User",
-			Email:          "test@example.com",
-		}, &models.TokenData{
-			AccessToken: "at-secret",
-			TokenType:   "bearer",
-			ExpiresIn:   3600,
-		}, nil
+		PlatformUserID: "pf-123",
+		Username:       "testuser",
+		Name:           "Test User",
+		Email:          "test@example.com",
+	}, &models.TokenData{
+		AccessToken: "at-secret",
+		TokenType:   "bearer",
+		ExpiresIn:   3600,
+	}, nil
 }
 
 var successFindOrCreate = func(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error) {
@@ -578,9 +563,9 @@ func TestHandleCallback_FindOrCreateError(t *testing.T) {
 }
 
 // TestHandleCallback_SaveTokenError asserts that an error from the
-// TokenStorage.SaveEncryptedToken call (used to be on the per-provider
-// TokenManager before Taglio 2.1) surfaces as a 500. The test wires a
-// mockTokenService with a saveTokenFn that errors.
+// CredentialVault.Save call (used to be on the per-provider TokenManager
+// before Taglio 2.1, then on TokenService in 2.1, now on the vault) surfaces
+// as a 500. The test wires a mockCredentialVault with a saveFn that errors.
 func TestHandleCallback_SaveTokenError(t *testing.T) {
 	svc := &mockProvider{
 		platform:       "instagram",
@@ -589,12 +574,12 @@ func TestHandleCallback_SaveTokenError(t *testing.T) {
 	store := &mockUserStore{
 		findOrCreateFn: successFindOrCreate,
 	}
-	tokenSvc := &mockTokenService{
-		saveTokenFn: func(platformAccountID int64, tokenData *models.TokenData) error {
+	vault := &mockCredentialVault{
+		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
 			return fmt.Errorf("token save error")
 		},
 	}
-	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "instagram", "test-state")
@@ -766,12 +751,12 @@ func TestHandlePublishPost_TokenRefreshFailed(t *testing.T) {
 			}, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return nil, fmt.Errorf("refresh failed: token expired")
 		},
 	}
-	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
 	body := `{"platform":"twitter","content_type":"text","caption":"hi"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
@@ -794,12 +779,12 @@ func TestHandlePublishPost_BadContentType(t *testing.T) {
 			}, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
 	body := `{"platform":"instagram","content_type":"unknown","caption":"hi"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
@@ -822,12 +807,12 @@ func TestHandlePublishPost_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return &models.OAuthToken{AccessToken: "fresh-token", TokenType: "bearer"}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 	// plumb the publish fn through the mockProvider
 	svc.publishFn = func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
 		if accessToken != "fresh-token" {
@@ -868,15 +853,15 @@ func TestHandlePublishPost_PublishError(t *testing.T) {
 			}, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
 		},
 	}
 	svc.publishFn = func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
 		return nil, fmt.Errorf("publish failed: 500 internal error")
 	}
-	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
 	body := `{"platform":"instagram","content_type":"text","caption":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
@@ -901,15 +886,15 @@ func TestHandlePublishPost_BodyUserIDIgnored_TrustsJWT(t *testing.T) {
 			}, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
 		},
 	}
 	svc.publishFn = func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
 		return &models.PublishResult{PlatformMediaID: "jwt-ok"}, nil
 	}
-	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
 	body := `{"user_id":999,"platform":"instagram","content_type":"text","caption":"jwt test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
@@ -994,15 +979,15 @@ func TestHandlePublishAll_Success_AllPlatforms(t *testing.T) {
 			}, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
 		},
 	}
 	svc.publishFn = func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
 		return &models.PublishResult{PlatformMediaID: "id-" + platformUserID}, nil
 	}
-	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
 	body := `{"content_type":"text","caption":"hello world"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
@@ -1048,8 +1033,8 @@ func TestHandlePublishAll_PartialFailures(t *testing.T) {
 			}, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return &models.OAuthToken{AccessToken: "tok", TokenType: "bearer"}, nil
 		},
 	}
@@ -1059,7 +1044,7 @@ func TestHandlePublishAll_PartialFailures(t *testing.T) {
 		}
 		return &models.PublishResult{PlatformMediaID: "ok"}, nil
 	}
-	r := newTestRouter(svc, store, "", WithTokenService(tokenSvc))
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
 
 	body := `{"content_type":"text","caption":"hello"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))

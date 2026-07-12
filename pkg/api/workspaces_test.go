@@ -17,9 +17,11 @@ import (
 // newWorkspaceTestRouter builds a Router wired with the supplied
 // workspace store. Authentication is JWT-only (Taglio 1.1).
 //
-// Taglio 2.1: the Router takes a CapabilityRouter (per-capability lookups)
-// instead of the old PlatformRegistry. These tests don't exercise the
-// publish path so a default no-op mockTokenService is enough.
+// Taglio 2.2: the Router takes a CapabilityRouter (per-capability lookups)
+// plus a CredentialVault (via WithCredentialVault). These tests don't
+// exercise the publish path so a default no-op mockCredentialVault is
+// enough; the CapabilityRouter is also empty since no test in this file
+// invokes a provider.
 func newWorkspaceTestRouter(
 	workspaceStore *mockWorkspaceStore,
 ) *Router {
@@ -31,7 +33,7 @@ func newWorkspaceTestRouter(
 		nil,
 		WithWorkspaceStore(workspaceStore),
 		WithPostStore(&mockPostStore{}),
-		WithTokenService(&mockTokenService{}),
+		WithCredentialVault(&mockCredentialVault{}),
 	)
 }
 

@@ -39,7 +39,7 @@ func newPostsTestRouter(
 		nil,
 		WithWorkspaceStore(ws),
 		WithPostStore(postStore),
-		WithTokenService(&mockTokenService{}),
+		WithCredentialVault(&mockCredentialVault{}),
 	)
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
@@ -87,8 +88,8 @@ func (m *mockUserStore) FindPlatformAccountByID(id int64) (*models.PlatformAccou
 
 // mockProvider is a services.OAuthProvider + services.Publisher (the two
 // capabilities the worker consumes from the CapabilityRouter). RefreshOAuthToken
-// is the only OAuthProvider method the worker actually calls (the token
-// service invokes it when a token is within the expiry grace window).
+// is the only OAuthProvider method the worker actually calls (the vault
+// invokes it when a token is within the expiry grace window).
 type mockProvider struct {
 	platform  string
 	publishFn func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
@@ -106,7 +107,7 @@ func (m *mockProvider) HandleCallback(ctx context.Context, state, code string) (
 	panic("HandleCallback not used in worker tests")
 }
 func (m *mockProvider) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
-	panic("RefreshOAuthToken not used in worker tests — wire via mockTokenService.refreshFn if needed")
+	panic("RefreshOAuthToken not used in worker tests — wire via mockCredentialVault.renewFn if needed")
 }
 func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
 	m.publishCalls++
@@ -116,39 +117,52 @@ func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID 
 	return m.publishFn(ctx, accessToken, platformUserID, payload)
 }
 
-// mockTokenService is a services.TokenStorage. The worker only calls
-// EnsureFreshToken (via the tokenSvc field on PublishWorker), so
-// SaveEncryptedToken / GetDecryptedToken are stubbed.
-type mockTokenService struct {
-	ensureFreshFn func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error)
-	ensureCalls   int
+// mockCredentialVault is a credentials.VaultAPI. The worker only calls
+// Renew (via the vault field on PublishWorker), so Save / Get / Revoke /
+// Rotate are stubbed (panic if accidentally called).
+//
+// Taglio 2.2: renamed from mockTokenService. The `renewFn` signature
+// now takes a credentials.TokenRefresher (plain function) rather than
+// a services.OAuthProvider — the vault has zero knowledge of per-platform
+// types, so the worker adapts OAuthProvider.RefreshOAuthToken into a
+// closure at the call site. The test never needs to call the refresher
+// itself; it just returns a valid token.
+type mockCredentialVault struct {
+	renewFn func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error)
+	ensureCalls int
 }
 
-func (m *mockTokenService) SaveEncryptedToken(platformAccountID int64, tokenData *models.TokenData) error {
-	panic("SaveEncryptedToken not used in worker tests")
+func (m *mockCredentialVault) Save(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
+	panic("Save not used in worker tests")
 }
-func (m *mockTokenService) GetDecryptedToken(platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
-	panic("GetDecryptedToken not used in worker tests")
+func (m *mockCredentialVault) Get(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
+	panic("Get not used in worker tests")
 }
-func (m *mockTokenService) EnsureFreshToken(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+func (m *mockCredentialVault) Renew(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 	m.ensureCalls++
-	if m.ensureFreshFn == nil {
-		return nil, errors.New("EnsureFreshToken not implemented in this test")
+	if m.renewFn == nil {
+		return nil, errors.New("Renew not implemented in this test")
 	}
-	return m.ensureFreshFn(ctx, accountID, tokenType, refresh)
+	return m.renewFn(ctx, accountID, tokenType, refresh)
+}
+func (m *mockCredentialVault) Revoke(ctx context.Context, platformAccountID int64) error {
+	panic("Revoke not used in worker tests")
+}
+func (m *mockCredentialVault) Rotate(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
+	return m.Save(ctx, platformAccountID, tokenData)
 }
 
 // newTestWorker builds a PublishWorker wired with the given mocks.
 // interval is small (10ms) but irrelevant — the tests call publishTarget
 // directly rather than driving the Run loop.
-func newTestWorker(posts *mockPostStore, users *mockUserStore, svc *mockProvider, tokenSvc *mockTokenService) *PublishWorker {
+func newTestWorker(posts *mockPostStore, users *mockUserStore, svc *mockProvider, vault *mockCredentialVault) *PublishWorker {
 	router := services.NewCapabilityRouter()
 	router.Register(svc.Name(), svc)
 	return NewPublishWorker(
 		posts,
 		users,
 		router,
-		tokenSvc,
+		vault,
 		10*time.Millisecond,
 		nil, // inherit slog.Default()
 	)
@@ -203,12 +217,12 @@ func TestPublishTarget_HappyPath_ClaimThenPublishToPublished(t *testing.T) {
 			return &models.PublishResult{PlatformMediaID: "media-456"}, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return &models.OAuthToken{AccessToken: "fresh-tok", TokenType: "bearer"}, nil
 		},
 	}
-	w := newTestWorker(posts, users, svc, tokenSvc)
+	w := newTestWorker(posts, users, svc, vault)
 
 	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
 		t.Fatalf("publishTarget: %v", err)
@@ -221,8 +235,8 @@ func TestPublishTarget_HappyPath_ClaimThenPublishToPublished(t *testing.T) {
 	if posts.findByIDCalls != 1 {
 		t.Errorf("FindByID calls: want 1, got %d", posts.findByIDCalls)
 	}
-	if tokenSvc.ensureCalls != 1 {
-		t.Errorf("EnsureFreshToken calls: want 1, got %d (BEFORE Publish should have refreshed the OAuth token)", tokenSvc.ensureCalls)
+	if vault.ensureCalls != 1 {
+		t.Errorf("Renew calls: want 1, got %d (BEFORE Publish should have refreshed the OAuth token)", vault.ensureCalls)
 	}
 	if svc.publishCalls != 1 {
 		t.Errorf("Publish calls: want 1, got %d", svc.publishCalls)
@@ -278,13 +292,13 @@ func TestPublishTarget_ClaimLoss_SkipsWithoutPublish(t *testing.T) {
 			return nil, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
-			t.Error("EnsureFreshToken called despite claim loss")
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			t.Error("Renew called despite claim loss")
 			return nil, nil
 		},
 	}
-	w := newTestWorker(posts, users, svc, tokenSvc)
+	w := newTestWorker(posts, users, svc, vault)
 
 	// Claim-loss is NOT an error from publishTarget's perspective —
 	// it's a normal skip. The worker just logs and returns nil.
@@ -299,8 +313,8 @@ func TestPublishTarget_ClaimLoss_SkipsWithoutPublish(t *testing.T) {
 	if posts.findByIDCalls != 0 {
 		t.Errorf("FindByID calls: want 0, got %d (claim-loss must short-circuit)", posts.findByIDCalls)
 	}
-	if tokenSvc.ensureCalls != 0 {
-		t.Errorf("EnsureFreshToken calls: want 0, got %d (claim-loss must short-circuit)", tokenSvc.ensureCalls)
+	if vault.ensureCalls != 0 {
+		t.Errorf("Renew calls: want 0, got %d (claim-loss must short-circuit)", vault.ensureCalls)
 	}
 	if svc.publishCalls != 0 {
 		t.Errorf("Publish calls: want 0, got %d (CRITICAL: this is the double-publish path)", svc.publishCalls)
@@ -340,18 +354,18 @@ func TestPublishTarget_ClaimFiresBeforeFindByID(t *testing.T) {
 			return &models.PublishResult{PlatformMediaID: "ok"}, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
-			order = append(order, "ensureFresh")
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			order = append(order, "renew")
 			return &models.OAuthToken{AccessToken: "t"}, nil
 		},
 	}
-	w := newTestWorker(posts, users, svc, tokenSvc)
+	w := newTestWorker(posts, users, svc, vault)
 
 	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
 		t.Fatalf("publishTarget: %v", err)
 	}
-	want := []string{"claim", "findByID", "findAccount", "ensureFresh", "publish"}
+	want := []string{"claim", "findByID", "findAccount", "renew", "publish"}
 	if len(order) != len(want) {
 		t.Fatalf("call order: want %v, got %v", want, order)
 	}
@@ -392,13 +406,13 @@ func TestPublishTarget_ClaimFiresBeforeAnySideEffectOnLoss(t *testing.T) {
 			return nil, nil
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
-			order = append(order, "ensureFresh")
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			order = append(order, "renew")
 			return nil, nil
 		},
 	}
-	w := newTestWorker(posts, users, svc, tokenSvc)
+	w := newTestWorker(posts, users, svc, vault)
 
 	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
 		t.Fatalf("publishTarget: %v", err)
@@ -421,8 +435,8 @@ func TestPublishTarget_ClaimError_Propagates(t *testing.T) {
 	}
 	users := &mockUserStore{}
 	svc := &mockProvider{platform: "instagram"}
-	tokenSvc := &mockTokenService{}
-	w := newTestWorker(posts, users, svc, tokenSvc)
+	vault := &mockCredentialVault{}
+	w := newTestWorker(posts, users, svc, vault)
 
 	err := w.publishTarget(context.Background(), scheduledTarget())
 	if err == nil {
@@ -450,8 +464,8 @@ func TestPublishTarget_PostNotFound_AfterClaim_MarksFailed(t *testing.T) {
 	}
 	users := &mockUserStore{}
 	svc := &mockProvider{platform: "instagram"}
-	tokenSvc := &mockTokenService{}
-	w := newTestWorker(posts, users, svc, tokenSvc)
+	vault := &mockCredentialVault{}
+	w := newTestWorker(posts, users, svc, vault)
 
 	if err := w.publishTarget(context.Background(), scheduledTarget()); err == nil {
 		t.Fatal("expected error from vanished post, got nil")
@@ -494,12 +508,12 @@ func TestPublishTarget_PlatformPublishError_MarksFailed(t *testing.T) {
 			return nil, errors.New("500 internal error from meta")
 		},
 	}
-	tokenSvc := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return &models.OAuthToken{AccessToken: "t"}, nil
 		},
 	}
-	w := newTestWorker(posts, users, svc, tokenSvc)
+	w := newTestWorker(posts, users, svc, vault)
 
 	if err := w.publishTarget(context.Background(), scheduledTarget()); err == nil {
 		t.Fatal("expected error from platform publish failure, got nil")
@@ -554,7 +568,7 @@ func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 	}
 
 	// Worker A: claims on first acquire, proceeds through the full
-	// happy path (FindByID → EnsureFreshToken → Publish).
+	// happy path (FindByID → Renew → Publish).
 	postsA := &mockPostStore{
 		claimFn: func(id int64) (bool, error) {
 			mu.Lock()
@@ -581,12 +595,12 @@ func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 			return &models.PublishResult{PlatformMediaID: "media-A"}, nil
 		},
 	}
-	tokenA := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vaultA := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return &models.OAuthToken{AccessToken: "t"}, nil
 		},
 	}
-	wA := newTestWorker(postsA, usersA, svcA, tokenA)
+	wA := newTestWorker(postsA, usersA, svcA, vaultA)
 
 	// Worker B: identical happy path wiring (if B ever won, B
 	// would also reach Publish). The whole point of the test is
@@ -619,12 +633,12 @@ func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 			return &models.PublishResult{PlatformMediaID: "media-B"}, nil
 		},
 	}
-	tokenB := &mockTokenService{
-		ensureFreshFn: func(ctx context.Context, accountID int64, tokenType string, refresh services.OAuthProvider) (*models.OAuthToken, error) {
+	vaultB := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 			return &models.OAuthToken{AccessToken: "t"}, nil
 		},
 	}
-	wB := newTestWorker(postsB, usersB, svcB, tokenB)
+	wB := newTestWorker(postsB, usersB, svcB, vaultB)
 
 	// Race the two workers on the same target.
 	var wg sync.WaitGroup
@@ -646,24 +660,24 @@ func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 	// mocks) so the assertion order doesn't matter and a test
 	// failure in the counters is the single source of truth.
 	// (One of A/B will be the loser depending on goroutine
-	// scheduling; the loser's findByIDCalls + ensureFreshCalls +
+	// scheduling; the loser's findByIDCalls + renewCalls +
 	// publishCalls + updateCalls must all be 0.)
 	winnerPosts, loserPosts := postsA, postsB
 	winnerSvc, loserSvc := svcA, svcB
-	winnerTok, loserTok := tokenA, tokenB
+	winnerVault, loserVault := vaultA, vaultB
 	if claimedBy == "B" {
 		winnerPosts, loserPosts = postsB, postsA
 		winnerSvc, loserSvc = svcB, svcA
-		winnerTok, loserTok = tokenB, tokenA
+		winnerVault, loserVault = vaultB, vaultA
 	}
 	_ = winnerPosts // winner's call counts are exercised by the happy-path test
 	_ = winnerSvc
-	_ = winnerTok
+	_ = winnerVault
 	if loserPosts.findByIDCalls != 0 {
 		t.Errorf("loser FindByID calls: want 0, got %d (claim-loss must short-circuit BEFORE post load)", loserPosts.findByIDCalls)
 	}
-	if loserTok.ensureCalls != 0 {
-		t.Errorf("loser EnsureFreshToken calls: want 0, got %d", loserTok.ensureCalls)
+	if loserVault.ensureCalls != 0 {
+		t.Errorf("loser Renew calls: want 0, got %d", loserVault.ensureCalls)
 	}
 	if loserSvc.publishCalls != 0 {
 		t.Errorf("loser Publish calls: want 0, got %d (CRITICAL: this is the double-publish path)", loserSvc.publishCalls)

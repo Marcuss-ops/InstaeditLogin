@@ -19,8 +19,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
@@ -34,7 +34,8 @@ type Router struct {
 	storageProvider StorageProvider
 	auditLogStore   AuditLogStore
 	auth            *auth.Manager
-	tokenSvc        services.TokenStorage
+	vault           credentials.VaultAPI
+	apiKeyStore     APIKeyStore
 	oneTimeCodes    *OneTimeCodeStore
 	frontendURL     string
 	allowedOrigin   []string
@@ -65,10 +66,12 @@ type PostStore interface {
 	List(filter repository.PostFilter) (*repository.PagedPosts, error)
 	Delete(id int64) error
 	Save(target *models.PostTarget) error
-	RetryPost(id int64) error
-	CancelPost(id int64) error
 	PublishPost(id int64) error
+	SchedulePost(id int64, scheduledAt time.Time) error
+	CancelPost(id int64) error
+	RetryPost(id int64) error
 	RetryTarget(id int64) error
+	ListTargets(postID int64) ([]models.PostTarget, error)
 	AddMediaAsset(asset *models.MediaAsset) error
 	ListMediaAssets(postID int64) ([]models.MediaAsset, error)
 }
@@ -80,6 +83,16 @@ type StorageProvider interface {
 
 type AuditLogStore interface {
 	Log(ctx context.Context, eventType, actorID string, resourceType, resourceID string, metadata map[string]interface{}) error
+}
+
+// APIKeyStore is the narrow contract for api-key CRUD + rotation.
+// Implemented by *repository.ApiKeyRepository in production.
+type APIKeyStore interface {
+	Create(ak *models.ApiKey, testKey bool) (string, error)
+	FindByID(id int64) (*models.ApiKey, error)
+	ListByProject(projectID int64) ([]models.ApiKey, error)
+	Delete(id int64) error
+	Rotate(id int64, testKey bool) (*models.ApiKey, string, error)
 }
 
 type RouterOption func(*Router)
@@ -103,14 +116,22 @@ func WithOneTimeCodeStore(s *OneTimeCodeStore) RouterOption {
 	return func(r *Router) { r.oneTimeCodes = s }
 }
 
-// WithTokenService injects the token-encryption/refresh service. The
-// Router REQUIRES this to be set (via main.go) before serving
+// WithCredentialVault injects the central credential vault. The Router
+// REQUIRES this to be set (via main.go) before serving
 // handleCallback / handlePublishPost / handlePublishAll — the call
 // sites panic with a nil-pointer dereference if it's missing, which is
 // the desired fail-fast behaviour for a misconfigured main.go. Tests
-// inject a mockTokenService via this same option.
-func WithTokenService(s services.TokenStorage) RouterOption {
-	return func(r *Router) { r.tokenSvc = s }
+// inject a mockCredentialVault via this same option.
+//
+// Taglio 2.2: renamed from WithTokenService. The vault centralises
+// AES-256-GCM encryption, persistence, refresh (with Postgres advisory
+// locks), and revocation — no provider or consumer needs to know how
+// tokens are stored.
+func WithCredentialVault(v credentials.VaultAPI) RouterOption {
+	return func(r *Router) { r.vault = v }
+}
+func WithApiKeyStore(repo APIKeyStore) RouterOption {
+	return func(r *Router) { r.apiKeyStore = repo }
 }
 
 func NewRouter(
@@ -159,20 +180,19 @@ func (r *Router) Setup() http.Handler {
 		sr.Delete("/{id}", r.protected(r.handleDeleteWorkspace))
 	})
 	r.mux.Route("/api/v1/posts", func(sr chi.Router) {
-		sr.Get("/", r.protected(r.handleListPosts))
 		sr.Post("/", r.protected(r.handleCreatePost))
 		sr.Get("/workspace/{wid}", r.protected(r.handleListByWorkspace))
 		sr.Get("/{id}", r.protected(r.handleGetPost))
-		sr.Patch("/{id}", r.protected(r.handleUpdatePost))
-		sr.Delete("/{id}", r.protected(r.handleDeletePost))
-		sr.Post("/{id}/publish", r.protected(r.handlePublishPostAction))
 		sr.Post("/{id}/schedule", r.protected(r.handleSchedulePost))
-		sr.Post("/{id}/cancel", r.protected(r.handleCancelPost))
-		sr.Post("/{id}/retry", r.protected(r.handleRetryPost))
-		sr.Get("/{id}/targets", r.protected(r.handleGetPostTargets))
 		sr.Post("/{id}/targets", r.protected(r.handleAddTarget))
 	})
-	r.mux.Method(http.MethodPost, "/api/v1/post-targets/{id}/retry", r.protected(r.handleRetryTarget))
+	r.mux.Route("/api/v1/projects/{pid}/keys", func(sr chi.Router) {
+		sr.Post("/", r.protected(r.handleCreateApiKey))
+		sr.Get("/", r.protected(r.handleListApiKeys))
+		sr.Get("/{kid}", r.protected(r.handleGetApiKey))
+		sr.Delete("/{kid}", r.protected(r.handleDeleteApiKey))
+		sr.Post("/{kid}/rotate", r.protected(r.handleRotateApiKey))
+	})
 	return r.corsMiddleware(r.loggingMiddleware(r.mux))
 }
 
@@ -235,10 +255,8 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to save user: "+err.Error())
 		return
 	}
-	// Taglio 2.1: token persistence moved out of the per-provider concern
-	// into the shared TokenStorage. The provider's only job is the OAuth
-	// flow; encrypt-and-store is now an infrastructure call.
-	if err := r.tokenSvc.SaveEncryptedToken(account.ID, tokenData); err != nil {
+	// Taglio 2.2: token persistence goes through CredentialVault.Save.
+	if err := r.vault.Save(req.Context(), account.ID, tokenData); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save token: "+err.Error())
 		return
 	}
@@ -464,17 +482,23 @@ func (r *Router) publishContent(ctx context.Context, userID int64, pubReq *Publi
 
 func (r *Router) publishToAccount(ctx context.Context, account *models.PlatformAccount, pubReq *PublishRequest) (*models.PublishResult, error) {
 	// Taglio 2.1: per-capability lookups. We need the OAuthProvider (for
-	// token refresh via TokenStorage) AND the Publisher (for the actual
+	// token refresh via the vault) AND the Publisher (for the actual
 	// call). A platform missing either cannot be published to.
 	oauth, oauthOK := r.capabilities.OAuth(account.Platform)
 	publisher, pubOK := r.capabilities.Publisher(account.Platform)
 	if !oauthOK || !pubOK {
 		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("unsupported platform: %s", account.Platform)}
 	}
+	// Taglio 2.2: adapt the provider's RefreshOAuthToken method into a
+	// credentials.TokenRefresher closure. The vault only knows the
+	// function signature; the provider type stays out of the vault.
+	refresher := credentials.TokenRefresher(func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+		return oauth.RefreshOAuthToken(ctx, refreshToken)
+	})
 	// Try Bearer first (refresh-capable), then LongLived (Meta-style re-exchange).
-	oauthToken, err := r.tokenSvc.EnsureFreshToken(ctx, account.ID, models.TokenTypeBearer, oauth)
+	oauthToken, err := r.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
 	if err != nil {
-		if oauthToken, err = r.tokenSvc.EnsureFreshToken(ctx, account.ID, models.TokenTypeLongLived, oauth); err != nil {
+		if oauthToken, err = r.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher); err != nil {
 			return nil, &publishError{http.StatusUnauthorized, "no valid token: " + err.Error()}
 		}
 	}
