@@ -1,42 +1,66 @@
 -- ============================================================================
 -- 027_drop_publish_state.sql
 --
--- Taglio 5.x — consolidation of the two migrations 011_*.sql files
--- (commit-stepped against the same goal). Strategy:
+-- Taglio 5.x — consolidation step. Required regardless of deployment
+-- history.
 --
---   - 011_target_publish_state.sql is DELETED — its sibling
---     011_target_provider_state.sql is the canonical 011, and Go code
---     never reads publish_state. A grep across *.go returns zero hits.
---   - This migration DROPs publish_state to converge production
---     databases that already ran the original 011 pair.
---   - Idempotent (DROP COLUMN IF EXISTS).
+--   This migration DROPs the `publish_state` column from `post_targets`
+--   that was created by the now-deleted `011_target_publish_state.sql`.
+--   It is unconditional: applies on greenfield installs (where the
+--   column never existed) AND on databases that ran the original
+--   `011_target_*.sql` pair pre-consolidation. On greenfield installs
+--   the `IF EXISTS` guard makes it a no-op; on existing prod databases
+--   it removes the unused column to converge the on-disk schema with
+--   the migration-history contents.
 --
--- Why a SEPARATE migration rather than folding the drop into 028+ is
--- left as a deliberate design choice: every additive SQL change goes
--- through its own migration file, so a future operator reading git
--- log can pinpoint "this is when the duplicate-column cleanup landed".
--- The runner is idempotent (ALTER + DROP are both IF EXISTS guarded)
--- so re-runs against an already-converged DB are no-ops.
+--   Rationale: grep across *.go returns zero hits for `publish_state`.
+--   The canonical async-state column is `provider_state` (added by
+--   `011_target_provider_state.sql` — the now-singular 011), and it
+--   is the column the worker / reconciler / outbox dispatcher all read
+--   and write. `publish_state` was a parallel-design leftover from an
+--   earlier draft of the async-state-machine work and was never
+--   adopted by any Go layer.
 --
--- Risks considered:
+-- Idempotency: `DROP COLUMN IF EXISTS` makes the migration safe to
+-- re-run on databases that already converged. The runner re-executes
+-- every .sql file on every startup (no `schema_migrations` table), so
+-- idempotency is the hard requirement for ALL additive changes in this
+-- project — this migration follows the same rule.
 --
---   (a) Production DBs that already have publish_state. DROP COLUMN
+-- Why a SEPARATE migration rather than folding the drop into 028+:
+--   every additive SQL change goes through its own migration file, so
+--   a future operator reading git log can pinpoint "this is when the
+--   duplicate-column cleanup landed". Folding the drop into a future
+--   unrelated migration would hide this intent.
+--
+-- Risks surveyed (and mitigated):
+--
+--   (a) Production DBs that already have `publish_state`. DROP COLUMN
 --       is the canonical way to remove it; without this migration,
 --       deleting only the .sql file leaves prod OUT OF SYNC with the
---       new migrations/ contents. (developer mistake to call
---       `pure delete` "consolidation" — it would silently drop the
---       column from dev/test (because those migrate from greenfield)
---       while prod kept the stale column.)
---   (b) The `idx_post_targets_publishing_publish_id` index, defined
---       in BOTH 011 files as `CREATE INDEX IF NOT EXISTS`, lives on
---       production either way (only one CREATE actually fires since
---       the second is a no-op). With 011_target_publish_state.sql
---       deleted, only 011_target_provider_state.sql creates it once.
---       Production keeps the index from its original pair — fine.
---   (c) No Go references exist: `publish_state` is referenced only
---       by the deleted migration + the integration-test schema
---       fingerprint. The fingerprint test is updated to drop the
---       publish_state expectation in the same commit.
+--       new `migrations/` contents. (Dev/test migrate from greenfield
+--       so they never had the column — the divergence is prod-only.)
+--   (b) The partial index `idx_post_targets_publishing_publish_id`,
+--       defined in BOTH 011 files as `CREATE INDEX IF NOT EXISTS`,
+--       lives on production either way (only one CREATE actually
+--       fires since the second is a no-op). With
+--       `011_target_publish_state.sql` deleted,
+--       `011_target_provider_state.sql` is the sole creator. The
+--       index is on (id) WHERE status='publishing' AND
+--       platform_post_id IS NOT NULL — independent of any specific
+--       state column, so it stays valid whether or not
+--       `publish_state` was dropped.
+--   (c) No Go references to `publish_state` (grep verified across
+--       the entire repo). No other migration references the column.
+--       The `migrations_integration_test.go` schema-fingerprint
+--       assertion never listed `publish_state` as required — only
+--       `provider_state` — so no test update is needed.
+--
+-- Out-of-scope: this commit does NOT touch migration 012's pre-
+-- existing reverse-order failure (ALTER TYPE ADD VALUE waiting_
+-- provider + CREATE INDEX … WHERE status='waiting_provider' in the
+-- same db.Exec). The bug is independent of the consolidation and
+-- tracked separately.
 -- ============================================================================
 
 ALTER TABLE post_targets
