@@ -51,17 +51,17 @@ type mockPostStore struct {
 	// Call counters — one per method, incremented on every invocation.
 	// Tests assert on the relative ordering (e.g. claimCalls > 0 before
 	// findByIDCalls is allowed) and the final counts.
-	claimCalls int
-	findByIDCalls int
-	updateCalls int
+	claimCalls       int
+	findByIDCalls    int
+	updateCalls      int
 	listPendingCalls int
-	setKeyCalls int
+	setKeyCalls      int
 
 	// Function fields — each test overrides only what it exercises.
-	listPendingFn        func(before time.Time) ([]models.PostTarget, error)
-	claimFn              func(id int64) (bool, error)
-	findByIDFn           func(id int64) (*models.Post, error)
-	updateStatusFn       func(*models.PostTarget) error
+	listPendingFn  func(before time.Time) ([]models.PostTarget, error)
+	claimFn        func(id int64) (bool, error)
+	findByIDFn     func(id int64) (*models.Post, error)
+	updateStatusFn func(*models.PostTarget) error
 	// setKeyFn lets a test simulate ErrProviderIdempotencyConflict
 	// from the repository's SetProviderIdempotencyKey call. Default
 	// (nil) returns nil — the worker's happy path.
@@ -935,7 +935,7 @@ func TestRunOnce_TickOnly(t *testing.T) {
 		findByIDFn: func(id int64) (*models.Post, error) {
 			return &models.Post{ID: 100, Caption: "x"}, nil
 		},
-		claimFn: func(id int64) (bool, error) { return true, nil },
+		claimFn:  func(id int64) (bool, error) { return true, nil },
 		setKeyFn: func(id int64, key string) error { return nil },
 	}
 	users := &mockUserStore{
@@ -995,7 +995,7 @@ func TestRunOnce_TickOnly_AsyncPlatform_NoReconcile(t *testing.T) {
 		findByIDFn: func(id int64) (*models.Post, error) {
 			return &models.Post{ID: 100, Caption: "x", MediaURL: "https://cdn.example.com/v.mp4"}, nil
 		},
-		claimFn: func(id int64) (bool, error) { return true, nil },
+		claimFn:  func(id int64) (bool, error) { return true, nil },
 		setKeyFn: func(id int64, key string) error { return nil },
 	}
 	users := &mockUserStore{

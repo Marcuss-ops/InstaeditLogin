@@ -6,22 +6,22 @@
 //
 // Why a separate goroutine:
 //
-//	1. INDEPENDENT CADENCE. The publish driver ticks at 30s (default)
-//	   and looks for queued→publishing transitions. The reconciler
-//	   ticks faster (5s default) so an async publish's
-//	   publishing→published transition is observed promptly without
-//	   being coupled to the driver's cadence.
-//	2. NO DOUBLE-POLL. With tickReconcile removed from PublishWorker,
-//	   there is exactly ONE goroutine reading the publishing row
-//	   set per replica. Two replicas each have ONE reconciler —
-//	   multi-replica safety is delegated to the platform's
-//	   state-string idempotency (and the publisher_idempotency_key
-//	   column on post_targets for any publisher that uses the
-//	   provider reconciler idempotency model).
-//	3. FAILURE ISOLATION. A stuck reconciler tick does NOT block
-//	   the publish driver. With the old in-runOnce shape, a slow
-//	   platform API on the reconciler tick held the publish driver
-//	   hostage for the duration of the platform call.
+//  1. INDEPENDENT CADENCE. The publish driver ticks at 30s (default)
+//     and looks for queued→publishing transitions. The reconciler
+//     ticks faster (5s default) so an async publish's
+//     publishing→published transition is observed promptly without
+//     being coupled to the driver's cadence.
+//  2. NO DOUBLE-POLL. With tickReconcile removed from PublishWorker,
+//     there is exactly ONE goroutine reading the publishing row
+//     set per replica. Two replicas each have ONE reconciler —
+//     multi-replica safety is delegated to the platform's
+//     state-string idempotency (and the publisher_idempotency_key
+//     column on post_targets for any publisher that uses the
+//     provider reconciler idempotency model).
+//  3. FAILURE ISOLATION. A stuck reconciler tick does NOT block
+//     the publish driver. With the old in-runOnce shape, a slow
+//     platform API on the reconciler tick held the publish driver
+//     hostage for the duration of the platform call.
 //
 // Per-tick body: ListPublishing → for each row → lookup account
 // → lookup AsyncPublisher capability → vault.Renew token →

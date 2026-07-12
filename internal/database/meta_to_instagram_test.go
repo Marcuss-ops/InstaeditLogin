@@ -12,8 +12,6 @@ import (
 	"testing"
 )
 
-
-
 // insertPlatformAccount inserts a platform_accounts row and returns its id.
 func insertPlatformAccount(t *testing.T, db *sql.DB, platform, platformUserID, username string) int64 {
 	t.Helper()
