@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -292,37 +293,47 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	// THREE independent drains — the publish worker, the reconcile
-	// worker, and the outbox dispatcher have no shared shutdown
-	// dependency. Cancelling in parallel + giving each its own 15s
-	// budget is race-free vs a single join-channel that could fire
-	// the 15s timeout while one goroutine is mid-MarkProcessed but
-	// another has already closed. (Same shape as the prior 2-way
-	// version; adding the third goroutine stacks another 15s budget
-	// on the shutdown path — fast on graceful drain, only stretches
-	// on hard hangs.)
+	// 3 goroutines drain CONCURRENTLY. Each leaf has its own 15s
+	// inner timeout, so wg.Wait returns within 15s of start (parallel
+	// execution — no per-leaf blocks forever on a hung Run). Total
+	// wall-clock on hard hangs: 15s (down from the prior stacked
+	// 3x15s = 45s). Missing "drained cleanly" line identifies which
+	// worker hit its inner timeout.
 	slog.Info("Shutting down: cancelling publish worker + reconcile worker + outbox dispatcher in parallel")
 	workerCancel()
 	reconcileCancel()
 	dispatcherCancel()
-	select {
-	case <-workerDone:
-		slog.Info("publish worker drained cleanly")
-	case <-time.After(15 * time.Second):
-		slog.Warn("publish worker drain timeout, continuing shutdown")
-	}
-	select {
-	case <-reconcileDone:
-		slog.Info("reconcile worker drained cleanly")
-	case <-time.After(15 * time.Second):
-		slog.Warn("reconcile worker drain timeout, continuing shutdown")
-	}
-	select {
-	case <-dispatcherDone:
-		slog.Info("outbox dispatcher drained cleanly")
-	case <-time.After(15 * time.Second):
-		slog.Warn("outbox dispatcher drain timeout, continuing shutdown")
-	}
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-workerDone:
+			slog.Info("publish worker drained cleanly")
+		case <-time.After(15 * time.Second):
+			slog.Warn("publish worker drain timeout, continuing shutdown")
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		select {
+		case <-reconcileDone:
+			slog.Info("reconcile worker drained cleanly")
+		case <-time.After(15 * time.Second):
+			slog.Warn("reconcile worker drain timeout, continuing shutdown")
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		select {
+		case <-dispatcherDone:
+			slog.Info("outbox dispatcher drained cleanly")
+		case <-time.After(15 * time.Second):
+			slog.Warn("outbox dispatcher drain timeout, continuing shutdown")
+		}
+	}()
+	wg.Wait()
+	slog.Info("all background goroutines drained")
 
 	slog.Info("Shutting down server...")
 
