@@ -576,3 +576,14 @@ func (s *YouTubeOAuthService) getUserInfo(ctx context.Context, accessToken strin
 		Email:          result.Email,
 	}, nil
 }
+
+// -----------------------------------------------------------------------------
+// Compile-time conformance to the central Platform Registry contract.
+// Taglio 4.3.
+// -----------------------------------------------------------------------------
+var (
+	_ Provider         = (*YouTubeOAuthService)(nil)
+	_ OAuthProvider    = (*YouTubeOAuthService)(nil)
+	_ ContentValidator = (*YouTubeOAuthService)(nil)
+	_ Publisher        = (*YouTubeOAuthService)(nil)
+)

@@ -239,6 +239,23 @@ func (s *ThreadsOAuthService) Reconcile(ctx context.Context, accessToken, publis
 	}
 }
 
+// -----------------------------------------------------------------------------
+// Compile-time conformance to the central Platform Registry contract.
+// Threads implements OAuthProvider + ContentValidator + Publisher
+// (sync compat path) + AsyncPublisher (Taglio 4.2, added Reconcile
+// in this PR). Without AsyncPublisher, the worker reconciler would
+// never pick up Threads targets — the Publish() return value alone
+// is not enough to drive the state machine.
+// Taglio 4.3.
+// -----------------------------------------------------------------------------
+var (
+	_ Provider         = (*ThreadsOAuthService)(nil)
+	_ OAuthProvider    = (*ThreadsOAuthService)(nil)
+	_ ContentValidator = (*ThreadsOAuthService)(nil)
+	_ Publisher        = (*ThreadsOAuthService)(nil)
+	_ AsyncPublisher   = (*ThreadsOAuthService)(nil)
+)
+
 // =========================================================================
 // Helpers
 // =========================================================================

@@ -287,6 +287,21 @@ func (s *FacebookOAuthService) publishPageFeed(ctx context.Context, pageAccessTo
 	return result.ID, nil
 }
 
+// -----------------------------------------------------------------------------
+// Compile-time conformance to the central Platform Registry contract.
+// The blank identifiers cost zero runtime; they pin the interface set
+// the constructor advertises. Drop a line here if a capability is removed
+// from the implementation; drop the assertion if a new capability lands.
+// Taglio 4.3.
+// -----------------------------------------------------------------------------
+var (
+	_ Provider           = (*FacebookOAuthService)(nil)
+	_ OAuthProvider      = (*FacebookOAuthService)(nil)
+	_ ResourceDiscoverer = (*FacebookOAuthService)(nil)
+	_ ContentValidator   = (*FacebookOAuthService)(nil)
+	_ Publisher          = (*FacebookOAuthService)(nil)
+)
+
 func (s *FacebookOAuthService) publishPagePhoto(ctx context.Context, pageAccessToken, pageID, imageURL, caption string) (string, error) {
 	params := url.Values{}
 	params.Set("url", imageURL)

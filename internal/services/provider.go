@@ -29,6 +29,15 @@ type NameProvider interface {
 	Name() string
 }
 
+// Provider is a type alias for NameProvider. The canonical short name
+// per the Zernio-like Platform Registry contract: every registered
+// capability row is keyed by its Provider.Name() string.
+//
+// Taglio 4.3: NameProvider kept as the existing symbol so legacy call
+// sites compile unchanged; Provider is the preferred name for new
+// code. They are interchangeable at compile time.
+type Provider = NameProvider
+
 // OAuthProvider handles the OAuth login flow: build login URL, exchange the
 // authorization code for a token, fetch the user profile, refresh the token
 // when it expires. Every provider that supports user login implements this.
@@ -59,6 +68,16 @@ type AccountDiscoverer interface {
 	// has no sub-accounts on this platform.
 	DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*models.PlatformAccount, error)
 }
+
+// ResourceDiscoverer is a type alias for AccountDiscoverer. The
+// canonical Zernio-like name for "provider that can list sub-resources
+// connected to the same access token" (Facebook Pages, LinkedIn
+// Organizations, Instagram Business Accounts, etc.).
+//
+// Taglio 4.3: AccountDiscoverer kept for backward compatibility;
+// ResourceDiscoverer is the preferred name for new code per the
+// Platform Registry spec. They are interchangeable at compile time.
+type ResourceDiscoverer = AccountDiscoverer
 
 // ContentValidator validates that a publish payload is acceptable for the
 // platform (e.g. YouTube requires video_url, LinkedIn requires text).
@@ -148,7 +167,13 @@ type CapabilityRouter struct {
 // capabilities is the per-platform bucket. Each field is nil if the
 // registered provider does not satisfy that interface — callers must
 // use the (X, ok) pattern to handle the absence.
+//
+// Taglio 4.3: added `raw any` to remember the original provider
+// instance so Get(name) can recover the concrete value (used by
+// platform-specific helpers like Validate / Revoke that are NOT on
+// any of the named capability interfaces).
 type capabilities struct {
+	raw      any
 	oauth    OAuthProvider
 	discover AccountDiscoverer
 	validate ContentValidator
@@ -172,7 +197,7 @@ func NewCapabilityRouter() *CapabilityRouter {
 // Re-registering the same name overwrites the previous entry. Callers
 // that want to refuse duplicates can check Names() first.
 func (r *CapabilityRouter) Register(name string, p any) {
-	entry := &capabilities{}
+	entry := &capabilities{raw: p}
 	if o, ok := p.(OAuthProvider); ok {
 		entry.oauth = o
 	}
@@ -189,6 +214,24 @@ func (r *CapabilityRouter) Register(name string, p any) {
 		entry.async = ap
 	}
 	r.providers[name] = entry
+}
+
+// Get returns the raw provider registered under name (e.g. a concrete
+// *FacebookOAuthService), or false if not registered. Use this for
+// platform-specific helpers (account lifecycle Validate/Revoke,
+// Meta-fb_exchange_token, TikTok PULL_FROM_FILE chunked upload, etc.)
+// that aren't on any of the capability interfaces. For dispatch
+// logic, prefer the typed accessors: OAuth(name), Publisher(name),
+// AsyncPublisher(name), ResourceDiscoverer(name), Validator(name).
+//
+// Taglio 4.3: the raw instance is stashed at Register time so callers
+// don't need to do their own type assertion in the hot path.
+func (r *CapabilityRouter) Get(name string) (any, bool) {
+	e, ok := r.providers[name]
+	if !ok || e == nil {
+		return nil, false
+	}
+	return e.raw, true
 }
 
 // OAuth returns the OAuthProvider for name, or false.

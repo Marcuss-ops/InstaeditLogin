@@ -375,6 +375,22 @@ func (s *TikTokOAuthService) Reconcile(ctx context.Context, accessToken, publish
 	}
 }
 
+// -----------------------------------------------------------------------------
+// Compile-time conformance to the central Platform Registry contract.
+// TikTok implements both Publisher (sync legacy path / direct publish)
+// AND AsyncPublisher (Taglio 4.2 four-step state machine). The router
+// uses AsyncPublisher when present, falling back to Publisher only on
+// platforms that don't satisfy the async state machine.
+// Taglio 4.3.
+// -----------------------------------------------------------------------------
+var (
+	_ Provider         = (*TikTokOAuthService)(nil)
+	_ OAuthProvider    = (*TikTokOAuthService)(nil)
+	_ ContentValidator = (*TikTokOAuthService)(nil)
+	_ Publisher        = (*TikTokOAuthService)(nil)
+	_ AsyncPublisher   = (*TikTokOAuthService)(nil)
+)
+
 // --- Private ---
 
 type tiktokTokenResponse struct {

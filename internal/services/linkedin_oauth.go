@@ -272,3 +272,14 @@ func (s *LinkedInOAuthService) getUserInfo(ctx context.Context, accessToken stri
 		Email:          result.Email,
 	}, nil
 }
+
+// -----------------------------------------------------------------------------
+// Compile-time conformance to the central Platform Registry contract.
+// Taglio 4.3.
+// -----------------------------------------------------------------------------
+var (
+	_ Provider         = (*LinkedInOAuthService)(nil)
+	_ OAuthProvider    = (*LinkedInOAuthService)(nil)
+	_ ContentValidator = (*LinkedInOAuthService)(nil)
+	_ Publisher        = (*LinkedInOAuthService)(nil)
+)

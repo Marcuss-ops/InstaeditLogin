@@ -49,6 +49,22 @@ import (
 // interchangeable at the call site.
 type CapabilityRegistry = *services.CapabilityRouter
 
+// PlatformRegistry is the canonical Zernio-like name for the central
+// platform registry. Per the Platform Registry contract:
+//
+//	registry.Register("instagram",  instagramProvider)
+//	registry.Register("tiktok",     tiktokProvider)
+//	registry.Register("twitter",    twitterProvider)
+//	registry.Register("youtube",    youtubeProvider)
+//	registry.Register("linkedin",   linkedinProvider)
+//	registry.Register("facebook",   facebookProvider)
+//	registry.Register("threads",    threadsProvider)
+//
+// Type-aliased to CapabilityRegistry / *services.CapabilityRouter
+// so existing call sites compile unchanged. Handler/worker/SDK
+// consumers can use either name interchangeably.
+type PlatformRegistry = *services.CapabilityRouter
+
 // Dependency is a forward-compat extension point for BuildRegistry.
 // Each Dependency mutates the internal builder before platforms are
 // registered. Today the only exposed Dependency is WithLogger; more
