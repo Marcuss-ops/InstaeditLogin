@@ -340,6 +340,16 @@ func TestLoad_ConfigValidationErrors(t *testing.T) {
 		t.Setenv("META_APP_SECRET", strings.Repeat("a", 32))
 		t.Setenv("ENCRYPTION_KEY", minValid32ByteBase64Key)
 		t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
+		// Taglio 2.4 follow-up: S3_* env vars (mandatory since
+		// Taglio 3.1) are seeded with the same syntactically-valid
+		// placeholders used by minimalValidConfig. Load() reads them
+		// through godotenv; the placeholders never need to be real
+		// AWS creds because the tests don't dial the storage
+		// backend.
+		t.Setenv("S3_ENDPOINT", "https://s3.example.com")
+		t.Setenv("S3_BUCKET", "test-bucket")
+		t.Setenv("S3_ACCESS_KEY", "test-access-key")
+		t.Setenv("S3_SECRET_KEY", "test-secret-key")
 	}
 
 	t.Run("all required envs valid succeeds", func(t *testing.T) {
@@ -461,6 +471,11 @@ func TestLoad_AppEnv_PropagatesValue(t *testing.T) {
 	t.Setenv("META_APP_SECRET", strings.Repeat("a", 32))
 	t.Setenv("ENCRYPTION_KEY", minValid32ByteBase64Key)
 	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
+	// S3 env vars mandatory since Taglio 3.1.
+	t.Setenv("S3_ENDPOINT", "https://s3.example.com")
+	t.Setenv("S3_BUCKET", "test-bucket")
+	t.Setenv("S3_ACCESS_KEY", "test-access-key")
+	t.Setenv("S3_SECRET_KEY", "test-secret-key")
 	t.Setenv("APP_ENV", "staging")
 
 	cfg, err := Load()
@@ -470,7 +485,9 @@ func TestLoad_AppEnv_PropagatesValue(t *testing.T) {
 	if cfg.AppEnv != "staging" {
 		t.Fatalf("AppEnv: want staging, got %q", cfg.AppEnv)
 	}
-} // TestValidate_NoOAuthPlatformsValid (Taglio 2.4) proves that a
+}
+
+// TestValidate_NoOAuthPlatformsValid (Taglio 2.4) proves that a
 // config with EVERY OAuth platform empty (Meta AppID+Secret empty,
 // no TikTok/Twitter/YouTube/LinkedIn creds) still passes validate().
 // The server is then expected to start with zero registered providers;
@@ -581,6 +598,11 @@ func TestLoad_AppEnv_BogusFails(t *testing.T) {
 	t.Setenv("META_APP_SECRET", strings.Repeat("a", 32))
 	t.Setenv("ENCRYPTION_KEY", minValid32ByteBase64Key)
 	t.Setenv("JWT_SECRET", strings.Repeat("a", 32))
+	// S3 env vars mandatory since Taglio 3.1.
+	t.Setenv("S3_ENDPOINT", "https://s3.example.com")
+	t.Setenv("S3_BUCKET", "test-bucket")
+	t.Setenv("S3_ACCESS_KEY", "test-access-key")
+	t.Setenv("S3_SECRET_KEY", "test-secret-key")
 	t.Setenv("APP_ENV", "bogus")
 
 	_, err := Load()
