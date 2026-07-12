@@ -23,21 +23,28 @@ import (
 // selezione**. Facebook publishing is gated by the Page model — you
 // cannot publish to a personal profile via the Graph API (/me/feed
 // returns 400), so this service publishes ONLY to Pages, never to the
-// user. The specific Page to publish to is selected at OAuth-connect
-// time via DiscoverAccounts (which returns all Pages the user
-// manages), with the chosen page_id stored in
-// PlatformAccount.metadata so the per-target Publish dispatches to
-// the right page.
+// user. Selection of WHICH Page to publish to is surfaced through
+// DiscoverAccounts (which returns all Pages the user manages) so the
+// OAuth-connect handler can offer them at connect time.
+//
+// CURRENT STATE vs INTENDED STATE — the per-Page selection wiring is
+// incomplete. Today Publish() defaults to `pages[0]` (the first Page
+// returned by getPages); platformUserID carries the Facebook user id,
+// not a page id. A future commit on main will add explicit page-id
+// persistence on PlatformAccount.metadata and Publish() will read it
+// instead of calling getPages() at publish time. Tracked as a follow-up.
 //
 // Capabilities exposed:
 //   - OAuthProvider (Meta OAuth login flow with Pages-scoped auth)
 //   - ResourceDiscoverer (= AccountDiscoverer — Facebook Pages the user
-//     manages; selection happens here, the OAuth-connect handler picks
-//     one Page and persists its id on PlatformAccount.metadata)
+//     manages; the OAuth-connect handler surfaces them, today the
+//     pick is implicit via pages[0])
 //   - ContentValidator (text or image required — text goes to /feed,
-//     image to /photos)
-//   - Publisher (Page feed / Page photo, dispatched on the
-//     previously-selected page_id via /{page_id}/feed or /{page_id}/photos)
+//     image to /photos). Note: video uploads on Pages use a separate
+//     /videos endpoint and are NOT covered by the current Publisher
+//     implementation; reels/videos would be a follow-up.
+//   - Publisher (Page feed / Page photo, dispatched on pages[0] today
+//     — to be replaced by explicit page-id selection in a follow-up)
 //   - AccountManager (Validate / Revoke — non-interface helpers used
 //     by the handlers' account lifecycle methods).
 type FacebookOAuthService struct {
