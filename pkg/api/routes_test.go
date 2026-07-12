@@ -1186,6 +1186,41 @@ func TestHandleCallback_RejectsMissingStateParam_400(t *testing.T) {
 	}
 }
 
+// TestPlatformMetaIsRejected (Taglio 5c) proves that a request with
+// platform="meta" returns 404 unsupported_platform. The legacy composite
+// Meta provider was split into instagram, facebook, and threads — the
+// "meta" string must no longer be a valid platform identifier anywhere.
+func TestPlatformMetaIsRejected(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "")
+
+	// Login with platform=meta must return 404.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/login", nil)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("/auth/meta/login: want 404 (platform removed), got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Callback with platform=meta must return 404.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=x", nil)
+	w2 := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w2, req2)
+	if w2.Code != http.StatusNotFound {
+		t.Fatalf("/auth/meta/callback: want 404 (platform removed), got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	// The registered providers (instagram, tiktok, twitter) must still work.
+	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
+	w3 := httptest.NewRecorder()
+	withBearerJWT(t, req3, 1)
+	r.Setup().ServeHTTP(w3, req3)
+	if w3.Code != http.StatusFound {
+		t.Fatalf("/auth/instagram/login: want 302 (still works), got %d", w3.Code)
+	}
+}
+
 func TestHandleCallback_DeletesStateCookieAfterUse(t *testing.T) {
 	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
 	store := &mockUserStore{findOrCreateFn: successFindOrCreate}

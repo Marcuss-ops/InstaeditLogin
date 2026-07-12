@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // TestBuildRegistry_NoPlatforms asserts the degenerate case: a config
@@ -323,6 +324,164 @@ func TestBuildRegistry_InstagramMissingMetaCreds(t *testing.T) {
 				t.Errorf("expected warn log to contain %q, got %q", tc.wantWarnSub, logged)
 			}
 		})
+	}
+}
+
+// TestRegistryDoesNotRegisterMeta (Taglio 5c) proves that a config
+// with no "meta" platform registers zero Meta providers — only the
+// three concrete Meta-family providers (instagram, facebook, threads)
+// can be registered. The "meta" string must NOT appear in registry.Names().
+func TestRegistryDoesNotRegisterMeta(t *testing.T) {
+	cfg := &config.Config{
+		MetaAppID:            "1234567890",
+		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+		InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+		ThreadsRedirectURI:   "https://example.com/api/v1/auth/threads/callback",
+	}
+	registry, err := BuildRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildRegistry: %v", err)
+	}
+	for _, name := range registry.Names() {
+		if name == "meta" {
+			t.Errorf("registry.Names() contains 'meta' — must never register the legacy composite Meta provider (only instagram, facebook, threads)")
+		}
+	}
+}
+
+// TestRegistrySkipsUnconfiguredProvider (Taglio 5c) proves that a provider
+// whose redirect URI is empty is NOT registered, while providers with
+// redirect URIs set ARE registered. Uses Instagram as the configured
+// provider and Facebook/Threads as the unconfigured ones.
+func TestRegistrySkipsUnconfiguredProvider(t *testing.T) {
+	cfg := &config.Config{
+		MetaAppID:            "1234567890",
+		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+		InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+		FacebookRedirectURI:  "",
+		ThreadsRedirectURI:   "",
+	}
+	registry, err := BuildRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildRegistry: %v", err)
+	}
+	names := registry.Names()
+	if len(names) != 1 {
+		t.Fatalf("registry.Names(): want 1 platform (instagram only), got %d (%v)", len(names), names)
+	}
+	if names[0] != "instagram" {
+		t.Errorf("registered platform: want instagram, got %q", names[0])
+	}
+	for _, name := range names {
+		if name == "facebook" || name == "threads" {
+			t.Errorf("unconfigured provider %q should not be registered (redirect URI is empty)", name)
+		}
+	}
+}
+
+// TestRegistryAllowsDuplicateRegistration (Taglio 5c) proves that
+// re-registering the same platform name overwrites the previous entry
+// (last-write-wins). The registry intentionally allows this — callers
+// that want to prevent duplicates can check registry.Names() first.
+func TestRegistryAllowsDuplicateRegistration(t *testing.T) {
+	cfg := &config.Config{
+		MetaAppID:            "1234567890",
+		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+	}
+	registry, err := BuildRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildRegistry: %v", err)
+	}
+	// Register a second time — should overwrite silently.
+	fb2, err := services.NewFacebookOAuthService(cfg)
+	if err != nil {
+		t.Fatalf("NewFacebookOAuthService (second): %v", err)
+	}
+	if fb2 == nil {
+		t.Fatal("NewFacebookOAuthService returned nil with valid config")
+	}
+	registry.Register(fb2.Name(), fb2)
+
+	names := registry.Names()
+	// Count occurrences of "facebook".
+	count := 0
+	for _, name := range names {
+		if name == "facebook" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("facebook appears %d times in registry.Names() — duplicate registration must not create duplicate entries", count)
+	}
+}
+
+// TestRegistryReturnsCapabilities (Taglio 5c) proves that registered
+// platforms return the expected capabilities from the router's typed
+// accessors (OAuth, Publisher, Validator). A nil capability for a
+// platform that should have it is a wiring bug.
+func TestRegistryReturnsCapabilities(t *testing.T) {
+	cfg := &config.Config{
+		MetaAppID:            "1234567890",
+		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+	}
+	registry, err := BuildRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildRegistry: %v", err)
+	}
+
+	// Facebook must have OAuth capability.
+	oauth, ok := registry.OAuth("facebook")
+	if !ok || oauth == nil {
+		t.Errorf("Facebook: OAuth capability missing")
+	}
+
+	// Facebook must have Publisher capability.
+	pub, ok := registry.Publisher("facebook")
+	if !ok || pub == nil {
+		t.Errorf("Facebook: Publisher capability missing")
+	}
+
+	// Facebook must have Validator capability.
+	val, ok := registry.Validator("facebook")
+	if !ok || val == nil {
+		t.Errorf("Facebook: Validator capability missing")
+	}
+}
+
+// TestRegistryReturnsUnsupportedPlatformError (Taglio 5c) proves that
+// querying capabilities for an unregistered platform returns (nil, false).
+// The HTTP handler uses this to return 404 for unsupported providers, and
+// the worker uses it to skip platforms it can't publish to.
+func TestRegistryReturnsUnsupportedPlatformError(t *testing.T) {
+	cfg := &config.Config{
+		MetaAppID:            "1234567890",
+		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+	}
+	registry, err := BuildRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildRegistry: %v", err)
+	}
+
+	// "meta" must NOT be registered.
+	if _, ok := registry.OAuth("meta"); ok {
+		t.Error("meta: OAuth capability must be absent (legacy composite provider is not registered)")
+	}
+	if _, ok := registry.Publisher("meta"); ok {
+		t.Error("meta: Publisher capability must be absent")
+	}
+
+	// Completely unknown platform.
+	if _, ok := registry.OAuth("nonexistent"); ok {
+		t.Error("nonexistent: OAuth capability must be absent")
+	}
+
+	// Verify registered platform still works alongside the negative checks.
+	if _, ok := registry.OAuth("facebook"); !ok {
+		t.Error("facebook: OAuth capability must be present (registered platform must not be affected by unsupported checks)")
 	}
 }
 
