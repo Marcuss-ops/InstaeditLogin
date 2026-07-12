@@ -329,9 +329,9 @@ func (w *PublishWorker) tickReconcile(ctx context.Context) (reconciled, failed i
 //  4. Calls CheckPublishStatus (single GET, no polling).
 //  5. Updates provider_state to the current state (debugging/observability).
 //  6. Transitions:
-//       PUBLISH_COMPLETE → status='published', set published_at
-//       FAILED          → status='failed', save error_message
-//       in-flight       → leave status='publishing', no transition
+//     PUBLISH_COMPLETE → status='published', set published_at
+//     FAILED          → status='failed', save error_message
+//     in-flight       → leave status='publishing', no transition
 //
 // Returns (reconciled bool, wasFailed bool, err). The bools let the
 // caller increment the per-tick counters without parsing the error.
@@ -519,16 +519,35 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		key = *target.ProviderIdempotencyKey
 	} else {
 		key = computeProviderIdempotencyKey(target.PostID, account.ID)
+		// Mirror the stamped key onto the in-memory struct so any
+		// SUBSEQUENT path that reads target.ProviderIdempotencyKey
+		// (UpdateStatus captures, future debug-log wires) sees the
+		// stamped value, not the pre-stamp nil. Without this mirror
+		// we trust ListPending's SELECT to include the column on
+		// every re-fetch (the case today) — setting it locally
+		// removes that implicit coupling.
+		target.ProviderIdempotencyKey = &key
 		if err := w.postRepo.SetProviderIdempotencyKey(target.ID, key); err != nil {
 			if errors.Is(err, repository.ErrProviderIdempotencyConflict) {
-				// Degenerate: same (post, account) yielded a key already
-				// stamped on another row of this account. Treat as a
-				// failure so the tick counter increments and the
-				// operator can reconcile. The hold-pattern would be
-				// worse: a stuck 'publishing' row.
-				w.logger.Warn("provider idempotency key conflict on stamp; tick counts as failed",
+				// Degenerate: another row on the same account already
+				// has this key (collision with extremely low probability
+				// for SHA-256 prefix, OR a stale key from a prior failed
+				// attempt). Do NOT leave the row in 'publishing' — it
+				// would be polled forever by tickReconcile and never
+				// re-picked by tick either. Promote to 'failed' so the
+				// row drops out of BOTH filter sets and the operator
+				// can see + reconcile it.
+				w.logger.Warn("provider idempotency key conflict on stamp; promoting target to failed",
 					"target_id", target.ID, "post_id", target.PostID,
 					"platform_account_id", account.ID, "key", key, "error", err)
+				target.Status = models.PostStatusFailed
+				target.ErrorMessage = "provider idempotency key conflict: " + err.Error()
+				if updateErr := w.postRepo.UpdateStatus(target); updateErr != nil {
+					// Surface both errors so the tick counter increments
+					// AND the operator sees the underlying failure mode.
+					return fmt.Errorf("provider idempotency key conflict (also failed to mark failed: %v): %w",
+						updateErr, err)
+				}
 				return fmt.Errorf("provider idempotency key conflict: %w", err)
 			}
 			if errors.Is(err, repository.ErrPostTargetNotFound) {

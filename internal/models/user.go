@@ -113,8 +113,10 @@ type PublishPayload struct {
 	VideoURL string `json:"video_url,omitempty"`
 	Title    string `json:"title,omitempty"`
 
-	// PrivacyLevel controls who can view the post. TikTok-only.
-	// Empty value falls back to PUBLIC_TO_EVERYONE inside the TikTok service.
+	// PrivacyLevel controls who can view the post. Required by TikTok
+	// (PUBLIC_TO_EVERYONE, MUTUAL_FOLLOW_FRIENDS, SELF_ONLY), YouTube
+	// (public, unlisted, private), and LinkedIn (PUBLIC, CONNECTIONS).
+	// Taglio 4b: no default — empty value causes a validation_error.
 	PrivacyLevel string `json:"privacy_level,omitempty"`
 
 	// CommentMode controls whether comments are allowed on the post. TikTok-only.

@@ -3,12 +3,15 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -651,24 +654,27 @@ func TestPublishTarget_PayloadIdempotencyKeyCarriesAcrossRetries(t *testing.T) {
 	}
 }
 
-// TestPublishTarget_SetKeyConflict_TicksAsFailed covers the
-// ErrProviderIdempotencyConflict path: the worker must surface the
-// error and the tick must count this target as failed (operator
-// reconciliation required). The row should NOT transition to
-// 'failed' though — the conflict is a distinct error class.
-func TestPublishTarget_SetKeyConflict_TicksAsFailed(t *testing.T) {
-	// Inject a fake ErrProviderIdempotencyConflict via setKeyFn so
-	// we don't have to import the real repository package here.
+// TestPublishTarget_SetKeyConflict_PromotesToFailed covers the
+// ErrProviderIdempotencyConflict path: the worker MUST promote the
+// target to status='failed' (not leave it in 'publishing' anymore) so
+// the row drops out of BOTH 'tick' and 'tickReconcile' filter sets.
+// Leaving the row in 'publishing' would be a permanent infinite polling
+// loop (no other worker can re-claim it because verdict-§10 owned the row).
+//
+// The setKeyFn injects a fake ErrProviderIdempotencyConflict-shaped
+// error to avoid importing the real repository package.
+func TestPublishTarget_SetKeyConflict_PromotesToFailed(t *testing.T) {
 	posts := &mockPostStore{
 		claimFn: func(id int64) (bool, error) { return true, nil },
 		findByIDFn: func(id int64) (*models.Post, error) {
 			return &models.Post{ID: 100, Caption: "x"}, nil
 		},
 		setKeyFn: func(id int64, key string) error {
-			// Surface the same sentinel the repository uses so the
-			// worker's errors.Is(err, repository.ErrProviderIdempotencyConflict)
-			// check picks it up.
-			return errors.New("provider idempotency key conflict: account already has a target with this key")
+			// Wrap with %w so errors.Is(err, repository.ErrProviderIdempotencyConflict)
+			// matches the real sentinel inside the worker's promote-to-failed
+			// branch (the same dispatch the production pq.Error path triggers).
+			return fmt.Errorf("%w: account already has a target with this key",
+				repository.ErrProviderIdempotencyConflict)
 		},
 	}
 	users := &mockUserStore{
@@ -694,11 +700,32 @@ func TestPublishTarget_SetKeyConflict_TicksAsFailed(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected conflict error to surface, got nil — the tick counter wouldn't increment without it")
 	}
+	// ALSO assert the sentinel propagates through the worker's outer
+	// fmt.Errorf wrapping — the production pq.Error path dispatches
+	// repository.ErrProviderIdempotencyConflict upstream via the same
+	// chain and the tick counter's errors.Is check depends on it.
+	if !errors.Is(err, repository.ErrProviderIdempotencyConflict) {
+		t.Errorf("err chain must wrap repository.ErrProviderIdempotencyConflict for the tick/errors.Is dispatcher, got %v", err)
+	}
 	if svc.publishCalls != 0 {
 		t.Errorf("Publish calls under conflict: want 0, got %d", svc.publishCalls)
 	}
-	if posts.updateCalls != 0 {
-		t.Errorf("UpdateStatus calls under conflict: want 0, got %d — conflict must NOT promote to failed status", posts.updateCalls)
+	// CRITICAL: on conflict, the worker MUST call UpdateStatus with
+	// status='failed' so the row drops out of both 'publishing' filter
+	// sets (tick + tickReconcile). Without this, the row is stuck and
+	// tickReconcile's forever-poll loop wastes cycles on it.
+	if posts.updateCalls != 1 {
+		t.Errorf("UpdateStatus calls under conflict: want 1 (promote-to-failed), got %d", posts.updateCalls)
+	}
+	if len(posts.updateTargets) != 1 {
+		t.Fatalf("UpdateStatus captures under conflict: want 1, got %d", len(posts.updateTargets))
+	}
+	final := posts.updateTargets[0]
+	if final.Status != models.PostStatusFailed {
+		t.Errorf("final status: want failed (promote-to-failed on conflict), got %q", final.Status)
+	}
+	if !strings.Contains(final.ErrorMessage, "provider idempotency key conflict") {
+		t.Errorf("ErrorMessage should explain the conflict: %q", final.ErrorMessage)
 	}
 }
 

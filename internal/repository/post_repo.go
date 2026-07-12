@@ -251,14 +251,14 @@ func (r *PostRepository) Save(target *models.PostTarget) error {
 // retries (same input → same key via deterministic SHA-256 prefix).
 //
 // Behaviour:
-//   * 23505 with constraint `post_targets_platform_provider_uniq` →
+//   - 23505 with constraint `post_targets_platform_provider_uniq` →
 //     ErrProviderIdempotencyConflict (this account already has another
 //     target with the same key; degenerate but exported so the caller
 //     can log + skip rather than silently re-keying). In normal flow
 //     this should not fire — the worker stamps a fresh key only when
 //     the existing one is nil — but the typed dispatch is the safety net.
-//   * 0 rows affected → ErrPostTargetNotFound.
-//   * Anything else → wrapped generic error.
+//   - 0 rows affected → ErrPostTargetNotFound.
+//   - Anything else → wrapped generic error.
 //
 // On conflict, the WORKER treats it as a recoverable race: re-reads the
 // target's existing key from ListByPost/ListPublishing and reuses it.

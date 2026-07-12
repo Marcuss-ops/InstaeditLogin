@@ -27,6 +27,15 @@
 --    with NULL default (backward-compat) and only enforce uniqueness
 --    once the worker has stamped a key.
 --
+-- 3. Worker lookup index. The only "look up by key" query the
+--    worker emits today is keyed on (platform_account_id,
+--    provider_idempotency_key), which the unique composite index
+--    above already serves. No separate single-column index here.
+--    (If a future query needs "find ALL targets with this key across
+--    tenants" — admin tooling — add a dedicated non-unique index
+--    under its own migration so the write-cost is bounded and the
+--    index is justified by a real workload.)
+--
 --    The worker's normal retry flow goes ClaimQueuedTarget (UPDATE) →
 --    EnsureProviderIdempotencyKey (UPDATE) → Publish — it never
 --    INSERTs a duplicate target row, so this constraint catches only
@@ -68,14 +77,12 @@ ALTER TABLE post_targets
 --    WHERE provider_idempotency_key IS NOT NULL. NULLs are excluded
 --    from the index, so rows that haven't been keyed yet coexist
 --    freely. The constraint kicks in only for keyed rows.
+--    This composite index also serves the only "look up by key"
+--    query the worker emits today (WHERE platform_account_id = ? AND
+--    provider_idempotency_key = ?), so a redundant
+--    non-unique single-column index would just bloat writes. If a
+--    future query needs "find ALL targets with this key across
+--    tenants" (admin tooling), add a separate dedicated index.
 CREATE UNIQUE INDEX IF NOT EXISTS post_targets_platform_provider_uniq
   ON post_targets (platform_account_id, provider_idempotency_key)
-  WHERE provider_idempotency_key IS NOT NULL;
-
--- 3. Worker lookup index (non-unique partial). Same WHERE clause as
---    the unique index above so the index doesn't grow with unkeyed
---    rows. The worker queries "any unfinished retry for this key on
---    this account?" via this index.
-CREATE INDEX IF NOT EXISTS idx_post_targets_provider_idempotency_key
-  ON post_targets (provider_idempotency_key)
   WHERE provider_idempotency_key IS NOT NULL;
