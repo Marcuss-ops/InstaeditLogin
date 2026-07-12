@@ -28,8 +28,14 @@ type contextKey string
 const userIDKey contextKey = "user_id"
 
 // Claims carries the user identity inside a signed JWT.
+//
+// SPRINT 1.1: WorkspaceID (json:"ws") is mandatory. Tokens issued by
+// pre-SPRINT-1.1 builds did NOT carry this claim; the middleware
+// rejects any token missing it with 401. Every Issuer call must pass
+// a positive wsID (Manager.Issue enforces this).
 type Claims struct {
-	UserID int64 `json:"uid"`
+	UserID      int64 `json:"uid"`
+	WorkspaceID int64 `json:"ws"`
 	jwt.RegisteredClaims
 }
 
@@ -50,11 +56,22 @@ func NewManager(secret string, ttlHours int) *Manager {
 	}
 }
 
-// Issue signs a JWT for userID. It returns the encoded token, the JTI, the
-// expiry timestamp, and any signing error.
-func (m *Manager) Issue(userID int64) (string, string, time.Time, error) {
+// Issue signs a JWT for (userID, workspaceID). It returns the encoded
+// token, the JTI, the expiry timestamp, and any signing error.
+//
+// SPRINT 1.1: workspaceID is REQUIRED. A zero workspaceID is rejected.
+// The middleware will not stamp any UserIdentity whose workspace claim
+// is missing/zero — every authenticated request must have an active
+// workspace resolved from real workspace_members. Issuers include
+// AuthService (register auto-creates a personal workspace; login picks
+// the user's first membership) and handleSwitchWorkspace (re-issues
+// after a successful /workspaces/{id}/switch).
+func (m *Manager) Issue(userID, workspaceID int64) (string, string, time.Time, error) {
 	if userID <= 0 {
 		return "", "", time.Time{}, fmt.Errorf("invalid user id: %d", userID)
+	}
+	if workspaceID <= 0 {
+		return "", "", time.Time{}, fmt.Errorf("invalid workspace id: %d", workspaceID)
 	}
 	jti, err := randomJTI()
 	if err != nil {
@@ -63,7 +80,8 @@ func (m *Manager) Issue(userID int64) (string, string, time.Time, error) {
 	now := time.Now()
 	exp := now.Add(m.ttl)
 	claims := Claims{
-		UserID: userID,
+		UserID:      userID,
+		WorkspaceID: workspaceID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   fmt.Sprintf("%d", userID),
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -79,10 +97,16 @@ func (m *Manager) Issue(userID int64) (string, string, time.Time, error) {
 	return signed, jti, exp, nil
 }
 
-// Verify parses and validates a JWT, returning the user id on success.
-func (m *Manager) Verify(raw string) (int64, error) {
+// Verify parses and validates a JWT, returning (userID, workspaceID)
+// on success. A token missing WorkspaceID (issued by pre-SPRINT-1.1
+// builds) is rejected — no implicit fallback to any default workspace.
+//
+// The two-value return replaces the pre-SPRINT-1.1 single uint64
+// return; every caller that consumed the old Verify(raw) (int64, err)
+// must update to the new shape.
+func (m *Manager) Verify(raw string) (int64, int64, error) {
 	if raw == "" {
-		return 0, errors.New("empty token")
+		return 0, 0, errors.New("empty token")
 	}
 	token, err := jwt.ParseWithClaims(raw, &Claims{}, func(t *jwt.Token) (interface{}, error) {
 		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
@@ -91,16 +115,19 @@ func (m *Manager) Verify(raw string) (int64, error) {
 		return m.secret, nil
 	})
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
-		return 0, errors.New("invalid token")
+		return 0, 0, errors.New("invalid token")
 	}
 	if claims.UserID <= 0 {
-		return 0, errors.New("missing user id in claims")
+		return 0, 0, errors.New("missing user id in claims")
 	}
-	return claims.UserID, nil
+	if claims.WorkspaceID <= 0 {
+		return 0, 0, errors.New("missing workspace id in claims (token pre-SPRINT-1.1 or invalid)")
+	}
+	return claims.UserID, claims.WorkspaceID, nil
 }
 
 // Middleware returns a handler that enforces auth. The contract is
@@ -142,31 +169,31 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 				return
 			}
 			raw := strings.TrimSpace(header[len(prefix):])
-			if IsApiKeyBearer(raw) {
-				// Defer to API-key middleware (mounted earlier) or fall
-				// through to the handler with no identity. Never reject
-				// here — the absence of a valid API-key row is not the
-				// JWT chain's call.
-				next.ServeHTTP(w, r)
-				return
-			}
-			userID, err := m.Verify(raw)
-			if err != nil {
-				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
-				return
-			}
-			m.putIdentity(r, w, next, NewUserIdentity(userID, DefaultFallbackWorkspaceID))
+		if IsApiKeyBearer(raw) {
+			// Defer to API-key middleware (mounted earlier) or fall
+			// through to the handler with no identity. Never reject
+			// here — the absence of a valid API-key row is not the
+			// JWT chain's call.
+			next.ServeHTTP(w, r)
 			return
 		}
-		// 2) Fallback: HttpOnly session cookie set by /api/v1/auth/exchange
-		//    (Taglio 1.2). The browser attaches it via credentials:'include'.
-		if c, err := r.Cookie(SessionCookieName); err == nil && c.Value != "" {
-			userID, err := m.Verify(c.Value)
-			if err == nil && userID > 0 {
-				m.putIdentity(r, w, next, NewUserIdentity(userID, DefaultFallbackWorkspaceID))
-				return
-			}
+		userID, wsID, err := m.Verify(raw)
+		if err != nil {
+			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+			return
 		}
+		m.putIdentity(r, w, next, NewUserIdentity(userID, wsID))
+		return
+	}
+	// 2) Fallback: HttpOnly session cookie set by /api/v1/auth/exchange
+	//    (Taglio 1.2). The browser attaches it via credentials:'include'.
+	if c, err := r.Cookie(SessionCookieName); err == nil && c.Value != "" {
+		userID, wsID, err := m.Verify(c.Value)
+		if err == nil && userID > 0 && wsID > 0 {
+			m.putIdentity(r, w, next, NewUserIdentity(userID, wsID))
+			return
+		}
+	}
 		http.Error(w, "missing or invalid session", http.StatusUnauthorized)
 	})
 }
@@ -192,16 +219,14 @@ func UserIDFromContext(ctx context.Context) (int64, bool) {
 	return v, ok
 }
 
-// WithUserID returns a derived context carrying the given user id. The
-// inverse of UserIDFromContext.
-//
-// SECURITY: test-only. Calling this from a production handler silently
-// bypasses JWT auth — the request reaches the handler with a
-// context-asserted user id but no real authentication. Production
-// handlers MUST obtain the user id from Middleware (via the Authorization
-// header OR the session cookie) so the JWT is verified. Only call
-// WithUserID from *_test.go files (e.g. to test requireUserID /
-// handleCreatePost without standing up a full JWT round-trip).
+// WithUserID is preserved for legacy tests. SPRINT 1.1: callers should
+// prefer WithIdentity(ctx, NewUserIdentity(uid, wsID)) and provide an
+// explicit workspace_id — WithUserID alone leaves IdentityFromContext
+// returning nil, which is rejected (401) by handlers that read the
+// identity via IdentityFromContext. Tests using WithUserID for handlers
+// that read IdentityFromContext must migrate to WithIdentity.
+// Returning context.WithValue(userIDKey, ...) keeps UserIDFromContext
+// callers (requireUserID-based handlers) working as before.
 func WithUserID(ctx context.Context, userID int64) context.Context {
 	return context.WithValue(ctx, userIDKey, userID)
 }

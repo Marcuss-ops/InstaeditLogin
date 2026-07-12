@@ -230,7 +230,7 @@ func TestHandleAcceptInvite(t *testing.T) {
 	r.registerTeamRoutes()
 
 	// Issue a real JWT for user 99.
-	jwt, _, _, _ := authMgr.Issue(99)
+	jwt, _, _, _ := authMgr.Issue(99, 1)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/invites/"+inv.Token, nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)

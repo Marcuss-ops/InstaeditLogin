@@ -20,9 +20,85 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
+
+// UserWorkspaceHelper is the interface used by route handlers to
+// resolve a user's active workspace without tying pkg/api to the
+// concrete *sql.DB-bound repositories. Tests inject a stub implementing
+// these methods (see pkg/api/workspaces_test.go). Production wiring in
+// cmd/server/main.go supplies the *repository.TeamRepository +
+// *repository.WorkspaceRepository via RepoUserWorkspaceHelper.
+type UserWorkspaceHelper interface {
+	ListOwned(ctx context.Context, userID int64) ([]int64, error)
+	ListMemberships(ctx context.Context, userID int64) ([]int64, error)
+}
+
+// repoUserWorkspaceHelper implements UserWorkspaceHelper against the
+// real Postgres repositories. The methods wrap the underlying
+// repository calls and project to a []int64 (one id per row).
+type repoUserWorkspaceHelper struct {
+	workspaceRepo *repository.WorkspaceRepository
+	teamRepo      *repository.TeamRepository
+}
+
+// RepoUserWorkspaceHelper is the production constructor. Exposed
+// because main.go needs to build the helper from the *sql.DB-bound
+// repositories. Kept lowercase-prefixed in type name (private field
+// types) but the constructor is uppercase.
+func RepoUserWorkspaceHelper(w *repository.WorkspaceRepository, t *repository.TeamRepository) UserWorkspaceHelper {
+	return &repoUserWorkspaceHelper{workspaceRepo: w, teamRepo: t}
+}
+
+func (h repoUserWorkspaceHelper) ListOwned(_ context.Context, userID int64) ([]int64, error) {
+	owned, err := h.workspaceRepo.ListByOwner(userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, 0, len(owned))
+	for _, w := range owned {
+		out = append(out, w.ID)
+	}
+	return out, nil
+}
+
+func (h repoUserWorkspaceHelper) ListMemberships(_ context.Context, userID int64) ([]int64, error) {
+	members, err := h.teamRepo.ListForUser(userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, 0, len(members))
+	for _, m := range members {
+		out = append(out, m.WorkspaceID)
+	}
+	return out, nil
+}
+
+func (h repoUserWorkspaceHelper) listOwned(_ context.Context, userID int64) ([]int64, error) {
+	owned, err := h.workspaceRepo.ListByOwner(userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, 0, len(owned))
+	for _, w := range owned {
+		out = append(out, w.ID)
+	}
+	return out, nil
+}
+
+func (h repoUserWorkspaceHelper) listMemberships(_ context.Context, userID int64) ([]int64, error) {
+	members, err := h.teamRepo.ListForUser(userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, 0, len(members))
+	for _, m := range members {
+		out = append(out, m.WorkspaceID)
+	}
+	return out, nil
+}
 
 type Router struct {
 	mux              *chi.Mux
@@ -46,6 +122,12 @@ type Router struct {
 	authEmailSvc     AuthEmailStore
 	teamStore        TeamStore
 	billingSvc       BillingServiceAPI
+	// userAndWorkspaceHelper resolves a user's active workspace during
+	// OAuth callback / exchange (and switch endpoint). Wired in
+	// cmd/server/main.go via WithUserWorkspaceHelper(); defaults to nil
+	// so the explicit 501-shaped error in handleExchangeCode short-
+	// circuits dev environments that have not yet wired the helper.
+	userAndWorkspaceHelper UserWorkspaceHelper
 }
 
 type UserStore interface {
@@ -220,6 +302,15 @@ func WithTeamStore(s TeamStore) RouterOption {
 func WithBillingService(svc BillingServiceAPI) RouterOption {
 	return func(r *Router) { r.billingSvc = svc }
 }
+
+// WithUserWorkspaceHelper injects the resolver used by handleExchangeCode
+// (and by future switch handlers) to derive the workspace_id stamped on
+// freshly-issued JWTs. Required in production wiring; the helper is nil
+// until this option is set, at which point handleExchangeCode fails the
+// request with 500 (cf. resolveActiveWorkspace).
+func WithUserWorkspaceHelper(h UserWorkspaceHelper) RouterOption {
+	return func(r *Router) { r.userAndWorkspaceHelper = h }
+}
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -283,6 +374,9 @@ func (r *Router) Setup() http.Handler {
 		sr.Get("/", r.protected(r.handleListWorkspaces))
 		sr.Get("/{id}", r.protected(r.handleGetWorkspace))
 		sr.Delete("/{id}", r.protected(r.handleDeleteWorkspace))
+		// SPRINT 1.1: switch active workspace. Re-issues the JWT with
+		// the new ws claim and sets a fresh HttpOnly session cookie.
+		sr.Post("/{id}/switch", r.protected(r.handleSwitchWorkspace))
 	})
 	r.mux.Route("/api/v1/posts", func(sr chi.Router) {
 		sr.Post("/", r.protected(r.handleCreatePost))
@@ -444,6 +538,12 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 // for an HttpOnly session cookie. The code is single-use and 60s TTL; on
 // success the cookie is set and 204 is returned. The SPA's /auth/callback
 // page calls this immediately on mount, then redirects to /dashboard.
+//
+// SPRINT 1.1: the issued JWT MUST carry the user's active workspace.
+// Resolution order: ExplicitWorkspaceID (set by /api/v1/connections/{p}/start
+// in Sprint 1.2 future work — currently always nil) > first owned
+// workspace > workspace_members. If none, we create a personal workspace
+// and add the user as admin so the JWT can be issued.
 func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -465,7 +565,12 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid or expired code")
 		return
 	}
-	jwtToken, _, _, err := r.auth.Issue(payload.UserID)
+	activeWS, err := r.resolveActiveWorkspace(req.Context(), payload.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve active workspace: "+err.Error())
+		return
+	}
+	jwtToken, _, _, err := r.auth.Issue(payload.UserID, activeWS)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to issue session token")
 		return
@@ -488,16 +593,59 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleMe returns the current user identity. Used by the SPA on every page
-// load to learn who's logged in (no JWT in localStorage anymore).
+// handleMe returns the current user identity, including the active
+// workspace_id stamped on the JWT. Used by the SPA on every page load
+// to learn who's logged in (no JWT in localStorage anymore) and to
+// align the dashboard's "current workspace" indicator with the server's
+// view.
 func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
-	userID, ok := requireUserID(w, req, r)
-	if !ok {
+	id := auth.IdentityFromContext(req.Context())
+	if id == nil {
+		writeError(w, http.StatusUnauthorized, "missing identity")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"user_id": userID,
+		"user_id":      id.UserID(),
+		"workspace_id": id.WorkspaceID(),
 	})
+}
+
+// resolveActiveWorkspace returns the workspace_id which should be
+// stamped on a freshly-issued JWT for the given user. Shared by
+// /auth/exchange (OAuth callback) and the switch endpoint's re-bind
+// after token rotation. Strategy (SPRINT 1.1):
+//
+//	1. Owned workspaces: pick most recent (ListByOwner desc).
+//	2. Memberships: pick most recent (ListForUser desc).
+//	3. None → auto-create a "Personal" workspace + admin membership.
+//
+// Step 3 is required so OAuth users who never went through the
+// email/password onboarding still receive a JWT carrying a valid
+// workspace claim (Manager.Issue refuses to sign without one).
+func (r *Router) resolveActiveWorkspace(ctx context.Context, userID int64) (int64, error) {
+	if r.userAndWorkspaceHelper == nil {
+		return 0, fmt.Errorf("user workspace helper not configured")
+	}
+	if r.workspaceStore == nil || r.teamStore == nil {
+		return 0, fmt.Errorf("workspace or team store not configured")
+	}
+	// owned
+	if owned, err := r.userAndWorkspaceHelper.ListOwned(ctx, userID); err == nil && len(owned) > 0 {
+		return owned[0], nil
+	}
+	// membership
+	if memberships, err := r.userAndWorkspaceHelper.ListMemberships(ctx, userID); err == nil && len(memberships) > 0 {
+		return memberships[0], nil
+	}
+	// Create personal workspace on the fly.
+	ws := &models.Workspace{Name: "Personal", OwnerID: userID}
+	if err := r.workspaceStore.Create(ws); err != nil {
+		return 0, fmt.Errorf("create personal workspace on oauth exchange: %w", err)
+	}
+	if err := r.teamStore.AddMember(ws.ID, userID, repository.RoleAdmin); err != nil {
+		return 0, fmt.Errorf("add oauth user as admin: %w", err)
+	}
+	return ws.ID, nil
 }
 
 // handleLogout clears the session cookie. 204 on success.

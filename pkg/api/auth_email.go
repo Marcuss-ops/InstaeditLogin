@@ -22,12 +22,22 @@ type AuthEmailStore interface {
 	ResetPassword(token, newPassword string) error
 }
 
-// authEmailSvc adapts *services.AuthService to the AuthEmailStore interface.
-type authEmailSvc struct {
+// AuthEmailServiceAdapter adapts *services.AuthService to the local
+// AuthEmailStore interface used by the API handlers. Exported via
+// NewAuthEmailServiceAdapter so cmd/server/main.go can wrap the
+// concrete service without exporting every private helper.
+type AuthEmailServiceAdapter struct {
 	svc *services.AuthService
 }
 
-func (a *authEmailSvc) Register(email, password, name string) (int64, string, error) {
+// NewAuthEmailServiceAdapter wraps a *services.AuthService as an
+// AuthEmailStore. Required since AuthService has a richer API
+// (Register returns *models.User, the adapter projects user.ID).
+func NewAuthEmailServiceAdapter(svc *services.AuthService) AuthEmailStore {
+	return &AuthEmailServiceAdapter{svc: svc}
+}
+
+func (a *AuthEmailServiceAdapter) Register(email, password, name string) (int64, string, error) {
 	user, jwt, err := a.svc.Register(email, password, name)
 	if err != nil {
 		return 0, "", err
@@ -35,7 +45,7 @@ func (a *authEmailSvc) Register(email, password, name string) (int64, string, er
 	return user.ID, jwt, nil
 }
 
-func (a *authEmailSvc) Login(email, password string) (int64, string, error) {
+func (a *AuthEmailServiceAdapter) Login(email, password string) (int64, string, error) {
 	user, jwt, err := a.svc.Login(email, password)
 	if err != nil {
 		return 0, "", err
@@ -43,19 +53,19 @@ func (a *authEmailSvc) Login(email, password string) (int64, string, error) {
 	return user.ID, jwt, nil
 }
 
-func (a *authEmailSvc) IssueVerificationToken(userID int64, email string) (string, error) {
+func (a *AuthEmailServiceAdapter) IssueVerificationToken(userID int64, email string) (string, error) {
 	return a.svc.IssueVerificationToken(userID, email)
 }
 
-func (a *authEmailSvc) VerifyEmail(token string) (int64, error) {
+func (a *AuthEmailServiceAdapter) VerifyEmail(token string) (int64, error) {
 	return a.svc.VerifyEmail(token)
 }
 
-func (a *authEmailSvc) IssueResetToken(email string) (string, error) {
+func (a *AuthEmailServiceAdapter) IssueResetToken(email string) (string, error) {
 	return a.svc.IssueResetToken(email)
 }
 
-func (a *authEmailSvc) ResetPassword(token, newPassword string) error {
+func (a *AuthEmailServiceAdapter) ResetPassword(token, newPassword string) error {
 	return a.svc.ResetPassword(token, newPassword)
 }
 

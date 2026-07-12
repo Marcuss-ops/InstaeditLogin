@@ -77,6 +77,8 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 	tokenRepo := repository.NewTokenRepository(db)
+	teamRepo := repository.NewTeamRepository(db)
+	workspaceRepo := repository.NewWorkspaceRepository(db)
 	// Taglio 4.6 — API key repository. Bound to the same *sql.DB
 	// used by every other repo so it participates in the standard
 	// connection pool + metrics counter. The Authenticator below
@@ -145,6 +147,17 @@ func main() {
 	slog.Info("storage provider: S3-compatible configured",
 		"endpoint", cfg.S3Endpoint, "bucket", cfg.S3Bucket, "region", cfg.S3Region)
 
+	// SPRINT 1.1: workspace + team repositories wired into the route
+	// helper so handleExchangeCode (OAuth callback) can resolve the
+	// user's active workspace before issuing a workspace-bearing JWT.
+	userWorkspaceHelper := api.RepoUserWorkspaceHelper(workspaceRepo, teamRepo)
+
+	// SPRINT 1.1: email/password auth service. Constructor signature
+	// now requires workspaceRepo + teamRepo; Register auto-creates a
+	// personal workspace, Login resolves a real workspace membership.
+	authEmailBackend := services.NewAuthService(userRepo, workspaceRepo, teamRepo, authMgr, cfg.JWTSecret)
+	authEmailSvc := api.NewAuthEmailServiceAdapter(authEmailBackend)
+
 	opts := []api.RouterOption{
 		api.WithCredentialVault(vault),
 		api.WithStorageProvider(storageProvider),
@@ -162,6 +175,13 @@ func main() {
 		// request header for at-most-once POST semantics; payload
 		// hash mismatch on replay → 409.
 		api.WithIdempotencyStore(idempotencyRepo),
+		api.WithUserWorkspaceHelper(userWorkspaceHelper),
+		// SPRINT 1.1: team (member/invite) routes + email/password
+		// registration routes are now wired with the real repos. Both
+		// were optional before; making them unconditional removes the
+		// 501-shaped dev-only paths from the production build.
+		api.WithTeamStore(teamRepo),
+		api.WithAuthEmailService(authEmailSvc),
 	}
 	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)

@@ -115,6 +115,35 @@ func (r *TeamRepository) ListMembers(workspaceID int64) ([]models.WorkspaceMembe
 	return members, nil
 }
 
+// ListForUser returns every workspace the user is a member of, in
+// joined_at-descending order (most recent first). Used by
+// AuthService.resolveActiveWorkspace to pick the user's active
+// workspace at sign-in / OAuth callback time. Result includes
+// WorkspaceID; other WorkspaceMember fields are zeroed.
+func (r *TeamRepository) ListForUser(userID int64) ([]models.WorkspaceMember, error) {
+	rows, err := r.db.Query(
+		`SELECT wm.id, wm.workspace_id, wm.user_id, wm.role, wm.joined_at
+		 FROM workspace_members wm
+		 WHERE wm.user_id = $1
+		 ORDER BY wm.joined_at DESC`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list for user: %w", err)
+	}
+	defer rows.Close()
+
+	var members []models.WorkspaceMember
+	for rows.Next() {
+		m := models.WorkspaceMember{}
+		if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.UserID, &m.Role, &m.JoinedAt); err != nil {
+			return nil, fmt.Errorf("list for user: scan: %w", err)
+		}
+		members = append(members, m)
+	}
+	return members, nil
+}
+
 // GetRole returns the role string for a user in a workspace, or empty
 // string if the user is not a member.
 func (r *TeamRepository) GetRole(workspaceID, userID int64) (string, error) {

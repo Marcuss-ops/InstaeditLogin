@@ -40,9 +40,12 @@ type Identity interface {
 	// KeyID returns the api_key row id. Always 0 for JWT identities.
 	KeyID() int64
 
-	// WorkspaceID returns the tenant scope. For JWT users today this is
-	// DefaultFallbackWorkspaceID; for ApiKeyIdentity it is the row's
-	// workspace_id.
+	// WorkspaceID returns the tenant scope. For JWT-authenticated
+	// dashboard users this is the workspace_id claim stamped on the JWT
+	// by the Manager.Issue path; for ApiKeyIdentity it is the
+	// api_keys row's workspace_id. NEVER a hard-coded fallback — the
+	// caller is expected to derive this from a real membership lookup
+	// or the JWT claim before stamping the identity into the context.
 	WorkspaceID() int64
 
 	// Permissions returns the raw permission set for API keys
@@ -69,10 +72,11 @@ func WithIdentity(ctx context.Context, id Identity) context.Context {
 	return context.WithValue(ctx, identityCtxKey{}, id)
 }
 
-// DefaultFallbackWorkspaceID is the workspace id stamped onto JWT-derived
-// identities today. Seed data creates a workspace at id=1 named
-// "Default Workspace"; this constant MUST stay in sync with that seed.
-const DefaultFallbackWorkspaceID int64 = 1
+// No fallback workspace id is defined: JWT-derived identities MUST carry
+// a workspace_id claim that came out of Manager.Issue(userID, wsID). The
+// middleware refuses to stamp an identity without a valid workspace claim
+// (a request with a JWT issued before SPRINT 1.1 will be rejected with 401
+// and the user must re-authenticate to receive a workspace-bearing JWT).
 
 // --- UserIdentity -----------------------------------------------------------
 
