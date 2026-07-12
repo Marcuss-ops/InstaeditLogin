@@ -42,11 +42,14 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	jwt "github.com/golang-jwt/jwt/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -91,6 +94,45 @@ func issueJWTWithSecret(t *testing.T, secret string, userID int64) string {
 		t.Fatalf("issue jwt with custom secret: %v", err)
 	}
 	return tok
+}
+
+// mintLegacySessionIDZeroJWT hand-crafts a sessionID=0 JWT signed
+// with the supplied secret. SPRINT 7.4 (P0#14-blocco-1.4) hardened
+// Manager.Issue to refuse sessionID<=0, so the issuance-side helper
+// is no longer useful for tests that need to verify Verify's
+// rejection of legacy sid<=0 tokens. This test-only helper uses
+// the lower-level jwt.NewWithClaims(HS256, auth.Claims{...}) path
+// to sign a JWT whose sid claim is exactly 0 — exercising the
+// Manager.Verify contract (HMAC valid → sid<=0 rejected) without
+// depending on a deprecated issuance API. The JTI is a fresh
+// auth.RandomHex so two calls for the same user produce distinct
+// JWTs (audit + replay-trace friendly).
+func mintLegacySessionIDZeroJWT(t *testing.T, secret string, userID, wsID int64) string {
+	t.Helper()
+	jti, err := auth.RandomHex(16)
+	if err != nil {
+		t.Fatalf("rand jti: %v", err)
+	}
+	now := time.Now()
+	claims := auth.Claims{
+		UserID:      userID,
+		WorkspaceID: wsID,
+		SessionID:   0, // <-- the entire point of this helper
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   fmt.Sprintf("%d", userID),
+			Issuer:    "instaeditlogin",
+			Audience:  jwt.ClaimStrings{"api"},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(24 * time.Hour)),
+			ID:        jti,
+		},
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := tok.SignedString([]byte(secret))
+	if err != nil {
+		t.Fatalf("sign legacy sid=0 JWT: %v", err)
+	}
+	return signed
 }
 
 // assertNoSessionRedirect verifies the recorder reflects a 302 to
@@ -179,20 +221,17 @@ func TestOAuthSessionRedirect_Blocco12_NoSession_BearerJwt_Malformed_Redirects(t
 // JWT where sessionID<=0 (the legacy Manager.Issue(u, wsID) path
 // minted tokens with sessionID=0). → middleware 302s.
 //
-// Contract dependency: Manager.Issue(u, w) currently allows
-// sessionID=0 issuance (the legacy API is preserved for backward
-// compatibility). If Manager.Issue is ever hardened to refuse sid=0,
-// this test will need to hand-craft a sessionID=0 JWT using a
-// lower-level signing helper or the construction becomes moot.
+// SPRINT 7.4 (P0#14-blocco-1.4): Manager.Issue now REFUSES
+// sessionID=0 (it requires sessionID>0 for every issuance). The test
+// therefore hand-crafts a sessionID=0 JWT using the lower-level
+// jwt.NewWithClaims(HS256, auth.Claims{SessionID: 0}) signing helper
+// — this isolates the test from Manager.Issue so we can still
+// verify the Verify layer rejects sid<=0 independently of the
+// issuance-side hardening.
 func TestOAuthSessionRedirect_Blocco12_NoSession_BearerJwt_SessionIDZero_Redirects(t *testing.T) {
 	r := newOAuthSessionRedirectRouter(t, []string{"instagram"}, "https://app.example.com")
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
-	// Manager.Issue(u, w) is the legacy path — it signs with sessionID=0.
-	// Manager.Verify accepts the HMAC but rejects on `sid <= 0`.
-	legacyTok, _, _, err := auth.NewManager(testJWTSecret, 24).Issue(1, 1)
-	if err != nil {
-		t.Fatalf("issue legacy jwt (session-id zero): %v", err)
-	}
+	legacyTok := mintLegacySessionIDZeroJWT(t, testJWTSecret, 1, 1)
 	req.Header.Set("Authorization", "Bearer "+legacyTok)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
@@ -293,14 +332,14 @@ func TestOAuthSessionRedirect_Blocco12_NoSession_SessionCookie_EmptyValue_Redire
 // Manager.Issue(u, wsID) shape) is rejected by Manager.Verify → 302.
 // Documents that the cookie path enforces the same post-SPRINT-2.1
 // invariant as the Bearer path.
+//
+// SPRINT 7.4 (P0#14-blocco-1.4): same hand-crafted JWT pattern as
+// the Bearer variant — Manager.Issue refuses sid≤0, so this test
+// uses mintLegacySessionIDZeroJWT to construct the cookie value.
 func TestOAuthSessionRedirect_Blocco12_NoSession_SessionCookie_SessionIDZero_Redirects(t *testing.T) {
 	r := newOAuthSessionRedirectRouter(t, []string{"instagram"}, "https://app.example.com")
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
-	legacyTok, _, _, err := auth.NewManager(testJWTSecret, 24).Issue(1, 1)
-	if err != nil {
-		t.Fatalf("issue legacy jwt (session-id zero): %v", err)
-	}
-	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: legacyTok})
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: mintLegacySessionIDZeroJWT(t, testJWTSecret, 1, 1)})
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 	assertNoSessionRedirect(t, w, "https://app.example.com", "instagram")

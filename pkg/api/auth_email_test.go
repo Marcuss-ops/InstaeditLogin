@@ -3,19 +3,23 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // fakeAuthEmailStore implements AuthEmailStore for handler tests.
 type fakeAuthEmailStore struct {
-	users   map[string]fakeUser
-	nextID  int64
+	users  map[string]fakeUser
+	nextID int64
 }
 
 type fakeUser struct {
@@ -34,12 +38,12 @@ func newFakeAuthEmailStore() *fakeAuthEmailStore {
 	}
 }
 
-func (f *fakeAuthEmailStore) Register(email, password, name string) (int64, string, error) {
+func (f *fakeAuthEmailStore) Register(email, password, name string) (*models.User, int64, error) {
 	if _, ok := f.users[email]; ok {
-		return 0, "", services.ErrEmailAlreadyTaken
+		return nil, 0, services.ErrEmailAlreadyTaken
 	}
 	if len(password) < 8 {
-		return 0, "", services.ErrPasswordTooShort
+		return nil, 0, services.ErrPasswordTooShort
 	}
 	hasDigit := false
 	for _, c := range password {
@@ -49,7 +53,7 @@ func (f *fakeAuthEmailStore) Register(email, password, name string) (int64, stri
 		}
 	}
 	if !hasDigit {
-		return 0, "", services.ErrPasswordNoDigit
+		return nil, 0, services.ErrPasswordNoDigit
 	}
 	id := f.nextID
 	f.nextID++
@@ -61,21 +65,21 @@ func (f *fakeAuthEmailStore) Register(email, password, name string) (int64, stri
 		userID:       id,
 		tokens:       make(map[string]string),
 	}
-	return id, "fake-jwt-" + email, nil
+	return &models.User{ID: id, Email: email, Name: name}, id, nil
 }
 
-func (f *fakeAuthEmailStore) Login(email, password string) (int64, string, error) {
+func (f *fakeAuthEmailStore) Login(email, password string) (*models.User, int64, error) {
 	u, ok := f.users[email]
 	if !ok {
-		return 0, "", services.ErrInvalidPassword
+		return nil, 0, services.ErrInvalidPassword
 	}
 	if u.passwordHash != password {
-		return 0, "", services.ErrInvalidPassword
+		return nil, 0, services.ErrInvalidPassword
 	}
 	if !u.verified {
-		return 0, "", services.ErrEmailNotVerified
+		return nil, 0, services.ErrEmailNotVerified
 	}
-	return u.userID, "fake-jwt-" + email, nil
+	return &models.User{ID: u.userID, Email: email, Name: u.name}, u.userID, nil
 }
 
 func (f *fakeAuthEmailStore) IssueVerificationToken(userID int64, email string) (string, error) {
@@ -384,10 +388,55 @@ func TestHandleVerifyEmail(t *testing.T) {
 	}
 }
 
+// fakeSessionsStore is the SPRINT 7.4 (P0#14-blocco-1.4) test fixture
+// for the SessionsStore interface. Returns fixed strings for the
+// access/refresh tokens; cookies are written but never verified in
+// these unit tests (they only check status codes + JSON bodies).
+// Implemented as methods-on-pointer so it satisfies the interface
+// structural typing cleanly.
+type fakeSessionsStore struct {
+	nextSessionID int64
+}
+
+func (f *fakeSessionsStore) Start(req services.StartSessionRequest) (*services.StartSessionResult, error) {
+	if f.nextSessionID == 0 {
+		f.nextSessionID = 1
+	}
+	f.nextSessionID++
+	return &services.StartSessionResult{
+		SessionID:        f.nextSessionID,
+		AccessToken:      fmt.Sprintf("fake-access-token-u%d", req.UserID),
+		AccessJTI:        fmt.Sprintf("fake-jti-%d", req.UserID),
+		AccessExpiresAt:  time.Now().Add(15 * time.Minute),
+		RefreshToken:     fmt.Sprintf("fake-refresh-token-u%d", req.UserID),
+		RefreshHash:      []byte("fake-refresh-hash"),
+		RefreshExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}, nil
+}
+
+func (f *fakeSessionsStore) Refresh(_ services.RefreshRequest) (*services.StartSessionResult, error) {
+	f.nextSessionID++
+	return &services.StartSessionResult{
+		SessionID:        f.nextSessionID,
+		AccessToken:      "fake-access-token-refresh",
+		RefreshToken:     "fake-refresh-token-refresh",
+		AccessExpiresAt:  time.Now().Add(15 * time.Minute),
+		RefreshExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}, nil
+}
+
+func (f *fakeSessionsStore) Revoke(_, _ int64, _ string) error          { return nil }
+func (f *fakeSessionsStore) RevokeAll(_ int64, _ string) (int64, error) { return 0, nil }
+func (f *fakeSessionsStore) List(_ int64) ([]repository.Session, error) { return nil, nil }
+func (f *fakeSessionsStore) WithdrawFromCookie(_ string) error          { return nil }
+
 // newAuthEmailTestRouter creates a minimal Router with only the auth email
-// routes wired, using the given fake store.
+// routes wired, using the given fake store. SPRINT 7.4: also wires a
+// fakeSessionsStore so the handlers (handleRegister / handleLoginEmail)
+// can complete the session-bound JWT mint without dragging in a real
+// *sql.DB-bound SessionRepository.
 func newAuthEmailTestRouter(store AuthEmailStore) *chi.Mux {
-	r := &Router{authEmailSvc: store}
+	r := &Router{authEmailSvc: store, sessionsSvc: &fakeSessionsStore{}}
 	r.mux = chi.NewRouter()
 	r.registerAuthEmailRoutes()
 	return r.mux

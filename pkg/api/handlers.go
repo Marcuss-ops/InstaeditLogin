@@ -115,7 +115,12 @@ type Router struct {
 	// return 501 (consistent with the nil-store pattern used by the
 	// other feature flags). The /auth/{provider}/callback handler
 	// refuses to mint a session when this is nil.
-	sessionsSvc *services.SessionsService
+	// SPRINT 7.4 (P0#14-blocco-1.4): sessionsSvc is exposed via the
+	// SessionsStore interface so test fixtures can supply an in-memory
+	// fake (no real *sql.DB-bound SessionRepository required). The
+	// production wiring in cmd/server/main.go passes
+	// *services.SessionsService which satisfies the interface.
+	sessionsSvc SessionsStore
 	// cookieSecure is the Secure flag for cookies. Defaults to true
 	// in production wiring (cmd/server/main.go) and to false in tests
 	// that exercise the cookie path with httptest's in-memory server.
@@ -157,6 +162,32 @@ func WithMagicLinkStore(s AuthMagicLinkStore) RouterOption {
 type ConnectionStateStore interface {
 	Create(state *repository.ConnectionState) error
 	Consume(id string, expectedNonce string, jwtWorkspaceID int64) (*repository.ConnectionState, error)
+}
+
+// SessionsStore is the contract between the HTTP layer and the SPRINT 2.1
+// session lifecycle. Production wiring in cmd/server/main.go injects the
+// concrete *services.SessionsService (which satisfies the interface).
+// Tests inject an in-memory fake (see fakeSessionsService in
+// pkg/api/auth_email_test.go and pkg/api/sessions_test.go) so handler
+// tests don't need a real *sql.DB-bound SessionRepository.
+//
+// The methods mirror the post-Sprint-2.1 rotation/revoke contract:
+//   - Start creates a session row + access/refresh cookie pair.
+//   - Refresh rotates the refresh token + reuses-detection revokes
+//     the entire family on reuse (Row.RevokedAt != nil).
+//   - Revoke revokes a single session owned by the caller.
+//   - RevokeAll revokes every active session for the caller.
+//   - List returns every session (active + revoked) for the caller,
+//     ordered by LastUsedAt DESC; used by GET /auth/sessions.
+//   - WithdrawFromCookie is the cookie-anchored logout: revoke the
+//     row whose hash matches the supplied refresh cookie value.
+type SessionsStore interface {
+	Start(services.StartSessionRequest) (*services.StartSessionResult, error)
+	Refresh(services.RefreshRequest) (*services.StartSessionResult, error)
+	Revoke(sessionID, ownerUserID int64, reason string) error
+	RevokeAll(userID int64, reason string) (int64, error)
+	List(userID int64) ([]repository.Session, error)
+	WithdrawFromCookie(refreshPlain string) error
 }
 
 // WithConnectionStateStore wires *repository.ConnectionStateRepository
@@ -682,18 +713,30 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 }
 
 // handleExchangeCode exchanges a one-time code (from /auth/callback?code=...)
-// for an HttpOnly session cookie. The code is single-use and 60s TTL; on
-// success the cookie is set and 204 is returned. The SPA's /auth/callback
-// page calls this immediately on mount, then redirects to /dashboard.
+// for a fresh session row + access JWT + refresh token. The code is
+// single-use and 60s TTL; on success both cookies are set and 204 is
+// returned. The SPA's /auth/callback page calls this immediately on
+// mount, then redirects to /dashboard.
 //
-// SPRINT 1.1: the issued JWT MUST carry the user's active workspace.
+// SPRINT 1.1: the JWT MUST carry the user's active workspace.
 // Resolution order: ExplicitWorkspaceID (set by /api/v1/connections/{p}/start
 // in Sprint 1.2 future work — currently always nil) > first owned
 // workspace > workspace_members. If none, we create a personal workspace
 // and add the user as admin so the JWT can be issued.
+//
+// SPRINT 7.4 (P0#14-blocco-1.4): JWT issuance migrated to
+// SessionsService.Start. Previously this handler called
+// r.auth.Issue(payload.UserID, activeWS) which minted a
+// sessionID=0 JWT — incompatible with Manager.Verify post-Sprint-2.1
+// hardening. The single SessionsService.Start call now creates the
+// session row AND binds the row's positive ID to the access JWT.
 func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if r.sessionsSvc == nil {
+		writeError(w, http.StatusInternalServerError, "sessions service not configured (Blocco #1.4 migration requires it)")
 		return
 	}
 	var body struct {
@@ -717,42 +760,18 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to resolve active workspace: "+err.Error())
 		return
 	}
-	jwtToken, _, _, err := r.auth.Issue(payload.UserID, activeWS)
+	result, err := r.sessionsSvc.Start(services.StartSessionRequest{
+		UserID:      payload.UserID,
+		WorkspaceID: activeWS,
+		UserAgent:   req.UserAgent(),
+		IP:          clientIP(req),
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to issue session token")
+		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
 		return
 	}
 	metrics.IncJWTIssued()
-	// SameSite=None is required because the SPA is on a different host
-	// (Vercel) than the API backend. Secure=true is required by browsers
-	// for SameSite=None. HttpOnly keeps the JWT out of document.cookie
-	// so an XSS in the SPA cannot exfiltrate it.
-	sameSite := http.SameSiteNoneMode
-	// Cookie MaxAge MUST match the JWT TTL (Manager default 168h),
-	// not the one-time-code ttl (here 24h via payload.ExpiresAt).
-	// Using the code ttl would silently force re-auth mid-session
-	// when the cookie expires before the JWT inside it.
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    jwtToken,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: sameSite,
-		MaxAge:   7 * 24 * 3600, // matches Manager default ttl in NewManager
-	})
-	// Blocco #1.3 — issue a fresh csrf_token cookie on every code
-	// exchange so the SPA's first post-login POST can succeed.
-	// The token is regenerated on every fresh authentication (login
-	// / refresh / exchange) so a pre-login attacker cannot guess
-	// it. Uses r.csrfConfig() (Secure=r.cookieSecure) for parity
-	// with r.protected's CSRF middleware — in tests r.cookieSecure
-	// is false, so the emitted cookie doesn't conflict with the
-	// httptest server's lack-of-HTTPS posture.
-	csrfCfg := r.csrfConfig()
-	if _, err := auth.SetCSRFToken(w, csrfCfg); err != nil {
-		slog.Error("csrf token set failed on exchange", "error", err)
-	}
+	writeSessionCookies(w, req, result, r.cookieSecure)
 	w.WriteHeader(http.StatusNoContent)
 }
 

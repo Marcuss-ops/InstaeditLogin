@@ -2,26 +2,29 @@
 //
 // Magic-link is the V1 product login path.
 //
-//   POST /api/v1/auth/magic-link/start  body: {email}
-//     1. Generate 32-byte URL-safe token (base64url).
-//     2. SHA-256 the token; persist { email, token_hash, expires_at
-//        = now+15min } in magic_link_tokens.
-//     3. Return 200 {status:"sent", magic_link_token:<plain>}. (In
-//        production the plaintext goes via Mailgun/SES; the dev/test
-//        SPA completes the loop via the body field. NEVER log the
-//        plaintext anywhere.)
+//	POST /api/v1/auth/magic-link/start  body: {email}
+//	  1. Generate 32-byte URL-safe token (base64url).
+//	  2. SHA-256 the token; persist { email, token_hash, expires_at
+//	     = now+15min } in magic_link_tokens.
+//	  3. Return 200 {status:"sent", magic_link_token:<plain>}. (In
+//	     production the plaintext goes via Mailgun/SES; the dev/test
+//	     SPA completes the loop via the body field. NEVER log the
+//	     plaintext anywhere.)
 //
-//   POST /api/v1/auth/magic-link/verify  body: {token}
-//     1. SHA-256 the token; consume the magic_link_tokens row in a
-//        tx (single-use). Returns 401 invalid-or-expired on miss/
-//        replay.
-//     2. Email is on the consumed row. Call AuthEmailService.
-//        MagicLinkSignupOrLookup(email) — idempotent: creates user +
-//        personal workspace if email is new, otherwise validates
-//        email_verified and returns the existing user + their active
-//        workspace.
-//     3. Manager.Issue(userID, wsID) -> set HttpOnly session cookie
-//        (7d), 204 No Content.
+//	POST /api/v1/auth/magic-link/verify  body: {token}
+//	  1. SHA-256 the token; consume the magic_link_tokens row in a
+//	     tx (single-use). Returns 401 invalid-or-expired on miss/
+//	     replay.
+//	  2. Email is on the consumed row. Call AuthEmailService.
+//	     MagicLinkSignupOrLookup(email) — idempotent: creates user +
+//	     personal workspace if email is new, otherwise validates
+//	     email_verified and returns the existing user + their active
+//	     workspace.
+//	  3. SPRINT 7.4 (P0#14-blocco-1.4): SessionsService.Start(req)
+//	     → set HttpOnly session cookie (7d) + HttpOnly refresh
+//	     cookie, 204 No Content. The session row is created with a
+//	     positive session_id so the access JWT passes Manager.Verify's
+//	     post-Sprint-2.1 invariant (sid > 0).
 //
 // Tokens are NEVER persisted in plaintext. The plaintext is sent via
 // email (or returned in the dev response); only the SHA-256 lands on
@@ -39,6 +42,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // AuthMagicLinkStore is the persistence contract for magic_link_tokens.
@@ -150,11 +154,25 @@ func (r *Router) handleMagicLinkVerify(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to ensure user/workspace: "+err.Error())
 		return
 	}
-	jwtToken, _, _, err := r.auth.Issue(userID, wsID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to issue session token")
+	// SPRINT 7.4 (P0#14-blocco-1.4): the JWT MUST carry a positive
+	// session_id so Manager.Verify accepts it post-Sprint-2.1. The
+	// only production path that produces sid>0 is
+	// SessionsService.Start — it creates the sessions row AND signs
+	// the access JWT bound to the row's id.
+	if r.sessionsSvc == nil {
+		writeError(w, http.StatusInternalServerError, "sessions service not configured (Blocco #1.4 migration requires it)")
 		return
 	}
-	setSessionCookie(w, jwtToken)
+	result, err := r.sessionsSvc.Start(services.StartSessionRequest{
+		UserID:      userID,
+		WorkspaceID: wsID,
+		UserAgent:   req.UserAgent(),
+		IP:          clientIP(req),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
+		return
+	}
+	writeSessionCookies(w, req, result, r.cookieSecure)
 	w.WriteHeader(http.StatusNoContent)
 }

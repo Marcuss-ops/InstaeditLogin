@@ -2,13 +2,16 @@
 //
 // Switches the caller's active workspace. The handler:
 //
-//	1. Authenticates the caller via Manager.Middleware (Cookie or Bearer).
-//	2. Verifies the caller is a member of the requested workspace via
-//	   teamStore.GetRole (admin/editor/viewer all qualify; the role only
-//	   governs permission scope, not the switch itself).
-//	3. Re-issues a JWT whose ws claim == requested workspace id.
-//	4. Writes a fresh HttpOnly session cookie with the new JWT so the
-//	   next request automatically operates against the new workspace.
+//  1. Authenticates the caller via Manager.Middleware (Cookie or Bearer).
+//  2. Verifies the caller is a member of the requested workspace via
+//     teamStore.GetRole (admin/editor/viewer all qualify; the role only
+//     governs permission scope, not the switch itself).
+//  3. SPRINT 7.4 (P0#14-blocco-1.4): rotates the session — revokes
+//     the previous session row (best-effort) and creates a new one
+//     bound to the requested workspace_id via SessionsService.Start.
+//     The cookie is rotated atomically (Set-Cookie overrides the
+//     prior session cookie because they share the name "session").
+//  4. Returns the workspace_id + role as JSON.
 //
 // Failure modes:
 //   - missing or invalid JWT  → 401 (Re-issue of session middleware failure)
@@ -21,10 +24,11 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
@@ -35,6 +39,14 @@ func (r *Router) handleSwitchWorkspace(w http.ResponseWriter, req *http.Request)
 	}
 	if r.teamStore == nil || r.auth == nil {
 		writeError(w, http.StatusNotImplemented, "workspace switch not configured on this server")
+		return
+	}
+	if r.sessionsSvc == nil {
+		// SPRINT 7.4: workspace switch + cookie rotation requires a
+		// session row (otherwise the new JWT would have sessionID=0
+		// and Manager.Verify would reject it). Fail-fast the misconfig
+		// so production wiring is self-documenting.
+		writeError(w, http.StatusInternalServerError, "sessions service not configured (Blocco #1.4 migration requires it)")
 		return
 	}
 	targetWS, ok := parsePathIDAsInt64(w, req, "id")
@@ -59,27 +71,38 @@ func (r *Router) handleSwitchWorkspace(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusForbidden, "not a member of this workspace")
 		return
 	}
-	// Re-issue the JWT carrying the new ws claim. The previous
-	// cookie is replaced atomically by WriteHeader (Set-Cookie with
-	// MaxAge>0 overrides the prior cookie because they share the
-	// name "session").
-	jwtToken, _, _, err := r.auth.Issue(id.UserID(), targetWS)
+
+	// SPRINT 7.4: revoke the OLD session row (best-effort) and
+	// allocate a NEW one bound to the target workspace. We revoke
+	// first so a partial-failure (revoke succeeded but Start
+	// failed) leaves the user logged out rather than with a stale
+	// session — keeping `Verify` invariants consistent.
+	if oldSID := id.SessionID(); oldSID > 0 {
+		if err := r.sessionsSvc.Revoke(oldSID, id.UserID(), "workspace_switch"); err != nil && err != services.ErrSessionForbidden {
+			// Don't fail the request on a revoke error — the user
+			// will still get the new session and the old refresh
+			// cookie will simply stop working at its next refresh.
+			// Surface to logs though.
+			slog.Warn("workspace switch: revoke old session failed", "old_session_id", oldSID, "error", err)
+		}
+	}
+
+	result, err := r.sessionsSvc.Start(services.StartSessionRequest{
+		UserID:      id.UserID(),
+		WorkspaceID: targetWS,
+		UserAgent:   req.UserAgent(),
+		IP:          clientIP(req),
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to issue session token: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
 		return
 	}
 	metrics.IncJWTIssued()
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    jwtToken,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteNoneMode,
-		MaxAge:   int((7 * 24 * time.Hour).Seconds()),
-	})
+	writeSessionCookies(w, req, result, r.cookieSecure)
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"workspace_id": targetWS,
 		"role":         role,
+		"session_id":   result.SessionID,
 	})
 }

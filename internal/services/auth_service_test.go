@@ -12,7 +12,16 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// newTestAuthService creates an AuthService wired with sqlmock.
+// newTestAuthService creates an AuthService wired with sqlmock for
+// the user + workspace + team repositories. SPRINT 7.4
+// (P0#14-blocco-1.4): NewAuthService must be wired with all three
+// repositories because Register now auto-creates a Personal
+// Workspace + admin membership, and Login now resolves the user's
+// active workspace via workspaceRepo.ListByOwner / teamRepo.ListForUser.
+// Tests that exercise ONLY IssueVerificationToken / VerifyEmail /
+// IssueResetToken / ResetPassword don't touch those repositories and
+// can pass nil for any of them, but for simplicity we wire all three
+// here so every test runs against the same shape.
 func newTestAuthService(t *testing.T) (*services.AuthService, sqlmock.Sqlmock, func()) {
 	t.Helper()
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -21,23 +30,25 @@ func newTestAuthService(t *testing.T) (*services.AuthService, sqlmock.Sqlmock, f
 	}
 	cleanup := func() { _ = db.Close() }
 	userRepo := repository.NewUserRepository(db)
+	workspaceRepo := repository.NewWorkspaceRepository(db)
+	teamRepo := repository.NewTeamRepository(db)
 	authMgr := auth.NewManager("test-secret-key-for-auth-service-tests", 24)
-	// SPRINT 1.1: NewAuthService now requires workspaceRepo + teamRepo
-	// (Register auto-creates a Personal Workspace, Login resolves an
-	// active workspace). Tests that exercise ONLY IssueVerificationToken /
-	// VerifyEmail / IssueResetToken / ResetPassword don't touch the repos
-	// and so can pass nil; tests that hit Register / Login / MagicLink
-	// must wire real (or fake) repos. SPRINT 2.1 follow-up: add
-	// panic-on-nil guards in NewAuthService so the runtime surface is
-	// self-documenting.
-	svc := services.NewAuthService(userRepo, nil, nil, authMgr, "test-secret-key-for-auth-service-tests")
+	svc := services.NewAuthService(userRepo, workspaceRepo, teamRepo, authMgr, "test-secret-key-for-auth-service-tests")
 	return svc, mock, cleanup
 }
+
+// workspaceCreatePlaceholder is the INSERT pattern emitted by
+// workspaceRepo.Create (mirrors the SQL in
+// internal/repository/workspace_repo.go). DRY'd here because the
+// same expectation appears in Register + MagicLink tests.
+const workspaceCreatePlaceholder = `INSERT INTO workspaces (name, owner_id) VALUES ($1, $2)
+	 RETURNING id, created_at`
 
 func TestAuthService_Register_WeakPassword(t *testing.T) {
 	svc, _, cleanup := newTestAuthService(t)
 	defer cleanup()
-
+	// Weak-password path fires BEFORE the repo is touched, so no
+	// sqlmock expectations are required.
 	_, _, err := svc.Register("test@example.com", "abc", "Test")
 	if err != services.ErrPasswordTooShort {
 		t.Errorf("want ErrPasswordTooShort, got %v", err)
@@ -49,18 +60,27 @@ func TestAuthService_Register_WeakPassword(t *testing.T) {
 	}
 }
 
+// TestAuthService_Register_HappyPath asserts the SPRINT 7.4 contract:
+// Register now returns (*models.User, wsID, error) — NOT a JWT.
+// The caller (HTTP handler) is responsible for minting the JWT via
+// SessionsService.Start so that the JWT's sessionID is bound to a
+// real sessions row (Blocco #1.4 invariant). This test exercises
+// the user-create + workspace-create + admin-mem...bership steps in
+// order; the JWT mint is verified separately by sessions.Service.
 func TestAuthService_Register_HappyPath(t *testing.T) {
 	svc, mock, cleanup := newTestAuthService(t)
 	defer cleanup()
 
 	now := time.Now()
 
+	// 1) Find existing user (returns no rows).
 	mock.ExpectQuery(
 		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-		       created_at, updated_at FROM users WHERE email = $1`,
+	       created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("test@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "created_at", "updated_at"}))
 
+	// 2) Insert user, returning id=1.
 	mock.ExpectQuery(
 		`INSERT INTO users (email, name, password_hash)
 		 VALUES ($1, $2, $3) RETURNING id, created_at, updated_at`,
@@ -68,15 +88,35 @@ func TestAuthService_Register_HappyPath(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).
 			AddRow(1, now, now))
 
-	user, jwt, err := svc.Register("test@example.com", "password1", "Test User")
+	// 3) Personal workspace insert (SPRINT 1.1 + SPRINT 7.4): returns id=10.
+	mock.ExpectQuery(workspaceCreatePlaceholder).
+		WithArgs("Personal", 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(10, now))
+
+	// 4) AddMember preflight GetRole: SELECT role FROM workspace_members
+	//    WHERE workspace_id=10 AND user_id=1 returns no rows.
+	mock.ExpectQuery(
+		`SELECT role FROM workspace_members
+		 WHERE workspace_id = $1 AND user_id = $2`,
+	).WithArgs(10, 1).
+		WillReturnRows(sqlmock.NewRows([]string{"role"}))
+
+	// 5) AddMember then INSERT INTO workspace_members.
+	mock.ExpectExec(
+		`INSERT INTO workspace_members (workspace_id, user_id, role)
+		 VALUES ($1, $2, $3)`,
+	).WithArgs(10, 1, repository.RoleAdmin).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	user, wsID, err := svc.Register("test@example.com", "password1", "Test User")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if user.ID != 1 {
 		t.Errorf("user.ID: want 1, got %d", user.ID)
 	}
-	if jwt == "" {
-		t.Error("jwt should not be empty")
+	if wsID != 10 {
+		t.Errorf("wsID: want 10 (the Personal workspace id), got %d", wsID)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
@@ -91,7 +131,7 @@ func TestAuthService_Register_DuplicateEmail(t *testing.T) {
 
 	mock.ExpectQuery(
 		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-		       created_at, updated_at FROM users WHERE email = $1`,
+	       created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("dupe@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "created_at", "updated_at"}).
 			AddRow(2, "dupe@example.com", "Existing", []byte("hash"), false, now, now))
@@ -102,6 +142,11 @@ func TestAuthService_Register_DuplicateEmail(t *testing.T) {
 	}
 }
 
+// TestAuthService_Login_HappyPath asserts the SPRINT 7.4 contract:
+// Login returns (*models.User, wsID, error) — NOT a JWT.
+// The new resolveActiveWorkspace step is mocked to return one owned
+// workspace (id=10) so Login can short-circuit on the owned
+// workspaces branch and return a non-zero wsID.
 func TestAuthService_Login_HappyPath(t *testing.T) {
 	svc, mock, cleanup := newTestAuthService(t)
 	defer cleanup()
@@ -109,22 +154,36 @@ func TestAuthService_Login_HappyPath(t *testing.T) {
 	now := time.Now()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password1"), bcrypt.DefaultCost)
 
+	// 1) Find user by email.
 	mock.ExpectQuery(
 		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-		       created_at, updated_at FROM users WHERE email = $1`,
+	       created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("login@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "created_at", "updated_at"}).
 			AddRow(1, "login@example.com", "Login User", hash, true, now, now))
 
-	user, jwt, err := svc.Login("login@example.com", "password1")
+	// 2) resolveActiveWorkspace: ListByOwner returns one workspace.
+	mock.ExpectQuery(
+		`SELECT id, name, owner_id, created_at
+		 FROM workspaces
+		 WHERE owner_id = $1
+		 ORDER BY created_at DESC`,
+	).WithArgs(1).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "owner_id", "created_at"}).
+			AddRow(10, "Personal", 1, now))
+
+	user, wsID, err := svc.Login("login@example.com", "password1")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 	if user.ID != 1 {
 		t.Errorf("user.ID: want 1, got %d", user.ID)
 	}
-	if jwt == "" {
-		t.Error("jwt should not be empty")
+	if wsID != 10 {
+		t.Errorf("wsID: want 10 (active workspace), got %d", wsID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
 	}
 }
 
@@ -137,7 +196,7 @@ func TestAuthService_Login_EmailNotVerified(t *testing.T) {
 
 	mock.ExpectQuery(
 		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-		       created_at, updated_at FROM users WHERE email = $1`,
+	       created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("unverified@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "created_at", "updated_at"}).
 			AddRow(1, "unverified@example.com", "User", hash, false, now, now))
@@ -157,7 +216,7 @@ func TestAuthService_Login_WrongPassword(t *testing.T) {
 
 	mock.ExpectQuery(
 		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-		       created_at, updated_at FROM users WHERE email = $1`,
+	       created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("wrong@example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "created_at", "updated_at"}).
 			AddRow(1, "wrong@example.com", "User", hash, true, now, now))

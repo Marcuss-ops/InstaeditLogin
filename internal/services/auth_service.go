@@ -75,40 +75,46 @@ var ErrNoWorkspace = errors.New("user has no workspace; complete onboarding")
 // -----------------------------------------------------------------------
 
 // Register creates a new SaaS user with an email and password.
-// Returns a session JWT carrying the resolved workspace_id so the user
-// is logged in immediately after signup.
+// Returns the user row and the workspace_id of the newly-created
+// Personal Workspace. The HTTP handler is responsible for minting
+// the session JWT via SessionsService.Start (which creates a session
+// row and binds it to the access JWT).
+//
+// SPRINT 7.4 (P0#14-blocco-1.4): JWT issuance moved out of AuthService.
+// Manager.Issue(u, w) (which minted sessionID=0 JWTs) is now rejected
+// by the auth package; producing a session-bound JWT requires a real
+// session row, which only SessionsService.Start can do.
 //
 // SPRINT 1.1 mandatories, executed atomically here:
-//   1. create the user row (email + bcrypt hash + email_verified=false);
-//   2. create a "Personal Workspace" owned by the new user,
-//      auto-adding the user as admin via workspace_members.
-//   3. issue a JWT whose ws claim is the new workspace id.
+//  1. create the user row (email + bcrypt hash + email_verified=false);
+//  2. create a "Personal Workspace" owned by the new user,
+//     auto-adding the user as admin via workspace_members.
 //
-// The JWT carries the real workspace_id — DO NOT switch this to
-// anything derived from a global default. If step 2 fails the whole
-// register fails (rollback semantics in userRepo + workspaceRepo).
-func (s *AuthService) Register(email, password, name string) (*models.User, string, error) {
+// The returned workspace_id is the real workspace id — DO NOT switch
+// this to anything derived from a global default. If step 2 fails the
+// whole register fails (rollback semantics in userRepo + workspaceRepo).
+func (s *AuthService) Register(email, password, name string) (*models.User, int64, error) {
 	if err := validatePassword(password); err != nil {
-		return nil, "", err
+		return nil, 0, err
 	}
 
 	// Check for existing user.
 	existing, err := s.userRepo.FindByEmail(email)
 	if err != nil {
-		return nil, "", fmt.Errorf("register: find by email: %w", err)
+		return nil, 0, fmt.Errorf("register: find by email: %w", err)
 	}
 	if existing != nil {
-		return nil, "", ErrEmailAlreadyTaken
+		return nil, 0, ErrEmailAlreadyTaken
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return nil, "", fmt.Errorf("register: bcrypt: %w", err)
+		return nil, 0, fmt.Errorf("register: bcrypt: %w", err)
 	}
 
 	user, err := s.userRepo.CreateSaaSUser(email, name, hash)
 	if err != nil {
-		return nil, "", fmt.Errorf("register: create user: %w", err)
+		return nil, 0, fmt.Errorf("register: create user: %w", err)
 	}
 
 	// SPRINT 1.1: every new user gets exactly one "Personal Workspace"
@@ -117,78 +123,66 @@ func (s *AuthService) Register(email, password, name string) (*models.User, stri
 	workspaceName := "Personal"
 	ws := &models.Workspace{Name: workspaceName, OwnerID: user.ID}
 	if err := s.workspaceRepo.Create(ws); err != nil {
-		return nil, "", fmt.Errorf("register: create personal workspace: %w", err)
+		return nil, 0, fmt.Errorf("register: create personal workspace: %w", err)
 	}
 	if err := s.teamRepo.AddMember(ws.ID, user.ID, repository.RoleAdmin); err != nil {
-		return nil, "", fmt.Errorf("register: add admin membership: %w", err)
+		return nil, 0, fmt.Errorf("register: add admin membership: %w", err)
 	}
 
-	jwt, _, _, err := s.authMgr.Issue(user.ID, ws.ID)
-	if err != nil {
-		return nil, "", fmt.Errorf("register: issue jwt: %w", err)
-	}
-
-	return user, jwt, nil
+	return user, ws.ID, nil
 }
 
-// Login authenticates a user by email and password, returning a session
-// JWT whose ws claim is the user's first real workspace membership.
+// Login authenticates a user by email and password. Returns the
+// user row and the user's active workspace_id. The HTTP handler is
+// responsible for minting the session JWT via SessionsService.Start.
+//
+// SPRINT 7.4 (P0#14-blocco-1.4): JWT issuance moved out of AuthService.
+// Same rationale as Register — post-Sprint-2.1 contracts require a
+// session row first, which only SessionsService.Start provides.
 //
 // SPRINT 1.1: workspace resolution on Login.
 //
-//   1. List workspaces owned by the user via workspaceRepo.ListByOwner
-//      and merged with the user's workspace_members. If we find any,
-//      pick the most recently created one — that is the user's active
-//      workspace at sign-in time (matching what they were doing before
-//      the session ended).
-//   2. If the user has zero memberships AND zero owned workspaces,
-//      return ErrNoWorkspace. The caller (handler) surfaces a 409 +
-//      message pointing at the onboarding flow — never an implicit
-//      fallback to a global default workspace.
-func (s *AuthService) Login(email, password string) (*models.User, string, error) {
+//  1. List workspaces owned by the user via workspaceRepo.ListByOwner
+//     and merged with the user's workspace_members. If we find any,
+//     pick the most recently created one.
+//  2. If the user has zero memberships AND zero owned workspaces,
+//     return ErrNoWorkspace. The caller (handler) surfaces a 409 +
+//     message pointing at the onboarding flow.
+func (s *AuthService) Login(email, password string) (*models.User, int64, error) {
 	user, err := s.userRepo.FindByEmail(email)
 	if err != nil {
-		return nil, "", fmt.Errorf("login: find by email: %w", err)
+		return nil, 0, fmt.Errorf("login: find by email: %w", err)
 	}
 	if user == nil {
-		return nil, "", ErrInvalidPassword
+		return nil, 0, ErrInvalidPassword
 	}
 	if len(user.PasswordHash) == 0 {
-		return nil, "", ErrInvalidPassword
+		return nil, 0, ErrInvalidPassword
 	}
 
 	if err := bcrypt.CompareHashAndPassword(user.PasswordHash, []byte(password)); err != nil {
-		return nil, "", ErrInvalidPassword
+		return nil, 0, ErrInvalidPassword
 	}
 
 	if !user.EmailVerified {
-		return nil, "", ErrEmailNotVerified
+		return nil, 0, ErrEmailNotVerified
 	}
 
 	activeWS, err := s.resolveActiveWorkspace(user.ID)
 	if err != nil {
-		return nil, "", err
+		return nil, 0, err
 	}
 
-	jwt, _, _, err := s.authMgr.Issue(user.ID, activeWS)
-	if err != nil {
-		return nil, "", fmt.Errorf("login: issue jwt: %w", err)
-	}
-
-	return user, jwt, nil
+	return user, activeWS, nil
 }
 
-// IssueSessionTokenForWorkspace re-issues a JWT for (userID, workspaceID).
-// Used by handleSwitchWorkspace after a successful /workspaces/{id}/switch
-// and by handleExchangeCode (OAuth callback) after resolving the user's
-// active workspace. Centralises the Issue-with-wsID pattern.
-func (s *AuthService) IssueSessionTokenForWorkspace(userID, workspaceID int64) (string, error) {
-	jwt, _, _, err := s.authMgr.Issue(userID, workspaceID)
-	if err != nil {
-		return "", fmt.Errorf("issue session token: %w", err)
-	}
-	return jwt, nil
-}
+// IssueSessionTokenForWorkspace has been REMOVED in SPRINT 7.4
+// (P0#14-blocco-1.4). It used Manager.Issue(userID, wsID) which minted
+// sessionID=0 — incompatible with post-SPRINT-2.1 Verify contract.
+// Callers (handleSwitchWorkspace, handleExchangeCode) now use
+// SessionsService directly: they revoke the old session row (handle
+// switch), then SessionsService.Start() with the new workspace id.
+// AuthService no longer holds the contract of issuing JWTs.
 
 // MagicLinkSignupOrLookup is the new-user path for product login magic-link.
 // SPRINT 1.2 — equivalent of Register for passwordless users: creates
@@ -236,10 +230,10 @@ func (s *AuthService) MagicLinkSignupOrLookup(email string) (userID int64, wsID 
 // resolveActiveWorkspace picks the user's active workspace at sign-in /
 // OAuth callback / onboarding-completion time. Strategy:
 //
-//	1. If the user owns at least one workspace, pick the most recent.
-//	2. Else, if the user is a member of at least one workspace, pick the
-//	   most recent membership.
-//	3. Else return ErrNoWorkspace — caller must surface onboarding.
+//  1. If the user owns at least one workspace, pick the most recent.
+//  2. Else, if the user is a member of at least one workspace, pick the
+//     most recent membership.
+//  3. Else return ErrNoWorkspace — caller must surface onboarding.
 //
 // Owned-workspace preference (above membership) reflects that the
 // owner has full admin control and is the natural "home" workspace.

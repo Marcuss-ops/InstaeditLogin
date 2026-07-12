@@ -6,16 +6,27 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // AuthEmailStore is the subset of AuthService methods consumed by the
 // email/password handlers. The interface is local to the api package so
 // test fakes can implement it without importing internal/services.
+//
+// SPRINT 7.4 (P0#14-blocco-1.4): Register/Login signatures migrate
+// from `(userID, jwtToken, error)` to `(user, wsID, error)` — JWT
+// issuance is no longer AuthService's responsibility. The handler is
+// the integration point that, in cooperation with SessionsService,
+// creates the row + binds the JWT. This removes every path that could
+// mint a sessionID=0 JWT from production code.
 type AuthEmailStore interface {
-	Register(email, password, name string) (userID int64, jwtToken string, err error)
-	Login(email, password string) (userID int64, jwtToken string, err error)
+	// Register creates the user + Personal Workspace + admin
+	// membership, returning the user and the new workspace_id.
+	Register(email, password, name string) (user *models.User, wsID int64, err error)
+	// Login authenticates the user + resolves the active workspace,
+	// returning the user and the active workspace_id.
+	Login(email, password string) (user *models.User, wsID int64, err error)
 	IssueVerificationToken(userID int64, email string) (string, error)
 	VerifyEmail(token string) (int64, error)
 	IssueResetToken(email string) (string, error)
@@ -41,20 +52,25 @@ func NewAuthEmailServiceAdapter(svc *services.AuthService) AuthEmailStore {
 	return &AuthEmailServiceAdapter{svc: svc}
 }
 
-func (a *AuthEmailServiceAdapter) Register(email, password, name string) (int64, string, error) {
-	user, jwt, err := a.svc.Register(email, password, name)
+// Register projects AuthService.Register into the API interface.
+// SPRINT 7.4: no JWT in the return — handler is responsible for
+// calling SessionsService.Start to bind the user to a session.
+func (a *AuthEmailServiceAdapter) Register(email, password, name string) (*models.User, int64, error) {
+	user, wsID, err := a.svc.Register(email, password, name)
 	if err != nil {
-		return 0, "", err
+		return nil, 0, err
 	}
-	return user.ID, jwt, nil
+	return user, wsID, nil
 }
 
-func (a *AuthEmailServiceAdapter) Login(email, password string) (int64, string, error) {
-	user, jwt, err := a.svc.Login(email, password)
+// Login projects AuthService.Login into the API interface — same
+// rationale as Register.
+func (a *AuthEmailServiceAdapter) Login(email, password string) (*models.User, int64, error) {
+	user, wsID, err := a.svc.Login(email, password)
 	if err != nil {
-		return 0, "", err
+		return nil, 0, err
 	}
-	return user.ID, jwt, nil
+	return user, wsID, nil
 }
 
 func (a *AuthEmailServiceAdapter) IssueVerificationToken(userID int64, email string) (string, error) {
@@ -95,11 +111,22 @@ func (r *Router) registerAuthEmailRoutes() {
 //  Handlers
 // -----------------------------------------------------------------------
 
-// handleRegister creates a new SaaS user with email + password.
+// handleRegister creates a new SaaS user with email + password, mints
+// a session row via SessionsService.Start, and writes both the access
+// (HttpOnly) and refresh (HttpOnly) cookies via writeSessionCookies.
 // POST /api/v1/auth/register
+//
+// SPRINT 7.4 (P0#14-blocco-1.4): JWT issuance moved out of
+// AuthService. This handler now owns the integration: AuthService
+// returns (user, workspaceID); the handler binds them to a session
+// row through SessionsService.Start and writes the cookies.
 func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
 	if r.authEmailSvc == nil {
 		writeError(w, http.StatusNotImplemented, "email/password auth not configured")
+		return
+	}
+	if r.sessionsSvc == nil {
+		writeError(w, http.StatusInternalServerError, "sessions service not configured (Blocco #1.4 migration requires it)")
 		return
 	}
 	var body struct {
@@ -116,7 +143,7 @@ func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	userID, jwtToken, err := r.authEmailSvc.Register(body.Email, body.Password, body.Name)
+	user, wsID, err := r.authEmailSvc.Register(body.Email, body.Password, body.Name)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrPasswordTooShort) || errors.Is(err, services.ErrPasswordNoDigit):
@@ -129,21 +156,36 @@ func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Issue a session row + access JWT bound to (user, ws). Both
+	// tokens are returned by SessionsService.Start; the handler
+	// writes both cookies via writeSessionCookies (which honours
+	// r.cookieSecure — see pkg/api/sessions.go).
+	result, err := r.sessionsSvc.Start(services.StartSessionRequest{
+		UserID:      user.ID,
+		WorkspaceID: wsID,
+		UserAgent:   req.UserAgent(),
+		IP:          clientIP(req),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
+		return
+	}
+	writeSessionCookies(w, req, result, r.cookieSecure)
+
 	// TODO(FASE 2.2): Send verification token via email (Mailgun/SES).
-	// For dev/test the token is returned in the response body.
-	verifyToken, err := r.authEmailSvc.IssueVerificationToken(userID, body.Email)
+	verifToken, err := r.authEmailSvc.IssueVerificationToken(user.ID, body.Email)
 	if err != nil {
 		slog.Warn("verification token generation failed", "email", body.Email, "error", err)
 	}
 
-	setSessionCookie(w, jwtToken)
-
 	resp := map[string]interface{}{
-		"user_id": userID,
-		"email":   body.Email,
+		"user_id":      user.ID,
+		"workspace_id": wsID,
+		"email":        body.Email,
+		"session_id":   result.SessionID,
 	}
-	if verifyToken != "" {
-		resp["verification_token"] = verifyToken
+	if verifToken != "" {
+		resp["verification_token"] = verifToken
 	}
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -179,11 +221,21 @@ func (r *Router) handleVerifyEmail(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// handleLoginEmail authenticates a SaaS user with email + password.
+// handleLoginEmail authenticates a SaaS user with email + password,
+// mints a session row via SessionsService.Start, and writes both
+// the access (HttpOnly) and refresh (HttpOnly) cookies.
 // POST /api/v1/auth/login
+//
+// SPRINT 7.4 (P0#14-blocco-1.4): same integration pattern as
+// handleRegister — AuthService returns (user, wsID); the handler
+// binds them to a session row through SessionsService.Start.
 func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 	if r.authEmailSvc == nil {
 		writeError(w, http.StatusNotImplemented, "email/password auth not configured")
+		return
+	}
+	if r.sessionsSvc == nil {
+		writeError(w, http.StatusInternalServerError, "sessions service not configured (Blocco #1.4 migration requires it)")
 		return
 	}
 	var body struct {
@@ -199,7 +251,7 @@ func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	userID, jwtToken, err := r.authEmailSvc.Login(body.Email, body.Password)
+	user, wsID, err := r.authEmailSvc.Login(body.Email, body.Password)
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidPassword):
@@ -208,9 +260,6 @@ func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 			writeError(w, http.StatusForbidden, "email not verified")
 		case errors.Is(err, services.ErrNoWorkspace):
 			// SPRINT 1.1: signal SPA to route the user into onboarding.
-			// 409 Conflict is correct: credentials are valid, but the
-			// server refuses to mint a session because no workspace is
-			// available to bind the JWT to.
 			writeJSON(w, http.StatusConflict, map[string]interface{}{
 				"error":               err.Error(),
 				"code":                "no_workspace",
@@ -222,10 +271,26 @@ func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	setSessionCookie(w, jwtToken)
+	// Issue a session row + access JWT bound to (user, ws). Both
+	// tokens are returned by SessionsService.Start; the handler
+	// writes both cookies via writeSessionCookies.
+	result, err := r.sessionsSvc.Start(services.StartSessionRequest{
+		UserID:      user.ID,
+		WorkspaceID: wsID,
+		UserAgent:   req.UserAgent(),
+		IP:          clientIP(req),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
+		return
+	}
+	writeSessionCookies(w, req, result, r.cookieSecure)
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"user_id": userID,
-		"email":   body.Email,
+		"user_id":      user.ID,
+		"workspace_id": wsID,
+		"email":        body.Email,
+		"session_id":   result.SessionID,
 	})
 }
 
@@ -260,7 +325,6 @@ func (r *Router) handleForgotPassword(w http.ResponseWriter, req *http.Request) 
 	}
 
 	// TODO(FASE 2.2): Send reset token via email (Mailgun/SES).
-	// For dev/test the token is returned in the response body.
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message":     "if the email is registered, a reset link has been sent",
 		"reset_token": token,
@@ -305,28 +369,16 @@ func (r *Router) handleResetPassword(w http.ResponseWriter, req *http.Request) {
 // -----------------------------------------------------------------------
 //  Helpers
 // -----------------------------------------------------------------------
-
-// setSessionCookie writes the HttpOnly session cookie AND a fresh
-// csrf_token cookie so the SPA's first post-login POST can succeed
-// (Blocco #1.3). Both cookies share SameSite=None / Secure=true —
-// required for cross-origin SPA + cross-site cookies. The csrf_token
-// is regenerated on every successful login so a pre-login attacker
-// cannot guess the post-login token (see internal/auth/csrf.go).
-func setSessionCookie(w http.ResponseWriter, jwtToken string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    jwtToken,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteNoneMode,
-		MaxAge:   7 * 24 * 3600, // 7 days, matching JWT TTL
-	})
-	if _, err := auth.SetCSRFToken(w, auth.CSRFConfig{
-		Secure:   true,
-		Path:     "/",
-		SameSite: http.SameSiteNoneMode,
-	}); err != nil {
-		slog.Error("csrf token set failed on session cookie", "error", err)
-	}
-}
+//
+// SPRINT 7.4 (P0#14-blocco-1.4) removed the legacy clientIPFromRequest /
+// setSessionCookie / setRefreshCookie helpers. The cookie-write path
+// moved to pkg/api/sessions.go's writeSessionCookies (which honors
+// r.cookieSecure instead of hardcoding Secure=true) and the
+// client-IP extraction moved to clientIP(r) in the same file
+// (which now uses net.SplitHostPort to strip the ephemeral port).
+// Helpers were duplicate and diverged in behaviour: secure-cookie
+// paths now uniformly honour the production cookieSecure toggle.
+//
+// The legacy layering is gone: every login, refresh, and workspace
+// switch writes its cookies through a single function so the cookie
+// attributes line up across endpoints.

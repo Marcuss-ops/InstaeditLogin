@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -160,15 +161,15 @@ func (h *Router) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 
 // sessionListItem is the wire shape returned by GET /auth/sessions.
 type sessionListItem struct {
-	ID            int64  `json:"id"`
-	WorkspaceID   int64  `json:"workspace_id"`
-	CreatedAt     string `json:"created_at"`
-	LastUsedAt    string `json:"last_used_at"`
-	ExpiresAt     string `json:"expires_at"`
-	RevokedAt     string `json:"revoked_at,omitempty"`
-	RevokeReason  string `json:"revoke_reason,omitempty"`
-	Current       bool   `json:"current"`
-	UserAgent     string `json:"user_agent,omitempty"`
+	ID           int64  `json:"id"`
+	WorkspaceID  int64  `json:"workspace_id"`
+	CreatedAt    string `json:"created_at"`
+	LastUsedAt   string `json:"last_used_at"`
+	ExpiresAt    string `json:"expires_at"`
+	RevokedAt    string `json:"revoked_at,omitempty"`
+	RevokeReason string `json:"revoke_reason,omitempty"`
+	Current      bool   `json:"current"`
+	UserAgent    string `json:"user_agent,omitempty"`
 }
 
 // handleListSessions returns all sessions for the authenticated user
@@ -193,12 +194,12 @@ func (h *Router) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	out := make([]sessionListItem, 0, len(rows))
 	for _, s := range rows {
 		item := sessionListItem{
-			ID:           s.ID,
-			WorkspaceID:  s.WorkspaceID,
-			CreatedAt:    s.CreatedAt.UTC().Format(time.RFC3339),
-			LastUsedAt:   s.LastUsedAt.UTC().Format(time.RFC3339),
-			ExpiresAt:    s.ExpiresAt.UTC().Format(time.RFC3339),
-			UserAgent:    s.UserAgent,
+			ID:          s.ID,
+			WorkspaceID: s.WorkspaceID,
+			CreatedAt:   s.CreatedAt.UTC().Format(time.RFC3339),
+			LastUsedAt:  s.LastUsedAt.UTC().Format(time.RFC3339),
+			ExpiresAt:   s.ExpiresAt.UTC().Format(time.RFC3339),
+			UserAgent:   s.UserAgent,
 		}
 		if s.RevokedAt != nil {
 			item.RevokedAt = s.RevokedAt.UTC().Format(time.RFC3339)
@@ -252,7 +253,11 @@ func (h *Router) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // clientIP returns the first X-Forwarded-For hop, falling back to
-// r.RemoteAddr. Reused by the rate-limit middleware.
+// X-Real-IP, and finally to net.SplitHostPort(r.RemoteAddr). Stable
+// IP hashing for rate-limit / SessionsService.IPHash requires
+// stripping the ephemeral port if present (otherwise every reconnect
+// from the same client produces a different hash — defeating the
+// per-IP / per-workspace rate scopes).
 func clientIP(r *http.Request) string {
 	if v := r.Header.Get("X-Forwarded-For"); v != "" {
 		if i := strings.Index(v, ","); i > 0 {
@@ -263,7 +268,11 @@ func clientIP(r *http.Request) string {
 	if v := r.Header.Get("X-Real-IP"); v != "" {
 		return v
 	}
-	return r.RemoteAddr
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // withCtx is exported for tests; keeps the linter happy on packages

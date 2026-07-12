@@ -274,12 +274,34 @@ func TestCsrf_Logout_NoToken_OK(t *testing.T) {
 	}
 }
 
-// TestSetSessionCookie_AlsoSetsCsrfCookie — the email/password login
-// helper setSessionCookie must issue BOTH cookies so the SPA can
-// echo the csrf_token on its first post-login POST.
-func TestSetSessionCookie_AlsoSetsCsrfCookie(t *testing.T) {
+// TestWriteSessionCookies_AlsoSetsCsrfCookie — the SPRINT 7.4 cookie
+// helper writeSessionCookies (pkg/api/sessions.go) must issue BOTH
+// the HttpOnly session cookie AND the readable csrf_token cookie so
+// the SPA can echo the csrf_token on its first post-login POST.
+//
+// Renamed from TestSetSessionCookie_AlsoSetsCsrfCookie after the
+// SPRINT 7.4 cookie-helper cleanup unified all JWT-issuing handlers
+// onto writeSessionCookies. The Blocco #1.3 invariant this test pins
+// (csrf_token cookie attributes: not HttpOnly, Secure, SameSite=None,
+// 64-char hex value) is unchanged — only the helper name moved.
+// Migration: build a tiny *services.StartSessionResult inline and
+// call writeSessionCookies with secure=true (production toggle).
+func TestWriteSessionCookies_AlsoSetsCsrfCookie(t *testing.T) {
 	w := httptest.NewRecorder()
-	setSessionCookie(w, "fake-jwt")
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	result := &services.StartSessionResult{
+		SessionID:        1,
+		AccessToken:      "fake-jwt",
+		AccessJTI:        "fake-jti",
+		AccessExpiresAt:  time.Now().Add(15 * time.Minute),
+		RefreshToken:     "fake-refresh",
+		RefreshHash:      []byte("fake-refresh-hash"),
+		RefreshExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}
+	// secure=true mirrors the production cookieSecure toggle in
+	// cmd/server/main.go: the CSRF cookie must be Secure in
+	// production so SameSite=None is honoured by browsers.
+	writeSessionCookies(w, req, result, true)
 	cookies := w.Result().Cookies()
 	var session, csrf *http.Cookie
 	for _, c := range cookies {
@@ -291,10 +313,10 @@ func TestSetSessionCookie_AlsoSetsCsrfCookie(t *testing.T) {
 		}
 	}
 	if session == nil {
-		t.Fatal("session cookie not set by setSessionCookie")
+		t.Fatal("session cookie not set by writeSessionCookies (Blocco #1.3 contract)")
 	}
 	if csrf == nil {
-		t.Fatal("csrf_token cookie not set by setSessionCookie (Blocco #1.3 contract)")
+		t.Fatal("csrf_token cookie not set by writeSessionCookies (Blocco #1.3 contract)")
 	}
 	if csrf.HttpOnly {
 		t.Errorf("csrf_token must NOT be HttpOnly (SPA reads via document.cookie): %+v", csrf)
