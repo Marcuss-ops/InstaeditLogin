@@ -123,7 +123,7 @@ func TestHandleListMembers_NotMember(t *testing.T) {
 	r.registerTeamRoutes()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/1/members", nil)
-	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentity(99, 1))
+	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentity(99, 1, 1))
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -149,7 +149,7 @@ func TestHandleCreateInvite_AdminOnly(t *testing.T) {
 	// Editor attempts invite → 403.
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/1/invites", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentity(43, 1))
+	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentity(43, 1, 1))
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -160,7 +160,7 @@ func TestHandleCreateInvite_AdminOnly(t *testing.T) {
 	// Admin invites → 201.
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/1/invites", bytes.NewReader(b))
 	req2.Header.Set("Content-Type", "application/json")
-	ctx2 := auth.WithIdentity(req2.Context(), auth.NewUserIdentity(42, 1))
+	ctx2 := auth.WithIdentity(req2.Context(), auth.NewUserIdentity(42, 1, 1))
 	req2 = req2.WithContext(ctx2)
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)

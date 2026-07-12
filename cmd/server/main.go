@@ -168,6 +168,20 @@ func main() {
 	sessionRepo := repository.NewSessionRepository(db)
 	sessionsSvc := services.NewSessionsService(sessionRepo, authMgr)
 
+	// SPRINT 2.2: multi-tier rate limiter. RateLimitRepository owns
+	// the `rate_limit_counters` Postgres table (fixed-window,
+	// UNLOGGED, shared across replicas). RateLimitService
+	// coordinates the Postgres tiers (per-workspace, per-API-key)
+	// and the in-memory tiers (per-IP OAuth start, per-endpoint
+	// media presign). The Postgres tiers are required in
+	// production so the per-workspace and per-API-key budgets
+	// are consistent across replicas (the user explicitly forbade
+	// in-memory limiters for these). The edge tier (Cloudflare /
+	// reverse proxy) is the real per-IP gate and is documented in
+	// docs/OPERATIONS.md.
+	rateLimitRepo := repository.NewRateLimitRepository(db)
+	rateLimitSvc := services.NewRateLimitService(rateLimitRepo)
+
 	opts := []api.RouterOption{
 		api.WithCredentialVault(vault),
 		api.WithStorageProvider(storageProvider),
@@ -199,6 +213,15 @@ func main() {
 		// HTTPS. (httptest in the unit suite sets this to false.)
 		api.WithSessionsService(sessionsSvc),
 		api.WithCookieSecure(true),
+		// SPRINT 2.2: multi-tier rate limiter. Wires the
+		// per-workspace POST /posts (60/min/workspace, Postgres),
+		// per-API-key reads (600/min/key, Postgres), per-IP OAuth
+		// start (20/min/IP, in-memory coarse backstop), and
+		// per-endpoint media presign (30/min, in-memory coarse
+		// backstop) tiers. The edge tier (Cloudflare / reverse
+		// proxy) is the real per-IP gate — see
+		// docs/OPERATIONS.md.
+		api.WithRateLimitService(rateLimitSvc),
 	}
 	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)

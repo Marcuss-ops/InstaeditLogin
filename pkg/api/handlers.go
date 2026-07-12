@@ -119,6 +119,13 @@ type Router struct {
 	// in production wiring (cmd/server/main.go) and to false in tests
 	// that exercise the cookie path with httptest's in-memory server.
 	cookieSecure bool
+	// SPRINT 2.2 — multi-tier rate limiter (optional). Wiring via
+	// WithRateLimitService. When nil, the per-tier middleware
+	// factories (WorkspacePostLimit / APIKeyReadLimit /
+	// MediaPresignLimit / OAuthStartLimit) become no-ops. Required
+	// in production so the per-workspace and per-API-key tiers are
+	// enforced (per the user's "no in-memory for >1 replica" rule).
+	rateLimitSvc *services.RateLimitService
 }
 
 // ConnectionStateStore is declared in pkg/api/connections.go (SPRINT 1.2);
@@ -345,6 +352,18 @@ func WithSessionsService(svc *services.SessionsService) RouterOption {
 func WithCookieSecure(secure bool) RouterOption {
 	return func(r *Router) { r.cookieSecure = secure }
 }
+
+// WithRateLimitService wires the SPRINT 2.2 multi-tier rate
+// limiter. Required in production wiring so the per-workspace
+// POST /posts (60/min/workspace) and per-API-key reads
+// (600/min/key) are enforced across replicas via the Postgres
+// rate_limit_counters table. The per-IP (OAuth start) and
+// per-endpoint (media presign) tiers stay in-memory per-replica
+// as coarse backstops; the real per-IP gate is the edge tier
+// (Cloudflare / reverse proxy — see docs/OPERATIONS.md).
+func WithRateLimitService(svc *services.RateLimitService) RouterOption {
+	return func(r *Router) { r.rateLimitSvc = svc }
+}
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -387,7 +406,8 @@ func (r *Router) Setup() http.Handler {
 		r.registerBillingRoutes()
 	}
 
-	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login", http.HandlerFunc(r.handleLogin))
+	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login",
+		OAuthStartLimitIfConfigured(r.rateLimitSvc)(http.HandlerFunc(r.handleLogin)))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(r.handleCallback))
 	r.mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(r.handleExchangeCode))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/me", r.protected(r.handleMe))
@@ -410,7 +430,15 @@ func (r *Router) Setup() http.Handler {
 	// replaced by /api/v1/media/presign (see pkg/api/media.go). The
 	// new endpoint is part of a 3-step presigned upload flow that
 	// removes arbitrary media_url from public post payloads.
-	r.mux.Method(http.MethodPost, "/api/v1/media/presign", r.protected(r.handlePresignMedia))
+	// SPRINT 2.2: per-endpoint media-presign budget (30/min,
+	// in-memory coarse backstop). The middleware is a no-op when
+	// rateLimitSvc is nil.
+	var mediaPresignMw []func(http.Handler) http.Handler
+	if r.rateLimitSvc != nil {
+		mediaPresignMw = append(mediaPresignMw, MediaPresignLimit(r.rateLimitSvc))
+	}
+	r.mux.Method(http.MethodPost, "/api/v1/media/presign",
+		chain(r.protected(r.handlePresignMedia), mediaPresignMw...))
 	r.mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", r.protected(r.handleCompleteMedia))
 	r.mux.Route("/api/v1/workspaces", func(sr chi.Router) {
 		sr.Post("/", r.protected(r.handleCreateWorkspace))
@@ -422,6 +450,13 @@ func (r *Router) Setup() http.Handler {
 		sr.Post("/{id}/switch", r.protected(r.handleSwitchWorkspace))
 	})
 	r.mux.Route("/api/v1/posts", func(sr chi.Router) {
+		// SPRINT 2.2: per-workspace POST budget (60/min/workspace,
+		// Postgres-backed). Outer to the auth-protected handler so
+		// the identity is available when the tier resolves the
+		// scope. The middleware is a no-op when rateLimitSvc is nil.
+		if r.rateLimitSvc != nil {
+			sr.Use(WorkspacePostLimit(r.rateLimitSvc))
+		}
 		sr.Post("/", r.protected(r.handleCreatePost))
 		sr.Get("/", r.protected(r.handleListPosts))
 		sr.Get("/workspace/{wid}", r.protected(r.handleListByWorkspace))
@@ -466,6 +501,13 @@ func (r *Router) Setup() http.Handler {
 				r.auth.Middleware(next).ServeHTTP(w, req)
 			})
 		})
+		// SPRINT 2.2: per-API-key read budget (600/min/key,
+		// Postgres-backed). Mounted AFTER the auth chain so the
+		// ApiKeyIdentity is in context when the tier resolves the
+		// scope. The middleware is a no-op when rateLimitSvc is nil.
+		if r.rateLimitSvc != nil {
+			sr.Use(APIKeyReadLimit(r.rateLimitSvc))
+		}
 		sr.Post("/", r.handleCreateApiKey)
 		sr.Get("/", r.handleListApiKeys)
 		sr.Get("/{id}", r.handleGetApiKey)
@@ -705,6 +747,31 @@ func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		r.auth.Middleware(next).ServeHTTP(w, req)
 	}
+}
+
+// chain composes a list of middlewares around a final handler.
+// chain(h, m1, m2) yields m1(m2(h)) — the first arg is the
+// innermost handler, subsequent args wrap it in order. No-op
+// identity when no middlewares are supplied.
+func chain(handler http.Handler, mws ...func(http.Handler) http.Handler) http.Handler {
+	composed := handler
+	// Apply in reverse so the first middleware in the slice is
+	// the outermost wrapper at request time.
+	for i := len(mws) - 1; i >= 0; i-- {
+		composed = mws[i](composed)
+	}
+	return composed
+}
+
+// OAuthStartLimitIfConfigured is a no-op identity when the rate
+// limiter is not wired; otherwise it wraps with OAuthStartLimit.
+// Used by Setup() so the OAuth start route registration stays
+// unconditional (no nil-guard branching in the route table).
+func OAuthStartLimitIfConfigured(svc *services.RateLimitService) func(http.Handler) http.Handler {
+	if svc == nil {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return OAuthStartLimit(svc)
 }
 
 // handleGetAccount / handleValidateAccount / handleReconnectAccount / handleDeleteAccount
