@@ -93,7 +93,7 @@ echo "ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
 - `META_APP_SECRET < 32 char` → "got X; must be at least 32"
 - `META_*` key-without-secret o viceversa per platform opzionali → "TIKTOK_CLIENT_SECRET is required"
 
-## 5. Meta Developer Console (obbligatorio per login)
+## 5. Meta Developer Console (opzionale — solo se vuoi Instagram/Facebook/Threads)
 
 1. https://developers.facebook.com → **My Apps** → **Create App** (tipo "Other" → "Next")
 2. **Settings → Basic**:
