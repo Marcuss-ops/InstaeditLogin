@@ -391,6 +391,20 @@ func (w *PublishWorker) reconcileTarget(ctx context.Context, target *models.Post
 		// Leave the target alone; the next tick will check again.
 		return false, false, nil
 	}
+	// Defensive guard: a successful Reconcile result with an empty
+	// PlatformMediaID is a misbehaving platform impl (the canonical
+	// contract returns res.PlatformMediaID == publish_id or the
+	// public-facing id — both non-empty). Treat as transient so the
+	// row stays in 'publishing' and the next tick retries. Per-target
+	// backoff is the post_targets retry state machine (or, longer-
+	// term, the outbox dispatcher's max-attempts). This branch is
+	// dead for TikTok's specific impl (always populates the field)
+	// but defensive for future AsyncPublisher implementations.
+	if res.PlatformMediaID == "" {
+		w.logger.Warn("publish reconcile empty PlatformMediaID (treated as transient)",
+			"target_id", target.ID, "publish_id", target.PlatformPostID)
+		return false, false, nil
+	}
 
 	// 5. Success transition: persist terminal publisher_state + flip
 	// the target row to 'published' with publish_id-stamped URL fields.
