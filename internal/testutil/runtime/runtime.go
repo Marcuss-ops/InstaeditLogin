@@ -141,6 +141,13 @@ func WaitReady(t testing.TB, ping func() error, deadline, backoff time.Duration)
 		if time.Now().After(absDeadline) {
 			t.Fatalf("WaitReady: timeout after %d attempt(s) over %v (last ping error: %v)",
 				attempt, deadline, lastErr)
+			// Defensive return: a real *testing.T.Fatalf calls
+			// runtime.Goexit and never reaches this line, but a
+			// fake testing.TB (e.g. unit-test stubs that capture
+			// the Fatalf call) will return normally — without this
+			// return, the loop would keep sleeping + retrying
+			// against a fake that never fails, hanging the test.
+			return
 		}
 		time.Sleep(backoff)
 	}
