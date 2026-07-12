@@ -23,6 +23,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 func main() {
@@ -388,23 +389,57 @@ func main() {
 		}
 	}()
 
+	// Set the worker_id singleton BEFORE the metrics collector
+	// (and any other goroutine) comes up, so log lines emitted
+	// from each worker tick carry the canonical process-local
+	// worker_id. The order matters: every other startup log line
+	// printed AFTER this call automatically inherits the id
+	// because slog.Default() was wired earlier with logger.Info
+	// that includes it (set in a follow-up). Setting it BEFORE the
+	// 5th goroutine spawn keeps the field consistent across the
+	// fan-out.
+	metrics.InitWorkerID()
+
+	// SPRINT 6.1 (P1#13) — Observations phase 2: spawn the metrics
+	// collector goroutine. Refreshes the 5 periodic gauges from
+	// pkg/metrics/observability.go (publish_queue_depth /
+	// publish_queue_lag_seconds / publish_targets_by_status /
+	// dead_letter_count / database_pool_usage). Single-flighted
+	// across N replicas via pg_try_advisory_xact_lock — only 1
+	// replica runs the DB queries per tick; the others skip
+	// silently (see pkg/metrics/collector.go package docstring).
+	// Pool gauges (database_pool_usage) ALWAYS run locally
+	// (sql.DB.Stats() is in-process). Same lifecycle shape as
+	// the other 4 background goroutines (ctx-cancellable, Done
+	// channel, drained in parallel on shutdown). Phase 7 will
+	// switch the cadence to a config-driven duration; for now
+	// the default is 10s (metrics.DefaultCollectorInterval).
+	collectorCtx, collectorCancel := context.WithCancel(context.Background())
+	collectorDone := make(chan struct{})
+	go func() {
+		defer close(collectorDone)
+		if err := metrics.RunPeriodicCollector(collectorCtx, db, metrics.DefaultCollectorInterval, slog.Default()); err != nil && err != context.Canceled {
+			slog.Error("metrics collector exited with error", "error", err)
+		}
+	}()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	// 4 goroutines drain CONCURRENTLY. Each leaf has its own 15s
+	// 5 goroutines drain CONCURRENTLY. Each leaf has its own 15s
 	// inner timeout, so wg.Wait returns within 15s of start (parallel
 	// execution — no per-leaf blocks forever on a hung Run). Total
-	// wall-clock on hard hangs: 15s (down from the prior stacked
-	// 3x15s = 45s). Missing "drained cleanly" line identifies which
-	// worker hit its inner timeout.
-	slog.Info("Shutting down: cancelling publish worker + reconcile worker + outbox dispatcher + webhook worker in parallel")
+	// wall-clock on hard hangs: 15s. Missing "drained cleanly" line
+	// identifies which worker hit its inner timeout.
+	slog.Info("Shutting down: cancelling publish worker + reconcile worker + outbox dispatcher + webhook worker + metrics collector in parallel")
 	workerCancel()
 	reconcileCancel()
 	dispatcherCancel()
 	webhookCancel()
+	collectorCancel()
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 	go func() {
 		defer wg.Done()
 		select {
@@ -439,6 +474,15 @@ func main() {
 			slog.Info("webhook worker drained cleanly")
 		case <-time.After(15 * time.Second):
 			slog.Warn("webhook worker drain timeout, continuing shutdown")
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		select {
+		case <-collectorDone:
+			slog.Info("metrics collector drained cleanly")
+		case <-time.After(15 * time.Second):
+			slog.Warn("metrics collector drain timeout, continuing shutdown")
 		}
 	}()
 	wg.Wait()

@@ -1,12 +1,16 @@
 package metrics
 
 import (
+	"os"
+	"strconv"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 // workerID is the per-process identity for SPRINT 6.1 (Observability
 // with SLO). Set once at process startup (cmd/server/main.go calls
-// metrics.SetWorkerID(uuid.New().String())) and read by:
+// metrics.InitWorkerID()) and read by:
 //
 //   - slog.With("worker_id", metrics.WorkerID()) on every structured
 //     log line emitted from a background goroutine (workers emit
@@ -84,4 +88,55 @@ func WorkerID() string {
 	workerIDMutex.RLock()
 	defer workerIDMutex.RUnlock()
 	return workerID
+}
+
+// InitWorkerID (SPRINT 6.1 / Phase 2) generates a unique per-process
+// worker_id and stamps it via SetWorkerID. The format is
+// "worker-<hostname>-<pid>-<uuid>" — log-parseable, stable across
+// the process lifetime, and unique across N replicas / restarts:
+//
+//   - hostname is from os.Hostname(); "unknown" fallback handles
+//     chrooted / networkless test envs where hostname lookup errors.
+//   - pid disambiguates fast restarts on the same host where the
+//     UUID alone would not tell you "process P2" from "process P3".
+//   - uuid (crypto-random, 36-char hex-with-dashes) makes the id
+//     unique across the rest of the cluster even if two hosts
+//     coincidentally share hostname + pid at exactly the same
+//     nanosecond (impractical but the cheap guarantee).
+//
+// Returns the generated id for callers that want to log it
+// prominently at startup ("worker_id=worker-abc-12345-<uuid> ...").
+// SetWorkerID's idempotent keep-first rule means re-running
+// InitWorkerID in the same process is a no-op — only the first
+// call wins, all subsequent ones return the same value.
+//
+// Why a helper at all (vs callers inlining uuid.New().String()):
+//   - The format consistency ("worker-<host>-<pid>-<uuid>") lives in
+//     one place. A grep for `"worker-.*-"` matches every caller.
+//   - main.go doesn't import google/uuid itself; importing
+//     pkg/metrics + calling InitWorkerID keeps the dependency
+//     surface lean.
+//
+// Failure modes:
+//   - hostname lookup error → fallback to "unknown", log id
+//     carries "worker-unknown-<pid>-<uuid>". Operator can still
+//     disambiguate via pid + uuid.
+//   - uuid generator failure (crypto/rand exhaustion — never
+//     happens in practice) → panic inside uuid.NewString(). The
+//     process can't start without a stable id; fail-fast is right.
+//
+// SECURITY NOTE: hostname + pid are deliberately emitted into log
+// lines and metric external_labels (set by Prometheus scraper, not
+// stored in app source). Operators WANT to see host identity in
+// logs for cross-replica correlation. The "leak" framing is wrong:
+// this is the canonical ops-telemetry use case. Operator workstations
+// that need to redact this can run a log-rewriter at the collector.
+func InitWorkerID() string {
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "unknown"
+	}
+	id := "worker-" + hostname + "-" + strconv.Itoa(os.Getpid()) + "-" + uuid.NewString()
+	SetWorkerID(id)
+	return id
 }
