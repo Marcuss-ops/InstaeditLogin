@@ -658,6 +658,83 @@ paths:
         '404':
           $ref: '#/components/responses/NotFoundError'
 
+  # ───────────── Post Targets (C3 — async state machine) ─────────────
+
+  /post_targets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [PostTargets]
+      operationId: postTargetsGet
+      summary: Fetch a single post target with full async state.
+      description: |
+        Returns the canonical async state machine values for one
+        target. Use this to poll after a 202 Accepted create, or to
+        resolve a webhook back into the canonical row.
+
+        Status machine (per-target):
+          draft → queued → publishing → (published | failed |
+          waiting_provider | retrying)
+        Indirect transition `retrying → publishing` happens when the
+        worker tick re-claims (ListPending) the row whose
+        `next_attempt_at <= now`.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Target's current state, including provider_state + retry bookkeeping.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostTargetDetail'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /post_targets/{id}/retry:
+    post:
+      tags: [PostTargets]
+      operationId: postTargetsRetry
+      summary: Manually re-queue a `failed` or `partially_published` target.
+      description: |
+        Transitions the target back to `queued` (next worker tick will
+        re-claim via `ClaimQueuedTarget`). Pass `force: true` to allow
+        retrying from `partially_published` or `waiting_provider`
+        (default behavior allows `failed` only).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostTargetRetryRequest'
+      responses:
+        '200':
+          description: Target accepted for re-publish (next worker tick).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [queued]
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '422':
+          description: Target can't be retried from its current state without `force`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
 # ─────────────────────────────────────────────────────────────────────────────
 components:
 
@@ -1224,3 +1301,131 @@ components:
       properties:
         platform_account_id: { type: integer, format: int64, minimum: 1 }
         settings: { $ref: '#/components/schemas/TargetSettings' }
+
+    # ────── Post Targets (C3) — async state + retry ────────────────
+
+    PostTargetDetail:
+      type: object
+      description: |
+        Canonical async state of a single target. The `status` field
+        is the authoritative state-machine value; `provider_state`
+        carries the platform-specific sub-state on async platforms
+        (TikTok: PROCESSING_UPLOAD / PENDING_PUBLISH / IN_REVIEW /
+        PUBLISH_COMPLETE; Meta: PUBLISHED / REJECTED); `attempt_count`
+        + `next_attempt_at` carry retry bookkeeping; `last_error_code`
+        is the stable short code (RATE_LIMITED / INVALID_TOKEN / etc.).
+      required: [id, post_id, platform_account_id, status, attempt_count, version, created_at, updated_at]
+      properties:
+        id: { type: string, example: pt_01HXY_DoNotUse }
+        post_id:
+          type: string
+          description: 'Parent post id (use /posts/{id} for content).'
+        platform:
+          type: string
+          enum: [meta, tiktok, twitter, youtube, linkedin]
+          description: 'Resolved from platform_account_id.'
+        platform_account_id: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/PostTargetState' }
+        attempt_count:
+          type: integer
+          minimum: 0
+          default: 0
+          description: 'Monotonically increasing retry counter (migration 018).'
+        next_attempt_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 'Earliest time the worker will re-try a row in `retrying` state.'
+        provider_state:
+          type: string
+          nullable: true
+          description: 'Opaque per-platform state string (TikTok async flow uses this).'
+        container_id:
+          type: string
+          nullable: true
+          description: 'TikTok `container_id` for PULL_FROM_FILE chunked upload.'
+        platform_post_id:
+          type: string
+          nullable: true
+          description: |
+            INTERNAL publish id the platform exposes (TikTok
+            `publish_id`, sync platform equivalent). Set at claim for
+            async flows; set at successful-publish for sync flows.
+        remote_post_id:
+          type: string
+          nullable: true
+          description: 'Public-facing post id from the platform.'
+        remote_post_url:
+          type: string
+          format: uri
+          nullable: true
+          description: 'Public-facing URL on the platform.'
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_error_code:
+          type: string
+          nullable: true
+          description: 'Stable short code: RATE_LIMITED / INVALID_TOKEN / MEDIA_UNREACHABLE / CONTAINER_NOT_READY.'
+        error_message:
+          type: string
+          nullable: true
+        settings_echo:
+          $ref: '#/components/schemas/TargetSettings'
+          description: 'The settings block as persisted on this target row (for diagnostics).'
+        provider_idempotency_key:
+          type: string
+          nullable: true
+          description: 'Per-target deterministic key forwarded to the platform as `idempotency_key` (migration 022).'
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      example:
+        id: pt_01HXY_DoNotUse
+        post_id: post_01HXY_DoNotUse
+        platform: tiktok
+        platform_account_id: 101
+        status: publishing
+        attempt_count: 1
+        next_attempt_at: null
+        provider_state: PROCESSING_UPLOAD
+        container_id: tiktok_container_DoNotUse
+        platform_post_id: tiktok_publish_DoNotUse
+        last_error_code: null
+        error_message: null
+        settings_echo:
+          tiktok:
+            privacy_level: public
+            allow_duet: true
+        provider_idempotency_key: 'taglio:pt:01HXY_DoNotUse:v1'
+        version: 1
+        created_at: '2026-07-12T15:00:00Z'
+        updated_at: '2026-07-12T15:00:05Z'
+
+    PostTargetState:
+      type: string
+      description: |
+        Per-target state machine. Note that the post-level
+        `PostStatus` collapses sibling targets into a single
+        maximum-reduction value (e.g. one `failed` + one `published`
+        ⇒ `partially_published`).
+      enum:
+        - draft
+        - queued
+        - publishing
+        - published
+        - failed
+        - waiting_provider
+        - retrying
+
+    PostTargetRetryRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          default: false
+          description: |
+            When `true`, allows retrying from `partially_published`
+            or `waiting_provider` states. Default retry is `failed`
+            only.
