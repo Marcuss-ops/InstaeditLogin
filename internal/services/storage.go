@@ -101,21 +101,37 @@ type S3Provider struct {
 // "https://s3.us-east-1.amazonaws.com" or "https://minio.example.com".
 // region is the SigV4 credential-scope component; pass "" to default
 // to "us-east-1" (acceptable for AWS S3, MinIO, R2, B2, Wasabi).
-func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, logger *slog.Logger) *S3Provider {
+//
+// Returns an error (NOT nil) when the endpoint is malformed: an empty
+// string, a missing scheme, a non-http(s) scheme, or a missing host.
+// This is fail-loud — a typo'd endpoint would otherwise produce a
+// syntactically valid signed URL pointing at a dead host, surfacing as
+// a confusing 403 from S3 instead of a clear Go-side error.
+func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, logger *slog.Logger) (*S3Provider, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if region == "" {
 		region = "us-east-1"
 	}
-	// Strip a trailing slash so constructed URLs never have "//" between
-	// the host and the path. Strip any path component — the signer uses
-	// only the host header.
-	host := strings.TrimRight(endpoint, "/")
-	if u, err := url.Parse(host); err == nil {
-		host = u.Scheme + "://" + u.Host
+	// Parse the endpoint. Fail loud on malformed input instead of
+	// silently passing it through to the signer (which would produce
+	// a syntactically valid URL pointing at a dead host).
+	u, err := url.Parse(strings.TrimRight(endpoint, "/"))
+	if err != nil {
+		return nil, fmt.Errorf("S3 endpoint %q is not a valid URL: %w", endpoint, err)
 	}
-	hostOnly := strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return nil, fmt.Errorf("S3 endpoint %q must use http or https scheme (got %q)", endpoint, u.Scheme)
+	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("S3 endpoint %q has no host (expected format: https://s3.us-east-1.amazonaws.com)", endpoint)
+	}
+	if u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return nil, fmt.Errorf("S3 endpoint %q must be a bare host (no path/query/fragment/userinfo)", endpoint)
+	}
+	host := u.Scheme + "://" + u.Host
+	hostOnly := u.Host
 	baseHost := bucket + "." + hostOnly
 	return &S3Provider{
 		endpoint:  host,
@@ -127,7 +143,7 @@ func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, logger
 		mediaBase: host + "/" + bucket,
 		http:      &http.Client{Timeout: 15 * time.Second},
 		logger:    logger,
-	}
+	}, nil
 }
 
 // Provider implements StorageProvider.
@@ -405,13 +421,4 @@ func sanitizeFilename(filename string) string {
 		s = s[:200]
 	}
 	return s
-}
-
-// truncate shortens a string for inclusion in error messages without
-// flooding logs with potentially-large provider responses.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

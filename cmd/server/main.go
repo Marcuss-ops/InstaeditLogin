@@ -175,9 +175,13 @@ func main() {
 	// vars are set; we can build the provider unconditionally. There
 	// is no "no storage + 501" mode — /api/v1/storage/upload-url is
 	// always available.
-	storageProvider := services.NewS3Provider(
+	storageProvider, err := services.NewS3Provider(
 		cfg.S3Endpoint, cfg.S3Bucket, cfg.S3Region,
 		cfg.S3AccessKey, cfg.S3SecretKey, slog.Default())
+	if err != nil {
+		slog.Error("Failed to construct S3 storage provider (check S3_ENDPOINT format)", "error", err)
+		os.Exit(1)
+	}
 	slog.Info("storage provider: S3-compatible configured",
 		"endpoint", cfg.S3Endpoint, "bucket", cfg.S3Bucket, "region", cfg.S3Region)
 
