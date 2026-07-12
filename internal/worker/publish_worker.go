@@ -25,18 +25,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// TikTok publish states (Taglio 4.2) — the platform-specific state
-// strings returned by TikTok's status/fetch endpoint. Constants here
-// so the reconciler can compare without typos and so tests can
-// reference the canonical values.
-const (
-	tikTokStateProcessingUpload = "PROCESSING_UPLOAD"
-	tikTokStatePendingPublish   = "PENDING_PUBLISH"
-	tikTokStateInReview         = "IN_REVIEW"
-	tikTokStatePublishComplete  = "PUBLISH_COMPLETE"
-	tikTokStateFailed           = "FAILED"
-)
-
 // providerIdempotencyKeyPrefix is the namespace marker baked into the
 // SHA-256 input so a v2 (or any future revision) of the deterministic
 // key generator can yield different outputs for the same (post_id,
@@ -319,22 +307,38 @@ func (w *PublishWorker) tickReconcile(ctx context.Context) (reconciled, failed i
 	return reconciled, failed, nil
 }
 
-// reconcileTarget (Taglio 4.2) is the per-target reconciler. It:
-//  1. Loads the platform account (skipped if missing — orphan target).
-//  2. Looks up the AsyncPublisher capability. If the platform doesn't
-//     support async publishing (e.g. Meta, YouTube), leaves the target
-//     alone — sync platforms complete their publish in the original
-//     tick() call.
-//  3. Refreshes the OAuth token via the vault.
-//  4. Calls CheckPublishStatus (single GET, no polling).
-//  5. Updates provider_state to the current state (debugging/observability).
-//  6. Transitions:
-//     PUBLISH_COMPLETE → status='published', set published_at
-//     FAILED          → status='failed', save error_message
-//     in-flight       → leave status='publishing', no transition
+// reconcileTarget (Taglio 5.x — canonical async-publisher transition).
+// Drives the per-target async state machine by delegating to
+// AsyncPublisher.Reconcile, which returns one of three terminal-stable
+// outcomes per its interface contract:
 //
-// Returns (reconciled bool, wasFailed bool, err). The bools let the
-// caller increment the per-tick counters without parsing the error.
+//	(*PublishResult, nil)    — PUBLISH_COMPLETE → status='published'
+//	(nil, err)               — FAILED          → status='failed' (terminal).
+//	                            Includes transient 5xx/network errors: the
+//	                            interface contract is "errors are terminal
+//	                            too, retry is the worker's responsibility".
+//	                            The dispatcher's retry counter + decorrelated-
+//	                            jitter backoff on outbox_events is the retry
+//	                            mechanism at the platform-decoupled level;
+//	                            per-target retry on this row is via the
+//	                            post_targets.next_attempt_at / attempt_count
+//	                            columns (Taglio 4.7 state machine).
+//	(nil, nil)               — in-flight → leave alone, retry next tick.
+//
+// Per-capability setup (account/oauth lookup, vault.Renew) is
+// unchanged from the previous Taglio 4.2 implementation. The state-string
+// switch (`switch state { case "PUBLISH_COMPLETE": ... }`) is gone —
+// Reconcile owns the transition decision; the worker just records it.
+//
+// provider_state column (UpdatePublishState) is now written ONLY on
+// terminal transitions (PUBLISH_COMPLETE / FAILED), not on every
+// in-flight tick. Without a state string from Reconcile's contract we
+// can't write a fine-grained in-flight label; skipping it is the
+// documented choice (the column becomes a terminal-state log rather
+// than a per-tick snapshot).
+//
+// Returns (reconciled bool, wasFailed bool, err). reconciled and wasFailed
+// let the caller increment per-tick counters without parsing the error.
 func (w *PublishWorker) reconcileTarget(ctx context.Context, target *models.PostTarget) (reconciled bool, wasFailed bool, err error) {
 	// 1. Load platform account.
 	account, err := w.userRepo.FindPlatformAccountByID(target.PlatformAccountID)
@@ -370,43 +374,39 @@ func (w *PublishWorker) reconcileTarget(ctx context.Context, target *models.Post
 		}
 	}
 
-	// 4. Check publish status (single GET, no polling).
-	state, err := ap.CheckPublishStatus(ctx, oauthToken.AccessToken, target.PlatformPostID)
+	// 4. Delegate to platform's Reconcile (single GET + transition decision).
+	res, err := ap.Reconcile(ctx, oauthToken.AccessToken, target.PlatformPostID)
 	if err != nil {
-		// Network / API error — leave the target alone, retry next tick.
-		// The publish_id is stable; a transient 5xx shouldn't mark the
-		// target failed (TikTok's SLO is too loose for that).
-		w.logger.Warn("CheckPublishStatus error (will retry next tick)",
+		// Terminal failure — includes FAILED-state and transient 5xx
+		// (the platform impl collapses both into a non-nil error per
+		// the Reconcile contract; retry is up to the outbox dispatcher
+		// or the post_targets retry state machine).
+		w.logger.Warn("publish reconcile terminal error",
 			"target_id", target.ID, "publish_id", target.PlatformPostID, "error", err)
+		_ = w.postRepo.UpdatePublishState(target.ID, "FAILED")
+		return w.markFailedAndReturn(target, fmt.Sprintf("publish failed: %v", err))
+	}
+	if res == nil {
+		// In-flight — no state string available (Reconcile hides it).
+		// Leave the target alone; the next tick will check again.
 		return false, false, nil
 	}
 
-	// 5. Update provider_state (always, even on terminal states, for
-	// observability — operators can see the final state in the DB).
-	if updateErr := w.postRepo.UpdatePublishState(target.ID, state); updateErr != nil {
-		// Non-fatal: the state transition below is the source of truth.
-		w.logger.Warn("UpdatePublishState failed (continuing with transition)",
-			"target_id", target.ID, "error", updateErr)
+	// 5. Success transition: persist terminal publisher_state + flip
+	// the target row to 'published' with publish_id-stamped URL fields.
+	_ = w.postRepo.UpdatePublishState(target.ID, "PUBLISH_COMPLETE")
+	target.Status = models.PostStatusPublished
+	// For TikTok, PlatformMediaID == publish_id; for other async
+	// providers the value is the public-facing post id returned by
+	// the platform at terminal time. Either way, res.PlatformMediaID
+	// is the canonical post_target.platform_post_id at completion.
+	target.PlatformPostID = res.PlatformMediaID
+	now := time.Now()
+	target.PublishedAt = &now
+	if err := w.postRepo.UpdateStatus(target); err != nil {
+		return false, false, fmt.Errorf("transition to published: %w", err)
 	}
-
-	// 6. Transition based on state.
-	switch state {
-	case tikTokStatePublishComplete:
-		target.Status = models.PostStatusPublished
-		// platform_post_id stays as the publish_id (the TikTok media id
-		// is the same as the publish_id for completed publishes).
-		now := time.Now()
-		target.PublishedAt = &now
-		if err := w.postRepo.UpdateStatus(target); err != nil {
-			return false, false, fmt.Errorf("transition to published: %w", err)
-		}
-		return true, false, nil
-	case tikTokStateFailed:
-		return w.markFailedAndReturn(target, fmt.Sprintf("tiktok publish failed (publish_id=%s, state=%s)", target.PlatformPostID, state))
-	default:
-		// PROCESSING_UPLOAD / PENDING_PUBLISH / IN_REVIEW — still in flight.
-		return false, false, nil
-	}
+	return true, false, nil
 }
 
 // markFailedAndReturn transitions the target to status='failed' and

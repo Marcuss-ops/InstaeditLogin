@@ -1185,9 +1185,11 @@ func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestReconcileTarget_PublishComplete_TransitionsToPublished covers the
-// happy terminal state: CheckPublishStatus returns PUBLISH_COMPLETE,
-// the reconciler must transition the target from 'publishing' to
-// 'published' with a non-nil published_at.
+// happy terminal state: Reconcile returns (*PublishResult, nil)
+// corresponding to PUBLISH_COMPLETE upstream, the reconciler must
+// transition the target from 'publishing' to 'published' with a
+// non-nil published_at. The mock's CheckPublishStatus must NOT be
+// reached — Reconcile is the new entrypoint and wraps it.
 func TestReconcileTarget_PublishComplete_TransitionsToPublished(t *testing.T) {
 	posts := &mockPostStore{}
 	users := &mockUserStore{
@@ -1197,8 +1199,8 @@ func TestReconcileTarget_PublishComplete_TransitionsToPublished(t *testing.T) {
 	}
 	svc := &mockAsyncProvider{
 		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		checkStatusFn: func(ctx context.Context, accessToken, publishID string) (string, error) {
-			return "PUBLISH_COMPLETE", nil
+		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: publishID}, nil
 		},
 	}
 	vault := &mockCredentialVault{
@@ -1213,10 +1215,10 @@ func TestReconcileTarget_PublishComplete_TransitionsToPublished(t *testing.T) {
 		t.Fatalf("reconcileTarget: %v", err)
 	}
 	if !reconciled {
-		t.Error("reconciled: want true (PUBLISH_COMPLETE is a terminal transition), got false")
+		t.Error("reconciled: want true (success result is a terminal transition), got false")
 	}
 	if wasFailed {
-		t.Error("wasFailed: want false (PUBLISH_COMPLETE is a success, not failure)")
+		t.Error("wasFailed: want false (success, not failure)")
 	}
 	// UpdateStatus should have been called once with status=published.
 	if posts.updateCalls != 1 {
@@ -1232,22 +1234,31 @@ func TestReconcileTarget_PublishComplete_TransitionsToPublished(t *testing.T) {
 	if final.PlatformPostID != "publish-id-abc" {
 		t.Errorf("platform_post_id: want publish-id-abc (carried over), got %q", final.PlatformPostID)
 	}
-	// UpdatePublishState must have been called for observability.
+	// UpdatePublishState must have been called once with terminal label
+	// "PUBLISH_COMPLETE" — the post-refactor worker writes this only on
+	// terminal transitions, not on in-flight ticks.
 	if posts.updatePublishStateCalls != 1 {
 		t.Errorf("UpdatePublishState calls: want 1 (record terminal state), got %d", posts.updatePublishStateCalls)
 	}
 	if len(posts.updatePublishStateValues) != 1 || posts.updatePublishStateValues[0] != "PUBLISH_COMPLETE" {
 		t.Errorf("UpdatePublishState values: want [PUBLISH_COMPLETE], got %v", posts.updatePublishStateValues)
 	}
-	// CheckPublishStatus called exactly once (no polling).
-	if svc.checkStatusCalls != 1 {
-		t.Errorf("CheckPublishStatus calls: want 1, got %d (NO polling — the whole point of Taglio 4.2)", svc.checkStatusCalls)
+	// Reconcile called exactly once. CheckPublishStatus MUST NOT be reached
+	// (Reconcile is the new entrypoint; the old in-flight string path is
+	// gone from reconcileTarget).
+	if svc.reconcileCalls != 1 {
+		t.Errorf("Reconcile calls: want 1, got %d", svc.reconcileCalls)
+	}
+	if svc.checkStatusCalls != 0 {
+		t.Errorf("CheckPublishStatus calls: want 0 (worker no longer calls it directly), got %d", svc.checkStatusCalls)
 	}
 }
 
 // TestReconcileTarget_Failed_TransitionsToFailed covers the failure
-// terminal state: CheckPublishStatus returns FAILED, the reconciler
-// must transition to 'failed' with the error message.
+// terminal state: Reconcile returns (nil, err) for FAILED-state AND
+// for transient 5xx (both collapse to terminal per the interface
+// contract). The reconciler must transition to 'failed' with the error
+// message.
 func TestReconcileTarget_Failed_TransitionsToFailed(t *testing.T) {
 	posts := &mockPostStore{}
 	users := &mockUserStore{
@@ -1257,8 +1268,8 @@ func TestReconcileTarget_Failed_TransitionsToFailed(t *testing.T) {
 	}
 	svc := &mockAsyncProvider{
 		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		checkStatusFn: func(ctx context.Context, accessToken, publishID string) (string, error) {
-			return "FAILED", nil
+		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
+			return nil, errors.New("publish failed: tiktok returned status FAILED")
 		},
 	}
 	vault := &mockCredentialVault{
@@ -1289,17 +1300,25 @@ func TestReconcileTarget_Failed_TransitionsToFailed(t *testing.T) {
 	if final.PublishedAt != nil {
 		t.Error("PublishedAt should remain nil on failure")
 	}
-	// provider_state was still recorded (for observability).
+	// provider_state was recorded with terminal "FAILED".
 	if posts.updatePublishStateCalls != 1 {
 		t.Errorf("UpdatePublishState calls: want 1 (record terminal state), got %d", posts.updatePublishStateCalls)
+	}
+	if len(posts.updatePublishStateValues) != 1 || posts.updatePublishStateValues[0] != "FAILED" {
+		t.Errorf("UpdatePublishState values: want [FAILED], got %v", posts.updatePublishStateValues)
+	}
+	if svc.reconcileCalls != 1 {
+		t.Errorf("Reconcile calls: want 1, got %d", svc.reconcileCalls)
 	}
 }
 
 // TestReconcileTarget_InFlight_LeavesStatusUnchanged covers the
-// in-flight case: CheckPublishStatus returns PROCESSING_UPLOAD (or
-// PENDING_PUBLISH / IN_REVIEW), the reconciler must LEAVE the
-// status as 'publishing' and just record the current state in
-// provider_state. The next tick will check again.
+// in-flight case: Reconcile returns (nil, nil) — the platform's
+// PublishID is still in PROCESSING_UPLOAD/PENDING_PUBLISH/IN_REVIEW.
+// The reconciler MUST leave status='publishing' and try again next
+// tick. UpdatePublishState is intentionally NOT called on in-flight
+// (no state string is exposed through Reconcile's contract; the
+// column becomes a terminal-state log rather than a per-tick snapshot).
 func TestReconcileTarget_InFlight_LeavesStatusUnchanged(t *testing.T) {
 	posts := &mockPostStore{}
 	users := &mockUserStore{
@@ -1309,8 +1328,8 @@ func TestReconcileTarget_InFlight_LeavesStatusUnchanged(t *testing.T) {
 	}
 	svc := &mockAsyncProvider{
 		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		checkStatusFn: func(ctx context.Context, accessToken, publishID string) (string, error) {
-			return "PROCESSING_UPLOAD", nil
+		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
+			return nil, nil // in-flight
 		},
 	}
 	vault := &mockCredentialVault{
@@ -1327,17 +1346,17 @@ func TestReconcileTarget_InFlight_LeavesStatusUnchanged(t *testing.T) {
 	if reconciled || wasFailed {
 		t.Errorf("reconciled=%v wasFailed=%v: want (false, false) for in-flight", reconciled, wasFailed)
 	}
-	// CRITICAL: no UpdateStatus call — the row is still in-flight, the
-	// reconciler must not mutate status.
+	// CRITICAL: no UpdateStatus call — the row is still in-flight.
 	if posts.updateCalls != 0 {
 		t.Errorf("UpdateStatus calls: want 0 (in-flight, no transition), got %d", posts.updateCalls)
 	}
-	// But UpdatePublishState IS called — for observability.
-	if posts.updatePublishStateCalls != 1 {
-		t.Errorf("UpdatePublishState calls: want 1 (record in-flight state), got %d", posts.updatePublishStateCalls)
+	// UpdatePublishState is intentionally NOT called on in-flight
+	// (the worker has no state string to write — Reconcile hides it).
+	if posts.updatePublishStateCalls != 0 {
+		t.Errorf("UpdatePublishState calls: want 0 (in-flight, terminal-state log only), got %d", posts.updatePublishStateCalls)
 	}
-	if len(posts.updatePublishStateValues) != 1 || posts.updatePublishStateValues[0] != "PROCESSING_UPLOAD" {
-		t.Errorf("UpdatePublishState values: want [PROCESSING_UPLOAD], got %v", posts.updatePublishStateValues)
+	if svc.reconcileCalls != 1 {
+		t.Errorf("Reconcile calls: want 1, got %d", svc.reconcileCalls)
 	}
 }
 
@@ -1421,12 +1440,16 @@ func TestReconcileTarget_OrphanAccount_MarksFailed(t *testing.T) {
 	}
 }
 
-// TestReconcileTarget_CheckStatusError_LeavesAlone covers the
-// transient-error case: CheckPublishStatus returns a 5xx. The
-// reconciler must leave the target as-is so the next tick retries
-// — failing a target on a transient 5xx would be too aggressive
-// (TikTok's SLO is loose).
-func TestReconcileTarget_CheckStatusError_LeavesAlone(t *testing.T) {
+// TestReconcileTarget_TransientError_TerminalFailure covers the
+// post-refactor behavioural change: under Reconcile's contract, ANY
+// error from Reconcile — including transient 5xx — is terminal.
+// The platform impl collapses both FAILED-state and transient errors
+// into (nil, err); the worker treats that as a 'failed' transition.
+// (Pre-refactor: transient errors left the target alone for next
+// tick. The reviewer's documented choice was to trust Reconcile's
+// contract; per-target retry is the outbox dispatcher's job at the
+// platform-decoupled level.)
+func TestReconcileTarget_TransientError_TerminalFailure(t *testing.T) {
 	posts := &mockPostStore{}
 	users := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
@@ -1435,8 +1458,8 @@ func TestReconcileTarget_CheckStatusError_LeavesAlone(t *testing.T) {
 	}
 	svc := &mockAsyncProvider{
 		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		checkStatusFn: func(ctx context.Context, accessToken, publishID string) (string, error) {
-			return "", errors.New("502 bad gateway from tiktok")
+		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
+			return nil, errors.New("502 bad gateway from tiktok")
 		},
 	}
 	vault := &mockCredentialVault{
@@ -1448,24 +1471,36 @@ func TestReconcileTarget_CheckStatusError_LeavesAlone(t *testing.T) {
 
 	reconciled, wasFailed, err := w.reconcileTarget(context.Background(), publishingTarget())
 	if err != nil {
-		t.Fatalf("reconcileTarget: %v (transient errors must NOT propagate as tick errors)", err)
+		t.Fatalf("reconcileTarget: %v (reconciler surface error must NOT propagate as tick error)", err)
 	}
-	if reconciled || wasFailed {
-		t.Errorf("reconciled=%v wasFailed=%v: want (false, false) for transient error", reconciled, wasFailed)
+	if !reconciled || !wasFailed {
+		t.Errorf("reconciled=%v wasFailed=%v: want (true, true) — transient errors are terminal under Reconcile's contract", reconciled, wasFailed)
 	}
-	// No DB writes — we leave the target alone to retry next tick.
-	if posts.updateCalls != 0 {
-		t.Errorf("UpdateStatus calls: want 0 (transient error, retry next tick), got %d", posts.updateCalls)
+	// The transient error trades in for status='failed' + error_message
+	// populated, so the row drops out of BOTH tick + tickReconcile
+	// filter sets. Retry is the dispatcher's job at the outbox level.
+	if posts.updateCalls != 1 {
+		t.Errorf("UpdateStatus calls: want 1 (transition publishing→failed), got %d", posts.updateCalls)
 	}
-	if posts.updatePublishStateCalls != 0 {
-		t.Errorf("UpdatePublishState calls: want 0 (no state to record), got %d", posts.updatePublishStateCalls)
+	final := posts.updateTargets[0]
+	if final.Status != models.PostStatusFailed {
+		t.Errorf("final status: want failed, got %q", final.Status)
+	}
+	if !strings.Contains(final.ErrorMessage, "502") {
+		t.Errorf("ErrorMessage should propagate the platform error: %q", final.ErrorMessage)
+	}
+	if posts.updatePublishStateCalls != 1 {
+		t.Errorf("UpdatePublishState calls: want 1 (terminal-state log), got %d", posts.updatePublishStateCalls)
+	}
+	if len(posts.updatePublishStateValues) != 1 || posts.updatePublishStateValues[0] != "FAILED" {
+		t.Errorf("UpdatePublishState values: want [FAILED], got %v", posts.updatePublishStateValues)
 	}
 }
 
 // TestTickReconcile_IteratesAllPublishingTargets covers the tickReconcile
 // goroutine: it should call ListPublishing, then iterate every returned
-// target through reconcileTarget. The call counts and counters let us
-// verify the iteration.
+// target through reconcileTarget (which delegates to Reconcile).
+// Reconcile returning (nil, nil) on every target = all in-flight.
 func TestTickReconcile_IteratesAllPublishingTargets(t *testing.T) {
 	posts := &mockPostStore{
 		listPublishingFn: func() ([]models.PostTarget, error) {
@@ -1481,12 +1516,11 @@ func TestTickReconcile_IteratesAllPublishingTargets(t *testing.T) {
 			return &models.PlatformAccount{ID: 10, Platform: "tiktok", PlatformUserID: "tt-1"}, nil
 		},
 	}
-	// Each CheckPublishStatus returns PROCESSING_UPLOAD so reconcileTarget
-	// leaves the target alone. We only care about the iteration here.
+	// Reconcile returns (nil, nil) for in-flight on every call.
 	svc := &mockAsyncProvider{
 		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		checkStatusFn: func(ctx context.Context, accessToken, publishID string) (string, error) {
-			return "PROCESSING_UPLOAD", nil
+		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
+			return nil, nil
 		},
 	}
 	vault := &mockCredentialVault{
@@ -1511,15 +1545,16 @@ func TestTickReconcile_IteratesAllPublishingTargets(t *testing.T) {
 	if posts.listPublishingCalls != 1 {
 		t.Errorf("ListPublishing calls: want 1, got %d", posts.listPublishingCalls)
 	}
-	// CheckPublishStatus called 3 times — once per target.
-	if svc.checkStatusCalls != 3 {
-		t.Errorf("CheckPublishStatus calls: want 3 (one per target), got %d", svc.checkStatusCalls)
+	// Reconcile called 3 times — once per target.
+	if svc.reconcileCalls != 3 {
+		t.Errorf("Reconcile calls: want 3 (one per target), got %d", svc.reconcileCalls)
 	}
-	// UpdatePublishState called 3 times — one per target, for observability.
-	if posts.updatePublishStateCalls != 3 {
-		t.Errorf("UpdatePublishState calls: want 3 (one per target), got %d", posts.updatePublishStateCalls)
+	// UpdatePublishState NOT called on in-flight (terminal-state log only,
+	// not per-tick snapshot). UpdateStatus NOT called either — none
+	// transitioned.
+	if posts.updatePublishStateCalls != 0 {
+		t.Errorf("UpdatePublishState calls: want 0 (in-flight, no terminal log yet), got %d", posts.updatePublishStateCalls)
 	}
-	// UpdateStatus NOT called — none of them transitioned.
 	if posts.updateCalls != 0 {
 		t.Errorf("UpdateStatus calls: want 0 (all in-flight), got %d", posts.updateCalls)
 	}
@@ -1544,8 +1579,8 @@ func TestTickReconcile_EmptyList_NoOp(t *testing.T) {
 	if reconciled != 0 || failed != 0 {
 		t.Errorf("counters: want (0, 0), got (%d, %d)", reconciled, failed)
 	}
-	if svc.checkStatusCalls != 0 {
-		t.Errorf("CheckPublishStatus calls: want 0 (empty list), got %d", svc.checkStatusCalls)
+	if svc.reconcileCalls != 0 {
+		t.Errorf("Reconcile calls: want 0 (empty list), got %d", svc.reconcileCalls)
 	}
 }
 
@@ -1570,7 +1605,8 @@ func TestTickReconcile_ListError_Propagates(t *testing.T) {
 
 // TestRunOnce_BothTicksAndReconcile covers the new runOnce() method:
 // it should call BOTH tick() AND tickReconcile() in sequence on
-// every interval.
+// every interval. The mock's Reconcile returns success, exercising
+// the publishing→published transition end-to-end.
 func TestRunOnce_BothTicksAndReconcile(t *testing.T) {
 	posts := &mockPostStore{
 		listPendingFn: func(before time.Time) ([]models.PostTarget, error) {
@@ -1589,8 +1625,8 @@ func TestRunOnce_BothTicksAndReconcile(t *testing.T) {
 	}
 	svc := &mockAsyncProvider{
 		baseMockProvider: baseMockProvider{platform: "tiktok"},
-		checkStatusFn: func(ctx context.Context, accessToken, publishID string) (string, error) {
-			return "PUBLISH_COMPLETE", nil
+		reconcileFn: func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: publishID}, nil
 		},
 	}
 	vault := &mockCredentialVault{
@@ -1615,6 +1651,14 @@ func TestRunOnce_BothTicksAndReconcile(t *testing.T) {
 	}
 	if len(posts.updateTargets) != 1 || posts.updateTargets[0].Status != models.PostStatusPublished {
 		t.Errorf("final status: want published, got %+v", posts.updateTargets)
+	}
+	// Reconcile reached (1 call), CheckPublishStatus NOT reached
+	// directly (Reconcile is the new entrypoint).
+	if svc.reconcileCalls != 1 {
+		t.Errorf("Reconcile calls: want 1, got %d", svc.reconcileCalls)
+	}
+	if svc.checkStatusCalls != 0 {
+		t.Errorf("CheckPublishStatus calls: want 0 (worker delegates to Reconcile), got %d", svc.checkStatusCalls)
 	}
 }
 
