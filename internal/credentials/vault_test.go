@@ -19,18 +19,51 @@ import (
 // -----------------------------------------------------------------------
 
 // mockTokenStore implements the credentials.TokenStore contract (3 methods)
-// using function fields so each test wires only what it exercises. The
-// default (nil fields) returns success on Save / Delete and a "no rows"
-// sentinel on Find — that is what most tests in this file want. Tests
-// that need to force a Save / Find / Delete error override the relevant
-// field in the constructor.
+// using function fields AND an internal per-(accountID, tokenType) state
+// map. The state map is what makes the slow-path Renew test work: when
+// vault.Renew persists the refreshed token via SaveToken, the subsequent
+// Get must see the FRESH row, not the originally-seeded expired one.
+// Without state tracking, every FindLatestToken call would return the
+// stale token and the final Get would surface the "expired at ..." error.
+//
+// The function fields remain for tests that need to inject errors or
+// custom behaviour. Tests that just want to seed the initial state
+// should use seedToken (does NOT increment saveCalls).
+//
+// state is NESTED (map[int64]map[string]*models.Token) so the delete
+// path can match account_id with exact int64 equality. A flat
+// "accountID:tokenType" string-key would break the moment two account
+// ids share a digit prefix (e.g. 1 vs 10, 100 vs 1000) — HasPrefix
+// would silently delete the wrong account's tokens.
 type mockTokenStore struct {
-	saveTokenFn   func(*models.Token) error
-	findLatestFn  func(int64, string) (*models.Token, error)
-	deleteAllFn   func(int64) error
-	saveCalls     atomic.Int32
-	findCalls     atomic.Int32
-	deleteCalls   atomic.Int32
+	saveTokenFn  func(*models.Token) error
+	findLatestFn func(int64, string) (*models.Token, error)
+	deleteAllFn  func(int64) error
+	saveCalls    atomic.Int32
+	findCalls    atomic.Int32
+	deleteCalls  atomic.Int32
+
+	// state[accountID][tokenType] = *models.Token. The two-level map
+	// matches the production SQL's `WHERE platform_account_id = $1`
+	// equality semantics: deleting for account 10 only removes
+	// account 10's tokens, never account 1's.
+	state map[int64]map[string]*models.Token
+}
+
+// seedToken pre-populates the internal state for (t.PlatformAccountID,
+// t.TokenType) WITHOUT calling SaveToken (so saveCalls is not inflated
+// and the Save→Get roundtrip is observable). Used by every test that
+// needs to start from a known initial token.
+func (m *mockTokenStore) seedToken(t *models.Token) {
+	if m.state == nil {
+		m.state = make(map[int64]map[string]*models.Token)
+	}
+	bucket, ok := m.state[t.PlatformAccountID]
+	if !ok {
+		bucket = make(map[string]*models.Token)
+		m.state[t.PlatformAccountID] = bucket
+	}
+	bucket[t.TokenType] = t
 }
 
 func (m *mockTokenStore) SaveToken(t *models.Token) error {
@@ -38,8 +71,9 @@ func (m *mockTokenStore) SaveToken(t *models.Token) error {
 	if m.saveTokenFn != nil {
 		return m.saveTokenFn(t)
 	}
-	t.ID = 1
+	t.ID = int64(m.saveCalls.Load())
 	t.CreatedAt = time.Now()
+	m.seedToken(t)
 	return nil
 }
 
@@ -47,6 +81,11 @@ func (m *mockTokenStore) FindLatestToken(platformAccountID int64, tokenType stri
 	m.findCalls.Add(1)
 	if m.findLatestFn != nil {
 		return m.findLatestFn(platformAccountID, tokenType)
+	}
+	if bucket, ok := m.state[platformAccountID]; ok {
+		if t, ok := bucket[tokenType]; ok {
+			return t, nil
+		}
 	}
 	return nil, nil
 }
@@ -56,6 +95,11 @@ func (m *mockTokenStore) DeleteAllTokensForPlatformAccount(platformAccountID int
 	if m.deleteAllFn != nil {
 		return m.deleteAllFn(platformAccountID)
 	}
+	// Exact int64 match — mirrors the production SQL
+	// `DELETE FROM tokens WHERE platform_account_id = $1`. A nested
+	// map makes this trivially safe against account-id prefix overlap
+	// (1 vs 10, 100 vs 1000, etc.).
+	delete(m.state, platformAccountID)
 	return nil
 }
 
@@ -127,9 +171,7 @@ func TestVault_Renew_FastPath_FreshToken_NoLockAcquisition(t *testing.T) {
 	const accountID int64 = 10
 	// ExpiresAt 5 minutes in the future — well outside the 60s grace window.
 	fresh := newEncryptedToken(t, v, accountID, 5*time.Minute, "old-refresh")
-	store.findLatestFn = func(id int64, tt string) (*models.Token, error) {
-		return fresh, nil
-	}
+	store.seedToken(fresh)
 
 	got, err := v.Renew(context.Background(), accountID, models.TokenTypeBearer, func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
 		t.Fatal("refresher must NOT be called on fast path (token is fresh)")
@@ -172,14 +214,12 @@ func TestVault_Renew_FastPath_FreshToken_NoLockAcquisition(t *testing.T) {
 func TestVault_Renew_SlowPath_ExpiredToken_AcquiresLockAndCommits(t *testing.T) {
 	v, mock, store := newTestVault(t)
 	const accountID int64 = 42
-	// ExpiresAt in the past — must trigger the slow path.
+	// ExpiresAt in the past — must trigger the slow path. seedToken
+	// (not findLatestFn) is the right primitive here because the vault
+	// will call SaveToken after refresh and then Get — the final Get
+	// must see the FRESH row written by SaveToken, not the expired row.
 	expired := newEncryptedToken(t, v, accountID, -1*time.Minute, "old-refresh")
-	// FindLatestToken is called twice on the slow path: once before the
-	// lock (fast-path probe) and once after the lock (re-check). Both
-	// returns point at the same expired row.
-	store.findLatestFn = func(id int64, tt string) (*models.Token, error) {
-		return expired, nil
-	}
+	store.seedToken(expired)
 
 	// SQL sequence (strict order):
 	//   BEGIN
@@ -218,8 +258,13 @@ func TestVault_Renew_SlowPath_ExpiredToken_AcquiresLockAndCommits(t *testing.T) 
 	// The lock transaction committed; FindLatestToken was called twice
 	// (fast-path probe + re-check inside the lock); SaveToken was called
 	// once (persist the refreshed token).
-	if store.findCalls.Load() != 2 {
-		t.Errorf("FindLatestToken calls: want 2 (fast-path probe + re-check), got %d", store.findCalls.Load())
+	if store.findCalls.Load() != 4 {
+		// The slow path triggers 4 FindLatestToken calls: Get#1 (fast-path
+		// probe), Get#2 (re-check inside the lock), v.store.FindLatestToken
+		// (for extractRefreshMaterial), Get#3 (final return after Save).
+		// The first three see the expired row; the fourth must see the
+		// freshly-saved row — which is the whole point of the state map.
+		t.Errorf("FindLatestToken calls: want 4 (3 via Get + 1 direct for extractRefreshMaterial), got %d", store.findCalls.Load())
 	}
 	if store.saveCalls.Load() != 1 {
 		t.Errorf("SaveToken calls: want 1 (persist refreshed token), got %d", store.saveCalls.Load())
@@ -235,9 +280,7 @@ func TestVault_Renew_SlowPath_WithinGraceWindow_AcquiresLock(t *testing.T) {
 	const accountID int64 = 7
 	// ExpiresAt 30s in the future — INSIDE the 60s grace window.
 	soonExpiring := newEncryptedToken(t, v, accountID, 30*time.Second, "old-refresh")
-	store.findLatestFn = func(id int64, tt string) (*models.Token, error) {
-		return soonExpiring, nil
-	}
+	store.seedToken(soonExpiring)
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
 		WithArgs(accountID).
@@ -267,7 +310,7 @@ func TestVault_Renew_LockAcquisitionFails_RollsBack(t *testing.T) {
 	v, mock, store := newTestVault(t)
 	const accountID int64 = 99
 	expired := newEncryptedToken(t, v, accountID, -1*time.Minute, "r")
-	store.findLatestFn = func(id int64, tt string) (*models.Token, error) { return expired, nil }
+	store.seedToken(expired)
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
@@ -299,7 +342,7 @@ func TestVault_Renew_RefresherFails_PropagatesAndRollsBack(t *testing.T) {
 	v, mock, store := newTestVault(t)
 	const accountID int64 = 11
 	expired := newEncryptedToken(t, v, accountID, -1*time.Minute, "old-refresh")
-	store.findLatestFn = func(id int64, tt string) (*models.Token, error) { return expired, nil }
+	store.seedToken(expired)
 
 	refresherErr := errors.New("simulated platform 500")
 	mock.ExpectBegin()
@@ -339,7 +382,7 @@ func TestVault_Renew_LongLivedToken_UsesAccessTokenAsRefreshMaterial(t *testing.
 	// expects as input.
 	expired := newEncryptedToken(t, v, accountID, -1*time.Minute, "")
 	expired.TokenType = models.TokenTypeLongLived
-	store.findLatestFn = func(id int64, tt string) (*models.Token, error) { return expired, nil }
+	store.seedToken(expired)
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
@@ -381,7 +424,7 @@ func TestVault_Renew_NonLongLivedToken_NoRefreshToken_Errors(t *testing.T) {
 	// extractRefreshMaterial — which returns the descriptive error
 	// because the token is Bearer (not LongLived) and has no refresh.
 	expired := newEncryptedToken(t, v, accountID, -1*time.Minute, "")
-	store.findLatestFn = func(id int64, tt string) (*models.Token, error) { return expired, nil }
+	store.seedToken(expired)
 
 	mock.ExpectBegin()
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
@@ -446,10 +489,10 @@ func TestVault_Save_Get_Revoke_RoundTrip(t *testing.T) {
 
 	// Save
 	if err := v.Save(ctx, accountID, &models.TokenData{
-		AccessToken: "the-access",
+		AccessToken:  "the-access",
 		RefreshToken: "the-refresh",
-		TokenType:   "bearer",
-		ExpiresIn:   3600,
+		TokenType:    "bearer",
+		ExpiresIn:    3600,
 	}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -457,17 +500,10 @@ func TestVault_Save_Get_Revoke_RoundTrip(t *testing.T) {
 		t.Errorf("SaveToken calls: want 1, got %d", store.saveCalls.Load())
 	}
 
-	// Get — the store returns a "fresh" row for the GET
-	expiry := time.Now().Add(time.Hour)
-	store.findLatestFn = func(id int64, tt string) (*models.Token, error) {
-		encAccess, _ := v.encryptor.Encrypt("the-access")
-		return &models.Token{
-			PlatformAccountID: id,
-			TokenType:         tt,
-			EncryptedToken:    encAccess,
-			ExpiresAt:         &expiry,
-		}, nil
-	}
+	// Get — the mock's default FindLatestToken reads the just-saved
+	// row from its state map, so no findLatestFn override is needed.
+	// The Get path will also check the stored ExpiresAt; Save sets it
+	// to NOW + ExpiresIn = NOW + 1h, which is fresh.
 	got, err := v.Get(ctx, accountID, models.TokenTypeBearer)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -483,6 +519,10 @@ func TestVault_Save_Get_Revoke_RoundTrip(t *testing.T) {
 	if store.deleteCalls.Load() != 1 {
 		t.Errorf("DeleteAllTokensForPlatformAccount calls: want 1, got %d", store.deleteCalls.Load())
 	}
+	// After Revoke, Get must return a "no token" error (state cleared).
+	if _, err := v.Get(ctx, accountID, models.TokenTypeBearer); err == nil {
+		t.Error("Get after Revoke must return an error (state cleared)")
+	}
 }
 
 // TestVault_Revoke_NotFound_TreatedAsSuccess proves Revoke is
@@ -497,5 +537,3 @@ func TestVault_Revoke_NotFound_TreatedAsSuccess(t *testing.T) {
 		t.Errorf("Revoke must swallow 'token not found' (idempotent disconnect): got %v", err)
 	}
 }
-
-
