@@ -1,0 +1,592 @@
+openapi: 3.1.0
+
+info:
+  title: InstaEditLogin API
+  version: 1.0.0
+  summary: Multi-platform OAuth + publishing REST API.
+  description: |
+    Single source of truth for SDK generation, reference docs, and QA tests.
+    Universal payload (`targets[]` + per-platform `settings`) and an 8-state
+    async publish state machine drive the public surface.
+
+    Sections in this file:
+    • Auth    — `/api/v1/auth/*` + `/api/v1/api-keys`  (this commit)
+    • Posts   — `/api/v1/posts`  (universal payload)
+    • Targets — `/api/v1/post_targets/{id}`  (async state per target)
+  contact:
+    name: InstaEditLogin Engineering
+    url: https://example.com/support
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.instaeditlogin.example/v1
+    description: Production
+  - url: https://api-staging.instaeditlogin.example/v1
+    description: Staging
+  - url: http://localhost:8080/v1
+    description: Local development
+
+# Taglio 4.6: every protected endpoint accepts EITHER `Bearer sk_test_…` /
+# `Bearer sk_live_…` (server-to-server) or the HttpOnly session cookie
+# set by `POST /api/v1/auth/exchange` (browser). Each operation
+# declares which schemes apply via `security:`.
+security:
+  - ApiKeyAuth: []
+  - JwtCookie: []
+
+tags:
+  - name: Auth
+    description: OAuth hosted flow + API-key management.
+  - name: Posts
+    description: Universal-publishing API (`targets[]` discriminated union).
+  - name: PostTargets
+    description: Async state of a single post target.
+
+paths:
+
+  # ───────────── Auth ───────────────────────────────────────────────────────
+
+  /auth/{provider}/login:
+    get:
+      tags: [Auth]
+      operationId: authGetLoginUrl
+      summary: Start OAuth flow for the given provider.
+      description: |
+        302 redirect to the provider's authorization URL. The server
+        sets a one-shot `oauth_state_{provider}` HttpOnly cookie for
+        CSRF protection; the `state` query param on the callback is
+        matched against this cookie.
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [meta, tiktok, twitter, youtube, linkedin]
+      responses:
+        '302':
+          description: Redirect to provider authorization URL (`Location` header).
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+              description: Provider's `/authorize` URL.
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/{provider}/callback:
+    get:
+      tags: [Auth]
+      operationId: authHandleCallback
+      summary: OAuth callback (issues a one-time exchange code).
+      description: |
+        Browser is redirected here from the provider after consent. The
+        server exchanges `code` + verified `state` for an access/refresh
+        token pair (stored encrypted in the vault), creates or refreshes
+        the `platform_accounts` row, then issues a single-use 60s code.
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [meta, tiktok, twitter, youtube, linkedin]
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '302':
+          description: Redirect to `${FRONTEND_URL}/auth/callback?code=...&provider=...`.
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+        '200':
+          description: 'Headless mode (no FRONTEND_URL): the exchange code is returned in the body so a CLI caller can POST it to /api/v1/auth/exchange.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthCallbackHeadlessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/exchange:
+    post:
+      tags: [Auth]
+      operationId: authExchangeCode
+      summary: Exchange one-time code for HttpOnly session cookie.
+      description: |
+        Browser SPA posts the `code` from the callback URL; the server
+        validates + consumes the code (single-use, 60s TTL) and replies
+        with `204` plus a `Set-Cookie: iel_session=…; HttpOnly; Secure;
+        SameSite=None`. The SPA never sees the JWT.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthExchangeRequest'
+      responses:
+        '204':
+          description: Session cookie set.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: '`iel_session=<jwt>; HttpOnly; Secure; SameSite=None; Path=/`.'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: authGetMe
+      summary: Return the authenticated user identity.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Identity of the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMeResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: authLogout
+      summary: Clear the HttpOnly session cookie.
+      security:
+        - JwtCookie: []
+      responses:
+        '204':
+          description: Cookie cleared.
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+
+  # ───────────── API keys (Taglio 4.6) ─────────────────────────────────────
+
+  /api-keys:
+    get:
+      tags: [Auth]
+      operationId: apiKeysList
+      summary: List API keys in the authenticated workspace.
+      description: |
+        Returns only the visible `key_prefix` (e.g. `sk_test_aB3xY9K2`).
+        The plaintext secret is never re-fetchable after creation.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: API keys for the caller's workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+    post:
+      tags: [Auth]
+      operationId: apiKeysCreate
+      summary: Create a new API key.
+      description: |
+        The plaintext `secret` is returned EXACTLY ONCE on creation.
+        Persist it in your secrets manager immediately; the server
+        stores only the SHA-256 hash.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyCreateRequest'
+      responses:
+        '201':
+          description: Key created. `secret` is shown only in this response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityError'
+
+  /api-keys/{id}:
+    get:
+      tags: [Auth]
+      operationId: apiKeysGet
+      summary: Fetch a single API key by id.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: Key metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    delete:
+      tags: [Auth]
+      operationId: apiKeysRevoke
+      summary: Revoke an API key (immediate).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '204':
+          description: Key revoked. Subsequent Bearer requests with this secret will get 401.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /api-keys/{id}/rotate:
+    post:
+      tags: [Auth]
+      operationId: apiKeysRotate
+      summary: Rotate a key (new secret, new prefix; old is revoked).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '201':
+          description: New key issued. Old `id` is now revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreateResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: sk_test_<52-char-base32> | sk_live_<52-char-base32>
+      description: |
+        Server-to-server API key. Prefix determines sandbox vs live:
+        `sk_test_…` is sandbox (no quota burn, separate bucket);
+        `sk_live_…` is production (real quota + real account
+        connections). The literal secret value is generated by
+        `internal/auth/apikey.go:Generate(env)` from 32 bytes of
+        `crypto/rand` entropy.
+    JwtCookie:
+      type: apiKey
+      in: cookie
+      name: iel_session
+      description: |
+        HttpOnly JWT session cookie set by `POST /api/v1/auth/exchange`.
+        SameSite=None; Secure. Browser SPA flow only.
+
+  parameters:
+    PathId:
+      name: id
+      in: path
+      required: true
+      description: Numeric resource id.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+
+  responses:
+    BadRequestError:
+      description: Malformed request (bad JSON, missing required field, invalid id format).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnauthorizedError:
+      description: Missing or invalid credentials (expired JWT, revoked API key, malformed prefix).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ForbiddenError:
+      description: Resource exists but is not owned by the caller.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFoundError:
+      description: Resource not found or not visible to the caller (existence not leaked on cross-tenant probes).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ConflictError:
+      description: Idempotency-Key conflict (same key, different request hash).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnprocessableEntityError:
+      description: Semantic validation error (well-formed JSON but invalid content).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    MethodNotAllowed:
+      description: HTTP method not allowed on this endpoint.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InternalError:
+      description: Server-side error. Retrying may succeed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+
+    # ────── Errors (canonical envelope, Taglio 5.x design) ──────────
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+      example:
+        error:
+          code: authentication_error
+          message: Invalid API key.
+          retryable: false
+          request_id: req_01J8X…
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable code.
+          enum:
+            - authentication_error
+            - authorization_error
+            - validation_error
+            - rate_limited
+            - media_invalid
+            - provider_unavailable
+            - provider_rejected
+            - reauthentication_required
+            - quota_exceeded
+            - internal_error
+            - idempotency_key_conflict
+        message:
+          type: string
+          description: Human-readable summary. NEVER includes raw provider error text.
+        platform:
+          type: string
+          nullable: true
+          description: Set when the error is platform-specific.
+        retryable:
+          type: boolean
+          default: false
+          description: True if the caller can re-attempt the request later.
+        request_id:
+          type: string
+          description: Server-generated request id for log correlation.
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Optional structured metadata (provider_status_code, retry_after_seconds, …).
+
+    # ────── Auth flow ───────────────────────────────────────────────
+    AuthCallbackHeadlessResponse:
+      type: object
+      required: [status, provider, code, user_id, account_id]
+      properties:
+        status:
+          type: string
+          enum: [code_issued]
+        provider:
+          type: string
+        code:
+          type: string
+          description: One-time code; POST to /api/v1/auth/exchange within 60s.
+        user_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        account_id:
+          type: integer
+          format: int64
+    AuthExchangeRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: One-time code from /auth/callback?code=...
+      example:
+        code: 1HXYah9…
+    AuthMeResponse:
+      type: object
+      required: [user_id]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+          description: Internal opaque id of the authenticated user.
+        workspaces:
+          type: array
+          items: { type: integer, format: int64 }
+          description: Workspace ids the user owns. Omitted for API-key auth.
+      example:
+        user_id: 42
+        workspaces: [1, 2]
+
+    # ────── API keys ────────────────────────────────────────────────
+    #
+    # PLACEHOLDER POLICY: every `secret` example below is a deliberate
+    # non-secret placeholder (underscore-separated words + "_DoNotUse"
+    # suffix) so GitHub's push-protection secret scanner does not
+    # accidentally flag the openapi.yaml itself. Real secrets are NEVER
+    # shipped in this file. SDK codegen should treat any example with
+    # the suffix "_DoNotUse" as a sentinel and replace it at runtime.
+    #
+    ApiKey:
+      type: object
+      description: API key metadata. The plaintext secret is NEVER returned here.
+      required: [id, name, environment, key_prefix, created_at]
+      properties:
+        id:
+          type: string
+          example: ak_01HXY…
+        name:
+          type: string
+        environment:
+          type: string
+          enum: [test, live]
+          description: |
+            Discriminator matching the secret prefix:
+            `sk_test_…` ↔ `test`; `sk_live_…` ↔ `live`.
+        key_prefix:
+          type: string
+          description: 'Visible prefix shown in the dashboard: `sk_<env>_<8-char-secret-prefix>`.'
+          example: sk_TEST_aB3xY9_K2_DoNotUse
+        scopes:
+          type: array
+          items: { type: string }
+          description: Optional scope list (Taglio 4.6+).
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      example:
+        id: ak_01HXY_DoNotUse
+        name: Production server
+        environment: live
+        key_prefix: sk_LIVE_aB3xY9_K2_DoNotUse
+        scopes: [posts:write, media:write]
+        last_used_at: '2026-07-12T09:58:00Z'
+        created_at: '2026-07-01T10:00:00Z'
+    ApiKeyCreateRequest:
+      type: object
+      required: [name, environment]
+      properties:
+        name:
+          type: string
+          maxLength: 80
+          description: Human-readable label (shown in dashboard + audit log).
+        environment:
+          type: string
+          enum: [test, live]
+          description: Sandbox (`test`) or production (`live`).
+        scopes:
+          type: array
+          items: { type: string }
+          description: Optional scope list at creation time.
+      example:
+        name: CI smoke key
+        environment: test
+        scopes: [posts:write, media:write]
+    ApiKeyCreateResponse:
+      type: object
+      description: |
+        Returned EXACTLY ONCE on `POST /api/v1/api-keys` (create) and
+        `POST /api/v1/api-keys/{id}/rotate` (rotate). The `secret`
+        here is the only time it is ever transmitted.
+      required: [id, name, environment, key_prefix, secret, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        environment:
+          type: string
+          enum: [test, live]
+        key_prefix:
+          type: string
+          description: 'Visible portion: `sk_<env>_<8-char-secret>`.'
+        secret:
+          type: string
+          description: 'Full plaintext `sk_test_<52-char-base32>` or `sk_live_<52-char-base32>` — STORE NOW. See PLACEHOLDER POLICY in this file before copying any example.'
+          example: sk_LIVE_aB3xY9_K2_PLACEHOLDER_DoNotUse
+        scopes:
+          type: array
+          items: { type: string }
+        created_at:
+          type: string
+          format: date-time
+      example:
+        id: ak_01J8X_DoNotUse
+        name: Production server
+        environment: live
+        key_prefix: sk_LIVE_aB3xY9_K2_DoNotUse
+        secret: sk_LIVE_aB3xY9_K2_PLACEHOLDER_DO_NOT_USE_xxxxxxxx_DoNotUse
+        scopes: [posts:write, media:write, accounts:read]
+        created_at: '2026-07-12T10:00:00Z'
+    ApiKeyListResponse:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiKey'
+      example:
+        keys:
+          - id: ak_01HXY_DoNotUse
+            name: Production server
+            environment: live
+            key_prefix: sk_LIVE_aB3xY9_K2_DoNotUse
+            scopes: [posts:write]
+            last_used_at: '2026-07-12T09:58:00Z'
+            created_at: '2026-07-01T10:00:00Z'
