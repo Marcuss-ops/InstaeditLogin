@@ -2,9 +2,7 @@ package services
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -13,7 +11,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -228,15 +225,12 @@ func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platform
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// When OAuth 1.0a static credentials are configured, sign the request
-	// with OAuth 1.0a (user-context). Otherwise use the OAuth 2.0 Bearer
-	// token from the database.
-	if s.cfg.TwitterAccessToken != "" && s.cfg.TwitterAPIKey != "" {
-		signOAuth1(req, s.cfg.TwitterAPIKey, s.cfg.TwitterAPIKeySecret,
-			s.cfg.TwitterAccessToken, s.cfg.TwitterAccessTokenSecret)
-	} else {
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-	}
+	// Taglio 1.3: X is OAuth 2.0 PKCE only. The OAuth 1.0a static-credential
+	// branch was removed — every publish now uses the user-context Bearer
+	// token from the database. Static API keys cannot publish as someone
+	// other than the original key owner, so they were never a valid path for
+	// a multi-tenant dashboard.
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -307,72 +301,6 @@ func (s *TwitterOAuthService) exchangeCodeForToken(ctx context.Context, code, ve
 		return nil, fmt.Errorf("token parse: %w", err)
 	}
 	return &tr, nil
-}
-
-// signOAuth1 adds an OAuth 1.0a Authorization header to the request using
-// the static API key / access token credentials. Used as a fallback when
-// OAuth 2.0 user authentication is not configured.
-func signOAuth1(req *http.Request, consumerKey, consumerSecret, accessToken, accessTokenSecret string) {
-	nonceBytes := make([]byte, 16)
-	var nonce string
-	if _, err := rand.Read(nonceBytes); err != nil {
-		nonce = fmt.Sprintf("%d", time.Now().UnixNano())
-	} else {
-		nonce = fmt.Sprintf("%x", nonceBytes)
-	}
-	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-
-	params := map[string]string{
-		"oauth_consumer_key":     consumerKey,
-		"oauth_nonce":            nonce,
-		"oauth_signature_method": "HMAC-SHA1",
-		"oauth_timestamp":        timestamp,
-		"oauth_token":            accessToken,
-		"oauth_version":          "1.0",
-	}
-
-	// Build the signature base string.
-	// Method & URL (percent-encoded).
-	baseURL := fmt.Sprintf("%s://%s%s", req.URL.Scheme, req.URL.Host, req.URL.Path)
-	encodedURL := url.QueryEscape(baseURL)
-
-	// Collect and sort params.
-	var paramPairs []string
-	for k, v := range params {
-		paramPairs = append(paramPairs, fmt.Sprintf("%s=%s",
-			url.QueryEscape(k), url.QueryEscape(v)))
-	}
-	// Append query params from the URL.
-	for k, vs := range req.URL.Query() {
-		for _, v := range vs {
-			paramPairs = append(paramPairs, fmt.Sprintf("%s=%s",
-				url.QueryEscape(k), url.QueryEscape(v)))
-		}
-	}
-	sort.Strings(paramPairs)
-	paramString := strings.Join(paramPairs, "&")
-
-	sigBase := fmt.Sprintf("%s&%s&%s",
-		req.Method,
-		encodedURL,
-		url.QueryEscape(paramString),
-	)
-
-	// Signing key: consumer_secret & token_secret (raw values, NOT URL-encoded per RFC 5849).
-	signingKey := consumerSecret + "&" + accessTokenSecret
-
-	mac := hmac.New(sha1.New, []byte(signingKey))
-	mac.Write([]byte(sigBase))
-	signature := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-
-	// Build Authorization header.
-	params["oauth_signature"] = signature
-	var authParts []string
-	for k, v := range params {
-		authParts = append(authParts, fmt.Sprintf(`%s="%s"`,
-			url.QueryEscape(k), url.QueryEscape(v)))
-	}
-	req.Header.Set("Authorization", "OAuth "+strings.Join(authParts, ", "))
 }
 
 func (s *TwitterOAuthService) getUserInfo(ctx context.Context, accessToken string) (*models.PlatformProfile, error) {

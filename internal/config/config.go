@@ -60,27 +60,25 @@ type Config struct {
 	DBName      string
 	DBSSLMode   string
 
-	// Meta OAuth
+	// Meta OAuth — shared App ID and Secret across Instagram / Facebook / Threads.
 	MetaAppID       string
 	MetaAppSecret   string
-	MetaRedirectURI string
+	MetaRedirectURI string // DEPRECATED by InstagramRedirectURI / FacebookRedirectURI / ThreadsRedirectURI
+
+	// Per-platform redirect URIs (same Meta App, different callback paths).
+	InstagramRedirectURI string
+	FacebookRedirectURI  string
+	ThreadsRedirectURI   string
 
 	// TikTok OAuth
 	TikTokClientKey    string
 	TikTokClientSecret string
 	TikTokRedirectURI  string
 
-	// Twitter/X OAuth
+	// Twitter/X OAuth 2.0 PKCE
 	TwitterClientID     string
 	TwitterClientSecret string
 	TwitterRedirectURI  string
-
-	// Twitter/X OAuth 1.0a (static credentials for direct publishing —
-	// bypasses OAuth 2.0 user login; all posts go to the owner's account).
-	TwitterAPIKey            string
-	TwitterAPIKeySecret      string
-	TwitterAccessToken       string
-	TwitterAccessTokenSecret string
 
 	// YouTube OAuth
 	YouTubeClientID     string
@@ -153,16 +151,15 @@ func Load() (*Config, error) {
 		MetaAppID:                    getEnv("META_APP_ID", ""),
 		MetaAppSecret:                getEnv("META_APP_SECRET", ""),
 		MetaRedirectURI:              getEnv("META_REDIRECT_URI", "http://localhost:8080/api/v1/auth/meta/callback"),
+		InstagramRedirectURI:         getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
+		FacebookRedirectURI:          getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
+		ThreadsRedirectURI:           getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
 		TikTokClientKey:              getEnv("TIKTOK_CLIENT_KEY", ""),
 		TikTokClientSecret:           getEnv("TIKTOK_CLIENT_SECRET", ""),
 		TikTokRedirectURI:            getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
 		TwitterClientID:              getEnv("TWITTER_CLIENT_ID", ""),
 		TwitterClientSecret:          getEnv("TWITTER_CLIENT_SECRET", ""),
 		TwitterRedirectURI:           getEnv("TWITTER_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
-		TwitterAPIKey:                getEnv("TWITTER_API_KEY", ""),
-		TwitterAPIKeySecret:          getEnv("TWITTER_API_KEY_SECRET", ""),
-		TwitterAccessToken:           getEnv("TWITTER_ACCESS_TOKEN", ""),
-		TwitterAccessTokenSecret:     getEnv("TWITTER_ACCESS_TOKEN_SECRET", ""),
 		YouTubeClientID:              getEnv("YOUTUBE_CLIENT_ID", ""),
 		YouTubeClientSecret:          getEnv("YOUTUBE_CLIENT_SECRET", ""),
 		YouTubeRedirectURI:           getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
@@ -225,15 +222,25 @@ func (c *Config) validate() error {
 		}
 	}
 
-	// Meta OAuth is mandatory. Fail fast on missing or weak credentials.
-	if c.MetaAppID == "" {
-		return fmt.Errorf("META_APP_ID is required")
-	}
-	if c.MetaAppSecret == "" {
-		return fmt.Errorf("META_APP_SECRET is required (must be at least %d characters)", secretMinChars)
-	}
-	if len(c.MetaAppSecret) < secretMinChars {
-		return fmt.Errorf("META_APP_SECRET must be at least %d characters (got %d)", secretMinChars, len(c.MetaAppSecret))
+	// Meta OAuth: App ID and Secret are shared across Instagram / Facebook /
+	// Threads. At least one of the three redirect URIs must be configured
+	// together with the shared credentials; individual providers are
+	// registered (or skipped) in main.go based on which redirect URIs are set.
+	//
+	// The App ID + Secret are mandatory only when at least one redirect URI is
+	// configured. An entirely empty Meta config (no App ID, no redirect URIs)
+	// is valid — it means all Meta-family platforms are disabled.
+	metaAnyConfigured := c.InstagramRedirectURI != "" || c.FacebookRedirectURI != "" || c.ThreadsRedirectURI != ""
+	if metaAnyConfigured {
+		if c.MetaAppID == "" {
+			return fmt.Errorf("META_APP_ID is required when a Meta-family redirect URI is set (INSTAGRAM_REDIRECT_URI / FACEBOOK_REDIRECT_URI / THREADS_REDIRECT_URI)")
+		}
+		if c.MetaAppSecret == "" {
+			return fmt.Errorf("META_APP_SECRET is required when a Meta-family redirect URI is set")
+		}
+		if len(c.MetaAppSecret) < secretMinChars {
+			return fmt.Errorf("META_APP_SECRET must be at least %d characters (got %d)", secretMinChars, len(c.MetaAppSecret))
+		}
 	}
 
 	// Encryption key: must decode to exactly aesKeyBytes for AES-256-GCM.

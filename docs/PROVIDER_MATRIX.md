@@ -4,7 +4,7 @@
 |----------|-------|---------|---------------|--------|
 | Meta (Facebook/Instagram) | ✅ | ✅ | Long-lived token exchange | `pages_manage_posts`, `instagram_content_publish` |
 | TikTok | ✅ | ✅ | Yes | `user.info.basic`, `video.publish` |
-| Twitter / X | ✅ | ✅ | Yes | `tweet.write`, `users.read` |
+| Twitter / X | ✅ OAuth 2.0 PKCE only | ✅ | Yes | `tweet.write`, `users.read` |
 | YouTube | ✅ | ✅ | Yes | `youtube.upload`, `youtube.readonly` |
 | LinkedIn | ✅ | ✅ | No (no offline_access scope) | `openid`, `profile`, `email`, `w_member_social` |
 
