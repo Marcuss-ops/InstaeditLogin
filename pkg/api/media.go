@@ -256,11 +256,11 @@ type MediaRef struct {
 // user-supplied asset_id is converted to a trusted URL — the only
 // URL the platform API ever sees.
 func (r *Router) resolveMediaURLs(_ context.Context, userID int64, refs []MediaRef) ([]string, error) {
-	if r.mediaStore == nil || r.storageProvider == nil {
-		return nil, fmt.Errorf("media not configured on this server")
-	}
 	if len(refs) == 0 {
 		return nil, nil
+	}
+	if r.mediaStore == nil || r.storageProvider == nil {
+		return nil, fmt.Errorf("media not configured on this server")
 	}
 	urls := make([]string, 0, len(refs))
 	for _, ref := range refs {

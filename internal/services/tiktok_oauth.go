@@ -19,11 +19,16 @@ import (
 // provider only carries the methods it actually supports — no more
 // composition onto a single monolithic PlatformService.
 //
-// Capabilities exposed:
+// Capabilities exposed (Taglio 4.2):
 //   - OAuthProvider (login flow)
 //   - ContentValidator (video_url required; caption ≤ 4000 runes)
-//   - Publisher (async video init + poll)
-//   - PublishReconciler (poll the publish status post-init)
+//   - Publisher (Publisher.Publish = thin wrapper that calls StartPublish
+//     and returns immediately with the publish_id, for backward compat
+//     with the existing Publisher contract used by the worker's tick)
+//   - AsyncPublisher (the 4-step state machine: StartPublish /
+//     CheckPublishStatus / ContinuePublish / Reconcile) — this is the
+//     new surface that the reconciler goroutine drives instead of
+//     calling a synchronous polling loop inside the request path.
 //   - AccountManager (Validate / Revoke — non-interface helpers)
 type TikTokOAuthService struct {
 	cfg        *config.Config
@@ -204,16 +209,37 @@ func (s *TikTokOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken
 	}, nil
 }
 
-// Publish initiates a TikTok video publish and returns the publish_id.
-// TikTok's flow is async: the initial POST returns immediately and the
-// caller (the publish worker) reconciles via ReconcilePublish.
+// Publish (Taglio 4.2) is a thin wrapper that calls StartPublish and
+// returns the publish_id. Kept on the Publisher interface for backward
+// compat with the worker's existing tick() call site — the worker's
+// publishTarget() calls publisher.Publish(ctx, token, account.PlatformUserID,
+// payload) and expects a *models.PublishResult. The reconciler goroutine
+// (new in Taglio 4.2) drives the async state machine via the AsyncPublisher
+// capability (CheckPublishStatus / Reconcile) instead of this method.
 func (s *TikTokOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
 	defer RecordPublishMetrics(models.PlatformTikTok, time.Now(), &err)
 	if err := s.ValidateContent(payload); err != nil {
 		return nil, err
 	}
+	publishID, state, err := s.StartPublish(ctx, accessToken, platformUserID, payload)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("TikTok: publish initialized (worker will store publish_id + state, reconciler will poll)", "publish_id", publishID, "state", state)
+	return &models.PublishResult{PlatformMediaID: publishID}, nil
+}
 
-	slog.Info("TikTok: initiating video publish")
+// StartPublish (Taglio 4.2) is the first step of the async state machine.
+// It calls the TikTok /v2/post/publish/video/init/ endpoint and returns
+// immediately with the publish_id and the platform's initial state.
+// No polling — the reconciler goroutine will call CheckPublishStatus
+// on the next tick to advance the state.
+func (s *TikTokOAuthService) StartPublish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (publishID string, state string, err error) {
+	if err := s.ValidateContent(payload); err != nil {
+		return "", "", err
+	}
+
+	slog.Info("TikTok: starting async publish (init)")
 
 	postInfo := map[string]interface{}{
 		"title":           truncateTikTokTitle(payload.Text),
@@ -235,93 +261,118 @@ func (s *TikTokOAuthService) Publish(ctx context.Context, accessToken, platformU
 		"https://open.tiktokapis.com/v2/post/publish/video/init/",
 		strings.NewReader(string(jsonBody)))
 	if err != nil {
-		return nil, fmt.Errorf("tiktok init request: %w", err)
+		return "", "", fmt.Errorf("tiktok init request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("tiktok init failed: %w", err)
+		return "", "", fmt.Errorf("tiktok init failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tiktok init returned status %d: %s", resp.StatusCode, string(body))
+		return "", "", fmt.Errorf("tiktok init returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var initResult struct {
 		Data struct {
 			PublishID string `json:"publish_id"`
+			Status    string `json:"status"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &initResult); err != nil {
-		return nil, fmt.Errorf("tiktok init parse: %w", err)
+		return "", "", fmt.Errorf("tiktok init parse: %w", err)
 	}
 
-	publishID := initResult.Data.PublishID
-	slog.Info("TikTok: publish initialized", "publish_id", publishID)
-
-	// Return publish_id as the platform_media_id so the publish worker
-	// can reconcile later. The PublishReconciler contract says callers
-	// pass the platform_media_id back to ReconcilePublish.
-	return &models.PublishResult{
-		PlatformMediaID: publishID,
-	}, nil
+	publishID = initResult.Data.PublishID
+	state = initResult.Data.Status
+	slog.Info("TikTok: async publish initialized", "publish_id", publishID, "state", state)
+	return publishID, state, nil
 }
 
-// ReconcilePublish polls the TikTok status endpoint for a previously
-// initiated publish_id. The publish worker calls this when a target
-// has been moved to status='publishing' but Publish returned a
-// publish_id (no terminal platform_media_id yet).
+// CheckPublishStatus (Taglio 4.2) does a SINGLE GET to the TikTok status
+// endpoint. Returns the platform's current state string. Does NOT poll.
+// The reconciler goroutine calls this on every tick to advance the
+// post_target through the async state machine.
 //
-// Behaviour:
-//   - PUBLISH_COMPLETE → returns the publish_id as platform_media_id
-//   - FAILED → returns an error
-//   - any other state → returns an error indicating "still in flight"
-//     (the worker re-tries on the next tick)
-func (s *TikTokOAuthService) ReconcilePublish(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
-	for i := 0; i < 30; i++ {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("tiktok reconcile cancelled: %w", ctx.Err())
-		case <-time.After(2 * time.Second):
-		}
+// Expected state values (from TikTok API docs):
+//   - PROCESSING_UPLOAD — TikTok is fetching the video from the URL
+//   - PENDING_PUBLISH   — video received, waiting for processing
+//   - IN_REVIEW         — TikTok is reviewing the video
+//   - PUBLISH_COMPLETE  — video is live
+//   - FAILED            — publish failed
+func (s *TikTokOAuthService) CheckPublishStatus(ctx context.Context, accessToken, publishID string) (state string, err error) {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"https://open.tiktokapis.com/v2/post/publish/status/fetch/", nil)
+	if err != nil {
+		return "", fmt.Errorf("tiktok status request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	q := req.URL.Query()
+	q.Set("publish_id", publishID)
+	req.URL.RawQuery = q.Encode()
 
-		req, _ := http.NewRequestWithContext(ctx, "GET",
-			"https://open.tiktokapis.com/v2/post/publish/status/fetch/", nil)
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-		q := req.URL.Query()
-		q.Set("publish_id", publishID)
-		req.URL.RawQuery = q.Encode()
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("tiktok status fetch failed: %w", err)
+	}
+	defer resp.Body.Close()
 
-		resp, err := s.httpClient.Do(req)
-		if err != nil {
-			continue
-		}
-
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		var statusResult struct {
-			Data struct {
-				Status string `json:"status"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(body, &statusResult); err != nil {
-			continue
-		}
-
-		switch statusResult.Data.Status {
-		case "PUBLISH_COMPLETE":
-			return &models.PublishResult{PlatformMediaID: publishID}, nil
-		case "FAILED":
-			return nil, fmt.Errorf("tiktok publish failed: %s", string(body))
-		}
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("tiktok status returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	return nil, fmt.Errorf("tiktok reconcile timed out for publish_id %s", publishID)
+	var statusResult struct {
+		Data struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &statusResult); err != nil {
+		return "", fmt.Errorf("tiktok status parse: %w", err)
+	}
+	return statusResult.Data.Status, nil
+}
+
+// ContinuePublish (Taglio 4.2) is a no-op for PULL_FROM_URL. The platform
+// fetches the video directly from the URL set in StartPublish. Provided
+// for forward-compat with PULL_FROM_FILE flows that would do chunked
+// upload here.
+func (s *TikTokOAuthService) ContinuePublish(ctx context.Context, accessToken, publishID string) error {
+	// PULL_FROM_URL: TikTok already has the video from StartPublish.
+	// No continuation needed.
+	return nil
+}
+
+// Reconcile (Taglio 4.2) is the terminal-state detector the reconciler
+// goroutine calls. It combines CheckPublishStatus with transition logic:
+//
+//   PUBLISH_COMPLETE → returns *PublishResult (success, terminal)
+//   FAILED          → returns error (terminal)
+//   in-flight       → returns (nil, nil) — caller should retry next tick
+//
+// The reconciler in the worker uses this contract: nil result + nil err
+// means "leave the target alone, check again next tick". A non-nil result
+// means "transition to published". A non-nil err means "transition to failed".
+func (s *TikTokOAuthService) Reconcile(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
+	state, err := s.CheckPublishStatus(ctx, accessToken, publishID)
+	if err != nil {
+		return nil, err
+	}
+	switch state {
+	case "PUBLISH_COMPLETE":
+		return &models.PublishResult{PlatformMediaID: publishID}, nil
+	case "FAILED":
+		return nil, fmt.Errorf("tiktok publish failed: publish_id=%s state=%s", publishID, state)
+	default:
+		// PROCESSING_UPLOAD, PENDING_PUBLISH, IN_REVIEW — still in flight.
+		// Caller (reconciler goroutine) leaves the target as-is and
+		// checks again on the next tick.
+		return nil, nil
+	}
 }
 
 // --- Private ---

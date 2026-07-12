@@ -122,7 +122,7 @@ go run cmd/server/main.go
 Output atteso:
 ```
 verify-api-base-url [OK]  VITE_API_BASE_URL = ... (context: local)
-msg="Router configured" auth=strict jwt_ttl_hours=168
+msg="Router configured" jwt_ttl_hours=168
 msg="listening" addr=0.0.0.0:8080
 ```
 
@@ -282,7 +282,7 @@ Dopo ogni deploy, esegui uno smoke test di isolamento:
 ```bash
 # (1) Backend conferma APP_ENV in startup
 curl -sS https://api.example.com/api/v1/health | python -m json.tool
-# Atteso: il log precedente mostra "app_env":"production" + "auth_mode":"strict"
+# Atteso: il log precedente mostra "app_env":"production"
 
 # (2) CORS blocca origine non in allowlist
 curl -sI -H "Origin: https://evil.example.com" https://api.example.com/api/v1/health | grep -i access-control
@@ -298,7 +298,7 @@ psql "$DATABASE_URL" -c "SELECT current_database();"
 
 # (5) Fail-fast non scatta (prova con APP_ENV=production)
 APP_ENV=production DATABASE_URL=... JWT_SECRET=$(openssl rand -hex 32) go run cmd/server/main.go
-# Atteso: il server parte (Taglio 1.1: nessun guard legacy, l'auth è strict in ogni env)
+# Atteso: il server parte (Taglio 1.1: nessun guard legacy)
 ```
 
 ### `.env.example` aggiornato
@@ -333,16 +333,10 @@ Esempi concreti:
 
 I test in `pkg/api/routes_test.go::TestHandleCreateWorkspace_MissingName_422`, `TestHandleCreatePost_MissingWorkspaceID_422`, `TestHandleCreatePost_NoTargets_422`, `TestHandleCreatePost_BadTargetID_422`, e il `TestPostsAPI_Create_BadStatus_400` in `pkg/api/posts_test.go` lockano il contract — qualsiasi regressione qui rompe `go test ./pkg/api/...`.
 
-### 13.2 Auth strict-only (Taglio 1.1, post-rollout)
+### 13.2 Auth JWT (Taglio 1.1)
 
-Il fallback lenient `userID=1` è stato **eliminato** nel Taglio 1.1. Ogni handler ora
-deriva l'identità esclusivamente dal JWT di sessione (e in futuro da API key, Taglio 1.2).
-Non esiste più:
-
-- la env var `STRICT_JWT_AUTH`
-- il campo `Config.StrictJWTAuth`
-- i flag `strictAuth` su `Router`, `NewRouter`, e i tre helper di test (`newTestRouter`, `newPostsTestRouter`, `newWorkspaceTestRouter`)
-- il fallback `userID=1` in `requireUserOrDefault`, `resolveUserID` e nel guard fail-fast `APP_ENV=production && !strict`
+L'identità arriva esclusivamente dal JWT di sessione (Bearer header o cookie
+HttpOnly `session`). Non esiste alcun fallback a `user_id` dal body o dalla query.
 
 L'helper unico è `requireUserID`:
 

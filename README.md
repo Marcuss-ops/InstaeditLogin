@@ -171,11 +171,11 @@ e lo restituisce:
 - come **JSON** `{ jwt_token, ... }` se `FRONTEND_URL` non è configurato (curl,
   Postman, integrazioni server-to-server).
 
-Il middleware (`internal/auth.Middleware`) è **strict per costruzione** dopo il Taglio 1.1:
+Il middleware (`internal/auth.Middleware`) dopo il Taglio 1.1:
 l'identità arriva solo dal JWT di sessione o da una API key (Taglio 1.2). Non esiste
 alcuna modalità legacy o lenient.
 
-### Auth (unica — Taglio 1.1)
+### Auth JWT (Taglio 1.1)
 
 - Authorization mancante → **401** `missing authorization header`
 - Header non in formato `Bearer` → **401** `invalid authorization header`
@@ -188,15 +188,15 @@ Il client deve allegare `Authorization: Bearer <jwt>` ad ogni chiamata a
 
 All'avvio il server logga:
 ```
-msg="Router configured" jwt_ttl_hours=168 auth=strict
+msg="Router configured" jwt_ttl_hours=168
 ```
 
 > 🚨 **NESSUNA MODALITÀ LEGACY** 🚨
 >
-> Dopo il Taglio 1.1 il body e la query string non vengono più usati per ricavare
-> l'identità: non c'è fallback a `user_id=1`, non c'è `STRICT_JWT_AUTH=false`, non c'è
-> helper che restituisce un utente sintetico. Un client senza Bearer riceve 401 in
-> qualsiasi ambiente (`dev`, `staging`, `production`).
+> L'identità arriva esclusivamente dal JWT di sessione (Bearer header o cookie
+> HttpOnly). Il body e la query string non vengono mai usati per ricavare
+> l'identità. Un client senza Bearer valido riceve 401 in qualsiasi
+> ambiente (`dev`, `staging`, `production`).
 
 ## Deployment
 

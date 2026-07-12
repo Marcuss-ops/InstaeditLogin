@@ -79,15 +79,50 @@ type Publisher interface {
 	Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
 }
 
-// PublishReconciler reconciles a publish after the fact (e.g. polls for
-// status when the initial response is async). NOT implemented by all
-// providers — only TikTok today, but the interface is here so other
-// async platforms can opt in without changing the worker.
-type PublishReconciler interface {
-	// ReconcilePublish polls the platform for the final state of a previously
-	// initiated publish. publishID is the value returned from the initial
-	// Publish call (or stored on the post_target).
-	ReconcilePublish(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error)
+// AsyncPublisher models the four-step state machine for platforms whose
+// publish is asynchronous (TikTok today; the interface is here so other
+// async platforms can opt in without changing the worker).
+//
+// The flow is:
+//
+//	1. StartPublish       — initiate the publish, return publish_id, return immediately.
+//	2. CheckPublishStatus — single status query, no polling. Returns the platform's
+//	                        current state string (PROCESSING_UPLOAD / PENDING_PUBLISH /
+//	                        IN_REVIEW / PUBLISH_COMPLETE / FAILED).
+//	3. ContinuePublish    — for PULL_FROM_FILE chunked upload, no-op for PULL_FROM_URL.
+//	4. Reconcile          — combines CheckPublishStatus + transition decision:
+//	                          PUBLISH_COMPLETE → success result
+//	                          FAILED          → error
+//	                          in-flight       → (nil, nil) — try again next tick
+//
+// Taglio 4.2: replaces the old PublishReconciler.ReconcilePublish which had a
+// 30-attempt × 2-second synchronous polling loop inside the worker's tick.
+// The new design moves the polling OUT of the request path into a separate
+// reconciler goroutine that calls Reconcile on every tick.
+type AsyncPublisher interface {
+	NameProvider
+	// StartPublish initiates the async publish and returns the platform's
+	// publish_id (stored on post_target.platform_post_id) plus the
+	// platform's current state (stored on post_target.provider_state).
+	// Returns immediately — no polling, no waiting for the publish to
+	// complete. The reconciler will check status later.
+	StartPublish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (publishID string, state string, err error)
+	// CheckPublishStatus does a SINGLE GET to the platform's status
+	// endpoint. Returns the current state string. Does NOT poll.
+	// Errors on network failure, 4xx/5xx, or unexpected response shape.
+	CheckPublishStatus(ctx context.Context, accessToken, publishID string) (state string, err error)
+	// ContinuePublish is a placeholder for PULL_FROM_FILE chunked upload
+	// flows. For PULL_FROM_URL (TikTok's current default) it's a no-op
+	// that returns nil — the platform fetches the video directly from
+	// the URL. Provided for forward-compat with platforms that need
+	// explicit chunked upload.
+	ContinuePublish(ctx context.Context, accessToken, publishID string) error
+	// Reconcile queries the platform and decides the transition:
+	//   PUBLISH_COMPLETE → returns *PublishResult (success, terminal)
+	//   FAILED          → returns error (terminal)
+	//   in-flight       → returns (nil, nil) — caller should retry later
+	// The reconciler goroutine in the worker calls this on every tick.
+	Reconcile(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error)
 }
 
 // ErrRevokeUnsupported is returned by provider-specific Revoke helpers when
@@ -118,7 +153,7 @@ type capabilities struct {
 	discover AccountDiscoverer
 	validate ContentValidator
 	publish  Publisher
-	recon    PublishReconciler
+	async    AsyncPublisher
 }
 
 // NewCapabilityRouter creates an empty router.
@@ -150,8 +185,8 @@ func (r *CapabilityRouter) Register(name string, p any) {
 	if pub, ok := p.(Publisher); ok {
 		entry.publish = pub
 	}
-	if rec, ok := p.(PublishReconciler); ok {
-		entry.recon = rec
+	if ap, ok := p.(AsyncPublisher); ok {
+		entry.async = ap
 	}
 	r.providers[name] = entry
 }
@@ -192,13 +227,15 @@ func (r *CapabilityRouter) Publisher(name string) (Publisher, bool) {
 	return e.publish, true
 }
 
-// Reconciler returns the PublishReconciler for name, or false.
-func (r *CapabilityRouter) Reconciler(name string) (PublishReconciler, bool) {
+// AsyncPublisher returns the AsyncPublisher for name, or false. The
+// reconciler goroutine in the worker uses this to call Reconcile on
+// targets whose platform implements the async state machine.
+func (r *CapabilityRouter) AsyncPublisher(name string) (AsyncPublisher, bool) {
 	e, ok := r.providers[name]
-	if !ok || e == nil || e.recon == nil {
+	if !ok || e == nil || e.async == nil {
 		return nil, false
 	}
-	return e.recon, true
+	return e.async, true
 }
 
 // Names returns the list of registered platform names. The order is

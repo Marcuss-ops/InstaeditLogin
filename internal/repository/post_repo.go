@@ -168,7 +168,7 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
 	return posts, nil
 }
 
-// ListScheduled returns posts whose status='scheduled' AND scheduled_at <=
+// ListScheduled returns posts whose status='queued' AND scheduled_at <=
 // before. `before` is the cutoff time (typically time.Now()); passing it
 // from Go (instead of using SQL NOW()) decouples the DB clock from the
 // application clock, making the worker loop and tests fully deterministic.
@@ -229,10 +229,11 @@ func (r *PostRepository) Save(target *models.PostTarget) error {
 func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
 	result, err := r.db.Exec(
 		`UPDATE post_targets
-		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4
+		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
+		     provider_state = $6, container_id = $7
 		 WHERE id = $5`,
 		target.Status, target.PlatformPostID, target.ErrorMessage,
-		target.PublishedAt, target.ID,
+		target.PublishedAt, target.ID, target.ProviderState, target.ContainerID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update post_target status: %w", err)
@@ -251,21 +252,21 @@ func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
 	return nil
 }
 
-// ClaimScheduledTarget atomically transitions a post_target from
-// status='scheduled' to status='publishing', returning true on claim
+// ClaimQueuedTarget atomically transitions a post_target from
+// status='queued' to status='publishing', returning true on claim
 // success and false if the target was already claimed by another
 // worker (or the id is invalid).
 //
 // Verdict §10: this is the atomic-claim primitive that unblocks
 // running 2+ worker replicas without double-publishes. The single
-// UPDATE statement uses WHERE status='scheduled' as a logical
+// UPDATE statement uses WHERE status='queued' as a logical
 // lock — the database's row-level locking guarantees that exactly
 // one worker's UPDATE returns RowsAffected==1 and the rest return
 // RowsAffected==0 (the row is no longer in 'scheduled' state from
 // the loser's perspective). The 'publishing' row is then invisible
-// to the next ListPending sweep (which filters status='scheduled'),
+// to the next ListPending sweep (which filters status='queued'),
 // so the losing worker never re-picks it.
-func (r *PostRepository) ClaimScheduledTarget(id int64) (bool, error) {
+func (r *PostRepository) ClaimQueuedTarget(id int64) (bool, error) {
 	result, err := r.db.Exec(
 		`UPDATE post_targets
 		 SET status = 'publishing'
@@ -282,12 +283,32 @@ func (r *PostRepository) ClaimScheduledTarget(id int64) (bool, error) {
 	return n == 1, nil
 }
 
+// ClaimWaitingProviderTarget atomically transitions a post_target from
+// status='waiting_provider' to status='publishing'.
+func (r *PostRepository) ClaimWaitingProviderTarget(id int64) (bool, error) {
+	result, err := r.db.Exec(
+		`UPDATE post_targets
+		 SET status = 'publishing'
+		 WHERE id = $1 AND status = 'waiting_provider'`,
+		id,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to claim waiting target: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	return n == 1, nil
+}
+
 // ListByPost returns the full fan-out set for a given post, ordered by id
 // ASC (insertion order). Returns (nil, nil) if the post has no targets
 // (the empty slice path through Scan-loop).
 func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
-		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at
+		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
+		       provider_state, container_id
 		 FROM post_targets
 		 WHERE post_id = $1
 		 ORDER BY id ASC`,
@@ -302,7 +323,8 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	for rows.Next() {
 		t := models.PostTarget{}
 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
-			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt); err != nil {
+			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+			&t.ProviderState, &t.ContainerID); err != nil {
 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
 		}
 		targets = append(targets, t)
@@ -310,7 +332,69 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	return targets, nil
 }
 
-// ListPending returns post_targets whose status='scheduled' AND whose parent
+// ListPublishing (Taglio 4.2) returns post_targets whose status='publishing'
+// AND platform_post_id IS NOT NULL. These are the targets the reconciler
+// goroutine needs to poll for async state transitions (TikTok's
+// PROCESSING_UPLOAD → PUBLISH_COMPLETE flow).
+//
+// The non-null platform_post_id filter is essential: a target that
+// transitions to 'publishing' but has not yet been assigned a
+// publish_id (e.g. still in the synchronous Publish() call) must NOT
+// be picked up by the reconciler — there's no publish_id to query
+// status against.
+//
+// Ordered by id ASC for stable iteration; this lets the reconciler
+// check the same target on every tick without flapping.
+func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
+	rows, err := r.db.Query(
+		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
+		        provider_state, container_id
+		 FROM post_targets
+		 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
+		 ORDER BY id ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list publishing post_targets: %w", err)
+	}
+	defer rows.Close()
+
+	var targets []models.PostTarget
+	for rows.Next() {
+		t := models.PostTarget{}
+		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+			&t.ProviderState, &t.ContainerID); err != nil {
+			return nil, fmt.Errorf("failed to scan post_target: %w", err)
+		}
+		targets = append(targets, t)
+	}
+	return targets, nil
+}
+
+// UpdatePublishState (Taglio 4.2) updates only the provider_state column
+// on a post_target. Used by the reconciler to record the current
+// platform-specific state (PROCESSING_UPLOAD / PENDING_PUBLISH /
+// IN_REVIEW) on every CheckPublishStatus call without triggering a
+// full status transition. Idempotent.
+func (r *PostRepository) UpdatePublishState(id int64, providerState string) error {
+	result, err := r.db.Exec(
+		`UPDATE post_targets SET provider_state = $1 WHERE id = $2`,
+		providerState, id,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update provider_state: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, id)
+	}
+	return nil
+}
+
+// ListPending returns post_targets whose status='queued' AND whose parent
 // post is due (scheduled_at <= before). This is the worker's main pickup
 // query, called periodically (e.g. every 30s) by the publishing worker.
 //
@@ -320,10 +404,11 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
 		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
-		        pt.platform_post_id, pt.error_message, pt.published_at
+		        pt.platform_post_id, pt.error_message, pt.published_at,
+		        pt.provider_state, pt.container_id
 		 FROM post_targets pt
 		 JOIN posts p ON p.id = pt.post_id
-		 WHERE pt.status = 'scheduled' AND p.scheduled_at <= $1
+		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider') AND p.scheduled_at <= $1
 		 ORDER BY p.scheduled_at ASC`,
 		before,
 	)
@@ -336,7 +421,8 @@ func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, err
 	for rows.Next() {
 		t := models.PostTarget{}
 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
-			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt); err != nil {
+			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+			&t.ProviderState, &t.ContainerID); err != nil {
 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
 		}
 		targets = append(targets, t)

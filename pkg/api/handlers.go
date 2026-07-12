@@ -36,7 +36,6 @@ type Router struct {
 	auditLogStore   AuditLogStore
 	auth            *auth.Manager
 	vault           credentials.VaultAPI
-	apiKeyStore     APIKeyStore
 	oneTimeCodes    *OneTimeCodeStore
 	frontendURL     string
 	allowedOrigin   []string
@@ -59,7 +58,7 @@ type WorkspaceStore interface {
 }
 
 type PostStore interface {
-	Create(post *models.Post, targets []*models.PostTarget, idempotencyKey string, requestHash string) (*models.CreateResult, error)
+	Create(post *models.Post, targets []*models.PostTarget) error
 	FindByID(id int64) (*models.Post, error)
 	Update(post *models.Post) error
 	ListByWorkspace(workspaceID int64) ([]models.Post, error)
@@ -85,16 +84,6 @@ type StorageProvider interface {
 
 type AuditLogStore interface {
 	Log(ctx context.Context, eventType, actorID string, resourceType, resourceID string, metadata map[string]interface{}) error
-}
-
-// APIKeyStore is the narrow contract for api-key CRUD + rotation.
-// Implemented by *repository.ApiKeyRepository in production.
-type APIKeyStore interface {
-	Create(ak *models.ApiKey, testKey bool) (string, error)
-	FindByID(id int64) (*models.ApiKey, error)
-	ListByProject(projectID int64) ([]models.ApiKey, error)
-	Delete(id int64) error
-	Rotate(id int64, testKey bool) (*models.ApiKey, string, error)
 }
 
 type RouterOption func(*Router)
@@ -132,10 +121,6 @@ func WithOneTimeCodeStore(s *OneTimeCodeStore) RouterOption {
 func WithCredentialVault(v credentials.VaultAPI) RouterOption {
 	return func(r *Router) { r.vault = v }
 }
-func WithApiKeyStore(repo APIKeyStore) RouterOption {
-	return func(r *Router) { r.apiKeyStore = repo }
-}
-
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -202,13 +187,6 @@ func (r *Router) Setup() http.Handler {
 	})
 	r.mux.Route("/api/v1/post-targets", func(sr chi.Router) {
 		sr.Post("/{id}/retry", r.protected(r.handleRetryTarget))
-	})
-	r.mux.Route("/api/v1/projects/{pid}/keys", func(sr chi.Router) {
-		sr.Post("/", r.protected(r.handleCreateApiKey))
-		sr.Get("/", r.protected(r.handleListApiKeys))
-		sr.Get("/{kid}", r.protected(r.handleGetApiKey))
-		sr.Delete("/{kid}", r.protected(r.handleDeleteApiKey))
-		sr.Post("/{kid}/rotate", r.protected(r.handleRotateApiKey))
 	})
 	return r.corsMiddleware(r.loggingMiddleware(r.mux))
 }

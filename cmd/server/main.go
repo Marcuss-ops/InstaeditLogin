@@ -48,7 +48,7 @@ func main() {
 
 	slog.Info("Starting InstaEditLogin server v2.0.0...")
 
-	slog.Info("Environment", "app_env", cfg.AppEnv, "auth", "strict (JWT Bearer required on every protected route)")
+	slog.Info("Environment", "app_env", cfg.AppEnv)
 
 	db, err := database.Connect(cfg)
 	if err != nil {
@@ -140,7 +140,6 @@ func main() {
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)
 	slog.Info("Router configured",
 		"jwt_ttl_hours", cfg.JWTTTLHours,
-		"auth", "strict (JWT bearer required)",
 		"frontend_url", cfg.FrontendURL,
 		"cors_origins", corsOrigins,
 		"platforms", capRouter.Names())

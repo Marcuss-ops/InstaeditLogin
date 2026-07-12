@@ -14,7 +14,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -187,7 +186,7 @@ func (m *mockWorkspaceStore) Delete(id int64) error {
 
 // mockPostStore implements PostStore with configurable function fields.
 type mockPostStore struct {
-	createFn          func(*models.Post, []*models.PostTarget, string, string) (*models.CreateResult, error)
+	createFn          func(*models.Post, []*models.PostTarget) error
 	findByIDFn        func(id int64) (*models.Post, error)
 	updateFn          func(*models.Post) error
 	listByWorkspaceFn func(workspaceID int64) ([]models.Post, error)
@@ -199,9 +198,9 @@ type mockPostStore struct {
 	retryTargetFn     func(id int64) error
 }
 
-func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget, idempotencyKey string, requestHash string) (*models.CreateResult, error) {
+func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget) error {
 	if m.createFn != nil {
-		return m.createFn(post, targets, idempotencyKey, requestHash)
+		return m.createFn(post, targets)
 	}
 	post.ID = 100
 	post.CreatedAt = time.Now()
@@ -209,7 +208,7 @@ func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget, 
 		t.ID = int64(200 + i)
 		t.PostID = post.ID
 	}
-	return &models.CreateResult{Post: post, Targets: targets}, nil
+	return nil
 }
 func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
 	if m.findByIDFn != nil {
@@ -270,50 +269,6 @@ func (m *mockPostStore) RetryTarget(id int64) error {
 		return nil
 	}
 	return m.retryTargetFn(id)
-}
-
-// mockStorageProvider implements StorageProvider with configurable function fields.
-type mockStorageProvider struct {
-	grant               *services.UploadGrant
-	err                 error
-	capturedUserID      int64
-	capturedKey         string
-	capturedContentType string
-	capturedSize        int64
-	verifyFn            func(key string) (string, int64, error)
-	assetURLFn          func(key string) string
-}
-
-func (m *mockStorageProvider) Provider() string { return "mock" }
-
-func (m *mockStorageProvider) SignUpload(ctx context.Context, userID int64, key, contentType string, sizeBytes int64, ttl time.Duration) (*services.UploadGrant, error) {
-	m.capturedUserID = userID
-	m.capturedKey = key
-	m.capturedContentType = contentType
-	m.capturedSize = sizeBytes
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.grant, nil
-}
-
-// VerifyUpload (Taglio 3.2) — defaults to a success response that
-// matches the asset's content-type + size. Tests that need a
-// different response override verifyFn.
-func (m *mockStorageProvider) VerifyUpload(_ context.Context, key string) (string, int64, error) {
-	if m.verifyFn != nil {
-		return m.verifyFn(key)
-	}
-	return "image/jpeg", 1024, nil
-}
-
-// AssetURL (Taglio 3.2) — returns the trusted internal S3 URL. Tests
-// that need a different URL override assetURLFn.
-func (m *mockStorageProvider) AssetURL(key string) string {
-	if m.assetURLFn != nil {
-		return m.assetURLFn(key)
-	}
-	return "https://mock-s3.example.com/" + key
 }
 
 // ---------------------------------------------------------------------------
@@ -841,7 +796,7 @@ func TestHandlePublishPost_Success(t *testing.T) {
 	media.assets["asset-ready-1"] = &models.MediaAsset{
 		ID: "asset-ready-1", UserID: 1, UploadKey: "uploads/1/video.mp4",
 		ContentType: "video/mp4", SizeBytes: 1024,
-		Status: models.MediaAssetStatusReady,
+		Status:    models.MediaAssetStatusReady,
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 	storage := newMockStorageProvider()
@@ -1260,7 +1215,7 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 		},
 	}
 	postStore := &mockPostStore{
-		createFn: func(p *models.Post, tgts []*models.PostTarget, _ string, _ string) (*models.CreateResult, error) {
+		createFn: func(p *models.Post, tgts []*models.PostTarget) error {
 			p.ID = 100
 			p.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 			for i, target := range tgts {
@@ -1274,7 +1229,7 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 		WithPostStore(postStore),
 	)
 
-	body := `{"workspace_id":1,"content":{"title":"hello","caption":"world"},"targets":[{"account_id":10}]}`
+	body := `{"workspace_id":1,"content":{"title":"hello","caption":"world"},"targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1322,7 +1277,7 @@ func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 		},
 	}
 	postStore := &mockPostStore{
-		createFn: func(p *models.Post, _ []*models.PostTarget, _ string, _ string) (*models.CreateResult, error) {
+		createFn: func(p *models.Post, _ []*models.PostTarget) error {
 			p.ID = 100
 			p.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 			return nil
@@ -1335,7 +1290,7 @@ func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 		WithPostStore(postStore),
 	)
 
-	body := `{"workspace_id":1,"content":{"title":"future post"},"scheduled_at":"2030-01-01T00:00:00Z","targets":[{"account_id":10}]}`
+	body := `{"workspace_id":1,"content":{"title":"future post"},"scheduled_at":"2030-01-01T00:00:00Z","targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1372,7 +1327,7 @@ func TestHandleCreatePost_MissingWorkspaceID_422(t *testing.T) {
 		WithPostStore(postStore),
 	)
 
-	body := `{"targets":[{"account_id":10}]}`
+	body := `{"targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1416,7 +1371,7 @@ func TestHandleCreatePost_BadTargetID_422(t *testing.T) {
 		WithPostStore(postStore),
 	)
 
-	body := `{"workspace_id":1,"content":{"title":"x"},"targets":[{"account_id":0}]}`
+	body := `{"workspace_id":1,"content":{"title":"x"},"targets":[{"platform_account_id":0}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1442,7 +1397,7 @@ func TestHandleCreatePost_CrossOwnerWorkspace_403(t *testing.T) {
 		WithPostStore(postStore),
 	)
 
-	body := `{"workspace_id":1,"content":{"title":"x"},"targets":[{"account_id":10}]}`
+	body := `{"workspace_id":1,"content":{"title":"x"},"targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1509,7 +1464,7 @@ func TestHandleCreatePost_StrictPayloadRejectsLegacyMediaURL(t *testing.T) {
 		},
 	}
 	postStore := &mockPostStore{
-		createFn: func(p *models.Post, _ []*models.PostTarget, _ string, _ string) (*models.CreateResult, error) {
+		createFn: func(p *models.Post, _ []*models.PostTarget) error {
 			p.ID = 100
 			p.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 			return nil
@@ -1524,7 +1479,7 @@ func TestHandleCreatePost_StrictPayloadRejectsLegacyMediaURL(t *testing.T) {
 
 	// Legacy payload with media_url — should be silently ignored.
 	// The new contract is { content: { media: [{ asset_id }] } }.
-	body := `{"workspace_id":1,"content":{"title":"x","media_url":"https://attacker.com/x.png"},"targets":[{"account_id":10}]}`
+	body := `{"workspace_id":1,"content":{"title":"x","media_url":"https://attacker.com/x.png"},"targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

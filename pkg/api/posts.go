@@ -1,13 +1,10 @@
 package api
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -34,16 +31,16 @@ type CreatePostContent struct {
 
 // CreatePostTarget is one entry in the universal targets[] array.
 type CreatePostTarget struct {
-	AccountID int64 `json:"account_id"`
+	PlatformAccountID int64 `json:"platform_account_id"`
 }
 
 // CreatePostRequest is the universal JSON body for POST /api/v1/posts.
 type CreatePostRequest struct {
-	WorkspaceID    int64              `json:"workspace_id"`
-	Content        CreatePostContent  `json:"content"`
-	ScheduledAt    *time.Time         `json:"scheduled_at,omitempty"`
-	Targets        []CreatePostTarget `json:"targets"`
-	IdempotencyKey *string            `json:"-"` // set from header, not body
+	WorkspaceID int64              `json:"workspace_id"`
+	Content     CreatePostContent  `json:"content"`
+	ScheduledAt *time.Time         `json:"scheduled_at,omitempty"`
+	Status      models.PostStatus  `json:"status,omitempty"`
+	Targets     []CreatePostTarget `json:"targets"`
 }
 
 // SchedulePostRequest is the JSON body for POST /posts/{id}/schedule.
@@ -53,7 +50,7 @@ type SchedulePostRequest struct {
 
 // AddTargetRequest is the JSON body for POST /posts/{id}/targets.
 type AddTargetRequest struct {
-	AccountID int64 `json:"account_id"`
+	PlatformAccountID int64 `json:"platform_account_id"`
 }
 
 // --- Error mapping -----------------------------------------------------------
@@ -82,13 +79,15 @@ func mapRepoError(err error) (int, string) {
 // handleCreatePost creates a post with targets in a single atomic call.
 // POST /api/v1/posts
 //
-// Universal payload: {workspace_id, content:{title,caption,media_url},
+// Universal payload: {workspace_id, content:{title,caption,media},
 // scheduled_at, targets:[{account_id}]}. Status defaults to "draft";
 // if scheduled_at is set, status auto-promotes to "queued".
 //
-// Idempotency-Key header: clients may supply an Idempotency-Key to safely
-// retry the request. Same key + same body returns the original 201 response.
-// Same key + different body returns 409 Conflict.
+// Taglio 3.2: the legacy `media_url` field on content is REMOVED.
+// Clients pass `media: [{ asset_id }]` — the handler resolves each
+// asset_id to a trusted internal S3 URL via the mediaStore +
+// storageProvider. The first asset's URL is stored in post.MediaURL
+// so the publish worker can continue to use the existing flow.
 func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 	if r.postStore == nil {
 		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
@@ -103,15 +102,8 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Read body into bytes for SHA-256 hashing (idempotency) and JSON decode.
-	bodyBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to read request body: "+err.Error())
-		return
-	}
-
 	var body CreatePostRequest
-	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
@@ -119,14 +111,18 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "workspace_id is required")
 		return
 	}
+	if body.Status != "" && !body.Status.IsValid() {
+		writeError(w, http.StatusBadRequest, "status must be one of: draft, queued")
+		return
+	}
 	if len(body.Targets) == 0 {
 		writeError(w, http.StatusUnprocessableEntity, "at least one target is required")
 		return
 	}
 	for i, t := range body.Targets {
-		if t.AccountID == 0 {
+		if t.PlatformAccountID == 0 {
 			writeError(w, http.StatusUnprocessableEntity,
-				fmt.Sprintf("targets[%d].account_id is required", i))
+				fmt.Sprintf("targets[%d].platform_account_id is required", i))
 			return
 		}
 	}
@@ -146,15 +142,10 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 	}
 
 	status := models.PostStatusDraft
-	if body.ScheduledAt != nil {
+	if body.Status != "" {
+		status = body.Status
+	} else if body.ScheduledAt != nil {
 		status = models.PostStatusQueued
-	}
-
-	// Compute SHA-256 of the raw request body (idempotency hash).
-	idempotencyKey := req.Header.Get("Idempotency-Key")
-	requestHash := sha256Hex(bodyBytes)
-	if idempotencyKey != "" {
-		body.IdempotencyKey = &idempotencyKey
 	}
 
 	// Taglio 3.2: resolve media asset_id(s) → trusted internal S3 URL.
@@ -170,35 +161,24 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 	}
 
 	post := &models.Post{
-		WorkspaceID:    body.WorkspaceID,
-		Title:          body.Content.Title,
-		Caption:        body.Content.Caption,
-		MediaURL:       mediaURL,
-		ScheduledAt:    body.ScheduledAt,
-		Status:         status,
-		IdempotencyKey: bodyIdempotencyKeyPtr(body),
-		Version:        1,
+		WorkspaceID: body.WorkspaceID,
+		Title:       body.Content.Title,
+		Caption:     body.Content.Caption,
+		MediaURL:    mediaURL,
+		ScheduledAt: body.ScheduledAt,
+		Status:      status,
 	}
 	targets := make([]*models.PostTarget, 0, len(body.Targets))
 	for _, t := range body.Targets {
 		targets = append(targets, &models.PostTarget{
-			PlatformAccountID: t.AccountID,
+			PlatformAccountID: t.PlatformAccountID,
 			Status:            models.PostStatusQueued,
-			Version:           1,
 		})
 	}
 
-	result, err := r.postStore.Create(post, targets, idempotencyKey, requestHash)
-	if err != nil {
+	if err := r.postStore.Create(post, targets); err != nil {
 		code, msg := mapRepoError(err)
 		writeError(w, code, "failed to create post: "+msg)
-		return
-	}
-	if result.Duplicate {
-		// Idempotent retry: return the cached response body.
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		w.Write(result.CachedBody)
 		return
 	}
 	writeJSON(w, http.StatusCreated, createPostResponse{post: post, targets: targets})
@@ -243,8 +223,8 @@ func (r *Router) handleAddTarget(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if body.AccountID == 0 {
-		writeError(w, http.StatusBadRequest, "account_id is required")
+	if body.PlatformAccountID == 0 {
+		writeError(w, http.StatusBadRequest, "platform_account_id is required")
 		return
 	}
 	existing, err := r.postStore.FindByID(id)
@@ -259,7 +239,7 @@ func (r *Router) handleAddTarget(w http.ResponseWriter, req *http.Request) {
 	}
 	target := &models.PostTarget{
 		PostID:            id,
-		PlatformAccountID: body.AccountID,
+		PlatformAccountID: body.PlatformAccountID,
 		Status:            models.PostStatusQueued,
 		Version:           1,
 	}
@@ -615,17 +595,3 @@ func (r *Router) handleRetryTarget(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
 }
 
-// --- Helpers ----------------------------------------------------------------
-
-// sha256Hex returns the hex-encoded SHA-256 hash of data.
-func sha256Hex(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
-}
-
-// bodyIdempotencyKeyPtr returns a pointer to the idempotency key if set in
-// the request body (for the legacy idempotency_key field on Post). This is
-// distinct from the Idempotency-Key header.
-func bodyIdempotencyKeyPtr(body CreatePostRequest) *string {
-	return body.IdempotencyKey
-}

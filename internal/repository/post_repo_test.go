@@ -281,9 +281,10 @@ func TestPostUpdateStatus_Happy(t *testing.T) {
 
 	mock.ExpectExec(
 		`UPDATE post_targets
-		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4
+		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
+		     provider_state = $6, container_id = $7
 		 WHERE id = $5`,
-	).WithArgs(models.PostStatusPublished, "remote-123", "", &now, int64(200)).
+	).WithArgs(models.PostStatusPublished, "remote-123", "", &now, int64(200), "", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	tgt := &models.PostTarget{
@@ -307,9 +308,10 @@ func TestPostRepository_UpdateStatus_StaleTarget(t *testing.T) {
 
 	mock.ExpectExec(
 		`UPDATE post_targets
-	 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4
+	 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
+	     provider_state = $6, container_id = $7
 	 WHERE id = $5`,
-	).WithArgs(models.PostStatusFailed, "", "publish error", (*time.Time)(nil), int64(999)).
+	).WithArgs(models.PostStatusFailed, "", "publish error", (*time.Time)(nil), int64(999), "", "").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err := repo.UpdateStatus(&models.PostTarget{
@@ -496,16 +498,17 @@ func TestPostListByPost_OKWithNullablePublishedAt(t *testing.T) {
 	publishedAt := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
 
 	mock.ExpectQuery(
-		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at
+		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
+		        provider_state, container_id
 		 FROM post_targets
 		 WHERE post_id = $1
 		 ORDER BY id ASC`,
 	).WithArgs(int64(100)).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at"},
-		).AddRow(10, 100, 1000, models.PostStatusScheduled, "", "", nil).
-			AddRow(11, 100, 1001, models.PostStatusPublished, "remote-1", "", publishedAt).
-			AddRow(12, 100, 1002, models.PostStatusFailed, "", "twitter error", nil))
+			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id"},
+		).AddRow(10, 100, 1000, models.PostStatusScheduled, "", "", nil, "", "").
+			AddRow(11, 100, 1001, models.PostStatusPublished, "remote-1", "", publishedAt, "", "").
+			AddRow(12, 100, 1002, models.PostStatusFailed, "", "twitter error", nil, "", ""))
 
 	got, err := repo.ListByPost(100)
 	if err != nil {
@@ -561,16 +564,17 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
 
 	mock.ExpectQuery(
 		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
-		        pt.platform_post_id, pt.error_message, pt.published_at
+		        pt.platform_post_id, pt.error_message, pt.published_at,
+		        pt.provider_state, pt.container_id
 		 FROM post_targets pt
 		 JOIN posts p ON p.id = pt.post_id
-		 WHERE pt.status = 'scheduled' AND p.scheduled_at <= $1
+		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider') AND p.scheduled_at <= $1
 		 ORDER BY p.scheduled_at ASC`,
 	).WithArgs(cutoff).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at"},
-		).AddRow(101, 1, 1000, models.PostStatusScheduled, "", "", nil).
-			AddRow(102, 1, 1001, models.PostStatusScheduled, "", "", nil))
+			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id"},
+		).AddRow(101, 1, 1000, models.PostStatusScheduled, "", "", nil, "", "").
+			AddRow(102, 1, 1001, models.PostStatusScheduled, "", "", nil, "", ""))
 
 	targets, err := repo.ListPending(cutoff)
 	if err != nil {
@@ -595,12 +599,12 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
 // concurrent writers against a real database. Use testcontainers-go + a
 // real Postgres to exercise that, since sqlmock serializes queries globally
 // on its internal gomock controller.
-// TestPostClaimScheduledTarget_Success covers the verdict §10 atomic-claim
+// TestPostClaimQueuedTarget_Success covers the verdict §10 atomic-claim
 // happy path: a single row in 'scheduled' is transitioned to 'publishing'
 // and the function returns (true, nil). The UPDATE statement must include
 // the AND status='scheduled' guard (the logical lock that prevents two
 // workers from both claiming the same row).
-func TestPostClaimScheduledTarget_Success(t *testing.T) {
+func TestPostClaimQueuedTarget_Success(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
@@ -611,9 +615,9 @@ func TestPostClaimScheduledTarget_Success(t *testing.T) {
 	).WithArgs(int64(200)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	claimed, err := repo.ClaimScheduledTarget(200)
+	claimed, err := repo.ClaimQueuedTarget(200)
 	if err != nil {
-		t.Fatalf("ClaimScheduledTarget: %v", err)
+		t.Fatalf("ClaimQueuedTarget: %v", err)
 	}
 	if !claimed {
 		t.Errorf("claimed: want true, got false (RowsAffected=1 should mean the claim won)")
@@ -623,12 +627,12 @@ func TestPostClaimScheduledTarget_Success(t *testing.T) {
 	}
 }
 
-// TestPostClaimScheduledTarget_AlreadyClaimed covers the verdict §10
+// TestPostClaimQueuedTarget_AlreadyClaimed covers the verdict §10
 // loser path: when another worker already transitioned the row to
 // 'publishing' (or any non-'scheduled' status), the UPDATE matches
 // zero rows and the function returns (false, nil). The 'losing'
 // worker is expected to skip publishing (no error, no Publish call).
-func TestPostClaimScheduledTarget_AlreadyClaimed(t *testing.T) {
+func TestPostClaimQueuedTarget_AlreadyClaimed(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
@@ -639,9 +643,9 @@ func TestPostClaimScheduledTarget_AlreadyClaimed(t *testing.T) {
 	).WithArgs(int64(200)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	claimed, err := repo.ClaimScheduledTarget(200)
+	claimed, err := repo.ClaimQueuedTarget(200)
 	if err != nil {
-		t.Fatalf("ClaimScheduledTarget: %v (must NOT error when another worker already claimed; the loser path is a normal skip)", err)
+		t.Fatalf("ClaimQueuedTarget: %v (must NOT error when another worker already claimed; the loser path is a normal skip)", err)
 	}
 	if claimed {
 		t.Errorf("claimed: want false, got true (RowsAffected=0 should mean the claim was lost)")
@@ -651,12 +655,12 @@ func TestPostClaimScheduledTarget_AlreadyClaimed(t *testing.T) {
 	}
 }
 
-// TestPostClaimScheduledTarget_DBError covers the path where the DB
+// TestPostClaimQueuedTarget_DBError covers the path where the DB
 // itself is unreachable / errors out. The function must surface the
 // error to the worker (so the tick can log and continue to the next
 // target) rather than silently returning false (which would mask
 // infrastructure issues as a phantom claim-loss).
-func TestPostClaimScheduledTarget_DBError(t *testing.T) {
+func TestPostClaimQueuedTarget_DBError(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
@@ -667,7 +671,7 @@ func TestPostClaimScheduledTarget_DBError(t *testing.T) {
 	).WithArgs(int64(200)).
 		WillReturnError(errors.New("connection lost"))
 
-	claimed, err := repo.ClaimScheduledTarget(200)
+	claimed, err := repo.ClaimQueuedTarget(200)
 	if err == nil {
 		t.Fatal("expected DB error to propagate, got nil")
 	}
@@ -679,13 +683,13 @@ func TestPostClaimScheduledTarget_DBError(t *testing.T) {
 	}
 }
 
-// TestPostClaimScheduledTarget_RowsAffectedReadError covers the rare
+// TestPostClaimQueuedTarget_RowsAffectedReadError covers the rare
 // race where the UPDATE itself succeeds but the follow-up
 // RowsAffected() call fails (e.g. connection interrupted between
 // Exec and RowsAffected). The function must surface the error
 // rather than returning a misleading (false, nil) that would let
 // the worker proceed as if another worker had claimed.
-func TestPostClaimScheduledTarget_RowsAffectedReadError(t *testing.T) {
+func TestPostClaimQueuedTarget_RowsAffectedReadError(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
@@ -696,7 +700,7 @@ func TestPostClaimScheduledTarget_RowsAffectedReadError(t *testing.T) {
 	).WithArgs(int64(200)).
 		WillReturnResult(sqlmock.NewErrorResult(errors.New("rows affected read failed")))
 
-	_, err := repo.ClaimScheduledTarget(200)
+	_, err := repo.ClaimQueuedTarget(200)
 	if err == nil {
 		t.Fatal("expected RowsAffected error to propagate, got nil")
 	}

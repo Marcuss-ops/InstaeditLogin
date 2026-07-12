@@ -155,5 +155,15 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		}
 	}
 
+	// Threads (Zernio 2.1): Meta-family async publishing.
+	if cfg.ThreadsRedirectURI != "" {
+		th, err := services.NewThreadsOAuthService(cfg)
+		if err != nil {
+			b.logger.Warn("Skipped Threads provider (constructor failed)", "error", err)
+		} else if th != nil {
+			router.Register(th.Name(), th)
+		}
+	}
+
 	return router, nil
 }

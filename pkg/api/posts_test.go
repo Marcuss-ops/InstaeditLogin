@@ -205,7 +205,7 @@ func TestPostsAPI_AddTarget_PostNotFound_404(t *testing.T) {
 
 func TestPostsAPI_AddTarget_ErrPostUnauthorized_403(t *testing.T) {
 	r := newPostsTestRouter(&mockPostStore{
-		saveFn: func(t *models.PostTarget) error { return repository.ErrPostUnauthorized },
+		saveTargetFn: func(t *models.PostTarget) error { return repository.ErrPostUnauthorized },
 	})
 	body := `{"platform_account_id":42}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/100/targets", bytes.NewReader([]byte(body)))

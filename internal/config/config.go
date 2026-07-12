@@ -394,15 +394,4 @@ func getEnvInt64(key string, fallback int64) int64 {
 	return fallback
 }
 
-// getEnvBool reads a boolean environment variable (true/1/yes/on) with a default fallback.
-func getEnvBool(key string, fallback bool) bool {
-	if value, ok := os.LookupEnv(key); ok {
-		switch strings.ToLower(strings.TrimSpace(value)) {
-		case "true", "1", "yes", "on":
-			return true
-		case "false", "0", "no", "off":
-			return false
-		}
-	}
-	return fallback
-}
+
