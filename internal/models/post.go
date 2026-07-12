@@ -9,14 +9,30 @@ import (
 
 // PostStatus is the lifecycle of a Post (or PostTarget). Mirrors the
 // Postgres enum `post_status` introduced by migration 003_posts_workspaces.sql
-// and extended by migration 010_publish_jobs_and_queued_status.sql.
+// and extended by:
 //
-// Lifecycle:
+//   - migration 010_publish_jobs_and_queued_status.sql (queued, waiting_provider)
+//   - migration 012_async_threads_support.sql (waiting_provider, queued, partially_published)
+//   - migration 018_publish_state_machine.sql (retrying)
+//
+// Lifecycle (post-commit-018):
 //
 //	draft → queued → publishing → published
 //	                           → partially_published
 //	                           → waiting_provider
+//	                           → retrying ───→ (when ListPending picks
+//	                                        ───  the row again after
+//	                                        ───  next_attempt_at <= now,
+//	                                        ───  ClaimQueuedTarget flips
+//	                                        ───  it back to publishing) ─→ publishing
 //	                           → failed
+//
+// The retrying → publishing step is INDIRECT: a worker tick re-checks
+// post_targets rows where status='retrying' AND next_attempt_at <= now,
+// claims them via ClaimQueuedTarget (which sets status='publishing'),
+// and resumes the publish from there. There is no direct UPDATE
+// 'retrying' → 'publishing' anywhere — the worker is the only legitimate
+// writer of that transition.
 //
 // String-based enum pattern lets us flow PostStatus values through
 // encoding/json (default string serialization) and through database/sql
@@ -31,6 +47,12 @@ const (
 	PostStatusPartiallyPublished PostStatus = "partially_published"
 	PostStatusFailed             PostStatus = "failed"
 	PostStatusWaitingProvider    PostStatus = "waiting_provider"
+	// PostStatusRetrying (migration 018) — the target failed
+	// transiently (e.g. transient 5xx, rate limit) and is now sitting
+	// in backoff. NOT terminal: when next_attempt_at <= now the
+	// worker re-claims it (transitioning back to publishing via the
+	// ListPending SELECT) and resumes the pipeline.
+	PostStatusRetrying PostStatus = "retrying"
 
 	// Deprecated: use PostStatusQueued instead.
 	PostStatusScheduled = PostStatusQueued
@@ -45,7 +67,8 @@ func (s PostStatus) IsValid() bool {
 		PostStatusPublished,
 		PostStatusPartiallyPublished,
 		PostStatusFailed,
-		PostStatusWaitingProvider:
+		PostStatusWaitingProvider,
+		PostStatusRetrying:
 		return true
 	default:
 		return false
@@ -100,19 +123,58 @@ type Post struct {
 }
 
 // PostTarget represents the fan-out of a Post to a specific platform account.
+// The retry-aware columns added by migration 018_publish_state_machine.sql
+// (current_step, progress, attempt_count, next_attempt_at, remote_post_id,
+// remote_post_url, last_error_code) are exposed here so the worker and
+// API layer can read/write them through the same struct.
 type PostTarget struct {
 	ID                int64      `json:"id"`
 	PostID            int64      `json:"post_id"`
 	PlatformAccountID int64      `json:"platform_account_id"`
 	Status            PostStatus `json:"status"`
-	PlatformPostID    string     `json:"platform_post_id,omitempty"`
-	ErrorMessage      string     `json:"error_message,omitempty"`
-	PublishedAt       *time.Time `json:"published_at,omitempty"`
-	ProviderState     string     `json:"provider_state,omitempty"`
-	ContainerID       string     `json:"container_id,omitempty"`
-	Version           int64      `json:"version"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+
+	// Zernio publish-state-machine (migration 018):
+	//   * current_step       — free-form pipeline-stage label, written
+	//                          by the worker at every transition.
+	//   * progress (0..100)  — percentage, bumped by async check status.
+	//   * attempt_count      — retry counter, monotonically increasing.
+	//   * next_attempt_at    — backoff target; NULL while not retrying.
+	CurrentStep   string     `json:"current_step,omitempty"`
+	Progress      int        `json:"progress"`
+	AttemptCount  int        `json:"attempt_count"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+
+	// Provider-facing ids (see migration 011_target_provider_state.sql
+	// for the platform_post_id / provider_state / container_id trio).
+	// platform_post_id is the INTERNAL id the provider exposes for the
+	// publish (publish_id on async platforms; same as remote_post_id on
+	// sync platforms). Set at claim time on async flows; set at
+	// successful-publish time on sync flows.
+	PlatformPostID string `json:"platform_post_id,omitempty"`
+	// remote_post_id / remote_post_url (migration 018) carry the
+	// PUBLIC-FACING identification of the published post. They are
+	// the canonical "where did this end up" answer dashboards render.
+	// For sync platforms they're populated together from
+	// models.PublishResult; for async platforms they materialise once
+	// the reconciler lands the provider's terminal-state response.
+	RemotePostID  string `json:"remote_post_id,omitempty"`
+	RemotePostURL string `json:"remote_post_url,omitempty"`
+
+	// Diagnostic / observability columns.
+	ErrorMessage  string     `json:"error_message,omitempty"`
+	PublishedAt   *time.Time `json:"published_at,omitempty"`
+	ProviderState string     `json:"provider_state,omitempty"`
+	ContainerID   string     `json:"container_id,omitempty"`
+	// last_error_code (migration 018) is the short stable code —
+	// "RATE_LIMITED", "INVALID_TOKEN", "MEDIA_UNREACHABLE",
+	// "CONTAINER_NOT_READY" — surfaces in dashboards/retry-logic
+	// without the human prose of error_message.
+	LastErrorCode string `json:"last_error_code,omitempty"`
+
+	// Optimistic-concurrency + audit timestamps (migration 012).
+	Version   int64     `json:"version"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // PublishJob is an append-only audit log. One row per publish attempt.
