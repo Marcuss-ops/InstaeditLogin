@@ -38,13 +38,21 @@ func NewOrganizationRepository(db *sql.DB) *OrganizationRepository {
 // operations on organizations. Use errors.Is to dispatch on it.
 var ErrOrganizationNotFound = errors.New("organization not found")
 
-// Create inserts a new organization and assigns id/created_at/updated_at.
-// The SQL DEFAULTs on status/plan (see migration 013) handle empty-string
-// callers — we intentionally do NOT pre-fill default values in Go so the
-// SQL DEFAULT is the single source of truth (matches PostRepository's
-// pattern). After RETURNING, FindByID is unnecessary because the Scan
-// below populates the struct directly.
+// Create inserts a new organization and assigns id/status/plan/
+// created_at/updated_at. Defaults status to "active" and plan to "free"
+// in Go when the caller left them empty — necessary because Postgres
+// DEFAULT only fires when the column is OMITTED from the INSERT (or
+// explicitly set to DEFAULT keyword); an empty-string INSERT value
+// would bypass the column default and land in the row as "". The Go
+// guard prevents that footgun while RETURNING+Scan still surfaces the
+// canonical stored value back to the caller.
 func (r *OrganizationRepository) Create(org *models.Organization) error {
+	if org.Status == "" {
+		org.Status = models.OrganizationStatusActive
+	}
+	if org.Plan == "" {
+		org.Plan = models.OrganizationPlanFree
+	}
 	err := r.db.QueryRow(
 		`INSERT INTO organizations (name, slug, status, plan)
 		 VALUES ($1, $2, $3, $4)
