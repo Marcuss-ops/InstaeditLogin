@@ -21,16 +21,14 @@ import (
 // fetch user info from /me. What differs is the scopes, redirect URI, and
 // publishing logic, which each wrapper provider controls independently.
 //
-// Taglio 2.1: token persistence was lifted out of providers entirely and lives
-// in the shared TokenService. MetaOAuthBase now only carries OAuth-level
-// helpers — no token repo, no encryptor, no TokenHelper.
+// Taglio 2.1: token persistence is handled by the central CredentialVault.
+// MetaOAuthBase carries only OAuth-level helpers.
 type MetaOAuthBase struct {
 	cfg        *config.Config
 	httpClient *http.Client
 }
 
-// NewMetaOAuthBase creates the shared OAuth client. Taglio 2.1: no longer
-// takes a tokenRepo — token persistence is the TokenService's responsibility.
+// NewMetaOAuthBase creates the shared OAuth client.
 func NewMetaOAuthBase(cfg *config.Config) *MetaOAuthBase {
 	return &MetaOAuthBase{
 		cfg:        cfg,

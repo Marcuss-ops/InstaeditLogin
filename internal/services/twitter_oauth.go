@@ -30,8 +30,7 @@ type TwitterOAuthService struct {
 	httpClient *http.Client
 }
 
-// NewTwitterOAuthService creates a new TwitterOAuthService. Taglio 2.1:
-// the constructor no longer takes a tokenRepo.
+// NewTwitterOAuthService creates a new TwitterOAuthService.
 func NewTwitterOAuthService(cfg *config.Config) (*TwitterOAuthService, error) {
 	if cfg.TwitterClientID == "" {
 		return nil, nil // provider disabled

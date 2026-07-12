@@ -28,8 +28,7 @@ type YouTubeOAuthService struct {
 	httpClient *http.Client
 }
 
-// NewYouTubeOAuthService creates a new YouTubeOAuthService. Taglio 2.1:
-// the constructor no longer takes a tokenRepo.
+// NewYouTubeOAuthService creates a new YouTubeOAuthService.
 func NewYouTubeOAuthService(cfg *config.Config) (*YouTubeOAuthService, error) {
 	if cfg.YouTubeClientID == "" {
 		return nil, nil // provider disabled

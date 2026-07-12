@@ -50,10 +50,7 @@ type FacebookOAuthService struct {
 	redirectURI string
 }
 
-// NewFacebookOAuthService creates a new FacebookOAuthService. Returns
-// nil when the redirect URI is not configured (provider disabled).
-// Taglio 2.1: the constructor no longer takes a tokenRepo — token
-// persistence is the TokenService's job, not the provider's.
+// NewFacebookOAuthService creates a new FacebookOAuthService. Returns nil when the redirect URI is not configured (provider disabled).
 func NewFacebookOAuthService(cfg *config.Config) (*FacebookOAuthService, error) {
 	if cfg.FacebookRedirectURI == "" {
 		return nil, nil // provider disabled

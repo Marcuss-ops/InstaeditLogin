@@ -23,12 +23,11 @@ import (
 
 // mockProvider implements the two capabilities the API router consumes:
 // OAuthProvider (Name, GetLoginURL, HandleCallback, RefreshOAuthToken) and
-// Publisher (Name, Publish). The real per-platform structs (Facebook, X,
-// TikTok, …) implement both, so the single mock struct mirrors that.
+// Publisher (Name, Publish). The real per-platform structs implement both,
+// so the single mock struct mirrors that.
 //
-// Taglio 2.1: TokenManager methods (SaveEncryptedToken, GetDecryptedToken,
-// EnsureFreshToken) moved off the provider and onto the shared
-// credentials.VaultAPI. The mock is unchanged by Taglio 2.2.
+// Taglio 2.2: token persistence moved to the central CredentialVault.
+// The mock is unchanged by Taglio 2.2.
 type mockProvider struct {
 	platform       string
 	loginURL       string
@@ -540,9 +539,8 @@ func TestHandleCallback_FindOrCreateError(t *testing.T) {
 }
 
 // TestHandleCallback_SaveTokenError asserts that an error from the
-// CredentialVault.Save call (used to be on the per-provider TokenManager
-// before Taglio 2.1, then on TokenService in 2.1, now on the vault) surfaces
-// as a 500. The test wires a mockCredentialVault with a saveFn that errors.
+// CredentialVault.Save call surfaces as a 500. The test wires a
+// mockCredentialVault with a saveFn that errors.
 func TestHandleCallback_SaveTokenError(t *testing.T) {
 	svc := &mockProvider{
 		platform:       "instagram",

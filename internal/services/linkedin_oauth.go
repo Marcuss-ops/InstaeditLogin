@@ -27,8 +27,7 @@ type LinkedInOAuthService struct {
 	httpClient *http.Client
 }
 
-// NewLinkedInOAuthService creates a new LinkedInOAuthService. Taglio 2.1:
-// the constructor no longer takes a tokenRepo.
+// NewLinkedInOAuthService creates a new LinkedInOAuthService.
 func NewLinkedInOAuthService(cfg *config.Config) (*LinkedInOAuthService, error) {
 	if cfg.LinkedInClientID == "" {
 		return nil, nil // provider disabled

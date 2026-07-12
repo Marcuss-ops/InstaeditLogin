@@ -33,8 +33,7 @@ type TikTokOAuthService struct {
 	httpClient *http.Client
 }
 
-// NewTikTokOAuthService creates a new TikTokOAuthService. Taglio 2.1:
-// the constructor no longer takes a tokenRepo.
+// NewTikTokOAuthService creates a new TikTokOAuthService.
 func NewTikTokOAuthService(cfg *config.Config) (*TikTokOAuthService, error) {
 	if cfg.TikTokClientKey == "" {
 		return nil, nil // provider disabled

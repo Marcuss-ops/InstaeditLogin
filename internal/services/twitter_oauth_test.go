@@ -44,9 +44,7 @@ func twitterTestCfg() *config.Config {
 	}
 }
 
-// newTestTwitterService creates a TwitterOAuthService whose httpClient is
-// pointed at the httptest server. TokenHelper is nil because these tests
-// only exercise the OAuth flow, not token persistence.
+// newTestTwitterService creates a TwitterOAuthService whose httpClient is pointed at the httptest server.
 func newTestTwitterService(srv *httptest.Server) *TwitterOAuthService {
 	cfg := twitterTestCfg()
 	return &TwitterOAuthService{
