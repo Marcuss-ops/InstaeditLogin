@@ -122,7 +122,7 @@ go run cmd/server/main.go
 Output atteso:
 ```
 verify-api-base-url [OK]  VITE_API_BASE_URL = ... (context: local)
-msg="Router configured" auth_mode="strict (Bearer required)" strict_jwt_auth=true
+msg="Router configured" auth=strict jwt_ttl_hours=168
 msg="listening" addr=0.0.0.0:8080
 ```
 
@@ -297,8 +297,8 @@ psql "$DATABASE_URL" -c "SELECT current_database();"
 # Atteso: il db name contiene "prod" (NON "dev" / NON "instaedit_login" usato in locale)
 
 # (5) Fail-fast non scatta (prova con APP_ENV=production)
-APP_ENV=production STRICT_JWT_AUTH=true DATABASE_URL=... go run cmd/server/main.go
-# Atteso: il server parte (STRICT_JWT_AUTH=true soddisfa il guard)
+APP_ENV=production DATABASE_URL=... JWT_SECRET=$(openssl rand -hex 32) go run cmd/server/main.go
+# Atteso: il server parte (Taglio 1.1: nessun guard legacy, l'auth è strict in ogni env)
 ```
 
 ### `.env.example` aggiornato
@@ -333,30 +333,34 @@ Esempi concreti:
 
 I test in `pkg/api/routes_test.go::TestHandleCreateWorkspace_MissingName_422`, `TestHandleCreatePost_MissingWorkspaceID_422`, `TestHandleCreatePost_NoTargets_422`, `TestHandleCreatePost_BadTargetID_422`, e il `TestPostsAPI_Create_BadStatus_400` in `pkg/api/posts_test.go` lockano il contract — qualsiasi regressione qui rompe `go test ./pkg/api/...`.
 
-### 13.2 Lenient-auth: fallback `userID=1` (solo test/legacy)
+### 13.2 Auth strict-only (Taglio 1.1, post-rollout)
 
-Quando `STRICT_JWT_AUTH=false` (default per il dev locale e la finestra di rollback legacy), i handler workspace/post usano `userID=1` come fallback se né il JWT né un body/query `user_id` sono presenti. È una scelta **di test/legacy**, NON di produzione:
+Il fallback lenient `userID=1` è stato **eliminato** nel Taglio 1.1. Ogni handler ora
+deriva l'identità esclusivamente dal JWT di sessione (e in futuro da API key, Taglio 1.2).
+Non esiste più:
 
-- Il guard fail-fast in `cmd/server/main.go` rifiuta di partire con `APP_ENV=production && !STRICT_JWT_AUTH`, quindi in produzione il branch lenient è irraggiungibile.
-- Il fallback permette ai test di chiamare gli endpoint senza wirare un JWT issuer, mantenendo il test suite compatto.
-- Se devi aggiungere un nuovo handler che usa l'identità utente, replica il pattern in `handleCreatePost` / `handleCreateWorkspace` (vedi `pkg/api/posts.go` e `pkg/api/workspaces.go`):
+- la env var `STRICT_JWT_AUTH`
+- il campo `Config.StrictJWTAuth`
+- i flag `strictAuth` su `Router`, `NewRouter`, e i tre helper di test (`newTestRouter`, `newPostsTestRouter`, `newWorkspaceTestRouter`)
+- il fallback `userID=1` in `requireUserOrDefault`, `resolveUserID` e nel guard fail-fast `APP_ENV=production && !strict`
+
+L'helper unico è `requireUserID`:
 
 ```go
-userID := resolveUserID(req, 0, r.strictAuth)
-if userID == 0 {
-    if r.strictAuth {
-        writeError(w, http.StatusUnauthorized, "user identity required")
-        return
+func requireUserID(w http.ResponseWriter, req *http.Request, r *Router) (int64, bool) {
+    uid, ok := auth.UserIDFromContext(req.Context())
+    if !ok || uid <= 0 {
+        writeError(w, http.StatusUnauthorized, "missing user identity")
+        return 0, false
     }
-    // Lenient / legacy-fallback: when STRICT_JWT_AUTH=false and no JWT
-    // is present, default to a synthetic user id (1) so the handler
-    // stays testable. In production STRICT_JWT_AUTH defaults to true,
-    // so this branch is unreachable.
-    userID = 1
+    return uid, true
 }
 ```
 
-**NON** introdurre un nuovo helper che legge un body fallback (`pubReq.UserID`) come fa `handlePublishPost` — i handler workspace/post non leggono un body fallback per design. I test esistenti in `pkg/api/posts_test.go` e `pkg/api/workspaces_test.go` usano `strictAuth=false` e si aspettano il fallback a 1.
+Tutti gli endpoint protetti (workspaces, posts, publish, publish-all, accounts, storage)
+chiamano `requireUserID` come prima riga. Nessun handler legge `user_id` dal body o dalla
+query. I test ora iniettano un Bearer JWT via `issueTestJWT(t, 1)` invece di affidarsi al
+fallback lenient (vedi `pkg/api/posts_test.go` e `pkg/api/workspaces_test.go`).
 
 ### 13.3 `createPostResponse` dual-shape (top-level + "post" key annidato)
 
@@ -399,12 +403,12 @@ Se devi cambiare la response shape, aggiorna **entrambi** i test file + il docst
 ## File di riferimento
 
 - `internal/config/config.go` — env validation fail-fast + `EnforceProductionInvariants` (TODO: da estrarre)
-- `internal/auth/jwt.go` — middleware strict/legacy modes
+- `internal/auth/jwt.go` — middleware strict-only (Taglio 1.1)
 - `pkg/api/handlers.go` — `Router` struct, `NewRouter`, `Setup`, CORS + logging middleware, pre-existing routes (health, OAuth, publish, listAccounts, metrics)
 - `pkg/api/workspaces.go` — `/api/v1/workspaces` CRUD handlers; 422 vs 400 contract (§13.1); lenient-auth fallback (§13.2)
 - `pkg/api/posts.go` — `/api/v1/posts` CRUD handlers; 422 vs 400 contract (§13.1); lenient-auth fallback (§13.2); `createPostResponse` dual-shape (§13.3)
 - `pkg/api/storage.go` — `/api/v1/storage/upload-url` handler
-- `cmd/server/main.go` — fail-fast guard `APP_ENV=production && !STRICT_JWT_AUTH`; auto-migrate on boot
+- `cmd/server/main.go` — auto-migrate on boot (rimosso fail-fast guard legacy in Taglio 1.1)
 - `web/src/lib/auth.ts` — `authedFetch()`, `probeBackend()`, JWT helpers
 - `web/src/lib/probe-cache.ts` — cache 5min per /health + force-clear
 - `web/src/lib/probe-display.ts` — banner copy per ogni `ProbeFailureReason`; hint uses `window.location.origin`

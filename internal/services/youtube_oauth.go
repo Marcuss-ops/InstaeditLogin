@@ -39,7 +39,7 @@ func NewYouTubeOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepos
 	}, nil
 }
 
-func (s *YouTubeOAuthService) GetPlatform() string { return models.PlatformYouTube }
+func (s *YouTubeOAuthService) Name() string { return models.PlatformYouTube }
 
 func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 	params := url.Values{}
@@ -76,6 +76,54 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
 	}
 
 	return profile, tokenData, nil
+}
+
+// Validate calls the Google userinfo endpoint to verify the access token.
+func (s *YouTubeOAuthService) Validate(ctx context.Context, accessToken, platformUserID string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"https://www.googleapis.com/oauth2/v2/userinfo", nil)
+	if err != nil {
+		return fmt.Errorf("youtube validate request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("youtube validate failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("youtube validate returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// Revoke calls Google's OAuth 2.0 token revocation endpoint.
+func (s *YouTubeOAuthService) Revoke(ctx context.Context, accessToken string) error {
+	body := url.Values{}
+	body.Set("token", accessToken)
+
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		"https://oauth2.googleapis.com/revoke",
+		strings.NewReader(body.Encode()))
+	if err != nil {
+		return fmt.Errorf("youtube revoke request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("youtube revoke failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("youtube revoke returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
 }
 
 // RefreshOAuthToken exchanges a YouTube refresh token for a new access token.

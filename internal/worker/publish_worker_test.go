@@ -100,7 +100,7 @@ type mockPlatformService struct {
 	publishCalls     int
 }
 
-func (m *mockPlatformService) GetPlatform() string { return m.platform }
+func (m *mockPlatformService) Name() string { return m.platform }
 func (m *mockPlatformService) GetLoginURL(state string) string {
 	panic("GetLoginURL not used in worker tests")
 }
@@ -135,10 +135,12 @@ func (m *mockPlatformService) EnsureFreshToken(ctx context.Context, accountID in
 // interval is small (10ms) but irrelevant — the tests call publishTarget
 // directly rather than driving the Run loop.
 func newTestWorker(posts *mockPostStore, users *mockUserStore, svc *mockPlatformService) *PublishWorker {
+	reg := services.NewPlatformRegistry()
+	reg.RegisterPlatformService(svc.Name(), svc)
 	return NewPublishWorker(
 		posts,
 		users,
-		map[string]services.PlatformService{"meta": svc},
+		reg,
 		10*time.Millisecond,
 		nil, // inherit slog.Default()
 	)

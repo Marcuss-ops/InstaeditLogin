@@ -20,16 +20,37 @@ type User struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Account status constants for the lifecycle of a linked social account.
+const (
+	AccountStatusActive         = "active"
+	AccountStatusExpired        = "expired"
+	AccountStatusReauthRequired = "reauth_required"
+	AccountStatusRevoked        = "revoked"
+	AccountStatusDisconnected   = "disconnected"
+	AccountStatusError          = "error"
+)
+
 // PlatformAccount links a User to a social platform profile.
 type PlatformAccount struct {
-	ID             int64     `json:"id"`
-	UserID         int64     `json:"user_id"`
-	Platform       string    `json:"platform"`
-	PlatformUserID string    `json:"platform_user_id"`
-	Username       string    `json:"username"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID               int64      `json:"id"`
+	UserID           int64      `json:"user_id"`
+	Platform         string     `json:"platform"`
+	PlatformUserID   string     `json:"platform_user_id"`
+	Username         string     `json:"username"`
+	Status           string     `json:"status"`
+	ConnectedAt      *time.Time `json:"connected_at,omitempty"`
+	LastValidatedAt  *time.Time `json:"last_validated_at,omitempty"`
+	LastRefreshAt    *time.Time `json:"last_refresh_at,omitempty"`
+	ReauthRequiredAt *time.Time `json:"reauth_required_at,omitempty"`
+	LastErrorCode    string     `json:"last_error_code,omitempty"`
+	LastErrorMessage string     `json:"last_error_message,omitempty"`
+	Metadata         Metadata   `json:"metadata,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
+
+// Metadata is a generic JSONB container for platform-specific account data.
+type Metadata map[string]interface{}
 
 // Token represents an encrypted OAuth token stored in the database.
 type Token struct {

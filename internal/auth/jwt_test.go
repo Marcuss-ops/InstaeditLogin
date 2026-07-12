@@ -63,14 +63,15 @@ func TestVerifyInvalidSignature(t *testing.T) {
 	}
 }
 
-func TestMiddleware_StrictRejectsMissing(t *testing.T) {
+func TestMiddleware_RejectsMissing(t *testing.T) {
+	// Taglio 1.1: missing Authorization header → 401. No lenient fallback.
 	m := NewManager(testSecret, 24)
 	called := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	})
-	h := m.Middleware(true, next)
+	h := m.Middleware(next)
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -82,12 +83,12 @@ func TestMiddleware_StrictRejectsMissing(t *testing.T) {
 	}
 }
 
-func TestMiddleware_StrictRejectsInvalidScheme(t *testing.T) {
+func TestMiddleware_RejectsInvalidScheme(t *testing.T) {
 	m := NewManager(testSecret, 24)
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	req.Header.Set("Authorization", "Token xyz")
 	w := httptest.NewRecorder()
-	m.Middleware(true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})).ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
@@ -95,7 +96,28 @@ func TestMiddleware_StrictRejectsInvalidScheme(t *testing.T) {
 	}
 }
 
-func TestMiddleware_StrictAllowValidToken(t *testing.T) {
+func TestMiddleware_RejectsBogusBearer(t *testing.T) {
+	// A Bearer prefix with an unparseable token MUST be rejected with 401,
+	// not silently allowed through (Taglio 1.1: no lenient mode).
+	m := NewManager(testSecret, 24)
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Authorization", "Bearer this.is.bogus")
+	w := httptest.NewRecorder()
+	m.Middleware(next).ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", w.Code)
+	}
+	if called {
+		t.Fatal("next handler should not have been called")
+	}
+}
+
+func TestMiddleware_AllowValidToken(t *testing.T) {
 	m := NewManager(testSecret, 24)
 	tok, _, _, _ := m.Issue(99)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,48 +130,8 @@ func TestMiddleware_StrictAllowValidToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()
-	m.Middleware(true, next).ServeHTTP(w, req)
+	m.Middleware(next).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
-	}
-}
-
-func TestMiddleware_LenientAllowsMissing(t *testing.T) {
-	m := NewManager(testSecret, 24)
-	called := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	})
-	req := httptest.NewRequest(http.MethodGet, "/x", nil)
-	w := httptest.NewRecorder()
-	m.Middleware(false, next).ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200 lenient, got %d", w.Code)
-	}
-	if !called {
-		t.Fatal("next handler should have been called")
-	}
-	if _, ok := UserIDFromContext(req.Context()); ok {
-		t.Fatal("uid should not be set when Authorization is missing in lenient mode")
-	}
-}
-
-func TestMiddleware_LenientRejectsBogusButContinues(t *testing.T) {
-	m := NewManager(testSecret, 24)
-	called := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	})
-	req := httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.Header.Set("Authorization", "Bearer this.is.bogus")
-	w := httptest.NewRecorder()
-	m.Middleware(false, next).ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200 lenient+invalid token, got %d", w.Code)
-	}
-	if !called {
-		t.Fatal("next handler should have been called")
 	}
 }

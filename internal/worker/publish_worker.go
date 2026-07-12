@@ -1,7 +1,7 @@
 // Package worker implements background processes that run alongside the
 // HTTP server: the publish worker drives the scheduled-post fan-out, picking
 // up post_targets whose scheduled_at <= NOW() and dispatching them through
-// the appropriate per-platform PlatformService implementation.
+// the appropriate per-platform implementation via the PlatformRegistry.
 package worker
 
 import (
@@ -52,11 +52,11 @@ type PublisherUserStore interface {
 // `publishing` → `published | failed`) acts as a logical lock so two worker
 // instances (future-sh) cannot double-publish the same target.
 type PublishWorker struct {
-	postRepo  PublisherPostStore
-	userRepo  PublisherUserStore
-	platforms map[string]services.PlatformService
-	interval  time.Duration
-	logger    *slog.Logger
+	postRepo PublisherPostStore
+	userRepo PublisherUserStore
+	registry *services.PlatformRegistry
+	interval time.Duration
+	logger   *slog.Logger
 }
 
 // NewPublishWorker wires the dependencies. interval <= 0 falls back to a safe
@@ -65,7 +65,7 @@ type PublishWorker struct {
 func NewPublishWorker(
 	postRepo PublisherPostStore,
 	userRepo PublisherUserStore,
-	platforms map[string]services.PlatformService,
+	registry *services.PlatformRegistry,
 	interval time.Duration,
 	logger *slog.Logger,
 ) *PublishWorker {
@@ -76,11 +76,11 @@ func NewPublishWorker(
 		logger = slog.Default()
 	}
 	return &PublishWorker{
-		postRepo:  postRepo,
-		userRepo:  userRepo,
-		platforms: platforms,
-		interval:  interval,
-		logger:    logger,
+		postRepo: postRepo,
+		userRepo: userRepo,
+		registry: registry,
+		interval: interval,
+		logger:   logger,
 	}
 }
 
@@ -207,8 +207,8 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	}
 
 	// 4. Resolve platform service
-	p, ok := w.platforms[account.Platform]
-	if !ok {
+	p, err := w.registry.Resolve(account.Platform)
+	if err != nil {
 		return w.markFailed(target, "no platform service registered for: "+account.Platform)
 	}
 

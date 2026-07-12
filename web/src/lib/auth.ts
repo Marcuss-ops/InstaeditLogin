@@ -218,7 +218,7 @@ export async function probeBackend(
       reason: "http_error",
       message: `Backend returned HTTP ${response.status}.`,
     };
-  } catch (err) {
+  } catch {
     clearTimeout(timer);
     const aborted = controller.signal.aborted;
     if (aborted) {
@@ -244,7 +244,9 @@ export async function probeBackend(
       externalSignal.removeEventListener("abort", onExternalAbort);
     }
   }
-}/**
+}
+
+/**
  * Returns a teardown function that re-runs `onChange` whenever the tab regains
  * focus or becomes visible. Useful for self-healing: a developer noticing the
  * backend 404 can start the server, switch back to the tab, and the UI snaps
@@ -342,8 +344,7 @@ export async function probeAuthBoundary(
 			reason: "not_401",
 			message:
 				"Protected endpoint answered without rejecting the unauthenticated request. The auth middleware may be mis-wired or CORS is bleating through incorrectly.",
-		};
-	} catch (err) {
+		};  } catch {
 		clearTimeout(timer);
 		if (controller.signal.aborted) {
 			return {

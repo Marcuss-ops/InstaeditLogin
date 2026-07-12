@@ -96,17 +96,14 @@ type Config struct {
 	EncryptionKey string
 
 	// JWT
-	JWTSecret     string
-	JWTTTLHours   int
-	StrictJWTAuth bool
+	JWTSecret   string
+	JWTTTLHours int
 
 	// Logging
 	LogLevel string
 
 	// AppEnv is the deployment environment. Must be one of "dev",
-	// "staging", "production". The "production" value triggers
-	// fail-fast checks on insecure defaults (see cmd/server/main.go
-	// for STRICT_JWT_AUTH). Default "dev" so missing env-var on local
+	// "staging", "production". Default "dev" so missing env-var on local
 	// shouldn't surprise developers.
 	AppEnv string
 
@@ -175,7 +172,6 @@ func Load() (*Config, error) {
 		EncryptionKey:                getEnv("ENCRYPTION_KEY", ""),
 		JWTSecret:                    getEnv("JWT_SECRET", ""),
 		JWTTTLHours:                  getEnvInt("JWT_TTL_HOURS", 168),
-		StrictJWTAuth:                getEnvBool("STRICT_JWT_AUTH", true),
 		LogLevel:                     getEnv("LOG_LEVEL", "info"),
 		AppEnv:                       getEnv("APP_ENV", "dev"),
 		PublishWorkerIntervalSeconds: getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),

@@ -44,7 +44,7 @@ func NewTwitterOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepos
 	}, nil
 }
 
-func (s *TwitterOAuthService) GetPlatform() string { return models.PlatformTwitter }
+func (s *TwitterOAuthService) Name() string { return models.PlatformTwitter }
 
 func (s *TwitterOAuthService) GetLoginURL(state string) string {
 	// Generate a cryptographically random PKCE code_verifier (64 bytes → 86 chars base64url)
@@ -108,6 +108,55 @@ func (s *TwitterOAuthService) HandleCallback(ctx context.Context, state, code st
 	}
 
 	return profile, tokenData, nil
+}
+
+// Validate calls the Twitter /2/users/me endpoint to verify the access token.
+func (s *TwitterOAuthService) Validate(ctx context.Context, accessToken, platformUserID string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"https://api.twitter.com/2/users/me?user.fields=id", nil)
+	if err != nil {
+		return fmt.Errorf("twitter validate request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("twitter validate failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("twitter validate returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// Revoke calls Twitter's OAuth 2.0 token revocation endpoint.
+func (s *TwitterOAuthService) Revoke(ctx context.Context, accessToken string) error {
+	body := url.Values{}
+	body.Set("token", accessToken)
+	body.Set("client_id", s.cfg.TwitterClientID)
+
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		"https://api.twitter.com/2/oauth2/revoke",
+		strings.NewReader(body.Encode()))
+	if err != nil {
+		return fmt.Errorf("twitter revoke request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("twitter revoke failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("twitter revoke returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
 }
 
 // RefreshOAuthToken exchanges a Twitter refresh token for a new access token.

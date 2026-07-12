@@ -20,15 +20,10 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 )
 
-// authModeLabel returns a short banner used in the startup log line so an
-// operator can immediately tell whether the server is in strict mode (safe
-// default) or legacy fallback (rollback window, accepts user_id from body).
-func authModeLabel(strict bool) string {
-	if strict {
-		return "strict (Bearer required)"
-	}
-	return "legacy (publish trusts user_id — rollback only)"
-}
+// authModeLabel removed in Taglio 1.1: the JWT middleware is strict by
+// construction (every protected request must carry a valid Bearer token,
+// no synthetic fallback, no body/query user_id). The startup log no
+// longer needs a "mode" banner.
 
 func main() {
 	cfg, err := config.Load()
@@ -46,18 +41,11 @@ func main() {
 
 	slog.Info("Starting InstaEditLogin server v2.0.0...")
 
-	slog.Info("Environment", "app_env", cfg.AppEnv, "auth_mode", authModeLabel(cfg.StrictJWTAuth))
+	slog.Info("Environment", "app_env", cfg.AppEnv, "auth", "strict (JWT Bearer required on every protected route)")
 
-	// Fail-fast security guard: in production, JWT auth MUST be strict so
-	// the server can't be tricked into trusting user_id from request bodies
-	// (legacy mode). Without this check a misconfigured production deploy
-	// would accept any user_id sent in /api/v1/posts/publish — a privilege-
-	// escalation vector.
-	if cfg.AppEnv == "production" && !cfg.StrictJWTAuth {
-		slog.Error("SECURITY: STRICT_JWT_AUTH must be enabled in production. Refusing to start with non-strict auth. Set STRICT_JWT_AUTH=true explicitly, or change APP_ENV to 'dev'/'staging' for non-prod deploys.",
-			"app_env", cfg.AppEnv, "strict_jwt_auth", cfg.StrictJWTAuth)
-		os.Exit(1)
-	}
+	// Taglio 1.1: the legacy-mode fail-fast guard is gone. There is no
+	// fallback that trusts request bodies/queries — the JWT middleware is
+	// strict by construction in every environment.
 
 	db, err := database.Connect(cfg)
 	if err != nil {
@@ -88,14 +76,14 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 	tokenRepo := repository.NewTokenRepository(db)
-	platforms := make(map[string]services.PlatformService)
+	registry := services.NewPlatformRegistry()
 
 	metaSvc, err := services.NewFacebookOAuthService(cfg, tokenRepo)
 	if err != nil {
 		slog.Error("Failed to create Meta OAuth service", "error", err)
 		os.Exit(1)
 	}
-	platforms[metaSvc.GetPlatform()] = metaSvc
+	registry.RegisterPlatformService(metaSvc.Name(), metaSvc)
 	slog.Info("Meta/Facebook OAuth provider registered")
 
 	if cfg.TikTokClientKey != "" {
@@ -103,7 +91,7 @@ func main() {
 		if err != nil {
 			slog.Warn("Failed to create TikTok OAuth service", "error", err)
 		} else {
-			platforms[tiktokSvc.GetPlatform()] = tiktokSvc
+			registry.RegisterPlatformService(tiktokSvc.Name(), tiktokSvc)
 			slog.Info("TikTok OAuth provider registered")
 		}
 	} else {
@@ -115,7 +103,7 @@ func main() {
 		if err != nil {
 			slog.Warn("Failed to create Twitter OAuth service", "error", err)
 		} else {
-			platforms[twitterSvc.GetPlatform()] = twitterSvc
+			registry.RegisterPlatformService(twitterSvc.Name(), twitterSvc)
 			slog.Info("Twitter OAuth provider registered")
 		}
 	} else {
@@ -127,7 +115,7 @@ func main() {
 		if err != nil {
 			slog.Warn("Failed to create YouTube OAuth service", "error", err)
 		} else {
-			platforms[youtubeSvc.GetPlatform()] = youtubeSvc
+			registry.RegisterPlatformService(youtubeSvc.Name(), youtubeSvc)
 			slog.Info("YouTube OAuth provider registered")
 		}
 	} else {
@@ -139,7 +127,7 @@ func main() {
 		if err != nil {
 			slog.Warn("Failed to create LinkedIn OAuth service", "error", err)
 		} else {
-			platforms[linkedinSvc.GetPlatform()] = linkedinSvc
+			registry.RegisterPlatformService(linkedinSvc.Name(), linkedinSvc)
 			slog.Info("LinkedIn OAuth provider registered")
 		}
 	} else {
@@ -147,6 +135,7 @@ func main() {
 	}
 
 	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours)
+
 	// Auto-add the configured FrontendURL to the CORS allowlist when none
 	// was provided via CORS_ALLOWED_ORIGINS, so a single env var is enough
 	// for local dev. Production deployments still set the explicit list.
@@ -176,12 +165,10 @@ func main() {
 	} else {
 		slog.Warn("storage provider: none configured (set SUPABASE_URL+SUPABASE_SERVICE_KEY+SUPABASE_BUCKET OR AWS_REGION+AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY+AWS_S3_BUCKET for /api/v1/storage/upload-url)")
 	}
-
-	router := api.NewRouter(platforms, userRepo, authMgr, cfg.StrictJWTAuth, cfg.FrontendURL, corsOrigins, opts...)
+	router := api.NewRouter(registry, userRepo, authMgr, cfg.FrontendURL, corsOrigins, opts...)
 	slog.Info("Router configured",
 		"jwt_ttl_hours", cfg.JWTTTLHours,
-		"strict_jwt_auth", cfg.StrictJWTAuth,
-		"auth_mode", authModeLabel(cfg.StrictJWTAuth),
+		"auth", "strict (JWT bearer required)",
 		"frontend_url", cfg.FrontendURL,
 		"cors_origins", corsOrigins)
 	handler := router.Setup()
@@ -222,7 +209,7 @@ func main() {
 		publishWorker := worker.NewPublishWorker(
 			repository.NewPostRepository(db),
 			repository.NewUserRepository(db),
-			platforms,
+			registry,
 			time.Duration(cfg.PublishWorkerIntervalSeconds)*time.Second,
 			slog.Default(),
 		)

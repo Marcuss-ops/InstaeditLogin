@@ -100,7 +100,7 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
 		return
 	}
-	userID, ok := requireUserOrDefault(w, req, r)
+	userID, ok := requireUserID(w, req, r)
 	if !ok {
 		return
 	}
@@ -315,7 +315,7 @@ func (r *Router) handleGetPost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
 		return
 	}
-	userID, ok := requireUserOrDefault(w, req, r)
+	userID, ok := requireUserID(w, req, r)
 	if !ok {
 		return
 	}

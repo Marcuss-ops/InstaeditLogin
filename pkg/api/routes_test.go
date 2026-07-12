@@ -22,22 +22,17 @@ import (
 
 // mockPlatformService lets each test override only the methods it cares about.
 type mockPlatformService struct {
-	platform       string
-	loginURL       string
-	handleCallback func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error)
-	publishFn      func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
-	saveTokenFn    func(platformAccountID int64, tokenData *models.TokenData) error
-	ensureFreshFn  func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error)
-	refreshFn      func(ctx context.Context, refreshToken string) (*models.TokenData, error)
-	// handleCallbackCalls counts HandleCallback invocations. Used by
-	// the verdict-§2 reject tests to prove the platform's code-
-	// exchange code does NOT run when the state verification fails
-	// (otherwise an attacker could complete a code exchange with a
-	// forged state).
+	platform            string
+	loginURL            string
+	handleCallback      func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error)
+	publishFn           func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
+	saveTokenFn         func(platformAccountID int64, tokenData *models.TokenData) error
+	ensureFreshFn       func(ctx context.Context, accountID int64, tokenType string, refresh services.TokenRefresher) (*models.OAuthToken, error)
+	refreshFn           func(ctx context.Context, refreshToken string) (*models.TokenData, error)
 	handleCallbackCalls int
 }
 
-func (m *mockPlatformService) GetPlatform() string             { return m.platform }
+func (m *mockPlatformService) Name() string                    { return m.platform }
 func (m *mockPlatformService) GetLoginURL(state string) string { return m.loginURL + "?state=" + state }
 func (m *mockPlatformService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	m.handleCallbackCalls++
@@ -76,8 +71,11 @@ func (m *mockPlatformService) EnsureFreshToken(ctx context.Context, accountID in
 
 // mockUserStore implements UserStore with configurable function fields.
 type mockUserStore struct {
-	findOrCreateFn func(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error)
-	listFn         func(userID int64, platform string) ([]*models.PlatformAccount, error)
+	findOrCreateFn          func(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error)
+	listFn                  func(userID int64, platform string) ([]*models.PlatformAccount, error)
+	findPlatformAccountFn   func(id int64) (*models.PlatformAccount, error)
+	updatePlatformAccountFn func(account *models.PlatformAccount) error
+	deletePlatformAccountFn func(id int64) error
 }
 
 func (m *mockUserStore) FindOrCreateUserByPlatform(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error) {
@@ -86,11 +84,26 @@ func (m *mockUserStore) FindOrCreateUserByPlatform(profile *models.PlatformProfi
 func (m *mockUserStore) ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error) {
 	return m.listFn(userID, platform)
 }
+func (m *mockUserStore) FindPlatformAccountByID(id int64) (*models.PlatformAccount, error) {
+	if m.findPlatformAccountFn != nil {
+		return m.findPlatformAccountFn(id)
+	}
+	return nil, nil
+}
+func (m *mockUserStore) UpdatePlatformAccount(account *models.PlatformAccount) error {
+	if m.updatePlatformAccountFn != nil {
+		return m.updatePlatformAccountFn(account)
+	}
+	return nil
+}
+func (m *mockUserStore) DeletePlatformAccount(id int64) error {
+	if m.deletePlatformAccountFn != nil {
+		return m.deletePlatformAccountFn(id)
+	}
+	return nil
+}
 
-// mockWorkspaceStore implements WorkspaceStore with configurable function
-// fields. Long-form names (listByOwnerFn, etc.) let workspaces_test.go
-// reuse this single struct without redeclaring — Go's test files share a
-// package-level namespace and would otherwise reject duplicates.
+// mockWorkspaceStore implements WorkspaceStore with configurable function fields.
 type mockWorkspaceStore struct {
 	createFn      func(*models.Workspace) error
 	findByIDFn    func(id int64) (*models.Workspace, error)
@@ -108,11 +121,6 @@ func (m *mockWorkspaceStore) FindByID(id int64) (*models.Workspace, error) {
 	if m.findByIDFn != nil {
 		return m.findByIDFn(id)
 	}
-	// Default behavior: return a real workspace owned by user 1 so the new
-	// workspace-ownership checks in handleCreatePost / handleGetPost pass
-	// for tests that don't wire findByIDFn explicitly. Tests that need
-	// cross-owner behavior (e.g. TestHandleCreatePost_CrossOwnerWorkspace_403)
-	// configure findByIDFn to return a workspace owned by 999.
 	return &models.Workspace{
 		ID:        id,
 		Name:      "default",
@@ -134,12 +142,6 @@ func (m *mockWorkspaceStore) Delete(id int64) error {
 }
 
 // mockPostStore implements PostStore with configurable function fields.
-// Update (used by handleSchedulePost) and Save (used by handleAddTarget)
-// are part of the unified PostStore interface in handlers.go; their
-// no-op fallback lets each test override only what it exercises.
-// Long-form name (listByWorkspaceFn) lets posts_test.go reuse this
-// single struct without redeclaring — Go's test files share a
-// package-level namespace and would otherwise reject duplicates.
 type mockPostStore struct {
 	createFn          func(*models.Post, []*models.PostTarget) error
 	findByIDFn        func(id int64) (*models.Post, error)
@@ -152,9 +154,6 @@ func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget) 
 	if m.createFn != nil {
 		return m.createFn(post, targets)
 	}
-	// Default behavior: assign deterministic IDs and a recent created_at so
-	// the handler's 201 response can be decoded by tests that don't
-	// override createFn (mirrors the real DB RETURNING clause semantics).
 	post.ID = 100
 	post.CreatedAt = time.Now()
 	for i, t := range targets {
@@ -167,10 +166,6 @@ func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
 	if m.findByIDFn != nil {
 		return m.findByIDFn(id)
 	}
-	// Default behavior: return a real (draft) post for any id so handlers
-	// that pre-load the post (handleAddTarget, handleSchedulePost) work
-	// without each test wiring findByIDFn explicitly. Tests that need a
-	// 404 still configure findByIDFn to return sql.ErrNoRows.
 	return &models.Post{
 		ID:          id,
 		WorkspaceID: 1,
@@ -198,9 +193,7 @@ func (m *mockPostStore) Save(target *models.PostTarget) error {
 	return m.saveFn(target)
 }
 
-// mockStorageProvider implements StorageProvider with configurable function
-// fields. Captures SignUpload args so tests can assert key construction
-// (user_id scoping, UUID4 uniqueness, name sanitization).
+// mockStorageProvider implements StorageProvider with configurable function fields.
 type mockStorageProvider struct {
 	grant               *services.UploadGrant
 	err                 error
@@ -229,35 +222,33 @@ func (m *mockStorageProvider) SignUpload(ctx context.Context, userID int64, key,
 
 const testJWTSecret = "test-jwt-secret-must-be-long-enough-for-hs256"
 
+func withBearerJWT(t *testing.T, req *http.Request, userID int64) {
+	t.Helper()
+	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, userID))
+}
+
 // newTestRouter builds a Router wired with a mock platform and store.
-// By default strictAuth=false (so publish is reachable without Bearer).
 func newTestRouter(
 	platformSvc *mockPlatformService,
 	store *mockUserStore,
-	strictAuth bool,
 	frontendURL string,
 	opts ...RouterOption,
 ) *Router {
-	platforms := map[string]services.PlatformService{
-		"meta":    platformSvc,
-		"tiktok":  platformSvc,
-		"twitter": platformSvc,
-	}
+	registry := services.NewPlatformRegistry()
+	registry.RegisterPlatformService(platformSvc.Name(), platformSvc)
+	registry.RegisterPlatformService("meta", platformSvc)
+	registry.RegisterPlatformService("tiktok", platformSvc)
+	registry.RegisterPlatformService("twitter", platformSvc)
 	return NewRouter(
-		platforms,
+		registry,
 		store,
 		auth.NewManager(testJWTSecret, 24),
-		strictAuth,
 		frontendURL,
 		nil,
 		opts...,
 	)
 }
 
-// issueTestJWT issues a JWT for the given userID using the test secret.
-// Mirrors the pattern in TestHandlePublishPost_WithJWT_StrictMode and is
-// used by the protected-endpoint tests (workspaces + posts) so that
-// `requireUserID` can read back the authenticated user from context.
 func issueTestJWT(t *testing.T, userID int64) string {
 	t.Helper()
 	authMgr := auth.NewManager(testJWTSecret, 24)
@@ -268,7 +259,6 @@ func issueTestJWT(t *testing.T, userID int64) string {
 	return tok
 }
 
-// successCallback returns canned HandleCallback results.
 var successCallback = func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	return &models.PlatformProfile{
 			PlatformUserID: "pf-123",
@@ -282,18 +272,12 @@ var successCallback = func(ctx context.Context, state, code string) (*models.Pla
 		}, nil
 }
 
-// successFindOrCreate returns a canned user+account pair.
 var successFindOrCreate = func(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error) {
 	return &models.User{ID: 1, Name: profile.Name, Email: profile.Email},
 		&models.PlatformAccount{ID: 10, UserID: 1, Platform: platform, PlatformUserID: profile.PlatformUserID, Username: profile.Username},
 		nil
 }
 
-// setOAuthStateCookieForTest sets the per-provider oauth state cookie
-// on a request, simulating what handleLogin does. The callback's
-// verifyOAuthState helper reads this cookie to constant-time-compare
-// it against the state query param. Used by the handleCallback tests
-// to set up a valid post-login state.
 func setOAuthStateCookieForTest(req *http.Request, provider, state string) {
 	req.AddCookie(&http.Cookie{
 		Name:     OAuthStateCookieName(provider),
@@ -312,10 +296,11 @@ func setOAuthStateCookieForTest(req *http.Request, provider, state string) {
 func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta", loginURL: "https://auth.example.com/oauth"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/login", nil)
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusFound {
@@ -325,11 +310,6 @@ func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
 	if !strings.HasPrefix(loc, "https://auth.example.com/oauth?state=") {
 		t.Fatalf("unexpected redirect: %s", loc)
 	}
-	// Verdict §2: state must be a server-generated random base64
-	// URL-safe token (32 random bytes → 43 chars), NOT the old
-	// "meta_default" placeholder. Also verify the state in the
-	// redirect matches the oauth_state_meta cookie (the binding
-	// that defeats login CSRF).
 	_, after, ok := strings.Cut(loc, "state=")
 	if !ok {
 		t.Fatalf("state= not found in redirect: %s", loc)
@@ -344,7 +324,6 @@ func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
 	if _, err := base64.RawURLEncoding.DecodeString(stateParam); err != nil {
 		t.Fatalf("state must be base64 URL-safe: %v (state=%q)", err, stateParam)
 	}
-	// Cookie must be set with the same state value.
 	var cookie *http.Cookie
 	for _, c := range w.Result().Cookies() {
 		if c.Name == OAuthStateCookieName("meta") {
@@ -367,10 +346,6 @@ func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
 	if cookie.SameSite != http.SameSiteLaxMode {
 		t.Errorf("oauth state cookie SameSite: want Lax, got %v", cookie.SameSite)
 	}
-	// MaxAge: must be 600s (10 minutes per the oauthStateMaxAge
-	// constant). A future "simplification" that drops MaxAge would
-	// make the cookie a session cookie (effectively forever) and
-	// silently widen the CSRF attack window.
 	if cookie.MaxAge != int(oauthStateMaxAge.Seconds()) {
 		t.Errorf("oauth state cookie MaxAge: want %d, got %d (must match oauthStateMaxAge)", int(oauthStateMaxAge.Seconds()), cookie.MaxAge)
 	}
@@ -379,10 +354,11 @@ func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
 func TestHandleLogin_UnsupportedProvider(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta", loginURL: "https://auth.example.com"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/unknown/login", nil)
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -390,27 +366,20 @@ func TestHandleLogin_UnsupportedProvider(t *testing.T) {
 	}
 }
 
-// TestHandleLogin_IgnoresClientState locks in the verdict §2 contract:
-// the server is the only party that can authoritatively bind the OAuth
-// state to a browser session, so the client's ?state= query param is
-// IGNORED. The redirect uses a server-generated random token, and the
-// oauth_state_{provider} cookie stores the same token. This defeats
-// login CSRF (an attacker can no longer pre-compute a state and trick
-// the victim's browser into completing their flow).
 func TestHandleLogin_IgnoresClientState(t *testing.T) {
 	svc := &mockPlatformService{platform: "twitter", loginURL: "https://auth.twitter.com/auth"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/twitter/login?state=my-custom-state", nil)
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	loc := w.Header().Get("Location")
 	if strings.Contains(loc, "state=my-custom-state") {
 		t.Fatalf("server should IGNORE the client's ?state= (verdict §2); redirect leaked the client value: %s", loc)
 	}
-	// And the redirect should still carry a server-generated random state.
 	_, after, ok := strings.Cut(loc, "state=")
 	if !ok {
 		t.Fatalf("state= not found in redirect: %s", loc)
@@ -428,10 +397,11 @@ func TestHandleLogin_IgnoresClientState(t *testing.T) {
 func TestHandleCallback_MissingCode(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback", nil)
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -442,10 +412,11 @@ func TestHandleCallback_MissingCode(t *testing.T) {
 func TestHandleCallback_UnsupportedProvider(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/unknown/callback?code=abc", nil)
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -461,11 +432,12 @@ func TestHandleCallback_HandleCallbackError(t *testing.T) {
 		},
 	}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/twitter/callback?code=bad&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "twitter", "test-state")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
@@ -483,11 +455,12 @@ func TestHandleCallback_FindOrCreateError(t *testing.T) {
 			return nil, nil, fmt.Errorf("db error")
 		},
 	}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "meta", "test-state")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
@@ -506,11 +479,12 @@ func TestHandleCallback_SaveTokenError(t *testing.T) {
 	store := &mockUserStore{
 		findOrCreateFn: successFindOrCreate,
 	}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "meta", "test-state")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
@@ -526,11 +500,12 @@ func TestHandleCallback_Success_JSONResponse(t *testing.T) {
 	store := &mockUserStore{
 		findOrCreateFn: successFindOrCreate,
 	}
-	r := newTestRouter(svc, store, false, "") // empty frontendURL → JSON
+	r := newTestRouter(svc, store, "") // empty frontendURL → JSON
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "meta", "test-state")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -560,11 +535,12 @@ func TestHandleCallback_Success_FrontendRedirect(t *testing.T) {
 	store := &mockUserStore{
 		findOrCreateFn: successFindOrCreate,
 	}
-	r := newTestRouter(svc, store, false, "https://app.example.com")
+	r := newTestRouter(svc, store, "https://app.example.com")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "meta", "test-state")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusFound {
@@ -583,14 +559,31 @@ func TestHandleCallback_Success_FrontendRedirect(t *testing.T) {
 // handlePublishPost tests
 // ---------------------------------------------------------------------------
 
+func TestHandlePublishPost_MissingJWT_401(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "")
+
+	body := `{"platform":"meta","content_type":"text","caption":"hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", w.Code)
+	}
+}
+
 func TestHandlePublishPost_InvalidJSON(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -598,49 +591,16 @@ func TestHandlePublishPost_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestHandlePublishPost_MissingUserID_Strict(t *testing.T) {
-	svc := &mockPlatformService{platform: "meta"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, true, "") // strictAuth=true, no Bearer
-
-	body := `{"platform":"meta","content_type":"text","caption":"hello"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.Setup().ServeHTTP(w, req)
-
-	// JWT middleware rejects with 401 before handler runs.
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401, got %d", w.Code)
-	}
-}
-
-func TestHandlePublishPost_MissingUserID_Lenient(t *testing.T) {
-	svc := &mockPlatformService{platform: "meta"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "") // strictAuth=false, no user_id in body
-
-	body := `{"platform":"meta","content_type":"text","caption":"hello"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.Setup().ServeHTTP(w, req)
-
-	// No JWT, no fallback user_id → 400.
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
 func TestHandlePublishPost_UnsupportedPlatform(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	body := `{"user_id":1,"platform":"unknown","content_type":"text","caption":"hi"}`
+	body := `{"platform":"unknown","content_type":"text","caption":"hi"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -652,15 +612,16 @@ func TestHandlePublishPost_NoAccountLinked(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
-			return nil, nil // no accounts
+			return nil, nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	body := `{"user_id":1,"platform":"meta","content_type":"text","caption":"hi"}`
+	body := `{"platform":"meta","content_type":"text","caption":"hi"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -682,12 +643,13 @@ func TestHandlePublishPost_TokenRefreshFailed(t *testing.T) {
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	body := `{"user_id":1,"platform":"twitter","content_type":"text","caption":"hi"}`
+	body := `{"platform":"twitter","content_type":"text","caption":"hi"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
@@ -709,12 +671,13 @@ func TestHandlePublishPost_BadContentType(t *testing.T) {
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	body := `{"user_id":1,"platform":"meta","content_type":"unknown","caption":"hi"}`
+	body := `{"platform":"meta","content_type":"unknown","caption":"hi"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -742,12 +705,13 @@ func TestHandlePublishPost_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	body := `{"user_id":1,"platform":"meta","content_type":"video","media_url":"https://cdn.example.com/video.mp4","caption":"Check this out"}`
+	body := `{"platform":"meta","content_type":"video","media_url":"https://cdn.example.com/video.mp4","caption":"Check this out"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -783,28 +747,21 @@ func TestHandlePublishPost_PublishError(t *testing.T) {
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	body := `{"user_id":1,"platform":"meta","content_type":"text","caption":"test"}`
+	body := `{"platform":"meta","content_type":"text","caption":"test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
-	// Publish errors are not publishError, so they default to 500.
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestHandlePublishPost_WithJWT_StrictMode(t *testing.T) {
-	// Issue a real JWT and inject it. The handler should use the JWT uid, not the body user_id.
-	authMgr := auth.NewManager(testJWTSecret, 24)
-	tok, _, _, err := authMgr.Issue(42)
-	if err != nil {
-		t.Fatalf("issue: %v", err)
-	}
-
+func TestHandlePublishPost_BodyUserIDIgnored_TrustsJWT(t *testing.T) {
 	var capturedUserID int64
 	svc := &mockPlatformService{
 		platform: "meta",
@@ -823,28 +780,42 @@ func TestHandlePublishPost_WithJWT_StrictMode(t *testing.T) {
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, true, "")
+	r := newTestRouter(svc, store, "")
 
-	// Send body with user_id=999, but JWT says 42. Strict mode should use JWT.
 	body := `{"user_id":999,"platform":"meta","content_type":"text","caption":"jwt test"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 42)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
-	// Verify the JWT userID (42) was used, not the body's user_id (999).
 	if capturedUserID != 42 {
-		t.Fatalf("userID from context: want 42, got %d", capturedUserID)
+		t.Fatalf("userID from context: want 42 (JWT), got %d (must NOT use body user_id)", capturedUserID)
 	}
 }
 
 // ---------------------------------------------------------------------------
 // handlePublishAll tests
 // ---------------------------------------------------------------------------
+
+func TestHandlePublishAll_MissingJWT_401(t *testing.T) {
+	svc := &mockPlatformService{platform: "meta"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "")
+
+	body := `{"content_type":"text","caption":"hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", w.Code)
+	}
+}
 
 func TestHandlePublishAll_NoAccounts(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
@@ -853,12 +824,13 @@ func TestHandlePublishAll_NoAccounts(t *testing.T) {
 			return nil, nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	body := `{"user_id":1,"content_type":"text","caption":"hello"}`
+	body := `{"content_type":"text","caption":"hello"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -869,12 +841,13 @@ func TestHandlePublishAll_NoAccounts(t *testing.T) {
 func TestHandlePublishAll_InvalidContentType(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	body := `{"user_id":1,"content_type":"bogus","caption":"hi"}`
+	body := `{"content_type":"bogus","caption":"hi"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -894,20 +867,19 @@ func TestHandlePublishAll_Success_AllPlatforms(t *testing.T) {
 	}
 	store := &mockUserStore{
 		listFn: func(userID int64, platform string) ([]*models.PlatformAccount, error) {
-			// handlePublishAll calls with platform="" to get all accounts.
-			// publishToAccount does NOT call ListPlatformAccountsByUser again.
 			return []*models.PlatformAccount{
 				{ID: 10, UserID: 1, Platform: "meta", PlatformUserID: "fb-123", Username: "fbuser"},
 				{ID: 11, UserID: 1, Platform: "twitter", PlatformUserID: "tw-456", Username: "twuser"},
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	body := `{"user_id":1,"content_type":"text","caption":"hello world"}`
+	body := `{"content_type":"text","caption":"hello world"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -958,12 +930,13 @@ func TestHandlePublishAll_PartialFailures(t *testing.T) {
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	body := `{"user_id":1,"content_type":"text","caption":"hello"}`
+	body := `{"content_type":"text","caption":"hello"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish-all", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -1020,13 +993,13 @@ func TestHandleCreateWorkspace_Happy(t *testing.T) {
 			return nil
 		},
 	}
-	r := newTestRouter(svc, store, true, "", WithWorkspaceStore(wsStore))
+	r := newTestRouter(svc, store, "", WithWorkspaceStore(wsStore))
 
 	body := `{"name":"My Workspace"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1049,13 +1022,13 @@ func TestHandleCreateWorkspace_MissingName_422(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
-	r := newTestRouter(svc, store, true, "", WithWorkspaceStore(wsStore))
+	r := newTestRouter(svc, store, "", WithWorkspaceStore(wsStore))
 
 	body := `{}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnprocessableEntity {
@@ -1067,12 +1040,12 @@ func TestHandleCreateWorkspace_MalformedJSON_400(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
-	r := newTestRouter(svc, store, true, "", WithWorkspaceStore(wsStore))
+	r := newTestRouter(svc, store, "", WithWorkspaceStore(wsStore))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -1080,11 +1053,10 @@ func TestHandleCreateWorkspace_MalformedJSON_400(t *testing.T) {
 	}
 }
 
-// NotConfigured_501 fires BEFORE requireUserID, so no JWT context needed.
-func TestHandleCreateWorkspace_NotConfigured_501(t *testing.T) {
+func TestHandleCreateWorkspace_MissingJWT_401(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "") // no WithWorkspaceStore
+	r := newTestRouter(svc, store, "") // no WithWorkspaceStore
 
 	body := `{"name":"My Workspace"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(body))
@@ -1092,8 +1064,8 @@ func TestHandleCreateWorkspace_NotConfigured_501(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("want 501, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", w.Code)
 	}
 }
 
@@ -1102,14 +1074,14 @@ func TestHandleGetWorkspace_CrossOwner_404(t *testing.T) {
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{
 		findByIDFn: func(id int64) (*models.Workspace, error) {
-			return &models.Workspace{ID: id, Name: "Other", OwnerID: 999}, nil // not caller (1)
+			return &models.Workspace{ID: id, Name: "Other", OwnerID: 999}, nil
 		},
 	}
-	r := newTestRouter(svc, store, true, "", WithWorkspaceStore(wsStore))
+	r := newTestRouter(svc, store, "", WithWorkspaceStore(wsStore))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/42", nil)
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 42)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -1139,7 +1111,7 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 			return nil
 		},
 	}
-	r := newTestRouter(svc, store, true, "",
+	r := newTestRouter(svc, store, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -1147,8 +1119,8 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 	body := `{"workspace_id":1,"title":"hello","caption":"world","targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1183,10 +1155,6 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 	}
 }
 
-// TestHandleCreatePost_HappyWithScheduledAt verifies the happy path of
-// the scheduling feature: when scheduled_at is provided the auto-status
-// transition `draft -> scheduled` happens, AND the response echoes back
-// scheduled_at so the client can confirm what was stored.
 func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
@@ -1202,7 +1170,7 @@ func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 			return nil
 		},
 	}
-	r := newTestRouter(svc, store, true, "",
+	r := newTestRouter(svc, store, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -1210,8 +1178,8 @@ func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 	body := `{"workspace_id":1,"title":"future post","media_url":"https://cdn/img.png","scheduled_at":"2030-01-01T00:00:00Z","targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusCreated {
@@ -1239,7 +1207,7 @@ func TestHandleCreatePost_MissingWorkspaceID_422(t *testing.T) {
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	postStore := &mockPostStore{}
-	r := newTestRouter(svc, store, true, "",
+	r := newTestRouter(svc, store, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -1247,8 +1215,8 @@ func TestHandleCreatePost_MissingWorkspaceID_422(t *testing.T) {
 	body := `{"targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnprocessableEntity {
@@ -1261,7 +1229,7 @@ func TestHandleCreatePost_NoTargets_422(t *testing.T) {
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	postStore := &mockPostStore{}
-	r := newTestRouter(svc, store, true, "",
+	r := newTestRouter(svc, store, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -1269,8 +1237,8 @@ func TestHandleCreatePost_NoTargets_422(t *testing.T) {
 	body := `{"workspace_id":1}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnprocessableEntity {
@@ -1283,7 +1251,7 @@ func TestHandleCreatePost_BadTargetID_422(t *testing.T) {
 	store := &mockUserStore{}
 	wsStore := &mockWorkspaceStore{}
 	postStore := &mockPostStore{}
-	r := newTestRouter(svc, store, true, "",
+	r := newTestRouter(svc, store, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -1291,8 +1259,8 @@ func TestHandleCreatePost_BadTargetID_422(t *testing.T) {
 	body := `{"workspace_id":1,"targets":[{"platform_account_id":0}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnprocessableEntity {
@@ -1309,7 +1277,7 @@ func TestHandleCreatePost_CrossOwnerWorkspace_403(t *testing.T) {
 		},
 	}
 	postStore := &mockPostStore{}
-	r := newTestRouter(svc, store, true, "",
+	r := newTestRouter(svc, store, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
@@ -1317,8 +1285,8 @@ func TestHandleCreatePost_CrossOwnerWorkspace_403(t *testing.T) {
 	body := `{"workspace_id":1,"targets":[{"platform_account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 42)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusForbidden {
@@ -1345,14 +1313,14 @@ func TestHandleGetPost_CrossOwner_404(t *testing.T) {
 			}, nil
 		},
 	}
-	r := newTestRouter(svc, store, true, "",
+	r := newTestRouter(svc, store, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/100", nil)
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 42)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -1364,16 +1332,16 @@ func TestHandleGetPost_CrossOwner_404(t *testing.T) {
 // handleCreateUploadURL tests
 // ---------------------------------------------------------------------------
 
-// NotConfigured_501 fires BEFORE requireUserID, so no JWT context needed.
 func TestHandleCreateUploadURL_NotConfigured_501(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "") // no WithStorageProvider
+	r := newTestRouter(svc, store, "")
 
 	body := `{"filename":"test.mp4","content_type":"video/mp4","size_bytes":1024}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotImplemented {
@@ -1385,7 +1353,7 @@ func TestHandleCreateUploadURL_MissingJWT_401(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
 	storage := &mockStorageProvider{}
-	r := newTestRouter(svc, store, true, "", WithStorageProvider(storage))
+	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
 
 	body := `{"filename":"test.mp4","content_type":"video/mp4","size_bytes":1024}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
@@ -1402,14 +1370,13 @@ func TestHandleCreateUploadURL_InvalidContentType_422(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
 	storage := &mockStorageProvider{}
-	r := newTestRouter(svc, store, true, "", WithStorageProvider(storage))
+	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
 
-	// text/html is in no allowlist (imagine XSS surface area).
 	body := `{"filename":"xss.html","content_type":"text/html","size_bytes":1024}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnprocessableEntity {
@@ -1421,8 +1388,7 @@ func TestHandleCreateUploadURL_TooLarge_422(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
 	storage := &mockStorageProvider{}
-	// Cap at 1000 bytes so the test is deterministic without MB numbers.
-	r := newTestRouter(svc, store, true, "",
+	r := newTestRouter(svc, store, "",
 		WithStorageProvider(storage),
 		WithMaxUploadBytes(1000),
 	)
@@ -1430,8 +1396,8 @@ func TestHandleCreateUploadURL_TooLarge_422(t *testing.T) {
 	body := `{"filename":"huge.mp4","content_type":"video/mp4","size_bytes":99999999}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnprocessableEntity {
@@ -1443,13 +1409,13 @@ func TestHandleCreateUploadURL_MissingFilename_422(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta"}
 	store := &mockUserStore{}
 	storage := &mockStorageProvider{}
-	r := newTestRouter(svc, store, true, "", WithStorageProvider(storage))
+	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
 
 	body := `{"content_type":"video/mp4","size_bytes":1024}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnprocessableEntity {
@@ -1467,13 +1433,13 @@ func TestHandleCreateUploadURL_Happy_200(t *testing.T) {
 			ExpiresAt: time.Now().Add(15 * time.Minute),
 		},
 	}
-	r := newTestRouter(svc, store, true, "", WithStorageProvider(storage))
+	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
 
 	body := `{"filename":"test.mp4","content_type":"video/mp4","size_bytes":1024000}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+issueTestJWT(t, 1))
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -1497,14 +1463,12 @@ func TestHandleCreateUploadURL_Happy_200(t *testing.T) {
 	if resp.ExpiresAt.IsZero() {
 		t.Error("expires_at should be set")
 	}
-	// Key must be scoped under user_id=1 (the JWT uid).
 	if storage.capturedUserID != 1 {
 		t.Errorf("user_id capture: want 1, got %d", storage.capturedUserID)
 	}
 	if !strings.HasPrefix(storage.capturedKey, "uploads/1/") {
 		t.Errorf("key prefix: want uploads/1/, got %q", storage.capturedKey)
 	}
-	// content_type forwarded verbatim.
 	if storage.capturedContentType != "video/mp4" {
 		t.Errorf("content_type capture: want video/mp4, got %q", storage.capturedContentType)
 	}
@@ -1514,142 +1478,26 @@ func TestHandleCreateUploadURL_Happy_200(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// requireUserOrDefault tests
-// ---------------------------------------------------------------------------
-
-// TestRequireUserOrDefault locks in the lenient-default contract shared
-// by handleCreateWorkspace, handleListWorkspaces, handleDeleteWorkspace,
-// handleCreatePost, and handleGetPost. The helper centralizes what used
-// to be 5 copies of the same 10-line block:
-//
-//	userID := resolveUserID(req, 0, r.strictAuth)
-//	if userID == 0 {
-//	    if r.strictAuth { writeError(w, 401, ...); return }
-//	    userID = 1  // synthetic fallback
-//	}
-//
-// Any future "simplification" that changes this behaviour (e.g. returning
-// 400 instead of 401 in strict mode, changing the synthetic userID from 1
-// to 0, or removing the fallback entirely) must update this test in
-// lockstep with HANDOFF-LINUX.md §13.2 and the requireUserOrDefault
-// docstring in pkg/api/handlers.go.
-func TestRequireUserOrDefault(t *testing.T) {
-	const syntheticUserID = int64(1)
-	cases := []struct {
-		name           string
-		strictAuth     bool
-		withJWT        bool // attach a Bearer JWT to the request
-		jwtUserID      int64
-		wantUserID     int64
-		wantOk         bool
-		wantStatusCode int // 0 = no response written by requireUserOrDefault
-	}{
-		{
-			name:       "strict + JWT present returns JWT uid and ok=true",
-			strictAuth: true,
-			withJWT:    true,
-			jwtUserID:  42,
-			wantUserID: 42,
-			wantOk:     true,
-		},
-		{
-			name:           "strict + JWT absent writes 401 and returns ok=false",
-			strictAuth:     true,
-			withJWT:        false,
-			wantUserID:     0,
-			wantOk:         false,
-			wantStatusCode: http.StatusUnauthorized,
-		},
-		{
-			name:       "lenient + JWT present returns JWT uid and ok=true",
-			strictAuth: false,
-			withJWT:    true,
-			jwtUserID:  42,
-			wantUserID: 42,
-			wantOk:     true,
-		},
-		{
-			name:       "lenient + JWT absent falls back to synthetic userID=1",
-			strictAuth: false,
-			withJWT:    false,
-			wantUserID: syntheticUserID,
-			wantOk:     true,
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			// requireUserOrDefault only reads r.strictAuth, so a
-			// partial Router is sufficient.
-			r := &Router{strictAuth: c.strictAuth}
-
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			if c.withJWT {
-				// Use auth.WithUserID to inject the userID into
-				// the request context the same way auth.Middleware
-				// would after a successful JWT verify. This keeps
-				// every test case shaped the same (no special
-				// middleware-routing branch) and isolates the
-				// requireUserOrDefault contract from the
-				// auth.Middleware contract (which has its own
-				// dedicated tests).
-				req = req.WithContext(auth.WithUserID(req.Context(), c.jwtUserID))
-			}
-
-			w := httptest.NewRecorder()
-			gotUID, gotOk := requireUserOrDefault(w, req, r)
-			if gotUID != c.wantUserID {
-				t.Errorf("userID: want %d, got %d", c.wantUserID, gotUID)
-			}
-			if gotOk != c.wantOk {
-				t.Errorf("ok: want %v, got %v", c.wantOk, gotOk)
-			}
-			if c.wantStatusCode != 0 && w.Code != c.wantStatusCode {
-				t.Errorf("status: want %d, got %d", c.wantStatusCode, w.Code)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // CORS middleware tests
 // ---------------------------------------------------------------------------
 
-// newCORSTestRouter is a 1-line helper for tests that need to control
-// allowedOrigins (which newTestRouter hardcodes to nil). The CORS
-// middleware only echoes the Allow-Origin / Allow-Methods headers when
-// the request Origin matches an entry in allowedOrigins, so testing
-// those headers requires a non-nil allowlist.
 func newCORSTestRouter(allowedOrigins []string) *Router {
 	return NewRouter(
-		map[string]services.PlatformService{},
+		services.NewPlatformRegistry(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),
-		false,
 		"",
 		allowedOrigins,
 	)
 }
 
-// TestCorsMiddleware_AllowMethodsIncludesPutPatchDelete locks in the
-// preflight header for the verdict §2 fix: browser-initiated DELETE
-// /api/v1/workspaces/{id} requires Access-Control-Allow-Methods to
-// include DELETE (and PUT/PATCH for future endpoints). The previous
-// header was "GET, POST, OPTIONS" which caused the preflight to fail
-// for any non-GET/POST request, silently breaking workspace deletion
-// from the SPA. Any future "simplification" that drops one of these
-// methods from the allow list must update this test in lockstep with
-// HANDOFF-LINUX.md §2.
 func TestCorsMiddleware_AllowMethodsIncludesPutPatchDelete(t *testing.T) {
-	// Build a minimal router with a non-empty allowedOrigins so the
-	// CORS middleware actually echoes the headers (per the corsMiddleware
-	// contract in handlers.go: unknown origins get NO Allow-Origin
-	// header, which would make the preflight useless to test).
 	r := newCORSTestRouter([]string{"https://instaedit.org"})
 
-	// Browser preflight: OPTIONS with an allowed Origin header.
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/workspaces/123", nil)
 	req.Header.Set("Origin", "https://instaedit.org")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNoContent {
@@ -1668,16 +1516,10 @@ func TestCorsMiddleware_AllowMethodsIncludesPutPatchDelete(t *testing.T) {
 // OAuth state CSRF protection (verdict §2) tests
 // ---------------------------------------------------------------------------
 
-// TestHandleLogin_StateIsRandomAcrossRequests locks in the
-// cryptographic-randomness requirement: two consecutive logins
-// produce different state tokens. A static or predictable state
-// (like the old "meta_default") would let an attacker pre-compute
-// a valid state and trick a victim's browser into completing
-// their flow.
 func TestHandleLogin_StateIsRandomAcrossRequests(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta", loginURL: "https://auth.example.com/oauth"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	extractState := func(w *httptest.ResponseRecorder) string {
 		loc := w.Header().Get("Location")
@@ -1704,34 +1546,22 @@ func TestHandleLogin_StateIsRandomAcrossRequests(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_RejectsMissingStateCookie_400 locks in the
-// CSRF protection: a callback with a state query param but no
-// matching cookie MUST be rejected (otherwise an attacker could
-// trigger a callback with an arbitrary state value).
 func TestHandleCallback_RejectsMissingStateCookie_400(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta", handleCallback: successCallback}
 	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	// No setOAuthStateCookieForTest — simulating an attacker who
-	// triggers the callback without ever going through handleLogin.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=anything", nil)
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 (missing state cookie), got %d: %s", w.Code, w.Body.String())
 	}
-	// The platform's HandleCallback MUST NOT have been called — the
-	// state check must run BEFORE the code exchange, otherwise an
-	// attacker who triggers a callback with a forged state would
-	// still complete a code exchange against the platform.
 	if svc.handleCallbackCalls != 0 {
 		t.Errorf("platform HandleCallback called %d time(s) despite state verification failure (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
 	}
-	// The state cookie MUST NOT be deleted on verification failure
-	// (the legitimate user can retry; deleting would lock them out
-	// for the 10-minute MaxAge window).
 	for _, c := range w.Result().Cookies() {
 		if c.Name == OAuthStateCookieName("meta") && c.MaxAge < 0 {
 			t.Errorf("state cookie was deleted on verification failure (should persist so the legitimate user can retry): %+v", c)
@@ -1742,34 +1572,23 @@ func TestHandleCallback_RejectsMissingStateCookie_400(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_RejectsMismatchedState_400 locks in the
-// constant-time comparison: a callback whose state query param
-// does NOT match the cookie MUST be rejected. The mismatch
-// simulates an attacker who started a flow against their own
-// account (getting a real cookie+state pair) and then tried to
-// replay a different state value.
 func TestHandleCallback_RejectsMismatchedState_400(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta", handleCallback: successCallback}
 	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
-	// Cookie says "cookie-state", but query says "different-state" → mismatch.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=different-state", nil)
 	setOAuthStateCookieForTest(req, "meta", "cookie-state")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 (state mismatch), got %d: %s", w.Code, w.Body.String())
 	}
-	// The platform's HandleCallback MUST NOT have been called on
-	// state mismatch (otherwise an attacker who started a flow
-	// against their own account could replay a different state
-	// and still complete a code exchange).
 	if svc.handleCallbackCalls != 0 {
 		t.Errorf("platform HandleCallback called %d time(s) despite state mismatch (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
 	}
-	// The state cookie MUST NOT be deleted on mismatch (retry-friendly).
 	for _, c := range w.Result().Cookies() {
 		if c.Name == OAuthStateCookieName("meta") && c.MaxAge < 0 {
 			t.Errorf("state cookie was deleted on mismatch (should persist so the legitimate user can retry): %+v", c)
@@ -1780,26 +1599,20 @@ func TestHandleCallback_RejectsMismatchedState_400(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_RejectsMissingStateParam_400: a callback with
-// no state query param at all must be rejected (the platform
-// can't echo back a state it never received).
 func TestHandleCallback_RejectsMissingStateParam_400(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta", handleCallback: successCallback}
 	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc", nil)
 	setOAuthStateCookieForTest(req, "meta", "any-state")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 (missing state query param), got %d: %s", w.Code, w.Body.String())
 	}
-	// The platform's HandleCallback MUST NOT have been called on
-	// missing state (the verify step is what protects the code
-	// exchange; a missing state param must short-circuit before
-	// any platform API call).
 	if svc.handleCallbackCalls != 0 {
 		t.Errorf("platform HandleCallback called %d time(s) despite missing state (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
 	}
@@ -1808,25 +1621,20 @@ func TestHandleCallback_RejectsMissingStateParam_400(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_DeletesStateCookieAfterUse locks in the
-// single-use contract: a successful callback MUST delete the
-// oauth_state_{provider} cookie so it can't be replayed. The
-// deletion is signaled by Set-Cookie with MaxAge<0.
 func TestHandleCallback_DeletesStateCookieAfterUse(t *testing.T) {
 	svc := &mockPlatformService{platform: "meta", handleCallback: successCallback}
 	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
-	r := newTestRouter(svc, store, false, "")
+	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "meta", "test-state")
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
-	// The response must include a Set-Cookie that deletes the
-	// oauth_state_meta cookie (MaxAge<0).
 	var deletionCookie *http.Cookie
 	for _, c := range w.Result().Cookies() {
 		if c.Name == OAuthStateCookieName("meta") {

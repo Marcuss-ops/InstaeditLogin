@@ -38,7 +38,7 @@ func NewTikTokOAuthService(cfg *config.Config, tokenRepo *repository.TokenReposi
 	}, nil
 }
 
-func (s *TikTokOAuthService) GetPlatform() string { return models.PlatformTikTok }
+func (s *TikTokOAuthService) Name() string { return models.PlatformTikTok }
 
 // maskClientKey restituisce una versione mascherata della client key per i log.
 // Mostra solo i primi 4 caratteri per chiavi corte, oppure primi/ultimi 4 per
@@ -115,6 +115,34 @@ func (s *TikTokOAuthService) HandleCallback(ctx context.Context, state, code str
 	}
 
 	return profile, tokenData, nil
+}
+
+// Validate calls the TikTok user info endpoint to verify the access token.
+func (s *TikTokOAuthService) Validate(ctx context.Context, accessToken, platformUserID string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name", nil)
+	if err != nil {
+		return fmt.Errorf("tiktok validate request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("tiktok validate failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("tiktok validate returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// Revoke is not supported by the TikTok API. The caller should proceed with
+// local token deletion.
+func (s *TikTokOAuthService) Revoke(ctx context.Context, accessToken string) error {
+	return ErrRevokeUnsupported
 }
 
 // RefreshOAuthToken exchanges a TikTok refresh token for a new access token.

@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -98,63 +97,34 @@ func (m *Manager) Verify(raw string) (int64, error) {
 	return claims.UserID, nil
 }
 
-// Middleware returns a handler that enforces JWT auth.
+// Middleware returns a handler that enforces JWT auth. The contract is
+// strictly: every request MUST carry an Authorization: Bearer <jwt> header
+// with a valid HS256 token. Anything else (missing header, wrong scheme,
+// expired/invalid token) is rejected with 401 before the handler runs.
 //
-// Two modes are supported, selected by the `strict` flag (wired at startup
-// from the STRICT_JWT_AUTH env var; default true since the SPA ships JWT-aware):
-//
-//	STRICT MODE (default; STRICT_JWT_AUTH=true):
-//	  - Missing Authorization header           → 401 missing authorization header
-//	  - Authorization header without Bearer  → 401 invalid authorization header
-//	  - Bearer with invalid/expired JWT       → 401 invalid or expired token
-//	  - Bearer with valid JWT                  → user_id placed in ctx, calls next
-//
-//	LEGACY FALLBACK (STRICT_JWT_AUTH=false):
-//	  Reserved for the AUTH MIGRATION ROLLBACK WINDOW. When the JWT-aware
-//	  frontend is being rolled out, the old SPA clients don't send
-//	  Authorization and would otherwise be locked out. In legacy mode the
-//	  middleware accepts the request and emits a slog.Warn line so ops can
-//	  measure how many legacy callers are still hitting the API.
-//
-//	  SECURITY: in legacy mode `resolveUserID` falls back to the
-//	  `user_id` field on the request body/query, which means anyone who
-//	  knows an integer id can publish as that user. NEVER run legacy mode
-//	  in production once the new frontend is fully rolled out.
+// After Taglio 1.1 THERE IS NO LEGACY MODE. Identity never comes from the
+// request body, never from the query string, and never from a synthetic
+// fallback user id. When API-key auth (Taglio 1.2) is added, that path
+// will sit in front of this middleware so the JWT context key is still
+// the only source of user identity for downstream handlers.
 //
 // Use UserIDFromContext to retrieve the authenticated user id downstream.
-// The boolean is false when the request reached the handler without the
-// middleware having run (or having accepted a legacy request).
-func (m *Manager) Middleware(strict bool, next http.Handler) http.Handler {
+func (m *Manager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
 		if header == "" {
-			if strict {
-				http.Error(w, "missing authorization header", http.StatusUnauthorized)
-				return
-			}
-			next.ServeHTTP(w, r)
+			http.Error(w, "missing authorization header", http.StatusUnauthorized)
 			return
 		}
 		const prefix = "Bearer "
 		if !strings.HasPrefix(header, prefix) {
-			if strict {
-				http.Error(w, "invalid authorization header", http.StatusUnauthorized)
-				return
-			}
-			slog.Warn("auth: invalid Authorization header but STRICT_JWT_AUTH is off; allowing legacy request")
-			next.ServeHTTP(w, r)
+			http.Error(w, "invalid authorization header", http.StatusUnauthorized)
 			return
 		}
 		raw := strings.TrimSpace(header[len(prefix):])
 		userID, err := m.Verify(raw)
 		if err != nil {
-			if strict {
-				slog.Info("auth: rejecting request with invalid token", "error", err)
-				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
-				return
-			}
-			slog.Warn("auth: invalid JWT but STRICT_JWT_AUTH is off; allowing legacy request", "error", err)
-			next.ServeHTTP(w, r)
+			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 			return
 		}
 		ctx := context.WithValue(r.Context(), userIDKey, userID)
@@ -164,7 +134,7 @@ func (m *Manager) Middleware(strict bool, next http.Handler) http.Handler {
 
 // UserIDFromContext returns the authenticated user id placed by Middleware.
 // The boolean is false when the request reached the handler without the
-// middleware having run (or having accepted a legacy request).
+// middleware having authenticated a valid JWT.
 func UserIDFromContext(ctx context.Context) (int64, bool) {
 	v, ok := ctx.Value(userIDKey).(int64)
 	return v, ok
@@ -178,8 +148,8 @@ func UserIDFromContext(ctx context.Context) (int64, bool) {
 // context-asserted user id but no real authentication. Production
 // handlers MUST obtain the user id from Middleware (via the Authorization
 // header) so the JWT is verified. Only call WithUserID from *_test.go
-// files (e.g. to test resolveUserID / requireUserOrDefault without
-// standing up a full JWT round-trip).
+// files (e.g. to test requireUserID / handleCreatePost without standing
+// up a full JWT round-trip).
 func WithUserID(ctx context.Context, userID int64) context.Context {
 	return context.WithValue(ctx, userIDKey, userID)
 }

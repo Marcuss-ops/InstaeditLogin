@@ -39,8 +39,8 @@ func NewFacebookOAuthService(cfg *config.Config, tokenRepo *repository.TokenRepo
 	}, nil
 }
 
-// GetPlatform returns the platform identifier.
-func (s *FacebookOAuthService) GetPlatform() string { return models.PlatformMeta }
+// Name returns the platform identifier.
+func (s *FacebookOAuthService) Name() string { return models.PlatformMeta }
 
 // GetLoginURL builds the Meta OAuth login URL for user redirection.
 func (s *FacebookOAuthService) GetLoginURL(state string) string {
@@ -94,6 +94,53 @@ func (s *FacebookOAuthService) HandleCallback(ctx context.Context, state, code s
 	}
 
 	return profile, tokenData, nil
+}
+
+// Validate calls the Meta token debug endpoint to verify the access token.
+func (s *FacebookOAuthService) Validate(ctx context.Context, accessToken, platformUserID string) error {
+	params := url.Values{}
+	params.Set("access_token", accessToken)
+	params.Set("fields", "id")
+
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"https://graph.facebook.com/v19.0/me?"+params.Encode(), nil)
+	if err != nil {
+		return fmt.Errorf("meta validate request: %w", err)
+	}
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("meta validate failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("meta validate returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// Revoke calls Meta's DELETE /me/permissions endpoint to invalidate
+// the token.
+func (s *FacebookOAuthService) Revoke(ctx context.Context, accessToken string) error {
+	req, err := http.NewRequestWithContext(ctx, "DELETE",
+		fmt.Sprintf("https://graph.facebook.com/v19.0/me/permissions?access_token=%s", url.QueryEscape(accessToken)), nil)
+	if err != nil {
+		return fmt.Errorf("meta revoke request: %w", err)
+	}
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("meta revoke failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("meta revoke returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
 }
 
 // RefreshOAuthToken extends a long-lived Meta token using fb_exchange_token.

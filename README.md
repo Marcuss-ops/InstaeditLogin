@@ -124,10 +124,11 @@ e lo restituisce:
 - come **JSON** `{ jwt_token, ... }` se `FRONTEND_URL` non è configurato (curl,
   Postman, integrazioni server-to-server).
 
-Il middleware (`internal/auth.Middleware`) decide se la `Authorization: Bearer <jwt>`
-è obbligatoria o facoltativa in base a `STRICT_JWT_AUTH`.
+Il middleware (`internal/auth.Middleware`) è **strict per costruzione** dopo il Taglio 1.1:
+l'identità arriva solo dal JWT di sessione o da una API key (Taglio 1.2). Non esiste
+alcuna modalità legacy o lenient.
 
-### Modalità strict (default — `STRICT_JWT_AUTH=true`)
+### Auth (unica — Taglio 1.1)
 
 - Authorization mancante → **401** `missing authorization header`
 - Header non in formato `Bearer` → **401** `invalid authorization header`
@@ -140,39 +141,15 @@ Il client deve allegare `Authorization: Bearer <jwt>` ad ogni chiamata a
 
 All'avvio il server logga:
 ```
-msg="Router configured" auth_mode="strict (Bearer required)" strict_jwt_auth=true
+msg="Router configured" jwt_ttl_hours=168 auth=strict
 ```
 
-> 🚨 **LEGGI QUESTO PRIMA DI DISATTIVARE LA STRICT MODE** 🚨
+> 🚨 **NESSUNA MODALITÀ LEGACY** 🚨
 >
-> `STRICT_JWT_AUTH=false` ripristina il comportamento rollback in cui
-> chiunque conosca un `user_id` intero può pubblicare o listare gli account
-> di quell'utente senza possedere la sessione. Impostalo su `false` **SOLO**
-> durante la finestra di rollout del frontend JWT-aware e rimettilo a `true`
-> non appena la SPA serve il 100% del traffico. **Non lasciarlo mai `false`
-> in produzione** — leggi anche "Come chiudere la finestra di rollout"
-> più sotto.
-
-### Modalità legacy (`STRICT_JWT_AUTH=false`) — SOLO durante il rollout
-
-Quando la SPA JWT-aware non serve ancora il 100% del traffico si può
-temporaneamente abbassare la guardia. In modalità legacy:
-
-- il middleware **non** blocca le richieste senza `Authorization`
-- `resolveUserID` accetta `user_id` dal **body** JSON o dalla **query string**
-- ogni chiamata senza JWT emette un `slog.Warn`:
-  ```
-  msg="auth: invalid JWT but STRICT_JWT_AUTH is off; allowing legacy request"
-  ```
-
-### Come chiudere la finestra di rollout
-
-1. Verificare che `slog` non emetta più warning `STRICT_JWT_AUTH is off` (vuol
-   dire che 100% del traffico porta il bearer).
-2. Mettere `STRICT_JWT_AUTH=true` nel `.env` (o rimuovere la riga per fare
-   affidamento sul default) e riavviare il server.
-3. Opzionale: rimuovere la `user_id` field dai DTO `PublishRequest` /
-   handleListAccounts una volta spenti tutti i client legacy.
+> Dopo il Taglio 1.1 il body e la query string non vengono più usati per ricavare
+> l'identità: non c'è fallback a `user_id=1`, non c'è `STRICT_JWT_AUTH=false`, non c'è
+> helper che restituisce un utente sintetico. Un client senza Bearer riceve 401 in
+> qualsiasi ambiente (`dev`, `staging`, `production`).
 
 ## Deployment
 
@@ -244,9 +221,9 @@ frontend su `https://instaedit.vercel.app`, backend su
 - `JWT_SECRET` con **almeno** 32 byte (RFC 7518 §3.2; validato allo startup)
 - `META_APP_SECRET` **e** tutti i `*_CLIENT_SECRET` opzionali (TikTok/Twitter/
   YouTube) con almeno **32 caratteri** (validato allo startup)
-- Modalità strict JWT (`STRICT_JWT_AUTH=true`, default) blocca ogni richiesta
-  a `/api/v1/posts/publish` e `/api/v1/accounts` senza `Authorization: Bearer
-  <jwt>` valido
+- Auth strict JWT (Taglio 1.1): blocca ogni richiesta a `/api/v1/posts/publish`
+  e `/api/v1/accounts` senza `Authorization: Bearer <jwt>` valido; nessun
+  fallback a `user_id` body/query, nessun ID sintetico (default userID=1 rimosso)
 - `.env` escluso da git
 - HTTPS richiesto in produzione
 - Per i dettagli sui secret minimi vedi `## Generazione dei secret` in alto

@@ -403,8 +403,8 @@ func TestLoad_ConfigValidationErrors(t *testing.T) {
 func TestValidate_AppEnv(t *testing.T) {
 	// APP_ENV must be one of dev|staging|production. Anything else is
 	// rejected so a typo (e.g. "prod", "PRODUCTION", "stage") can't masquerade
-	// as a non-production deploy and accidentally bypass the
-	// STRICT_JWT_AUTH fail-fast in main.go (which keys off "production").
+	// as a non-production deploy and accidentally treat dev-only behaviour
+	// as production-safe (Taglio 1.1: auth is strict in every environment).
 	tests := []struct {
 		name      string
 		env       string

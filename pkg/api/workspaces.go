@@ -39,14 +39,16 @@ func mapWorkspaceError(err error) (int, string) {
 }
 
 // handleCreateWorkspace creates a workspace owned by the authenticated
-// user. OwnerID is populated from JWT context (strict) or omitted (lenient).
+// user. OwnerID is populated from the JWT context (Taglio 1.1:
+// strictly from the JWT, never from a synthetic fallback nor from
+// the body/query).
 // 501 if WithWorkspaceStore was not wired.
 func (r *Router) handleCreateWorkspace(w http.ResponseWriter, req *http.Request) {
 	if r.workspaceStore == nil {
 		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
 		return
 	}
-	userID, ok := requireUserOrDefault(w, req, r)
+	userID, ok := requireUserID(w, req, r)
 	if !ok {
 		return
 	}
@@ -77,7 +79,7 @@ func (r *Router) handleListWorkspaces(w http.ResponseWriter, req *http.Request) 
 		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
 		return
 	}
-	userID, ok := requireUserOrDefault(w, req, r)
+	userID, ok := requireUserID(w, req, r)
 	if !ok {
 		return
 	}
@@ -93,17 +95,22 @@ func (r *Router) handleListWorkspaces(w http.ResponseWriter, req *http.Request) 
 }
 
 // handleGetWorkspace fetches a single workspace by id. 404 if the id
-// doesn't match any row; 500 on driver errors. Ownership check (only
-// in strict mode, where STRICT_JWT_AUTH=true gates this behind a real
-// JWT identity — in lenient mode the existing TestWorkspacesAPI tests
-// assume that an unauthenticated GET still returns the workspace).
+// doesn't match any row; 500 on driver errors. Ownership check is
+// unconditional after Taglio 1.1: every caller must present a valid
+// JWT and the workspace's owner must match the caller's user id.
+// Cross-tenant GETH returns 404 (existence-leak avoidance).
 //
-// A future hardening pass could return 404 unconditionally to prevent
-// workspace-existence leaks across tenants — see errors.go doc.
+// A future hardening pass could collapse cross-owner 404 + missing 404
+// into indistinguishable 404 to further hide existence, but the JWT
+// gate is now mandatory.
 // 501 if WithWorkspaceStore was not wired.
 func (r *Router) handleGetWorkspace(w http.ResponseWriter, req *http.Request) {
 	if r.workspaceStore == nil {
 		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
+		return
+	}
+	callerID, ok := requireUserID(w, req, r)
+	if !ok {
 		return
 	}
 	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
@@ -121,12 +128,7 @@ func (r *Router) handleGetWorkspace(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	// Ownership gate: only enforced in strict mode. Lenient mode is the
-	// legacy/rollback window and the existing tests intentionally allow
-	// reads without a JWT — tightening this would break the legacy
-	// publish fallback (publish trusts user_id from body in lenient).
-	callerID := resolveUserID(req, 0, r.strictAuth)
-	if r.strictAuth && callerID != 0 && ws.OwnerID != callerID {
+	if ws.OwnerID != callerID {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
@@ -142,16 +144,16 @@ func (r *Router) handleDeleteWorkspace(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
 		return
 	}
+	userID, ok := requireUserID(w, req, r)
+	if !ok {
+		return
+	}
+	// Pre-check existence + ownership so we can return 404 vs 403 distinctly.
 	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid workspace id: "+err.Error())
 		return
 	}
-	userID, ok := requireUserOrDefault(w, req, r)
-	if !ok {
-		return
-	}
-	// Pre-check existence + ownership so we can return 404 vs 403 distinctly.
 	existing, err := r.workspaceStore.FindByID(id)
 	status, msg := mapWorkspaceError(err)
 	if status == http.StatusNotFound {
