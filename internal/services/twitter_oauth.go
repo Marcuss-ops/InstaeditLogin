@@ -104,7 +104,7 @@ func (s *TwitterOAuthService) HandleCallback(ctx context.Context, state, code st
 // ValidateContent enforces the "text or image" rule for a tweet.
 func (s *TwitterOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.Text == "" && payload.ImageURL == "" {
-		return fmt.Errorf("twitter requires text or image_url")
+		return fmt.Errorf("twitter requires text or media")
 	}
 	return nil
 }

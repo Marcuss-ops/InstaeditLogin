@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,6 +15,13 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
+
+// crypto/sha256 was previously imported here for the inline hash
+// calculation in handleCreatePost; the responsibility moved to
+// pkg/api/idempotency.go's idempotencyHash helper, so the import
+// is no longer needed in this file. The "strings" import IS still
+// needed (see uses of strings.TrimSpace and strings.Contains below)
+// — only the crypto/sha256 reference is gone.
 
 // --- Request types -----------------------------------------------------------
 
@@ -83,6 +91,32 @@ func mapRepoError(err error) (int, string) {
 // scheduled_at, targets:[{account_id}]}. Status defaults to "draft";
 // if scheduled_at is set, status auto-promotes to "queued".
 //
+// Idempotency (level 1, migration 021): when the request carries an
+// Idempotency-Key header, the handler consults the idempotency_records
+// cache keyed on (workspace_id, idempotency_key):
+//
+//   - hit + same payload hash → replay: re-fetch the post and
+//     return it with the original 201 status.
+//   - hit + different payload hash OR different resource_type →
+//     409 idempotency_key_conflict.
+//   - miss → handler runs normally; on success, an idempotency
+//     record is inserted for future replays.
+//
+// Order of operations (security-relevant):
+//
+//  1. Read body bytes + hash them (idempotency_read_body).
+//  2. Unmarshal + validate body schema (workspace_id, status, targets).
+//  3. Look up workspace by body.WorkspaceID + check ws.OwnerID == userID.
+//     This MUST run before the cache replay: an attacker could
+//     forge a request with another tenant's workspace_id in the body
+//     and a guessed key — without the ownership check, the cache
+//     would leak that tenant's resource. The ownership check makes
+//     the (workspace_id, key) cache tuple safe to use.
+//  4. Cache lookup keyed on (ws.ID, idemKey, hash).
+//  5. Branch: replay / conflict / continue.
+//  6. If continue, run the rest of the handler (mediaURL resolution,
+//     PostRepository.Create, insert idempotency_record, write JSON).
+//
 // Taglio 3.2: the legacy `media_url` field on content is REMOVED.
 // Clients pass `media: [{ asset_id }]` — the handler resolves each
 // asset_id to a trusted internal S3 URL via the mediaStore +
@@ -102,7 +136,24 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Read body bytes once + compute hash. Rewinds req.Body so any
+	// downstream json.NewDecoder(req.Body) sees the same payload.
+	bodyBytes, bodyErr := idempotencyReadBody(req)
+	if bodyErr != nil {
+		writeError(w, http.StatusBadRequest, "request body unreadable: "+bodyErr.Error())
+		return
+	}
+	hash := idempotencyHash(bodyBytes)
+
+	// Decode the body. We use json.Unmarshal on the bytes slice
+	// (vs json.NewDecoder(req.Body)) because we already have the
+	// bytes — Unmarshal doesn't read from req.Body so rewind
+	// concerns are moot.
 	var body CreatePostRequest
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
@@ -139,6 +190,34 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 	if ws.OwnerID != userID {
 		writeError(w, http.StatusForbidden, "workspace not owned by this user")
 		return
+	}
+
+	// Workspace ownership verified. NOW do the idempotency lookup
+	// keyed on (ws.ID, idemKey). Cross-tenant cache hit is
+	// impossible because the (workspace, key) tuple is unique.
+	idemKey := strings.TrimSpace(req.Header.Get("Idempotency-Key"))
+	idemOutcome, idemRec, idemErr := idempotencyLookup(r, ws.ID, idemKey, hash, "post")
+	if idemErr != nil {
+		// 400 on "key too long" is a client-side contract
+		// violation. Everything else (DB errors) is server-side.
+		if strings.Contains(idemErr.Error(), "exceeds") {
+			writeError(w, http.StatusBadRequest, idemErr.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "idempotency lookup: "+idemErr.Error())
+		return
+	}
+	switch idemOutcome {
+	case idempotencyConflict:
+		writeError(w, http.StatusConflict, "idempotency_key_conflict")
+		return
+	case idempotencyReplay:
+		if replayErr := replayIdempotentResource(r, w, idemRec, idemRec.ResponseStatus); replayErr != nil {
+			writeError(w, http.StatusInternalServerError, "idempotency replay: "+replayErr.Error())
+		}
+		return
+	case idempotencyContinue:
+		// Fall through to the rest of the handler.
 	}
 
 	status := models.PostStatusDraft
@@ -181,6 +260,11 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, code, "failed to create post: "+msg)
 		return
 	}
+	// Idempotency-Key post-create write (level 1, migration 021).
+	// Only fires when the request carried the header AND we fell
+	// through to the handler (i.e. no cached hit). Best-effort:
+	// the cache is operator UX, not part of the API contract.
+	insertIdempotentRecord(r, ws.ID, idemKey, "post", post.ID, hash, http.StatusCreated)
 	writeJSON(w, http.StatusCreated, createPostResponse{post: post, targets: targets})
 }
 
@@ -419,9 +503,22 @@ func (r *Router) handleListPosts(w http.ResponseWriter, req *http.Request) {
 
 // handlePatchPost updates the editable fields of an existing post.
 // PATCH /api/v1/posts/{id}
+//
+// Taglio 3b: the legacy `media_url` field is REMOVED from PATCH.
+// Clients pass `media: [{ asset_id }]` — the handler resolves each
+// asset_id to a trusted internal S3 URL. User-controlled URLs can
+// no longer be injected via PATCH.
 func (r *Router) handlePatchPost(w http.ResponseWriter, req *http.Request) {
 	if r.postStore == nil {
 		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
+		return
+	}
+	if r.workspaceStore == nil {
+		writeError(w, http.StatusNotImplemented, "workspaces not configured on this server")
+		return
+	}
+	userID, ok := requireUserID(w, req, r)
+	if !ok {
 		return
 	}
 	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
@@ -434,11 +531,16 @@ func (r *Router) handlePatchPost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotFound, "post not found")
 		return
 	}
+	ws, err := r.workspaceStore.FindByID(existing.WorkspaceID)
+	if err != nil || ws == nil || ws.OwnerID != userID {
+		writeError(w, http.StatusNotFound, "post not found")
+		return
+	}
 	var body struct {
-		Title    string `json:"title,omitempty"`
-		Caption  string `json:"caption,omitempty"`
-		MediaURL string `json:"media_url,omitempty"`
-		Status   string `json:"status,omitempty"`
+		Title   string     `json:"title,omitempty"`
+		Caption string     `json:"caption,omitempty"`
+		Media   []MediaRef `json:"media,omitempty"`
+		Status  string     `json:"status,omitempty"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -460,8 +562,13 @@ func (r *Router) handlePatchPost(w http.ResponseWriter, req *http.Request) {
 	if body.Caption != "" {
 		post.Caption = body.Caption
 	}
-	if body.MediaURL != "" {
-		post.MediaURL = body.MediaURL
+	if len(body.Media) > 0 {
+		mediaURL, err := r.resolveFirstMediaURL(userID, body.Media)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		post.MediaURL = mediaURL
 	}
 	if body.Status != "" {
 		s := models.PostStatus(body.Status)
@@ -594,4 +701,3 @@ func (r *Router) handleRetryTarget(w http.ResponseWriter, req *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
 }
-

@@ -20,7 +20,7 @@ import (
 //
 // Capabilities exposed:
 //   - OAuthProvider (Google OAuth 2.0 with offline access)
-//   - ContentValidator (video_url required)
+//   - ContentValidator (video required)
 //   - Publisher (resumable upload protocol)
 //   - AccountManager (Validate / Revoke)
 type YouTubeOAuthService struct {
@@ -81,7 +81,7 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
 // ValidateContent enforces the YouTube video-required rule.
 func (s *YouTubeOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.VideoURL == "" {
-		return fmt.Errorf("youtube requires video_url for publishing")
+		return fmt.Errorf("youtube requires a video for publishing")
 	}
 	return nil
 }

@@ -75,7 +75,7 @@ type AccountDiscoverer interface {
 type ResourceDiscoverer = AccountDiscoverer
 
 // ContentValidator validates that a publish payload is acceptable for the
-// platform (e.g. YouTube requires video_url, LinkedIn requires text).
+// platform (e.g. YouTube requires a video, LinkedIn requires text).
 // Every provider implements this so handlePublishPost can short-circuit
 // before the per-platform Publish call.
 type ContentValidator interface {

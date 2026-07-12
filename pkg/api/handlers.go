@@ -26,22 +26,23 @@ import (
 )
 
 type Router struct {
-	mux             *chi.Mux
-	capabilities    *services.CapabilityRouter
-	userRepo        UserStore
-	workspaceStore  WorkspaceStore
-	postStore       PostStore
-	storageProvider StorageProvider
-	mediaStore      MediaStore
-	auditLogStore   AuditLogStore
-	auth            *auth.Manager
-	apiKeyAuth      *auth.Authenticator
-	apiKeyStore     ApiKeyStore
-	vault           credentials.VaultAPI
-	oneTimeCodes    *OneTimeCodeStore
-	frontendURL     string
-	allowedOrigin   []string
-	maxUploadBytes  int64
+	mux               *chi.Mux
+	capabilities      *services.CapabilityRouter
+	userRepo          UserStore
+	workspaceStore    WorkspaceStore
+	postStore         PostStore
+	storageProvider   StorageProvider
+	mediaStore        MediaStore
+	auditLogStore     AuditLogStore
+	auth              *auth.Manager
+	apiKeyAuth        *auth.Authenticator
+	apiKeyStore       ApiKeyStore
+	idempotencyStore  IdempotencyStore
+	vault             credentials.VaultAPI
+	oneTimeCodes      *OneTimeCodeStore
+	frontendURL       string
+	allowedOrigin     []string
+	maxUploadBytes    int64
 }
 
 type UserStore interface {
@@ -106,6 +107,28 @@ type ApiKeyStore interface {
 	Rotate(orgID, oldID int64, newKey *models.ApiKey, newHash []byte) error
 }
 
+// IdempotencyStore mirrors the two methods the /api/v1/posts
+// handler (handleCreatePost) needs:
+//
+//   - FindActiveByKey — pre-handler lookup. Returns (nil, nil)
+//     on miss OR on expired rows (so the middleware treats expired
+//     records as a normal miss and lets the handler run).
+//   - Insert — post-handler write. Persists (workspace_id, key,
+//     hash) so subsequent replays hit the same row.
+//
+// The contract is intentionally narrow: no Update, no Delete from
+// the API layer; the table is append-only from this side. Expired
+// rows are evicted by a CRON sweeper that lands in a future Taglio.
+//
+// Same pattern as PostStore / WorkspaceStore / ApiKeyStore: an
+// interface local to pkg/api so handlers depend on the contract,
+// not on the *sql.DB-bound concrete type. Tests can pass an
+// in-memory fake.
+type IdempotencyStore interface {
+	FindActiveByKey(workspaceID int64, key string, now time.Time) (*models.IdempotencyRecord, error)
+	Insert(rec *models.IdempotencyRecord) error
+}
+
 type StorageProvider interface {
 	Provider() string
 	SignUpload(ctx context.Context, userID int64, key, contentType string, sizeBytes int64, ttl time.Duration) (*services.UploadGrant, error)
@@ -141,6 +164,16 @@ func WithAuditLogStore(store AuditLogStore) RouterOption {
 }
 func WithOneTimeCodeStore(s *OneTimeCodeStore) RouterOption {
 	return func(r *Router) { r.oneTimeCodes = s }
+}
+
+// WithIdempotencyStore injects the idempotency_records persistence
+// layer. The /api/v1/posts handler (handleCreatePost) consults this
+// when an Idempotency-Key request header is present. Without this
+// option wired, Idempotency-Key headers are silently ignored — the
+// handler falls through to the no-cache path. Production wiring
+// must include this option (see cmd/server/main.go).
+func WithIdempotencyStore(s IdempotencyStore) RouterOption {
+	return func(r *Router) { r.idempotencyStore = s }
 }
 
 // WithApiKeyAuthenticator injects the API-key middleware used on

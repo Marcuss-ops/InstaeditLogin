@@ -132,7 +132,7 @@ func (s *FacebookOAuthService) RefreshOAuthToken(ctx context.Context, currentTok
 // deep inside the Graph API with a 400.
 func (s *FacebookOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.Text == "" && payload.ImageURL == "" {
-		return fmt.Errorf("facebook requires either text or an image_url")
+		return fmt.Errorf("facebook requires either text or media")
 	}
 	return nil
 }
@@ -221,7 +221,7 @@ func (s *FacebookOAuthService) Publish(ctx context.Context, accessToken, platfor
 	} else if payload.Text != "" {
 		mediaID, err = s.publishPageFeed(ctx, page.AccessToken, page.ID, payload.Text)
 	} else {
-		return nil, fmt.Errorf("facebook requires text content or an image_url")
+		return nil, fmt.Errorf("facebook requires text or media")
 	}
 
 	if err != nil {

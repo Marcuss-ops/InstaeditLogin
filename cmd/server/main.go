@@ -90,6 +90,14 @@ func main() {
 	// to the HTTP handlers via WithApiKeyStore.
 	apiKeyRepo := repository.NewApiKeyRepository(db)
 	apiKeyAuth := auth.NewApiKeyAuthenticator(apiKeyRepo)
+	// Zernio Milestone publish-state-machine — Idempotency-Key
+	// cache backing for /api/v1/posts. Two methods exposed through
+	// the IdempotencyStore interface (FindActiveByKey + Insert).
+	// OPTIONAL wiring: the handler falls through silently if the
+	// store is absent, so dev environments without migration 021
+	// still work. Production deployments must wire it (this main.go
+	// is production).
+	idempotencyRepo := repository.NewIdempotencyRepository(db)
 
 	// Taglio 2.2: the central CredentialVault. It owns the encryptor +
 	// the *sql.DB (for pg_advisory_xact_lock during refresh) + the
@@ -150,6 +158,11 @@ func main() {
 		// (see routes_test.go patterns).
 		api.WithApiKeyStore(apiKeyRepo),
 		api.WithApiKeyAuthenticator(apiKeyAuth),
+		// Zernio Milestone publish-state-machine — idempotency cache
+		// backing for handleCreatePost. Uses the Idempotency-Key
+		// request header for at-most-once POST semantics; payload
+		// hash mismatch on replay → 409.
+		api.WithIdempotencyStore(idempotencyRepo),
 	}
 	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)

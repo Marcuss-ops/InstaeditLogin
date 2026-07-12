@@ -19,7 +19,7 @@ import (
 //
 // Capabilities exposed (Taglio 4.2):
 //   - OAuthProvider (login flow)
-//   - ContentValidator (video_url required; caption ≤ 4000 runes)
+//   - ContentValidator (video required; caption ≤ 4000 runes)
 //   - Publisher (Publisher.Publish = thin wrapper that calls StartPublish
 //     and returns immediately with the publish_id, for backward compat
 //     with the existing Publisher contract used by the worker's tick)
@@ -118,12 +118,12 @@ func (s *TikTokOAuthService) HandleCallback(ctx context.Context, state, code str
 	return profile, tokenData, nil
 }
 
-// ValidateContent enforces TikTok's hard requirements: a video_url and
+// ValidateContent enforces TikTok's hard requirements: a video and
 // caption not exceeding 4000 runes. Privacy/comment/duet modes are
 // validated separately by the public-API normalisation functions below.
 func (s *TikTokOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.VideoURL == "" {
-		return fmt.Errorf("tiktok requires a video_url for publishing")
+		return fmt.Errorf("tiktok requires a video for publishing")
 	}
 	if n := len([]rune(payload.Text)); n > tikTokTitleMaxRunes {
 		return fmt.Errorf("tiktok caption exceeds %d-rune limit (got %d)", tikTokTitleMaxRunes, n)

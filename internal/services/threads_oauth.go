@@ -116,7 +116,7 @@ func (s *ThreadsOAuthService) RefreshOAuthToken(ctx context.Context, currentToke
 // ValidateContent enforces Threads' content requirements.
 func (s *ThreadsOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.Text == "" && payload.ImageURL == "" && payload.VideoURL == "" {
-		return fmt.Errorf("threads requires text, an image_url, or a video_url")
+		return fmt.Errorf("threads requires text or media")
 	}
 	return nil
 }
