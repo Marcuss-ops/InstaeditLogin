@@ -8,5 +8,4 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 )
-// Trigger redeployment on Vercel with web root directory
 

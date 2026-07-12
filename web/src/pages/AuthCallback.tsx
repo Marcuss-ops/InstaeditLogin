@@ -40,7 +40,7 @@ export function AuthCallback() {
           clearSessionCache();
           setStatus("success");
           // Replace history so the ?code= URL never lands in browser history.
-          navigate("/dashboard", {
+          navigate("/accounts", {
             replace: true,
             state: { provider },
           });
@@ -91,7 +91,7 @@ export function AuthCallback() {
               Signed in.
             </h1>
             <p className="text-[15px] text-neutral-500">
-              Redirecting to your dashboard…
+              Redirecting to your accounts…
             </p>
           </>
         )}

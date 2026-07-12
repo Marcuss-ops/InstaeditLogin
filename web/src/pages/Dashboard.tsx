@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { AlertTriangle, Calendar, ChevronRight, LogOut, RefreshCw, Sparkles } from "lucide-react";
+import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
+import { Nav } from "../components/Nav";
 import { API_BASE_URL } from "../lib/api";
 import { PROVIDERS, getProvider, type ProviderId } from "../lib/providers";
 import {
@@ -9,9 +10,6 @@ import {
   authedFetch,
   clearSessionCache,
   fetchSession,
-  logout,
-  probeBackend,
-  type ProbeResult,
 } from "../lib/auth";
 
 type PlatformAccount = {
@@ -26,27 +24,23 @@ type PlatformAccount = {
 
 type FetchState =
   | { kind: "loading" }
-  | { kind: "backend_offline"; probe: Extract<ProbeResult, { ok: false }> }
+  | { kind: "backend_offline" }
   | { kind: "empty"; name: string }
   | { kind: "ready"; name: string; accounts: PlatformAccount[] }
   | { kind: "error"; message: string };
 
 const NEW_BADGE_HOURS = 24;
-const DEFAULT_TIMEOUT_MS = 5000;
+const REQUEST_ID = () => crypto.randomUUID?.()?.slice(0, 8) ?? Math.random().toString(36).slice(2, 10);
 
 function isFresh(createdAt: string): boolean {
   const created = new Date(createdAt).getTime();
-  if (Number.isNaN(created)) {
-    return false;
-  }
+  if (Number.isNaN(created)) return false;
   return Date.now() - created < NEW_BADGE_HOURS * 60 * 60 * 1000;
 }
 
 function formatJoined(createdAt: string): string {
   const created = new Date(createdAt);
-  if (Number.isNaN(created.getTime())) {
-    return "recently";
-  }
+  if (Number.isNaN(created.getTime())) return "recently";
   return created.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -59,8 +53,6 @@ export function Dashboard() {
   const navigate = useNavigate();
   const [state, setState] = useState<FetchState>({ kind: "loading" });
   const [sessionName, setSessionName] = useState<string>("");
-  // Cancels in-flight probe/fetch on retry so Refresh-button mashing can't
-  // race two responses into the state machine.
   const abortRef = useRef<AbortController | null>(null);
 
   const loadAccounts = useCallback(async (nameFallback = "") => {
@@ -68,27 +60,14 @@ export function Dashboard() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    if (controller.signal.aborted) {
-      return;
-    }
+    if (controller.signal.aborted) return;
     setState({ kind: "loading" });
-    // Probe the backend first so we can tell the user "the API host is down"
-    // distinctly from "the API host says no accounts".
-    const probe = await probeBackend(DEFAULT_TIMEOUT_MS, controller.signal);
-    if (controller.signal.aborted) {
-      return;
-    }
-    if (!probe.ok) {
-      setState({ kind: "backend_offline", probe });
-      return;
-    }
+
     try {
       const response = await authedFetch("/api/v1/accounts", {
         signal: controller.signal,
       });
-      if (controller.signal.aborted) {
-        return;
-      }
+      if (controller.signal.aborted) return;
       const data = (await response.json()) as { accounts: PlatformAccount[] };
       const accounts = data.accounts ?? [];
       setState(
@@ -97,15 +76,18 @@ export function Dashboard() {
           : { kind: "ready", name: nameFallback, accounts },
       );
     } catch (err) {
-      if (controller.signal.aborted) {
-        return;
-      }
+      if (controller.signal.aborted) return;
       if (err instanceof AuthError) {
         navigate("/login", { replace: true });
         return;
       }
       // AbortError from the controller cancels silently.
       if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      // Network-level failures (TypeError on fetch) = backend offline.
+      if (err instanceof TypeError || (err instanceof Error && err.message.toLowerCase().includes("fetch"))) {
+        setState({ kind: "backend_offline" });
         return;
       }
       const message = err instanceof ApiError ? err.message : "Unable to reach the API.";
@@ -116,8 +98,6 @@ export function Dashboard() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      // Taglio 1.2: identity arrives via the HttpOnly session cookie,
-      // not localStorage. Probe /api/v1/auth/me to learn who the user is.
       const session = await fetchSession();
       if (cancelled) return;
       if (!session) {
@@ -144,35 +124,18 @@ export function Dashboard() {
 
   return (
     <div className="min-h-screen bg-neutral-50 flex flex-col">
+      <Nav />
       <div className="max-w-[1100px] mx-auto px-6 w-full">
-        {/* Top bar */}
-        <div className="flex items-center justify-between py-6">
-          <Link
-            to="/"
-            className="text-sm font-medium text-neutral-500 hover:text-black transition-colors no-underline"
-          >
-            ← Back to home
-          </Link>
-          <button
-            type="button"
-            onClick={() => logout("/login")}
-            className="inline-flex items-center gap-2 text-sm font-medium text-neutral-500 hover:text-black transition-colors"
-          >
-            <LogOut size={14} />
-            Log out
-          </button>
-        </div>
-
         {/* Heading */}
         <div className="flex flex-col items-center justify-center py-8">
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500 to-violet-500 flex items-center justify-center mb-5 shadow-[0_8px_24px_rgba(123,97,255,0.25)]">
             <Sparkles size={26} className="text-white" />
           </div>
           <h1 className="text-[clamp(28px,4vw,38px)] font-extrabold tracking-[-0.02em] mb-2 text-black text-center">
-            {sessionName ? `Welcome, ${sessionName}` : "Your dashboard"}
+            {sessionName ? `Welcome, ${sessionName}` : "Your accounts"}
           </h1>
           <p className="text-neutral-500 text-[16px] text-center max-w-[480px]">
-            Manage connected accounts, publish content, and track your reach — all from one place.
+            Manage connected accounts, publish content, and track your reach.
           </p>
 
           {justConnected && (
@@ -226,31 +189,21 @@ export function Dashboard() {
           )}
 
           {state.kind === "backend_offline" && (
-            <div
-              role="alert"
-              aria-live="polite"
-              className="bg-red-50 border border-red-200 rounded-xl p-6 flex items-start gap-3"
-            >
-              <AlertTriangle size={20} className="text-red-500 mt-0.5 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-red-700 font-bold text-[15px] mb-1">
-                  Backend is unreachable
-                </p>
-                <p className="text-red-700/90 text-[13px] leading-relaxed mb-2">
-                  {state.probe.message}
-                </p>
-                <p className="text-neutral-700 text-[13px] leading-relaxed font-mono break-all">
-                  Probed: {state.probe.url}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void loadAccounts()}
-                  className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white text-[13px] font-semibold hover:bg-red-700 transition-colors"
-                >
-                  <RefreshCw size={14} />
-                  Retry probe
-                </button>
-              </div>
+            <div className="bg-white border border-neutral-200 rounded-xl p-8 text-center">
+              <p className="text-red-500 font-semibold text-[15px] mb-1">
+                Backend unavailable
+              </p>
+              <p className="text-[13px] text-neutral-500 mb-2 font-mono">
+                Request ID: {REQUEST_ID()}
+              </p>
+              <button
+                type="button"
+                onClick={() => void loadAccounts()}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-black text-white text-[14px] font-semibold hover:bg-neutral-800 transition-colors"
+              >
+                <RefreshCw size={14} />
+                Retry
+              </button>
             </div>
           )}
 
@@ -293,7 +246,6 @@ export function Dashboard() {
                     <div
                       className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${provider.color}`}
                     />
-
                     <div className="flex items-center gap-4">
                       <div
                         className={`w-12 h-12 rounded-xl bg-gradient-to-br ${provider.color} flex items-center justify-center text-white shrink-0`}
@@ -325,49 +277,6 @@ export function Dashboard() {
             </div>
           )}
         </section>
-
-        {/* Quick actions (placeholder cards -> real upcoming features) */}
-        {state.kind === "ready" && (
-          <section className="pb-16">
-            <h2 className="text-[20px] font-bold tracking-[-0.01em] text-black mb-5">
-              Quick actions
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                {
-                  icon: <Calendar size={22} />,
-                  title: "Schedule a post",
-                  desc: "Calendar view across all connected platforms",
-                },
-                {
-                  icon: <Sparkles size={22} />,
-                  title: "AI-assisted drafts",
-                  desc: "Generate captions and edits from prompts",
-                },
-                {
-                  icon: <ChevronRight size={22} />,
-                  title: "Connect more",
-                  desc: "Add another platform to your stack",
-                },
-              ].map((card) => (
-                <div
-                  key={card.title}
-                  className="bg-white border border-neutral-200 rounded-xl p-6 flex flex-col items-start gap-3 hover:shadow-[0_8px_24px_rgba(0,0,0,0.04)] transition-all"
-                >
-                  <div className="w-12 h-12 rounded-xl bg-neutral-100 flex items-center justify-center text-black">
-                    {card.icon}
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-[15px] text-black mb-1">
-                      {card.title}
-                    </h3>
-                    <p className="text-[13px] text-neutral-500">{card.desc}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
       </div>
     </div>
   );

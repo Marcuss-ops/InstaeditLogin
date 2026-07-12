@@ -1,54 +1,26 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { Nav } from "./components/Nav";
-import { Hero } from "./components/Hero";
-import { PromiseBanner } from "./components/PromiseBanner";
-import { Features } from "./components/Features";
-import { Monetize } from "./components/Monetize";
-import { CTA } from "./components/CTA";
-import { Footer } from "./components/Footer";
-import { TikTokSection } from "./components/TikTokSection";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { AuthCallback } from "./pages/AuthCallback";
 import { PrivacyPolicy } from "./pages/PrivacyPolicy";
 import { TermsOfService } from "./pages/TermsOfService";
-import { Status } from "./pages/Status";
-
-function LandingPage() {
-  return (
-    <div className="min-h-screen antialiased isolate">
-      <div className="ambient-orbs" aria-hidden="true">
-        <div className="orb orb-1"></div>
-        <div className="orb orb-2"></div>
-        <div className="orb orb-3"></div>
-        <div className="orb orb-4"></div>
-        <div className="orb orb-5"></div>
-      </div>
-      <Nav />
-      <main>
-        <Hero />
-        <PromiseBanner />
-        <Features />
-        <Monetize />
-        <CTA />
-      </main>
-      <Footer />
-    </div>
-  );
-}
+import { Compose } from "./pages/Compose";
+import { Posts } from "./pages/Posts";
+import { Settings } from "./pages/Settings";
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<LandingPage />} />
+        <Route path="/" element={<Navigate to="/accounts" replace />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/accounts" element={<Dashboard />} />
+        <Route path="/compose" element={<Compose />} />
+        <Route path="/posts" element={<Posts />} />
+        <Route path="/settings/api" element={<Settings />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
-        <Route path="/status" element={<Status />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/terms" element={<TermsOfService />} />
-        <Route path="/tiktok" element={<TikTokSection />} />
       </Routes>
     </BrowserRouter>
   );
