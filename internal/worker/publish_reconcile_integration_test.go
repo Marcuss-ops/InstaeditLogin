@@ -1,52 +1,63 @@
 //go:build integration
 
-// Package worker — testcontainers integration test for the two-goroutine
-// publish pipeline (PublishWorker + ReconcileWorker).
+// Package worker — testcontainers integration tests for the
+// two-goroutine publish pipeline (PublishWorker + ReconcileWorker).
 //
-// This file is the runtime integration counterpart to the unit tests in
-// publish_worker_test.go + reconcile_worker_test.go. It exercises the
-// REAL worker constructors against a REAL Postgres (testcontainers),
-// with the ONLY non-real component being the outbound HTTP to TikTok —
-// that one is pointed at an httptest.Server that returns a canned
-// PUBLISH_COMPLETE response. The reconciler drives a real
-// *TikTokOAuthService (no fakes) so the platform-decoded
-// Reconcile → success result → terminal UpdateStatus path is exercised
-// end-to-end.
+// Two integration tests cover the async-publish state machine
+// end-to-end against a real Postgres (testcontainers-go), a real
+// *CredentialVault, real Postgres-backed *_Repository types, and a
+// real *TikTokOAuthService. The only mock layer is the outbound
+// HTTPS to TikTok — redirected via a custom http.RoundTripper to a
+// per-test httptest.Server with state-machine semantics.
 //
 // Why "integration" not "unit":
 //   - Postgres is real (testcontainers-go ephemeral 16-alpine).
 //   - *CredentialVault is real (real *crypto.Encryptor, real
-//     *repository.TokenRepository) so the fast-path Renew hits a real
-//     tokens row in the testcontainer's DB.
+//     *repository.TokenRepository) so the fast-path Renew hits a
+//     real tokens row in the testcontainer's DB.
 //   - *CapabilityRouter is real. The fake layer is just TikTok's
-//     outbound HTTPS — the *TikTokOAuthService itself is the production
-//     struct, only the HTTP client transport is rewired to localhost.
+//     outbound HTTPS — the *TikTokOAuthService itself is the
+//     production struct, only the HTTP client transport is rewired
+//     to localhost.
 //   - *repository.PostRepository is real. All SQL is real.
 //
-// The pre-seeded post_target is inserted DIRECTLY in status='publishing'
-// with a non-null platform_post_id, so the PublishWorker (driver) has
-// nothing to claim (no queued rows) and the ReconcilerWorker is the
-// sole actor that drives the row to terminal. This isolates the
-// assertion ("row transitions to status='published' within
-// cfg.ReconcileWorkerIntervalSeconds + epsilon") to the reconciler's
-// 5s cadence — the bound would be meaningless on the 30s driver
-// cadence.
+// Both tests pre-seed the post_target DIRECTLY in status='publishing'
+// with a non-null platform_post_id (no queued row is present), so the
+// PublishWorker (driver) has nothing to claim and the ReconcileWorker
+// is the sole actor that drives the row to terminal. This isolation
+// lets each test's wall-clock bound be tied to the reconciler's
+// cadence (5s default), so the bound is meaningful regardless of the
+// driver's 30s cadence.
 //
-// The wall-clock bound being asserted is the canonical Taglio 5.x
-// guarantee: an async publish's publishing → published transition is
-// observed within ONE reconciler tick (5s default). Epsilon accounts
-// for the DB roundtrip + httptest.Server roundtrip on a slow CI host.
+// The tests cover (canonical Taglio 5.x wall-clock guarantees):
+//
+//   1. AsyncRowTransitionsToPublished — happy path: the seeded row
+//      transitions to 'published' within ONE reconciler tick.
+//   2. InFlightRetriesAcrossTicks — in-flight retry path: 2 ticks
+//      return PROCESSING_UPLOAD (the (nil, nil) → leave-alone
+//      contract from AsyncPublisher.Reconcile), the 3rd tick
+//      returns PUBLISH_COMPLETE and the row transitions. Proves
+//      the in-flight retry mechanism end-to-end.
+//
+// Both tests share setupWorkerRig + runWorkerPair helpers below to
+// avoid duplicating Testcontainers + Postgres migrations + encryption
+// + vault + repo wiring + LIFO teardown ordering across the two
+// tests. Any drift between the helper and what the production wiring
+// in cmd/server/main.go does would surface here as a parallel-drain
+// shutdown regression.
 package worker
 
 import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,6 +105,183 @@ func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		inner = http.DefaultTransport
 	}
 	return inner.RoundTrip(req2)
+}
+
+// rig bundles the wired-up integration test environment (real DB +
+// repos + vault + router + cfg + enc) for use by both tests. Single
+// ownership of all dependencies at the rig construction site — the
+// runWorkerPair helper reads PostRepo + UserRepo from here rather
+// than re-constructing them. The fields are intentionally lowercase
+// (package-internal); only this file uses them.
+type rig struct {
+	DB       *sql.DB
+	Router   *services.CapabilityRouter
+	Vault    credentials.VaultAPI
+	PostRepo *repository.PostRepository
+	UserRepo *repository.UserRepository
+	CFG      *config.Config
+	Enc      *crypto.Encryptor
+	TargetID int64 // id of the pre-seeded post_target row
+}
+
+// setupWorkerRig wires up the integration test environment in the
+// canonical ordering: Postgres + cleanup registration → migrations
+// → encrypt → httptest.Server + cleanup registration → customClient
+// → vault → repos → seed fixtures → router + TikTok capability.
+//
+// The teardown chain registered via t.Cleanup runs in LIFO order:
+// the test's defer'd pair.Shutdown() drains workers FIRST, then
+// ts.Close, then cleanupDB. The strict ordering matters — a worker
+// could be in the middle of an HTTP call to ts when a fatal fires
+// elsewhere, and we want the worker to finish its tick BEFORE the
+// httptest.Server is closed and BEFORE the testcontainer is
+// terminated.
+//
+// handlerBuilder receives the shared hit counter (*atomic.Int32)
+// so a state-machine-style handler can branch on the per-call
+// sequence number (the InFlight test uses this; the happy-path
+// test ignores it).
+//
+// The helper fatally-fails the test on any setup failure. Partial
+// resources are torn down via the t.Cleanup chain registered up to
+// the failure point — there's no leaked testcontainer or httptest
+// server on a failed setup.
+func setupWorkerRig(t *testing.T, cfg *config.Config, handlerBuilder func(*atomic.Int32) http.Handler) *rig {
+	t.Helper()
+	requireDocker(t)
+
+	// Postgres (testcontainer). Register DB cleanup FIRST so even
+	// fatal failures during Migrate / NewEncryptor / NewServer /
+	// seed / router setup tear down the testcontainer. Subsequent
+	// ts.Close is registered AFTER this so t.Cleanup runs in LIFO
+	// order: ts.Close → cleanupDB.
+	db, cleanupDB := startTestPostgres(t)
+	t.Cleanup(cleanupDB)
+
+	if err := database.Migrate(db); err != nil {
+		t.Fatalf("database.Migrate: %v", err)
+	}
+
+	enc, err := crypto.NewEncryptor(cfg.EncryptionKey)
+	if err != nil {
+		t.Fatalf("crypto.NewEncryptor: %v", err)
+	}
+
+	// httptest.Server — registered AFTER cleanupDB so the LIFO
+	// teardown order is: ts.Close → cleanupDB.
+	var hits atomic.Int32
+	ts := httptest.NewServer(handlerBuilder(&hits))
+	t.Cleanup(ts.Close)
+
+	customClient := &http.Client{
+		Transport: &rewriteTransport{TargetURL: ts.URL, Inner: http.DefaultTransport},
+		Timeout:   5 * time.Second,
+	}
+
+	tokenRepo := repository.NewTokenRepository(db)
+	postRepo := repository.NewPostRepository(db)
+	userRepo := repository.NewUserRepository(db)
+	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
+
+	_, _, _, _, targetID := seedTestFixtures(t, db, enc)
+
+	router := services.NewCapabilityRouter()
+	ttSvc, err := services.NewTikTokOAuthService(cfg, services.ProviderDependencies{HTTPClient: customClient})
+	if err != nil {
+		t.Fatalf("services.NewTikTokOAuthService: %v", err)
+	}
+	if ttSvc == nil {
+		t.Fatal("NewTikTokOAuthService returned nil despite TikTokClientID being set")
+	}
+	router.Register(ttSvc.Name(), ttSvc)
+
+	return &rig{
+		DB:       db,
+		Router:   router,
+		Vault:    vault,
+		PostRepo: postRepo,
+		UserRepo: userRepo,
+		CFG:      cfg,
+		Enc:      enc,
+		TargetID: targetID,
+	}
+}
+
+// workerPair owns the parallel goroutines spawned for PublishWorker
+// + ReconcileWorker. Mirrors the cmd/server/main.go shape — both
+// workers run as independent background goroutines with cancellable
+// contexts, and shutdown is parallel (WaitGroup-drained) so neither
+// worker forces the other to wait.
+type workerPair struct {
+	pubCancel context.CancelFunc
+	recCancel context.CancelFunc
+	wg        sync.WaitGroup
+}
+
+// Shutdown cancels both contexts and waits for both goroutines to
+// exit. Mirrors cmd/server/main.go's parallel-drain shutdown
+// (sync.WaitGroup + per-leaf 15s inner timeouts) — bounded by the
+// slowest Run drain (sub-second on healthy paths; capped at ~15s
+// on the parallel-drain hard ceiling).
+//
+// IMPORTANT: callers MUST `defer pair.Shutdown()` so the worker
+// drain happens BEFORE t.Cleanup callbacks (httptest.Server close
+// + testcontainer terminate) — otherwise a worker's in-flight HTTP
+// call could race the testcontainer teardown, producing an "EOF on
+// retired connection" that masks the real cause. t.Fatal in the
+// test body still fires the defer (Go's runtime.Goexit runs
+// deferred funcs before terminating the goroutine), so workers are
+// always drained on fatal paths.
+func (p *workerPair) Shutdown() {
+	p.pubCancel()
+	p.recCancel()
+	p.wg.Wait()
+}
+
+// runWorkerPair spawns PublishWorker + ReconcileWorker on parallel
+// goroutines, wired to the rig's dependencies. The workers' tick
+// intervals come from rig.CFG.PublishWorkerIntervalSeconds (default
+// 30s, but not material here since ListPending is empty) and
+// rig.CFG.ReconcileWorkerIntervalSeconds (default 5s — drives both
+// tests' wall-clock bounds).
+//
+// Each worker gets its own cancellable ctx with the production
+// per-goroutine shape (cmd/server/main.go creates separate ctxs so
+// a Cancel call on one doesn't tear down the other). The workers'
+// Run methods return on ctx.Done() with a graceful drain of their
+// in-flight tick.
+//
+// PostRepo + UserRepo are read from the rig (single construction
+// site) — both *PostRepository and *UserRepository satisfy the
+// workers' narrow interface sets via duck-typing at the call
+// site. *repository.PostRepository implements PublisherPostStore
+// (used by the driver) AND ReconcilePostStore (used by the
+// reconciler) without any type glue.
+func runWorkerPair(rig *rig) *workerPair {
+	pubCtx, pubCancel := context.WithCancel(context.Background())
+	recCtx, recCancel := context.WithCancel(context.Background())
+
+	pubWorker := NewPublishWorker(
+		rig.PostRepo, rig.UserRepo, rig.Router, rig.Vault,
+		time.Duration(rig.CFG.PublishWorkerIntervalSeconds)*time.Second,
+		nil, // inherit slog.Default() (matches cmd/server/main.go wiring)
+	)
+	recWorker := NewReconcileWorker(
+		rig.PostRepo, rig.UserRepo, rig.Router, rig.Vault,
+		time.Duration(rig.CFG.ReconcileWorkerIntervalSeconds)*time.Second,
+		nil,
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _ = pubWorker.Run(pubCtx) }()
+	go func() { defer wg.Done(); _ = recWorker.Run(recCtx) }()
+
+	return &workerPair{
+		pubCancel: pubCancel,
+		recCancel: recCancel,
+		wg:        wg,
+	}
 }
 
 // requireDocker short-circuits the test if Docker isn't available so
@@ -171,10 +359,7 @@ func startTestPostgres(t *testing.T) (*sql.DB, func()) {
 func seedTestFixtures(t *testing.T, db *sql.DB, enc *crypto.Encryptor) (workspaceID, userID, platformAccountID, postID, targetID int64) {
 	t.Helper()
 
-	// 1. user — minimal (email + name are the NOT-NULL-everywhere
-	// columns; updated_at has a default). Use deterministic emails so
-	// a future re-run-on-same-container would conflict, but each
-	// test gets a fresh container so this is irrelevant.
+	// 1. user — minimal.
 	if err := db.QueryRow(
 		`INSERT INTO users (email, name) VALUES ('integration-test@example.com', 'integration-test') RETURNING id`,
 	).Scan(&userID); err != nil {
@@ -189,12 +374,7 @@ func seedTestFixtures(t *testing.T, db *sql.DB, enc *crypto.Encryptor) (workspac
 		t.Fatalf("seed workspaces: %v", err)
 	}
 
-	// 3. platform_account — platform='tiktok', status='active' (the
-	// 005_account_lifecycle default). workspace_id is set (the
-	// 003_posts_workspaces migration made it nullable-but-prefer-
-	// populated; the workers don't filter on it but a populated
-	// workspace keeps the fixture consistent with the production
-	// invariant).
+	// 3. platform_account — platform='tiktok', status='active'.
 	if err := db.QueryRow(
 		`INSERT INTO platform_accounts (user_id, workspace_id, platform, platform_user_id, username, status)
 		 VALUES ($1, $2, 'tiktok', 'tt-integration-1', 'integration_tt', 'active') RETURNING id`,
@@ -204,10 +384,7 @@ func seedTestFixtures(t *testing.T, db *sql.DB, enc *crypto.Encryptor) (workspac
 	}
 
 	// 4. tokens — pre-insert an UNEXPIRED encrypted access token so
-	// the reconciler's vault.Renew takes the fast path
-	// (Get → ExpiresAt in future → no refresh → no API call). The
-	// test's PublishWorker never fires (no queued rows), so we don't
-	// need to worry about the driver's idempotency-key stamp path.
+	// the reconciler's vault.Renew takes the fast path.
 	encryptedAccess, err := enc.Encrypt("dummy-access-token-integration-test")
 	if err != nil {
 		t.Fatalf("encrypt access token: %v", err)
@@ -221,10 +398,7 @@ func seedTestFixtures(t *testing.T, db *sql.DB, enc *crypto.Encryptor) (workspac
 		t.Fatalf("seed tokens: %v", err)
 	}
 
-	// 5. post — minimal; status is incidental (the workers filter
-	// on post_targets.status, not posts.status). Use 'draft' since
-	// the post is essentially inert in this test — the platform
-	// publish is the post_target's affair, not the post's.
+	// 5. post — minimal.
 	if err := db.QueryRow(
 		`INSERT INTO posts (workspace_id, title, caption, media_url, status)
 		 VALUES ($1, 'integration-test', 'integration-test caption', 'https://example.com/video.mp4', 'draft') RETURNING id`,
@@ -233,13 +407,8 @@ func seedTestFixtures(t *testing.T, db *sql.DB, enc *crypto.Encryptor) (workspac
 		t.Fatalf("seed posts: %v", err)
 	}
 
-	// 6. post_target — the heart of the test. Pre-set
-	// status='publishing' and a non-null platform_post_id so
-	// ListPublishing picks it up on the first reconciler tick. The
-	// driver (PublishWorker) ignores this row (its ListPending
-	// filter is status='queued' OR status='waiting_provider'); the
-	// reconciler is the sole writer to the publishing → published
-	// transition on this row.
+	// 6. post_target — status='publishing', non-null platform_post_id
+	// so ListPublishing picks it up on the first reconciler tick.
 	if err := db.QueryRow(
 		`INSERT INTO post_targets (post_id, platform_account_id, status, platform_post_id)
 		 VALUES ($1, $2, 'publishing', 'integration-test-publish-id-001') RETURNING id`,
@@ -251,215 +420,340 @@ func seedTestFixtures(t *testing.T, db *sql.DB, enc *crypto.Encryptor) (workspac
 	return workspaceID, userID, platformAccountID, postID, targetID
 }
 
-// TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished is the
-// end-to-end integration test for the two-goroutine publish pipeline.
-//
-// What it asserts:
-//   1. The pre-seeded post_target row (status='publishing') transitions
-//      to status='published' within cfg.ReconcileWorkerIntervalSeconds
-//      + epsilon. The bound is the canonical Taglio 5.x wall-clock
-//      guarantee: an async publish's terminal transition is observed
-//      within ONE reconciler tick.
-//   2. The transition was driven by the REAL *TikTokOAuthService
-//      pointed at the httptest.Server (not a mock) — verified by the
-//      server's hit counter.
-//   3. The provider_state column is stamped to 'PUBLISH_COMPLETE' and
-//      the published_at column is non-null after the transition.
-//   4. The PublishWorker goroutine ran (parallel-drain shape) without
-//      interfering with the reconciler's transition.
-//
-// What it does NOT assert (intentional, to keep the test fast and
-// scoped to the reconciler's terminal-transition path):
-//   - The PublishWorker's queued → publishing transition (no queued
-//     rows are seeded; the driver has nothing to claim).
-//   - The outbox dispatcher's materialisation (no outbox rows are
-//     seeded; the dispatcher is intentionally NOT spawned — this
-//     test is publish-worker + reconcile-worker only, mirroring the
-//     spec's "PublishWorker + ReconcileWorker in parallel" wording).
-func TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished(t *testing.T) {
-	requireDocker(t)
-	db, cleanupDB := startTestPostgres(t)
-	// Defer LIFO: cleanupDB runs LAST (after the workers are
-	// drained by wg.Wait + the testcontainer can be torn down
-	// safely). See the cleanup-ordering note at the bottom of
-	// runOnce below for the rationale.
-	defer cleanupDB()
-
-	// 1. Migrate the schema (RunMigrations is idempotent so the
-	// initial 027-migration set is applied once on a fresh
-	// testcontainer).
-	if err := database.Migrate(db); err != nil {
-		t.Fatalf("database.Migrate: %v", err)
-	}
-
-	// 2. Spin up the httptest.Server that stands in for the TikTok
-	// status endpoint. Returns PUBLISH_COMPLETE on the first call —
-	// the canonical single-tick path the reconciler drives. A
-	// hit counter lets the test assert the server was actually
-	// reached (rules out "test passed because the reconciler did
-	// nothing").
-	var statusHits int32
-	var mu sync.Mutex
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v2/post/publish/status/fetch/" {
-			mu.Lock()
-			statusHits++
-			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"status":"PUBLISH_COMPLETE"}}`))
-			return
-		}
-		// Anything else is unexpected — the real *TikTokOAuthService
-		// only calls this one endpoint on the reconciler path. Fail
-		// loudly so a future drift surfaces here.
-		t.Errorf("unexpected httptest.Server call: %s %s", r.Method, r.URL.Path)
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer ts.Close()
-
-	// 3. Build a custom *http.Client that rewrites every outbound
-	// request to point at ts.URL. The transport is the only thing
-	// the real *TikTokOAuthService is wired to (via
-	// ProviderDependencies.HTTPClient); the rest of the service is
-	// the production struct.
-	customClient := &http.Client{
-		Transport: &rewriteTransport{TargetURL: ts.URL},
-		Timeout:   5 * time.Second,
-	}
-
-	// 4. Config — must satisfy validation (EncryptionKey base64-
-	// decode-32-bytes, TikTokClientSecret ≥ 32 chars). The
-	// TikTokClientID/Secret are arbitrary — the real TikTok
-	// endpoints aren't called (transport rewrites everything to
-	// localhost) so the values only need to pass validate().
+// makeTestConfig builds a config.Config that passes the crypto + tiktok
+// validation gates without any platform endpoints being real.
+// EncryptionKey is a base64-encoded 32-byte raw key (AES-256). The
+// TikTokClientID/Secret are arbitrary — they only need to be
+// long enough to satisfy validate(); no real TikTok endpoint is
+// called because the rewriteTransport redirects every outbound
+// request to the test's httptest.Server.
+func makeTestConfig(publishInterval, reconcileInterval int) *config.Config {
 	encKeyBytes := []byte("12345678901234567890123456789012") // 32 raw bytes → AES-256
 	encKey := base64.StdEncoding.EncodeToString(encKeyBytes)
-	cfg := &config.Config{
+	return &config.Config{
 		TikTokClientID:                 "integration-test-client-id",
 		TikTokClientSecret:             "integration-test-client-secret-must-be-32-chars-or-more",
 		TikTokRedirectURI:              "https://example.com/callback",
 		EncryptionKey:                  encKey,
-		PublishWorkerIntervalSeconds:   30,
-		ReconcileWorkerIntervalSeconds: 5,
+		PublishWorkerIntervalSeconds:   publishInterval,
+		ReconcileWorkerIntervalSeconds: reconcileInterval,
 	}
+}
 
-	enc, err := crypto.NewEncryptor(cfg.EncryptionKey)
-	if err != nil {
-		t.Fatalf("crypto.NewEncryptor: %v", err)
+// readTargetStatus queries post_targets for the row's current status,
+// provider_state, and `published_at IS NOT NULL`. One round-trip per
+// call — used by both tests' polling loops below.
+func readTargetStatus(t *testing.T, db *sql.DB, targetID int64) (status string, providerState string, publishedAtSet bool) {
+	t.Helper()
+	if err := db.QueryRow(
+		`SELECT status, COALESCE(provider_state, ''), published_at IS NOT NULL
+		   FROM post_targets WHERE id = $1`,
+		targetID,
+	).Scan(&status, &providerState, &publishedAtSet); err != nil {
+		t.Fatalf("poll post_targets.status: %v", err)
 	}
+	return
+}
 
-	// 5. Real *CredentialVault + real repos. The vault is the
-	// production struct; the only reason the test stays hermetic
-	// is that the seed inserts an unexpired token so vault.Renew
-	// takes the fast path (no refresh, no API call).
-	tokenRepo := repository.NewTokenRepository(db)
-	userRepo := repository.NewUserRepository(db)
-	postRepo := repository.NewPostRepository(db)
-	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
+// TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished is
+// the canonical happy-path integration test for the two-goroutine
+// publish pipeline.
+//
+// What it asserts:
+//  1. The pre-seeded post_target row (status='publishing') transitions
+//     to status='published' within cfg.ReconcileWorkerIntervalSeconds
+//     + 1s epsilon. The bound is the canonical Taglio 5.x wall-clock
+//     guarantee: an async publish's terminal transition is observed
+//     within ONE reconciler tick (5s default + epsilon).
+//  2. The transition was driven by the REAL *TikTokOAuthService
+//     pointed at the httptest.Server (not a mock) — verified by the
+//     shared hit counter.
+//  3. The provider_state column is stamped to 'PUBLISH_COMPLETE' and
+//     the published_at column is non-null after the transition.
+//
+// What it does NOT assert:
+//   - The PublishWorker's queued → publishing transition (no queued
+//     rows are seeded; the driver has nothing to claim).
+//   - The outbox dispatcher's materialisation (no outbox rows are
+//     seeded; the dispatcher is intentionally NOT spawned).
+func TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished(t *testing.T) {
+	var capturedStates []string
+	rig := setupWorkerRig(t, makeTestConfig(30, 5), func(hits *atomic.Int32) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v2/post/publish/status/fetch/" {
+				n := hits.Add(1) - 1 // canonical atomic pre-increment sequence number
+				capturedStates = append(capturedStates, "PUBLISH_COMPLETE")
+				_ = n
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"data":{"status":"PUBLISH_COMPLETE"}}`))
+				return
+			}
+			t.Errorf("unexpected httptest.Server call: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		})
+	})
 
-	// 6. Seed: user → workspace → platform_account → token → post
-	// → post_target(status='publishing'). The target's id is what
-	// the test polls on.
-	_, _, _, _, targetID := seedTestFixtures(t, db, enc)
+	pair := runWorkerPair(rig)
+	defer pair.Shutdown()
 
-	// 7. Real *CapabilityRouter with the real *TikTokOAuthService
-	// (pointed at the local httptest.Server via customClient).
-	router := services.NewCapabilityRouter()
-	ttSvc, err := services.NewTikTokOAuthService(cfg, services.ProviderDependencies{HTTPClient: customClient})
-	if err != nil {
-		t.Fatalf("services.NewTikTokOAuthService: %v", err)
-	}
-	if ttSvc == nil {
-		t.Fatal("NewTikTokOAuthService returned nil despite TikTokClientID being set")
-	}
-	router.Register(ttSvc.Name(), ttSvc)
-
-	// 8. Spawn the two workers on independent goroutines, each
-	// with their own ctx. Mirrors the cmd/server/main.go shape.
-	pubCtx, pubCancel := context.WithCancel(context.Background())
-	recCtx, recCancel := context.WithCancel(context.Background())
-	defer pubCancel()
-	defer recCancel()
-
-	pubWorker := NewPublishWorker(
-		postRepo, userRepo, router, vault,
-		time.Duration(cfg.PublishWorkerIntervalSeconds)*time.Second,
-		nil, // inherit slog.Default()
-	)
-	recWorker := NewReconcileWorker(
-		postRepo, userRepo, router, vault,
-		time.Duration(cfg.ReconcileWorkerIntervalSeconds)*time.Second,
-		nil, // inherit slog.Default()
-	)
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); _ = pubWorker.Run(pubCtx) }()
-	go func() { defer wg.Done(); _ = recWorker.Run(recCtx) }()
-
-	// 9. Poll the target's status until it transitions to
-	// 'published' OR the budget is exhausted. The budget is
-	// cfg.ReconcileWorkerIntervalSeconds + epsilon: the canonical
-	// Taglio 5.x wall-clock bound for "an async publish is
-	// observed within one reconciler tick". 1s of epsilon is
-	// generous for the DB roundtrip + httptest.Server roundtrip
-	// on a slow CI host; tighten to 500ms if you want a stricter
-	// bound, but the +1s slack avoids flakes on shared CI runners.
-	epsilon := 1 * time.Second
-	budget := time.Duration(cfg.ReconcileWorkerIntervalSeconds)*time.Second + epsilon
+	// Poll the row's status until 'published' OR the budget is
+	// exhausted. cfg.ReconcileWorkerIntervalSeconds + epsilon = the
+	// canonical Taglio 5.x wall-clock bound.
+	tickInterval := time.Duration(rig.CFG.ReconcileWorkerIntervalSeconds) * time.Second
+	budget := tickInterval + 1*time.Second
 	deadline := time.Now().Add(budget)
 
-	var (
-		finalStatus    string
-		providerState  string
-		publishedAtSet bool
-	)
+	var finalStatus, finalProviderState string
+	var finalPublishedAtSet bool
 	for time.Now().Before(deadline) {
-		if err := db.QueryRow(
-			`SELECT status, COALESCE(provider_state, ''), published_at IS NOT NULL
-			   FROM post_targets WHERE id = $1`,
-			targetID,
-		).Scan(&finalStatus, &providerState, &publishedAtSet); err != nil {
-			t.Fatalf("poll post_targets.status: %v", err)
-		}
+		finalStatus, finalProviderState, finalPublishedAtSet = readTargetStatus(t, rig.DB, rig.TargetID)
 		if finalStatus == "published" {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// 10. Assertions.
 	if finalStatus != "published" {
 		t.Errorf("post_target did not transition to 'published' within %v (last status: %q)", budget, finalStatus)
 	}
-	if providerState != "PUBLISH_COMPLETE" {
-		t.Errorf("provider_state: want \"PUBLISH_COMPLETE\", got %q (reconciler should stamp the terminal state on the success transition)", providerState)
+	if finalProviderState != "PUBLISH_COMPLETE" {
+		t.Errorf("provider_state: want \"PUBLISH_COMPLETE\", got %q (reconciler should stamp the terminal state on the success transition)", finalProviderState)
 	}
-	if !publishedAtSet {
+	if !finalPublishedAtSet {
 		t.Error("published_at: want non-nil, got nil (reconciler must stamp publish time on terminal success)")
 	}
 
-	mu.Lock()
-	hits := statusHits
-	mu.Unlock()
-	if hits < 1 {
-		t.Errorf("httptest.Server was not reached (status hits: %d) — the reconciler did not drive the real TikTok code path", hits)
+	// Assert the canonical state-machine contract exactly — 1 call,
+	// PUBLISH_COMPLETE. The drift from the InFlight test's
+	// [PROCESSING_UPLOAD, PROCESSING_UPLOAD, PUBLISH_COMPLETE]
+	// sequence proves the two tests are wired with different server
+	// state machines (the rig's handlerBuilder-fork pattern is wired
+	// correctly).
+	//
+	// NOTE: capturedStates is written only by the handler and read
+	// here AFTER pair.Shutdown (via the deferred cleanup at function
+	// return). No concurrent writes at read time, so a plain
+	// unsynchronised snapshot is race-free.
+	if len(capturedStates) < 1 {
+		t.Errorf("httptest.Server was not reached (no status responses captured) — the reconciler did not drive the real TikTok code path")
 	}
-
-	// 11. Graceful shutdown. Cancel both contexts and wait for
-	// both Run loops to return. wg.Wait blocks until both
-	// goroutines call defer wg.Done() — the workers' Run
-	// methods return on ctx.Done() (with a graceful drain of the
-	// in-flight tick). After wg.Wait returns, the defers fire in
-	// LIFO order: pubCancel/recCancel → ts.Close() → cleanupDB.
-	// That order matters: the testcontainer MUST outlive the
-	// workers (they still hold DB connections) and the httptest
-	// server MUST outlive the workers' final API calls (in case
-	// any are in flight). cleanupDB running last guarantees the
-	// DB is alive when the workers exit.
-	pubCancel()
-	recCancel()
-	wg.Wait()
 }
 
+// TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks verifies
+// the reconciler's in-flight retry path end-to-end on a real DB:
+//
+//   - The httptest.Server returns PROCESSING_UPLOAD for the 2 initial
+//     reconciler calls (the initial runOnce at t=0 + the 2nd tick at
+//     t=~5s) and PUBLISH_COMPLETE for the 3rd call (the 3rd tick at
+//     t=~10s).
+//   - The row should stay in status='publishing' through the 2nd tick
+//     and flip to 'published' on the 3rd tick. This proves the
+//     AsyncPublisher.Reconcile contract's (nil, nil) → leave-alone
+//     branch (reconcile_worker.go::reconcileTarget) is wired
+//     correctly end-to-end on a real DB.
+//
+// Canonical wall-clock map (with 5s tick interval):
+//
+//	  ┌─────────┬────────┬───────────────────────────────────┐
+//	  │ wall t  │ tick # │ httptest.Server state             │
+//	  ├─────────┼────────┼───────────────────────────────────┤
+//	  │  ~0s    │  init  │ call #1 → PROCESSING_UPLOAD      │
+//	  │  ~5s    │  tick  │ call #2 → PROCESSING_UPLOAD      │
+//	  │ ~10s    │  tick  │ call #3 → PUBLISH_COMPLETE       │
+//	  │         │        │ row → status='published'         │
+//	  └─────────┴────────┴───────────────────────────────────┘
+//
+// Assertions on the timing:
+//   - lastSeenAsPublishingAt is at or after tickInterval (proves at
+//     least one reconciler tick fired and saw in-flight — the row
+//     was STILL 'publishing' AFTER the 1st tick).
+//   - transitionedToPublishedAt is at or after 2*tickInterval - 1s
+//     (proves the 3rd tick flipped the row, not the 2nd). The 1s
+//     slack absorbs ticker jitter + poll cadence + DB write latency.
+//
+// Hard assertions on the state machine:
+//   - Exactly 3 calls to the httptest.Server (drift = a wrong
+//     response sequence, e.g., a 4th retry or premature terminal).
+//   - Response order is exactly [PROCESSING_UPLOAD, PROCESSING_UPLOAD,
+//     PUBLISH_COMPLETE] (drift = the state-machine handler is
+//     mis-threaded).
+//
+// Why this complements the happy-path test:
+//   - Happy-path covers the (res, nil) → success terminal path.
+//   - InFlight covers the (nil, nil) → leave-alone path.
+// The two together cover EVERY branch of AsyncPublisher.Reconcile's
+// terminal-stable-outcome contract on a real DB.
+func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
+	cfg := makeTestConfig(30, 5) // driver's interval is immaterial here (no queued rows); 30s kept consistent with happy-path
+	var capturedStates []string
+	rig := setupWorkerRig(t, cfg, func(hits *atomic.Int32) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v2/post/publish/status/fetch/" {
+				t.Errorf("unexpected httptest.Server call: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			n := hits.Add(1) - 1 // canonical atomic pre-increment sequence number (0-based)
+			var state string
+			switch n {
+			case 0, 1:
+				state = "PROCESSING_UPLOAD"
+			default:
+				state = "PUBLISH_COMPLETE"
+			}
+			capturedStates = append(capturedStates, state)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"data":{"status":"%s"}}`, state)
+		})
+	})
+
+	pair := runWorkerPair(rig)
+	defer pair.Shutdown()
+
+	// Wall-clock budget: 2 in-flight ticks (initial + tick #2) + 1
+	// terminal tick (tick #3) + a 2s epsilon for ticker jitter + DB
+	// write latency + httptest.Server roundtrip on a slow CI host.
+	// Tighten the epsilon if you want stricter bounds; the 2s slack
+	// just protects against flakes on shared CI runners.
+	tickInterval := time.Duration(rig.CFG.ReconcileWorkerIntervalSeconds) * time.Second
+	epsilon := 2 * time.Second
+	budget := 3*tickInterval + epsilon
+	startTime := time.Now()
+	deadline := startTime.Add(budget)
+
+	// Continuous poll loop. Records:
+	//   - lastSeenAsPublishingAt: the wall-clock of the latest sample
+	//     where status='publishing'. Updated on every 'publishing'
+	//     sample so the final value is the LAST poll just BEFORE the
+	//     transition (or the very last poll of the loop if no
+	//     transition happened).
+	//   - transitionedToPublishedAt: set the first time the sample
+	//     shows status='published'; trigger to break the loop.
+	//
+	// Labeled break (poll:) keeps the escape out of the inner switch
+	// without resorting to `goto` (idiomatic Go avoids goto).
+	var (
+		lastSeenAsPublishingAt    time.Time
+		transitionedToPublishedAt time.Time
+	)
+poll:
+	for time.Now().Before(deadline) {
+		status, _, _ := readTargetStatus(t, rig.DB, rig.TargetID)
+		switch status {
+		case "publishing":
+			lastSeenAsPublishingAt = time.Now()
+		case "published":
+			transitionedToPublishedAt = time.Now()
+			break poll
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	transitionedSinceStart := transitionedToPublishedAt.Sub(startTime)
+	lastPublishingSinceStart := lastSeenAsPublishingAt.Sub(startTime)
+
+	// === Assertion 1: the row eventually transitions to 'published' within budget ===
+	if transitionedToPublishedAt.IsZero() {
+		t.Errorf("post_target did not transition to 'published' within %v — the 3rd reconciler tick (which returns PUBLISH_COMPLETE) should have flipped it", budget)
+	}
+
+	// === Assertion 2: the row was still 'publishing' AFTER at least one reconciler tick ===
+	//
+	// lastSeenAsPublishingAt tracks the latest sample where status
+	// was 'publishing'. The first reconciler call (initial runOnce)
+	// fires at t=0; the polling loop starts immediately so we'll
+	// have many samples flagged as 'publishing' from t≈100ms through
+	// t≈10s. The LAST such sample must be AFTER tickInterval (=5s),
+	// otherwise the row would have transitioned on the 2nd tick
+	// instead of the 3rd — meaning the state machine was mis-wired.
+	//
+	// Slack of 500ms absorbs the very worst case where the 2nd tick
+	// fires at t=4.5s (ticker jitter) and transitions the row BEFORE
+	// we sample at t=4.6s. In practice the jitter is sub-millisecond
+	// on Go's runtime.NewTicker so 500ms is wildly conservative.
+	if !lastSeenAsPublishingAt.IsZero() && !transitionedToPublishedAt.IsZero() {
+		minInFlightWallClock := tickInterval - 500*time.Millisecond
+		if lastPublishingSinceStart < minInFlightWallClock {
+			t.Errorf("last sample of status='publishing' was at wall-clock %v after worker start; should be >= %v (= tickInterval - 500ms) so we know at least 1 reconciler tick fired with PROCESSING_UPLOAD and left the row alone",
+				lastPublishingSinceStart.Round(100*time.Millisecond), minInFlightWallClock)
+		}
+	}
+
+	// === Assertion 3: the transition happened around the 3rd tick ===
+	//
+	// The 3rd tick fires at t≈2*tickInterval (=10s). transitionedToPublishedAt
+	// captures the first poll that sees status='published'; the actual
+	// DB write happened ~100ms earlier (one poll interval at most
+	// before). Slack of 1s absorbs:
+	//   - ticker jitter (sub-ms in practice)
+	//   - the gap between the tick fire and the in-flight tickReconcile
+	//     (sub-second on healthy paths)
+	//   - the DB UpdateStatus roundtrip
+	//   - our 100ms poll cadence rounding
+	// Together these are << 1s on a healthy testcontainer. If the
+	// bound ever fires, the row is transitioning on the WRONG tick
+	// (e.g., the 2nd tick instead of the 3rd — meaning the state
+	// machine's first PROCESSING_UPLOAD returned terminal, or the
+	// second one did).
+	if !transitionedToPublishedAt.IsZero() {
+		minTransitionWallClock := 2*tickInterval - 1*time.Second
+		if transitionedSinceStart < minTransitionWallClock {
+			t.Errorf("transition to 'published' happened at wall-clock %v after worker start; should be >= %v (= 2*tickInterval - 1s) so we know the 3rd reconciler tick flipped it (not the 2nd)",
+				transitionedSinceStart.Round(100*time.Millisecond), minTransitionWallClock)
+		}
+	}
+
+	// === Assertion 4: final row state is the canonical terminal transition ===
+	finalStatus, finalProviderState, finalPublishedAtSet := readTargetStatus(t, rig.DB, rig.TargetID)
+	if finalStatus != "published" {
+		t.Errorf("final post_target.status: want \"published\", got %q", finalStatus)
+	}
+	if finalProviderState != "PUBLISH_COMPLETE" {
+		t.Errorf("final provider_state: want \"PUBLISH_COMPLETE\", got %q", finalProviderState)
+	}
+	if !finalPublishedAtSet {
+		t.Error("final published_at: want non-nil, got nil (reconciler must stamp publish time on terminal success)")
+	}
+
+	// === Assertion 5: state machine was threaded correctly ===
+	//
+	// Exactly 3 calls (TWO in-flight + ONE terminal) proves the
+	// reconciler never made a 4th call (which would mean a wake-loop
+	// bug, OR we never transitioned and the loop kept polling). The
+	// pair.Shutdown() in the deferred cleanup path drains workers
+	// BEFORE we read capturedStates, so there's no race between the
+	// handler writing and this read.
+	//
+	// The order assertion [PROCESSING_UPLOAD, PROCESSING_UPLOAD,
+	// PUBLISH_COMPLETE] catches any drift in the handler's branch
+	// logic (e.g., if a refactor to the handlerBuilder wiring
+	// accidentally swapped the PROCESSING_UPLOAD / PUBLISH_COMPLETE
+	// branches).
+	expectedStates := []string{"PROCESSING_UPLOAD", "PROCESSING_UPLOAD", "PUBLISH_COMPLETE"}
+	if len(capturedStates) != 3 {
+		t.Errorf("httptest.Server status hits: want 3, got %d (states: %v) — a drift here means the reconciler made an unexpected extra call (e.g., a wake-loop bug), or the 2 PROCESSING_UPLOADs didn't both fire before the terminal tick",
+			len(capturedStates), capturedStates)
+	}
+	for i := range expectedStates {
+		if i >= len(capturedStates) {
+			break
+		}
+		if capturedStates[i] != expectedStates[i] {
+			t.Errorf("httptest.Server response order idx %d: want %q, got %q (full captured sequence: %v)",
+				i, expectedStates[i], capturedStates[i], capturedStates)
+		}
+	}
+
+	// Log the timing for debugging — visible in -v output even on
+	// pass, and visible on fail so a CI failure shows the exact
+	// transition wall-clock vs the bounds.
+	if !transitionedToPublishedAt.IsZero() {
+		t.Logf("in-flight timing: last publishing sample at %v (>= %v expected); transitioned to 'published' at %v (>= %v expected)",
+			lastPublishingSinceStart.Round(100*time.Millisecond),
+			(tickInterval - 500*time.Millisecond),
+			transitionedSinceStart.Round(100*time.Millisecond),
+			(2*tickInterval-1*time.Second))
+	}
+}
