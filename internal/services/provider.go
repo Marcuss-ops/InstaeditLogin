@@ -218,13 +218,26 @@ func (e *RateLimitError) Error() string {
 	return fmt.Sprintf("rate limited: retry after %s", e.RetryAfter)
 }
 
-// IsRateLimitError is a convenience wrapper for `errors.As`. The
-// canonical call is `errors.As(err, &rle)` where rle is a
-// *services.RateLimitError, but IsRateLimitError reads more cleanly
-// at the call site and gives a stable test surface.
+// IsRateLimitError is a convenience wrapper for `errors.As` that
+// detects BOTH the legacy *RateLimitError (SPRINT 5.2 contract)
+// AND the canonical *ProviderError with Code == rate_limited
+// (SPRINT 5.1). Worker code can keep using IsRateLimitError
+// unchanged through the 5.1 transition: providers gradually switch
+// from returning *RateLimitError to returning *ProviderError, and
+// the worker detects both transparently.
 func IsRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
 	var rle *RateLimitError
-	return errors.As(err, &rle)
+	if errors.As(err, &rle) {
+		return true
+	}
+	var pe *ProviderError
+	if errors.As(err, &pe) && pe.Code == ErrorCodeRateLimited {
+		return true
+	}
+	return false
 }
 
 // ResumablePublisher is the optional capability for platforms whose
