@@ -124,6 +124,21 @@ type PublishPayload struct {
 	// DuetMode controls whether others can create duets from the post. TikTok-only.
 	// Accepted: "allow" (default) or "no_duet" / "disabled".
 	DuetMode string `json:"duet_mode,omitempty"`
+
+	// IdempotencyKey (Taglio 4.7 LEVEL 2, migration 022) is the
+	// per-target provider-side dedup key. The worker writes this onto
+	// each post_target post-claim and forwards it here on the publish
+	// call. Providers that support per-call idempotency keys
+	// (LinkedIn's "X-Restli-Idempotency-Key", Twitter v2's request_id,
+	// TikTok's "idempotent" query param, etc) forward it on their
+	// upstream HTTP call; providers without native idempotency simply
+	// ignore this field — our DB-level
+	// UNIQUE(platform_account_id, provider_idempotency_key) constraint
+	// is the catch-all safety net.
+	//
+	// `json:"-"` because this field is OUR internal worker plumbing,
+	// not part of the user-facing API contract.
+	IdempotencyKey string `json:"-"`
 }
 
 // PublishResult is returned after successful content publishing.

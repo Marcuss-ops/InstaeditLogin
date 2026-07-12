@@ -2,8 +2,11 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -42,6 +45,12 @@ func NewPostRepository(db *sql.DB) *PostRepository {
 // Save). The transaction guarantees no orphan post is ever visible
 // without its initial fan-out, and that a partial failure rolls back
 // cleanly.
+//
+// Taglio 4.7 LEVEL 2: a duplicate target row at INSERT time (violating
+// UNIQUE(post_id, platform_account_id) added by migration 022) aborts
+// the transaction with ErrPostTargetDuplicate wrapped — the API layer
+// maps to 409. The whole post insert also rolls back so the caller
+// doesn't see an orphan post without its fan-out.
 func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -74,6 +83,11 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 			t.PostID, t.PlatformAccountID, t.Status,
 		).Scan(&t.ID)
 		if err != nil {
+			var pqErr *pq.Error
+			if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "post_targets_post_id_platform_uniq" {
+				return fmt.Errorf("%w: post=%d platform_account=%d",
+					ErrPostTargetDuplicate, t.PostID, t.PlatformAccountID)
+			}
 			return fmt.Errorf("failed to create post_target: %w", err)
 		}
 	}
@@ -203,6 +217,15 @@ func (r *PostRepository) ListScheduled(before time.Time) ([]models.Post, error) 
 // post). Use this to add a platform_account to an already-existing post.
 // For the initial create-of-post-with-N-targets use PostRepository.Create
 // which wraps both inserts in one transaction.
+//
+// provider_idempotency_key is intentionally NOT set here — it's a
+// worker-side concern stamped AFTER the atomic claim (see
+// SetProviderIdempotencyKey). Stamping at Save time would require the
+// API handler to know the determinism rule, which would leak the
+// worker contract into HTTP-body parsing.
+//
+// A duplicate (post_id, platform_account_id) surfaces as
+// ErrPostTargetDuplicate (mapped to 409 in the API layer).
 func (r *PostRepository) Save(target *models.PostTarget) error {
 	err := r.db.QueryRow(
 		`INSERT INTO post_targets (post_id, platform_account_id, status)
@@ -211,7 +234,59 @@ func (r *PostRepository) Save(target *models.PostTarget) error {
 		target.PostID, target.PlatformAccountID, target.Status,
 	).Scan(&target.ID)
 	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "post_targets_post_id_platform_uniq" {
+			return fmt.Errorf("%w: post=%d platform_account=%d",
+				ErrPostTargetDuplicate, target.PostID, target.PlatformAccountID)
+		}
 		return fmt.Errorf("failed to save post_target: %w", err)
+	}
+	return nil
+}
+
+// SetProviderIdempotencyKey (Taglio 4.7 LEVEL 2, migration 022) writes
+// the per-target provider-side idempotency key onto the post_target
+// row. The worker calls this AFTER the atomic ClaimQueuedTarget and
+// BEFORE the publish call, so the key is stamped on the same row across
+// retries (same input → same key via deterministic SHA-256 prefix).
+//
+// Behaviour:
+//   * 23505 with constraint `post_targets_platform_provider_uniq` →
+//     ErrProviderIdempotencyConflict (this account already has another
+//     target with the same key; degenerate but exported so the caller
+//     can log + skip rather than silently re-keying). In normal flow
+//     this should not fire — the worker stamps a fresh key only when
+//     the existing one is nil — but the typed dispatch is the safety net.
+//   * 0 rows affected → ErrPostTargetNotFound.
+//   * Anything else → wrapped generic error.
+//
+// On conflict, the WORKER treats it as a recoverable race: re-reads the
+// target's existing key from ListByPost/ListPublishing and reuses it.
+// The DB constraint is the authoritative safety net; the worker's
+// resolve-on-conflict handling is the runtime mitigation.
+func (r *PostRepository) SetProviderIdempotencyKey(id int64, key string) error {
+	if key == "" {
+		return fmt.Errorf("SetProviderIdempotencyKey: key is empty for post_target id=%d", id)
+	}
+	result, err := r.db.Exec(
+		`UPDATE post_targets
+		 SET provider_idempotency_key = $1
+		 WHERE id = $2`,
+		key, id,
+	)
+	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "post_targets_platform_provider_uniq" {
+			return fmt.Errorf("%w: id=%d", ErrProviderIdempotencyConflict, id)
+		}
+		return fmt.Errorf("failed to set provider_idempotency_key: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, id)
 	}
 	return nil
 }
@@ -304,11 +379,13 @@ func (r *PostRepository) ClaimWaitingProviderTarget(id int64) (bool, error) {
 
 // ListByPost returns the full fan-out set for a given post, ordered by id
 // ASC (insertion order). Returns (nil, nil) if the post has no targets
-// (the empty slice path through Scan-loop).
+// (the empty slice path through Scan-loop). Includes the
+// provider_idempotency_key column added by migration 022 — pre-022
+// rows expose NULL.
 func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
 		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
-		       provider_state, container_id
+		       provider_state, container_id, provider_idempotency_key
 		 FROM post_targets
 		 WHERE post_id = $1
 		 ORDER BY id ASC`,
@@ -324,7 +401,7 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 		t := models.PostTarget{}
 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
 			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
-			&t.ProviderState, &t.ContainerID); err != nil {
+			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey); err != nil {
 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
 		}
 		targets = append(targets, t)
@@ -344,11 +421,13 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 // status against.
 //
 // Ordered by id ASC for stable iteration; this lets the reconciler
-// check the same target on every tick without flapping.
+// check the same target on every tick without flapping. Includes the
+// provider_idempotency_key column added by migration 022 so retries
+// from the reconciler reuse the same key already stamped at claim time.
 func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
 		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
-		        provider_state, container_id
+		        provider_state, container_id, provider_idempotency_key
 		 FROM post_targets
 		 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
 		 ORDER BY id ASC`,
@@ -363,7 +442,7 @@ func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
 		t := models.PostTarget{}
 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
 			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
-			&t.ProviderState, &t.ContainerID); err != nil {
+			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey); err != nil {
 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
 		}
 		targets = append(targets, t)
@@ -400,12 +479,15 @@ func (r *PostRepository) UpdatePublishState(id int64, providerState string) erro
 //
 // The JOIN with posts is essential: a target whose parent post is scheduled
 // for tomorrow is NOT pending today. Without the JOIN we'd waste cycles
-// re-checking and would still race on scheduled_at boundaries.
+// re-checking and would still race on scheduled_at boundaries. Includes
+// the provider_idempotency_key column added by migration 022 so the
+// worker can read the existing key (preserved across retries) without
+// an extra round-trip.
 func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
 		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
 		        pt.platform_post_id, pt.error_message, pt.published_at,
-		        pt.provider_state, pt.container_id
+		        pt.provider_state, pt.container_id, pt.provider_idempotency_key
 		 FROM post_targets pt
 		 JOIN posts p ON p.id = pt.post_id
 		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider') AND p.scheduled_at <= $1
@@ -422,7 +504,7 @@ func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, err
 		t := models.PostTarget{}
 		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
 			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
-			&t.ProviderState, &t.ContainerID); err != nil {
+			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey); err != nil {
 			return nil, fmt.Errorf("failed to scan post_target: %w", err)
 		}
 		targets = append(targets, t)

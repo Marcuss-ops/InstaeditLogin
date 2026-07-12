@@ -5,13 +5,15 @@
 //
 // Taglio 4.2 adds a second goroutine: the reconciler periodically polls
 // targets in status='publishing' with a non-null platform_post_id, driving
-// the 4-step async state machine (CheckPublishStatus → state transition)
-// instead of the old synchronous 30x2s polling loop that used to live
-// inside the provider's ReconcilePublish.
+// the 4-step async state machine (CheckPublishStatus → state transition).
+// Taglio 4a: the old synchronous polling loop (30×2s) was removed entirely
+// — the reconciler goroutine replaces it.
 package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -34,6 +37,37 @@ const (
 	tikTokStateFailed           = "FAILED"
 )
 
+// providerIdempotencyKeyPrefix is the namespace marker baked into the
+// SHA-256 input so a v2 (or any future revision) of the deterministic
+// key generator can yield different outputs for the same (post_id,
+// platform_account_id) tuple. Bumping the prefix is the migration:
+// change the prefix, run a backfill to recompute all rows, and v2
+// keys fully replace v1.
+const providerIdempotencyKeyPrefix = "v1:"
+
+// providerIdempotencyKeyLen is the hex-prefix length chosen for the
+// worker-stamped key. 16 hex characters = 64 bits of entropy, more
+// than enough to keep collision probability negligible for the life of
+// a workspace (a 32 hex / 128-bit alternative is overkill for a
+// per-(post,account) tuple).
+const providerIdempotencyKeyLen = 16
+
+// computeProviderIdempotencyKey returns the deterministic hex prefix
+// for (postID, platformAccountID). Stable across processes and time,
+// so retries on the same target produce the same key — the platform's
+// native API dedup catches the duplicate publish on its end.
+//
+// The prefix-encoding is the migration boundary: introduce v2 keys by
+// changing the prefix string, not by changing the SHA-256 layout. Old
+// v1 keys remain readable until the backfill completes.
+func computeProviderIdempotencyKey(postID, platformAccountID int64) string {
+	h := sha256.New()
+	h.Write([]byte(providerIdempotencyKeyPrefix))
+	fmt.Fprintf(h, "%d:%d", postID, platformAccountID)
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum)[:providerIdempotencyKeyLen]
+}
+
 // PublisherPostStore is the narrow slice of the post + post_targets repository
 // the worker depends on. Defined here (not in repository package) so the
 // worker can be unit-tested with a small in-memory mock without touching
@@ -41,6 +75,11 @@ const (
 //
 // Taglio 4.2: added ListPublishing + UpdatePublishState to support the
 // async reconciler goroutine.
+//
+// Taglio 4.7 LEVEL 2: added SetProviderIdempotencyKey so the worker can
+// stamp the deterministic per-target key on the post_target row AFTER
+// the atomic claim and BEFORE the publish call. Retries reuse the same
+// key.
 type PublisherPostStore interface {
 	// ListPending returns post_targets whose status='queued' AND whose
 	// parent post.scheduled_at <= before. Ordered by post.scheduled_at ASC.
@@ -70,6 +109,17 @@ type PublisherPostStore interface {
 	// lifecycle state, so the worker does NOT need to claim the row
 	// first.
 	UpdatePublishState(id int64, providerState string) error
+	// SetProviderIdempotencyKey (Taglio 4.7 LEVEL 2, migration 022)
+	// writes the worker-computed deterministic per-target
+	// idempotency_key onto the post_target row. The worker calls
+	// this AFTER ClaimQueuedTarget succeeds and BEFORE the publish
+	// call so retries reuse the same key. Errors:
+	//   * ErrProviderIdempotencyConflict: another target on the same
+	//     account already has this key — degenerate/duplicate, the
+	//     worker treats as failed and lets the operator reconcile.
+	//   * ErrPostTargetNotFound: id is stale.
+	//   * Other: wrapped DB error.
+	SetProviderIdempotencyKey(id int64, key string) error
 }
 
 // PublisherUserStore is the narrow slice of the user / platform_accounts
@@ -96,11 +146,11 @@ type PublisherUserStore interface {
 // The OAuthProvider is adapted to a credentials.TokenRefresher closure
 // at the call site so the vault has zero knowledge of per-platform types.
 //
-// Taglio 4.2: the worker also uses the AsyncPublisher capability to
-// drive the 4-step state machine (StartPublish / CheckPublishStatus /
+// Taglio 4.2: the worker also uses the AsyncPublisher capability (Taglio 4a)
+// to drive the 4-step state machine (StartPublish / CheckPublishStatus /
 // ContinuePublish / Reconcile) for platforms whose publish is async
-// (TikTok today). The reconciler goroutine replaces the old synchronous
-// polling loop that used to live inside the provider.
+// (TikTok, Threads). The reconciler goroutine replaces the old synchronous
+// polling loop.
 type PublishWorker struct {
 	postRepo PublisherPostStore
 	userRepo PublisherUserStore
@@ -452,6 +502,43 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	// 6. Build payload + publish. MediaURL goes through as VideoURL (the
 	// payload's ImageURL branch is reserved for image-only posts that don't
 	// have a content_type column — future enhancement).
+	//
+	// Taglio 4.7 LEVEL 2 (migration 022): ensure the post_target has
+	// the deterministic provider_idempotency_key stamped onto it BEFORE
+	// publishing. The key is computed from (post.ID, account.ID) so it
+	// is stable across retries — the platform's native API dedup
+	// catches the duplicate publish on its end. Forward it on the
+	// payload so providers that support per-call idempotency keys
+	// (LinkedIn "X-Restli-Idempotency-Key", Twitter v2 "request_id",
+	// TikTok "idempotent" query param) drive the upstream API to
+	// dedup; providers without native support ignore the field, but
+	// the DB-level UNIQUE(platform_account_id, provider_idempotency_key)
+	// constraint is the catch-all safety net.
+	var key string
+	if target.ProviderIdempotencyKey != nil && *target.ProviderIdempotencyKey != "" {
+		key = *target.ProviderIdempotencyKey
+	} else {
+		key = computeProviderIdempotencyKey(target.PostID, account.ID)
+		if err := w.postRepo.SetProviderIdempotencyKey(target.ID, key); err != nil {
+			if errors.Is(err, repository.ErrProviderIdempotencyConflict) {
+				// Degenerate: same (post, account) yielded a key already
+				// stamped on another row of this account. Treat as a
+				// failure so the tick counter increments and the
+				// operator can reconcile. The hold-pattern would be
+				// worse: a stuck 'publishing' row.
+				w.logger.Warn("provider idempotency key conflict on stamp; tick counts as failed",
+					"target_id", target.ID, "post_id", target.PostID,
+					"platform_account_id", account.ID, "key", key, "error", err)
+				return fmt.Errorf("provider idempotency key conflict: %w", err)
+			}
+			if errors.Is(err, repository.ErrPostTargetNotFound) {
+				// Stale id — another worker or a manual op touched the row.
+				// Don't double-publish; treat as a failed tick entry.
+				return fmt.Errorf("provider idempotency key stamp on missing target: %w", err)
+			}
+			return fmt.Errorf("ensure provider idempotency key: %w", err)
+		}
+	}
 	payload := models.PublishPayload{
 		Text:  post.Caption,
 		Title: post.Title,
@@ -459,6 +546,7 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	if post.MediaURL != "" {
 		payload.VideoURL = post.MediaURL
 	}
+	payload.IdempotencyKey = key
 	result, err := publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
 	if err != nil {
 		return w.markFailed(target, err.Error())

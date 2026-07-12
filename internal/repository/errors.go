@@ -82,4 +82,25 @@ var (
 	// ErrMediaAssetNotFound is returned when a media asset lookup by UUID
 	// finds no row (or zero rows affected on update). Taglio 3.2.
 	ErrMediaAssetNotFound = errors.New("media asset not found")
+
+	// ErrPostTargetDuplicate is returned when a Create or Save would
+	// INSERT a duplicate post_target row violating the
+	// UNIQUE(post_id, platform_account_id) defense-in-depth constraint
+	// added by migration 022 (Taglio 4.7 LEVEL 2). The API layer
+	// maps this to HTTP 409 (the second CreatePost hit the fan-out
+	// already landed). NOT a precondition failure — clients can recover
+	// by GETting the post and continuing from the existing fan-out.
+	ErrPostTargetDuplicate = errors.New("post target already exists for this post + platform account")
+
+	// ErrProviderIdempotencyConflict is returned when a save
+	// (typically SetProviderIdempotencyKey or Create on a target
+	// already keyed) would violate the partial
+	// UNIQUE(platform_account_id, provider_idempotency_key) constraint
+	// from migration 022. Maps to HTTP 409 at the API layer. Note:
+	// in the worker's normal publish flow, this should not fire —
+	// the worker writes the key ONCE per retry cycle on the same row,
+	// and the partial UNIQUE excludes NULLs so the migration can't
+	// regress on pre-existing data. The error is the safety net for
+	// degenerate runbook INSERTs and unintended duplicate-key stamps.
+	ErrProviderIdempotencyConflict = errors.New("provider idempotency key conflict: account already has a target with this key")
 )

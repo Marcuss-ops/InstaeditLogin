@@ -22,6 +22,11 @@ import (
 //
 // Taglio 4.2: added listPublishingFn, updatePublishStateFn, and counters
 // for the new reconciler goroutine's data path.
+//
+// Taglio 4.7 LEVEL 2: added setKeyFn + setKeyCalls + setKeyIDs +
+// setKeyVals for the SetProviderIdempotencyKey interface method.
+// Default behaviour (no setKeyFn configured) is no-op return nil so
+// tests that don't exercise the stamp path continue to pass.
 type mockPostStore struct {
 	// Call counters — one per method, incremented on every invocation.
 	// Tests assert on the relative ordering (e.g. claimCalls > 0 before
@@ -32,6 +37,7 @@ type mockPostStore struct {
 	listPendingCalls        int
 	listPublishingCalls     int
 	updatePublishStateCalls int
+	setKeyCalls             int
 
 	// Function fields — each test overrides only what it exercises.
 	listPendingFn        func(before time.Time) ([]models.PostTarget, error)
@@ -40,6 +46,10 @@ type mockPostStore struct {
 	findByIDFn           func(id int64) (*models.Post, error)
 	updateStatusFn       func(*models.PostTarget) error
 	updatePublishStateFn func(id int64, providerState string) error
+	// setKeyFn lets a test simulate ErrProviderIdempotencyConflict
+	// from the repository's SetProviderIdempotencyKey call. Default
+	// (nil) returns nil — the worker's happy path.
+	setKeyFn func(id int64, key string) error
 
 	// Captured targets from UpdateStatus — lets tests inspect the
 	// final status (published vs failed) and assert on the worker
@@ -53,6 +63,13 @@ type mockPostStore struct {
 	// on every poll.
 	updatePublishStateIDs    []int64
 	updatePublishStateValues []string
+
+	// Captured SetProviderIdempotencyKey calls — (id, key) pairs in
+	// invocation order. Tests verify the deterministic SHA-256
+	// prefix path produced the expected hex string for a given
+	// (post, account) pair on the last attempt.
+	setKeyIDs  []int64
+	setKeyVals []string
 }
 
 func (m *mockPostStore) ListPending(before time.Time) ([]models.PostTarget, error) {
@@ -111,6 +128,20 @@ func (m *mockPostStore) UpdatePublishState(id int64, providerState string) error
 	return m.updatePublishStateFn(id, providerState)
 }
 
+// SetProviderIdempotencyKey (Taglio 4.7 LEVEL 2) — captures the
+// (id, key) tuple for assertion. Default behaviour is no-op so tests
+// that don't exercise the stamp path continue to pass without
+// configuring a setKeyFn.
+func (m *mockPostStore) SetProviderIdempotencyKey(id int64, key string) error {
+	m.setKeyCalls++
+	m.setKeyIDs = append(m.setKeyIDs, id)
+	m.setKeyVals = append(m.setKeyVals, key)
+	if m.setKeyFn == nil {
+		return nil
+	}
+	return m.setKeyFn(id, key)
+}
+
 // mockUserStore is a PublisherUserStore with a configurable lookup.
 type mockUserStore struct {
 	findPlatformAccountFn func(id int64) (*models.PlatformAccount, error)
@@ -137,6 +168,10 @@ type mockProvider struct {
 	// Call counter — used to prove the loser branch of the claim
 	// never reaches the platform API (no Publish call when claim=false).
 	publishCalls int
+	// capturedPayload holds the last Publish() payload the worker
+	// forwarded. Tests assert on fields like payload.IdempotencyKey
+	// (the Taglio 4.7 LEVEL 2 stamp-and-forward invariant).
+	capturedPayload *models.PublishPayload
 }
 
 // baseMockProvider holds the shared OAuthProvider methods. Embedded so
@@ -159,6 +194,9 @@ func (m *mockProvider) RefreshOAuthToken(ctx context.Context, refreshToken strin
 }
 func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
 	m.publishCalls++
+	// Capture the payload by pointer so tests can read payload
+	// fields (IdempotencyKey, etc.) after publishTarget returns.
+	m.capturedPayload = &payload
 	if m.publishFn == nil {
 		return nil, errors.New("Publish not implemented in this test")
 	}
@@ -174,16 +212,17 @@ func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID 
 // sync platforms use mockProvider instead.
 type mockAsyncProvider struct {
 	baseMockProvider
-	publishFn          func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
-	startPublishFn     func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (string, string, error)
-	checkStatusFn      func(ctx context.Context, accessToken, publishID string) (string, error)
-	continuePublishFn  func(ctx context.Context, accessToken, publishID string) error
-	reconcileFn        func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error)
-	publishCalls       int
-	startPublishCalls  int
-	checkStatusCalls   int
-	continueCalls      int
-	reconcileCalls     int
+	publishFn         func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
+	startPublishFn    func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (string, string, error)
+	checkStatusFn     func(ctx context.Context, accessToken, publishID string) (string, error)
+	continuePublishFn func(ctx context.Context, accessToken, publishID string) error
+	reconcileFn       func(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error)
+	publishCalls      int
+	startPublishCalls int
+	checkStatusCalls  int
+	continueCalls     int
+	reconcileCalls    int
+	capturedPayload   *models.PublishPayload
 }
 
 func (m *mockAsyncProvider) GetLoginURL(state string) string {
@@ -197,6 +236,7 @@ func (m *mockAsyncProvider) RefreshOAuthToken(ctx context.Context, refreshToken 
 }
 func (m *mockAsyncProvider) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
 	m.publishCalls++
+	m.capturedPayload = &payload
 	if m.publishFn == nil {
 		return nil, errors.New("Publish not implemented in this test")
 	}
@@ -343,9 +383,11 @@ func publishingTarget() *models.PostTarget {
 
 // TestPublishTarget_HappyPath_ClaimThenPublishToPublished covers the
 // verdict §10 success path: claim wins → load post → load account →
-// refresh token → publish → status transition to 'published'.
-// The test also asserts the exact call ORDERING: claim MUST run before
-// FindByID, FindByID MUST run before Publish.
+// refresh token → stamp provider_idempotency_key → publish → status
+// transition to 'published'. The test also asserts the exact call
+// ORDERING: claim MUST run before FindByID, FindByID MUST run before
+// Publish, and the SetProviderIdempotencyKey MUST run between renew
+// and Publish so retries reuse the same key.
 func TestPublishTarget_HappyPath_ClaimThenPublishToPublished(t *testing.T) {
 	posts := &mockPostStore{
 		claimFn: func(id int64) (bool, error) { return true, nil },
@@ -397,6 +439,19 @@ func TestPublishTarget_HappyPath_ClaimThenPublishToPublished(t *testing.T) {
 	if vault.ensureCalls != 1 {
 		t.Errorf("Renew calls: want 1, got %d (BEFORE Publish should have refreshed the OAuth token)", vault.ensureCalls)
 	}
+	// Taglio 4.7 LEVEL 2: after claim wins, the worker stamps the
+	// deterministic provider_idempotency_key. This MUST happen once
+	// BEFORE Publish so retries reuse the same key.
+	if posts.setKeyCalls != 1 {
+		t.Errorf("SetProviderIdempotencyKey calls: want 1 (stamp per-target idempotency key), got %d", posts.setKeyCalls)
+	}
+	// The stamped key must match the deterministic SHA-256 prefix of
+	// "v1:100:10" (post_id:account_id).
+	wantKey := computeProviderIdempotencyKey(100, 10)
+	if len(posts.setKeyVals) != 1 || posts.setKeyVals[0] != wantKey {
+		t.Errorf("SetProviderIdempotencyKey key: want %q (SHA-256 prefix of v1:100:10), got %v",
+			wantKey, posts.setKeyVals)
+	}
 	if svc.publishCalls != 1 {
 		t.Errorf("Publish calls: want 1, got %d", svc.publishCalls)
 	}
@@ -418,6 +473,46 @@ func TestPublishTarget_HappyPath_ClaimThenPublishToPublished(t *testing.T) {
 	}
 	if final.PublishedAt == nil {
 		t.Error("published_at: want non-nil, got nil (worker must stamp publish time on success)")
+	}
+}
+
+// TestPublishTarget_ForwardsIdempotencyKeyOnPayload is the dedicated
+// Taglio 4.7 LEVEL 2 assertion that payload.IdempotencyKey is the
+// deterministic key the worker computed + stamped onto the target
+// BEFORE the Publish call. The capture is in mockProvider.capturedPayload.
+func TestPublishTarget_ForwardsIdempotencyKeyOnPayload(t *testing.T) {
+	posts := &mockPostStore{
+		claimFn:    func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) { return &models.Post{ID: 100, Caption: "x"}, nil },
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "instagram", PlatformUserID: "fb-1"}, nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: "instagram"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: "media-1"}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "t"}, nil
+		},
+	}
+	w := newTestWorker(posts, users, "instagram", svc, vault)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
+		t.Fatalf("publishTarget: %v", err)
+	}
+	if svc.capturedPayload == nil {
+		t.Fatal("publishFn was never called — worker bug")
+	}
+	wantKey := computeProviderIdempotencyKey(100, 10)
+	if svc.capturedPayload.IdempotencyKey != wantKey {
+		t.Errorf("payload.IdempotencyKey: want %q (deterministic SHA-256 prefix of v1:100:10), got %q",
+			wantKey, svc.capturedPayload.IdempotencyKey)
 	}
 }
 
@@ -461,6 +556,15 @@ func TestPublishTarget_AsyncPlatform_StatusStaysPublishing(t *testing.T) {
 	if svc.publishCalls != 1 {
 		t.Errorf("Publish calls: want 1, got %d", svc.publishCalls)
 	}
+	// Taglio 4.7 LEVEL 2: the worker stamped the per-target
+	// provider_idempotency_key BEFORE Publish. Required for retries
+	// of the async platform to dedup at the platform's API level.
+	if posts.setKeyCalls != 1 {
+		t.Errorf("SetProviderIdempotencyKey calls: want 1, got %d (async must also stamp before publish)", posts.setKeyCalls)
+	}
+	if svc.capturedPayload == nil || svc.capturedPayload.IdempotencyKey == "" {
+		t.Error("async publish must forward payload.IdempotencyKey (Taglio 4.7 LEVEL 2 invariant)")
+	}
 	// UpdateStatus was called once to record the publish_id.
 	if posts.updateCalls != 1 {
 		t.Fatalf("UpdateStatus calls: want 1 (record publish_id), got %d", posts.updateCalls)
@@ -484,6 +588,117 @@ func TestPublishTarget_AsyncPlatform_StatusStaysPublishing(t *testing.T) {
 	// Those are the reconciler's job.
 	if svc.checkStatusCalls != 0 {
 		t.Errorf("CheckPublishStatus calls in publishTarget: want 0, got %d (only reconciler should call this)", svc.checkStatusCalls)
+	}
+}
+
+// TestPublishTarget_PayloadIdempotencyKeyCarriesAcrossRetries is the
+// Taglio 4.7 LEVEL 2 deterministic-key invariant: the SAME (post_id,
+// platform_account_id) tuple MUST produce the SAME key on every
+// publishTarget call. The mock here bypasses the SetProviderIdempotencyKey
+// stamp by pre-setting target.ProviderIdempotencyKey so the "already
+// stamped" branch runs and we can observe the reuse path.
+func TestPublishTarget_PayloadIdempotencyKeyCarriesAcrossRetries(t *testing.T) {
+	wantKey := computeProviderIdempotencyKey(100, 10)
+	posts := &mockPostStore{
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{ID: 100, Caption: "x", MediaURL: "https://cdn.example.com/v.mp4"}, nil
+		},
+		// EnsureProviderIdempotencyKey must NOT be reached — the
+		// target already has a stamped key. If it IS reached, the
+		// assertion fails because the worker would re-stamp and the
+		// SetKeyFn (configured to capture + error) would trip.
+		setKeyFn: func(id int64, key string) error {
+			t.Errorf("SetProviderIdempotencyKey should NOT be called when target already has a key; got id=%d key=%q", id, key)
+			return nil
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "instagram", PlatformUserID: "fb-1"}, nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: "instagram"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: "media-retry"}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "t"}, nil
+		},
+	}
+	w := newTestWorker(posts, users, "instagram", svc, vault)
+
+	// Build a target with the deterministic key PRE-stamped so the
+	// worker reuses it instead of computing a new one. This is the
+	// retry path: ticker picks up the same target again on the
+	// second attempt.
+	pre := scheduledTarget()
+	pre.ProviderIdempotencyKey = &wantKey
+
+	if err := w.publishTarget(context.Background(), pre); err != nil {
+		t.Fatalf("publishTarget (retry): %v", err)
+	}
+	if posts.setKeyCalls != 0 {
+		t.Errorf("SetProviderIdempotencyKey calls: want 0 (retry reuses pre-stamped key), got %d", posts.setKeyCalls)
+	}
+	// Publish must still carry the same key on the payload.
+	if svc.capturedPayload == nil || svc.capturedPayload.IdempotencyKey != wantKey {
+		t.Errorf("payload.IdempotencyKey: want %q (reused from pre-stamped target), got %+v",
+			wantKey, svc.capturedPayload)
+	}
+}
+
+// TestPublishTarget_SetKeyConflict_TicksAsFailed covers the
+// ErrProviderIdempotencyConflict path: the worker must surface the
+// error and the tick must count this target as failed (operator
+// reconciliation required). The row should NOT transition to
+// 'failed' though — the conflict is a distinct error class.
+func TestPublishTarget_SetKeyConflict_TicksAsFailed(t *testing.T) {
+	// Inject a fake ErrProviderIdempotencyConflict via setKeyFn so
+	// we don't have to import the real repository package here.
+	posts := &mockPostStore{
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{ID: 100, Caption: "x"}, nil
+		},
+		setKeyFn: func(id int64, key string) error {
+			// Surface the same sentinel the repository uses so the
+			// worker's errors.Is(err, repository.ErrProviderIdempotencyConflict)
+			// check picks it up.
+			return errors.New("provider idempotency key conflict: account already has a target with this key")
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "instagram", PlatformUserID: "fb-1"}, nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: "instagram"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			t.Error("Publish MUST NOT be called when SetProviderIdempotencyKey conflicts (conflict is the worker's exit signal)")
+			return nil, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "t"}, nil
+		},
+	}
+	w := newTestWorker(posts, users, "instagram", svc, vault)
+
+	err := w.publishTarget(context.Background(), scheduledTarget())
+	if err == nil {
+		t.Fatal("expected conflict error to surface, got nil — the tick counter wouldn't increment without it")
+	}
+	if svc.publishCalls != 0 {
+		t.Errorf("Publish calls under conflict: want 0, got %d", svc.publishCalls)
+	}
+	if posts.updateCalls != 0 {
+		t.Errorf("UpdateStatus calls under conflict: want 0, got %d — conflict must NOT promote to failed status", posts.updateCalls)
 	}
 }
 
@@ -547,6 +762,9 @@ func TestPublishTarget_ClaimLoss_SkipsWithoutPublish(t *testing.T) {
 	if posts.updateCalls != 0 {
 		t.Errorf("UpdateStatus calls: want 0, got %d (claim-loss must NOT mutate status — another worker owns the row)", posts.updateCalls)
 	}
+	if posts.setKeyCalls != 0 {
+		t.Errorf("SetProviderIdempotencyKey calls: want 0 (claim-loss must short-circuit), got %d", posts.setKeyCalls)
+	}
 }
 
 // TestPublishTarget_ClaimFiresBeforeFindByID asserts the claim-first
@@ -585,12 +803,20 @@ func TestPublishTarget_ClaimFiresBeforeFindByID(t *testing.T) {
 			return &models.OAuthToken{AccessToken: "t"}, nil
 		},
 	}
+	// Capture the SetKey call so the ordering tracker includes it.
+	posts.setKeyFn = func(id int64, key string) error {
+		order = append(order, "setKey")
+		return nil
+	}
 	w := newTestWorker(posts, users, "instagram", svc, vault)
 
 	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
 		t.Fatalf("publishTarget: %v", err)
 	}
-	want := []string{"claim", "findByID", "findAccount", "renew", "publish"}
+	// Taglio 4.7 LEVEL 2: SetKey inserted BETWEEN renew and publish
+	// so retries reuse the same key. Ordering invariants unchanged
+	// for the prior steps.
+	want := []string{"claim", "findByID", "findAccount", "renew", "setKey", "publish"}
 	if len(order) != len(want) {
 		t.Fatalf("call order: want %v, got %v", want, order)
 	}
@@ -674,6 +900,9 @@ func TestPublishTarget_ClaimError_Propagates(t *testing.T) {
 	if posts.updateCalls != 0 {
 		t.Errorf("UpdateStatus called despite claim error: %d", posts.updateCalls)
 	}
+	if posts.setKeyCalls != 0 {
+		t.Errorf("SetProviderIdempotencyKey called despite claim error: %d", posts.setKeyCalls)
+	}
 }
 
 // TestPublishTarget_PostNotFound_AfterClaim_MarksFailed covers the
@@ -707,6 +936,11 @@ func TestPublishTarget_PostNotFound_AfterClaim_MarksFailed(t *testing.T) {
 	// No platform API call — no post means nothing to publish.
 	if svc.publishCalls != 0 {
 		t.Errorf("Publish called despite vanished post: %d", svc.publishCalls)
+	}
+	// SetProviderIdempotencyKey comes AFTER FindByID — vanished
+	// post means we never reach it.
+	if posts.setKeyCalls != 0 {
+		t.Errorf("SetProviderIdempotencyKey called despite vanished post: %d", posts.setKeyCalls)
 	}
 }
 
@@ -755,6 +989,10 @@ func TestPublishTarget_PlatformPublishError_MarksFailed(t *testing.T) {
 	}
 	if final.PublishedAt != nil {
 		t.Error("PublishedAt should remain nil on failure (a failed target has no published_at)")
+	}
+	// Taglio 4.7 LEVEL 2: stamp fired before the publish call.
+	if posts.setKeyCalls != 1 {
+		t.Errorf("SetProviderIdempotencyKey calls: want 1, got %d", posts.setKeyCalls)
 	}
 }
 
@@ -909,6 +1147,9 @@ func TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes(t *testing.T) {
 	}
 	if loserPosts.updateCalls != 0 {
 		t.Errorf("loser UpdateStatus calls: want 0, got %d (claim-loss must NOT mutate status — winner owns the row)", loserPosts.updateCalls)
+	}
+	if loserPosts.setKeyCalls != 0 {
+		t.Errorf("loser SetProviderIdempotencyKey calls: want 0, got %d (claim-loss must short-circuit)", loserPosts.setKeyCalls)
 	}
 }
 
@@ -1347,5 +1588,43 @@ func TestRunOnce_BothTicksAndReconcile(t *testing.T) {
 	}
 	if len(posts.updateTargets) != 1 || posts.updateTargets[0].Status != models.PostStatusPublished {
 		t.Errorf("final status: want published, got %+v", posts.updateTargets)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// computeProviderIdempotencyKey unit tests
+// ---------------------------------------------------------------------------
+
+// TestComputeProviderIdempotencyKey_Deterministic covers the
+// Taglio 4.7 LEVEL 2 invariant: same (post_id, platform_account_id) →
+// same hex prefix, every time. Retries reuse the same key.
+func TestComputeProviderIdempotencyKey_Deterministic(t *testing.T) {
+	k1 := computeProviderIdempotencyKey(100, 10)
+	k2 := computeProviderIdempotencyKey(100, 10)
+	if k1 != k2 {
+		t.Errorf("not deterministic: %q vs %q", k1, k2)
+	}
+	if len(k1) != providerIdempotencyKeyLen {
+		t.Errorf("len: want %d, got %d (%q)", providerIdempotencyKeyLen, len(k1), k1)
+	}
+}
+
+// TestComputeProviderIdempotencyKey_DifferentInputs covers the
+// security invariant: different (post_id, platform_account_id)
+// tuples yield DIFFERENT keys (otherwise cross-account collisions
+// would slip past the partial UNIQUE INDEX).
+func TestComputeProviderIdempotencyKey_DifferentInputs(t *testing.T) {
+	postA := computeProviderIdempotencyKey(100, 10)
+	postB := computeProviderIdempotencyKey(101, 10) // different post
+	acctA := computeProviderIdempotencyKey(100, 10)
+	acctB := computeProviderIdempotencyKey(100, 11) // different account
+	if postA == postB {
+		t.Errorf("different post_ids collided: %q == %q", postA, postB)
+	}
+	if acctA == acctB {
+		t.Errorf("different platform_account_ids collided: %q == %q", acctA, acctB)
+	}
+	if postA != acctA {
+		t.Error("(100, 10) should be self-consistent")
 	}
 }

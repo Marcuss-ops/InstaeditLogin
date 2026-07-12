@@ -61,7 +61,7 @@ var (
 			// Custom buckets: tighter than DefBuckets at the low end so we
 			// can distinguish fast acks (TikTok init, Meta container)
 			// from full publish round-trips, and a 10s ceiling covers the
-			// TikTok polling loop + YouTube resumable upload path.
+			// YouTube resumable upload path.
 			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
 		},
 		[]string{"platform"},

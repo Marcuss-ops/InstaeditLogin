@@ -109,10 +109,10 @@ type Publisher interface {
 //	                          FAILED          → error
 //	                          in-flight       → (nil, nil) — try again next tick
 //
-// Taglio 4.2: replaces the old PublishReconciler.ReconcilePublish which had a
-// 30-attempt × 2-second synchronous polling loop inside the worker's tick.
-// The new design moves the polling OUT of the request path into a separate
-// reconciler goroutine that calls Reconcile on every tick.
+// Taglio 4.2: replaces the old synchronous polling loop inside the worker's
+// tick with a separate reconciler goroutine. Publish() returns immediately
+// with the publish_id; the reconciler calls Reconcile on every tick to
+// advance the async state machine.
 type AsyncPublisher interface {
 	NameProvider
 	// StartPublish initiates the async publish and returns the platform's

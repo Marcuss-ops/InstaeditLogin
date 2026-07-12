@@ -124,9 +124,12 @@ type Post struct {
 
 // PostTarget represents the fan-out of a Post to a specific platform account.
 // The retry-aware columns added by migration 018_publish_state_machine.sql
-// (current_step, progress, attempt_count, next_attempt_at, remote_post_id,
+// (attempt_count, next_attempt_at, remote_post_id,
 // remote_post_url, last_error_code) are exposed here so the worker and
 // API layer can read/write them through the same struct.
+// Taglio 4a: CurrentStep and Progress removed — the async state machine
+// uses discrete provider_state strings (PROCESSING_UPLOAD, PUBLISH_COMPLETE,
+// FAILED), not fake percentages.
 type PostTarget struct {
 	ID                int64      `json:"id"`
 	PostID            int64      `json:"post_id"`
@@ -134,13 +137,13 @@ type PostTarget struct {
 	Status            PostStatus `json:"status"`
 
 	// Zernio publish-state-machine (migration 018):
-	//   * current_step       — free-form pipeline-stage label, written
-	//                          by the worker at every transition.
-	//   * progress (0..100)  — percentage, bumped by async check status.
 	//   * attempt_count      — retry counter, monotonically increasing.
 	//   * next_attempt_at    — backoff target; NULL while not retrying.
-	CurrentStep   string     `json:"current_step,omitempty"`
-	Progress      int        `json:"progress"`
+	// Taglio 4a: CurrentStep and Progress removed — the async state
+	// machine (Taglio 4.2) uses discrete provider_state values, not
+	// fake percentages. The reconciler writes the real platform state
+	// string (PROCESSING_UPLOAD / PUBLISH_COMPLETE / FAILED) into
+	// provider_state on every tick.
 	AttemptCount  int        `json:"attempt_count"`
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 
@@ -170,6 +173,16 @@ type PostTarget struct {
 	// "CONTAINER_NOT_READY" — surfaces in dashboards/retry-logic
 	// without the human prose of error_message.
 	LastErrorCode string `json:"last_error_code,omitempty"`
+
+	// ProviderIdempotencyKey (migration 022, Taglio 4.7 LEVEL 2) —
+	// the deterministic per-target key the worker computes after the
+	// atomic claim, used to forward as the platform's idempotency_key
+	// on its create-post API call. Retries reuse the same key so the
+	// platform's native API dedup catches the duplicate publish on its
+	// end and we never double-post. Nullable: rows that haven't yet
+	// been keyed (pre-migration-022 + freshly-claimed targets in
+	// flight) expose nil; the partial UNIQUE index allows NULLs.
+	ProviderIdempotencyKey *string `json:"provider_idempotency_key,omitempty"`
 
 	// Optimistic-concurrency + audit timestamps (migration 012).
 	Version   int64     `json:"version"`
