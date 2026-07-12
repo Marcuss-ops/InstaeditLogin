@@ -226,7 +226,7 @@ func (b *barrierRefresher) refresh(ctx context.Context, refreshToken string) (*m
 //     access token back.
 func TestVault_Renew_ConcurrentSameAccount_SingleRefresherCall(t *testing.T) {
 	db := integrationDB(t)
-	enc, err := crypto.NewEncryptor("kP5jF8aL2nQ7rT3vX6yB9cE1dG4hJ0mN5oS8uV2wY4zA=")
+	enc, err := crypto.NewEncryptor(1, map[uint32]string{1: "kP5jF8aL2nQ7rT3vX6yB9cE1dG4hJ0mN5oS8uV2wY4zA="})
 	if err != nil {
 		t.Fatalf("NewEncryptor: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestVault_Renew_ConcurrentSameAccount_SingleRefresherCall(t *testing.T) {
 // would fail this test.
 func TestVault_Renew_ConcurrentDifferentAccounts_BothRefresherCalls(t *testing.T) {
 	db := integrationDB(t)
-	enc, err := crypto.NewEncryptor("kP5jF8aL2nQ7rT3vX6yB9cE1dG4hJ0mN5oS8uV2wY4zA=")
+	enc, err := crypto.NewEncryptor(1, map[uint32]string{1: "kP5jF8aL2nQ7rT3vX6yB9cE1dG4hJ0mN5oS8uV2wY4zA="})
 	if err != nil {
 		t.Fatalf("NewEncryptor: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestVault_Renew_ConcurrentDifferentAccounts_BothRefresherCalls(t *testing.T
 // (the test would deadlock if the lock key collided).
 func TestVault_Renew_KeyedByAccountID_TwoAccountsUseDifferentLocks(t *testing.T) {
 	db := integrationDB(t)
-	enc, err := crypto.NewEncryptor("kP5jF8aL2nQ7rT3vX6yB9cE1dG4hJ0mN5oS8uV2wY4zA=")
+	enc, err := crypto.NewEncryptor(1, map[uint32]string{1: "kP5jF8aL2nQ7rT3vX6yB9cE1dG4hJ0mN5oS8uV2wY4zA="})
 	if err != nil {
 		t.Fatalf("NewEncryptor: %v", err)
 	}

@@ -121,7 +121,7 @@ func newTestVault(t *testing.T) (*CredentialVault, sqlmock.Sqlmock, *mockTokenSt
 
 	// 32-byte base64-encoded key for AES-256-GCM (deterministic for tests).
 	// Decoded to: 32 ASCII bytes "0123456789abcdef0123456789abcdef"
-	enc, err := crypto.NewEncryptor("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	enc, err := crypto.NewEncryptor(1, map[uint32]string{1: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="})
 	if err != nil {
 		t.Fatalf("crypto.NewEncryptor: %v", err)
 	}

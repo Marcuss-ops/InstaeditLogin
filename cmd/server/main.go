@@ -69,7 +69,7 @@ func main() {
 
 	slog.Info("Database migrations completed")
 
-	enc, err := crypto.NewEncryptor(cfg.EncryptionKey)
+	enc, err := crypto.NewEncryptor(1, map[uint32]string{1: cfg.EncryptionKey})
 	if err != nil {
 		slog.Error("Failed to initialize encryptor", "error", err)
 		os.Exit(1)

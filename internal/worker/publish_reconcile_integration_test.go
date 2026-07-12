@@ -158,7 +158,7 @@ func setupWorkerRig(t *testing.T, cfg *config.Config, handlerBuilder func(*atomi
 		t.Fatalf("database.Migrate: %v", err)
 	}
 
-	enc, err := crypto.NewEncryptor(cfg.EncryptionKey)
+	enc, err := crypto.NewEncryptor(1, map[uint32]string{1: cfg.EncryptionKey})
 	if err != nil {
 		t.Fatalf("crypto.NewEncryptor: %v", err)
 	}
