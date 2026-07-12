@@ -64,6 +64,11 @@ func newMockPostDBExact(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 }
 
 func TestPostCreate_AtomicTx_Happy(t *testing.T) {
+	// Taglio 5.0 STEP 1: Create writes posts + post_targets + outbox_events
+	// in ONE transaction. Expectations: Begin, INSERT posts RETURNING,
+	// INSERT post_targets (200) RETURNING, INSERT outbox_events (target=200),
+	// INSERT post_targets (201) RETURNING, INSERT outbox_events (target=201),
+	// Commit.
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
@@ -81,12 +86,26 @@ func TestPostCreate_AtomicTx_Happy(t *testing.T) {
 		 RETURNING id`,
 	).WithArgs(int64(100), int64(10), models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
+	mock.ExpectExec(
+		`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+		 VALUES ($1, $2, $3, $4::jsonb)`,
+	).WithArgs(
+		"post_target", int64(200), "post_target.publish_requested",
+		sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(
 		`INSERT INTO post_targets (post_id, platform_account_id, status)
 		 VALUES ($1, $2, $3)
 		 RETURNING id`,
 	).WithArgs(int64(100), int64(11), models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(201))
+	mock.ExpectExec(
+		`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+		 VALUES ($1, $2, $3, $4::jsonb)`,
+	).WithArgs(
+		"post_target", int64(201), "post_target.publish_requested",
+		sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	post := &models.Post{
@@ -118,6 +137,8 @@ func TestPostCreate_AtomicTx_Happy(t *testing.T) {
 }
 
 func TestPostCreate_EmptyTargets_OKSkipsTargetInserts(t *testing.T) {
+	// Empty targets: no post_target INSERT, no outbox INSERT. The tx still
+	// commits with just the post row.
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
@@ -129,6 +150,7 @@ func TestPostCreate_EmptyTargets_OKSkipsTargetInserts(t *testing.T) {
 		WithArgs(int64(1), "draft", "", "", (*time.Time)(nil), models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
 	// No target insert expectations — we pass nil/empty targets.
+	// No outbox insert expectations either — no targets means no outbox events.
 	mock.ExpectCommit()
 
 	if err := repo.Create(&models.Post{
@@ -142,8 +164,9 @@ func TestPostCreate_EmptyTargets_OKSkipsTargetInserts(t *testing.T) {
 }
 
 func TestPostRepository_Create_TxRollback(t *testing.T) {
-	// Critical tx test: second INSERT fails → tx.Rollback called (no orphan
-	// post visible, no orphan target visible).
+	// Critical tx test: first post_target INSERT fails → tx.Rollback
+	// called (no orphan post visible, no orphan target visible, no orphan
+	// outbox). The deferred rollback propagates the error.
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
@@ -165,7 +188,6 @@ func TestPostRepository_Create_TxRollback(t *testing.T) {
 		&models.Post{WorkspaceID: 1, Title: "hello", Status: models.PostStatusDraft},
 		[]*models.PostTarget{
 			{PlatformAccountID: 10, Status: models.PostStatusDraft},
-			// The second target wouldn't be touched because the first fails.
 		},
 	)
 	if err == nil {
@@ -225,9 +247,6 @@ func TestPostRepository_Update_Success(t *testing.T) {
 // the wrapper must carry the typed sentinel so pkg/api can map via
 // errors.Is, AND must retain id context for log lines.
 func TestPostRepository_Update_NotFound(t *testing.T) {
-	// The whole point of feat(repo): surface rows-affected = 0 as a real
-	// error so cross-workspace updates don't silently succeed AND so the
-	// API layer can map the typed sentinel via errors.Is to 404.
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
@@ -300,9 +319,6 @@ func TestPostUpdateStatus_Happy(t *testing.T) {
 // on post_target: the wrapper must carry the sentinel so the worker
 // drops the phantom status transition.
 func TestPostRepository_UpdateStatus_StaleTarget(t *testing.T) {
-	// Same defensive check as Update: a 0-rows-affected response means the
-	// target id is stale and the worker would otherwise see a phantom OK.
-	// Sentinel (ErrPostTargetNotFound) lets the worker drop the phantom.
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
@@ -391,8 +407,6 @@ func TestPostFindByID_FoundWithNullableTime(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	// Crucially test BOTH the populated ScheduledAt path AND the nil path
-	// (lib/pq + driver.Valuer interplay is non-trivial).
 	mock.ExpectQuery(
 		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
 		 FROM posts
@@ -599,6 +613,83 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
 // concurrent writers against a real database. Use testcontainers-go + a
 // real Postgres to exercise that, since sqlmock serializes queries globally
 // on its internal gomock controller.
+func TestPostCreate_ConcurrentGoroutines_NoSharedState(t *testing.T) {
+	const numGoroutines = 5
+	var wg sync.WaitGroup
+	errs := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			if err != nil {
+				errs <- err
+				return
+			}
+			defer db.Close()
+			repo := repository.NewPostRepository(db)
+			now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+			postID := int64(100 + idx)
+			tgtAID := int64(200 + idx*10)
+			tgtBID := int64(201 + idx*10)
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(
+				`INSERT INTO posts (workspace_id, title, caption, media_url, scheduled_at, status)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 RETURNING id, created_at`,
+			).WithArgs(int64(1), "title", "", "", (*time.Time)(nil), models.PostStatusDraft).
+				WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(postID, now))
+			mock.ExpectQuery(
+				`INSERT INTO post_targets (post_id, platform_account_id, status)
+		 VALUES ($1, $2, $3)
+		 RETURNING id`,
+			).WithArgs(postID, int64(10+idx), models.PostStatusDraft).
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(tgtAID))
+			// Taglio 5.0 STEP 1: outbox event per target in same tx.
+			mock.ExpectExec(
+				`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+		 VALUES ($1, $2, $3, $4::jsonb)`,
+			).WithArgs("post_target", tgtAID, "post_target.publish_requested", sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectQuery(
+				`INSERT INTO post_targets (post_id, platform_account_id, status)
+		 VALUES ($1, $2, $3)
+		 RETURNING id`,
+			).WithArgs(postID, int64(11+idx), models.PostStatusDraft).
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(tgtBID))
+			mock.ExpectExec(
+				`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+		 VALUES ($1, $2, $3, $4::jsonb)`,
+			).WithArgs("post_target", tgtBID, "post_target.publish_requested", sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
+
+			if err := repo.Create(
+				&models.Post{
+					WorkspaceID: 1, Title: "title", Status: models.PostStatusDraft,
+				},
+				[]*models.PostTarget{
+					{PlatformAccountID: int64(10 + idx), Status: models.PostStatusDraft},
+					{PlatformAccountID: int64(11 + idx), Status: models.PostStatusDraft},
+				},
+			); err != nil {
+				errs <- err
+				return
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("goroutine error: %v", err)
+	}
+}
+
 // TestPostClaimQueuedTarget_Success covers the verdict §10 atomic-claim
 // happy path: a single row in 'scheduled' is transitioned to 'publishing'
 // and the function returns (true, nil). The UPDATE statement must include
@@ -706,71 +797,5 @@ func TestPostClaimQueuedTarget_RowsAffectedReadError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to read rows affected") {
 		t.Errorf("error should preserve 'read rows affected' context: %v", err)
-	}
-}
-
-func TestPostCreate_ConcurrentGoroutines_NoSharedState(t *testing.T) {
-	const numGoroutines = 5
-	var wg sync.WaitGroup
-	errs := make(chan error, numGoroutines)
-
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-			if err != nil {
-				errs <- err
-				return
-			}
-			defer db.Close()
-			repo := repository.NewPostRepository(db)
-			now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-			postID := int64(100 + idx)
-			tgtAID := int64(200 + idx*10)
-			tgtBID := int64(201 + idx*10)
-
-			mock.ExpectBegin()
-			mock.ExpectQuery(
-				`INSERT INTO posts (workspace_id, title, caption, media_url, scheduled_at, status)
-		 VALUES ($1, $2, $3, $4, $5, $6)
-		 RETURNING id, created_at`,
-			).WithArgs(int64(1), "title", "", "", (*time.Time)(nil), models.PostStatusDraft).
-				WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(postID, now))
-			mock.ExpectQuery(
-				`INSERT INTO post_targets (post_id, platform_account_id, status)
-		 VALUES ($1, $2, $3)
-		 RETURNING id`,
-			).WithArgs(postID, int64(10+idx), models.PostStatusDraft).
-				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(tgtAID))
-			mock.ExpectQuery(
-				`INSERT INTO post_targets (post_id, platform_account_id, status)
-		 VALUES ($1, $2, $3)
-		 RETURNING id`,
-			).WithArgs(postID, int64(11+idx), models.PostStatusDraft).
-				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(tgtBID))
-			mock.ExpectCommit()
-
-			if err := repo.Create(
-				&models.Post{
-					WorkspaceID: 1, Title: "title", Status: models.PostStatusDraft,
-				},
-				[]*models.PostTarget{
-					{PlatformAccountID: int64(10 + idx), Status: models.PostStatusDraft},
-					{PlatformAccountID: int64(11 + idx), Status: models.PostStatusDraft},
-				},
-			); err != nil {
-				errs <- err
-				return
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				errs <- err
-			}
-		}(i)
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Errorf("goroutine error: %v", err)
 	}
 }

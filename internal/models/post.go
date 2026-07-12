@@ -247,14 +247,66 @@ type IdempotencyRecord struct {
 // OutboxEvent is a row in the transactional-outbox table. Written atomically
 // inside the same transaction that mutates the aggregate, so downstream
 // consumers never miss an event (no dual-write problem).
+//
+// Taglio 5.0 (Migration 023): the dispatcher reads outbox_events in a
+// claim-with-lease pattern. The fields below carry the lifecycle
+// state of the dispatcher claim itself (NOT the aggregate's
+// lifecycle) — they're bookkeeping for "is this row currently being
+// processed, by which dispatcher instance, when does its lease
+// expire, what's the retry strategy on failure".
+//
+// Field groups:
+//   - Aggregate: AggregateType + AggregateID + EventType + Payload
+//     (consumer-facing — the dispatcher reads these to route).
+//   - Lease: LeaseID + LeaseUntil (dispatcher state — used by the
+//     atomic claim UPDATE).
+//   - Retry: Status + AttemptCount + NextAttemptAt + LastError +
+//     ProcessedAt (dispatcher's view of delivery progress).
+//   - Audit: CreatedAt.
 type OutboxEvent struct {
 	ID            int64           `json:"id"`
 	AggregateType string          `json:"aggregate_type"`
 	AggregateID   int64           `json:"aggregate_id"`
 	EventType     string          `json:"event_type"`
 	Payload       json.RawMessage `json:"payload"`
-	CreatedAt     time.Time       `json:"created_at"`
+
+	// Status follows the documented enum: 'pending' (default),
+	// 'processed' (terminal-success), 'dead_letter' (terminal-fail).
+	// OutboxStatus constants below.
+	Status string `json:"status"`
+
+	// Lease — set by ClaimNext, renewed by heartbeat, cleared on
+	// terminal Mark*. Nil while the row sits in the queue waiting
+	// for a free dispatcher.
+	LeaseID    *string    `json:"lease_id,omitempty"`
+	LeaseUntil *time.Time `json:"lease_until,omitempty"`
+
+	// Retry bookkeeping. NextAttemptAt is the earliest time the
+	// dispatcher will retry this row; the partial-index
+	// idx_outbox_pending selects only rows where next_attempt_at IS
+	// NULL OR next_attempt_at <= now().
+	AttemptCount  int        `json:"attempt_count"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+
+	// Last error captured for the most recent failed attempt.
+	LastError string `json:"last_error,omitempty"`
+
+	// Audit timestamps. ProcessedAt set on terminal success; on
+	// dead_letter it's also set so operator queries can compute
+	// "time-in-dlq".
+	CreatedAt   time.Time  `json:"created_at"`
+	ProcessedAt *time.Time `json:"processed_at,omitempty"`
 }
+
+// OutboxStatus constants — string-typed enum (mirrors the SQL CHECK
+// constraint in migration 023). The dispatcher writes only 'pending'
+// initially; transitions to 'processed' or 'dead_letter' are
+// terminal (only manual SQL moves rows back to 'pending' for replay).
+const (
+	OutboxStatusPending    = "pending"
+	OutboxStatusProcessed  = "processed"
+	OutboxStatusDeadLetter = "dead_letter"
+)
 
 // CreateResult is the return value of PostRepository.Create. It is either a
 // newly created post+targets (Duplicate=false) or a cached idempotent

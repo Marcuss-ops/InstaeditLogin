@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -51,6 +52,28 @@ func NewPostRepository(db *sql.DB) *PostRepository {
 // the transaction with ErrPostTargetDuplicate wrapped — the API layer
 // maps to 409. The whole post insert also rolls back so the caller
 // doesn't see an orphan post without its fan-out.
+//
+// Taglio 5.0 STEP 1: every target also gets a corresponding
+// outbox_events row inserted in the SAME transaction. The outbox is
+// the dispatcher's pickup queue; without same-tx atomicity, a process
+// crash between the post insert and the outbox INSERT would leave a
+// post with no publish intent — the canonical dual-write problem that
+// the transactional outbox pattern eliminates.
+//
+//	post_target row → outbox_events row (one-to-one)
+//	aggregate_type  = "post_target"
+//	event_type      = "post_target.publish_requested"
+//	aggregate_id    = target.ID (returned by RETURNING above)
+//	payload         = JSON snapshot the dispatcher needs to materialise
+//	                  a publish_job: post_id, target_id, workspace_id,
+//	                  platform_account_id, scheduled_at, title, caption,
+//	                  media_url. Caching these avoids a re-fetch of the
+//	                  parent post in the dispatcher hot path.
+//
+// Empty posts (drafts target = []) emit ZERO outbox rows — there is no
+// publish intent to enqueue. Future SAVE of an extra target via
+// PostRepository.Save should ALSO write an outbox row in the same
+// pattern; that follows a separate migration-change known as STEP 2.
 func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -89,6 +112,41 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 					ErrPostTargetDuplicate, t.PostID, t.PlatformAccountID)
 			}
 			return fmt.Errorf("failed to create post_target: %w", err)
+		}
+	}
+
+	// Taglio 5.0 STEP 1: write the outbox event for each target in the
+	// SAME transaction. The dispatcher (separate goroutine) will READ
+	// from outbox_events (FOR UPDATE SKIP LOCKED) and materialise a
+	// publish_job row + notify the worker to pick the target up.
+	//
+	// The payload is a JSON snapshot of the dispatcher's inputs so the
+	// dispatcher NEVER has to re-read the parent post. (Re-reading
+	// would require the dispatcher to hold a peer repo handle, and a
+	// parent-post mutation between Create and the dispatch pickup would
+	// leave the dispatcher acting on stale data.)
+	for _, t := range targets {
+		payload, marshalErr := json.Marshal(map[string]any{
+			"event_version":       "v1",
+			"post_id":             post.ID,
+			"target_id":           t.ID,
+			"workspace_id":        post.WorkspaceID,
+			"platform_account_id": t.PlatformAccountID,
+			"scheduled_at":        post.ScheduledAt,
+			"title":               post.Title,
+			"caption":             post.Caption,
+			"media_url":           post.MediaURL,
+		})
+		if marshalErr != nil {
+			return fmt.Errorf("failed to marshal outbox payload for target %d: %w", t.ID, marshalErr)
+		}
+		_, err = tx.Exec(
+			`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+			 VALUES ($1, $2, $3, $4::jsonb)`,
+			"post_target", t.ID, "post_target.publish_requested", string(payload),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert outbox event for target %d: %w", t.ID, err)
 		}
 	}
 

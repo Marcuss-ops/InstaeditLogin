@@ -6,7 +6,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -204,9 +203,9 @@ func WithApiKeyStore(s ApiKeyStore) RouterOption {
 
 // WithCredentialVault injects the central credential vault. The Router
 // REQUIRES this to be set (via main.go) before serving
-// handleCallback / handlePublishPost / handlePublishAll — the call
-// sites panic with a nil-pointer dereference if it's missing, which is
-// the desired fail-fast behaviour for a misconfigured main.go. Tests
+// handleCallback — the call site panics with a nil-pointer dereference
+// if it's missing, which is the desired fail-fast behaviour for a
+// misconfigured main.go. Tests
 // inject a mockCredentialVault via this same option.
 //
 // Taglio 2.2: renamed from WithTokenService. The vault centralises
@@ -246,9 +245,6 @@ func (r *Router) Setup() http.Handler {
 	r.mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(r.handleExchangeCode))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/me", r.protected(r.handleMe))
 	r.mux.Method(http.MethodPost, "/api/v1/auth/logout", http.HandlerFunc(r.handleLogout))
-	r.mux.Method(http.MethodPost, "/api/v1/posts/publish", r.protected(r.handlePublishPost))
-	r.mux.Method(http.MethodPost, "/api/v1/posts/publish-all", r.protected(r.handlePublishAll))
-	r.mux.Method(http.MethodGet, "/api/v1/accounts", r.protected(r.handleListAccounts))
 	r.mux.Method(http.MethodGet, "/api/v1/accounts/{id}", r.protected(r.handleGetAccount))
 	r.mux.Method(http.MethodPost, "/api/v1/accounts/{id}/validate", r.protected(r.handleValidateAccount))
 	r.mux.Method(http.MethodPost, "/api/v1/accounts/{id}/reconnect", r.protected(r.handleReconnectAccount))
@@ -475,8 +471,6 @@ func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
-	// For now return just the user_id; the SPA can call /api/v1/accounts
-	// for richer profile data. Future: extend the userRepo with FindByID.
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"user_id": userID,
 	})
@@ -501,188 +495,10 @@ func (r *Router) handleLogout(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-type PublishRequest struct {
-	// Platform is the social platform key (e.g. "instagram",
-	// "tiktok"). Required.
-	Platform string `json:"platform"`
-	// Media (Taglio 3.2) is the list of verified media asset_ids
-	// to attach to the post. The handler resolves each asset_id to
-	// the trusted internal S3 URL via the mediaStore + storageProvider.
-	// NO user-controlled URL ever reaches the platform API.
-	Media        []MediaRef `json:"media"`
-	Caption      string     `json:"caption"`
-	ContentType  string     `json:"content_type"`
-	Title        string     `json:"title"`
-	PrivacyLevel string     `json:"privacy_level,omitempty"`
-	CommentMode  string     `json:"comment_mode,omitempty"`
-	DuetMode     string     `json:"duet_mode,omitempty"`
-}
-
 func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		r.auth.Middleware(next).ServeHTTP(w, req)
 	}
-}
-
-// --- publish handlers ---
-
-func (r *Router) handlePublishAll(w http.ResponseWriter, req *http.Request) {
-	var pubReq PublishRequest
-	if err := json.NewDecoder(req.Body).Decode(&pubReq); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-	userID, ok := requireUserID(w, req, r)
-	if !ok {
-		return
-	}
-	if pubReq.ContentType != "text" && pubReq.ContentType != "image" && pubReq.ContentType != "photo" && pubReq.ContentType != "video" && pubReq.ContentType != "reel" {
-		writeError(w, http.StatusBadRequest, "content_type must be one of: image, video, text")
-		return
-	}
-	accounts, err := r.userRepo.ListPlatformAccountsByUser(userID, "")
-	if err != nil || len(accounts) == 0 {
-		writeError(w, http.StatusNotFound, "no connected accounts found for this user")
-		return
-	}
-	type platformResult struct {
-		Platform, Status, PlatformMediaID, PlatformURL, Error string
-	}
-	var results []platformResult
-	var okCount, failCount int
-	for _, acc := range accounts {
-		result, err := r.publishToAccount(req.Context(), acc, &pubReq)
-		pr := platformResult{Platform: acc.Platform}
-		if err != nil {
-			pr.Status = "error"
-			pr.Error = err.Error()
-			failCount++
-		} else {
-			pr.Status = "published"
-			pr.PlatformMediaID = result.PlatformMediaID
-			pr.PlatformURL = result.PlatformURL
-			okCount++
-		}
-		results = append(results, pr)
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "completed", "success_count": okCount, "fail_count": failCount, "results": results,
-	})
-}
-
-func (r *Router) handlePublishPost(w http.ResponseWriter, req *http.Request) {
-	var pubReq PublishRequest
-	if err := json.NewDecoder(req.Body).Decode(&pubReq); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-	userID, ok := requireUserID(w, req, r)
-	if !ok {
-		return
-	}
-	result, err := r.publishContent(req.Context(), userID, &pubReq)
-	if err != nil {
-		var pe *publishError
-		if errors.As(err, &pe) {
-			writeError(w, pe.status, pe.message)
-		} else {
-			writeError(w, http.StatusInternalServerError, "failed to publish: "+err.Error())
-		}
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "published", "platform": pubReq.Platform,
-		"platform_media_id": result.PlatformMediaID, "platform_url": result.PlatformURL,
-	})
-}
-
-func (r *Router) publishContent(ctx context.Context, userID int64, pubReq *PublishRequest) (*models.PublishResult, error) {
-	if pubReq.Platform == "" {
-		pubReq.Platform = models.PlatformInstagram
-	}
-	if _, ok := r.capabilities.OAuth(pubReq.Platform); !ok {
-		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("unsupported platform: %s", pubReq.Platform)}
-	}
-	accounts, err := r.userRepo.ListPlatformAccountsByUser(userID, pubReq.Platform)
-	if err != nil || len(accounts) == 0 {
-		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("no %s account linked to this user", pubReq.Platform)}
-	}
-	return r.publishToAccount(ctx, accounts[0], pubReq)
-}
-
-func (r *Router) publishToAccount(ctx context.Context, account *models.PlatformAccount, pubReq *PublishRequest) (*models.PublishResult, error) {
-	// Taglio 2.1: per-capability lookups. We need the OAuthProvider (for
-	// token refresh via the vault) AND the Publisher (for the actual
-	// call). A platform missing either cannot be published to.
-	oauth, oauthOK := r.capabilities.OAuth(account.Platform)
-	publisher, pubOK := r.capabilities.Publisher(account.Platform)
-	if !oauthOK || !pubOK {
-		return nil, &publishError{http.StatusNotFound, fmt.Sprintf("unsupported platform: %s", account.Platform)}
-	}
-	// Taglio 2.2: adapt the provider's RefreshOAuthToken method into a
-	// credentials.TokenRefresher closure. The vault only knows the
-	// function signature; the provider type stays out of the vault.
-	refresher := credentials.TokenRefresher(func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
-		return oauth.RefreshOAuthToken(ctx, refreshToken)
-	})
-	// Try Bearer first (refresh-capable), then LongLived (Meta-style re-exchange).
-	oauthToken, err := r.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
-	if err != nil {
-		if oauthToken, err = r.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher); err != nil {
-			return nil, &publishError{http.StatusUnauthorized, "no valid token: " + err.Error()}
-		}
-	}
-	// Taglio 3.2: resolve asset_id(s) → trusted internal S3 URL(s).
-	// The platform API never sees a user-controlled URL — only the
-	// S3 URL of an asset the user previously uploaded and committed
-	// via /complete. This eliminates the SSRF and open-redirect
-	// surface that the old media_url field exposed.
-	mediaURLs, err := r.resolveMediaURLs(ctx, account.UserID, pubReq.Media)
-	if err != nil {
-		return nil, &publishError{http.StatusUnprocessableEntity, err.Error()}
-	}
-	payload := models.PublishPayload{
-		Text: pubReq.Caption, Title: pubReq.Title,
-		PrivacyLevel: pubReq.PrivacyLevel, CommentMode: pubReq.CommentMode, DuetMode: pubReq.DuetMode,
-	}
-	switch pubReq.ContentType {
-	case "video", "reel":
-		if len(mediaURLs) > 0 {
-			payload.VideoURL = mediaURLs[0]
-		}
-	case "image", "photo":
-		if len(mediaURLs) > 0 {
-			payload.ImageURL = mediaURLs[0]
-		}
-	case "text":
-	default:
-		return nil, &publishError{http.StatusBadRequest, "content_type must be one of: image, video, text"}
-	}
-	return publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
-}
-
-type publishError struct {
-	status  int
-	message string
-}
-
-func (e *publishError) Error() string { return e.message }
-
-func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
-	userID, ok := requireUserID(w, req, r)
-	if !ok {
-		return
-	}
-	platform := req.URL.Query().Get("platform")
-	accounts, err := r.userRepo.ListPlatformAccountsByUser(userID, platform)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list accounts: "+err.Error())
-		return
-	}
-	if accounts == nil {
-		accounts = []*models.PlatformAccount{}
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"accounts": accounts})
 }
 
 // handleGetAccount / handleValidateAccount / handleReconnectAccount / handleDeleteAccount

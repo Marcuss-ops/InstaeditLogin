@@ -66,18 +66,10 @@ func main() {
 
 	slog.Info("Database migrations completed")
 
-	// One-shot backfill: migrate any YouTube refresh tokens stored as legacy
-	// "refresh_token:..." scopes into the dedicated encrypted_refresh_token column.
-	// The backfill uses the encryptor directly (not the vault) because it
-	// predates the vault and is a startup-time one-shot — a one-off
-	// migration that touches rows the vault has no business reading.
 	enc, err := crypto.NewEncryptor(cfg.EncryptionKey)
 	if err != nil {
-		slog.Error("Failed to initialize encryptor for backfill", "error", err)
+		slog.Error("Failed to initialize encryptor", "error", err)
 		os.Exit(1)
-	}
-	if err := database.BackfillYouTubeRefreshTokens(db, enc); err != nil {
-		slog.Warn("YouTube refresh-token backfill failed (non-fatal)", "error", err)
 	}
 
 	userRepo := repository.NewUserRepository(db)
@@ -105,6 +97,10 @@ func main() {
 	// No provider or consumer is allowed to import the internal
 	// repository directly — they go through this vault.
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
+
+	// Taglio 4c: the one-shot YouTube refresh-token backfill was converted
+	// to migration 013_backfill_youtube_refresh_tokens.sql and removed
+	// from startup. No legacy records remain — the migration is idempotent.
 
 	// Taglio 2.5: all platform-specific registration is encapsulated
 	// in providers.BuildRegistry. The returned *CapabilityRegistry is a
