@@ -111,7 +111,7 @@ func RequireDocker(t *testing.T) {
 //
 // Configuration:
 //
-//   - Image: postgres:16-alpine
+//   - Image: postgres:17-alpine
 //   - Credentials: test / test
 //   - SSL: disabled (testcontainer-internal connection only)
 //
@@ -145,7 +145,7 @@ func StartTestPostgres(t *testing.T, opts ...Option) (*sql.DB, func()) {
 	ctx := context.Background()
 
 	pgC, err := tpostgres.Run(ctx,
-		"postgres:16-alpine",
+		"postgres:17-alpine",
 		tpostgres.WithDatabase(cfg.databaseName),
 		tpostgres.WithUsername("test"),
 		tpostgres.WithPassword("test"),
