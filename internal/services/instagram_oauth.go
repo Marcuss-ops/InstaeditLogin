@@ -25,7 +25,8 @@ import (
 //   - ResourceDiscoverer (Instagram Business Accounts linked to the user's
 //     Facebook Pages — IG publishing is page-tied; you cannot publish to
 //     a personal IG account without it being linked to a Page)
-//   - ContentValidator (image or Reel — media required)
+//   - ContentValidator (media-only — Instagram does NOT support text-only
+//     posts; ValidateContent requires media)
 //   - Publisher (synchronous — POST /media + POST /media_publish; IG's
 //     media_publish returns the final media_id synchronously so no
 //     AsyncPublisher is needed)
@@ -123,8 +124,13 @@ func (s *InstagramOAuthService) RefreshOAuthToken(ctx context.Context, currentTo
 	}, nil
 }
 
-// ValidateContent enforces Instagram's minimum requirements: image or Reel.
-// Taglio 5d: minimum feature set = image + Reel.
+// ValidateContent enforces Instagram's media-only rule: a post MUST carry
+// instagram requires media. Text-only posts are NOT supported by the Instagram
+// Graph API — the only "text" first-class entity is the caption on a media
+// post, and a post with no media is rejected at the /media endpoint.
+//
+// Note: caption (payload.Text) is OPTIONAL — IG allows image-only and
+// video-only posts with no caption. only the media is required.
 func (s *InstagramOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.ImageURL == "" && payload.VideoURL == "" {
 		return fmt.Errorf("instagram requires media (text-only posts are not supported by the IG Graph API)")

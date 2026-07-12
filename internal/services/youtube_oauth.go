@@ -20,7 +20,7 @@ import (
 //
 // Capabilities exposed:
 //   - OAuthProvider (Google OAuth 2.0 with offline access)
-//   - ContentValidator (video + title + description + privacy)
+//   - ContentValidator (video required)
 //   - Publisher (resumable upload protocol)
 //   - AccountManager (Validate / Revoke)
 type YouTubeOAuthService struct {
@@ -78,9 +78,9 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
 	return profile, tokenData, nil
 }
 
-// ValidateContent enforces YouTube's minimum requirements: video,
-// title, description, and privacy level.
-// Taglio 5d: minimum feature set = video + title + description + privacy.
+// ValidateContent enforces the YouTube video-required rule
+// and a mandatory privacy_level.
+// Taglio 4b: privacy_level is now required — one of public, unlisted, private.
 func (s *YouTubeOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.VideoURL == "" {
 		return fmt.Errorf("youtube requires a video for publishing")

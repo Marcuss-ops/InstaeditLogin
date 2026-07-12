@@ -126,6 +126,16 @@ type Config struct {
 	// upload. Default 200 MiB (200*1024*1024). Configurable so a deploy
 	// with stricter storage quotas can dial it down without rebuilding.
 	MaxUploadBytes int64
+
+	// CapabilitiesMatrixPath is the on-disk location of the JSON file that
+	// declares the per-platform theoretical capabilities (Taglio 5e
+	// Level 1). Defaults to "config/capabilities.json" (canonical path
+	// relative to the server's working directory). Empty value, missing
+	// file, or malformed JSON falls back to capabilities.WithDefaults() —
+	// logger.Info on the path actually used, so operators can verify the
+	// boot picked up the JSON they intended. CAPABILITIES_CONFIG_PATH
+	// env var overrides this field.
+	CapabilitiesMatrixPath string
 }
 
 // Load reads configuration from environment variables.
@@ -178,6 +188,8 @@ func Load() (*Config, error) {
 		S3Region:    getEnv("S3_REGION", ""),
 
 		MaxUploadBytes: getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
+
+		CapabilitiesMatrixPath: getEnv("CAPABILITIES_CONFIG_PATH", "config/capabilities.json"),
 	}
 
 	if err := cfg.validate(); err != nil {

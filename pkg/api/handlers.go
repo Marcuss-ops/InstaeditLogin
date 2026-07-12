@@ -74,36 +74,15 @@ type PostStore interface {
 
 // ApiKeyStore mirrors the subset of repository.ApiKeyRepository that
 // the API layer + Authenticator middleware actually depend on.
-// Decoupled from the concrete repository so:
-//   - apikeys handlers can be wired with a fake store in tests (see
-//     posts_test.go pattern: stream-based sqlmock or in-memory map).
-//   - The Authenticator's ApiKeyLookup interface (in
-//     internal/auth/apikey_middleware.go) is satisfied by
-//     ApiKeyStore.FindByHash + ApiKeyStore.MarkUsed directly —
-//     *repository.ApiKeyRepository implements both interfaces.
-//
-// Methods invoked from THIS package's handlers:
-//   - Create: handleCreateApiKey / handleRotateApiKey
-//   - FindByID: handleGetApiKey
-//   - ListByOrg / ListByProject: handleListApiKeys
-//   - Revoke: handleDeleteApiKey (DELETE = soft revoke)
-//   - UpdateName: future PATCH endpoint
-//   - Rotate: handleRotateApiKey (transactional revoke+insert)
-//
-// Tenant scoping: every method that takes orgID/components
-// enforces it server-side. Cross-tenant calls return
-// (nil, nil) or ErrApiKeyNotFound indistinguishable from
-// "wrong id" — callers should not need to distinguish.
 type ApiKeyStore interface {
 	Create(key *models.ApiKey, hash []byte) error
-	FindByIDForOrg(orgID, id int64) (*models.ApiKey, error)
+	FindByIDForWorkspace(wsID, id int64) (*models.ApiKey, error)
 	FindByHash(hash []byte) (*models.ApiKey, error)
-	ListByOrg(orgID int64) ([]models.ApiKey, error)
-	ListByProject(orgID, projectID int64) ([]models.ApiKey, error)
-	Revoke(orgID, id int64) error
-	MarkUsed(orgID, id int64) error
-	UpdateName(orgID, id int64, name string) error
-	Rotate(orgID, oldID int64, newKey *models.ApiKey, newHash []byte) error
+	ListByWorkspace(wsID int64) ([]models.ApiKey, error)
+	Revoke(wsID, id int64) error
+	MarkUsed(wsID, id int64) error
+	UpdateName(wsID, id int64, name string) error
+	Rotate(wsID, oldID int64, newKey *models.ApiKey, newHash []byte) error
 }
 
 // IdempotencyStore mirrors the two methods the /api/v1/posts

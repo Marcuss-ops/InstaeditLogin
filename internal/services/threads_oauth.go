@@ -32,10 +32,10 @@ import (
 //
 // Capabilities exposed:
 //   - OAuthProvider (Meta OAuth login flow)
-//   - ContentValidator (text or image)
+//   - ContentValidator (text/image/video required)
 //   - Publisher (DEPRECATED compat path — synchronous single-step
-//     container create + immediate publish. AsyncPublisher is the
-//     primary publish path for Threads)
+//     container create + immediate publish. Wraps the async flow
+//     behind a blocking call. New code MUST prefer AsyncPublisher)
 //   - AsyncPublisher (PRIMARY — StartPublish / CheckPublishStatus /
 //     ContinuePublish / Reconcile. The worker reconciler goroutine
 //     drives this on every tick.)
@@ -113,8 +113,7 @@ func (s *ThreadsOAuthService) RefreshOAuthToken(ctx context.Context, currentToke
 	}, nil
 }
 
-// ValidateContent enforces Threads' content requirements: text or image.
-// Taglio 5d: minimum feature set = text + image.
+// ValidateContent enforces Threads' content requirements.
 func (s *ThreadsOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.Text == "" && payload.ImageURL == "" && payload.VideoURL == "" {
 		return fmt.Errorf("threads requires text or media")

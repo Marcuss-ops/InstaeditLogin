@@ -19,8 +19,8 @@ import (
 //
 // Capabilities exposed:
 //   - OAuthProvider (OAuth 2.0 with OpenID Connect userinfo)
-//   - ContentValidator (text + single image to personal profile)
-//   - Publisher (POST /rest/posts, text + single image)
+//   - ContentValidator (text required — text_only)
+//   - Publisher (POST /rest/posts, text only — Taglio 3c: articleSource removed)
 //   - AccountManager (Validate / Revoke)
 type LinkedInOAuthService struct {
 	cfg        *config.Config
@@ -75,9 +75,11 @@ func (s *LinkedInOAuthService) HandleCallback(ctx context.Context, state, code s
 	return profile, tokenData, nil
 }
 
-// ValidateContent enforces LinkedIn's minimum requirements: text,
-// visibility, and single image (personal profile).
-// Taglio 5d: minimum feature set = text + single image to personal profile.
+// ValidateContent enforces the text-only rule for a LinkedIn post
+// and a mandatory visibility (privacy_level).
+// Taglio 3c: LinkedIn is text_only — the articleSource block that
+// pretended to upload media was removed.
+// Taglio 4b: visibility is now required — one of PUBLIC, CONNECTIONS.
 func (s *LinkedInOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.Text == "" {
 		return fmt.Errorf("linkedin requires text content")

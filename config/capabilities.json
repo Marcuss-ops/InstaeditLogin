@@ -1,0 +1,83 @@
+{
+  "_defaults": {
+    "text_only": false,
+    "supports_images": false,
+    "supports_video": false,
+    "supports_carousel": false,
+    "supports_stories": false,
+    "max_media_count": 0,
+    "max_caption_runes": 5000,
+    "max_video_seconds": 0,
+    "privacy_levels": []
+  },
+  "twitter": {
+    "text_only": false,
+    "supports_images": true,
+    "supports_video": true,
+    "supports_carousel": false,
+    "supports_stories": false,
+    "max_media_count": 4,
+    "max_caption_runes": 280,
+    "privacy_levels": []
+  },
+  "instagram": {
+    "text_only": false,
+    "supports_images": true,
+    "supports_video": true,
+    "supports_carousel": true,
+    "supports_stories": false,
+    "max_media_count": 10,
+    "max_caption_runes": 2200,
+    "privacy_levels": []
+  },
+  "facebook": {
+    "text_only": false,
+    "supports_images": true,
+    "supports_video": true,
+    "supports_carousel": false,
+    "supports_stories": false,
+    "max_media_count": 1,
+    "max_caption_runes": 63206,
+    "privacy_levels": []
+  },
+  "threads": {
+    "text_only": false,
+    "supports_images": true,
+    "supports_video": true,
+    "supports_carousel": false,
+    "supports_stories": false,
+    "max_media_count": 1,
+    "max_caption_runes": 500,
+    "privacy_levels": []
+  },
+  "tiktok": {
+    "text_only": false,
+    "supports_images": false,
+    "supports_video": true,
+    "supports_carousel": false,
+    "supports_stories": false,
+    "max_media_count": 1,
+    "max_caption_runes": 4000,
+    "privacy_levels": ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"]
+  },
+  "youtube": {
+    "text_only": false,
+    "supports_images": false,
+    "supports_video": true,
+    "supports_carousel": false,
+    "supports_stories": false,
+    "max_media_count": 1,
+    "max_caption_runes": 5000,
+    "privacy_levels": ["public", "unlisted", "private"]
+  },
+  "linkedin": {
+    "text_only": false,
+    "supports_images": true,
+    "supports_video": false,
+    "supports_carousel": false,
+    "supports_stories": false,
+    "max_media_count": 1,
+    "max_caption_runes": 3000,
+    "privacy_levels": ["PUBLIC", "CONNECTIONS"]
+  }
+}

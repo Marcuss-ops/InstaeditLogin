@@ -155,7 +155,7 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 				return
 			}
-			m.putIdentity(r, w, next, NewUserIdentity(userID, DefaultFallbackOrgID))
+			m.putIdentity(r, w, next, NewUserIdentity(userID, DefaultFallbackWorkspaceID))
 			return
 		}
 		// 2) Fallback: HttpOnly session cookie set by /api/v1/auth/exchange
@@ -163,7 +163,7 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 		if c, err := r.Cookie(SessionCookieName); err == nil && c.Value != "" {
 			userID, err := m.Verify(c.Value)
 			if err == nil && userID > 0 {
-				m.putIdentity(r, w, next, NewUserIdentity(userID, DefaultFallbackOrgID))
+				m.putIdentity(r, w, next, NewUserIdentity(userID, DefaultFallbackWorkspaceID))
 				return
 			}
 		}
