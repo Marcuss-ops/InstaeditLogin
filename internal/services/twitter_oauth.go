@@ -23,7 +23,7 @@ import (
 // composition onto a single monolithic PlatformService.
 //
 // Capabilities exposed:
-//   - OAuthProvider (OAuth 2.0 PKCE flow, no more 1.0a static keys since Taglio 1.3)
+//   - OAuthProvider (OAuth 2.0 PKCE flow)
 //   - ContentValidator (text or image required)
 //   - Publisher (POST /2/tweets with user Bearer)
 //   - AccountManager (Validate / Revoke)
@@ -229,9 +229,8 @@ func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platform
 		return nil, fmt.Errorf("twitter tweet request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	// Taglio 1.3: X is OAuth 2.0 PKCE only. The OAuth 1.0a static-credential
-	// branch was removed — every publish now uses the user-context Bearer
-	// token from the database.
+	// Taglio 1.3: X is OAuth 2.0 PKCE only. Every publish uses the
+	// user-context Bearer token.
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := s.httpClient.Do(req)

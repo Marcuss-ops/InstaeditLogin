@@ -19,13 +19,27 @@ import (
 // methods it actually supports — no more composition onto a single
 // monolithic PlatformService.
 //
+// Taglio 4.4 split: scope formally narrowed to **Pages-only con
+// selezione**. Facebook publishing is gated by the Page model — you
+// cannot publish to a personal profile via the Graph API (/me/feed
+// returns 400), so this service publishes ONLY to Pages, never to the
+// user. The specific Page to publish to is selected at OAuth-connect
+// time via DiscoverAccounts (which returns all Pages the user
+// manages), with the chosen page_id stored in
+// PlatformAccount.metadata so the per-target Publish dispatches to
+// the right page.
+//
 // Capabilities exposed:
-//   - OAuthProvider (login flow)
-//   - AccountDiscoverer (Facebook Pages the user manages)
-//   - ContentValidator (text or image required)
-//   - Publisher (Page feed / Page photo)
-//   - AccountManager (Validate / Revoke — non-interface helpers used by
-//     the handlers' account lifecycle methods).
+//   - OAuthProvider (Meta OAuth login flow with Pages-scoped auth)
+//   - ResourceDiscoverer (= AccountDiscoverer — Facebook Pages the user
+//     manages; selection happens here, the OAuth-connect handler picks
+//     one Page and persists its id on PlatformAccount.metadata)
+//   - ContentValidator (text or image required — text goes to /feed,
+//     image to /photos)
+//   - Publisher (Page feed / Page photo, dispatched on the
+//     previously-selected page_id via /{page_id}/feed or /{page_id}/photos)
+//   - AccountManager (Validate / Revoke — non-interface helpers used
+//     by the handlers' account lifecycle methods).
 type FacebookOAuthService struct {
 	base        *MetaOAuthBase
 	redirectURI string

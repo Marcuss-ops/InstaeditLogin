@@ -181,5 +181,22 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		}
 	}
 
+	// Instagram (Taglio 4.4): Meta-family media-only. Independent
+	// registration — a deployment can enable only Instagram without
+	// the rest of Meta-family. Same shared-credentials check as
+	// Facebook: cfg.MetaAppID + cfg.MetaAppSecret are required.
+	if cfg.InstagramRedirectURI != "" {
+		if cfg.MetaAppID == "" || cfg.MetaAppSecret == "" {
+			b.logger.Warn("Skipped Instagram provider: META_APP_ID and META_APP_SECRET are required (or unset INSTAGRAM_REDIRECT_URI to disable)")
+		} else {
+			ig, err := services.NewInstagramOAuthService(cfg)
+			if err != nil {
+				b.logger.Warn("Skipped Instagram provider (constructor failed)", "error", err)
+			} else if ig != nil {
+				router.Register(ig.Name(), ig)
+			}
+		}
+	}
+
 	return router, nil
 }

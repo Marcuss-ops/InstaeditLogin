@@ -273,12 +273,8 @@ frontend su `https://instaedit.vercel.app`, backend su
 - Auth JWT (Taglio 1.1): blocca ogni richiesta a `/api/v1/posts/publish`
   e `/api/v1/accounts` senza `Authorization: Bearer <jwt>` valido; nessun
   fallback a `user_id` body/query, nessun ID sintetico (default userID=1 rimosso)
-- **X / Twitter OAuth 2.0 PKCE only (Taglio 1.3)**: nessuna credenziale statica
-  `TWITTER_API_KEY` / `TWITTER_API_KEY_SECRET` / `TWITTER_ACCESS_TOKEN` /
-  `TWITTER_ACCESS_TOKEN_SECRET`; ogni publish usa esclusivamente il Bearer
+- **X / Twitter OAuth 2.0 PKCE (Taglio 1.3)**: ogni publish usa esclusivamente il Bearer
   token utente OAuth 2.0 (PKCE) ottenuto via `/api/v1/auth/twitter/callback`.
-  Le env var sono rimosse dal config e il fallback OAuth 1.0a in
-  `internal/services/twitter_oauth.go::Publish` non esiste più.
 - `.env` escluso da git
 - HTTPS richiesto in produzione
 - Per i dettagli sui secret minimi vedi `## Generazione dei secret` in alto

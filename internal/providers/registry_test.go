@@ -136,6 +136,33 @@ func TestBuildRegistry_OnlyLinkedIn(t *testing.T) {
 	}
 }
 
+// TestBuildRegistry_OnlyInstagram (Taglio 4.4) asserts that
+// configuring the shared Meta OAuth credentials + an Instagram
+// redirect URI registers exactly the Instagram provider. MetaAppSecret
+// must be ≥ 32 chars to pass the config-level length policy (enforced
+// by config.validate, which BuildRegistry does NOT call — but the test
+// mirrors the production config so the constructor sees a realistic
+// input). Independent from Facebook: a deployment can run Meta-only-
+// Instagram without enabling Facebook or Threads.
+func TestBuildRegistry_OnlyInstagram(t *testing.T) {
+	cfg := &config.Config{
+		MetaAppID:            "1234567890",
+		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+		InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+	}
+	registry, err := BuildRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildRegistry: %v", err)
+	}
+	names := registry.Names()
+	if len(names) != 1 {
+		t.Fatalf("registry.Names(): want 1 platform, got %d (%v)", len(names), names)
+	}
+	if names[0] != "instagram" {
+		t.Errorf("registered platform: want %q, got %q", "instagram", names[0])
+	}
+}
+
 // TestBuildRegistry_FacebookMissingMetaCreds (Taglio 2.4) proves
 // the warn-and-skip path: when FACEBOOK_REDIRECT_URI is set but
 // META_APP_ID or META_APP_SECRET is empty, the Facebook provider
@@ -183,6 +210,113 @@ func TestBuildRegistry_FacebookMissingMetaCreds(t *testing.T) {
 			}
 			if got := registry.Len(); got != 0 {
 				t.Errorf("registry.Len(): want 0 (Facebook should be skipped), got %d (names: %v)", got, registry.Names())
+			}
+			logged := buf.String()
+			if !strings.Contains(logged, tc.wantWarnSub) {
+				t.Errorf("expected warn log to contain %q, got %q", tc.wantWarnSub, logged)
+			}
+		})
+	}
+}
+
+// TestBuildRegistry_AllSevenPlatforms (Taglio 4.4) asserts that
+// configuring the shared Meta OAuth credentials + all three Meta-family
+// redirect URIs + all four non-Meta platforms registers all seven
+// providers (instagram, facebook, threads, tiktok, twitter, youtube,
+// linkedin). This supersedes the previous AllFivePlatforms test now
+// that Meta-family has been split into three distinct providers.
+func TestBuildRegistry_AllSevenPlatforms(t *testing.T) {
+	cfg := &config.Config{
+		MetaAppID:            "1234567890",
+		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+		InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+		ThreadsRedirectURI:   "https://example.com/api/v1/auth/threads/callback",
+		TikTokClientKey:      "tt-key",
+		TikTokClientSecret:   "this-is-a-32-char-test-secret-tttt",
+		TwitterClientID:      "tw-id",
+		TwitterClientSecret:  "this-is-a-32-char-test-secret-twww",
+		YouTubeClientID:      "yt-id",
+		YouTubeClientSecret:  "this-is-a-32-char-test-secret-yttt",
+		LinkedInClientID:     "li-id",
+		LinkedInClientSecret: "this-is-a-32-char-test-secret-liii",
+	}
+	registry, err := BuildRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildRegistry: %v", err)
+	}
+	got := registry.Names()
+	want := map[string]bool{
+		"instagram": true,
+		"facebook":  true,
+		"threads":   true,
+		"tiktok":    true,
+		"twitter":   true,
+		"youtube":   true,
+		"linkedin":  true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("registry.Names(): want %d platforms, got %d (%v)", len(want), len(got), got)
+	}
+	for _, name := range got {
+		if !want[name] {
+			t.Errorf("unexpected platform registered: %q", name)
+		}
+		delete(want, name)
+	}
+	for name := range want {
+		t.Errorf("expected platform not registered: %q", name)
+	}
+}
+
+// TestBuildRegistry_InstagramMissingMetaCreds (Taglio 4.4) proves the
+// warn-and-skip path for the new Instagram provider: when
+// INSTAGRAM_REDIRECT_URI is set but META_APP_ID or META_APP_SECRET is
+// empty, the Instagram provider is NOT registered (it would have an
+// empty client_id) and a descriptive warning is logged. Symmetric with
+// the existing TestBuildRegistry_FacebookMissingMetaCreds.
+func TestBuildRegistry_InstagramMissingMetaCreds(t *testing.T) {
+	tests := []struct {
+		name        string
+		metaAppID   string
+		metaAppSec  string
+		wantWarnSub string
+	}{
+		{
+			name:        "META_APP_ID empty, META_APP_SECRET set",
+			metaAppID:   "",
+			metaAppSec:  "this-is-a-32-char-test-secret-AAAA",
+			wantWarnSub: "Skipped Instagram provider: META_APP_ID and META_APP_SECRET are required",
+		},
+		{
+			name:        "META_APP_ID set, META_APP_SECRET empty",
+			metaAppID:   "1234567890",
+			metaAppSec:  "",
+			wantWarnSub: "Skipped Instagram provider: META_APP_ID and META_APP_SECRET are required",
+		},
+		{
+			name:        "both META creds empty",
+			metaAppID:   "",
+			metaAppSec:  "",
+			wantWarnSub: "Skipped Instagram provider: META_APP_ID and META_APP_SECRET are required",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := &bytes.Buffer{}
+			customLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			cfg := &config.Config{
+				MetaAppID:            tc.metaAppID,
+				MetaAppSecret:        tc.metaAppSec,
+				InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+			}
+			registry, err := BuildRegistry(cfg, WithLogger(customLogger))
+			if err != nil {
+				t.Fatalf("BuildRegistry: %v", err)
+			}
+			if got := registry.Len(); got != 0 {
+				t.Errorf("registry.Len(): want 0 (Instagram should be skipped), got %d (names: %v)", got, registry.Names())
 			}
 			logged := buf.String()
 			if !strings.Contains(logged, tc.wantWarnSub) {
