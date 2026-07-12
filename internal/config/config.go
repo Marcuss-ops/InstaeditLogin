@@ -92,6 +92,14 @@ type Config struct {
 	// coupling to the driver's cadence. Both run as separate
 	// goroutines on independent contexts with parallel shutdown.
 	ReconcileWorkerIntervalSeconds int
+	// SPRINT 4.2 — independent tick interval for the WebhookWorker
+	// goroutine. Drains the webhook_deliveries table every
+	// WEBHOOK_WORKER_INTERVAL_SECONDS (default 5s). Faster than
+	// the publish driver so an end-to-end delivery latency is
+	// bounded by a 1-2s ceiling under typical load. Same
+	// lifecycle shape: independent goroutine, ctx-cancellable,
+	// drained in parallel on shutdown.
+	WebhookWorkerIntervalSeconds int
 
 	// S3-compatible storage (mandatory).
 	S3Endpoint  string
@@ -149,6 +157,7 @@ func Load() (*Config, error) {
 		AppEnv:                         getEnv("APP_ENV", "dev"),
 		PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
 		ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
+		WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
 		S3Endpoint:                     getEnv("S3_ENDPOINT", ""),
 		S3Bucket:                       getEnv("S3_BUCKET", ""),
 		S3AccessKey:                    getEnv("S3_ACCESS_KEY", ""),

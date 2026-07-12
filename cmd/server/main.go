@@ -182,6 +182,17 @@ func main() {
 	rateLimitRepo := repository.NewRateLimitRepository(db)
 	rateLimitSvc := services.NewRateLimitService(rateLimitRepo)
 
+	// SPRINT 4.2: webhook runtime. WebhookRepository owns the
+	// `webhook_endpoints` / `webhook_events` / `webhook_deliveries`
+	// tables. The HTTP router uses it to manage endpoint
+	// configuration + manual replay. The background worker
+	// (spawned below) uses the same repo to claim + process
+	// due deliveries with HMAC-SHA256 signing, backoff, and DLQ.
+	// Both share the *sql.DB connection pool; multi-replica
+	// safety is delegated to ClaimDueDeliveries (SELECT FOR
+	// UPDATE SKIP LOCKED + UPDATE in a single tx).
+	webhookRepo := repository.NewWebhookRepository(db)
+
 	opts := []api.RouterOption{
 		api.WithCredentialVault(vault),
 		api.WithStorageProvider(storageProvider),
@@ -222,6 +233,13 @@ func main() {
 		// proxy) is the real per-IP gate — see
 		// docs/OPERATIONS.md.
 		api.WithRateLimitService(rateLimitSvc),
+		// SPRINT 4.2: webhook runtime. Wires the
+		// /api/v1/webhooks/endpoints CRUD endpoints + manual
+		// delivery replay. The background worker that does the
+		// actual POST work is spawned separately below (same
+		// shape as the publish worker, the reconcile worker,
+		// and the outbox dispatcher).
+		api.WithWebhookStore(webhookRepo),
 	}
 	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)
@@ -349,22 +367,44 @@ func main() {
 		}
 	}()
 
+	// SPRINT 4.2: spawn the webhook worker goroutine — drains the
+	// webhook_deliveries table every cfg.WebhookWorkerIntervalSeconds
+	// (default 5s). The worker shares the *sql.DB connection pool
+	// with the other background goroutines; multi-replica safety
+	// is delegated to WebhookRepository.ClaimDueDeliveries (SELECT
+	// FOR UPDATE SKIP LOCKED + UPDATE in a single tx). Same
+	// lifecycle shape as the publish worker, the reconcile
+	// worker, and the outbox dispatcher: independent goroutine,
+	// independent tick interval, ctx-cancellable, drained in
+	// parallel on shutdown.
+	webhookWorkerInterval := time.Duration(cfg.WebhookWorkerIntervalSeconds) * time.Second
+	webhookCtx, webhookCancel := context.WithCancel(context.Background())
+	webhookDone := make(chan struct{})
+	go func() {
+		defer close(webhookDone)
+		webhookWorker := worker.NewWebhookWorker(webhookRepo, webhookWorkerInterval)
+		if err := webhookWorker.Run(webhookCtx); err != nil && err != context.Canceled {
+			slog.Error("webhook worker exited with error", "error", err)
+		}
+	}()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	// 3 goroutines drain CONCURRENTLY. Each leaf has its own 15s
+	// 4 goroutines drain CONCURRENTLY. Each leaf has its own 15s
 	// inner timeout, so wg.Wait returns within 15s of start (parallel
 	// execution — no per-leaf blocks forever on a hung Run). Total
 	// wall-clock on hard hangs: 15s (down from the prior stacked
 	// 3x15s = 45s). Missing "drained cleanly" line identifies which
 	// worker hit its inner timeout.
-	slog.Info("Shutting down: cancelling publish worker + reconcile worker + outbox dispatcher in parallel")
+	slog.Info("Shutting down: cancelling publish worker + reconcile worker + outbox dispatcher + webhook worker in parallel")
 	workerCancel()
 	reconcileCancel()
 	dispatcherCancel()
+	webhookCancel()
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		select {
@@ -390,6 +430,15 @@ func main() {
 			slog.Info("outbox dispatcher drained cleanly")
 		case <-time.After(15 * time.Second):
 			slog.Warn("outbox dispatcher drain timeout, continuing shutdown")
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		select {
+		case <-webhookDone:
+			slog.Info("webhook worker drained cleanly")
+		case <-time.After(15 * time.Second):
+			slog.Warn("webhook worker drain timeout, continuing shutdown")
 		}
 	}()
 	wg.Wait()

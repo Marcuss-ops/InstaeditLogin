@@ -126,6 +126,14 @@ type Router struct {
 	// in production so the per-workspace and per-API-key tiers are
 	// enforced (per the user's "no in-memory for >1 replica" rule).
 	rateLimitSvc *services.RateLimitService
+	// SPRINT 4.2 — webhook runtime (optional). Wiring via
+	// WithWebhookStore. When nil, /api/v1/webhooks/* return 501
+	// (mirroring the other feature-flag nil-guard pattern).
+	// The HTTP handlers only manage endpoint configuration +
+	// manual replay — the actual POST work happens in a
+	// background worker (internal/worker/webhook_worker.go)
+	// that main.go spawns separately.
+	webhookStore WebhookStore
 }
 
 // ConnectionStateStore is declared in pkg/api/connections.go (SPRINT 1.2);
@@ -364,6 +372,15 @@ func WithCookieSecure(secure bool) RouterOption {
 func WithRateLimitService(svc *services.RateLimitService) RouterOption {
 	return func(r *Router) { r.rateLimitSvc = svc }
 }
+
+// WithWebhookStore wires the SPRINT 4.2 webhook runtime. The
+// HTTP handlers use it to CRUD endpoint configuration + manual
+// replay; the background worker (spawned separately by
+// cmd/server/main.go) uses the same repo to claim + process
+// deliveries. When not wired, /api/v1/webhooks/* return 501.
+func WithWebhookStore(s WebhookStore) RouterOption {
+	return func(r *Router) { r.webhookStore = s }
+}
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -404,6 +421,13 @@ func (r *Router) Setup() http.Handler {
 	// FASE 3.1: Stripe billing (when configured).
 	if r.billingSvc != nil {
 		r.registerBillingRoutes()
+	}
+
+	// SPRINT 4.2: webhook runtime (when configured). Endpoints
+	// + manual-replay only — the actual POST work happens in the
+	// background worker (cmd/server/main.go spawns it separately).
+	if r.webhookStore != nil {
+		r.registerWebhookRoutes()
 	}
 
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login",
