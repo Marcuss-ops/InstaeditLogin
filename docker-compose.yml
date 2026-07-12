@@ -1,0 +1,65 @@
+# InstaEditLogin — Local Development Stack
+# Usage:
+#   cp .env.dev.example .env.dev
+#   docker compose up --build
+#
+# Services:
+#   db:       PostgreSQL 15
+#   backend:  Go API server (auto-reload via go run)
+#   frontend: Vite React dev server
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: instaedit-db
+    environment:
+      POSTGRES_USER: instaedit
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_DB: instaedit_login
+    ports:
+      - "5432:5432"
+    volumes:
+      - instaedit_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U instaedit -d instaedit_login"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    image: golang:1.23-alpine
+    container_name: instaedit-backend
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env.dev
+    environment:
+      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "go run cmd/server/main.go"
+
+  frontend:
+    image: node:20-alpine
+    container_name: instaedit-frontend
+    working_dir: /app/web
+    volumes:
+      - ./web:/app/web
+    ports:
+      - "5173:5173"
+    env_file:
+      - .env.dev
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8080
+    depends_on:
+      - backend
+    command: >
+      sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+
+volumes:
+  instaedit_pg_data:

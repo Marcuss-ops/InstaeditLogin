@@ -19,7 +19,7 @@ import (
 
 // LinkedInOAuthService implements OAuthProvider and ContentPublisher for LinkedIn.
 type LinkedInOAuthService struct {
-	cfg        *config.Config
+	cfg *config.Config
 	*TokenHelper
 	httpClient *http.Client
 }
@@ -92,9 +92,9 @@ func (s *LinkedInOAuthService) Publish(ctx context.Context, accessToken, platfor
 	// LinkedIn Posts API: POST https://api.linkedin.com/rest/posts
 	// Version 202606, main-feed distribution, public visibility.
 	postBody := map[string]interface{}{
-		"author":          "urn:li:person:" + platformUserID,
-		"commentary":      payload.Text,
-		"visibility":      "PUBLIC",
+		"author":     "urn:li:person:" + platformUserID,
+		"commentary": payload.Text,
+		"visibility": "PUBLIC",
 		"distribution": map[string]interface{}{
 			"feedDistribution": "MAIN_FEED",
 		},

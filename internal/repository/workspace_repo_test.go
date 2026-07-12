@@ -221,4 +221,3 @@ func TestWorkspaceListByOwner_QueryError(t *testing.T) {
 	errContains(t, err, "failed to list workspaces by owner")
 	errContains(t, err, "query timeout")
 }
-

@@ -25,7 +25,7 @@ import (
 
 // TwitterOAuthService implements OAuthProvider and ContentPublisher for Twitter/X.
 type TwitterOAuthService struct {
-	cfg        *config.Config
+	cfg *config.Config
 	*TokenHelper
 	httpClient *http.Client
 }

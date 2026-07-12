@@ -147,9 +147,10 @@ func (p *SupabaseProvider) SignUpload(ctx context.Context, userID int64, key, co
 // Signing is hand-rolled to avoid pulling in aws-sdk-go-v2 (~50 MB of
 // transitively downloaded modules). The implementation follows AWS's
 // reference SigV4 spec:
-//   https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
-//   https://docs.aws.amazon.com/general/latest/gr/sigv4-create-string-to-sign.html
-//   https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html
+//
+//	https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
+//	https://docs.aws.amazon.com/general/latest/gr/sigv4-create-string-to-sign.html
+//	https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html
 //
 // For presigned URLs the canonical request is signed with payload hash
 // UNSIGNED-PAYLOAD so the client doesn't need to hash the entire file
@@ -225,7 +226,7 @@ func (p *S3Provider) SignUpload(ctx context.Context, userID int64, key, contentT
 //   - ttl:      X-Amz-Expires value in seconds
 //   - method:   HTTP verb (PUT for upload, GET in theory)
 //   - now:      time used for X-Amz-Date (caller injects for determinism
-//               in tests; production passes time.Now())
+//     in tests; production passes time.Now())
 //
 // The canonical query string is BOTH the input to the SigV4 signing AND
 // the query string of the returned URL — they MUST be identical for the

@@ -14,6 +14,7 @@ docker-compose.override.yml
 *.exe
 *.exe~
 # Go build artifacts
+/seed
 go.work
 # IDE
 .idea/

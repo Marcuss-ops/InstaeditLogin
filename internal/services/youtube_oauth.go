@@ -20,7 +20,7 @@ import (
 
 // YouTubeOAuthService implements OAuthProvider and ContentPublisher for YouTube.
 type YouTubeOAuthService struct {
-	cfg        *config.Config
+	cfg *config.Config
 	*TokenHelper
 	httpClient *http.Client
 }

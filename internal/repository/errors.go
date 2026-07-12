@@ -5,19 +5,19 @@ import "errors"
 // Sentinel errors returned by the repository layer. The pkg/api layer maps
 // these via errors.Is to HTTP status codes:
 //
-//   ErrPostNotFound           → 404 (post does not exist)
-//   ErrUnauthorized / 404 (tenant-isolation miss: post exists but is
-//                                owned by a different workspace; maps to
-//                                403 by current API contract for admin
-//                                debugging; a future hardening pass could
-//                                switch this to 404 to prevent
-//                                workspace-existence leaks across tenants)
-//   ErrPostTargetNotFound     → 404 (a stale post_target ID — the worker
-//                                would otherwise see nil error and assume
-//                                the status transition happened, leaving a
-//                                ghost target in the pending queue)
-//   ErrUserNotFound           → 404 (user id does not exist)
-//   ErrTokenNotFound          → 404 (token id stale / account has no tokens)
+//	ErrPostNotFound           → 404 (post does not exist)
+//	ErrUnauthorized / 404 (tenant-isolation miss: post exists but is
+//	                             owned by a different workspace; maps to
+//	                             403 by current API contract for admin
+//	                             debugging; a future hardening pass could
+//	                             switch this to 404 to prevent
+//	                             workspace-existence leaks across tenants)
+//	ErrPostTargetNotFound     → 404 (a stale post_target ID — the worker
+//	                             would otherwise see nil error and assume
+//	                             the status transition happened, leaving a
+//	                             ghost target in the pending queue)
+//	ErrUserNotFound           → 404 (user id does not exist)
+//	ErrTokenNotFound          → 404 (token id stale / account has no tokens)
 //
 // Foundation for `pkg/api/{workspaces,posts}.go` mapping: the API layer wraps
 // the canonical sentinel in its own response envelope; callers in internal

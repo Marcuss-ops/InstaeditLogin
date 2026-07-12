@@ -103,23 +103,23 @@ func (m *Manager) Verify(raw string) (int64, error) {
 // Two modes are supported, selected by the `strict` flag (wired at startup
 // from the STRICT_JWT_AUTH env var; default true since the SPA ships JWT-aware):
 //
-//   STRICT MODE (default; STRICT_JWT_AUTH=true):
-//     - Missing Authorization header           → 401 missing authorization header
-//     - Authorization header without Bearer  → 401 invalid authorization header
-//     - Bearer with invalid/expired JWT       → 401 invalid or expired token
-//     - Bearer with valid JWT                  → user_id placed in ctx, calls next
+//	STRICT MODE (default; STRICT_JWT_AUTH=true):
+//	  - Missing Authorization header           → 401 missing authorization header
+//	  - Authorization header without Bearer  → 401 invalid authorization header
+//	  - Bearer with invalid/expired JWT       → 401 invalid or expired token
+//	  - Bearer with valid JWT                  → user_id placed in ctx, calls next
 //
-//   LEGACY FALLBACK (STRICT_JWT_AUTH=false):
-//     Reserved for the AUTH MIGRATION ROLLBACK WINDOW. When the JWT-aware
-//     frontend is being rolled out, the old SPA clients don't send
-//     Authorization and would otherwise be locked out. In legacy mode the
-//     middleware accepts the request and emits a slog.Warn line so ops can
-//     measure how many legacy callers are still hitting the API.
+//	LEGACY FALLBACK (STRICT_JWT_AUTH=false):
+//	  Reserved for the AUTH MIGRATION ROLLBACK WINDOW. When the JWT-aware
+//	  frontend is being rolled out, the old SPA clients don't send
+//	  Authorization and would otherwise be locked out. In legacy mode the
+//	  middleware accepts the request and emits a slog.Warn line so ops can
+//	  measure how many legacy callers are still hitting the API.
 //
-//     SECURITY: in legacy mode `resolveUserID` falls back to the
-//     `user_id` field on the request body/query, which means anyone who
-//     knows an integer id can publish as that user. NEVER run legacy mode
-//     in production once the new frontend is fully rolled out.
+//	  SECURITY: in legacy mode `resolveUserID` falls back to the
+//	  `user_id` field on the request body/query, which means anyone who
+//	  knows an integer id can publish as that user. NEVER run legacy mode
+//	  in production once the new frontend is fully rolled out.
 //
 // Use UserIDFromContext to retrieve the authenticated user id downstream.
 // The boolean is false when the request reached the handler without the

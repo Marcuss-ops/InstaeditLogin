@@ -89,6 +89,7 @@ func mapRepoError(err error) (int, string) {
 //  7. each target has a platform_account_id (422 on zero)
 //  8. auto-promote status: scheduled_at != nil && status == "" → "scheduled"
 //  9. default status: "draft" if still empty
+//
 // 10. Create (404 on ErrPostUnauthorized per the cross-tenant contract)
 func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 	if r.postStore == nil {

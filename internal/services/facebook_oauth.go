@@ -19,7 +19,7 @@ import (
 
 // FacebookOAuthService implements OAuthProvider and ContentPublisher for Meta/Facebook.
 type FacebookOAuthService struct {
-	cfg        *config.Config
+	cfg *config.Config
 	*TokenHelper
 	httpClient *http.Client
 }

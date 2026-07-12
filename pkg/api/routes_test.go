@@ -37,8 +37,8 @@ type mockPlatformService struct {
 	handleCallbackCalls int
 }
 
-func (m *mockPlatformService) GetPlatform() string                            { return m.platform }
-func (m *mockPlatformService) GetLoginURL(state string) string                { return m.loginURL + "?state=" + state }
+func (m *mockPlatformService) GetPlatform() string             { return m.platform }
+func (m *mockPlatformService) GetLoginURL(state string) string { return m.loginURL + "?state=" + state }
 func (m *mockPlatformService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	m.handleCallbackCalls++
 	if m.handleCallback == nil {
@@ -202,12 +202,12 @@ func (m *mockPostStore) Save(target *models.PostTarget) error {
 // fields. Captures SignUpload args so tests can assert key construction
 // (user_id scoping, UUID4 uniqueness, name sanitization).
 type mockStorageProvider struct {
-	grant              *services.UploadGrant
-	err                error
-	capturedUserID     int64
-	capturedKey        string
+	grant               *services.UploadGrant
+	err                 error
+	capturedUserID      int64
+	capturedKey         string
 	capturedContentType string
-	capturedSize       int64
+	capturedSize        int64
 }
 
 func (m *mockStorageProvider) Provider() string { return "mock" }

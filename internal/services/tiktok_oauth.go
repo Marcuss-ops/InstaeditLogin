@@ -19,7 +19,7 @@ import (
 
 // TikTokOAuthService implements OAuthProvider and ContentPublisher for TikTok.
 type TikTokOAuthService struct {
-	cfg        *config.Config
+	cfg *config.Config
 	*TokenHelper
 	httpClient *http.Client
 }

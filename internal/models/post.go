@@ -16,11 +16,11 @@ type PostStatus string
 
 // Lifecycle values. Persisted as-is by Value/Scan.
 const (
-	PostStatusDraft     PostStatus = "draft"
-	PostStatusScheduled PostStatus = "scheduled"
+	PostStatusDraft      PostStatus = "draft"
+	PostStatusScheduled  PostStatus = "scheduled"
 	PostStatusPublishing PostStatus = "publishing"
-	PostStatusPublished PostStatus = "published"
-	PostStatusFailed    PostStatus = "failed"
+	PostStatusPublished  PostStatus = "published"
+	PostStatusFailed     PostStatus = "failed"
 )
 
 // IsValid reports whether s is one of the defined PostStatus values.

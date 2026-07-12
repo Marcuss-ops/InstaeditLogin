@@ -214,7 +214,7 @@ func TestPostRepository_Update_Success(t *testing.T) {
 
 	post := &models.Post{
 		ID: 100, WorkspaceID: 1, Title: "new", Caption: "cap",
-		MediaURL: "url", ScheduledAt: &now,		Status:      models.PostStatusScheduled,
+		MediaURL: "url", ScheduledAt: &now, Status: models.PostStatusScheduled,
 	}
 	if err := repo.Update(post); err != nil {
 		t.Fatalf("Update: %v", err)

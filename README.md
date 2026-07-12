@@ -11,12 +11,13 @@ Supporta **5 piattaforme social** con gestione unificata di token e API.
 | **TikTok**        | ✅    | ✅      | Video publishing via TikTok API v2        |
 | **Twitter / X**   | ✅    | ✅      | Tweets testuali via X API v2              |
 | **YouTube**       | ✅    | ✅      | Upload video via YouTube Data API v3      |
+| **LinkedIn**      | ✅    | ✅      | Post testuali e articoli via LinkedIn Posts API |
 
 Tutte le piattaforme oltre a Meta sono **opzionali**: si attivano solo se le relative credenziali sono configurate nel `.env`.
 
 ## Stack Tecnologico
 
-- **Linguaggio:** Go 1.26+
+- **Linguaggio:** Go 1.23+
 - **Database:** PostgreSQL
 - **Sicurezza:** AES-256-GCM per token a riposo, JWT per sessioni
 - **Pattern:** Interface-based providers (OAuthProvider + ContentPublisher + TokenManager)
@@ -25,7 +26,7 @@ Tutte le piattaforme oltre a Meta sono **opzionali**: si attivano solo se le rel
 
 ### Prerequisiti
 
-- Go 1.26+
+- Go 1.23+
 - PostgreSQL 15+
 - Meta App ID e App Secret (obbligatori — da [developers.facebook.com](https://developers.facebook.com))
 - Credenziali opzionali per TikTok, Twitter, YouTube

@@ -340,13 +340,13 @@ func TestPostsAPI_Create_BadTargetID_422(t *testing.T) {
 //
 // The test proves the 404 came from the CROSS-OWNER path (not from a
 // post-not-found or workspace-lookup-error path) via two assertions:
-//   1. workspaceStore.findByIDFn was called exactly once (a "post not
-//      found" from `p == nil` would short-circuit BEFORE the workspace
-//      lookup; a "failed to get post" would not reach the workspace at
-//      all).
-//   2. The response body is the cross-owner "post not found" string —
-//      NOT the "failed to get post: " prefix that mapRepoError would
-//      produce for a FindByID error.
+//  1. workspaceStore.findByIDFn was called exactly once (a "post not
+//     found" from `p == nil` would short-circuit BEFORE the workspace
+//     lookup; a "failed to get post" would not reach the workspace at
+//     all).
+//  2. The response body is the cross-owner "post not found" string —
+//     NOT the "failed to get post: " prefix that mapRepoError would
+//     produce for a FindByID error.
 func TestPostsAPI_Get_CrossOwner_404(t *testing.T) {
 	wsCalled := int64(0)
 	r := newPostsTestRouter(
@@ -621,13 +621,13 @@ func TestCreatePostResponse_DualShape_FlatAndNestedAgree(t *testing.T) {
 
 // TestCreatePostResponse_Targets_TopLevelKey_PreservesOrder locks in two
 // aspects of the targets encoding:
-//   1. "targets" lives at the TOP level of the response, not inside the
-//      nested "post" object (otherwise a flat-decode consumer looking
-//      for `resp.targets` would silently get nothing).
-//   2. The targets slice is JSON-encoded in slice order, preserving
-//      per-target IDs, platform_account_ids, statuses, and error
-//      messages. A future "sort by id" optimization would break the
-//      documented ordering and the per-platform error reporting.
+//  1. "targets" lives at the TOP level of the response, not inside the
+//     nested "post" object (otherwise a flat-decode consumer looking
+//     for `resp.targets` would silently get nothing).
+//  2. The targets slice is JSON-encoded in slice order, preserving
+//     per-target IDs, platform_account_ids, statuses, and error
+//     messages. A future "sort by id" optimization would break the
+//     documented ordering and the per-platform error reporting.
 func TestCreatePostResponse_Targets_TopLevelKey_PreservesOrder(t *testing.T) {
 	post := &models.Post{
 		ID:          1,

@@ -4,11 +4,11 @@ import "time"
 
 // Platform constants identify supported social platforms.
 const (
-	PlatformMeta      = "meta"
-	PlatformTikTok    = "tiktok"
-	PlatformTwitter   = "twitter"
-	PlatformYouTube   = "youtube"
-	PlatformLinkedIn  = "linkedin"
+	PlatformMeta     = "meta"
+	PlatformTikTok   = "tiktok"
+	PlatformTwitter  = "twitter"
+	PlatformYouTube  = "youtube"
+	PlatformLinkedIn = "linkedin"
 )
 
 // User represents an application user (platform-agnostic).
