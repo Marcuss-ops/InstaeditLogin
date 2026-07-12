@@ -102,7 +102,7 @@ echo "ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
 3. **Use cases** → configura **"Authenticate and request data from users with Facebook Login"** (o simile per Instagram)
 4. **Facebook Login for Business** (o **Facebook Login** → **Settings**) → **Valid OAuth Redirect URIs**:
    ```
-   http://localhost:8080/api/v1/auth/meta/callback
+   http://localhost:8080/api/v1/auth/instagram/callback
    ```
    Salva.
 5. Roles → aggiungi il tuo Facebook account come **Developer** o **Tester** (l'app è in Development mode di default — solo Testers possono fare login).
@@ -131,10 +131,10 @@ msg="listening" addr=0.0.0.0:8080
 ```bash
 # (1) Health endpoint
 curl -sS http://localhost:8080/api/v1/health | python -m json.tool
-# Atteso: {"status":"ok","service":"InstaEdit","version":"2.0.0","platforms":["meta"]}
+# Atteso: {"status":"ok","service":"InstaEdit","version":"2.0.0","platforms":["instagram"]}
 
 # (2) Meta OAuth login reindirizza a Facebook (302)
-curl -sI http://localhost:8080/api/v1/auth/meta/login
+curl -sI http://localhost:8080/api/v1/auth/instagram/login
 # Atteso: HTTP/1.1 302 Found + Location: https://www.facebook.com/v18.0/dialog/oauth?...
 
 # (3) Protected route rifiuta senza JWT (401)
@@ -165,10 +165,10 @@ Apri http://localhost:5173 nel browser.
 ## 9. Test login Meta end-to-end
 
 1. http://localhost:5173 → click **"Login with Meta"**
-2. Il browser naviga a `http://localhost:8080/api/v1/auth/meta/login` → 302 verso Facebook
+2. Il browser naviga a `http://localhost:8080/api/v1/auth/instagram/login` → 302 verso Facebook
 3. Login su Facebook come Tester (l'utente aggiunto in punto 5)
 4. Autorizza l'app
-5. Facebook rimanda a `http://localhost:8080/api/v1/auth/meta/callback?code=...`
+5. Facebook rimanda a `http://localhost:8080/api/v1/auth/instagram/callback?code=...`
 6. Backend scambia `code` per `access_token` → emette JWT → 302 verso `${FRONTEND_URL}/auth/callback?jwt=...`
 7. Frontend cattura il JWT dalla query string, lo salva in localStorage, naviga a `/dashboard`
 
@@ -187,7 +187,7 @@ Il validator del backend è fail-fast. Controlla che `JWT_SECRET=` abbia esattam
 Hai dimenticato di aggiungerti come Developer/Tester in Meta App → Roles. Oppure l'app è in Live mode ma non hai Marketing/Instagram permissions richieste.
 
 ### Meta login reindirizza a "Invalid Redirect URI"
-Hai dimenticato di aggiungere `http://localhost:8080/api/v1/auth/meta/callback` in Facebook Login → Settings → Valid OAuth Redirect URIs. Vedi punto 5.
+Hai dimenticato di aggiungere `http://localhost:8080/api/v1/auth/instagram/callback` in Facebook Login → Settings → Valid OAuth Redirect URIs. Vedi punto 5.
 
 ### Frontend 404 su `/favicon.ico`
 Il prebuild hook rigenera `web/public/favicon.ico` ad ogni build. Se stai servendo direttamente da `vite dev`, il file è servito al volo. Se stai buildando, `npm run build` lo copia in `dist/favicon.ico`. Se ancora 404, verifica che `vite.config.ts` abbia il plugin `verifyApiBaseUrlPlugin` e che il `prebuild` script in `package.json` esista.
@@ -202,7 +202,7 @@ Dopo che il flow locale funziona, per andare in produzione:
 - **Frontend**: deploy su Vercel (già configurato via `web/vercel.json`)
 - **Vercel env**: `VITE_API_BASE_URL` deve puntare all'URL pubblica del backend
 - **CORS**: nel backend `.env`, `CORS_ALLOWED_ORIGINS=https://instaedit.org,https://www.instaedit.org`
-- **Meta redirect URI**: aggiungi `https://api.instaedit.org/api/v1/auth/meta/callback` alla console Meta
+- **Meta redirect URI**: aggiungi `https://api.instaedit.org/api/v1/auth/instagram/callback` alla console Meta
 
 ---
 

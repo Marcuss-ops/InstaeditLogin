@@ -183,10 +183,10 @@ describe("validateApiBaseUrl", () => {
 
     it("does NOT redact the pathname (paths aren't secrets; pinning the contract)", () => {
       const r = validateApiBaseUrl(
-        env({ VITE_API_BASE_URL: "https://api.example.com/api/v1/auth/meta/login?token=x" }),
+        env({ VITE_API_BASE_URL: "https://api.example.com/api/v1/auth/instagram/login?token=x" }),
       );
       // Pathname verbatim
-      expect(r.messages[0]).toContain("/api/v1/auth/meta/login");
+      expect(r.messages[0]).toContain("/api/v1/auth/instagram/login");
       // Query stripped
       expect(r.messages[0]).not.toContain("token=x");
     });

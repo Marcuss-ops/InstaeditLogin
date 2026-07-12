@@ -35,6 +35,8 @@ type Router struct {
 	mediaStore      MediaStore
 	auditLogStore   AuditLogStore
 	auth            *auth.Manager
+	apiKeyAuth      *auth.Authenticator
+	apiKeyStore     ApiKeyStore
 	vault           credentials.VaultAPI
 	oneTimeCodes    *OneTimeCodeStore
 	frontendURL     string
@@ -68,6 +70,40 @@ type PostStore interface {
 	CancelPost(id int64) error
 	RetryPost(id int64) error
 	RetryTarget(id int64) error
+}
+
+// ApiKeyStore mirrors the subset of repository.ApiKeyRepository that
+// the API layer + Authenticator middleware actually depend on.
+// Decoupled from the concrete repository so:
+//   - apikeys handlers can be wired with a fake store in tests (see
+//     posts_test.go pattern: stream-based sqlmock or in-memory map).
+//   - The Authenticator's ApiKeyLookup interface (in
+//     internal/auth/apikey_middleware.go) is satisfied by
+//     ApiKeyStore.FindByHash + ApiKeyStore.MarkUsed directly —
+//     *repository.ApiKeyRepository implements both interfaces.
+//
+// Methods invoked from THIS package's handlers:
+//   - Create: handleCreateApiKey / handleRotateApiKey
+//   - FindByID: handleGetApiKey
+//   - ListByOrg / ListByProject: handleListApiKeys
+//   - Revoke: handleDeleteApiKey (DELETE = soft revoke)
+//   - UpdateName: future PATCH endpoint
+//   - Rotate: handleRotateApiKey (transactional revoke+insert)
+//
+// Tenant scoping: every method that takes orgID/components
+// enforces it server-side. Cross-tenant calls return
+// (nil, nil) or ErrApiKeyNotFound indistinguishable from
+// "wrong id" — callers should not need to distinguish.
+type ApiKeyStore interface {
+	Create(key *models.ApiKey, hash []byte) error
+	FindByIDForOrg(orgID, id int64) (*models.ApiKey, error)
+	FindByHash(hash []byte) (*models.ApiKey, error)
+	ListByOrg(orgID int64) ([]models.ApiKey, error)
+	ListByProject(orgID, projectID int64) ([]models.ApiKey, error)
+	Revoke(orgID, id int64) error
+	MarkUsed(orgID, id int64) error
+	UpdateName(orgID, id int64, name string) error
+	Rotate(orgID, oldID int64, newKey *models.ApiKey, newHash []byte) error
 }
 
 type StorageProvider interface {
@@ -105,6 +141,32 @@ func WithAuditLogStore(store AuditLogStore) RouterOption {
 }
 func WithOneTimeCodeStore(s *OneTimeCodeStore) RouterOption {
 	return func(r *Router) { r.oneTimeCodes = s }
+}
+
+// WithApiKeyAuthenticator injects the API-key middleware used on
+// /api/v1/api-keys/* routes. When set, requests with Authorization:
+// Bearer sk_test_…/sk_live_… are authenticated against the api_keys
+// table by Authenticator.Middleware; non-sk_ requests pass through
+// to the existing JWT/cookie chain. When NOT set, the API-key routes
+// behave as JWT-only (existing behaviour; the apiKeyStore is
+// independently wired by WithApiKeyStore).
+//
+// Optional in main.go today so existing dev environments without
+// per-tenant API keys keep working — production deployments always
+// set it (cmd/server/main.go constructs one via
+// auth.NewApiKeyAuthenticator(apiKeyRepo)).
+func WithApiKeyAuthenticator(a *auth.Authenticator) RouterOption {
+	return func(r *Router) { r.apiKeyAuth = a }
+}
+
+// WithApiKeyStore injects the api_keys persistence layer. The
+// /api/v1/api-keys/* handlers require this to be wired; otherwise
+// they return 501 Not Implemented at runtime, mirroring the
+// postStore / workspaceStore nil-guard pattern. The interface is
+// local to this package so test fixtures can supply an in-memory
+// fake without dragging the repository import into pkg/api tests.
+func WithApiKeyStore(s ApiKeyStore) RouterOption {
+	return func(r *Router) { r.apiKeyStore = s }
 }
 
 // WithCredentialVault injects the central credential vault. The Router
@@ -187,6 +249,40 @@ func (r *Router) Setup() http.Handler {
 	})
 	r.mux.Route("/api/v1/post-targets", func(sr chi.Router) {
 		sr.Post("/{id}/retry", r.protected(r.handleRetryTarget))
+	})
+
+	// /api/v1/api-keys/* — Taglio 4.6 tenant API key management.
+	//
+	// Middleware order on this sub-router:
+	//   1. Authenticator (if wired) — authenticates sk_test_/sk_live_
+	//      Bearer tokens and deposits ApiKeyIdentity in context.
+	//      Pass-through for non-sk_ requests, so JWT/cookie auth runs
+	//      next.
+	//   2. JWT/cookie auth (existing r.auth) — authenticates JWT/cookie
+	//      sessions, deposits UserIdentity in context.
+	//   3. Handler — reads IdentityFromContext (works for both),
+	//      dispatches on IsAPIKey / HasPermission as needed.
+	//
+	// Skipping Authenticator (when WithApiKeyAuthenticator was not
+	// called) means API-key-only clients can't authenticate; the
+	// JWT/cookie path remains available so dashboard-like flows
+	// still work in dev.
+	r.mux.Route("/api/v1/api-keys", func(sr chi.Router) {
+		if r.apiKeyAuth != nil {
+			sr.Use(func(next http.Handler) http.Handler {
+				return r.apiKeyAuth.Middleware(next)
+			})
+		}
+		sr.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				r.auth.Middleware(next).ServeHTTP(w, req)
+			})
+		})
+		sr.Post("/", r.handleCreateApiKey)
+		sr.Get("/", r.handleListApiKeys)
+		sr.Get("/{id}", r.handleGetApiKey)
+		sr.Delete("/{id}", r.handleDeleteApiKey)
+		sr.Post("/{id}/rotate", r.handleRotateApiKey)
 	})
 	return r.corsMiddleware(r.loggingMiddleware(r.mux))
 }

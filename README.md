@@ -1,17 +1,19 @@
 # InstaEditLogin v2
 
 Microservizio multi-piattaforma di autenticazione OAuth 2.0 e publishing contenuti.
-Supporta **5 piattaforme social** con gestione unificata di token e API.
+Supporta **7 piattaforme social** con gestione unificata di token e API.
 
 ## Piattaforme Supportate
 
 | Piattaforma      | OAuth | Publish | Descrizione                               |
 |------------------|-------|---------|-------------------------------------------|
-| **Meta** (FB/IG)  | ✅    | ✅      | Foto/Reel su Instagram via Graph API      |
-| **TikTok**        | ✅    | ✅      | Video publishing via TikTok API v2        |
-| **Twitter / X**   | ✅ (OAuth 2.0 PKCE) | ✅ | Tweets testuali via X API v2              |
-| **YouTube**       | ✅    | ✅      | Upload video via YouTube Data API v3      |
-| **LinkedIn**      | ✅    | ✅      | Post testuali e articoli via LinkedIn Posts API |
+| **Instagram**    | ✅    | ✅      | Foto/Reel su Instagram via Graph API      |
+| **Facebook**     | ✅    | ✅      | Post su Facebook Pages via Graph API      |
+| **Threads**      | ✅    | ✅      | Post testuali su Threads via Graph API    |
+| **TikTok**       | ✅    | ✅      | Video publishing via TikTok API v2        |
+| **Twitter / X**  | ✅ (OAuth 2.0 PKCE) | ✅ | Tweets testuali via X API v2              |
+| **YouTube**      | ✅    | ✅      | Upload video via YouTube Data API v3      |
+| **LinkedIn**     | ✅    | ✅      | Post testuali e articoli via LinkedIn Posts API |
 
 Tutte le piattaforme sono **opzionali e indipendenti** (Taglio 2.4): si attivano
 singolarmente, ognuna solo se le proprie credenziali sono configurate nel `.env`.

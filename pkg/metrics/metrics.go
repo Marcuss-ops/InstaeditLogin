@@ -3,7 +3,7 @@
 // Metric naming follows the Prometheus best practices:
 //   - <subject>_<unit>_total for monotonic counters
 //   - <subject>_<unit> for histograms (latency in seconds)
-//   - low-cardinality labels only: `platform` ∈ {meta,tiktok,twitter,youtube},
+//   - low-cardinality labels only: `platform` ∈ {instagram,facebook,threads,tiktok,twitter,youtube,linkedin},
 //     `error_kind` ∈ {auth, api, network, internal}. NEVER put err.Error()
 //     raw bytes into a label.
 //
@@ -22,10 +22,13 @@ import (
 
 // Platform label values. Kept in sync with internal/models.
 const (
-	PlatformMeta    = "meta"
-	PlatformTikTok  = "tiktok"
-	PlatformTwitter = "twitter"
-	PlatformYouTube = "youtube"
+	PlatformInstagram = "instagram"
+	PlatformFacebook  = "facebook"
+	PlatformThreads   = "threads"
+	PlatformTikTok    = "tiktok"
+	PlatformTwitter   = "twitter"
+	PlatformYouTube   = "youtube"
+	PlatformLinkedIn  = "linkedin"
 )
 
 // error_kind label values.

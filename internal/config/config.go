@@ -63,7 +63,7 @@ type Config struct {
 	// Meta OAuth — shared App ID and Secret across Instagram / Facebook / Threads.
 	MetaAppID       string
 	MetaAppSecret   string
-	MetaRedirectURI string // DEPRECATED by InstagramRedirectURI / FacebookRedirectURI / ThreadsRedirectURI
+	MetaRedirectURI string // DEPRECATED: use per-platform redirect URIs (Instagram/Facebook/Threads)
 
 	// Per-platform redirect URIs (same Meta App, different callback paths).
 	InstagramRedirectURI string
@@ -148,7 +148,7 @@ func Load() (*Config, error) {
 		DBSSLMode:                    getEnv("DB_SSLMODE", "disable"),
 		MetaAppID:                    getEnv("META_APP_ID", ""),
 		MetaAppSecret:                getEnv("META_APP_SECRET", ""),
-		MetaRedirectURI:              getEnv("META_REDIRECT_URI", "http://localhost:8080/api/v1/auth/meta/callback"),
+		MetaRedirectURI:              getEnv("META_REDIRECT_URI", ""),
 		InstagramRedirectURI:         getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
 		FacebookRedirectURI:          getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
 		ThreadsRedirectURI:           getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
@@ -245,7 +245,7 @@ func (c *Config) validate() error {
 	// redirect URIs) is valid — it means all Meta-family platforms are
 	// disabled. A half-configured Meta (ID set, secret empty, or vice
 	// versa) is rejected so a misconfiguration fails fast at startup
-	// rather than at the first /auth/meta-family/{login,callback} hit.
+	// rather than at the first /auth/{provider}/{login,callback} hit.
 	//
 	// The previous "if any redirect URI is set, META_APP_ID +
 	// META_APP_SECRET are mandatory" logic was removed in Taglio 2.4

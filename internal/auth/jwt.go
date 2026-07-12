@@ -124,6 +124,17 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 		// 1) Authorization: Bearer wins when present (API-key / non-browser
 		//    clients; preserves the existing test suite which sets this
 		//    header via withBearerJWT).
+		//
+		// Taglio 4.6 dual-auth: if the Bearer token looks like an API key
+		// (sk_test_/sk_live_ prefix), the JWT middleware does NOT reject
+		// it. The upstream auth.Authenticator.Middleware (mounted first
+		// in Router.Setup) handles API-key authentication; if THAT chain
+		// fails to authenticate (skipped or no key row), the JWT middleware
+		// cannot recover — the request continues without an identity,
+		// the handler reads IdentityFromContext and gets nil, fails
+		// with 401 in the requireIdentity helper. We pass through here
+		// so the JWT path's eager-rejection doesn't 401 valid API-key
+		// requests.
 		if header := r.Header.Get("Authorization"); header != "" {
 			const prefix = "Bearer "
 			if !strings.HasPrefix(header, prefix) {
@@ -131,12 +142,20 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 				return
 			}
 			raw := strings.TrimSpace(header[len(prefix):])
+			if IsApiKeyBearer(raw) {
+				// Defer to API-key middleware (mounted earlier) or fall
+				// through to the handler with no identity. Never reject
+				// here — the absence of a valid API-key row is not the
+				// JWT chain's call.
+				next.ServeHTTP(w, r)
+				return
+			}
 			userID, err := m.Verify(raw)
 			if err != nil {
 				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 				return
 			}
-			m.putUser(r, w, next, userID)
+			m.putIdentity(r, w, next, NewUserIdentity(userID, DefaultFallbackOrgID))
 			return
 		}
 		// 2) Fallback: HttpOnly session cookie set by /api/v1/auth/exchange
@@ -144,7 +163,7 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 		if c, err := r.Cookie(SessionCookieName); err == nil && c.Value != "" {
 			userID, err := m.Verify(c.Value)
 			if err == nil && userID > 0 {
-				m.putUser(r, w, next, userID)
+				m.putIdentity(r, w, next, NewUserIdentity(userID, DefaultFallbackOrgID))
 				return
 			}
 		}
@@ -152,8 +171,16 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-func (m *Manager) putUser(r *http.Request, w http.ResponseWriter, next http.Handler, userID int64) {
-	ctx := context.WithValue(r.Context(), userIDKey, userID)
+// putIdentity deposits an authenticated Identity into the context.
+// Dual-writes: sets BOTH the userIDKey (preserving UserIDFromContext
+// for legacy handler code) AND the identityCtxKey (consumed by the
+// new IdentityFromContext). The dual-write lets this commit ship
+// without touching every package that calls UserIDFromContext
+// today; a future cleanup pass can drop the userIDKey once all
+// callers have migrated to IdentityFromContext.
+func (m *Manager) putIdentity(r *http.Request, w http.ResponseWriter, next http.Handler, id Identity) {
+	ctx := WithIdentity(r.Context(), id)
+	ctx = context.WithValue(ctx, userIDKey, id.UserID())
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 

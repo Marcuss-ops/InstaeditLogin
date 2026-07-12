@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-export type ProviderId = "meta" | "tiktok" | "twitter" | "youtube" | "linkedin";
+export type ProviderId = "instagram" | "facebook" | "threads" | "tiktok" | "twitter" | "youtube" | "linkedin";
 
 export type ProviderMeta = {
   id: ProviderId;
@@ -13,9 +13,21 @@ export type ProviderMeta = {
   icon: ReactNode;
 };
 
-const META_SVG = (
+const INSTAGRAM_SVG = (
+  <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+    <path d="M12 2.2c3.2 0 3.6 0 4.9.1 1.2.1 1.8.3 2.2.4.6.2 1 .5 1.4.9.4.4.7.8.9 1.4.2.4.3 1 .4 2.2.1 1.3.1 1.7.1 4.9s0 3.6-.1 4.9c-.1 1.2-.2 1.8-.4 2.2-.2.6-.5 1-.9 1.4-.4.4-.8.7-1.4.9-.4.2-1 .3-2.2.4-1.3.1-1.7.1-4.9.1s-3.6 0-4.9-.1c-1.2-.1-1.8-.2-2.2-.4-.6-.2-1-.5-1.4-.9-.4-.4-.7-.8-.9-1.4-.2-.4-.3-1-.4-2.2-.1-1.3-.1-1.7-.1-4.9s0-3.6.1-4.9c.1-1.2.3-1.8.4-2.2.2-.6.5-1 .9-1.4.4-.4.8-.7 1.4-.9.4-.2 1-.3 2.2-.4C8.4 2.2 8.8 2.2 12 2.2zm0 2c-3.1 0-3.4 0-4.6.1-1.1 0-1.7.2-2.1.4-.5.2-.9.5-1.3.9-.4.4-.7.8-.9 1.3-.2.4-.4 1-.4 2.1-.1 1.2-.1 1.5-.1 4.6s0 3.4.1 4.6c0 1.1.2 1.7.4 2.1.2.5.5.9.9 1.3.4.4.8.7 1.3.9.4.2 1 .4 2.1.4 1.2.1 1.5.1 4.6.1s3.4 0 4.6-.1c1.1 0 1.7-.2 2.1-.4.5-.2.9-.5 1.3-.9.4-.4.7-.8.9-1.3.2-.4.4-1 .4-2.1.1-1.2.1-1.5.1-4.6s0-3.4-.1-4.6c0-1.1-.2-1.7-.4-2.1-.2-.5-.5-.9-.9-1.3-.4-.4-.8-.7-1.3-.9-.4-.2-1-.4-2.1-.4-1.2-.1-1.5-.1-4.6-.1zm0 3.4a4.4 4.4 0 110 8.8 4.4 4.4 0 010-8.8zm0 1.8a2.6 2.6 0 100 5.2 2.6 2.6 0 000-5.2zm5.7-3.6a1 1 0 110 2 1 1 0 010-2z" />
+  </svg>
+);
+
+const FACEBOOK_SVG = (
   <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
     <path d="M13.5 22v-8h2.7l.4-3.2H13.5V8.5c0-.9.3-1.5 1.6-1.5h1.7V4.1c-.3 0-1.3-.1-2.5-.1-2.5 0-4.2 1.5-4.2 4.3v2.5H7.3V14h2.8v8h3.4z" />
+  </svg>
+);
+
+const THREADS_SVG = (
+  <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+    <path d="M12 3C7 3 3 7 3 12s4 9 9 9 9-4 9-9-4-9-9-9zm0 2c3.9 0 7 3.1 7 7s-3.1 7-7 7-7-3.1-7-7 3.1-7 7-7zm-1.5 4c-1.4 0-2.5 1.1-2.5 2.5s1.1 2.5 2.5 2.5c.6 0 1.1-.2 1.5-.6l.7.7c-.6.5-1.4.9-2.2.9-1.9 0-3.5-1.6-3.5-3.5s1.6-3.5 3.5-3.5h3v2h-3zm5 0v2h-2v-2h2z" />
   </svg>
 );
 
@@ -45,14 +57,34 @@ const LINKEDIN_SVG = (
 
 export const PROVIDERS: ProviderMeta[] = [
   {
-    id: "meta",
-    name: "Instagram & Facebook",
-    description: "Connect Instagram Business and Facebook Pages",
-    color: "from-[#0A84FF] to-[#7B61FF]",
-    iconBg: "from-[#0A84FF] to-[#7B61FF]",
+    id: "instagram",
+    name: "Instagram",
+    description: "Connect your Instagram Business account",
+    color: "from-[#E1306C] to-[#C13584]",
+    iconBg: "from-[#E1306C] to-[#C13584]",
+    glowColor: "rgba(225,48,108,0.35)",
+    nameGradient: "linear-gradient(135deg, #E1306C, #C13584)",
+    icon: INSTAGRAM_SVG,
+  },
+  {
+    id: "facebook",
+    name: "Facebook",
+    description: "Publish to your Facebook Pages",
+    color: "from-[#0A84FF] to-[#0866FF]",
+    iconBg: "from-[#0A84FF] to-[#0866FF]",
     glowColor: "rgba(10,132,255,0.35)",
-    nameGradient: "linear-gradient(135deg, #0A84FF, #7B61FF)",
-    icon: META_SVG,
+    nameGradient: "linear-gradient(135deg, #0A84FF, #0866FF)",
+    icon: FACEBOOK_SVG,
+  },
+  {
+    id: "threads",
+    name: "Threads",
+    description: "Publish text and images to Threads",
+    color: "from-[#000000] to-[#333333]",
+    iconBg: "from-[#000000] to-[#333333]",
+    glowColor: "rgba(0,0,0,0.25)",
+    nameGradient: "linear-gradient(135deg, #000000, #444444)",
+    icon: THREADS_SVG,
   },
   {
     id: "tiktok",

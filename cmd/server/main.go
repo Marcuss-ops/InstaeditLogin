@@ -82,6 +82,14 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 	tokenRepo := repository.NewTokenRepository(db)
+	// Taglio 4.6 — API key repository. Bound to the same *sql.DB
+	// used by every other repo so it participates in the standard
+	// connection pool + metrics counter. The Authenticator below
+	// uses exactly two of its methods (FindByHash, MarkUsed) — the
+	// rest are reachable through the ApiKeyStore interface exposed
+	// to the HTTP handlers via WithApiKeyStore.
+	apiKeyRepo := repository.NewApiKeyRepository(db)
+	apiKeyAuth := auth.NewApiKeyAuthenticator(apiKeyRepo)
 
 	// Taglio 2.2: the central CredentialVault. It owns the encryptor +
 	// the *sql.DB (for pg_advisory_xact_lock during refresh) + the
@@ -135,6 +143,14 @@ func main() {
 		api.WithCredentialVault(vault),
 		api.WithStorageProvider(storageProvider),
 		api.WithMaxUploadBytes(cfg.MaxUploadBytes),
+		// Taglio 4.6 — API key wiring. Repository is exposed to
+		// the /api/v1/api-keys handlers; Authenticator is the
+		// middleware that turns Authorization: Bearer sk_* into
+		// an authenticated request. Both are required in
+		// production; tests can inject fakes via the same options
+		// (see routes_test.go patterns).
+		api.WithApiKeyStore(apiKeyRepo),
+		api.WithApiKeyAuthenticator(apiKeyAuth),
 	}
 	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)
@@ -142,7 +158,8 @@ func main() {
 		"jwt_ttl_hours", cfg.JWTTTLHours,
 		"frontend_url", cfg.FrontendURL,
 		"cors_origins", corsOrigins,
-		"platforms", capRouter.Names())
+		"platforms", capRouter.Names(),
+		"api_keys_enabled", apiKeyRepo != nil)
 	handler := router.Setup()
 
 	// Vercel injects PORT; fall back to config or 8080

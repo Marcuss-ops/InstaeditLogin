@@ -351,6 +351,112 @@ func (r *ApiKeyRepository) UpdateName(orgID, id int64, name string) error {
 	return nil
 }
 
+// Rotate atomically revokes the old key and inserts a new key in
+// a single transaction. The new key carries the same metadata as
+// the old one (organization_id, project_id, name, environment,
+// permissions, expires_at) and is owned by the same created_by.
+// The plaintext + hash + key_prefix are freshly supplied by the
+// caller (handler invokes auth.Generate, persists via auth.Hash).
+//
+// Why a single tx: the obvious split (revoke then create) leaves
+// a window where an operator's rotation request has revoked the
+// old key but failed to mint a new one — every active integration
+// would go down for the operator's mistake. The transaction wraps
+// both writes; if either fails, BOTH roll back and the old key
+// stays usable (still its previous revoked_at, but the active
+// state is also unchanged because the tx was atomic).
+//
+// Atomic semantics:
+//
+// BEGIN
+//   UPDATE api_keys SET revoked_at = NOW() WHERE id = $oldID AND org_id = $orgID
+//   INSERT INTO api_keys (...) VALUES (...) RETURNING id, created_at, updated_at
+// COMMIT
+//
+// Either: (a) both succeed → old key is revoked, new key is active.
+// Or: (b) both roll back → old key remains exactly as it was.
+//
+// No partial state observable to clients (the response is sent
+// AFTER Commit succeeds — handler is responsible for the gate).
+//
+// Returns ErrApiKeyNotFound when the old id+org filter matches
+// zero rows (cross-tenant attempt or wrong id). Returns
+// ErrApiKeyHashCollided if the freshly generated hash collides
+// (astronomically unlikely; the handler retries Generate + Rotate).
+func (r *ApiKeyRepository) Rotate(orgID, oldID int64, newKey *models.ApiKey, newHash []byte) error {
+	if len(newHash) != 32 {
+		return fmt.Errorf("api key hash must be 32 bytes; got %d", len(newHash))
+	}
+	if newKey == nil {
+		return errors.New("new api key cannot be nil")
+	}
+	if newKey.OrganizationID <= 0 || newKey.OrganizationID != orgID {
+		return errors.New("new key organization_id must match orgID param")
+	}
+	if newKey.CreatedBy <= 0 {
+		return errors.New("new key created_by is required")
+	}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin rotate tx: %w", err)
+	}
+	// Safe even after Commit — sql.Tx.Rollback is a no-op once
+	// Commit returned nil.
+	defer tx.Rollback()
+
+	// 1) Revoke the old key. Use COALESCE so a re-rotate of an
+	// already-revoked key keeps the FIRST revoke timestamp (audit
+	// history preserved). The same RowAffected==0 sentinel as
+	// Revoke() returns ErrApiKeyNotFound.
+	result, err := tx.Exec(
+		`UPDATE api_keys
+		 SET revoked_at = COALESCE(revoked_at, NOW()),
+		     updated_at = NOW()
+		 WHERE id = $1 AND organization_id = $2`,
+		oldID, orgID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to revoke old key in rotate tx: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected in rotate: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrApiKeyNotFound, oldID)
+	}
+
+	// 2) Insert the new key with the freshly supplied hash.
+	perms := newKey.Permissions
+	if perms == nil {
+		perms = []string{}
+	}
+	if err := tx.QueryRow(
+		`INSERT INTO api_keys
+		    (organization_id, project_id, created_by, name, environment,
+		     key_prefix, key_hash, permissions, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 RETURNING id, created_at, updated_at`,
+		newKey.OrganizationID, nullableProjectID(newKey.ProjectID),
+		newKey.CreatedBy, newKey.Name, newKey.Environment,
+		newKey.KeyPrefix, newHash, perms, newKey.ExpiresAt,
+	).Scan(&newKey.ID, &newKey.CreatedAt, &newKey.UpdatedAt); err != nil {
+		// Same UNIQUE-violation dispatch as Create: typed pq.Error
+		// match on SQLSTATE 23505 + Constraint "api_keys_key_hash_key".
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" &&
+			pqErr.Constraint == "api_keys_key_hash_key" {
+			return fmt.Errorf("%w", ErrApiKeyHashCollided)
+		}
+		return fmt.Errorf("failed to insert new key in rotate tx: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit rotate tx: %w", err)
+	}
+	return nil
+}
+
 // --- internal helpers --------------------------------------------------------
 
 // nullableProjectID converts a *int64 into a value suitable for a
