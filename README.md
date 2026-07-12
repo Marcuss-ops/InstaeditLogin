@@ -13,7 +13,10 @@ Supporta **5 piattaforme social** con gestione unificata di token e API.
 | **YouTube**       | ✅    | ✅      | Upload video via YouTube Data API v3      |
 | **LinkedIn**      | ✅    | ✅      | Post testuali e articoli via LinkedIn Posts API |
 
-Tutte le piattaforme oltre a Meta sono **opzionali**: si attivano solo se le relative credenziali sono configurate nel `.env`.
+Tutte le piattaforme sono **opzionali e indipendenti** (Taglio 2.4): si attivano
+singolarmente, ognuna solo se le proprie credenziali sono configurate nel `.env`.
+Il server parte anche con un solo provider attivo (es. solo YouTube) o con zero
+provider (in questo caso `/api/v1/auth/{anything}` risponde 404).
 
 ## Stack Tecnologico
 
@@ -28,8 +31,10 @@ Tutte le piattaforme oltre a Meta sono **opzionali**: si attivano solo se le rel
 
 - Go 1.23+
 - PostgreSQL 15+
-- Meta App ID e App Secret (obbligatori — da [developers.facebook.com](https://developers.facebook.com))
-- Credenziali opzionali per TikTok, Twitter, YouTube
+- **Nessuna piattaforma social è obbligatoria** (Taglio 2.4): configura nel
+  `.env` solo le credenziali delle piattaforme che vuoi supportare. Le
+  cinque piattaforme (Meta, TikTok, Twitter, YouTube, LinkedIn) sono
+  tutte indipendenti — vedi `## Piattaforme indipendenti` più sotto.
 
 ### Setup
 
@@ -91,6 +96,46 @@ instaedit-login/
 }
 ```
 
+## Piattaforme indipendenti (Taglio 2.4)
+
+Ogni piattaforma social (Meta, TikTok, Twitter, YouTube, LinkedIn) si
+registra in modo **completamente indipendente** dalle altre. Il server
+parte con un qualsiasi sottoinsieme di piattaforme configurate, anche
+una sola.
+
+**Regole** (valide per tutte e cinque le piattaforme):
+
+1. **Piattaforma disabilitata**: nessuna variabile d'ambiente settata
+   per quella piattaforma (es. `YOUTUBE_CLIENT_ID` e `YOUTUBE_CLIENT_SECRET`
+   entrambe vuote) → la piattaforma non viene registrata, il server parte
+   senza di essa, `/api/v1/auth/youtube/login` risponde 404.
+2. **Piattaforma abilitata**: credenziali complete presenti nel `.env`
+   → la piattaforma viene registrata all'avvio e i suoi endpoint
+   OAuth/Publish sono attivi.
+3. **Piattaforma half-configured** (es. `YOUTUBE_CLIENT_ID` settato ma
+   `YOUTUBE_CLIENT_SECRET` vuoto) → l'avvio **fallisce** con un errore
+   esplicito che dice quale env var manca. Meglio fallire al boot che
+   scoprire il problema al primo click OAuth.
+
+**Caso speciale Meta**: le credenziali `META_APP_ID` + `META_APP_SECRET`
+sono condivise da tutti i provider Meta-family (Facebook, Instagram,
+Threads). Se una di queste è half-configured (solo ID o solo secret)
+l'avvio fallisce con errore esplicito. Se entrambe sono vuote MA
+`FACEBOOK_REDIRECT_URI` è settato, la registrazione di Facebook viene
+saltata con un warning (`Slog.Warn`) — la URL di login Facebook senza
+`META_APP_ID` non potrebbe funzionare, quindi è meglio skippare
+esplicitamente che registrare un servizio zoppo.
+
+**Esempi di configurazione validi**:
+
+| `.env`                                              | Piattaforme attive              |
+|-----------------------------------------------------|----------------------------------|
+| `META_APP_ID` + `META_APP_SECRET` + `FACEBOOK_REDIRECT_URI` | Facebook solo                |
+| `YOUTUBE_CLIENT_ID` + `YOUTUBE_CLIENT_SECRET`       | YouTube solo                     |
+| `LINKEDIN_CLIENT_ID` + `LINKEDIN_CLIENT_SECRET`     | LinkedIn solo                    |
+| (nessuna env OAuth)                                 | Nessuna (server parte lo stesso) |
+| Tutte e 5 le piattaforme configurate                | Tutte e 5                        |
+
 ## Generazione dei secret
 
 Prima di avviare il server, genera i due secret locali (`JWT_SECRET` ed
@@ -105,10 +150,12 @@ openssl rand -hex 32
 openssl rand -base64 32
 ```
 
-I `*_CLIENT_SECRET` delle piattaforme opzionali (TikTok, Twitter, YouTube)
-vengono rilasciati dalle rispettive console sviluppatore (vedi i link sopra
+I `*_CLIENT_SECRET` delle piattaforme opzionali (TikTok, Twitter, YouTube,
+LinkedIn) e `META_APP_SECRET` (anch'esso opzionale, Taglio 2.4) vengono
+rilasciati dalle rispettive console sviluppatore (vedi i link sopra
 in `## Piattaforme Supportate`) e devono essere ≥32 caratteri in copia-incolla
-— un valore più corto fa fallire l'avvio.
+— un valore più corto fa fallire l'avvio. Se invece l'env var è vuota, la
+piattaforma corrispondente non viene registrata.
 
 > ⚠️ **Conserva i secret in modo sicuro**: non committare `.env`, non
 > riusare lo stesso secret su due ambienti (dev/staging/prod), ruotalo
@@ -219,8 +266,10 @@ frontend su `https://instaedit.vercel.app`, backend su
   startup; un messaggio d'errore mostra entrambi i numeri, es. "got 16;
   expected 32")
 - `JWT_SECRET` con **almeno** 32 byte (RFC 7518 §3.2; validato allo startup)
-- `META_APP_SECRET` **e** tutti i `*_CLIENT_SECRET` opzionali (TikTok/Twitter/
-  YouTube) con almeno **32 caratteri** (validato allo startup)
+- Tutti i `*_CLIENT_SECRET` (META_APP_SECRET + TIKTOK_CLIENT_SECRET +
+  TWITTER_CLIENT_SECRET + YOUTUBE_CLIENT_SECRET + LINKEDIN_CLIENT_SECRET)
+  con almeno **32 caratteri** quando l'env var è settata (validato allo
+  startup; un valore vuoto = piattaforma disabilitata, Taglio 2.4)
 - Auth strict JWT (Taglio 1.1): blocca ogni richiesta a `/api/v1/posts/publish`
   e `/api/v1/accounts` senza `Authorization: Bearer <jwt>` valido; nessun
   fallback a `user_id` body/query, nessun ID sintetico (default userID=1 rimosso)

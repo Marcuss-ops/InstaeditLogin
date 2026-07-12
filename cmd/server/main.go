@@ -103,7 +103,6 @@ func main() {
 		os.Exit(1)
 	}
 	capRouter := registry
-	_ = services.NewCapabilityRouter // keep the import alive for tests; harmless at runtime
 
 	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours)
 	oneTimeCodes := api.NewOneTimeCodeStore(60 * time.Second)
@@ -218,5 +217,3 @@ func main() {
 
 	slog.Info("Server stopped")
 }
-
-

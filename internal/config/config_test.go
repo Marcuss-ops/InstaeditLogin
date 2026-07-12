@@ -463,6 +463,120 @@ func TestLoad_AppEnv_PropagatesValue(t *testing.T) {
 	}
 }
 
+// TestValidate_NoOAuthPlatformsValid (Taglio 2.4) proves that a
+// config with EVERY OAuth platform empty (Meta AppID+Secret empty,
+// no TikTok/Twitter/YouTube/LinkedIn creds) still passes validate().
+// The server is then expected to start with zero registered providers;
+// /api/v1/auth/{anything} returns 404 for every {anything}.
+func TestValidate_NoOAuthPlatformsValid(t *testing.T) {
+	cfg := &Config{
+		AppEnv:        "dev",
+		DatabaseURL:   "postgres://x",
+		EncryptionKey: minValid32ByteBase64Key,
+		JWTSecret:     validJWTSecret(),
+		// No META_APP_ID, no META_APP_SECRET, no TikTok/Twitter/
+		// YouTube/LinkedIn credentials. Every redirect URI empty.
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() with zero OAuth platforms should succeed; got %v", err)
+	}
+}
+
+// TestValidate_OnlyYouTubeValid (Taglio 2.4) proves that a config
+// with Meta entirely empty + only YouTube configured still passes
+// validate(). This is the canonical example called out in the user
+// spec: "il server deve avviarsi anche con un solo provider
+// configurato (es. solo YouTube o solo LinkedIn)".
+func TestValidate_OnlyYouTubeValid(t *testing.T) {
+	cfg := &Config{
+		AppEnv:              "dev",
+		DatabaseURL:         "postgres://x",
+		EncryptionKey:       minValid32ByteBase64Key,
+		JWTSecret:           validJWTSecret(),
+		YouTubeClientID:     "yt-id",
+		YouTubeClientSecret: validMetaSecret32,
+		// MetaAppID empty, MetaAppSecret empty, no other platforms.
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() with only YouTube configured should succeed; got %v", err)
+	}
+}
+
+// TestValidate_OnlyLinkedInValid (Taglio 2.4) is the second
+// canonical example: server starts with only LinkedIn configured.
+func TestValidate_OnlyLinkedInValid(t *testing.T) {
+	cfg := &Config{
+		AppEnv:               "dev",
+		DatabaseURL:          "postgres://x",
+		EncryptionKey:        minValid32ByteBase64Key,
+		JWTSecret:            validJWTSecret(),
+		LinkedInClientID:     "li-id",
+		LinkedInClientSecret: validMetaSecret32,
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() with only LinkedIn configured should succeed; got %v", err)
+	}
+}
+
+// TestValidate_MetaHalfConfigured (Taglio 2.4) covers the two
+// half-configured Meta cases that must still fail: a Meta config
+// with only the App ID, or only the App Secret, is a misconfiguration
+// (it would produce a Facebook service with an empty client_id or
+// an empty client_secret) and must be rejected at startup.
+func TestValidate_MetaHalfConfigured(t *testing.T) {
+	tests := []struct {
+		name      string
+		id        string
+		secret    string
+		errSubstr string
+	}{
+		{
+			name:      "META_APP_ID set, META_APP_SECRET empty fails",
+			id:        "meta-id",
+			secret:    "",
+			errSubstr: "META_APP_SECRET is required when META_APP_ID is set",
+		},
+		{
+			name:      "META_APP_ID empty, META_APP_SECRET set fails",
+			id:        "",
+			secret:    validMetaSecret32,
+			errSubstr: "META_APP_ID is required when META_APP_SECRET is set",
+		},
+		{
+			name:      "META_APP_ID set, META_APP_SECRET 31 chars fails (length)",
+			id:        "meta-id",
+			secret:    strings.Repeat("a", 31),
+			errSubstr: "META_APP_SECRET must be at least 32 characters",
+		},
+		{
+			name:      "META_APP_ID empty, META_APP_SECRET empty OK (platform disabled)",
+			id:        "",
+			secret:    "",
+			errSubstr: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalValidConfig(validJWTSecret())
+			cfg.MetaAppID = tc.id
+			cfg.MetaAppSecret = tc.secret
+			err := cfg.validate()
+			if tc.errSubstr == "" {
+				if err != nil {
+					t.Fatalf("validate() should succeed for %q; got %v", tc.name, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validate() should fail for %q with substring %q; got nil", tc.name, tc.errSubstr)
+			}
+			if !strings.Contains(err.Error(), tc.errSubstr) {
+				t.Fatalf("validate() error: want substring %q, got %q", tc.errSubstr, err.Error())
+			}
+		})
+	}
+}
+
 func TestLoad_AppEnv_BogusFails(t *testing.T) {
 	// End-to-end: a bogus APP_ENV makes Load() fail. Validates that the
 	// config validation runs against user-supplied values, not just the

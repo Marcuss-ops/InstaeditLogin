@@ -191,10 +191,11 @@ func Load() (*Config, error) {
 // minimum-length policy. Order is intentional:
 //
 //  1. Database — nothing else can run without it
-//  2. Meta OAuth (mandatory) — earliest mandatory credential
+//  2. S3-compatible storage (mandatory, Taglio 3.1)
 //  3. Encryption key (mandatory) — guards every persisted token
 //  4. JWT signing key (mandatory) — gates every authenticated request
-//  5. Optional OAuth platforms — only error if a platform is half-configured
+//  5. Optional OAuth platforms (including Meta, Taglio 2.4) — only
+//     error if a platform is half-configured
 //
 // Sequential validation (early return on first error) is deliberate: it
 // surfaces the most upstream misconfiguration first, so the operator
@@ -235,25 +236,28 @@ func (c *Config) validate() error {
 		return fmt.Errorf("S3_SECRET_KEY is required")
 	}
 
-	// Meta OAuth: App ID and Secret are shared across Instagram / Facebook /
-	// Threads. At least one of the three redirect URIs must be configured
-	// together with the shared credentials; individual providers are
-	// registered (or skipped) in main.go based on which redirect URIs are set.
+	// Meta OAuth (Taglio 2.4: same optional-platform semantics as
+	// TikTok/Twitter/YouTube/LinkedIn). The App ID + Secret are shared
+	// across Instagram / Facebook / Threads; each Meta-family provider is
+	// registered independently in providers/registry.go based on which
+	// redirect URI is set + whether META_APP_ID + META_APP_SECRET are
+	// both present. An entirely empty Meta config (no App ID, no
+	// redirect URIs) is valid — it means all Meta-family platforms are
+	// disabled. A half-configured Meta (ID set, secret empty, or vice
+	// versa) is rejected so a misconfiguration fails fast at startup
+	// rather than at the first /auth/meta-family/{login,callback} hit.
 	//
-	// The App ID + Secret are mandatory only when at least one redirect URI is
-	// configured. An entirely empty Meta config (no App ID, no redirect URIs)
-	// is valid — it means all Meta-family platforms are disabled.
-	metaAnyConfigured := c.InstagramRedirectURI != "" || c.FacebookRedirectURI != "" || c.ThreadsRedirectURI != ""
-	if metaAnyConfigured {
-		if c.MetaAppID == "" {
-			return fmt.Errorf("META_APP_ID is required when a Meta-family redirect URI is set (INSTAGRAM_REDIRECT_URI / FACEBOOK_REDIRECT_URI / THREADS_REDIRECT_URI)")
-		}
-		if c.MetaAppSecret == "" {
-			return fmt.Errorf("META_APP_SECRET is required when a Meta-family redirect URI is set")
-		}
-		if len(c.MetaAppSecret) < secretMinChars {
-			return fmt.Errorf("META_APP_SECRET must be at least %d characters (got %d)", secretMinChars, len(c.MetaAppSecret))
-		}
+	// The previous "if any redirect URI is set, META_APP_ID +
+	// META_APP_SECRET are mandatory" logic was removed in Taglio 2.4
+	// so a deployment can run with only YouTube / only LinkedIn / etc.
+	if c.MetaAppID == "" && c.MetaAppSecret == "" {
+		// platform disabled — no validation needed
+	} else if c.MetaAppID == "" {
+		return fmt.Errorf("META_APP_ID is required when META_APP_SECRET is set (or unset both to disable the platform)")
+	} else if c.MetaAppSecret == "" {
+		return fmt.Errorf("META_APP_SECRET is required when META_APP_ID is set (or unset both to disable the platform)")
+	} else if len(c.MetaAppSecret) < secretMinChars {
+		return fmt.Errorf("META_APP_SECRET must be at least %d characters (got %d)", secretMinChars, len(c.MetaAppSecret))
 	}
 
 	// Encryption key: must decode to exactly aesKeyBytes for AES-256-GCM.

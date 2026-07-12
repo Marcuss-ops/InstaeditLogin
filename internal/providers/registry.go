@@ -95,14 +95,27 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 	router := services.NewCapabilityRouter()
 
 	// Facebook (shared Meta OAuth credentials). Register when the
-	// Meta-family Facebook redirect URI is set; the constructor
-	// returns nil when the URI is absent (no error, no panic).
+	// Meta-family Facebook redirect URI is set AND the shared Meta
+	// credentials are both present. Taglio 2.4: each provider is
+	// fully independent — a deployment can run with only YouTube /
+	// only LinkedIn / etc. with zero Meta config. The constructor
+	// itself only checks the redirect URI; the registry is the
+	// single place that knows "META_APP_ID + META_APP_SECRET are
+	// required for Facebook to work" and warns-and-skips
+	// accordingly.
 	if cfg.FacebookRedirectURI != "" {
-		fb, err := services.NewFacebookOAuthService(cfg)
-		if err != nil {
-			b.logger.Warn("Skipped Facebook provider (constructor failed)", "error", err)
-		} else if fb != nil {
-			router.Register(fb.Name(), fb)
+		if cfg.MetaAppID == "" || cfg.MetaAppSecret == "" {
+			b.logger.Warn("Skipped Facebook provider: META_APP_ID and META_APP_SECRET are required (or unset FACEBOOK_REDIRECT_URI to disable)")
+			// Do not call the constructor — it would build a service
+			// with an empty client_id, which would fail noisily on
+			// the first /auth/facebook/login hit.
+		} else {
+			fb, err := services.NewFacebookOAuthService(cfg)
+			if err != nil {
+				b.logger.Warn("Skipped Facebook provider (constructor failed)", "error", err)
+			} else if fb != nil {
+				router.Register(fb.Name(), fb)
+			}
 		}
 	}
 

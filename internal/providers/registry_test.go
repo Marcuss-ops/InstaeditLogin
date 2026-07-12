@@ -61,16 +61,16 @@ func TestBuildRegistry_FacebookOnly(t *testing.T) {
 // re-introduced).
 func TestBuildRegistry_AllFivePlatforms(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:           "1234567890",
-		MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA",
-		FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
-		TikTokClientKey:     "tt-key",
-		TikTokClientSecret:  "this-is-a-32-char-test-secret-tttt",
-		TwitterClientID:     "tw-id",
-		TwitterClientSecret: "this-is-a-32-char-test-secret-twww",
-		YouTubeClientID:     "yt-id",
-		YouTubeClientSecret: "this-is-a-32-char-test-secret-yttt",
-		LinkedInClientID:    "li-id",
+		MetaAppID:            "1234567890",
+		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+		TikTokClientKey:      "tt-key",
+		TikTokClientSecret:   "this-is-a-32-char-test-secret-tttt",
+		TwitterClientID:      "tw-id",
+		TwitterClientSecret:  "this-is-a-32-char-test-secret-twww",
+		YouTubeClientID:      "yt-id",
+		YouTubeClientSecret:  "this-is-a-32-char-test-secret-yttt",
+		LinkedInClientID:     "li-id",
 		LinkedInClientSecret: "this-is-a-32-char-test-secret-liii",
 	}
 	registry, err := BuildRegistry(cfg)
@@ -90,6 +90,105 @@ func TestBuildRegistry_AllFivePlatforms(t *testing.T) {
 	}
 	for name := range want {
 		t.Errorf("expected platform not registered: %q", name)
+	}
+}
+
+// TestBuildRegistry_OnlyYouTube (Taglio 2.4) is the canonical
+// example from the user spec: a config with only YouTube
+// credentials registered yields a registry with exactly the
+// youtube platform. Meta is entirely empty, no half-config.
+func TestBuildRegistry_OnlyYouTube(t *testing.T) {
+	cfg := &config.Config{
+		YouTubeClientID:     "yt-id",
+		YouTubeClientSecret: "this-is-a-32-char-test-secret-yttt",
+	}
+	registry, err := BuildRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildRegistry: %v", err)
+	}
+	names := registry.Names()
+	if len(names) != 1 {
+		t.Fatalf("registry.Names(): want 1 platform, got %d (%v)", len(names), names)
+	}
+	if names[0] != "youtube" {
+		t.Errorf("registered platform: want %q, got %q", "youtube", names[0])
+	}
+}
+
+// TestBuildRegistry_OnlyLinkedIn (Taglio 2.4) is the second
+// canonical example: server runs with only LinkedIn configured.
+// All Meta fields are empty, no half-config.
+func TestBuildRegistry_OnlyLinkedIn(t *testing.T) {
+	cfg := &config.Config{
+		LinkedInClientID:     "li-id",
+		LinkedInClientSecret: "this-is-a-32-char-test-secret-liii",
+	}
+	registry, err := BuildRegistry(cfg)
+	if err != nil {
+		t.Fatalf("BuildRegistry: %v", err)
+	}
+	names := registry.Names()
+	if len(names) != 1 {
+		t.Fatalf("registry.Names(): want 1 platform, got %d (%v)", len(names), names)
+	}
+	if names[0] != "linkedin" {
+		t.Errorf("registered platform: want %q, got %q", "linkedin", names[0])
+	}
+}
+
+// TestBuildRegistry_FacebookMissingMetaCreds (Taglio 2.4) proves
+// the warn-and-skip path: when FACEBOOK_REDIRECT_URI is set but
+// META_APP_ID or META_APP_SECRET is empty, the Facebook provider
+// is NOT registered (it would have an empty client_id) and a
+// descriptive warning is logged.
+func TestBuildRegistry_FacebookMissingMetaCreds(t *testing.T) {
+	tests := []struct {
+		name        string
+		metaAppID   string
+		metaAppSec  string
+		wantWarnSub string
+	}{
+		{
+			name:        "META_APP_ID empty, META_APP_SECRET set",
+			metaAppID:   "",
+			metaAppSec:  "this-is-a-32-char-test-secret-AAAA",
+			wantWarnSub: "Skipped Facebook provider: META_APP_ID and META_APP_SECRET are required",
+		},
+		{
+			name:        "META_APP_ID set, META_APP_SECRET empty",
+			metaAppID:   "1234567890",
+			metaAppSec:  "",
+			wantWarnSub: "Skipped Facebook provider: META_APP_ID and META_APP_SECRET are required",
+		},
+		{
+			name:        "both META creds empty",
+			metaAppID:   "",
+			metaAppSec:  "",
+			wantWarnSub: "Skipped Facebook provider: META_APP_ID and META_APP_SECRET are required",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := &bytes.Buffer{}
+			customLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			cfg := &config.Config{
+				MetaAppID:           tc.metaAppID,
+				MetaAppSecret:       tc.metaAppSec,
+				FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+			}
+			registry, err := BuildRegistry(cfg, WithLogger(customLogger))
+			if err != nil {
+				t.Fatalf("BuildRegistry: %v", err)
+			}
+			if got := registry.Len(); got != 0 {
+				t.Errorf("registry.Len(): want 0 (Facebook should be skipped), got %d (names: %v)", got, registry.Names())
+			}
+			logged := buf.String()
+			if !strings.Contains(logged, tc.wantWarnSub) {
+				t.Errorf("expected warn log to contain %q, got %q", tc.wantWarnSub, logged)
+			}
+		})
 	}
 }
 
