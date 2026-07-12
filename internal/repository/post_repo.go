@@ -240,11 +240,11 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
 	return posts, nil
 }
 
-// ListScheduled returns posts whose status='queued' AND scheduled_at <=
+// ListQueued returns posts whose status='queued' AND scheduled_at <=
 // before. `before` is the cutoff time (typically time.Now()); passing it
 // from Go (instead of using SQL NOW()) decouples the DB clock from the
 // application clock, making the worker loop and tests fully deterministic.
-func (r *PostRepository) ListScheduled(before time.Time) ([]models.Post, error) {
+func (r *PostRepository) ListQueued(before time.Time) ([]models.Post, error) {
 	rows, err := r.db.Query(
 		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
 		 FROM posts

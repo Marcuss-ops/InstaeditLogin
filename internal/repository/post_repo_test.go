@@ -551,7 +551,7 @@ func TestPostListByPost_OKWithNullablePublishedAt(t *testing.T) {
 	}
 }
 
-func TestPostListScheduled_BeforeTimeFilterApplied(t *testing.T) {
+func TestPostListQueued_BeforeTimeFilterApplied(t *testing.T) {
 	// Worker uses this query to find posts due for publishing. time.Time
 	// parameter rather than SQL NOW() → deterministic across timezones.
 	db, mock := newMockPostDBExact(t)
@@ -568,9 +568,9 @@ func TestPostListScheduled_BeforeTimeFilterApplied(t *testing.T) {
 			[]string{"id", "workspace_id", "title", "caption", "media_url", "scheduled_at", "status", "created_at"},
 		).AddRow(1, 1, "due", "", "", cutoff, models.PostStatusScheduled, cutoff))
 
-	posts, err := repo.ListScheduled(cutoff)
+	posts, err := repo.ListQueued(cutoff)
 	if err != nil {
-		t.Fatalf("ListScheduled: %v", err)
+		t.Fatalf("ListQueued: %v", err)
 	}
 	if len(posts) != 1 {
 		t.Fatalf("len: want 1, got %d", len(posts))
