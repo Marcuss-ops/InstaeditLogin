@@ -15,6 +15,8 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/outbox"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/outbox/processors"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/providers"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -216,17 +218,62 @@ func main() {
 		}
 	}()
 
+	// Spawn the outbox dispatcher goroutine: reads outbox_events rows
+	// written atomically by PostRepository.Create and materialises
+	// publish_jobs audit rows via the publish-jobs processor. This is
+	// STEP 3 of the transactional-outbox pipeline (Taglio 5.x):
+	//
+	//   STEP 1 (post_repo::Create) → posts + post_targets + outbox_events
+	//                              in one BEGIN/COMMIT tx
+	//   STEP 2 (dispatcher Run)   → claim outbox row, heartbeat, process
+	//   STEP 3 (this materialiser) → INSERT publish_jobs (audit-only);
+	//                                post_targets.status remains the SoT
+	//
+	// The dispatcher is a SECOND background goroutine alongside the
+	// publish worker. Both share the *sql.DB connection pool; the
+	// worker reads post_targets.status='queued' (driver) while the
+	// dispatcher writes publish_jobs.status='pending' (audit).
+	// Multi-replica safety is delegated to the dispatcher's SKIP LOCKED
+	// claim — see internal/outbox/dispatcher.go + repository/outbox_repo.go.
+	dispatcherCtx, dispatcherCancel := context.WithCancel(context.Background())
+	dispatcherDone := make(chan struct{})
+	go func() {
+		defer close(dispatcherDone)
+		dispatcher := outbox.NewDispatcher(outbox.DispatcherConfig{
+			OutboxStore:  repository.NewOutboxRepository(db),
+			Process:      processors.NewPublishJobsMaterialiser(db),
+			Logger:       slog.Default(),
+			TickInterval: outbox.DefaultTickInterval,
+		})
+		if err := dispatcher.Run(dispatcherCtx); err != nil && err != context.Canceled {
+			slog.Error("outbox dispatcher exited with error", "error", err)
+		}
+	}()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	slog.Info("Shutting down: cancelling publish worker first")
+	// Two independent drains — the publish worker and the outbox
+	// dispatcher have no shared shutdown dependency. Cancelling in
+	// parallel + giving each its own 15s budget is simpler (and
+	// race-free) vs a single join-channel that could fire the 15s
+	// timeout while one half is mid-MarkProcessed but the other has
+	// already closed.
+	slog.Info("Shutting down: cancelling publish worker + outbox dispatcher in parallel")
 	workerCancel()
+	dispatcherCancel()
 	select {
 	case <-workerDone:
 		slog.Info("publish worker drained cleanly")
 	case <-time.After(15 * time.Second):
 		slog.Warn("publish worker drain timeout, continuing shutdown")
+	}
+	select {
+	case <-dispatcherDone:
+		slog.Info("outbox dispatcher drained cleanly")
+	case <-time.After(15 * time.Second):
+		slog.Warn("outbox dispatcher drain timeout, continuing shutdown")
 	}
 
 	slog.Info("Shutting down server...")
