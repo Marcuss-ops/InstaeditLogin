@@ -161,7 +161,7 @@ piattaforma corrispondente non viene registrata.
 > riusare lo stesso secret su due ambienti (dev/staging/prod), ruotalo
 > immediatamente se viene esposto.
 
-## Autenticazione JWT & Rollout
+## Autenticazione JWT
 
 L'API emette un JWT HS256 al termine del flusso OAuth (`/api/v1/auth/{provider}/callback`)
 e lo restituisce:
@@ -270,7 +270,7 @@ frontend su `https://instaedit.vercel.app`, backend su
   TWITTER_CLIENT_SECRET + YOUTUBE_CLIENT_SECRET + LINKEDIN_CLIENT_SECRET)
   con almeno **32 caratteri** quando l'env var è settata (validato allo
   startup; un valore vuoto = piattaforma disabilitata, Taglio 2.4)
-- Auth strict JWT (Taglio 1.1): blocca ogni richiesta a `/api/v1/posts/publish`
+- Auth JWT (Taglio 1.1): blocca ogni richiesta a `/api/v1/posts/publish`
   e `/api/v1/accounts` senza `Authorization: Bearer <jwt>` valido; nessun
   fallback a `user_id` body/query, nessun ID sintetico (default userID=1 rimosso)
 - **X / Twitter OAuth 2.0 PKCE only (Taglio 1.3)**: nessuna credenziale statica
