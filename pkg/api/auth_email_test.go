@@ -109,6 +109,28 @@ func (f *fakeAuthEmailStore) IssueResetToken(email string) (string, error) {
 	return tok, nil
 }
 
+// MagicLinkSignupOrLookup is the SPRINT 1.2 magic-link path.
+// Idempotent on email: creates a new fake user if absent and
+// returns (userID, workspaceID=1, nil). Tests that need a
+// specific id can seed f.users[email] ahead of time.
+func (f *fakeAuthEmailStore) MagicLinkSignupOrLookup(email string) (int64, int64, error) {
+	u, ok := f.users[email]
+	if !ok {
+		id := f.nextID
+		f.nextID++
+		f.users[email] = fakeUser{
+			email:        email,
+			name:         email,
+			passwordHash: "",
+			verified:     true, // magic-link authenticates the email
+			userID:       id,
+			tokens:       make(map[string]string),
+		}
+		return id, 1, nil
+	}
+	return u.userID, 1, nil
+}
+
 func (f *fakeAuthEmailStore) ResetPassword(token, newPassword string) error {
 	for _, u := range f.users {
 		if _, ok := u.tokens[token]; ok {

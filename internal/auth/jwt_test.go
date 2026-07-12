@@ -23,7 +23,7 @@ func TestIssueAndVerify(t *testing.T) {
 	if got := time.Until(exp); got < 23*time.Hour || got > 25*time.Hour {
 		t.Fatalf("ttl outside expected window: %s", got)
 	}
-	uid, wsID, err := m.Verify(tok)
+	uid, wsID, _, err := m.Verify(tok)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -62,14 +62,14 @@ func TestVerifyRejectsMissingWorkspaceClaim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign forged token: %v", err)
 	}
-	if _, _, err := m.Verify(signed); err == nil {
+	if _, _, _, err := m.Verify(signed); err == nil {
 		t.Fatal("expected error verifying token with no workspace claim")
 	}
 }
 
 func TestVerifyEmptyToken(t *testing.T) {
 	m := NewManager(testSecret, 24)
-	if _, _, err := m.Verify(""); err == nil {
+	if _, _, _, err := m.Verify(""); err == nil {
 		t.Fatal("expected error for empty token")
 	}
 }
@@ -78,14 +78,14 @@ func TestVerifyWrongSecret(t *testing.T) {
 	m1 := NewManager(testSecret, 24)
 	tok, _, _, _ := m1.Issue(7, 1)
 	m2 := NewManager("a-different-secret-with-32-bytes-of-content", 24)
-	if _, _, err := m2.Verify(tok); err == nil {
+	if _, _, _, err := m2.Verify(tok); err == nil {
 		t.Fatal("expected error when verifying with wrong secret")
 	}
 }
 
 func TestVerifyInvalidSignature(t *testing.T) {
 	m := NewManager(testSecret, 24)
-	if _, _, err := m.Verify("not.a.real.jwt"); err == nil {
+	if _, _, _, err := m.Verify("not.a.real.jwt"); err == nil {
 		t.Fatal("expected error for malformed token")
 	}
 }

@@ -42,11 +42,17 @@ type Identity interface {
 
 	// WorkspaceID returns the tenant scope. For JWT-authenticated
 	// dashboard users this is the workspace_id claim stamped on the JWT
-	// by the Manager.Issue path; for ApiKeyIdentity it is the
+	// by the Manager.IssueAccess path; for ApiKeyIdentity it is the
 	// api_keys row's workspace_id. NEVER a hard-coded fallback — the
 	// caller is expected to derive this from a real membership lookup
 	// or the JWT claim before stamping the identity into the context.
 	WorkspaceID() int64
+
+	// SessionID returns the active sessions row id (JWT path only).
+	// Zero for API-key identities. SPRINT 2.1+: every JWT carries
+	// a positive session_id and the middleware refuses to stamp
+	// a session-less identity, so a zero here is unambiguous.
+	SessionID() int64
 
 	// Permissions returns the raw permission set for API keys
 	// (nil for JWT users).
@@ -81,15 +87,18 @@ func WithIdentity(ctx context.Context, id Identity) context.Context {
 // --- UserIdentity -----------------------------------------------------------
 
 // UserIdentity is the Identity implementation for a JWT-authenticated
-// dashboard user.
+// dashboard user. SPRINT 2.1+ adds the SessionID field; tokens minted
+// before that sprint carried no session_id claim and are rejected by
+// Manager.Verify, so the zero default is unreachable in production.
 type UserIdentity struct {
 	uid int64
 	ws  int64
+	sid int64
 }
 
 // NewUserIdentity constructs a UserIdentity with explicit fields.
-func NewUserIdentity(uid, ws int64) UserIdentity {
-	return UserIdentity{uid: uid, ws: ws}
+func NewUserIdentity(uid, ws, sid int64) UserIdentity {
+	return UserIdentity{uid: uid, ws: ws, sid: sid}
 }
 
 // IsAPIKey implements Identity.
@@ -103,6 +112,9 @@ func (u UserIdentity) KeyID() int64 { return 0 }
 
 // WorkspaceID implements Identity.
 func (u UserIdentity) WorkspaceID() int64 { return u.ws }
+
+// SessionID implements Identity.
+func (u UserIdentity) SessionID() int64 { return u.sid }
 
 // Permissions implements Identity. JWT users have no permission array.
 func (u UserIdentity) Permissions() []string { return nil }
@@ -143,6 +155,13 @@ func (a ApiKeyIdentity) KeyID() int64 { return a.keyID }
 
 // WorkspaceID implements Identity.
 func (a ApiKeyIdentity) WorkspaceID() int64 { return a.wsID }
+
+// SessionID implements Identity. API keys are not associated with a
+// session row, so this always returns 0. Required by the Identity
+// interface as of SPRINT 2.1 — handlers may branch on whether the
+// principal is JWT-authenticated (has a session) or an API key
+// (does not).
+func (a ApiKeyIdentity) SessionID() int64 { return 0 }
 
 // Permissions implements Identity.
 func (a ApiKeyIdentity) Permissions() []string { return a.permissions }

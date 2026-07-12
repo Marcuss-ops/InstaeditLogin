@@ -158,6 +158,16 @@ func main() {
 	authEmailBackend := services.NewAuthService(userRepo, workspaceRepo, teamRepo, authMgr, cfg.JWTSecret)
 	authEmailSvc := api.NewAuthEmailServiceAdapter(authEmailBackend)
 
+	// SPRINT 2.1: session lifecycle. SessionRepository owns the
+	// `sessions` table; SessionsService coordinates session creation,
+	// rotation (with refresh-reuse theft detection), and revocation.
+	// The service is wired into the Router so /auth/refresh,
+	// /auth/logout, /auth/logout-all, and /auth/sessions work in
+	// production. The auth manager issues access JWTs whose
+	// SessionID claim points to the row created by SessionsService.
+	sessionRepo := repository.NewSessionRepository(db)
+	sessionsSvc := services.NewSessionsService(sessionRepo, authMgr)
+
 	opts := []api.RouterOption{
 		api.WithCredentialVault(vault),
 		api.WithStorageProvider(storageProvider),
@@ -182,6 +192,13 @@ func main() {
 		// 501-shaped dev-only paths from the production build.
 		api.WithTeamStore(teamRepo),
 		api.WithAuthEmailService(authEmailSvc),
+		// SPRINT 2.1: revocable session lifecycle. Wires the
+		// /auth/refresh, /auth/logout, /auth/logout-all, and
+		// /auth/sessions endpoints. CookieSecure=true: the session
+		// cookies carry the Secure flag because production runs on
+		// HTTPS. (httptest in the unit suite sets this to false.)
+		api.WithSessionsService(sessionsSvc),
+		api.WithCookieSecure(true),
 	}
 	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)

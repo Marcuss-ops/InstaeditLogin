@@ -49,8 +49,11 @@ func NewMagicLinkRepository(db *sql.DB) *MagicLinkRepository {
 }
 
 // Issue inserts a fresh token row. tokenHash MUST be the SHA-256 of the
-// plaintext we sent (the plaintext itself is not stored).
-func (r *MagicLinkRepository) Issue(email string, tokenHash []byte, ttl time.Duration) (uuid.UUID, error) {
+// plaintext we sent (the plaintext itself is not stored). Returns the
+// token id as a canonical UUID string so callers (handler layer) can
+// satisfy the AuthMagicLinkStore interface contract without depending
+// on google/uuid directly.
+func (r *MagicLinkRepository) Issue(email string, tokenHash []byte, ttl time.Duration) (string, error) {
 	id := uuid.New()
 	_, err := r.db.Exec(
 		`INSERT INTO magic_link_tokens (id, email, token_hash, expires_at)
@@ -58,9 +61,9 @@ func (r *MagicLinkRepository) Issue(email string, tokenHash []byte, ttl time.Dur
 		id, email, tokenHash, fmt.Sprintf("%d seconds", int(ttl.Seconds())),
 	)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("issue magic link: %w", err)
+		return "", fmt.Errorf("issue magic link: %w", err)
 	}
-	return id, nil
+	return id.String(), nil
 }
 
 // Consume atomically reads the row by token_hash, marks consumed_at = NOW()

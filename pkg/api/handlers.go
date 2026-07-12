@@ -108,6 +108,17 @@ type Router struct {
 	// Wiring via WithMagicLinkStore / WithConnectionStateStore.
 	authMagicLink        AuthMagicLinkStore
 	connectionStates     ConnectionStateStore
+	// SPRINT 2.1 — revocable session lifecycle (optional). Wiring
+	// via WithSessionsService. When nil, /auth/refresh, /auth/logout,
+	// /auth/logout-all, /auth/sessions and DELETE /auth/sessions/{id}
+	// return 501 (consistent with the nil-store pattern used by the
+	// other feature flags). The /auth/{provider}/callback handler
+	// refuses to mint a session when this is nil.
+	sessionsSvc *services.SessionsService
+	// cookieSecure is the Secure flag for cookies. Defaults to true
+	// in production wiring (cmd/server/main.go) and to false in tests
+	// that exercise the cookie path with httptest's in-memory server.
+	cookieSecure bool
 }
 
 // ConnectionStateStore is declared in pkg/api/connections.go (SPRINT 1.2);
@@ -319,6 +330,21 @@ func WithBillingService(svc BillingServiceAPI) RouterOption {
 func WithUserWorkspaceHelper(h UserWorkspaceHelper) RouterOption {
 	return func(r *Router) { r.userAndWorkspaceHelper = h }
 }
+
+// WithSessionsService wires the SPRINT 2.1 sessions service used by
+// /auth/refresh, /auth/logout, /auth/logout-all, /auth/sessions,
+// and the workspace-switch endpoint. When not set, the endpoints
+// return 501 Not Implemented.
+func WithSessionsService(svc *services.SessionsService) RouterOption {
+	return func(r *Router) { r.sessionsSvc = svc }
+}
+
+// WithCookieSecure toggles the Secure flag on session cookies.
+// Defaults to false (httptest-friendly); production wiring in
+// cmd/server/main.go MUST set this to true.
+func WithCookieSecure(secure bool) RouterOption {
+	return func(r *Router) { r.cookieSecure = secure }
+}
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -365,7 +391,16 @@ func (r *Router) Setup() http.Handler {
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(r.handleCallback))
 	r.mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(r.handleExchangeCode))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/me", r.protected(r.handleMe))
+	// SPRINT 2.1: refresh + logout live OUTSIDE the JWT middleware
+	// (the cookie IS the credential). CSRF is bypassed for /refresh
+	// and /logout because the act of presenting a valid refresh
+	// cookie already authenticates the request.
+	r.mux.Method(http.MethodPost, "/api/v1/auth/refresh", http.HandlerFunc(r.handleRefresh))
 	r.mux.Method(http.MethodPost, "/api/v1/auth/logout", http.HandlerFunc(r.handleLogout))
+	// /logout-all + /sessions live BEHIND the JWT middleware.
+	r.mux.Method(http.MethodPost, "/api/v1/auth/logout-all", r.protected(r.handleLogoutAll))
+	r.mux.Method(http.MethodGet, "/api/v1/auth/sessions", r.protected(r.handleListSessions))
+	r.mux.Method(http.MethodDelete, "/api/v1/auth/sessions/{id}", r.protected(r.handleDeleteSession))
 	r.mux.Method(http.MethodGet, "/api/v1/accounts/{id}", r.protected(r.handleGetAccount))
 	r.mux.Method(http.MethodPost, "/api/v1/accounts/{id}/validate", r.protected(r.handleValidateAccount))
 	r.mux.Method(http.MethodPost, "/api/v1/accounts/{id}/reconnect", r.protected(r.handleReconnectAccount))
@@ -660,24 +695,11 @@ func (r *Router) resolveActiveWorkspace(ctx context.Context, userID int64) (int6
 	return ws.ID, nil
 }
 
-// handleLogout clears the session cookie. 204 on success.
-func (r *Router) handleLogout(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteNoneMode,
-		MaxAge:   -1,
-		Expires:  time.Unix(1, 0),
-	})
-	w.WriteHeader(http.StatusNoContent)
-}
+// handleLogout is defined in pkg/api/sessions.go (SPRINT 2.1).
+// It withdraws the session row matching the refresh-token cookie
+// and clears all session cookies in one step. The route
+// registration in Setup() resolves to that method directly.
+
 
 func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {

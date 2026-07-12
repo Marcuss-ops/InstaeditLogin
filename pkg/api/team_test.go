@@ -97,7 +97,7 @@ func TestHandleListMembers(t *testing.T) {
 	r.registerTeamRoutes()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/1/members", nil)
-	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentity(42, 1))
+	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentity(42, 1, 1))
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -180,7 +180,7 @@ func TestHandleRemoveMember(t *testing.T) {
 	r.registerTeamRoutes()
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/1/members/43", nil)
-	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentity(42, 1))
+	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentity(42, 1, 1))
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -205,7 +205,7 @@ func TestHandleRemoveMember_CannotRemoveSelf(t *testing.T) {
 	r.registerTeamRoutes()
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/1/members/42", nil)
-	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentity(42, 1))
+	ctx := auth.WithIdentity(req.Context(), auth.NewUserIdentity(42, 1, 1))
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

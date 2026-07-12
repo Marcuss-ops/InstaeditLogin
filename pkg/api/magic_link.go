@@ -38,7 +38,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
@@ -156,14 +155,6 @@ func (r *Router) handleMagicLinkVerify(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to issue session token")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.SessionCookieName,
-		Value:    jwtToken,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteNoneMode,
-		MaxAge:   7 * 24 * 3600, // matches Manager default ttl (168h)
-	})
+	setSessionCookie(w, jwtToken)
 	w.WriteHeader(http.StatusNoContent)
 }

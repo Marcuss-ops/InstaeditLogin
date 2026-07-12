@@ -22,7 +22,15 @@ func newTestAuthService(t *testing.T) (*services.AuthService, sqlmock.Sqlmock, f
 	cleanup := func() { _ = db.Close() }
 	userRepo := repository.NewUserRepository(db)
 	authMgr := auth.NewManager("test-secret-key-for-auth-service-tests", 24)
-	svc := services.NewAuthService(userRepo, authMgr, "test-secret-key-for-auth-service-tests")
+	// SPRINT 1.1: NewAuthService now requires workspaceRepo + teamRepo
+	// (Register auto-creates a Personal Workspace, Login resolves an
+	// active workspace). Tests that exercise ONLY IssueVerificationToken /
+	// VerifyEmail / IssueResetToken / ResetPassword don't touch the repos
+	// and so can pass nil; tests that hit Register / Login / MagicLink
+	// must wire real (or fake) repos. SPRINT 2.1 follow-up: add
+	// panic-on-nil guards in NewAuthService so the runtime surface is
+	// self-documenting.
+	svc := services.NewAuthService(userRepo, nil, nil, authMgr, "test-secret-key-for-auth-service-tests")
 	return svc, mock, cleanup
 }
 
