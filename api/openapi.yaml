@@ -10,8 +10,8 @@ info:
     async publish state machine drive the public surface.
 
     Sections in this file:
-    • Auth    — `/api/v1/auth/*` + `/api/v1/api-keys`  (this commit)
-    • Posts   — `/api/v1/posts`  (universal payload)
+    • Auth    — `/api/v1/auth/*` + `/api/v1/api-keys`  (C1)
+    • Posts   — `/api/v1/posts`  (universal target settings) — (C2, this commit)
     • Targets — `/api/v1/post_targets/{id}`  (async state per target)
   contact:
     name: InstaEditLogin Engineering
@@ -29,8 +29,7 @@ servers:
 
 # Taglio 4.6: every protected endpoint accepts EITHER `Bearer sk_test_…` /
 # `Bearer sk_live_…` (server-to-server) or the HttpOnly session cookie
-# set by `POST /api/v1/auth/exchange` (browser). Each operation
-# declares which schemes apply via `security:`.
+# set by `POST /api/v1/auth/exchange` (browser).
 security:
   - ApiKeyAuth: []
   - JwtCookie: []
@@ -190,7 +189,7 @@ paths:
       operationId: apiKeysList
       summary: List API keys in the authenticated workspace.
       description: |
-        Returns only the visible `key_prefix` (e.g. `sk_test_aB3xY9K2`).
+        Returns only the visible `key_prefix` (e.g. `sk_TEST_aB3xY9_K2_DoNotUse`).
         The plaintext secret is never re-fetchable after creation.
       security:
         - ApiKeyAuth: []
@@ -295,6 +294,370 @@ paths:
         '404':
           $ref: '#/components/responses/NotFoundError'
 
+  # ───────────── Posts (C2 — universal payload) ────────────────────────────
+
+  /posts:
+    get:
+      tags: [Posts]
+      operationId: postsList
+      summary: List posts across the caller's workspaces.
+      description: |
+        Returns posts in the caller's workspaces. Optional filter by
+        `workspace_id` (callers must own that workspace). Order: most
+        recently created first.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: workspace_id
+          in: query
+          description: 'Restrict to a single workspace. Must be owned by the caller.'
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: status
+          in: query
+          description: Filter by post status.
+          schema:
+            $ref: '#/components/schemas/PostStatus'
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor.
+          schema: { type: string }
+      responses:
+        '200':
+          description: A page of posts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+    post:
+      tags: [Posts]
+      operationId: postsCreate
+      summary: Create a post with one or more targets (universal publish).
+      description: |
+        Universal payload. The body has one `targets[]` array; each
+        element specifies a `platform_account_id` and a `settings`
+        block that is **discriminated by platform key**: the JSON key
+        is the platform name and the value is its settings shape.
+
+        Returns **202 Accepted** per platform contract. Each target
+        lands in the async state machine (PostStatusQueued initially).
+        The SDK should follow up via
+        `GET /api/v1/post_targets/{id}` (C3) or subscribe to the
+        `post.target.published` / `post.target.failed` webhooks.
+
+        Idempotency: send `Idempotency-Key: <uuid>` on `live`. Same
+        key + same body → same response; same key + different body →
+        409 conflict.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: |
+            Idempotency token (UUID recommended). Required in `live`
+            mode; optional in `test` mode. Optional duration: 24h.
+          schema: { type: string, maxLength: 255 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostCreateRequest'
+      responses:
+        '202':
+          description: Post + targets accepted; execution is async.
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+              description: '`/api/v1/posts/{id}` for polling/thumb-link.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostWithTargetsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          description: Idempotency-Key conflict (same key, different request body).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /posts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Posts]
+      operationId: postsGet
+      summary: Fetch a post by id.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: The post with current state and (optionally) targets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostWithTargetsResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    patch:
+      tags: [Posts]
+      operationId: postsPatch
+      summary: Edit a post's content / scheduled_at / status.
+      description: |
+        Only the immediately editable fields are honoured while the
+        post is `draft` or `queued`. Once a target is in `publishing`,
+        the only legal patch is `cancel` (POST /{id}/cancel).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostPatchRequest'
+      responses:
+        '200':
+          description: Updated post.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityError'
+    delete:
+      tags: [Posts]
+      operationId: postsDelete
+      summary: Delete a post and cascade its targets.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: 'Deleted (kept returning 200 with `{status:"deleted"}` for symmetry with current handlers).'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [deleted] }
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /posts/workspace/{wid}:
+    get:
+      tags: [Posts]
+      operationId: postsListByWorkspace
+      summary: List posts in a single workspace.
+      parameters:
+        - name: wid
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Posts in the given workspace, ordered newest-first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /posts/{id}/publish:
+    post:
+      tags: [Posts]
+      operationId: postsPublish
+      summary: Manually trigger publish for all currently `queued` targets.
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Targets transitioned to `publishing`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [publishing] }
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /posts/{id}/schedule:
+    post:
+      tags: [Posts]
+      operationId: postsSchedule
+      summary: Set `scheduled_at` and flip status to `queued`.
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostScheduleRequest'
+      responses:
+        '200':
+          description: Updated post.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /posts/{id}/cancel:
+    post:
+      tags: [Posts]
+      operationId: postsCancel
+      summary: Cancel a queued post (back to `draft`).
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Post moved to `draft`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [draft] }
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /posts/{id}/retry:
+    post:
+      tags: [Posts]
+      operationId: postsRetry
+      summary: Re-queue a `failed` post (per-target handled separately).
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Post moved to `queued`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [queued] }
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /posts/{id}/targets:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Posts]
+      operationId: postsListTargets
+      summary: List all targets for a post (parent endpoints).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: List of post targets for the post.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  targets:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PostTargetResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    post:
+      tags: [Posts]
+      operationId: postsAddTarget
+      summary: Append a target to an existing post.
+      description: |
+        The new target uses the same settings language as
+        `POST /api/v1/posts`. The `scheduled_at` is inherited from
+        the parent post.
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostTargetAddRequest'
+      responses:
+        '201':
+          description: Target created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostTargetResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
 # ─────────────────────────────────────────────────────────────────────────────
 components:
 
@@ -330,46 +693,14 @@ components:
         minimum: 1
 
   responses:
-    BadRequestError:
-      description: Malformed request (bad JSON, missing required field, invalid id format).
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    UnauthorizedError:
-      description: Missing or invalid credentials (expired JWT, revoked API key, malformed prefix).
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    ForbiddenError:
-      description: Resource exists but is not owned by the caller.
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    NotFoundError:
-      description: Resource not found or not visible to the caller (existence not leaked on cross-tenant probes).
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    ConflictError:
-      description: Idempotency-Key conflict (same key, different request hash).
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    UnprocessableEntityError:
-      description: Semantic validation error (well-formed JSON but invalid content).
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    MethodNotAllowed:
-      description: HTTP method not allowed on this endpoint.
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
-    InternalError:
-      description: Server-side error. Retrying may succeed.
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+    BadRequestError: { description: Malformed request. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    UnauthorizedError: { description: Missing or invalid credentials. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    ForbiddenError: { description: Resource exists but is not owned by the caller. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFoundError: { description: Resource not found or not visible to the caller. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    ConflictError: { description: Idempotency-Key conflict. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    UnprocessableEntityError: { description: Semantic validation error. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    MethodNotAllowed: { description: HTTP method not allowed. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    InternalError: { description: Server-side error. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   schemas:
 
@@ -392,7 +723,6 @@ components:
       properties:
         code:
           type: string
-          description: Stable machine-readable code.
           enum:
             - authentication_error
             - authorization_error
@@ -405,188 +735,452 @@ components:
             - quota_exceeded
             - internal_error
             - idempotency_key_conflict
-        message:
-          type: string
-          description: Human-readable summary. NEVER includes raw provider error text.
+        message: { type: string }
         platform:
           type: string
           nullable: true
-          description: Set when the error is platform-specific.
         retryable:
           type: boolean
           default: false
-          description: True if the caller can re-attempt the request later.
-        request_id:
-          type: string
-          description: Server-generated request id for log correlation.
+        request_id: { type: string }
         details:
           type: object
           additionalProperties: true
           nullable: true
-          description: Optional structured metadata (provider_status_code, retry_after_seconds, …).
 
     # ────── Auth flow ───────────────────────────────────────────────
     AuthCallbackHeadlessResponse:
       type: object
       required: [status, provider, code, user_id, account_id]
       properties:
-        status:
-          type: string
-          enum: [code_issued]
-        provider:
-          type: string
-        code:
-          type: string
-          description: One-time code; POST to /api/v1/auth/exchange within 60s.
-        user_id:
-          type: integer
-          format: int64
-        name:
-          type: string
-        account_id:
-          type: integer
-          format: int64
+        status: { type: string, enum: [code_issued] }
+        provider: { type: string }
+        code: { type: string }
+        user_id: { type: integer, format: int64 }
+        name: { type: string }
+        account_id: { type: integer, format: int64 }
     AuthExchangeRequest:
       type: object
       required: [code]
       properties:
-        code:
-          type: string
-          description: One-time code from /auth/callback?code=...
-      example:
-        code: 1HXYah9…
+        code: { type: string }
     AuthMeResponse:
       type: object
       required: [user_id]
       properties:
-        user_id:
-          type: integer
-          format: int64
-          description: Internal opaque id of the authenticated user.
+        user_id: { type: integer, format: int64 }
         workspaces:
           type: array
           items: { type: integer, format: int64 }
-          description: Workspace ids the user owns. Omitted for API-key auth.
-      example:
-        user_id: 42
-        workspaces: [1, 2]
 
-    # ────── API keys ────────────────────────────────────────────────
-    #
-    # PLACEHOLDER POLICY: every `secret` example below is a deliberate
-    # non-secret placeholder (underscore-separated words + "_DoNotUse"
-    # suffix) so GitHub's push-protection secret scanner does not
-    # accidentally flag the openapi.yaml itself. Real secrets are NEVER
-    # shipped in this file. SDK codegen should treat any example with
-    # the suffix "_DoNotUse" as a sentinel and replace it at runtime.
-    #
+    # ────── API keys (C1 — see PLACEHOLDER POLICY in Api key schemas) ─
     ApiKey:
       type: object
-      description: API key metadata. The plaintext secret is NEVER returned here.
       required: [id, name, environment, key_prefix, created_at]
       properties:
-        id:
-          type: string
-          example: ak_01HXY…
-        name:
-          type: string
-        environment:
-          type: string
-          enum: [test, live]
-          description: |
-            Discriminator matching the secret prefix:
-            `sk_test_…` ↔ `test`; `sk_live_…` ↔ `live`.
+        id: { type: string, example: ak_01HXY_DoNotUse }
+        name: { type: string }
+        environment: { type: string, enum: [test, live] }
         key_prefix:
           type: string
-          description: 'Visible prefix shown in the dashboard: `sk_<env>_<8-char-secret-prefix>`.'
+          description: 'Visible prefix `sk_<env>_<8-char-secret>` (placeholder-safe form used in examples).'
           example: sk_TEST_aB3xY9_K2_DoNotUse
         scopes:
           type: array
           items: { type: string }
-          description: Optional scope list (Taglio 4.6+).
-        last_used_at:
-          type: string
-          format: date-time
-          nullable: true
-        created_at:
-          type: string
-          format: date-time
-      example:
-        id: ak_01HXY_DoNotUse
-        name: Production server
-        environment: live
-        key_prefix: sk_LIVE_aB3xY9_K2_DoNotUse
-        scopes: [posts:write, media:write]
-        last_used_at: '2026-07-12T09:58:00Z'
-        created_at: '2026-07-01T10:00:00Z'
+        last_used_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
     ApiKeyCreateRequest:
       type: object
       required: [name, environment]
       properties:
-        name:
-          type: string
-          maxLength: 80
-          description: Human-readable label (shown in dashboard + audit log).
-        environment:
-          type: string
-          enum: [test, live]
-          description: Sandbox (`test`) or production (`live`).
+        name: { type: string, maxLength: 80 }
+        environment: { type: string, enum: [test, live] }
         scopes:
           type: array
           items: { type: string }
-          description: Optional scope list at creation time.
-      example:
-        name: CI smoke key
-        environment: test
-        scopes: [posts:write, media:write]
     ApiKeyCreateResponse:
       type: object
       description: |
         Returned EXACTLY ONCE on `POST /api/v1/api-keys` (create) and
-        `POST /api/v1/api-keys/{id}/rotate` (rotate). The `secret`
-        here is the only time it is ever transmitted.
+        `POST /api/v1/api-keys/{id}/rotate` (rotate).
       required: [id, name, environment, key_prefix, secret, created_at]
       properties:
         id: { type: string }
         name: { type: string }
-        environment:
-          type: string
-          enum: [test, live]
-        key_prefix:
-          type: string
-          description: 'Visible portion: `sk_<env>_<8-char-secret>`.'
+        environment: { type: string, enum: [test, live] }
+        key_prefix: { type: string }
         secret:
           type: string
-          description: 'Full plaintext `sk_test_<52-char-base32>` or `sk_live_<52-char-base32>` — STORE NOW. See PLACEHOLDER POLICY in this file before copying any example.'
-          example: sk_LIVE_aB3xY9_K2_PLACEHOLDER_DoNotUse
+          description: 'Full plaintext `sk_test_<52-char-base32>` or `sk_live_<52-char-base32>` — STORE NOW.'
+          example: sk_LIVE_PLACEHOLDER_DO_NOT_USE_DoNotUse
         scopes:
           type: array
           items: { type: string }
-        created_at:
-          type: string
-          format: date-time
-      example:
-        id: ak_01J8X_DoNotUse
-        name: Production server
-        environment: live
-        key_prefix: sk_LIVE_aB3xY9_K2_DoNotUse
-        secret: sk_LIVE_aB3xY9_K2_PLACEHOLDER_DO_NOT_USE_xxxxxxxx_DoNotUse
-        scopes: [posts:write, media:write, accounts:read]
-        created_at: '2026-07-12T10:00:00Z'
+        created_at: { type: string, format: date-time }
     ApiKeyListResponse:
       type: object
       required: [keys]
       properties:
         keys:
           type: array
-          items:
-            $ref: '#/components/schemas/ApiKey'
+          items: { $ref: '#/components/schemas/ApiKey' }
+
+    # ────── Posts (C2) ─────────────────────────────────────────────
+
+    MediaAssetRef:
+      type: object
+      description: |
+        Reference to a media asset that has already been uploaded via
+        the 3-step presigned flow (`POST /media/presign`, PUT to
+        `upload_url`, `POST /media/{asset_id}/complete`). Assets in
+        `ready` state are the only valid input here.
+      required: [asset_id]
+      properties:
+        asset_id:
+          type: string
+          example: ma_01HXY…
+        alt_text:
+          type: string
+          description: 'Optional. Per-asset alt text for screen readers.'
+
+    PostCreateContent:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 200
+        caption:
+          type: string
+          maxLength: 5000
+        media:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { $ref: '#/components/schemas/MediaAssetRef' }
+
+    PostCreateRequest:
+      type: object
+      description: |
+        Universal payload. The single `targets[]` array carries one
+        entry per platform account, each with a settings block
+        **discriminated by the platform key** (`tiktok`, `youtube`,
+        …). Exactly one platform key per target.
+      required: [workspace_id, targets]
+      properties:
+        workspace_id:
+          type: integer
+          format: int64
+          minimum: 1
+        scheduled_at:
+          type: string
+          format: date-time
+          description: |
+            Target publish time. If omitted AND `status` is omitted,
+            the post is created as `draft`. If omitted AND
+            `status=queued`, the post queues immediately.
+        status:
+          $ref: '#/components/schemas/PostStatus'
+        content: { $ref: '#/components/schemas/PostCreateContent' }
+        targets:
+          type: array
+          minItems: 1
+          maxItems: 25
+          items: { $ref: '#/components/schemas/PostCreateTarget' }
       example:
-        keys:
-          - id: ak_01HXY_DoNotUse
-            name: Production server
-            environment: live
-            key_prefix: sk_LIVE_aB3xY9_K2_DoNotUse
-            scopes: [posts:write]
-            last_used_at: '2026-07-12T09:58:00Z'
-            created_at: '2026-07-01T10:00:00Z'
+        workspace_id: 1
+        scheduled_at: "2026-07-12T15:00:00Z"
+        content:
+          title: "Reel estivo 2026"
+          caption: "Primo teaser della stagione"
+          media: [{ asset_id: ma_01J8X_DoNotUse }]
+        targets:
+          - platform_account_id: 101
+            settings:
+              tiktok:
+                privacy_level: public
+                allow_comments: true
+                allow_duet: true
+                allow_stitch: false
+                auto_add_music: false
+          - platform_account_id: 102
+            settings:
+              youtube:
+                title: "Reel estivo 2026 — InstaEditLogin demo"
+                privacy_status: unlisted
+                made_for_kids: false
+                category_id: 22
+
+    PostCreateTarget:
+      type: object
+      description: One platform-account publish instruction.
+      required: [platform_account_id, settings]
+      properties:
+        platform_account_id:
+          type: integer
+          format: int64
+          minimum: 1
+        settings:
+          $ref: '#/components/schemas/TargetSettings'
+
+    TargetSettings:
+      type: object
+      description: |
+        Per-platform settings. The **JSON key IS the platform name**;
+        the value is the platform-specific settings shape. Exactly
+        one key MUST be present per target.
+      minProperties: 1
+      maxProperties: 1
+      additionalProperties: false
+      properties:
+        tiktok:  { $ref: '#/components/schemas/TikTokTargetSettings' }
+        youtube: { $ref: '#/components/schemas/YouTubeTargetSettings' }
+        instagram: { $ref: '#/components/schemas/InstagramTargetSettings' }
+        facebook:  { $ref: '#/components/schemas/FacebookTargetSettings' }
+        threads:   { $ref: '#/components/schemas/ThreadsTargetSettings' }
+        twitter:   { $ref: '#/components/schemas/TwitterTargetSettings' }
+        linkedin:  { $ref: '#/components/schemas/LinkedInTargetSettings' }
+      example:
+        tiktok:
+          privacy_level: public
+          allow_comments: true
+
+    TikTokTargetSettings:
+      type: object
+      properties:
+        privacy_level:
+          type: string
+          enum: [public, friends, private]
+          default: public
+        allow_comments:
+          type: boolean
+          default: true
+        allow_duet:
+          type: boolean
+          default: true
+        allow_stitch:
+          type: boolean
+          default: true
+        auto_add_music:
+          type: boolean
+          default: false
+
+    YouTubeTargetSettings:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, maxLength: 100 }
+        description: { type: string, maxLength: 5000 }
+        privacy_status:
+          type: string
+          enum: [public, unlisted, private]
+          default: unlisted
+        made_for_kids:
+          type: boolean
+          default: false
+          description: 'Legally required under COPPA.'
+        category_id:
+          type: integer
+          description: 'YouTube category id (e.g. 22 = People & Blogs).'
+        tags:
+          type: array
+          items: { type: string }
+          maxItems: 500
+
+    InstagramTargetSettings:
+      type: object
+      properties:
+        alt_text:
+          type: string
+          maxLength: 1000
+        location_id:
+          type: string
+          description: 'Facebook page-scoped location id.'
+        collaborators:
+          type: array
+          items: { type: string }
+          maxItems: 3
+        cover_asset_id:
+          type: string
+          description: 'ma_… asset already in `ready` state for use as Reel cover.'
+
+    FacebookTargetSettings:
+      type: object
+      properties:
+        page_id:
+          type: string
+          description: 'Page-scoped id (numeric, returned as string per Meta).'
+        scheduled_publish:
+          type: boolean
+          default: false
+        backdated_time:
+          type: string
+          format: date-time
+        call_to_action:
+          type: object
+          description: 'Structured CTA attached to the post.'
+          properties:
+            type:
+              type: string
+              enum: [LIKE_PAGE, SHOP_NOW, SIGN_UP, LEARN_MORE, BOOK_NOW, WATCH_MORE]
+            value:
+              type: object
+              properties:
+                link: { type: string, format: uri }
+
+    ThreadsTargetSettings:
+      type: object
+      properties:
+        reply_control:
+          type: string
+          enum: [everyone, accounts_you_follow]
+          default: everyone
+        topic_tag:
+          type: string
+        location_id:
+          type: string
+
+    TwitterTargetSettings:
+      type: object
+      properties:
+        reply_settings:
+          type: string
+          enum: [everyone, mentioned_users, followers]
+          default: everyone
+        quote_tweet_id:
+          type: string
+          description: 'Numeric id of an existing tweet to quote (as string per X API v2).'
+        media_alt_text:
+          type: object
+          description: '`<asset_id>` → alt text mapping.'
+          additionalProperties: { type: string }
+
+    LinkedInTargetSettings:
+      type: object
+      properties:
+        visibility:
+          type: string
+          enum: [PUBLIC, CONNECTIONS]
+          default: PUBLIC
+        article_url:
+          type: string
+          format: uri
+          description: 'Article URL to share (vs native text post).'
+        media_category:
+          type: string
+          enum: [IMAGE, VIDEO, NONE]
+          default: NONE
+
+    PostStatus:
+      type: string
+      description: Post-level state. Per-target state is `PostTargetStatus`.
+      enum:
+        - draft
+        - queued
+        - publishing
+        - published
+        - partially_published
+        - failed
+        - waiting_provider
+        - retrying
+
+    PostResponse:
+      type: object
+      required: [id, workspace_id, status]
+      properties:
+        id: { type: string, example: post_01HXY_DoNotUse }
+        workspace_id: { type: integer, format: int64 }
+        title: { type: string }
+        caption: { type: string }
+        media_url: { type: string, format: uri, description: 'Resolved internal S3 URL (server-controlled, NEVER user input).' }
+        scheduled_at: { type: string, format: date-time, nullable: true }
+        status: { $ref: '#/components/schemas/PostStatus' }
+        idempotency_key: { type: string, nullable: true }
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PostTargetResponse:
+      type: object
+      description: |
+        A single target row (per-platform publish attempt). Async state
+        machine modeled separately as `PostTargetStatus`. Detailed
+        fields are documented in `PostTargetDetail` (C3).
+      required: [id, post_id, platform_account_id, status]
+      properties:
+        id: { type: string, example: pt_01HXY_DoNotUse }
+        post_id: { type: string }
+        platform:
+          type: string
+          enum: [meta, tiktok, twitter, youtube, linkedin]
+          description: 'Resolved from `platform_account_id`.'
+        platform_account_id: { type: integer, format: int64 }
+        status: { type: string, enum: [draft, queued, publishing, published, failed, waiting_provider, retrying] }
+        settings_echo:
+          $ref: '#/components/schemas/TargetSettings'
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PostWithTargetsResponse:
+      type: object
+      description: |
+        Standard 202/200 envelope used by `POST /api/v1/posts`,
+        `GET /api/v1/posts/{id}`, and (in C3) by `GET
+        /api/v1/post_targets/{id}/parent`.
+      required: [id, workspace_id, status, targets]
+      properties:
+        id: { type: string }
+        workspace_id: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/PostStatus' }
+        scheduled_at: { type: string, format: date-time, nullable: true }
+        idempotency_key: { type: string, nullable: true }
+        targets:
+          type: array
+          items: { $ref: '#/components/schemas/PostTargetResponse' }
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PostListResponse:
+      type: object
+      required: [posts]
+      properties:
+        posts:
+          type: array
+          items: { $ref: '#/components/schemas/PostResponse' }
+        next_cursor:
+          type: string
+          nullable: true
+          description: 'Opaque cursor for the next page; null when exhausted.'
+
+    PostPatchRequest:
+      type: object
+      description: |
+        At least one of `title`, `caption`, `media`, `status` MUST
+        be present. Setting `media` resolves asset_ids server-side;
+        user-controlled `media_url` is NOT accepted.
+      properties:
+        title: { type: string, maxLength: 200 }
+        caption: { type: string, maxLength: 5000 }
+        media:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { $ref: '#/components/schemas/MediaAssetRef' }
+        status:
+          $ref: '#/components/schemas/PostStatus'
+
+    PostScheduleRequest:
+      type: object
+      required: [scheduled_at]
+      properties:
+        scheduled_at:
+          type: string
+          format: date-time
+
+    PostTargetAddRequest:
+      type: object
+      required: [platform_account_id, settings]
+      properties:
+        platform_account_id: { type: integer, format: int64, minimum: 1 }
+        settings: { $ref: '#/components/schemas/TargetSettings' }
