@@ -5,7 +5,7 @@ Un'unica API per pubblicare contenuti su **Instagram, Facebook, Threads, TikTok,
 
 > **5 minuti al primo post pubblicato.** Questa guida attraversa i sei step minimi del quickstart:
 >
-> 1. [Autenticazione & creazione API key](AUTH.md#autenticazione)
+> 1. [Autenticazione & creazione API key](AUTH.md)
 > 2. [Sandbox vs Live (`sk_test_` / `sk_live_`)](SANDBOX.md)
 > 3. [Connessione account via hosted OAuth](AUTH.md#hosted-oauth)
 > 4. [Upload media via presigned URL](MEDIA.md)
