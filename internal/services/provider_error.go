@@ -479,3 +479,65 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
+
+// ---------------------------------------------------------------------------
+// SPRINT 6.1 (P1#13) — publish-outcome label vocabulary for observability.
+//
+// The metrics layer (pkg/metrics/observability.go) keeps a counter
+// publish_attempts_total{provider, outcome}. The outcome label is
+// derived from this package's ProviderErrorCode taxonomy so the worker
+// emits the right label without duplicating the mapping logic.
+//
+// Lives here (not in pkg/metrics) because the mapping depends on
+// ProviderErrorCode, the type that lives in this package — pkg/metrics
+// cannot import internal/services (it would be a cyclic dependency via
+// the existing metrics helper functions).
+// ---------------------------------------------------------------------------
+
+const (
+	PublishOutcomeSuccess        = "success"
+	PublishOutcomeRateLimited     = "rate_limited"
+	PublishOutcomeAuthError      = "auth_error"
+	PublishOutcomeProviderUnavail = "provider_unavail"
+	PublishOutcomeMediaFailed     = "media_failed"
+	PublishOutcomeContentRejected = "content_rejected"
+	PublishOutcomeValidation      = "validation"
+	PublishOutcomeQuota          = "quota"
+	PublishOutcomeInternal       = "internal"
+)
+
+// PublishOutcomeFromCode maps a ProviderErrorCode to the canonical
+// publish-outcome label value used by pkg/metrics publish_attempts_total.
+// The mapping is exhaustive over the 10 taxonomy codes + the success
+// case (empty code); an unknown code falls back to
+// PublishOutcomeInternal so dashboards stay in sync.
+//
+// This is the SINGLE place this mapping lives; callers MUST go
+// through this helper rather than inline a switch. The pkg/metrics
+// package re-exports the symbol via a tiny wrapper
+// (pkg/metrics.PublishOutcomeFromCode) so dashboards / log lines
+// outside the services package don't need the internal import.
+func PublishOutcomeFromCode(code ProviderErrorCode) string {
+	if code == "" {
+		return PublishOutcomeSuccess
+	}
+	switch code {
+	case ErrorCodeRateLimited:
+		return PublishOutcomeRateLimited
+	case ErrorCodeAuthenticationError, ErrorCodePermissionMissing, ErrorCodeReauthenticationRequired:
+		return PublishOutcomeAuthError
+	case ErrorCodeProviderUnavailable:
+		return PublishOutcomeProviderUnavail
+	case ErrorCodeMediaProcessingFailed:
+		return PublishOutcomeMediaFailed
+	case ErrorCodeContentRejected:
+		return PublishOutcomeContentRejected
+	case ErrorCodeQuotaExceeded:
+		return PublishOutcomeQuota
+	case ErrorCodeValidationError:
+		return PublishOutcomeValidation
+	case ErrorCodeInternalError:
+		return PublishOutcomeInternal
+	}
+	return PublishOutcomeInternal
+}
