@@ -1,11 +1,18 @@
 // Package postgres provides shared testcontainers-based helpers for
 // integration tests across the InstaeditLogin codebase. The helpers
 // here are the canonical source-of-truth for "spin up an ephemeral
-// Postgres 16-alpine for a single test" — both
+// Postgres 17-alpine for a single test" — both
 // internal/database/*_integration_test.go and
 // internal/worker/publish_reconcile_integration_test.go import them,
 // so a Postgres version bump, credential change, or testcontainers
 // API move happens in ONE place rather than drifting between files.
+//
+// Cross-cutting concerns (Docker availability, the 15-second/200ms
+// readiness-poll loop) live in internal/testutil/runtime. This
+// package composes those primitives — it adds ONLY Postgres-specific
+// wiring (image/credentials/DSN, the WithDatabase option, the cleanup
+// closure). Future testutil/<engine> packages (Redis, Kafka, …) follow
+// the same composition path.
 //
 // The package compiles unconditionally (no //go:build integration
 // tag): the standard library plus testcontainers-go and lib/pq are
@@ -14,10 +21,10 @@
 //
 // design notes:
 //
-//   - StartTestPostgres internally calls RequireDocker as its first
-//     step. Test files therefore have a single canonical call site
-//     (db, cleanup := postgres.StartTestPostgres(t)) and don't need a
-//     separate postgres.RequireDocker(t) guard.
+//   - StartTestPostgres internally calls runtime.RequireDocker as
+//     its first step. Test files therefore have a single canonical
+//     call site (db, cleanup := postgres.StartTestPostgres(t)) and
+//     don't need a separate docker-availability guard.
 //
 //   - The database name is configurable via the WithDatabase option
 //     (functional-option pattern). The default is "instaedit_test",
@@ -27,21 +34,25 @@
 //     pre-refactor name (clear logical separation in shared test
 //     logs even though each testcontainer is ephemeral).
 //
-//   - RequireDocker is exported so future tests that spin up a
-//     non-Postgres testcontainer (Redis, Kafka, etc.) can use the
-//     same Docker-availability guard without having to call
-//     StartTestPostgres first.
+//   - (history) The local RequireDocker helper previously exported
+//     by this package moved to internal/testutil/runtime when the
+//     cross-cutting Docker-check + readiness-poll conventions were
+//     extracted. No external callers of postgres.RequireDocker
+//     existed at extraction time (verified by grep), so the move
+//     was direct rather than via a deprecation alias. Future
+//     readers who grep for RequireDocker should land on
+//     runtime.RequireDocker instead.
 package postgres
 
 import (
 	"context"
 	"database/sql"
-	"os/exec"
 	"testing"
-	"time"
 
 	_ "github.com/lib/pq"
 	tpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/runtime"
 )
 
 // config is the internal struct that the functional options mutate.
@@ -81,30 +92,7 @@ func WithDatabase(name string) Option {
 	}
 }
 
-// RequireDocker short-circuits the calling test if Docker isn't
-// available so dev environments without Docker don't see false
-// failures. Two-step check:
-//
-//  1. exec.LookPath("docker") confirms the binary is on PATH.
-//  2. docker info confirms the daemon is reachable (a missing or
-//     stopped daemon fails this step, not the binary lookup).
-//
-// Either failing calls t.Skipf — the conventional SKIPPED-not-FAILED
-// signal that the environment intentionally isn't running the test.
-//
-// RequireDocker is also called as the first step of StartTestPostgres,
-// so test files don't need to invoke it separately.
-func RequireDocker(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker not on PATH: %v", err)
-	}
-	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skipf("docker daemon not reachable: %v", err)
-	}
-}
-
-// StartTestPostgres spins up an ephemeral Postgres 16-alpine via
+// StartTestPostgres spins up an ephemeral Postgres 17-alpine via
 // testcontainers-go and returns the *sql.DB + a cleanup function
 // that terminates the container. The default database name is
 // "instaedit_test"; override with WithDatabase(name).
@@ -115,16 +103,15 @@ func RequireDocker(t *testing.T) {
 //   - Credentials: test / test
 //   - SSL: disabled (testcontainer-internal connection only)
 //
-// The first step is an internal RequireDocker call: tests that don't
-// need a separate requireDocker(t) guard can call this as their only
-// Docker-touching helper.
+// The first step is an internal runtime.RequireDocker call: tests
+// that don't need a separate docker-availability guard can call
+// this as their only Docker-touching helper.
 //
-// The 15s/200ms ping-backoff loop absorbs testcontainers' built-in
-// readiness-check race: the log-based "database system is ready to
-// accept connections" message can fire BEFORE the TCP listener is
-// actually bound on some Docker configs — the first Ping() then hits
-// "connection reset by peer", and subsequent pings (typically within
-// 1–3 attempts) succeed once the listener is up.
+// The readiness-poll loop is delegated to runtime.WaitReady with
+// db.Ping as the probe (and the canonical 15s/200ms defaults) —
+// see runtime.WaitReady's doc for the rationale on why testcontainers'
+// log-based "ready" message races the TCP listener and why the
+// 15s/200ms timing budget is right.
 //
 // Each call produces a FRESH ephemeral container — there is no
 // cross-test state sharing. The container is killed by either the
@@ -133,9 +120,11 @@ func RequireDocker(t *testing.T) {
 func StartTestPostgres(t *testing.T, opts ...Option) (*sql.DB, func()) {
 	t.Helper()
 
-	// Skip the test if Docker isn't available — same shape as the
-	// prior inlined requireDocker guard at every test's first line.
-	RequireDocker(t)
+	// Docker-availability guard is canonical in the runtime package
+	// so a future testutil/redis/etc. helper can compose it the
+	// same way without duplicating the exec.LookPath + docker info
+	// dance.
+	runtime.RequireDocker(t)
 
 	cfg := defaultConfig()
 	for _, o := range opts {
@@ -164,18 +153,11 @@ func StartTestPostgres(t *testing.T, opts ...Option) (*sql.DB, func()) {
 		t.Fatalf("sql.Open: %v", err)
 	}
 
-	// Retry db.Ping with a short backoff. See the function doc for
-	// the rationale on the 15s/200ms loop.
-	pingDeadline := time.Now().Add(15 * time.Second)
-	for attempt := 1; ; attempt++ {
-		if pingErr := db.Ping(); pingErr == nil {
-			break
-		}
-		if time.Now().After(pingDeadline) {
-			t.Fatalf("db.Ping: timeout after %d attempts over 15s", attempt)
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
+	// Readiness-poll delegated to the runtime helper: same
+	// 15s/200ms contract, attempt count surfaced via t.Logf on
+	// success, last error surfaced via t.Fatalf on timeout.
+	runtime.WaitReady(t, func() error { return db.Ping() },
+		runtime.WaitReadyDefaultDeadline, runtime.WaitReadyDefaultBackoff)
 
 	cleanup := func() {
 		_ = db.Close()
