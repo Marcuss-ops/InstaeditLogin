@@ -64,11 +64,15 @@ func newMockPostDBExact(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 }
 
 func TestPostCreate_AtomicTx_Happy(t *testing.T) {
-	// Taglio 5.0 STEP 1: Create writes posts + post_targets + outbox_events
-	// in ONE transaction. Expectations: Begin, INSERT posts RETURNING,
-	// INSERT post_targets (200) RETURNING, INSERT outbox_events (target=200),
-	// INSERT post_targets (201) RETURNING, INSERT outbox_events (target=201),
-	// Commit.
+	// Taglio 5.0 STEP 1: Create writes posts + ALL post_targets + ALL
+	// outbox_events in ONE transaction. The production code does TWO
+	// separate target loops (first fills target.ID via RETURNING,
+	// second writes outbox rows referencing target.ID). Mock order:
+	//   Begin, INSERT posts RETURNING (id=100),
+	//   INSERT post_targets (target A → id=200),
+	//   INSERT post_targets (target B → id=201),
+	//   INSERT outbox_events (target=200), INSERT outbox_events (target=201),
+	//   Commit.
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
@@ -80,12 +84,23 @@ func TestPostCreate_AtomicTx_Happy(t *testing.T) {
 		 RETURNING id, created_at`,
 	).WithArgs(int64(1), "hello", "world", "", (*time.Time)(nil), models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
+	// Target A: id=200 from RETURNING (first iteration of targets loop).
 	mock.ExpectQuery(
 		`INSERT INTO post_targets (post_id, platform_account_id, status)
 		 VALUES ($1, $2, $3)
 		 RETURNING id`,
 	).WithArgs(int64(100), int64(10), models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
+	// Target B: id=201 from RETURNING (second iteration of targets loop).
+	// BOTH post_targets must INSERT before ANY outbox INSERT because
+	// t.ID must be populated for both targets before the outbox loop runs.
+	mock.ExpectQuery(
+		`INSERT INTO post_targets (post_id, platform_account_id, status)
+		 VALUES ($1, $2, $3)
+		 RETURNING id`,
+	).WithArgs(int64(100), int64(11), models.PostStatusDraft).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(201))
+	// Outbox loop now: target 0's outbox first, target 1's second.
 	mock.ExpectExec(
 		`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
 		 VALUES ($1, $2, $3, $4::jsonb)`,
@@ -93,12 +108,6 @@ func TestPostCreate_AtomicTx_Happy(t *testing.T) {
 		"post_target", int64(200), "post_target.publish_requested",
 		sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(
-		`INSERT INTO post_targets (post_id, platform_account_id, status)
-		 VALUES ($1, $2, $3)
-		 RETURNING id`,
-	).WithArgs(int64(100), int64(11), models.PostStatusDraft).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(201))
 	mock.ExpectExec(
 		`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
 		 VALUES ($1, $2, $3, $4::jsonb)`,
@@ -641,24 +650,26 @@ func TestPostCreate_ConcurrentGoroutines_NoSharedState(t *testing.T) {
 		 RETURNING id, created_at`,
 			).WithArgs(int64(1), "title", "", "", (*time.Time)(nil), models.PostStatusDraft).
 				WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(postID, now))
+			// Taglio 5.0 STEP 1: BOTH post_targets INSERT first (so the
+			// RETURNING ids fill target.ID for both rows), THEN BOTH
+			// outbox INSERTs.
 			mock.ExpectQuery(
 				`INSERT INTO post_targets (post_id, platform_account_id, status)
 		 VALUES ($1, $2, $3)
 		 RETURNING id`,
 			).WithArgs(postID, int64(10+idx), models.PostStatusDraft).
 				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(tgtAID))
-			// Taglio 5.0 STEP 1: outbox event per target in same tx.
-			mock.ExpectExec(
-				`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
-		 VALUES ($1, $2, $3, $4::jsonb)`,
-			).WithArgs("post_target", tgtAID, "post_target.publish_requested", sqlmock.AnyArg()).
-				WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectQuery(
 				`INSERT INTO post_targets (post_id, platform_account_id, status)
 		 VALUES ($1, $2, $3)
 		 RETURNING id`,
 			).WithArgs(postID, int64(11+idx), models.PostStatusDraft).
 				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(tgtBID))
+			mock.ExpectExec(
+				`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
+		 VALUES ($1, $2, $3, $4::jsonb)`,
+			).WithArgs("post_target", tgtAID, "post_target.publish_requested", sqlmock.AnyArg()).
+				WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectExec(
 				`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
 		 VALUES ($1, $2, $3, $4::jsonb)`,
