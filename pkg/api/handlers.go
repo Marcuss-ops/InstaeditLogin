@@ -104,6 +104,38 @@ type Router struct {
 	// so the explicit 501-shaped error in handleExchangeCode short-
 	// circuits dev environments that have not yet wired the helper.
 	userAndWorkspaceHelper UserWorkspaceHelper
+	// SPRINT 1.2 — magic-link + connection-state persistence (optional).
+	// Wiring via WithMagicLinkStore / WithConnectionStateStore.
+	authMagicLink        AuthMagicLinkStore
+	connectionStates     ConnectionStateStore
+}
+
+// ConnectionStateStore is declared in pkg/api/connections.go (SPRINT 1.2);
+// placeholder import to keep repository wired in this package so the
+// above struct field typechecks.
+
+var _ = repository.RoleAdmin
+
+// WithMagicLinkStore wires *repository.MagicLinkRepository into the
+// Router. Without this option, /api/v1/auth/magic-link/* return 501.
+func WithMagicLinkStore(s AuthMagicLinkStore) RouterOption {
+	return func(r *Router) { r.authMagicLink = s }
+}
+
+// ConnectionStateStore is the persistence contract for connection_states
+// (SPRINT 1.2). Defined inline to keep pkg/api off internal/repository
+// imports; main.go injects *repository.ConnectionStateRepository which
+// satisfies this interface. Implementations live in pkg/api/connections.go
+// once that file is materialised.
+type ConnectionStateStore interface {
+	Create(state *repository.ConnectionState) error
+	Consume(id string, expectedNonce string, jwtWorkspaceID int64) (*repository.ConnectionState, error)
+}
+
+// WithConnectionStateStore wires *repository.ConnectionStateRepository
+// into the Router. Without this option, /api/v1/connections/* return 501.
+func WithConnectionStateStore(s ConnectionStateStore) RouterOption {
+	return func(r *Router) { r.connectionStates = s }
 }
 
 type UserStore interface {

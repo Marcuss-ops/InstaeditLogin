@@ -20,6 +20,10 @@ type AuthEmailStore interface {
 	VerifyEmail(token string) (int64, error)
 	IssueResetToken(email string) (string, error)
 	ResetPassword(token, newPassword string) error
+	// SPRINT 1.2 — magic-link signup-or-lookup. Idempotent on email:
+	// creates user + Personal Workspace + admin if email is new,
+	// otherwise resolves the existing user's active workspace.
+	MagicLinkSignupOrLookup(email string) (userID int64, wsID int64, err error)
 }
 
 // AuthEmailServiceAdapter adapts *services.AuthService to the local
@@ -67,6 +71,10 @@ func (a *AuthEmailServiceAdapter) IssueResetToken(email string) (string, error) 
 
 func (a *AuthEmailServiceAdapter) ResetPassword(token, newPassword string) error {
 	return a.svc.ResetPassword(token, newPassword)
+}
+
+func (a *AuthEmailServiceAdapter) MagicLinkSignupOrLookup(email string) (int64, int64, error) {
+	return a.svc.MagicLinkSignupOrLookup(email)
 }
 
 // -----------------------------------------------------------------------

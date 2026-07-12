@@ -190,6 +190,49 @@ func (s *AuthService) IssueSessionTokenForWorkspace(userID, workspaceID int64) (
 	return jwt, nil
 }
 
+// MagicLinkSignupOrLookup is the new-user path for product login magic-link.
+// SPRINT 1.2 — equivalent of Register for passwordless users: creates
+// the user row (password_hash NULL, email_verified=true), creates a
+// Personal Workspace, and adds the user as admin. Idempotent on email:
+// if the user already exists, returns the existing user_id and the
+// resolved active workspace (without creating a duplicate user).
+//
+// Used by handleMagicLinkVerify after consuming a one-time token. The
+// verify handler completes the loop with Manager.Issue + cookie set;
+// this method only guarantees "row exists, wsID resolved".
+func (s *AuthService) MagicLinkSignupOrLookup(email string) (userID int64, wsID int64, err error) {
+	existing, err := s.userRepo.FindByEmail(email)
+	if err != nil {
+		return 0, 0, fmt.Errorf("magic link signup: find: %w", err)
+	}
+	if existing != nil {
+		// The login email is by definition already-verified (the user
+		// clicked the link in their inbox), so normalize the flag even
+		// for existing accounts.
+		_ = s.userRepo.SetEmailVerified(existing.ID)
+		activeWS, err := s.resolveActiveWorkspace(existing.ID)
+		if err != nil {
+			return 0, 0, fmt.Errorf("magic link signup: resolve workspace: %w", err)
+		}
+		return existing.ID, activeWS, nil
+	}
+	user, err := s.userRepo.CreateSaaSUser(email, email, nil)
+	if err != nil {
+		return 0, 0, fmt.Errorf("magic link signup: create user: %w", err)
+	}
+	if err := s.userRepo.SetEmailVerified(user.ID); err != nil {
+		return 0, 0, fmt.Errorf("magic link signup: verify: %w", err)
+	}
+	ws := &models.Workspace{Name: "Personal", OwnerID: user.ID}
+	if err := s.workspaceRepo.Create(ws); err != nil {
+		return 0, 0, fmt.Errorf("magic link signup: create workspace: %w", err)
+	}
+	if err := s.teamRepo.AddMember(ws.ID, user.ID, repository.RoleAdmin); err != nil {
+		return 0, 0, fmt.Errorf("magic link signup: add admin: %w", err)
+	}
+	return user.ID, ws.ID, nil
+}
+
 // resolveActiveWorkspace picks the user's active workspace at sign-in /
 // OAuth callback / onboarding-completion time. Strategy:
 //
