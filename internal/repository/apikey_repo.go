@@ -369,8 +369,10 @@ func (r *ApiKeyRepository) UpdateName(orgID, id int64, name string) error {
 // Atomic semantics:
 //
 // BEGIN
-//   UPDATE api_keys SET revoked_at = NOW() WHERE id = $oldID AND org_id = $orgID
-//   INSERT INTO api_keys (...) VALUES (...) RETURNING id, created_at, updated_at
+//
+//	UPDATE api_keys SET revoked_at = NOW() WHERE id = $oldID AND org_id = $orgID
+//	INSERT INTO api_keys (...) VALUES (...) RETURNING id, created_at, updated_at
+//
 // COMMIT
 //
 // Either: (a) both succeed → old key is revoked, new key is active.

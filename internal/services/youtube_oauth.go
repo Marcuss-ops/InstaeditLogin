@@ -78,10 +78,18 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
 	return profile, tokenData, nil
 }
 
-// ValidateContent enforces the YouTube video-required rule.
+// ValidateContent enforces the YouTube video-required rule
+// and a mandatory privacy_level.
+// Taglio 4b: privacy_level is now required — one of public, unlisted, private.
 func (s *YouTubeOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.VideoURL == "" {
 		return fmt.Errorf("youtube requires a video for publishing")
+	}
+	if payload.PrivacyLevel == "" {
+		return fmt.Errorf("youtube requires a privacy_level: one of public, unlisted, private")
+	}
+	if err := validateYouTubePrivacyLevel(payload.PrivacyLevel); err != nil {
+		return err
 	}
 	return nil
 }
@@ -208,7 +216,7 @@ func (s *YouTubeOAuthService) Publish(ctx context.Context, accessToken, platform
 			"description": payload.Text,
 		},
 		"status": map[string]string{
-			"privacyStatus": "public",
+			"privacyStatus": normalizeYouTubePrivacyLevel(payload.PrivacyLevel),
 		},
 	}
 
@@ -492,6 +500,25 @@ func defaultVideoTitle(payload models.PublishPayload) string {
 		return payload.Text
 	}
 	return "Uploaded via InstaEdit"
+}
+
+// validateYouTubePrivacyLevel returns an error if level is not one of the
+// three YouTube-recognized privacy values. Used by ValidateContent.
+// Taglio 4b: no default — empty/unrecognized causes validation_error.
+func validateYouTubePrivacyLevel(level string) error {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "public", "unlisted", "private":
+		return nil
+	default:
+		return fmt.Errorf("youtube privacy_level must be one of public, unlisted, private (got %q)", level)
+	}
+}
+
+// normalizeYouTubePrivacyLevel canonicalizes the privacy value for the
+// YouTube API (lowercase). ValidateContent already guarantees the value
+// is valid.
+func normalizeYouTubePrivacyLevel(level string) string {
+	return strings.ToLower(strings.TrimSpace(level))
 }
 
 // --- Private ---

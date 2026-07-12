@@ -75,14 +75,20 @@ func (s *LinkedInOAuthService) HandleCallback(ctx context.Context, state, code s
 	return profile, tokenData, nil
 }
 
-// ValidateContent enforces the text-only rule for a LinkedIn post.
+// ValidateContent enforces the text-only rule for a LinkedIn post
+// and a mandatory visibility (privacy_level).
 // Taglio 3c: LinkedIn is text_only — the articleSource block that
-// pretended to upload media (via payload.ImageURL/VideoURL) was
-// removed because it passed arbitrary URLs to the LinkedIn API
-// without any media upload infrastructure behind it.
+// pretended to upload media was removed.
+// Taglio 4b: visibility is now required — one of PUBLIC, CONNECTIONS.
 func (s *LinkedInOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.Text == "" {
 		return fmt.Errorf("linkedin requires text content")
+	}
+	if payload.PrivacyLevel == "" {
+		return fmt.Errorf("linkedin requires a privacy_level (visibility): PUBLIC or CONNECTIONS")
+	}
+	if err := validateLinkedInVisibility(payload.PrivacyLevel); err != nil {
+		return err
 	}
 	return nil
 }
@@ -132,7 +138,7 @@ func (s *LinkedInOAuthService) Publish(ctx context.Context, accessToken, platfor
 	postBody := map[string]interface{}{
 		"author":     "urn:li:person:" + platformUserID,
 		"commentary": payload.Text,
-		"visibility": "PUBLIC",
+		"visibility": normalizeLinkedInVisibility(payload.PrivacyLevel),
 		"distribution": map[string]interface{}{
 			"feedDistribution": "MAIN_FEED",
 		},
@@ -176,6 +182,24 @@ func (s *LinkedInOAuthService) Publish(ctx context.Context, accessToken, platfor
 	return &models.PublishResult{
 		PlatformMediaID: parsed.ID,
 	}, nil
+}
+
+// validateLinkedInVisibility returns an error if visibility is not one of the
+// LinkedIn-recognized values. Used by ValidateContent.
+// Taglio 4b: no default — empty/unrecognized causes validation_error.
+func validateLinkedInVisibility(level string) error {
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case "PUBLIC", "CONNECTIONS":
+		return nil
+	default:
+		return fmt.Errorf("linkedin visibility must be PUBLIC or CONNECTIONS (got %q)", level)
+	}
+}
+
+// normalizeLinkedInVisibility canonicalizes the visibility value for the
+// LinkedIn API. ValidateContent already guarantees the value is valid.
+func normalizeLinkedInVisibility(level string) string {
+	return strings.ToUpper(strings.TrimSpace(level))
 }
 
 // --- Private ---

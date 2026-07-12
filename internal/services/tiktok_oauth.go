@@ -118,12 +118,19 @@ func (s *TikTokOAuthService) HandleCallback(ctx context.Context, state, code str
 	return profile, tokenData, nil
 }
 
-// ValidateContent enforces TikTok's hard requirements: a video and
-// caption not exceeding 4000 runes. Privacy/comment/duet modes are
-// validated separately by the public-API normalisation functions below.
+// ValidateContent enforces TikTok's hard requirements: a video,
+// a privacy_level (mandatory — no default), and caption ≤ 4000 runes.
+// Taglio 4b: privacy_level is now required — empty/unrecognized values
+// return a validation_error instead of silently defaulting to PUBLIC_TO_EVERYONE.
 func (s *TikTokOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.VideoURL == "" {
 		return fmt.Errorf("tiktok requires a video for publishing")
+	}
+	if payload.PrivacyLevel == "" {
+		return fmt.Errorf("tiktok requires a privacy_level: one of PUBLIC_TO_EVERYONE, MUTUAL_FOLLOW_FRIENDS, SELF_ONLY")
+	}
+	if err := validateTikTokPrivacyLevel(payload.PrivacyLevel); err != nil {
+		return err
 	}
 	if n := len([]rune(payload.Text)); n > tikTokTitleMaxRunes {
 		return fmt.Errorf("tiktok caption exceeds %d-rune limit (got %d)", tikTokTitleMaxRunes, n)
@@ -410,6 +417,8 @@ func truncateTikTokTitle(s string) string {
 }
 
 func normalizeTikTokPrivacyLevel(level string) string {
+	// Taglio 4b: ValidateContent already rejected empty/unrecognized
+	// values, so this switch always matches. No default fallback.
 	switch strings.ToUpper(strings.TrimSpace(level)) {
 	case "PUBLIC_TO_EVERYONE":
 		return "PUBLIC_TO_EVERYONE"
@@ -417,11 +426,19 @@ func normalizeTikTokPrivacyLevel(level string) string {
 		return "MUTUAL_FOLLOW_FRIENDS"
 	case "SELF_ONLY":
 		return "SELF_ONLY"
-	case "":
-		return "PUBLIC_TO_EVERYONE"
 	default:
-		slog.Warn("TikTok: unrecognized privacy_level, defaulting to PUBLIC_TO_EVERYONE", "input", level)
-		return "PUBLIC_TO_EVERYONE"
+		return ""
+	}
+}
+
+// validateTikTokPrivacyLevel returns an error if level is not one of the
+// three TikTok-recognized privacy values. Used by ValidateContent.
+func validateTikTokPrivacyLevel(level string) error {
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case "PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY":
+		return nil
+	default:
+		return fmt.Errorf("tiktok privacy_level must be one of PUBLIC_TO_EVERYONE, MUTUAL_FOLLOW_FRIENDS, SELF_ONLY (got %q)", level)
 	}
 }
 

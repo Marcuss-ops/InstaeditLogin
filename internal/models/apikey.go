@@ -43,21 +43,21 @@ const (
 	// publish.
 	PermissionPublish = "publish"
 
-// PermissionMedia — presigned uploads via /api/v1/media/presign.
-// Bare name (no resource:action) matches the rest of the permission
-// set; finer-grained actions (media.list, media.delete) can be
-// added as separate constants when needed. The AllKnownApiKeyPermissionValues
-// map (and the SQL GIN index on permissions) supports any of them
-// transparently — once they are added to the known set here, the
-// validators accept them and the index covers the lookup.
-PermissionMedia = "media"
+	// PermissionMedia — presigned uploads via /api/v1/media/presign.
+	// Bare name (no resource:action) matches the rest of the permission
+	// set; finer-grained actions (media.list, media.delete) can be
+	// added as separate constants when needed. The AllKnownApiKeyPermissionValues
+	// map (and the SQL GIN index on permissions) supports any of them
+	// transparently — once they are added to the known set here, the
+	// validators accept them and the index covers the lookup.
+	PermissionMedia = "media"
 
-// PermissionAccountsManage — connect/disconnect platform accounts,
-// refresh OAuth tokens, run account validations. Bare name for
-// consistency with the rest of the permission set; finer-grained
-// actions like account.connect / account.disconnect land in a future
-// commit if and when the surface needs to split.
-PermissionAccountsManage = "accounts"
+	// PermissionAccountsManage — connect/disconnect platform accounts,
+	// refresh OAuth tokens, run account validations. Bare name for
+	// consistency with the rest of the permission set; finer-grained
+	// actions like account.connect / account.disconnect land in a future
+	// commit if and when the surface needs to split.
+	PermissionAccountsManage = "accounts"
 
 	// PermissionAdmin — every route, including key minting and
 	// revoking. Org owners only; never issued to third-party
@@ -77,12 +77,12 @@ var DefaultApiKeyPermissions = []string{PermissionRead}
 // so an intentional typo doesn't silently grant no permission after
 // normalisation (which would be a footgun).
 var AllKnownApiKeyPermissionValues = map[string]struct{}{
-	PermissionRead:            {},
-	PermissionWrite:           {},
-	PermissionPublish:         {},
-	PermissionMedia:           {},
-	PermissionAccountsManage:  {},
-	PermissionAdmin:           {},
+	PermissionRead:           {},
+	PermissionWrite:          {},
+	PermissionPublish:        {},
+	PermissionMedia:          {},
+	PermissionAccountsManage: {},
+	PermissionAdmin:          {},
 }
 
 // ValidateApiKeyPermissions reports whether every perm is in the

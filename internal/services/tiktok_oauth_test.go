@@ -228,11 +228,13 @@ func TestTikTok_HandleCallback_UserInfoFails(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // validPublishPayload returns a payload that passes ValidateContent
-// (video_url present, caption under 4000 runes).
+// (video_url present, caption under 4000 runes, privacy_level set).
+// Taglio 4b: privacy_level is now mandatory.
 func validPublishPayload() models.PublishPayload {
 	return models.PublishPayload{
-		Text:     "Hello TikTok from Taglio 4.2",
-		VideoURL: "https://cdn.example.com/video.mp4",
+		Text:         "Hello TikTok from Taglio 4.2",
+		VideoURL:     "https://cdn.example.com/video.mp4",
+		PrivacyLevel: "PUBLIC_TO_EVERYONE",
 	}
 }
 
@@ -389,7 +391,7 @@ func TestTikTok_StartPublish_JSONBody(t *testing.T) {
 
 	svc := newTestTikTokService(srv)
 	_, _, err := svc.StartPublish(context.Background(), "tok", "tt-1",
-		models.PublishPayload{Text: "My Title", VideoURL: "https://cdn.example.com/abc.mp4"})
+		models.PublishPayload{Text: "My Title", VideoURL: "https://cdn.example.com/abc.mp4", PrivacyLevel: "SELF_ONLY"})
 	if err != nil {
 		t.Fatalf("StartPublish: %v", err)
 	}
@@ -672,14 +674,19 @@ func TestTikTok_ValidateContent(t *testing.T) {
 	if err := svc.ValidateContent(models.PublishPayload{Text: "x"}); err == nil {
 		t.Error("expected error for empty video_url, got nil")
 	}
-	// Caption under limit → no error.
-	if err := svc.ValidateContent(models.PublishPayload{Text: "hello", VideoURL: "https://x/v.mp4"}); err != nil {
+	// Missing privacy_level → error (Taglio 4b).
+	if err := svc.ValidateContent(models.PublishPayload{Text: "hello", VideoURL: "https://x/v.mp4"}); err == nil {
+		t.Error("expected error for missing privacy_level (Taglio 4b), got nil")
+	}
+	// Full valid payload → no error.
+	if err := svc.ValidateContent(models.PublishPayload{Text: "hello", VideoURL: "https://x/v.mp4", PrivacyLevel: "PUBLIC_TO_EVERYONE"}); err != nil {
 		t.Errorf("unexpected error for valid payload: %v", err)
 	}
 	// Caption over limit → error.
 	if err := svc.ValidateContent(models.PublishPayload{
-		Text:     strings.Repeat("a", 4001),
-		VideoURL: "https://x/v.mp4",
+		Text:         strings.Repeat("a", 4001),
+		VideoURL:     "https://x/v.mp4",
+		PrivacyLevel: "MUTUAL_FOLLOW_FRIENDS",
 	}); err == nil {
 		t.Error("expected error for caption > 4000 runes, got nil")
 	}
