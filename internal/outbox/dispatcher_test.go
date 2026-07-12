@@ -477,6 +477,15 @@ func TestDispatcher_Heartbeat_RenewsLease(t *testing.T) {
 // in-flight one finish. ProcessFunc is gated by a channel; we cancel
 // mid-flight and then unblock to verify the drain path runs to
 // completion (MarkProcessed on the in-flight, no leaked claims).
+//
+// IMPORTANT — processFunc gates ONLY on the `gate` channel, NOT on
+// ctx.Done(). A ctx.Done()-aware ProcessFunc would short-circuit
+// on cancellation and return ctx.Err(), defeating the test's
+// intent (which is "Run stays blocked on the in-flight"). The
+// dispatcher's drain-on-shutdown semantics only apply to long-running
+// ProcessFunc implementations that explicitly respect ctx; the
+// test's ProcessFunc ignores ctx to model the worst case where the
+// caller doesn't propagate cancellation.
 func TestDispatcher_GracefulShutdown_DrainsInFlight(t *testing.T) {
 	store := &mockOutboxStore{
 		claimResponses: []claimResponse{{ev: newEvent(110, 1)}},
@@ -485,14 +494,10 @@ func TestDispatcher_GracefulShutdown_DrainsInFlight(t *testing.T) {
 	entered := make(chan struct{}) // process→test signal
 	d := outbox.NewDispatcher(outbox.DispatcherConfig{
 		OutboxStore: store,
-		Process: func(ctx context.Context, _ *models.OutboxEvent) error {
+		Process: func(_ context.Context, _ *models.OutboxEvent) error {
 			close(entered)
-			select {
-			case <-gate:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+			<-gate // block strictly on the test-driven gate; ctx is ignored
+			return nil
 		},
 		TickInterval: 1 * time.Hour, // only the initial drain matters
 	})
@@ -570,35 +575,6 @@ func TestDispatcher_PanicInProcess_RecoversAsTransient(t *testing.T) {
 	}
 }
 
-// TestComputeBackoff_DecorrelatedJitter exercises the AWS-style
-// backoff formula directly: `next = min(cap, rand(base, prev * 3))`.
-// For attempt=1, prev=base, so temp = min(cap, base*3). All sampled
-// values must lie in [base, temp). The cap kicks in at large attempts.
-func TestComputeBackoff_DecorrelatedJitter(t *testing.T) {
-	store := &mockOutboxStore{}
-	d := outbox.NewDispatcher(outbox.DispatcherConfig{
-		OutboxStore: store,
-		Process:     func(_ context.Context, _ *models.OutboxEvent) error { return nil },
-		RandSource:  rand.NewSource(123456),
-		BaseDelay:   100 * time.Millisecond,
-		CapDelay:    2 * time.Second,
-	})
-
-	// Run a finite number of attempts via reflection-free direct calls.
-	// We rely on the dispatcher exposing computeBackoff via Run; since
-	// it's unexported, we re-derive the formula here against a similar
-	// RandSource to verify the bound calculations match the package's.
-	// (We don't have a public hook for the formula — we test the
-	// observable side effect of the dispatcher calling MarkFailed with
-	// a value in the expected band via TestDispatcher_TransientFailure
-	// above.)
-
-	// Skipping duplicate verification: the formula's bounds are
-	// exercised by the live transient test. This sub-test remains as
-	// the explicit "behaviour preserved in future refactor" tag.
-	t.Skip("computeBackoff is verified via the live transient-failure test")
-}
-
 // --- utilities --------------------------------------------------------------
 
 // contains is a small substring check that swallows the strings import
@@ -614,8 +590,3 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
-
-// (TestComputeBackoff_DecorrelatedJitter intentionally removed:
-// the formula is exercised end-to-end by
-// TestDispatcher_TransientFailure_MarkFailedWithBackoff which
-// asserts the backoff band [base, base*3) at attempt=1.)
