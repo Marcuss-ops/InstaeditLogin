@@ -60,19 +60,29 @@ go run cmd/server/main.go
 instaedit-login/
 ├── cmd/server/main.go          # Entry point con wiring multi-provider
 ├── internal/
+│   ├── auth/                   # JWT + API key middleware (Taglio 1.1)
 │   ├── config/                 # Configurazioni e .env (multi-platform)
+│   ├── credentials/            # CredentialVault (encrypt + refresh + advisory lock)
+│   ├── crypto/                 # AES-256-GCM encrypt/decrypt
 │   ├── database/               # Connessione PostgreSQL e migrations
 │   ├── models/                 # Modelli platform-agnostici
-│   ├── repository/             # CRUD unificato (User, PlatformAccount, Token)
-│   ├── crypto/                 # AES-256-GCM encrypt/decrypt
+│   ├── providers/              # BuildRegistry — per-platform capability wiring
+│   ├── repository/             # CRUD unificato (User, PlatformAccount, Token, Post, Workspace)
+│   ├── worker/                 # Publish worker + async reconciler
 │   └── services/
-│       ├── provider.go         # Small capability interfaces + CapabilityRouter
-│       ├── token_helper.go     # Token encryption/retrieval condiviso
-│       ├── facebook_oauth.go   # Provider Meta (Facebook + Instagram)
-│       ├── tiktok_oauth.go     # Provider TikTok
-│       ├── twitter_oauth.go    # Provider Twitter/X
-│       └── youtube_oauth.go    # Provider YouTube
-└── pkg/api/routes.go           # Router platform-agnostico
+│       ├── provider.go         # Small capability interfaces + CapabilityRouter (Taglio 2a/2e)
+│       ├── meta_oauth_base.go  # Meta OAuth base (shared by Facebook/Instagram/Threads)
+│       ├── facebook_oauth.go   # Provider Facebook Pages
+│       ├── instagram_oauth.go  # Provider Instagram Business (Reel + image)
+│       ├── threads_oauth.go    # Provider Threads (async container)
+│       ├── tiktok_oauth.go     # Provider TikTok (async 4-step state machine)
+│       ├── twitter_oauth.go    # Provider X/Twitter (OAuth 2.0 PKCE only)
+│       ├── youtube_oauth.go    # Provider YouTube (resumable upload)
+│       ├── linkedin_oauth.go   # Provider LinkedIn (REST posts)
+│       ├── http_client.go      # HTTP client shared by providers
+│       ├── metrics_helper.go   # Publish + token refresh metrics wrappers
+│       └── storage.go          # S3-compatible storage (presigned uploads)
+└── pkg/api/                    # HTTP handlers + router (platform-agnostic)
 ```
 
 ## API Endpoints
