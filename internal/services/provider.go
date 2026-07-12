@@ -2,13 +2,8 @@
 // provider can implement, plus the CapabilityRouter that holds providers by
 // platform name and dispatches per-capability lookups.
 //
-// Taglio 2.1 replaces the old composite PlatformService (OAuthProvider +
-// Publisher + TokenManager) with five narrow interfaces so each provider
-// implements only what its platform actually supports. The token-encryption
-// logic was lifted out of the per-provider concern entirely and now lives
-// in a shared TokenService (internal/services/token_service.go) — every
-// provider shares the same encrypted token schema, so the logic was
-// infrastructure, not capability.
+// Taglio 2.1: five narrow interfaces so each provider implements only what
+// its platform actually supports.
 package services
 
 import (
@@ -153,7 +148,6 @@ var ErrRevokeUnsupported = fmt.Errorf("provider does not support token revocatio
 
 // ---------------------------------------------------------------------------
 // CapabilityRouter — the single source of truth for platform dispatch.
-// Replaces the old map[string]PlatformService with capability-aware routing.
 // ---------------------------------------------------------------------------
 
 // CapabilityRouter holds all registered providers, keyed by platform name.
@@ -190,9 +184,7 @@ func NewCapabilityRouter() *CapabilityRouter {
 
 // Register stores p under name, type-asserting each capability it satisfies.
 // Providers that don't implement a capability simply have a nil for that
-// slot — callers must check with the (X, ok) pattern. This avoids the
-// PlatformService-of-everything problem where every provider is forced to
-// satisfy OAuth + Publish + Token just to be a member of the registry.
+// slot — callers must check with the (X, ok) pattern.
 //
 // Re-registering the same name overwrites the previous entry. Callers
 // that want to refuse duplicates can check Names() first.

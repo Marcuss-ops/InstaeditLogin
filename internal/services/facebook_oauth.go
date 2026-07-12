@@ -15,9 +15,7 @@ import (
 )
 
 // FacebookOAuthService implements the Meta-Facebook provider as a set of
-// small capabilities. Taglio 2.1: each provider only carries the
-// methods it actually supports — no more composition onto a single
-// monolithic PlatformService.
+// small capabilities. Taglio 2.1:
 //
 // Taglio 4.4 split: scope formally narrowed to **Pages-only con
 // selezione**. Facebook publishing is gated by the Page model — you

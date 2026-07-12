@@ -16,8 +16,6 @@ import (
 )
 
 // LinkedInOAuthService implements the LinkedIn provider. Taglio 2.1:
-// each provider only carries the methods it actually supports — no more
-// composition onto a single monolithic PlatformService.
 //
 // Capabilities exposed:
 //   - OAuthProvider (OAuth 2.0 with OpenID Connect userinfo)

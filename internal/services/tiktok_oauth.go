@@ -15,9 +15,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
-// TikTokOAuthService implements the TikTok provider. Taglio 2.1: each
-// provider only carries the methods it actually supports — no more
-// composition onto a single monolithic PlatformService.
+// TikTokOAuthService implements the TikTok provider. Taglio 2.1:
 //
 // Capabilities exposed (Taglio 4.2):
 //   - OAuthProvider (login flow)
