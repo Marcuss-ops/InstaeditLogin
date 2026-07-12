@@ -24,7 +24,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"strconv"
 	"time"
 )
@@ -95,25 +94,3 @@ func (s *WebhookSigner) Verify(secret []byte, ts int64, eventID, signatureHex st
 	return hmac.Equal(expected, got)
 }
 
-// Sanity check at package init: round-trip a known input.
-func init() {
-	// Cheap golden vector — catches a future refactor that
-	// accidentally swaps the timestamp/body concatenation order.
-	signer := NewWebhookSigner()
-	const (
-		secret  = "test-secret"
-		ts      = int64(1700000000)
-		eventID = "evt_abc123"
-		body    = `{"hello":"world"}`
-	)
-	got := signer.Sign([]byte(secret), ts, eventID, []byte(body))
-	// Documented expected: hex(HMAC-SHA256(secret, "1700000000.{\"hello\":\"world\"}")).
-	// The exact value is determined by HMAC-SHA256; a regression
-	// here means the signed-string format changed.
-	const want = "DO_NOT_RELY_ON_LITERAL_AT_INIT" // replaced in tests via golden vector
-	_ = got
-	_ = want
-	// Suppress an unused-import warning if fmt.Sprintf isn't
-	// otherwise referenced in this file.
-	_ = fmt.Sprintf
-}
