@@ -45,6 +45,7 @@ type Router struct {
 	rateLimiter      *rateLimiter // FASE 1.2: per-IP token bucket
 	authEmailSvc     AuthEmailStore
 	teamStore        TeamStore
+	billingSvc       BillingServiceAPI
 }
 
 type UserStore interface {
@@ -212,6 +213,13 @@ func WithAuthEmailService(svc AuthEmailStore) RouterOption {
 func WithTeamStore(s TeamStore) RouterOption {
 	return func(r *Router) { r.teamStore = s }
 }
+
+// WithBillingService injects the Stripe billing service for checkout,
+// customer portal, and webhook handling. When not set, /api/v1/billing/*
+// endpoints return 501 Not Implemented.
+func WithBillingService(svc BillingServiceAPI) RouterOption {
+	return func(r *Router) { r.billingSvc = svc }
+}
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -247,6 +255,11 @@ func (r *Router) Setup() http.Handler {
 	// FASE 2.3: workspace team management (when configured).
 	if r.teamStore != nil {
 		r.registerTeamRoutes()
+	}
+
+	// FASE 3.1: Stripe billing (when configured).
+	if r.billingSvc != nil {
+		r.registerBillingRoutes()
 	}
 
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login", http.HandlerFunc(r.handleLogin))

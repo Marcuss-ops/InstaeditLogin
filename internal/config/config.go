@@ -102,6 +102,12 @@ type Config struct {
 
 	// MaxUploadBytes caps the size of any single file upload.
 	MaxUploadBytes int64
+
+	// Stripe billing (optional — billing endpoints are 501 when not configured).
+	StripeSecretKey      string
+	StripeWebhookSecret  string
+	StripeSuccessURL     string
+	StripeCancelURL      string
 }
 
 // Load reads configuration from environment variables.
@@ -149,6 +155,10 @@ func Load() (*Config, error) {
 		S3SecretKey:                    getEnv("S3_SECRET_KEY", ""),
 		S3Region:                       getEnv("S3_REGION", ""),
 		MaxUploadBytes:                 getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
+		StripeSecretKey:                getEnv("STRIPE_SECRET_KEY", ""),
+		StripeWebhookSecret:            getEnv("STRIPE_WEBHOOK_SECRET", ""),
+		StripeSuccessURL:               getEnv("STRIPE_SUCCESS_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?success=1"),
+		StripeCancelURL:                getEnv("STRIPE_CANCEL_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?canceled=1"),
 	}
 
 	if err := cfg.validate(); err != nil {
