@@ -693,14 +693,54 @@ components:
         minimum: 1
 
   responses:
-    BadRequestError: { description: Malformed request. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    UnauthorizedError: { description: Missing or invalid credentials. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    ForbiddenError: { description: Resource exists but is not owned by the caller. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    NotFoundError: { description: Resource not found or not visible to the caller. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    ConflictError: { description: Idempotency-Key conflict. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    UnprocessableEntityError: { description: Semantic validation error. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    MethodNotAllowed: { description: HTTP method not allowed. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    InternalError: { description: Server-side error. content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    BadRequestError:
+      description: Malformed request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnauthorizedError:
+      description: Missing or invalid credentials.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ForbiddenError:
+      description: Resource exists but is not owned by the caller.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFoundError:
+      description: Resource not found or not visible to the caller.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ConflictError:
+      description: Idempotency-Key conflict.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnprocessableEntityError:
+      description: Semantic validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    MethodNotAllowed:
+      description: HTTP method not allowed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Server-side error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
 
   schemas:
 
