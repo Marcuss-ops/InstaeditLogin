@@ -42,6 +42,7 @@ type Router struct {
 	frontendURL      string
 	allowedOrigin    []string
 	maxUploadBytes   int64
+	rateLimiter      *rateLimiter // FASE 1.2: per-IP token bucket
 }
 
 type UserStore interface {
@@ -209,6 +210,7 @@ func NewRouter(
 		oneTimeCodes:  NewOneTimeCodeStore(60 * time.Second),
 		frontendURL:   frontendURL,
 		allowedOrigin: allowedOrigins,
+		rateLimiter:   newRateLimiter(), // FASE 1.2: per-IP token bucket
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -292,7 +294,9 @@ func (r *Router) Setup() http.Handler {
 		sr.Delete("/{id}", r.handleDeleteApiKey)
 		sr.Post("/{id}/rotate", r.handleRotateApiKey)
 	})
-	return r.corsMiddleware(r.loggingMiddleware(r.mux))
+	// FASE 1.2: rate limiter is the outermost middleware so it
+	// protects ALL routes (public + protected) from abuse.
+	return r.rateLimiter.middleware(r.corsMiddleware(r.loggingMiddleware(r.mux)))
 }
 
 // ----------------------------------------------------------------------- Handlers
