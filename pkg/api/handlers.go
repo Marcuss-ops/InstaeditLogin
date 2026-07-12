@@ -530,6 +530,20 @@ func (r *Router) Setup() http.Handler {
 	// JWT/cookie path remains available so dashboard-like flows
 	// still work in dev.
 	r.mux.Route("/api/v1/api-keys", func(sr chi.Router) {
+		// Blocco #1.3 — CSRF double-submit is enforced on EVERY
+		// unsafe method (POST/DELETE/PATCH). Mounted OUTERMOST so a
+		// missing/expired csrf_token cookie is rejected with 403
+		// before we spend cycles on auth. Bearer-authenticated
+		// callers are exempt (the middleware detects the Bearer
+		// prefix and short-circuits). The cookie-authenticated
+		// POST/DELETE here is the dashboard UI minting/rotating
+		// API keys from its own session; without CSRF those would
+		// be trivially CSRF-able from any malicious third-party
+		// page (the session cookie is HttpOnly but cross-site
+		// requests still carry it).
+		sr.Use(func(next http.Handler) http.Handler {
+			return auth.NewCSRF(r.csrfConfig(), next)
+		})
 		if r.apiKeyAuth != nil {
 			sr.Use(func(next http.Handler) http.Handler {
 				return r.apiKeyAuth.Middleware(next)
@@ -727,6 +741,18 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 		SameSite: sameSite,
 		MaxAge:   7 * 24 * 3600, // matches Manager default ttl in NewManager
 	})
+	// Blocco #1.3 — issue a fresh csrf_token cookie on every code
+	// exchange so the SPA's first post-login POST can succeed.
+	// The token is regenerated on every fresh authentication (login
+	// / refresh / exchange) so a pre-login attacker cannot guess
+	// it. Uses r.csrfConfig() (Secure=r.cookieSecure) for parity
+	// with r.protected's CSRF middleware — in tests r.cookieSecure
+	// is false, so the emitted cookie doesn't conflict with the
+	// httptest server's lack-of-HTTPS posture.
+	csrfCfg := r.csrfConfig()
+	if _, err := auth.SetCSRFToken(w, csrfCfg); err != nil {
+		slog.Error("csrf token set failed on exchange", "error", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -790,9 +816,45 @@ func (r *Router) resolveActiveWorkspace(ctx context.Context, userID int64) (int6
 // and clears all session cookies in one step. The route
 // registration in Setup() resolves to that method directly.
 
+// csrfConfig returns the CSRF config that matches the
+// session_cookie defaults: Secure=r.cookieSecure, SameSite=None
+// (required for cross-origin SPA + cross-site cookie; browsers
+// require Secure when SameSite=None), Path=/, HttpOnly=false
+// (SPA reads via document.cookie).
+//
+// Blocco #1.3 — the csrf_token cookie is set by every endpoint that
+// mints a session (handleExchangeCode, handleRegister,
+// handleLoginEmail, handleRefresh) so the SPA can immediately echo
+// it on the next unsafe request. The token is regenerated on
+// every successful login to ensure the post-login token cannot be
+// guessed by a pre-login attacker (see internal/auth/csrf.go).
+func (r *Router) csrfConfig() auth.CSRFConfig {
+	return auth.CSRFConfig{
+		Secure:   r.cookieSecure,
+		Path:     "/",
+		SameSite: http.SameSiteNoneMode,
+	}
+}
+
+// protected wraps an http.HandlerFunc with the CSRF double-submit
+// check (outermost) and the JWT/cookie auth.Middleware (inner).
+// Failure modes:
+//   - safe methods (GET/HEAD/OPTIONS) skip CSRF and reach auth.Middleware
+//     (which 401s on missing/invalid session).
+//   - Authorization Bearer-prefixed requests skip CSRF (JWT or API-key
+//     paths) and reach auth.Middleware.
+//   - cookie-authenticated unsafe requests MUST carry a csrf_token
+//     cookie equal to the X-CSRF-Token request header — otherwise 403.
+//
+// Other helpers in this file also use r.csrfConfig() to issue the
+// csrf_token cookie on login / refresh / exchange / register so the
+// SPA's first post-login POST can succeed.
 func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		r.auth.Middleware(next).ServeHTTP(w, req)
+		csrfHandler := auth.NewCSRF(r.csrfConfig(), http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			r.auth.Middleware(next).ServeHTTP(w, req)
+		}))
+		csrfHandler.ServeHTTP(w, req)
 	}
 }
 

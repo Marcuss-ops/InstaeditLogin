@@ -306,8 +306,12 @@ func (r *Router) handleResetPassword(w http.ResponseWriter, req *http.Request) {
 //  Helpers
 // -----------------------------------------------------------------------
 
-// setSessionCookie writes the HttpOnly session cookie with a 7-day MaxAge
-// matching the JWT TTL.
+// setSessionCookie writes the HttpOnly session cookie AND a fresh
+// csrf_token cookie so the SPA's first post-login POST can succeed
+// (Blocco #1.3). Both cookies share SameSite=None / Secure=true —
+// required for cross-origin SPA + cross-site cookies. The csrf_token
+// is regenerated on every successful login so a pre-login attacker
+// cannot guess the post-login token (see internal/auth/csrf.go).
 func setSessionCookie(w http.ResponseWriter, jwtToken string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.SessionCookieName,
@@ -318,4 +322,11 @@ func setSessionCookie(w http.ResponseWriter, jwtToken string) {
 		SameSite: http.SameSiteNoneMode,
 		MaxAge:   7 * 24 * 3600, // 7 days, matching JWT TTL
 	})
+	if _, err := auth.SetCSRFToken(w, auth.CSRFConfig{
+		Secure:   true,
+		Path:     "/",
+		SameSite: http.SameSiteNoneMode,
+	}); err != nil {
+		slog.Error("csrf token set failed on session cookie", "error", err)
+	}
 }

@@ -11,14 +11,22 @@
 //      NON-HttpOnly cookie `csrf_token` (readable by document.cookie).
 //   2. The SPA reads it via document.cookie and echoes it on every
 //      non-safe request (POST/PUT/DELETE/PATCH) as header X-CSRF-Token.
-//   3. This middleware rejects any non-safe request whose cookie and
-//      header do not match (or where either is missing).
+//   3. This middleware rejects any non-safe SESSION-COOKIE-BEARING
+//      request whose cookie and header do not match (or where either
+//      is missing).
 //
 // Exemptions:
 //   - Safe methods (GET, HEAD, OPTIONS) never require CSRF.
 //   - Bearer-token requests (Authorization: Bearer …) skip CSRF; they
 //     are not cookie-authenticated and the developer who minted the
 //     token is presumed to also be configuring the CORS origin.
+//   - Unauthenticated requests (NO session cookie AND no Bearer):
+//     auth.Middleware will reject them with 401. CSRF is moot when
+//     there is no session-cookie context to authenticate — enforcing
+//     CSRF here would just turn a 401 into a 403 for a request the
+//     server already refuses to process. This narrows CSRF defense
+//     precisely to the attack vector: state mutations leveraging an
+//     EXISTING session cookie (the cross-site forgery scenario).
 //   - /api/v1/auth/refresh and the OAuth callback endpoints (cookie
 //     was just set on the response that pointed the user at them;
 //     there is no pre-existing cookie-authenticated session yet).
@@ -78,6 +86,16 @@ func NewCSRF(cfg CSRFConfig, next http.Handler) http.Handler {
 		}
 		// Bearer-token callers skip CSRF.
 		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Unauthenticated callers (no SessionCookieName cookie) skip
+		// CSRF — auth.Middleware will 401 them. CSRF defense is only
+		// meaningful when a session cookie is present (the attack
+		// vector is a cross-site request that the browser attaches
+		// the victim's cookie to). Without a session cookie, there
+		// is no auth context for CSRF to protect.
+		if _, err := r.Cookie(SessionCookieName); err != nil {
 			next.ServeHTTP(w, r)
 			return
 		}

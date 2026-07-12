@@ -13,7 +13,11 @@ const testSecret = "test-jwt-secret-must-be-long-enough-for-hs256"
 
 func TestIssueAndVerify(t *testing.T) {
 	m := NewManager(testSecret, 24)
-	tok, jti, exp, err := m.Issue(42, 1)
+	// SPRINT 7.2 fix: Manager.Issue refuses to sign without a
+	// positive sessionID (post-SPRINT-2.1 contract — Verify would
+	// reject a sessionID=0 JWT). Use IssueAccess to mint a JWT
+	// carrying all three IDs.
+	tok, jti, exp, err := m.IssueAccess(42, 1, 1)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -146,7 +150,9 @@ func TestMiddleware_RejectsBogusBearer(t *testing.T) {
 
 func TestMiddleware_AllowValidToken(t *testing.T) {
 	m := NewManager(testSecret, 24)
-	tok, _, _, _ := m.Issue(99, 1)
+	// SPRINT 7.2 fix: same — IssueAccess(u, wsID, sessionID) so
+	// Manager.Verify accepts the token.
+	tok, _, _, _ := m.IssueAccess(99, 1, 1)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		uid, ok := UserIDFromContext(r.Context())
 		if !ok || uid != 99 {
