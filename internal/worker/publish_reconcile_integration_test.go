@@ -67,6 +67,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/postgres"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/runtime"
 )
 
 // rewriteTransport is a custom http.RoundTripper that rewrites the
@@ -371,20 +372,10 @@ func makeTestConfig(publishInterval, reconcileInterval int) *config.Config {
 	}
 }
 
-// readTargetStatus queries post_targets for the row's current status,
-// provider_state, and `published_at IS NOT NULL`. One round-trip per
-// call — used by both tests' polling loops below.
-func readTargetStatus(t *testing.T, db *sql.DB, targetID int64) (status string, providerState string, publishedAtSet bool) {
-	t.Helper()
-	if err := db.QueryRow(
-		`SELECT status, COALESCE(provider_state, ''), published_at IS NOT NULL
-		   FROM post_targets WHERE id = $1`,
-		targetID,
-	).Scan(&status, &providerState, &publishedAtSet); err != nil {
-		t.Fatalf("poll post_targets.status: %v", err)
-	}
-	return
-}
+// (readTargetStatus was removed in the WaitReadyMatch refactor;
+// both test polling loops now inline the QueryRow+Scan via a
+// WaitReadyMatch closure, which returns (false, err) on probe
+// error so a transient DB blip doesn't terminate the test.)
 
 // TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished is
 // the canonical happy-path integration test for the two-goroutine
@@ -430,20 +421,24 @@ func TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished(t *testing.T)
 
 	// Poll the row's status until 'published' OR the budget is
 	// exhausted. cfg.ReconcileWorkerIntervalSeconds + epsilon = the
-	// canonical Taglio 5.x wall-clock bound.
+	// canonical Taglio 5.x wall-clock bound. Uses
+	// runtime.WaitReadyMatch for the same DRY reasons as
+	// InFlightRetriesAcrossTicks (below).
 	tickInterval := time.Duration(rig.CFG.ReconcileWorkerIntervalSeconds) * time.Second
 	budget := tickInterval + 1*time.Second
-	deadline := time.Now().Add(budget)
 
 	var finalStatus, finalProviderState string
 	var finalPublishedAtSet bool
-	for time.Now().Before(deadline) {
-		finalStatus, finalProviderState, finalPublishedAtSet = readTargetStatus(t, rig.DB, rig.TargetID)
-		if finalStatus == "published" {
-			break
+	runtime.WaitReadyMatch(t, func() (bool, error) {
+		if err := rig.DB.QueryRow(
+			`SELECT status, COALESCE(provider_state, ''), published_at IS NOT NULL
+			   FROM post_targets WHERE id = $1`,
+			rig.TargetID,
+		).Scan(&finalStatus, &finalProviderState, &finalPublishedAtSet); err != nil {
+			return false, err
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
+		return finalStatus == "published", nil
+	}, budget, 100*time.Millisecond)
 
 	if finalStatus != "published" {
 		t.Errorf("post_target did not transition to 'published' within %v (last status: %q)", budget, finalStatus)
@@ -552,7 +547,6 @@ func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
 	epsilon := 2 * time.Second
 	budget := 3*tickInterval + epsilon
 	startTime := time.Now()
-	deadline := startTime.Add(budget)
 
 	// Continuous poll loop. Records:
 	//   - lastSeenAsPublishingAt: the wall-clock of the latest sample
@@ -561,26 +555,39 @@ func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
 	//     transition (or the very last poll of the loop if no
 	//     transition happened).
 	//   - transitionedToPublishedAt: set the first time the sample
-	//     shows status='published'; trigger to break the loop.
+	//     shows status='published'; the WaitReadyMatch return-on-
+	//     match terminates the loop.
 	//
-	// Labeled break (poll:) keeps the escape out of the inner switch
-	// without resorting to `goto` (idiomatic Go avoids goto).
+	// Uses runtime.WaitReadyMatch (the testutil sibling helper for
+	// poll-until-pred loops) instead of an inlined `for + break`.
+	// The helper handles deadline tracking + backoff + the per-
+	// attempt sampling; the closure handles only the protocol-level
+	// state check (status== "published"). On probe error, the
+	// closure returns (false, err) — the helper logs the error via
+	// t.Logf and keeps polling, so a transient DB blip doesn't
+	// kill the test (the previous t.Fatalf-in-readTargetStatus
+	// pattern would have).
 	var (
 		lastSeenAsPublishingAt    time.Time
 		transitionedToPublishedAt time.Time
 	)
-poll:
-	for time.Now().Before(deadline) {
-		status, _, _ := readTargetStatus(t, rig.DB, rig.TargetID)
+	runtime.WaitReadyMatch(t, func() (bool, error) {
+		var status string
+		if err := rig.DB.QueryRow(
+			`SELECT status FROM post_targets WHERE id = $1`,
+			rig.TargetID,
+		).Scan(&status); err != nil {
+			return false, err
+		}
 		switch status {
 		case "publishing":
 			lastSeenAsPublishingAt = time.Now()
 		case "published":
 			transitionedToPublishedAt = time.Now()
-			break poll
+			return true, nil
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
+		return false, nil
+	}, budget, 100*time.Millisecond)
 
 	transitionedSinceStart := transitionedToPublishedAt.Sub(startTime)
 	lastPublishingSinceStart := lastSeenAsPublishingAt.Sub(startTime)
@@ -637,7 +644,20 @@ poll:
 	}
 
 	// === Assertion 4: final row state is the canonical terminal transition ===
-	finalStatus, finalProviderState, finalPublishedAtSet := readTargetStatus(t, rig.DB, rig.TargetID)
+	// Inline the QueryRow+Scan (was readTargetStatus pre-refactor).
+	// A final-snapshot probe error IS fatal here — the budget has
+	// been spent, the test is about to assert on the row, and a
+	// broken DB connection at this point would mask the real
+	// outcome.
+	var finalStatus, finalProviderState string
+	var finalPublishedAtSet bool
+	if err := rig.DB.QueryRow(
+		`SELECT status, COALESCE(provider_state, ''), published_at IS NOT NULL
+		   FROM post_targets WHERE id = $1`,
+		rig.TargetID,
+	).Scan(&finalStatus, &finalProviderState, &finalPublishedAtSet); err != nil {
+		t.Fatalf("final post_targets.status: %v", err)
+	}
 	if finalStatus != "published" {
 		t.Errorf("final post_target.status: want \"published\", got %q", finalStatus)
 	}

@@ -152,3 +152,97 @@ func WaitReady(t testing.TB, ping func() error, deadline, backoff time.Duration)
 		time.Sleep(backoff)
 	}
 }
+
+// WaitReadyMatch polls the provided match function until it returns
+// (true, _) or the deadline elapses. Sister helper to WaitReady;
+// the success criterion is a boolean match (e.g., "is the row in
+// this status?") rather than a nil-error ping (e.g., "is the TCP
+// listener up?"). Used to absorb poll-until-pred loops like the
+// worker integration test's `for { if status == "published" { break } }`
+// shape, and gives Kafka / future engine integration tests a
+// matching tool for poll-until-state checks.
+//
+// Behaviour matrix for the (bool, err) return:
+//
+//	(true,  nil) — matched; return immediately.
+//	(true,  err) — matched with a warning; log via t.Logf, return
+//	               immediately. The match is what we care about; the
+//	               err is a soft warning (e.g., a deprecation notice
+//	               bundled with the matched state).
+//	(false, nil) — not yet; keep polling.
+//	(false, err) — probe error; log via t.Logf, keep polling.
+//	               Transient probe errors don't kill the test — only
+//	               the deadline does. This is the right semantic for
+//	               poll-until-state checks (a transient DB blip
+//	               during a Kafka admin metadata call shouldn't
+//	               terminate the integration test).
+//
+// On success: silent (matches WaitReady's no-noise policy).
+//
+// On timeout: t.Fatalf with the attempt count, the configured
+// deadline, and the last error returned by match (may be nil if
+// the match just never returned true).
+//
+// Parameters:
+//
+//   - t:        the test handle (used for t.Helper + t.Logf +
+//     t.Fatalf). Accepts testing.TB for the same testability
+//     reason as WaitReady (a fake TB can capture the Fatalf
+//     call).
+//   - match:    zero-arg function returning (matched, err) per
+//     the matrix above. The caller controls the protocol-level
+//     state check; WaitReadyMatch controls only the timing.
+//   - deadline: maximum wall-clock duration for the poll. Zero
+//     or negative → WaitReadyDefaultDeadline.
+//   - backoff:  sleep duration between polls. Zero or negative →
+//     WaitReadyDefaultBackoff.
+//
+// Distinct from WaitReady: the success criterion is a boolean
+// match rather than a nil-error ping call. Keep the two functions
+// as siblings rather than having WaitReady delegate here — the
+// Fatalf format strings are intentionally different (WaitReady
+// says "last ping error", WaitReadyMatch says "last match error"),
+// and CI-debugging scripts grep on those substrings.
+func WaitReadyMatch(t testing.TB, match func() (bool, error), deadline, backoff time.Duration) {
+	t.Helper()
+
+	if deadline <= 0 {
+		deadline = WaitReadyDefaultDeadline
+	}
+	if backoff <= 0 {
+		backoff = WaitReadyDefaultBackoff
+	}
+
+	absDeadline := time.Now().Add(deadline)
+
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		matched, err := match()
+		if matched {
+			// (true, err): matched with a soft warning. The
+			// match is what we care about — log the warning
+			// for visibility under -v, then return. Silent
+			// return would hide a class of "matched but with
+			// a deprecation notice / stale-data hint" bugs.
+			if err != nil {
+				t.Logf("WaitReadyMatch: matched with warning: %v", err)
+			}
+			return
+		}
+		lastErr = err
+
+		if time.Now().After(absDeadline) {
+			t.Fatalf("WaitReadyMatch: timeout after %d attempt(s) over %v (last match error: %v)",
+				attempt, deadline, lastErr)
+			// Defensive return: same rationale as WaitReady's
+			// defensive return — a fake testing.TB (the unit
+			// tests' fakeTB) returns normally from Fatalf, so
+			// without this return the loop would keep sleeping +
+			// retrying against a fake that never matches, hanging
+			// the test. A real *testing.T.Fatalf calls
+			// runtime.Goexit and never reaches this line.
+			return
+		}
+		time.Sleep(backoff)
+	}
+}

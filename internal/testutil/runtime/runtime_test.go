@@ -252,6 +252,222 @@ func TestWaitReady_DefaultResolution(t *testing.T) {
 	})
 }
 
+// TestWaitReadyMatch_SuccessOnFirstAttempt: a match that returns
+// (true, nil) on the first call must cause WaitReadyMatch to return
+// immediately, with exactly one match call.
+func TestWaitReadyMatch_SuccessOnFirstAttempt(t *testing.T) {
+	calls := 0
+	match := func() (bool, error) {
+		calls++
+		return true, nil
+	}
+
+	runtime.WaitReadyMatch(t, match, time.Second, 100*time.Millisecond)
+
+	if calls != 1 {
+		t.Errorf("match calls: want 1, got %d (WaitReadyMatch should return on the first match without polling)", calls)
+	}
+}
+
+// TestWaitReadyMatch_SuccessOnNthAttempt: a match that returns
+// (false, nil) K-1 times then (true, nil) on call K must cause
+// WaitReadyMatch to return after K calls, with exactly K match
+// calls. The wall-clock duration is at least (K-1) * backoff —
+// each non-matching attempt is followed by a backoff sleep, but
+// the final matching attempt has no sleep after it.
+func TestWaitReadyMatch_SuccessOnNthAttempt(t *testing.T) {
+	const matchUntil = 3
+	calls := 0
+	match := func() (bool, error) {
+		calls++
+		if calls < matchUntil {
+			return false, nil
+		}
+		return true, nil
+	}
+
+	const backoff = 50 * time.Millisecond
+	start := time.Now()
+	runtime.WaitReadyMatch(t, match, time.Second, backoff)
+	elapsed := time.Since(start)
+
+	if calls != matchUntil {
+		t.Errorf("match calls: want %d, got %d (WaitReadyMatch should retry until match)", matchUntil, calls)
+	}
+
+	// (K-1) backoff sleeps happened (after each of the K-1
+	// non-matching attempts); the final matching attempt has no
+	// sleep after it. The lower bound subtracts 50ms of slack for
+	// heavily-loaded CI runners; the upper bound adds 500ms to
+	// catch infinite-loop regressions.
+	minExpected := time.Duration(matchUntil-1)*backoff - 50*time.Millisecond
+	maxExpected := time.Duration(matchUntil-1)*backoff + 500*time.Millisecond
+	if elapsed < minExpected {
+		t.Errorf("elapsed: want >= %v (= %d backoffs - 50ms slack), got %v", minExpected, matchUntil-1, elapsed)
+	}
+	if elapsed > maxExpected {
+		t.Errorf("elapsed: want <= %v (= %d backoffs + 500ms ceiling), got %v (possible infinite loop regression)", maxExpected, matchUntil-1, elapsed)
+	}
+}
+
+// TestWaitReadyMatch_TimeoutFatalfMessageFormat: a match that
+// always returns (false, nil) must cause WaitReadyMatch to call
+// Fatalf with a message that names the attempt count, the
+// deadline, and the last match error. This locks in the CI-debug
+// artifact format so a future refactor that breaks the format
+// also breaks a test (not a CI failure whose root cause is
+// hidden by a different message).
+//
+// Distinct from WaitReady's format: WaitReadyMatch says
+// "last match error" instead of WaitReady's "last ping error".
+// The two Fatalf substrings are intentionally different so
+// CI-debugging scripts can grep them apart.
+func TestWaitReadyMatch_TimeoutFatalfMessageFormat(t *testing.T) {
+	fake := &fakeTB{T: t}
+
+	attempts := 0
+	match := func() (bool, error) {
+		attempts++
+		return false, nil
+	}
+
+	const deadline = 50 * time.Millisecond
+	const backoff = 10 * time.Millisecond
+	runtime.WaitReadyMatch(fake, match, deadline, backoff)
+
+	if !fake.failed {
+		t.Fatal("WaitReadyMatch should have called Fatalf (the deadline expired and the loop never saw a match)")
+	}
+	if fake.lastFormat == "" {
+		t.Fatal("fakeTB.Fatalf was called with an empty format string (should never happen)")
+	}
+
+	// Assert the format string contains the canonical substrings.
+	expectedFormatSubstrings := []string{
+		"WaitReadyMatch",
+		"timeout",
+		"attempt(s)",
+		"last match error",
+	}
+	for _, want := range expectedFormatSubstrings {
+		if !strings.Contains(fake.lastFormat, want) {
+			t.Errorf("Fatalf format missing %q\nfull format: %s", want, fake.lastFormat)
+		}
+	}
+
+	// Assert the args contain the expected typed values:
+	//   args[0] = attempt count (int)
+	//   args[1] = deadline (time.Duration)
+	//   args[2] = lastErr (error, may be nil if the match never errored)
+	if len(fake.lastArgs) < 3 {
+		t.Fatalf("Fatalf args: want >=3 (attempt, deadline, lastErr), got %d: %v",
+			len(fake.lastArgs), fake.lastArgs)
+	}
+	if attempt, ok := fake.lastArgs[0].(int); !ok {
+		t.Errorf("args[0]: want int (attempt count), got %T", fake.lastArgs[0])
+	} else if attempt < 1 {
+		t.Errorf("attempt count: want >=1, got %d", attempt)
+	} else if attempt != attempts {
+		// The count of attempts observed in the match closure
+		// must match the attempt number reported in the Fatalf
+		// message. A drift here would mean the loop's attempt
+		// counter is off-by-one vs. the match's actual call
+		// count.
+		t.Errorf("attempt count: want %d (observed in match), got %d (in Fatalf)",
+			attempts, attempt)
+	}
+	if d, ok := fake.lastArgs[1].(time.Duration); !ok {
+		t.Errorf("args[1]: want time.Duration (deadline), got %T", fake.lastArgs[1])
+	} else if d != deadline {
+		t.Errorf("deadline: want %v, got %v", deadline, d)
+	}
+	// args[2] (lastErr) is allowed to be nil because the match
+	// closure here returns (false, nil) — the timeout can be a
+	// clean state-mismatch rather than an underlying error. The
+	// format string prints "<nil>" in that case (Go's %v on a
+	// nil error).
+
+	// The loop should have iterated at least 2 times (50ms
+	// deadline / 10ms backoff = 5 expected iterations; allow
+	// some slack on the lower bound).
+	if attempts < 2 {
+		t.Errorf("attempts: want >=2 (50ms deadline, 10ms backoff), got %d", attempts)
+	}
+}
+
+// TestWaitReadyMatch_DefaultResolution: passing deadline=0 or
+// backoff=0 must resolve to WaitReadyDefaultDeadline /
+// WaitReadyDefaultBackoff. Mirrors TestWaitReady_DefaultResolution
+// — same structure, different helper.
+func TestWaitReadyMatch_DefaultResolution(t *testing.T) {
+	t.Run("DeadlineZero", func(t *testing.T) {
+		// Pass deadline=0 + immediate-match. WaitReadyMatch should
+		// resolve deadline=0 to WaitReadyDefaultDeadline (15s) and
+		// return after the first match. If deadline=0 were
+		// misinterpreted as "no time allowed", the very first
+		// poll's deadline check would fire and the helper would
+		// log a spurious "WaitReadyMatch: timeout after 1
+		// attempt(s) over 0s" before any actual poll.
+		calls := 0
+		runtime.WaitReadyMatch(t, func() (bool, error) {
+			calls++
+			return true, nil
+		}, 0, 10*time.Millisecond)
+		if calls != 1 {
+			t.Errorf("match calls: want 1, got %d (deadline=0 should resolve to WaitReadyDefaultDeadline, not 'no time allowed')",
+				calls)
+		}
+	})
+
+	t.Run("BackoffZero", func(t *testing.T) {
+		// Pass backoff=0 + 2-attempt-match. WaitReadyMatch should
+		// resolve backoff=0 to WaitReadyDefaultBackoff (200ms) and
+		// sleep ~200ms between the 2 attempts. If backoff=0 were
+		// misinterpreted as "no sleep", the loop would spin at
+		// 100% CPU and complete in microseconds; the wall-clock
+		// should prove the default was used.
+		calls := 0
+		start := time.Now()
+		runtime.WaitReadyMatch(t, func() (bool, error) {
+			calls++
+			if calls < 2 {
+				return false, nil
+			}
+			return true, nil
+		}, time.Second, 0)
+		elapsed := time.Since(start)
+
+		if calls != 2 {
+			t.Errorf("match calls: want 2, got %d", calls)
+		}
+		// backoff=0 should resolve to WaitReadyDefaultBackoff
+		// (200ms). One backoff sleep happened (between the 2
+		// attempts). Allow 100ms..600ms slack for CI jitter.
+		minExpected := 100 * time.Millisecond
+		maxExpected := 600 * time.Millisecond
+		if elapsed < minExpected || elapsed > maxExpected {
+			t.Errorf("elapsed: want %v..%v (backoff=0 should resolve to WaitReadyDefaultBackoff=200ms), got %v",
+				minExpected, maxExpected, elapsed)
+		}
+	})
+
+	t.Run("DefaultsAreSensible", func(t *testing.T) {
+		// Same as the WaitReady DefaultsAreSensible subtest — the
+		// constants are shared between WaitReady and
+		// WaitReadyMatch (both default to the same 15s/200ms
+		// budget). Tested once for WaitReady, tested again here
+		// for WaitReadyMatch so a future refactor that splits the
+		// constants (e.g., per-helper defaults) breaks the right
+		// test.
+		if runtime.WaitReadyDefaultDeadline != 15*time.Second {
+			t.Errorf("WaitReadyDefaultDeadline: want 15s, got %v", runtime.WaitReadyDefaultDeadline)
+		}
+		if runtime.WaitReadyDefaultBackoff != 200*time.Millisecond {
+			t.Errorf("WaitReadyDefaultBackoff: want 200ms, got %v", runtime.WaitReadyDefaultBackoff)
+		}
+	})
+}
+
 // fakeTB is a minimal testing.TB implementation that captures
 // Fatalf calls (format string + args) without actually failing
 // the parent test. Used to test WaitReady's timeout path in
