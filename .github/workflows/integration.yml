@@ -68,7 +68,7 @@ jobs:
       - name: Verify build (sanity — no integration tag)
         run: go build ./...
 
-      - name: Run database + worker integration tests (testcontainers postgres:17-alpine)
+      - name: Run integration tests (database + worker + redis smoke)
         # Delegates to the Makefile — single source of truth for the
         # test command. Edit `make test-integration`, not this step.
         run: make test-integration
