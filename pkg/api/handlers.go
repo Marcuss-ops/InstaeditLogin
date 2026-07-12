@@ -43,6 +43,7 @@ type Router struct {
 	allowedOrigin    []string
 	maxUploadBytes   int64
 	rateLimiter      *rateLimiter // FASE 1.2: per-IP token bucket
+	authEmailSvc     AuthEmailStore
 }
 
 type UserStore interface {
@@ -195,6 +196,14 @@ func WithApiKeyStore(s ApiKeyStore) RouterOption {
 func WithCredentialVault(v credentials.VaultAPI) RouterOption {
 	return func(r *Router) { r.vault = v }
 }
+
+// WithAuthEmailService injects the email/password auth service for SaaS
+// registration, login, email verification, and password reset endpoints.
+// When not set, /api/v1/auth/register, /login, /verify, /forgot-password,
+// and /reset-password return 501 Not Implemented.
+func WithAuthEmailService(svc AuthEmailStore) RouterOption {
+	return func(r *Router) { r.authEmailSvc = svc }
+}
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -221,6 +230,12 @@ func NewRouter(
 func (r *Router) Setup() http.Handler {
 	r.mux = chi.NewRouter()
 	r.mux.Method(http.MethodGet, "/api/v1/health", http.HandlerFunc(r.handleHealth))
+
+	// FASE 2.2: email/password auth routes (when configured).
+	if r.authEmailSvc != nil {
+		r.registerAuthEmailRoutes()
+	}
+
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login", http.HandlerFunc(r.handleLogin))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(r.handleCallback))
 	r.mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(r.handleExchangeCode))

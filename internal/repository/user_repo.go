@@ -23,9 +23,11 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
 	user := &models.User{}
 	err := r.db.QueryRow(
-		`SELECT id, email, name, created_at, updated_at FROM users WHERE email = $1`,
+		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
+		       created_at, updated_at FROM users WHERE email = $1`,
 		email,
-	).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.Email, &user.Name, &user.PasswordHash, &user.EmailVerified,
+		&user.CreatedAt, &user.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -40,9 +42,11 @@ func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
 func (r *UserRepository) FindByID(id int64) (*models.User, error) {
 	user := &models.User{}
 	err := r.db.QueryRow(
-		`SELECT id, email, name, created_at, updated_at FROM users WHERE id = $1`,
+		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
+		       created_at, updated_at FROM users WHERE id = $1`,
 		id,
-	).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.Email, &user.Name, &user.PasswordHash, &user.EmailVerified,
+		&user.CreatedAt, &user.UpdatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -329,6 +333,57 @@ func (r *UserRepository) UpdatePlatformAccount(account *models.PlatformAccount) 
 	}
 	if n == 0 {
 		return fmt.Errorf("%w: id=%d", ErrUserNotFound, account.ID)
+	}
+	return nil
+}
+
+// CreateSaaSUser inserts a new user with an email, name, and bcrypt password hash.
+// Used for email/password registration; OAuth users continue to use Create().
+func (r *UserRepository) CreateSaaSUser(email, name string, passwordHash []byte) (*models.User, error) {
+	user := &models.User{
+		Email:        email,
+		Name:         name,
+		PasswordHash: passwordHash,
+	}
+	err := r.db.QueryRow(
+		`INSERT INTO users (email, name, password_hash)
+		 VALUES ($1, $2, $3) RETURNING id, created_at, updated_at`,
+		email, name, passwordHash,
+	).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SaaS user: %w", err)
+	}
+	return user, nil
+}
+
+// SetEmailVerified marks a user's email as verified.
+func (r *UserRepository) SetEmailVerified(userID int64) error {
+	result, err := r.db.Exec(
+		`UPDATE users SET email_verified = TRUE, updated_at = $1 WHERE id = $2`,
+		time.Now(), userID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to verify email: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrUserNotFound, userID)
+	}
+	return nil
+}
+
+// UpdatePassword sets a new bcrypt password hash for a user.
+func (r *UserRepository) UpdatePassword(userID int64, passwordHash []byte) error {
+	result, err := r.db.Exec(
+		`UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3`,
+		passwordHash, time.Now(), userID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update password: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrUserNotFound, userID)
 	}
 	return nil
 }
