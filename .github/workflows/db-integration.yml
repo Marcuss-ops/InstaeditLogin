@@ -1,0 +1,64 @@
+name: db-integration
+
+# Runs the migration integration tests against a real ephemeral
+# Postgres via testcontainers-go. Triggered on every push to main
+# and on PRs touching the migrations, the model, or the test file.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'internal/database/migrations/**'
+      - 'internal/database/*.go'
+      - 'internal/database/migrations_integration_test.go'
+      - 'internal/models/post.go'
+      - '.github/workflows/db-integration.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/database/migrations/**'
+      - 'internal/database/*.go'
+      - 'internal/database/migrations_integration_test.go'
+      - 'internal/models/post.go'
+      - '.github/workflows/db-integration.yml'
+  workflow_dispatch:
+
+# GitHub-hosted ubuntu runners ship with Docker pre-installed —
+# testcontainers just works without setup-docker.
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Verify build (sanity — no integration tag)
+        run: go build ./...
+
+      - name: Run migration integration tests (testcontainers postgres 16-alpine)
+        run: |
+          go test \
+            -tags=integration \
+            -v \
+            -timeout 10m \
+            ./internal/database/...
+
+      - name: Dump test summary on failure
+        if: failure()
+        run: |
+          echo "=== Likely causes ==="
+          echo "  - Docker not available on runner (impossible on ubuntu-latest)"
+          echo "  - Migration name typo / file missing"
+          echo "  - Migration added a new post_status enum value (must add to expectedPostStatusActive)"
+          echo "  - Migration added a column Go model expects (must add to requiredColumns)"
+          echo "  - Migration lost idempotency (a non-IF NOT EXISTS ALTER)"
+          echo
+          echo "Run locally:"
+          echo "  go test -tags=integration -v ./internal/database/..."
