@@ -15,7 +15,7 @@
  *     then hard-navigates to /login.
  */
 
-import { API_BASE_URL } from "./supabase";
+import { API_BASE_URL } from "./api";
 
 export type Session = {
   userId: number;

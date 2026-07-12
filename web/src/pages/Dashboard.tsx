@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AlertTriangle, Calendar, ChevronRight, LogOut, RefreshCw, Sparkles } from "lucide-react";
-import { API_BASE_URL } from "../lib/supabase";
+import { API_BASE_URL } from "../lib/api";
 import { PROVIDERS, getProvider, type ProviderId } from "../lib/providers";
 import {
   ApiError,

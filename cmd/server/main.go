@@ -28,6 +28,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Taglio 3.1: S3 storage is mandatory. The config validation
+	// already rejects a missing S3_ENDPOINT/S3_BUCKET/S3_ACCESS_KEY/
+	// S3_SECRET_KEY with a descriptive error, but we panic here too as
+	// belt-and-suspenders: if a future refactor relaxes the validation
+	// (or someone calls NewCredentialVault before config.validate
+	// runs), the server must still refuse to start.
+	if cfg.S3Endpoint == "" || cfg.S3Bucket == "" || cfg.S3AccessKey == "" || cfg.S3SecretKey == "" {
+		panic("S3 storage is required: set S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY")
+	}
+
 	logLevel := slog.LevelInfo
 	if cfg.LogLevel == "debug" {
 		logLevel = slog.LevelDebug
@@ -160,28 +170,21 @@ func main() {
 		corsOrigins = []string{cfg.FrontendURL}
 	}
 
-	// Build the optional router options for storage. The provider is
-	// selected at startup via env vars: Supabase (URL+KEY+BUCKET) OR
-	// AWS S3 (REGION+KEY_ID+SECRET+BUCKET). When neither is fully set
-	// the storage handlers return 501 Not Implemented so the rest of
-	// the server still boots.
+	// Taglio 3.1: S3 storage is the ONLY storage backend. The
+	// config validation + startup panic above guarantee all four env
+	// vars are set; we can build the provider unconditionally. There
+	// is no "no storage + 501" mode — /api/v1/storage/upload-url is
+	// always available.
+	storageProvider := services.NewS3Provider(
+		cfg.S3Endpoint, cfg.S3Bucket, cfg.S3Region,
+		cfg.S3AccessKey, cfg.S3SecretKey, slog.Default())
+	slog.Info("storage provider: S3-compatible configured",
+		"endpoint", cfg.S3Endpoint, "bucket", cfg.S3Bucket, "region", cfg.S3Region)
+
 	opts := []api.RouterOption{
 		api.WithCredentialVault(vault),
-	}
-	if cfg.SupabaseURL != "" && cfg.SupabaseServiceKey != "" && cfg.SupabaseBucket != "" {
-		opts = append(opts,
-			api.WithStorageProvider(services.NewSupabaseProvider(
-				cfg.SupabaseURL, cfg.SupabaseServiceKey, cfg.SupabaseBucket, slog.Default())),
-			api.WithMaxUploadBytes(cfg.MaxUploadBytes))
-		slog.Info("storage provider: Supabase configured", "bucket", cfg.SupabaseBucket)
-	} else if cfg.AWSRegion != "" && cfg.AWSAccessKeyID != "" && cfg.AWSSecretAccessKey != "" && cfg.AWSBucket != "" {
-		opts = append(opts,
-			api.WithStorageProvider(services.NewS3Provider(
-				cfg.AWSRegion, cfg.AWSBucket, cfg.AWSAccessKeyID, cfg.AWSSecretAccessKey, slog.Default())),
-			api.WithMaxUploadBytes(cfg.MaxUploadBytes))
-		slog.Info("storage provider: AWS S3 configured", "bucket", cfg.AWSBucket, "region", cfg.AWSRegion)
-	} else {
-		slog.Warn("storage provider: none configured (set SUPABASE_URL+SUPABASE_SERVICE_KEY+SUPABASE_BUCKET OR AWS_REGION+AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY+AWS_S3_BUCKET for /api/v1/storage/upload-url)")
+		api.WithStorageProvider(storageProvider),
+		api.WithMaxUploadBytes(cfg.MaxUploadBytes),
 	}
 	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)

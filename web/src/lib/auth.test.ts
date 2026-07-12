@@ -6,7 +6,7 @@
  *     positive matches, negative matches, look-alike domains, port/path
  *     independence, and invalid-URL safety.
  *  2. `probeBackend`  — integration via mocked fetch + mocked
- *     `../supabase`. The mock forces API_BASE_URL to a `*.vercel.app`
+ *     `../api`. The mock forces API_BASE_URL to a `*.vercel.app`
  *     host so the new `vercel_stale_deploy` branch is reachable from a
  *     test. The non-vercel paths are not retested here because they go
  *     through the existing implicit coverage (default API_BASE_URL is
@@ -28,14 +28,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // race during hoisted evaluation; the value matches MOCK_VERCEL_URL
 // declared right after.
 //
-// IMPORTANT: the mock path is "./supabase" (NOT "../supabase") because
+// IMPORTANT: the mock path is "./api" (NOT "../api") because
 // auth.test.ts lives next to auth.ts in /web/src/lib/, so its relative
-// `./supabase` resolves to the SAME module that auth.ts imports via
-// `./supabase`. Using `../supabase` would resolve to /web/src/supabase
+// `./api` resolves to the SAME module that auth.ts imports via
+// `./api`. Using `../api` would resolve to /web/src/api
 // (or fall through to an unrelated module), leaving the real
 // API_BASE_URL untouched and silently making the test exercise the
 // generic not_found branch instead of the vercel branch under test.
-vi.mock("./supabase", () => ({
+//
+// Taglio 3.1: this used to mock "./api" (api.ts (formerly supabase.ts — renamed in Taglio 3.1)
+// file). The Supabase client was removed; api.ts now exports only
+// API_BASE_URL.
+vi.mock("./api", () => ({
   API_BASE_URL: "https://instaedit-login-abc123.vercel.app",
 }));
 

@@ -1,26 +1,28 @@
 // Package services implements the StorageProvider abstraction used by
-// /api/v1/storage/upload-url. Two providers are wired at startup based on
-// environment variables (see cmd/server/main.go and internal/config):
+// /api/v1/storage/upload-url. A single S3-compatible provider is wired
+// at startup based on environment variables (see cmd/server/main.go
+// and internal/config):
 //
-//	Supabase Storage — requires SUPABASE_URL + SUPABASE_SERVICE_KEY + SUPABASE_BUCKET.
-//	                  Uses the REST endpoint POST /storage/v1/object/upload/sign/{b}/{k}
-//	                  with the service-role JWT; bucket must be PUBLIC so media_url
-//	                  derived from the public URL is reachable by social platforms.
-//
-//	AWS S3           — requires AWS_REGION + AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
-//	                  + AWS_S3_BUCKET. Generates an AWS SigV4 presigned PUT URL with
-//	                  the canonical-request test vectors documented in signS3V4URL().
+//	S3-compatible — requires S3_ENDPOINT + S3_BUCKET + S3_ACCESS_KEY +
+//	                S3_SECRET_KEY. Optional S3_REGION (default "us-east-1").
+//	                Uses the standard AWS SigV4 presigned-URL algorithm
+//	                (signS3V4URL). Works with AWS S3, MinIO, Cloudflare R2,
+//	                Backblaze B2, Wasabi, and any other S3-compatible store.
 //
 // The chosen implementation returns a StorageProvider bound to a single
-// bucket/account. The handler calls SignUpload to mint an UploadGrant
-// containing both the time-limited upload URL and the bucket's public
-// media URL the client stores as Post.MediaURL after the PUT succeeds.
+// bucket. The handler calls SignUpload to mint an UploadGrant containing
+// both the time-limited upload URL and the bucket's public media URL
+// the client stores as Post.MediaURL after the PUT succeeds.
 //
 // Path keying convention: uploads/{user_id}/{uuid4}_{sanitized_name}.
 // The user_id prefix is required for tenant isolation under shared-bucket
-// ACLs (Supabase row-level security or S3 bucket policy). The UUID4
-// component (crypto/rand, RFC 4122 v4) makes keys unguessable so the same
-// filename from the same user never collides across uploads.
+// ACLs. The UUID4 component (crypto/rand, RFC 4122 v4) makes keys
+// unguessable so the same filename from the same user never collides
+// across uploads.
+//
+// Taglio 3.1: SupabaseProvider was removed. Storage is now exclusively
+// S3-compatible; main.go panics at startup if any of the four required
+// env vars is missing.
 package services
 
 import (
@@ -29,11 +31,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -49,12 +50,12 @@ type UploadGrant struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// StorageProvider generates UploadGrants for client uploads. Both Supabase
-// and S3 providers implement this — the handler stays provider-agnostic.
+// StorageProvider generates UploadGrants for client uploads. The
+// handler stays provider-agnostic — it only knows the interface.
 type StorageProvider interface {
-	// Provider returns the implementation tag ("supabase" or "s3"). Useful
-	// for logging + the /health endpoint so operators can see which backend
-	// is wired without tailing env vars.
+	// Provider returns the implementation tag ("s3"). Useful for logging
+	// + the /health endpoint so operators can see which backend is
+	// wired without tailing env vars.
 	Provider() string
 	// SignUpload mints a TTL-bound upload URL for key scoped under
 	// user_id plus the corresponding public media_url. content_type and
@@ -63,90 +64,18 @@ type StorageProvider interface {
 	SignUpload(ctx context.Context, userID int64, key, contentType string, sizeBytes int64, ttl time.Duration) (*UploadGrant, error)
 }
 
-// SupabaseProvider uses the Supabase Storage REST API to mint a signed
-// upload URL. The returned URL embeds a short-lived token in the query
-// string so the client can PUT directly without an Authorization header.
-//
-// Requires a "public" or "public-read" bucket (or RLS-by-user) so that
-// media_url (constructed as /storage/v1/object/public/{bucket}/{key}) is
-// reachable by the social platforms' servers downloading the asset
-// during publish.
-type SupabaseProvider struct {
-	baseURL string // e.g. https://abcdefgh.supabase.co  (no trailing slash)
-	bucket  string
-	apiKey  string // service-role JWT
-	http    *http.Client
-	logger  *slog.Logger
-}
-
-// NewSupabaseProvider is a thin constructor; trims trailing slashes from
-// baseURL to avoid double-slash in constructed URLs.
-func NewSupabaseProvider(baseURL, apiKey, bucket string, logger *slog.Logger) *SupabaseProvider {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	return &SupabaseProvider{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		bucket:  bucket,
-		apiKey:  apiKey,
-		http:    &http.Client{Timeout: 15 * time.Second},
-		logger:  logger,
-	}
-}
-
-// Provider implements StorageProvider.
-func (p *SupabaseProvider) Provider() string { return "supabase" }
-
-// SignUpload calls Supabase's POST /storage/v1/object/upload/sign/{bucket}/{key}
-// and constructs media_url as /storage/v1/object/public/{bucket}/{key}.
-// The Supabase API: https://supabase.com/docs/reference/javascript/storage-from-createsigneduploadurl
-func (p *SupabaseProvider) SignUpload(ctx context.Context, userID int64, key, contentType string, sizeBytes int64, ttl time.Duration) (*UploadGrant, error) {
-	signPath := fmt.Sprintf("%s/storage/v1/object/upload/sign/%s/%s",
-		p.baseURL, p.bucket, key)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, signPath, strings.NewReader(""))
-	if err != nil {
-		return nil, fmt.Errorf("failed to build supabase sign request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", p.apiKey)
-
-	resp, err := p.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("supabase sign request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("supabase sign request returned %d: %s",
-			resp.StatusCode, truncate(string(body), 256))
-	}
-
-	var result struct {
-		URL string `json:"url"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("failed to decode supabase response: %w", err)
-	}
-	if result.URL == "" {
-		return nil, fmt.Errorf("supabase returned empty url in response")
-	}
-
-	mediaURL := fmt.Sprintf("%s/storage/v1/object/public/%s/%s",
-		p.baseURL, p.bucket, key)
-	return &UploadGrant{
-		UploadURL: result.URL,
-		MediaURL:  mediaURL,
-		ExpiresAt: time.Now().Add(ttl),
-	}, nil
-}
-
-// S3Provider generates an AWS SigV4-signed PUT URL against a bucket using
-// virtual-hosted-style addressing: {bucket}.s3.{region}.amazonaws.com.
+// S3Provider generates an AWS SigV4-signed PUT URL against an arbitrary
+// S3-compatible endpoint. The address style is virtual-hosted
+// (https://{bucket}.{endpoint-host}/{key}), which works for AWS S3 and
+// most S3-compatible stores (MinIO, R2, B2, Wasabi). For stores that
+// only support path-style (e.g. older MinIO without DNS), the
+// S3_ENDPOINT should be set to the bucket subdomain directly
+// (e.g. "https://mybucket.minio.example.com") — the signer still works.
 //
 // Signing is hand-rolled to avoid pulling in aws-sdk-go-v2 (~50 MB of
-// transitively downloaded modules). The implementation follows AWS's
-// reference SigV4 spec:
+// transitively downloaded modules). The implementation follows the
+// AWS SigV4 reference spec and is identical for every S3-compatible
+// backend (only the endpoint host + region change):
 //
 //	https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
 //	https://docs.aws.amazon.com/general/latest/gr/sigv4-create-string-to-sign.html
@@ -156,29 +85,48 @@ func (p *SupabaseProvider) SignUpload(ctx context.Context, userID int64, key, co
 // UNSIGNED-PAYLOAD so the client doesn't need to hash the entire file
 // upfront. This is the canonical approach for client-side uploads.
 type S3Provider struct {
-	region      string
-	bucket      string
-	accessKeyID string
-	secretKey   string
-	baseHost    string // {bucket}.s3.{region}.amazonaws.com (virtual-hosted)
-	http        *http.Client
-	logger      *slog.Logger
+	endpoint  string // e.g. "https://s3.us-east-1.amazonaws.com" (no trailing slash, no bucket)
+	bucket    string
+	region    string // SigV4 credential-scope component; default "us-east-1"
+	accessKey string
+	secretKey string
+	baseHost  string // "{bucket}.{endpoint-host}" — pre-computed for SignUpload
+	mediaBase string // "{endpoint}/{bucket}" — pre-computed for MediaURL
+	http      *http.Client
+	logger    *slog.Logger
 }
 
-// NewS3Provider builds the provider and pre-computes baseHost so SignUpload
-// doesn't repeat the template on every call.
-func NewS3Provider(region, bucket, accessKeyID, secretKey string, logger *slog.Logger) *S3Provider {
+// NewS3Provider builds the provider. endpoint MUST be the bare host URL
+// (no bucket, no trailing slash, no path) — e.g.
+// "https://s3.us-east-1.amazonaws.com" or "https://minio.example.com".
+// region is the SigV4 credential-scope component; pass "" to default
+// to "us-east-1" (acceptable for AWS S3, MinIO, R2, B2, Wasabi).
+func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, logger *slog.Logger) *S3Provider {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if region == "" {
+		region = "us-east-1"
+	}
+	// Strip a trailing slash so constructed URLs never have "//" between
+	// the host and the path. Strip any path component — the signer uses
+	// only the host header.
+	host := strings.TrimRight(endpoint, "/")
+	if u, err := url.Parse(host); err == nil {
+		host = u.Scheme + "://" + u.Host
+	}
+	hostOnly := strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
+	baseHost := bucket + "." + hostOnly
 	return &S3Provider{
-		region:      region,
-		bucket:      bucket,
-		accessKeyID: accessKeyID,
-		secretKey:   secretKey,
-		baseHost:    fmt.Sprintf("%s.s3.%s.amazonaws.com", bucket, region),
-		http:        &http.Client{Timeout: 15 * time.Second},
-		logger:      logger,
+		endpoint:  host,
+		bucket:    bucket,
+		region:    region,
+		accessKey: accessKey,
+		secretKey: secretKey,
+		baseHost:  baseHost,
+		mediaBase: host + "/" + bucket,
+		http:      &http.Client{Timeout: 15 * time.Second},
+		logger:    logger,
 	}
 }
 
@@ -188,7 +136,8 @@ func (p *S3Provider) Provider() string { return "s3" }
 // SignUpload generates a SigV4 PUT URL. For presigned PUTs, the canonical
 // request signs only `host` — content-type and content-length headers
 // are forwarded by the client but do not participate in the signature
-// (S3 accepts the upload as long as X-Amz-Signature validates).
+// (S3-compatible stores accept the upload as long as X-Amz-Signature
+// validates).
 func (p *S3Provider) SignUpload(ctx context.Context, userID int64, key, contentType string, sizeBytes int64, ttl time.Duration) (*UploadGrant, error) {
 	_ = ctx
 	_ = userID
@@ -197,7 +146,7 @@ func (p *S3Provider) SignUpload(ctx context.Context, userID int64, key, contentT
 	uploadURL, err := signS3V4URL(
 		p.baseHost, p.region, "s3",
 		key, ttl, http.MethodPut,
-		p.accessKeyID, p.secretKey,
+		p.accessKey, p.secretKey,
 		time.Now(),
 	)
 	if err != nil {
@@ -219,8 +168,9 @@ func (p *S3Provider) SignUpload(ctx context.Context, userID int64, key, contentT
 // Ref: https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
 //
 // Parameters:
-//   - host:     bucket virtual host (e.g. "mybucket.s3.us-east-1.amazonaws.com")
-//   - region:   AWS region of the bucket
+//   - host:     bucket virtual host (e.g. "mybucket.s3.us-east-1.amazonaws.com"
+//     or "mybucket.minio.example.com" for S3-compatible stores)
+//   - region:   SigV4 credential-scope component
 //   - service:  "s3"
 //   - key:      object key (already URL-safe per BuildUploadKey)
 //   - ttl:      X-Amz-Expires value in seconds
@@ -418,17 +368,16 @@ func newUUID4() string {
 // BuildUploadKey assembles the storage key for a user upload.
 // Pattern: uploads/{user_id}/{uuid4}_{sanitized-filename}.
 //
-// The user_id prefix provides tenant isolation (Supabase row-level
-// security OR S3 bucket policy can later enforce access). The UUID4
-// component makes the key unguessable so the same filename from the
-// same user never collides across uploads.
+// The user_id prefix provides tenant isolation. The UUID4 component
+// makes the key unguessable so the same filename from the same user
+// never collides across uploads.
 func BuildUploadKey(userID int64, filename string) string {
 	return fmt.Sprintf("uploads/%d/%s_%s",
 		userID, newUUID4(), sanitizeFilename(filename))
 }
 
 // sanitizeFilename reduces a client-provided filename to a safe token
-// suitable for an S3/Supabase object key. Steps:
+// suitable for an S3 object key. Steps:
 //  1. Strip any path components (path.Base) so ".." never escapes.
 //  2. Replace unsafe chars (anything outside [A-Za-z0-9-_.]) with '_'.
 //  3. Trim to 200 chars to keep the final key compact.

@@ -108,21 +108,19 @@ type Config struct {
 	// Background worker tuning.
 	PublishWorkerIntervalSeconds int
 
-	// Supabase Storage (alternative to AWS S3). When SUPABASE_URL +
-	// SUPABASE_SERVICE_KEY + SUPABASE_BUCKET are all set, presigned upload
-	// URLs use the Supabase Storage REST API. Otherwise the endpoint
-	// /api/v1/storage/upload-url returns 501 in production.
-	SupabaseURL        string
-	SupabaseServiceKey string
-	SupabaseBucket     string
-
-	// AWS S3 (alternative to Supabase Storage). When AWS_REGION +
-	// AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY + AWS_S3_BUCKET are all
-	// set, presigned upload URLs use AWS SigV4-signed PUT URLs.
-	AWSRegion          string
-	AWSAccessKeyID     string
-	AWSSecretAccessKey string
-	AWSBucket          string
+	// S3-compatible storage (mandatory). Taglio 3.1: Supabase was removed;
+	// the only storage backend is S3-compatible (works with AWS S3,
+	// MinIO, Cloudflare R2, Backblaze B2, Wasabi, etc.). All four env
+	// vars must be set or the server refuses to start.
+	S3Endpoint  string // e.g. "https://s3.us-east-1.amazonaws.com" or "https://minio.example.com" (no trailing slash, no bucket)
+	S3Bucket    string
+	S3AccessKey string
+	S3SecretKey string
+	// S3Region is the SigV4 credential-scope component. Optional; defaults
+	// to "us-east-1" (acceptable for AWS S3, MinIO, R2, B2, Wasabi). Set
+	// explicitly if your S3-compatible store rejects arbitrary region
+	// strings in the credential scope.
+	S3Region string
 
 	// MaxUploadBytes caps the size of any single file the client may
 	// upload. Default 200 MiB (200*1024*1024). Configurable so a deploy
@@ -173,14 +171,11 @@ func Load() (*Config, error) {
 		AppEnv:                       getEnv("APP_ENV", "dev"),
 		PublishWorkerIntervalSeconds: getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
 
-		SupabaseURL:        getEnv("SUPABASE_URL", ""),
-		SupabaseServiceKey: getEnv("SUPABASE_SERVICE_KEY", ""),
-		SupabaseBucket:     getEnv("SUPABASE_BUCKET", ""),
-
-		AWSRegion:          getEnv("AWS_REGION", ""),
-		AWSAccessKeyID:     getEnv("AWS_ACCESS_KEY_ID", ""),
-		AWSSecretAccessKey: getEnv("AWS_SECRET_ACCESS_KEY", ""),
-		AWSBucket:          getEnv("AWS_S3_BUCKET", ""),
+		S3Endpoint:  getEnv("S3_ENDPOINT", ""),
+		S3Bucket:    getEnv("S3_BUCKET", ""),
+		S3AccessKey: getEnv("S3_ACCESS_KEY", ""),
+		S3SecretKey: getEnv("S3_SECRET_KEY", ""),
+		S3Region:    getEnv("S3_REGION", ""),
 
 		MaxUploadBytes: getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
 	}
@@ -220,6 +215,24 @@ func (c *Config) validate() error {
 		if c.DBPassword == "" {
 			return fmt.Errorf("DB_PASSWORD is required (or set DATABASE_URL)")
 		}
+	}
+
+	// S3-compatible storage is mandatory (Taglio 3.1). All four env vars
+	// must be set or the server refuses to start. Supabase was removed
+	// entirely; there is no "no storage + 501" fallback. The explicit panic
+	// in main.go is belt-and-suspenders against a future refactor that
+	// relaxes this validation.
+	if c.S3Endpoint == "" {
+		return fmt.Errorf("S3_ENDPOINT is required (e.g. https://s3.us-east-1.amazonaws.com or https://minio.example.com)")
+	}
+	if c.S3Bucket == "" {
+		return fmt.Errorf("S3_BUCKET is required")
+	}
+	if c.S3AccessKey == "" {
+		return fmt.Errorf("S3_ACCESS_KEY is required")
+	}
+	if c.S3SecretKey == "" {
+		return fmt.Errorf("S3_SECRET_KEY is required")
 	}
 
 	// Meta OAuth: App ID and Secret are shared across Instagram / Facebook /

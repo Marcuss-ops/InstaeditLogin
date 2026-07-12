@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, Shield, Sparkles } from "lucide-react";
 import { Nav } from "../components/Nav";
-import { API_BASE_URL } from "../lib/supabase";
+import { API_BASE_URL } from "../lib/api";
 import { PROVIDERS } from "../lib/providers";
 import { probeBackend, subscribeToVisibility, type ProbeResult } from "../lib/auth";
 import { clearProbeCache, readProbeCache, writeProbeCache } from "../lib/probe-cache";
