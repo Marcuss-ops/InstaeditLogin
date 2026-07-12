@@ -52,13 +52,7 @@ SQL
 
 `DATABASE_URL` risultante: `postgresql://instaedit:instaedit_dev_pwd@localhost:5432/instaedit_login?sslmode=disable`
 
-### Opzione B — Supabase free tier (zero-config, 500MB gratis)
-
-1. https://supabase.com → Sign up → New project
-2. Settings → Database → Connection string → **URI** mode
-3. Copia la URL — è già in formato `postgresql://postgres:[PASSWORD]@aws-0-eu-west-1.pooler.supabase.com:6543/postgres`
-
-### Opzione C — Neon free tier (serverless, scale-to-zero)
+### Opzione B — Neon free tier (serverless, scale-to-zero)
 
 1. https://neon.tech → Sign up → Create project
 2. Copia la connection string: `postgresql://username:password@ep-xxx.region.aws.neon.tech/neondb?sslmode=require`
@@ -212,17 +206,17 @@ Dopo che il flow locale funziona, per andare in produzione:
 
 | Risorsa | DEV (`APP_ENV=dev`) | PROD (`APP_ENV=production`) |
 |---------|---------------------|----------------------------|
-| Supabase project | `instaedit-dev` (free tier) | `instaedit-prod` (paid plan) |
-| `DATABASE_URL` | `postgresql://postgres:[DEV-PW]@aws-0-eu-west-1.pooler.supabase.com:6543/postgres` | `postgresql://postgres:[PROD-PW]@aws-1-us-east-1.pooler.supabase.com:6543/postgres` |
-| `SUPABASE_BUCKET` | `instaedit-dev-uploads` | `instaedit-prod-uploads` |
+| Database | `instaedit-dev` | `instaedit-prod` |
+| `DATABASE_URL` | `postgresql://user:[DEV-PW]@dev-host:5432/instaedit` | `postgresql://user:[PROD-PW]@prod-host:5432/instaedit` |
+| `S3_BUCKET` | `instaedit-dev-uploads` | `instaedit-prod-uploads` |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:4173` (no pubblici!) | `https://app.example.com,https://www.app.example.com` (no localhost!) |
 | `JWT_SECRET` | un valore generato localmente | un valore separato, generato sul server di deploy |
 | `ENCRYPTION_KEY` | un valore generato localmente | un valore separato (i token persistiti sono criptati con questa chiave!) |
 | Meta OAuth app | una app Meta separata in Development mode | una app Meta separata in Live mode |
 
-### Perché tre Supabase project e non uno con due branch?
+### Perché due database separati e non uno con due branch?
 
-Supabase **non supporta database branching** come Neon (richiede restauro da backup). Un dev che lancia `TRUNCATE posts CASCADE` su un db condiviso cancella anche i post di produzione. Due Supabase project separati sono l'unica opzione che protegge da questo.
+Un dev che lancia `TRUNCATE posts CASCADE` su un db condiviso cancella anche i post di produzione. Due database separati sono la protezione minima.
 
 ### Come passare da dev a prod
 
@@ -250,20 +244,20 @@ Il servizio di deploy carica il gruppo giusto in base al branch che promuovi (ma
 
 ### Naming convention per i secret store (`_DEV_KEY` / `_PROD_KEY`)
 
-Quando hai un secret che varia per environment (in particolare le chiavi service-role Supabase, le chiavi AWS, le chiavi di cifra), usa SEMPRE un suffisso nel nome del secret:
+Per ogni secret che varia per environment (chiavi S3, chiavi di cifra), usa SEMPRE un suffisso nel nome del secret:
 
 | Tipo | Secret ID nel manager | Valore |
 |------|----------------------|--------|
 | DB password | `instaedit-login/db-password/dev` | `[DEV-PASSWORD]` |
 | DB password | `instaedit-login/db-password/prod` | `[PROD-PASSWORD]` |
-| Supabase service-role key | `instaedit-login/supabase-service-key/dev` | `eyJ...DEV` |
-| Supabase service-role key | `instaedit-login/supabase-service-key/prod` | `eyJ...PROD` |
+| S3 access key | `instaedit-login/s3-access-key/dev` | `AKIA...DEV` |
+| S3 access key | `instaedit-login/s3-access-key/prod` | `AKIA...PROD` |
 | JWT secret | `instaedit-login/jwt-secret/dev` | `[32-byte dev]` |
 | JWT secret | `instaedit-login/jwt-secret/prod` | `[32-byte prod, ≥64 byte]` |
 | Encryption key | `instaedit-login/encryption-key/dev` | `[32-byte base64 dev]` |
 | Encryption key | `instaedit-login/encryption-key/prod` | `[32-byte base64 prod]` |
 
-Il suffisso `_DEV_KEY` / `_PROD_KEY` nel prompt dell'utente si riferisce a questa convenzione di naming (separare le due chiavi Supabase Service Key con un suffisso). Nel `.env` vero e proprio il backend legge un unico `SUPABASE_SERVICE_KEY`; il suffisso vive solo nel tuo secret store.
+Il suffisso `_DEV_KEY` / `_PROD_KEY` vive solo nel secret store, non nel `.env`.
 
 ### Cosa succede se mischi gli ambienti
 
@@ -303,7 +297,7 @@ APP_ENV=production DATABASE_URL=... JWT_SECRET=$(openssl rand -hex 32) go run cm
 
 ### `.env.example` aggiornato
 
-La sezione "APP_ENV", "Supabase Storage", e "CORS origins" del file `.env.example` in questo repo è stata aggiornata con esempi dev/prod side-by-side per supportare questa sezione. Leggi i commenti del file prima di copiare in `.env`.
+La sezione "APP_ENV", "S3 Storage", e "CORS origins" del file `.env.example` è stata aggiornata con esempi dev/prod. Leggi i commenti del file prima di copiare in `.env`.
 
 ---
 

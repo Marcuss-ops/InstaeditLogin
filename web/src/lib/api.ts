@@ -20,9 +20,7 @@
  *   Settings → Environment Variables → add VITE_API_BASE_URL
  *     pointing at the deployed Go API host.
  *
- * Taglio 3.1: this file replaces web/src/lib/supabase.ts. The Supabase
- * client and the dual-storage selection logic were removed; storage is
- * now exclusively S3-compatible and wired server-side.
+ * Taglio 3.1: storage is exclusively S3-compatible and wired server-side.
  */
 export const API_BASE_URL: string =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";

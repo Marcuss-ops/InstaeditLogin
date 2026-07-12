@@ -50,7 +50,7 @@ type Config struct {
 	AllowedCORSOrigins []string
 
 	// Database (PostgreSQL)
-	// Use DATABASE_URL for full connection string (e.g. Supabase), OR individual fields below.
+	// Use DATABASE_URL for full connection string, OR individual fields below.
 	// DATABASE_URL takes precedence.
 	DatabaseURL string
 	DBHost      string
@@ -220,7 +220,7 @@ func (c *Config) validate() error {
 
 	// S3-compatible storage is mandatory (Taglio 3.1). All four env vars
 	// must be set or the server refuses to start. Supabase was removed
-	// entirely; there is no "no storage + 501" fallback. The explicit panic
+	// entirely. The explicit panic
 	// in main.go is belt-and-suspenders against a future refactor that
 	// relaxes this validation.
 	if c.S3Endpoint == "" {
@@ -335,7 +335,7 @@ func (c *Config) validateOptionalPlatform(name, id, secret string) error {
 }
 
 // DSN returns the PostgreSQL connection string.
-// If DATABASE_URL is set (e.g. from Supabase), it is returned directly.
+// If DATABASE_URL is set, it is returned directly.
 func (c *Config) DSN() string {
 	if c.DatabaseURL != "" {
 		return c.DatabaseURL

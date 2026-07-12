@@ -45,7 +45,7 @@ const defaultMaxUploadBytes int64 = 200 * 1024 * 1024 // 200 MiB
 
 // handleCreateUploadURL (POST /api/v1/storage/upload-url, protected)
 // generates a presigned upload URL. Validation:
-//   - storage configured    → 501 otherwise
+//   - storage always configured (mandatory since Taglio 3.1)
 //   - JWT user identity     → 401 if missing (via requireUserID)
 //   - filename non-empty    → 422
 //   - content_type in allowlist (image/jpeg, image/png, image/webp,
@@ -58,10 +58,6 @@ const defaultMaxUploadBytes int64 = 200 * 1024 * 1024 // 200 MiB
 // expires_at) so the client can PUT the file then reference media_url
 // as Post.MediaURL when calling POST /api/v1/posts.
 func (r *Router) handleCreateUploadURL(w http.ResponseWriter, req *http.Request) {
-	if r.storageProvider == nil {
-		writeError(w, http.StatusNotImplemented, "storage not configured on this server")
-		return
-	}
 	userID, ok := requireUserID(w, req, r)
 	if !ok {
 		return

@@ -127,8 +127,7 @@ func main() {
 	// Taglio 3.1: S3 storage is the ONLY storage backend. The
 	// config validation + startup panic above guarantee all four env
 	// vars are set; we can build the provider unconditionally. There
-	// is no "no storage + 501" mode — /api/v1/storage/upload-url is
-	// always available.
+	// is always available.
 	storageProvider, err := services.NewS3Provider(
 		cfg.S3Endpoint, cfg.S3Bucket, cfg.S3Region,
 		cfg.S3AccessKey, cfg.S3SecretKey, slog.Default())

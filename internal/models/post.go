@@ -202,15 +202,32 @@ type PostMediaAsset struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// IdempotencyRecord stores the fingerprint of an idempotent POST request.
-// original_post_id is NULL at insert time and set after the post is created.
+// IdempotencyRecord stores the fingerprint of an idempotent POST request
+// (level 1 of the two-level idempotency design — migration
+// 021_idempotency_records.sql). Backed by the api_keys-style lookup
+// pattern of "same key + same hash → return original; same key +
+// different hash → 409".
+//
+// WorkspaceID + IdempotencyKey together form the lookup key (UNIQUE
+// composite on the SQL table). ResourceType + ResourceID let the
+// handler re-fetch the resource on replay — we deliberately do NOT
+// cache the response body, instead relying on a re-render from
+// resource_id. That's simpler (no body buffer in middleware) and
+// keeps the cached payload tiny.
+//
+// RequestHash is []byte (raw 32 bytes of SHA-256 output), not a hex
+// string — JSON serialisation will base64-encode it automatically.
+// Storing as the raw bytes halves the storage cost vs hex and the
+// lookup comparison uses bytes.Equal which is constant-time.
 type IdempotencyRecord struct {
 	ID             int64     `json:"id"`
-	IdempotencyKey string    `json:"idempotency_key"`
 	WorkspaceID    int64     `json:"workspace_id"`
-	RequestHash    string    `json:"request_hash"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	ResourceType   string    `json:"resource_type"`
+	ResourceID     int64     `json:"resource_id"`
+	RequestHash    []byte    `json:"request_hash"`
 	ResponseStatus int       `json:"response_status"`
-	OriginalPostID *int64    `json:"original_post_id,omitempty"`
+	ExpiresAt      time.Time `json:"expires_at"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 

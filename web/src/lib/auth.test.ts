@@ -36,9 +36,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // API_BASE_URL untouched and silently making the test exercise the
 // generic not_found branch instead of the vercel branch under test.
 //
-// Taglio 3.1: this used to mock "./api" (api.ts (formerly supabase.ts — renamed in Taglio 3.1)
-// file). The Supabase client was removed; api.ts now exports only
-// API_BASE_URL.
+// Taglio 3.1: api.ts exports only API_BASE_URL.
 vi.mock("./api", () => ({
   API_BASE_URL: "https://instaedit-login-abc123.vercel.app",
 }));

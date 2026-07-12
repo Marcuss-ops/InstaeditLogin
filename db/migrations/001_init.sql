@@ -2,7 +2,6 @@
 --
 -- Il sorgente autoritativo è in internal/database/migrations/001_init.sql
 -- (embeddato nel binario Go e applicato automaticamente da db.Migrate).
--- Questo file è tenuto come riferimento per migration manuali su Supabase.
 
 -- Core users table (platform-agnostic)
 CREATE TABLE IF NOT EXISTS users (
