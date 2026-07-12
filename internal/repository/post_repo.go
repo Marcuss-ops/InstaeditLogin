@@ -248,7 +248,7 @@ func (r *PostRepository) ListScheduled(before time.Time) ([]models.Post, error) 
 	rows, err := r.db.Query(
 		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
 		 FROM posts
-		 WHERE status = 'scheduled' AND scheduled_at <= $1
+		 WHERE status = 'queued' AND scheduled_at <= $1
 		 ORDER BY scheduled_at ASC`,
 		before,
 	)
@@ -403,7 +403,7 @@ func (r *PostRepository) ClaimQueuedTarget(id int64) (bool, error) {
 	result, err := r.db.Exec(
 		`UPDATE post_targets
 		 SET status = 'publishing'
-		 WHERE id = $1 AND status = 'scheduled'`,
+		 WHERE id = $1 AND status = 'queued'`,
 		id,
 	)
 	if err != nil {

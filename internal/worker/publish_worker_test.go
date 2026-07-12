@@ -434,7 +434,7 @@ func TestPublishTarget_HappyPath_ClaimThenPublishToPublished(t *testing.T) {
 
 	// All four steps fired exactly once.
 	if posts.claimCalls != 1 {
-		t.Errorf("ClaimScheduledTarget calls: want 1, got %d", posts.claimCalls)
+		t.Errorf("ClaimQueuedTarget calls: want 1, got %d", posts.claimCalls)
 	}
 	if posts.findByIDCalls != 1 {
 		t.Errorf("FindByID calls: want 1, got %d", posts.findByIDCalls)
@@ -775,7 +775,7 @@ func TestPublishTarget_ClaimLoss_SkipsWithoutPublish(t *testing.T) {
 
 	// Hard call counts: claim fires once, NOTHING ELSE does.
 	if posts.claimCalls != 1 {
-		t.Errorf("ClaimScheduledTarget calls: want 1, got %d", posts.claimCalls)
+		t.Errorf("ClaimQueuedTarget calls: want 1, got %d", posts.claimCalls)
 	}
 	if posts.findByIDCalls != 0 {
 		t.Errorf("FindByID calls: want 0, got %d (claim-loss must short-circuit)", posts.findByIDCalls)

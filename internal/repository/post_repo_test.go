@@ -561,7 +561,7 @@ func TestPostListScheduled_BeforeTimeFilterApplied(t *testing.T) {
 	mock.ExpectQuery(
 		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
 		 FROM posts
-		 WHERE status = 'scheduled' AND scheduled_at <= $1
+		 WHERE status = 'queued' AND scheduled_at <= $1
 		 ORDER BY scheduled_at ASC`,
 	).WithArgs(cutoff).
 		WillReturnRows(sqlmock.NewRows(
@@ -713,7 +713,7 @@ func TestPostClaimQueuedTarget_Success(t *testing.T) {
 	mock.ExpectExec(
 		`UPDATE post_targets
 		 SET status = 'publishing'
-		 WHERE id = $1 AND status = 'scheduled'`,
+		 WHERE id = $1 AND status = 'queued'`,
 	).WithArgs(int64(200)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -741,7 +741,7 @@ func TestPostClaimQueuedTarget_AlreadyClaimed(t *testing.T) {
 	mock.ExpectExec(
 		`UPDATE post_targets
 		 SET status = 'publishing'
-		 WHERE id = $1 AND status = 'scheduled'`,
+		 WHERE id = $1 AND status = 'queued'`,
 	).WithArgs(int64(200)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
@@ -769,7 +769,7 @@ func TestPostClaimQueuedTarget_DBError(t *testing.T) {
 	mock.ExpectExec(
 		`UPDATE post_targets
 		 SET status = 'publishing'
-		 WHERE id = $1 AND status = 'scheduled'`,
+		 WHERE id = $1 AND status = 'queued'`,
 	).WithArgs(int64(200)).
 		WillReturnError(errors.New("connection lost"))
 
@@ -798,7 +798,7 @@ func TestPostClaimQueuedTarget_RowsAffectedReadError(t *testing.T) {
 	mock.ExpectExec(
 		`UPDATE post_targets
 		 SET status = 'publishing'
-		 WHERE id = $1 AND status = 'scheduled'`,
+		 WHERE id = $1 AND status = 'queued'`,
 	).WithArgs(int64(200)).
 		WillReturnResult(sqlmock.NewErrorResult(errors.New("rows affected read failed")))
 
