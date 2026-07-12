@@ -2,69 +2,46 @@ package models
 
 import (
 	"fmt"
-	"strings"
 	"unicode/utf8"
 )
 
-// ValidatePayload runs the GENERIC cross-platform checks a CapabilitySet
-// can express:
+// ValidatePayload is the matrix-level rule check, called by every
+// per-platform ContentValidator BEFORE the platform-specific guard.
 //
-//   - text-only vs media URLs (text_only flag rejects any media)
-//   - media-URL/bool flags (supports_images/supports_video vs payload)
-//   - max caption rune count (text length detects the platform's published
-//     hard cap; trim spaces first so an all-space caption doesn't pass
-//     a 1-rune minimum)
-//   - privacy level allowlist (PrivacyLevels nil/absent means "no opt"
+// Provider-specific mandatory-content rules (Twitter requires text,
+// Instagram requires media, etc.) live in the per-provider guard and
+// run AFTER this helper. This helper only knows the matrix shape:
+// caption rune cap, media-kind legality, media-count cap.
 //
-// Platform-specific extras (TikTok's 4000-rune title cap, YouTube's
-// VALID_PRIVACY enum, LinkedIn's PUBLIC/CONNECTIONS visibility, etc.)
-// stay in each provider's ValidateContent as a SECOND tier — they encode
-// platform contracts that are NOT cleanly expressible as a CapabilitySet
-// bit field.
-//
-// nil-Receiver safe: passing a nil *CapabilitySet returns nil (the
-// validator was called on the zero set; treat as "no rule set, accept
-// everything"). The router always passes a populated CapabilitySet so
-// the nil path is only relevant for tests / defensive callers.
+// Numeric caps use 0=no-limit. Bool supports_* gate media kinds.
+// MaxMediaCount counts ImageURL + VideoURL as discrete items today.
 func (c *CapabilitySet) ValidatePayload(payload PublishPayload) error {
-	if c == nil {
-		return nil
-	}
-	// Text-only platforms (Twitter classic via a future flag; not active
-	// in any current platform's matrix) reject any media URL.
-	if c.TextOnly {
-		if payload.ImageURL != "" || payload.VideoURL != "" {
-			return fmt.Errorf("text-only platform forbids media URLs (image_url=%q video_url=%q)",
-				payload.ImageURL, payload.VideoURL)
+	// 1. Caption rune cap (0=no cap).
+	if c.MaxCaptionRunes > 0 {
+		runes := utf8.RuneCountInString(payload.Text)
+		if runes > c.MaxCaptionRunes {
+			return fmt.Errorf("payload caption is %d runes, exceeds matrix cap %d", runes, c.MaxCaptionRunes)
 		}
 	}
+	// 2. Media-kind legality.
 	if payload.ImageURL != "" && !c.SupportsImages {
-		return fmt.Errorf("platform does not support images (image_url=%q)", payload.ImageURL)
+		return fmt.Errorf("payload carries an image but platform does not support images")
 	}
 	if payload.VideoURL != "" && !c.SupportsVideo {
-		return fmt.Errorf("platform does not support video (video_url=%q)", payload.VideoURL)
+		return fmt.Errorf("payload carries a video but platform does not support videos")
 	}
-	trimmed := strings.TrimSpace(payload.Text)
-	if c.MaxCaptionRunes > 0 && utf8.RuneCountInString(trimmed) > c.MaxCaptionRunes {
-		return fmt.Errorf("caption exceeds %d-rune limit (got %d runes)",
-			c.MaxCaptionRunes, utf8.RuneCountInString(trimmed))
-	}
-	if len(c.PrivacyLevels) > 0 && payload.PrivacyLevel != "" {
-		if !containsString(c.PrivacyLevels, payload.PrivacyLevel) {
-			return fmt.Errorf("privacy_level %q not in allowed set %v", payload.PrivacyLevel, c.PrivacyLevels)
+	// 3. Media-count cap.
+	if c.MaxMediaCount > 0 {
+		count := 0
+		if payload.ImageURL != "" {
+			count++
+		}
+		if payload.VideoURL != "" {
+			count++
+		}
+		if count > c.MaxMediaCount {
+			return fmt.Errorf("payload has %d media items, exceeds matrix cap %d", count, c.MaxMediaCount)
 		}
 	}
 	return nil
-}
-
-// containsString returns true if s is an exact match for any element of
-// arr. Used by ValidatePayload to enforce the privacy-level allowlist
-// without map allocations (the slice is at most a handful of strings).
-func containsString(arr []string, s string) bool {
-	for _, v := range arr {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

@@ -417,6 +417,7 @@ func (s *InstagramOAuthService) publishMediaContainer(ctx context.Context, acces
 //   - ResourceDiscoverer (IG Business Accounts linked to Pages)
 //   - ContentValidator (media-only — rejects text-only)
 //   - Publisher (sync container_create + media_publish)
+//
 // NOT AsyncPublisher — Instagram's publish returns the final media_id
 // synchronously via /media_publish, so no AsyncPublisher state machine
 // is required.

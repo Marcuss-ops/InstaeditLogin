@@ -233,7 +233,7 @@ func TestMedia_Complete_Happy_TransitionsToReady(t *testing.T) {
 	store.assets["abc"] = &models.MediaAsset{
 		ID: "abc", UserID: 1, UploadKey: "uploads/1/x.jpg",
 		ContentType: "image/jpeg", SizeBytes: 1024,
-		Status: models.MediaAssetStatusPending,
+		Status:    models.MediaAssetStatusPending,
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 	storage := newMockStorageProvider()
@@ -269,7 +269,7 @@ func TestMedia_Complete_CrossOwner_404(t *testing.T) {
 	store.assets["abc"] = &models.MediaAsset{
 		ID: "abc", UserID: 999, UploadKey: "uploads/999/x.jpg",
 		ContentType: "image/jpeg", SizeBytes: 1024,
-		Status: models.MediaAssetStatusPending,
+		Status:    models.MediaAssetStatusPending,
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 	r := newMediaTestRouter(store, newMockStorageProvider())
@@ -287,7 +287,7 @@ func TestMedia_Complete_SizeMismatch_422_AndFailed(t *testing.T) {
 	store.assets["abc"] = &models.MediaAsset{
 		ID: "abc", UserID: 1, UploadKey: "uploads/1/x.jpg",
 		ContentType: "image/jpeg", SizeBytes: 1024,
-		Status: models.MediaAssetStatusPending,
+		Status:    models.MediaAssetStatusPending,
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 	storage := newMockStorageProvider()
@@ -312,7 +312,7 @@ func TestMedia_Complete_ContentTypeMismatch_422(t *testing.T) {
 	store.assets["abc"] = &models.MediaAsset{
 		ID: "abc", UserID: 1, UploadKey: "uploads/1/x.jpg",
 		ContentType: "image/jpeg", SizeBytes: 1024,
-		Status: models.MediaAssetStatusPending,
+		Status:    models.MediaAssetStatusPending,
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 	storage := newMockStorageProvider()
@@ -334,7 +334,7 @@ func TestMedia_Complete_Expired_410(t *testing.T) {
 	store.assets["abc"] = &models.MediaAsset{
 		ID: "abc", UserID: 1, UploadKey: "uploads/1/x.jpg",
 		ContentType: "image/jpeg", SizeBytes: 1024,
-		Status: models.MediaAssetStatusPending,
+		Status:    models.MediaAssetStatusPending,
 		ExpiresAt: time.Now().Add(-1 * time.Hour), // already expired
 	}
 	r := newMediaTestRouter(store, newMockStorageProvider())
@@ -352,7 +352,7 @@ func TestMedia_Complete_IdempotentIfAlreadyReady_200(t *testing.T) {
 	store.assets["abc"] = &models.MediaAsset{
 		ID: "abc", UserID: 1, UploadKey: "uploads/1/x.jpg",
 		ContentType: "image/jpeg", SizeBytes: 1024,
-		Status: models.MediaAssetStatusReady,
+		Status:    models.MediaAssetStatusReady,
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 	r := newMediaTestRouter(store, newMockStorageProvider())

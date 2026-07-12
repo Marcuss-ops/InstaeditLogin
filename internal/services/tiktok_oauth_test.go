@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/capabilities"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -17,7 +16,7 @@ import (
 // tiktokTestCfg returns a minimal config for TikTok OAuth tests.
 func tiktokTestCfg() *config.Config {
 	return &config.Config{
-		TikTokClientKey:    "test-tiktok-client-key",
+		TikTokClientID:     "test-tiktok-client-key",
 		TikTokClientSecret: "test-tiktok-client-secret-32chars",
 		TikTokRedirectURI:  "http://localhost:8080/tiktok/callback",
 	}
@@ -668,39 +667,27 @@ func TestTikTok_Publish_ValidationError_SkipsPlatform(t *testing.T) {
 // TestTikTok_ValidateContent: exercises the dedicated validation
 // helper. This is the test that the other Publish / StartPublish
 // tests rely on — kept here as an explicit, granular check.
-// TestTikTok_ValidateContent: Taglio 5e — ValidateContent now takes
-// (ctx, payload, caps). The TikTok service derives caps internally
-// from its constructor-injected Matrix; we test against both nil
-// (built-in defaults) and explicit-caps construction paths.
 func TestTikTok_ValidateContent(t *testing.T) {
-	ctx := context.Background()
-	caps := capabilities.WithDefaults().For(models.PlatformTikTok)
+	svc := &TikTokOAuthService{cfg: tiktokTestCfg()}
 
-	// Built-in defaults path (nil Matrix ⇒ WithDefaults().For(Platform)).
-	svcDefaults := &TikTokOAuthService{cfg: tiktokTestCfg()}
-	if err := svcDefaults.ValidateContent(ctx, models.PublishPayload{Text: "x"}, svcDefaults.validateContentCaps()); err == nil {
-		t.Error("defaults: expected error for empty video_url, got nil")
+	// Empty VideoURL → error.
+	if err := svc.ValidateContent(models.PublishPayload{Text: "x"}); err == nil {
+		t.Error("expected error for empty video_url, got nil")
 	}
-	if err := svcDefaults.ValidateContent(ctx, models.PublishPayload{Text: "hello", VideoURL: "https://x/v.mp4"}, svcDefaults.validateContentCaps()); err == nil {
-		t.Error("defaults: expected error for missing privacy_level, got nil")
+	// Missing privacy_level → error (Taglio 4b).
+	if err := svc.ValidateContent(models.PublishPayload{Text: "hello", VideoURL: "https://x/v.mp4"}); err == nil {
+		t.Error("expected error for missing privacy_level (Taglio 4b), got nil")
 	}
-	if err := svcDefaults.ValidateContent(ctx,
-		models.PublishPayload{Text: "hello", VideoURL: "https://x/v.mp4", PrivacyLevel: "PUBLIC_TO_EVERYONE"},
-		svcDefaults.validateContentCaps()); err != nil {
-		t.Errorf("defaults: unexpected error for valid payload: %v", err)
+	// Full valid payload → no error.
+	if err := svc.ValidateContent(models.PublishPayload{Text: "hello", VideoURL: "https://x/v.mp4", PrivacyLevel: "PUBLIC_TO_EVERYONE"}); err != nil {
+		t.Errorf("unexpected error for valid payload: %v", err)
 	}
-	if err := svcDefaults.ValidateContent(ctx,
-		models.PublishPayload{
-			Text:         strings.Repeat("a", 4001),
-			VideoURL:     "https://x/v.mp4",
-			PrivacyLevel: "MUTUAL_FOLLOW_FRIENDS",
-		},
-		svcDefaults.validateContentCaps()); err == nil {
-		t.Error("defaults: expected error for caption > 4000 runes, got nil")
-	}
-
-	// Explicit-caps path: pass the same CapabilitySet directly.
-	if err := svcDefaults.ValidateContent(ctx, models.PublishPayload{Text: "x"}, caps); err == nil {
-		t.Error("explicit: expected error for empty video_url, got nil")
+	// Caption over limit → error.
+	if err := svc.ValidateContent(models.PublishPayload{
+		Text:         strings.Repeat("a", 4001),
+		VideoURL:     "https://x/v.mp4",
+		PrivacyLevel: "MUTUAL_FOLLOW_FRIENDS",
+	}); err == nil {
+		t.Error("expected error for caption > 4000 runes, got nil")
 	}
 }

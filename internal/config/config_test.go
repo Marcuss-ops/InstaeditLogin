@@ -188,13 +188,13 @@ func TestValidate_EncryptionKeyLength(t *testing.T) {
 			name:       "16-byte key fails with both got and expected",
 			key:        base64.StdEncoding.EncodeToString(make([]byte, 16)),
 			wantErr:    true,
-			errSubstrs: []string{"got 16", "expected 32"},
+			errSubstrs: []string{"got 16", "exactly 32"},
 		},
 		{
 			name:       "64-byte key fails (wrong size for AES-256)",
 			key:        base64.StdEncoding.EncodeToString(make([]byte, 64)),
 			wantErr:    true,
-			errSubstrs: []string{"got 64", "expected 32"},
+			errSubstrs: []string{"got 64", "exactly 32"},
 		},
 		{
 			name:    "exactly 32-byte key passes",
@@ -250,9 +250,9 @@ func TestValidate_OptionalPlatforms(t *testing.T) {
 		{"tiktok valid pair passes", "TIKTOK", "tiktok-key", validMetaSecret32, false, ""},
 		// Twitter
 		{"twitter both empty OK (platform disabled)", "TWITTER", "", "", false, ""},
-		{"twitter id without secret fails (secret required)", "TWITTER", "twitter-id", "", true, "TWITTER_CLIENT_SECRET is required"},
-		{"twitter 31-char secret fails length", "TWITTER", "twitter-id", strings.Repeat("a", 31), true, "at least 32 characters"},
-		{"twitter valid pair passes", "TWITTER", "twitter-id", validMetaSecret32, false, ""},
+		{"twitter id without secret fails (secret required)", "X", "x-id", "", true, "X_CLIENT_SECRET is required"},
+		{"twitter 31-char secret fails length", "X", "x-id", strings.Repeat("a", 31), true, "at least 32 characters"},
+		{"twitter valid pair passes", "X", "x-id", validMetaSecret32, false, ""},
 		// YouTube
 		{"youtube both empty OK (platform disabled)", "YOUTUBE", "", "", false, ""},
 		{"youtube id without secret fails (secret required)", "YOUTUBE", "youtube-id", "", true, "YOUTUBE_CLIENT_SECRET is required"},
@@ -269,11 +269,11 @@ func TestValidate_OptionalPlatforms(t *testing.T) {
 			// readable when the wiring is explicit near the assertion.
 			switch tc.platform {
 			case "TIKTOK":
-				cfg.TikTokClientKey = tc.id
+				cfg.TikTokClientID = tc.id
 				cfg.TikTokClientSecret = tc.secret
-			case "TWITTER":
-				cfg.TwitterClientID = tc.id
-				cfg.TwitterClientSecret = tc.secret
+			case "X":
+				cfg.XClientID = tc.id
+				cfg.XClientSecret = tc.secret
 			case "YOUTUBE":
 				cfg.YouTubeClientID = tc.id
 				cfg.YouTubeClientSecret = tc.secret
@@ -393,7 +393,7 @@ func TestLoad_ConfigValidationErrors(t *testing.T) {
 
 	t.Run("tiktok key without secret fails", func(t *testing.T) {
 		baseEnv()
-		t.Setenv("TIKTOK_CLIENT_KEY", "tiktok-key")
+		t.Setenv("TIKTOK_CLIENT_ID", "tiktok-key")
 		t.Setenv("TIKTOK_CLIENT_SECRET", "")
 		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TIKTOK_CLIENT_SECRET is required") {
 			t.Fatalf("Load() with TikTok key but no secret should fail; got %v", err)
@@ -402,7 +402,7 @@ func TestLoad_ConfigValidationErrors(t *testing.T) {
 
 	t.Run("short tiktok secret fails with length-error", func(t *testing.T) {
 		baseEnv()
-		t.Setenv("TIKTOK_CLIENT_KEY", "tiktok-key")
+		t.Setenv("TIKTOK_CLIENT_ID", "tiktok-key")
 		t.Setenv("TIKTOK_CLIENT_SECRET", strings.Repeat("a", 31))
 		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "at least 32 characters") {
 			t.Fatalf("Load() with too-short TikTok secret should fail; got %v", err)

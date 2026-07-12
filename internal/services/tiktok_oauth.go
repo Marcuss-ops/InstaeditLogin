@@ -35,7 +35,7 @@ type TikTokOAuthService struct {
 
 // NewTikTokOAuthService creates a new TikTokOAuthService.
 func NewTikTokOAuthService(cfg *config.Config) (*TikTokOAuthService, error) {
-	if cfg.TikTokClientKey == "" {
+	if cfg.TikTokClientID == "" {
 		return nil, nil // provider disabled
 	}
 	return &TikTokOAuthService{
@@ -79,7 +79,7 @@ func truncateForLog(s string, maxLen int) string {
 
 func (s *TikTokOAuthService) GetLoginURL(state string) string {
 	params := url.Values{}
-	params.Set("client_key", s.cfg.TikTokClientKey)
+	params.Set("client_key", s.cfg.TikTokClientID)
 	params.Set("redirect_uri", s.cfg.TikTokRedirectURI)
 	params.Set("state", state)
 	params.Set("scope", "user.info.basic,video.publish")
@@ -88,7 +88,7 @@ func (s *TikTokOAuthService) GetLoginURL(state string) string {
 	loginURL := "https://www.tiktok.com/v2/auth/authorize/?" + params.Encode()
 	slog.Info("TikTok: built login URL",
 		"redirect_uri", s.cfg.TikTokRedirectURI,
-		"client_key_prefix", maskClientKey(s.cfg.TikTokClientKey),
+		"client_key_prefix", maskClientKey(s.cfg.TikTokClientID),
 		"scope", params.Get("scope"))
 	return loginURL
 }
@@ -173,7 +173,7 @@ func (s *TikTokOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken
 	}
 	slog.Info("TikTok: refreshing access token")
 	body := url.Values{}
-	body.Set("client_key", s.cfg.TikTokClientKey)
+	body.Set("client_key", s.cfg.TikTokClientID)
 	body.Set("client_secret", s.cfg.TikTokClientSecret)
 	body.Set("refresh_token", refreshToken)
 	body.Set("grant_type", "refresh_token")
@@ -354,9 +354,9 @@ func (s *TikTokOAuthService) ContinuePublish(ctx context.Context, accessToken, p
 // Reconcile (Taglio 4.2) is the terminal-state detector the reconciler
 // goroutine calls. It combines CheckPublishStatus with transition logic:
 //
-//   PUBLISH_COMPLETE → returns *PublishResult (success, terminal)
-//   FAILED          → returns error (terminal)
-//   in-flight       → returns (nil, nil) — caller should retry next tick
+//	PUBLISH_COMPLETE → returns *PublishResult (success, terminal)
+//	FAILED          → returns error (terminal)
+//	in-flight       → returns (nil, nil) — caller should retry next tick
 //
 // The reconciler in the worker uses this contract: nil result + nil err
 // means "leave the target alone, check again next tick". A non-nil result
@@ -453,7 +453,7 @@ func modeIsDisabled(mode string) bool {
 
 func (s *TikTokOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*tiktokTokenResponse, error) {
 	body := url.Values{}
-	body.Set("client_key", s.cfg.TikTokClientKey)
+	body.Set("client_key", s.cfg.TikTokClientID)
 	body.Set("client_secret", s.cfg.TikTokClientSecret)
 	body.Set("code", code)
 	body.Set("grant_type", "authorization_code")
@@ -477,7 +477,7 @@ func (s *TikTokOAuthService) exchangeCodeForToken(ctx context.Context, code stri
 		slog.Error("TikTok: token exchange failed",
 			"status", resp.StatusCode,
 			"response", truncateForLog(string(respBody), 200),
-			"client_key_prefix", maskClientKey(s.cfg.TikTokClientKey),
+			"client_key_prefix", maskClientKey(s.cfg.TikTokClientID),
 			"redirect_uri", s.cfg.TikTokRedirectURI)
 		return nil, fmt.Errorf("token exchange failed (status %d): %s", resp.StatusCode, string(respBody))
 	}

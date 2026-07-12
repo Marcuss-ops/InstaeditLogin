@@ -170,13 +170,12 @@ func main() {
 		"api_keys_enabled", apiKeyRepo != nil)
 	handler := router.Setup()
 
-	// Vercel injects PORT; fall back to config or 8080
-	addr := ":8080"
-	if p := os.Getenv("PORT"); p != "" {
-		addr = ":" + p
-	} else if cfg.ServerPort != "" {
-		addr = cfg.ServerHost + ":" + cfg.ServerPort
+	// Listen on PORT (Vercel / Railway / Render standard). Fallback to :8080.
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
+	addr := ":" + port
 
 	srv := &http.Server{
 		Addr:         addr,

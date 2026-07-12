@@ -218,11 +218,11 @@ func (s *ThreadsOAuthService) ContinuePublish(ctx context.Context, accessToken, 
 // Reconcile closes the AsyncPublisher loop: it queries the container status
 // and applies the transition decided in provider_state.
 //
-//   IN_PROGRESS → (nil, nil)  caller retries on next tick
-//   FINISHED    → publish the container via /threads_publish and return *PublishResult
-//                  with the real media ID (captured from publishContainer)
-//   ERROR       → error (terminal — worker transitions target.status='failed')
-//   EXPIRED     → error (terminal)
+//	IN_PROGRESS → (nil, nil)  caller retries on next tick
+//	FINISHED    → publish the container via /threads_publish and return *PublishResult
+//	               with the real media ID (captured from publishContainer)
+//	ERROR       → error (terminal — worker transitions target.status='failed')
+//	EXPIRED     → error (terminal)
 //
 // Taglio 4.2 / Zernio 2.1: without Reconcile, ThreadsOAuthService does not
 // satisfy the AsyncPublisher interface and the registry will register it

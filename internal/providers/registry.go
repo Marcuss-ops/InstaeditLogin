@@ -135,7 +135,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		}
 	}
 
-	if cfg.TikTokClientKey != "" {
+	if cfg.TikTokClientID != "" {
 		tik, err := services.NewTikTokOAuthService(cfg)
 		if err != nil {
 			b.logger.Warn("Skipped TikTok provider (constructor failed)", "error", err)
@@ -144,7 +144,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		}
 	}
 
-	if cfg.TwitterClientID != "" {
+	if cfg.XClientID != "" {
 		tw, err := services.NewTwitterOAuthService(cfg)
 		if err != nil {
 			b.logger.Warn("Skipped Twitter/X provider (constructor failed)", "error", err)

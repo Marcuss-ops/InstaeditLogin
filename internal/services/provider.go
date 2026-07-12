@@ -99,15 +99,15 @@ type Publisher interface {
 //
 // The flow is:
 //
-//	1. StartPublish       — initiate the publish, return publish_id, return immediately.
-//	2. CheckPublishStatus — single status query, no polling. Returns the platform's
-//	                        current state string (PROCESSING_UPLOAD / PENDING_PUBLISH /
-//	                        IN_REVIEW / PUBLISH_COMPLETE / FAILED).
-//	3. ContinuePublish    — for PULL_FROM_FILE chunked upload, no-op for PULL_FROM_URL.
-//	4. Reconcile          — combines CheckPublishStatus + transition decision:
-//	                          PUBLISH_COMPLETE → success result
-//	                          FAILED          → error
-//	                          in-flight       → (nil, nil) — try again next tick
+//  1. StartPublish       — initiate the publish, return publish_id, return immediately.
+//  2. CheckPublishStatus — single status query, no polling. Returns the platform's
+//     current state string (PROCESSING_UPLOAD / PENDING_PUBLISH /
+//     IN_REVIEW / PUBLISH_COMPLETE / FAILED).
+//  3. ContinuePublish    — for PULL_FROM_FILE chunked upload, no-op for PULL_FROM_URL.
+//  4. Reconcile          — combines CheckPublishStatus + transition decision:
+//     PUBLISH_COMPLETE → success result
+//     FAILED          → error
+//     in-flight       → (nil, nil) — try again next tick
 //
 // Taglio 4.2: replaces the old synchronous polling loop inside the worker's
 // tick with a separate reconciler goroutine. Publish() returns immediately

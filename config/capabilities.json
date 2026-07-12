@@ -1,83 +1,50 @@
 {
   "_defaults": {
-    "text_only": false,
-    "supports_images": false,
-    "supports_video": false,
-    "supports_carousel": false,
-    "supports_stories": false,
-    "max_media_count": 0,
-    "max_caption_runes": 5000,
-    "max_video_seconds": 0,
-    "privacy_levels": []
+    "max_caption_runes": 4000
   },
   "twitter": {
-    "text_only": false,
+    "text_only": true,
     "supports_images": true,
     "supports_video": true,
-    "supports_carousel": false,
-    "supports_stories": false,
-    "max_media_count": 4,
     "max_caption_runes": 280,
-    "privacy_levels": []
+    "max_media_count": 4
   },
   "instagram": {
-    "text_only": false,
     "supports_images": true,
     "supports_video": true,
     "supports_carousel": true,
-    "supports_stories": false,
+    "supports_stories": true,
     "max_media_count": 10,
-    "max_caption_runes": 2200,
-    "privacy_levels": []
+    "max_caption_runes": 2200
   },
-  "facebook": {
-    "text_only": false,
-    "supports_images": true,
+  "youtube": {
     "supports_video": true,
-    "supports_carousel": false,
-    "supports_stories": false,
-    "max_media_count": 1,
-    "max_caption_runes": 63206,
-    "privacy_levels": []
-  },
-  "threads": {
-    "text_only": false,
-    "supports_images": true,
-    "supports_video": true,
-    "supports_carousel": false,
-    "supports_stories": false,
-    "max_media_count": 1,
-    "max_caption_runes": 500,
-    "privacy_levels": []
+    "max_video_seconds": 60,
+    "max_caption_runes": 5000
   },
   "tiktok": {
-    "text_only": false,
-    "supports_images": false,
     "supports_video": true,
-    "supports_carousel": false,
-    "supports_stories": false,
-    "max_media_count": 1,
+    "max_video_seconds": 600,
     "max_caption_runes": 4000,
     "privacy_levels": ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"]
   },
-  "youtube": {
-    "text_only": false,
-    "supports_images": false,
-    "supports_video": true,
-    "supports_carousel": false,
-    "supports_stories": false,
-    "max_media_count": 1,
-    "max_caption_runes": 5000,
-    "privacy_levels": ["public", "unlisted", "private"]
-  },
   "linkedin": {
-    "text_only": false,
     "supports_images": true,
-    "supports_video": false,
-    "supports_carousel": false,
-    "supports_stories": false,
-    "max_media_count": 1,
+    "supports_video": true,
+    "max_media_count": 9,
     "max_caption_runes": 3000,
-    "privacy_levels": ["PUBLIC", "CONNECTIONS"]
+    "privacy_levels": ["PUBLIC", "CONNECTIONS_ONLY"]
+  },
+  "threads": {
+    "supports_images": true,
+    "supports_video": true,
+    "max_caption_runes": 500
+  },
+  "facebook": {
+    "supports_images": true,
+    "supports_video": true,
+    "supports_stories": true,
+    "max_media_count": 1,
+    "max_caption_runes": 63206
   }
 }

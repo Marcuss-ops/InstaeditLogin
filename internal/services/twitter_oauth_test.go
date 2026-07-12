@@ -38,9 +38,9 @@ func testClient(srv *httptest.Server) *http.Client {
 // construct a real TwitterOAuthService without hitting a real database.
 func twitterTestCfg() *config.Config {
 	return &config.Config{
-		TwitterClientID:     "test-client-id",
-		TwitterClientSecret: "test-client-secret-must-be-at-least-32-chars-long",
-		TwitterRedirectURI:  "http://localhost:8080/callback",
+		XClientID:     "test-client-id",
+		XClientSecret: "test-client-secret-must-be-at-least-32-chars-long",
+		XRedirectURI:  "http://localhost:8080/callback",
 	}
 }
 
@@ -252,5 +252,3 @@ func TestTwitter_HandleCallback_UserInfoFails(t *testing.T) {
 		t.Fatal("expected error when user info fails")
 	}
 }
-
-

@@ -25,23 +25,23 @@ import (
 )
 
 type Router struct {
-	mux               *chi.Mux
-	capabilities      *services.CapabilityRouter
-	userRepo          UserStore
-	workspaceStore    WorkspaceStore
-	postStore         PostStore
-	storageProvider   StorageProvider
-	mediaStore        MediaStore
-	auditLogStore     AuditLogStore
-	auth              *auth.Manager
-	apiKeyAuth        *auth.Authenticator
-	apiKeyStore       ApiKeyStore
-	idempotencyStore  IdempotencyStore
-	vault             credentials.VaultAPI
-	oneTimeCodes      *OneTimeCodeStore
-	frontendURL       string
-	allowedOrigin     []string
-	maxUploadBytes    int64
+	mux              *chi.Mux
+	capabilities     *services.CapabilityRouter
+	userRepo         UserStore
+	workspaceStore   WorkspaceStore
+	postStore        PostStore
+	storageProvider  StorageProvider
+	mediaStore       MediaStore
+	auditLogStore    AuditLogStore
+	auth             *auth.Manager
+	apiKeyAuth       *auth.Authenticator
+	apiKeyStore      ApiKeyStore
+	idempotencyStore IdempotencyStore
+	vault            credentials.VaultAPI
+	oneTimeCodes     *OneTimeCodeStore
+	frontendURL      string
+	allowedOrigin    []string
+	maxUploadBytes   int64
 }
 
 type UserStore interface {
