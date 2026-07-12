@@ -35,6 +35,7 @@ package providers
 
 import (
 	"log/slog"
+	"net/http"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -67,8 +68,8 @@ type PlatformRegistry = *services.CapabilityRouter
 
 // Dependency is a forward-compat extension point for BuildRegistry.
 // Each Dependency mutates the internal builder before platforms are
-// registered. Today the only exposed Dependency is WithLogger; more
-// (WithHTTPClient, WithClock) will be added as a future provider
+// registered. Today the exposed Dependencies are WithLogger and
+// WithHTTPClient; more (WithClock) will be added as a future provider
 // needs them.
 type Dependency func(*registryBuilder)
 
@@ -78,6 +79,7 @@ type Dependency func(*registryBuilder)
 type registryBuilder struct {
 	cfg    *config.Config
 	logger *slog.Logger
+	deps   services.ProviderDependencies
 }
 
 // WithLogger overrides the default slog.Default() used for the
@@ -86,6 +88,13 @@ type registryBuilder struct {
 // this and let the default apply.
 func WithLogger(l *slog.Logger) Dependency {
 	return func(b *registryBuilder) { b.logger = l }
+}
+
+// WithHTTPClient injects an HTTP client into all provider constructors.
+// Tests use this to route outbound calls through httptest.Server; the
+// production main() uses the default (no Dependency needed).
+func WithHTTPClient(c *http.Client) Dependency {
+	return func(b *registryBuilder) { b.deps.HTTPClient = c }
 }
 
 // BuildRegistry constructs the CapabilityRegistry from cfg, wiring
@@ -126,7 +135,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 			// with an empty client_id, which would fail noisily on
 			// the first /auth/facebook/login hit.
 		} else {
-			fb, err := services.NewFacebookOAuthService(cfg)
+			fb, err := services.NewFacebookOAuthService(cfg, b.deps)
 			if err != nil {
 				b.logger.Warn("Skipped Facebook provider (constructor failed)", "error", err)
 			} else if fb != nil {
@@ -136,7 +145,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 	}
 
 	if cfg.TikTokClientID != "" {
-		tik, err := services.NewTikTokOAuthService(cfg)
+		tik, err := services.NewTikTokOAuthService(cfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped TikTok provider (constructor failed)", "error", err)
 		} else if tik != nil {
@@ -145,7 +154,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 	}
 
 	if cfg.XClientID != "" {
-		tw, err := services.NewTwitterOAuthService(cfg)
+		tw, err := services.NewTwitterOAuthService(cfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped Twitter/X provider (constructor failed)", "error", err)
 		} else if tw != nil {
@@ -154,7 +163,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 	}
 
 	if cfg.YouTubeClientID != "" {
-		yt, err := services.NewYouTubeOAuthService(cfg)
+		yt, err := services.NewYouTubeOAuthService(cfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped YouTube provider (constructor failed)", "error", err)
 		} else if yt != nil {
@@ -163,7 +172,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 	}
 
 	if cfg.LinkedInClientID != "" {
-		li, err := services.NewLinkedInOAuthService(cfg)
+		li, err := services.NewLinkedInOAuthService(cfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped LinkedIn provider (constructor failed)", "error", err)
 		} else if li != nil {
@@ -173,7 +182,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 
 	// Threads (Zernio 2.1): Meta-family async publishing.
 	if cfg.ThreadsRedirectURI != "" {
-		th, err := services.NewThreadsOAuthService(cfg)
+		th, err := services.NewThreadsOAuthService(cfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped Threads provider (constructor failed)", "error", err)
 		} else if th != nil {
@@ -189,7 +198,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		if cfg.MetaAppID == "" || cfg.MetaAppSecret == "" {
 			b.logger.Warn("Skipped Instagram provider: META_APP_ID and META_APP_SECRET are required (or unset INSTAGRAM_REDIRECT_URI to disable)")
 		} else {
-			ig, err := services.NewInstagramOAuthService(cfg)
+			ig, err := services.NewInstagramOAuthService(cfg, b.deps)
 			if err != nil {
 				b.logger.Warn("Skipped Instagram provider (constructor failed)", "error", err)
 			} else if ig != nil {

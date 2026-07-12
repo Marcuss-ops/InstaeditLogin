@@ -9,9 +9,44 @@ package services
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
+
+// ProviderDependencies holds injectable dependencies for provider constructors.
+// Passed as variadic arg to NewXxxOAuthService(cfg, deps...); when empty,
+// sensible production defaults are used (NewHTTPClient, time.Now).
+//
+// Taglio 5c testability: tests inject httptest.Server-backed HTTP clients
+// and deterministic clocks via this struct.
+type ProviderDependencies struct {
+	// HTTPClient overrides the default NewHTTPClient() used for outbound
+	// OAuth and publishing API calls. Tests inject an *http.Client whose
+	// Transport rewrites URLs to an httptest.Server.
+	HTTPClient *http.Client
+
+	// Clock replaces time.Now for deterministic timestamp generation.
+	// Tests inject a fixed clock; production defaults to time.Now.
+	Clock func() time.Time
+}
+
+// resolveHTTPClient returns deps.HTTPClient if set, or a new default.
+func (d ProviderDependencies) resolveHTTPClient() *http.Client {
+	if d.HTTPClient != nil {
+		return d.HTTPClient
+	}
+	return NewHTTPClient()
+}
+
+// resolveClock returns deps.Clock if set, or time.Now as default.
+func (d ProviderDependencies) resolveClock() func() time.Time {
+	if d.Clock != nil {
+		return d.Clock
+	}
+	return time.Now
+}
 
 // ---------------------------------------------------------------------------
 // Capability interfaces — each provider registers as many as it supports.

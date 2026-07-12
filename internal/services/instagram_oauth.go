@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -38,14 +37,15 @@ type InstagramOAuthService struct {
 
 // NewInstagramOAuthService creates a new InstagramOAuthService. Returns
 // nil when the redirect URI is not configured (provider disabled).
+// Accepts optional ProviderDependencies for HTTP client injection.
 // Taglio 4.4: split out from the monolithic meta-OAuth provider. Same
 // constructor posture as Facebook / Threads: nil = disabled, err = failed.
-func NewInstagramOAuthService(cfg *config.Config) (*InstagramOAuthService, error) {
+func NewInstagramOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*InstagramOAuthService, error) {
 	if cfg.InstagramRedirectURI == "" {
 		return nil, nil // provider disabled
 	}
 	return &InstagramOAuthService{
-		base:        NewMetaOAuthBase(cfg),
+		base:        NewMetaOAuthBase(cfg, deps...),
 		redirectURI: cfg.InstagramRedirectURI,
 	}, nil
 }
@@ -226,7 +226,7 @@ func (s *InstagramOAuthService) Revoke(ctx context.Context, accessToken string) 
 // id). The OAuth-connect flow populates PlatformAccount.PlatformUserID
 // with this value via DiscoverAccounts.
 func (s *InstagramOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
-	defer RecordPublishMetrics(models.PlatformInstagram, time.Now(), &err)
+	defer RecordPublishMetrics(models.PlatformInstagram, s.base.now(), &err)
 	if err := s.ValidateContent(payload); err != nil {
 		return nil, err
 	}

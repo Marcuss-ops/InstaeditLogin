@@ -31,17 +31,33 @@ import (
 type TikTokOAuthService struct {
 	cfg        *config.Config
 	httpClient *http.Client
+	clock      func() time.Time
 }
 
-// NewTikTokOAuthService creates a new TikTokOAuthService.
-func NewTikTokOAuthService(cfg *config.Config) (*TikTokOAuthService, error) {
+// NewTikTokOAuthService creates a new TikTokOAuthService. Accepts optional
+// ProviderDependencies for HTTP client injection (tests inject httptest
+// server clients through deps).
+func NewTikTokOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*TikTokOAuthService, error) {
 	if cfg.TikTokClientID == "" {
 		return nil, nil // provider disabled
 	}
+	var dep ProviderDependencies
+	if len(deps) > 0 {
+		dep = deps[0]
+	}
 	return &TikTokOAuthService{
 		cfg:        cfg,
-		httpClient: NewHTTPClient(),
+		httpClient: dep.resolveHTTPClient(),
+		clock:      dep.resolveClock(),
 	}, nil
+}
+
+// now returns the current time via the injected clock, or time.Now as default.
+func (s *TikTokOAuthService) now() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
 }
 
 // Name returns the platform identifier.
@@ -221,7 +237,7 @@ func (s *TikTokOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken
 // (new in Taglio 4.2) drives the async state machine via the AsyncPublisher
 // capability (CheckPublishStatus / Reconcile) instead of this method.
 func (s *TikTokOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
-	defer RecordPublishMetrics(models.PlatformTikTok, time.Now(), &err)
+	defer RecordPublishMetrics(models.PlatformTikTok, s.now(), &err)
 	if err := s.ValidateContent(payload); err != nil {
 		return nil, err
 	}

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -50,13 +49,13 @@ type FacebookOAuthService struct {
 	redirectURI string
 }
 
-// NewFacebookOAuthService creates a new FacebookOAuthService. Returns nil when the redirect URI is not configured (provider disabled).
-func NewFacebookOAuthService(cfg *config.Config) (*FacebookOAuthService, error) {
+// NewFacebookOAuthService creates a new FacebookOAuthService. Returns nil when the redirect URI is not configured (provider disabled). Accepts optional ProviderDependencies for HTTP client injection.
+func NewFacebookOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*FacebookOAuthService, error) {
 	if cfg.FacebookRedirectURI == "" {
 		return nil, nil // provider disabled
 	}
 
-	base := NewMetaOAuthBase(cfg)
+	base := NewMetaOAuthBase(cfg, deps...)
 
 	return &FacebookOAuthService{
 		base:        base,
@@ -202,7 +201,7 @@ func (s *FacebookOAuthService) Revoke(ctx context.Context, accessToken string) e
 // Supports text-only posts and single-image posts. Videos, albums, groups,
 // and personal profiles are not supported yet.
 func (s *FacebookOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
-	defer RecordPublishMetrics(models.PlatformFacebook, time.Now(), &err)
+	defer RecordPublishMetrics(models.PlatformFacebook, s.base.now(), &err)
 
 	pages, err := s.getPages(ctx, accessToken)
 	if err != nil {

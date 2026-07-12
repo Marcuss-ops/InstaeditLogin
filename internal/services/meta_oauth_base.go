@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -26,14 +27,29 @@ import (
 type MetaOAuthBase struct {
 	cfg        *config.Config
 	httpClient *http.Client
+	clock      func() time.Time
 }
 
-// NewMetaOAuthBase creates the shared OAuth client.
-func NewMetaOAuthBase(cfg *config.Config) *MetaOAuthBase {
+// NewMetaOAuthBase creates the shared OAuth client. Accepts optional
+// ProviderDependencies for HTTP client + clock injection.
+func NewMetaOAuthBase(cfg *config.Config, deps ...ProviderDependencies) *MetaOAuthBase {
+	var dep ProviderDependencies
+	if len(deps) > 0 {
+		dep = deps[0]
+	}
 	return &MetaOAuthBase{
 		cfg:        cfg,
-		httpClient: NewHTTPClient(),
+		httpClient: dep.resolveHTTPClient(),
+		clock:      dep.resolveClock(),
 	}
+}
+
+// now returns the current time via the injected clock, or time.Now as default.
+func (b *MetaOAuthBase) now() time.Time {
+	if b.clock != nil {
+		return b.clock()
+	}
+	return time.Now()
 }
 
 // ExchangeCodeForToken trades an OAuth authorization code for a short-lived

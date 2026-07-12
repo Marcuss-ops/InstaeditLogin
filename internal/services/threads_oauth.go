@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -46,12 +45,13 @@ type ThreadsOAuthService struct {
 
 // NewThreadsOAuthService creates a new ThreadsOAuthService. Returns
 // nil when the redirect URI is not configured (provider disabled).
-func NewThreadsOAuthService(cfg *config.Config) (*ThreadsOAuthService, error) {
+// Accepts optional ProviderDependencies for HTTP client injection.
+func NewThreadsOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*ThreadsOAuthService, error) {
 	if cfg.ThreadsRedirectURI == "" {
 		return nil, nil // provider disabled
 	}
 	return &ThreadsOAuthService{
-		base:        NewMetaOAuthBase(cfg),
+		base:        NewMetaOAuthBase(cfg, deps...),
 		redirectURI: cfg.ThreadsRedirectURI,
 	}, nil
 }
@@ -126,7 +126,7 @@ func (s *ThreadsOAuthService) ValidateContent(payload models.PublishPayload) err
 // =========================================================================
 
 func (s *ThreadsOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
-	defer RecordPublishMetrics(models.PlatformThreads, time.Now(), &err)
+	defer RecordPublishMetrics(models.PlatformThreads, s.base.now(), &err)
 	containerID, err := s.createContainer(ctx, accessToken, platformUserID, payload)
 	if err != nil {
 		return nil, err
@@ -155,7 +155,7 @@ type threadsProviderState struct {
 // The caller stores containerID + userID as provider_state so
 // ContinuePublish can derive the platform user ID.
 func (s *ThreadsOAuthService) StartPublish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (publishID string, state string, err error) {
-	defer RecordPublishMetrics(models.PlatformThreads, time.Now(), &err)
+	defer RecordPublishMetrics(models.PlatformThreads, s.base.now(), &err)
 	if err := s.ValidateContent(payload); err != nil {
 		return "", "", err
 	}

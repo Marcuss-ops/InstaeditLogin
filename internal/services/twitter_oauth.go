@@ -28,17 +28,32 @@ import (
 type TwitterOAuthService struct {
 	cfg        *config.Config
 	httpClient *http.Client
+	clock      func() time.Time
 }
 
-// NewTwitterOAuthService creates a new TwitterOAuthService.
-func NewTwitterOAuthService(cfg *config.Config) (*TwitterOAuthService, error) {
+// NewTwitterOAuthService creates a new TwitterOAuthService. Accepts optional
+// ProviderDependencies for HTTP client injection.
+func NewTwitterOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*TwitterOAuthService, error) {
 	if cfg.XClientID == "" {
 		return nil, nil // provider disabled
 	}
+	var dep ProviderDependencies
+	if len(deps) > 0 {
+		dep = deps[0]
+	}
 	return &TwitterOAuthService{
 		cfg:        cfg,
-		httpClient: NewHTTPClient(),
+		httpClient: dep.resolveHTTPClient(),
+		clock:      dep.resolveClock(),
 	}, nil
+}
+
+// now returns the current time via the injected clock, or time.Now as default.
+func (s *TwitterOAuthService) now() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
 }
 
 func (s *TwitterOAuthService) Name() string { return models.PlatformTwitter }
@@ -210,7 +225,7 @@ func (s *TwitterOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 }
 
 func (s *TwitterOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
-	defer RecordPublishMetrics(models.PlatformTwitter, time.Now(), &err)
+	defer RecordPublishMetrics(models.PlatformTwitter, s.now(), &err)
 	if err := s.ValidateContent(payload); err != nil {
 		return nil, err
 	}

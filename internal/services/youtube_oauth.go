@@ -26,17 +26,32 @@ import (
 type YouTubeOAuthService struct {
 	cfg        *config.Config
 	httpClient *http.Client
+	clock      func() time.Time
 }
 
-// NewYouTubeOAuthService creates a new YouTubeOAuthService.
-func NewYouTubeOAuthService(cfg *config.Config) (*YouTubeOAuthService, error) {
+// NewYouTubeOAuthService creates a new YouTubeOAuthService. Accepts optional
+// ProviderDependencies for HTTP client injection.
+func NewYouTubeOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*YouTubeOAuthService, error) {
 	if cfg.YouTubeClientID == "" {
 		return nil, nil // provider disabled
 	}
+	var dep ProviderDependencies
+	if len(deps) > 0 {
+		dep = deps[0]
+	}
 	return &YouTubeOAuthService{
 		cfg:        cfg,
-		httpClient: NewHTTPClient(),
+		httpClient: dep.resolveHTTPClient(),
+		clock:      dep.resolveClock(),
 	}, nil
+}
+
+// now returns the current time via the injected clock, or time.Now as default.
+func (s *YouTubeOAuthService) now() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
 }
 
 func (s *YouTubeOAuthService) Name() string { return models.PlatformYouTube }
@@ -194,7 +209,7 @@ const youtubeUploadChunkSize = 256 * 1024
 
 // Publish uploads a video to YouTube using the resumable upload protocol.
 func (s *YouTubeOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
-	defer RecordPublishMetrics(models.PlatformYouTube, time.Now(), &err)
+	defer RecordPublishMetrics(models.PlatformYouTube, s.now(), &err)
 	if err := s.ValidateContent(payload); err != nil {
 		return nil, err
 	}

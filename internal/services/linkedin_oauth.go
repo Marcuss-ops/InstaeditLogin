@@ -25,17 +25,32 @@ import (
 type LinkedInOAuthService struct {
 	cfg        *config.Config
 	httpClient *http.Client
+	clock      func() time.Time
 }
 
-// NewLinkedInOAuthService creates a new LinkedInOAuthService.
-func NewLinkedInOAuthService(cfg *config.Config) (*LinkedInOAuthService, error) {
+// NewLinkedInOAuthService creates a new LinkedInOAuthService. Accepts optional
+// ProviderDependencies for HTTP client injection.
+func NewLinkedInOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*LinkedInOAuthService, error) {
 	if cfg.LinkedInClientID == "" {
 		return nil, nil // provider disabled
 	}
+	var dep ProviderDependencies
+	if len(deps) > 0 {
+		dep = deps[0]
+	}
 	return &LinkedInOAuthService{
 		cfg:        cfg,
-		httpClient: NewHTTPClient(),
+		httpClient: dep.resolveHTTPClient(),
+		clock:      dep.resolveClock(),
 	}, nil
+}
+
+// now returns the current time via the injected clock, or time.Now as default.
+func (s *LinkedInOAuthService) now() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
 }
 
 func (s *LinkedInOAuthService) Name() string { return models.PlatformLinkedIn }
@@ -128,7 +143,7 @@ func (s *LinkedInOAuthService) RefreshOAuthToken(ctx context.Context, refreshTok
 }
 
 func (s *LinkedInOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
-	defer RecordPublishMetrics(models.PlatformLinkedIn, time.Now(), &err)
+	defer RecordPublishMetrics(models.PlatformLinkedIn, s.now(), &err)
 	if err := s.ValidateContent(payload); err != nil {
 		return nil, err
 	}
