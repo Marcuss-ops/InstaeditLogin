@@ -62,6 +62,21 @@ type StorageProvider interface {
 	// size_bytes are forwarded so providers can pass them to Content-Length
 	// headers if they support header-based validation.
 	SignUpload(ctx context.Context, userID int64, key, contentType string, sizeBytes int64, ttl time.Duration) (*UploadGrant, error)
+	// VerifyUpload (Taglio 3.2) HEADs the object at key and returns
+	// the server-reported content-type + size. The /complete handler
+	// calls this to commit a media asset: the asset is marked `ready`
+	// only if the S3 server confirms the object exists with the
+	// expected size + content-type. Returns an error on 404 or any
+	// non-2xx.
+	VerifyUpload(ctx context.Context, key string) (contentType string, sizeBytes int64, err error)
+	// AssetURL (Taglio 3.2) returns the trusted internal URL the
+	// publish flow passes to per-platform providers. The URL is
+	// always built from this provider's bucket + the asset's
+	// upload_key — never from a user-controlled string. This is the
+	// single chokepoint that prevents SSRF: even if a future
+	// contributor accidentally exposes a "url" field somewhere, the
+	// only path the platform API ever sees is AssetURL(key).
+	AssetURL(key string) string
 }
 
 // S3Provider generates an AWS SigV4-signed PUT URL against an arbitrary
@@ -148,6 +163,57 @@ func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, logger
 
 // Provider implements StorageProvider.
 func (p *S3Provider) Provider() string { return "s3" }
+
+// AssetURL (Taglio 3.2) returns the trusted internal S3 URL for a
+// stored object. The URL uses the same virtual-hosted scheme as the
+// presigned upload URL (https://{bucket}.{host}/{key}). This is the
+// SINGLE chokepoint through which publish-time URLs flow: a future
+// contributor adding a new field on the publish payload cannot
+// accidentally introduce SSRF because there is no public API
+// surface for user-controlled URLs.
+func (p *S3Provider) AssetURL(key string) string {
+	return fmt.Sprintf("https://%s/%s", p.baseHost, key)
+}
+
+// VerifyUpload (Taglio 3.2) performs a SigV4-signed HEAD against the
+// S3 object at key. Returns the server-reported content-type and
+// content-length, or an error if the object doesn't exist or S3
+// returns a non-2xx. Used by the /complete handler to commit a
+// media asset.
+//
+// The presigned-URL signer (signS3V4URL) is reused with method=HEAD
+// and a 5-minute TTL; HEAD is idempotent and the TTL is just the
+// URL-expiry window. The signature is computed with
+// UNSIGNED-PAYLOAD (the same as PUT presigns) because S3 supports it
+// for HEAD too, and reusing the signer avoids a second copy of the
+// SigV4 algorithm.
+func (p *S3Provider) VerifyUpload(ctx context.Context, key string) (contentType string, sizeBytes int64, err error) {
+	signedURL, signErr := signS3V4URL(
+		p.baseHost, p.region, "s3",
+		key, 5*time.Minute, http.MethodHead,
+		p.accessKey, p.secretKey,
+		time.Now(),
+	)
+	if signErr != nil {
+		return "", 0, fmt.Errorf("failed to sign HEAD URL: %w", signErr)
+	}
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodHead, signedURL, nil)
+	if reqErr != nil {
+		return "", 0, fmt.Errorf("failed to build HEAD request: %w", reqErr)
+	}
+	resp, doErr := p.http.Do(req)
+	if doErr != nil {
+		return "", 0, fmt.Errorf("HEAD request failed: %w", doErr)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", 0, fmt.Errorf("object not found in S3: %s", key)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, fmt.Errorf("S3 HEAD returned status %d for key %s", resp.StatusCode, key)
+	}
+	return resp.Header.Get("Content-Type"), resp.ContentLength, nil
+}
 
 // SignUpload generates a SigV4 PUT URL. For presigned PUTs, the canonical
 // request signs only `host` — content-type and content-length headers

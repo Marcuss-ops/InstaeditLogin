@@ -72,4 +72,14 @@ var (
 	// the API layer can map to 404 via errors.Is without leaking query
 	// details through string matching.
 	ErrWorkspaceNotFound = errors.New("workspace not found")
+
+	// ErrIdempotencyConflict is returned when a client retries a POST with
+	// the same Idempotency-Key but a different request body (hash mismatch).
+	// The API layer maps this to HTTP 409 Conflict per the Stripe idempotency
+	// convention.
+	ErrIdempotencyConflict = errors.New("idempotency key conflict: same key, different body")
+
+	// ErrMediaAssetNotFound is returned when a media asset lookup by UUID
+	// finds no row (or zero rows affected on update). Taglio 3.2.
+	ErrMediaAssetNotFound = errors.New("media asset not found")
 )

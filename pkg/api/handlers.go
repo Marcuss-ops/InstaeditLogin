@@ -32,6 +32,7 @@ type Router struct {
 	workspaceStore  WorkspaceStore
 	postStore       PostStore
 	storageProvider StorageProvider
+	mediaStore      MediaStore
 	auditLogStore   AuditLogStore
 	auth            *auth.Manager
 	vault           credentials.VaultAPI
@@ -58,27 +59,28 @@ type WorkspaceStore interface {
 }
 
 type PostStore interface {
-	Create(post *models.Post, targets []*models.PostTarget) error
+	Create(post *models.Post, targets []*models.PostTarget, idempotencyKey string, requestHash string) (*models.CreateResult, error)
 	FindByID(id int64) (*models.Post, error)
-	FindWithTargets(id int64) (*models.Post, []models.PostTarget, []models.MediaAsset, error)
 	Update(post *models.Post) error
 	ListByWorkspace(workspaceID int64) ([]models.Post, error)
-	List(filter repository.PostFilter) (*repository.PagedPosts, error)
 	Delete(id int64) error
-	Save(target *models.PostTarget) error
+	SaveTarget(target *models.PostTarget) error
 	PublishPost(id int64) error
-	SchedulePost(id int64, scheduledAt time.Time) error
 	CancelPost(id int64) error
 	RetryPost(id int64) error
 	RetryTarget(id int64) error
-	ListTargets(postID int64) ([]models.PostTarget, error)
-	AddMediaAsset(asset *models.MediaAsset) error
-	ListMediaAssets(postID int64) ([]models.MediaAsset, error)
 }
 
 type StorageProvider interface {
 	Provider() string
 	SignUpload(ctx context.Context, userID int64, key, contentType string, sizeBytes int64, ttl time.Duration) (*services.UploadGrant, error)
+	// VerifyUpload (Taglio 3.2) HEADs the object and returns
+	// server-reported content-type + size for /complete verification.
+	VerifyUpload(ctx context.Context, key string) (contentType string, sizeBytes int64, err error)
+	// AssetURL (Taglio 3.2) returns the trusted internal URL for an
+	// uploaded asset. The publish flow goes through this — the
+	// platform API never sees a user-controlled URL.
+	AssetURL(key string) string
 }
 
 type AuditLogStore interface {
@@ -172,7 +174,12 @@ func (r *Router) Setup() http.Handler {
 	r.mux.Method(http.MethodPost, "/api/v1/accounts/{id}/reconnect", r.protected(r.handleReconnectAccount))
 	r.mux.Method(http.MethodDelete, "/api/v1/accounts/{id}", r.protected(r.handleDeleteAccount))
 	r.mux.Method(http.MethodGet, "/api/v1/metrics", http.HandlerFunc(r.handleMetrics))
-	r.mux.Method(http.MethodPost, "/api/v1/storage/upload-url", r.protected(r.handleCreateUploadURL))
+	// Taglio 3.2: the old /api/v1/storage/upload-url endpoint is
+	// replaced by /api/v1/media/presign (see pkg/api/media.go). The
+	// new endpoint is part of a 3-step presigned upload flow that
+	// removes arbitrary media_url from public post payloads.
+	r.mux.Method(http.MethodPost, "/api/v1/media/presign", r.protected(r.handlePresignMedia))
+	r.mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", r.protected(r.handleCompleteMedia))
 	r.mux.Route("/api/v1/workspaces", func(sr chi.Router) {
 		sr.Post("/", r.protected(r.handleCreateWorkspace))
 		sr.Get("/", r.protected(r.handleListWorkspaces))
@@ -181,10 +188,20 @@ func (r *Router) Setup() http.Handler {
 	})
 	r.mux.Route("/api/v1/posts", func(sr chi.Router) {
 		sr.Post("/", r.protected(r.handleCreatePost))
+		sr.Get("/", r.protected(r.handleListPosts))
 		sr.Get("/workspace/{wid}", r.protected(r.handleListByWorkspace))
 		sr.Get("/{id}", r.protected(r.handleGetPost))
+		sr.Patch("/{id}", r.protected(r.handlePatchPost))
+		sr.Delete("/{id}", r.protected(r.handleDeletePost))
+		sr.Post("/{id}/publish", r.protected(r.handlePublishPostID))
 		sr.Post("/{id}/schedule", r.protected(r.handleSchedulePost))
+		sr.Post("/{id}/cancel", r.protected(r.handleCancelPost))
+		sr.Post("/{id}/retry", r.protected(r.handleRetryPost))
+		sr.Get("/{id}/targets", r.protected(r.handleGetPostTargets))
 		sr.Post("/{id}/targets", r.protected(r.handleAddTarget))
+	})
+	r.mux.Route("/api/v1/post-targets", func(sr chi.Router) {
+		sr.Post("/{id}/retry", r.protected(r.handleRetryTarget))
 	})
 	r.mux.Route("/api/v1/projects/{pid}/keys", func(sr chi.Router) {
 		sr.Post("/", r.protected(r.handleCreateApiKey))
@@ -378,14 +395,20 @@ func (r *Router) handleLogout(w http.ResponseWriter, req *http.Request) {
 }
 
 type PublishRequest struct {
-	Platform     string `json:"platform"`
-	MediaURL     string `json:"media_url"`
-	Caption      string `json:"caption"`
-	ContentType  string `json:"content_type"`
-	Title        string `json:"title"`
-	PrivacyLevel string `json:"privacy_level,omitempty"`
-	CommentMode  string `json:"comment_mode,omitempty"`
-	DuetMode     string `json:"duet_mode,omitempty"`
+	// Platform is the social platform key (e.g. "instagram",
+	// "tiktok"). Required.
+	Platform string `json:"platform"`
+	// Media (Taglio 3.2) is the list of verified media asset_ids
+	// to attach to the post. The handler resolves each asset_id to
+	// the trusted internal S3 URL via the mediaStore + storageProvider.
+	// NO user-controlled URL ever reaches the platform API.
+	Media        []MediaRef `json:"media"`
+	Caption      string     `json:"caption"`
+	ContentType  string     `json:"content_type"`
+	Title        string     `json:"title"`
+	PrivacyLevel string     `json:"privacy_level,omitempty"`
+	CommentMode  string     `json:"comment_mode,omitempty"`
+	DuetMode     string     `json:"duet_mode,omitempty"`
 }
 
 func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
@@ -502,15 +525,28 @@ func (r *Router) publishToAccount(ctx context.Context, account *models.PlatformA
 			return nil, &publishError{http.StatusUnauthorized, "no valid token: " + err.Error()}
 		}
 	}
+	// Taglio 3.2: resolve asset_id(s) → trusted internal S3 URL(s).
+	// The platform API never sees a user-controlled URL — only the
+	// S3 URL of an asset the user previously uploaded and committed
+	// via /complete. This eliminates the SSRF and open-redirect
+	// surface that the old media_url field exposed.
+	mediaURLs, err := r.resolveMediaURLs(ctx, account.UserID, pubReq.Media)
+	if err != nil {
+		return nil, &publishError{http.StatusUnprocessableEntity, err.Error()}
+	}
 	payload := models.PublishPayload{
 		Text: pubReq.Caption, Title: pubReq.Title,
 		PrivacyLevel: pubReq.PrivacyLevel, CommentMode: pubReq.CommentMode, DuetMode: pubReq.DuetMode,
 	}
 	switch pubReq.ContentType {
 	case "video", "reel":
-		payload.VideoURL = pubReq.MediaURL
+		if len(mediaURLs) > 0 {
+			payload.VideoURL = mediaURLs[0]
+		}
 	case "image", "photo":
-		payload.ImageURL = pubReq.MediaURL
+		if len(mediaURLs) > 0 {
+			payload.ImageURL = mediaURLs[0]
+		}
 	case "text":
 	default:
 		return nil, &publishError{http.StatusBadRequest, "content_type must be one of: image, video, text"}

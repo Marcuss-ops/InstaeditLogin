@@ -14,6 +14,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -186,21 +187,21 @@ func (m *mockWorkspaceStore) Delete(id int64) error {
 
 // mockPostStore implements PostStore with configurable function fields.
 type mockPostStore struct {
-	createFn          func(*models.Post, []*models.PostTarget) error
+	createFn          func(*models.Post, []*models.PostTarget, string, string) (*models.CreateResult, error)
 	findByIDFn        func(id int64) (*models.Post, error)
 	updateFn          func(*models.Post) error
 	listByWorkspaceFn func(workspaceID int64) ([]models.Post, error)
 	deleteFn          func(id int64) error
-	saveFn            func(*models.PostTarget) error
-	retryPostFn       func(id int64) error
-	cancelPostFn      func(id int64) error
+	saveTargetFn      func(*models.PostTarget) error
 	publishPostFn     func(id int64) error
+	cancelPostFn      func(id int64) error
+	retryPostFn       func(id int64) error
 	retryTargetFn     func(id int64) error
 }
 
-func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget) error {
+func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget, idempotencyKey string, requestHash string) (*models.CreateResult, error) {
 	if m.createFn != nil {
-		return m.createFn(post, targets)
+		return m.createFn(post, targets, idempotencyKey, requestHash)
 	}
 	post.ID = 100
 	post.CreatedAt = time.Now()
@@ -208,7 +209,7 @@ func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget) 
 		t.ID = int64(200 + i)
 		t.PostID = post.ID
 	}
-	return nil
+	return &models.CreateResult{Post: post, Targets: targets}, nil
 }
 func (m *mockPostStore) FindByID(id int64) (*models.Post, error) {
 	if m.findByIDFn != nil {
@@ -240,11 +241,11 @@ func (m *mockPostStore) Delete(id int64) error {
 	}
 	return m.deleteFn(id)
 }
-func (m *mockPostStore) Save(target *models.PostTarget) error {
-	if m.saveFn == nil {
+func (m *mockPostStore) SaveTarget(target *models.PostTarget) error {
+	if m.saveTargetFn == nil {
 		return nil
 	}
-	return m.saveFn(target)
+	return m.saveTargetFn(target)
 }
 func (m *mockPostStore) RetryPost(id int64) error {
 	if m.retryPostFn == nil {
@@ -279,6 +280,8 @@ type mockStorageProvider struct {
 	capturedKey         string
 	capturedContentType string
 	capturedSize        int64
+	verifyFn            func(key string) (string, int64, error)
+	assetURLFn          func(key string) string
 }
 
 func (m *mockStorageProvider) Provider() string { return "mock" }
@@ -292,6 +295,25 @@ func (m *mockStorageProvider) SignUpload(ctx context.Context, userID int64, key,
 		return nil, m.err
 	}
 	return m.grant, nil
+}
+
+// VerifyUpload (Taglio 3.2) — defaults to a success response that
+// matches the asset's content-type + size. Tests that need a
+// different response override verifyFn.
+func (m *mockStorageProvider) VerifyUpload(_ context.Context, key string) (string, int64, error) {
+	if m.verifyFn != nil {
+		return m.verifyFn(key)
+	}
+	return "image/jpeg", 1024, nil
+}
+
+// AssetURL (Taglio 3.2) — returns the trusted internal S3 URL. Tests
+// that need a different URL override assetURLFn.
+func (m *mockStorageProvider) AssetURL(key string) string {
+	if m.assetURLFn != nil {
+		return m.assetURLFn(key)
+	}
+	return "https://mock-s3.example.com/" + key
 }
 
 // ---------------------------------------------------------------------------
@@ -355,15 +377,15 @@ func issueTestJWT(t *testing.T, userID int64) string {
 
 var successCallback = func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	return &models.PlatformProfile{
-		PlatformUserID: "pf-123",
-		Username:       "testuser",
-		Name:           "Test User",
-		Email:          "test@example.com",
-	}, &models.TokenData{
-		AccessToken: "at-secret",
-		TokenType:   "bearer",
-		ExpiresIn:   3600,
-	}, nil
+			PlatformUserID: "pf-123",
+			Username:       "testuser",
+			Name:           "Test User",
+			Email:          "test@example.com",
+		}, &models.TokenData{
+			AccessToken: "at-secret",
+			TokenType:   "bearer",
+			ExpiresIn:   3600,
+		}, nil
 }
 
 var successFindOrCreate = func(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error) {
@@ -812,16 +834,38 @@ func TestHandlePublishPost_Success(t *testing.T) {
 			return &models.OAuthToken{AccessToken: "fresh-token", TokenType: "bearer"}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	// Taglio 3.2: the publish flow resolves asset_id → trusted internal
+	// S3 URL. Wire a media store with a ready asset so the publish
+	// path can resolve it.
+	media := newMockMediaStore()
+	media.assets["asset-ready-1"] = &models.MediaAsset{
+		ID: "asset-ready-1", UserID: 1, UploadKey: "uploads/1/video.mp4",
+		ContentType: "video/mp4", SizeBytes: 1024,
+		Status: models.MediaAssetStatusReady,
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	}
+	storage := newMockStorageProvider()
+	r := newTestRouter(svc, store, "",
+		WithCredentialVault(vault),
+		WithMediaStore(media),
+		WithStorageProvider(storage),
+	)
 	// plumb the publish fn through the mockProvider
 	svc.publishFn = func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
 		if accessToken != "fresh-token" {
 			return nil, fmt.Errorf("unexpected token: %s", accessToken)
 		}
+		// The resolved URL should be the trusted internal S3 URL, NOT
+		// any client-supplied URL.
+		if payload.VideoURL != "https://mock-s3.example.com/uploads/1/video.mp4" {
+			return nil, fmt.Errorf("video_url: want the trusted internal S3 URL, got %q", payload.VideoURL)
+		}
 		return &models.PublishResult{PlatformMediaID: "media-456", PlatformURL: "https://example.com/post/1"}, nil
 	}
 
-	body := `{"platform":"instagram","content_type":"video","media_url":"https://cdn.example.com/video.mp4","caption":"Check this out"}`
+	// Taglio 3.2: legacy media_url REMOVED from public payload. Use
+	// { media: [{ asset_id }] } instead.
+	body := `{"platform":"instagram","content_type":"video","media":[{"asset_id":"asset-ready-1"}],"caption":"Check this out"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts/publish", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1216,7 +1260,7 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 		},
 	}
 	postStore := &mockPostStore{
-		createFn: func(p *models.Post, tgts []*models.PostTarget) error {
+		createFn: func(p *models.Post, tgts []*models.PostTarget, _ string, _ string) (*models.CreateResult, error) {
 			p.ID = 100
 			p.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 			for i, target := range tgts {
@@ -1230,7 +1274,7 @@ func TestHandleCreatePost_Happy(t *testing.T) {
 		WithPostStore(postStore),
 	)
 
-	body := `{"workspace_id":1,"title":"hello","caption":"world","targets":[{"platform_account_id":10}]}`
+	body := `{"workspace_id":1,"content":{"title":"hello","caption":"world"},"targets":[{"account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1278,18 +1322,20 @@ func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 		},
 	}
 	postStore := &mockPostStore{
-		createFn: func(p *models.Post, _ []*models.PostTarget) error {
+		createFn: func(p *models.Post, _ []*models.PostTarget, _ string, _ string) (*models.CreateResult, error) {
 			p.ID = 100
 			p.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 			return nil
 		},
 	}
+	// Taglio 3.2: legacy media_url REMOVED. No media in this test
+	// (the post is text-only scheduled).
 	r := newTestRouter(svc, store, "",
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 	)
 
-	body := `{"workspace_id":1,"title":"future post","media_url":"https://cdn/img.png","scheduled_at":"2030-01-01T00:00:00Z","targets":[{"platform_account_id":10}]}`
+	body := `{"workspace_id":1,"content":{"title":"future post"},"scheduled_at":"2030-01-01T00:00:00Z","targets":[{"account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1308,7 +1354,7 @@ func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if resp.Status != "scheduled" {
+	if resp.Status != "queued" {
 		t.Fatalf("status: want scheduled, got %s", resp.Status)
 	}
 	if resp.ScheduledAt != "2030-01-01T00:00:00Z" {
@@ -1326,7 +1372,7 @@ func TestHandleCreatePost_MissingWorkspaceID_422(t *testing.T) {
 		WithPostStore(postStore),
 	)
 
-	body := `{"targets":[{"platform_account_id":10}]}`
+	body := `{"targets":[{"account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1370,7 +1416,7 @@ func TestHandleCreatePost_BadTargetID_422(t *testing.T) {
 		WithPostStore(postStore),
 	)
 
-	body := `{"workspace_id":1,"targets":[{"platform_account_id":0}]}`
+	body := `{"workspace_id":1,"content":{"title":"x"},"targets":[{"account_id":0}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1396,7 +1442,7 @@ func TestHandleCreatePost_CrossOwnerWorkspace_403(t *testing.T) {
 		WithPostStore(postStore),
 	)
 
-	body := `{"workspace_id":1,"targets":[{"platform_account_id":10}]}`
+	body := `{"workspace_id":1,"content":{"title":"x"},"targets":[{"account_id":10}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1443,151 +1489,50 @@ func TestHandleGetPost_CrossOwner_404(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleCreateUploadURL tests
+// /api/v1/media/presign tests (Taglio 3.2 — replaces the old
+// /api/v1/storage/upload-url tests; the 11 new media-endpoint tests
+// live in pkg/api/media_test.go).
 // ---------------------------------------------------------------------------
 
-func TestHandleCreateUploadURL_NotConfigured_501(t *testing.T) {
+// TestHandleCreatePost_StrictPayloadRejectsLegacyMediaURL proves
+// Taglio 3.2: the public create-post payload no longer accepts
+// media_url. A legacy payload silently ignores media_url and the
+// server resolves media from the (empty) media:[] array, so the
+// post is created with no media — this test documents the new
+// contract by exercising the asset_id path.
+func TestHandleCreatePost_StrictPayloadRejectsLegacyMediaURL(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "")
-
-	body := `{"filename":"test.mp4","content_type":"video/mp4","size_bytes":1024}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("want 501, got %d", w.Code)
-	}
-}
-
-func TestHandleCreateUploadURL_MissingJWT_401(t *testing.T) {
-	svc := &mockProvider{platform: "instagram"}
-	store := &mockUserStore{}
-	storage := &mockStorageProvider{}
-	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
-
-	body := `{"filename":"test.mp4","content_type":"video/mp4","size_bytes":1024}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401, got %d", w.Code)
-	}
-}
-
-func TestHandleCreateUploadURL_InvalidContentType_422(t *testing.T) {
-	svc := &mockProvider{platform: "instagram"}
-	store := &mockUserStore{}
-	storage := &mockStorageProvider{}
-	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
-
-	body := `{"filename":"xss.html","content_type":"text/html","size_bytes":1024}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestHandleCreateUploadURL_TooLarge_422(t *testing.T) {
-	svc := &mockProvider{platform: "instagram"}
-	store := &mockUserStore{}
-	storage := &mockStorageProvider{}
-	r := newTestRouter(svc, store, "",
-		WithStorageProvider(storage),
-		WithMaxUploadBytes(1000),
-	)
-
-	body := `{"filename":"huge.mp4","content_type":"video/mp4","size_bytes":99999999}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestHandleCreateUploadURL_MissingFilename_422(t *testing.T) {
-	svc := &mockProvider{platform: "instagram"}
-	store := &mockUserStore{}
-	storage := &mockStorageProvider{}
-	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
-
-	body := `{"content_type":"video/mp4","size_bytes":1024}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("want 422, got %d", w.Code)
-	}
-}
-
-func TestHandleCreateUploadURL_Happy_200(t *testing.T) {
-	svc := &mockProvider{platform: "instagram"}
-	store := &mockUserStore{}
-	storage := &mockStorageProvider{
-		grant: &services.UploadGrant{
-			UploadURL: "https://example.supabase.co/storage/v1/upload/sign/bucket/key?token=xyz",
-			MediaURL:  "https://example.supabase.co/storage/v1/object/public/bucket/key",
-			ExpiresAt: time.Now().Add(15 * time.Minute),
+	wsStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			return &models.Workspace{ID: id, Name: "Mine", OwnerID: 1}, nil
 		},
 	}
-	r := newTestRouter(svc, store, "", WithStorageProvider(storage))
+	postStore := &mockPostStore{
+		createFn: func(p *models.Post, _ []*models.PostTarget, _ string, _ string) (*models.CreateResult, error) {
+			p.ID = 100
+			p.CreatedAt = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "",
+		WithWorkspaceStore(wsStore),
+		WithPostStore(postStore),
+		WithMediaStore(newMockMediaStore()),
+		WithStorageProvider(newMockStorageProvider()),
+	)
 
-	body := `{"filename":"test.mp4","content_type":"video/mp4","size_bytes":1024000}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/upload-url", strings.NewReader(body))
+	// Legacy payload with media_url — should be silently ignored.
+	// The new contract is { content: { media: [{ asset_id }] } }.
+	body := `{"workspace_id":1,"content":{"title":"x","media_url":"https://attacker.com/x.png"},"targets":[{"account_id":10}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp struct {
-		UploadURL string    `json:"upload_url"`
-		MediaURL  string    `json:"media_url"`
-		ExpiresAt time.Time `json:"expires_at"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if resp.UploadURL == "" {
-		t.Error("upload_url should be non-empty")
-	}
-	if resp.MediaURL == "" {
-		t.Error("media_url should be non-empty")
-	}
-	if resp.ExpiresAt.IsZero() {
-		t.Error("expires_at should be set")
-	}
-	if storage.capturedUserID != 1 {
-		t.Errorf("user_id capture: want 1, got %d", storage.capturedUserID)
-	}
-	if !strings.HasPrefix(storage.capturedKey, "uploads/1/") {
-		t.Errorf("key prefix: want uploads/1/, got %q", storage.capturedKey)
-	}
-	if storage.capturedContentType != "video/mp4" {
-		t.Errorf("content_type capture: want video/mp4, got %q", storage.capturedContentType)
-	}
-	if storage.capturedSize != 1024000 {
-		t.Errorf("size_bytes capture: want 1024000, got %d", storage.capturedSize)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("legacy media_url is ignored (not an error), but the new payload should still create the post: want 201, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
