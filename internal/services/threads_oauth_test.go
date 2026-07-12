@@ -15,9 +15,9 @@ import (
 // threadsTestCfg returns a minimal config for Threads OAuth tests.
 func threadsTestCfg() *config.Config {
 	return &config.Config{
-		MetaAppID:           "test-meta-app-id",
-		MetaAppSecret:       "test-meta-app-secret-must-be-32-chars-min",
-		ThreadsRedirectURI:  "http://localhost:8080/api/v1/auth/threads/callback",
+		MetaAppID:          "test-meta-app-id",
+		MetaAppSecret:      "test-meta-app-secret-must-be-32-chars-min",
+		ThreadsRedirectURI: "http://localhost:8080/api/v1/auth/threads/callback",
 	}
 }
 

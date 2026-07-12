@@ -16,9 +16,9 @@ import (
 // instagramTestCfg returns a minimal config for Instagram OAuth tests.
 func instagramTestCfg() *config.Config {
 	return &config.Config{
-		MetaAppID:             "test-meta-app-id",
-		MetaAppSecret:         "test-meta-app-secret-must-be-32-chars-min",
-		InstagramRedirectURI:  "http://localhost:8080/api/v1/auth/instagram/callback",
+		MetaAppID:            "test-meta-app-id",
+		MetaAppSecret:        "test-meta-app-secret-must-be-32-chars-min",
+		InstagramRedirectURI: "http://localhost:8080/api/v1/auth/instagram/callback",
 	}
 }
 

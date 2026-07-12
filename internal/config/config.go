@@ -94,8 +94,6 @@ type Config struct {
 
 	// MaxUploadBytes caps the size of any single file upload.
 	MaxUploadBytes int64
-
-
 }
 
 // Load reads configuration from environment variables.

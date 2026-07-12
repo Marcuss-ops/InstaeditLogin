@@ -159,10 +159,10 @@ func TestMissingThreadsRedirectDisablesOnlyThreads(t *testing.T) {
 // that having a redirect URI set does NOT relax the half-configured check.
 func TestIncompleteMetaCredentialsFailValidation(t *testing.T) {
 	tests := []struct {
-		name        string
-		id          string
-		secret      string
-		errSubstr   string
+		name      string
+		id        string
+		secret    string
+		errSubstr string
 	}{
 		{
 			name:      "META_APP_ID set, META_APP_SECRET empty — redirects present",

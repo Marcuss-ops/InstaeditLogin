@@ -69,12 +69,12 @@ type TokenStore interface {
 //   - Save:    initial store after the OAuth callback
 //   - Get:     decrypt + return (used when the token is known-fresh)
 //   - Rotate:  semantic alias for Save (same encrypt+store, but the
-//              caller's intent is "re-issue with a new key" — the vault
-//              also deletes any older rows via TokenStore.SaveToken's
-//              prune-older logic)
+//     caller's intent is "re-issue with a new key" — the vault
+//     also deletes any older rows via TokenStore.SaveToken's
+//     prune-older logic)
 //   - Renew:   check-and-refresh, serialised by pg_advisory_xact_lock
 //   - Revoke:  delete all tokens for a platform account (disconnect /
-//              logout / account deletion)
+//     logout / account deletion)
 type VaultAPI interface {
 	Save(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error
 	Get(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error)

@@ -227,12 +227,12 @@ func TestColumns_AllExpectedPresent(t *testing.T) {
 }
 
 // TestMigrations_OrderIndependent: idempotency + order-tolerance.
-//   1. Apply 001→012 in canonical lexical order, hash the schema.
-//   2. Re-apply 001→012 in canonical order. Hash must match — proves
-//      the `IF NOT EXISTS` + DO-block guards actually work.
-//   3. Apply migrations 001→012 in REVERSE lexical order. Hash must
-//      STILL match — proves no migration is silently order-dependent
-//      (e.g. relying on a column added later).
+//  1. Apply 001→012 in canonical lexical order, hash the schema.
+//  2. Re-apply 001→012 in canonical order. Hash must match — proves
+//     the `IF NOT EXISTS` + DO-block guards actually work.
+//  3. Apply migrations 001→012 in REVERSE lexical order. Hash must
+//     STILL match — proves no migration is silently order-dependent
+//     (e.g. relying on a column added later).
 //
 // This catches the class of regression where migration N tries to
 // `ALTER TABLE foo ADD bar` without `IF NOT EXISTS` and the second

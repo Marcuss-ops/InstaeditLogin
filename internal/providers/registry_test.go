@@ -386,9 +386,9 @@ func TestRegistrySkipsUnconfiguredProvider(t *testing.T) {
 // that want to prevent duplicates can check registry.Names() first.
 func TestRegistryAllowsDuplicateRegistration(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:            "1234567890",
-		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
-		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+		MetaAppID:           "1234567890",
+		MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA",
+		FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -423,9 +423,9 @@ func TestRegistryAllowsDuplicateRegistration(t *testing.T) {
 // platform that should have it is a wiring bug.
 func TestRegistryReturnsCapabilities(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:            "1234567890",
-		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
-		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+		MetaAppID:           "1234567890",
+		MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA",
+		FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -457,9 +457,9 @@ func TestRegistryReturnsCapabilities(t *testing.T) {
 // the worker uses it to skip platforms it can't publish to.
 func TestRegistryReturnsUnsupportedPlatformError(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:            "1234567890",
-		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
-		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+		MetaAppID:           "1234567890",
+		MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA",
+		FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {

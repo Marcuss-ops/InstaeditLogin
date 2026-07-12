@@ -85,13 +85,13 @@ var ErrMalformedApiKey = errors.New("malformed API key")
 //
 // The secret is 32 bytes from crypto/rand, encoded lowercase
 // base32 (StdEncoding without padding) → 52 chars. Caller MUST:
-//   1. Save the FULL plaintext through Create (the result is the
-//      "shown once" response body). The repository layer is
-//      responsible for hashing before persistence.
-//   2. Save the keyPrefix on the api_keys row (for dashboard display
-//      and audit logs).
-//   3. Never log the plaintext. Slog calls on the result of Generate
-//      are forbidden — the API layer is the only legitimate carrier.
+//  1. Save the FULL plaintext through Create (the result is the
+//     "shown once" response body). The repository layer is
+//     responsible for hashing before persistence.
+//  2. Save the keyPrefix on the api_keys row (for dashboard display
+//     and audit logs).
+//  3. Never log the plaintext. Slog calls on the result of Generate
+//     are forbidden — the API layer is the only legitimate carrier.
 //
 // env must be exactly models.ApiKeyEnvironmentTest or
 // models.ApiKeyEnvironmentLive. Other values are rejected with
