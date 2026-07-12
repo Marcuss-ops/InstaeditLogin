@@ -19,8 +19,8 @@ import (
 //
 // Capabilities exposed:
 //   - OAuthProvider (OAuth 2.0 with OpenID Connect userinfo)
-//   - ContentValidator (text required)
-//   - Publisher (POST /rest/posts with article link)
+//   - ContentValidator (text required — text_only)
+//   - Publisher (POST /rest/posts, text only — Taglio 3c: articleSource removed)
 //   - AccountManager (Validate / Revoke)
 type LinkedInOAuthService struct {
 	cfg        *config.Config
@@ -75,7 +75,11 @@ func (s *LinkedInOAuthService) HandleCallback(ctx context.Context, state, code s
 	return profile, tokenData, nil
 }
 
-// ValidateContent enforces the "text required" rule for a LinkedIn post.
+// ValidateContent enforces the text-only rule for a LinkedIn post.
+// Taglio 3c: LinkedIn is text_only — the articleSource block that
+// pretended to upload media (via payload.ImageURL/VideoURL) was
+// removed because it passed arbitrary URLs to the LinkedIn API
+// without any media upload infrastructure behind it.
 func (s *LinkedInOAuthService) ValidateContent(payload models.PublishPayload) error {
 	if payload.Text == "" {
 		return fmt.Errorf("linkedin requires text content")
@@ -133,23 +137,6 @@ func (s *LinkedInOAuthService) Publish(ctx context.Context, accessToken, platfor
 			"feedDistribution": "MAIN_FEED",
 		},
 		"lifecycleState": "PUBLISHED",
-	}
-
-	articleSource := payload.ImageURL
-	if articleSource == "" {
-		articleSource = payload.VideoURL
-	}
-	if articleSource != "" {
-		article := map[string]interface{}{
-			"source":      articleSource,
-			"description": payload.Text,
-		}
-		if payload.Title != "" {
-			article["title"] = payload.Title
-		}
-		postBody["content"] = map[string]interface{}{
-			"article": article,
-		}
 	}
 
 	jsonBody, err := json.Marshal(postBody)

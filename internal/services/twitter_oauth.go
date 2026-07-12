@@ -22,8 +22,8 @@ import (
 //
 // Capabilities exposed:
 //   - OAuthProvider (OAuth 2.0 PKCE flow)
-//   - ContentValidator (text or image required)
-//   - Publisher (POST /2/tweets with user Bearer)
+//   - ContentValidator (text required — text_only)
+//   - Publisher (POST /2/tweets with user Bearer, text only)
 //   - AccountManager (Validate / Revoke)
 type TwitterOAuthService struct {
 	cfg        *config.Config
@@ -101,10 +101,13 @@ func (s *TwitterOAuthService) HandleCallback(ctx context.Context, state, code st
 	return profile, tokenData, nil
 }
 
-// ValidateContent enforces the "text or image" rule for a tweet.
+// ValidateContent enforces the text-only rule for a tweet.
+// Taglio 3c: image_url removed — X/Twitter is text_only until
+// native media upload (v1.1 media/upload + v2 media/metadata)
+// is implemented.
 func (s *TwitterOAuthService) ValidateContent(payload models.PublishPayload) error {
-	if payload.Text == "" && payload.ImageURL == "" {
-		return fmt.Errorf("twitter requires text or media")
+	if payload.Text == "" {
+		return fmt.Errorf("twitter requires text content")
 	}
 	return nil
 }
