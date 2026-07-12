@@ -27,8 +27,12 @@ import (
 // (007..010, 013..016) are intentionally excluded — migrations 011 and
 // 012 are the latest in the user-requested range.
 //
-// Note: two migrations share the prefix `011_target_*.sql` — the test
-// runner (RunMigrations + this constant list) iterates both.
+// Note: only ONE `011_target_*.sql` file remains on disk. The
+// earlier 011_target_publish_state.sql was consolidated away
+// (commit renamed to drop the unused publish_state column). Migration
+// 027_drop_publish_state.sql converges production databases that
+// had already applied the old pair; new greenfield installs (and
+// this testcontainer) never have the column in the first place.
 var migrationsToTest = []string{
 	"001_init.sql",
 	"002_add_refresh_token.sql",
@@ -37,7 +41,6 @@ var migrationsToTest = []string{
 	"005_account_lifecycle.sql",
 	"006_media_assets.sql",
 	"011_target_provider_state.sql",
-	"011_target_publish_state.sql",
 	"012_async_threads_support.sql",
 }
 
@@ -93,7 +96,8 @@ var requiredColumns = []struct{ Table, Column string }{
 	{"media_assets", "content_type"}, {"media_assets", "size_bytes"}, {"media_assets", "status"},
 	{"media_assets", "sha256"}, {"media_assets", "error_message"},
 	{"media_assets", "expires_at"}, {"media_assets", "created_at"}, {"media_assets", "updated_at"},
-	// 011_target_provider_state + 011_target_publish_state
+	// 011_target_provider_state (canonical 011 after consolidation;
+	// 011_target_publish_state.sql was deleted along with its column)
 	{"post_targets", "provider_state"},
 	// 012_async_threads_support + posts updates + post_targets updates
 	{"posts", "idempotency_key"}, {"posts", "version"}, {"posts", "updated_at"},

@@ -1,0 +1,43 @@
+-- ============================================================================
+-- 027_drop_publish_state.sql
+--
+-- Taglio 5.x — consolidation of the two migrations 011_*.sql files
+-- (commit-stepped against the same goal). Strategy:
+--
+--   - 011_target_publish_state.sql is DELETED — its sibling
+--     011_target_provider_state.sql is the canonical 011, and Go code
+--     never reads publish_state. A grep across *.go returns zero hits.
+--   - This migration DROPs publish_state to converge production
+--     databases that already ran the original 011 pair.
+--   - Idempotent (DROP COLUMN IF EXISTS).
+--
+-- Why a SEPARATE migration rather than folding the drop into 028+ is
+-- left as a deliberate design choice: every additive SQL change goes
+-- through its own migration file, so a future operator reading git
+-- log can pinpoint "this is when the duplicate-column cleanup landed".
+-- The runner is idempotent (ALTER + DROP are both IF EXISTS guarded)
+-- so re-runs against an already-converged DB are no-ops.
+--
+-- Risks considered:
+--
+--   (a) Production DBs that already have publish_state. DROP COLUMN
+--       is the canonical way to remove it; without this migration,
+--       deleting only the .sql file leaves prod OUT OF SYNC with the
+--       new migrations/ contents. (developer mistake to call
+--       `pure delete` "consolidation" — it would silently drop the
+--       column from dev/test (because those migrate from greenfield)
+--       while prod kept the stale column.)
+--   (b) The `idx_post_targets_publishing_publish_id` index, defined
+--       in BOTH 011 files as `CREATE INDEX IF NOT EXISTS`, lives on
+--       production either way (only one CREATE actually fires since
+--       the second is a no-op). With 011_target_publish_state.sql
+--       deleted, only 011_target_provider_state.sql creates it once.
+--       Production keeps the index from its original pair — fine.
+--   (c) No Go references exist: `publish_state` is referenced only
+--       by the deleted migration + the integration-test schema
+--       fingerprint. The fingerprint test is updated to drop the
+--       publish_state expectation in the same commit.
+-- ============================================================================
+
+ALTER TABLE post_targets
+    DROP COLUMN IF EXISTS publish_state;
