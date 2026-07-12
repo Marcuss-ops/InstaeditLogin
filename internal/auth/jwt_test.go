@@ -85,7 +85,7 @@ func TestVerifyWrongSecret(t *testing.T) {
 
 func TestVerifyInvalidSignature(t *testing.T) {
 	m := NewManager(testSecret, 24)
-	if _, err := m.Verify("not.a.real.jwt"); err == nil {
+	if _, _, err := m.Verify("not.a.real.jwt"); err == nil {
 		t.Fatal("expected error for malformed token")
 	}
 }

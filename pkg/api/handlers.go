@@ -76,30 +76,6 @@ func (h repoUserWorkspaceHelper) ListMemberships(_ context.Context, userID int64
 	return out, nil
 }
 
-func (h repoUserWorkspaceHelper) listOwned(_ context.Context, userID int64) ([]int64, error) {
-	owned, err := h.workspaceRepo.ListByOwner(userID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]int64, 0, len(owned))
-	for _, w := range owned {
-		out = append(out, w.ID)
-	}
-	return out, nil
-}
-
-func (h repoUserWorkspaceHelper) listMemberships(_ context.Context, userID int64) ([]int64, error) {
-	members, err := h.teamRepo.ListForUser(userID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]int64, 0, len(members))
-	for _, m := range members {
-		out = append(out, m.WorkspaceID)
-	}
-	return out, nil
-}
-
 type Router struct {
 	mux              *chi.Mux
 	capabilities     *services.CapabilityRouter
@@ -581,6 +557,10 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 	// for SameSite=None. HttpOnly keeps the JWT out of document.cookie
 	// so an XSS in the SPA cannot exfiltrate it.
 	sameSite := http.SameSiteNoneMode
+	// Cookie MaxAge MUST match the JWT TTL (Manager default 168h),
+	// not the one-time-code ttl (here 24h via payload.ExpiresAt).
+	// Using the code ttl would silently force re-auth mid-session
+	// when the cookie expires before the JWT inside it.
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.SessionCookieName,
 		Value:    jwtToken,
@@ -588,7 +568,7 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: sameSite,
-		MaxAge:   int(time.Until(payload.ExpiresAt).Seconds()),
+		MaxAge:   7 * 24 * 3600, // matches Manager default ttl in NewManager
 	})
 	w.WriteHeader(http.StatusNoContent)
 }

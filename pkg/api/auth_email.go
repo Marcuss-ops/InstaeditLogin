@@ -198,6 +198,16 @@ func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 			writeError(w, http.StatusUnauthorized, "invalid email or password")
 		case errors.Is(err, services.ErrEmailNotVerified):
 			writeError(w, http.StatusForbidden, "email not verified")
+		case errors.Is(err, services.ErrNoWorkspace):
+			// SPRINT 1.1: signal SPA to route the user into onboarding.
+			// 409 Conflict is correct: credentials are valid, but the
+			// server refuses to mint a session because no workspace is
+			// available to bind the JWT to.
+			writeJSON(w, http.StatusConflict, map[string]interface{}{
+				"error":               err.Error(),
+				"code":                "no_workspace",
+				"onboarding_required": true,
+			})
 		default:
 			writeError(w, http.StatusInternalServerError, "login failed")
 		}
