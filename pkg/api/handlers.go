@@ -44,6 +44,7 @@ type Router struct {
 	maxUploadBytes   int64
 	rateLimiter      *rateLimiter // FASE 1.2: per-IP token bucket
 	authEmailSvc     AuthEmailStore
+	teamStore        TeamStore
 }
 
 type UserStore interface {
@@ -204,6 +205,13 @@ func WithCredentialVault(v credentials.VaultAPI) RouterOption {
 func WithAuthEmailService(svc AuthEmailStore) RouterOption {
 	return func(r *Router) { r.authEmailSvc = svc }
 }
+
+// WithTeamStore injects the workspace team repository for member/invite
+// management. When not set, /api/v1/workspaces/{id}/members, /invites,
+// and /api/v1/invites/{token} return 501 Not Implemented.
+func WithTeamStore(s TeamStore) RouterOption {
+	return func(r *Router) { r.teamStore = s }
+}
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -234,6 +242,11 @@ func (r *Router) Setup() http.Handler {
 	// FASE 2.2: email/password auth routes (when configured).
 	if r.authEmailSvc != nil {
 		r.registerAuthEmailRoutes()
+	}
+
+	// FASE 2.3: workspace team management (when configured).
+	if r.teamStore != nil {
+		r.registerTeamRoutes()
 	}
 
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login", http.HandlerFunc(r.handleLogin))
