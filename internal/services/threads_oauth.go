@@ -16,15 +16,29 @@ import (
 
 // ThreadsOAuthService implements the Meta-Threads provider. Threads uses
 // Meta's Graph API with the same OAuth infrastructure as Instagram/Facebook
-// (MetaOAuthBase), but publishing is asynchronous — the initial POST creates
-// a media container whose status must be polled via CheckPublishStatus
-// before the worker publishes via ContinuePublish.
+// (MetaOAuthBase). **Publishing is asynchronous-only**: the initial POST
+// creates a media container whose status is polled via CheckPublishStatus,
+// then the worker publishes via ContinuePublish. The state machine is
+// driven by the AsyncPublisher interface (Taglio 4.2).
+//
+// Taglio 4.4 split: scope formally clarified to async-only via container.
+// The legacy Publisher.Publish() surface is KEPT as a backwards-compat
+// wrapper that runs the full async flow synchronously (createContainer +
+// wait + publishContainer in the same call). New code should use the
+// AsyncPublisher interface (StartPublish / CheckPublishStatus /
+// ContinuePublish / Reconcile) so reconciliation state lives in
+// post_targets.provider_state and is driven by the worker reconciler
+// goroutine — not by a synchronous poll inside the request path.
 //
 // Capabilities exposed:
 //   - OAuthProvider (Meta OAuth login flow)
 //   - ContentValidator (text/image/video required)
-//   - Publisher (synchronous single-step container create + immediate publish)
-//   - AsyncPublisher (Zernio 2.1: two-step async container create → poll → publish)
+//   - Publisher (DEPRECATED compat path — synchronous single-step
+//     container create + immediate publish. Wraps the async flow
+//     behind a blocking call. New code MUST prefer AsyncPublisher)
+//   - AsyncPublisher (PRIMARY — StartPublish / CheckPublishStatus /
+//     ContinuePublish / Reconcile. The worker reconciler goroutine
+//     drives this on every tick.)
 type ThreadsOAuthService struct {
 	base        *MetaOAuthBase
 	redirectURI string
