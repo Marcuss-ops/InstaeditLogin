@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -106,8 +107,8 @@ type Router struct {
 	userAndWorkspaceHelper UserWorkspaceHelper
 	// SPRINT 1.2 — magic-link + connection-state persistence (optional).
 	// Wiring via WithMagicLinkStore / WithConnectionStateStore.
-	authMagicLink        AuthMagicLinkStore
-	connectionStates     ConnectionStateStore
+	authMagicLink    AuthMagicLinkStore
+	connectionStates ConnectionStateStore
 	// SPRINT 2.1 — revocable session lifecycle (optional). Wiring
 	// via WithSessionsService. When nil, /auth/refresh, /auth/logout,
 	// /auth/logout-all, /auth/sessions and DELETE /auth/sessions/{id}
@@ -165,7 +166,14 @@ func WithConnectionStateStore(s ConnectionStateStore) RouterOption {
 }
 
 type UserStore interface {
-	FindOrCreateUserByPlatform(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error)
+	// AttachPlatformAccount links an OAuth platform profile to the
+	// authenticated user identified by userID. SPRINT 7.1 (P0#14)
+	// closed the OAuth-auto-create gap: this method NEVER creates a
+	// user, only attaches a (platform, platform_user_id) tuple to
+	// an existing one. Returns ErrAccountAlreadyLinked (mapped to
+	// HTTP 409 by the OAuth callback handler) when the tuple is
+	// already linked to a different user.
+	AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error)
 	ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error)
 	FindPlatformAccountByID(id int64) (*models.PlatformAccount, error)
 	UpdatePlatformAccount(account *models.PlatformAccount) error
@@ -430,9 +438,16 @@ func (r *Router) Setup() http.Handler {
 		r.registerWebhookRoutes()
 	}
 
+	// SPRINT 7.1 (P0#14): OAuth social routes are gated on a valid
+	// InstaEdit session (Bearer or HttpOnly cookie). The middleware
+	// 302s to /login?next=/connections/{provider} when the user is
+	// not authenticated, so the SPA can resume the OAuth connect
+	// after the user logs in. auto-create-user is removed: users
+	// reach the OAuth callback only via the product onboarding
+	// flow (magic link / email register / login).
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login",
-		OAuthStartLimitIfConfigured(r.rateLimitSvc)(http.HandlerFunc(r.handleLogin)))
-	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(r.handleCallback))
+		OAuthStartLimitIfConfigured(r.rateLimitSvc)(http.HandlerFunc(r.oauthSessionRedirect(r.handleLogin))))
+	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(r.oauthSessionRedirect(r.handleCallback)))
 	r.mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(r.handleExchangeCode))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/me", r.protected(r.handleMe))
 	// SPRINT 2.1: refresh + logout live OUTSIDE the JWT middleware
@@ -597,48 +612,57 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	metrics.RecordOAuthLoginSuccess(provider)
-	user, account, err := r.userRepo.FindOrCreateUserByPlatform(profile, provider)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save user: "+err.Error())
+
+	// SPRINT 7.1 (P0#14): session requirement is enforced by the
+	// oauthSessionRedirect middleware mounted in Setup(). The user
+	// is guaranteed to exist here.
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil {
+		// Defence-in-depth: the middleware should have redirected,
+		// but if it didn't (e.g. wired without the new option in a
+		// test fixture), refuse the connect with 401 rather than
+		// silently auto-creating users.
+		writeError(w, http.StatusUnauthorized, "oauth social requires an InstaEdit session")
 		return
 	}
+	userID := identity.UserID()
+
+	// Attach to the authenticated user — never auto-create.
+	account, err := r.userRepo.AttachPlatformAccount(userID, profile, provider)
+	if err != nil {
+		if errors.Is(err, repository.ErrAccountAlreadyLinked) {
+			// Operator runbook: the legal owner of the link must
+			// disconnect via DELETE /api/v1/accounts/{id} before
+			// re-link is possible.
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to attach platform account: "+err.Error())
+		return
+	}
+
 	// Taglio 2.2: token persistence goes through CredentialVault.Save.
 	if err := r.vault.Save(req.Context(), account.ID, tokenData); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save token: "+err.Error())
 		return
 	}
-	// Taglio 1.2: do NOT return the JWT in the URL or the response body.
-	// Instead, generate a one-time code bound to {userID, name, username, jwtExp},
-	// redirect the browser to /auth/callback?code=...&provider=..., and let
-	// the SPA POST that code to /api/v1/auth/exchange which sets the
-	// HttpOnly session cookie.
-	expiresAt := time.Now().Add(24 * time.Hour)
-	var authCode string
-	authCode, err = r.oneTimeCodes.Generate(ExchangePayload{
-		UserID:    user.ID,
-		Name:      user.Name,
-		Username:  account.Username,
-		ExpiresAt: expiresAt,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to issue one-time code")
-		return
-	}
+
+	// SPRINT 7.1 redirect target: the SPA's connections page. No
+	// one-time code is needed — the session cookie validated at the
+	// top of this handler IS the active session.
 	if r.frontendURL != "" {
 		q := url.Values{}
-		q.Set("code", authCode)
 		q.Set("provider", provider)
-		http.Redirect(w, req, strings.TrimRight(r.frontendURL, "/")+"/auth/callback?"+q.Encode(), http.StatusFound)
+		q.Set("status", "connected")
+		http.Redirect(w, req, strings.TrimRight(r.frontendURL, "/")+"/connections?"+q.Encode(), http.StatusFound)
 		return
 	}
-	// No frontend configured (test/CLI mode): return the code in the body
-	// so the caller can manually POST it to /api/v1/auth/exchange.
+	// CLI / test mode (no FRONTEND_URL): typed JSON response so
+	// callers can pipeline the result without following a redirect.
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":     "code_issued",
+		"status":     "connected",
 		"provider":   provider,
-		"code":       authCode,
-		"user_id":    user.ID,
-		"name":       user.Name,
+		"user_id":    userID,
 		"account_id": account.ID,
 	})
 }
@@ -728,9 +752,9 @@ func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
 // /auth/exchange (OAuth callback) and the switch endpoint's re-bind
 // after token rotation. Strategy (SPRINT 1.1):
 //
-//	1. Owned workspaces: pick most recent (ListByOwner desc).
-//	2. Memberships: pick most recent (ListForUser desc).
-//	3. None → auto-create a "Personal" workspace + admin membership.
+//  1. Owned workspaces: pick most recent (ListByOwner desc).
+//  2. Memberships: pick most recent (ListForUser desc).
+//  3. None → auto-create a "Personal" workspace + admin membership.
 //
 // Step 3 is required so OAuth users who never went through the
 // email/password onboarding still receive a JWT carrying a valid
@@ -766,11 +790,83 @@ func (r *Router) resolveActiveWorkspace(ctx context.Context, userID int64) (int6
 // and clears all session cookies in one step. The route
 // registration in Setup() resolves to that method directly.
 
-
 func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		r.auth.Middleware(next).ServeHTTP(w, req)
 	}
+}
+
+// oauthSessionRedirect validates the session (Bearer or HttpOnly
+// cookie) BEFORE running the wrapped OAuth handler, but unlike
+// `protected` it does not write a 401 on failure: it 302-redirects
+// to ${frontendURL}/login?next=/connections/{provider} so the SPA
+// can show the login UI and resume the OAuth connect after the user
+// authenticates. SPRINT 7.1 (P0#14) — OAuth social is now a
+// "connect an account to an existing product session" operation,
+// not a registration pathway. The handleLogin and handleCallback
+// routes both mount this middleware so the OAuth dialog is never
+// reachable without an InstaEdit session.
+//
+// When frontendURL is empty (CLI / test mode) the helper falls
+// back to writeError(401) so callers can still rely on a typed
+// error response — the SPA path is irrelevant in CLI mode anyway.
+func (r *Router) oauthSessionRedirect(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		identity := r.extractSessionIdentity(req)
+		if identity == nil {
+			if r.frontendURL != "" {
+				provider := req.PathValue("provider")
+				nextURL := url.QueryEscape("/connections/" + provider)
+				http.Redirect(w, req,
+					strings.TrimRight(r.frontendURL, "/")+"/login?next="+nextURL,
+					http.StatusFound)
+				return
+			}
+			writeError(w, http.StatusUnauthorized, "missing user identity (OAuth social requires an InstaEdit session — post /api/v1/auth/register or /login first)")
+			return
+		}
+		ctx := auth.WithIdentity(req.Context(), identity)
+		next(w, req.WithContext(ctx))
+	}
+}
+
+// extractSessionIdentity returns the UserIdentity from the request's
+// Bearer token or `session` HttpOnly cookie, or nil when no valid
+// identity is present. Mirrors auth.Manager.Middleware's verification
+// logic but returns a typed result instead of writing a response,
+// so the caller can decide between 401 (protected endpoints) and
+// 302→/login (OAuth endpoints). API-key Bearer tokens are NOT
+// considered valid for OAuth social — OAuth is a human flow that
+// requires a JWT-path session (sessionID > 0).
+func (r *Router) extractSessionIdentity(req *http.Request) auth.Identity {
+	if r.auth == nil {
+		return nil
+	}
+	// Bearer path.
+	if header := req.Header.Get("Authorization"); header != "" {
+		const prefix = "Bearer "
+		if !strings.HasPrefix(header, prefix) {
+			return nil
+		}
+		raw := strings.TrimSpace(header[len(prefix):])
+		if auth.IsApiKeyBearer(raw) {
+			return nil
+		}
+		uid, wsID, sid, err := r.auth.Verify(raw)
+		if err != nil || uid <= 0 || wsID <= 0 || sid <= 0 {
+			return nil
+		}
+		return auth.NewUserIdentity(uid, wsID, sid)
+	}
+	// Cookie path (`session` HttpOnly).
+	if c, err := req.Cookie(auth.SessionCookieName); err == nil && c.Value != "" {
+		uid, wsID, sid, err := r.auth.Verify(c.Value)
+		if err != nil || uid <= 0 || wsID <= 0 || sid <= 0 {
+			return nil
+		}
+		return auth.NewUserIdentity(uid, wsID, sid)
+	}
+	return nil
 }
 
 // chain composes a list of middlewares around a final handler.

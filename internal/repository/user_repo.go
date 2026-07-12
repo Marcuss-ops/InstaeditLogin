@@ -212,77 +212,83 @@ func (r *UserRepository) FindPlatformAccountByID(id int64) (*models.PlatformAcco
 	return account, nil
 }
 
-// FindOrCreateUserByPlatform finds an existing user linked to the given platform profile,
-// or creates a new user with a linked platform account if none exists.
-func (r *UserRepository) FindOrCreateUserByPlatform(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error) {
-	// Try to find existing platform account
+// AttachPlatformAccount links an OAuth platform profile to an EXISTING
+// user identified by userID. It does NOT create users — SPRINT 7.1
+// (P0#14) closed the OAuth-auto-create gap; users are created via the
+// product onboarding flow (magic link / email register) before they
+// can ever hit /api/v1/auth/{provider}/callback.
+//
+// Behaviour:
+//   - If (platform, platform_user_id) does not exist → INSERT a new
+//     platform_accounts row bound to userID. Returns the new row.
+//   - If (platform, platform_user_id) exists AND existing.UserID == userID
+//     → idempotent: update the username in place (provider-side renames
+//     do happen) and return the existing row.
+//   - If (platform, platform_user_id) exists AND existing.UserID != userID
+//     → return ErrAccountAlreadyLinked. We never silently rebind a
+//     platform identity to a different session user; that's an
+//     account-takeover vector. The operator's runbook is for the
+//     human owner of the existing link to disconnect via
+//     DELETE /api/v1/accounts/{id} before re-link is possible.
+//
+// userID > 0 is enforced (SPRINT 2.1 + Taglio 1.1): a zero user id
+// means the caller hijacked a sessionless request, which is the
+// exact scenario this method is designed to refuse.
+func (r *UserRepository) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+	if userID <= 0 {
+		return nil, fmt.Errorf("attach platform account: invalid user id %d (must be > 0)", userID)
+	}
+	if profile == nil {
+		return nil, fmt.Errorf("attach platform account: nil profile")
+	}
+	if profile.PlatformUserID == "" {
+		return nil, fmt.Errorf("attach platform account: empty platform_user_id")
+	}
+	if platform == "" {
+		return nil, fmt.Errorf("attach platform account: empty platform")
+	}
+
 	existing, err := r.FindPlatformAccount(platform, profile.PlatformUserID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to find platform account: %w", err)
+		return nil, fmt.Errorf("attach platform account: lookup: %w", err)
 	}
-
 	if existing != nil {
-		// Update username if changed
-		user, err := r.FindByID(existing.UserID)
-		if err != nil {
-			return nil, nil, err
+		if existing.UserID != userID {
+			// 409 surface echoes this message verbatim — keep it minimal:
+			// do NOT embed profile.PlatformUserID (provider-scoped stable
+			// id that the requester already knows) or any PII that would
+			// otherwise leak to a stranger's logs.
+			return nil, fmt.Errorf("%w: platform=%s owned_by=%d requested_by=%d",
+				ErrAccountAlreadyLinked, platform, existing.UserID, userID)
 		}
-		// Update user info
-		if profile.Name != "" || profile.Email != "" {
-			user.Name = coalesceStr(profile.Name, user.Name)
-			user.Email = coalesceStr(profile.Email, user.Email)
-			_ = r.Update(user)
-		}
-		// Update platform account username
+		// Same user — idempotent re-link. Refresh username if the
+		// provider says it's changed.
 		if profile.Username != "" && profile.Username != existing.Username {
-			existing.Username = profile.Username
-			_, _ = r.db.Exec(
+			if _, err := r.db.Exec(
 				`UPDATE platform_accounts SET username = $1, updated_at = $2 WHERE id = $3`,
 				profile.Username, time.Now(), existing.ID,
-			)
+			); err != nil {
+				return nil, fmt.Errorf("attach platform account: update username: %w", err)
+			}
+			existing.Username = profile.Username
 		}
-		return user, existing, nil
+		return existing, nil
 	}
 
-	// Create new user and platform account in a transaction
-	tx, err := r.db.Begin()
-	if err != nil {
-		return nil, nil, err
-	}
-	defer tx.Rollback()
-
-	user := &models.User{
-		Email: profile.Email,
-		Name:  profile.Name,
-	}
-	err = tx.QueryRow(
-		`INSERT INTO users (email, name) VALUES ($1, $2) RETURNING id, created_at, updated_at`,
-		user.Email, user.Name,
-	).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create user: %w", err)
-	}
-
+	// No prior link — create bound to the authenticated user.
 	account := &models.PlatformAccount{
-		UserID:         user.ID,
+		UserID:         userID,
 		Platform:       platform,
 		PlatformUserID: profile.PlatformUserID,
 		Username:       profile.Username,
+		Status:         models.AccountStatusActive,
 	}
-	err = tx.QueryRow(
-		`INSERT INTO platform_accounts (user_id, platform, platform_user_id, username)
-		 VALUES ($1, $2, $3, $4) RETURNING id, created_at, updated_at`,
-		account.UserID, account.Platform, account.PlatformUserID, account.Username,
-	).Scan(&account.ID, &account.CreatedAt, &account.UpdatedAt)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create platform account: %w", err)
+	now := time.Now()
+	account.ConnectedAt = &now
+	if err := r.CreatePlatformAccount(account); err != nil {
+		return nil, fmt.Errorf("attach platform account: create: %w", err)
 	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return user, account, nil
+	return account, nil
 }
 
 // coalesceStr returns the first non-empty string.

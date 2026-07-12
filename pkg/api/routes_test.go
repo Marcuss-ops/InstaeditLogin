@@ -14,6 +14,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -112,16 +113,25 @@ func (m *mockCredentialVault) Rotate(ctx context.Context, platformAccountID int6
 }
 
 // mockUserStore implements UserStore with configurable function fields.
+//
+// SPRINT 7.1 (P0#14): FindOrCreateUserByPlatform is gone from the
+// UserStore interface — the OAuth callback now ONLY attaches the
+// platform account to the authenticated user (never auto-creates).
+// Tests that used to return a *models.User pair from a mock callback
+// now return only *models.PlatformAccount (the link side).
 type mockUserStore struct {
-	findOrCreateFn          func(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error)
+	attachFn                func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error)
 	listFn                  func(userID int64, platform string) ([]*models.PlatformAccount, error)
 	findPlatformAccountFn   func(id int64) (*models.PlatformAccount, error)
 	updatePlatformAccountFn func(account *models.PlatformAccount) error
 	deletePlatformAccountFn func(id int64) error
 }
 
-func (m *mockUserStore) FindOrCreateUserByPlatform(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error) {
-	return m.findOrCreateFn(profile, platform)
+func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+	if m.attachFn == nil {
+		return nil, fmt.Errorf("AttachPlatformAccount not implemented in this test mock (override via mockUserStore.attachFn)")
+	}
+	return m.attachFn(userID, profile, platform)
 }
 func (m *mockUserStore) ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error) {
 	return m.listFn(userID, platform)
@@ -319,12 +329,22 @@ func newTestRouter(
 	)
 }
 
+// issueTestJWT mints a JWT carrying (userID, workspaceID=1, sessionID=1).
+// SPRINT 7.1 couples /auth/{provider}/* to a session-gating middleware
+// (oauthSessionRedirect) that calls Manager.Verify on the Authorization
+// header or session cookie. Manager.Verify rejects any token with
+// UserID<=0 || WorkspaceID<=0 || SessionID<=0, so the legacy
+// `Issue(userID)` path (which signs with wsID=0, sessionID=0) no longer
+// produces an acceptable token. IssueAccess requires all three IDs
+// positive; tests that previously relied on Issue(userID) implicitly
+// expected the OAuth layer to ignore the Authorization header — that
+// assumption no longer holds.
 func issueTestJWT(t *testing.T, userID int64) string {
 	t.Helper()
 	authMgr := auth.NewManager(testJWTSecret, 24)
-	tok, _, _, err := authMgr.Issue(userID)
+	tok, _, _, err := authMgr.IssueAccess(userID, 1, 1)
 	if err != nil {
-		t.Fatalf("issue jwt: %v", err)
+		t.Fatalf("issue access jwt (user=%d, ws=1, session=1): %v", userID, err)
 	}
 	return tok
 }
@@ -342,10 +362,17 @@ var successCallback = func(ctx context.Context, state, code string) (*models.Pla
 		}, nil
 }
 
-var successFindOrCreate = func(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error) {
-	return &models.User{ID: 1, Name: profile.Name, Email: profile.Email},
-		&models.PlatformAccount{ID: 10, UserID: 1, Platform: platform, PlatformUserID: profile.PlatformUserID, Username: profile.Username},
-		nil
+// successAttach models the SPRINT 7.1 connect path: the JWT's user_id
+// (1) is the linkage target, never a freshly-allocated id from a
+// FindOrCreateUserByPlatform query.
+var successAttach = func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+	return &models.PlatformAccount{
+		ID:             10,
+		UserID:         userID,
+		Platform:       platform,
+		PlatformUserID: profile.PlatformUserID,
+		Username:       profile.Username,
+	}, nil
 }
 
 func setOAuthStateCookieForTest(req *http.Request, provider, state string) {
@@ -515,14 +542,54 @@ func TestHandleCallback_HandleCallbackError(t *testing.T) {
 	}
 }
 
-func TestHandleCallback_FindOrCreateError(t *testing.T) {
+// TestHandleCallback_AttachError_409 proves SPRINT 7.1 (P0#14):
+// ErrAccountAlreadyLinked surfaces as HTTP 409 to the client. The
+// (platform, platform_user_id) tuple was previously linked to a
+// different InstaEdit user; we never silently rebind. The legal
+// owner of the link must disconnect via
+// DELETE /api/v1/accounts/{id} before re-link is possible.
+//
+// The mock returns the sentinel directly so errors.Is in the
+// handler matches the chain (a wrapped fmt.Errorf("%s: ...")
+// without %w would silently 500 instead of 409).
+func TestHandleCallback_AttachError_409(t *testing.T) {
 	svc := &mockProvider{
 		platform:       "instagram",
 		handleCallback: successCallback,
 	}
 	store := &mockUserStore{
-		findOrCreateFn: func(profile *models.PlatformProfile, platform string) (*models.User, *models.PlatformAccount, error) {
-			return nil, nil, fmt.Errorf("db error")
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			return nil, fmt.Errorf("%w: platform=%s owned_by=999 requested_by=%d",
+				repository.ErrAccountAlreadyLinked, platform, userID)
+		},
+	}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "instagram", "test-state")
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409 Conflict, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "platform account") {
+		t.Errorf("response body should explain the link conflict; got %q", w.Body.String())
+	}
+}
+
+// TestHandleCallback_AttachError_500 covers other AttachPlatformAccount
+// failures (db error, lookup error, create error) that map to 500 —
+// distinct from the ErrAccountAlreadyLinked 409 path above.
+func TestHandleCallback_AttachError_500(t *testing.T) {
+	svc := &mockProvider{
+		platform:       "instagram",
+		handleCallback: successCallback,
+	}
+	store := &mockUserStore{
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			return nil, fmt.Errorf("db error")
 		},
 	}
 	r := newTestRouter(svc, store, "")
@@ -534,7 +601,7 @@ func TestHandleCallback_FindOrCreateError(t *testing.T) {
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("want 500, got %d", w.Code)
+		t.Fatalf("want 500, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -547,7 +614,7 @@ func TestHandleCallback_SaveTokenError(t *testing.T) {
 		handleCallback: successCallback,
 	}
 	store := &mockUserStore{
-		findOrCreateFn: successFindOrCreate,
+		attachFn: successAttach,
 	}
 	vault := &mockCredentialVault{
 		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
@@ -573,7 +640,7 @@ func TestHandleCallback_Success_JSONResponse(t *testing.T) {
 		handleCallback: successCallback,
 	}
 	store := &mockUserStore{
-		findOrCreateFn: successFindOrCreate,
+		attachFn: successAttach,
 	}
 	r := newTestRouter(svc, store, "") // empty frontendURL → JSON
 
@@ -591,20 +658,27 @@ func TestHandleCallback_Success_JSONResponse(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	// Taglio 1.2: the callback now returns a one-time code, NOT the JWT.
-	// The SPA POSTs the code to /api/v1/auth/exchange to mint the
-	// HttpOnly session cookie.
-	if body["status"] != "code_issued" {
-		t.Fatalf("status: want code_issued, got %v", body["status"])
+	// SPRINT 7.1 (P0#14): the OAuth callback is now an "attach to
+	// existing session" operation — no one-time code is issued, no
+	// JWT is minted, and no user is auto-created. The typed JSON
+	// response in CLI / test mode reports the link.
+	if body["status"] != "connected" {
+		t.Fatalf("status: want connected, got %v (SPRINT 7.1 contract)", body["status"])
 	}
 	if body["provider"] != "instagram" {
 		t.Fatalf("provider: want instagram, got %v", body["provider"])
 	}
-	if body["code"] == nil || body["code"] == "" {
-		t.Fatal("expected one-time code in response (Taglio 1.2: JWT never in body)")
+	if _, present := body["code"]; present {
+		t.Fatalf("code field must NOT appear in OAuth callback response (SPRINT 7.1: no one-time code path): %v", body)
+	}
+	if _, present := body["jwt"]; present {
+		t.Fatalf("jwt field must NEVER appear (Taglio 1.2 + SPRINT 7.1): %v", body)
 	}
 	if uid, ok := body["user_id"].(float64); !ok || uid != 1 {
-		t.Fatalf("user_id: want 1, got %v (Taglio 1.2 contract)", body["user_id"])
+		t.Fatalf("user_id: want 1 (the session user), got %v (SPRINT 7.1: must equal JWT uid)", body["user_id"])
+	}
+	if accountID, ok := body["account_id"].(float64); !ok || accountID != 10 {
+		t.Fatalf("account_id: want 10, got %v", body["account_id"])
 	}
 }
 
@@ -614,7 +688,7 @@ func TestHandleCallback_Success_FrontendRedirect(t *testing.T) {
 		handleCallback: successCallback,
 	}
 	store := &mockUserStore{
-		findOrCreateFn: successFindOrCreate,
+		attachFn: successAttach,
 	}
 	r := newTestRouter(svc, store, "https://app.example.com")
 
@@ -625,21 +699,27 @@ func TestHandleCallback_Success_FrontendRedirect(t *testing.T) {
 	r.Setup().ServeHTTP(w, req)
 
 	if w.Code != http.StatusFound {
-		t.Fatalf("want 302, got %d", w.Code)
+		t.Fatalf("want 302, got %d: %s", w.Code, w.Body.String())
 	}
 	loc := w.Header().Get("Location")
-	if !strings.Contains(loc, "https://app.example.com/auth/callback?") {
-		t.Fatalf("redirect URL mismatch: %s", loc)
+	// SPRINT 7.1 (P0#14): the redirect target is the SPA's connections
+	// page with provider + status=connected query params — no one-time
+	// code, no JWT. The session cookie that validated at the top of
+	// the handler IS the active session.
+	if !strings.Contains(loc, "https://app.example.com/connections?") {
+		t.Fatalf("redirect URL must land on /connections (SPRINT 7.1): %s", loc)
 	}
-	// Taglio 1.2: the redirect carries a one-time code, NOT the JWT.
 	if strings.Contains(loc, "jwt=") {
-		t.Fatalf("JWT must never appear in the redirect URL (Taglio 1.2): %s", loc)
+		t.Fatalf("JWT must never appear in the redirect URL: %s", loc)
 	}
-	if !strings.Contains(loc, "code=") {
-		t.Fatalf("expected one-time code in redirect params (Taglio 1.2): %s", loc)
+	if strings.Contains(loc, "code=") {
+		t.Fatalf("one-time code must NOT appear in the OAuth callback redirect (SPRINT 7.1): %s", loc)
 	}
 	if !strings.Contains(loc, "provider=instagram") {
 		t.Fatalf("expected provider=instagram in redirect params: %s", loc)
+	}
+	if !strings.Contains(loc, "status=connected") {
+		t.Fatalf("expected status=connected in redirect params: %s", loc)
 	}
 }
 
@@ -1096,10 +1176,21 @@ func TestHandleLogin_StateIsRandomAcrossRequests(t *testing.T) {
 		return stateParam
 	}
 
+	// SPRINT 7.1 (P0#14): the OAuth login route is now behind
+	// oauthSessionRedirect — a request without an InstaEdit session
+	// is 302'd to /login (verified separately by
+	// TestHandleLogin_RequireSession_RedirectsToLogin). To drive
+	// the actual handleLogin handler, attach a valid Bearer before
+	// each call so redirect lands on the provider's auth dialog
+	// (state-cookie entropy can then be measured).
 	w1 := httptest.NewRecorder()
-	r.Setup().ServeHTTP(w1, httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil))
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
+	withBearerJWT(t, req1, 1)
+	r.Setup().ServeHTTP(w1, req1)
 	w2 := httptest.NewRecorder()
-	r.Setup().ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil))
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
+	withBearerJWT(t, req2, 1)
+	r.Setup().ServeHTTP(w2, req2)
 
 	s1 := extractState(w1)
 	s2 := extractState(w2)
@@ -1113,7 +1204,7 @@ func TestHandleLogin_StateIsRandomAcrossRequests(t *testing.T) {
 
 func TestHandleCallback_RejectsMissingStateCookie_400(t *testing.T) {
 	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
-	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
+	store := &mockUserStore{attachFn: successAttach}
 	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=anything", nil)
@@ -1139,7 +1230,7 @@ func TestHandleCallback_RejectsMissingStateCookie_400(t *testing.T) {
 
 func TestHandleCallback_RejectsMismatchedState_400(t *testing.T) {
 	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
-	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
+	store := &mockUserStore{attachFn: successAttach}
 	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=different-state", nil)
@@ -1166,7 +1257,7 @@ func TestHandleCallback_RejectsMismatchedState_400(t *testing.T) {
 
 func TestHandleCallback_RejectsMissingStateParam_400(t *testing.T) {
 	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
-	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
+	store := &mockUserStore{attachFn: successAttach}
 	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc", nil)
@@ -1190,25 +1281,34 @@ func TestHandleCallback_RejectsMissingStateParam_400(t *testing.T) {
 // platform="meta" returns 404 unsupported_platform. The legacy composite
 // Meta provider was split into instagram, facebook, and threads — the
 // "meta" string must no longer be a valid platform identifier anywhere.
+//
+// SPRINT 7.1 (P0#14): the OAuth routes are now mounted behind
+// oauthSessionRedirect, so a request without an InstaEdit session to
+// an unsupported platform is 302'd to /login (no leak of the provider
+// roster). When a valid session IS present, the inner handleLogin /
+// handleCallback returns 404 unsupported_provider as before — that's
+// the contract the test asserts below.
 func TestPlatformMetaIsRejected(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}
 	r := newTestRouter(svc, store, "")
 
-	// Login with platform=meta must return 404.
+	// Login with platform=meta + AUTH must return 404 (unsupported).
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/login", nil)
 	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
-		t.Fatalf("/auth/meta/login: want 404 (platform removed), got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("/auth/meta/login (+auth): want 404 (platform removed), got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Callback with platform=meta must return 404.
+	// Callback with platform=meta + AUTH must return 404 (unsupported).
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=x", nil)
 	w2 := httptest.NewRecorder()
+	withBearerJWT(t, req2, 1)
 	r.Setup().ServeHTTP(w2, req2)
 	if w2.Code != http.StatusNotFound {
-		t.Fatalf("/auth/meta/callback: want 404 (platform removed), got %d: %s", w2.Code, w2.Body.String())
+		t.Fatalf("/auth/meta/callback (+auth): want 404 (platform removed), got %d: %s", w2.Code, w2.Body.String())
 	}
 
 	// The registered providers (instagram, tiktok, twitter) must still work.
@@ -1221,9 +1321,83 @@ func TestPlatformMetaIsRejected(t *testing.T) {
 	}
 }
 
+// TestHandleLogin_RequireSession_RedirectsToLogin (SPRINT 7.1 P0#14):
+// the OAuth start route 302-redirects to FRONTEND_URL/login?next=...
+// when no InstaEdit session is present. The platform roster is no
+// longer enumerable by unauthenticated probes — both supported and
+// unsupported providers behave identically (redirect) without a
+// session, so an attacker can't tell registered platforms from
+// unregistered ones just by hitting /login. The supported-provider
+// check runs AFTER session validation, so a valid session is
+// required to differentiate.
+func TestHandleLogin_RequireSession_RedirectsToLogin(t *testing.T) {
+	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "https://app.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req) // NO withBearerJWT — session is missing
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("no-session /auth/instagram/login: want 302 to /login, got %d: %s", w.Code, w.Body.String())
+	}
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "https://app.example.com/login?next=") {
+		t.Fatalf("redirect URL must land on FRONTEND_URL/login: got %s", loc)
+	}
+	// The 'next' parameter must encode the provider so the SPA can
+	// resume the OAuth connect after login.
+	if !strings.Contains(loc, "instagram") {
+		t.Errorf("next path should mention the provider so the SPA can resume: %s", loc)
+	}
+	// Defence-in-depth: no state cookie should be set when the
+	// request never made it to the provider's auth dialog.
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateCookieName("instagram") && c.MaxAge > 0 {
+			t.Errorf("oauth state cookie was set despite missing session (state should only bind to authenticated users): %+v", c)
+		}
+	}
+}
+
+// TestHandleCallback_RequireSession_RedirectsToLogin (SPRINT 7.1
+// P0#14): the OAuth callback route mirrors the login route — any
+// hit without a valid InstaEdit session is a 302 to /login. This
+// closes the path where an attacker can simply open the browser
+// at /api/v1/auth/{provider}/callback?code=...&state=test-state
+// without ever being authenticated.
+func TestHandleCallback_RequireSession_RedirectsToLogin(t *testing.T) {
+	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "https://app.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "instagram", "test-state")
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req) // NO withBearerJWT — session is missing
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("no-session /auth/instagram/callback: want 302 to /login, got %d: %s", w.Code, w.Body.String())
+	}
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "https://app.example.com/login?next=") {
+		t.Fatalf("redirect URL must land on FRONTEND_URL/login: got %s", loc)
+	}
+	// No code-exchange call should have happened (no tokenExchange
+	// invoked when there's no session).
+	if svc.handleCallbackCalls != 0 {
+		t.Errorf("HandleCallback called %d time(s) despite missing session (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
+	}
+	// No platform account should have been created or attached
+	// (the mock would have recorded attachFn invocations).
+	// The mockUserStore defaults to erroring on attach so we
+	// can't directly assert "not called" without wiring attachFn;
+	// the absence of a 200 + state-cookie deletion is sufficient.
+}
+
 func TestHandleCallback_DeletesStateCookieAfterUse(t *testing.T) {
 	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
-	store := &mockUserStore{findOrCreateFn: successFindOrCreate}
+	store := &mockUserStore{attachFn: successAttach}
 	r := newTestRouter(svc, store, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)

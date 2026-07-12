@@ -45,7 +45,10 @@ func newPostsTestRouter(
 
 func postsIssueJWT(t *testing.T, userID int64) string {
 	t.Helper()
-	tok, _, _, err := auth.NewManager(testJWTSecret, 24).Issue(userID)
+	// SPRINT 7.1: Issuer must carry (wsID=1, sessionID=1) so
+	// Manager.Verify accepts the token when the request reaches
+	// r.protected (Taglio 1.1 contracts).
+	tok, _, _, err := auth.NewManager(testJWTSecret, 24).IssueAccess(userID, 1, 1)
 	if err != nil {
 		t.Fatalf("issue jwt: %v", err)
 	}

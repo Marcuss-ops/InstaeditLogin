@@ -103,4 +103,14 @@ var (
 	// regress on pre-existing data. The error is the safety net for
 	// degenerate runbook INSERTs and unintended duplicate-key stamps.
 	ErrProviderIdempotencyConflict = errors.New("provider idempotency key conflict: account already has a target with this key")
+
+	// ErrAccountAlreadyLinked is returned by UserRepository.AttachPlatformAccount
+	// when the (platform, platform_user_id) row exists but belongs to a
+	// different user than the one passed in. SPRINT 7.1 (P0#14) closes
+	// the OAuth-auto-create gap — AttachPlatformAccount MUST NOT silently
+	// rebind an account to a different user. The API layer maps this
+	// sentinel to HTTP 409 Conflict so the user is told their (provider,
+	// provider-user-id) is already linked to another InstaEdit account
+	// (re-binding would be an account-takeover vector).
+	ErrAccountAlreadyLinked = errors.New("platform account already linked to another user")
 )

@@ -39,7 +39,11 @@ func newWorkspaceTestRouter(
 
 func workspacesIssueJWT(t *testing.T, userID int64) string {
 	t.Helper()
-	tok, _, _, err := auth.NewManager(testJWTSecret, 24).Issue(userID)
+	// SPRINT 7.1 (P0#14): Issue(userID) signs with wsID=0/1+sessionID=0
+	// which Manager.Verify rejects (it requires all three positive).
+	// IssueAccess is the production-side helper that produces an
+	// acceptable bearer — Issue is kept only for legacy callers.
+	tok, _, _, err := auth.NewManager(testJWTSecret, 24).IssueAccess(userID, 1, 1)
 	if err != nil {
 		t.Fatalf("issue jwt: %v", err)
 	}

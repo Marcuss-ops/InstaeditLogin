@@ -229,8 +229,10 @@ func TestHandleAcceptInvite(t *testing.T) {
 	r.mux = router
 	r.registerTeamRoutes()
 
-	// Issue a real JWT for user 99.
-	jwt, _, _, _ := authMgr.Issue(99, 1)
+	// Issue a real JWT for user 99. SPRINT 7.1: must carry positive
+	// sessionID so Manager.Verify accepts it (the team routes are
+	// now behind r.protected which uses the same Verify contract).
+	jwt, _, _, _ := authMgr.IssueAccess(99, 1, 1)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/invites/"+inv.Token, nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)
