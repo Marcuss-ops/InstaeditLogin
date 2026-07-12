@@ -74,11 +74,18 @@ func TestWaitReady_SuccessOnNthAttempt(t *testing.T) {
 
 	// (K-1) backoff sleeps happened (after each of the K-1 failed
 	// attempts); the final successful attempt has no sleep after
-	// it. Allow a 30ms floor for scheduler jitter on the lower
-	// bound.
-	minExpected := time.Duration(failUntil-1)*backoff - 30*time.Millisecond
+	// it. The lower bound subtracts 50ms of slack for heavily-loaded
+	// CI runners (Goroutine scheduling latency can dwarf the
+	// 50ms per-iteration sleep). The upper bound adds 500ms to catch
+	// infinite-loop regressions (a runaway loop would blow past
+	// this and fail the test).
+	minExpected := time.Duration(failUntil-1)*backoff - 50*time.Millisecond
+	maxExpected := time.Duration(failUntil-1)*backoff + 500*time.Millisecond
 	if elapsed < minExpected {
-		t.Errorf("elapsed: want >= %v (= %d backoffs), got %v", minExpected, failUntil-1, elapsed)
+		t.Errorf("elapsed: want >= %v (= %d backoffs - 50ms slack), got %v", minExpected, failUntil-1, elapsed)
+	}
+	if elapsed > maxExpected {
+		t.Errorf("elapsed: want <= %v (= %d backoffs + 500ms ceiling), got %v (possible infinite loop regression)", maxExpected, failUntil-1, elapsed)
 	}
 }
 
@@ -225,6 +232,24 @@ func TestWaitReady_DefaultResolution(t *testing.T) {
 				minExpected, maxExpected, elapsed)
 		}
 	})
+
+	t.Run("DefaultsAreSensible", func(t *testing.T) {
+		// The default-resolution path in WaitReady is:
+		//   if deadline <= 0 { deadline = WaitReadyDefaultDeadline }
+		//   if backoff  <= 0 { backoff  = WaitReadyDefaultBackoff  }
+		// This subtest locks in the constant values (the intended
+		// defaults) so an accidental change to 30s/500ms is caught
+		// by a test, not by surprise in production. The DeadlineZero
+		// + BackoffZero subtests above prove the resolution code
+		// path doesn't crash on 0; this one proves the values the
+		// path uses are the values we expect.
+		if runtime.WaitReadyDefaultDeadline != 15*time.Second {
+			t.Errorf("WaitReadyDefaultDeadline: want 15s, got %v", runtime.WaitReadyDefaultDeadline)
+		}
+		if runtime.WaitReadyDefaultBackoff != 200*time.Millisecond {
+			t.Errorf("WaitReadyDefaultBackoff: want 200ms, got %v", runtime.WaitReadyDefaultBackoff)
+		}
+	})
 }
 
 // fakeTB is a minimal testing.TB implementation that captures
@@ -240,6 +265,13 @@ func TestWaitReady_DefaultResolution(t *testing.T) {
 // only override the public methods we want to intercept — all
 // other TB methods (Helper, Skipf, Cleanup, etc.) are inherited
 // from the embedded *testing.T and behave normally.
+//
+// SINGLE-GOROUTINE ONLY: the failed/lastFormat/lastArgs fields
+// are not guarded by a mutex. A future test that splits across
+// parallel subtests (t.Parallel()) and routes Fatalf through this
+// fake would race on these fields. WaitReady itself is
+// single-goroutine, so this is safe today; the comment is
+// defensive for future contributors.
 type fakeTB struct {
 	*testing.T
 

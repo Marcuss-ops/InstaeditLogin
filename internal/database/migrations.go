@@ -16,6 +16,18 @@ var migrationFiles embed.FS
 // Every statement is idempotent (CREATE IF NOT EXISTS, ADD COLUMN IF NOT EXISTS,
 // DO-block guarded CREATE TYPE).
 func RunMigrations(db *sql.DB) error {
+	return runMigrationsRange(db, 0)
+}
+
+// RunMigrationsUpTo runs all migrations up to and including the migration
+// whose filename starts with the given sequence number (e.g. 27 runs
+// 001..027). Useful for testing: insert data after N-1 migrations, then
+// apply migration N to verify its behaviour.
+func RunMigrationsUpTo(db *sql.DB, maxSeq int) error {
+	return runMigrationsRange(db, maxSeq)
+}
+
+func runMigrationsRange(db *sql.DB, maxSeq int) error {
 	entries, err := migrationFiles.ReadDir("migrations")
 	if err != nil {
 		return fmt.Errorf("failed to read embedded migrations: %w", err)
@@ -31,6 +43,14 @@ func RunMigrations(db *sql.DB) error {
 			continue
 		}
 
+		// If a maxSeq is set, skip migrations beyond it.
+		if maxSeq > 0 {
+			seq := extractMigrationSeq(entry.Name())
+			if seq > maxSeq {
+				continue
+			}
+		}
+
 		sqlBytes, err := migrationFiles.ReadFile("migrations/" + entry.Name())
 		if err != nil {
 			return fmt.Errorf("failed to read migration %s: %w", entry.Name(), err)
@@ -42,4 +62,18 @@ func RunMigrations(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// extractMigrationSeq parses the leading digits from a filename like
+// "028_multi_tenancy.sql" → 28.
+func extractMigrationSeq(name string) int {
+	var seq int
+	for _, c := range name {
+		if c >= '0' && c <= '9' {
+			seq = seq*10 + int(c-'0')
+		} else {
+			break
+		}
+	}
+	return seq
 }
