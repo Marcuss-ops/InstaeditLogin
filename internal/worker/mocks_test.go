@@ -283,6 +283,15 @@ func newTestWorker(posts PublisherPostStore, users *mockUserStore, name string, 
 	)
 }
 
+// newTestWorkerWithoutThrottle is like newTestWorker but with the
+// platform throttle disabled (nil). Use this in tests that call
+// publishTarget multiple times to avoid blocking on Wait().
+func newTestWorkerWithoutThrottle(posts PublisherPostStore, users *mockUserStore, name string, svc any, vault *mockCredentialVault) *PublishWorker {
+	w := newTestWorker(posts, users, name, svc, vault)
+	w.throttle = nil
+	return w
+}
+
 // newTestReconcileWorker builds a ReconcileWorker wired with the
 // given mocks. interval is small (10ms) but irrelevant — tests call
 // tickReconcile / reconcileTarget directly, or drive Run on a

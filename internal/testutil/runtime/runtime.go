@@ -101,8 +101,13 @@ func RequireDocker(t *testing.T) {
 //
 // Parameters:
 //
-//   - t:        the test handle (used for t.Helper + t.Logf +
-//     t.Fatalf).
+//   - t:        the test handle (used for t.Helper + t.Fatalf).
+//     Accepts testing.TB rather than *testing.T for testability:
+//     a fake TB can capture the Fatalf call (format string + args)
+//     in unit tests without leaking failure to the parent test, and
+//     any real *testing.T satisfies testing.TB so existing callers
+//     (postgres.go, redis.go, etc.) are unaffected by the
+//     widening.
 //   - ping:     zero-arg function returning nil iff the service is
 //     ready. Canonical contacts are db.Ping for Postgres, the PING
 //     command for Redis, broker metadata requests for Kafka. The
@@ -114,7 +119,7 @@ func RequireDocker(t *testing.T) {
 //     negative → WaitReadyDefaultBackoff. A backoff > deadline (after
 //     default-resolution) is harmless — the loop's last failed
 //     probe simply exits without sleeping.
-func WaitReady(t *testing.T, ping func() error, deadline, backoff time.Duration) {
+func WaitReady(t testing.TB, ping func() error, deadline, backoff time.Duration) {
 	t.Helper()
 
 	if deadline <= 0 {

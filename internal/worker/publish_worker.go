@@ -146,6 +146,7 @@ type PublishWorker struct {
 	userRepo PublisherUserStore
 	router   *services.CapabilityRouter
 	vault    credentials.VaultAPI
+	throttle *PlatformThrottle // FASE 1.3: per-platform rate limiter
 	interval time.Duration
 	logger   *slog.Logger
 }
@@ -174,6 +175,7 @@ func NewPublishWorker(
 		userRepo: userRepo,
 		router:   router,
 		vault:    vault,
+		throttle: NewPlatformThrottle(), // FASE 1.3
 		interval: interval,
 		logger:   logger,
 	}
@@ -406,6 +408,17 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		payload.VideoURL = post.MediaURL
 	}
 	payload.IdempotencyKey = key
+
+	// FASE 1.3: throttle per-platform API calls to avoid rate-limit
+	// bans. If the throttle is nil (test mode), skip. If the platform's
+	// bucket is empty, Wait() blocks until a token is available or
+	// ctx is cancelled (graceful shutdown).
+	if w.throttle != nil {
+		if err := w.throttle.Wait(ctx, account.Platform); err != nil {
+			return fmt.Errorf("throttle wait for %s: %w", account.Platform, err)
+		}
+	}
+
 	result, err := publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
 	if err != nil {
 		return w.markFailed(target, err.Error())
