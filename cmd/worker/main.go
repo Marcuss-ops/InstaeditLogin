@@ -32,6 +32,10 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/bootstrap"
 )
 
+// startWorkerHealthListener lives in cmd/worker/health_listener.go
+// (same package main) — kept here in the repo's small-main-file
+// convention so cmd/worker/main.go stays a thin entrypoint.
+
 func main() {
 	_, _ = fmt.Fprintln(os.Stdout, "Starting InstaEditLogin workers (Blocco #2.1: split from cmd/server)")
 
@@ -48,6 +52,12 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Health listener for Fly [[services.tcp_checks]] (see
+	// fly.worker.toml + startWorkerHealthListener godoc). Bound BEFORE
+	// RunWorkers blocks so the listener is reachable for the whole
+	// window the worker is alive.
+	startWorkerHealthListener(ctx, slog.Default())
 
 	// Signal handler drives ctx cancel. MUST be installed before
 	// RunWorkers blocks on <-ctx.Done(), otherwise SIGARM is lost.

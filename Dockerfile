@@ -1,16 +1,21 @@
-# InstaEditLogin — Multi-stage Dockerfile (Blocco #2.1)
+# InstaEditLogin — Multi-stage Dockerfile (Blocco #2.1 / Blocco #4.1)
 #
 # Targets:
-#   api       — HTTP server only (cmd/api)
-#   worker    — 5 background goroutines only (cmd/worker)
-#   migrate   — one-shot pre-deploy migration (cmd/migrate)
-#   server    — legacy single-bundle wrapper (cmd/server) for dev / Railway
+#   api         — HTTP server only (cmd/api). Local-dev single-process shape.
+#   worker      — 5 background goroutines only (cmd/worker). Local-dev single-process.
+#   migrate     — one-shot pre-deploy migration (cmd/migrate).
+#   production  — UNIFIED bundle for Fly.io (Blocco #4.1). Ships
+#                 /app/api + /app/worker + /app/migrate in ONE image;
+#                 fly.toml [processes] picks which binary runs. This
+#                 is what Fly builds in production.
+#   server      — legacy single-bundle wrapper (cmd/server) for dev / Railway.
 #
 # Build:
-#   docker build --target api     -t instaedit-api      .
-#   docker build --target worker  -t instaedit-worker   .
-#   docker build --target migrate -t instaedit-migrate  .
-#   docker build --target server  -t instaedit-server   .   (dev / backward-compat)
+#   docker build --target api         -t instaedit-api         .
+#   docker build --target worker      -t instaedit-worker      .
+#   docker build --target migrate     -t instaedit-migrate     .
+#   docker build --target production  -t instaedit-fly         .   # Fly.io target
+#   docker build --target server      -t instaedit-server      .   # legacy single-process
 #
 # Default target (when no --target is supplied): api.
 
@@ -93,3 +98,34 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://localhost:8080/api/v1/health || exit 1
 
 CMD ["/app/server"]
+
+# ────────────────────────────────────────────────────────────────────────
+# Stage 7: production — Blocco #4.1 Fly.io unified-image target.
+#
+# Ships /app/api, /app/worker, AND /app/migrate in ONE image. fly.toml
+# [processes] picks which binary runs per process group:
+#   - [processes] api    = "/app/api"     (HTTP server)
+#   - [processes] worker = "/app/worker"  (5 background goroutines)
+#
+# WORKDIR=/app keeps the cmd/migrate binary at ./migrate so the
+# release_command = "./migrate" Fly idiom lands on the right path.
+# The docker HEALTHCHECK below is a fallback for raw `docker run`
+# debugging; Fly has per-process health checks of its own
+# ([[services.http_checks]] on the api group + [[services.tcp_checks]]
+# on the worker group, both pointing at this image's listener rather
+# than a Docker HEALTHCHECK).
+# ────────────────────────────────────────────────────────────────────────
+FROM base AS production
+COPY --from=builder /out/api     /app/api
+COPY --from=builder /out/worker  /app/worker
+COPY --from=builder /out/migrate /app/migrate
+RUN chown -R appuser:appuser /app
+USER appuser
+WORKDIR /app
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:8080/api/v1/health || exit 1
+
+# Default CMD is the api; fly.toml [processes] overrides per process group.
+CMD ["/app/api"]
