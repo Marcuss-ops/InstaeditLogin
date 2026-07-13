@@ -3,10 +3,9 @@
 # ONE Fly app, TWO process groups (api + worker). Both run from the
 # SAME image (Dockerfile [production] stage, which bundles
 # /app/api + /app/worker + /app/migrate + /migrate). The [processes]
-# block below picks the per-process entrypoint binary; the rest of
-# the image is shared (same DB conn, same encryption keys, same JWT
-# secret, same S3 storage config). Setting `workdir` to `/app` so the
-# release_command shorthand "./migrate" lands on /app/migrate.
+# block below picks the per-process entrypoint binary; the rest of the
+# image is shared (same DB conn, same encryption keys, same JWT
+# secret, same S3 storage config).
 #
 # Always-on (Blocco #4.1 contract): min_machines_running = 1 GUARDS
 # against scale-to-zero. The api process keeps low-latency JWT issuing
@@ -14,35 +13,64 @@
 # publish/reconcile drain steady. Independent health checks below gate
 # traffic onto healthy machines during a rolling swap.
 #
-# Env scoping:
-#   - shared (api + worker):          DATABASE_URL, JWT_SECRET,
-#                                    ENCRYPTION_KEYS, ACTIVE_ENCRYPTION_KEY_ID,
-#                                    S3_*, bucket, region, email,
-#                                    OAuth provider creds, stripe webhook
-#                                    secret, worker tick intervals.
-#   - api-only:                       FRONTEND_URL, CORS_ALLOWED_ORIGINS,
-#                                    Stripe publishable keys if any,
-#                                    PORT. Worker process ignores these
-#                                    silently (cfg.FrontendURL = "" is a
-#                                    valid state for the no-HTTP process).
-#   - worker-only:                    WORKER_HEALTH_PORT = "9090" (Fly
-#                                    [[services.tcp_checks]] target). The
-#                                    shared [env] sets it to "0" (off) so
-#                                    `fly deploy` never surprises dev
-#                                    environments — only the [processes.worker.env]
-#                                    block enables it on Fly.
+# ────────────────────────────────────────────────────────────────────────
+# Secrets policy (Blocco #4.1)
+# ────────────────────────────────────────────────────────────────────────
+# This file is committed. Anything sensitive MUST be set via
+# `flyctl secrets set` — never inlined in [env] (which is committed
+# to git). The canonical beta command lives in docs/DEPLOY.md and
+# covers:
+#
+#   - DB:           DATABASE_URL (managed Postgres on Fly, internal
+#                   flycast, sslmode=require baked into the URL).
+#   - Crypto:       ENCRYPTION_KEYS (format "id:base64key[,id:base64key]")
+#                   + JWT_SECRET.
+#   - S3:           S3_ACCESS_KEY, S3_SECRET_KEY. S3_ENDPOINT,
+#                   S3_REGION, S3_BUCKET are public and live in [env]
+#                   below.
+#   - Mail:         EMAIL_PROVIDER_KEY. EMAIL_PROVIDER, EMAIL_FROM,
+#                   EMAIL_FROM_NAME are public and live in [env].
+#   - Providers:    META_APP_ID, META_APP_SECRET (covers Instagram,
+#                   Facebook, Threads via Meta Graph). The
+#                   *_REDIRECT_URI URLs are public (pinned by the
+#                   provider console on registration) and live in
+#                   [env].
+#   - Frontend:     FRONTEND_URL, CORS_ALLOWED_ORIGINS, COOKIE_DOMAIN
+#                   (set to ".instaedit.org" so the csrf_token cookie
+#                   is shared across app/api subdomains per Blocco
+#                   #2.4 cross-subdomain match).
+#   - Observability (opt-in, Blocco #5.3): SENTRY_DSN,
+#                   SENTRY_ENVIRONMENT, SENTRY_RELEASE. Empty == no
+#                   Sentry init; non-empty == sentrygo.Init runs at
+#                   startup + panic middleware captures every
+#                   recovered panic via sentryhttp.New. The empty
+#                   default keeps dev/local runs quiet.
+#
+# Per-process secrets work the same way (replace FOO with any real
+# per-process env name; the codebase currently has no per-process
+# secrets, so this is illustrative only):
+#   flyctl secrets set --process-group worker FOO=bar
+#
+# Note for third-party TOML validators (CI gates, etc.): this file
+# uses a Fly-specific extension where [processes] declares string
+# entrypoints (api = "/app/api", worker = "/app/worker") AND
+# [processes.api.env] / [processes.worker.env] declare per-process
+# env sub-tables in the same hierarchy. Standard strict TOML parsers
+# (e.g. Python tomllib) flag this as "Cannot overwrite a value"
+# because the path [processes][api] is a string in one place and
+# the prefix of a sub-table in another. flyctl parses this correctly;
+# trust flyctl over strict parsers for the Fly-specific shape.
+#
+# Disabled providers — TikTok, X (Twitter), YouTube, LinkedIn, and
+# Stripe — are not configured in beta. Their *_CLIENT_ID /
+# *_CLIENT_SECRET / *_REDIRECT_URI / STRIPE_* env keys are removed
+# entirely from this file; re-add them when the corresponding
+# provider is enabled (the in-app capabilities / provider-registry
+# also gates them off, so a stale value can't accidentally re-enable
+# a disabled flow).
 #
 # Deploy:
 #   flyctl deploy --config fly.toml
-#
-# NOTE on secrets: this file uses `<redacted>` for secrets intentionally.
-# Production deploys MUST set those values via `flyctl secrets set` \
-# before/after the first deploy (DATABASE_URL, JWT_SECRET, \
-# ENCRYPTION_KEYS, S3_ACCESS_KEY, S3_SECRET_KEY, EMAIL_PROVIDER_KEY, \
-# STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET). Setting them via [env] \
-# would pin them in version control; Fly's secrets store is the \
-# canonical home for sensitive material. Per-process scopes work the
-# same way: `flyctl secrets set --process-group worker WORKER_TOKEN=...`.
 
 app = "instaedit-login"
 primary_region = "iad"
@@ -56,12 +84,10 @@ primary_region = "iad"
 [deploy]
   # release_command runs in a fresh ephemeral machine with the SAME
   # image, picking up DATABASE_URL + JWT_SECRET + ENCRYPTION_KEYS
-  # from the regular [env] block (Fly inherits into release machines).
-  # WORKDIR=/app is set on Dockerfile [production] so `./migrate`
-  # resolves to /app/migrate (the binary at that path comes from the
-  # `COPY --from=builder /out/migrate /app/migrate` line in the
-  # Dockerfile). The contract from the user spec is "./migrate" —
-  # NOT "./migrate.sh", the binary has no extension.
+  # via Fly's secret propagation into release machines. WORKDIR=/app
+  # is set on Dockerfile [production] so `./migrate` resolves to
+  # /app/migrate. The contract from the spec is "./migrate" — NOT
+  # "./migrate.sh"; the binary has no extension.
   release_command = "./migrate"
   strategy = "rolling"
   # ALWAYS-ON: at least 1 machine per process group alive. No
@@ -71,81 +97,55 @@ primary_region = "iad"
   min_machines_running = 1
 
 [env]
-  # Process-agnostic shared config.
+  # Process-agnostic shared non-sensitive config.
   GIN_MODE = "release"
   LOG_LEVEL = "info"
   APP_ENV = "production"
 
-  # Blocco #5.3 — Sentry observability (optional). Commented
-  # out by default — operators opt in by running `flyctl secrets
-  # set SENTRY_DSN=https://<key>@<host>/<project>` and the
-  # values re-attach via Fly's secret propagation on next
-  # deploy. The wire code in internal/bootstrap.Wire checks
-  # cfg.SentryDSN — empty == no Sentry init; non-empty ==
-  # sentrygo.Init runs at startup + panic middleware
-  # captures every recovered panic via sentryhttp.New.
-  # SENTRY_DSN = "<redacted>"
-  # SENTRY_ENVIRONMENT = "production"
-  # SENTRY_RELEASE = "<redacted>"
-
-  # Blocco #5.3 — /ready endpoint is mounted at "/ready" (no JWT).
-  # Fly's [[services.api]] http_checks above targets
-  # /api/v1/health (the cheap liveness probe); /ready is for
-  # K8s-style deep-readiness probes that wake the DB. Add a
-  # second [[services]] block or a [[services.http_checks]] on
-  # the existing one with path = "/ready" when an orchestrator
-  # needs the deep signal.
-
-  # DB (managed Postgres on Fly, internal-only via flycast).
-  DATABASE_URL = "postgresql://instaedit:<redacted>@<managed-pg-host>.flycast:5432/instaedit_login?sslmode=require"
-  DB_SSLMODE = "require"
-
-  # Crypto (Blocco #2.2 multi-key).
-  ENCRYPTION_KEYS = "<redacted>"
-  ACTIVE_ENCRYPTION_KEY_ID = "1"
-
-  # JWT (worker + api both sign/validate).
-  JWT_SECRET = "<redacted>"
-
-  # S3-compatible storage (api mints presigned URLs; worker verifies
-  # media_url on candidate publish payloads, so both apps need S3_*).
+  # S3-compatible storage. The endpoint / region / bucket are public
+  # (Tigris is a public service). The access / secret keys are set
+  # via flyctl secrets set (S3_ACCESS_KEY, S3_SECRET_KEY).
   S3_ENDPOINT = "https://fly.storage.tigris.dev"
   S3_REGION = "auto"
   S3_BUCKET = "instaedit-media"
-  S3_ACCESS_KEY = "<redacted>"
-  S3_SECRET_KEY = "<redacted>"
+
+  # Mail transactional provider (Blocco #2.3). Provider name + From
+  # address are public; the actual API key (EMAIL_PROVIDER_KEY) is
+  # set via flyctl secrets set. Worker reads outbox events and
+  # invokes the sender; api reads the same config for ad-hoc
+  # transactional templates.
+  EMAIL_PROVIDER = "postmark"
+  EMAIL_FROM = "no-reply@instaedit.org"
+  EMAIL_FROM_NAME = "InstaEdit"
+
+  # Active encryption key id (the actual key bytes come from the
+  # ENCRYPTION_KEYS secret, set via flyctl secrets set). The id is
+  # just an index, not a credential — safe to keep in [env].
+  ACTIVE_ENCRYPTION_KEY_ID = "1"
 
   # Worker cadence (consumed by both apps; api process ignores
-  # because it has no workers; worker uses them directly).
+  # because it has no workers; worker uses them directly). Tunable
+  # per environment but not a secret.
   PUBLISH_WORKER_INTERVAL_SECONDS = "30"
   RECONCILE_WORKER_INTERVAL_SECONDS = "5"
   WEBHOOK_WORKER_INTERVAL_SECONDS = "30"
   METRICS_COLLECT_INTERVAL_SECONDS = "60"
 
-  # OAuth provider creds (worker refreshes via the vault; api only
-  # uses them at startup). Same template both sides.
-  META_APP_ID = "<redacted>"
-  META_APP_SECRET = "<redacted>"
-  TIKTOK_CLIENT_ID = "<redacted>"
-  TIKTOK_CLIENT_SECRET = "<redacted>"
-  X_CLIENT_ID = "<redacted>"
-  X_CLIENT_SECRET = "<redacted>"
-  YOUTUBE_CLIENT_ID = "<redacted>"
-  YOUTUBE_CLIENT_SECRET = "<redacted>"
-  LINKEDIN_CLIENT_ID = "<redacted>"
-  LINKEDIN_CLIENT_SECRET = "<redacted>"
+  # Rate-limit floors (api only; the worker process ignores these).
+  # Tunable per environment but not a secret.
+  RATE_LIMIT_POSTS_PER_WORKSPACE_PER_MIN = "60"
+  RATE_LIMIT_APIKEY_READS_PER_KEY_PER_MIN = "600"
+  RATE_LIMIT_MEDIA_PRESIGN_PER_IP_PER_MIN = "30"
+  RATE_LIMIT_OAUTH_START_PER_IP_PER_MIN = "30"
 
-  # Mail transactional provider (Blocco #2.3). Worker reads outbox
-  # events and invokes the sender; api reads the same config for
-  # ad-hoc transactional templates.
-  EMAIL_PROVIDER = "postmark"
-  EMAIL_PROVIDER_KEY = "<redacted>"
-  EMAIL_FROM = "no-reply@instaedit.org"
-  EMAIL_FROM_NAME = "InstaEdit"
-
-  # Stripe — webhook signing secret is verified by the worker; the
-  # publishable key + secret are api-only.
-  STRIPE_WEBHOOK_SECRET = "<redacted>"
+  # OAuth redirect URIs (public, registered in each provider's
+  # developer console). These are NOT secrets — they're pinned by
+  # the provider console on registration. They live in [env] so
+  # the same value is shared between api and worker without going
+  # through the secrets store.
+  INSTAGRAM_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/instagram/callback"
+  FACEBOOK_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/facebook/callback"
+  THREADS_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/threads/callback"
 
   # Worker health port — shared default is OFF ("0") so dev runs
   # (make run-worker) don't accidentally bind 9090. [processes.worker.env]
@@ -161,15 +161,6 @@ primary_region = "iad"
 
 [processes.api.env]
   PORT = "8080"
-  FRONTEND_URL = "https://app.instaedit.org"
-  CORS_ALLOWED_ORIGINS = "https://app.instaedit.org"
-  STRIPE_SECRET_KEY = "<redacted>"
-  STRIPE_PRICE_ID_PRO = "<redacted>"
-  # Rate-limit floors — api only.
-  RATE_LIMIT_POSTS_PER_WORKSPACE_PER_MIN = "60"
-  RATE_LIMIT_APIKEY_READS_PER_KEY_PER_MIN = "600"
-  RATE_LIMIT_MEDIA_PRESIGN_PER_IP_PER_MIN = "30"
-  RATE_LIMIT_OAUTH_START_PER_IP_PER_MIN = "30"
 
 [processes.worker.env]
   # Opt the worker process group into the Fly tcp_checks target. The
@@ -228,15 +219,13 @@ primary_region = "iad"
     grace_period = "15s"
 
 # ────────────────────────────────────────────────────────────────────────
-# [[services.migrate]] — sentinel service for the release-command container.
-# Fly runs release_command in a dedicated fresh machine with the SAME
-# image; declaring a minimal service here means Fly can route its
-# /api/v1/health probe during release and surface a clean "release
-# failed" line in the dashboard if /migrate exits non-zero during the
-# apply. internal_port 8080 is fine because cmd/migrate never binds it
-# so http_checks here gracefully fail-fast — the release DOES NOT need
-# the http_checks to succeed, only ./migrate to exit 0; we leave this
-# commented as documentation.
+# [[services.migrate]] — sentinel service for the release-command
+# container. Fly runs release_command in a dedicated fresh machine
+# with the SAME image; declaring a minimal service here means Fly
+# can route its /api/v1/health probe during release. cmd/migrate
+# never binds a port so http_checks here gracefully fail-fast — the
+# release DOES NOT need the http_checks to succeed, only ./migrate
+# to exit 0; we leave this commented as documentation.
 # ────────────────────────────────────────────────────────────────────────
 # [[services]]
 #   processes = ["release"]
