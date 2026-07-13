@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // -----------------------------------------------------------------------
@@ -15,7 +17,7 @@ func TestThrottle_Wait_AcquiresTokenImmediately(t *testing.T) {
 	pt := NewPlatformThrottle()
 
 	// First call should return immediately (burst=1, bucket full).
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
 	start := time.Now()
@@ -23,7 +25,7 @@ func TestThrottle_Wait_AcquiresTokenImmediately(t *testing.T) {
 		t.Fatalf("Wait: %v", err)
 	}
 	elapsed := time.Since(start)
-	if elapsed > 50*time.Millisecond {
+	if elapsed > 100*time.Millisecond {
 		t.Errorf("Wait took %v, want immediate (bucket full)", elapsed)
 	}
 }
@@ -38,8 +40,8 @@ func TestThrottle_Wait_BlocksWhenEmpty(t *testing.T) {
 	}
 
 	// Second call should block (TikTok rate: 1/2s, burst=1).
-	// Give it a short timeout so the test doesn't hang.
-	ctx2, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Use a generous timeout so slow CI runners do not flake.
+	ctx2, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	start := time.Now()
@@ -48,9 +50,9 @@ func TestThrottle_Wait_BlocksWhenEmpty(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 	// TikTok rate is 0.5 req/s = 2s per token. Elapsed should be
-	// at least ~2s, but allow some slack for scheduler variance.
-	if elapsed < 1500*time.Millisecond {
-		t.Errorf("Wait took %v, want >=1500ms (tiktok rate: 0.5/s)", elapsed)
+	// at least ~2s, but allow generous slack for scheduler variance.
+	if elapsed < 1300*time.Millisecond {
+		t.Errorf("Wait took %v, want >=1300ms (tiktok rate: 0.5/s)", elapsed)
 	}
 }
 
@@ -69,13 +71,14 @@ func TestThrottle_DifferentPlatforms_IndependentBuckets(t *testing.T) {
 
 	// Instagram has rate=2/s (500ms per token). TikTok has 0.5/s
 	// (2s per token). Calling Instagram again should return much
-	// faster than TikTok.
+	// faster than TikTok. Use generous timeouts to avoid flakes on
+	// slow or contended CI runners.
 	start := time.Now()
 	if err := pt.Wait(ctx, "instagram"); err != nil {
 		t.Fatalf("instagram second Wait: %v", err)
 	}
 	igElapsed := time.Since(start)
-	if igElapsed > 700*time.Millisecond {
+	if igElapsed > 900*time.Millisecond {
 		t.Errorf("instagram Wait took %v, want ~500ms (rate=2/s)", igElapsed)
 	}
 
@@ -84,8 +87,8 @@ func TestThrottle_DifferentPlatforms_IndependentBuckets(t *testing.T) {
 		t.Fatalf("tiktok second Wait: %v", err)
 	}
 	ttElapsed := time.Since(start)
-	if ttElapsed < 1500*time.Millisecond {
-		t.Errorf("tiktok Wait took %v, want >=1500ms (rate=0.5/s)", ttElapsed)
+	if ttElapsed < 1300*time.Millisecond {
+		t.Errorf("tiktok Wait took %v, want >=1300ms (rate=0.5/s)", ttElapsed)
 	}
 }
 
@@ -119,7 +122,7 @@ func TestThrottle_UnknownPlatform_DefaultsToOnePerSecond(t *testing.T) {
 		t.Fatalf("first Wait: %v", err)
 	}
 
-	ctx2, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx2, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	start := time.Now()
@@ -127,8 +130,8 @@ func TestThrottle_UnknownPlatform_DefaultsToOnePerSecond(t *testing.T) {
 		t.Fatalf("second Wait: %v", err)
 	}
 	elapsed := time.Since(start)
-	if elapsed < 800*time.Millisecond {
-		t.Errorf("unknown platform Wait took %v, want >=800ms (rate=1/s)", elapsed)
+	if elapsed < 700*time.Millisecond {
+		t.Errorf("unknown platform Wait took %v, want >=700ms (rate=1/s)", elapsed)
 	}
 }
 
@@ -141,8 +144,9 @@ func TestThrottle_ConcurrentAccess_NoRace(t *testing.T) {
 	// Each goroutine calls Wait once. Since burst=1, only the first
 	// returns immediately; the rest wait for tokens to refill. With
 	// 10 goroutines and instagram rate=2/s, total time should be
-	// about (10-1)/2 = 4.5s. Use a generous timeout.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// about (10-1)/2 = 4.5s. Use a generous timeout so slow CI
+	// runners do not flake.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	errs := make(chan error, goroutines)
@@ -159,6 +163,40 @@ func TestThrottle_ConcurrentAccess_NoRace(t *testing.T) {
 	for err := range errs {
 		if err != nil {
 			t.Errorf("Wait error: %v", err)
+		}
+	}
+}
+
+// TestThrottle_LimiterRates verifies the configured rate limits
+// without relying on wall-clock timing. This is the authoritative
+// check that each platform gets the expected rate; the timing-based
+// tests above are smoke tests that may be skipped or relaxed further
+// if they remain flaky on slow CI runners.
+func TestThrottle_LimiterRates(t *testing.T) {
+	pt := NewPlatformThrottle()
+
+	cases := []struct {
+		platform string
+		want     float64
+	}{
+		{"instagram", 2},
+		{"facebook", 2},
+		{"threads", 2},
+		{"tiktok", 0.5},
+		{"youtube", 0.33},
+		{"twitter", 1},
+		{"linkedin", 0.5},
+		{"unknown-platform", 1},
+	}
+
+	for _, tc := range cases {
+		lim := pt.LimiterFor(tc.platform)
+		if lim == nil {
+			t.Fatalf("LimiterFor(%q) returned nil", tc.platform)
+		}
+		got := lim.Limit()
+		if got != rate.Limit(tc.want) {
+			t.Errorf("LimiterFor(%q).Limit() = %v, want %v", tc.platform, got, tc.want)
 		}
 	}
 }

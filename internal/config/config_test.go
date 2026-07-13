@@ -131,4 +131,4 @@ func TestValidate_SentryDSN_Unparseable(t *testing.T) {
 // repo's pre-existing test-fixture naming convention (cf.
 // meta_test.go) so the identifier doesn't accidentally shadow
 // unrelated package-level declarations.
-var dummpyBase64Key32 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+var dummpyBase64Key32 = validEncryptionKey()

@@ -85,9 +85,7 @@ func NewPlatformThrottle() *PlatformThrottle {
 func (pt *PlatformThrottle) Wait(ctx context.Context, platform string) error {
 	lim := pt.getLimiter(platform)
 	return lim.Wait(ctx)
-}
-
-// getLimiter returns the per-platform limiter, creating one with
+} // getLimiter returns the per-platform  limiter, creating one with
 // the default rate if not already cached.
 func (pt *PlatformThrottle) getLimiter(platform string) *rate.Limiter {
 	pt.mu.Lock()
@@ -104,4 +102,11 @@ func (pt *PlatformThrottle) getLimiter(platform string) *rate.Limiter {
 	lim := rate.NewLimiter(r, defaultBurst)
 	pt.entries[platform] = lim
 	return lim
+}
+
+// LimiterFor exposes the underlying rate limiter for the given
+// platform. It is intended for tests that want to verify the
+// configured rate without relying on wall-clock timing.
+func (pt *PlatformThrottle) LimiterFor(platform string) *rate.Limiter {
+	return pt.getLimiter(platform)
 }

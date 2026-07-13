@@ -522,16 +522,16 @@ func TestPostListByPost_OKWithNullablePublishedAt(t *testing.T) {
 
 	mock.ExpectQuery(
 		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
-		        provider_state, container_id, provider_idempotency_key
+		        provider_state, container_id, provider_idempotency_key, completed_at
 		 FROM post_targets
 		 WHERE post_id = $1
 		 ORDER BY id ASC`,
 	).WithArgs(int64(100)).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id", "provider_idempotency_key"},
-		).AddRow(10, 100, 1000, models.PostStatusScheduled, "", "", nil, "", "", nil).
-			AddRow(11, 100, 1001, models.PostStatusPublished, "remote-1", "", publishedAt, "", "", nil).
-			AddRow(12, 100, 1002, models.PostStatusFailed, "", "twitter error", nil, "", "", nil))
+			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id", "provider_idempotency_key", "completed_at"},
+		).AddRow(10, 100, 1000, models.PostStatusScheduled, "", "", nil, "", "", nil, nil).
+			AddRow(11, 100, 1001, models.PostStatusPublished, "remote-1", "", publishedAt, "", "", nil, nil).
+			AddRow(12, 100, 1002, models.PostStatusFailed, "", "twitter error", nil, "", "", nil, nil))
 
 	got, err := repo.ListByPost(100)
 	if err != nil {
@@ -588,16 +588,16 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
 	mock.ExpectQuery(
 		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
 		        pt.platform_post_id, pt.error_message, pt.published_at,
-		        pt.provider_state, pt.container_id, pt.provider_idempotency_key
+		        pt.provider_state, pt.container_id, pt.provider_idempotency_key, pt.completed_at
 		 FROM post_targets pt
 		 JOIN posts p ON p.id = pt.post_id
 		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider') AND p.scheduled_at <= $1
 		 ORDER BY p.scheduled_at ASC`,
 	).WithArgs(cutoff).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id", "provider_idempotency_key"},
-		).AddRow(101, 1, 1000, models.PostStatusScheduled, "", "", nil, "", "", nil).
-			AddRow(102, 1, 1001, models.PostStatusScheduled, "", "", nil, "", "", nil))
+			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id", "provider_idempotency_key", "completed_at"},
+		).AddRow(101, 1, 1000, models.PostStatusScheduled, "", "", nil, "", "", nil, nil).
+			AddRow(102, 1, 1001, models.PostStatusScheduled, "", "", nil, "", "", nil, nil))
 
 	targets, err := repo.ListPending(cutoff)
 	if err != nil {
