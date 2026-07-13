@@ -1,11 +1,16 @@
 /**
- * Auth helpers for the InstaEdit SPA (Taglio 1.2 / Taglio 5a).
+ * Auth helpers for the InstaEdit SPA (Taglio 1.2 / Taglio 5a / Blocco #2.4 CSRF).
  *
  *   - authedFetch attaches credentials: 'include' so the browser sends the
- *     session cookie. The backend middleware reads the cookie when no
- *     Authorization: Bearer header is set.
+ *     session cookie, AND auto-injects X-CSRF-Token on unsafe methods
+ *     (POST/PUT/PATCH/DELETE) by reading the `csrf_token` cookie set by
+ *     /api/v1/auth/session. The backend CSRF middleware rejects unsafe
+ *     requests missing this header (see internal/auth/csrf.go).
  *   - logout POSTs to /api/v1/auth/logout (which clears the cookie) and
  *     then hard-navigates to /login.
+ *   - readCookie is the shared document.cookie reader; exported so call
+ *     sites that need the csrf_token value outside of an HTTP request
+ *     (rare) can reuse the same parsing logic.
  */
 
 import { API_BASE_URL } from "./api";
@@ -77,6 +82,44 @@ export class ApiError extends Error {
   }
 }
 
+// HTTP methods the backend CSRF middleware protects. Every request
+// matching one of these MUST carry an `X-CSRF-Token` header that
+// equals the `csrf_token` cookie set by /api/v1/auth/session (see
+// internal/auth/csrf.go). The header is auto-injected by authedFetch
+// from document.cookie; a missing header yields
+// `403 csrf rejected: missing_csrf_header` in production.
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * Reads the value of a cookie by name from `document.cookie`.
+ * Returns null when no cookie with that name is set, or when called
+ * outside a browser (no `document` global, e.g. SSR or a node
+ * worker that doesn't load jsdom).
+ *
+ * Used by `authedFetch` to attach `X-CSRF-Token` on unsafe methods.
+ * Browser cookie-domain scope matters: when COOKIE_DOMAIN is set to
+ * e.g. ".instaedit.org" via fly secrets, the `csrf_token` cookie is
+ * shared across subdomains so the SPA on `app.instaedit.org` can
+ * read the value that `api.instaedit.org` set. The dev default is
+ * host-only (cookie set on the API origin) and the SPA must hit the
+ * API on the same browser-visible origin (e.g. via Vite proxy at
+ * localhost:5173 → localhost:8080) for document.cookie to contain
+ * the value.
+ */
+export function readCookie(name: string): string | null {
+  if (typeof document === "undefined" || !document.cookie) {
+    return null;
+  }
+  const prefix = `${encodeURIComponent(name)}=`;
+  for (const part of document.cookie.split(";")) {
+    const value = part.trim();
+    if (value.startsWith(prefix)) {
+      return decodeURIComponent(value.slice(prefix.length));
+    }
+  }
+  return null;
+}
+
 export async function authedFetch(
   path: string,
   init: RequestInit = {},
@@ -84,6 +127,20 @@ export async function authedFetch(
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
+  }
+  // Backend CSRF protection (see internal/auth/csrf.go): unsafe
+  // methods require a header matching the `csrf_token` cookie.
+  // Auto-inject from document.cookie so callers don't have to thread
+  // the value through every call site. A missing csrf_token cookie
+  // (e.g. session expired) leaves the header absent — the backend
+  // will then 403 with `missing_csrf_header`, which is the
+  // expected signal to re-authenticate.
+  const method = (init.method ?? "GET").toUpperCase();
+  if (UNSAFE_METHODS.has(method) && !headers.has("X-CSRF-Token")) {
+    const csrfToken = readCookie("csrf_token");
+    if (csrfToken) {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
   }
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
