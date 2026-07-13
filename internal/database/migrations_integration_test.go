@@ -41,15 +41,16 @@ var migrationsToTest = []string{
 	"012_async_threads_support.sql",
 }
 
-// expectedPostStatusActive is the documented 7-value active enum set
+// expectedPostStatusActive is the documented active enum set
 // after migration 012 has applied. The migration 003 CREATE TYPE
 // introduces 5 values; migration 012 ADD VALUE introduces 3 more
 // (waiting_provider / queued / partially_published). 'queued' is the
 // rename target of the legacy 'scheduled' value which remains in the
 // enum for back-compat with rows already inserted pre-012.
+// Later migrations 018 and 035 add 'retrying' and 'dlq'.
 //
-// Net on-disk enum labels after 012 = 5 (003) + 3 (012) = 8
-// (the 7 active + the 1 deprecated 'scheduled').
+// Net on-disk enum labels after 035 = 5 (003) + 3 (012) + 2 (018/035)
+// (the 9 active + the 1 deprecated 'scheduled').
 var expectedPostStatusActive = map[string]bool{
 	"draft":               true,
 	"queued":              true,
@@ -58,6 +59,8 @@ var expectedPostStatusActive = map[string]bool{
 	"failed":              true,
 	"waiting_provider":    true,
 	"partially_published": true,
+	"retrying":            true,
+	"dlq":                 true,
 }
 
 // requiredColumns lists (table, column) tuples the test asserts exist
@@ -118,15 +121,16 @@ func TestMigrations_001To012_AppliesCleanly(t *testing.T) {
 	}
 }
 
-// TestPostStatus_HasExpectedSevenValues: the 7-value active set is
+// TestPostStatus_HasExpectedNineValues: the active set is
 // documented in docs/SANDBOX.md + API/openapi.yaml (Taglio 5.x SSOT).
 // Per migration 003 (CREATE TYPE post_status AS ENUM) + 012 (ADD VALUE
-// waiting_provider / queued / partially_published), the on-disk enum
-// has 8 labels (7 active + 'scheduled' deprecated back-compat alias).
+// waiting_provider / queued / partially_published) + 018/035 (ADD VALUE
+// retrying / dlq), the on-disk enum has 10 labels (9 active + 'scheduled'
+// deprecated back-compat alias).
 //
 // This test catches schema drift: if a future migration accidentally
 // drops an active value OR adds a third alias, CI fails.
-func TestPostStatus_HasExpectedSevenValues(t *testing.T) {
+func TestPostStatus_HasExpectedNineValues(t *testing.T) {
 	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()
 

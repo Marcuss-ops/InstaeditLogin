@@ -101,8 +101,10 @@ func (r *UserRepository) FindPlatformAccount(platform, platformUserID string) (*
 	var metadata []byte
 	err := r.db.QueryRow(
 		`SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
-		        last_validated_at, last_refresh_at, reauth_required_at, last_error_code,
-		        last_error_message, metadata, created_at, updated_at
+		        last_validated_at, last_refresh_at, reauth_required_at,
+		        COALESCE(last_error_code, '') AS last_error_code,
+		        COALESCE(last_error_message, '') AS last_error_message,
+		        metadata, created_at, updated_at
 		 FROM platform_accounts WHERE platform = $1 AND platform_user_id = $2`,
 		platform, platformUserID,
 	).Scan(&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID,
@@ -147,14 +149,18 @@ func (r *UserRepository) ListPlatformAccountsByUser(userID int64, platform strin
 	if platform == "" {
 		rows, err = r.db.Query(
 			`SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
-			        last_validated_at, last_refresh_at, reauth_required_at, last_error_code,
-			        last_error_message, metadata, created_at, updated_at
+			        last_validated_at, last_refresh_at, reauth_required_at,
+			        COALESCE(last_error_code, '') AS last_error_code,
+			        COALESCE(last_error_message, '') AS last_error_message,
+			        metadata, created_at, updated_at
 			 FROM platform_accounts WHERE user_id = $1 ORDER BY created_at DESC`, userID)
 	} else {
 		rows, err = r.db.Query(
 			`SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
-			        last_validated_at, last_refresh_at, reauth_required_at, last_error_code,
-			        last_error_message, metadata, created_at, updated_at
+			        last_validated_at, last_refresh_at, reauth_required_at,
+			        COALESCE(last_error_code, '') AS last_error_code,
+			        COALESCE(last_error_message, '') AS last_error_message,
+			        metadata, created_at, updated_at
 			 FROM platform_accounts WHERE user_id = $1 AND platform = $2 ORDER BY created_at DESC`,
 			userID, platform)
 	}
@@ -194,8 +200,10 @@ func (r *UserRepository) FindPlatformAccountByID(id int64) (*models.PlatformAcco
 	var metadata []byte
 	err := r.db.QueryRow(
 		`SELECT id, user_id, platform, platform_user_id, username, status, connected_at,
-		        last_validated_at, last_refresh_at, reauth_required_at, last_error_code,
-		        last_error_message, metadata, created_at, updated_at
+		        last_validated_at, last_refresh_at, reauth_required_at,
+		        COALESCE(last_error_code, '') AS last_error_code,
+		        COALESCE(last_error_message, '') AS last_error_message,
+		        metadata, created_at, updated_at
 		 FROM platform_accounts
 		 WHERE id = $1`, id,
 	).Scan(&account.ID, &account.UserID, &account.Platform, &account.PlatformUserID,

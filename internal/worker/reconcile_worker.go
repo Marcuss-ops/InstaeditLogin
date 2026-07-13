@@ -86,13 +86,9 @@ type ReconcilePostStore interface {
 	// transitions the reconciler writes. Idempotent on terminal
 	// states (two reconcilers racing the same row will both write
 	// the same terminal state — the second UPDATE is a no-op).
+	// The target's ProviderState is also written atomically by
+	// UpdateStatus on terminal transitions.
 	UpdateStatus(target *models.PostTarget) error
-	// UpdatePublishState stamps the provider_state column with the
-	// terminal label (PUBLISH_COMPLETE or FAILED). Written ONLY on
-	// terminal transitions, not on every in-flight tick — the
-	// column is terminal-state observability, not per-tick
-	// consistency.
-	UpdatePublishState(id int64, providerState string) error
 }
 
 // ReconcileUserStore is the reconciler's narrow view of the user /
@@ -281,12 +277,12 @@ func (w *ReconcileWorker) tickReconcile(ctx context.Context) (reconciled, failed
 // ... }`) is gone — Reconcile owns the transition decision; the
 // worker just records it.
 //
-// provider_state column (UpdatePublishState) is now written ONLY
-// on terminal transitions (PUBLISH_COMPLETE / FAILED), not on
-// every in-flight tick. Without a state string from Reconcile's
-// contract we can't write a fine-grained in-flight label; skipping
-// it is the documented choice (the column becomes a terminal-state
-// log rather than a per-tick snapshot).
+// provider_state is written ONLY on terminal transitions
+// (PUBLISH_COMPLETE / FAILED) via UpdateStatus, not on every
+// in-flight tick. Without a state string from Reconcile's contract
+// we can't write a fine-grained in-flight label; skipping it is the
+// documented choice (the column becomes a terminal-state log
+// rather than a per-tick snapshot).
 //
 // Returns (reconciled bool, wasFailed bool, err). reconciled and
 // wasFailed let the caller increment per-tick counters without
@@ -348,6 +344,8 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	})
 	oauthToken, err := w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
 	if err != nil {
+		w.logger.Warn("bearer token renew failed, falling back to long_lived",
+			"account_id", account.ID, "error", err)
 		if oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher); err != nil {
 			return w.markFailedAndReturn(target, "token refresh failed: "+err.Error())
 		}
@@ -362,7 +360,6 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 		// or the post_targets retry state machine).
 		w.logger.Warn("publish reconcile terminal error",
 			"target_id", target.ID, "publish_id", target.PlatformPostID, "error", err)
-		_ = w.postRepo.UpdatePublishState(target.ID, "FAILED")
 		return w.markFailedAndReturn(target, fmt.Sprintf("publish failed: %v", err))
 	}
 	if res == nil {
@@ -387,8 +384,8 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 
 	// 5. Success transition: persist terminal publisher_state + flip
 	// the target row to 'published' with publish_id-stamped URL fields.
-	_ = w.postRepo.UpdatePublishState(target.ID, "PUBLISH_COMPLETE")
 	target.Status = models.PostStatusPublished
+	target.ProviderState = "PUBLISH_COMPLETE"
 	// For TikTok, PlatformMediaID == publish_id; for other async
 	// providers the value is the public-facing post id returned by
 	// the platform at terminal time. Either way, res.PlatformMediaID
@@ -407,8 +404,20 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 // counters. The (true, true, nil) return values signal "yes, this
 // target was reconciled (to failed), yes it failed, no error".
 func (w *ReconcileWorker) markFailedAndReturn(target *models.PostTarget, reason string) (reconciled bool, wasFailed bool, err error) {
-	target.Status = models.PostStatusFailed
-	target.ErrorMessage = reason
-	_ = w.postRepo.UpdateStatus(target)
+	w.logger.Warn("reconcile target marked failed",
+		"target_id", target.ID,
+		"post_id", target.PostID,
+		"reason", reason)
+
+	// Mutate a copy so the caller's target stays unchanged if the DB
+	// write fails (avoids leaking a stale in-memory failed state).
+	failedTarget := *target
+	failedTarget.Status = models.PostStatusFailed
+	failedTarget.ProviderState = "FAILED"
+	failedTarget.ErrorMessage = reason
+	if updateErr := w.postRepo.UpdateStatus(&failedTarget); updateErr != nil {
+		return false, false, fmt.Errorf("transition to failed: %w", updateErr)
+	}
+	*target = failedTarget
 	return true, true, nil
 }

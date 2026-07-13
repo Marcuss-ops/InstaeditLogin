@@ -899,8 +899,10 @@ func (r *PostRepository) ClaimPublishingTarget(id int64) (bool, error) {
 // timestamps.
 func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
-		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
-		       provider_state, container_id, provider_idempotency_key, completed_at
+		`SELECT id, post_id, platform_account_id, status,
+		        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
+		        COALESCE(provider_state, ''), COALESCE(container_id, ''),
+		        provider_idempotency_key, completed_at
 		 FROM post_targets
 		 WHERE post_id = $1
 		 ORDER BY id ASC`,
@@ -946,8 +948,10 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 // field is included for consistency with ListByPost).
 func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
-		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
-			        provider_state, container_id, provider_idempotency_key, completed_at
+		`SELECT id, post_id, platform_account_id, status,
+			        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
+			        COALESCE(provider_state, ''), COALESCE(container_id, ''),
+			        provider_idempotency_key, completed_at
 			 FROM post_targets
 			 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
 			 ORDER BY id ASC`,
@@ -970,29 +974,6 @@ func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
 	return targets, nil
 }
 
-// UpdatePublishState (Taglio 4.2) updates only the provider_state column
-// on a post_target. Used by the reconciler to record the current
-// platform-specific state (PROCESSING_UPLOAD / PENDING_PUBLISH /
-// IN_REVIEW) on every CheckPublishStatus call without triggering a
-// full status transition. Idempotent.
-func (r *PostRepository) UpdatePublishState(id int64, providerState string) error {
-	result, err := r.db.Exec(
-		`UPDATE post_targets SET provider_state = $1 WHERE id = $2`,
-		providerState, id,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update provider_state: %w", err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to read rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, id)
-	}
-	return nil
-}
-
 // ListPending returns post_targets whose status='queued' AND whose parent
 // post is due (scheduled_at <= before). This is the worker's main pickup
 // query, called periodically (e.g. every 30s) by the publishing worker.
@@ -1007,8 +988,9 @@ func (r *PostRepository) UpdatePublishState(id int64, providerState string) erro
 func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
 		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
-		        pt.platform_post_id, pt.error_message, pt.published_at,
-		        pt.provider_state, pt.container_id, pt.provider_idempotency_key, pt.completed_at
+		        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
+		        COALESCE(pt.provider_state, ''), COALESCE(pt.container_id, ''),
+		        pt.provider_idempotency_key, pt.completed_at
 		 FROM post_targets pt
 		 JOIN posts p ON p.id = pt.post_id
 		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider') AND p.scheduled_at <= $1

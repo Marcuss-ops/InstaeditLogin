@@ -29,7 +29,7 @@ import (
 // mockReconcilePostStore (reconcile_worker_test.go) because the
 // driver's surface (ListPending, ClaimQueuedTarget, FindByID,
 // SetProviderIdempotencyKey) is different from the reconciler's
-// (ListPublishing, UpdatePublishState). The interface split
+// (ListPublishing, UpdateStatus). The interface split
 // (PublisherPostStore vs ReconcilePostStore) compiles-in the
 // invariant that each goroutine only exercises its own surface.
 // ------------------------------------------------------------------

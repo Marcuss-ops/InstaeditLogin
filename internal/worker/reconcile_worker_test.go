@@ -8,11 +8,10 @@
 //
 // All tests use the mocks in mocks_test.go (mockUserStore,
 // mockAsyncProvider, mockProvider, mockCredentialVault) plus the
-// mockReconcilePostStore defined here (3-method surface: ListPublishing,
-// UpdateStatus, UpdatePublishState). The fact that the reconciler
-// cannot accidentally call SetProviderIdempotencyKey / ClaimQueuedTarget
-// is enforced at compile time by the ReconcilePostStore interface
-// boundary.
+// mockReconcilePostStore defined here (2-method surface: ListPublishing,
+// UpdateStatus). The fact that the reconciler cannot accidentally call
+// SetProviderIdempotencyKey / ClaimQueuedTarget is enforced at compile
+// time by the ReconcilePostStore interface boundary.
 package worker
 
 import (
@@ -32,25 +31,23 @@ import (
 // mockReconcilePostStore — the narrow interface ReconcileWorker
 // depends on. Distinct from mockPostStore (publish_worker_test.go)
 // because the reconciler has different surface needs: only the
-// read (ListPublishing) and the status/state mutations (UpdateStatus,
-// UpdatePublishState). The driver-side mutations (claim, find, stamp
-// key) belong to the publish driver, not the reconciler.
+// read (ListPublishing) and the status mutation (UpdateStatus).
+// The driver-side mutations (claim, find, stamp key) belong to the
+// publish driver, not the reconciler.
 // ------------------------------------------------------------------
 
 type mockReconcilePostStore struct {
 	mu sync.Mutex // guards counters + captured slices (read by test goroutine while written by worker goroutine)
 
 	// Call counters — one per method, incremented on every invocation.
-	listPublishingCalls     int
-	claimPublishingCalls    int
-	updateCalls             int
-	updatePublishStateCalls int
+	listPublishingCalls  int
+	claimPublishingCalls int
+	updateCalls          int
 
 	// Function fields — each test overrides only what it exercises.
-	listPublishingFn     func() ([]models.PostTarget, error)
-	claimPublishingFn    func(id int64) (bool, error)
-	updateStatusFn       func(*models.PostTarget) error
-	updatePublishStateFn func(id int64, providerState string) error
+	listPublishingFn  func() ([]models.PostTarget, error)
+	claimPublishingFn func(id int64) (bool, error)
+	updateStatusFn    func(*models.PostTarget) error
 
 	// Captured targets from UpdateStatus — lets tests inspect the
 	// final status (published vs failed) and assert on the worker
@@ -58,12 +55,6 @@ type mockReconcilePostStore struct {
 	// (not pointers) so later mutations to the caller's target
 	// don't leak into the captured snapshot.
 	updateTargets []models.PostTarget
-
-	// Captured UpdatePublishState calls — id + value tuples in
-	// invocation order. Tests verify the worker is recording the
-	// terminal state label on every transition.
-	updatePublishStateIDs    []int64
-	updatePublishStateValues []string
 }
 
 func (m *mockReconcilePostStore) ListPublishing() ([]models.PostTarget, error) {
@@ -95,18 +86,6 @@ func (m *mockReconcilePostStore) UpdateStatus(target *models.PostTarget) error {
 		return nil
 	}
 	return m.updateStatusFn(target)
-}
-
-func (m *mockReconcilePostStore) UpdatePublishState(id int64, providerState string) error {
-	m.mu.Lock()
-	m.updatePublishStateCalls++
-	m.updatePublishStateIDs = append(m.updatePublishStateIDs, id)
-	m.updatePublishStateValues = append(m.updatePublishStateValues, providerState)
-	m.mu.Unlock()
-	if m.updatePublishStateFn == nil {
-		return nil
-	}
-	return m.updatePublishStateFn(id, providerState)
 }
 
 // ------------------------------------------------------------------
@@ -167,14 +146,9 @@ func TestReconcileTarget_PublishComplete_TransitionsToPublished(t *testing.T) {
 	if final.PlatformPostID != "publish-id-abc" {
 		t.Errorf("platform_post_id: want publish-id-abc (carried over), got %q", final.PlatformPostID)
 	}
-	// UpdatePublishState must have been called once with terminal label
-	// "PUBLISH_COMPLETE" — the post-refactor worker writes this only on
-	// terminal transitions, not on in-flight ticks.
-	if posts.updatePublishStateCalls != 1 {
-		t.Errorf("UpdatePublishState calls: want 1 (record terminal state), got %d", posts.updatePublishStateCalls)
-	}
-	if len(posts.updatePublishStateValues) != 1 || posts.updatePublishStateValues[0] != "PUBLISH_COMPLETE" {
-		t.Errorf("UpdatePublishState values: want [PUBLISH_COMPLETE], got %v", posts.updatePublishStateValues)
+	// provider_state must be stamped on the terminal transition.
+	if final.ProviderState != "PUBLISH_COMPLETE" {
+		t.Errorf("provider_state: want PUBLISH_COMPLETE, got %q", final.ProviderState)
 	}
 	// Reconcile called exactly once. CheckPublishStatus MUST NOT be reached
 	// (Reconcile is the new entrypoint; the old in-flight string path is
@@ -235,11 +209,9 @@ func TestReconcileTarget_Failed_TransitionsToFailed(t *testing.T) {
 	if final.PublishedAt != nil {
 		t.Error("PublishedAt should remain nil on failure")
 	}
-	if posts.updatePublishStateCalls != 1 {
-		t.Errorf("UpdatePublishState calls: want 1 (record terminal state), got %d", posts.updatePublishStateCalls)
-	}
-	if len(posts.updatePublishStateValues) != 1 || posts.updatePublishStateValues[0] != "FAILED" {
-		t.Errorf("UpdatePublishState values: want [FAILED], got %v", posts.updatePublishStateValues)
+	// provider_state must be stamped on the terminal transition.
+	if final.ProviderState != "FAILED" {
+		t.Errorf("provider_state: want FAILED, got %q", final.ProviderState)
 	}
 	if svc.reconcileCalls != 1 {
 		t.Errorf("Reconcile calls: want 1, got %d", svc.reconcileCalls)
@@ -250,7 +222,7 @@ func TestReconcileTarget_Failed_TransitionsToFailed(t *testing.T) {
 // in-flight case: Reconcile returns (nil, nil) — the platform's
 // PublishID is still in PROCESSING_UPLOAD/PENDING_PUBLISH/IN_REVIEW.
 // The reconciler MUST leave status='publishing' and try again next
-// tick. UpdatePublishState is intentionally NOT called on in-flight
+// tick. provider_state is intentionally NOT written on in-flight
 // (no state string is exposed through Reconcile's contract; the
 // column becomes a terminal-state log rather than a per-tick snapshot).
 func TestReconcileTarget_InFlight_LeavesStatusUnchanged(t *testing.T) {
@@ -285,9 +257,6 @@ func TestReconcileTarget_InFlight_LeavesStatusUnchanged(t *testing.T) {
 	}
 	if posts.updateCalls != 0 {
 		t.Errorf("UpdateStatus calls: want 0 (in-flight, no transition), got %d", posts.updateCalls)
-	}
-	if posts.updatePublishStateCalls != 0 {
-		t.Errorf("UpdatePublishState calls: want 0 (in-flight, terminal-state log only), got %d", posts.updatePublishStateCalls)
 	}
 	if svc.reconcileCalls != 1 {
 		t.Errorf("Reconcile calls: want 1, got %d", svc.reconcileCalls)
@@ -327,9 +296,6 @@ func TestReconcileTarget_SyncPlatform_LeavesAlone(t *testing.T) {
 	}
 	if posts.updateCalls != 0 {
 		t.Errorf("UpdateStatus calls: want 0 (sync platform, no transition), got %d", posts.updateCalls)
-	}
-	if posts.updatePublishStateCalls != 0 {
-		t.Errorf("UpdatePublishState calls: want 0 (sync platform, no polling), got %d", posts.updatePublishStateCalls)
 	}
 	if svc.publishCalls != 0 {
 		t.Errorf("Publish calls: want 0 (sync platform, no polling), got %d", svc.publishCalls)
@@ -373,6 +339,9 @@ func TestReconcileTarget_OrphanAccount_MarksFailed(t *testing.T) {
 	}
 	if final.ErrorMessage == "" {
 		t.Error("ErrorMessage should explain why the target was failed (orphan account)")
+	}
+	if final.ProviderState != "FAILED" {
+		t.Errorf("provider_state: want FAILED, got %q", final.ProviderState)
 	}
 }
 
@@ -473,11 +442,8 @@ func TestReconcileTarget_TransientError_TerminalFailure(t *testing.T) {
 	if !strings.Contains(final.ErrorMessage, "502") {
 		t.Errorf("ErrorMessage should propagate the platform error: %q", final.ErrorMessage)
 	}
-	if posts.updatePublishStateCalls != 1 {
-		t.Errorf("UpdatePublishState calls: want 1 (terminal-state log), got %d", posts.updatePublishStateCalls)
-	}
-	if len(posts.updatePublishStateValues) != 1 || posts.updatePublishStateValues[0] != "FAILED" {
-		t.Errorf("UpdatePublishState values: want [FAILED], got %v", posts.updatePublishStateValues)
+	if final.ProviderState != "FAILED" {
+		t.Errorf("provider_state: want FAILED, got %q", final.ProviderState)
 	}
 }
 
@@ -534,9 +500,6 @@ func TestTickReconcile_IteratesAllPublishingTargets(t *testing.T) {
 	}
 	if svc.reconcileCalls != 3 {
 		t.Errorf("Reconcile calls: want 3 (one per target), got %d", svc.reconcileCalls)
-	}
-	if posts.updatePublishStateCalls != 0 {
-		t.Errorf("UpdatePublishState calls: want 0 (in-flight, no terminal log yet), got %d", posts.updatePublishStateCalls)
 	}
 	if posts.updateCalls != 0 {
 		t.Errorf("UpdateStatus calls: want 0 (all in-flight), got %d", posts.updateCalls)

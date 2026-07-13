@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/lib/pq"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
@@ -36,7 +38,7 @@ func (r *TokenRepository) SaveToken(token *models.Token) error {
 		`INSERT INTO tokens (platform_account_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
 		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at`,
 		token.PlatformAccountID, token.TokenType, token.EncryptedToken,
-		token.EncryptedRefreshToken, token.ExpiresAt, token.Scopes,
+		token.EncryptedRefreshToken, token.ExpiresAt, pq.Array(token.Scopes),
 	).Scan(&token.ID, &token.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save token: %w", err)
@@ -66,7 +68,7 @@ func (r *TokenRepository) FindLatestToken(platformAccountID int64, tokenType str
 		 ORDER BY created_at DESC LIMIT 1`,
 		platformAccountID, tokenType,
 	).Scan(&token.ID, &token.PlatformAccountID, &token.TokenType,
-		&token.EncryptedToken, &token.EncryptedRefreshToken, &token.ExpiresAt, &token.Scopes, &token.CreatedAt)
+		&token.EncryptedToken, &token.EncryptedRefreshToken, &token.ExpiresAt, pq.Array(&token.Scopes), &token.CreatedAt)
 
 	if err == sql.ErrNoRows {
 		return nil, nil

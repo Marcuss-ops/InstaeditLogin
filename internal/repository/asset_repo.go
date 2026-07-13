@@ -56,7 +56,9 @@ func (r *MediaAssetRepository) FindByID(id string) (*models.MediaAsset, error) {
 	asset := &models.MediaAsset{}
 	err := r.db.QueryRow(
 		`SELECT id, user_id, upload_key, content_type, size_bytes, status,
-		        sha256, error_message, expires_at, created_at, updated_at
+		        COALESCE(sha256, '') AS sha256,
+		        COALESCE(error_message, '') AS error_message,
+		        expires_at, created_at, updated_at
 		 FROM media_assets WHERE id = $1`, id,
 	).Scan(
 		&asset.ID, &asset.UserID, &asset.UploadKey, &asset.ContentType,

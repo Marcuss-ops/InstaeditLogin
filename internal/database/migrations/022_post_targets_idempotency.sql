@@ -69,9 +69,19 @@ ALTER TABLE post_targets
 --    Existing data: pre-existing duplicate rows would block this. The
 --    migration assumes the application invariant already holds; if
 --    not, a follow-up must dedupe before this constraint can be added.
-ALTER TABLE post_targets
-  ADD CONSTRAINT post_targets_post_id_platform_uniq
-  UNIQUE (post_id, platform_account_id);
+--    Wrapped in a DO block so the migration can be applied twice
+--    (idempotency gate) without raising "relation already exists".
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'post_targets_post_id_platform_uniq'
+  ) THEN
+    ALTER TABLE post_targets
+      ADD CONSTRAINT post_targets_post_id_platform_uniq
+      UNIQUE (post_id, platform_account_id);
+  END IF;
+END $$;
 
 -- 2. Partial UNIQUE on (platform_account_id, provider_idempotency_key)
 --    WHERE provider_idempotency_key IS NOT NULL. NULLs are excluded

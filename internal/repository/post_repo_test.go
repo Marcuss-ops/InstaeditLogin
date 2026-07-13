@@ -521,8 +521,10 @@ func TestPostListByPost_OKWithNullablePublishedAt(t *testing.T) {
 	publishedAt := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
 
 	mock.ExpectQuery(
-		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
-		        provider_state, container_id, provider_idempotency_key, completed_at
+		`SELECT id, post_id, platform_account_id, status,
+		        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
+		        COALESCE(provider_state, ''), COALESCE(container_id, ''),
+		        provider_idempotency_key, completed_at
 		 FROM post_targets
 		 WHERE post_id = $1
 		 ORDER BY id ASC`,
@@ -587,8 +589,9 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
 
 	mock.ExpectQuery(
 		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
-		        pt.platform_post_id, pt.error_message, pt.published_at,
-		        pt.provider_state, pt.container_id, pt.provider_idempotency_key, pt.completed_at
+		        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
+		        COALESCE(pt.provider_state, ''), COALESCE(pt.container_id, ''),
+		        pt.provider_idempotency_key, pt.completed_at
 		 FROM post_targets pt
 		 JOIN posts p ON p.id = pt.post_id
 		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider') AND p.scheduled_at <= $1

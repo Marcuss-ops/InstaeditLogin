@@ -211,7 +211,7 @@ func setupWorkerRig(t *testing.T, cfg *config.Config, handlerBuilder func(*atomi
 type workerPair struct {
 	pubCancel context.CancelFunc
 	recCancel context.CancelFunc
-	wg        sync.WaitGroup
+	wg        *sync.WaitGroup
 }
 
 // Shutdown cancels both contexts and waits for both goroutines to
@@ -268,7 +268,7 @@ func runWorkerPair(rig *rig) *workerPair {
 		nil,
 	)
 
-	var wg sync.WaitGroup
+	wg := &sync.WaitGroup{}
 	wg.Add(2)
 	go func() { defer wg.Done(); _ = pubWorker.Run(pubCtx) }()
 	go func() { defer wg.Done(); _ = recWorker.Run(recCtx) }()

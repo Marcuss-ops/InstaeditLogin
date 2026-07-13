@@ -8,11 +8,11 @@
 //     surfaces (ListPending, ClaimQueuedTarget, FindByID,
 //     SetProviderIdempotencyKey).
 //   - mockReconcilePostStore (reconcile_worker_test.go) —
-//     reconciler-only surfaces (ListPublishing, UpdatePublishState).
+//     reconciler-only surfaces (ListPublishing, UpdateStatus).
 //
 // The split is intentional: a regression that introduces a "reconciler
 // calls SetProviderIdempotencyKey" bug would fail to compile on the
-// reconciler side; a "driver calls UpdatePublishState" bug would not
+// reconciler side; a "driver calls UpdateStatus" bug would not
 // compile on the driver side. The interface split ALSO compiles-in
 // this invariant.
 package worker

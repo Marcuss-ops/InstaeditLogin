@@ -61,16 +61,20 @@ CREATE INDEX IF NOT EXISTS idx_connection_states_consumed
 -- The runner (internal/database/migrations.go::RunMigrations) executes
 -- every .sql on every startup without a schema_migrations table, so
 -- this statement MUST be idempotent on its own. We use a DO block
--- with a duplicate_object exception handler so the constraint is
--- added exactly once: a fresh DB adds it; a DB that already has it
+-- with an explicit pg_constraint lookup so the constraint is added
+-- exactly once: a fresh DB adds it; a DB that already has it
 -- (including prod DBs that crashed at this step on a prior startup)
 -- skips the add silently. Pre-existing prod state — table created
 -- + index created, but constraint missing — is recovered
 -- automatically on the next startup after this fix deploys.
-DO $$ BEGIN
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'platform_accounts_ws_platform_puid_uniq'
+  ) THEN
     ALTER TABLE platform_accounts
-        ADD CONSTRAINT platform_accounts_ws_platform_puid_uniq
-        UNIQUE (workspace_id, platform, platform_user_id);
-EXCEPTION
-    WHEN duplicate_object THEN NULL;
+      ADD CONSTRAINT platform_accounts_ws_platform_puid_uniq
+      UNIQUE (workspace_id, platform, platform_user_id);
+  END IF;
 END $$;
