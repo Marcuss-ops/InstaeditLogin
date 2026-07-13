@@ -1,88 +1,197 @@
+# .github/workflows/integration.yml — InstaEditLogin CI (Blocco #3.1)
+#
+# One unified CI workflow that gates every push + PR to main. The
+# workflow fails if ANY of the following are not true:
+#   1. Every Go file is gofmt-clean (Blocco #3.1 hard requirement).
+#   2. `go vet ./...` produces no output.
+#   3. `go test -race ./...` passes (race detector on the unit suite).
+#   4. `go build ./...` builds the project end-to-end.
+#   5. Frontend `npm ci` succeeds with the committed lockfile.
+#   6. Frontend `npm run lint` (oxlint) is clean.
+#   7. Frontend `npm run test` (vitest) is clean.
+#   8. Frontend `npm run build` (tsc + vite build) produces a bundle.
+#   9. Integration tests against a real ephemeral Postgres via
+#      testcontainers-go pass — this includes
+#      TestMigrations_OrderIndependent which itself exercises
+#      migration idempotency (apply on empty DB → apply again →
+#      schema fingerprint must match), so the user's "apply twice"
+#      requirement is covered WITHOUT a separate bash migrate step
+#      (which would hit bootstrap.Wire's fail-fast S3 / JWT_SECRET
+#      / ENCRYPTION_KEYS validation).
+#
+# Trigger scope is BROAD (no `paths` filter) — every push to main OR
+# every PR-opened/PR-synchronized hits the full gate. Single job
+# (`ubuntu-latest`) chosen for fail-fast sequencing rather than
+# parallel matrix: a gofmt failure surfaces immediately instead of
+# being out-shouted by a passing parallel job.
+
 name: integration
 
 # Least-privilege: checkout + build + test don't need write or
-# deploy scopes. The default GITHUB_TOKEN is broader.
+# deploy scopes. The default GITHUB_TOKEN has PR / deployment scopes.
 permissions:
   contents: read
 
-# Runs the integration tests against real ephemeral Postgres containers
-# via testcontainers-go, covering both internal/database and
-# internal/worker. Triggered on push/PR that touches test-shaping
-# code or deps; Docker is pre-installed on ubuntu-runners.
-on:
+# NOTE: GitHub Actions YAML 1.2 treats `on` as a normal string, but
+# some YAML tools (yaml.safe_load in Python ≤1.1 mode, older SDK
+# parsers) interpret `on` as boolean true. Quoting the key makes the
+# file portable across both parsers.
+"on":
   push:
     branches: [main]
-    paths:
-      - 'internal/database/**/*.go'
-      - 'internal/database/migrations/**'
-      - 'internal/worker/**/*.go'
-      - 'internal/models/**/*.go'
-      - 'internal/testutil/**/*.go'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/integration.yml'
   pull_request:
     branches: [main]
-    paths:
-      - 'internal/database/**/*.go'
-      - 'internal/database/migrations/**'
-      - 'internal/worker/**/*.go'
-      - 'internal/models/**/*.go'
-      - 'internal/testutil/**/*.go'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/integration.yml'
   workflow_dispatch:
 
-# Postgres image (currently postgres:17-alpine) is sourced from the
-# testutil helper — bumping the version there is the single source
-# of truth.
+# Docker is pre-installed on ubuntu-runners (testcontainers-go relies
+# on it for the Postgres + Redis integration tests). The runner's
+# default Docker has full socket access in CI; locally the README
+# documents the requirement.
 
 jobs:
-  integration:
+  ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     # Cancel in-progress runs in the same group so a fast follow-up
-    # push doesn't spawn a duplicate runner re-pulling postgres:17-alpine.
-    # Group by workflow + (PR number OR ref): on PR events `github.ref`
-    # is `refs/pull/N/merge` and CHANGES per commit, so the PR number
-    # is needed to keep consecutive PR pushes in the same group.
+    # push doesn't spawn duplicate runners re-pulling postgres:17-alpine
+    # + node modules + Go module cache. Group by workflow + PR number
+    # (PR events) OR ref (push events): `github.event.pull_request.number`
+    # is 0 outside PR contexts so we OR with github.ref.
     concurrency:
-      group: integration-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
 
     steps:
+      # ─── 1. Checkout ──────────────────────────────────────────────
       - uses: actions/checkout@v4
 
+      # ─── 2. Go toolchain ──────────────────────────────────────────
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Drive the Go version from go.mod (currently 1.25.0) so a
-          # future bump propagates here automatically. Avoids the prior
-          # hardcode-drift bug (db-integration.yml had `1.23` while
-          # go.mod was 1.25.0).
+          # Drive the Go version from go.mod (currently 1.23 per the
+          # Dockerfile builder, but locked at the version the mod
+          # file declares) so a future bump propagates here
+          # automatically.
           go-version-file: go.mod
           cache: true
 
-      - name: Verify build (sanity — no integration tag)
+      # ─── 3. Go formatting check (Blocco #3.1 hard requirement) ────
+      # Use `gofmt -l .` to LIST files that would be reformatted
+      # (empty == clean). Respects .gitignore via filename matches.
+      # Output piped to `cat` so the actual offending filenames show
+      # up in the CI log when this fails. NO `-w` — CI must FAIL not
+      # silently rewrite the working tree.
+      - name: Check Go formatting (gofmt)
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "::error::unformatted files detected (run 'gofmt -w .' locally then re-push):"
+            echo "$UNFORMATTED"
+            echo
+            echo "── gofmt -d (preview of changes) ──"
+            gofmt -d . | head -200
+            exit 1
+          fi
+          echo "✓ gofmt clean"
+
+      # ─── 4. Go vet ────────────────────────────────────────────────
+      - name: Run go vet
+        run: go vet ./...
+
+      # ─── 5. Go test -race (full unit suite) ───────────────────────
+      # Equivalent to `make backend-test`. Runs WITHOUT the integration
+      # build tag so a Docker absence on the runner does NOT block
+      # this step. (Integration-tagged tests live below as their own
+      # step that DOES require Docker.)
+      - name: Run Go tests with race detector
+        # No `|| true`: race-detector hits MUST hard-fail the job
+        # (the "workflow fails = deploy doesn't happen" contract).
+        #
+        # Integration-tagged suites in internal/database,
+        # internal/worker and internal/testutil/redis are guarded by
+        # `//go:build integration` at the top of those files; without
+        # the `-tags=integration` flag they compile to empty test
+        # binaries and pass vacuously, so no explicit package-list
+        # filter is needed here. `make test-integration` (step 9
+        # below) re-runs the same packages WITH the tag.
+        run: go test -race -count=1 -timeout 120s ./...
+
+      # ─── 6. Go build (sanity — works without -tags) ──────────────
+      - name: Verify Go build
         run: go build ./...
 
+      # ─── 7. Node toolchain ────────────────────────────────────────
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Pin to web/package.json's declared engines.node (when
+          # present) else fall back to the current LTS 20. The lockfile
+          # is what `npm ci` actually keys off of; the version here
+          # just sets up cache + binary.
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # ─── 8. Frontend CI block ─────────────────────────────────────
+      # `npm ci` (NOT `npm install`) — uses the committed lockfile,
+      # fails fast if the lockfile is stale. pretest/prebuild hooks
+      # (scripts/generate-favicon-ico.mjs) run automatically as part
+      # of those commands. oxlint (`npm run lint`) is faster than
+      # tsc + eslint combined, so the lint step is cheap.
+      - name: Frontend checks (lint + test + build)
+        working-directory: ./web
+        run: |
+          echo "── npm ci ──"
+          npm ci
+          echo
+          echo "── npm run lint ──"
+          npm run lint
+          echo
+          echo "── npm run test ──"
+          npm run test
+          echo
+          echo "── npm run build ──"
+          npm run build
+          echo
+          echo "✓ frontend gateway passed"
+
+      # ─── 9. Integration tests (Postgres via testcontainers-go) ────
+      # Delegates to the Makefile — single source of truth for the
+      # test command. Edit `make test-integration`, not this step.
+      #
+      # Includes internally:
+      #   - TestMigrations_OrderIndependent (postgresql 17-alpine +
+      #     twice-apply fingerprint diff) — covers the user's "apply
+      #     migrations on empty DB + apply again (idempotency)" rule
+      #     WITHOUT a bash migrate step that would hit bootstrap.Wire's
+      #     fail-fast S3 / JWT_SECRET / ENCRYPTION_KEYS validation.
+      #   - PublishWorker + ReconcileWorker pipeline (uses real PG +
+      #     real httptest.Server for the TikTok wire).
+      #   - internal/testutil/redis PING/SET/GET roundtrip (validates
+      #     the runtime abstraction works for non-SQL backends).
       - name: Run integration tests (database + worker + redis smoke)
-        # Delegates to the Makefile — single source of truth for the
-        # test command. Edit `make test-integration`, not this step.
         run: make test-integration
 
+      # ─── 10. Dump test summary on failure ─────────────────────────
       - name: Dump test summary on failure
         if: failure()
         run: |
           echo "=== Likely causes ==="
+          echo "  - gofmt file list detected (rerun 'gofmt -w .' locally then re-push)"
+          echo "  - go vet flagged a suspicious construct (e.g. printf %s on user input)"
+          echo "  - go test -race hit a data race (look at the failing test's stack)"
+          echo "  - npm ci failure: lockfile out of sync → re-run 'npm install' locally, commit web/package-lock.json"
+          echo "  - npm run lint failure (oxlint): fix in web/, re-push"
+          echo "  - npm run test failure (vitest): fix the failing test"
+          echo "  - npm run build failure (tsc + vite): check the bundle error + type errors"
           echo "  - Docker not available on runner (impossible on ubuntu-latest)"
-          echo "  - Migration added a new post_status enum value (must add to expectedPostStatusActive)"
-          echo "  - Migration added a column Go model expects (must add to requiredColumns)"
+          echo "  - Migration added a column Go model expects (must add to requiredColumns in internal/database/migrations_integration_test.go)"
           echo "  - Migration lost idempotency (a non-IF NOT EXISTS ALTER on re-run)"
-          echo "  - Worker integration test hung — check the per-leaf 15s parallel-drain"
-          echo "    ceiling in cmd/server/main.go"
+          echo "  - Worker integration test hung — check the per-leaf 15s parallel-drain ceiling"
           echo
           echo "Run locally:"
+          echo "  make lint-check"
           echo "  make test-integration"
+          echo "  cd web && npm ci && npm run lint && npm run test && npm run build"

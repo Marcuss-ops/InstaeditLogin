@@ -1,4 +1,4 @@
-.PHONY: dev stop seed test lint backend-test frontend-test test-integration \
+.PHONY: dev stop seed test lint lint-check backend-test frontend-test test-integration \
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-production docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
@@ -94,8 +94,37 @@ frontend-test:
 	cd web && npm ci && npm run lint && npm run test && npm run build
 
 # Run formatters and linters
+#
+# `make lint` is the DEVELOPER-friendly shape: it AUTO-FIXES gofmt
+# (-w) and re-runs the lints. Convenience for local iteration.
+#
+# `make lint-check` is the CI-friendly shape: gofmt CHECKS and FAILS
+# on unformatted files (no -w), identical to the gate in
+# .github/workflows/integration.yml. Use this in pre-commit hooks and
+# other CI surfaces where mutation is wrong.
+#
+# The canonical CI command remains `make lint-check` so PRs that
+# ship with unformatted Go files block instead of silently rewriting
+# the working tree on the runner.
 lint:
 	gofmt -w .
+	go vet ./...
+	cd web && npm run lint
+
+# CI-friendly variant: FAIL on unformatted Go files (no -w).
+# The check mirrors the gate inside .github/workflows/integration.yml
+# exactly. Run in pre-commit; CI uses the same command.
+lint-check:
+	@UNFORMATTED=$$(gofmt -l .); \
+	if [ -n "$$UNFORMATTED" ]; then \
+		echo "::error::unformatted Go files (run 'gofmt -w .' then re-push):"; \
+		echo "$$UNFORMATTED"; \
+		echo; \
+		echo "── gofmt -d (preview of changes) ──"; \
+		gofmt -d . | head -200; \
+		exit 1; \
+	fi
+	@echo "✓ gofmt clean"
 	go vet ./...
 	cd web && npm run lint
 
