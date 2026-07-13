@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -254,5 +255,146 @@ func TestMiddleware_AllowValidToken(t *testing.T) {
 	m.Middleware(next).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------
+// Blocco #5.2 — cross-environment JWT rejection
+//
+// The 3 user-spec cases:
+//   1. same secret + different envs          -> explicit 401 (env mismatch)
+//   2. different secrets + same env          -> explicit 401 (sig mismatch)
+//   3. token issued by dev that arrives on prod -> explicit 401 (env mismatch)
+//
+// All three must produce a 401, and the env-mismatch ones must
+// surface the canonical "token environment mismatch" body so the
+// rejection is visible in the operator's logs (not a silent
+// pass-through or generic 401).
+// ---------------------------------------------------------------------
+
+// TestCrossEnv_SameSecretDifferentEnv confirms case (1): a token
+// minted in env=dev by manager A (same secret as manager B) is
+// rejected with errCrossEnvMismatch when manager B (env=staging)
+// verifies it. The env-bound Manager uses WithEnv() to lock its
+// own process env into the Verify path.
+func TestCrossEnv_SameSecretDifferentEnv(t *testing.T) {
+	const sharedSecret = "shared-secret-for-cross-env-test-32-bytes!"
+	issuer := NewManager(sharedSecret, 24).WithEnv("dev")
+	verifier := NewManager(sharedSecret, 24).WithEnv("staging")
+
+	tok, _, _, err := issuer.IssueAccess(42, 1, 1)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	_, _, _, verr := verifier.Verify(tok)
+	if verr == nil {
+		t.Fatal("Verify across envs: want error, got nil")
+	}
+	if !errors.Is(verr, errCrossEnvMismatch) {
+		t.Fatalf("Verify across envs: want errCrossEnvMismatch, got %v", verr)
+	}
+}
+
+// TestCrossEnv_DifferentSecretSameEnv confirms case (2): a token
+// signed with secret A is rejected by a Manager built with secret
+// B, even though both managers run in the same env. The failure
+// surfaces from jwt-go (signature mismatch), NOT from our
+// errCrossEnvMismatch path — the test pins that distinction so a
+// future refactor can't confuse the two failure modes.
+func TestCrossEnv_DifferentSecretSameEnv(t *testing.T) {
+	issuer := NewManager("secret-A-with-enough-bytes-for-hs256-32x", 24).WithEnv("production")
+	verifier := NewManager("secret-B-with-enough-bytes-for-hs256-32x", 24).WithEnv("production")
+
+	tok, _, _, err := issuer.IssueAccess(7, 1, 1)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	_, _, _, verr := verifier.Verify(tok)
+	if verr == nil {
+		t.Fatal("Verify with different secret: want error, got nil")
+	}
+	if errors.Is(verr, errCrossEnvMismatch) {
+		t.Fatalf("Verify with different secret: want sig-mismatch error, NOT errCrossEnvMismatch; got %v", verr)
+	}
+}
+
+// TestCrossEnv_DevTokenArrivesOnProd confirms case (3) — the
+// canonical "dev token leaked into prod" attack path. The token
+// was minted by an issuer configured with env=dev (via
+// WithEnv("dev")); the verifier is configured with env=production.
+// The verifier must reject the token with errCrossEnvMismatch
+// (NOT a generic sig error — the signature is correct, only the
+// env claim is wrong).
+func TestCrossEnv_DevTokenArrivesOnProd(t *testing.T) {
+	const sharedSecret = "another-shared-secret-for-cross-env-test-xx"
+	devIssuer := NewManager(sharedSecret, 24).WithEnv("dev")
+	prodVerifier := NewManager(sharedSecret, 24).WithEnv("production")
+
+	tok, _, _, err := devIssuer.IssueAccess(99, 1, 1)
+	if err != nil {
+		t.Fatalf("dev issue: %v", err)
+	}
+	// Direct Verify: must fail with the env-mismatch sentinel.
+	if _, _, _, err := prodVerifier.Verify(tok); !errors.Is(err, errCrossEnvMismatch) {
+		t.Fatalf("prodVerify(devToken): want errCrossEnvMismatch, got %v", err)
+	}
+
+	// Middleware path: the rejection must surface as an explicit
+	// 401 body (not a silent pass-through, not a generic 401).
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	prodVerifier.Middleware(next).ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("Middleware status: want 401, got %d", w.Code)
+	}
+	if called {
+		t.Fatal("next handler must not run when env mismatched")
+	}
+	if !strings.Contains(w.Body.String(), "token environment mismatch") {
+		t.Errorf("Middleware body: want explicit env-mismatch body, got %q", w.Body.String())
+	}
+}
+
+// TestCrossEnv_NoEnvConfigured_SkipCheck confirms the
+// backwards-compat path: a Manager without WithEnv() (the
+// test-default + the 17+ existing test fixtures) accepts tokens
+// with any env claim, including an empty one. This pins the
+// “only enforce when both sides have a non-empty env” contract
+// the production rollout depends on — flipping it would force
+// every test that uses NewManager directly to chain WithEnv.
+func TestCrossEnv_NoEnvConfigured_SkipCheck(t *testing.T) {
+	issuer := NewManager(testSecret, 24)   // no WithEnv
+	verifier := NewManager(testSecret, 24) // no WithEnv
+	tok, _, _, err := issuer.IssueAccess(1, 1, 1)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, _, _, err := verifier.Verify(tok); err != nil {
+		t.Errorf("Verify without WithEnv chain: want nil err, got %v", err)
+	}
+}
+
+// TestCrossEnv_IssuerNoEnv_VerifierWithEnv_StillEnforced confirms
+// the asymmetric case: if the verifier has WithEnv() but the
+// issuer did not, the token has env="" in its claims and the
+// verifier (env="production") must reject it. This catches the
+// "issuer never chained WithEnv" deployment regression — every
+// production binary must chain WithEnv at construction time.
+func TestCrossEnv_IssuerNoEnv_VerifierWithEnv_StillEnforced(t *testing.T) {
+	issuer := NewManager(testSecret, 24) // no WithEnv -> token has env=""
+	verifier := NewManager(testSecret, 24).WithEnv("production")
+	tok, _, _, err := issuer.IssueAccess(1, 1, 1)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	_, _, _, verr := verifier.Verify(tok)
+	if !errors.Is(verr, errCrossEnvMismatch) {
+		t.Fatalf("Verify(issuer-no-env -> verifier-prod): want errCrossEnvMismatch, got %v", verr)
 	}
 }

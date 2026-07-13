@@ -56,10 +56,25 @@ const (
 // the sessions table. Tokens minted before SPRINT 2.1 do NOT have
 // this claim and will be rejected by Verify — forcing all existing
 // users to re-authenticate.
+//
+// Blocco #5.2 adds Env (json:"env") so a token minted under
+// AppEnv=A is rejected (with explicit 401) by Manager running
+// under AppEnv=B. Verified by Manager.Verify when the Manager
+// has been configured with WithEnv() (production wiring); when
+// the Manager has no env set (test fixtures, post-NewManager
+// chainable call missing), the env check is skipped so the
+// existing test suite keeps working without per-test env
+// plumbing. Tokens minted before Blocco #5.2 do NOT have the
+// env claim; their Verify call falls under the same skip path
+// (manager.env == ""), so the rollout is silent — but skipping
+// is the wrong long-term posture for production. Callers wiring
+// the real binary MUST chain WithEnv(cfg.AppEnv) at construction
+// time (see internal/bootstrap.Wire).
 type Claims struct {
-	UserID      int64 `json:"uid"`
-	WorkspaceID int64 `json:"ws"`
-	SessionID   int64 `json:"sid"`
+	UserID      int64  `json:"uid"`
+	WorkspaceID int64  `json:"ws"`
+	SessionID   int64  `json:"sid"`
+	Env         string `json:"env,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -70,6 +85,13 @@ type Manager struct {
 	refreshTTL time.Duration
 	issuer     string
 	audience   string
+	// env (Blocco #5.2) is the AppEnv this process is running in.
+	// When non-empty, every Issue stamps claims.Env with this value
+	// and Verify rejects tokens whose env claim differs. When
+	// empty (the test-default), the env check is skipped —
+	// preserving backwards-compat for the existing 17+ .NewManager
+	// call sites that don't care about cross-env partitions.
+	env string
 }
 
 // NewManager constructs a Manager. Variadic for backward-compat:
@@ -121,6 +143,24 @@ func NewManager(secret string, ttls ...interface{}) *Manager {
 	}
 }
 
+// WithEnv (Blocco #5.2) configures the Manager to stamp every
+// issued token with `env` and to reject every verified token whose
+// env claim differs. Builder form so existing callers (and the 17+
+// test fixtures using NewManager directly) remain untouched;
+// production bootstrap.Wire chains WithEnv(cfg.AppEnv) once at
+// startup. Passing an empty env disables the check (equivalent to
+// not calling WithEnv at all) — useful for tests that mint and
+// verify tokens in the same env (or no env at all).
+func (m *Manager) WithEnv(env string) *Manager {
+	m.env = env
+	return m
+}
+
+// Env returns the env the Manager was configured with ("" when
+// WithEnv was not called). Exposed for tests that need to confirm
+// a Manager's env-binding before asserting on Verify behaviour.
+func (m *Manager) Env() string { return m.env }
+
 // NewManagerWithHours keeps the pre-SPRINT-2.1 constructor usable
 // at its original name. Maps ttlHours to the access TTL; refresh
 // TTL stays at 30d.
@@ -152,6 +192,7 @@ func (m *Manager) IssueAccess(userID, wsID, sessionID int64) (string, string, ti
 		UserID:      userID,
 		WorkspaceID: wsID,
 		SessionID:   sessionID,
+		Env:         m.env, // Blocco #5.2 — empty string is omitempty (legacy tokens minted before Blocco #5.2 carry no env claim)
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   fmt.Sprintf("%d", userID),
 			Issuer:    m.issuer,
@@ -212,6 +253,7 @@ func (m *Manager) Issue(userID int64, rest ...int64) (string, string, time.Time,
 		UserID:      userID,
 		WorkspaceID: wsID,
 		SessionID:   sessionID, // guaranteed > 0 (early-return above)
+		Env:         m.env,     // Blocco #5.2 — same as IssueAccess
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   fmt.Sprintf("%d", userID),
 			Issuer:    m.issuer,
@@ -284,8 +326,29 @@ func (m *Manager) Verify(raw string) (int64, int64, int64, error) {
 	if claims.SessionID <= 0 {
 		return 0, 0, 0, errors.New("missing session id in claims (pre-SPRINT-2.1 or invalid)")
 	}
+	// Blocco #5.2 — cross-environment rejection. When the
+	// Manager was configured with an env (via WithEnv at
+	// bootstrap time), every verified token must carry the same
+	// env. Tokens minted under env A that arrive on a process
+	// running env B are rejected with the canonical sentinel
+	// error so the middleware can write an explicit 401 body
+	// (separately distinguishable from generic signature /
+	// expiry failures). Verifies where Manager.env == "" (the
+	// test-default) skip this check.
+	if m.env != "" && claims.Env != m.env {
+		return 0, 0, 0, errCrossEnvMismatch
+	}
 	return claims.UserID, claims.WorkspaceID, claims.SessionID, nil
 }
+
+// errCrossEnvMismatch (Blocco #5.2) is the canonical sentinel
+// returned by Manager.Verify when a token's env claim does not
+// match the Manager's configured env. Middleware inspects this
+// error with errors.Is to emit an explicit 401 body; other
+// failure modes (sig mismatch, expiry, malformed) keep the
+// generic 401 message so the explicit rejection remains
+// distinguishable to operators reading the Sentry / log feed.
+var errCrossEnvMismatch = errors.New("token environment mismatch: explicit cross-env rejection")
 
 // Middleware returns a handler that enforces auth.
 func (m *Manager) Middleware(next http.Handler) http.Handler {
@@ -303,7 +366,7 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 			}
 			uid, wsID, sid, err := m.Verify(raw)
 			if err != nil {
-				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+				writeVerifyError(w, err) // Blocco #5.2: differentiate explicit cross-env 401 from generic 401
 				return
 			}
 			m.putIdentity(r, w, next, NewUserIdentity(uid, wsID, sid))
@@ -318,6 +381,21 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 		}
 		http.Error(w, "missing or invalid session", http.StatusUnauthorized)
 	})
+}
+
+// writeVerifyError (Blocco #5.2) maps a Verify-failure error to a
+// 401 body. Cross-env mismatches use the explicit "environment
+// mismatch" body so an operator watching the response can
+// distinguish a token that arrived at the wrong deployment from
+// a forged/expired/malformed token. All other failure modes keep
+// the generic "invalid or expired token" body so the explicit
+// rejection stays distinguishable in logs.
+func writeVerifyError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errCrossEnvMismatch) {
+		http.Error(w, errCrossEnvMismatch.Error(), http.StatusUnauthorized)
+		return
+	}
+	http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 }
 
 func (m *Manager) putIdentity(r *http.Request, w http.ResponseWriter, next http.Handler, id Identity) {

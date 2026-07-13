@@ -139,7 +139,7 @@ func Wire(ctx context.Context) (*App, error) {
 	}
 	capRouter := registry
 
-	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours)
+	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours).WithEnv(cfg.AppEnv)
 	oneTimeCodes := api.NewOneTimeCodeStore(60 * time.Second)
 	// oneTimeCodes ticker terminates with the process — no explicit
 	// Stop() needed. The original cmd/server/main.go did `defer
