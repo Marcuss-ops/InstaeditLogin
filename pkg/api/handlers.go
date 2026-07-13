@@ -501,6 +501,13 @@ func (r *Router) Setup() http.Handler {
 		r.registerWebhookRoutes()
 	}
 
+	// Magic-link product login (POST /magic-link/start + /verify).
+	// Always wired — the handlers short-circuit with 501 if the
+	// authMagicLink store or authEmailSvc is unset, so an unconfigured
+	// production wiring still gets clean error messages instead of
+	// 404s from missing routes.
+	r.registerMagicLinkRoutes()
+
 	// SPRINT 7.1 (P0#14): OAuth social routes are gated on a valid
 	// InstaEdit session (Bearer or HttpOnly cookie). The middleware
 	// 302s to /login?next=/connections/{provider} when the user is
@@ -639,7 +646,13 @@ func (r *Router) Setup() http.Handler {
 	// terminal handler) get caught. The wrapper is a no-op for
 	// happy-path requests (passthrough to rate-limiter) and
 	// recovers + writes 500 only on panic.
-	rateLimitAndBelow := r.rateLimiter.middleware(r.corsMiddleware(r.loggingMiddleware(r.mux)))
+	// securityHeaders is OUTSIDE the rate-limit + CORS + logging chain
+	// so its decisions are independent of those middlewares' behaviour.
+	// It is INSIDE recover so a panic inside its handler still gets
+	// caught + logged + translated to a 500.
+	rateLimitAndBelow := r.securityHeadersMiddleware(
+		r.rateLimiter.middleware(r.corsMiddleware(r.loggingMiddleware(r.mux))),
+	)
 	return r.recoverMiddleware(rateLimitAndBelow)
 }
 
@@ -1053,6 +1066,36 @@ func (r *Router) handleMetrics(w http.ResponseWriter, req *http.Request) {
 	metrics.Handler().ServeHTTP(w, req)
 }
 
+// registerMagicLinkRoutes mounts the magic-link product login
+// endpoints (SPRINT 1.2). Both routes are intentionally unauthenticated:
+// start needs no session (it's how a session is bootstrapped), verify
+// consumes a single-use token in the body and produces a fresh
+// session row. Mirrors the email/password endpoints which are also
+// mounted directly via r.registerAuthEmailRoutes().
+//
+// CSRF double-submit is also intentionally SKIPPED here, unlike
+// every other PRODUCT-AUTHORED POST/PATCH/DELETE. /start is
+// unauthenticated, and the body is application/json (cross-origin
+// requests force a CORS preflight our allow-list will reject).
+// /verify is gated on a single-use token in the body the attacker
+// doesn't possess, so a forged call cannot mint a session. The
+// few siblings that also bypass CSRF — /auth/refresh, /auth/logout,
+// /auth/exchange — each authenticate via the cookie or one-time
+// code that the request itself is meant to consume. Other
+// user-state-mutating endpoints go through r.protected() (which
+// applies CSRF) — do NOT add magic-link to that chain by accident.
+//
+// The handlers themselves guard against missing infrastructure:
+// handleMagicLinkStart 501s if r.authMagicLink is nil,
+// handleMagicLinkVerify 501s if either authMagicLink or authEmailSvc
+// is unset. We mount the routes regardless so a developer who
+// disabled the store accidentally gets a typed error instead of a
+// 404 from the mux table.
+func (r *Router) registerMagicLinkRoutes() {
+	r.mux.Method(http.MethodPost, "/api/v1/auth/magic-link/start", http.HandlerFunc(r.handleMagicLinkStart))
+	r.mux.Method(http.MethodPost, "/api/v1/auth/magic-link/verify", http.HandlerFunc(r.handleMagicLinkVerify))
+}
+
 func (r *Router) corsMiddleware(next http.Handler) http.Handler {
 	allowed := make(map[string]struct{}, len(r.allowedOrigin))
 	for _, o := range r.allowedOrigin {
@@ -1078,6 +1121,81 @@ func (r *Router) corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, req)
 	})
+}
+
+// securityHeadersMiddleware applies the standard hardened HTTP response
+// headers to every response (defence-in-depth on top of whatever the
+// upstream proxy/CDN also sets). The choices:
+//
+//   - default-src 'none' on Content-Security-Policy is the strict
+//     default for an API-only JSON server: it blocks scripts,
+//     styles, images, fonts, media, frames from any source unless
+//     explicitly allowed. It also forbids <form> submissions to
+//     third parties (form-action 'none') and embeds (frame-ancestors).
+//     The SPA's index.html is served from the static host (Vite dev
+//     / Vercel in prod), NOT from this server, so the SPA's CSP is
+//     NOT here — its index.html / vercel.json / Nginx header config is
+//     what carries the SPA-relevant CSP. This server only needs CSP
+//     because some endpoints return redirect responses (OAuth
+//     callback → /auth/callback redirect) and a redirect from a
+//     strict-CSP origin shouldn't become a script-execution vector.
+//   - X-Content-Type-Options: nosniff blocks MIME-sniffing (mostly
+//     cosmetic for a JSON server but it's a single header so apply).
+//   - X-Frame-Options: DENY blocks iframe embedding of API routes
+//     (defence vs clickjacking if a malicious 3p page tries to load
+//     our JSON responses in an iframe to read cross-origin responses
+//     via same-origin network errors).
+//   - Referrer-Policy: strict-origin-when-cross-origin keeps the
+//     Referer header trustworthy but doesn't leak full paths.
+//   - Strict-Transport-Security is ONLY emitted when the request
+//     arrived over HTTPS (TLS or via a known TLS-terminating proxy:
+//     Fly / Render / Cloudflare all set the X-Forwarded-Proto=https
+//     header). HSTS over plain HTTP would break the connection.
+//
+// Placed OUTSIDE CORS / rate-limit so the headers apply to every
+// response regardless of those middleware short-circuits. Placed
+// INSIDE recover so a panic during header-writing is still caught
+// (the headers will be reset by writeJSON 500 below).
+func (r *Router) securityHeadersMiddleware(next http.Handler) http.Handler {
+	apiCSP := strings.Join([]string{
+		"default-src 'none'",
+		"frame-ancestors 'none'",
+		"form-action 'none'",
+		"base-uri 'none'",
+	}, "; ")
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", apiCSP)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		if isTLSRequest(req) {
+			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
+		next.ServeHTTP(w, req)
+	})
+}
+
+// isTLSRequest reports whether the request reached the server over an
+// encrypted transport. Falls back to X-Forwarded-Proto when TLS is
+// terminated upstream (every managed deploy we ship uses one). This
+// is the gate for the HSTS header so a plain-HTTP sandbox doesn't
+// advertise a permanent HTTPS-only contract to browsers.
+func isTLSRequest(req *http.Request) bool {
+	if req.TLS != nil {
+		return true
+	}
+	if p := req.Header.Get("X-Forwarded-Proto"); p != "" {
+		pp := strings.ToLower(strings.TrimSpace(p))
+		if i := strings.Index(pp, ","); i > 0 {
+			pp = strings.TrimSpace(pp[:i])
+		}
+		return pp == "https"
+	}
+	if strings.EqualFold(req.Header.Get("X-Forwarded-Ssl"), "on") {
+		return true
+	}
+	return false
 }
 
 // ----------------------------------------------------------------------- Helpers

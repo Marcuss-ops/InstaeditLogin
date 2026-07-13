@@ -5,6 +5,26 @@ import { clearSessionCache } from "../lib/auth";
 
 type CallbackStatus = "processing" | "success" | "error";
 
+/**
+ * /auth/callback handles TWO incoming flows:
+ *
+ *   1. OAuth one-time code: ?code=… from /auth/{provider}/callback.
+ *      We POST to /api/v1/auth/exchange with the code; the backend
+ *      consumes the code from the one-time store and writes the
+ *      session cookies; 204 → navigate /accounts.
+ *
+ *   2. Magic-link token:    ?token=… from the email magic link (or
+ *      the dev "Verify now" surface in /login).
+ *      We POST to /api/v1/auth/magic-link/verify with the token;
+ *      the backend consumes the SHA-256 hashed token from
+ *      magic_link_tokens, runs MagicLinkSignupOrLookup, mints a
+ *      session, sets cookies; 204 → navigate /accounts.
+ *
+ * Both flows succeed by setting the session cookie and redirecting.
+ * We deliberately use raw fetch (not authedFetch) because the
+ * request is unauthenticated in both paths — the cookie we WANT
+ * is the one this very request is supposed to set.
+ */
 export function AuthCallback() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<CallbackStatus>("processing");
@@ -13,33 +33,35 @@ export function AuthCallback() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
+    const token = params.get("token");
     const provider = params.get("provider") ?? "";
 
-    if (!code) {
+    if (!code && !token) {
       setStatus("error");
       setError(
-        "The OAuth callback did not include a one-time code. Please try again from the login page.",
+        "The callback did not include a code or a magic-link token. Please try again from the login page.",
       );
       return;
     }
 
+    const path = code
+      ? "/api/v1/auth/exchange"
+      : "/api/v1/auth/magic-link/verify";
+    const body = code ? { code } : { token };
+
     (async () => {
       try {
-        const response = await fetch(
-          `${API_BASE_URL}/api/v1/auth/exchange`,
-          {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code }),
-          },
-        );
+        const response = await fetch(`${API_BASE_URL}${path}`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
         if (response.status === 204) {
-          // Session cookie is set. Force a fresh /api/v1/auth/me fetch on
-          // the next page that needs it.
+          // Session cookie is set. Force a fresh /api/v1/auth/me fetch
+          // on the next page that needs it.
           clearSessionCache();
           setStatus("success");
-          // Replace history so the ?code= URL never lands in browser history.
           navigate("/accounts", {
             replace: true,
             state: { provider },
