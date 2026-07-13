@@ -7,10 +7,12 @@ import { TermsOfService } from "./pages/TermsOfService";
 import { Compose } from "./pages/Compose";
 import { Posts } from "./pages/Posts";
 import { Settings } from "./pages/Settings";
+import { CookieBanner } from "./components/CookieBanner";
 
 function App() {
   return (
     <BrowserRouter>
+      <CookieBanner />
       <Routes>
         <Route path="/" element={<Navigate to="/accounts" replace />} />
         <Route path="/login" element={<Login />} />
