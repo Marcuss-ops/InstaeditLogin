@@ -76,6 +76,26 @@ primary_region = "iad"
   LOG_LEVEL = "info"
   APP_ENV = "production"
 
+  # Blocco #5.3 — Sentry observability (optional). Commented
+  # out by default — operators opt in by running `flyctl secrets
+  # set SENTRY_DSN=https://<key>@<host>/<project>` and the
+  # values re-attach via Fly's secret propagation on next
+  # deploy. The wire code in internal/bootstrap.Wire checks
+  # cfg.SentryDSN — empty == no Sentry init; non-empty ==
+  # sentrygo.Init runs at startup + panic middleware
+  # captures every recovered panic via sentryhttp.New.
+  # SENTRY_DSN = "<redacted>"
+  # SENTRY_ENVIRONMENT = "production"
+  # SENTRY_RELEASE = "<redacted>"
+
+  # Blocco #5.3 — /ready endpoint is mounted at "/ready" (no JWT).
+  # Fly's [[services.api]] http_checks above targets
+  # /api/v1/health (the cheap liveness probe); /ready is for
+  # K8s-style deep-readiness probes that wake the DB. Add a
+  # second [[services]] block or a [[services.http_checks]] on
+  # the existing one with path = "/ready" when an orchestrator
+  # needs the deep signal.
+
   # DB (managed Postgres on Fly, internal-only via flycast).
   DATABASE_URL = "postgresql://instaedit:<redacted>@<managed-pg-host>.flycast:5432/instaedit_login?sslmode=require"
   DB_SSLMODE = "require"

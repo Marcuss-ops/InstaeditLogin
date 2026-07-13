@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
@@ -140,6 +142,28 @@ type Router struct {
 	// background worker (internal/worker/webhook_worker.go)
 	// that main.go spawns separately.
 	webhookStore WebhookStore
+
+	// Blocco #5.3 — Sentry hub + /ready wiring.
+	// sentryHub is nil when SENTRY_DSN is unset (operator-disables-
+	// by-omission). When set, the recovery middleware uses
+	// sentryhttp.New() against this hub; when nil, plain recover.
+	sentryHub *sentry.Hub
+	// workerStatus tracks per-goroutine startup flags for the
+	// /ready "5 worker loops started (no deadlock)" check.
+	workerStatus *WorkerStatus
+	// dbForReady is the *sql.DB used by /ready for PingContext +
+	// SchemaHealthy. Nil disables both (test fixture path); the
+	// production wiring in cmd/server/main.go passes app.DB.
+	dbForReady *sql.DB
+}
+
+// WithDB wires the database for the /ready handler's DB ping +
+// migrations check. Production wiring in internal/bootstrap.Wire
+// passes App.DB; tests pass nil (which makes /ready return "db not
+// configured" so the error is visible without dragging the real
+// *sql.DB into unit tests).
+func WithDB(db *sql.DB) RouterOption {
+	return func(r *Router) { r.dbForReady = db }
 }
 
 // ConnectionStateStore is declared in pkg/api/connections.go (SPRINT 1.2);
@@ -446,6 +470,14 @@ func NewRouter(
 func (r *Router) Setup() http.Handler {
 	r.mux = chi.NewRouter()
 	r.mux.Method(http.MethodGet, "/api/v1/health", http.HandlerFunc(r.handleHealth))
+	// Blocco #5.3 — /ready is top-level + public. Readiness
+	// probes never carry credentials; routers must NOT have to
+	// know the /api/v1 prefix to probe. Mounted in the route
+	// table BEFORE the other handlers so it's near-code at the
+	// top of Setup(); the handler is invoked via the recovery
+	// middleware chain (captures panic-on-probe) regardless of
+	// where the route sits in mux order.
+	r.mux.Method(http.MethodGet, "/ready", http.HandlerFunc(r.handleReady))
 
 	// FASE 2.2: email/password auth routes (when configured).
 	if r.authEmailSvc != nil {
@@ -600,7 +632,15 @@ func (r *Router) Setup() http.Handler {
 	})
 	// FASE 1.2: rate limiter is the outermost middleware so it
 	// protects ALL routes (public + protected) from abuse.
-	return r.rateLimiter.middleware(r.corsMiddleware(r.loggingMiddleware(r.mux)))
+	//
+	// Blocco #5.3 — the panic-catching recovery wrapper sits
+	// OUTSIDE the rate-limit + CORS + logging chain so panics
+	// inside ANY of those middleware bodies (not just the
+	// terminal handler) get caught. The wrapper is a no-op for
+	// happy-path requests (passthrough to rate-limiter) and
+	// recovers + writes 500 only on panic.
+	rateLimitAndBelow := r.rateLimiter.middleware(r.corsMiddleware(r.loggingMiddleware(r.mux)))
+	return r.recoverMiddleware(rateLimitAndBelow)
 }
 
 // ----------------------------------------------------------------------- Handlers

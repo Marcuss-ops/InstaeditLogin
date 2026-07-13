@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/getsentry/sentry-go v0.30.0
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -76,6 +77,7 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

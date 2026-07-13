@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -150,6 +151,27 @@ type Config struct {
 	StripeWebhookSecret string
 	StripeSuccessURL    string
 	StripeCancelURL     string
+
+	// Sentry (optional, Blocco #5.3).
+	//
+	// SENTRY_DSN is the SDK DSN string (`https://key@sentry.io/projid`).
+	// Empty (the default) disables the entire observability surface:
+	//   - sentry.Init is NOT called at startup.
+	//   - the panic-catching middleware falls back to a plain
+	//     `recover(http.Handler)` that writes 500 with NO outbound
+	//     network traffic.
+	// - Non-empty: sentry.Init runs at startup; the panic-catching
+	//   middleware wraps with sentryhttp.New so CaptureException is
+	//   called for every recovered panic and the SDK buffers out-of-band.
+	//
+	// SENTRY_ENVIRONMENT defaults to AppEnv ("dev"/"staging"/"production")
+	// when empty; SENTRY_RELEASE is passed straight through to the SDK
+	// (the operator typically wires this to the deploy SHA via the CI
+	// pipeline). Both are passed via env so the production deploy can
+	// set them without re-baking the binary.
+	SentryDSN         string
+	SentryEnvironment string
+	SentryRelease     string
 }
 
 // Load reads configuration from environment variables.
@@ -208,6 +230,11 @@ func Load() (*Config, error) {
 		StripeWebhookSecret:            getEnv("STRIPE_WEBHOOK_SECRET", ""),
 		StripeSuccessURL:               getEnv("STRIPE_SUCCESS_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?success=1"),
 		StripeCancelURL:                getEnv("STRIPE_CANCEL_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?canceled=1"),
+		// Sentry (Blocco #5.3). SENTRY_DSN empty == SDK never
+		// initialised + recovery middleware uses plain recover.
+		SentryDSN:         getEnv("SENTRY_DSN", ""),
+		SentryEnvironment: getEnv("SENTRY_ENVIRONMENT", ""),
+		SentryRelease:     getEnv("SENTRY_RELEASE", ""),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -273,6 +300,24 @@ func (c *Config) validate() error {
 	}
 	if len(c.JWTSecret) < jwtSecretMinBytes {
 		return fmt.Errorf("JWT_SECRET must be at least %d bytes for HS256 (got %d)", jwtSecretMinBytes, len(c.JWTSecret))
+	}
+
+	// Sentry (Blocco #5.3 — optional). When SET, validate the DSN
+	// shape so a typo at boot surfaces as a process-exit rather than
+	// a silent no-op at the first panic render. When UNSET, no
+	// validation; the absence is the signal the operator gave us to
+	// disable the observability surface.
+	if c.SentryDSN != "" {
+		if err := validateSentryDSN(c.SentryDSN, c.AppEnv); err != nil {
+			return fmt.Errorf("SENTRY_DSN: %w", err)
+		}
+		// Defaults: if the operator set SENTRY_DSN but didn't supply
+		// an environment label, derive it from AppEnv so the SDK
+		// dashboard tags events correctly. Empty Release is fine —
+		// the SDK emits events with no release tag (still useful).
+		if c.SentryEnvironment == "" {
+			c.SentryEnvironment = c.AppEnv
+		}
 	}
 
 	// Optional OAuth platforms.
@@ -506,4 +551,40 @@ func getEnvInt64(key string, fallback int64) int64 {
 		}
 	}
 	return fallback
+}
+
+// validateSentryDSN parses the DSN as a URL and asserts the canonical
+// Sentry shape (scheme, key@host, project path). Empty input is
+// rejected upstream by the caller's guard so we can assume non-empty
+// here. Format errors return with both the underlying url.Parse error
+// AND the original DSN so the operator can copy/paste the failing
+// value into their tooling.
+//
+// Scheme allowance: https is always accepted. http is accepted ONLY
+// when appEnv is "dev" or "staging" — production deployments reject
+// unencrypted DSN at boot so an operator typo doesn't accidentally
+// ship PII-tinted stack traces to a cleartext endpoint. The
+// self-hosted Sentry dev path (`make dev` → docker-compose Sentry on
+// http://localhost:9000/1) is unblocked by this gating.
+func validateSentryDSN(dsn, appEnv string) error {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return fmt.Errorf("not a valid URL: %w (dsn=%q)", err, dsn)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return fmt.Errorf("scheme must be http or https (got %q, dsn=%q)", u.Scheme, dsn)
+	}
+	if u.Scheme == "http" && appEnv == "production" {
+		return fmt.Errorf("scheme=http is not allowed in production (use https, dsn=%q)", dsn)
+	}
+	if u.User == nil {
+		return fmt.Errorf("missing public key (expected https://<key>@host/<project>, got %q)", dsn)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("missing host (dsn=%q)", dsn)
+	}
+	if u.Path == "" || u.Path == "/" {
+		return fmt.Errorf("missing project id (expected https://<key>@host/<project>, got %q)", dsn)
+	}
+	return nil
 }

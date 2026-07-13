@@ -24,6 +24,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
@@ -52,6 +54,19 @@ type App struct {
 	WebhookRepo *repository.WebhookRepository
 	HTTPHandler http.Handler
 	Logger      *slog.Logger
+
+	// WorkerStatus (Blocco #5.3) tracks per-goroutine startup
+	// signals; consumed by /ready. Always non-nil after Wire().
+	// The type lives in pkg/api (not bootstrap) because pkg/api
+	// owns the /ready handler that reads it; bootstrap only
+	// constructs + stores a reference.
+	WorkerStatus *api.WorkerStatus
+
+	// SentryHub (Blocco #5.3). Nil when SENTRY_DSN is empty
+	// (operator-disables-by-omission contract). When non-nil, the
+	// panic-catching middleware uses sentryhttp.New() against
+	// this hub so CaptureException flows correct on every panic.
+	SentryHub *sentry.Hub
 }
 
 // Wire connects to the database, builds every shared dependency, and
@@ -172,6 +187,63 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithRateLimitService(rateLimitSvc),
 		api.WithWebhookStore(webhookRepo),
 	}
+	// Set the worker_id singleton BEFORE any goroutine comes up so log
+	// lines emitted from each worker tick carry the canonical
+	// process-local worker_id.
+	metrics.InitWorkerID()
+
+	// Blocco #5.3 — Sentry init (lazy). The user contract is
+	// "SENTRY_DSN empty == no init; non-empty == CaptureException
+	// pipeline". We honour that by short-circuiting sentry.Init
+	// entirely when the DSN is empty (no outbound DNS lookup, no
+	// background transport goroutine, no per-event CPU cost). When
+	// the DSN is set, sentry.Init runs once; sentry-go guards
+	// against repeat Init in a single process so this is idempotent
+	// across Wire() calls within the same binary.
+	var hub *sentry.Hub
+	if cfg.SentryDSN != "" {
+		clientOpts := sentry.ClientOptions{
+			Dsn:         cfg.SentryDSN,
+			Environment: cfg.SentryEnvironment,
+			Release:     cfg.SentryRelease,
+			// ServerName is intentionally LET-default (the
+			// SDK reads it from the OS). Overriding with
+			// cfg.AppEnv would double-up the env label.
+		}
+		if err := sentry.Init(clientOpts); err != nil {
+			// Sentry init failure is SOFT: log + continue without
+			// the observability surface rather than refusing to
+			// boot. Operators can fix the DSN + redeploy; the
+			// recovery middleware drops to plain recover for the
+			// remainder of this process's lifetime.
+			slog.Warn("sentry init failed; recovery middleware will run without Sentry capture",
+				"error", err)
+		} else {
+			hub = sentry.CurrentHub()
+			slog.Info("sentry configured",
+				"environment", cfg.SentryEnvironment,
+				"release", cfg.SentryRelease)
+		}
+	} else {
+		slog.Info("sentry disabled (SENTRY_DSN empty)")
+	}
+
+	// Inject the Sentry hub into the router options so the recovery
+	// middleware can read it via the Router field (not via the App
+	// field — pkg/api stays decoupled from internal/bootstrap).
+	opts = append(opts, api.WithSentryHub(hub))
+
+	// Blocco #5.3 — wire the DB + worker status into /ready's
+	// contract. The DB is consumed via PingContext + SchemaHealthy;
+	// the WorkerStatus is consumed via AllStarted. The worker
+	// status instance is constructed HERE (not inside the App)
+	// so the router reference AND the App.WorkerStatus reference
+	// point at the SAME *api.WorkerStatus — flip a goroutine's
+	// flag in RunWorkers and the /ready handler observes the
+	// change in the same atomic map.
+	workerStatus := api.NewWorkerStatus(api.WorkerNames)
+	opts = append(opts, api.WithDB(db), api.WithWorkerStatus(workerStatus))
+
 	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)
 
@@ -180,21 +252,20 @@ func Wire(ctx context.Context) (*App, error) {
 		"frontend_url", cfg.FrontendURL,
 		"cors_origins", corsOrigins,
 		"platforms", capRouter.Names(),
-		"api_keys_enabled", apiKeyRepo != nil)
-
-	// Set the worker_id singleton BEFORE any goroutine comes up so log
-	// lines emitted from each worker tick carry the canonical
-	// process-local worker_id.
-	metrics.InitWorkerID()
+		"api_keys_enabled", apiKeyRepo != nil,
+		"sentry_enabled", hub != nil,
+		"ready_endpoint", "/ready")
 
 	return &App{
-		Cfg:         cfg,
-		DB:          db,
-		Vault:       vault,
-		CapRouter:   capRouter,
-		WebhookRepo: webhookRepo,
-		HTTPHandler: router.Setup(),
-		Logger:      logger,
+		Cfg:          cfg,
+		DB:           db,
+		Vault:        vault,
+		CapRouter:    capRouter,
+		WebhookRepo:  webhookRepo,
+		HTTPHandler:  router.Setup(),
+		Logger:       logger,
+		WorkerStatus: workerStatus,
+		SentryHub:    hub,
 	}, nil
 }
 
@@ -222,6 +293,13 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		d := make(chan struct{})
 		go func() {
 			defer close(d)
+			// Blocco #5.3: flip the "started" flag as the FIRST
+			// executable line in the goroutine. /ready uses this
+			// for the no-deadlock assertion. The Mark call MUST
+			// happen inside the goroutine (not before go) so the
+			// published "started" state actually proves the
+			// goroutine reached its first executable line.
+			a.WorkerStatus.Mark("publish")
 			pw := worker.NewPublishWorker(
 				repository.NewPostRepository(a.DB),
 				repository.NewUserRepository(a.DB),
@@ -243,6 +321,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		d := make(chan struct{})
 		go func() {
 			defer close(d)
+			a.WorkerStatus.Mark("reconcile")
 			rw := worker.NewReconcileWorker(
 				repository.NewPostRepository(a.DB),
 				repository.NewUserRepository(a.DB),
@@ -264,6 +343,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		d := make(chan struct{})
 		go func() {
 			defer close(d)
+			a.WorkerStatus.Mark("outbox")
 			ds := outbox.NewDispatcher(outbox.DispatcherConfig{
 				OutboxStore:  repository.NewOutboxRepository(a.DB),
 				Process:      processors.NewPublishJobsMaterialiser(a.DB),
@@ -283,6 +363,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		d := make(chan struct{})
 		go func() {
 			defer close(d)
+			a.WorkerStatus.Mark("webhook")
 			ww := worker.NewWebhookWorker(a.WebhookRepo, time.Duration(a.Cfg.WebhookWorkerIntervalSeconds)*time.Second)
 			if err := ww.Run(c); err != nil && err != context.Canceled {
 				slog.Error("webhook worker exited with error", "error", err)
@@ -297,6 +378,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		d := make(chan struct{})
 		go func() {
 			defer close(d)
+			a.WorkerStatus.Mark("metrics")
 			if err := metrics.RunPeriodicCollector(c, a.DB, metrics.DefaultCollectorInterval, slog.Default()); err != nil && err != context.Canceled {
 				slog.Error("metrics collector exited with error", "error", err)
 			}
