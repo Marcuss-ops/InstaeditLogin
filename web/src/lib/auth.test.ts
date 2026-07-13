@@ -4,7 +4,7 @@
  * Covers: fetchSession, clearSessionCache, authedFetch, logout, AuthError, ApiError.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AuthError, ApiError, authedFetch, clearSessionCache, fetchSession, logout } from "./auth";
+import { AuthError, ApiError, authedFetch, clearSessionCache, fetchSession } from "./auth";
 
 describe("AuthError", () => {
   it("is an Error subclass with name AuthError", () => {

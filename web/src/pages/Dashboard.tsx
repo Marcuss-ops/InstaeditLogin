@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { Nav } from "../components/Nav";
 import { API_BASE_URL } from "../lib/api";
