@@ -105,12 +105,17 @@ const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
  * API on the same browser-visible origin (e.g. via Vite proxy at
  * localhost:5173 → localhost:8080) for document.cookie to contain
  * the value.
+ *
+ * The lookup prefix is the literal cookie name (no URL-encoding):
+ * browsers store cookie names as-is in `document.cookie` and only
+ * URL-encode the value. Encoding the name would silently miss
+ * cookies whose name contains a reserved character (e.g. `+`, `/`).
  */
 export function readCookie(name: string): string | null {
   if (typeof document === "undefined" || !document.cookie) {
     return null;
   }
-  const prefix = `${encodeURIComponent(name)}=`;
+  const prefix = `${name}=`;
   for (const part of document.cookie.split(";")) {
     const value = part.trim();
     if (value.startsWith(prefix)) {

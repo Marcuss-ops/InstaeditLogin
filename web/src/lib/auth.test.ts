@@ -113,6 +113,18 @@ describe("readCookie", () => {
     setDocumentCookie(" csrf_token=trim-me");
     expect(readCookie("csrf_token")).toBe("trim-me");
   });
+
+  it("matches cookie names literally (no URL-encoding of the name)", () => {
+    // Browsers store cookie names as-is in `document.cookie` and
+    // only URL-encode the VALUE. A previous version of this helper
+    // applied `encodeURIComponent` to the name, which silently
+    // missed cookies whose name contains a reserved character
+    // (e.g. `+`, `/`). Pin the contract: lookup is literal, not
+    // URL-encoded.
+    setDocumentCookie("c+srf_token=value; csrf_token=live");
+    expect(readCookie("c+srf_token")).toBe("value");
+    expect(readCookie("csrf_token")).toBe("live");
+  });
 });
 
 describe("authedFetch — X-CSRF-Token injection (Blocco #2.4)", () => {
