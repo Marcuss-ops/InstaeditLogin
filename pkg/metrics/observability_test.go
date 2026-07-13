@@ -228,6 +228,7 @@ var canonicalOutcomeValues = []string{
 // to read a single labeled series without mutating global state —
 // sibling-series counts are not touched by this test.
 func TestRecordPublishAttempt_HappyPath(t *testing.T) {
+	publishAttempts.Reset()
 	RecordPublishAttempt("tiktok", "success")
 	if got := testutil.ToFloat64(publishAttempts.WithLabelValues("tiktok", "success")); got != 1 {
 		t.Errorf("publish_attempts_total{tiktok, success}: want 1, got %v", got)
@@ -243,6 +244,7 @@ func TestRecordPublishAttempt_HappyPath(t *testing.T) {
 // fallback: an empty outcome label gets substituted with
 // "uncategorised" so dashboards never query an absent series.
 func TestRecordPublishAttempt_EmptyOutcomeIsUncategorised(t *testing.T) {
+	publishAttempts.Reset()
 	RecordPublishAttempt("twitter", "")
 	if got := testutil.ToFloat64(publishAttempts.WithLabelValues("twitter", "uncategorised")); got != 1 {
 		t.Errorf("publish_attempts_total{twitter, uncategorised}: want 1, got %v", got)
