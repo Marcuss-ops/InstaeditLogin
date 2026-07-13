@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { Nav } from "../components/Nav";
-import { API_BASE_URL } from "../lib/api";
-import { PROVIDERS, getProvider, type ProviderId } from "../lib/providers";
+import { getProvider, type ProviderId } from "../lib/providers";
 import {
   ApiError,
   AuthError,
@@ -49,7 +48,6 @@ function formatJoined(createdAt: string): string {
 }
 
 export function Dashboard() {
-  const location = useLocation();
   const navigate = useNavigate();
   const [state, setState] = useState<FetchState>({ kind: "loading" });
   const [sessionName, setSessionName] = useState<string>("");
@@ -114,7 +112,10 @@ export function Dashboard() {
     };
   }, [loadAccounts, navigate]);
 
-  const justConnected = (location.state as { provider?: string } | null)?.provider;
+  // The OAuth post-callback toast is surfaced on /connections (see
+  // Connections.tsx); /accounts is now only the "what's connected"
+  // view. The 7 unconnected provider cards were moved to
+  // /connections as part of the Login-→-magic-link migration.
   const accountsByProvider: Record<string, PlatformAccount | undefined> = {};
   if (state.kind === "ready") {
     for (const acc of state.accounts) {
@@ -137,13 +138,6 @@ export function Dashboard() {
           <p className="text-neutral-500 text-[16px] text-center max-w-[480px]">
             Manage connected accounts, publish content, and track your reach.
           </p>
-
-          {justConnected && (
-            <div className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-green-50 border border-green-200 text-green-700 text-[13px] font-medium">
-              <span className="w-2 h-2 rounded-full bg-green-500" />
-              {getProvider(justConnected)?.name ?? justConnected} connected successfully
-            </div>
-          )}
         </div>
 
         {/* Connected accounts */}
@@ -208,73 +202,70 @@ export function Dashboard() {
           )}
 
           {(state.kind === "empty" || state.kind === "ready") && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {PROVIDERS.map((provider) => {
-                const account = accountsByProvider[provider.id];
-                if (!account) {
-                  return (
-                    <a
-                      key={provider.id}
-                      href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}
-                      className="group relative bg-white border border-dashed border-neutral-300 rounded-xl p-5 no-underline text-black hover:border-neutral-500 hover:shadow-[0_8px_24px_rgba(0,0,0,0.05)] transition-all overflow-hidden"
-                    >
-                      <div className="flex items-center gap-4">
-                        <div className={`w-12 h-12 rounded-xl border border-neutral-200 flex items-center justify-center text-neutral-400 group-hover:text-white group-hover:bg-gradient-to-br group-hover:${provider.color} transition-all`}>
-                          {provider.icon}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-[15px] mb-1 text-black">
-                            {provider.name}
-                          </h3>
-                          <p className="text-[13px] text-neutral-500">Not connected</p>
-                        </div>
-                        <ChevronRight
-                          size={18}
-                          className="text-neutral-300 group-hover:text-black group-hover:translate-x-[2px] transition-all"
-                        />
-                      </div>
-                    </a>
-                  );
-                }
-
-                const fresh = isFresh(account.created_at);
-                return (
-                  <div
-                    key={account.id}
-                    className="relative bg-white border border-neutral-200 rounded-xl p-5 hover:border-neutral-400 hover:shadow-[0_8px_24px_rgba(0,0,0,0.05)] transition-all overflow-hidden"
-                  >
-                    <div
-                      className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${provider.color}`}
-                    />
-                    <div className="flex items-center gap-4">
+            <>
+              {state.kind === "ready" && state.accounts.length > 0 && (
+                <div
+                  className="grid grid-cols-1 sm:grid-cols-2 gap-4"
+                  data-testid="dashboard-connected-grid"
+                >
+                  {state.accounts.map((account) => {
+                    const provider = getProvider(account.platform);
+                    if (!provider) return null;
+                    const fresh = isFresh(account.created_at);
+                    return (
                       <div
-                        className={`w-12 h-12 rounded-xl bg-gradient-to-br ${provider.color} flex items-center justify-center text-white shrink-0`}
+                        key={account.id}
+                        data-testid={`connected-card-${account.platform}`}
+                        className="relative bg-white border border-neutral-200 rounded-xl p-5 hover:border-neutral-400 hover:shadow-[0_8px_24px_rgba(0,0,0,0.05)] transition-all overflow-hidden"
                       >
-                        {provider.icon}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h3 className="font-bold text-[15px] text-black truncate">
-                            {provider.name}
-                          </h3>
-                          {fresh && (
-                            <span className="px-2 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-700 text-[11px] font-semibold uppercase tracking-wider">
-                              New
-                            </span>
-                          )}
+                        <div
+                          className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${provider.color}`}
+                        />
+                        <div className="flex items-center gap-4">
+                          <div
+                            className={`w-12 h-12 rounded-xl bg-gradient-to-br ${provider.color} flex items-center justify-center text-white shrink-0`}
+                          >
+                            {provider.icon}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h3 className="font-bold text-[15px] text-black truncate">
+                                {provider.name}
+                              </h3>
+                              {fresh && (
+                                <span className="px-2 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-700 text-[11px] font-semibold uppercase tracking-wider">
+                                  New
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[13px] text-neutral-500 truncate">
+                              @{account.username || "—"}
+                            </p>
+                            <p className="text-[11px] text-neutral-400 mt-1">
+                              Joined {formatJoined(account.created_at)}
+                            </p>
+                          </div>
                         </div>
-                        <p className="text-[13px] text-neutral-500 truncate">
-                          @{account.username || "—"}
-                        </p>
-                        <p className="text-[11px] text-neutral-400 mt-1">
-                          Joined {formatJoined(account.created_at)}
-                        </p>
                       </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* "Connect more" CTA — the 7 unconnected provider cards
+                  moved to /connections (see Connections.tsx). */}
+              <div className="mt-6 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => navigate("/connections")}
+                  data-testid="dashboard-connect-more"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-black text-white text-[14px] font-semibold hover:bg-neutral-800 transition-colors"
+                >
+                  Connect more accounts
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            </>
           )}
         </section>
       </div>

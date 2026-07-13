@@ -62,10 +62,30 @@ export function AuthCallback() {
           // on the next page that needs it.
           clearSessionCache();
           setStatus("success");
-          navigate("/accounts", {
-            replace: true,
-            state: { provider },
-          });
+          // Two landing sites:
+          //   - OAuth (code present)  → /connections with the post-callback
+          //     query params so the Connections page can show a
+          //     connected/failed toast and clean the URL.
+          //   - Magic-link (token)    → /accounts (the dashboard). The
+          //     sign-in is the action; no provider was linked.
+          //
+          // We propagate the backend's `?status=` value rather than
+          // hardcoding "connected" — if the OAuth flow failed at any
+          // point (user denied consent, token-exchange error, account
+          // already taken, rate limit, …) the backend's
+          // /auth/{provider}/callback (the backend endpoint, distinct
+          // from this `/auth/callback` page) will land here with
+          // `?status=failed` and the user should see the failed
+          // toast on /connections, not a misleading success.
+          //
+          // Default to "" (no toast) rather than "connected": on a
+          // deploy-critical path, silence is debuggable, a false
+          // success is the bug class we just fixed.
+          const status = params.get("status") ?? "";
+          const target = code
+            ? `/connections?provider=${encodeURIComponent(provider || "")}&status=${encodeURIComponent(status)}`
+            : "/accounts";
+          navigate(target, { replace: true });
           return;
         }
         let detail = `HTTP ${response.status}`;
