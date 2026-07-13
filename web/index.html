@@ -39,7 +39,13 @@
 
     <title>InstaEdit — AI-Powered Video Creation &amp; Publishing Platform</title>
 
-    <!-- JSON-LD Structured Data -->
+    <!-- JSON-LD Structured Data. contactPoint / sameAs are
+         deliberately omitted — Google rich-results penalises
+         schema with placeholder or unreachable contact data, and
+         exposing personal / third-party accounts in the wire payload
+         is a privacy footgun. Add back with verified org contact info
+         (legal entity contact email + official social handles) once
+         those are stable. -->
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
@@ -56,17 +62,8 @@
       },
       "author": {
         "@type": "Organization",
-        "name": "InstaEdit, Inc.",
-        "url": "https://instaedit.org/",
-        "logo": "https://instaedit.org/app-icon-1024.png",
-        "contactPoint": {
-          "@type": "ContactPoint",
-          "email": "futurimilionariposta@gmail.com",
-          "contactType": "customer support"
-        },
-        "sameAs": [
-          "https://discord.com/users/1201477873719050332"
-        ]
+        "name": "InstaEdit",
+        "url": "https://instaedit.org/"
       }
     }
     </script>

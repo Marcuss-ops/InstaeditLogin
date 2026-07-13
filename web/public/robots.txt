@@ -1,0 +1,18 @@
+User-agent: *
+# Backend / API routes — never crawl.
+Disallow: /api/
+# OAuth callback transient — never crawl.
+Disallow: /auth/
+# App-only routes — no SEO value, no public access without auth.
+Disallow: /accounts
+Disallow: /compose
+Disallow: /posts
+Disallow: /settings/
+
+# Public marketing/legal surfaces.
+Allow: /
+Allow: /login
+Allow: /privacy
+Allow: /terms
+
+Sitemap: https://app.instaedit.org/sitemap.xml
