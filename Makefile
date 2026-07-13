@@ -2,7 +2,8 @@
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-production docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
-        fly-deploy fly-verify fly-help
+        fly-deploy fly-verify fly-help \
+        fly-secrets fly-secrets-dry-run fly-secrets-verify fly-secrets-test
 
 # Start the full local development stack modeled on Blocco #2.1's
 # production-true topology: 3 services (api + worker + migrate) plus
@@ -200,11 +201,15 @@ fly-verify:
 
 # Print a quickstart cheat-sheet for the Fly deploy shape.
 fly-help:
-	@echo "── One-time setup ─────────────────────────────────────"
-	@echo "  flyctl apps create instaedit-login"
-	@echo "  flyctl secrets set DATABASE_URL=... ENCRYPTION_KEYS=... \\"
-	@echo "       JWT_SECRET=... S3_ACCESS_KEY=... S3_SECRET_KEY=... \\"
-	@echo "       EMAIL_PROVIDER_KEY=... STRIPE_WEBHOOK_SECRET=..."
+	@echo "── One-time setup (per machine / per new operator) ──────"
+	@echo "  flyctl auth login"
+	@echo "  cp .env.example .env.production   # fill in 14 secrets"
+	@echo "  git check-ignore .env.production  # confirm gitignored"
+	@echo ""
+	@echo "── Secrets pipeline (always secrets → verify → deploy) ──"
+	@echo "  make fly-secrets-dry-run   # preview (redacted table)"
+	@echo "  make fly-secrets           # stage (--stage, no restart)"
+	@echo "  make fly-secrets-verify    # assert clean: no <redacted>, no disabled keys"
 	@echo ""
 	@echo "── Pre-deploy dry-run ──────────────────────────────────"
 	@echo "  make fly-verify"
@@ -218,3 +223,73 @@ fly-help:
 	@echo "  · Rolls api (HTTP :8080, http_checks /api/v1/health)"
 	@echo "    + worker (tcp_checks :9090) process groups."
 	@echo "  · Keeps >= 1 VM alive per group (min_machines_running=1)."
+
+# ────────────────────────────────────────────────────────────────────────
+# Blocco #4.1: Fly.io secrets pipeline.
+#
+# The canonical deploy order is secrets → verify → deploy, and the
+# scripts in scripts/ implement that contract:
+#
+#   - set-fly-secrets.sh: pipes a .env file to
+#     `flyctl secrets import --app X --stage`. The --stage flag is
+#     critical: without it, `secrets set` triggers an immediate rolling
+#     restart on the EXISTING image, which is the wrong ordering for a
+#     coordinated secrets+code rollout. With --stage, secrets bank on
+#     Fly's side and attach to instances on the next `fly deploy`.
+#
+#   - verify-fly-secrets.sh: runs `flyctl secrets list --app X` and
+#     asserts no <redacted> placeholder, no disabled-provider key, all
+#     14 required keys present. Idempotent; safe to re-run.
+#
+# Both scripts default to dry-run / read-only for safety. The
+# `fly-secrets` target passes --apply for you; `fly-secrets-dry-run`
+# and `fly-secrets-verify` are pure read-only.
+#
+# ENV_FILE defaults to .env.production at the repo root. Override with
+#   make fly-secrets ENV_FILE=.env.staging
+#
+# See docs/DEPLOY.md for the full pipeline, the secret-rotation runbook,
+# and the troubleshooting FAQ.
+# ────────────────────────────────────────────────────────────────────────
+
+# Stage the 14 secrets on Fly (idempotent overwrite; --stage avoids a
+# premature restart). Wraps scripts/set-fly-secrets.sh --apply.
+fly-secrets:
+	@if [[ ! -x ./scripts/set-fly-secrets.sh ]]; then \
+		echo "❌ scripts/set-fly-secrets.sh not found or not executable"; \
+		echo "   Run: chmod +x scripts/set-fly-secrets.sh"; \
+		exit 1; \
+	fi
+	./scripts/set-fly-secrets.sh --env-file "$${ENV_FILE:-.env.production}" --apply
+
+# Preview the secrets push (redacted table; no secrets leave your
+# machine). Run this FIRST to catch missing keys, <redacted>
+# placeholders, and disabled-provider leaks before going live.
+fly-secrets-dry-run:
+	@if [[ ! -x ./scripts/set-fly-secrets.sh ]]; then \
+		echo "❌ scripts/set-fly-secrets.sh not found or not executable"; \
+		exit 1; \
+	fi
+	./scripts/set-fly-secrets.sh --env-file "$${ENV_FILE:-.env.production}"
+
+# Assert the deployed secrets are clean. Run AFTER `make fly-secrets`
+# and BEFORE `make fly-deploy`. Exits non-zero on any failure so it's
+# safe to wire into a CI gate.
+fly-secrets-verify:
+	@if [[ ! -x ./scripts/verify-fly-secrets.sh ]]; then \
+		echo "❌ scripts/verify-fly-secrets.sh not found or not executable"; \
+		exit 1; \
+	fi
+	./scripts/verify-fly-secrets.sh
+
+# Regression test for the deploy-critical .env parser
+# (scripts/_parse_envfile.py). Runs in CI via .github/workflows/integration.yml.
+# Plain python — no pytest dep, <1s on any machine with python3 (already
+# required by the set script's pre-flight). Add new test cases when
+# adding new validation rules to the parser.
+fly-secrets-test:
+	@if [[ ! -f scripts/test_parse_envfile.py ]]; then \
+		echo "❌ scripts/test_parse_envfile.py not found"; \
+		exit 1; \
+	fi
+	python3 scripts/test_parse_envfile.py

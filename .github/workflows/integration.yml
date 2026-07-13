@@ -157,6 +157,15 @@ jobs:
           echo
           echo "✓ frontend gateway passed"
 
+      # ─── 8.5. Fly secrets parser regression test (Blocco #4.1) ───
+      # The .env parser in scripts/_parse_envfile.py is the security
+      # boundary of the deploy — a bug here could push a malformed
+      # value (panic at boot) or a shell-expanded value (silently
+      # mutate a secret). This is a fast (<1s) pure-python test that
+      # locks the contract. No Docker / no external services needed.
+      - name: Verify Fly secrets parser
+        run: make fly-secrets-test
+
       # ─── 9. Integration tests (Postgres via testcontainers-go) ────
       # Delegates to the Makefile — single source of truth for the
       # test command. Edit `make test-integration`, not this step.
