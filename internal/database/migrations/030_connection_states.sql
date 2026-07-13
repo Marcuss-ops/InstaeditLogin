@@ -54,6 +54,23 @@ CREATE INDEX IF NOT EXISTS idx_connection_states_consumed
 -- imported into different teams. Adding a workspace-scoped uniqueness on
 -- platform_accounts prevents the same workspace linking the same social id
 -- twice (which would otherwise share tokens — BOLA).
-ALTER TABLE platform_accounts
-    ADD CONSTRAINT IF NOT EXISTS platform_accounts_ws_platform_puid_uniq
-    UNIQUE (workspace_id, platform, platform_user_id);
+--
+-- Idempotency note (Blocco #5.1 fix): PostgreSQL does NOT support
+-- `IF NOT EXISTS` on `ADD CONSTRAINT` (the clause is only valid on
+-- ADD COLUMN, CREATE TABLE, CREATE INDEX, CREATE SCHEMA, etc.).
+-- The runner (internal/database/migrations.go::RunMigrations) executes
+-- every .sql on every startup without a schema_migrations table, so
+-- this statement MUST be idempotent on its own. We use a DO block
+-- with a duplicate_object exception handler so the constraint is
+-- added exactly once: a fresh DB adds it; a DB that already has it
+-- (including prod DBs that crashed at this step on a prior startup)
+-- skips the add silently. Pre-existing prod state — table created
+-- + index created, but constraint missing — is recovered
+-- automatically on the next startup after this fix deploys.
+DO $$ BEGIN
+    ALTER TABLE platform_accounts
+        ADD CONSTRAINT platform_accounts_ws_platform_puid_uniq
+        UNIQUE (workspace_id, platform, platform_user_id);
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
