@@ -30,20 +30,23 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// sessionCookieConfig is the cookie config used for both access and
-// refresh cookies. SameSite=None is required because the SPA is on
-// a different host (Vercel) than the API. Secure=true is required
-// by browsers for SameSite=None.
-func sessionCookieConfig(secure bool) auth.CSRFConfig {
-	return auth.CSRFConfig{
-		Secure:   secure,
-		Path:     "/",
-		SameSite: http.SameSiteNoneMode,
-	}
-}
-
-func writeSessionCookies(w http.ResponseWriter, r *http.Request, res *services.StartSessionResult, secure bool) {
-	cfg := sessionCookieConfig(secure)
+// setSessionCookie writes the 3 cookies that comprise an
+// authenticated session: the access JWT (HttpOnly, short TTL),
+// the refresh token (HttpOnly, long TTL), and a fresh CSRF
+// token (readable by document.cookie). Called from
+// /auth/exchange, /auth/refresh, and the email + magic-link
+// login/register endpoints.
+//
+// SPRINT 7.2 follow-up: was a free function
+// (writeSessionCookies) that took `secure` as a positional
+// bool. Refactored to a method on *Router so it can use
+// r.cookieSecure + r.csrfConfig() directly (parity with
+// handleExchangeCode which already uses r.csrfConfig()).
+// Every call site was updated in the same commit; the
+// free-function form is removed.
+func (r *Router) setSessionCookie(w http.ResponseWriter, req *http.Request, res *services.StartSessionResult) {
+	cfg := r.csrfConfig()
+	secure := r.cookieSecure
 	// Access JWT cookie (HttpOnly, short TTL).
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.SessionCookieName,
@@ -64,20 +67,34 @@ func writeSessionCookies(w http.ResponseWriter, r *http.Request, res *services.S
 		SameSite: http.SameSiteNoneMode,
 		MaxAge:   int(time.Until(res.RefreshExpiresAt).Seconds()),
 	})
-	// CSRF token (readable by document.cookie).
+	// CSRF token (readable by document.cookie). The token is
+	// freshly generated on every set so the post-login token
+	// cannot be guessed by a pre-login attacker (the
+	// SetCSRFToken docs in csrf.go for the full rationale).
 	_, _ = auth.SetCSRFToken(w, cfg)
-	_ = r // keep linter quiet
+	_ = req // reserved for future per-request cookie-domain
+	// pinning (e.g. setting Domain from the request host when
+	// the SPA and API share a parent domain but live on
+	// different subdomains).
 }
 
-func clearSessionCookies(w http.ResponseWriter, secure bool) {
-	cfg := sessionCookieConfig(secure)
+// clearSessionCookie clears the same 3 cookies and removes the
+// CSRF token cookie. Called from /auth/logout, /auth/logout-all,
+// /auth/refresh on session-reuse-detected, and the workspace
+// switch endpoint when the user changes active workspace.
+//
+// SPRINT 7.2 follow-up: was a free function (clearSessionCookies).
+// Now a method on *Router; same parity rationale as
+// setSessionCookie.
+func (r *Router) clearSessionCookie(w http.ResponseWriter) {
+	cfg := r.csrfConfig()
 	for _, name := range []string{auth.SessionCookieName, auth.RefreshCookieName} {
 		http.SetCookie(w, &http.Cookie{
 			Name:     name,
 			Value:    "",
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   secure,
+			Secure:   r.cookieSecure,
 			SameSite: http.SameSiteNoneMode,
 			MaxAge:   -1,
 		})
@@ -112,17 +129,17 @@ func (h *Router) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrSessionReuse):
-			clearSessionCookies(w, h.cookieSecure)
+			h.clearSessionCookie(w)
 			writeError(w, http.StatusUnauthorized, "refresh token reuse detected; all sessions revoked")
 		case errors.Is(err, services.ErrSessionNotFound):
-			clearSessionCookies(w, h.cookieSecure)
+			h.clearSessionCookie(w)
 			writeError(w, http.StatusUnauthorized, "invalid or expired refresh token")
 		default:
 			writeError(w, http.StatusInternalServerError, "refresh failed")
 		}
 		return
 	}
-	writeSessionCookies(w, r, res, h.cookieSecure)
+	h.setSessionCookie(w, r, res)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -135,7 +152,7 @@ func (h *Router) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = h.sessionsSvc.WithdrawFromCookie(readRefreshCookie(r))
-	clearSessionCookies(w, h.cookieSecure)
+	h.clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -155,7 +172,7 @@ func (h *Router) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "logout-all failed")
 		return
 	}
-	clearSessionCookies(w, h.cookieSecure)
+	h.clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

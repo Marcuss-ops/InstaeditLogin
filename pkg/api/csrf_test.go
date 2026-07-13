@@ -275,18 +275,25 @@ func TestCsrf_Logout_NoToken_OK(t *testing.T) {
 }
 
 // TestWriteSessionCookies_AlsoSetsCsrfCookie — the SPRINT 7.4 cookie
-// helper writeSessionCookies (pkg/api/sessions.go) must issue BOTH
+// helper setSessionCookie (pkg/api/sessions.go) must issue BOTH
 // the HttpOnly session cookie AND the readable csrf_token cookie so
 // the SPA can echo the csrf_token on its first post-login POST.
 //
 // Renamed from TestSetSessionCookie_AlsoSetsCsrfCookie after the
 // SPRINT 7.4 cookie-helper cleanup unified all JWT-issuing handlers
-// onto writeSessionCookies. The Blocco #1.3 invariant this test pins
+// onto the new method. The Blocco #1.3 invariant this test pins
 // (csrf_token cookie attributes: not HttpOnly, Secure, SameSite=None,
 // 64-char hex value) is unchanged — only the helper name moved.
 // Migration: build a tiny *services.StartSessionResult inline and
-// call writeSessionCookies with secure=true (production toggle).
+// call setSessionCookie with h.Router.cookieSecure=true (production toggle).
 func TestWriteSessionCookies_AlsoSetsCsrfCookie(t *testing.T) {
+	// SPRINT 7.2 follow-up: setSessionCookie is a method on
+	// *Router, so we need a Router to call it on. csrfHarnessNew
+	// gives us one for free; we don't use h.Handler (the
+	// cookie-attribute assertions operate on the Recorder's
+	// cookies, not on a real request), but the harness's
+	// Router is exactly what the refactor needs.
+	h := csrfHarnessNew(t)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	result := &services.StartSessionResult{
@@ -301,7 +308,8 @@ func TestWriteSessionCookies_AlsoSetsCsrfCookie(t *testing.T) {
 	// secure=true mirrors the production cookieSecure toggle in
 	// cmd/server/main.go: the CSRF cookie must be Secure in
 	// production so SameSite=None is honoured by browsers.
-	writeSessionCookies(w, req, result, true)
+	h.Router.cookieSecure = true
+	h.Router.setSessionCookie(w, req, result)
 	cookies := w.Result().Cookies()
 	var session, csrf *http.Cookie
 	for _, c := range cookies {
@@ -313,10 +321,10 @@ func TestWriteSessionCookies_AlsoSetsCsrfCookie(t *testing.T) {
 		}
 	}
 	if session == nil {
-		t.Fatal("session cookie not set by writeSessionCookies (Blocco #1.3 contract)")
+		t.Fatal("session cookie not set by setSessionCookie (Blocco #1.3 contract)")
 	}
 	if csrf == nil {
-		t.Fatal("csrf_token cookie not set by writeSessionCookies (Blocco #1.3 contract)")
+		t.Fatal("csrf_token cookie not set by setSessionCookie (Blocco #1.3 contract)")
 	}
 	if csrf.HttpOnly {
 		t.Errorf("csrf_token must NOT be HttpOnly (SPA reads via document.cookie): %+v", csrf)

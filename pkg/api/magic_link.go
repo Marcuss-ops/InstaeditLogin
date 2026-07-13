@@ -173,6 +173,6 @@ func (r *Router) handleMagicLinkVerify(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
 		return
 	}
-	writeSessionCookies(w, req, result, r.cookieSecure)
+	r.setSessionCookie(w, req, result)
 	w.WriteHeader(http.StatusNoContent)
 }

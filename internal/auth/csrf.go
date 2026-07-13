@@ -100,9 +100,21 @@ func NewCSRF(cfg CSRFConfig, next http.Handler) http.Handler {
 			return
 		}
 		// Cookie callers: cookie value must equal header value.
+		// SPRINT 7.2 belt-and-suspenders: distinguish "no csrf cookie"
+		// (the browser never saw one set) from "csrf cookie present
+		// but value is empty" (a malformed or stripped cookie). Both
+		// are rejected, but the distinct reason codes make operator
+		// debugging easier — an empty-value cookie in production logs
+		// usually signals a third-party middleware that strips cookie
+		// values, NOT a CSRF attack. Bundling them under
+		// "missing_csrf_cookie" hides the signal.
 		c, err := r.Cookie(CSRFTokenCookieName)
-		if err != nil || c.Value == "" {
+		if err != nil {
 			rejectCSRF(w, "missing_csrf_cookie")
+			return
+		}
+		if c.Value == "" {
+			rejectCSRF(w, "empty_csrf_cookie_value")
 			return
 		}
 		hdr := r.Header.Get(CSRFHeader)

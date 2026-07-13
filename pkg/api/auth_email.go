@@ -170,7 +170,7 @@ func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
 		return
 	}
-	writeSessionCookies(w, req, result, r.cookieSecure)
+	r.setSessionCookie(w, req, result)
 
 	// TODO(FASE 2.2): Send verification token via email (Mailgun/SES).
 	verifToken, err := r.authEmailSvc.IssueVerificationToken(user.ID, body.Email)
@@ -284,7 +284,7 @@ func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
 		return
 	}
-	writeSessionCookies(w, req, result, r.cookieSecure)
+	r.setSessionCookie(w, req, result)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"user_id":      user.ID,
