@@ -33,6 +33,26 @@ ALTER TABLE post_targets
     ADD COLUMN IF NOT EXISTS max_attempts      INT NOT NULL DEFAULT 5,
     ADD COLUMN IF NOT EXISTS upload_offset     BIGINT NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS rate_limit_reset_at TIMESTAMPTZ,
+    -- Blocco #5.1 fix: the post_repo worker methods (MarkRetrying,
+    -- MarkRateLimited, ReclaimExpiredLeases) all read/write
+    -- `next_retry_at`, but 018 introduced the column as
+    -- `next_attempt_at` and the index below references
+    -- `next_retry_at`. Without this column the index create fails
+    -- and the migration halts. Add the column here so the index
+    -- resolves, the worker code can run, and a future consolidation
+    -- migration can decide whether to drop `next_attempt_at`
+    -- (currently unused) or unify the names. The new column is
+    -- nullable / no default so the add is non-disruptive for
+    -- existing rows; the worker stamps it on the next retry tick.
+    ADD COLUMN IF NOT EXISTS next_retry_at     TIMESTAMPTZ,
+    -- attempt_count + last_error_code were both added by 018
+    -- (internal/database/migrations/018_publish_state_machine.sql)
+    -- for the state-machine error taxonomy. 035's MarkRetrying,
+    -- MarkDeadLetter, and MarkRateLimited methods stamp these
+    -- columns; the 018 add is sufficient. The runner re-executes
+    -- every .sql on every startup, so we intentionally do NOT
+    -- re-assert these here — adding them twice would be a no-op
+    -- but would clutter this migration's diff.
     -- completed_at (SPRINT 5.2) is the timestamp a row reached a
     -- TERMINAL state: published (via published_at) or dlq / failed
     -- (via this column). Operators query `WHERE status IN ('dlq',
