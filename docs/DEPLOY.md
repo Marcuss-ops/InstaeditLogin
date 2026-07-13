@@ -66,7 +66,7 @@ flyctl postgres attach instaedit-pg --app instaedit-login
 
 ## 3. Secret collection
 
-The following **14 secrets** must be set on `instaedit-login`. Where to
+The following **15 secrets** must be set on `instaedit-login`. Where to
 get each:
 
 | # | Secret | Where to get it |
@@ -97,7 +97,7 @@ refuses to push if any of these prefixes appear in the .env file.
 # 1. Copy the dev template
 cp .env.example .env.production
 
-# 2. Fill in the 14 values above. Use your secret manager (1Password,
+# 2. Fill in the 15 values above. Use your secret manager (1Password,
 #    Bitwarden, …) — never paste real secrets into chat / git / issues.
 
 # 3. Verify the file is gitignored (it should be — `.env` is in
@@ -142,18 +142,18 @@ flyctl auth login
 
 # 1. Preview the secrets push (no secrets leave your machine)
 make fly-secrets-dry-run
-#    → prints a redacted table of all 14 keys + lengths
+#    → prints a redacted table of all 15 keys + lengths
 #    → exits 0 if validation passes
 
 # 2. Stage the secrets on Fly (NO restart triggered)
 make fly-secrets
-#    → pipes the .env to `flyctl secrets import --app X --stage`
+#    → pipes the .env to `flyctl secrets set --app X --stage -` via stdin
 #    → Fly banks the secrets; they attach to instances on the next
 #      `fly deploy`
 
 # 3. Verify clean state
 make fly-secrets-verify
-#    → asserts no <redacted>, no disabled-provider keys, all 14 keys present
+#    → asserts no <redacted>, no disabled-provider keys, all 15 keys present
 #    → exits 0 if all checks pass
 
 # 4. Sanity-check fly.toml
@@ -287,7 +287,7 @@ the line from `.env.production` (you can leave it commented for
 context) and re-run.
 
 ### `❌ missing required keys: META_APP_SECRET`
-You forgot to set one of the 14. See §3 for the full list + where to
+You forgot to set one of the 15. See §3 for the full list + where to
 get each.
 
 ### `App is not deployed` (during `fly secrets import`)
@@ -327,3 +327,181 @@ on `/api/v1/health` before the old VM is torn down.
 | Migrations | `internal/database/migrations/` (apply via `release_command`) |
 | Local dev handoff | `HANDOFF-LINUX.md` |
 | OpenAPI spec | `api/openapi.yaml` |
+
+---
+
+## 9. Frontend deploy (Vercel)
+
+The Vite SPA (`web/`) deploys to Vercel; the Go backend deploys to Fly
+(§2–§7). The two are decoupled — the frontend is a static bundle that
+hits the backend over HTTPS. This section is the canonical reference
+for the first Vercel setup + subsequent preview/production deploys.
+
+### 9.1 Pre-flight
+
+- Vercel account (https://vercel.com/signup) — sign up with GitHub for
+  the auto-deploy integration.
+- The `InstaeditLogin` repo connected to Vercel via the GitHub app.
+- (Optional) `vercel` CLI for env-var management from the terminal:
+  `npm i -g vercel`.
+
+### 9.2 Project settings (Vercel dashboard)
+
+Set these in the project's **Settings → General** page. They are
+file-equivalent in `web/vercel.json` (so re-importing the project
+preserves them) but the dashboard wins for the canonical values:
+
+| Setting | Value | Source of truth |
+|---------|-------|-----------------|
+| **Root Directory** | `web` | Vercel project setting (NOT in vercel.json) |
+| **Framework Preset** | Vite | `web/vercel.json` (`"framework": "vite"`) |
+| **Install Command** | `npm ci` | `web/vercel.json` (`"installCommand"`) |
+| **Build Command** | `npm run build` | `web/vercel.json` (`"buildCommand"`) |
+| **Output Directory** | `dist` | `web/vercel.json` (`"outputDirectory"`) |
+| **Node.js Version** | 22.12 | `web/vercel.json` (`"engines.node"`) + the Vercel runtime selector |
+
+> **Node version precedence**: Vercel resolves the runtime as
+> `vercel.json` `engines.node` → `package.json` `engines.node` →
+> project setting → default. The `engines.node` in `web/package.json`
+> is `>=20.19.0` (loose, so local dev works on any modern Node) —
+> `web/vercel.json` pins the Vercel production runtime to 22.12. They
+> do NOT need to match: local dev = minimum, Vercel = exact.
+
+### 9.3 SPA rewrites (history push for React Router)
+
+React Router uses the browser history API (e.g. `/connections`,
+`/compose`, `/posts`). Vercel must serve `index.html` for ALL
+non-asset routes so the client-side router can take over.
+
+`web/vercel.json` already configures this:
+
+```json
+"rewrites": [
+  { "source": "/(.*)", "destination": "/index.html" }
+]
+```
+
+This rewrites every request that doesn't match a static asset in
+`dist/` to `/index.html`. Vite emits assets at well-known paths
+(`/assets/index-*.js`, `/assets/index-*.css`, `/favicon.ico`, etc.)
+which Vercel serves before the rewrite rule fires, so the fallback
+is safe.
+
+> The rewrites block is technically redundant with
+> `"framework": "vite"` (Vercel auto-configures the SPA fallback for
+> Vite projects). We keep it explicit for readability — a future
+> maintainer who deletes the `framework` field won't silently break
+> client-side routing.
+
+If a future route legitimately needs a different file (e.g.
+`/robots.txt`, `/sitemap.xml`), add an explicit `routes` entry BEFORE
+the catch-all rewrite — the first match wins.
+
+### 9.4 Environment variables
+
+Set these in **Settings → Environment Variables**. For each var, pick
+the scope (Production / Preview / Development). For beta, only
+Production matters.
+
+| Variable | Value | Scope | Notes |
+|----------|-------|-------|-------|
+| `VITE_API_BASE_URL` | `https://api.instaedit.org` | Production | The Fly-deployed backend. Preview deployments can override this to a Fly preview URL or stay on production — see §9.7. |
+
+CLI equivalent (after `vercel login`):
+
+```bash
+cd web
+vercel env add VITE_API_BASE_URL production
+# paste: https://api.instaedit.org
+```
+
+> **Do NOT** put the production URL in `web/.env.example` or
+> `web/.env.production` — Vercel env vars override file-based ones
+> at build time, and committing a `.env.production` to the repo would
+> leak the URL to anyone with repo read access.
+
+### 9.5 Build-time validation
+
+`web/vite.config.ts` ships with a `verifyApiBaseUrlPlugin` that
+inspects `VITE_API_BASE_URL` at build start. The plugin:
+
+- **Production** build (`vite build` with `VERCEL_ENV=production`):
+  FAILS the build if the URL is missing, non-https, or pointing to
+  `localhost`. This catches the classic "Vercel stale deploy" bug
+  class before it ships to users.
+- **Preview** build (PR previews): WARNS but does not fail — the
+  operator may legitimately point a preview at a Fly staging URL.
+- **Local** build: silent on success, warns on the dev defaults.
+
+See `web/scripts/verify-api-base-url.ts` for the validation rules.
+
+### 9.6 First deploy
+
+```bash
+# 1. Push to main (Vercel auto-detects the push via the GitHub app)
+git push origin main
+
+# 2. Watch the deploy in the Vercel dashboard
+#    → "Building…" → "Deploying…" → "Ready" (or "Error" with logs)
+
+# 3. Smoke test the production URL
+#    (If you haven't set up the custom domain yet, use the Vercel-assigned
+#     default URL from the dashboard — same rewrite contract applies.)
+curl -sSI https://app.instaedit.org | head -5
+#    Expected: HTTP/2 200 + a Vercel header
+curl -sS https://app.instaedit.org | grep -o '<title>[^<]*</title>'
+#    Expected: <title>InstaEdit — ...</title>
+
+# 4. Smoke test the SPA route (history push)
+curl -sSI https://app.instaedit.org/connections | head -3
+#    Expected: HTTP/2 200 (NOT 404 — the rewrite rule kicks in)
+```
+
+### 9.7 Preview deployments (per PR)
+
+Vercel auto-creates a preview deployment for every PR. The preview
+URL looks like `https://instaedit-login-git-<branch>-<team>.vercel.app`.
+The preview can either:
+
+- Use the **same** `VITE_API_BASE_URL` as production (simplest, hits
+  the real Fly backend — use with caution on user-facing features).
+- Use a **per-PR** override (Settings → Environment Variables → add
+  `VITE_API_BASE_URL` scoped to "Preview" with a different value,
+  e.g. a Fly staging URL).
+
+For the beta, leave the Preview scope empty so previews hit the
+production Fly backend (single source of truth, simplest to debug).
+
+### 9.8 Troubleshooting
+
+#### Build fails: "VITE_API_BASE_URL validation failed in production context"
+The `verifyApiBaseUrlPlugin` rejected the env. Common causes:
+- Forgot to set the env var in the Vercel dashboard (§9.4).
+- Set the env var on the wrong scope (Preview only, not Production).
+- The value is `http://...` instead of `https://...` (Vite treats
+  `http://api.instaedit.org` as an error in production because
+  mixed-content + CORS issues).
+- The value is `http://localhost:8080` (the local-dev default
+  leaked into the production env).
+
+Fix: set the correct value in **Settings → Environment Variables**,
+then redeploy (the dashboard has a "Redeploy" button on the failed
+deploy that re-runs with the new env).
+
+#### SPA route returns 404 on hard refresh
+The `vercel.json` rewrites block is missing or wrong. Verify:
+```bash
+cat web/vercel.json | jq '.rewrites'
+# Expected: [{ "source": "/(.*)", "destination": "/index.html" }]
+```
+
+#### "Build failed: Could not resolve …"
+Usually a missing dev dep or a typescript error. Check:
+- `web/package.json` has all required deps
+- `cd web && npm ci` succeeds locally
+- `cd web && npm run build` succeeds locally
+
+#### "Deploy succeeded but the page shows the Vercel default"
+The Output Directory is wrong. Vercel is serving an empty `dist/`.
+Verify `web/vercel.json` has `"outputDirectory": "dist"` AND the
+Vite build actually emitted files to `dist/` (check the build log).
