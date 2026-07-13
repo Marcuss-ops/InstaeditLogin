@@ -6,7 +6,8 @@
 // Public surface (kept small on purpose):
 //
 //   - RequireDocker(t)   — Docker-availability guard (binary on PATH
-//     + daemon reachable). t.Skipf on failure so dev environments
+//
+//   - daemon reachable). t.Skipf on failure so dev environments
 //     without Docker don't see false failures.
 //
 //   - WaitReady(t, ping, deadline, backoff) — generic readiness-poll
@@ -20,13 +21,13 @@
 //
 // Why a separate package:
 //
-//   Postgres-specific helpers in internal/testutil/postgres
-//   compose these primitives (RequireDocker → tpostgres.Run →
-//   WaitReady(db.Ping)). New containers (Redis, Kafka, …) coming in
-//   the future ALSO need RequireDocker + a readiness-poll loop.
-//   Keeping the generic primitives in their own package avoids
-//   duplicating the loop into every testutil/<engine>/ package and
-//   keeps the convention DRY across future integrations.
+//	Postgres-specific helpers in internal/testutil/postgres
+//	compose these primitives (RequireDocker → tpostgres.Run →
+//	WaitReady(db.Ping)). New containers (Redis, Kafka, …) coming in
+//	the future ALSO need RequireDocker + a readiness-poll loop.
+//	Keeping the generic primitives in their own package avoids
+//	duplicating the loop into every testutil/<engine>/ package and
+//	keeps the convention DRY across future integrations.
 //
 // The package compiles unconditionally (no //go:build integration
 // tag): only the standard library is referenced. The

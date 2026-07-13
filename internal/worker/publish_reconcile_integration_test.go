@@ -31,13 +31,13 @@
 //
 // The tests cover (canonical Taglio 5.x wall-clock guarantees):
 //
-//   1. AsyncRowTransitionsToPublished — happy path: the seeded row
-//      transitions to 'published' within ONE reconciler tick.
-//   2. InFlightRetriesAcrossTicks — in-flight retry path: 2 ticks
-//      return PROCESSING_UPLOAD (the (nil, nil) → leave-alone
-//      contract from AsyncPublisher.Reconcile), the 3rd tick
-//      returns PUBLISH_COMPLETE and the row transitions. Proves
-//      the in-flight retry mechanism end-to-end.
+//  1. AsyncRowTransitionsToPublished — happy path: the seeded row
+//     transitions to 'published' within ONE reconciler tick.
+//  2. InFlightRetriesAcrossTicks — in-flight retry path: 2 ticks
+//     return PROCESSING_UPLOAD (the (nil, nil) → leave-alone
+//     contract from AsyncPublisher.Reconcile), the 3rd tick
+//     returns PUBLISH_COMPLETE and the row transitions. Proves
+//     the in-flight retry mechanism end-to-end.
 //
 // Both tests share setupWorkerRig + runWorkerPair helpers below to
 // avoid duplicating Testcontainers + Postgres migrations + encryption
@@ -481,14 +481,14 @@ func TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished(t *testing.T)
 //
 // Canonical wall-clock map (with 5s tick interval):
 //
-//	  ┌─────────┬────────┬───────────────────────────────────┐
-//	  │ wall t  │ tick # │ httptest.Server state             │
-//	  ├─────────┼────────┼───────────────────────────────────┤
-//	  │  ~0s    │  init  │ call #1 → PROCESSING_UPLOAD      │
-//	  │  ~5s    │  tick  │ call #2 → PROCESSING_UPLOAD      │
-//	  │ ~10s    │  tick  │ call #3 → PUBLISH_COMPLETE       │
-//	  │         │        │ row → status='published'         │
-//	  └─────────┴────────┴───────────────────────────────────┘
+//	┌─────────┬────────┬───────────────────────────────────┐
+//	│ wall t  │ tick # │ httptest.Server state             │
+//	├─────────┼────────┼───────────────────────────────────┤
+//	│  ~0s    │  init  │ call #1 → PROCESSING_UPLOAD      │
+//	│  ~5s    │  tick  │ call #2 → PROCESSING_UPLOAD      │
+//	│ ~10s    │  tick  │ call #3 → PUBLISH_COMPLETE       │
+//	│         │        │ row → status='published'         │
+//	└─────────┴────────┴───────────────────────────────────┘
 //
 // Assertions on the timing:
 //   - lastSeenAsPublishingAt is at or after tickInterval (proves at
@@ -508,6 +508,7 @@ func TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished(t *testing.T)
 // Why this complements the happy-path test:
 //   - Happy-path covers the (res, nil) → success terminal path.
 //   - InFlight covers the (nil, nil) → leave-alone path.
+//
 // The two together cover EVERY branch of AsyncPublisher.Reconcile's
 // terminal-stable-outcome contract on a real DB.
 func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
@@ -705,6 +706,6 @@ func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
 			lastPublishingSinceStart.Round(100*time.Millisecond),
 			(tickInterval - 500*time.Millisecond),
 			transitionedSinceStart.Round(100*time.Millisecond),
-			(2*tickInterval-1*time.Second))
+			(2*tickInterval - 1*time.Second))
 	}
 }

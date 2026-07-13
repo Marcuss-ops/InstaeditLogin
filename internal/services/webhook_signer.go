@@ -69,9 +69,9 @@ func (s *WebhookSigner) SignatureHeader(secret []byte, ts int64, eventID string,
 func (s *WebhookSigner) FormatHeaders(secret []byte, eventID string, body []byte) (ts int64, headers map[string]string) {
 	ts = time.Now().Unix()
 	headers = map[string]string{
-		"X-Signature": s.SignatureHeader(secret, ts, eventID, body),
-		"X-Timestamp": strconv.FormatInt(ts, 10),
-		"X-Event-Id":  eventID,
+		"X-Signature":  s.SignatureHeader(secret, ts, eventID, body),
+		"X-Timestamp":  strconv.FormatInt(ts, 10),
+		"X-Event-Id":   eventID,
 		"Content-Type": "application/json",
 		"User-Agent":   "InstaEditLogin-Webhooks/1.0",
 	}
@@ -93,4 +93,3 @@ func (s *WebhookSigner) Verify(secret []byte, ts int64, eventID, signatureHex st
 	}
 	return hmac.Equal(expected, got)
 }
-

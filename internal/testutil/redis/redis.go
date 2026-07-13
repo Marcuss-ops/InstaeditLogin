@@ -36,7 +36,7 @@ import (
 // Configuration:
 //
 //   - Image:      redis:7-alpine (matches the postgres.go major-only
-//                 pinning convention)
+//     pinning convention)
 //   - Credentials: none (testcontainer-default unsecured)
 //   - DB index:    0 (the Redis default)
 //

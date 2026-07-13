@@ -95,13 +95,13 @@ func (r *SessionRepository) FindByRefreshHash(hash []byte) (*Session, error) {
 }
 
 // Rotate performs the refresh-token rotation atomically:
-//   1. SELECT FOR UPDATE the old row.
-//   2. If revoked_at IS NOT NULL: reuse detected — call RevokeFamily
-//      (atomic, separate statement) and return ErrSessionReuse.
-//   3. Mark old row revoked (reason="rotated").
-//   4. INSERT new row with the same family_id, new refresh hash,
-//      new access_jti, last_used_at = NOW().
-//   5. Return the new row.
+//  1. SELECT FOR UPDATE the old row.
+//  2. If revoked_at IS NOT NULL: reuse detected — call RevokeFamily
+//     (atomic, separate statement) and return ErrSessionReuse.
+//  3. Mark old row revoked (reason="rotated").
+//  4. INSERT new row with the same family_id, new refresh hash,
+//     new access_jti, last_used_at = NOW().
+//  5. Return the new row.
 //
 // The caller is responsible for generating the new refresh-token
 // plaintext + hash + access JWT BEFORE calling Rotate.

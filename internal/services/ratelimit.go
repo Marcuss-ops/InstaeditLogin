@@ -3,10 +3,10 @@
 // Owns the application-level multi-tier rate-limit policy. Each
 // tier is identified by a scope string and a per-minute limit:
 //
-//   "ws_post:<workspaceID>"     POST /api/v1/posts           60/min  (Postgres)
-//   "apikey_read:<apiKeyID>"   GET  /api/v1/api-keys/*      600/min (Postgres)
-//   "media_presign"             POST /api/v1/media/presign  30/min  (in-memory)
-//   "oauth_ip:<ip>"            GET  /api/v1/auth/*/login   20/min  (in-memory)
+//	"ws_post:<workspaceID>"     POST /api/v1/posts           60/min  (Postgres)
+//	"apikey_read:<apiKeyID>"   GET  /api/v1/api-keys/*      600/min (Postgres)
+//	"media_presign"             POST /api/v1/media/presign  30/min  (in-memory)
+//	"oauth_ip:<ip>"            GET  /api/v1/auth/*/login   20/min  (in-memory)
 //
 // The Postgres tiers MUST be shared across replicas (per-workspace,
 // per-API-key) — the user explicitly forbade in-memory limiters
@@ -82,10 +82,10 @@ func (s *RateLimitService) Shutdown() {
 // Check is the tier-agnostic entry point. limit is per minute
 // (the spec'd unit for all tiers). Returns:
 //
-//   allowed   — true if the request is under budget
-//   remaining — tokens left in the current window (0 when over)
-//   resetAt   — when the window refills (UTC)
-//   err       — non-nil on backend failure (caller decides fail-open vs fail-closed)
+//	allowed   — true if the request is under budget
+//	remaining — tokens left in the current window (0 when over)
+//	resetAt   — when the window refills (UTC)
+//	err       — non-nil on backend failure (caller decides fail-open vs fail-closed)
 //
 // On Postgres error the service returns (true, limit, now+window, err)
 // so the middleware fails open. Callers that want fail-closed should

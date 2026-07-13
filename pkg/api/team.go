@@ -26,7 +26,7 @@ type TeamStore interface {
 	CreateInvite(workspaceID, invitedBy int64, email, role string) (*models.WorkspaceInvite, error)
 	FindInviteByToken(token string) (*models.WorkspaceInvite, error)
 	AcceptInvite(token string, userID int64) error
-}	// Role hierarchy: admin > editor > viewer.
+} // Role hierarchy: admin > editor > viewer.
 var roleRank = map[string]int{
 	"admin":  3,
 	"editor": 2,

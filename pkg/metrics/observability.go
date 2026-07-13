@@ -65,18 +65,18 @@ import (
 
 // Operation values for provider_latency_seconds{operation}.
 const (
-	OperationPublish      = "publish"        // Publisher.Publish(entry path)
-	OperationAsyncInit    = "async_init"     // AsyncPublisher.StartPublish
-	OperationAsyncStatus  = "async_status"   // AsyncPublisher.CheckPublishStatus
-	OperationReconcile    = "reconcile"      // AsyncPublisher.Reconcile
-	OperationRefresh      = "refresh"        // OAuthProvider.RefreshOAuthToken
+	OperationPublish     = "publish"      // Publisher.Publish(entry path)
+	OperationAsyncInit   = "async_init"   // AsyncPublisher.StartPublish
+	OperationAsyncStatus = "async_status" // AsyncPublisher.CheckPublishStatus
+	OperationReconcile   = "reconcile"    // AsyncPublisher.Reconcile
+	OperationRefresh     = "refresh"      // OAuthProvider.RefreshOAuthToken
 )
 
 // DeadLetterSource values for dead_letter_count{source}.
 const (
-	DeadLetterSourcePublish = "publish"  // post_targets.status='dlq'
-	DeadLetterSourceOutbox  = "outbox"   // outbox_events.status='dead_letter'
-	DeadLetterSourceWebhook = "webhook"  // webhook_deliveries.status='dead'
+	DeadLetterSourcePublish = "publish" // post_targets.status='dlq'
+	DeadLetterSourceOutbox  = "outbox"  // outbox_events.status='dead_letter'
+	DeadLetterSourceWebhook = "webhook" // webhook_deliveries.status='dead'
 )
 
 // PoolState values for database_pool_usage{state}.
@@ -90,11 +90,11 @@ const (
 
 // WebhookFailureReason values for webhook_delivery_failures{reason}.
 const (
-	WebhookFailureReasonTimeout     = "timeout"        // DefaultWebhookHTTPTimeout elapsed
-	WebhookFailureReasonNon2xxRetry = "non_2xx_retry"  // 408/425/429 → retry
-	WebhookFailureReasonNon2xxDead  = "non_2xx_dead"   // 4xx terminal → dead
-	WebhookFailureReasonLoadFailed  = "load_failed"    // FindEventByID/FindEndpointByID errored
-	WebhookFailureReasonBuildFailed = "build_failed"   // http.NewRequest errored
+	WebhookFailureReasonTimeout     = "timeout"       // DefaultWebhookHTTPTimeout elapsed
+	WebhookFailureReasonNon2xxRetry = "non_2xx_retry" // 408/425/429 → retry
+	WebhookFailureReasonNon2xxDead  = "non_2xx_dead"  // 4xx terminal → dead
+	WebhookFailureReasonLoadFailed  = "load_failed"   // FindEventByID/FindEndpointByID errored
+	WebhookFailureReasonBuildFailed = "build_failed"  // http.NewRequest errored
 )
 
 // ---------------------------------------------------------------------------
@@ -193,8 +193,8 @@ var (
 	// for new panels (30s ceiling covers YouTube).
 	providerLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name: "provider_latency_seconds",
-			Help: "Per-platform API call latency in seconds, labeled by provider and operation. Buckets span 50ms to 30s; the 30s tail covers the YouTube resumable upload path.",
+			Name:    "provider_latency_seconds",
+			Help:    "Per-platform API call latency in seconds, labeled by provider and operation. Buckets span 50ms to 30s; the 30s tail covers the YouTube resumable upload path.",
 			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
 		},
 		[]string{"provider", "operation"},
@@ -278,8 +278,8 @@ var (
 	// threshold.
 	httpRequestLatencySeconds = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name: "http_request_latency_seconds",
-			Help: "HTTP request latency in seconds, labeled by route pattern. Buckets include 0.3 (the POST /posts p95 SLO threshold) so histogram_quantile returns the SLO directly.",
+			Name:    "http_request_latency_seconds",
+			Help:    "HTTP request latency in seconds, labeled by route pattern. Buckets include 0.3 (the POST /posts p95 SLO threshold) so histogram_quantile returns the SLO directly.",
 			Buckets: []float64{0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 1, 2.5, 5, 10},
 		},
 		[]string{"route"},
@@ -425,7 +425,7 @@ func ObserveHTTPRequest(route, method, status string, seconds float64) {
 // SetDatabasePoolUsage are the periodic-gauge setters called by the
 // collector goroutine (Phase 2). Each takes the value directly;
 // zero values are valid (e.g. empty queue is depth=0, lag=0).
-func SetQueueDepth(depth int) { publishQueueDepth.Set(float64(depth)) }
+func SetQueueDepth(depth int)            { publishQueueDepth.Set(float64(depth)) }
 func SetQueueLagSeconds(seconds float64) { publishQueueLagSeconds.Set(seconds) }
 func SetTargetsByStatus(status string, count int) {
 	if status == "" {

@@ -39,13 +39,13 @@ import (
 // payload shape, and emit it from the appropriate worker /
 // service.
 const (
-	EventAccountConnected              = "account.connected"
+	EventAccountConnected                = "account.connected"
 	EventAccountReauthenticationRequired = "account.reauthentication_required"
-	EventPostPublished                 = "post.published"
-	EventPostPartiallyPublished        = "post.partially_published"
-	EventPostFailed                    = "post.failed"
-	EventPostTargetPublished           = "post_target.published"
-	EventPostTargetFailed              = "post_target.failed"
+	EventPostPublished                   = "post.published"
+	EventPostPartiallyPublished          = "post.partially_published"
+	EventPostFailed                      = "post.failed"
+	EventPostTargetPublished             = "post_target.published"
+	EventPostTargetFailed                = "post_target.failed"
 )
 
 // MaxAttempts is the cap for the backoff curve. After the 5th

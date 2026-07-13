@@ -30,16 +30,16 @@ import (
 type ProviderErrorCode string
 
 const (
-	ErrorCodeValidationError         ProviderErrorCode = "validation_error"
-	ErrorCodeAuthenticationError     ProviderErrorCode = "authentication_error"
-	ErrorCodePermissionMissing       ProviderErrorCode = "permission_missing"
+	ErrorCodeValidationError          ProviderErrorCode = "validation_error"
+	ErrorCodeAuthenticationError      ProviderErrorCode = "authentication_error"
+	ErrorCodePermissionMissing        ProviderErrorCode = "permission_missing"
 	ErrorCodeReauthenticationRequired ProviderErrorCode = "reauthentication_required"
-	ErrorCodeRateLimited             ProviderErrorCode = "rate_limited"
-	ErrorCodeProviderUnavailable     ProviderErrorCode = "provider_unavailable"
-	ErrorCodeMediaProcessingFailed   ProviderErrorCode = "media_processing_failed"
-	ErrorCodeContentRejected         ProviderErrorCode = "content_rejected"
-	ErrorCodeQuotaExceeded           ProviderErrorCode = "quota_exceeded"
-	ErrorCodeInternalError           ProviderErrorCode = "internal_error"
+	ErrorCodeRateLimited              ProviderErrorCode = "rate_limited"
+	ErrorCodeProviderUnavailable      ProviderErrorCode = "provider_unavailable"
+	ErrorCodeMediaProcessingFailed    ProviderErrorCode = "media_processing_failed"
+	ErrorCodeContentRejected          ProviderErrorCode = "content_rejected"
+	ErrorCodeQuotaExceeded            ProviderErrorCode = "quota_exceeded"
+	ErrorCodeInternalError            ProviderErrorCode = "internal_error"
 )
 
 // AllProviderErrorCodes returns the full taxonomy as a slice. Used
@@ -211,11 +211,11 @@ func MapHTTPStatus(statusCode int) ProviderErrorCode {
 // Header preference order (canonical first, per RFC 7231 + common
 // platform conventions):
 //
-//	1. Retry-After                (RFC 7231 §7.1.3, all platforms)
-//	2. X-RateLimit-Reset          (epoch seconds — GitHub, Stripe, YouTube)
-//	3. X-Rate-Limit-Reset         (alt spelling — some gateways)
-//	4. X-Rate-Limit-Reset-After   (some CDN providers)
-//	5. x-rate-limit-reset         (lowercase — Twitter v2 convention)
+//  1. Retry-After                (RFC 7231 §7.1.3, all platforms)
+//  2. X-RateLimit-Reset          (epoch seconds — GitHub, Stripe, YouTube)
+//  3. X-Rate-Limit-Reset         (alt spelling — some gateways)
+//  4. X-Rate-Limit-Reset-After   (some CDN providers)
+//  5. x-rate-limit-reset         (lowercase — Twitter v2 convention)
 //
 // Reuses ParseRetryAfter (provider.go) which handles delta-seconds,
 // Go duration strings, RFC 1123 dates, and epoch seconds.
@@ -495,15 +495,15 @@ func firstNonEmpty(values ...string) string {
 // ---------------------------------------------------------------------------
 
 const (
-	PublishOutcomeSuccess        = "success"
+	PublishOutcomeSuccess         = "success"
 	PublishOutcomeRateLimited     = "rate_limited"
-	PublishOutcomeAuthError      = "auth_error"
+	PublishOutcomeAuthError       = "auth_error"
 	PublishOutcomeProviderUnavail = "provider_unavail"
 	PublishOutcomeMediaFailed     = "media_failed"
 	PublishOutcomeContentRejected = "content_rejected"
 	PublishOutcomeValidation      = "validation"
-	PublishOutcomeQuota          = "quota"
-	PublishOutcomeInternal       = "internal"
+	PublishOutcomeQuota           = "quota"
+	PublishOutcomeInternal        = "internal"
 )
 
 // PublishOutcomeFromCode maps a ProviderErrorCode to the canonical

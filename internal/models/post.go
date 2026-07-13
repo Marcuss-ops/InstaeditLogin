@@ -178,8 +178,8 @@ type PostTarget struct {
 	RemotePostURL string `json:"remote_post_url,omitempty"`
 
 	// Diagnostic / observability columns.
-	ErrorMessage  string     `json:"error_message,omitempty"`
-	PublishedAt   *time.Time `json:"published_at,omitempty"`
+	ErrorMessage string     `json:"error_message,omitempty"`
+	PublishedAt  *time.Time `json:"published_at,omitempty"`
 	// CompletedAt (SPRINT 5.2, migration 035) is the catch-all
 	// timestamp a row reached a TERMINAL non-success state
 	// (status='dlq' or status='failed' after exhausting

@@ -39,8 +39,8 @@ type rateLimiter struct {
 }
 
 type rateLimiterEntry struct {
-	limiter   *rate.Limiter
-	lastSeen  time.Time
+	limiter  *rate.Limiter
+	lastSeen time.Time
 }
 
 // newRateLimiter creates a new rate limiter and starts a background
@@ -176,4 +176,3 @@ func extractIP(r *http.Request) string {
 	}
 	return addr
 }
-

@@ -24,30 +24,30 @@ import (
 //
 // Why NOT a metric label:
 //
-//   Each application-emitted "worker_id" label would multiply the
-//   cardinality by N (N = number of worker replicas) for every
-//   metric. The scrape job's external_labels approach is "free" —
-//   applied by Prometheus at scrape time, applies uniformly, never
-//   appears in the application's source. This is the explicit
-//   choice documented at the top of observability.go.
+//	Each application-emitted "worker_id" label would multiply the
+//	cardinality by N (N = number of worker replicas) for every
+//	metric. The scrape job's external_labels approach is "free" —
+//	applied by Prometheus at scrape time, applies uniformly, never
+//	appears in the application's source. This is the explicit
+//	choice documented at the top of observability.go.
 //
 // Thread safety:
 //
-//   SetWorkerID is called ONCE at process start (by main.go before
-//   the HTTP server starts accepting requests). After that point
-//   WorkerID() is the only consumer and reads must be cheap. The
-//   RWMutex allows concurrent reads from many goroutines without
-//   contention — the write-side critical section is held only
-//   during the single SetWorkerID call.
+//	SetWorkerID is called ONCE at process start (by main.go before
+//	the HTTP server starts accepting requests). After that point
+//	WorkerID() is the only consumer and reads must be cheap. The
+//	RWMutex allows concurrent reads from many goroutines without
+//	contention — the write-side critical section is held only
+//	during the single SetWorkerID call.
 //
 // Defensive default "unset":
 //
-//   If the application code reads WorkerID() BEFORE SetWorkerID has
-//   been called (e.g. in a test that doesn't call SetWorkerID), the
-//   default value of "unset" makes the missing-init obvious in
-//   dashboards / log queries. A panic would also be defensible
-//   (fail-fast) but the user's spec calls for structured logs that
-//   survive partial init, so we keep the soft default.
+//	If the application code reads WorkerID() BEFORE SetWorkerID has
+//	been called (e.g. in a test that doesn't call SetWorkerID), the
+//	default value of "unset" makes the missing-init obvious in
+//	dashboards / log queries. A panic would also be defensible
+//	(fail-fast) but the user's spec calls for structured logs that
+//	survive partial init, so we keep the soft default.
 var (
 	workerID      = "unset"
 	workerIDMutex sync.RWMutex

@@ -428,6 +428,7 @@ func TestMultiTenancy_PendingInvitePartialUnique(t *testing.T) {
 		t.Fatalf("re-invite after acceptance should succeed: %v", err)
 	}
 }
+
 // user_oauth_profiles table exists, enforces UNIQUE(user_id, platform),
 // and has been backfilled from platform_accounts.
 func TestMultiTenancy_CreatesUserOAuthProfiles(t *testing.T) {

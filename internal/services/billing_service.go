@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/stripe/stripe-go/v84"
-	"github.com/stripe/stripe-go/v84/checkout/session"
 	portallink "github.com/stripe/stripe-go/v84/billingportal/session"
+	"github.com/stripe/stripe-go/v84/checkout/session"
 	"github.com/stripe/stripe-go/v84/webhook"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -148,9 +148,9 @@ func (s *BillingService) handleCheckoutCompleted(event stripe.Event) error {
 
 func (s *BillingService) handleSubscriptionUpdated(event stripe.Event) error {
 	var sub struct {
-		ID                string `json:"id"`
-		Status            string `json:"status"`
-		CurrentPeriodEnd  int64  `json:"current_period_end"`
+		ID               string `json:"id"`
+		Status           string `json:"status"`
+		CurrentPeriodEnd int64  `json:"current_period_end"`
 	}
 	if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
 		return fmt.Errorf("parse subscription.updated: %w", err)

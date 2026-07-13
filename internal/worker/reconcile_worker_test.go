@@ -47,10 +47,10 @@ type mockReconcilePostStore struct {
 	updatePublishStateCalls int
 
 	// Function fields — each test overrides only what it exercises.
-	listPublishingFn       func() ([]models.PostTarget, error)
-	claimPublishingFn      func(id int64) (bool, error)
-	updateStatusFn         func(*models.PostTarget) error
-	updatePublishStateFn   func(id int64, providerState string) error
+	listPublishingFn     func() ([]models.PostTarget, error)
+	claimPublishingFn    func(id int64) (bool, error)
+	updateStatusFn       func(*models.PostTarget) error
+	updatePublishStateFn func(id int64, providerState string) error
 
 	// Captured targets from UpdateStatus — lets tests inspect the
 	// final status (published vs failed) and assert on the worker

@@ -3,11 +3,11 @@
 // Periodic metric collector goroutine. Refreshes the 5 production
 // gauges from Phase 1's metric definitions:
 //
-//   publish_queue_depth            (Gauge, no labels)
-//   publish_queue_lag_seconds      (Gauge, no labels)
-//   publish_targets_by_status      (GaugeVec{status})
-//   dead_letter_count              (GaugeVec{source})
-//   database_pool_usage            (GaugeVec{state})
+//	publish_queue_depth            (Gauge, no labels)
+//	publish_queue_lag_seconds      (Gauge, no labels)
+//	publish_targets_by_status      (GaugeVec{status})
+//	dead_letter_count              (GaugeVec{source})
+//	database_pool_usage            (GaugeVec{state})
 //
 // Lifecycle: RunPeriodicCollector is a blocking loop driven by a
 // time.Ticker; ctx-cancellable; integrates with cmd/server/main.go's
@@ -42,13 +42,14 @@
 //     Composite locks (DB only) are the simpler alternative.
 //
 // Why pre-setting all status/source gauges to 0 every tick:
-//   Prometheus GaugeVec.WithLabelValues(s).Set(...) only creates a
-//   series if Set is called. A status that hasn't been emitted yet
-//   (e.g. a fresh DB with no dlq rows) would have NO metric line
-//   in the scrape, and dashboards would silently break for
-//   "no data". Pre-setting 0 every tick guarantees the series
-//   always emits. Trade-off: 5x more Set calls per tick
-//   (~negligible cost) for dashboards that NEVER lose their metric.
+//
+//	Prometheus GaugeVec.WithLabelValues(s).Set(...) only creates a
+//	series if Set is called. A status that hasn't been emitted yet
+//	(e.g. a fresh DB with no dlq rows) would have NO metric line
+//	in the scrape, and dashboards would silently break for
+//	"no data". Pre-setting 0 every tick guarantees the series
+//	always emits. Trade-off: 5x more Set calls per tick
+//	(~negligible cost) for dashboards that NEVER lose their metric.
 package metrics
 
 import (

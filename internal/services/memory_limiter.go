@@ -46,7 +46,7 @@ type MemoryLimiter struct {
 }
 
 type memoryLimiterEntry struct {
-	limiter *rate.Limiter
+	limiter  *rate.Limiter
 	lastSeen time.Time
 }
 

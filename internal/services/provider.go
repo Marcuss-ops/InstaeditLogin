@@ -329,7 +329,7 @@ const DefaultMaxPublishAttempts = 5
 //   - "120s"                 → 120s
 //   - "2m" / "2m30s"         → parsed via time.ParseDuration
 //   - "Mon, 02 Jan 2026 ..." → parsed via time.Parse(RFC1123), converted
-//                              to a relative duration from now()
+//     to a relative duration from now()
 //
 // X-RateLimit-Reset is auto-detected: an integer that fits in 11
 // digits (year-2286 in unix seconds) is treated as an absolute

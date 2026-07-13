@@ -8,7 +8,9 @@
 //
 // Algorithm: fixed window. The hot read path is a single
 // `INSERT ... ON CONFLICT (scope, window_start) DO UPDATE SET
-//   count = rate_limit_counters.count + 1
+//
+//	count = rate_limit_counters.count + 1
+//
 // RETURNING count`. Postgres handles the race atomically via the
 // PRIMARY KEY (scope, window_start) constraint; no explicit row
 // lock needed.

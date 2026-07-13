@@ -202,16 +202,16 @@ var ErrWebhookEventNotFound = errors.New("webhook event not found")
 
 // WebhookDelivery mirrors a webhook_deliveries row.
 type WebhookDelivery struct {
-	ID           int64
-	EventID      int64
-	EndpointID   int64
-	Attempt      int
-	Status       string // 'pending' | 'success' | 'dead'
-	RequestLog   string
-	ResponseLog  string
-	ScheduledAt  time.Time
-	CompletedAt  *time.Time
-	LastError    string
+	ID          int64
+	EventID     int64
+	EndpointID  int64
+	Attempt     int
+	Status      string // 'pending' | 'success' | 'dead'
+	RequestLog  string
+	ResponseLog string
+	ScheduledAt time.Time
+	CompletedAt *time.Time
+	LastError   string
 }
 
 // ErrWebhookDeliveryNotFound is the delivery lookup sentinel.

@@ -911,64 +911,64 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	}
 	defer rows.Close()
 
-		var targets []models.PostTarget
-		for rows.Next() {
-			t := models.PostTarget{}
-			if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
-				&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
-				&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
-				return nil, fmt.Errorf("failed to scan post_target: %w", err)
-			}
-			targets = append(targets, t)
+	var targets []models.PostTarget
+	for rows.Next() {
+		t := models.PostTarget{}
+		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan post_target: %w", err)
 		}
-		return targets, nil
+		targets = append(targets, t)
 	}
+	return targets, nil
+}
 
-	// ListPublishing (Taglio 4.2) returns post_targets whose status='publishing'
-	// AND platform_post_id IS NOT NULL. These are the targets the reconciler
-	// goroutine needs to poll for async state transitions (TikTok's
-	// PROCESSING_UPLOAD → PUBLISH_COMPLETE flow).
-	//
-	// The non-null platform_post_id filter is essential: a target that
-	// transitions to 'publishing' but has not yet been assigned a
-	// publish_id (e.g. still in the synchronous Publish() call) must NOT
-	// be picked up by the reconciler — there's no publish_id to query
-	// status against.
-	//
-	// Ordered by id ASC for stable iteration; this lets the reconciler
-	// check the same target on every tick without flapping. Includes the
-	// provider_idempotency_key column added by migration 022 so retries
-	// from the reconciler reuse the same key already stamped at claim time.
-	// Includes the completed_at column added by migration 035 so the
-	// reconciler can detect rows that were DLQ'd while the reconciler
-	// held a stale read (defensive — ListPublishing filters on
-	// status='publishing' so DLQ'd rows are naturally excluded, but the
-	// field is included for consistency with ListByPost).
-	func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
-		rows, err := r.db.Query(
-			`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
+// ListPublishing (Taglio 4.2) returns post_targets whose status='publishing'
+// AND platform_post_id IS NOT NULL. These are the targets the reconciler
+// goroutine needs to poll for async state transitions (TikTok's
+// PROCESSING_UPLOAD → PUBLISH_COMPLETE flow).
+//
+// The non-null platform_post_id filter is essential: a target that
+// transitions to 'publishing' but has not yet been assigned a
+// publish_id (e.g. still in the synchronous Publish() call) must NOT
+// be picked up by the reconciler — there's no publish_id to query
+// status against.
+//
+// Ordered by id ASC for stable iteration; this lets the reconciler
+// check the same target on every tick without flapping. Includes the
+// provider_idempotency_key column added by migration 022 so retries
+// from the reconciler reuse the same key already stamped at claim time.
+// Includes the completed_at column added by migration 035 so the
+// reconciler can detect rows that were DLQ'd while the reconciler
+// held a stale read (defensive — ListPublishing filters on
+// status='publishing' so DLQ'd rows are naturally excluded, but the
+// field is included for consistency with ListByPost).
+func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
+	rows, err := r.db.Query(
+		`SELECT id, post_id, platform_account_id, status, platform_post_id, error_message, published_at,
 			        provider_state, container_id, provider_idempotency_key, completed_at
 			 FROM post_targets
 			 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
 			 ORDER BY id ASC`,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list publishing post_targets: %w", err)
-		}
-		defer rows.Close()
-
-		var targets []models.PostTarget
-		for rows.Next() {
-			t := models.PostTarget{}
-			if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
-				&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
-				&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
-				return nil, fmt.Errorf("failed to scan post_target: %w", err)
-			}
-			targets = append(targets, t)
-		}
-		return targets, nil
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list publishing post_targets: %w", err)
 	}
+	defer rows.Close()
+
+	var targets []models.PostTarget
+	for rows.Next() {
+		t := models.PostTarget{}
+		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan post_target: %w", err)
+		}
+		targets = append(targets, t)
+	}
+	return targets, nil
+}
 
 // UpdatePublishState (Taglio 4.2) updates only the provider_state column
 // on a post_target. Used by the reconciler to record the current

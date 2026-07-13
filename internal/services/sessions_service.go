@@ -39,12 +39,12 @@ type StartSessionRequest struct {
 // StartSessionResult is what the login/refresh handlers return to set
 // cookies on the response.
 type StartSessionResult struct {
-	SessionID       int64
-	AccessToken     string
-	AccessJTI       string
-	AccessExpiresAt time.Time
-	RefreshToken    string
-	RefreshHash     []byte
+	SessionID        int64
+	AccessToken      string
+	AccessJTI        string
+	AccessExpiresAt  time.Time
+	RefreshToken     string
+	RefreshHash      []byte
 	RefreshExpiresAt time.Time
 }
 
@@ -273,4 +273,3 @@ func IsNoSession(err error) bool {
 // _ keeps http imported for the future Set-Cookie helper that
 // the api package implements; suppress the unused import warning.
 var _ = http.MethodPost
-

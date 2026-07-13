@@ -264,8 +264,8 @@ func TestMapHTTPStatus(t *testing.T) {
 		{http.StatusNotFound, ErrorCodeContentRejected},
 		{http.StatusGone, ErrorCodeContentRejected},
 		{http.StatusTooManyRequests, ErrorCodeRateLimited},
-		{418, ErrorCodeValidationError},    // 4xx catch-all
-		{451, ErrorCodeValidationError},    // 4xx catch-all
+		{418, ErrorCodeValidationError}, // 4xx catch-all
+		{451, ErrorCodeValidationError}, // 4xx catch-all
 		{http.StatusInternalServerError, ErrorCodeProviderUnavailable},
 		{http.StatusBadGateway, ErrorCodeProviderUnavailable},
 		{http.StatusServiceUnavailable, ErrorCodeProviderUnavailable},
@@ -289,9 +289,9 @@ func TestMapHTTPStatus(t *testing.T) {
 // retry-after the rate-limit handler stamps onto post_targets.
 func TestParseThrottleHeaders(t *testing.T) {
 	cases := []struct {
-		name    string
-		header  http.Header
-		want    time.Duration
+		name   string
+		header http.Header
+		want   time.Duration
 	}{
 		{
 			name:   "Retry-After delta-seconds (RFC 7231)",
