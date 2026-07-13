@@ -127,6 +127,14 @@ type Router struct {
 	// in production wiring (cmd/server/main.go) and to false in tests
 	// that exercise the cookie path with httptest's in-memory server.
 	cookieSecure bool
+	// cookieDomain (Blocco #2.4 — CSRF cross-origin read) is the
+	// Domain attribute applied EXCLUSIVELY to the csrf_token cookie
+	// via auth.CSRFConfig. Session and refresh cookies NEVER receive
+	// it; they're HttpOnly on the API host and adding a Domain would
+	// widen the CSRF attack surface (cross-subdomain cookie reuse)
+	// without any compensating control (JS still cannot read them).
+	// Wired via WithCookieDomain; defaults to empty (dev-friendly).
+	cookieDomain string
 	// SPRINT 2.2 — multi-tier rate limiter (optional). Wiring via
 	// WithRateLimitService. When nil, the per-tier middleware
 	// factories (WorkspacePostLimit / APIKeyReadLimit /
@@ -422,6 +430,30 @@ func WithSessionsService(svc *services.SessionsService) RouterOption {
 // cmd/server/main.go MUST set this to true.
 func WithCookieSecure(secure bool) RouterOption {
 	return func(r *Router) { r.cookieSecure = secure }
+}
+
+// WithCookieDomain sets the optional `Domain` attribute applied to
+// the csrf_token cookie ONLY. Session and refresh cookies are NEVER
+// given a Domain — they remain host-only on the API origin. The
+// reason is asymmetric threat model:
+//
+//   - csrf_token is NON-HttpOnly and MUST be readable by JS on the
+//     SPA origin. Cross-origin (app.instaedit.org reading the
+//     api.instaedit.org cookie) only works when the cookie's Domain
+//     is set to a parent the SPA's host falls under, OR when the
+//     SPA is reverse-proxied through the API same-host.
+//
+//   - session / refresh cookies are HttpOnly. JS can never read them
+//     regardless of origin; the browser only attaches them on
+//     subsequent requests to the API origin. Setting Domain on these
+//     widens the cross-subdomain attack surface without any security
+//     upside — the SPA cannot read them anyway.
+//
+// Pass an empty string to disable (dev / localhost default).
+// Production wiring passes cfg.CookieDomain directly so COOKIE_DOMAIN
+// env controls the scope at deploy time.
+func WithCookieDomain(domain string) RouterOption {
+	return func(r *Router) { r.cookieDomain = domain }
 }
 
 // WithRateLimitService wires the SPRINT 2.2 multi-tier rate
@@ -902,9 +934,10 @@ func (r *Router) resolveActiveWorkspace(ctx context.Context, userID int64) (int6
 // guessed by a pre-login attacker (see internal/auth/csrf.go).
 func (r *Router) csrfConfig() auth.CSRFConfig {
 	return auth.CSRFConfig{
-		Secure:   r.cookieSecure,
-		Path:     "/",
-		SameSite: http.SameSiteNoneMode,
+		Secure:       r.cookieSecure,
+		Path:         "/",
+		CookieDomain: r.cookieDomain,
+		SameSite:     http.SameSiteNoneMode,
 	}
 }
 

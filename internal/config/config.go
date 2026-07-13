@@ -172,6 +172,20 @@ type Config struct {
 	SentryDSN         string
 	SentryEnvironment string
 	SentryRelease     string
+
+	// CookieDomain is the optional `Domain` attribute applied to the
+	// csrf_token cookie ONLY (session + refresh cookies stay host-only).
+	// Defaults to empty so dev (localhost:5173 + localhost:8080) keeps
+	// working unchanged. Production sets it to e.g. ".instaedit.org"
+	// so the SPA on app.instaedit.org can read the csrf_token via
+	// document.cookie over a cross-origin backend on api.instaedit.org.
+	// Use a leading dot to make the cookie available to every
+	// subdomain; the value is passed straight through to Go's
+	// http.Cookie Domain field (which the browser interprets per
+	// RFC 6265). Validation is intentionally NOT applied — the
+	// HTTPS / SameSite=None / leading-dot trade-off is the
+	// operator's call.
+	CookieDomain string
 }
 
 // Load reads configuration from environment variables.
@@ -235,6 +249,17 @@ func Load() (*Config, error) {
 		SentryDSN:         getEnv("SENTRY_DSN", ""),
 		SentryEnvironment: getEnv("SENTRY_ENVIRONMENT", ""),
 		SentryRelease:     getEnv("SENTRY_RELEASE", ""),
+		// COOKIE_DOMAIN: optional cross-subdomain scope for the
+		// csrf_token cookie ONLY (session + refresh stay host-only).
+		// Defaults to empty so dev (localhost:5173 + localhost:8080)
+		// keeps working unchanged. Pass ".instaedit.org" in
+		// production so the SPA on app.instaedit.org can read the
+		// csrf_token via document.cookie against the API on
+		// api.instaedit.org. NOT validated — the operator owns the
+		// Domain shape (leading dot for cross-subdomain, exact host
+		// to pin, etc.) and Go's http.Cookie Domain field will
+		// pass it straight through to the browser unchanged.
+		CookieDomain: getEnv("COOKIE_DOMAIN", ""),
 	}
 
 	if err := cfg.validate(); err != nil {

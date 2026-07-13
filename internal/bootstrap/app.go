@@ -184,6 +184,18 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithAuthEmailService(authEmailSvc),
 		api.WithSessionsService(sessionsSvc),
 		api.WithCookieSecure(true),
+		// csrf_token cookie Domain (Blocco #2.4): threaded from
+		// cfg.CookieDomain (COOKIE_DOMAIN env var). Empty stays
+		// host-only, which is correct for dev (localhost crosses
+		// different ports and a parent-domain match wouldn't help).
+		// Production sets e.g. ".instaedit.org" so the SPA on
+		// app.instaedit.org can read the csrf_token via
+		// document.cookie against the API on api.instaedit.org.
+		// Session + refresh cookies deliberately remain host-only:
+		// they are HttpOnly on the API origin, JS cannot read them
+		// anyway, and giving them a Domain would only widen the
+		// CSRF attack surface for zero security upside.
+		api.WithCookieDomain(cfg.CookieDomain),
 		api.WithRateLimitService(rateLimitSvc),
 		api.WithWebhookStore(webhookRepo),
 	}

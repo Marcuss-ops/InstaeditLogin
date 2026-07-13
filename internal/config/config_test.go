@@ -132,3 +132,43 @@ func TestValidate_SentryDSN_Unparseable(t *testing.T) {
 // meta_test.go) so the identifier doesn't accidentally shadow
 // unrelated package-level declarations.
 var dummpyBase64Key32 = validEncryptionKey()
+
+// TestLoad_CookieDomain_Env asserts the COOKIE_DOMAIN env var is
+// loaded verbatim into cfg.CookieDomain. The value is NOT validated
+// (the operator owns the shape — ".instaedit.org" for cross-subdomain,
+// "api.instaedit.org" for exact-host, empty for dev-host-only). This
+// test pins the round-trip; any future validation must be additive.
+func TestLoad_CookieDomain_Env(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("COOKIE_DOMAIN", ".instaedit.org")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with COOKIE_DOMAIN set: want nil, got %v", err)
+	}
+	if cfg.CookieDomain != ".instaedit.org" {
+		t.Errorf("CookieDomain: want .instaedit.org, got %q", cfg.CookieDomain)
+	}
+}
+
+// TestLoad_CookieDomain_DefaultEmpty asserts the developer-friendly
+// default: COOKIE_DOMAIN unset leaves cfg.CookieDomain empty so the
+// csrf_token cookie stays host-only on the API origin (dev runs at
+// localhost:5173 + localhost:8080 which have different "domains"
+// anyway, so a parent-domain match would be wrong). The absence of
+// any validate() rejection of an empty value is the contract: an
+// operator who hasn't yet set up DNS is unblocked from running.
+func TestLoad_CookieDomain_DefaultEmpty(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	// Deliberately do NOT set COOKIE_DOMAIN here.
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() without COOKIE_DOMAIN: want nil, got %v", err)
+	}
+	if cfg.CookieDomain != "" {
+		t.Errorf("CookieDomain default: want empty (dev), got %q", cfg.CookieDomain)
+	}
+}

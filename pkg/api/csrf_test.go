@@ -343,3 +343,144 @@ func TestWriteSessionCookies_AlsoSetsCsrfCookie(t *testing.T) {
 		t.Errorf("csrf_token must be valid hex: %v", err)
 	}
 }
+
+// TestCookieDomain_AppliesOnlyToCsrfCookie (Blocco #2.4) — when
+// the router carries cookieDomain=".instaedit.org", setSessionCookie
+// must attach Domain ONLY to the csrf_token cookie. Session and
+// refresh cookies stay host-only on the API origin.
+//
+// This is the asymmetry the cross-origin deploy requires: the SPA
+// on app.instaedit.org must be able to read the csrf_token via
+// document.cookie against the api.instaedit.org response (the
+// browser's cookie-share rules require a parent-domain match),
+// while HttpOnly session/refresh cookies have no business being
+// cross-subdomain anyway (JS can't read them no matter what).
+func TestCookieDomain_AppliesOnlyToCsrfCookie(t *testing.T) {
+	h := csrfHarnessNew(t)
+	h.Router.cookieSecure = true
+	h.Router.cookieDomain = ".instaedit.org"
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	result := &services.StartSessionResult{
+		SessionID:        1,
+		AccessToken:      "fake-jwt",
+		AccessJTI:        "fake-jti",
+		AccessExpiresAt:  time.Now().Add(15 * time.Minute),
+		RefreshToken:     "fake-refresh",
+		RefreshHash:      []byte("fake-refresh-hash"),
+		RefreshExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}
+	h.Router.setSessionCookie(w, req, result)
+
+	var session, refresh, csrf *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		switch c.Name {
+		case auth.SessionCookieName:
+			session = c
+		case auth.RefreshCookieName:
+			refresh = c
+		case auth.CSRFTokenCookieName:
+			csrf = c
+		}
+	}
+	if session == nil || refresh == nil || csrf == nil {
+		t.Fatalf("missing one of session/refresh/csrf cookies: session=%v refresh=%v csrf=%v", session != nil, refresh != nil, csrf != nil)
+	}
+	if session.Domain != "" {
+		t.Errorf("session cookie MUST stay host-only (Domain attr widens CSRF attack surface with no read-side benefit since cookie is HttpOnly); got Domain=%q", session.Domain)
+	}
+	if refresh.Domain != "" {
+		t.Errorf("refresh cookie MUST stay host-only (HttpOnly, same threat-model as session); got Domain=%q", refresh.Domain)
+	}
+	// Note on the leading dot: Go's net/http cookie PARSER strips
+	// it per RFC 6265 §5.2.3 ("if the first character is '.',
+	// SHOULD be ignored") when reading back from the Set-Cookie
+	// header. The wire still carries Domain=.instaedit.org (which
+	// is what we set via CSRFConfig.CookieDomain) — and the BROWSER
+	// honors it for cross-subdomain matching (app.instaedit.org
+	// reads the cookie from api.instaedit.org). The test compares
+	// what the parser returns ("instaedit.org") not what we wrote
+	// (".instaedit.org"); production behaviour is unchanged.
+	if csrf.Domain != "instaedit.org" {
+		t.Errorf("csrf_token MUST carry Domain=instaedit.org on the parsed cookie (SPA cross-origin document.cookie read; parser strips leading dot per RFC 6265 §5.2.3); got Domain=%q", csrf.Domain)
+	}
+	// Blocco #2.4 wire-level lock — independent of Go's cookie
+	// parser. The Set-Cookie header line for csrf_token MUST carry
+	// a "Domain=" attribute so the browser opts the cookie into
+	// cross-subdomain matching (app.instaedit.org reads the cookie
+	// that api.instaedit.org sets). Per RFC 6265 §4.1.2.3 + §5.2.3
+	// the leading dot is OBSOLETE — modern UAs ignore it, and Go's
+	// net/http serializer strips it on write via sanitizeCookieDomain
+	// for forward compliance. The wire form is therefore
+	// "Domain=instaedit.org" (no dot), which the browser treats
+	// IDENTICALLY to ".instaedit.org" for the parent-domain match.
+	// The parsed-cookie check above covers the parser-form; this one
+	// covers the wire-form so any future regression that drops the
+	// Domain attribute entirely is caught here, not in production.
+	rawLines := w.Result().Header["Set-Cookie"]
+	var csrfLine string
+	for _, line := range rawLines {
+		if strings.Contains(line, auth.CSRFTokenCookieName) {
+			csrfLine = line
+			break
+		}
+	}
+	if csrfLine == "" {
+		t.Fatalf("Set-Cookie header for csrf_token not found in raw response: raw=%v", rawLines)
+	}
+	if !strings.Contains(csrfLine, "Domain=instaedit.org") {
+		t.Errorf("csrf_token Set-Cookie MUST carry Domain=instaedit.org (cross-subdomain match for the browser per RFC 6265 §4.1.2.3; leading dot is stripped by Go's sanitizeCookieDomain per §5.2.3); got line=%q", csrfLine)
+	}
+}
+
+// TestCookieDomain_Empty_AllCookiesHostOnly (Blocco #2.4) — when
+// the router leaves cookieDomain="", setSessionCookie must NOT
+// attach Domain to ANY of the three cookies. Dev (localhost:5173 +
+// localhost:8080) needs this exact shape, so the test pins it so a
+// future refactor that defaults cookieDomain to something cannot
+// regress silently.
+func TestCookieDomain_Empty_AllCookiesHostOnly(t *testing.T) {
+	h := csrfHarnessNew(t)
+	h.Router.cookieSecure = true
+	// Deliberately leave cookieDomain at its zero value (empty string).
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	result := &services.StartSessionResult{
+		SessionID:        1,
+		AccessToken:      "fake-jwt",
+		AccessJTI:        "fake-jti",
+		AccessExpiresAt:  time.Now().Add(15 * time.Minute),
+		RefreshToken:     "fake-refresh",
+		RefreshHash:      []byte("fake-refresh-hash"),
+		RefreshExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	}
+	h.Router.setSessionCookie(w, req, result)
+
+	for _, c := range w.Result().Cookies() {
+		if c.Name != auth.SessionCookieName && c.Name != auth.RefreshCookieName && c.Name != auth.CSRFTokenCookieName {
+			continue
+		}
+		if c.Domain != "" {
+			t.Errorf("with cookieDomain empty, %s MUST be host-only (dev localhost contract); got Domain=%q", c.Name, c.Domain)
+		}
+	}
+	// Wire-level lock for the empty side of the same Blocco #2.4
+	// contract — the csrf_token Set-Cookie line MUST NOT contain a
+	// "Domain=" attribute so the cookie stays host-only on the API
+	// origin (dev localhost-crosses-ports contract). Same role as
+	// the parsed-cookie check above (parser returns empty when the
+	// attribute is absent), but pinned at the wire side so a future
+	// Go serializer change that starts emitting an explicit
+	// "Domain=" string gets caught here, not silently in prod.
+	rawLines := w.Result().Header["Set-Cookie"]
+	for _, line := range rawLines {
+		if !strings.Contains(line, auth.CSRFTokenCookieName) {
+			continue
+		}
+		if strings.Contains(line, "Domain=") {
+			t.Errorf("with cookieDomain empty, csrf_token Set-Cookie MUST NOT carry Domain= attribute (dev host-only contract); got line=%q", line)
+		}
+	}
+}
