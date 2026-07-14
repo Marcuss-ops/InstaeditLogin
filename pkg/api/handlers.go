@@ -562,6 +562,14 @@ func (r *Router) Setup() http.Handler {
 	r.mux.Method(http.MethodPost, "/api/v1/auth/logout-all", r.protected(r.handleLogoutAll))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/sessions", r.protected(r.handleListSessions))
 	r.mux.Method(http.MethodDelete, "/api/v1/auth/sessions/{id}", r.protected(r.handleDeleteSession))
+	// GET /api/v1/accounts — list the authenticated user's connected
+	// social accounts across every platform. SPRINT 7.1 (P0#14):
+	// must NEVER read user_id / workspace_id from body/query — both
+	// come exclusively from the JWT identity deposited by the auth
+	// middleware. Mounted BEFORE /accounts/{id} so chi's pattern
+	// matching prefers the literal path over the parameterised one
+	// (also a readability convention: list first, then by-id).
+	r.mux.Method(http.MethodGet, "/api/v1/accounts", r.protected(r.handleListAccounts))
 	r.mux.Method(http.MethodGet, "/api/v1/accounts/{id}", r.protected(r.handleGetAccount))
 	r.mux.Method(http.MethodPost, "/api/v1/accounts/{id}/validate", r.protected(r.handleValidateAccount))
 	r.mux.Method(http.MethodPost, "/api/v1/accounts/{id}/reconnect", r.protected(r.handleReconnectAccount))
@@ -1059,6 +1067,65 @@ func OAuthStartLimitIfConfigured(svc *services.RateLimitService) func(http.Handl
 		return func(next http.Handler) http.Handler { return next }
 	}
 	return OAuthStartLimit(svc)
+}
+
+// accountListItem is the wire shape returned by handleListAccounts.
+// We deliberately do NOT return the PlatformAccount struct directly:
+// it leaks user_id, last_error_code/message, metadata blob, and
+// every internal audit column the SPA does not need. The 6 fields
+// below are the SPEC'd response contract: id, platform,
+// platform_user_id, username, status, created_at.
+type accountListItem struct {
+	ID             int64     `json:"id"`
+	Platform       string    `json:"platform"`
+	PlatformUserID string    `json:"platform_user_id"`
+	Username       string    `json:"username"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// handleListAccounts returns the authenticated user's connected
+// social accounts. SPRINT 7.1 (P0#14) closure: identity comes ONLY
+// from the JWT (deposited by r.protected → r.auth.Middleware); never
+// from query params, body, or path. WorkspaceID from the identity
+// is captured for tenant-scoping future work (Taglio 1.4 audit
+// log) but is NOT used as a SQL filter — PlatformAccount is currently
+// user-scoped in the schema (a single social identity serves every
+// workspace the user is a member of; this matches the Taglio 2.4
+// "OAuth is one identity per user, not per workspace" contract).
+//
+// Response always uses the {"accounts": [...]} wrapper so the SPA's
+// JSON decoder can iterate unconditionally — never nil-vs-empty,
+// always an array (possibly empty).
+func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
+	id := auth.IdentityFromContext(req.Context())
+	if id == nil || id.UserID() <= 0 {
+		// Defence-in-depth: r.protected() should have already
+		// rejected this with 401. If a future refactor accidentally
+		// wires this handler without the middleware, refuse the
+		// request rather than silently returning any user's data.
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+	_ = id.WorkspaceID() // tenancy captured for audit; not used as SQL filter (see godoc)
+
+	accounts, err := r.userRepo.ListPlatformAccountsByUser(id.UserID(), "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list accounts: "+err.Error())
+		return
+	}
+	items := make([]accountListItem, 0, len(accounts))
+	for _, a := range accounts {
+		items = append(items, accountListItem{
+			ID:             a.ID,
+			Platform:       a.Platform,
+			PlatformUserID: a.PlatformUserID,
+			Username:       a.Username,
+			Status:         a.Status,
+			CreatedAt:      a.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"accounts": items})
 }
 
 // handleGetAccount / handleValidateAccount / handleReconnectAccount / handleDeleteAccount
