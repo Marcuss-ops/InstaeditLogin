@@ -5,16 +5,11 @@
 package services
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
@@ -25,7 +20,6 @@ var (
 	ErrPasswordNoDigit   = errors.New("password must contain at least 1 number")
 	ErrEmailAlreadyTaken = errors.New("email already registered")
 	ErrInvalidPassword   = errors.New("invalid password")
-	ErrEmailNotVerified  = errors.New("email not verified")
 )
 
 // AuthService handles email/password authentication flows.
@@ -37,13 +31,8 @@ var (
 // possible — every JWT-issued token now carries the resolved wsID.
 type AuthService struct {
 	userRepo      *repository.UserRepository
-	authMgr       *auth.Manager
 	workspaceRepo *repository.WorkspaceRepository
 	teamRepo      *repository.TeamRepository
-	// secret used to sign verification and password-reset tokens.
-	// In production this MUST be the same as JWT_SECRET so tokens
-	// are valid across process restarts.
-	secret []byte
 }
 
 // NewAuthService constructs an AuthService. The workspaceRepo + teamRepo
@@ -53,15 +42,11 @@ func NewAuthService(
 	userRepo *repository.UserRepository,
 	workspaceRepo *repository.WorkspaceRepository,
 	teamRepo *repository.TeamRepository,
-	authMgr *auth.Manager,
-	secret string,
 ) *AuthService {
 	return &AuthService{
 		userRepo:      userRepo,
-		authMgr:       authMgr,
 		workspaceRepo: workspaceRepo,
 		teamRepo:      teamRepo,
-		secret:        []byte(secret),
 	}
 }
 
@@ -164,10 +149,6 @@ func (s *AuthService) Login(email, password string) (*models.User, int64, error)
 		return nil, 0, ErrInvalidPassword
 	}
 
-	if !user.EmailVerified {
-		return nil, 0, ErrEmailNotVerified
-	}
-
 	activeWS, err := s.resolveActiveWorkspace(user.ID)
 	if err != nil {
 		return nil, 0, err
@@ -183,49 +164,6 @@ func (s *AuthService) Login(email, password string) (*models.User, int64, error)
 // SessionsService directly: they revoke the old session row (handle
 // switch), then SessionsService.Start() with the new workspace id.
 // AuthService no longer holds the contract of issuing JWTs.
-
-// MagicLinkSignupOrLookup is the new-user path for product login magic-link.
-// SPRINT 1.2 — equivalent of Register for passwordless users: creates
-// the user row (password_hash NULL, email_verified=true), creates a
-// Personal Workspace, and adds the user as admin. Idempotent on email:
-// if the user already exists, returns the existing user_id and the
-// resolved active workspace (without creating a duplicate user).
-//
-// Used by handleMagicLinkVerify after consuming a one-time token. The
-// verify handler completes the loop with Manager.Issue + cookie set;
-// this method only guarantees "row exists, wsID resolved".
-func (s *AuthService) MagicLinkSignupOrLookup(email string) (userID int64, wsID int64, err error) {
-	existing, err := s.userRepo.FindByEmail(email)
-	if err != nil {
-		return 0, 0, fmt.Errorf("magic link signup: find: %w", err)
-	}
-	if existing != nil {
-		// The login email is by definition already-verified (the user
-		// clicked the link in their inbox), so normalize the flag even
-		// for existing accounts.
-		_ = s.userRepo.SetEmailVerified(existing.ID)
-		activeWS, err := s.resolveActiveWorkspace(existing.ID)
-		if err != nil {
-			return 0, 0, fmt.Errorf("magic link signup: resolve workspace: %w", err)
-		}
-		return existing.ID, activeWS, nil
-	}
-	user, err := s.userRepo.CreateSaaSUser(email, email, nil)
-	if err != nil {
-		return 0, 0, fmt.Errorf("magic link signup: create user: %w", err)
-	}
-	if err := s.userRepo.SetEmailVerified(user.ID); err != nil {
-		return 0, 0, fmt.Errorf("magic link signup: verify: %w", err)
-	}
-	ws := &models.Workspace{Name: "Personal", OwnerID: user.ID}
-	if err := s.workspaceRepo.Create(ws); err != nil {
-		return 0, 0, fmt.Errorf("magic link signup: create workspace: %w", err)
-	}
-	if err := s.teamRepo.AddMember(ws.ID, user.ID, repository.RoleAdmin); err != nil {
-		return 0, 0, fmt.Errorf("magic link signup: add admin: %w", err)
-	}
-	return user.ID, ws.ID, nil
-}
 
 // resolveActiveWorkspace picks the user's active workspace at sign-in /
 // OAuth callback / onboarding-completion time. Strategy:
@@ -260,118 +198,10 @@ func (s *AuthService) resolveActiveWorkspace(userID int64) (int64, error) {
 	return 0, ErrNoWorkspace
 }
 
-// IssueVerificationToken generates an email verification token for the
-// given user. The token is a short-lived JWT (24h) carrying the user ID
-// and email. The caller (handler) is responsible for sending the email.
-func (s *AuthService) IssueVerificationToken(userID int64, email string) (string, error) {
-	return s.issuePurposeToken(userID, email, "verify", 24*time.Hour)
-}
-
-// VerifyEmail parses a verification token and marks the user's email as
-// verified. Returns the user ID on success.
-func (s *AuthService) VerifyEmail(token string) (int64, error) {
-	userID, purpose, err := s.parsePurposeToken(token)
-	if err != nil {
-		return 0, fmt.Errorf("verify email: %w", err)
-	}
-	if purpose != "verify" {
-		return 0, errors.New("verify email: token is not a verification token")
-	}
-	if err := s.userRepo.SetEmailVerified(userID); err != nil {
-		return 0, fmt.Errorf("verify email: %w", err)
-	}
-	return userID, nil
-}
-
-// IssueResetToken generates a password-reset token (1h TTL). Used after the
-// user requests a forgot-password flow. Returns an error if no user with
-// that email exists (but the API layer returns 200 anyway to avoid
-// email enumeration).
-func (s *AuthService) IssueResetToken(email string) (string, error) {
-	user, err := s.userRepo.FindByEmail(email)
-	if err != nil {
-		return "", fmt.Errorf("issue reset token: %w", err)
-	}
-	if user == nil {
-		return "", repository.ErrUserNotFound
-	}
-	return s.issuePurposeToken(user.ID, email, "reset", 1*time.Hour)
-}
-
-// ResetPassword validates a reset token and updates the user's password.
-func (s *AuthService) ResetPassword(token, newPassword string) error {
-	userID, purpose, err := s.parsePurposeToken(token)
-	if err != nil {
-		return fmt.Errorf("reset password: %w", err)
-	}
-	if purpose != "reset" {
-		return errors.New("reset password: token is not a reset token")
-	}
-	if err := validatePassword(newPassword); err != nil {
-		return err
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
-	if err != nil {
-		return fmt.Errorf("reset password: bcrypt: %w", err)
-	}
-	return s.userRepo.UpdatePassword(userID, hash)
-}
-
-// -----------------------------------------------------------------------
-//  Internal helpers
-// -----------------------------------------------------------------------
-
-type purposeClaims struct {
-	UserID  int64  `json:"uid"`
-	Email   string `json:"email"`
-	Purpose string `json:"purpose"`
-	jwt.RegisteredClaims
-}
-
-func (s *AuthService) issuePurposeToken(userID int64, email, purpose string, ttl time.Duration) (string, error) {
-	now := time.Now()
-	claims := purposeClaims{
-		UserID:  userID,
-		Email:   email,
-		Purpose: purpose,
-		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   fmt.Sprintf("%d", userID),
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
-			ID:        mustRandomHex(16),
-		},
-	}
-	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := tok.SignedString(s.secret)
-	if err != nil {
-		return "", fmt.Errorf("sign purpose token: %w", err)
-	}
-	return signed, nil
-}
-
-func (s *AuthService) parsePurposeToken(raw string) (userID int64, purpose string, err error) {
-	if raw == "" {
-		return 0, "", errors.New("empty token")
-	}
-	token, err := jwt.ParseWithClaims(raw, &purposeClaims{}, func(t *jwt.Token) (interface{}, error) {
-		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-		}
-		return s.secret, nil
-	})
-	if err != nil {
-		return 0, "", err
-	}
-	claims, ok := token.Claims.(*purposeClaims)
-	if !ok || !token.Valid {
-		return 0, "", errors.New("invalid token")
-	}
-	if claims.UserID <= 0 {
-		return 0, "", errors.New("missing user id in token")
-	}
-	return claims.UserID, claims.Purpose, nil
-}
-
+// (IssueResetToken / ResetPassword / purpose-token JWT helpers were
+// removed when the invite-only beta dropped the password-reset flow.
+// Passwords are now distributed out-of-band by an admin; no
+// self-service reset endpoint or token remains.)
 func validatePassword(password string) error {
 	if len(password) < 8 {
 		return ErrPasswordTooShort
@@ -389,10 +219,3 @@ func validatePassword(password string) error {
 	return nil
 }
 
-func mustRandomHex(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(fmt.Sprintf("crypto/rand.Read failed: %v", err))
-	}
-	return hex.EncodeToString(b)
-}

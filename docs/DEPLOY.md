@@ -147,8 +147,12 @@ flyctl apps create instaedit-login
 #         S3_BUCKET = "instaedit-prod-media"; do NOT use instaedit-media
 #         or any non-canonical name — the backend / asset_repo invariants
 #         assume the exact name once GIN_MODE=release)
-#       b) Endpoint            = fly.storage.tigris.dev (public, lives in
-#         fly.toml [env] S3_ENDPOINT; not a secret)
+#       b) Endpoint            = t3.storage.dev (Tigris Data global; the
+#         default in fly.toml [env] S3_ENDPOINT; not a secret). For
+#         Fly.io's regional Tigris instead, set S3_ENDPOINT=https://fly.storage.tigris.dev
+#         in .env.production AND update fly.toml's [env] S3_ENDPOINT to match.
+#         The SigV4 signer (internal/services/storage.go) is endpoint-agnostic
+#         — both URLs work, only the value changes.
 #       c) CORS                = single-origin https://app.instaedit.org,
 #         methods PUT/GET/HEAD, Expose ETag, MaxAgeSeconds=3600
 #         (the application / CSRF contract REQUIRES no other origins; adding
@@ -196,7 +200,7 @@ flyctl apps create instaedit-login
 
 ## 3. Secret collection
 
-The following **24 secrets** must be set on `instaedit-login`. Where to
+The following **27 secrets** must be set on `instaedit-login`. Where to
 get each:
 
 | # | Secret | Where to get it |
@@ -207,28 +211,31 @@ get each:
 | 4 | `ACTIVE_ENCRYPTION_KEY_ID` | The uint32 id of the key in `ENCRYPTION_KEYS` used for **new** encryption. Must be present in the parsed `ENCRYPTION_KEYS` map (validated by `internal/config/config.go`) |
 | 5 | `S3_ACCESS_KEY` | Tigris dashboard → "Access Keys" — captured as part of step 5 above (the same keys feed the `./scripts/s3/provision-tigris.sh` dry-run / apply run). The bucket name is `instaedit-prod-media` (per step 5/a). NEVER regenerate keys without rotating BOTH Fly secrets + the Tigris dashboard key — a half-rotated setup will silently fail presigned uploads. |
 | 6 | `S3_SECRET_KEY` | Tigris dashboard → "Access Keys" — see row 5 above. After Tigris revokes an old key, run `./scripts/s3/provision-tigris.sh --apply` again with the new creds (the script is idempotent — a regeneration does not require re-creating the bucket). |
-| 7 | `EMAIL_PROVIDER_KEY` | Resend dashboard → "API Keys" (starts with `re_`). **Capture now, push to Fly LATER.** As of (post-commit 58742bf Resend unification), the backend does NOT yet wire this key — `internal/config/config.go` has no `EmailProvider*` fields and `pkg/api/magic_link.go::handleMagicLinkStart` returns the magic-link token in the response body (dev fallback). The provider key is needed RIGHT NOW ONLY for the Gmail inbox test in [`docs/OPERATIONS.md` §7.3](./OPERATIONS.md#73-gmail-inbox-test-protocol) and the future backend wiring (separate task). Capture NOW into password manager `instaedit-login/email/EMAIL_PROVIDER_KEY` (resend's dashboard → Create API Key, scope = `Sending Access` ONLY not `Full Access`); do NOT yet add to `.env.production` / `make fly-secrets` until the backend wires Resend. Tracking defaults (open + click) MUST be `false` for transactional magic-link emails — see [`docs/OPERATIONS.md` §7.4](./OPERATIONS.md#74-tracking-verification). |
-| 8 | `META_APP_ID` | Meta Developer Console → your app → Settings → Basic |
-| 9 | `META_APP_SECRET` | Meta Developer Console → Settings → Basic → "Show" |
-| 10 | `FRONTEND_URL` | `https://app.instaedit.org` |
-| 11 | `CORS_ALLOWED_ORIGINS` | `https://instaedit.org,https://app.instaedit.org` (comma-separated, **no spaces**) |
-| 12 | `COOKIE_DOMAIN` | `.instaedit.org` (leading dot — needed for the SPA to read the csrf_token across subdomains; see `internal/config/config.go` Blocco #2.4) |
-| 13 | `INSTAGRAM_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/instagram/callback` |
-| 14 | `FACEBOOK_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/facebook/callback` |
-| 15 | `THREADS_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/threads/callback` |
-| 16 | `X_CLIENT_ID` | X Developer Portal → created app → "Keys and tokens" → "OAuth 2.0 Client ID" (post-App Review for scopes `tweet.read` / `tweet.write` / `users.read` / `offline.access`) |
-| 17 | `X_CLIENT_SECRET` | X Developer Portal → created app → "Keys and tokens" → "OAuth 2.0 Client Secret" (show-once; never committed — capture immediately on display) |
-| 18 | `X_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/twitter/callback` in X Developer Portal → Apps → "User authentication settings" → "Callback URIs". Also lives in `fly.toml` `[env]` as a public, non-sensitive value. |
-| 19 | `TIKTOK_CLIENT_ID` | TikTok Developer Portal → created app → "App ID" (Client Key, post-App Review for scopes `user.info.basic` + `video.publish`). The Client Key is the alpha-numeric string issued by TikTok when registering a Web/App platform. |
-| 20 | `TIKTOK_CLIENT_SECRET` | TikTok Developer Portal → created app → "App secret" (visible ONLY right after creation; if you reload the dashboard later it stops showing — capture immediately). |
-| 21 | `TIKTOK_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/tiktok/callback` in TikTok Developer Portal → created app → "Login Kit" → "Redirect URI" (also surfaced under "App settings" → "Authentication" → "Callback URL"). Also lives in `fly.toml` `[env]` as a public, non-sensitive value. |
-| 22 | `YOUTUBE_CLIENT_ID` | Google Cloud Console → "APIs & Services" → "Credentials" → "Create credentials" → "OAuth client ID" → "Web application" → Client ID (post-OAuth consent screen verification + Data API v3 scope approval for `youtube.upload`). Google identifies Client IDs with the suffix `.apps.googleusercontent.com` — the WHOLE string (including the suffix) is the canonical value. |
-| 23 | `YOUTUBE_CLIENT_SECRET` | Same flow as `YOUTUBE_CLIENT_ID` — shown immediately after client creation in the "OAuth client created" modal. Capture ONCE; if you reload the dialog without copying, you must reset the secret via "Reset Secret" (which invalidates in-flight tokens). |
-| 24 | `YOUTUBE_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/youtube/callback` in Google Cloud Console → "APIs & Services" → "Credentials" → the OAuth 2.0 client → "Authorized redirect URIs". Also lives in `fly.toml` `[env]` as a public, non-sensitive value. **NOTE:** the YouTube Data API v3 does NOT require a per-callback "data" prefix (unlike LinkedIn OAuth 2.0) — the bare `https://api.instaedit.org/api/v1/auth/youtube/callback` is sufficient. |
+| 7 | `META_APP_ID` | Meta Developer Console → your app → Settings → Basic |
+| 8 | `META_APP_SECRET` | Meta Developer Console → Settings → Basic → "Show" |
+| 9 | `FRONTEND_URL` | `https://app.instaedit.org` |
+| 10 | `CORS_ALLOWED_ORIGINS` | `https://instaedit.org,https://app.instaedit.org` (comma-separated, **no spaces**) |
+| 11 | `COOKIE_DOMAIN` | `.instaedit.org` (leading dot — needed for the SPA to read the csrf_token across subdomains; see `internal/config/config.go` Blocco #2.4) |
+| 12 | `INSTAGRAM_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/instagram/callback` |
+| 13 | `FACEBOOK_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/facebook/callback` |
+| 14 | `THREADS_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/threads/callback` |
+| 15 | `X_CLIENT_ID` | X Developer Portal → created app → "Keys and tokens" → "OAuth 2.0 Client ID" (post-App Review for scopes `tweet.read` / `tweet.write` / `users.read` / `offline.access`) |
+| 16 | `X_CLIENT_SECRET` | X Developer Portal → created app → "Keys and tokens" → "OAuth 2.0 Client Secret" (show-once; never committed — capture immediately on display) |
+| 17 | `X_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/twitter/callback` in X Developer Portal → Apps → "User authentication settings" → "Callback URIs". Also lives in `fly.toml` `[env]` as a public, non-sensitive value. |
+| 18 | `TIKTOK_CLIENT_ID` | TikTok Developer Portal → created app → "App ID" (Client Key, post-App Review for scopes `user.info.basic` + `video.publish`). The Client Key is the alpha-numeric string issued by TikTok when registering a Web/App platform. |
+| 19 | `TIKTOK_CLIENT_SECRET` | TikTok Developer Portal → created app → "App secret" (visible ONLY right after creation; if you reload the dashboard later it stops showing — capture immediately). |
+| 20 | `TIKTOK_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/tiktok/callback` in TikTok Developer Portal → created app → "Login Kit" → "Redirect URI" (also surfaced under "App settings" → "Authentication" → "Callback URL"). Also lives in `fly.toml` `[env]` as a public, non-sensitive value. |
+| 21 | `YOUTUBE_CLIENT_ID` | Google Cloud Console → "APIs & Services" → "Credentials" → "Create credentials" → "OAuth client ID" → "Web application" → Client ID (post-OAuth consent screen verification + Data API v3 scope approval for `youtube.upload`). Google identifies Client IDs with the suffix `.apps.googleusercontent.com` — the WHOLE string (including the suffix) is the canonical value. |
+| 22 | `YOUTUBE_CLIENT_SECRET` | Same flow as `YOUTUBE_CLIENT_ID` — shown immediately after client creation in the "OAuth client created" modal. Capture ONCE; if you reload the dialog without copying, you must reset the secret via "Reset Secret" (which invalidates in-flight tokens). |
+| 23 | `YOUTUBE_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/youtube/callback` in Google Cloud Console → "APIs & Services" → "Credentials" → the OAuth 2.0 client → "Authorized redirect URIs". Also lives in `fly.toml` `[env]` as a public, non-sensitive value. **NOTE:** the YouTube Data API v3 does NOT require a per-callback "data" prefix (unlike LinkedIn OAuth 2.0) — the bare `https://api.instaedit.org/api/v1/auth/youtube/callback` is sufficient. |
+| 24 | `LINKEDIN_CLIENT_ID` | LinkedIn Developer Portal → My Apps → "Auth" tab → "OAuth 2.0 settings" → "Client ID". |
+| 25 | `LINKEDIN_CLIENT_SECRET` | LinkedIn Developer Portal → "Auth" tab → "Client Secret". |
+| 26 | `LINKEDIN_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/linkedin/callback` in LinkedIn Developer Portal → My Apps → "Auth" tab → "OAuth 2.0 settings" → "Authorized redirect URLs for your app". Also lives in `fly.toml` `[env]` as a public, non-sensitive value. |
 
-**Do NOT include** (disabled providers, beta scope): `LINKEDIN_*`,
-`STRIPE_*`. The set script
-refuses to push if any of these prefixes appear in the .env file.
+> **Note on `EMAIL_PROVIDER_KEY`**: capture it in your password manager (`instaedit-login/email/EMAIL_PROVIDER_KEY`, Resend scope = `Sending Access` ONLY) for the Gmail inbox test in [`docs/OPERATIONS.md` §7.3](./OPERATIONS.md#73-gmail-inbox-test-protocol). Do **not** add it to `.env.production` / `make fly-secrets` until the backend wires Resend (see [`docs/OPERATIONS.md` §7.5](./OPERATIONS.md#75-email_provider_key-capture-protocol)).
+
+**Do NOT include** (disabled providers, beta scope): `STRIPE_*`.
+The set script refuses to push if any of these prefixes appear in the .env file.
 
 **Where to store the .env.production file**:
 
@@ -236,7 +243,7 @@ refuses to push if any of these prefixes appear in the .env file.
 # 1. Copy the dev template
 cp .env.example .env.production
 
-# 2. Fill in the 24 values above. Use your secret manager (1Password,
+# 2. Fill in the 26 values above. Use your secret manager (1Password,
 #    Bitwarden, …) — never paste real secrets into chat / git / issues.
 
 # 3. Verify the file is gitignored (it should be — `.env` is in
@@ -288,42 +295,44 @@ the status + shape (length / charset / regex) + capture location.
 | 4 | `ACTIVE_ENCRYPTION_KEY_ID` | literal `1` (uint32, no randomness; MUST be present in the parsed `ENCRYPTION_KEYS` map) | digit string in [0, 4294967295]; MUST equal one of the ids in the `ENCRYPTION_KEYS` CSV | `instaedit-login/active-encryption-key-id/production` | ✓ CAPTURED (literal `1`) | already in PM |
 | 5 | `S3_ACCESS_KEY` | Tigris dashboard → Access Keys → Generate new (paired with row 6) | non-empty (length ≈ 32–40 chars for Tigris tokens) | `instaedit-login/s3-access-key/production` | ○ PENDING | DEPLOY.md §2 step 5 + `scripts/s3/provision-tigris.sh` |
 | 6 | `S3_SECRET_KEY` | Tigris dashboard → Access Keys (paired with row 5; rotate the pair ONLY together) | non-empty (length ≈ 32–40 chars) | `instaedit-login/s3-secret-key/production` | ○ PENDING | DEPLOY.md §2 step 5 |
-| 7 | `EMAIL_PROVIDER_KEY` | Resend dashboard → API Keys → Create. **CRITICAL**: scope = `Sending Access` ONLY (NOT Full Access) — minimises blast radius if the key leaks | prefix is `re_`; total length ≈ 40 chars | `instaedit-login/email-provider-key/production` | ○ PENDING (NOT yet pushed to Fly because backend does not yet wire Resend — see OPERATIONS.md §7.5) | OPERATIONS.md §7.5 (deferred backend wiring) |
-| 8 | `META_APP_ID` | Meta Developer Console → your prod-app → Settings → Basic (App ID) | numeric string (typically 15 digits) | `instaedit-login/meta-app-id/production` | ○ PENDING | DEPLOY.md §6 followup (Meta prod-app review) |
-| 9 | `META_APP_SECRET` | Meta Developer Console → Settings → Basic → “Show” | ≥ 32 chars (per `internal/config/config.go::secretMinChars=32`) | `instaedit-login/meta-app-secret/production` | ○ PENDING | DEPLOY.md §6 followup |
-| 10 | `FRONTEND_URL` | Canonical per commit `716c709` + DNS §1.5 | exactly `https://app.instaedit.org` (HTTPS required; no trailing slash; no localhost) | N/A (public, lives in `fly.toml` `[env]`) | ✓ STABLE | no action |
-| 11 | `CORS_ALLOWED_ORIGINS` | Canonical per commit `716c709` + DNS §1.5 (apex redirect) | exactly `https://instaedit.org,https://app.instaedit.org` (2 comma-separated entries; no spaces) | N/A (public) | ✓ STABLE | no action |
-| 12 | `COOKIE_DOMAIN` | Canonical per commit `716c709` + `internal/config/config.go` Blocco #2.4 (cross-subdomain CSRF) | exactly `.instaedit.org` (leading dot — required for cross-subdomain match) | N/A (public) | ✓ STABLE | no action |
-| 13 | `INSTAGRAM_REDIRECT_URI` | Canonical per `fly.toml` `[env]`; exact registration in Meta Dev Console | exactly `https://api.instaedit.org/api/v1/auth/instagram/callback` | N/A (public; pinned by Meta console) | ✓ STABLE | no action |
-| 14 | `FACEBOOK_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/facebook/callback` | N/A (public) | ✓ STABLE | no action |
-| 15 | `THREADS_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/threads/callback` | N/A (public) | ✓ STABLE | no action |
-| 16 | `X_CLIENT_ID` | Sourced from X Developer Portal (post-App Review) | exactly an OAuth 2.0 Client ID (≈ 22-char alphanumeric) | `instaedit-login/x-client-id/production` | ○ PENDING | requires App Review for scopes `tweet.read` / `tweet.write` / `users.read` / `offline.access`; capture **together** with `X_CLIENT_SECRET` in a single password-manager pull |
-| 17 | `X_CLIENT_SECRET` | Sourced from X Developer Portal (post-App Review) | exactly an OAuth 2.0 Client Secret (≈ 40-50 chars) | `instaedit-login/x-client-secret/production` | ○ PENDING | captured together with `X_CLIENT_ID` (both surfaced in the same dashboard modal) |
-| 18 | `X_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/twitter/callback` | N/A (public; pinned by X Developer Portal) | ✓ STABLE | no action |
-| 19 | `TIKTOK_CLIENT_ID` | Sourced from TikTok Developer Portal (post-App Review) | exactly a TikTok Client Key (≈ 32 alphanumeric chars) | `instaedit-login/tiktok-client-id/production` | ○ PENDING | requires App Review for scopes `user.info.basic` + `video.publish`; capture **together** with `TIKTOK_CLIENT_SECRET` in a single dashboard pull |
-| 20 | `TIKTOK_CLIENT_SECRET` | Sourced from TikTok Developer Portal (post-App Review) | exactly a TikTok Client Secret (≈ 32-50 chars) | `instaedit-login/tiktok-client-secret/production` | ○ PENDING | captured together with `TIKTOK_CLIENT_ID` (both visible only IMMEDIATELY after app creation — capture before page refresh) |
-| 21 | `TIKTOK_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/tiktok/callback` | N/A (public; pinned by TikTok Developer Portal) | ✓ STABLE | no action |
-| 22 | `YOUTUBE_CLIENT_ID` | Sourced from Google Cloud Console (post-OAuth consent screen verification + scope-approval) | exactly a Google-format Client ID (`<random>.apps.googleusercontent.com` — ≈ 72 chars) | `instaedit-login/youtube-client-id/production` | ○ PENDING | requires OAuth consent screen verification (Internal or External depending on holdback policy) + Data API v3 scope approval for `youtube.upload`; capture **together** with `YOUTUBE_CLIENT_SECRET` in a single Cloud Console pull |
-| 23 | `YOUTUBE_CLIENT_SECRET` | Sourced from Google Cloud Console (post-OAuth consent screen verification + scope-approval) | exactly the Client Secret shown in the "OAuth client created" dialog (≈ 24-35 chars) | `instaedit-login/youtube-client-secret/production` | ○ PENDING | captured together with `YOUTUBE_CLIENT_ID` (both surfaced in the same dialog) |
-| 24 | `YOUTUBE_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/youtube/callback` | N/A (public; pinned by Google Cloud Console) | ✓ STABLE | no action |
+| 7 | `META_APP_ID` | Meta Developer Console → your prod-app → Settings → Basic (App ID) | numeric string (typically 15 digits) | `instaedit-login/meta-app-id/production` | ○ PENDING | DEPLOY.md §6 followup (Meta prod-app review) |
+| 8 | `META_APP_SECRET` | Meta Developer Console → Settings → Basic → “Show” | ≥ 32 chars (per `internal/config/config.go::secretMinChars=32`) | `instaedit-login/meta-app-secret/production` | ○ PENDING | DEPLOY.md §6 followup |
+| 9 | `FRONTEND_URL` | Canonical per commit `716c709` + DNS §1.5 | exactly `https://app.instaedit.org` (HTTPS required; no trailing slash; no localhost) | N/A (public, lives in `fly.toml` `[env]`) | ✓ STABLE | no action |
+| 10 | `CORS_ALLOWED_ORIGINS` | Canonical per commit `716c709` + DNS §1.5 (apex redirect) | exactly `https://instaedit.org,https://app.instaedit.org` (2 comma-separated entries; no spaces) | N/A (public) | ✓ STABLE | no action |
+| 11 | `COOKIE_DOMAIN` | Canonical per commit `716c709` + `internal/config/config.go` Blocco #2.4 (cross-subdomain CSRF) | exactly `.instaedit.org` (leading dot — required for cross-subdomain match) | N/A (public) | ✓ STABLE | no action |
+| 12 | `INSTAGRAM_REDIRECT_URI` | Canonical per `fly.toml` `[env]`; exact registration in Meta Dev Console | exactly `https://api.instaedit.org/api/v1/auth/instagram/callback` | N/A (public; pinned by Meta console) | ✓ STABLE | no action |
+| 13 | `FACEBOOK_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/facebook/callback` | N/A (public) | ✓ STABLE | no action |
+| 14 | `THREADS_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/threads/callback` | N/A (public) | ✓ STABLE | no action |
+| 15 | `X_CLIENT_ID` | Sourced from X Developer Portal (post-App Review) | exactly an OAuth 2.0 Client ID (≈ 22-char alphanumeric) | `instaedit-login/x-client-id/production` | ○ PENDING | requires App Review for scopes `tweet.read` / `tweet.write` / `users.read` / `offline.access`; capture **together** with `X_CLIENT_SECRET` in a single password-manager pull |
+| 16 | `X_CLIENT_SECRET` | Sourced from X Developer Portal (post-App Review) | exactly an OAuth 2.0 Client Secret (≈ 40-50 chars) | `instaedit-login/x-client-secret/production` | ○ PENDING | captured together with `X_CLIENT_ID` (both surfaced in the same dashboard modal) |
+| 17 | `X_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/twitter/callback` | N/A (public; pinned by X Developer Portal) | ✓ STABLE | no action |
+| 18 | `TIKTOK_CLIENT_ID` | Sourced from TikTok Developer Portal (post-App Review) | exactly a TikTok Client Key (≈ 32 alphanumeric chars) | `instaedit-login/tiktok-client-id/production` | ○ PENDING | requires App Review for scopes `user.info.basic` + `video.publish`; capture **together** with `TIKTOK_CLIENT_SECRET` in a single dashboard pull |
+| 19 | `TIKTOK_CLIENT_SECRET` | Sourced from TikTok Developer Portal (post-App Review) | exactly a TikTok Client Secret (≈ 32-50 chars) | `instaedit-login/tiktok-client-secret/production` | ○ PENDING | captured together with `TIKTOK_CLIENT_ID` (both visible only IMMEDIATELY after app creation — capture before page refresh) |
+| 20 | `TIKTOK_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/tiktok/callback` | N/A (public; pinned by TikTok Developer Portal) | ✓ STABLE | no action |
+| 21 | `YOUTUBE_CLIENT_ID` | Sourced from Google Cloud Console (post-OAuth consent screen verification + scope-approval) | exactly a Google-format Client ID (`<random>.apps.googleusercontent.com` — ≈ 72 chars) | `instaedit-login/youtube-client-id/production` | ○ PENDING | requires OAuth consent screen verification (Internal or External depending on holdback policy) + Data API v3 scope approval for `youtube.upload`; capture **together** with `YOUTUBE_CLIENT_SECRET` in a single Cloud Console pull |
+| 22 | `YOUTUBE_CLIENT_SECRET` | Sourced from Google Cloud Console (post-OAuth consent screen verification + scope-approval) | exactly the Client Secret shown in the "OAuth client created" dialog (≈ 24-35 chars) | `instaedit-login/youtube-client-secret/production` | ○ PENDING | captured together with `YOUTUBE_CLIENT_ID` (both surfaced in the same dialog) |
+| 23 | `YOUTUBE_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/youtube/callback` | N/A (public; pinned by Google Cloud Console) | ✓ STABLE | no action |
+| 24 | `LINKEDIN_CLIENT_ID` | LinkedIn Developer Portal → My Apps → "Auth" tab → "OAuth 2.0 settings" → "Client ID" | alphanumeric string (typically 14–18 chars) | `instaedit-login/linkedin-client-id/production` | ○ PENDING | requires LinkedIn product approval for `r_liteprofile` + `r_emailaddress`; capture **together** with `LINKEDIN_CLIENT_SECRET` in a single dashboard pull |
+| 25 | `LINKEDIN_CLIENT_SECRET` | LinkedIn Developer Portal → "Auth" tab → "Client Secret" | alphanumeric string (≈ 32–40 chars) | `instaedit-login/linkedin-client-secret/production` | ○ PENDING | captured together with `LINKEDIN_CLIENT_ID` (both surfaced in the same dashboard modal) |
+| 26 | `LINKEDIN_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/linkedin/callback` | N/A (public; pinned by LinkedIn Developer Portal) | ✓ STABLE | no action |
 
-**Aggregate status (2026-07-14)**: 3 CAPTURED (JWT_SECRET + ENCRYPTION_KEYS[id=1] + ACTIVE_ENCRYPTION_KEY_ID) • 8 STABLE (4 public env + 6 redirect URIs) • 13 PENDING — requires operator-side actions against external services (Fly Postgres / Tigris dashboard / Resend dashboard / Meta Dev Console + **X Developer Portal App Review** for scopes `tweet.read`/`tweet.write`/`users.read`/`offline.access` + **TikTok Developer Portal App Review** for scopes `user.info.basic` + `video.publish` + **YouTube Data API v3 OAuth Verification** for scope `youtube.upload` + OAuth consent screen publication).
+**Aggregate status (2026-07-14)**: 3 CAPTURED (JWT_SECRET + ENCRYPTION_KEYS[id=1] + ACTIVE_ENCRYPTION_KEY_ID) • 10 STABLE (3 public env + 7 redirect URIs) • 13 PENDING — requires operator-side actions against external services (Fly Postgres / Tigris dashboard / Meta Dev Console + **X Developer Portal App Review** for scopes `tweet.read`/`tweet.write`/`users.read`/`offline.access` + **TikTok Developer Portal App Review** for scopes `user.info.basic` + `video.publish` + **YouTube Data API v3 OAuth Verification** for scope `youtube.upload` + **LinkedIn Developer Portal product approval** for `r_liteprofile` + `r_emailaddress` + OAuth consent screen publication).
 
 **Privacy contract**: the actual secret values are NEVER printed in this manifest or in any commit output. The shape column gives the operator enough metadata to confirm locally (a) the captured value satisfies the input contract (e.g. JWT_SECRET is exactly 64 hex chars), (b) the captured value is correctly stored (the password-manager-entry column matches where the operator saved it). If you ever need to actually verify a value, paste it into your terminal locally WITHOUT piping it to the chat agent.
 
 **Pipeline self-test (pure local, no flyctl needed)**:
 ```text
 # Equivalent to `make fly-secrets-dry-run` minus the bash wrapper's flyctl pre-flight.
-# Verified 2026-07-14 on the synthetic shape-valid fixture: exit code 0, 24 keys validated.
+# Verified 2026-07-14 on the synthetic shape-valid fixture: exit code 0, 26 keys validated.
 # The bash wrapper (make fly-secrets-dry-run) and the parser-direct (this snippet) share
 # the SAME _parse_envfile.py contract; the regression suite scripts/test_parse_envfile.py
-# pins the contract with 24 invariant tests.
+# pins the contract with 15 invariant tests.
 umask 077
 python3 scripts/_parse_envfile.py .env.production dry-run instaedit-login scripts \
   2>&1 >/dev/null
 # Expected: exit 0 + redacted preview `KEY = first3***last3 (len=N)` per key on stderr.
 # Synthetic fixture leak-audit (2026-07-14): none of the 7 known fixture strings appeared
-# in stderr; 24 `len=N` preview entries emitted; stdout was 0 bytes.
+# in stderr; 26 `len=N` preview entries emitted; stdout was 0 bytes.
 ```
 
 **Operator-sequence prerequisite (sandbox-blocked steps)**:
@@ -337,7 +346,7 @@ flyctl auth login
 
 # 1. Preview the secrets push (no secrets leave your machine)
 make fly-secrets-dry-run
-#    → prints a redacted table of all 24 keys + lengths
+#    → prints a redacted table of all 26 keys + lengths
 #    → exits 0 if validation passes
 
 # 2. Stage the secrets on Fly (NO restart triggered)
@@ -348,7 +357,7 @@ make fly-secrets
 
 # 3. Verify clean state
 make fly-secrets-verify
-#    → asserts no <redacted>, no disabled-provider keys, all 24 keys present
+#    → asserts no <redacted>, no disabled-provider keys, all 26 keys present
 #    → exits 0 if all checks pass
 
 # 4. Sanity-check fly.toml
@@ -551,9 +560,9 @@ To tail logs during a rollout:
 flyctl logs --app instaedit-login
 ```
 
-*Privacy contract:* Fly logs must **never** show any of the **24 staged secrets** enumerated in §3 secret collection. That is: `DATABASE_URL` (the password embedded in the URI is just as risky as a separate column), `JWT_SECRET`, `ENCRYPTION_KEYS`, `ACTIVE_ENCRYPTION_KEY_ID`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `EMAIL_PROVIDER_KEY` (the `re_*` Resend token), `META_APP_ID`, `META_APP_SECRET`, plus first-party credentials: `access_token`, `refresh_token`, user passwords, the `csrf_token` value, and any magic-link `?token=` query parameter.
+*Privacy contract:* Fly logs must **never** show any of the **27 staged secrets** enumerated in §3 secret collection. That is: `DATABASE_URL` (the password embedded in the URI is just as risky as a separate column), `JWT_SECRET`, `ENCRYPTION_KEYS`, `ACTIVE_ENCRYPTION_KEY_ID`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `META_APP_ID`, `META_APP_SECRET`, plus first-party credentials: `access_token`, `refresh_token`, user passwords, the `csrf_token` value, and any magic-link `?token=` query parameter. `EMAIL_PROVIDER_KEY` is intentionally NOT staged until the backend wires Resend (see [`docs/OPERATIONS.md` §7.5](./OPERATIONS.md#75-email_provider_key-capture-protocol)).
 
-Any such leak is an immediate incident requiring credential revocation. The `fly.toml` contract also relies on the app binary's own `*http.Request` log filter (see `pkg/api/handlers.go` and `internal/services/sessions_service.go`) — the Fly platform strips injected ENV vars from logs by default; we're defending in depth. The canonical secret-name list is pinned in `scripts/_parse_envfile.py` + `scripts/test_parse_envfile.py` (24 regression cases) so any future secret addition automatically inherits the privacy contract.
+Any such leak is an immediate incident requiring credential revocation. The `fly.toml` contract also relies on the app binary's own `*http.Request` log filter (see `pkg/api/handlers.go` and `internal/services/sessions_service.go`) — the Fly platform strips injected ENV vars from logs by default; we're defending in depth. The canonical secret-name list is pinned in `scripts/_parse_envfile.py` + `scripts/test_parse_envfile.py` (27 required secrets, 15 regression tests) so any future secret addition automatically inherits the privacy contract.
 
 ### 7.7 Common failure modes
 
@@ -646,6 +655,35 @@ Do NOT assume a `fly-deploy` will seamlessly replace what is responding today. T
 2. Confirm `flyctl status --app instaedit-login` lists at least one healthy machine whose `Image` tag matches the SHA just pushed.
 3. Re-run all 3 gates (A + B + C) — Gate B in particular must return `workers_ready: true` BEFORE declaring the rollout successful.
 
+### 8.1.1 DNS correction checklist (if `api.instaedit.org` currently points away from Fly)
+
+If the live probes in §8.1 show `Server: Caddy` or missing Fly headers (`Fly-Region`, `fly-request-id`), the CNAME has likely been repointed. Apply these records at the registrar:
+
+1. **Remove** any existing `A`, `AAAA`, or `CNAME` records for `api.instaedit.org`.
+2. **Add** a single `CNAME`:
+   - Host: `api.instaedit.org`
+   - Value: `instaedit-login.fly.dev.` (trailing dot matters in some dashboards)
+   - TTL: `300`
+3. **Disable proxying** for `api.instaedit.org` (Cloudflare: grey cloud / DNS-only; other registrars: disable any "redirect" or "proxy" feature). Orange-cloud proxying breaks Fly's LE HTTP-01 validation.
+4. **Wait for propagation** (up to one old TTL window, typically 5 min), then verify:
+   ```bash
+   dig +short api.instaedit.org CNAME
+   # expected: instaedit-login.fly.dev.
+
+   curl -sI https://api.instaedit.org/api/v1/health | grep -i 'fly-request-id'
+   # expected: a fly-request-id header is present
+   ```
+5. **Re-issue the Fly cert** if it was previously validated against a different target:
+   ```bash
+   flyctl certs add api.instaedit.org --app instaedit-login
+   ```
+6. **Re-run Gates A, B, C** from §8 to confirm the new Fly deployment is the one serving traffic.
+
+> **Registrar-specific notes:**
+> - **Cloudflare:** set `api.instaedit.org` to DNS-only; the apex `instaedit.org` A record and `app.instaedit.org` CNAME can stay proxied or not as desired, but `api.` must be grey-cloud.
+> - **Namecheap / Route 53 / Gandi:** use a plain CNAME, not an ALIAS/ANAME, for `api.instaedit.org`.
+> - **TTL:** 300s is the canonical value in §1.5; if the previous record had a longer TTL, lower it first and wait one old-TTL window before expecting global propagation.
+
 ### 8.2 Deeper probes (operator laptop)
 
 Beyond the 3 gates, run the canonical post-deploy E2E runbooks (NO code commit needed; these invoke existing scripts):
@@ -702,7 +740,7 @@ flyctl auth login
 make fly-secrets-test        # local: 15 regression cases pass
 make fly-secrets-dry-run     # local: parser-direct redacted preview
 
-# 2. Push the 24 secrets to Fly (--stage = no premature restart)
+# 2. Push the 27 secrets to Fly (--stage = no premature restart)
 make fly-secrets             # operator: flyctl secrets import --stage
 
 # 3. Verify staged secrets are clean on Fly
@@ -765,7 +803,7 @@ the line from `.env.production` (you can leave it commented for
 context) and re-run.
 
 ### `❌ missing required keys: META_APP_SECRET`
-You forgot to set one of the 15. See §3 for the full list + where to
+You forgot to set one of the 26. See §3 for the full list + where to
 get each.
 
 ### `App is not deployed` (during `fly secrets import`)

@@ -61,13 +61,11 @@
 # the prefix of a sub-table in another. flyctl parses this correctly;
 # trust flyctl over strict parsers for the Fly-specific shape.
 #
-# Disabled providers — LinkedIn, and
-# Stripe — are not configured in beta. Their *_CLIENT_ID /
-# *_CLIENT_SECRET / *_REDIRECT_URI / STRIPE_* env keys are removed
-# entirely from this file; re-add them when the corresponding
-# provider is enabled (the in-app capabilities / provider-registry
-# also gates them off, so a stale value can't accidentally re-enable
-# a disabled flow).
+# Disabled provider — Stripe — is not configured in beta. Its
+# STRIPE_* env keys are removed entirely from this file; re-add it
+# when the corresponding provider is enabled (the in-app
+# capabilities / provider-registry also gates them off, so a stale
+# value can't accidentally re-enable a disabled flow).
 #
 # X (Twitter) was moved from disabled to beta on the X-provider
 # enablement commit; X_REDIRECT_URI lives in [env] above (public,
@@ -88,6 +86,14 @@
 # Credentials → OAuth 2.0 Client → "Authorized redirect URIs"),
 # while YOUTUBE_CLIENT_ID + YOUTUBE_CLIENT_SECRET are Fly secrets —
 # see scripts/required-fly-secrets.txt for the full list.
+#
+# LinkedIn was moved from disabled to beta on the LinkedIn-provider
+# enablement commit; LINKEDIN_REDIRECT_URI lives in [env] below
+# (public, registered in LinkedIn Developer Portal → My Apps →
+# "Auth" tab → "OAuth 2.0 settings" → "Authorized redirect URLs
+# for your app"), while LINKEDIN_CLIENT_ID + LINKEDIN_CLIENT_SECRET
+# are Fly secrets — see scripts/required-fly-secrets.txt for the
+# full list.
 #
 # Deploy:
 #   flyctl deploy --config fly.toml
@@ -125,7 +131,16 @@ primary_region = "iad"
   # S3-compatible storage. The endpoint / region / bucket are public
   # (Tigris is a public service). The access / secret keys are set
   # via flyctl secrets set (S3_ACCESS_KEY, S3_SECRET_KEY).
-  S3_ENDPOINT = "https://fly.storage.tigris.dev"
+  #
+  # The SigV4 signer (internal/services/storage.go) is endpoint-agnostic
+  # and supports BOTH of the canonical Tigris endpoints:
+  #   - https://t3.storage.dev          (Tigris Data global, multiregion;
+  #                                      accounts created via https://console.storage.dev)
+  #   - https://fly.storage.tigris.dev  (Fly.io's managed Tigris, regional;
+  #                                      accounts created via `flyctl storage create`)
+  # Switch by editing this line AND updating scripts/s3/provision-tigris.sh's
+  # default ENDPOINT — both stay in lockstep.
+  S3_ENDPOINT = "https://t3.storage.dev"
   S3_REGION = "auto"
   S3_BUCKET = "instaedit-prod-media"
 
@@ -169,6 +184,7 @@ primary_region = "iad"
   X_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/twitter/callback"
   TIKTOK_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/tiktok/callback"
   YOUTUBE_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/youtube/callback"
+  LINKEDIN_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/linkedin/callback"
 
   # Worker health port — shared default is OFF ("0") so dev runs
   # (make run-worker) don't accidentally bind 9090. [processes.worker.env]

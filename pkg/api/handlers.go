@@ -107,9 +107,6 @@ type Router struct {
 	// so the explicit 501-shaped error in handleExchangeCode short-
 	// circuits dev environments that have not yet wired the helper.
 	userAndWorkspaceHelper UserWorkspaceHelper
-	// SPRINT 1.2 — magic-link + connection-state persistence (optional).
-	// Wiring via WithMagicLinkStore / WithConnectionStateStore.
-	authMagicLink    AuthMagicLinkStore
 	connectionStates ConnectionStateStore
 	// SPRINT 2.1 — revocable session lifecycle (optional). Wiring
 	// via WithSessionsService. When nil, /auth/refresh, /auth/logout,
@@ -135,6 +132,14 @@ type Router struct {
 	// without any compensating control (JS still cannot read them).
 	// Wired via WithCookieDomain; defaults to empty (dev-friendly).
 	cookieDomain string
+
+	// adminInviteToken gates POST /api/v1/auth/register. When empty,
+	// the handler returns 403 regardless of the X-Admin-Token header
+	// (registration disabled). Wired in cmd/server via
+	// WithAdminInviteToken(cfg.AdminInviteToken). Production
+	// deployments must set ADMIN_INVITE_TOKEN via Fly secrets; dev
+	// can omit it (no public registration permitted).
+	adminInviteToken string
 	// SPRINT 2.2 — multi-tier rate limiter (optional). Wiring via
 	// WithRateLimitService. When nil, the per-tier middleware
 	// factories (WorkspacePostLimit / APIKeyReadLimit /
@@ -179,12 +184,6 @@ func WithDB(db *sql.DB) RouterOption {
 // above struct field typechecks.
 
 var _ = repository.RoleAdmin
-
-// WithMagicLinkStore wires *repository.MagicLinkRepository into the
-// Router. Without this option, /api/v1/auth/magic-link/* return 501.
-func WithMagicLinkStore(s AuthMagicLinkStore) RouterOption {
-	return func(r *Router) { r.authMagicLink = s }
-}
 
 // ConnectionStateStore is the persistence contract for connection_states
 // (SPRINT 1.2). Defined inline to keep pkg/api off internal/repository
@@ -387,9 +386,8 @@ func WithCredentialVault(v credentials.VaultAPI) RouterOption {
 }
 
 // WithAuthEmailService injects the email/password auth service for SaaS
-// registration, login, email verification, and password reset endpoints.
-// When not set, /api/v1/auth/register, /login, /verify, /forgot-password,
-// and /reset-password return 501 Not Implemented.
+// registration, login, and password reset endpoints.
+// When not set, /api/v1/auth/register and /login return 501 Not Implemented.
 func WithAuthEmailService(svc AuthEmailStore) RouterOption {
 	return func(r *Router) { r.authEmailSvc = svc }
 }
@@ -454,6 +452,15 @@ func WithCookieSecure(secure bool) RouterOption {
 // env controls the scope at deploy time.
 func WithCookieDomain(domain string) RouterOption {
 	return func(r *Router) { r.cookieDomain = domain }
+}
+
+// WithAdminInviteToken wires the shared secret that gates the public
+// registration endpoint (POST /api/v1/auth/register). The handler
+// performs a constant-time compare between this value and the
+// X-Admin-Token request header; an empty value disables registration
+// entirely. See internal/config.AdminInviteToken for the env surface.
+func WithAdminInviteToken(token string) RouterOption {
+	return func(r *Router) { r.adminInviteToken = token }
 }
 
 // WithRateLimitService wires the SPRINT 2.2 multi-tier rate
@@ -533,20 +540,13 @@ func (r *Router) Setup() http.Handler {
 		r.registerWebhookRoutes()
 	}
 
-	// Magic-link product login (POST /magic-link/start + /verify).
-	// Always wired — the handlers short-circuit with 501 if the
-	// authMagicLink store or authEmailSvc is unset, so an unconfigured
-	// production wiring still gets clean error messages instead of
-	// 404s from missing routes.
-	r.registerMagicLinkRoutes()
-
 	// SPRINT 7.1 (P0#14): OAuth social routes are gated on a valid
 	// InstaEdit session (Bearer or HttpOnly cookie). The middleware
 	// 302s to /login?next=/connections/{provider} when the user is
 	// not authenticated, so the SPA can resume the OAuth connect
 	// after the user logs in. auto-create-user is removed: users
 	// reach the OAuth callback only via the product onboarding
-	// flow (magic link / email register / login).
+	// flow (email register / login).
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login",
 		OAuthStartLimitIfConfigured(r.rateLimitSvc)(http.HandlerFunc(r.oauthSessionRedirect(r.handleLogin))))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(r.oauthSessionRedirect(r.handleCallback)))
@@ -1379,36 +1379,6 @@ func (r *Router) handleMetrics(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	metrics.Handler().ServeHTTP(w, req)
-}
-
-// registerMagicLinkRoutes mounts the magic-link product login
-// endpoints (SPRINT 1.2). Both routes are intentionally unauthenticated:
-// start needs no session (it's how a session is bootstrapped), verify
-// consumes a single-use token in the body and produces a fresh
-// session row. Mirrors the email/password endpoints which are also
-// mounted directly via r.registerAuthEmailRoutes().
-//
-// CSRF double-submit is also intentionally SKIPPED here, unlike
-// every other PRODUCT-AUTHORED POST/PATCH/DELETE. /start is
-// unauthenticated, and the body is application/json (cross-origin
-// requests force a CORS preflight our allow-list will reject).
-// /verify is gated on a single-use token in the body the attacker
-// doesn't possess, so a forged call cannot mint a session. The
-// few siblings that also bypass CSRF — /auth/refresh, /auth/logout,
-// /auth/exchange — each authenticate via the cookie or one-time
-// code that the request itself is meant to consume. Other
-// user-state-mutating endpoints go through r.protected() (which
-// applies CSRF) — do NOT add magic-link to that chain by accident.
-//
-// The handlers themselves guard against missing infrastructure:
-// handleMagicLinkStart 501s if r.authMagicLink is nil,
-// handleMagicLinkVerify 501s if either authMagicLink or authEmailSvc
-// is unset. We mount the routes regardless so a developer who
-// disabled the store accidentally gets a typed error instead of a
-// 404 from the mux table.
-func (r *Router) registerMagicLinkRoutes() {
-	r.mux.Method(http.MethodPost, "/api/v1/auth/magic-link/start", http.HandlerFunc(r.handleMagicLinkStart))
-	r.mux.Method(http.MethodPost, "/api/v1/auth/magic-link/verify", http.HandlerFunc(r.handleMagicLinkVerify))
 }
 
 func (r *Router) corsMiddleware(next http.Handler) http.Handler {

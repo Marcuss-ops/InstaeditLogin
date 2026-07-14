@@ -161,7 +161,7 @@ func Wire(ctx context.Context) (*App, error) {
 		"endpoint", cfg.S3Endpoint, "bucket", cfg.S3Bucket, "region", cfg.S3Region)
 
 	userWorkspaceHelper := api.RepoUserWorkspaceHelper(workspaceRepo, teamRepo)
-	authEmailBackend := services.NewAuthService(userRepo, workspaceRepo, teamRepo, authMgr, cfg.JWTSecret)
+	authEmailBackend := services.NewAuthService(userRepo, workspaceRepo, teamRepo)
 	authEmailSvc := api.NewAuthEmailServiceAdapter(authEmailBackend)
 
 	sessionRepo := repository.NewSessionRepository(db)
@@ -198,6 +198,9 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithCookieDomain(cfg.CookieDomain),
 		api.WithRateLimitService(rateLimitSvc),
 		api.WithWebhookStore(webhookRepo),
+		// ADMIN_INVITE_TOKEN gates public registration. If the env
+		// is unset, registration is disabled (handler returns 403).
+		api.WithAdminInviteToken(cfg.AdminInviteToken),
 	}
 	// Set the worker_id singleton BEFORE any goroutine comes up so log
 	// lines emitted from each worker tick carry the canonical

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -170,5 +171,65 @@ func TestLoad_CookieDomain_DefaultEmpty(t *testing.T) {
 	}
 	if cfg.CookieDomain != "" {
 		t.Errorf("CookieDomain default: want empty (dev), got %q", cfg.CookieDomain)
+	}
+}
+
+// TestLoad_AdminInviteToken_EmptyAllowed pins the "empty disables
+// registration" contract: an operator who has not yet set up a beta
+// admin token is unblocked from running. The handler treats the
+// empty string as the explicit "no public registration" signal and
+// returns 403; this test only verifies the config layer does not
+// reject the empty value at boot.
+func TestLoad_AdminInviteToken_EmptyAllowed(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	// Deliberately do NOT set ADMIN_INVITE_TOKEN here.
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() without ADMIN_INVITE_TOKEN: want nil (registration disabled), got %v", err)
+	}
+	if cfg.AdminInviteToken != "" {
+		t.Errorf("AdminInviteToken default: want empty, got %q", cfg.AdminInviteToken)
+	}
+}
+
+// TestLoad_AdminInviteToken_TooShortRejected guards against the
+// operator-typo class where a 4-char placeholder ("test", "demo",
+// "1234") is pushed to Fly. The brute-force surface of a 4-char
+// token is trivially searchable; the contract is "fail at boot
+// rather than silently weaken the gate".
+func TestLoad_AdminInviteToken_TooShortRejected(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	// 31 chars -- one below the 32 minimum.
+	t.Setenv("ADMIN_INVITE_TOKEN", "abcdefghijklmnopqrstuvwxyz12345")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() with 31-char ADMIN_INVITE_TOKEN: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "ADMIN_INVITE_TOKEN") {
+		t.Errorf("error must name the env var; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "31") {
+		t.Errorf("error must report the actual length; got %v", err)
+	}
+}
+
+// TestLoad_AdminInviteToken_ExactlyMinAllowed pins the boundary:
+// a 32-char token (the documented minimum) loads without error.
+func TestLoad_AdminInviteToken_ExactlyMinAllowed(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	// 32 chars -- exactly at the threshold.
+	t.Setenv("ADMIN_INVITE_TOKEN", "abcdefghijklmnopqrstuvwxyz123456")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with 32-char ADMIN_INVITE_TOKEN: want nil, got %v", err)
+	}
+	if cfg.AdminInviteToken != "abcdefghijklmnopqrstuvwxyz123456" {
+		t.Errorf("AdminInviteToken round-trip: got %q", cfg.AdminInviteToken)
 	}
 }

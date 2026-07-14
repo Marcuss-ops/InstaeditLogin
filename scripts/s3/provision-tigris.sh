@@ -3,9 +3,13 @@
 #
 # Idempotent provisioning of the Tigris bucket `instaedit-prod-media`.
 # Final state matches fly.toml [env]:
-#   - S3_ENDPOINT = "https://fly.storage.tigris.dev"
+#   - S3_ENDPOINT = "https://t3.storage.dev"          (Tigris Data global default)
 #   - S3_REGION   = "auto"
 #   - S3_BUCKET   = "instaedit-prod-media"
+#
+# For Fly.io's managed Tigris (regional), export S3_ENDPOINT=https://fly.storage.tigris.dev
+# before invoking this script. The SigV4 signer + aws-cli calls below are
+# endpoint-agnostic; only the S3_ENDPOINT var (and matching fly.toml line) change.
 #
 # Run from the operator laptop after `flyctl auth login`.
 # Reads S3 credentials from env (NEVER pass secrets as CLI args).
@@ -47,7 +51,7 @@ BUCKET="${S3_BUCKET:-instaedit-prod-media}"
 ORIGIN="${ALLOWED_ORIGIN:-https://app.instaedit.org}"
 MAX_BYTES="${MAX_BYTES:-209715200}"   # 200 * 1024 * 1024
 MAX_AGE="${MAX_AGE:-3600}"
-ENDPOINT="${S3_ENDPOINT:-https://fly.storage.tigris.dev}"
+ENDPOINT="${S3_ENDPOINT:-https://t3.storage.dev}"
 
 APPLY=0
 if [ "${1:-}" = "--apply" ]; then

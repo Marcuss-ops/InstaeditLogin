@@ -3,9 +3,9 @@
 // (access vs refresh) and a SessionID claim that ties a short-lived
 // access JWT to a row in the `sessions` table.
 //
-// Issuers in this codebase (AuthService.Register/Login/MagicLinkSignupOrLookup,
-// handleExchangeCode, handleSwitchWorkspace, handleMagicLinkVerify) must
-// create a session row BEFORE calling IssueAccess so the JWT carries
+// Issuers in this codebase (AuthService.Register/Login,
+// handleExchangeCode, handleSwitchWorkspace) must create a session row
+// BEFORE calling IssueAccess so the JWT carries
 // a positive session_id. A token with a missing/zero session_id is
 // rejected by Verify — this is a forced re-auth for all tokens minted
 // pre-SPRINT-2.1.

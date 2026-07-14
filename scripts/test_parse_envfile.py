@@ -67,12 +67,12 @@ def run_parser(env_path: str, mode: str = "dry-run") -> tuple[int, str, str]:
 def valid_env() -> str:
     return "\n".join([
         "DATABASE_URL=postgresql://u:p@h/d",
+        "ADMIN_INVITE_TOKEN=test-admin-token-32+chars-here-abcdef",
         "JWT_SECRET=abc123def456",
         "ENCRYPTION_KEYS=1:AbcBase64",
         "ACTIVE_ENCRYPTION_KEY_ID=1",
         "S3_ACCESS_KEY=AKIA",
         "S3_SECRET_KEY=secret",
-        "EMAIL_PROVIDER_KEY=re_x",
         "META_APP_ID=123",
         "META_APP_SECRET=verylongsecret",
         "FRONTEND_URL=https://app.instaedit.org",
@@ -138,8 +138,9 @@ def test_03_dollar_var_preserved_literally() -> None:
         "JWT_SECRET=abc$xyz",
         "ENCRYPTION_KEYS=1:AbcBase64",  # valid format (id:base64)
         "ACTIVE_ENCRYPTION_KEY_ID=1",
+        "ADMIN_INVITE_TOKEN=test-admin-token-32+chars-here-abcdef",
         "S3_ACCESS_KEY=AKIA", "S3_SECRET_KEY=secret",
-        "EMAIL_PROVIDER_KEY=re_x",
+
         "META_APP_ID=123",
         "META_APP_SECRET=$(rm -rf /)",  # malicious-looking; must be literal
         "FRONTEND_URL=https://app.instaedit.org",
@@ -229,8 +230,9 @@ def test_05_export_prefix() -> None:
     env = make_env("\n".join([
         "export DATABASE_URL=postgresql://u@h/d",
         "JWT_SECRET=abc", "ENCRYPTION_KEYS=1:Abc", "ACTIVE_ENCRYPTION_KEY_ID=1",
+        "ADMIN_INVITE_TOKEN=test-admin-token-32+chars-here-abcdef",
         "S3_ACCESS_KEY=AKIA", "S3_SECRET_KEY=secret",
-        "EMAIL_PROVIDER_KEY=re_x",
+
         "META_APP_ID=123", "META_APP_SECRET=verylongsecret",
         "FRONTEND_URL=https://app.instaedit.org",
         "CORS_ALLOWED_ORIGINS=https://a,https://b",
@@ -263,8 +265,9 @@ def test_06_single_and_double_quotes() -> None:
         "JWT_SECRET='abc def'",  # has a space — proves the quote strip happened
         "ENCRYPTION_KEYS='1:AbcBase64'",
         "ACTIVE_ENCRYPTION_KEY_ID=1",
+        "ADMIN_INVITE_TOKEN=test-admin-token-32+chars-here-abcdef",
         "S3_ACCESS_KEY=AKIA", "S3_SECRET_KEY=secret",
-        "EMAIL_PROVIDER_KEY=re_x",
+
         "META_APP_ID=123", "META_APP_SECRET=verylongsecret",
         "FRONTEND_URL=https://app.instaedit.org",
         "CORS_ALLOWED_ORIGINS=https://a,https://b",
@@ -297,8 +300,9 @@ def test_07_inline_hash_is_data_not_comment() -> None:
     env = make_env("\n".join([
         "DATABASE_URL=postgres # my dev db",  # inline # — must be data
         "JWT_SECRET=abc", "ENCRYPTION_KEYS=1:Abc", "ACTIVE_ENCRYPTION_KEY_ID=1",
+        "ADMIN_INVITE_TOKEN=test-admin-token-32+chars-here-abcdef",
         "S3_ACCESS_KEY=AKIA", "S3_SECRET_KEY=secret",
-        "EMAIL_PROVIDER_KEY=re_x",
+
         "META_APP_ID=123", "META_APP_SECRET=verylongsecret",
         "FRONTEND_URL=https://app.instaedit.org",
         "CORS_ALLOWED_ORIGINS=https://a,https://b",
@@ -332,7 +336,7 @@ def test_08_redacted_placeholder_rejected() -> None:
         "DATABASE_URL=x", "JWT_SECRET=abc", "ENCRYPTION_KEYS=1:Abc",
         "ACTIVE_ENCRYPTION_KEY_ID=1",
         "S3_ACCESS_KEY=AKIA", "S3_SECRET_KEY=secret",
-        "EMAIL_PROVIDER_KEY=re_x",
+
         "META_APP_ID=123",
         "FRONTEND_URL=https://app.instaedit.org",
         "CORS_ALLOWED_ORIGINS=https://a,https://b",
@@ -365,7 +369,7 @@ def test_09_disabled_provider_rejected() -> None:
         "DATABASE_URL=x", "JWT_SECRET=abc", "ENCRYPTION_KEYS=1:Abc",
         "ACTIVE_ENCRYPTION_KEY_ID=1",
         "S3_ACCESS_KEY=AKIA", "S3_SECRET_KEY=secret",
-        "EMAIL_PROVIDER_KEY=re_x",
+
         "META_APP_ID=123", "META_APP_SECRET=verylongsecret",
         "FRONTEND_URL=https://app.instaedit.org",
         "CORS_ALLOWED_ORIGINS=https://a,https://b",
@@ -399,8 +403,9 @@ def test_10_disabled_provider_commented_is_ok() -> None:
         "# TIKTOK_CLIENT_KEY=tt_xxx  # beta excludes TikTok",
         "DATABASE_URL=x", "JWT_SECRET=abc", "ENCRYPTION_KEYS=1:Abc",
         "ACTIVE_ENCRYPTION_KEY_ID=1",
+        "ADMIN_INVITE_TOKEN=test-admin-token-32+chars-here-abcdef",
         "S3_ACCESS_KEY=AKIA", "S3_SECRET_KEY=secret",
-        "EMAIL_PROVIDER_KEY=re_x",
+
         "META_APP_ID=123", "META_APP_SECRET=verylongsecret",
         "FRONTEND_URL=https://app.instaedit.org",
         "CORS_ALLOWED_ORIGINS=https://a,https://b",
@@ -426,7 +431,7 @@ def test_10_disabled_provider_commented_is_ok() -> None:
 
 
 def test_11_missing_required_key_rejected() -> None:
-    """If one of the 27 required keys is missing or empty, reject (rc=3)."""
+    """If one of the 26 required keys is missing or empty, reject (rc=3)."""
     lines = valid_env().split("\n")
     # Drop THREADS_REDIRECT_URI
     lines = [l for l in lines if not l.startswith("THREADS_REDIRECT_URI=")]
@@ -444,7 +449,7 @@ def test_12_active_encryption_key_id_not_in_map_rejected() -> None:
         "ACTIVE_ENCRYPTION_KEY_ID=2",   # but the active id is 2 (NOT in map)
         "DATABASE_URL=x", "JWT_SECRET=abc",
         "S3_ACCESS_KEY=AKIA", "S3_SECRET_KEY=secret",
-        "EMAIL_PROVIDER_KEY=re_x",
+
         "META_APP_ID=123", "META_APP_SECRET=verylongsecret",
         "FRONTEND_URL=https://app.instaedit.org",
         "CORS_ALLOWED_ORIGINS=https://a,https://b",
@@ -478,7 +483,7 @@ def test_13_non_uint32_encryption_key_id_rejected() -> None:
         "ACTIVE_ENCRYPTION_KEY_ID=1",
         "DATABASE_URL=x", "JWT_SECRET=abc",
         "S3_ACCESS_KEY=AKIA", "S3_SECRET_KEY=secret",
-        "EMAIL_PROVIDER_KEY=re_x",
+
         "META_APP_ID=123", "META_APP_SECRET=verylongsecret",
         "FRONTEND_URL=https://app.instaedit.org",
         "CORS_ALLOWED_ORIGINS=https://a,https://b",

@@ -8,24 +8,12 @@ import { getProvider, type ProviderId } from "../lib/providers";
 type CallbackStatus = "processing" | "success" | "error";
 
 /**
- * /auth/callback handles TWO incoming flows:
+ * /auth/callback handles the OAuth one-time code flow:
  *
- *   1. OAuth one-time code: ?code=… from /auth/{provider}/callback.
- *      We POST to /api/v1/auth/exchange with the code; the backend
- *      consumes the code from the one-time store and writes the
- *      session cookies; 204 → navigate /accounts.
- *
- *   2. Magic-link token:    ?token=… from the email magic link (or
- *      the dev "Verify now" surface in /login).
- *      We POST to /api/v1/auth/magic-link/verify with the token;
- *      the backend consumes the SHA-256 hashed token from
- *      magic_link_tokens, runs MagicLinkSignupOrLookup, mints a
- *      session, sets cookies; 204 → navigate /accounts.
- *
- * Both flows succeed by setting the session cookie and redirecting.
- * We deliberately use raw fetch (not authedFetch) because the
- * request is unauthenticated in both paths — the cookie we WANT
- * is the one this very request is supposed to set.
+ *   ?code=… from /auth/{provider}/callback.
+ *   We POST to /api/v1/auth/exchange with the code; the backend
+ *   consumes the code from the one-time store and writes the
+ *   session cookies; 204 → navigate /connections.
  */
 export function AuthCallback() {
   const navigate = useNavigate();
@@ -36,84 +24,45 @@ export function AuthCallback() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
-    const token = params.get("token");
     const provider = params.get("provider") ?? "";
 
-    if (!code && !token) {
+    if (!code) {
       const message =
-        "The callback did not include a code or a magic-link token. Please try again from the login page.";
+        "The callback did not include an authorization code. Please try again from the login page.";
       setStatus("error");
       setError(message);
       toast.error(message);
       return;
     }
 
-    const path = code
-      ? "/api/v1/auth/exchange"
-      : "/api/v1/auth/magic-link/verify";
-    const body = code ? { code } : { token };
-
     (async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}${path}`, {
+        const response = await fetch(`${API_BASE_URL}/api/v1/auth/exchange`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ code }),
         });
         if (response.status === 204) {
           // Session cookie is set. Force a fresh /api/v1/auth/me fetch
           // on the next page that needs it.
           clearSessionCache();
           setStatus("success");
-          // Two landing sites:
-          //   - OAuth (code present)  → /connections with the post-callback
-          //     query params so Connections can refresh the accounts list.
-          //     The TOAST for OAuth success/failure is emitted HERE (in
-          //     the global ToastViewport, see web/src/components/toast/);
-          //     Renderer state survives across the navigate() call.
-          //   - Magic-link (token)    → /accounts (the dashboard). The
-          //     sign-in is the action; no provider was linked.
-          //
-          // We propagate the backend's `?status=` value rather than
-          // hardcoding "connected" — if the OAuth flow failed at any
-          // point (user denied consent, token-exchange error, account
-          // already taken, rate limit, …) the backend's
-          // /auth/{provider}/callback (the backend endpoint, distinct
-          // from this `/auth/callback` page) will land here with
-          // `?status=failed` and the user should see the failed
-          // toast on /connections, not a misleading success.
-          //
-          // Default to "" (no toast on OAuth) rather than "connected":
-          // on a deploy-critical path, silence is debuggable, a false
-          // success is the bug class we just fixed.
+
           const oauthStatus = params.get("status") ?? "";
-          if (code) {
-            // Only emit if the provider id is one we recognize — defends
-            // against ?provider=garbage URLs producing ". connected."
-            // (a literal dot + space + "connected.") from a missing-name
-            // fallback. Unknown providers and empty/missing status
-            // stay silent: the OAuth flow's outcome is unverified, so
-            // announcing success would be a shipping a false-positive.
-            const providerMeta = provider
-              ? getProvider(provider as ProviderId)
-              : undefined;
-            if (providerMeta) {
-              if (oauthStatus === "failed") {
-                toast.error(
-                  `${providerMeta.name} connection failed. Please try again from Connections.`,
-                );
-              } else if (oauthStatus === "connected") {
-                toast.success(`${providerMeta.name} connected.`);
-              }
+          const providerMeta = provider
+            ? getProvider(provider as ProviderId)
+            : undefined;
+          if (providerMeta) {
+            if (oauthStatus === "failed") {
+              toast.error(
+                `${providerMeta.name} connection failed. Please try again from Connections.`,
+              );
+            } else if (oauthStatus === "connected") {
+              toast.success(`${providerMeta.name} connected.`);
             }
-          } else {
-            // Magic-link sign-in completed; the toast confirms the action.
-            toast.success("Signed in.");
           }
-          const target = code
-            ? `/connections?provider=${encodeURIComponent(provider || "")}&status=${encodeURIComponent(oauthStatus)}`
-            : "/accounts";
+          const target = `/connections?provider=${encodeURIComponent(provider || "")}&status=${encodeURIComponent(oauthStatus)}`;
           navigate(target, { replace: true });
           return;
         }
@@ -140,7 +89,7 @@ export function AuthCallback() {
         toast.error(message);
       }
     })();
-  }, [navigate]);
+  }, [navigate, toast]);
 
   return (
     <div className="min-h-screen bg-neutral-50 flex flex-col">

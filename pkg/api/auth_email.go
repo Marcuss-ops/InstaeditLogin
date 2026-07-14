@@ -1,9 +1,9 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -27,14 +27,6 @@ type AuthEmailStore interface {
 	// Login authenticates the user + resolves the active workspace,
 	// returning the user and the active workspace_id.
 	Login(email, password string) (user *models.User, wsID int64, err error)
-	IssueVerificationToken(userID int64, email string) (string, error)
-	VerifyEmail(token string) (int64, error)
-	IssueResetToken(email string) (string, error)
-	ResetPassword(token, newPassword string) error
-	// SPRINT 1.2 — magic-link signup-or-lookup. Idempotent on email:
-	// creates user + Personal Workspace + admin if email is new,
-	// otherwise resolves the existing user's active workspace.
-	MagicLinkSignupOrLookup(email string) (userID int64, wsID int64, err error)
 }
 
 // AuthEmailServiceAdapter adapts *services.AuthService to the local
@@ -73,26 +65,6 @@ func (a *AuthEmailServiceAdapter) Login(email, password string) (*models.User, i
 	return user, wsID, nil
 }
 
-func (a *AuthEmailServiceAdapter) IssueVerificationToken(userID int64, email string) (string, error) {
-	return a.svc.IssueVerificationToken(userID, email)
-}
-
-func (a *AuthEmailServiceAdapter) VerifyEmail(token string) (int64, error) {
-	return a.svc.VerifyEmail(token)
-}
-
-func (a *AuthEmailServiceAdapter) IssueResetToken(email string) (string, error) {
-	return a.svc.IssueResetToken(email)
-}
-
-func (a *AuthEmailServiceAdapter) ResetPassword(token, newPassword string) error {
-	return a.svc.ResetPassword(token, newPassword)
-}
-
-func (a *AuthEmailServiceAdapter) MagicLinkSignupOrLookup(email string) (int64, int64, error) {
-	return a.svc.MagicLinkSignupOrLookup(email)
-}
-
 // -----------------------------------------------------------------------
 //  Handler registration
 // -----------------------------------------------------------------------
@@ -101,10 +73,7 @@ func (a *AuthEmailServiceAdapter) MagicLinkSignupOrLookup(email string) (int64, 
 // Called from Router.Setup() when authEmailSvc is configured.
 func (r *Router) registerAuthEmailRoutes() {
 	r.mux.Method(http.MethodPost, "/api/v1/auth/register", http.HandlerFunc(r.handleRegister))
-	r.mux.Method(http.MethodPost, "/api/v1/auth/verify", http.HandlerFunc(r.handleVerifyEmail))
 	r.mux.Method(http.MethodPost, "/api/v1/auth/login", http.HandlerFunc(r.handleLoginEmail))
-	r.mux.Method(http.MethodPost, "/api/v1/auth/forgot-password", http.HandlerFunc(r.handleForgotPassword))
-	r.mux.Method(http.MethodPost, "/api/v1/auth/reset-password", http.HandlerFunc(r.handleResetPassword))
 }
 
 // -----------------------------------------------------------------------
@@ -120,9 +89,21 @@ func (r *Router) registerAuthEmailRoutes() {
 // AuthService. This handler now owns the integration: AuthService
 // returns (user, workspaceID); the handler binds them to a session
 // row through SessionsService.Start and writes the cookies.
+//
+// Invite-only beta gate: the public endpoint requires the
+// X-Admin-Token header to equal cfg.AdminInviteToken (constant-time
+// compare). An empty token or a missing/incorrect header returns
+// 403 "registration is invite-only". Operators create users by
+// supplying the header (curl / admin script) or via an internal
+// provisioning tool; the SPA does NOT expose /register.
 func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
 	if r.authEmailSvc == nil {
 		writeError(w, http.StatusNotImplemented, "email/password auth not configured")
+		return
+	}
+	if r.adminInviteToken == "" ||
+		subtle.ConstantTimeCompare([]byte(req.Header.Get("X-Admin-Token")), []byte(r.adminInviteToken)) != 1 {
+		writeError(w, http.StatusForbidden, "registration is invite-only")
 		return
 	}
 	if r.sessionsSvc == nil {
@@ -172,53 +153,13 @@ func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
 	}
 	r.setSessionCookie(w, req, result)
 
-	// TODO(FASE 2.2): Send verification token via email (Mailgun/SES).
-	verifToken, err := r.authEmailSvc.IssueVerificationToken(user.ID, body.Email)
-	if err != nil {
-		slog.Warn("verification token generation failed", "email", body.Email, "error", err)
-	}
-
 	resp := map[string]interface{}{
 		"user_id":      user.ID,
 		"workspace_id": wsID,
 		"email":        body.Email,
 		"session_id":   result.SessionID,
 	}
-	if verifToken != "" {
-		resp["verification_token"] = verifToken
-	}
 	writeJSON(w, http.StatusCreated, resp)
-}
-
-// handleVerifyEmail marks a user's email as verified.
-// POST /api/v1/auth/verify
-func (r *Router) handleVerifyEmail(w http.ResponseWriter, req *http.Request) {
-	if r.authEmailSvc == nil {
-		writeError(w, http.StatusNotImplemented, "email/password auth not configured")
-		return
-	}
-	var body struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-	if body.Token == "" {
-		writeError(w, http.StatusBadRequest, "verification token is required")
-		return
-	}
-
-	userID, err := r.authEmailSvc.VerifyEmail(body.Token)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid or expired verification token")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":  "verified",
-		"user_id": userID,
-	})
 }
 
 // handleLoginEmail authenticates a SaaS user with email + password,
@@ -256,8 +197,6 @@ func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case errors.Is(err, services.ErrInvalidPassword):
 			writeError(w, http.StatusUnauthorized, "invalid email or password")
-		case errors.Is(err, services.ErrEmailNotVerified):
-			writeError(w, http.StatusForbidden, "email not verified")
 		case errors.Is(err, services.ErrNoWorkspace):
 			// SPRINT 1.1: signal SPA to route the user into onboarding.
 			writeJSON(w, http.StatusConflict, map[string]interface{}{
@@ -291,78 +230,6 @@ func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 		"workspace_id": wsID,
 		"email":        body.Email,
 		"session_id":   result.SessionID,
-	})
-}
-
-// handleForgotPassword initiates the password reset flow.
-// POST /api/v1/auth/forgot-password
-func (r *Router) handleForgotPassword(w http.ResponseWriter, req *http.Request) {
-	if r.authEmailSvc == nil {
-		writeError(w, http.StatusNotImplemented, "email/password auth not configured")
-		return
-	}
-	var body struct {
-		Email string `json:"email"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-	if body.Email == "" {
-		writeError(w, http.StatusBadRequest, "email is required")
-		return
-	}
-
-	token, err := r.authEmailSvc.IssueResetToken(body.Email)
-	if err != nil {
-		// Always return 200 to avoid email enumeration. The reset token
-		// is returned in the response body so the caller can use it for
-		// testing; in production it would be sent via email only.
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"message": "if the email is registered, a reset link has been sent",
-		})
-		return
-	}
-
-	// TODO(FASE 2.2): Send reset token via email (Mailgun/SES).
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"message":     "if the email is registered, a reset link has been sent",
-		"reset_token": token,
-	})
-}
-
-// handleResetPassword completes the password reset flow.
-// POST /api/v1/auth/reset-password
-func (r *Router) handleResetPassword(w http.ResponseWriter, req *http.Request) {
-	if r.authEmailSvc == nil {
-		writeError(w, http.StatusNotImplemented, "email/password auth not configured")
-		return
-	}
-	var body struct {
-		Token       string `json:"token"`
-		NewPassword string `json:"new_password"`
-	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-	if body.Token == "" || body.NewPassword == "" {
-		writeError(w, http.StatusBadRequest, "token and new_password are required")
-		return
-	}
-
-	if err := r.authEmailSvc.ResetPassword(body.Token, body.NewPassword); err != nil {
-		switch {
-		case errors.Is(err, services.ErrPasswordTooShort) || errors.Is(err, services.ErrPasswordNoDigit):
-			writeError(w, http.StatusBadRequest, err.Error())
-		default:
-			writeError(w, http.StatusBadRequest, "invalid or expired reset token")
-		}
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "password reset successfully",
 	})
 }
 

@@ -26,9 +26,7 @@ type fakeUser struct {
 	email        string
 	name         string
 	passwordHash string // plaintext for test simplicity
-	verified     bool
 	userID       int64
-	tokens       map[string]string // token -> purpose
 }
 
 func newFakeAuthEmailStore() *fakeAuthEmailStore {
@@ -61,9 +59,7 @@ func (f *fakeAuthEmailStore) Register(email, password, name string) (*models.Use
 		email:        email,
 		name:         name,
 		passwordHash: password,
-		verified:     false,
 		userID:       id,
-		tokens:       make(map[string]string),
 	}
 	return &models.User{ID: id, Email: email, Name: name}, id, nil
 }
@@ -76,77 +72,7 @@ func (f *fakeAuthEmailStore) Login(email, password string) (*models.User, int64,
 	if u.passwordHash != password {
 		return nil, 0, services.ErrInvalidPassword
 	}
-	if !u.verified {
-		return nil, 0, services.ErrEmailNotVerified
-	}
 	return &models.User{ID: u.userID, Email: email, Name: u.name}, u.userID, nil
-}
-
-func (f *fakeAuthEmailStore) IssueVerificationToken(userID int64, email string) (string, error) {
-	tok := "verify-tok-" + email
-	if u, ok := f.users[email]; ok {
-		u.tokens[tok] = "verify"
-		f.users[email] = u
-	}
-	return tok, nil
-}
-
-func (f *fakeAuthEmailStore) VerifyEmail(token string) (int64, error) {
-	for _, u := range f.users {
-		if _, ok := u.tokens[token]; ok {
-			u.verified = true
-			f.users[u.email] = u
-			return u.userID, nil
-		}
-	}
-	return 0, services.ErrInvalidPassword
-}
-
-func (f *fakeAuthEmailStore) IssueResetToken(email string) (string, error) {
-	if _, ok := f.users[email]; !ok {
-		return "", services.ErrInvalidPassword
-	}
-	tok := "reset-tok-" + email
-	u := f.users[email]
-	u.tokens[tok] = "reset"
-	f.users[email] = u
-	return tok, nil
-}
-
-// MagicLinkSignupOrLookup is the SPRINT 1.2 magic-link path.
-// Idempotent on email: creates a new fake user if absent and
-// returns (userID, workspaceID=1, nil). Tests that need a
-// specific id can seed f.users[email] ahead of time.
-func (f *fakeAuthEmailStore) MagicLinkSignupOrLookup(email string) (int64, int64, error) {
-	u, ok := f.users[email]
-	if !ok {
-		id := f.nextID
-		f.nextID++
-		f.users[email] = fakeUser{
-			email:        email,
-			name:         email,
-			passwordHash: "",
-			verified:     true, // magic-link authenticates the email
-			userID:       id,
-			tokens:       make(map[string]string),
-		}
-		return id, 1, nil
-	}
-	return u.userID, 1, nil
-}
-
-func (f *fakeAuthEmailStore) ResetPassword(token, newPassword string) error {
-	for _, u := range f.users {
-		if _, ok := u.tokens[token]; ok {
-			if len(newPassword) < 8 {
-				return services.ErrPasswordTooShort
-			}
-			u.passwordHash = newPassword
-			f.users[u.email] = u
-			return nil
-		}
-	}
-	return services.ErrInvalidPassword
 }
 
 // -----------------------------------------------------------------------
@@ -161,6 +87,7 @@ func TestHandleRegister_HappyPath(t *testing.T) {
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Token", testAdminToken)
 	w := httptest.NewRecorder()
 
 	r.ServeHTTP(w, req)
@@ -187,6 +114,7 @@ func TestHandleRegister_DuplicateEmail(t *testing.T) {
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Token", testAdminToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
@@ -198,6 +126,7 @@ func TestHandleRegister_DuplicateEmail(t *testing.T) {
 	b2, _ := json.Marshal(body2)
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b2))
 	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Admin-Token", testAdminToken)
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusConflict {
@@ -213,10 +142,66 @@ func TestHandleRegister_WeakPassword(t *testing.T) {
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Token", testAdminToken)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status: want 400, got %d", w.Code)
+	}
+}
+
+// TestHandleRegister_InviteOnly guards the invite-only beta gate:
+// missing or wrong X-Admin-Token must always return 403, regardless
+// of body content. The router is constructed with a non-empty admin
+// token (see newAuthEmailTestRouter) so the constant-time compare
+// runs against testAdminToken.
+func TestHandleRegister_InviteOnly(t *testing.T) {
+	store := newFakeAuthEmailStore()
+	r := newAuthEmailTestRouter(store)
+
+	body := map[string]string{"email": "x@example.com", "password": "password1", "name": "X"}
+	b, _ := json.Marshal(body)
+
+	// Missing header.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("missing token: want 403, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// Wrong header.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-Admin-Token", "definitely-wrong")
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusForbidden {
+		t.Errorf("wrong token: want 403, got %d (body: %s)", w2.Code, w2.Body.String())
+	}
+}
+
+// TestHandleRegister_EmptyConfigDisabled asserts the empty-token
+// fail-closed posture: when the Router's adminInviteToken is empty
+// (operator forgot to set ADMIN_INVITE_TOKEN), registration is
+// unconditionally 403.
+func TestHandleRegister_EmptyConfigDisabled(t *testing.T) {
+	store := newFakeAuthEmailStore()
+	r := &Router{authEmailSvc: store, sessionsSvc: &fakeSessionsStore{}}
+	r.mux = chi.NewRouter()
+	r.registerAuthEmailRoutes()
+
+	body := map[string]string{"email": "x@example.com", "password": "password1", "name": "X"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Token", "anything")
+	w := httptest.NewRecorder()
+	// *Router has no ServeHTTP — call through r.mux (the *chi.Mux).
+	r.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("empty config: want 403, got %d", w.Code)
 	}
 }
 
@@ -229,12 +214,12 @@ func TestHandleLogin_Success(t *testing.T) {
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Token", testAdminToken)
 	r.ServeHTTP(httptest.NewRecorder(), req)
 
-	// Verify email.
 	store.users["login@example.com"] = fakeUser{
 		email: "login@example.com", name: "Login", passwordHash: "password1",
-		verified: true, userID: 1, tokens: make(map[string]string),
+		userID: 1,
 	}
 
 	// Login.
@@ -250,30 +235,6 @@ func TestHandleLogin_Success(t *testing.T) {
 	}
 }
 
-func TestHandleLogin_EmailNotVerified(t *testing.T) {
-	store := newFakeAuthEmailStore()
-	r := newAuthEmailTestRouter(store)
-
-	// Register (not verified).
-	body := map[string]string{"email": "unverified@example.com", "password": "password1", "name": "Unv"}
-	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(httptest.NewRecorder(), req)
-
-	// Login should fail.
-	loginBody := map[string]string{"email": "unverified@example.com", "password": "password1"}
-	lb, _ := json.Marshal(loginBody)
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(lb))
-	req2.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req2)
-
-	if w.Code != http.StatusForbidden {
-		t.Errorf("status: want 403, got %d", w.Code)
-	}
-}
-
 func TestHandleLogin_WrongPassword(t *testing.T) {
 	store := newFakeAuthEmailStore()
 	r := newAuthEmailTestRouter(store)
@@ -283,11 +244,12 @@ func TestHandleLogin_WrongPassword(t *testing.T) {
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Token", testAdminToken)
 	r.ServeHTTP(httptest.NewRecorder(), req)
 
 	store.users["pwd@example.com"] = fakeUser{
 		email: "pwd@example.com", name: "Pwd", passwordHash: "correct1",
-		verified: true, userID: 1, tokens: make(map[string]string),
+		userID: 1,
 	}
 
 	// Login with wrong password.
@@ -300,91 +262,6 @@ func TestHandleLogin_WrongPassword(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status: want 401, got %d", w.Code)
-	}
-}
-
-func TestHandleForgotPassword_Always200(t *testing.T) {
-	store := newFakeAuthEmailStore()
-	r := newAuthEmailTestRouter(store)
-
-	// Even for non-existent users, always return 200.
-	body := map[string]string{"email": "nobody@example.com"}
-	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/forgot-password", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("status: want 200, got %d", w.Code)
-	}
-}
-
-func TestHandleResetPassword_Flow(t *testing.T) {
-	store := newFakeAuthEmailStore()
-	r := newAuthEmailTestRouter(store)
-
-	// Register.
-	body := map[string]string{"email": "reset@example.com", "password": "password1", "name": "Reset"}
-	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(httptest.NewRecorder(), req)
-
-	// Forgot password → get reset token.
-	fpBody := map[string]string{"email": "reset@example.com"}
-	fb, _ := json.Marshal(fpBody)
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/forgot-password", bytes.NewReader(fb))
-	req2.Header.Set("Content-Type", "application/json")
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
-
-	var resp map[string]interface{}
-	json.NewDecoder(w2.Body).Decode(&resp)
-	tok, _ := resp["reset_token"].(string)
-	if tok == "" {
-		t.Fatal("no reset token returned")
-	}
-
-	// Reset password.
-	rpBody := map[string]string{"token": tok, "new_password": "newpasswd1"}
-	rb, _ := json.Marshal(rpBody)
-	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/reset-password", bytes.NewReader(rb))
-	req3.Header.Set("Content-Type", "application/json")
-	w3 := httptest.NewRecorder()
-	r.ServeHTTP(w3, req3)
-	if w3.Code != http.StatusOK {
-		t.Errorf("reset-password: want 200, got %d (body: %s)", w3.Code, w3.Body.String())
-	}
-}
-
-func TestHandleVerifyEmail(t *testing.T) {
-	store := newFakeAuthEmailStore()
-	r := newAuthEmailTestRouter(store)
-
-	// Register.
-	body := map[string]string{"email": "v@example.com", "password": "password1", "name": "V"}
-	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(httptest.NewRecorder(), req)
-
-	// Get verification token.
-	tok := "verify-tok-v@example.com"
-	store.users["v@example.com"] = fakeUser{
-		email: "v@example.com", name: "V", passwordHash: "password1",
-		verified: false, userID: 1, tokens: map[string]string{tok: "verify"},
-	}
-
-	// Verify.
-	vBody := map[string]string{"token": tok}
-	vb, _ := json.Marshal(vBody)
-	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/verify", bytes.NewReader(vb))
-	req2.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req2)
-	if w.Code != http.StatusOK {
-		t.Errorf("verify: want 200, got %d (body: %s)", w.Code, w.Body.String())
 	}
 }
 
@@ -430,13 +307,25 @@ func (f *fakeSessionsStore) RevokeAll(_ int64, _ string) (int64, error) { return
 func (f *fakeSessionsStore) List(_ int64) ([]repository.Session, error) { return nil, nil }
 func (f *fakeSessionsStore) WithdrawFromCookie(_ string) error          { return nil }
 
+// testAdminToken is the shared invite token used by the handler
+// tests to authenticate against the public /register endpoint
+// (which is now gated by WithAdminInviteToken). Production never
+// sees this value.
+const testAdminToken = "test-admin-token-32+chars-here-abcdef"
+
 // newAuthEmailTestRouter creates a minimal Router with only the auth email
 // routes wired, using the given fake store. SPRINT 7.4: also wires a
 // fakeSessionsStore so the handlers (handleRegister / handleLoginEmail)
 // can complete the session-bound JWT mint without dragging in a real
-// *sql.DB-bound SessionRepository.
+// *sql.DB-bound SessionRepository. Invite-only beta: the admin invite
+// token is pre-set to testAdminToken so happy-path register tests can
+// present the X-Admin-Token header.
 func newAuthEmailTestRouter(store AuthEmailStore) *chi.Mux {
-	r := &Router{authEmailSvc: store, sessionsSvc: &fakeSessionsStore{}}
+	r := &Router{
+		authEmailSvc:    store,
+		sessionsSvc:     &fakeSessionsStore{},
+		adminInviteToken: testAdminToken,
+	}
 	r.mux = chi.NewRouter()
 	r.registerAuthEmailRoutes()
 	return r.mux

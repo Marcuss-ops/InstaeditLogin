@@ -156,6 +156,55 @@ describe("validateApiBaseUrl", () => {
     });
   });
 
+  describe("VITE_DEMO_MODE (frontend-only preview mode)", () => {
+    it("ok on demo mode even with an empty URL (preview before backend is live)", () => {
+      const r = validateApiBaseUrl(
+        env({ VITE_API_BASE_URL: "", VITE_DEMO_MODE: "true", VERCEL_ENV: "production" }),
+      );
+      expect(r.level).toBe("ok");
+      expect(r.context).toBe("production");
+      expect(r.messages[0]).toMatch(/VITE_DEMO_MODE=true/);
+      expect(r.messages[0]).toMatch(/empty/);
+    });
+
+    it("ok on demo mode even with a localhost URL (the URL is unused)", () => {
+      const r = validateApiBaseUrl(
+        env({
+          VITE_API_BASE_URL: "http://localhost:8080",
+          VITE_DEMO_MODE: "true",
+          VERCEL_ENV: "production",
+        }),
+      );
+      expect(r.level).toBe("ok");
+    });
+
+    it("ok on demo mode with a non-canonical URL value (no validation error)", () => {
+      const r = validateApiBaseUrl(
+        env({
+          VITE_API_BASE_URL: "not a url",
+          VITE_DEMO_MODE: "true",
+          VERCEL_ENV: "production",
+        }),
+      );
+      expect(r.level).toBe("ok");
+    });
+
+    it("VITE_DEMO_MODE=false falls through to the normal URL check", () => {
+      const r = validateApiBaseUrl(
+        env({ VITE_API_BASE_URL: "", VITE_DEMO_MODE: "false", VERCEL_ENV: "production" }),
+      );
+      expect(r.level).toBe("error");
+      expect(r.messages[0]).toMatch(/empty/);
+    });
+
+    it("VITE_DEMO_MODE unset falls through to the normal URL check", () => {
+      const r = validateApiBaseUrl(
+        env({ VITE_API_BASE_URL: "", VERCEL_ENV: "production" }),
+      );
+      expect(r.level).toBe("error");
+    });
+  });
+
   describe("redaction (verify via the success message)", () => {
     it("strips query string so secrets don't leak into build logs", () => {
       const r = validateApiBaseUrl(

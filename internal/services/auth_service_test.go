@@ -7,21 +7,16 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // newTestAuthService creates an AuthService wired with sqlmock for
-// the user + workspace + team repositories. SPRINT 7.4
-// (P0#14-blocco-1.4): NewAuthService must be wired with all three
-// repositories because Register now auto-creates a Personal
-// Workspace + admin membership, and Login now resolves the user's
-// active workspace via workspaceRepo.ListByOwner / teamRepo.ListForUser.
-// Tests that exercise ONLY IssueVerificationToken / VerifyEmail /
-// IssueResetToken / ResetPassword don't touch those repositories and
-// can pass nil for any of them, but for simplicity we wire all three
-// here so every test runs against the same shape.
+// the user + workspace + team repositories. Register now
+// auto-creates a Personal Workspace + admin membership, and Login
+// resolves the user's active workspace via
+// workspaceRepo.ListByOwner / teamRepo.ListForUser. Every test in
+// this file runs against the same shape.
 func newTestAuthService(t *testing.T) (*services.AuthService, sqlmock.Sqlmock, func()) {
 	t.Helper()
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -32,15 +27,14 @@ func newTestAuthService(t *testing.T) (*services.AuthService, sqlmock.Sqlmock, f
 	userRepo := repository.NewUserRepository(db)
 	workspaceRepo := repository.NewWorkspaceRepository(db)
 	teamRepo := repository.NewTeamRepository(db)
-	authMgr := auth.NewManager("test-secret-key-for-auth-service-tests", 24)
-	svc := services.NewAuthService(userRepo, workspaceRepo, teamRepo, authMgr, "test-secret-key-for-auth-service-tests")
+	svc := services.NewAuthService(userRepo, workspaceRepo, teamRepo)
 	return svc, mock, cleanup
 }
 
 // workspaceCreatePlaceholder is the INSERT pattern emitted by
 // workspaceRepo.Create (mirrors the SQL in
 // internal/repository/workspace_repo.go). DRY'd here because the
-// same expectation appears in Register + MagicLink tests.
+// same expectation appears in Register tests.
 const workspaceCreatePlaceholder = `INSERT INTO workspaces (name, owner_id) VALUES ($1, $2)
 	 RETURNING id, created_at`
 
@@ -187,26 +181,6 @@ func TestAuthService_Login_HappyPath(t *testing.T) {
 	}
 }
 
-func TestAuthService_Login_EmailNotVerified(t *testing.T) {
-	svc, mock, cleanup := newTestAuthService(t)
-	defer cleanup()
-
-	now := time.Now()
-	hash, _ := bcrypt.GenerateFromPassword([]byte("password1"), bcrypt.DefaultCost)
-
-	mock.ExpectQuery(
-		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-	       created_at, updated_at FROM users WHERE email = $1`,
-	).WithArgs("unverified@example.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "created_at", "updated_at"}).
-			AddRow(1, "unverified@example.com", "User", hash, false, now, now))
-
-	_, _, err := svc.Login("unverified@example.com", "password1")
-	if err != services.ErrEmailNotVerified {
-		t.Errorf("want ErrEmailNotVerified, got %v", err)
-	}
-}
-
 func TestAuthService_Login_WrongPassword(t *testing.T) {
 	svc, mock, cleanup := newTestAuthService(t)
 	defer cleanup()
@@ -224,31 +198,6 @@ func TestAuthService_Login_WrongPassword(t *testing.T) {
 	_, _, err := svc.Login("wrong@example.com", "wrongpassword1")
 	if err != services.ErrInvalidPassword {
 		t.Errorf("want ErrInvalidPassword, got %v", err)
-	}
-}
-
-func TestAuthService_TokenRoundTrip(t *testing.T) {
-	svc, _, cleanup := newTestAuthService(t)
-	defer cleanup()
-
-	verifTok, err := svc.IssueVerificationToken(42, "verify@example.com")
-	if err != nil {
-		t.Fatalf("IssueVerificationToken: %v", err)
-	}
-	if verifTok == "" {
-		t.Fatal("verification token empty")
-	}
-
-	// Garbage token fails.
-	_, err = svc.VerifyEmail("not.a.token")
-	if err == nil {
-		t.Error("expected error for garbage token")
-	}
-
-	// Verification token used for password reset fails (wrong purpose).
-	err = svc.ResetPassword(verifTok, "newpassword2")
-	if err == nil {
-		t.Error("expected error using verification token for reset")
 	}
 }
 

@@ -205,7 +205,7 @@ fly-verify:
 fly-help:
 	@echo "── One-time setup (per machine / per new operator) ──────"
 	@echo "  flyctl auth login"
-	@echo "  cp .env.example .env.production   # fill in 14 secrets"
+	@echo "  cp .env.example .env.production   # fill in 27 secrets"
 	@echo "  git check-ignore .env.production  # confirm gitignored"
 	@echo ""
 	@echo "── Secrets pipeline (always secrets → verify → deploy) ──"
@@ -241,7 +241,7 @@ fly-help:
 #
 #   - verify-fly-secrets.sh: runs `flyctl secrets list --app X` and
 #     asserts no <redacted> placeholder, no disabled-provider key, all
-#     14 required keys present. Idempotent; safe to re-run.
+#     27 required keys present. Idempotent; safe to re-run.
 #
 # Both scripts default to dry-run / read-only for safety. The
 # `fly-secrets` target passes --apply for you; `fly-secrets-dry-run`
@@ -254,7 +254,7 @@ fly-help:
 # and the troubleshooting FAQ.
 # ────────────────────────────────────────────────────────────────────────
 
-# Stage the 14 secrets on Fly (idempotent overwrite; --stage avoids a
+# Stage the 27 secrets on Fly (idempotent overwrite; --stage avoids a
 # premature restart). Wraps scripts/set-fly-secrets.sh --apply.
 fly-secrets:
 	@if [[ ! -x ./scripts/set-fly-secrets.sh ]]; then \

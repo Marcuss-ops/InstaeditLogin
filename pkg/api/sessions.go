@@ -34,8 +34,8 @@ import (
 // authenticated session: the access JWT (HttpOnly, short TTL),
 // the refresh token (HttpOnly, long TTL), and a fresh CSRF
 // token (readable by document.cookie). Called from
-// /auth/exchange, /auth/refresh, and the email + magic-link
-// login/register endpoints.
+// /auth/exchange, /auth/refresh, and the email login/register
+// endpoints.
 //
 // SPRINT 7.2 follow-up: was a free function
 // (writeSessionCookies) that took `secure` as a positional

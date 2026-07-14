@@ -3,8 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { Nav } from "../components/Nav";
 import { Skeleton, ErrorState } from "../components/feedback";
+import { toastBus } from "../components/toast";
 import { API_BASE_URL } from "../lib/api";
 import { PROVIDERS, type ProviderId } from "../lib/providers";
+import { DEMO_MODE } from "../lib/demo";
 import {
   ApiError,
   AuthError,
@@ -35,7 +37,7 @@ const NEW_BADGE_HOURS = 24;
  *
  * Previously these 7 buttons lived in /login, but the OAuth
  * callback requires an authenticated InstaEdit session; placing
- * them here keeps the Login flow email-only (magic link) and
+ * them here keeps the Login flow email/password-only and
  * consolidates account linking behind a session gate.
  *
  * OAuth flow:
@@ -177,6 +179,23 @@ export function Connections() {
                       href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}
                       data-testid={dataTestId}
                       data-provider={provider.id}
+                      // Demo-mode intercept: preventDefault + toast when
+                      // the backend isn't reachable. The href stays in
+                      // the DOM so the existing Connections.test.tsx
+                      // assertion `expect(card.getAttribute("href"))
+                      // .toBe(...)` keeps passing; middle-click / "open
+                      // in new tab" still navigates (and shows the same
+                      // toast on the destination page if it's also in
+                      // demo mode).
+                      onClick={(e) => {
+                        if (DEMO_MODE) {
+                          e.preventDefault();
+                          toastBus.push(
+                            "error",
+                            "Connecting accounts requires a live backend. Deploy the Go API to enable OAuth.",
+                          );
+                        }
+                      }}
                       className="group relative bg-white border border-dashed border-neutral-300 rounded-xl p-5 no-underline text-black hover:border-neutral-500 hover:shadow-[0_8px_24px_rgba(0,0,0,0.05)] transition-all overflow-hidden"
                     >
                       <div className="flex items-center gap-4">

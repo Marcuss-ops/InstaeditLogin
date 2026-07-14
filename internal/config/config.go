@@ -13,9 +13,10 @@ import (
 
 // Minimum-credential thresholds.
 const (
-	jwtSecretMinBytes = 32
-	aesKeyBytes       = 32
-	secretMinChars    = 32
+	jwtSecretMinBytes        = 32
+	aesKeyBytes              = 32
+	secretMinChars           = 32
+	adminInviteTokenMinChars = 32 // ADMIN_INVITE_TOKEN: prevent trivial brute-force if the operator accidentally sets a short value
 )
 
 // Config holds all configuration for the application.
@@ -186,6 +187,16 @@ type Config struct {
 	// HTTPS / SameSite=None / leading-dot trade-off is the
 	// operator's call.
 	CookieDomain string
+
+	// AdminInviteToken gates the public registration endpoint
+	// (POST /api/v1/auth/register). The handler requires the request
+	// to present the same value via the X-Admin-Token header
+	// (constant-time compare). When empty, registration is fully
+	// disabled (the handler returns 403 "registration is
+	// invite-only"). Generate with `openssl rand -hex 32` and
+	// rotate via `flyctl secrets import`. NOT logged, NOT exposed
+	// in error messages.
+	AdminInviteToken string
 }
 
 // Load reads configuration from environment variables.
@@ -260,6 +271,11 @@ func Load() (*Config, error) {
 		// to pin, etc.) and Go's http.Cookie Domain field will
 		// pass it straight through to the browser unchanged.
 		CookieDomain: getEnv("COOKIE_DOMAIN", ""),
+		// Disable public registration unless an admin invite token
+		// is configured. Operators create users manually (via the
+		// admin endpoint or by setting ADMIN_INVITE_TOKEN and calling
+		// /api/v1/auth/register with X-Admin-Token).
+		AdminInviteToken: getEnv("ADMIN_INVITE_TOKEN", ""),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -348,6 +364,15 @@ func (c *Config) validate() error {
 	// Optional OAuth platforms.
 	if err := c.validateOptionalPlatform("TIKTOK", c.TikTokClientID, c.TikTokClientSecret); err != nil {
 		return err
+	}
+
+	// Admin invite token: empty disables registration (per WithAdminInviteToken
+	// contract); non-empty must be long enough to make online brute-force
+	// impractical. Mirrors the JWT secret's 32-byte threshold so a
+	// generated `openssl rand -hex 32` (64 hex chars) sails through and
+	// a 4-char typo is rejected at boot rather than exploited at runtime.
+	if c.AdminInviteToken != "" && len(c.AdminInviteToken) < adminInviteTokenMinChars {
+		return fmt.Errorf("ADMIN_INVITE_TOKEN must be at least %d characters when set (got %d); generate with `openssl rand -hex 32` (64 hex chars) or leave it unset to disable registration entirely", adminInviteTokenMinChars, len(c.AdminInviteToken))
 	}
 	if err := c.validateOptionalPlatform("X", c.XClientID, c.XClientSecret); err != nil {
 		return err

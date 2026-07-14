@@ -116,7 +116,7 @@ export function Dashboard() {
   // The OAuth post-callback toast is surfaced on /connections (see
   // Connections.tsx); /accounts is now only the "what's connected"
   // view. The 7 unconnected provider cards were moved to
-  // /connections as part of the Login-→-magic-link migration.
+  // /connections as part of the Login-→-OAuth migration.
   const accountsByProvider: Record<string, PlatformAccount | undefined> = {};
   if (state.kind === "ready") {
     for (const acc of state.accounts) {

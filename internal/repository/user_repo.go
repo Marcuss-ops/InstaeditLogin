@@ -223,7 +223,7 @@ func (r *UserRepository) FindPlatformAccountByID(id int64) (*models.PlatformAcco
 // AttachPlatformAccount links an OAuth platform profile to an EXISTING
 // user identified by userID. It does NOT create users — SPRINT 7.1
 // (P0#14) closed the OAuth-auto-create gap; users are created via the
-// product onboarding flow (magic link / email register) before they
+// product onboarding flow (email/password register) before they
 // can ever hit /api/v1/auth/{provider}/callback.
 //
 // Behaviour:
