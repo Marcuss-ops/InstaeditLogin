@@ -61,13 +61,19 @@
 # the prefix of a sub-table in another. flyctl parses this correctly;
 # trust flyctl over strict parsers for the Fly-specific shape.
 #
-# Disabled providers — TikTok, X (Twitter), YouTube, LinkedIn, and
+# Disabled providers — TikTok, YouTube, LinkedIn, and
 # Stripe — are not configured in beta. Their *_CLIENT_ID /
 # *_CLIENT_SECRET / *_REDIRECT_URI / STRIPE_* env keys are removed
 # entirely from this file; re-add them when the corresponding
 # provider is enabled (the in-app capabilities / provider-registry
 # also gates them off, so a stale value can't accidentally re-enable
 # a disabled flow).
+#
+# X (Twitter) was moved from disabled to beta on the X-provider
+# enablement commit; X_REDIRECT_URI lives in [env] above (public,
+# registered in X Developer Portal → User authentication settings →
+# Callback URIs), while X_CLIENT_ID + X_CLIENT_SECRET are Fly
+# secrets — see scripts/required-fly-secrets.txt for the full list.
 #
 # Deploy:
 #   flyctl deploy --config fly.toml
@@ -146,6 +152,7 @@ primary_region = "iad"
   INSTAGRAM_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/instagram/callback"
   FACEBOOK_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/facebook/callback"
   THREADS_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/threads/callback"
+  X_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/twitter/callback"
 
   # Worker health port — shared default is OFF ("0") so dev runs
   # (make run-worker) don't accidentally bind 9090. [processes.worker.env]
