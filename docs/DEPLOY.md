@@ -264,6 +264,53 @@ git check-ignore .env.production || echo "WARN: .env.production is NOT gitignore
 
 ---
 
+### 3.0 Operator reference manifest (2026-07-14)
+
+**Per-secret status table**: confirms what has already been captured + the shape
+constraints the captured value should match + where in the password manager
+the captured value lives. **Values are NEVER printed in this manifest** — only
+the status + shape (length / charset / regex) + capture location.
+
+| # | Secret | Source (resolved) | Shape (length / charset / regex) | Password manager entry | Captured? | Action ref |
+|---|--------|-------------------|----------------------------------|------------------------|-----------|------------|
+| 1 | `DATABASE_URL` | Pooled URL from `fly postgres create` (§2 step 2). PgBouncer on port 6432; sslmode=require baked in via flycast | Format spec: see DEPLOY.md §2 step 2 for the canonical DIRECT/POOLED structure (≈ 70–110 chars; Flycast URI; pooler port 6432; sslmode=require; the password URI-component is the only randomized segment). The ACTUAL DATABASE_URL is never printed in this manifest — only the password-manager entry column tells the operator where the captured value lives | `instaedit-login/database-url/production/pooled` ( + `/direct` separately) | ○ PENDING | DEPLOY.md §2 step 2 |
+| 2 | `JWT_SECRET` | `openssl rand -hex 32 \| head -c 64` (sha12=`2df3c07a1d40`) | 64 lowercase hex chars / 32 bytes binary (RFC 7518 HS256 minimum per `internal/config/config.go::jwtSecretMinBytes=32`) | `instaedit-login/jwt-secret/production` | ✓ CAPTURED | already in PM |
+| 3 | `ENCRYPTION_KEYS` | `openssl rand -base64 32 \| tr -d '\n'` for id=1 (sha12=`94e5775e101d`) | CSV `id:base64,id:base64,...`; each base64 decodes to exactly 32 bytes (AES-256 GCM slot per `internal/crypto/encrypt.go::aesKeyBytes=32`); each id is uint32 in [0, 4294967295] | `instaedit-login/encryption-key-1/production` (one entry per slot) | ✓ CAPTURED (1 slot) | already in PM |
+| 4 | `ACTIVE_ENCRYPTION_KEY_ID` | literal `1` (uint32, no randomness; MUST be present in the parsed `ENCRYPTION_KEYS` map) | digit string in [0, 4294967295]; MUST equal one of the ids in the `ENCRYPTION_KEYS` CSV | `instaedit-login/active-encryption-key-id/production` | ✓ CAPTURED (literal `1`) | already in PM |
+| 5 | `S3_ACCESS_KEY` | Tigris dashboard → Access Keys → Generate new (paired with row 6) | non-empty (length ≈ 32–40 chars for Tigris tokens) | `instaedit-login/s3-access-key/production` | ○ PENDING | DEPLOY.md §2 step 5 + `scripts/s3/provision-tigris.sh` |
+| 6 | `S3_SECRET_KEY` | Tigris dashboard → Access Keys (paired with row 5; rotate the pair ONLY together) | non-empty (length ≈ 32–40 chars) | `instaedit-login/s3-secret-key/production` | ○ PENDING | DEPLOY.md §2 step 5 |
+| 7 | `EMAIL_PROVIDER_KEY` | Resend dashboard → API Keys → Create. **CRITICAL**: scope = `Sending Access` ONLY (NOT Full Access) — minimises blast radius if the key leaks | prefix is `re_`; total length ≈ 40 chars | `instaedit-login/email-provider-key/production` | ○ PENDING (NOT yet pushed to Fly because backend does not yet wire Resend — see OPERATIONS.md §7.5) | OPERATIONS.md §7.5 (deferred backend wiring) |
+| 8 | `META_APP_ID` | Meta Developer Console → your prod-app → Settings → Basic (App ID) | numeric string (typically 15 digits) | `instaedit-login/meta-app-id/production` | ○ PENDING | DEPLOY.md §6 followup (Meta prod-app review) |
+| 9 | `META_APP_SECRET` | Meta Developer Console → Settings → Basic → “Show” | ≥ 32 chars (per `internal/config/config.go::secretMinChars=32`) | `instaedit-login/meta-app-secret/production` | ○ PENDING | DEPLOY.md §6 followup |
+| 10 | `FRONTEND_URL` | Canonical per commit `716c709` + DNS §1.5 | exactly `https://app.instaedit.org` (HTTPS required; no trailing slash; no localhost) | N/A (public, lives in `fly.toml` `[env]`) | ✓ STABLE | no action |
+| 11 | `CORS_ALLOWED_ORIGINS` | Canonical per commit `716c709` + DNS §1.5 (apex redirect) | exactly `https://instaedit.org,https://app.instaedit.org` (2 comma-separated entries; no spaces) | N/A (public) | ✓ STABLE | no action |
+| 12 | `COOKIE_DOMAIN` | Canonical per commit `716c709` + `internal/config/config.go` Blocco #2.4 (cross-subdomain CSRF) | exactly `.instaedit.org` (leading dot — required for cross-subdomain match) | N/A (public) | ✓ STABLE | no action |
+| 13 | `INSTAGRAM_REDIRECT_URI` | Canonical per `fly.toml` `[env]`; exact registration in Meta Dev Console | exactly `https://api.instaedit.org/api/v1/auth/instagram/callback` | N/A (public; pinned by Meta console) | ✓ STABLE | no action |
+| 14 | `FACEBOOK_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/facebook/callback` | N/A (public) | ✓ STABLE | no action |
+| 15 | `THREADS_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/threads/callback` | N/A (public) | ✓ STABLE | no action |
+
+**Aggregate status (2026-07-14)**: 3 CAPTURED (JWT_SECRET + ENCRYPTION_KEYS[id=1] + ACTIVE_ENCRYPTION_KEY_ID) • 5 STABLE (4 public env + 3 redirect URIs) • 7 PENDING — requires operator-side actions against external services (Fly Postgres / Tigris dashboard / Resend dashboard / Meta Dev Console).
+
+**Privacy contract**: the actual secret values are NEVER printed in this manifest or in any commit output. The shape column gives the operator enough metadata to confirm locally (a) the captured value satisfies the input contract (e.g. JWT_SECRET is exactly 64 hex chars), (b) the captured value is correctly stored (the password-manager-entry column matches where the operator saved it). If you ever need to actually verify a value, paste it into your terminal locally WITHOUT piping it to the chat agent.
+
+**Pipeline self-test (pure local, no flyctl needed)**:
+```text
+# Equivalent to `make fly-secrets-dry-run` minus the bash wrapper's flyctl pre-flight.
+# Verified 2026-07-14 on the synthetic shape-valid fixture: exit code 0, 15 keys validated.
+# The bash wrapper (make fly-secrets-dry-run) and the parser-direct (this snippet) share
+# the SAME _parse_envfile.py contract; the regression suite scripts/test_parse_envfile.py
+# pins the contract with 15 invariant tests.
+umask 077
+python3 scripts/_parse_envfile.py .env.production dry-run instaedit-login scripts \
+  2>&1 >/dev/null
+# Expected: exit 0 + redacted preview `KEY = first3***last3 (len=N)` per key on stderr.
+# Synthetic fixture leak-audit (2026-07-14): none of the 7 known fixture strings appeared
+# in stderr; 15 `len=N` preview entries emitted; stdout was 0 bytes.
+```
+
+**Operator-sequence prerequisite (sandbox-blocked steps)**:
+The push + verify + deploy chain (`make fly-secrets` + `make fly-secrets-verify` + `make fly-deploy`) requires an authenticated `flyctl` session. The bash wrapper pre-flight `[[ -x ./scripts/set-fly-secrets.sh ]]` + `command -v flyctl` + `flyctl auth whoami` gates the actual `flyctl secrets set --stage -` push; the dry-run validates the .env shape upstream of any flyctl call. Pipeline parity is guaranteed by `scripts/test_parse_envfile.py` (15 regression tests pin the contract). To execute the push: complete steps 4–5 of the operator next-steps block (see the `Suggest followups` of the prior turn).
+
 ## 4. First deploy (the canonical pipeline)
 
 ```bash
