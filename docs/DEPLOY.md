@@ -35,7 +35,7 @@ Tools + accounts required:
 
 ## 1.5 DNS delegation (canonical) — `instaedit.org`
 
-Quote minimally here for the deploy path; the **full DNS runbook (cert renewal, failure recovery, monitoring) lives in [docs/OPERATIONS.md §1](./OPERATIONS.md#1-dns-records-instaeditorg)**.
+Records table below is now authoritative for ALL 7 records (Vercel + Fly + email deliverability). The **full DNS runbook (cert renewal, failure recovery, DMARC progression, Gmail inbox test) lives in [docs/OPERATIONS.md §1 + §7](./OPERATIONS.md#1-dns-records-instaeditorg)** — the table here is the quick-reference; the runbook is the playbook.
 
 | Host | Type | Value | TTL | Purpose |
 |------|------|-------|-----|---------|
@@ -45,7 +45,9 @@ Quote minimally here for the deploy path; the **full DNS runbook (cert renewal, 
 | `_vercel.instaedit.org` | `TXT` | `vc-domain-verify=<token-from-Vercel>` | 300 | Vercel domain-ownership challenge. Token is surfaced in Vercel → Project → Settings → Domains; paste as-is. |
 | `instaedit.org` (apex) | `CAA` | `0 issue "letsencrypt.org"` | 3600 | Restrict cert issuance to Let's Encrypt (both Fly and Vercel use LE). |
 | `instaedit.org` (apex) | `CAA` | `0 iodef "mailto:security@instaedit.org"` | 3600 | Incident reporting for unauthorized issuance attempts. |
-| `_dmarc.instaedit.org` | `TXT` | `v=DMARC1; p=reject; rua=mailto:security@instaedit.org` | 3600 | Anti-spoofing for `no-reply@instaedit.org`. Tighten to `p=quarantine` first if some legit mail relays reject `p=reject`. |
+| `instaedit.org` (apex) | `TXT` | `v=spf1 include:_spf.resend.com ~all` | 3600 | SPF for Resend (sender domain `no-reply@instaedit.org`). Use `~all` (soft-fail) during the 2-4 weeks warm-up; flip to `-all` (hard-fail) after first month clean. **Note:** include host is `_spf.resend.com` (with `_spf.` prefix), not bare `resend.com` — this is the 2026 Resend canonical. |
+| `<selector>._domainkey.instaedit.org` | `CNAME` | `<selector>.dkim.resend.com.` | 3600 | DKIM rotation. **The `<selector>` is assigned by Resend when you add the domain** — look at the Resend dashboard → Domains → `instaedit.org` → Records BEFORE pasting. Typical values: `resend1`, `resend2`. The format `<selector>.dkim.resend.com.` is canonical in 2026; do NOT switch to a TXT-based DKIM record (some providers have migrated — Resend has NOT). |
+| `_dmarc.instaedit.org` | `TXT` | `v=DMARC1; p=none; rua=mailto:security@instaedit.org; ruf=mailto:security@instaedit.org; pct=100` | 3600 | **DMARC starts at `p=none`** for the 2-4 weeks warm-up window — Gmail requires a soft enforcement ramp for brand-new sender domains. Ramp schedule + reasoning: see [docs/OPERATIONS.md §7.2](./OPERATIONS.md#72-dmarc-progression-schedule). The rua/ruf reports go to `security@instaedit.org` — make sure that mailbox exists before flipping `p=quarantine` (otherwise reports get rejected by your own receiver). |
 
 Plus:
 - **DNSSEC** at the registrar (Cloudflare: one-click; Namecheap: opt-in via DS records). Required for the CAA records to be honored by resolvers.
@@ -205,7 +207,7 @@ get each:
 | 4 | `ACTIVE_ENCRYPTION_KEY_ID` | The uint32 id of the key in `ENCRYPTION_KEYS` used for **new** encryption. Must be present in the parsed `ENCRYPTION_KEYS` map (validated by `internal/config/config.go`) |
 | 5 | `S3_ACCESS_KEY` | Tigris dashboard → "Access Keys" — captured as part of step 5 above (the same keys feed the `./scripts/s3/provision-tigris.sh` dry-run / apply run). The bucket name is `instaedit-prod-media` (per step 5/a). NEVER regenerate keys without rotating BOTH Fly secrets + the Tigris dashboard key — a half-rotated setup will silently fail presigned uploads. |
 | 6 | `S3_SECRET_KEY` | Tigris dashboard → "Access Keys" — see row 5 above. After Tigris revokes an old key, run `./scripts/s3/provision-tigris.sh --apply` again with the new creds (the script is idempotent — a regeneration does not require re-creating the bucket). |
-| 7 | `EMAIL_PROVIDER_KEY` | Resend dashboard → "API Keys" (starts with `re_`) |
+| 7 | `EMAIL_PROVIDER_KEY` | Resend dashboard → "API Keys" (starts with `re_`). **Capture now, push to Fly LATER.** As of (post-commit 58742bf Resend unification), the backend does NOT yet wire this key — `internal/config/config.go` has no `EmailProvider*` fields and `pkg/api/magic_link.go::handleMagicLinkStart` returns the magic-link token in the response body (dev fallback). The provider key is needed RIGHT NOW ONLY for the Gmail inbox test in [`docs/OPERATIONS.md` §7.3](./OPERATIONS.md#73-gmail-inbox-test-protocol) and the future backend wiring (separate task). Capture NOW into password manager `instaedit-login/email/EMAIL_PROVIDER_KEY` (resend's dashboard → Create API Key, scope = `Sending Access` ONLY not `Full Access`); do NOT yet add to `.env.production` / `make fly-secrets` until the backend wires Resend. Tracking defaults (open + click) MUST be `false` for transactional magic-link emails — see [`docs/OPERATIONS.md` §7.4](./OPERATIONS.md#74-tracking-verification). |
 | 8 | `META_APP_ID` | Meta Developer Console → your app → Settings → Basic |
 | 9 | `META_APP_SECRET` | Meta Developer Console → Settings → Basic → "Show" |
 | 10 | `FRONTEND_URL` | `https://app.instaedit.org` |
