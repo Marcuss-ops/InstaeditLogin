@@ -111,7 +111,7 @@ def test_01_happy_path_dry_run_emits_nothing_to_stdout() -> None:
 
 
 def test_02_happy_path_apply_emits_all_27_key_val_lines() -> None:
-    """Valid env in apply mode: rc=0, all 24 KEY=VAL lines on stdout, no leak to stderr."""
+    """Valid env in apply mode: rc=0, all 27 KEY=VAL lines on stdout, no leak to stderr."""
     env = make_env(valid_env())
     rc, out, err = run_parser(env, "apply")
     assert rc == 0, f"rc=0 expected, got {rc}; stderr: {err}"
@@ -507,7 +507,7 @@ def test_13_non_uint32_encryption_key_id_rejected() -> None:
 
 ALL_TESTS = [
     test_01_happy_path_dry_run_emits_nothing_to_stdout,
-    test_02_happy_path_apply_emits_all_24_key_val_lines,
+    test_02_happy_path_apply_emits_all_27_key_val_lines,
     test_03_dollar_var_preserved_literally,
     test_04_crlf_line_endings,
     test_05_export_prefix,
