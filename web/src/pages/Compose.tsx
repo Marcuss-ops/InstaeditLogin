@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, ChevronLeft, Clock, Save, Send, Sparkles } from "lucide-react";
 import { Nav } from "../components/Nav";
+import { Skeleton } from "../components/feedback";
 import { ApiError, authedFetch } from "../lib/auth";
 import { PROVIDERS, getProvider, type ProviderId } from "../lib/providers";
 
@@ -253,9 +254,12 @@ export function Compose() {
           }}
         >
           {loadingMeta ? (
-            <div className="flex items-center justify-center py-10 gap-3">
-              <div className="w-8 h-8 rounded-full border-4 border-neutral-200 border-t-black animate-spin" />
-              <p className="text-[13px] text-neutral-500">Loading workspaces…</p>
+            <div className="space-y-5" data-testid="compose-loading">
+              <Skeleton variant="text" width="20%" />
+              <Skeleton variant="text" width="80%" />
+              <Skeleton variant="text" width="60%" />
+              <Skeleton variant="card" height={120} />
+              <Skeleton variant="text" width="40%" />
             </div>
           ) : (
             <div className="space-y-5">

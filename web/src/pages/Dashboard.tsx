@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { Nav } from "../components/Nav";
+import { Skeleton, ErrorState } from "../components/feedback";
 import { getProvider, type ProviderId } from "../lib/providers";
 import {
   ApiError,
@@ -159,27 +160,19 @@ export function Dashboard() {
           </div>
 
           {state.kind === "loading" && (
-            <div className="flex flex-col items-center justify-center py-20 gap-3">
-              <div className="w-10 h-10 rounded-full border-4 border-neutral-200 border-t-black animate-spin" />
-              <p className="text-[14px] text-neutral-500">Loading your accounts…</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4" data-testid="accounts-loading">
+              <Skeleton variant="card" height={88} />
+              <Skeleton variant="card" height={88} />
             </div>
           )}
 
           {state.kind === "error" && (
-            <div className="bg-white border border-neutral-200 rounded-xl p-8 text-center">
-              <p className="text-red-500 font-semibold text-[15px] mb-1">
-                Couldn't load accounts
-              </p>
-              <p className="text-[14px] text-neutral-500 mb-5">{state.message}</p>
-              <button
-                type="button"
-                onClick={() => void loadAccounts()}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-black text-white text-[14px] font-semibold hover:bg-neutral-800 transition-colors"
-              >
-                <RefreshCw size={14} />
-                Try again
-              </button>
-            </div>
+            <ErrorState
+              title="Couldn't load accounts"
+              message={state.message}
+              onRetry={() => void loadAccounts()}
+              retryLabel="Try again"
+            />
           )}
 
           {state.kind === "backend_offline" && (

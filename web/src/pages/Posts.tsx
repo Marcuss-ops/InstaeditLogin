@@ -14,6 +14,7 @@ import {
   Send,
 } from "lucide-react";
 import { Nav } from "../components/Nav";
+import { Skeleton, ErrorState, EmptyState } from "../components/feedback";
 import { authedFetch, ApiError, AuthError } from "../lib/auth";
 import { cn } from "../lib/utils";
 
@@ -412,40 +413,35 @@ export function Posts() {
 
         <section className="pb-12">
           {state.kind === "loading" && (
-            <div className="flex flex-col items-center justify-center py-20 gap-3">
-              <div className="w-10 h-10 rounded-full border-4 border-neutral-200 border-t-black animate-spin" />
-              <p className="text-[14px] text-neutral-500">Loading posts…</p>
+            <div className="grid gap-3" data-testid="posts-loading">
+              <Skeleton variant="card" height={88} />
+              <Skeleton variant="card" height={88} />
+              <Skeleton variant="card" height={88} />
             </div>
           )}
 
           {state.kind === "error" && (
-            <div className="bg-white border border-neutral-200 rounded-xl p-8 text-center">
-              <p className="text-red-500 font-semibold text-[15px] mb-1">Couldn't load posts</p>
-              <p className="text-[14px] text-neutral-500 mb-5">{state.message}</p>
-              <button
-                type="button"
-                onClick={() => void loadAll()}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-black text-white text-[14px] font-semibold hover:bg-neutral-800 transition-colors"
-              >
-                <RefreshCw size={14} /> Retry
-              </button>
-            </div>
+            <ErrorState
+              title="Couldn't load posts"
+              message={state.message}
+              onRetry={() => void loadAll()}
+            />
           )}
 
           {state.kind === "empty" && (
-            <div className="bg-white border border-dashed border-neutral-300 rounded-xl p-12 text-center">
-              <CircleDashed size={32} className="mx-auto text-neutral-300 mb-3" />
-              <h3 className="font-bold text-[16px] text-black mb-1">No posts yet</h3>
-              <p className="text-[14px] text-neutral-500 mb-5">
-                Compose your first post and publish to a connected account.
-              </p>
-              <Link
-                to="/compose"
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-black text-white text-[14px] font-semibold hover:bg-neutral-800 transition-colors no-underline"
-              >
-                <Sparkles size={14} /> Open composer
-              </Link>
-            </div>
+            <EmptyState
+              title="No posts yet"
+              description="Compose your first post and publish to a connected account."
+              icon={<CircleDashed size={32} />}
+              cta={
+                <Link
+                  to="/compose"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-black text-white text-[14px] font-semibold hover:bg-neutral-800 transition-colors no-underline"
+                >
+                  <Sparkles size={14} /> Open composer
+                </Link>
+              }
+            />
           )}
 
           {state.kind === "ready" && filtered.length === 0 && (

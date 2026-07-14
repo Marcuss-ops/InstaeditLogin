@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { Nav } from "../components/Nav";
+import { EmptyState, ErrorState, Skeleton } from "../components/feedback";
 import { ApiError, authedFetch } from "../lib/auth";
 import { cn } from "../lib/utils";
 
@@ -190,6 +191,10 @@ function WorkspacesTab({ showToast }: { showToast: (t: Toast) => void }) {
     }
   }, []);
 
+  // Wrap the local loader into a stable retry fn so the shared
+  // ErrorState component can re-call it without each caller re-typing.
+  const retry = () => void load();
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -294,14 +299,28 @@ function WorkspacesTab({ showToast }: { showToast: (t: Toast) => void }) {
           </button>
         </div>
         {list === null && (
-          <div className="py-6 text-center text-[13px] text-neutral-500">Loading…</div>
+          <div className="py-6 flex justify-center" data-testid="workspaces-loading">
+            <Skeleton variant="card" height={36} width="60%" />
+          </div>
         )}
         {error && (
-          <div className="py-6 text-center text-[13px] text-red-600">{error}</div>
+          <div className="py-4" data-testid="workspaces-error">
+            <ErrorState
+              title="Couldn't load workspaces"
+              message={error}
+              onRetry={retry}
+              retryLabel="Try again"
+              className="!p-5 !text-left"
+            />
+          </div>
         )}
         {list !== null && list.length === 0 && (
-          <div className="py-6 text-center text-[13px] text-neutral-500">
-            No workspaces yet.
+          <div className="py-4">
+            <EmptyState
+              title="No workspaces yet"
+              description="Create one above to start grouping accounts."
+              className="!p-6"
+            />
           </div>
         )}
         {list !== null && list.length > 0 && (
@@ -361,6 +380,10 @@ function ApiKeysTab({ showToast }: { showToast: (t: Toast) => void }) {
       setList([]);
     }
   }, []);
+
+  // Wrap the local loader into a stable retry fn so the shared
+  // ErrorState component can re-call it without each caller re-typing.
+  const retry = () => void load();
 
   useEffect(() => {
     void load();
@@ -560,13 +583,29 @@ function ApiKeysTab({ showToast }: { showToast: (t: Toast) => void }) {
           </button>
         </div>
         {list === null && (
-          <div className="py-6 text-center text-[13px] text-neutral-500">Loading…</div>
+          <div className="py-6 flex justify-center" data-testid="apikeys-loading">
+            <Skeleton variant="card" height={36} width="60%" />
+          </div>
         )}
         {error && (
-          <div className="py-6 text-center text-[13px] text-red-600">{error}</div>
+          <div className="py-4" data-testid="apikeys-error">
+            <ErrorState
+              title="Couldn't load API keys"
+              message={error}
+              onRetry={retry}
+              retryLabel="Try again"
+              className="!p-5 !text-left"
+            />
+          </div>
         )}
         {list !== null && list.length === 0 && (
-          <div className="py-6 text-center text-[13px] text-neutral-500">No API keys yet.</div>
+          <div className="py-4">
+            <EmptyState
+              title="No API keys yet"
+              description="Create one above to start using the API."
+              className="!p-6"
+            />
+          </div>
         )}
         {list !== null && list.length > 0 && (
           <ul className="divide-y divide-neutral-100" data-testid="apikey-list">
@@ -752,6 +791,10 @@ function WebhooksTab({ showToast }: { showToast: (t: Toast) => void }) {
     }
   }, []);
 
+  // Wrap the local loader into a stable retry fn so the shared
+  // ErrorState component can re-call it without each caller re-typing.
+  const retry = () => void load();
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -917,14 +960,28 @@ function WebhooksTab({ showToast }: { showToast: (t: Toast) => void }) {
           </button>
         </div>
         {list === null && (
-          <div className="py-6 text-center text-[13px] text-neutral-500">Loading…</div>
+          <div className="py-6 flex justify-center" data-testid="webhooks-loading">
+            <Skeleton variant="card" height={36} width="60%" />
+          </div>
         )}
         {error && (
-          <div className="py-6 text-center text-[13px] text-red-600">{error}</div>
+          <div className="py-4" data-testid="webhooks-error">
+            <ErrorState
+              title="Couldn't load webhooks"
+              message={error}
+              onRetry={retry}
+              retryLabel="Try again"
+              className="!p-5 !text-left"
+            />
+          </div>
         )}
         {list !== null && list.length === 0 && (
-          <div className="py-6 text-center text-[13px] text-neutral-500">
-            No webhook endpoints yet.
+          <div className="py-4">
+            <EmptyState
+              title="No webhook endpoints yet"
+              description="Add one above to start receiving events."
+              className="!p-6"
+            />
           </div>
         )}
         {list !== null && list.length > 0 && (
