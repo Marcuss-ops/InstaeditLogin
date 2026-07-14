@@ -14,6 +14,7 @@
  */
 
 import { API_BASE_URL } from "./api";
+import { toastBus } from "../components/toast";
 
 export type Session = {
   userId: number;
@@ -148,13 +149,33 @@ export async function authedFetch(
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-    credentials: "include",
-  });
+  // Network-level rejection (DNS, CORS pre-flight, offline). The toast
+  // fires BEFORE the re-throw so pages that don't have their own
+  // bespoke error UX (Login, Compose at the boundary) still surface a
+  // notification. Pages with `<ErrorState/>` get a parallel message
+  // — the toast is at viewport level (top-right), the ErrorState is
+  // in-place — both surfaces win.
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+      credentials: "include",
+    });
+  } catch (err) {
+    const message =
+      err instanceof TypeError
+        ? "Can't reach the server — check your connection."
+        : err instanceof Error
+          ? err.message
+          : "Network request failed.";
+    toastBus.push("error", message);
+    throw err;
+  }
 
   if (response.status === 401) {
+    // 401 path intentionally does NOT emit a toast — the caller
+    // navigates to /login instead, which already signals to the user.
     clearSessionCache();
     throw new AuthError();
   }
@@ -167,6 +188,10 @@ export async function authedFetch(
     } catch {
       // body wasn't JSON
     }
+    // Auto-emit BEFORE the throw so the global toast viewport
+    // picks up errors even on pages that forget to render a
+    // bespoke error state.
+    toastBus.push("error", message);
     throw new ApiError(response.status, message);
   }
 

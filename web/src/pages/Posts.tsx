@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Nav } from "../components/Nav";
 import { Skeleton, ErrorState, EmptyState } from "../components/feedback";
+import { toastBus } from "../components/toast";
 import { authedFetch, ApiError, AuthError } from "../lib/auth";
 import { cn } from "../lib/utils";
 
@@ -247,6 +248,12 @@ export function Posts() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Track each post's last-seen status so we can fire a global toast
+  // when the publish worker transitions queued → publishing → published,
+  // or surfaces a failure. The first loadAll only SEEDS the ref silently
+  // — initial mount is not a transition.
+  const prevStatusesRef = useRef<Record<number, string>>({});
+  const firstLoadRef = useRef(true);
 
   const loadAll = useCallback(async () => {
     abortRef.current?.abort();
@@ -262,11 +269,41 @@ export function Posts() {
       if (controller.signal.aborted) return;
       const postsData = (await postsResp.json()) as { posts: Post[] };
       const wsData = (await wsResp.json()) as { workspaces: Workspace[] };
+      const newPosts = postsData.posts ?? [];
       setWorkspaces(wsData.workspaces ?? []);
       setState({
-        kind: postsData.posts && postsData.posts.length > 0 ? "ready" : "empty",
-        posts: postsData.posts ?? [],
+        kind: newPosts.length > 0 ? "ready" : "empty",
+        posts: newPosts,
       } as FetchState);
+
+      // Publish-state diff (worker-driven transitions only):
+      //   queued → publishing → published  → toast.success
+      //   anything → failed                → toast.error
+      // `firstLoadRef` keeps initial-mount loads silent; the very
+      // first loadAll only seeds the ref. User-triggered mutations
+      // (Publish-now / Cancel / Retry clicks) still announce via the
+      // bespoke per-page `toast` state ("Action applied.") — that
+      // path covers the synchronous response to the click; the diff
+      // here covers the asynchronous worker follow-ups.
+      if (!firstLoadRef.current) {
+        for (const post of newPosts) {
+          const prev = prevStatusesRef.current[post.id];
+          if (!prev || prev === post.status) continue;
+          const label = post.title || `Post #${post.id}`;
+          if (
+            post.status === "published" &&
+            (prev === "queued" || prev === "publishing")
+          ) {
+            toastBus.push("success", `${label} published.`);
+          } else if (post.status === "failed" && prev !== "failed") {
+            toastBus.push("error", `${label} failed to publish.`);
+          }
+        }
+      }
+      firstLoadRef.current = false;
+      const nextStatuses: Record<number, string> = {};
+      for (const post of newPosts) nextStatuses[post.id] = post.status;
+      prevStatusesRef.current = nextStatuses;
     } catch (err) {
       if (controller.signal.aborted) return;
       if (err instanceof AuthError) return;

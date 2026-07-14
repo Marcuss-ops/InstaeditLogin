@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { Nav } from "../components/Nav";
 import { Skeleton, ErrorState } from "../components/feedback";
 import { API_BASE_URL } from "../lib/api";
-import { PROVIDERS, getProvider, type ProviderId } from "../lib/providers";
+import { PROVIDERS, type ProviderId } from "../lib/providers";
 import {
   ApiError,
   AuthError,
@@ -28,8 +28,6 @@ type FetchState =
   | { kind: "ready"; accounts: PlatformAccount[] }
   | { kind: "error"; message: string };
 
-type Toast = { kind: "ok" | "err"; message: string } | null;
-
 const NEW_BADGE_HOURS = 24;
 
 /**
@@ -46,47 +44,18 @@ const NEW_BADGE_HOURS = 24;
  *   2. Backend completes the OAuth dance, exchanges a one-time
  *      code via /auth/callback, then 302s the browser to
  *      /connections?provider={id}&status={connected|failed}.
- *   3. This page reads the query params on mount, surfaces a
- *      toast, and cleans the URL (history.replaceState) so a
- *      refresh doesn't re-trigger the toast.
+ *   3. `AuthCallback.tsx` emits the success/error toast BEFORE the
+ *      navigate, so the global ToastViewport (see web/src/components/toast/)
+ *      surfaces the OAuth outcome. This page no longer reads the
+ *      ?provider=…&status=… params — the only thing it needs from
+ *      the redirect is the fresh accounts list (loadAccounts() runs
+ *      on mount regardless). The URL params are preserved so anyone
+ *      reading the address bar still sees the OAuth-flow context.
  */
 export function Connections() {
-  const location = useLocation();
   const navigate = useNavigate();
   const [state, setState] = useState<FetchState>({ kind: "loading" });
-  const [toast, setToast] = useState<Toast>(null);
   const abortRef = useRef<AbortController | null>(null);
-
-  // Post-callback query params: read once, surface a toast, and
-  // strip the params from the URL so a refresh doesn't re-show
-  // the same toast. The OAuth callback (see AuthCallback) redirects
-  // here with ?provider=…&status=connected|failed on success.
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const provider = params.get("provider");
-    const status = params.get("status");
-    if (!provider || !status) return;
-    const name = getProvider(provider)?.name ?? provider;
-    if (status === "connected") {
-      setToast({ kind: "ok", message: `${name} connected.` });
-    } else if (status === "failed" || status === "error") {
-      setToast({
-        kind: "err",
-        message: `${name} connection failed. Please try again.`,
-      });
-    }
-    // Strip the query params from the address bar without
-    // re-running this effect (location.search becomes "" so the
-    // next pass finds no params to react to).
-    window.history.replaceState({}, "", "/connections");
-  }, [location.search]);
-
-  // Auto-dismiss the toast after 4s.
-  useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), 4000);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
 
   const loadAccounts = useCallback(async () => {
     abortRef.current?.abort();
@@ -155,17 +124,6 @@ export function Connections() {
             Link your social profiles to publish from a single inbox.
           </p>
         </div>
-
-        {/* Toast */}
-        {toast && (
-          <div
-            role="status"
-            data-testid={`toast-${toast.kind}`}
-            className={`fixed bottom-6 right-6 z-50 px-4 py-2.5 rounded-xl text-[13px] shadow-lg text-white ${toast.kind === "ok" ? "bg-green-600" : "bg-red-600"}`}
-          >
-            {toast.message}
-          </div>
-        )}
 
         {/* Grid */}
         <section className="pb-12">

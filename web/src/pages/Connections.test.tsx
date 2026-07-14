@@ -141,7 +141,20 @@ describe("Connections page", () => {
     expect(screen.getByTestId("connection-card-tiktok")).toBeTruthy();
   });
 
-  it("surfaces a success toast when ?provider=…&status=connected is on the URL", async () => {
+  it("does not surface a bespoke toast for OAuth callback URLs (the global ToastViewport owns OAuth outcomes now)", async () => {
+    // OAuth-callback outcomes used to surface a bespoke useState toast
+    // keyed on the URL params; that bespoke toast was migrated to the
+    // global <ToastViewport/> via <ToastProvider/> in App.tsx. This
+    // test pins the migration: the Connections page itself must not
+    // render any toast markup for ?provider=…&status=… URLs. The
+    // global toast surface is covered by web/src/components/toast/.
+    //
+    // Note on the URL: the test harness here uses MemoryRouter, which
+    // does NOT sync initialEntries into `window.location` (jsdom's
+    // location is independent of the React Router history). We assert
+    // on the page DOM only; the URL preservation is a behavioral
+    // side-effect covered by code review (no `history.replaceState`
+    // call in Connections.tsx anymore).
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(SESSION_OK)
@@ -149,39 +162,6 @@ describe("Connections page", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderConnections(["/connections?provider=instagram&status=connected"]);
-    await waitFor(() => {
-      expect(screen.getByTestId("toast-ok").textContent).toMatch(
-        /Instagram connected/,
-      );
-    });
-    // URL is cleaned so a refresh doesn't re-trigger the toast.
-    expect(window.location.search).toBe("");
-  });
-
-  it("surfaces an error toast when ?provider=…&status=failed is on the URL", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(SESSION_OK)
-      .mockResolvedValueOnce(NO_ACCOUNTS);
-    vi.stubGlobal("fetch", fetchMock);
-
-    renderConnections(["/connections?provider=tiktok&status=failed"]);
-    await waitFor(() => {
-      expect(screen.getByTestId("toast-err").textContent).toMatch(
-        /TikTok connection failed/,
-      );
-    });
-    expect(window.location.search).toBe("");
-  });
-
-  it("ignores unknown status values and shows no toast", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(SESSION_OK)
-      .mockResolvedValueOnce(NO_ACCOUNTS);
-    vi.stubGlobal("fetch", fetchMock);
-
-    renderConnections(["/connections?provider=instagram&status=banana"]);
     await waitFor(() => {
       expect(screen.getByTestId("connections-grid")).toBeTruthy();
     });

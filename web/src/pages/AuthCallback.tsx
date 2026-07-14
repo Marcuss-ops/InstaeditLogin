@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE_URL } from "../lib/api";
 import { clearSessionCache } from "../lib/auth";
+import { useToast } from "../components/toast";
+import { getProvider, type ProviderId } from "../lib/providers";
 
 type CallbackStatus = "processing" | "success" | "error";
 
@@ -29,6 +31,7 @@ export function AuthCallback() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<CallbackStatus>("processing");
   const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -37,10 +40,11 @@ export function AuthCallback() {
     const provider = params.get("provider") ?? "";
 
     if (!code && !token) {
+      const message =
+        "The callback did not include a code or a magic-link token. Please try again from the login page.";
       setStatus("error");
-      setError(
-        "The callback did not include a code or a magic-link token. Please try again from the login page.",
-      );
+      setError(message);
+      toast.error(message);
       return;
     }
 
@@ -64,8 +68,10 @@ export function AuthCallback() {
           setStatus("success");
           // Two landing sites:
           //   - OAuth (code present)  → /connections with the post-callback
-          //     query params so the Connections page can show a
-          //     connected/failed toast and clean the URL.
+          //     query params so Connections can refresh the accounts list.
+          //     The TOAST for OAuth success/failure is emitted HERE (in
+          //     the global ToastViewport, see web/src/components/toast/);
+          //     Renderer state survives across the navigate() call.
           //   - Magic-link (token)    → /accounts (the dashboard). The
           //     sign-in is the action; no provider was linked.
           //
@@ -78,12 +84,35 @@ export function AuthCallback() {
           // `?status=failed` and the user should see the failed
           // toast on /connections, not a misleading success.
           //
-          // Default to "" (no toast) rather than "connected": on a
-          // deploy-critical path, silence is debuggable, a false
+          // Default to "" (no toast on OAuth) rather than "connected":
+          // on a deploy-critical path, silence is debuggable, a false
           // success is the bug class we just fixed.
-          const status = params.get("status") ?? "";
+          const oauthStatus = params.get("status") ?? "";
+          if (code) {
+            // Only emit if the provider id is one we recognize — defends
+            // against ?provider=garbage URLs producing ". connected."
+            // (a literal dot + space + "connected.") from a missing-name
+            // fallback. Unknown providers and empty/missing status
+            // stay silent: the OAuth flow's outcome is unverified, so
+            // announcing success would be a shipping a false-positive.
+            const providerMeta = provider
+              ? getProvider(provider as ProviderId)
+              : undefined;
+            if (providerMeta) {
+              if (oauthStatus === "failed") {
+                toast.error(
+                  `${providerMeta.name} connection failed. Please try again from Connections.`,
+                );
+              } else if (oauthStatus === "connected") {
+                toast.success(`${providerMeta.name} connected.`);
+              }
+            }
+          } else {
+            // Magic-link sign-in completed; the toast confirms the action.
+            toast.success("Signed in.");
+          }
           const target = code
-            ? `/connections?provider=${encodeURIComponent(provider || "")}&status=${encodeURIComponent(status)}`
+            ? `/connections?provider=${encodeURIComponent(provider || "")}&status=${encodeURIComponent(oauthStatus)}`
             : "/accounts";
           navigate(target, { replace: true });
           return;
@@ -97,17 +126,18 @@ export function AuthCallback() {
         } catch {
           // body wasn't JSON
         }
+        const message = `Could not finalize sign-in: ${detail}. Please try again from the login page.`;
         setStatus("error");
-        setError(
-          `Could not finalize sign-in: ${detail}. Please try again from the login page.`,
-        );
+        setError(message);
+        toast.error(message);
       } catch (err) {
-        setStatus("error");
-        setError(
+        const message =
           err instanceof Error
             ? `Could not reach the backend: ${err.message}`
-            : "Could not reach the backend.",
-        );
+            : "Could not reach the backend.";
+        setStatus("error");
+        setError(message);
+        toast.error(message);
       }
     })();
   }, [navigate]);
