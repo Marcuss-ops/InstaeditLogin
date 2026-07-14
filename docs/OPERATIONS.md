@@ -136,6 +136,7 @@ Cross-references to the existing recovery scripts:
 |-------|--------------|---------|
 | **Postgres PITR + restore** | [`scripts/db/production-restore-drill.sh`](../scripts/db/production-restore-drill.sh) | First drill within 24h of first migration; then quarterly |
 | **Postgres health check** | [`scripts/db/check-postgres-health.sh`](../scripts/db/check-postgres-health.sh) | Pre-deploy + post-deploy + on incident |
+| **Tigris bucket provisioning** | [`scripts/s3/provision-tigris.sh`](../scripts/s3/provision-tigris.sh) | One-time at provisioning; re-run on key rotation; re-run on bucket-config drift |
 | **Fly app always-on contract** | `docs/DEPLOY.md` §7 (Troubleshooting) | Uptime monitor alerts if /health or /ready down > 2x consecutive ticks |
 | **Vercel SPA** | (manual) `curl -I https://app.instaedit.org/connections` returns 200 | On Vercel deploy + on incident |
 
@@ -146,6 +147,25 @@ Per-drill record-keeping paths:
 - Sentry issue `INFRA-FLY-CERT-*` / `INFRA-VERCEL-CERT-*` — automated captures
 
 ---
+
+## 4. Storage (Tigris / `instaedit-prod-media`)
+
+State (after `scripts/s3/provision-tigris.sh --apply`):
+
+- Single-origin CORS: `https://app.instaedit.org` / PUT-GET-HEAD / Expose ETag / MaxAge 3600
+- Lifecycle: AbortIncompleteMultipartUpload after 1 day (no orphan parts)
+- Versioning: Enabled (audit + accidental-delete recovery)
+- TLS-only policy: bucket-policy Denies `s3:*` when `aws:SecureTransport=false`
+- Max object size: 200 MB enforced TWICE — bucket policy Denies `PutObject` if `s3:content-length > 209715200`, AND the application clamps the presigned URL `Content-Length` via `STORAGE_MAX_UPLOAD_BYTES = 200 * 1024 * 1024` in `internal/config/config.go`.
+
+### 4.0 Storage recovery drills
+
+| Symptom | Fire alarm | Runbook |
+|---------|------------|---------|
+| Browser console: `CORS preflight failed for PUT /uploads/...` | Sentry issues spike from `app.instaedit.org` | Re-run `./scripts/s3/provision-tigris.sh --apply` (drift in CORSRules); if still failing check the Fly-side `VITE_API_BASE_URL` is `https://api.instaedit.org` (NOT `*.fly.dev` preview). |
+| Browser console: `413 Request Entity Too Large` from Tigris | Media upload metric spike | Verify `pkg/api/storage.go` STORAGE_MAX_UPLOAD_BYTES = 200 MB; if a user device is bypassing the presigned clamp (e.g. direct CORS upload from presign URL), the bucket-policy DefenseInDepth statement catches it. |
+| `aws s3api list-multipart-uploads` returns > 100 entries | (manual) Lifecycle rule is too lenient or unused parts piling up | Bump `AbortIncompleteMultipartUpload.DaysAfterInitiation` from 1 → 0.25 via `./scripts/s3/provision-tigris.sh --apply` (idempotent); confirm the new state with `aws s3api get-bucket-lifecycle-configuration`. |
+| `aws s3api get-bucket-policy` denials in `flyctl logs` (TLS / size) | Sentry `storage.policy.deny` capture tag | If the denial is for `aws:SecureTransport=false`, the SDK misconfigured — ad-hoc curl on `:80` of fly.storage.tigris.dev from a non-prod dev machine. If for `NumericGreaterThan`, the upstream uploader sends `> 200 MB` — not an actual bug; expected behavior. |
 
 ## 4. Monitoring baselines
 
@@ -210,6 +230,8 @@ from `production` to the auditor's confirmation line + closes the gate.
 | Fly cluster provisioning + size/HA/PITR/pooler/password | `scripts/db/provision-postgres-runbook.sh` + `docs/DEPLOY.md` §2 |
 | Postgres smoke check | `scripts/db/check-postgres-health.sh` |
 | Postgres restore drill | `scripts/db/production-restore-drill.sh` |
+| Tigris bucket provisioning | `scripts/s3/provision-tigris.sh` |
+| Tigris storage recovery drills | `docs/OPERATIONS.md` §4.0 |
 | Vercel project settings | `docs/DEPLOY.md` §9 |
 | Frontend build-time API URL validator | `web/scripts/verify-api-base-url.ts` |
 | Fly doc / API URL contract | `api/openapi.yaml` |

@@ -107,7 +107,7 @@ primary_region = "iad"
   # via flyctl secrets set (S3_ACCESS_KEY, S3_SECRET_KEY).
   S3_ENDPOINT = "https://fly.storage.tigris.dev"
   S3_REGION = "auto"
-  S3_BUCKET = "instaedit-media"
+  S3_BUCKET = "instaedit-prod-media"
 
   # Mail transactional provider (Blocco #2.3). Provider name + From
   # address are public; the actual API key (EMAIL_PROVIDER_KEY) is

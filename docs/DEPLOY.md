@@ -132,10 +132,57 @@ flyctl apps create instaedit-login
 #    # The script prints a copy-pasteable `fly postgres destroy ...` command
 #    # for cleanup; do NOT auto-destroy (operator must type --yes).
 
-# 5. Tigris bucket: sign up at https://tigrisdata.com, create a
-    # bucket named e.g. "instaedit-prod-uploads", copy the Access
-#    Key + Secret Key from the dashboard. These are S3_ACCESS_KEY
-#    + S3_SECRET_KEY.
+# 5. Tigris bucket: sign up at https://tigrisdata.com, generate Access
+#    Key + Secret Key from the dashboard; capture BOTH in the password
+#    manager under `instaedit-login/s3/<key>` BEFORE running the
+#    provisioning script (the script reads them from env, never CLI args).
+#
+#    The full canonical bucket-setup runbook lives at
+#    ./scripts/s3/provision-tigris.sh — print it once and step through it.
+#    Final bucket state (the runbook is idempotent + dry-run-by-default):
+#
+#       a) Name                = instaedit-prod-media   (matches fly.toml
+#         S3_BUCKET = "instaedit-prod-media"; do NOT use instaedit-media
+#         or any non-canonical name — the backend / asset_repo invariants
+#         assume the exact name once GIN_MODE=release)
+#       b) Endpoint            = fly.storage.tigris.dev (public, lives in
+#         fly.toml [env] S3_ENDPOINT; not a secret)
+#       c) CORS                = single-origin https://app.instaedit.org,
+#         methods PUT/GET/HEAD, Expose ETag, MaxAgeSeconds=3600
+#         (the application / CSRF contract REQUIRES no other origins; adding
+#         the Vercel preview URL would leak the prod bucket to PRs)
+#       d) Lifecycle           = AbortIncompleteMultipartUpload after 1 day
+#         (no orphan parts from cancelled uploads; no need for a separate
+#         bucket-cleanup cron)
+#       e) Versioning          = Enabled    (production media + audit
+#         trail; protects against accidental overwrite / delete)
+#       f) TLS-only            = bucket policy Denies s3:* when
+#         aws:SecureTransport=false (defense-in-depth — the SDK already
+#         uses HTTPS only)
+#       g) Max object size     = 200 MB enforced TWICE: (1) Bucket policy
+#         Denies PutObject if s3:content-length > 209715200;
+#         (2) backend presigned URL issuance (pkg/api/storage.go) clamps
+#         Content-Length to STORAGE_MAX_UPLOAD_BYTES = 200 * 1024 * 1024.
+#
+#    Run from your laptop AFTER postgres smoke check (§2 step 3) succeeds:
+#
+#       cd InstaeditLogin
+#       AWS_ACCESS_KEY_ID=<tigris-access-key> \
+#       AWS_SECRET_ACCESS_KEY=<tigris-secret-key> \
+#           ./scripts/s3/provision-tigris.sh          # dry-run; prints intent
+#       # Expected: "DRY-RUN COMPLETE — no mutations."
+#       #            + 6 steps listed, each prefixed with "→ would"
+#
+#       # Verify the dry-run output looks sane, THEN:
+#       AWS_ACCESS_KEY_ID=<tigris-access-key> \
+#       AWS_SECRET_ACCESS_KEY=<tigris-secret-key> \
+#           ./scripts/s3/provision-tigris.sh --apply  # commits state
+#       # Expected: "✓ PROVISIONING COMPLETE" + 6 ✓ GREEN steps + smoke PASS.
+#
+#    The script also runs a write+head+delete round-trip under the
+#    `ops-smoke-test-<UTC>.txt` key. Anything else = FAIL. Capture the
+#    S3_ACCESS_KEY + S3_SECRET_KEY values in the password manager
+#    BEFORE running this — they never appear in script output.
 ```
 
 > The `*_REDIRECT_URI` values in step 3 below MUST also be registered
@@ -156,8 +203,8 @@ get each:
 | 2 | `JWT_SECRET` | `openssl rand -hex 32` — **separate from dev** |
 | 3 | `ENCRYPTION_KEYS` | CSV string: `id:base64key,id:base64key,…` where each `id` is a **uint32** (e.g. `1`, `2`) and each `key` is the base64 of a 32-byte AES-256-GCM key. See "ENCRYPTION_KEYS format" below for the canonical `openssl` one-liner |
 | 4 | `ACTIVE_ENCRYPTION_KEY_ID` | The uint32 id of the key in `ENCRYPTION_KEYS` used for **new** encryption. Must be present in the parsed `ENCRYPTION_KEYS` map (validated by `internal/config/config.go`) |
-| 5 | `S3_ACCESS_KEY` | Tigris dashboard → "Access Keys" |
-| 6 | `S3_SECRET_KEY` | Tigris dashboard → "Access Keys" |
+| 5 | `S3_ACCESS_KEY` | Tigris dashboard → "Access Keys" — captured as part of step 5 above (the same keys feed the `./scripts/s3/provision-tigris.sh` dry-run / apply run). The bucket name is `instaedit-prod-media` (per step 5/a). NEVER regenerate keys without rotating BOTH Fly secrets + the Tigris dashboard key — a half-rotated setup will silently fail presigned uploads. |
+| 6 | `S3_SECRET_KEY` | Tigris dashboard → "Access Keys" — see row 5 above. After Tigris revokes an old key, run `./scripts/s3/provision-tigris.sh --apply` again with the new creds (the script is idempotent — a regeneration does not require re-creating the bucket). |
 | 7 | `EMAIL_PROVIDER_KEY` | Resend dashboard → "API Keys" (starts with `re_`) |
 | 8 | `META_APP_ID` | Meta Developer Console → your app → Settings → Basic |
 | 9 | `META_APP_SECRET` | Meta Developer Console → Settings → Basic → "Show" |
