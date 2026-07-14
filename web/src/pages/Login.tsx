@@ -57,7 +57,7 @@ export function extractMagicLinkToken(raw: string): string {
  *   1. User enters email + clicks "Send magic link".
  *   2. POST /api/v1/auth/magic-link/start → the response includes
  *      magic_link_token only in dev. In production a transactional
- *      mailer (Postmark, SES, …) emits the link to
+ *      mailer (Resend, SES, …) emits the link to
  *      {FRONTEND_URL}/auth/callback?token=xxx.
  *   3. The user can either:
  *        a) click the link in the email → /auth/callback → /verify

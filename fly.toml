@@ -114,7 +114,7 @@ primary_region = "iad"
   # set via flyctl secrets set. Worker reads outbox events and
   # invokes the sender; api reads the same config for ad-hoc
   # transactional templates.
-  EMAIL_PROVIDER = "postmark"
+  EMAIL_PROVIDER = "resend"
   EMAIL_FROM = "no-reply@instaedit.org"
   EMAIL_FROM_NAME = "InstaEdit"
 
