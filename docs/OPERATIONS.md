@@ -149,6 +149,146 @@ Per-drill record-keeping paths:
 - `ops/vercel-deploys-<YYYY-MM>.log` — manual smoke captures
 - Sentry issue `INFRA-FLY-CERT-*` / `INFRA-VERCEL-CERT-*` — automated captures
 
+### 3.1 Postgres PITR drill — canonical step-by-step procedure
+
+This subsection expands the one-line row from §3 (`production-restore-drill.sh`) into the full operator-side choreography. The script itself encodes the assertions (schema fingerprint, fork latency, row counts, sslmode, same-host rejection); this section is the HUMAN-side choreography around it.
+
+#### 3.1.1 Cadence
+
+| Trigger | Frequency |
+|---------|-----------|
+| **First drill** | Within 24h of the first migration deploy (after `make fly-deploy` exits 0 + scripts/db/check-postgres-health.sh shows `9 canary tables present`). |
+| **Baseline** | Quarterly (every 90 days). Track schedule in `ops/restore-drill-cadence.json` (operator-maintained). |
+| **On incident** | Within 48h of any operational incident that touched the cluster (failover, manual restart, OOM, lock timeouts > 30s). The drill proves the recovery path STILL works after the incident. |
+| **Pre-audit** | 7 days before any external security review (SOC2, ISO27001, etc.) — auditors expect a recent restore drill on file. |
+
+#### 3.1.2 Pre-flight checklist
+
+```bash
+# 1. Operator auth + tooling (the drill script refuses to run without them)
+flyctl version              # >= 0.10
+flyctl auth whoami          # must show your org handle
+command -v psql python3     # both must be on PATH
+command -v openssl          # for password generation if re-provisioning
+
+# 2. DB-name discipline assertion (CANONICAL production name)
+# This MUST read "instaedit-production". If it reads "instaedit_login"
+# (dev) or "instaedit_login_test" or anything else, you are pointing at the
+# WRONG cluster — abort and re-pull the prod URL from your password manager.
+PROD_DSN=$(cat ~/.fly-secrets-database-url-pooled.txt)
+echo "$PROD_DSN"
+psql "$PROD_DSN" -tA -c "SELECT current_database();"
+#   expected: instaedit-production
+#   TERRIBLE if: instaedit_login, instaedit_login_test, postgres, template1
+
+# 3. Confirm migrations are at-rest before the drill. The migration runner
+#    does NOT maintain a tracking table (each .sql is idempotent IF NOT
+#    EXISTS — see internal/database/migrate_check.go line 17); the actual
+#    readiness probe is the CanaryTables slice:
+#       var CanaryTables = []string{"users","tokens","workspaces","posts",
+#                                    "post_targets","webhook_deliveries"}
+#    Replicate that probe here so the operator sees the same diagnostic
+#    the app's /ready handler reports:
+#    NOTE: must mirror internal/database/migrate_check.go::CanaryTables —
+#    update BOTH together if the slice grows. A drift here silently makes
+#    the query return 0 even when a new canary table is missing.
+psql "$PROD_DSN" -tA -c "
+  SELECT count(*)
+    FROM unnest(ARRAY['users','tokens','workspaces','posts',
+                      'post_targets','webhook_deliveries']) t(tbl)
+   WHERE to_regclass('public.' || t.tbl) IS NULL;"
+#   expected: 0. If > 0 a release_command ./migrate is mid-deploy or
+#   failed partway; defer until /health reports 200 AND
+#   scripts/db/check-postgres-health.sh exits 0.
+
+# 4. Confirm the api + worker + outbox dispatcher are healthy
+curl -i https://api.instaedit.org/api/v1/health
+#   expected: HTTP 200 (api + worker both up)
+```
+
+#### 3.1.3 Step-by-step procedure
+
+```bash
+# ─── STEP 1: create the fork cluster ─────────────────────────────────
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+FORK_NAME="instaedit-restore-drill-$TS"
+flyctl postgres fork \
+    --from instaedit-production \
+    --to "$FORK_NAME" \
+    --region iad
+# Wait until Fly prints the POOLED URL of the new fork. It usually takes
+# 30-180s — the drill script will reject a stale URL (the fork is not yet
+# serving connections).
+
+# ─── STEP 2: pocket the FORK DSN ────────────────────────────────────
+# NEVER paste into shell history. `read -rs` keeps it out of `history`.
+read -rs FORK_DSN
+export FORK_DSN
+# Verify sslmode is require (NEVER disable on prod-shaped targets).
+[[ "$FORK_DSN" =~ sslmode=require ]] || { echo "FAIL: sslmode not require"; exit 1; }
+
+# ─── STEP 3: run the drill ──────────────────────────────────────────
+DATABASE_URL="$FORK_DSN" \
+DATABASE_URL_PROD="$PROD_DSN" \
+    ./scripts/db/production-restore-drill.sh
+# Exit codes:
+#   0  drill PASS. The script prints a markdown block ready to paste into
+#      ops/restore-drill-$TS.md. Save it BEFORE destroying the fork.
+#   1  pre-flight failure (psql/python missing, urls malformed,
+#      same host, sslmode=disable on either).
+#   3  drill failure (schema fingerprint mismatch, populated fork,
+#      latency out of envelope). DO NOT destroy the fork yet — see §3.1.4.
+
+# ─── STEP 4: save the report ────────────────────────────────────────
+mkdir -p ops
+# The script prints a markdown block on PASS. Copy it into ops/.
+# On FAIL: same block with the failure mode under a banner; save BEFORE
+# destroying the fork (post-mortem needs the breach/avoidance record).
+
+# ─── STEP 5: destroy the fork ────────────────────────────────────────
+# NEVER auto-destroyed — the operator must type the cluster name + --yes
+# explicitly. A fat-finger or typosquatted name would hit another
+# production-shaped target; the explicit confirmation prompt is the
+# safety net.
+flyctl postgres destroy --name "$FORK_NAME" --yes
+
+# ─── STEP 6: append to ops/restore-drill-cadence.json ───────────────
+# Track the verdict so the next quarterly cadence check is defensible
+# ("quarterly is overdue but drilled less than 30d ago"). Schema:
+# { "ts": "<UTC>", "verdict": "PASS"|"FAIL", "mode": "<root cause on FAIL>",
+#   "operator": "<whoami>@<host>", "fork_destroyed": true|false }
+```
+
+#### 3.1.4 Common failure modes
+
+| Symptom | Root cause | Fix |
+|---------|------------|-----|
+| `FAIL: both DSNs point to the same host:port` | Operator pasted the prod URL into `--fork` (or vice-versa). The drill would have hit prod. | Re-create the fork; re-run with the FORK URI in `--fork` only. The script's host-extraction match is the safety net (not a soft warning). |
+| `Schema fingerprint MISMATCH` | (a) fork still spinning up (wait 60s + retry); (b) prod has a live migration in flight (deploy failed mid-migration — `scripts/db/check-postgres-health.sh` reports missing canary tables per [§3.1.2](#312-pre-flight-checklist) step 3; wait for /health=200 then retry); (c) fork was made from a stale PITR snapshot (< 1s drift same fingerprint OK; > 5s drift indicates snapshot lag). | DO NOT destroy the fork on this error. Wait 60s + re-run. If still mismatched after 5 minutes, the snapshot is the suspect — escalate to Fly support with the `prod_fp` + `fork_fp` values from the report. |
+| `Fork connect latency > 5000ms` | Fork VM still spinning up OR transient Fly infrastructure issue. | Wait 60s + re-run. > 30s latency typically means the fork hit infrastructure friction; destroy + re-fork if persistent. |
+| `curl https://api.instaedit.org/api/v1/health` returns 503 during pre-flight | API VM is mid-rolling-restart. NOT a drill blocker if the 5xx resolves within 30s. | If the API is permanently down, defer the drill until POST-INFRA-INCIDENT — running a drill against a degraded baseline pollutes the report. |
+| `~/.fly-secrets-database-url-pooled.txt` doesn't exist or is empty | Operator hasn't provisioned the prod cluster yet (steps 1-7 of `scripts/db/provision-postgres-runbook.sh`). | Defer the drill until after step 8 of the runbook completes AND `make fly-deploy` exits 0. |
+| `fly postgres fork` returns `Out of quota` or `permission denied` | The org's PG-quota is exhausted, OR the operator's role lacks `postgres:create`. | Contact org admin; do NOT create a fork through any other channel because the drill script will reject a fork from a non-Fly source (sslmode/discovery drift). |
+| `psql "$PROD_DSN" -c "SELECT current_database();"` returns `instaedit_login` | Operator pasted the dev `.env`'s URL into the password manager, OR the dev `.env.production` was generated from a wrong template. | ABORT. Do NOT proceed with a dev-shaped prod URL. Re-pull from `instaedit-login/database-url/production/pooled` in your password manager; if missing, re-provision per `scripts/db/provision-postgres-runbook.sh`. |
+
+#### 3.1.5 Output contract
+
+After the drill completes (PASS or FAIL):
+
+- `ops/restore-drill-<UTC>.md` contains the report block including the `next step` command (always `flyctl postgres destroy --name <fork>` for cleanup).
+- A Sentry issue `INFRA-PG-RESTORE-DRILL-*` is filed MANUALLY by the operator ONLY on FAIL (the drill script is pure bash + psql + python3 and does NOT auto-capture to Sentry — the operator reviews the script's `cat` output, decides if the failure mode warrants an infrastructure issue, and files one with the verdict + failure-mode + report-file reference in the body). PASS drills don't generate Sentry noise.
+- `ops/restore-drill-cadence.json` (operator-maintained local file) gains a new entry documenting the timestamp + verdict + operator + fork-destroyed flag.
+
+#### 3.1.6 DB-name discipline (production convention)
+
+The canonical production cluster DB name is **`instaedit-production`** — NOT `instaedit_login` (dev), NOT `instaedit_login_test` (test), NOT `postgres` (Fly default), NOT `template1`. This invariant is enforced at THREE layers:
+
+1. **At provisioning** (`scripts/db/provision-postgres-runbook.sh` line 84): `CLUSTER_NAME="instaedit-production"`. Fly Postgres creates the default DB with the same name as the cluster, so DB name = cluster name = `instaedit-production`.
+2. **At smoke check** (`scripts/db/check-postgres-health.sh`): asserts the canary tables post-migration exist + the db name contains `prod` (NOT `dev`, NOT `instaedit_login`). Run `psql "$DATABASE_URL" -tA -c "SELECT current_database();"` and confirm the output.
+3. **At restore drill** (`scripts/db/production-restore-drill.sh`): the schema fingerprint is `SHA-256(enums ∪ columns ∪ indexes)` — a misconfigured dev cluster would produce a DIFFERENT fingerprint and the drill would FAIL with SCHEMA MISMATCH.
+
+**Anti-pattern**: pasting `postgresql://instaedit:instaedit_dev_pwd@localhost:5432/instaedit_login?sslmode=disable` (from `.env`) into `.env.production`. The parser (`scripts/_parse_envfile.py`) rejects `sslmode=disable` AND the cluster-name mismatch fires on first restore drill, but the API may have ALREADY pulled real production OAuth tokens into a dev-shaped DB before either gate trips (catastrophic privacy violation). The pre-flight check in §3.1.2 step 2 exists specifically to catch this BEFORE any API traffic flows.
+
 ---
 
 ## 4. Storage (Tigris / `instaedit-prod-media`)
@@ -235,7 +375,8 @@ Tick all of these before opening the app to real users:
 - [ ] Queue-lag + DLQ alerts firing on synthetic backlog (then cleared)
 - [ ] No `<access_token|refresh_token|password>.*` in `flyctl logs --app instaedit-login` output (privacy check)
 - [ ] SPF/DKIM/DMARC all pass `dig +short` for `instaedit.org` ✔
-- [ ] Restore drill completed + signed off (see §3)
+- [ ] Restore drill completed + signed off (see §3 + full procedure in §3.1)
+- [ ] DB-name discipline assertion: `psql "$DATABASE_URL" -tA -c "SELECT current_database();"` returns `instaedit-production` (NOT `instaedit_login` dev, NOT `instaedit_login_test` test). Confirmed at provisioning ([§3.1.6](#316-db-name-discipline-production-convention) layer 1) AND at smoke check ([§3.1.6](#316-db-name-discipline-production-convention) layer 2). Full 3-layer enforcement story (provisioning + smoke check + restore drill fingerprint) — see [§3.1.6](#316-db-name-discipline-production-convention).
 - [ ] Privacy policy + ToS + data-deletion page reachable (`https://app.instaedit.org/privacy`, `/tos`, `/data-deletion`)
 - [ ] Support email `security@instaedit.org` (or whatever was registered) auto-responds in <60s
 
@@ -396,7 +537,7 @@ The provider key has different capture semantics than the rest of the `.env.prod
 |---------|-----------|
 | Fly cluster provisioning + size/HA/PITR/pooler/password | `scripts/db/provision-postgres-runbook.sh` + `docs/DEPLOY.md` §2 |
 | Postgres smoke check | `scripts/db/check-postgres-health.sh` |
-| Postgres restore drill | `scripts/db/production-restore-drill.sh` |
+| Postgres restore drill (script + assertions) | `scripts/db/production-restore-drill.sh` + §3.1 below (canonical step-by-step procedure, cadence, pre-flight, common failure modes, DB-name discipline) | First drill within 24h of first migration; then quarterly; on any incident touching the cluster |
 | Tigris bucket provisioning | `scripts/s3/provision-tigris.sh` |
 | Post-deploy E2E smoke (Phase 9 sub-1-5+7) | `scripts/ops/post_deploy_smoke.sh` |
 | Workspace isolation test (Phase 9 sub-6) | `scripts/ops/workspace_isolation_test.sh` |
