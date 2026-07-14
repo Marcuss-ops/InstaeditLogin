@@ -40,19 +40,73 @@ Tools + accounts required:
 #    before any api/worker VM rolls out, per Blocco #4.1 contract).
 flyctl apps create instaedit-login
 
-# 2. Create the managed Postgres (Fly's "upstash-like" managed PG).
-flyctl postgres create --name instaedit-pg --region iad
-# Output: Connection string of the form
-#   postgres://<user>:<pass>@instaedit-pg.flycast:5432/instaedit?sslmode=disable
-# That's your DATABASE_URL.
+# 2. Provision the production database. The canonical walkthrough is
+#    ./scripts/db/provision-postgres-runbook.sh — print it once at the
+#    start of the session and step through it. Locked-in parameters
+#    (deviating from these means documenting why in a comment next to
+#    the runbook and re-committing):
+#
+#       a) Cluster name       = instaedit-production         (per spec;
+#         do NOT use instaedit-pg, instaedit-prod, or any non-spec name)
+#       b) Region              = iad                          (matches fly.toml
+#         primary_region so api/worker + pg share latency budget)
+#       c) VM                  = shared-cpu-1x / 1gb RAM     (cost-balanced
+#         for beta; upgradeable via dashboard without recreate)
+#       d) HA replicas         = 1                            (one standby
+#         for failover; ZERO = no auto-failover)
+#       e) PITR retention      = 14 days via dashboard         (Fly default
+#         is 7; bumping covers a 2-week incident window)
+#       f) Pooler              = built-in PgBouncer (port 6432)
+#         (app talks to the pooler; migrations go direct to bypass
+#         PgBouncer's DDL-incompatible txn model)
+#       g) Password            = openssl rand -base64 48       (384-bit;
+#         ONE password, NEVER reused from dev/staging, saved ONLY
+#         in the password manager — never in .env.example / git)
+#
+#    The command emits TWO connection strings — save BOTH in the
+#    password manager under separate keys:
+#
+#       DIRECT (admin / migrations):
+#         postgres://<user>:<pw>@instaedit-production.flycast:5432/<db>?sslmode=require
+#       POOLED  (app api + worker):
+#         postgres://<user>:<pw>@instaedit-production-bouncer.flycast:6432/<db>?sslmode=require&pgbouncer=true
+#
+#    The POOLED URL is what `make fly-secrets` will push into
+#    `DATABASE_URL` on the Fly app. The DIRECT URL stays in the
+#    operator's toolbelt only (runbook manual for migrations if
+#    release_command ever needs to connect with statement_timeout
+#    disabled).
 
-# 3. Attach the Postgres to the app (writes DATABASE_URL as a
-#    *secret* on the app — but the set-fly-secrets.sh script will
-#    re-set it from your .env.production, so this is a fallback).
-flyctl postgres attach instaedit-pg --app instaedit-login
+# 3. Smoke check the new cluster from your laptop BEFORE pushing secrets
+#    to Fly. This catches sslmode drift + connection issues BEFORE the
+#    first deploy attempts to apply migrations:
+#
+#       DATABASE_URL=<POOL-URL-FROM-PASSWORDMANAGER> \
+#           ./scripts/db/check-postgres-health.sh
+#    # Expected: "✓ sslmode=require" + "✓ server_version=16.x"
+#    #           + "✓ 0 of 9 canary tables present (pre-migration)"
+#
+#    After `make fly-deploy` succeeds, the same script run again will
+#    show "✓ 9 of 9 canary tables present (post-migration)".
 
-# 4. Tigris bucket: sign up at https://tigrisdata.com, create a
-#    bucket named e.g. "instaedit-prod-uploads", copy the Access
+# 4. Schedule the FIRST restore drill (mandatory — 24h after first
+#    migration). Fly supports PITR out-of-the-box via `fly postgres
+#    fork`. The drill script lives at ./scripts/db/production-restore-drill.sh:
+#
+#       FLY_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+#       fly postgres fork \
+#           --from instaedit-production \
+#           --to "instaedit-restore-drill-$FLY_TS" \
+#           --region iad
+#       # Wait for fork-ready (~30-180s). Fly prints the new fork's POOLED URI.
+#       DATABASE_URL_PROD=<PROD-POOL-URL> \
+#       DATABASE_URL=<FORK-POOL-URL> \#    ./scripts/db/production-restore-drill.sh
+#    # Expected: schema sha256 MATCH + row counts MATCH + verdict PASS.
+#    # The script prints a copy-pasteable `fly postgres destroy ...` command
+#    # for cleanup; do NOT auto-destroy (operator must type --yes).
+
+# 5. Tigris bucket: sign up at https://tigrisdata.com, create a
+    # bucket named e.g. "instaedit-prod-uploads", copy the Access
 #    Key + Secret Key from the dashboard. These are S3_ACCESS_KEY
 #    + S3_SECRET_KEY.
 ```
@@ -71,7 +125,7 @@ get each:
 
 | # | Secret | Where to get it |
 |---|--------|-----------------|
-| 1 | `DATABASE_URL` | Step 2's `flyctl postgres create` output (or Neon/Supabase dashboard) |
+| 1 | `DATABASE_URL` | **Pooled URL** from step 2 above (PgBouncer on Fly port 6432 — saves 1 round trip per worker start under burst load). Direct URL stays on the operator's machine only; migrations go direct via release_command. |
 | 2 | `JWT_SECRET` | `openssl rand -hex 32` — **separate from dev** |
 | 3 | `ENCRYPTION_KEYS` | CSV string: `id:base64key,id:base64key,…` where each `id` is a **uint32** (e.g. `1`, `2`) and each `key` is the base64 of a 32-byte AES-256-GCM key. See "ENCRYPTION_KEYS format" below for the canonical `openssl` one-liner |
 | 4 | `ACTIVE_ENCRYPTION_KEY_ID` | The uint32 id of the key in `ENCRYPTION_KEYS` used for **new** encryption. Must be present in the parsed `ENCRYPTION_KEYS` map (validated by `internal/config/config.go`) |

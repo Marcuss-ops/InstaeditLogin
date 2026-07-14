@@ -191,12 +191,16 @@ Vai su `/status` e leggi la ragione (es. `vercel_stale_deploy` vs `unreachable` 
 
 ## 11. (Opzionale) Setup produzione
 
+> **Provisioning canonico production Postgres (Fly cluster `instaedit-production` con size/HA/PITR/pooler/password discipline + restore drill)**: vedi docs/DEPLOY.md §2-§3 — runbook canonico con tutti i flag lockati e script di drill. Questa sezione è solo un sommario dei punti operativi distinti, NON duplica la procedura.
+
 Dopo che il flow locale funziona, per andare in produzione:
-- **Backend**: deploy su Railway/Render/Fly con `DATABASE_URL` + tutti i secret come env vars sul servizio
-- **Frontend**: deploy su Vercel (già configurato via `web/vercel.json`)
-- **Vercel env**: `VITE_API_BASE_URL` deve puntare all'URL pubblica del backend
-- **CORS**: nel backend `.env`, `CORS_ALLOWED_ORIGINS=https://instaedit.org,https://www.instaedit.org`
-- **Meta redirect URI**: aggiungi `https://api.instaedit.org/api/v1/auth/instagram/callback` alla console Meta
+- **Database Postgres**: `fly postgres create --name instaedit-production --region iad --vm-size shared-cpu-1x --vm-memory 1gb --initial-cluster-size 1 --pg-bouncer-enabled=true` (parametri lockati in `scripts/db/provision-postgres-runbook.sh`).
+- **Backend**: deploy su Fly.io via `make fly-deploy` (release_command `./migrate` gira prima dell'api/worker rollout).
+- **Frontend**: deploy su Vercel (già configurato via `web/vercel.json`).
+- **Vercel env**: `VITE_API_BASE_URL` deve puntare all'URL pubblica del backend.
+- **CORS**: nel backend `.env`, `CORS_ALLOWED_ORIGINS=https://instaedit.org,https://www.instaedit.org`.
+- **Meta redirect URI**: aggiungi `https://api.instaedit.org/api/v1/auth/instagram/callback` alla console Meta.
+- **Restore drill pre-launch**: `./scripts/db/production-restore-drill.sh` (Fly fork → smoke schema fingerprint → row count → report in `ops/restore-drill-<UTC>.md`).
 
 ---
 
