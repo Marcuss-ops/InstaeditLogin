@@ -187,6 +187,7 @@ State (after `scripts/s3/provision-tigris.sh --apply`):
 - [ ] **Dead-letter-queue alert**:
       `SELECT count(*) FROM publish_jobs WHERE status='dlq'` > 0 → alert.
 - [ ] **Refresh-token-failure alert** (Sentry capture event tag `auth.refresh.failed`).
+- [ ] **Log privacy assertion**: `make verify-log-redaction` runs cleanly on the live Fly.io logs in the last 1h (catches runtime leaks that the static CI grep cannot — see §4.3). Recommended cadence: after every `make fly-deploy` + weekly cron.
 
 ### 4.2 DNS / email hygiene
 
@@ -207,6 +208,20 @@ Backend logs MUST NOT include:
 - `password=...` from connection strings
 
 Automated guard: `grep -RnE '(refresh_token|jwt_secret|encryption_key|access_token)\\s*=' internal/` returns 0 hits in CI.
+
+---
+
+> **Operator-side Live Log Verifier** (`./scripts/obs/verify-log-redaction.sh`, wired as `make verify-log-redaction`): the static CI grep above proves the CODE doesn't hardcode sensitive variables, but does NOT cover runtime leaks (an operator typo in `slog.Warn("...", "token", token)` would not be caught statically). To prove the *running* deploy doesn't leak, the operator MUST periodically run this script:
+>
+> ```bash
+> make verify-log-redaction         # default: scan --since 1h
+> # or explicitly:
+> ./scripts/obs/verify-log-redaction.sh --apply --since 24h
+> ```
+>
+> The script streams `flyctl logs --app instaedit-login --since <window>` into a chmod-700 tmpdir (trap-cleaned on EXIT), greps against the canonical 7-pattern list (env var names + values, Resend `re_*` tokens, AWS `AKIA*` access keys, embedded DB URI passwords, literal `password=...`, `csrf_token=<hex>` URL params, `?token=<base64url>` magic-link tokens). It pipes each `grep` hit DIRECTLY into `awk` so the FULL secret-bearing line never enters a shell var; awk truncates to the first 80 chars + appends `***redacted***` so the operator NEVER sees actual captured secrets. Exit 0 if clean / exit 1 with sanitized snippet list + remediation pointers if any pattern hit.
+>
+> Wire into a weekly cron on the operator laptop so a future regression gets caught without a manual prompt. Cadence: after every `make fly-deploy` + weekly cron + on any `slog.Warn`/`slog.Info` regression PR.
 
 ---
 

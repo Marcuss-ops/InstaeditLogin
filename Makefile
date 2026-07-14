@@ -4,7 +4,8 @@
         docker-build-local-api docker-build-local-worker \
         fly-deploy fly-verify fly-help \
         fly-secrets fly-secrets-dry-run fly-secrets-verify fly-secrets-test \
-        ops-smoke ops-isolation ops-isolation-dry-run
+        ops-smoke ops-isolation ops-isolation-dry-run \
+        verify-log-redaction
 
 # Start the full local development stack modeled on Blocco #2.1's
 # production-true topology: 3 services (api + worker + migrate) plus
@@ -294,6 +295,27 @@ fly-secrets-test:
 		exit 1; \
 	fi
 	python3 scripts/test_parse_envfile.py
+
+# ──────────────────────────────────────────────────────────────────────────
+# Blocco #5.3: Operator-side observability + log-privacy assurance.
+#
+# `make verify-log-redaction` wraps `./scripts/obs/verify-log-redaction.sh --apply`
+# which streams `flyctl logs --app instaedit-login --since 1h` into a temp
+# file and greps against the 7 canonical privacy-contract patterns
+# documented in docs/OPERATIONS.md §4.3 + docs/DEPLOY.md §7.6. Use this
+# (a) after every `make fly-deploy` to confirm a fresh rollout hasn't
+# regressed the redaction discipline, and (b) weekly as a regression
+# tripwire. Exit codes propagate: 0 = clean / 1 = hit / 2 = no flyctl /
+# 3 = no auth / 4 = bad args. The script MUST NEVER print actual matched
+# secrets to stdout — only sanitized 80-char prefixes + ***redacted***.
+# ──────────────────────────────────────────────────────────────────────────
+verify-log-redaction:
+	@if [[ ! -x ./scripts/obs/verify-log-redaction.sh ]]; then \
+		echo "❌ scripts/obs/verify-log-redaction.sh not found or not executable"; \
+		echo "   Run: chmod +x scripts/obs/verify-log-redaction.sh"; \
+		exit 1; \
+	fi
+	./scripts/obs/verify-log-redaction.sh --apply
 
 # ────────────────────────────────────────────────────────────────────────
 # Blocco #5.1: Post-deploy operator runbooks.
