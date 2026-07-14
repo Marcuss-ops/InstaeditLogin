@@ -487,7 +487,248 @@ make fly-deploy
 
 ---
 
-## 7. Troubleshooting
+## 7. Phase 7: Deploy Backend (operator laptop flow)
+
+The target is `instaedit-login` on Fly.io. Code deploys should only occur *after* secrets are successfully staged (§3).
+
+### 7.1 One-time setup
+
+Ensure you have authenticated your local terminal with Fly.io:
+
+```bash
+flyctl auth login
+```
+
+### 7.2 Pre-deploy checks
+
+Verify your environment is shaped correctly for the Fly infrastructure:
+
+```bash
+make fly-verify
+```
+
+*Passes if `fly.toml` matches expected bounds (`min_machines_running=1`, valid process groups `api` and `worker`, `release_command = "./migrate"`).*
+
+### 7.3 Deploy command
+
+```bash
+make fly-deploy
+```
+
+### 7.4 What `fly-deploy` does
+
+1. **Builds the unified image** via the `[production]` target in `Dockerfile` (api + worker + migrate bundled into a single image so a single `fly deploy` ships all three binaries).
+2. **Runs `release_command`** (`./migrate`) in an ephemeral machine to apply pending database schema updates. If migrations fail, Fly ABORTS the rollout and the existing api/worker VMs keep running on their previous image (no half-deployed state).
+3. **Rolls the existing instances** (api and worker process groups) with the new image, binding any staged secrets via `fly secrets import --stage` (committed in `make fly-secrets` from §4).
+
+### 7.5 Secret-rotated redeploys
+
+If deploying specifically to lock in a secret rotation (e.g. a new `JWT_SECRET`), remember that all active in-flight worker and HTTP instances will immediately adopt the new value upon restart. For keys like JWT, this drops all current sessions, requiring user re-authentication. For `ENCRYPTION_KEYS` see §6 — the zero-downtime path requires keeping the old key in the CSV during the cutover window.
+
+### 7.6 Live tailing + log privacy
+
+To tail logs during a rollout:
+
+```bash
+flyctl logs --app instaedit-login
+```
+
+*Privacy contract:* Fly logs must **never** show any of the **15 staged secrets** enumerated in §3 secret collection. That is: `DATABASE_URL` (the password embedded in the URI is just as risky as a separate column), `JWT_SECRET`, `ENCRYPTION_KEYS`, `ACTIVE_ENCRYPTION_KEY_ID`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `EMAIL_PROVIDER_KEY` (the `re_*` Resend token), `META_APP_ID`, `META_APP_SECRET`, plus first-party credentials: `access_token`, `refresh_token`, user passwords, the `csrf_token` value, and any magic-link `?token=` query parameter.
+
+Any such leak is an immediate incident requiring credential revocation. The `fly.toml` contract also relies on the app binary's own `*http.Request` log filter (see `pkg/api/handlers.go` and `internal/services/sessions_service.go`) — the Fly platform strips injected ENV vars from logs by default; we're defending in depth. The canonical secret-name list is pinned in `scripts/_parse_envfile.py` + `scripts/test_parse_envfile.py` (15 regression cases) so any future secret addition automatically inherits the privacy contract.
+
+### 7.7 Common failure modes
+
+- **`release_command` fails:** Usually means the `DATABASE_URL` is pointing to the wrong host (e.g. localhost / Direct URL not Pooled URL) or `sslmode=require` is missing. Run `make fly-secrets-verify` to confirm the secret staged correctly, then re-run `/ready` on a prior-machine if accessible.
+- **Worker group failing tcp_checks:** The worker binds `WORKER_HEALTH_PORT` (9090 by default; 0 disables the listener per `cmd/worker/health_listener.go`). Ensure this port matches `fly.toml` service definitions for the worker process group.
+- **Health-check timeout:** App takes longer than `grace_period` to boot (default 10s in `fly.toml`). Bump `grace_period` if migrations took longer than ~8s on first start.
+- **Image build failure:** Dockerfile stage issues (Go version mismatch; missing build-arg). Retry with `flyctl deploy --config fly.toml --build-only` to isolate image-build problems from rollout problems.
+
+---
+
+## 8. Phase 8: Post-deploy Verification
+
+Perform these 3 gates on the live domain to confirm the rollout succeeded. All probes are read-only — they do NOT depend on a populated session.
+
+### Gate A — Healthz (HTTP api process responding)
+
+```bash
+curl -sS https://api.instaedit.org/api/v1/health | jq
+```
+
+**Expected envelope** (exact keys per `pkg/api/handlers.go::handleHealth`):
+
+```json
+{
+  "platforms": ["instagram", "facebook", "threads"],
+  "service":   "InstaEditLogin",
+  "status":    "ok",
+  "version":   "2.0.0"
+}
+```
+
+*What this proves:* The HTTP listener binds successfully on port 8080, the Go handlers package is reachable, and the provider capabilities block initialized (no provider-secret-missing panic on startup). It does NOT prove wire-level correctness — Phase 9.4 covers that.
+
+### Gate B — Readiness (DB + migrations + worker goroutines)
+
+```bash
+curl -sS https://api.instaedit.org/ready | jq
+```
+
+**Expected envelope** (exact keys per `pkg/api/ready.go::readinessResponse`, in priority order):
+
+```json
+{
+  "status":         "ok",
+  "db":             "ok",
+  "migrations":     "ok",
+  "workers_ready":  true
+}
+```
+
+> **CAVEAT (schema-inferred):** The healthy-state envelope (`workers_ready: true`) above is inferred from `pkg/api/ready.go::readinessResponse` + `pkg/api/worker_status.go::startedFields`. Live evidence on **2026-07-14 ONLY observed the FAILURE shape** (HTTP 503 + `workers_pending: [...]`). The healthy state has **no live evidence yet** — once `make fly-deploy` succeeds, the fresh probe should match the JSON above; if it returns something different, treat it as a regression and re-read `pkg/api/worker_status.go::startedFields` against the new response shape.
+
+If failing, `"status"` reads `"not_ready"`, AND you may see `"workers_pending": ["metrics", "outbox", "publish", "reconcile", "webhook"]` (the 5 startup-race losers that haven't yet flipped their `atomic.Bool` to true per `pkg/api/worker_status.go`), OR a non-`"ok"` value on `db` / `migrations`.
+
+*What this proves:* Postgres connection pool is active, all 9 canary tables (schema head from the migrations in `internal/database/migrations/`) exist, and all 5 background goroutines reached their first executable line without deadlocking.
+
+### Gate C — Fly machine state
+
+```bash
+flyctl status --app instaedit-login
+```
+
+*What this proves:* At least 2 machines are running in `started` state — 1 with `processes = ["api"]` and 1 with `processes = ["worker"]` — per the `min_machines_running = 1` per-process-group contract in `fly.toml`. Any per-process-group count less than 1 means Fly auto-stop kicked in (shouldn't happen with `min_machines_running=1` unless the app is being regionally migrated).
+
+### 8.1 Current status (2026-07-14) — INVESTIGATION REQUIRED before trusting any probe
+
+**CRITICAL WARNING:** As of today, the live `api.instaedit.org` is **almost certainly NOT** the latest `a74f575` deploy, and is **likely NOT** a Fly-deployed binary at all. Operators MUST investigate before assuming a `fly-deploy` will seamlessly replace what is responding today.
+
+Live probes via `curl -i` from a sandboxed host on 2026-07-14 returned:
+
+| Probe | Expected | Actual | Interpretation |
+|-------|----------|--------|----------------|
+| `GET /api/v1/health` | 200 | **200** + `{"platforms":["threads"],"service":"InstaEditLogin","status":"ok","version":"2.0.0"}` | API is alive, but `platforms=["threads"]` (NOT 3 platforms — our latest has IG/FB/Threads arrays of providers successfully configured) |
+| `GET /ready` | 200 | **503** + `{"status":"not_ready","db":"ok","migrations":"ok","workers_pending":["metrics","outbox","publish","reconcile","webhook"]}` | All 5 worker loops NOT yet flipped their `workers_ready` atomic.Bool |
+| `GET /api/v1/accounts` | 401 | **404** (NOT 401) | Our commit `033ab78`'s `handleListAccounts` route is NOT mounted on the live build — suggests a stale or partially-deployed codebase |
+| `POST /api/v1/auth/magic-link/start` | 200 | **404** | Our existing magic-link-start route is not mounted either |
+| `Server:` header + `Fly-Region` header + other Fly proxy signals | Fly-specific | **`Server: Caddy`** AND NO `Fly-Region` AND NO `fly-request-id` | This COMBINED signature is strong cross-evidence for a non-Fly origin. Fly's edge proxy always emits `fly-request-id` + `fly-region`; their absence (alongside a non-Fly `Server:`) is very unlikely to be coincidence. A Caddy `Server:` alone could be a custom entrypoint layer; the COMBINATION (Caddy + missing Fly proxy signals) is the diagnostic. |
+
+**Concrete hypotheses to disambiguate (test in this order):**
+
+1. **DNS re-pointed away from Fly**: run `dig +short api.instaedit.org CNAME` on the operator laptop — expected canonical is `instaedit-login.fly.dev.` per §1.5. If it resolves to a different host (e.g. a Caddy-box A record, a Vercel proxy, a personal-server IP), the DNS CNAME has been re-pointed by a prior session and `make fly-deploy` will not claim this endpoint.
+2. **Stale Fly deploy not yet reached this endpoint**: if the CNAME IS `instaedit-login.fly.dev.`, run `flyctl status --app instaedit-login` to confirm the app exists; if `Image` tag doesn't match the SHA just pushed, it's a prior-rollout artifact (older Go binary lacking our `handleListAccounts` from commit `033ab78`).
+3. **Other developer's isolated deploy**: if the live response shows code paths that don't exist anywhere in our `main` (e.g. platform count from earlier wiring), it's a separate instance addressing the same CNAME during testing.
+
+Do NOT assume a `fly-deploy` will seamlessly replace what is responding today. The live verify (Gate A + Gate B + Gate C in this section) MUST be re-run after each `make fly-deploy` to confirm the new image is the one serving.
+
+**Operator action sequence before declaring a fresh deploy successful:**
+
+1. Run `dig +short api.instaedit.org CNAME` — confirm it still resolves to `instaedit-login.fly.dev.` per §1.5. If it points elsewhere (e.g. Caddy's box), the CNAME has been re-pointed; update.
+2. Confirm `flyctl status --app instaedit-login` lists at least one healthy machine whose `Image` tag matches the SHA just pushed.
+3. Re-run all 3 gates (A + B + C) — Gate B in particular must return `workers_ready: true` BEFORE declaring the rollout successful.
+
+### 8.2 Deeper probes (operator laptop)
+
+Beyond the 3 gates, run the canonical post-deploy E2E runbooks (NO code commit needed; these invoke existing scripts):
+
+```bash
+# Comprehensive Phase 9 sub-1-5+7 smoke (read-only by default)
+make ops-smoke
+
+# Workspace isolation (Phase 9 sub-6) — creates 2 users + asserts cross-tenant boundaries
+make ops-isolation-dry-run     # preview the plan + cleanup SQL without mutating
+DATABASE_URL=postgres://...@instaedit-production-bouncer.flycast:6432/instaedit-production?sslmode=require \
+  make ops-isolation           # apply: 2 users + 4 assertions + psql CASCADE on EXIT
+```
+
+Both scripts are idempotent + bash -n clean (per commit `a74f575` review). Pass criteria: ALL PASS count > 0 AND FAIL count = 0; WARNs are advisory.
+
+---
+
+## 9. Phase 9: Sandbox vs Operator Boundary
+
+There is a hard boundary between what the Codex agent sandbox can verify locally and what strictly requires the operator's laptop with authenticated Fly.io access.
+
+### 9.1 Local Sandbox (CAN verify)
+
+- HTTP probes against `https://api.instaedit.org` (the sandbox has outbound internet egress — see today's live probes in §8.1).
+- `make fly-verify` — pure-shell parse of `fly.toml` (app name, processes, health checks, env surface counts).
+- `make lint-check` (gofmt + go vet + oxlint) — confirms Go code is lint-clean regardless of deploy state.
+- `make fly-secrets-test` — runs the .env parser's 15-case regression suite in `scripts/test_parse_envfile.py`.
+- Local file inspection (grep, awk, jq on git-tracked files).
+- Static code review against the just-committed source tree on `main`.
+
+### 9.2 Operator Laptop (REQUIRES Fly auth + raw secrets)
+
+- `flyctl` CLI invocation (Fly OAuth session).
+- Real `.env.production` file with actual secret values.
+- `make fly-secrets` — the actual `flyctl secrets import --stage -` push.
+- `make fly-deploy` — the actual `flyctl deploy` push.
+- `flyctl logs --app instaedit-login` — live log tailing during rollout.
+- `flyctl status --app instaedit-login` — Gate C of §8.
+
+### 9.3 Canonical Deploy Execution Block (paste-ready)
+
+> **Safety property reminder:** `make fly-deploy` runs `release_command = "./migrate"` BEFORE any api/worker VM rollouts. If migrations fail, Fly aborts the rollout and the existing api/worker VMs keep running on their previous image (`pkg/api/ready.go` will keep reporting `status: "ok"` because the existing VMs are still healthy). An exit-0 from `make fly-deploy` is therefore the ONLY acceptable deployment success signal — partial deploys cannot occur.
+
+For a fresh environment, paste this EXACT block into the operator's authenticated terminal session:
+
+```bash
+# ----- phase 7: deploy backend (this document, §7) -----
+
+# 0. One-time per machine
+flyctl auth login
+
+# 1. Verify the .env.production file is clean (no leftover placeholder values, no disabled provider keys)
+make fly-secrets-test        # local: 15 regression cases pass
+make fly-secrets-dry-run     # local: parser-direct redacted preview
+
+# 2. Push the 15 secrets to Fly (--stage = no premature restart)
+make fly-secrets             # operator: flyctl secrets import --stage
+
+# 3. Verify staged secrets are clean on Fly
+make fly-secrets-verify      # operator: flyctl secrets list + assertions
+
+# 4. Sanity-check fly.toml pre-deploy
+make fly-verify              # local: pure-shell parse
+
+# 5. Ship it
+make fly-deploy              # operator: flyctl deploy --config fly.toml
+                             #   -> release_command ./migrate (rolling abort on failure)
+                             #   -> rollout api group   (http_checks /api/v1/health)
+                             #   -> rollout worker group (tcp_checks :9090)
+
+# ----- phase 8: post-deploy verification (§8) -----
+
+# Gate A — Healthz (HTTP api + provider init)
+curl -sS https://api.instaedit.org/api/v1/health | jq
+
+# Gate B — Readiness (DB + 9 canary tables + 5 worker goroutines)
+curl -sS https://api.instaedit.org/ready | jq
+
+# Gate C — Fly machine state (>= 1 api + 1 worker per min_machines_running)
+flyctl status --app instaedit-login
+
+# ----- phase 9: deeper E2E (§9 + Phase 9.4-7) -----
+
+# Read-only smoke (Phase 9 sub-1-5+7)
+make ops-smoke
+
+# Workspace isolation drill (Phase 9 sub-6) — REQUIRES DATABASE_URL locally
+make ops-isolation-dry-run   # preview only
+# single-line to avoid `\` continuation + inline-comment shell-parse ambiguity:
+DATABASE_URL=postgres://...@instaedit-production-bouncer.flycast:6432/instaedit-production?sslmode=require make ops-isolation   # apply + CASCADE cleanup on EXIT
+```
+
+**Reconciliation notes:**
+- Satisfies `docs/OPERATIONS.md §5` go-live gate (the 9-box checklist).
+- The deploy sequence aligns with `internal/bootstrap/app.go::RunMigrationThenServer` — migrations run before any HTTP listener binds.
+- `make ops-smoke` / `make ops-isolation` are wired via `Makefile` targets added in commit `a74f575`.
+
+---
+
+## 10. Troubleshooting
 
 ### `❌ flyctl not installed`
 Install: https://fly.io/docs/hands-on/install-flyctl/
@@ -534,7 +775,7 @@ on `/api/v1/health` before the old VM is torn down.
 
 ---
 
-## 8. Cross-references
+## 11. Cross-references
 
 | Concern | Reference |
 |---------|-----------|
@@ -550,14 +791,14 @@ on `/api/v1/health` before the old VM is torn down.
 
 ---
 
-## 9. Frontend deploy (Vercel)
+## 12. Frontend deploy (Vercel)
 
 The Vite SPA (`web/`) deploys to Vercel; the Go backend deploys to Fly
 (§2–§7). The two are decoupled — the frontend is a static bundle that
 hits the backend over HTTPS. This section is the canonical reference
 for the first Vercel setup + subsequent preview/production deploys.
 
-### 9.1 Pre-flight
+### 12.1 Pre-flight
 
 - Vercel account (https://vercel.com/signup) — sign up with GitHub for
   the auto-deploy integration.
@@ -565,7 +806,7 @@ for the first Vercel setup + subsequent preview/production deploys.
 - (Optional) `vercel` CLI for env-var management from the terminal:
   `npm i -g vercel`.
 
-### 9.2 Project settings (Vercel dashboard)
+### 12.2 Project settings (Vercel dashboard)
 
 Set these in the project's **Settings → General** page. They are
 file-equivalent in `web/vercel.json` (so re-importing the project
@@ -587,7 +828,7 @@ preserves them) but the dashboard wins for the canonical values:
 > `web/vercel.json` pins the Vercel production runtime to 22.12. They
 > do NOT need to match: local dev = minimum, Vercel = exact.
 
-### 9.3 SPA rewrites (history push for React Router)
+### 12.3 SPA rewrites (history push for React Router)
 
 React Router uses the browser history API (e.g. `/connections`,
 `/compose`, `/posts`). Vercel must serve `index.html` for ALL
@@ -617,7 +858,7 @@ If a future route legitimately needs a different file (e.g.
 `/robots.txt`, `/sitemap.xml`), add an explicit `routes` entry BEFORE
 the catch-all rewrite — the first match wins.
 
-### 9.4 Environment variables
+### 12.4 Environment variables
 
 Set these in **Settings → Environment Variables**. For each var, pick
 the scope (Production / Preview / Development). For beta, only
@@ -625,7 +866,7 @@ Production matters.
 
 | Variable | Value | Scope | Notes |
 |----------|-------|-------|-------|
-| `VITE_API_BASE_URL` | `https://api.instaedit.org` | Production | The Fly-deployed backend. Preview deployments can override this to a Fly preview URL or stay on production — see §9.7. |
+| `VITE_API_BASE_URL` | `https://api.instaedit.org` | Production | The Fly-deployed backend. Preview deployments can override this to a Fly preview URL or stay on production — see §12.7. |
 
 CLI equivalent (after `vercel login`):
 
@@ -640,7 +881,7 @@ vercel env add VITE_API_BASE_URL production
 > at build time, and committing a `.env.production` to the repo would
 > leak the URL to anyone with repo read access.
 
-### 9.5 Build-time validation
+### 12.5 Build-time validation
 
 `web/vite.config.ts` ships with a `verifyApiBaseUrlPlugin` that
 inspects `VITE_API_BASE_URL` at build start. The plugin:
@@ -655,7 +896,7 @@ inspects `VITE_API_BASE_URL` at build start. The plugin:
 
 See `web/scripts/verify-api-base-url.ts` for the validation rules.
 
-### 9.6 First deploy
+### 12.6 First deploy
 
 ```bash
 # 1. Push to main (Vercel auto-detects the push via the GitHub app)
@@ -677,7 +918,7 @@ curl -sSI https://app.instaedit.org/connections | head -3
 #    Expected: HTTP/2 200 (NOT 404 — the rewrite rule kicks in)
 ```
 
-### 9.7 Preview deployments (per PR)
+### 12.7 Preview deployments (per PR)
 
 Vercel auto-creates a preview deployment for every PR. The preview
 URL looks like `https://instaedit-login-git-<branch>-<team>.vercel.app`.
@@ -692,11 +933,11 @@ The preview can either:
 For the beta, leave the Preview scope empty so previews hit the
 production Fly backend (single source of truth, simplest to debug).
 
-### 9.8 Troubleshooting
+### 12.8 Troubleshooting
 
 #### Build fails: "VITE_API_BASE_URL validation failed in production context"
 The `verifyApiBaseUrlPlugin` rejected the env. Common causes:
-- Forgot to set the env var in the Vercel dashboard (§9.4).
+- Forgot to set the env var in the Vercel dashboard (§12.4).
 - Set the env var on the wrong scope (Preview only, not Production).
 - The value is `http://...` instead of `https://...` (Vite treats
   `http://api.instaedit.org` as an error in production because
