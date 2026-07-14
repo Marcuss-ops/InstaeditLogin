@@ -1128,19 +1128,234 @@ func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"accounts": items})
 }
 
-// handleGetAccount / handleValidateAccount / handleReconnectAccount / handleDeleteAccount
-// are stubs returning 501 (Taglio 1.4 will land the real implementations).
+// ----------------------------------------------------------------
+// /accounts/{id} handlers (Taglio 1.4) — full implementations.
+//
+// Each handler enforces the same workspace-isolation contract: the
+// account must be owned by the authenticated user (account.UserID ==
+// identity.UserID()). Cross-tenant probes return 404 (not 403) so
+// the existence of accounts in other user boundaries is never
+// leakable. All four handlers share loadOwnAccountByID for the auth
+// + load + ownership check; the handler-specific logic below
+// handles the platform-side action.
+// ----------------------------------------------------------------
+
+// loadOwnAccountByID centralises the auth + load + ownership check
+// shared by all four /accounts/{id} handlers. Returns the loaded
+// account + identity on success; writes 401/404/500 directly to w
+// and returns (nil, nil, false) on failure. The 404 (not 403) for
+// cross-tenant probes is critical: a malicious probe MUST NOT be
+// able to enumerate which account ids exist in other users by
+// observing the 403 vs 404 response shape.
+func (r *Router) loadOwnAccountByID(w http.ResponseWriter, req *http.Request, id int64) (*models.PlatformAccount, auth.Identity, bool) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.UserID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return nil, nil, false
+	}
+	account, err := r.userRepo.FindPlatformAccountByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find account: "+err.Error())
+		return nil, nil, false
+	}
+	if account == nil || account.UserID != identity.UserID() {
+		// No existence leak: 404 covers both nil and cross-tenant.
+		writeError(w, http.StatusNotFound, "account not found")
+		return nil, nil, false
+	}
+	return account, identity, true
+}
+
+// isTokenExpired matches the canonical error string produced by
+// vault.Get on a stored-but-expired token. The vault's internal
+// isExpiryError helper (lowercase, package-private) is the source
+// of truth; we probe with substring equality rather than introducing
+// a typed sentinel to avoid an interface dependency in the HTTP
+// layer.
+func isTokenExpired(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "expired")
+}
+
+// auditAccountEvent fires a typed audit log entry, nil-safe (the
+// auditLogStore is optional in tests / dev). Captures the
+// WHO/WHAT/WHEN trio an operator needs to reconstruct the action.
+// eventType is one of {account.reauth_required, account.disconnected}.
+func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identity auth.Identity, account *models.PlatformAccount) {
+	if r.auditLogStore == nil {
+		return
+	}
+	actor := strconv.FormatInt(identity.UserID(), 10)
+	resource := strconv.FormatInt(account.ID, 10)
+	_ = r.auditLogStore.Log(ctx, eventType, actor, "platform_account", resource, map[string]interface{}{
+		"platform":         account.Platform,
+		"platform_user_id": account.PlatformUserID,
+	})
+}
+
+// handleGetAccount returns a single platform account owned by the
+// authenticated user. The wire shape is the same as the list
+// endpoint (6-field accountListItem) so the SPA decodes both
+// responses with the same shape. The platform_accounts row stays
+// after disconnect (status='disconnected'); this handler returns
+// it so the /connections page can render a "reconnect" CTA on a
+// row that was previously deleted.
 func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
-	writeError(w, http.StatusNotImplemented, "account by id: stub (Taglio 1.4)")
+	id, ok := parsePathIDAsInt64(w, req, "id")
+	if !ok {
+		return
+	}
+	account, _, ok := r.loadOwnAccountByID(w, req, id)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, accountListItem{
+		ID:             account.ID,
+		Platform:       account.Platform,
+		PlatformUserID: account.PlatformUserID,
+		Username:       account.Username,
+		Status:         account.Status,
+		CreatedAt:      account.CreatedAt,
+	})
 }
+
+// handleValidateAccount probes token freshness via vault.Get. The
+// handler stamps last_validated_at + flips the account status to
+// reflect reality (active | expired | reauth_required). It does
+// NOT rotate or revoke tokens (the reconnect flow handles that)
+// and does NOT call the provider (no remote API call; the endpoint
+// is cheap and rate-limit-safe for dashboards that auto-poll).
+//
+// Returns 200 either way — the validation IS the answer; the caller
+// reads status to decide what to do. The HTTP layer doesn't surface
+// the token error to the client (operators see the canonical
+// latency/error dashboards; the API only reports status changes).
 func (r *Router) handleValidateAccount(w http.ResponseWriter, req *http.Request) {
-	writeError(w, http.StatusNotImplemented, "validate account: stub (Taglio 1.4)")
+	id, ok := parsePathIDAsInt64(w, req, "id")
+	if !ok {
+		return
+	}
+	account, _, ok := r.loadOwnAccountByID(w, req, id)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	account.LastValidatedAt = &now
+
+	// Both token types are checked: short-lived for YouTube /
+	// Twitter / TikTok; long-lived for Meta. A platform having any
+	// non-expired stored token is "active"; both-expired/no-token
+	// is "expired"; neither nor "expired" (i.e. decrypt error or DB
+	// unreachable) is "reauth_required".
+	_, shortErr := r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
+	_, longErr := r.vault.Get(req.Context(), account.ID, models.TokenTypeLongLived)
+	switch {
+	case shortErr == nil || longErr == nil:
+		account.Status = models.AccountStatusActive
+	case isTokenExpired(shortErr) || isTokenExpired(longErr):
+		account.Status = models.AccountStatusExpired
+	default:
+		account.Status = models.AccountStatusReauthRequired
+	}
+	if err := r.userRepo.UpdatePlatformAccount(account); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update account: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, accountListItem{
+		ID:             account.ID,
+		Platform:       account.Platform,
+		PlatformUserID: account.PlatformUserID,
+		Username:       account.Username,
+		Status:         account.Status,
+		CreatedAt:      account.CreatedAt,
+	})
 }
+
+// handleReconnectAccount flags the account as needing reauth. The
+// SPA reads status='reauth_required' on /connections and surfaces
+// a "Reconnect to <Platform>" CTA. The actual OAuth round-trip
+// happens via /api/v1/auth/{provider}/login → callback, which
+// (because of SPRINT 7.1 idempotency in AttachPlatformAccount)
+// re-binds the existing platform_accounts row in place — no
+// duplicate row, no POST /accounts leak.
 func (r *Router) handleReconnectAccount(w http.ResponseWriter, req *http.Request) {
-	writeError(w, http.StatusNotImplemented, "reconnect account: stub (Taglio 1.4)")
+	id, ok := parsePathIDAsInt64(w, req, "id")
+	if !ok {
+		return
+	}
+	account, identity, ok := r.loadOwnAccountByID(w, req, id)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	account.Status = models.AccountStatusReauthRequired
+	account.ReauthRequiredAt = &now
+	if err := r.userRepo.UpdatePlatformAccount(account); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update account: "+err.Error())
+		return
+	}
+	r.auditAccountEvent(req.Context(), "account.reauth_required", identity, account)
+	writeJSON(w, http.StatusOK, accountListItem{
+		ID:             account.ID,
+		Platform:       account.Platform,
+		PlatformUserID: account.PlatformUserID,
+		Username:       account.Username,
+		Status:         account.Status,
+		CreatedAt:      account.CreatedAt,
+	})
 }
+
+// handleDeleteAccount soft-disconnects a platform account. Steps:
+//
+//  1. loadOwnAccountByID (auth + ownership + 404 on cross-tenant).
+//  2. vault.Revoke → deletes every encrypted token row for the
+//     account. Idempotent: the vault swallows ErrTokenNotFound.
+//  3. Soft-disconnect: status='disconnected' on the account row +
+//     last_error_code='DISCONNECTED' for operator dashboards. The
+//     row stays so the audit trail (user_id, platform, platform_user_id,
+//     connected_at) is preserved for compliance — a future Taglio adds
+//     the workspace-level "data deletion" endpoint that hard-deletes
+//     the row + scrubs the encrypted tokens.
+//  4. Audit log (account.disconnected), nil-safe.
+//
+// post_targets that referenced this account remain unchanged in the
+// schema: the publish driver will surface a "token revoked" failure
+// on the next tick and stamp post_targets.status='failed' through
+// the existing error-classification path. No handler-side bulk
+// transition is needed (Taglio 1.4 contract is implicit failure via
+// worker, not synchronous transition via handler).
+//
+// Best-effort remote revoke at the provider is NOT attempted here:
+// no Revoker capability interface exists today. A future Taglio 1.4
+// follow-up adds internal/services/provider.go's Revoker interface
+// plus a concrete implementation per provider that supports it
+// (Meta has /me/permissions; Twitter has POST oauth2/invalidate_token;
+// Google has https://oauth2.googleapis.com/revoke).
 func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
-	writeError(w, http.StatusNotImplemented, "delete account: stub (Taglio 1.4)")
+	id, ok := parsePathIDAsInt64(w, req, "id")
+	if !ok {
+		return
+	}
+	account, identity, ok := r.loadOwnAccountByID(w, req, id)
+	if !ok {
+		return
+	}
+	if err := r.vault.Revoke(req.Context(), account.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "vault revoke failed: "+err.Error())
+		return
+	}
+	account.Status = models.AccountStatusDisconnected
+	account.ConnectedAt = nil
+	account.LastErrorCode = "DISCONNECTED"
+	account.LastErrorMessage = "account disconnected by user"
+	if err := r.userRepo.UpdatePlatformAccount(account); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update account: "+err.Error())
+		return
+	}
+	r.auditAccountEvent(req.Context(), "account.disconnected", identity, account)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ----------------------------------------------------------------------- Middleware

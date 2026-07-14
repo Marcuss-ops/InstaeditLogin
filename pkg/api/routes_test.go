@@ -1644,3 +1644,523 @@ func TestHandleListAccounts_IgnoresQueryUserIDAndWorkspace(t *testing.T) {
 		t.Errorf("SQL filter used userID=%d, want 1 (JWT-derived). Query ?user_id=999 MUST NOT leak across tenants.", listFnUserID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// handleGetAccount / handleValidateAccount / handleReconnectAccount /
+// handleDeleteAccount tests (Taglio 1.4 — full implementations replacing
+// the 501 stubs). Workspace-isolation matrix: cross-tenant probes return
+// 404 (existential non-leak); no-session returns 401; vault errors
+// surface as 500; happy paths return the spec'd response shape.
+// ---------------------------------------------------------------------------
+
+// ownedAccountFixture returns a synthetic account owned by ownerID —
+// the template for the 4 happy-path tests below.
+func ownedAccountFixture(ownerID int64, platform string) *models.PlatformAccount {
+	now := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	return &models.PlatformAccount{
+		ID: 21, UserID: ownerID, Platform: platform,
+		PlatformUserID: "pf-21", Username: "alice_" + platform,
+		Status:    models.AccountStatusActive,
+		CreatedAt: now, UpdatedAt: now,
+	}
+}
+
+// TestHandleGetAccount_Happy proves the closed endpoint contract: 200 +
+// the 6-field wire shape, no internal PlatformAccount columns leaking.
+func TestHandleGetAccount_Happy(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	owner := ownedAccountFixture(1, "instagram")
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if id != 21 {
+				t.Errorf("handler called FindPlatformAccountByID with id=%d, want 21 (path param)", id)
+			}
+			return owner, nil
+		},
+	}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		ID             int64     `json:"id"`
+		Platform       string    `json:"platform"`
+		PlatformUserID string    `json:"platform_user_id"`
+		Username       string    `json:"username"`
+		Status         string    `json:"status"`
+		CreatedAt      time.Time `json:"created_at"`
+		UserID         int64     `json:"user_id,omitempty"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp.ID != 21 || resp.Platform != "instagram" || resp.Username != "alice_instagram" {
+		t.Errorf("response shape mismatch: %+v", resp)
+	}
+	if resp.UserID != 0 {
+		t.Errorf("internal user_id leaked: %d", resp.UserID)
+	}
+}
+
+// TestHandleGetAccount_NotFound_404 covers both the genuine-not-found
+// and the cross-tenant cases under one roof (the loadOwnAccountByID
+// helper collapses them by design — 404 prevents existence leaks).
+func TestHandleGetAccount_NotFound_404(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return nil, nil // genuine not-found
+		},
+	}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/999", nil)
+	w := httptest.NewRecorder()
+	// JWT for user 1, but no row exists for id=999.
+	jwt := issueTestJWT(t, 1)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 (account not found), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleGetAccount_CrossTenant_404 is the workspace-isolation
+// canary: an account owned by user 999 MUST NOT be returned when the
+// caller is user 1. The 404 (not 403) is critical — 403 would confirm
+// to a probe that the id exists but is cross-tenant, leaking the
+// existence of accounts in other user boundaries.
+func TestHandleGetAccount_CrossTenant_404(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	crossTenant := ownedAccountFixture(999, "instagram")
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return crossTenant, nil // exists, but owned by user 999
+		},
+	}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	// Caller is user 1.
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant probe MUST return 404 (not 403), got %d: %s", w.Code, w.Body.String())
+	}
+	// Defence-in-depth: response body must NOT echo the cross-tenant
+	// owner's id. Plain "account not found" string is the only safe form.
+	if strings.Contains(w.Body.String(), "999") {
+		t.Errorf("response leaks owned_by user id in body: %s", w.Body.String())
+	}
+}
+
+// TestHandleGetAccount_NoSession_401 proves r.protected rejects the
+// request before the handler runs. The handler's own nil-identity 401
+// is defence-in-depth (loadOwnAccountByID returns 401 on nil identity)
+// but the route-level middleware is the primary gate.
+func TestHandleGetAccount_NoSession_401(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			t.Errorf("FindPlatformAccountByUser MUST NOT be called without a session (data leak risk); got id=%d", id)
+			return nil, nil
+		},
+	}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req) // NO JWT — session-less probe
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("no-session /accounts/21: want 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// validTokenFuture returns a non-nil OAuthToken that the mock vault
+// hands back for "token is valid" cases in handleValidateAccount tests.
+func validTokenFuture() *models.OAuthToken {
+	exp := time.Now().Add(time.Hour)
+	return &models.OAuthToken{
+		AccessToken: "valid-token",
+		TokenType:   models.TokenTypeShortLived,
+		ExpiresAt:   &exp,
+	}
+}
+
+// TestHandleValidateAccount_ActiveToken verifies the happy path: a
+// valid short-lived token ⇒ 200 + status='active' + last_validated_at
+// stamped on the row. The handler UPDATE must be issued (UpdatePlatformAccount
+// is the persistence call we observe via the mock's updatePlatformAccountFn).
+func TestHandleValidateAccount_ActiveToken(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	owner := ownedAccountFixture(1, "instagram")
+
+	var updatedAccount *models.PlatformAccount
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			updatedAccount = a
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		getFn: func(ctx context.Context, accountID int64, tokenType string) (*models.OAuthToken, error) {
+			return validTokenFuture(), nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/validate", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 (active token), got %d: %s", w.Code, w.Body.String())
+	}
+	if updatedAccount == nil {
+		t.Fatal("UpdatePlatformAccount was NOT called — last_validated_at not stamped")
+	}
+	if updatedAccount.Status != models.AccountStatusActive {
+		t.Errorf("status: want active, got %s", updatedAccount.Status)
+	}
+	if updatedAccount.LastValidatedAt == nil || updatedAccount.LastValidatedAt.IsZero() {
+		t.Errorf("last_validated_at was NOT stamped (status check passed but freshness row not updated)")
+	}
+}
+
+// TestHandleValidateAccount_ExpiredToken verifies the expired path:
+// vault returns "token expired at ..." ⇒ status='expired' on the
+// UPDATE. The handler always returns 200 (validation IS the answer;
+// caller reads status to react).
+func TestHandleValidateAccount_ExpiredToken(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	owner := ownedAccountFixture(1, "instagram")
+
+	var updatedAccount *models.PlatformAccount
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			updatedAccount = a
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		getFn: func(ctx context.Context, accountID int64, tokenType string) (*models.OAuthToken, error) {
+			return nil, fmt.Errorf("vault: token expired at 2020-01-01T00:00:00Z")
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/validate", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 (validation IS the answer; caller reads status), got %d: %s", w.Code, w.Body.String())
+	}
+	if updatedAccount.Status != models.AccountStatusExpired {
+		t.Errorf("status: want expired, got %s", updatedAccount.Status)
+	}
+}
+
+// TestHandleValidateAccount_ReauthRequired covers the fall-through case:
+// vault returns a non-expiry error (DB error, decrypt failure) for both
+// token types ⇒ status='reauth_required'. Proves the handler does
+// NOT silently mark the row 'active' on a vault error path.
+func TestHandleValidateAccount_ReauthRequired(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	owner := ownedAccountFixture(1, "instagram")
+
+	var updatedAccount *models.PlatformAccount
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			updatedAccount = a
+			return nil
+		},
+	}
+	// Default mock returns "Get not implemented" (no expiry keyword).
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/validate", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if updatedAccount.Status != models.AccountStatusReauthRequired {
+		t.Errorf("status: want reauth_required (vault 'not implemented' is neither valid nor 'expired'), got %s", updatedAccount.Status)
+	}
+}
+
+// TestHandleValidateAccount_CrossTenant_404: the ownership check MUST
+// fire FIRST. vault.Get must NEVER be called for an account owned by
+// another user.
+func TestHandleValidateAccount_CrossTenant_404(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	crossTenant := ownedAccountFixture(999, "instagram")
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return crossTenant, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			t.Errorf("UpdatePlatformAccount MUST NOT be called for cross-tenant Validate; got status=%s", a.Status)
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		getFn: func(ctx context.Context, accountID int64, tokenType string) (*models.OAuthToken, error) {
+			t.Errorf("vault.Get MUST NOT be called for cross-tenant Validate (data leak risk); got accountID=%d tokenType=%s", accountID, tokenType)
+			return validTokenFuture(), nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/validate", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant Validate: want 404 (NOT 200, NOT 403), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleReconnectAccount_Happy verifies status flips to
+// 'reauth_required' + reauth_required_at is stamped. The status
+// field in the response shape MUST reflect the new state.
+func TestHandleReconnectAccount_Happy(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	owner := ownedAccountFixture(1, "instagram")
+
+	var updatedAccount *models.PlatformAccount
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			updatedAccount = a
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/reconnect", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if updatedAccount == nil {
+		t.Fatal("UpdatePlatformAccount was NOT called — reauth_required not stamped")
+	}
+	if updatedAccount.Status != models.AccountStatusReauthRequired {
+		t.Errorf("status: want reauth_required, got %s", updatedAccount.Status)
+	}
+	if updatedAccount.ReauthRequiredAt == nil || updatedAccount.ReauthRequiredAt.IsZero() {
+		t.Errorf("reauth_required_at was NOT stamped")
+	}
+}
+
+// TestHandleReconnectAccount_CrossTenant_404: vault + DB writes MUST
+// NOT happen for cross-tenant probes.
+func TestHandleReconnectAccount_CrossTenant_404(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	crossTenant := ownedAccountFixture(999, "instagram")
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return crossTenant, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			t.Errorf("UpdatePlatformAccount MUST NOT be called for cross-tenant reconnect (data leak risk); got status=%s", a.Status)
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/reconnect", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant reconnect: want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleDeleteAccount_Happy_204 verifies: 204 No Content + vault.Revoke
+// was called + account row was updated to status='disconnected' +
+// auditLogStore fired (when present).
+func TestHandleDeleteAccount_Happy_204(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	owner := ownedAccountFixture(1, "instagram")
+
+	var revokeCalled bool
+	var revokeAccountID int64
+	var updatedAccount *models.PlatformAccount
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			updatedAccount = a
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		revokeFn: func(ctx context.Context, platformAccountID int64) error {
+			revokeCalled = true
+			revokeAccountID = platformAccountID
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("want 204 No Content, got %d: %s", w.Code, w.Body.String())
+	}
+	if !revokeCalled {
+		t.Fatal("vault.Revoke was NOT called — local token cleanup skipped")
+	}
+	if revokeAccountID != 21 {
+		t.Errorf("vault.Revoke called with accountID=%d, want 21", revokeAccountID)
+	}
+	if updatedAccount == nil {
+		t.Fatal("UpdatePlatformAccount was NOT called — soft-disconnect not stamped")
+	}
+	if updatedAccount.Status != models.AccountStatusDisconnected {
+		t.Errorf("status: want disconnected, got %s", updatedAccount.Status)
+	}
+	if updatedAccount.LastErrorCode != "DISCONNECTED" {
+		t.Errorf("last_error_code: want DISCONNECTED, got %s", updatedAccount.LastErrorCode)
+	}
+	if updatedAccount.ConnectedAt != nil {
+		t.Errorf("connected_at: want nil after disconnect, got %v", updatedAccount.ConnectedAt)
+	}
+}
+
+// TestHandleDeleteAccount_VaultRevokeError_500 covers the failure path:
+// vault.Revoke errors ⇒ 500, account row NOT updated, cross-handler
+// state machine stays consistent.
+func TestHandleDeleteAccount_VaultRevokeError_500(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	owner := ownedAccountFixture(1, "instagram")
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			t.Errorf("UpdatePlatformAccount MUST NOT be called when vault.Revoke fails (transaction consistency); got status=%s", a.Status)
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		revokeFn: func(ctx context.Context, platformAccountID int64) error {
+			return fmt.Errorf("simulated vault DB error")
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("vault.Revoke error: want 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleDeleteAccount_CrossTenant_404 is the workspace-isolation
+// canary: vault.Revoke MUST NOT be called and UpdatePlatformAccount
+// MUST NOT be called for a cross-tenant probe. Existence-leak
+// prevention: 404 (not 403).
+func TestHandleDeleteAccount_CrossTenant_404(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	crossTenant := ownedAccountFixture(999, "instagram")
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return crossTenant, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			t.Errorf("UpdatePlatformAccount MUST NOT be called for cross-tenant delete; got status=%s", a.Status)
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		revokeFn: func(ctx context.Context, platformAccountID int64) error {
+			t.Errorf("vault.Revoke MUST NOT be called for cross-tenant delete (data leak risk); got accountID=%d", platformAccountID)
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant delete: want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleDeleteAccount_NoSession_401: r.protected rejects the
+// session-less probe BEFORE any DB or vault work happens. The
+// handler's own nil-identity 401 in loadOwnAccountByID is
+// defence-in-depth.
+func TestHandleDeleteAccount_NoSession_401(t *testing.T) {
+	svc := &mockProvider{platform: "instagram"}
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			t.Errorf("FindPlatformAccountByID MUST NOT be called without a session; got id=%d", id)
+			return nil, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			t.Errorf("UpdatePlatformAccount MUST NOT be called without a session")
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		revokeFn: func(ctx context.Context, platformAccountID int64) error {
+			t.Errorf("vault.Revoke MUST NOT be called without a session (token leak risk); got accountID=%d", platformAccountID)
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req) // NO JWT — session-less probe
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("no-session /accounts/21 DELETE: want 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
