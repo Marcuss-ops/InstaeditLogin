@@ -196,7 +196,7 @@ flyctl apps create instaedit-login
 
 ## 3. Secret collection
 
-The following **15 secrets** must be set on `instaedit-login`. Where to
+The following **18 secrets** must be set on `instaedit-login`. Where to
 get each:
 
 | # | Secret | Where to get it |
@@ -216,9 +216,12 @@ get each:
 | 13 | `INSTAGRAM_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/instagram/callback` |
 | 14 | `FACEBOOK_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/facebook/callback` |
 | 15 | `THREADS_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/threads/callback` |
+| 16 | `X_CLIENT_ID` | X Developer Portal → created app → "Keys and tokens" → "OAuth 2.0 Client ID" (post-App Review for scopes `tweet.read` / `tweet.write` / `users.read` / `offline.access`) |
+| 17 | `X_CLIENT_SECRET` | X Developer Portal → created app → "Keys and tokens" → "OAuth 2.0 Client Secret" (show-once; never committed — capture immediately on display) |
+| 18 | `X_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/twitter/callback` in X Developer Portal → Apps → "User authentication settings" → "Callback URIs". Also lives in `fly.toml` `[env]` as a public, non-sensitive value. |
 
-**Do NOT include** (disabled providers, beta scope): `TIKTOK_*`, `X_*`,
-`X_CLIENT_*`, `YOUTUBE_*`, `LINKEDIN_*`, `STRIPE_*`. The set script
+**Do NOT include** (disabled providers, beta scope): `TIKTOK_*`,
+`YOUTUBE_*`, `LINKEDIN_*`, `STRIPE_*`. The set script
 refuses to push if any of these prefixes appear in the .env file.
 
 **Where to store the .env.production file**:
@@ -227,7 +230,7 @@ refuses to push if any of these prefixes appear in the .env file.
 # 1. Copy the dev template
 cp .env.example .env.production
 
-# 2. Fill in the 15 values above. Use your secret manager (1Password,
+# 2. Fill in the 18 values above. Use your secret manager (1Password,
 #    Bitwarden, …) — never paste real secrets into chat / git / issues.
 
 # 3. Verify the file is gitignored (it should be — `.env` is in
@@ -288,24 +291,27 @@ the status + shape (length / charset / regex) + capture location.
 | 13 | `INSTAGRAM_REDIRECT_URI` | Canonical per `fly.toml` `[env]`; exact registration in Meta Dev Console | exactly `https://api.instaedit.org/api/v1/auth/instagram/callback` | N/A (public; pinned by Meta console) | ✓ STABLE | no action |
 | 14 | `FACEBOOK_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/facebook/callback` | N/A (public) | ✓ STABLE | no action |
 | 15 | `THREADS_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/threads/callback` | N/A (public) | ✓ STABLE | no action |
+| 16 | `X_CLIENT_ID` | Sourced from X Developer Portal (post-App Review) | exactly an OAuth 2.0 Client ID (≈ 22-char alphanumeric) | `instaedit-login/x-client-id/production` | ○ PENDING | requires App Review for scopes `tweet.read` / `tweet.write` / `users.read` / `offline.access`; capture **together** with `X_CLIENT_SECRET` in a single password-manager pull |
+| 17 | `X_CLIENT_SECRET` | Sourced from X Developer Portal (post-App Review) | exactly an OAuth 2.0 Client Secret (≈ 40-50 chars) | `instaedit-login/x-client-secret/production` | ○ PENDING | captured together with `X_CLIENT_ID` (both surfaced in the same dashboard modal) |
+| 18 | `X_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/twitter/callback` | N/A (public; pinned by X Developer Portal) | ✓ STABLE | no action |
 
-**Aggregate status (2026-07-14)**: 3 CAPTURED (JWT_SECRET + ENCRYPTION_KEYS[id=1] + ACTIVE_ENCRYPTION_KEY_ID) • 5 STABLE (4 public env + 3 redirect URIs) • 7 PENDING — requires operator-side actions against external services (Fly Postgres / Tigris dashboard / Resend dashboard / Meta Dev Console).
+**Aggregate status (2026-07-14)**: 3 CAPTURED (JWT_SECRET + ENCRYPTION_KEYS[id=1] + ACTIVE_ENCRYPTION_KEY_ID) • 6 STABLE (4 public env + 4 redirect URIs) • 9 PENDING — requires operator-side actions against external services (Fly Postgres / Tigris dashboard / Resend dashboard / Meta Dev Console + **X Developer Portal App Review** for scopes `tweet.read`/`tweet.write`/`users.read`/`offline.access`).
 
 **Privacy contract**: the actual secret values are NEVER printed in this manifest or in any commit output. The shape column gives the operator enough metadata to confirm locally (a) the captured value satisfies the input contract (e.g. JWT_SECRET is exactly 64 hex chars), (b) the captured value is correctly stored (the password-manager-entry column matches where the operator saved it). If you ever need to actually verify a value, paste it into your terminal locally WITHOUT piping it to the chat agent.
 
 **Pipeline self-test (pure local, no flyctl needed)**:
 ```text
 # Equivalent to `make fly-secrets-dry-run` minus the bash wrapper's flyctl pre-flight.
-# Verified 2026-07-14 on the synthetic shape-valid fixture: exit code 0, 15 keys validated.
+# Verified 2026-07-14 on the synthetic shape-valid fixture: exit code 0, 18 keys validated.
 # The bash wrapper (make fly-secrets-dry-run) and the parser-direct (this snippet) share
 # the SAME _parse_envfile.py contract; the regression suite scripts/test_parse_envfile.py
-# pins the contract with 15 invariant tests.
+# pins the contract with 18 invariant tests.
 umask 077
 python3 scripts/_parse_envfile.py .env.production dry-run instaedit-login scripts \
   2>&1 >/dev/null
 # Expected: exit 0 + redacted preview `KEY = first3***last3 (len=N)` per key on stderr.
 # Synthetic fixture leak-audit (2026-07-14): none of the 7 known fixture strings appeared
-# in stderr; 15 `len=N` preview entries emitted; stdout was 0 bytes.
+# in stderr; 18 `len=N` preview entries emitted; stdout was 0 bytes.
 ```
 
 **Operator-sequence prerequisite (sandbox-blocked steps)**:
@@ -319,7 +325,7 @@ flyctl auth login
 
 # 1. Preview the secrets push (no secrets leave your machine)
 make fly-secrets-dry-run
-#    → prints a redacted table of all 15 keys + lengths
+#    → prints a redacted table of all 18 keys + lengths
 #    → exits 0 if validation passes
 
 # 2. Stage the secrets on Fly (NO restart triggered)
@@ -330,7 +336,7 @@ make fly-secrets
 
 # 3. Verify clean state
 make fly-secrets-verify
-#    → asserts no <redacted>, no disabled-provider keys, all 15 keys present
+#    → asserts no <redacted>, no disabled-provider keys, all 18 keys present
 #    → exits 0 if all checks pass
 
 # 4. Sanity-check fly.toml
@@ -533,9 +539,9 @@ To tail logs during a rollout:
 flyctl logs --app instaedit-login
 ```
 
-*Privacy contract:* Fly logs must **never** show any of the **15 staged secrets** enumerated in §3 secret collection. That is: `DATABASE_URL` (the password embedded in the URI is just as risky as a separate column), `JWT_SECRET`, `ENCRYPTION_KEYS`, `ACTIVE_ENCRYPTION_KEY_ID`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `EMAIL_PROVIDER_KEY` (the `re_*` Resend token), `META_APP_ID`, `META_APP_SECRET`, plus first-party credentials: `access_token`, `refresh_token`, user passwords, the `csrf_token` value, and any magic-link `?token=` query parameter.
+*Privacy contract:* Fly logs must **never** show any of the **18 staged secrets** enumerated in §3 secret collection. That is: `DATABASE_URL` (the password embedded in the URI is just as risky as a separate column), `JWT_SECRET`, `ENCRYPTION_KEYS`, `ACTIVE_ENCRYPTION_KEY_ID`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `EMAIL_PROVIDER_KEY` (the `re_*` Resend token), `META_APP_ID`, `META_APP_SECRET`, plus first-party credentials: `access_token`, `refresh_token`, user passwords, the `csrf_token` value, and any magic-link `?token=` query parameter.
 
-Any such leak is an immediate incident requiring credential revocation. The `fly.toml` contract also relies on the app binary's own `*http.Request` log filter (see `pkg/api/handlers.go` and `internal/services/sessions_service.go`) — the Fly platform strips injected ENV vars from logs by default; we're defending in depth. The canonical secret-name list is pinned in `scripts/_parse_envfile.py` + `scripts/test_parse_envfile.py` (15 regression cases) so any future secret addition automatically inherits the privacy contract.
+Any such leak is an immediate incident requiring credential revocation. The `fly.toml` contract also relies on the app binary's own `*http.Request` log filter (see `pkg/api/handlers.go` and `internal/services/sessions_service.go`) — the Fly platform strips injected ENV vars from logs by default; we're defending in depth. The canonical secret-name list is pinned in `scripts/_parse_envfile.py` + `scripts/test_parse_envfile.py` (18 regression cases) so any future secret addition automatically inherits the privacy contract.
 
 ### 7.7 Common failure modes
 
@@ -684,7 +690,7 @@ flyctl auth login
 make fly-secrets-test        # local: 15 regression cases pass
 make fly-secrets-dry-run     # local: parser-direct redacted preview
 
-# 2. Push the 15 secrets to Fly (--stage = no premature restart)
+# 2. Push the 18 secrets to Fly (--stage = no premature restart)
 make fly-secrets             # operator: flyctl secrets import --stage
 
 # 3. Verify staged secrets are clean on Fly
