@@ -196,7 +196,7 @@ flyctl apps create instaedit-login
 
 ## 3. Secret collection
 
-The following **21 secrets** must be set on `instaedit-login`. Where to
+The following **24 secrets** must be set on `instaedit-login`. Where to
 get each:
 
 | # | Secret | Where to get it |
@@ -222,9 +222,12 @@ get each:
 | 19 | `TIKTOK_CLIENT_ID` | TikTok Developer Portal → created app → "App ID" (Client Key, post-App Review for scopes `user.info.basic` + `video.publish`). The Client Key is the alpha-numeric string issued by TikTok when registering a Web/App platform. |
 | 20 | `TIKTOK_CLIENT_SECRET` | TikTok Developer Portal → created app → "App secret" (visible ONLY right after creation; if you reload the dashboard later it stops showing — capture immediately). |
 | 21 | `TIKTOK_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/tiktok/callback` in TikTok Developer Portal → created app → "Login Kit" → "Redirect URI" (also surfaced under "App settings" → "Authentication" → "Callback URL"). Also lives in `fly.toml` `[env]` as a public, non-sensitive value. |
+| 22 | `YOUTUBE_CLIENT_ID` | Google Cloud Console → "APIs & Services" → "Credentials" → "Create credentials" → "OAuth client ID" → "Web application" → Client ID (post-OAuth consent screen verification + Data API v3 scope approval for `youtube.upload`). Google identifies Client IDs with the suffix `.apps.googleusercontent.com` — the WHOLE string (including the suffix) is the canonical value. |
+| 23 | `YOUTUBE_CLIENT_SECRET` | Same flow as `YOUTUBE_CLIENT_ID` — shown immediately after client creation in the "OAuth client created" modal. Capture ONCE; if you reload the dialog without copying, you must reset the secret via "Reset Secret" (which invalidates in-flight tokens). |
+| 24 | `YOUTUBE_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/youtube/callback` in Google Cloud Console → "APIs & Services" → "Credentials" → the OAuth 2.0 client → "Authorized redirect URIs". Also lives in `fly.toml` `[env]` as a public, non-sensitive value. **NOTE:** the YouTube Data API v3 does NOT require a per-callback "data" prefix (unlike LinkedIn OAuth 2.0) — the bare `https://api.instaedit.org/api/v1/auth/youtube/callback` is sufficient. |
 
-**Do NOT include** (disabled providers, beta scope): `YOUTUBE_*`,
-`LINKEDIN_*`, `STRIPE_*`. The set script
+**Do NOT include** (disabled providers, beta scope): `LINKEDIN_*`,
+`STRIPE_*`. The set script
 refuses to push if any of these prefixes appear in the .env file.
 
 **Where to store the .env.production file**:
@@ -233,7 +236,7 @@ refuses to push if any of these prefixes appear in the .env file.
 # 1. Copy the dev template
 cp .env.example .env.production
 
-# 2. Fill in the 21 values above. Use your secret manager (1Password,
+# 2. Fill in the 24 values above. Use your secret manager (1Password,
 #    Bitwarden, …) — never paste real secrets into chat / git / issues.
 
 # 3. Verify the file is gitignored (it should be — `.env` is in
@@ -300,24 +303,27 @@ the status + shape (length / charset / regex) + capture location.
 | 19 | `TIKTOK_CLIENT_ID` | Sourced from TikTok Developer Portal (post-App Review) | exactly a TikTok Client Key (≈ 32 alphanumeric chars) | `instaedit-login/tiktok-client-id/production` | ○ PENDING | requires App Review for scopes `user.info.basic` + `video.publish`; capture **together** with `TIKTOK_CLIENT_SECRET` in a single dashboard pull |
 | 20 | `TIKTOK_CLIENT_SECRET` | Sourced from TikTok Developer Portal (post-App Review) | exactly a TikTok Client Secret (≈ 32-50 chars) | `instaedit-login/tiktok-client-secret/production` | ○ PENDING | captured together with `TIKTOK_CLIENT_ID` (both visible only IMMEDIATELY after app creation — capture before page refresh) |
 | 21 | `TIKTOK_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/tiktok/callback` | N/A (public; pinned by TikTok Developer Portal) | ✓ STABLE | no action |
+| 22 | `YOUTUBE_CLIENT_ID` | Sourced from Google Cloud Console (post-OAuth consent screen verification + scope-approval) | exactly a Google-format Client ID (`<random>.apps.googleusercontent.com` — ≈ 72 chars) | `instaedit-login/youtube-client-id/production` | ○ PENDING | requires OAuth consent screen verification (Internal or External depending on holdback policy) + Data API v3 scope approval for `youtube.upload`; capture **together** with `YOUTUBE_CLIENT_SECRET` in a single Cloud Console pull |
+| 23 | `YOUTUBE_CLIENT_SECRET` | Sourced from Google Cloud Console (post-OAuth consent screen verification + scope-approval) | exactly the Client Secret shown in the "OAuth client created" dialog (≈ 24-35 chars) | `instaedit-login/youtube-client-secret/production` | ○ PENDING | captured together with `YOUTUBE_CLIENT_ID` (both surfaced in the same dialog) |
+| 24 | `YOUTUBE_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/youtube/callback` | N/A (public; pinned by Google Cloud Console) | ✓ STABLE | no action |
 
-**Aggregate status (2026-07-14)**: 3 CAPTURED (JWT_SECRET + ENCRYPTION_KEYS[id=1] + ACTIVE_ENCRYPTION_KEY_ID) • 7 STABLE (4 public env + 5 redirect URIs) • 11 PENDING — requires operator-side actions against external services (Fly Postgres / Tigris dashboard / Resend dashboard / Meta Dev Console + **X Developer Portal App Review** for scopes `tweet.read`/`tweet.write`/`users.read`/`offline.access` + **TikTok Developer Portal App Review** for scopes `user.info.basic` + `video.publish`).
+**Aggregate status (2026-07-14)**: 3 CAPTURED (JWT_SECRET + ENCRYPTION_KEYS[id=1] + ACTIVE_ENCRYPTION_KEY_ID) • 8 STABLE (4 public env + 6 redirect URIs) • 13 PENDING — requires operator-side actions against external services (Fly Postgres / Tigris dashboard / Resend dashboard / Meta Dev Console + **X Developer Portal App Review** for scopes `tweet.read`/`tweet.write`/`users.read`/`offline.access` + **TikTok Developer Portal App Review** for scopes `user.info.basic` + `video.publish` + **YouTube Data API v3 OAuth Verification** for scope `youtube.upload` + OAuth consent screen publication).
 
 **Privacy contract**: the actual secret values are NEVER printed in this manifest or in any commit output. The shape column gives the operator enough metadata to confirm locally (a) the captured value satisfies the input contract (e.g. JWT_SECRET is exactly 64 hex chars), (b) the captured value is correctly stored (the password-manager-entry column matches where the operator saved it). If you ever need to actually verify a value, paste it into your terminal locally WITHOUT piping it to the chat agent.
 
 **Pipeline self-test (pure local, no flyctl needed)**:
 ```text
 # Equivalent to `make fly-secrets-dry-run` minus the bash wrapper's flyctl pre-flight.
-# Verified 2026-07-14 on the synthetic shape-valid fixture: exit code 0, 21 keys validated.
+# Verified 2026-07-14 on the synthetic shape-valid fixture: exit code 0, 24 keys validated.
 # The bash wrapper (make fly-secrets-dry-run) and the parser-direct (this snippet) share
 # the SAME _parse_envfile.py contract; the regression suite scripts/test_parse_envfile.py
-# pins the contract with 21 invariant tests.
+# pins the contract with 24 invariant tests.
 umask 077
 python3 scripts/_parse_envfile.py .env.production dry-run instaedit-login scripts \
   2>&1 >/dev/null
 # Expected: exit 0 + redacted preview `KEY = first3***last3 (len=N)` per key on stderr.
 # Synthetic fixture leak-audit (2026-07-14): none of the 7 known fixture strings appeared
-# in stderr; 21 `len=N` preview entries emitted; stdout was 0 bytes.
+# in stderr; 24 `len=N` preview entries emitted; stdout was 0 bytes.
 ```
 
 **Operator-sequence prerequisite (sandbox-blocked steps)**:
@@ -331,7 +337,7 @@ flyctl auth login
 
 # 1. Preview the secrets push (no secrets leave your machine)
 make fly-secrets-dry-run
-#    → prints a redacted table of all 21 keys + lengths
+#    → prints a redacted table of all 24 keys + lengths
 #    → exits 0 if validation passes
 
 # 2. Stage the secrets on Fly (NO restart triggered)
@@ -342,7 +348,7 @@ make fly-secrets
 
 # 3. Verify clean state
 make fly-secrets-verify
-#    → asserts no <redacted>, no disabled-provider keys, all 21 keys present
+#    → asserts no <redacted>, no disabled-provider keys, all 24 keys present
 #    → exits 0 if all checks pass
 
 # 4. Sanity-check fly.toml
@@ -545,9 +551,9 @@ To tail logs during a rollout:
 flyctl logs --app instaedit-login
 ```
 
-*Privacy contract:* Fly logs must **never** show any of the **21 staged secrets** enumerated in §3 secret collection. That is: `DATABASE_URL` (the password embedded in the URI is just as risky as a separate column), `JWT_SECRET`, `ENCRYPTION_KEYS`, `ACTIVE_ENCRYPTION_KEY_ID`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `EMAIL_PROVIDER_KEY` (the `re_*` Resend token), `META_APP_ID`, `META_APP_SECRET`, plus first-party credentials: `access_token`, `refresh_token`, user passwords, the `csrf_token` value, and any magic-link `?token=` query parameter.
+*Privacy contract:* Fly logs must **never** show any of the **24 staged secrets** enumerated in §3 secret collection. That is: `DATABASE_URL` (the password embedded in the URI is just as risky as a separate column), `JWT_SECRET`, `ENCRYPTION_KEYS`, `ACTIVE_ENCRYPTION_KEY_ID`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `EMAIL_PROVIDER_KEY` (the `re_*` Resend token), `META_APP_ID`, `META_APP_SECRET`, plus first-party credentials: `access_token`, `refresh_token`, user passwords, the `csrf_token` value, and any magic-link `?token=` query parameter.
 
-Any such leak is an immediate incident requiring credential revocation. The `fly.toml` contract also relies on the app binary's own `*http.Request` log filter (see `pkg/api/handlers.go` and `internal/services/sessions_service.go`) — the Fly platform strips injected ENV vars from logs by default; we're defending in depth. The canonical secret-name list is pinned in `scripts/_parse_envfile.py` + `scripts/test_parse_envfile.py` (21 regression cases) so any future secret addition automatically inherits the privacy contract.
+Any such leak is an immediate incident requiring credential revocation. The `fly.toml` contract also relies on the app binary's own `*http.Request` log filter (see `pkg/api/handlers.go` and `internal/services/sessions_service.go`) — the Fly platform strips injected ENV vars from logs by default; we're defending in depth. The canonical secret-name list is pinned in `scripts/_parse_envfile.py` + `scripts/test_parse_envfile.py` (24 regression cases) so any future secret addition automatically inherits the privacy contract.
 
 ### 7.7 Common failure modes
 
@@ -696,7 +702,7 @@ flyctl auth login
 make fly-secrets-test        # local: 15 regression cases pass
 make fly-secrets-dry-run     # local: parser-direct redacted preview
 
-# 2. Push the 21 secrets to Fly (--stage = no premature restart)
+# 2. Push the 24 secrets to Fly (--stage = no premature restart)
 make fly-secrets             # operator: flyctl secrets import --stage
 
 # 3. Verify staged secrets are clean on Fly
