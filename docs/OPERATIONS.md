@@ -140,6 +140,8 @@ Cross-references to the existing recovery scripts:
 | **Tigris bucket provisioning** | [`scripts/s3/provision-tigris.sh`](../scripts/s3/provision-tigris.sh) | One-time at provisioning; re-run on key rotation; re-run on bucket-config drift |
 | **Fly app always-on contract** | `docs/DEPLOY.md` §7 (Troubleshooting) | Uptime monitor alerts if /health or /ready down > 2x consecutive ticks |
 | **Vercel SPA** | (manual) `curl -I https://app.instaedit.org/connections` returns 200 | On Vercel deploy + on incident |
+| **Post-deploy E2E smoke** (Phase 9 sub-1-5+7) | [`scripts/ops/post_deploy_smoke.sh`](../scripts/ops/post_deploy_smoke.sh) | After every `make fly-deploy`; weekly cron once stable |
+| **Workspace isolation test** (Phase 9 sub-6) | [`scripts/ops/workspace_isolation_test.sh`](../scripts/ops/workspace_isolation_test.sh) | Before opening beta to external users + on any cross-workspace query refactor |
 
 Per-drill record-keeping paths:
 
@@ -381,6 +383,8 @@ The provider key has different capture semantics than the rest of the `.env.prod
 | Postgres smoke check | `scripts/db/check-postgres-health.sh` |
 | Postgres restore drill | `scripts/db/production-restore-drill.sh` |
 | Tigris bucket provisioning | `scripts/s3/provision-tigris.sh` |
+| Post-deploy E2E smoke (Phase 9 sub-1-5+7) | `scripts/ops/post_deploy_smoke.sh` |
+| Workspace isolation test (Phase 9 sub-6) | `scripts/ops/workspace_isolation_test.sh` |
 | Tigris storage recovery drills | `docs/OPERATIONS.md` §4.0 |
 | Email sender DNS records + Gmail inbox test + tracking verification + provider-key capture | `docs/OPERATIONS.md` §7 |
 | Email DNS READ-ONLY check (no registrar mutations) | `scripts/email/check-email-deliverability.sh` |

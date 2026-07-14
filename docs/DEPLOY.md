@@ -350,6 +350,10 @@ re-builds and re-rolls.
 
 ## 5. Post-deploy smoke test
 
+**APPLY ALL of these on operator laptop AFTER `make fly-deploy` exits 0:**
+
+### 5.0 Lightweight shell probes (read-only)
+
 ```bash
 # 1. Health endpoint
 curl -sS https://api.instaedit.org/api/v1/health | jq
@@ -370,6 +374,44 @@ curl -sI -H "Origin: https://app.instaedit.org" \
 # 4. Tail logs
 flyctl logs --app instaedit-login
 ```
+
+### 5.1 Comprehensive end-to-end smoke (`scripts/ops/post_deploy_smoke.sh`)
+
+The script above is a quick check (4 probes). The **THOROUGH pre-launch verification** lives in `scripts/ops/post_deploy_smoke.sh` and covers Phase 9 sub-phases 1, 2, 3, 4, 5 + 7:
+
+```bash
+# Default mode (read-only — probes only, no prod-state-creation):
+./scripts/ops/post_deploy_smoke.sh
+
+# Verbose mode (also creates a real draft post + polls state 30s):
+APPLY_PUBLISH=1 ./scripts/ops/post_deploy_smoke.sh
+
+# Against a staging deploy:
+BASE_URL=https://staging.instaedit.org ./scripts/ops/post_deploy_smoke.sh
+```
+
+Pass criteria: ALL PASS count > 0 AND FAIL count = 0; WARNs are advisory (e.g., magic-link dev-fallback path detected). The script **is adaptive** on Phase 9.1: if the backend reply includes the dev-fallback `magic_link_token` field, the script consumes the token via `/verify` and exercises the cookie/CSRF contract end-to-end. If NOT (production email-wired path), the cookie/CSRF + /accounts + /media sub-phases are SKIPPED with a `DEFERRED` warning (until backend Resend wiring lands — see `docs/OPERATIONS.md` §7.5).
+
+### 5.2 Workspace isolation test (`scripts/ops/workspace_isolation_test.sh`)
+
+Phase 9 sub-phase 6 — verifies user A cannot access user B's data across /accounts + /posts/workspace/{wid} + cross-workspace POST /posts. The script creates 2 fresh users via the **email/password register flow** (not magic-link — the test must NOT depend on Resend email delivery), runs 4 isolation assertions, then **hard-deletes its own test data** via `psql $DATABASE_URL` CASCADE on users matching the random suffix.
+
+```bash
+# Preview only (no mutations):
+./scripts/ops/workspace_isolation_test.sh --dry-run
+
+# Apply (creates 2 users + 2 workspaces + runs assertions + hard-deletes on EXIT):
+DATABASE_URL=postgres://<POOL-URL-FROM-PM> \
+  ./scripts/ops/workspace_isolation_test.sh
+
+# Hard cleanup is ALWAYS attempted on EXIT (trap) — even on FAIL.
+# If cleanup fails (network, DB unreachable), the script prints the exact
+# psql commands to run by hand to remove the test users.
+```
+
+Pass criteria: 4/4 PASS; each FAIL exits 1 after cleanup. Cleanup SQL uses the random suffix so even if the trap fails, the operator can run a manual `psql ... WHERE email LIKE 'isol-%-%<SUFFIX>'`.
+
+> Both scripts integrate with the established pattern: idempotent, dry-run-by-default, `set -euo pipefail`, `bash -n` clean, exit codes (0/1/2/3), `mktemp` + `trap` cleanup. See `scripts/db/check-postgres-health.sh` + `scripts/email/check-email-deliverability.sh` + `scripts/s3/provision-tigris.sh` for the canonical pattern.
 
 ---
 
