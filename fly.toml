@@ -61,7 +61,7 @@
 # the prefix of a sub-table in another. flyctl parses this correctly;
 # trust flyctl over strict parsers for the Fly-specific shape.
 #
-# Disabled providers — TikTok, YouTube, LinkedIn, and
+# Disabled providers — YouTube, LinkedIn, and
 # Stripe — are not configured in beta. Their *_CLIENT_ID /
 # *_CLIENT_SECRET / *_REDIRECT_URI / STRIPE_* env keys are removed
 # entirely from this file; re-add them when the corresponding
@@ -74,6 +74,13 @@
 # registered in X Developer Portal → User authentication settings →
 # Callback URIs), while X_CLIENT_ID + X_CLIENT_SECRET are Fly
 # secrets — see scripts/required-fly-secrets.txt for the full list.
+#
+# TikTok was moved from disabled to beta on the TikTok-provider
+# enablement commit; TIKTOK_REDIRECT_URI lives in [env] below
+# (public, registered in TikTok Developer Portal → Apps → "Login
+# authentication" → "Redirect URI"), while TIKTOK_CLIENT_ID +
+# TIKTOK_CLIENT_SECRET are Fly secrets — see
+# scripts/required-fly-secrets.txt for the full list.
 #
 # Deploy:
 #   flyctl deploy --config fly.toml
@@ -153,6 +160,7 @@ primary_region = "iad"
   FACEBOOK_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/facebook/callback"
   THREADS_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/threads/callback"
   X_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/twitter/callback"
+  TIKTOK_REDIRECT_URI = "https://api.instaedit.org/api/v1/auth/tiktok/callback"
 
   # Worker health port — shared default is OFF ("0") so dev runs
   # (make run-worker) don't accidentally bind 9090. [processes.worker.env]
