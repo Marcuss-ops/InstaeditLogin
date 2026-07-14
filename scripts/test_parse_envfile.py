@@ -62,7 +62,7 @@ def run_parser(env_path: str, mode: str = "dry-run") -> tuple[int, str, str]:
     return result.returncode, result.stdout, result.stderr
 
 
-# A canonical "all 15 keys, valid" set. Each test overrides one or
+# A canonical "all 18 keys, valid" set. Each test overrides one or
 # more of these to exercise a specific failure mode.
 def valid_env() -> str:
     return "\n".join([
@@ -81,6 +81,9 @@ def valid_env() -> str:
         "INSTAGRAM_REDIRECT_URI=https://api/cb",
         "FACEBOOK_REDIRECT_URI=https://api/cb",
         "THREADS_REDIRECT_URI=https://api/cb",
+        "X_CLIENT_ID=test_x_id",
+        "X_CLIENT_SECRET=test_x_secret_64_chars_long_for_realism_xxxxxxxx",
+        "X_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/twitter/callback",
     ])
 
 
@@ -98,13 +101,13 @@ def test_01_happy_path_dry_run_emits_nothing_to_stdout() -> None:
     assert "THREADS_REDIRECT_URI" in err, f"preview missing THREADS_REDIRECT_URI; stderr: {err}"
 
 
-def test_02_happy_path_apply_emits_all_15_key_val_lines() -> None:
-    """Valid env in apply mode: rc=0, all 15 KEY=VAL lines on stdout, no leak to stderr."""
+def test_02_happy_path_apply_emits_all_18_key_val_lines() -> None:
+    """Valid env in apply mode: rc=0, all 18 KEY=VAL lines on stdout, no leak to stderr."""
     env = make_env(valid_env())
     rc, out, err = run_parser(env, "apply")
     assert rc == 0, f"rc=0 expected, got {rc}; stderr: {err}"
     lines = [l for l in out.splitlines() if l]
-    assert len(lines) == 15, f"expected 15 KEY=VAL lines, got {len(lines)}: {lines}"
+    assert len(lines) == 18, f"expected 18 KEY=VAL lines, got {len(lines)}: {lines}"
     for key in ("DATABASE_URL", "JWT_SECRET", "ENCRYPTION_KEYS",
                 "ACTIVE_ENCRYPTION_KEY_ID", "THREADS_REDIRECT_URI"):
         assert any(l.startswith(f"{key}=") for l in lines), f"missing {key} in stdout: {out}"
@@ -136,6 +139,9 @@ def test_03_dollar_var_preserved_literally() -> None:
         "INSTAGRAM_REDIRECT_URI=https://api/cb",
         "FACEBOOK_REDIRECT_URI=https://api/cb",
         "THREADS_REDIRECT_URI=https://api/cb",
+        "X_CLIENT_ID=test_x_id",
+        "X_CLIENT_SECRET=test_x_secret_64_chars_long_for_realism_xxxxxxxx",
+        "X_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/twitter/callback",
     ]))
     rc, out, err = run_parser(env, "apply")
     assert rc == 0, f"rc=0 expected, got {rc}; stderr: {err}"
@@ -214,6 +220,9 @@ def test_05_export_prefix() -> None:
         "INSTAGRAM_REDIRECT_URI=https://api/cb",
         "FACEBOOK_REDIRECT_URI=https://api/cb",
         "THREADS_REDIRECT_URI=https://api/cb",
+        "X_CLIENT_ID=test_x_id",
+        "X_CLIENT_SECRET=test_x_secret_64_chars_long_for_realism_xxxxxxxx",
+        "X_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/twitter/callback",
     ]))
     rc, out, err = run_parser(env, "apply")
     assert rc == 0, f"export prefix must parse; rc={rc}, stderr: {err}"
@@ -236,6 +245,9 @@ def test_06_single_and_double_quotes() -> None:
         "INSTAGRAM_REDIRECT_URI=https://api/cb",
         "FACEBOOK_REDIRECT_URI=https://api/cb",
         "THREADS_REDIRECT_URI=https://api/cb",
+        "X_CLIENT_ID=test_x_id",
+        "X_CLIENT_SECRET=test_x_secret_64_chars_long_for_realism_xxxxxxxx",
+        "X_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/twitter/callback",
     ]))
     rc, out, err = run_parser(env, "apply")
     assert rc == 0, f"quoted values must parse; rc={rc}, stderr: {err}"
@@ -258,6 +270,9 @@ def test_07_inline_hash_is_data_not_comment() -> None:
         "INSTAGRAM_REDIRECT_URI=https://api/cb",
         "FACEBOOK_REDIRECT_URI=https://api/cb",
         "THREADS_REDIRECT_URI=https://api/cb",
+        "X_CLIENT_ID=test_x_id",
+        "X_CLIENT_SECRET=test_x_secret_64_chars_long_for_realism_xxxxxxxx",
+        "X_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/twitter/callback",
     ]))
     rc, out, err = run_parser(env, "apply")
     assert rc == 0, f"inline # must parse; rc={rc}, stderr: {err}"
@@ -280,6 +295,9 @@ def test_08_redacted_placeholder_rejected() -> None:
         "INSTAGRAM_REDIRECT_URI=https://api/cb",
         "FACEBOOK_REDIRECT_URI=https://api/cb",
         "THREADS_REDIRECT_URI=https://api/cb",
+        "X_CLIENT_ID=test_x_id",
+        "X_CLIENT_SECRET=test_x_secret_64_chars_long_for_realism_xxxxxxxx",
+        "X_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/twitter/callback",
     ]))
     rc, out, err = run_parser(env, "dry-run")
     assert rc == 3, f"<redacted> must reject with rc=3; got rc={rc}, stderr: {err}"
@@ -301,6 +319,9 @@ def test_09_disabled_provider_rejected() -> None:
         "INSTAGRAM_REDIRECT_URI=https://api/cb",
         "FACEBOOK_REDIRECT_URI=https://api/cb",
         "THREADS_REDIRECT_URI=https://api/cb",
+        "X_CLIENT_ID=test_x_id",
+        "X_CLIENT_SECRET=test_x_secret_64_chars_long_for_realism_xxxxxxxx",
+        "X_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/twitter/callback",
     ]))
     rc, out, err = run_parser(env, "dry-run")
     assert rc == 3, f"STRIPE must reject with rc=3; got rc={rc}, stderr: {err}"
@@ -324,13 +345,16 @@ def test_10_disabled_provider_commented_is_ok() -> None:
         "INSTAGRAM_REDIRECT_URI=https://api/cb",
         "FACEBOOK_REDIRECT_URI=https://api/cb",
         "THREADS_REDIRECT_URI=https://api/cb",
+        "X_CLIENT_ID=test_x_id",
+        "X_CLIENT_SECRET=test_x_secret_64_chars_long_for_realism_xxxxxxxx",
+        "X_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/twitter/callback",
     ]))
     rc, out, err = run_parser(env, "dry-run")
     assert rc == 0, f"commented disabled providers must pass; rc={rc}, stderr: {err}"
 
 
 def test_11_missing_required_key_rejected() -> None:
-    """If one of the 15 required keys is missing or empty, reject (rc=3)."""
+    """If one of the 18 required keys is missing or empty, reject (rc=3)."""
     lines = valid_env().split("\n")
     # Drop THREADS_REDIRECT_URI
     lines = [l for l in lines if not l.startswith("THREADS_REDIRECT_URI=")]
@@ -356,6 +380,9 @@ def test_12_active_encryption_key_id_not_in_map_rejected() -> None:
         "INSTAGRAM_REDIRECT_URI=https://api/cb",
         "FACEBOOK_REDIRECT_URI=https://api/cb",
         "THREADS_REDIRECT_URI=https://api/cb",
+        "X_CLIENT_ID=test_x_id",
+        "X_CLIENT_SECRET=test_x_secret_64_chars_long_for_realism_xxxxxxxx",
+        "X_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/twitter/callback",
     ]))
     rc, out, err = run_parser(env, "dry-run")
     assert rc == 3, f"active id not in map must reject; got rc={rc}, stderr: {err}"
@@ -378,6 +405,9 @@ def test_13_non_uint32_encryption_key_id_rejected() -> None:
         "INSTAGRAM_REDIRECT_URI=https://api/cb",
         "FACEBOOK_REDIRECT_URI=https://api/cb",
         "THREADS_REDIRECT_URI=https://api/cb",
+        "X_CLIENT_ID=test_x_id",
+        "X_CLIENT_SECRET=test_x_secret_64_chars_long_for_realism_xxxxxxxx",
+        "X_REDIRECT_URI=https://api.instaedit.org/api/v1/auth/twitter/callback",
     ]))
     rc, out, err = run_parser(env, "dry-run")
     assert rc == 3, f"non-uint32 ENCRYPTION_KEYS id must reject; got rc={rc}, stderr: {err}"
@@ -387,7 +417,7 @@ def test_13_non_uint32_encryption_key_id_rejected() -> None:
 
 ALL_TESTS = [
     test_01_happy_path_dry_run_emits_nothing_to_stdout,
-    test_02_happy_path_apply_emits_all_15_key_val_lines,
+    test_02_happy_path_apply_emits_all_18_key_val_lines,
     test_03_dollar_var_preserved_literally,
     test_04_crlf_line_endings,
     test_05_export_prefix,
