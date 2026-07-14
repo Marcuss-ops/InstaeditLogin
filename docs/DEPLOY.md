@@ -29,7 +29,34 @@ Tools + accounts required:
 | Tigris account | https://tigrisdata.com (S3-compatible storage; Access Keys in dashboard) |
 | Resend account | https://resend.com (or your SMTP — magic-link mail) |
 | Managed Postgres | Fly Postgres (`flyctl postgres create`) or Neon/Supabase |
-| DNS for `instaedit.org` | registrar (or Cloudflare) — delegate A/CNAME per Fly's TLS setup guide |
+| DNS for `instaedit.org` | registrar (or Cloudflare) — see **§1.5 below** for the canonical records + see **[docs/OPERATIONS.md §1](./OPERATIONS.md#1-dns-records-instaeditorg)** for the full DNS runbook (CAA, DNSSEC, apex redirect) |
+
+---
+
+## 1.5 DNS delegation (canonical) — `instaedit.org`
+
+Quote minimally here for the deploy path; the **full DNS runbook (cert renewal, failure recovery, monitoring) lives in [docs/OPERATIONS.md §1](./OPERATIONS.md#1-dns-records-instaeditorg)**.
+
+| Host | Type | Value | TTL | Purpose |
+|------|------|-------|-----|---------|
+| `instaedit.org` (apex) | `A` | `76.76.21.21` | 60 | Vercel Anycast — 301 redirects to `app.instaedit.org`. Apex cannot use CNAME (DNS spec); use Vercel's A record + dashboard-level redirect (canonical over ALIAS-flattening for portability across registrars). |
+| `app.instaedit.org` | `CNAME` | `cname.vercel-dns.com.` | 60 | Vercel edge route to the SPA. |
+| `api.instaedit.org` | `CNAME` | `instaedit-login.fly.dev.` | 300 | Fly.io ingress for the backend. **Never** hardcode A records from `fly ips list` — Fly re-IPs during migrations and the CNAME keeps failover transparent. |
+| `_vercel.instaedit.org` | `TXT` | `vc-domain-verify=<token-from-Vercel>` | 300 | Vercel domain-ownership challenge. Token is surfaced in Vercel → Project → Settings → Domains; paste as-is. |
+| `instaedit.org` (apex) | `CAA` | `0 issue "letsencrypt.org"` | 3600 | Restrict cert issuance to Let's Encrypt (both Fly and Vercel use LE). |
+| `instaedit.org` (apex) | `CAA` | `0 iodef "mailto:security@instaedit.org"` | 3600 | Incident reporting for unauthorized issuance attempts. |
+| `_dmarc.instaedit.org` | `TXT` | `v=DMARC1; p=reject; rua=mailto:security@instaedit.org` | 3600 | Anti-spoofing for `no-reply@instaedit.org`. Tighten to `p=quarantine` first if some legit mail relays reject `p=reject`. |
+
+Plus:
+- **DNSSEC** at the registrar (Cloudflare: one-click; Namecheap: opt-in via DS records). Required for the CAA records to be honored by resolvers.
+- **Cloudflare users:** set `api.` and `app.` to **DNS-only** ("grey cloud"). The orange-cloud proxy returns fly/vercel's certs before LE validation can complete — HTTP-01 challenges will fail and cert renewal will silently break after 60 days.
+- **TTL rationale:** 60s on the frontend lets near-instant switchover in CDN failure events; 300s on the backend balances low-API-conn-churn vs cheap regional rerouting.
+
+> **Kicking it off** (after Fly app exists):
+> ```bash
+> flyctl certs add api.instaedit.org --app instaedit-login
+> ```
+> Fly will HTTP-01 validate against `instaedit-login.fly.dev` via the CNAME. Watch the log for `Cert issued` (typically 30-90s once DNS propagates). For Vercel: add `app.instaedit.org` in Project → Settings → Domains, paste the `_vercel` TXT value, wait for "Valid Configuration".
 
 ---
 
@@ -380,6 +407,7 @@ on `/api/v1/health` before the old VM is torn down.
 | Process groups (api / worker) | `Makefile` (`fly-help`, `fly-verify`) + `Dockerfile` (Blocco #4.1) |
 | Migrations | `internal/database/migrations/` (apply via `release_command`) |
 | Local dev handoff | `HANDOFF-LINUX.md` |
+| Operational runbook (DNS, certs, monitoring, recovery) | **[`docs/OPERATIONS.md`](./OPERATIONS.md)** |
 | OpenAPI spec | `api/openapi.yaml` |
 
 ---

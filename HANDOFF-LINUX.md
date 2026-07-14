@@ -192,6 +192,8 @@ Vai su `/status` e leggi la ragione (es. `vercel_stale_deploy` vs `unreachable` 
 ## 11. (Opzionale) Setup produzione
 
 > **Provisioning canonico production Postgres (Fly cluster `instaedit-production` con size/HA/PITR/pooler/password discipline + restore drill)**: vedi docs/DEPLOY.md §2-§3 — runbook canonico con tutti i flag lockati e script di drill. Questa sezione è solo un sommario dei punti operativi distinti, NON duplica la procedura.
+>
+> **DNS / cert / monitoringo**: vedi [docs/OPERATIONS.md §1-§5](./docs/OPERATIONS.md) — record canonici (apex A / app CNAME Vercel / api CNAME Fly / `_vercel` TXT / CAA / DMARC), failure-recovery playbook, monitoring baseline + pre-flight "go-live" gate. Una modifica a DNS / cert / monitoringo → prima aggiorna `docs/OPERATIONS.md`, poi l'eventuale cross-ref in `docs/DEPLOY.md`.
 
 Dopo che il flow locale funziona, per andare in produzione:
 - **Database Postgres**: `fly postgres create --name instaedit-production --region iad --vm-size shared-cpu-1x --vm-memory 1gb --initial-cluster-size 1 --pg-bouncer-enabled=true` (parametri lockati in `scripts/db/provision-postgres-runbook.sh`).
