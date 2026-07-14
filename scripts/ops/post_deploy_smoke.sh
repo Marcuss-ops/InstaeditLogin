@@ -35,6 +35,17 @@
 #   docs/DEPLOY.md §5       (lightweight post-deploy smoke; this is the THOROUGH version)
 #   docs/OPERATIONS.md §3   (recovery drills — `Publishing state` row references this script)
 #   docs/OPERATIONS.md §5   (go-live gate — section 6 of this script = one of the 9 boxes)
+#
+# Reliance on Tigris lifecycle (scripts/s3/provision-tigris.sh):
+#   This script §B.5 issues real PUTs to a Tigris bucket; each run writes at
+#   least ONE small object as a presign round-trip. Because §B.5 is read-only
+#   by default (no DELETE), the bucket MUST have the lifecycle rules
+#   documented in docs/OPERATIONS.md §4.2 — incomplete multipart uploads aborted
+#   after 24h, expired objects after 1 day. Without those rules, repeated runs
+#   accumulate smoke-test debris. (Future work could add an env-gated DELETE
+#   after PUT; out of scope for this commit.)
+#   This script also assumes §B.6 already-in-flight publish posts are operator-
+#   garbage-collected (the orphan post id is printed but not auto-deleted here).
 
 set -euo pipefail
 

@@ -3,7 +3,8 @@
         docker-build-production docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
         fly-deploy fly-verify fly-help \
-        fly-secrets fly-secrets-dry-run fly-secrets-verify fly-secrets-test
+        fly-secrets fly-secrets-dry-run fly-secrets-verify fly-secrets-test \
+        ops-smoke ops-isolation ops-isolation-dry-run
 
 # Start the full local development stack modeled on Blocco #2.1's
 # production-true topology: 3 services (api + worker + migrate) plus
@@ -293,3 +294,47 @@ fly-secrets-test:
 		exit 1; \
 	fi
 	python3 scripts/test_parse_envfile.py
+
+# ────────────────────────────────────────────────────────────────────────
+# Blocco #5.1: Post-deploy operator runbooks.
+#
+# `make ops-smoke` runs the comprehensive Phase 9 sub-1-5+7 end-to-end
+# verification against https://api.instaedit.org. Read-only by default.
+# Set APPLY_PUBLISH=1 (env) before the make call to actually trigger a
+# real publish + poll (still non-destructive on the workspace).
+#
+# `make ops-isolation` runs Phase 9 sub-6 — creates 2 fresh users,
+# asserts cross-tenant boundaries across 4 endpoints, CASCADE-deletes
+# test users on EXIT (success OR failure). Requires DATABASE_URL on the
+# operator machine for the cleanup.
+#
+# `make ops-isolation-dry-run` previews the full plan + cleanup SQL
+# without mutating. Use this BEFORE the real run to verify the script
+# will hit the expected endpoints with the expected test-user suffix.
+#
+# Both targets are BSD bash-portable, have NO Go dependency, can run on
+# laptops without the dev Docker stack. They cross-reference docs/DEPLOY.md
+# §5 and docs/OPERATIONS.md §3.
+# ────────────────────────────────────────────────────────────────────────
+ops-smoke:
+	@if [[ ! -x ./scripts/ops/post_deploy_smoke.sh ]]; then \
+		echo "❌ scripts/ops/post_deploy_smoke.sh not found or not executable"; \
+		echo "   Run: chmod +x scripts/ops/post_deploy_smoke.sh"; \
+		exit 1; \
+	fi
+	./scripts/ops/post_deploy_smoke.sh
+
+ops-isolation:
+	@if [[ ! -x ./scripts/ops/workspace_isolation_test.sh ]]; then \
+		echo "❌ scripts/ops/workspace_isolation_test.sh not found or not executable"; \
+		echo "   Run: chmod +x scripts/ops/workspace_isolation_test.sh"; \
+		exit 1; \
+	fi
+	./scripts/ops/workspace_isolation_test.sh
+
+ops-isolation-dry-run:
+	@if [[ ! -x ./scripts/ops/workspace_isolation_test.sh ]]; then \
+		echo "❌ scripts/ops/workspace_isolation_test.sh not found or not executable"; \
+		exit 1; \
+	fi
+	./scripts/ops/workspace_isolation_test.sh --dry-run
