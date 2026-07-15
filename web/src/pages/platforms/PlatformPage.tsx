@@ -1,7 +1,17 @@
 import { Link, useParams } from "react-router-dom";
-import { Zap, ArrowRight, ChevronDown, Check, X, Code } from "lucide-react";
+import { Zap, ArrowRight, ChevronDown, Check, X, Code, Rocket, Target, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { PLATFORMS, type PlatformData } from "./platformData";
+
+function SectionDivider({ icon }: { icon: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-center py-4">
+      <div className="h-px flex-1 max-w-[160px] bg-white/[0.06]" />
+      <div className="mx-6 text-[#9aa0aa]/30">{icon}</div>
+      <div className="h-px flex-1 max-w-[160px] bg-white/[0.06]" />
+    </div>
+  );
+}
 
 export function PlatformPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -25,6 +35,7 @@ export function PlatformPage() {
 
 function PlatformPageInner({ platform }: { platform: PlatformData }) {
   const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const accent = platform.color;
 
   return (
     <div className="min-h-screen bg-[#030308] text-[#e8e8ef]">
@@ -57,14 +68,14 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       </nav>
 
       {/* Hero */}
-      <section className="pt-40 pb-24 px-6">
+      <section className="pt-44 pb-28 px-6">
         <div className="max-w-4xl mx-auto text-center">
           <div
-            className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full border text-sm font-medium mb-10"
+            className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full border text-sm font-medium mb-12"
             style={{
-              borderColor: `${platform.color}30`,
-              backgroundColor: `${platform.color}10`,
-              color: platform.color,
+              borderColor: `${accent}30`,
+              backgroundColor: `${accent}10`,
+              color: accent,
             }}
           >
             {platform.icon}
@@ -75,7 +86,7 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
             {platform.heroTagline.split(",").map((part, i) => (
               <span key={i}>
                 {i === 0 ? part : (
-                  <span style={{ color: platform.color }}>{part}</span>
+                  <span style={{ color: accent }}>{part}</span>
                 )}
                 {i === 0 ? "," : ""}
               </span>
@@ -109,7 +120,7 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       </section>
 
       {/* Code preview */}
-      <section className="pb-24 px-6">
+      <section className="py-28 px-6">
         <div className="max-w-3xl mx-auto">
           <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
             <div className="flex items-center gap-2 px-5 py-3 border-b border-white/[0.06]">
@@ -125,62 +136,70 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
         </div>
       </section>
 
+      <SectionDivider icon={<Sparkles className="w-4 h-4" />} />
+
       {/* Note */}
-      <section className="pb-24 px-6">
+      <section className="py-28 px-6">
         <div className="max-w-3xl mx-auto">
           <div
-            className="rounded-2xl border p-6 md:p-8"
+            className="rounded-2xl border p-8 md:p-10"
             style={{
-              borderColor: `${platform.color}20`,
-              backgroundColor: `${platform.color}08`,
+              borderColor: `${accent}20`,
+              backgroundColor: `${accent}08`,
             }}
           >
             <div
-              className="text-sm font-semibold mb-2"
-              style={{ color: platform.color }}
+              className="text-sm font-semibold mb-3"
+              style={{ color: accent }}
             >
               {platform.noteTitle}
             </div>
-            <p className="text-sm text-[#9aa0aa] leading-relaxed">
+            <p className="text-base text-[#9aa0aa] leading-relaxed">
               {platform.noteDescription}
             </p>
           </div>
         </div>
       </section>
 
+      <SectionDivider icon={<Target className="w-4 h-4" />} />
+
       {/* Comparison */}
-      <section className="pb-24 px-6">
+      <section className="py-28 px-6">
         <div className="max-w-4xl mx-auto">
-          <h2 className="text-2xl md:text-3xl font-semibold tracking-tight text-center mb-12">
+          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-center mb-16">
             Why InstaEdit vs {platform.name} API?
           </h2>
 
           <div className="grid md:grid-cols-2 gap-6">
             {/* InstaEdit */}
-            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.04] p-8">
-              <div className="text-sm font-semibold text-emerald-400 mb-6">
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.04] p-10">
+              <div className="text-sm font-semibold text-emerald-400 mb-8">
                 {platform.comparison.us.label}
               </div>
-              <ul className="space-y-4">
+              <ul className="space-y-5">
                 {platform.comparison.us.items.map((item, i) => (
                   <li key={i} className="flex items-start gap-3">
-                    <Check className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
-                    <span className="text-sm text-[#e8e8ef]">{item}</span>
+                    <Check className="w-4 h-4 text-emerald-400 mt-1 shrink-0" />
+                    <span className="text-[15px] text-[#e8e8ef] leading-relaxed">
+                      {item}
+                    </span>
                   </li>
                 ))}
               </ul>
             </div>
 
             {/* Their API */}
-            <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-8">
-              <div className="text-sm font-semibold text-[#9aa0aa] mb-6">
+            <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-10">
+              <div className="text-sm font-semibold text-[#9aa0aa] mb-8">
                 {platform.comparison.them.label}
               </div>
-              <ul className="space-y-4">
+              <ul className="space-y-5">
                 {platform.comparison.them.items.map((item, i) => (
                   <li key={i} className="flex items-start gap-3">
-                    <X className="w-4 h-4 text-red-400/60 mt-0.5 shrink-0" />
-                    <span className="text-sm text-[#9aa0aa]">{item}</span>
+                    <X className="w-4 h-4 text-red-400/60 mt-1 shrink-0" />
+                    <span className="text-[15px] text-[#9aa0aa] leading-relaxed">
+                      {item}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -189,14 +208,16 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
         </div>
       </section>
 
+      <SectionDivider icon={<Rocket className="w-4 h-4" />} />
+
       {/* How it works */}
-      <section id="how-it-works" className="pb-24 px-6">
+      <section id="how-it-works" className="py-28 px-6">
         <div className="max-w-4xl mx-auto">
-          <h2 className="text-2xl md:text-3xl font-semibold tracking-tight text-center mb-12">
+          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-center mb-16">
             How it works
           </h2>
 
-          <div className="grid md:grid-cols-3 gap-8">
+          <div className="grid md:grid-cols-3 gap-10">
             {[
               {
                 step: "1",
@@ -216,16 +237,16 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
             ].map((s) => (
               <div key={s.step} className="text-center">
                 <div
-                  className="w-12 h-12 rounded-xl flex items-center justify-center text-lg font-semibold mx-auto mb-5"
+                  className="w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-semibold mx-auto mb-6"
                   style={{
-                    backgroundColor: `${platform.color}15`,
-                    color: platform.color,
+                    backgroundColor: `${accent}15`,
+                    color: accent,
                   }}
                 >
                   {s.step}
                 </div>
-                <h3 className="text-base font-medium mb-2">{s.title}</h3>
-                <p className="text-sm text-[#9aa0aa] leading-relaxed">
+                <h3 className="text-lg font-medium mb-3">{s.title}</h3>
+                <p className="text-[15px] text-[#9aa0aa] leading-relaxed">
                   {s.desc}
                 </p>
               </div>
@@ -234,10 +255,12 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
         </div>
       </section>
 
+      <SectionDivider icon={<Sparkles className="w-4 h-4" />} />
+
       {/* Features */}
-      <section className="pb-24 px-6">
+      <section className="py-28 px-6">
         <div className="max-w-4xl mx-auto">
-          <h2 className="text-2xl md:text-3xl font-semibold tracking-tight text-center mb-12">
+          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-center mb-16">
             Features
           </h2>
 
@@ -245,19 +268,19 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
             {platform.features.map((f, i) => (
               <div
                 key={i}
-                className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-8"
+                className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-10"
               >
                 <div
-                  className="w-11 h-11 rounded-xl flex items-center justify-center mb-5"
+                  className="w-12 h-12 rounded-xl flex items-center justify-center mb-6"
                   style={{
-                    backgroundColor: `${platform.color}15`,
-                    color: platform.color,
+                    backgroundColor: `${accent}15`,
+                    color: accent,
                   }}
                 >
                   {f.icon}
                 </div>
-                <h3 className="text-base font-medium mb-2">{f.title}</h3>
-                <p className="text-sm text-[#9aa0aa] leading-relaxed">
+                <h3 className="text-lg font-medium mb-3">{f.title}</h3>
+                <p className="text-[15px] text-[#9aa0aa] leading-relaxed">
                   {f.description}
                 </p>
               </div>
@@ -266,20 +289,22 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
         </div>
       </section>
 
+      <SectionDivider icon={<Target className="w-4 h-4" />} />
+
       {/* Content types */}
-      <section className="pb-24 px-6">
+      <section className="py-28 px-6">
         <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-2xl md:text-3xl font-semibold tracking-tight mb-8">
+          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight mb-10">
             Content types
           </h2>
           <div className="flex flex-wrap items-center justify-center gap-3">
             {platform.contentTypes.map((type) => (
               <span
                 key={type}
-                className="px-4 py-2 rounded-xl border text-sm font-medium"
+                className="px-4 py-2.5 rounded-xl border text-sm font-medium"
                 style={{
-                  borderColor: `${platform.color}25`,
-                  color: platform.color,
+                  borderColor: `${accent}25`,
+                  color: accent,
                 }}
               >
                 {type}
@@ -289,14 +314,16 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
         </div>
       </section>
 
+      <SectionDivider icon={<Rocket className="w-4 h-4" />} />
+
       {/* FAQ */}
-      <section className="pb-24 px-6">
+      <section className="py-28 px-6">
         <div className="max-w-3xl mx-auto">
-          <h2 className="text-2xl md:text-3xl font-semibold tracking-tight text-center mb-12">
+          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-center mb-16">
             Frequently asked questions
           </h2>
 
-          <div className="space-y-3">
+          <div className="space-y-4">
             {platform.faq.map((item, i) => (
               <div
                 key={i}
@@ -304,9 +331,9 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
               >
                 <button
                   onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                  className="w-full flex items-center justify-between px-6 py-4 text-left"
+                  className="w-full flex items-center justify-between px-6 py-5 text-left"
                 >
-                  <span className="text-sm font-medium pr-4">{item.q}</span>
+                  <span className="text-[15px] font-medium pr-4">{item.q}</span>
                   <ChevronDown
                     className={`w-4 h-4 text-[#9aa0aa] shrink-0 transition-transform ${
                       openFaq === i ? "rotate-180" : ""
@@ -314,7 +341,7 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
                   />
                 </button>
                 {openFaq === i && (
-                  <div className="px-6 pb-4 text-sm text-[#9aa0aa] leading-relaxed border-t border-white/[0.06] pt-4">
+                  <div className="px-6 pb-5 text-[15px] text-[#9aa0aa] leading-relaxed border-t border-white/[0.06] pt-5">
                     {item.a}
                   </div>
                 )}
@@ -325,19 +352,19 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       </section>
 
       {/* CTA */}
-      <section className="pb-32 px-6">
+      <section className="py-32 px-6">
         <div className="max-w-3xl mx-auto text-center">
-          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-16 md:p-20">
+          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-16 md:p-24">
             <div
-              className="w-12 h-12 rounded-xl flex items-center justify-center mx-auto mb-8"
-              style={{ backgroundColor: `${platform.color}15`, color: platform.color }}
+              className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-8"
+              style={{ backgroundColor: `${accent}15`, color: accent }}
             >
               {platform.icon}
             </div>
             <h2 className="text-3xl md:text-4xl font-semibold tracking-tight mb-5">
               Ready to ship your {platform.name} integration?
             </h2>
-            <p className="text-[#9aa0aa] mb-10 max-w-md mx-auto text-lg">
+            <p className="text-[#9aa0aa] mb-10 max-w-md mx-auto text-lg leading-relaxed">
               Join thousands of developers who chose InstaEdit over building
               with {platform.name}'s API directly. Same reliability, 10x less
               code.

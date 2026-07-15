@@ -244,15 +244,16 @@ export function Landing() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-white/[0.04] py-12 px-6">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
+      <footer className="border-t border-white/[0.04] pt-16 pb-10 px-6">
+        <div className="max-w-6xl mx-auto flex flex-col items-center gap-10">
+          <Link to="/" className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-md bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
               <Zap className="w-3 h-3 text-white" />
             </div>
             <span className="text-sm font-medium">InstaEdit</span>
-          </div>
-          <div className="flex items-center gap-4 text-xs text-[#9aa0aa]">
+          </Link>
+
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-xs text-[#9aa0aa]">
             {[
               { name: "TikTok", slug: "tiktok", color: "#ff0050" },
               { name: "Instagram", slug: "instagram", color: "#E1306C" },
@@ -271,7 +272,8 @@ export function Landing() {
               </Link>
             ))}
           </div>
-          <div className="flex items-center gap-6 text-xs text-[#9aa0aa]">
+
+          <div className="flex flex-wrap items-center justify-center gap-6 text-xs text-[#9aa0aa]">
             <Link to="/privacy" className="hover:text-white transition-colors">
               Privacy
             </Link>
