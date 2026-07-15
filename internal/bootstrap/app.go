@@ -25,12 +25,14 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/google/uuid"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/outbox"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/outbox/processors"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/providers"
@@ -131,6 +133,11 @@ func Wire(ctx context.Context) (*App, error) {
 	apiKeyRepo := repository.NewApiKeyRepository(db)
 	apiKeyAuth := auth.NewApiKeyAuthenticator(apiKeyRepo)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
+	postRepo := repository.NewPostRepository(db)
+	mediaRepo := repository.NewMediaAssetRepository(db)
+	connectionStateRepo := repository.NewConnectionStateRepository(db)
+	auditLogRepo := repository.NewAuditLogRepository(db)
+
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
 
 	registry, err := providers.BuildRegistry(cfg)
@@ -183,6 +190,11 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithTeamStore(teamRepo),
 		api.WithAuthEmailService(authEmailSvc),
 		api.WithSessionsService(sessionsSvc),
+		api.WithWorkspaceStore(workspaceRepo),
+		api.WithPostStore(postRepo),
+		api.WithMediaStore(mediaRepo),
+		api.WithConnectionStateStore(&connectionStateStoreWrapper{connectionStateRepo}),
+		api.WithAuditLogStore(&auditLogStoreWrapper{auditLogRepo}),
 		api.WithCookieSecure(true),
 		// csrf_token cookie Domain (Blocco #2.4): threaded from
 		// cfg.CookieDomain (COOKIE_DOMAIN env var). Empty stays
@@ -420,4 +432,63 @@ func (a *App) RunWorkers(ctx context.Context) error {
 	}
 	slog.Info("all background goroutines drained")
 	return nil
+}
+
+type connectionStateStoreWrapper struct {
+	repo *repository.ConnectionStateRepository
+}
+
+func (w *connectionStateStoreWrapper) Create(state *repository.ConnectionState) error {
+	return w.repo.Create(state)
+}
+
+func (w *connectionStateStoreWrapper) Consume(id string, expectedNonce string, jwtWorkspaceID int64) (*repository.ConnectionState, error) {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return nil, fmt.Errorf("invalid uuid: %w", err)
+	}
+	return w.repo.Consume(parsedID, expectedNonce, jwtWorkspaceID)
+}
+
+type auditLogStoreWrapper struct {
+	repo *repository.AuditLogRepository
+}
+
+func (w *auditLogStoreWrapper) Log(ctx context.Context, eventType, actorID string, resourceType, resourceID string, metadata map[string]interface{}) error {
+	var userID int64
+	if actorID != "" && actorID != "system" {
+		_, _ = fmt.Sscan(actorID, &userID)
+	}
+	var resID int64
+	if resourceID != "" {
+		_, _ = fmt.Sscan(resourceID, &resID)
+	}
+
+	result := "success"
+	if r, ok := metadata["result"].(string); ok {
+		result = r
+	}
+
+	ipHash := ""
+	if ip, ok := metadata["ip_hash"].(string); ok {
+		ipHash = ip
+	}
+
+	sessionID := ""
+	if sid, ok := metadata["session_id"].(string); ok {
+		sessionID = sid
+	}
+
+	logEntry := &models.AuditLog{
+		UserID:       userID,
+		SessionID:    sessionID,
+		Action:       eventType,
+		ResourceType: resourceType,
+		ResourceID:   resID,
+		Result:       result,
+		IPHash:       ipHash,
+		Metadata:     metadata,
+	}
+
+	return w.repo.Insert(logEntry)
 }

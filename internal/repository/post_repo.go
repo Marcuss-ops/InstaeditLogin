@@ -1014,3 +1014,89 @@ func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, err
 	}
 	return targets, nil
 }
+
+// SaveTarget saves a post target.
+func (r *PostRepository) SaveTarget(target *models.PostTarget) error {
+	return r.Save(target)
+}
+
+// Delete deletes a post by ID.
+func (r *PostRepository) Delete(id int64) error {
+	_, err := r.db.Exec("DELETE FROM posts WHERE id = $1", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete post: %w", err)
+	}
+	return nil
+}
+
+// PublishPost updates status to queued.
+func (r *PostRepository) PublishPost(id int64) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("UPDATE posts SET status = 'queued' WHERE id = $1", id)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec("UPDATE post_targets SET status = 'queued', error_message = '' WHERE post_id = $1", id)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// CancelPost updates status to draft.
+func (r *PostRepository) CancelPost(id int64) error {
+	_, err := r.db.Exec("UPDATE posts SET status = 'draft' WHERE id = $1", id)
+	if err != nil {
+		return fmt.Errorf("failed to cancel post: %w", err)
+	}
+	return nil
+}
+
+// RetryPost transitions failed post back to queued.
+func (r *PostRepository) RetryPost(id int64) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("UPDATE posts SET status = 'queued' WHERE id = $1", id)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec("UPDATE post_targets SET status = 'queued', error_message = '' WHERE post_id = $1 AND status = 'failed'", id)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// RetryTarget transitions failed target back to queued.
+func (r *PostRepository) RetryTarget(id int64) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("UPDATE post_targets SET status = 'queued', error_message = '' WHERE id = $1", id)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec("UPDATE posts SET status = 'queued' WHERE id = (SELECT post_id FROM post_targets WHERE id = $1)", id)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
