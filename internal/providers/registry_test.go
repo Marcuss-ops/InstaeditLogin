@@ -444,11 +444,13 @@ func TestRegistryReturnsCapabilities(t *testing.T) {
 		t.Errorf("Facebook: Publisher capability missing")
 	}
 
-	// Facebook must have Validator capability.
-	val, ok := registry.Validator("facebook")
-	if !ok || val == nil {
-		t.Errorf("Facebook: Validator capability missing")
-	}
+	// (Validator capability assertion removed in the ISP refactor:
+	// ContentValidator interface declaration is preserved in
+	// internal/services/provider_content_validator.go so the 7 oauth
+	// providers' var _ conformance still compiles, but the router
+	// no longer tracks a Validator accessor because no external
+	// consumer queries it today. See provider.go godoc §Pruned dead
+	// code for the full rationale.)
 }
 
 // TestRegistryReturnsUnsupportedPlatformError (Taglio 5c) proves that

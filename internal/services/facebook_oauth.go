@@ -312,7 +312,6 @@ func (s *FacebookOAuthService) publishPageFeed(ctx context.Context, pageAccessTo
 var (
 	_ Provider           = (*FacebookOAuthService)(nil)
 	_ OAuthProvider      = (*FacebookOAuthService)(nil)
-	_ ResourceDiscoverer = (*FacebookOAuthService)(nil)
 	_ ContentValidator   = (*FacebookOAuthService)(nil)
 	_ Publisher          = (*FacebookOAuthService)(nil)
 )

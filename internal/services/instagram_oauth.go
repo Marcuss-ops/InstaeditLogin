@@ -426,7 +426,6 @@ func (s *InstagramOAuthService) publishMediaContainer(ctx context.Context, acces
 var (
 	_ Provider           = (*InstagramOAuthService)(nil)
 	_ OAuthProvider      = (*InstagramOAuthService)(nil)
-	_ ResourceDiscoverer = (*InstagramOAuthService)(nil)
 	_ ContentValidator   = (*InstagramOAuthService)(nil)
 	_ Publisher          = (*InstagramOAuthService)(nil)
 )
