@@ -107,7 +107,7 @@ type Router struct {
 	// so the explicit 501-shaped error in handleExchangeCode short-
 	// circuits dev environments that have not yet wired the helper.
 	userAndWorkspaceHelper UserWorkspaceHelper
-	connectionStates ConnectionStateStore
+	connectionStates       ConnectionStateStore
 	// SPRINT 2.1 — revocable session lifecycle (optional). Wiring
 	// via WithSessionsService. When nil, /auth/refresh, /auth/logout,
 	// /auth/logout-all, /auth/sessions and DELETE /auth/sessions/{id}

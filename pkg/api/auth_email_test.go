@@ -322,8 +322,8 @@ const testAdminToken = "test-admin-token-32+chars-here-abcdef"
 // present the X-Admin-Token header.
 func newAuthEmailTestRouter(store AuthEmailStore) *chi.Mux {
 	r := &Router{
-		authEmailSvc:    store,
-		sessionsSvc:     &fakeSessionsStore{},
+		authEmailSvc:     store,
+		sessionsSvc:      &fakeSessionsStore{},
 		adminInviteToken: testAdminToken,
 	}
 	r.mux = chi.NewRouter()

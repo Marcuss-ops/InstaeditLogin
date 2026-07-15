@@ -218,4 +218,3 @@ func validatePassword(password string) error {
 	}
 	return nil
 }
-
