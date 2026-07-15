@@ -48,9 +48,8 @@ export const DEMO_MODE: boolean =
  */
 export const MOCK_SESSION: Session = {
   userId: 1,
-  name: "Demo User",
-  username: "demo",
-  // Far-future so the expiry-check code (if any) doesn't trip.
+  name: "Marco Rossi",
+  username: "marco",
   expiresAt: "2099-12-31T23:59:59Z",
 };
 
@@ -141,9 +140,37 @@ export function mockFetch(path: string, init: RequestInit = {}): Response {
 
   // ─── Accounts ────────────────────────────────────────────────────
   if (path === "/api/v1/accounts" && method === "GET") {
-    // Empty list → Dashboard shows the "Connect more accounts"
-    // CTA. Connections shows all 7 providers as "Not connected".
-    return jsonResponse({ accounts: [] });
+    return jsonResponse({
+      accounts: [
+        {
+          id: 1,
+          user_id: MOCK_SESSION.userId,
+          platform: "instagram",
+          platform_user_id: "17841405822304981",
+          username: "demo_brand_official",
+          created_at: "2026-07-10T14:30:00Z",
+          updated_at: "2026-07-14T09:15:00Z",
+        },
+        {
+          id: 2,
+          user_id: MOCK_SESSION.userId,
+          platform: "facebook",
+          platform_user_id: "102345678901234",
+          username: "Demo Brand Page",
+          created_at: "2026-07-10T14:35:00Z",
+          updated_at: "2026-07-12T18:00:00Z",
+        },
+        {
+          id: 3,
+          user_id: MOCK_SESSION.userId,
+          platform: "tiktok",
+          platform_user_id: "UCaDemoBrand123",
+          username: "@demobrand",
+          created_at: "2026-07-12T10:00:00Z",
+          updated_at: "2026-07-14T11:30:00Z",
+        },
+      ],
+    });
   }
 
   // ─── Workspaces ──────────────────────────────────────────────────
@@ -152,9 +179,15 @@ export function mockFetch(path: string, init: RequestInit = {}): Response {
       workspaces: [
         {
           id: 1,
-          name: "Demo Workspace",
+          name: "Brand Official",
           owner_id: MOCK_SESSION.userId,
-          created_at: "2024-01-01T00:00:00Z",
+          created_at: "2026-07-01T00:00:00Z",
+        },
+        {
+          id: 2,
+          name: "Personal Projects",
+          owner_id: MOCK_SESSION.userId,
+          created_at: "2026-07-05T12:00:00Z",
         },
       ],
     });
@@ -174,7 +207,65 @@ export function mockFetch(path: string, init: RequestInit = {}): Response {
 
   // ─── Posts ───────────────────────────────────────────────────────
   if (path === "/api/v1/posts" && method === "GET") {
-    return jsonResponse({ posts: [] });
+    return jsonResponse({
+      posts: [
+        {
+          id: 1,
+          workspace_id: 1,
+          title: "Summer Collection Launch",
+          caption: "Introducing our new summer collection! Fresh styles, bold colors. Link in bio.",
+          media_url: "https://images.unsplash.com/photo-1523381210434-271e8be1f52b?w=800",
+          scheduled_at: "2026-07-20T10:00:00Z",
+          status: "published",
+          created_at: "2026-07-14T09:00:00Z",
+          updated_at: "2026-07-14T10:05:00Z",
+        },
+        {
+          id: 2,
+          workspace_id: 1,
+          title: "Behind the Scenes",
+          caption: "A peek behind the curtain at our design studio. The magic happens here.",
+          media_url: "https://images.unsplash.com/photo-1558618666-fcd25c85f82e?w=800",
+          scheduled_at: "2026-07-18T14:30:00Z",
+          status: "queued",
+          created_at: "2026-07-15T08:20:00Z",
+          updated_at: "2026-07-15T08:20:00Z",
+        },
+        {
+          id: 3,
+          workspace_id: 1,
+          title: "Customer Spotlight",
+          caption: "Shoutout to @happy_customer for rocking our new drop! Tag us in your looks.",
+          media_url: "https://images.unsplash.com/photo-1529139574466-a303027c1d8b?w=800",
+          scheduled_at: null,
+          status: "draft",
+          created_at: "2026-07-15T06:00:00Z",
+          updated_at: "2026-07-15T06:00:00Z",
+        },
+        {
+          id: 4,
+          workspace_id: 1,
+          title: "Flash Sale Alert",
+          caption: "48h FLASH SALE: 30% off everything. Use code FLASH30 at checkout.",
+          media_url: "https://images.unsplash.com/photo-1607082349566-187342175e2f?w=800",
+          scheduled_at: "2026-07-16T08:00:00Z",
+          status: "failed",
+          created_at: "2026-07-14T16:00:00Z",
+          updated_at: "2026-07-14T16:02:00Z",
+        },
+        {
+          id: 5,
+          workspace_id: 1,
+          title: "Weekend Vibes",
+          caption: "Saturday mood: coffee, code, and creativity. What are you up to this weekend?",
+          media_url: "https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=800",
+          scheduled_at: "2026-07-19T09:00:00Z",
+          status: "queued",
+          created_at: "2026-07-15T07:45:00Z",
+          updated_at: "2026-07-15T07:45:00Z",
+        },
+      ],
+    });
   }
   if (path === "/api/v1/posts" && method === "POST") {
     // Returns a fake post id; the composer toasts "Queued for
@@ -194,7 +285,38 @@ export function mockFetch(path: string, init: RequestInit = {}): Response {
 
   // ─── API keys ────────────────────────────────────────────────────
   if (path === "/api/v1/api-keys" && method === "GET") {
-    return jsonResponse({ keys: [] });
+    return jsonResponse({
+      keys: [
+        {
+          id: 1,
+          workspace_id: 1,
+          created_by: MOCK_SESSION.userId,
+          name: "Production Key",
+          environment: "live",
+          key_prefix: "ie_live",
+          permissions: ["read", "write", "publish"],
+          expires_at: null,
+          revoked_at: null,
+          last_used_at: "2026-07-14T22:10:00Z",
+          created_at: "2026-07-10T12:00:00Z",
+          updated_at: "2026-07-10T12:00:00Z",
+        },
+        {
+          id: 2,
+          workspace_id: 1,
+          created_by: MOCK_SESSION.userId,
+          name: "CI/CD Pipeline",
+          environment: "test",
+          key_prefix: "ie_test",
+          permissions: ["read", "publish", "media"],
+          expires_at: "2026-12-31T23:59:59Z",
+          revoked_at: null,
+          last_used_at: "2026-07-15T03:00:00Z",
+          created_at: "2026-07-11T09:00:00Z",
+          updated_at: "2026-07-11T09:00:00Z",
+        },
+      ],
+    });
   }
   if (path === "/api/v1/api-keys" && method === "POST") {
     // The Settings page expects { key, plaintext } and shows the
@@ -247,7 +369,26 @@ export function mockFetch(path: string, init: RequestInit = {}): Response {
 
   // ─── Webhooks ────────────────────────────────────────────────────
   if (path === "/api/v1/webhooks/endpoints" && method === "GET") {
-    return jsonResponse({ endpoints: [] });
+    return jsonResponse({
+      endpoints: [
+        {
+          id: 1,
+          workspace_id: 1,
+          url: "https://hooks.slack.com/services/T00/B00/demo",
+          events: ["post.published", "post.failed"],
+          status: "active",
+          created_at: "2026-07-12T15:00:00Z",
+        },
+        {
+          id: 2,
+          workspace_id: 1,
+          url: "https://api.example.com/webhooks/instaedit",
+          events: ["account.connected", "account.disconnected", "post.created"],
+          status: "active",
+          created_at: "2026-07-13T10:30:00Z",
+        },
+      ],
+    });
   }
   if (path === "/api/v1/webhooks/endpoints" && method === "POST") {
     const body = safeJson<{ url?: string; events?: string[] }>(init.body);
