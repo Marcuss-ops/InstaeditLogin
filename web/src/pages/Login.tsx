@@ -66,19 +66,19 @@ export function Login() {
         </Link>
 
         {/* Card */}
-        <div className="rounded-2xl border border-white/[0.06] bg-white/[0.03] p-8">
+        <div className="rounded-2xl border border-white/[0.06] bg-white/[0.03] p-10">
           <h1 className="text-xl font-semibold tracking-tight mb-1">
             Welcome back
           </h1>
-          <p className="text-sm text-[#9aa0aa] mb-8">
+          <p className="text-sm text-[#9aa0aa] mb-10">
             Sign in to manage your content
           </p>
 
-          <form onSubmit={submit} className="space-y-4">
+          <form onSubmit={submit} className="space-y-5">
             <div>
               <label
                 htmlFor="email"
-                className="block text-sm font-medium text-[#9aa0aa] mb-1.5"
+                className="block text-sm font-medium text-[#9aa0aa] mb-2"
               >
                 Email
               </label>
@@ -100,7 +100,7 @@ export function Login() {
             <div>
               <label
                 htmlFor="password"
-                className="block text-sm font-medium text-[#9aa0aa] mb-1.5"
+                className="block text-sm font-medium text-[#9aa0aa] mb-2"
               >
                 Password
               </label>
