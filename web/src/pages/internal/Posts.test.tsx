@@ -67,4 +67,54 @@ describe("InternalPosts", () => {
     expect(screen.getByText("Launch post")).toBeInTheDocument();
     expect(screen.getByText("Hello world")).toBeInTheDocument();
   });
+
+  it("shows an error state when posts cannot be loaded", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url.endsWith("/api/v1/auth/me")) {
+          return mockJsonResponse({ user_id: 1 });
+        }
+        if (url.endsWith("/api/v1/workspaces")) {
+          return mockJsonResponse({ workspaces: [{ id: 1, name: "Marketing" }] });
+        }
+        return mockJsonResponse({ error: "boom" }, false, 500);
+      }),
+    );
+
+    renderPosts();
+
+    await waitFor(() => {
+      expect(screen.getByText("Couldn't load posts")).toBeInTheDocument();
+    });
+  });
+
+  it("renders the empty state when no posts exist", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url.endsWith("/api/v1/auth/me")) {
+          return mockJsonResponse({ user_id: 1 });
+        }
+        if (url.endsWith("/api/v1/posts")) {
+          return mockJsonResponse({ posts: [] });
+        }
+        if (url.endsWith("/api/v1/workspaces")) {
+          return mockJsonResponse({ workspaces: [{ id: 1, name: "Marketing" }] });
+        }
+        return mockJsonResponse({}, false, 404);
+      }),
+    );
+
+    renderPosts();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Posts/i })).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("No posts yet")).toBeInTheDocument();
+    expect(screen.getByText("Create post")).toBeInTheDocument();
+  });
 });

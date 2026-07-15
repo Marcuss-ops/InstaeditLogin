@@ -53,4 +53,48 @@ describe("InternalLinking", () => {
     expect(screen.getByText("Instagram")).toBeInTheDocument();
     expect(screen.getByText("Threads")).toBeInTheDocument();
   });
+
+  it("shows an error state when accounts cannot be loaded", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url.endsWith("/api/v1/auth/me")) {
+          return mockJsonResponse({ user_id: 1 });
+        }
+        return mockJsonResponse({ error: "boom" }, false, 500);
+      }),
+    );
+
+    renderLinking();
+
+    await waitFor(() => {
+      expect(screen.getByText("Couldn't load providers")).toBeInTheDocument();
+    });
+  });
+
+  it("renders all providers as not connected when no accounts exist", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        if (url.endsWith("/api/v1/auth/me")) {
+          return mockJsonResponse({ user_id: 1 });
+        }
+        if (url.endsWith("/api/v1/accounts")) {
+          return mockJsonResponse({ accounts: [] });
+        }
+        return mockJsonResponse({}, false, 404);
+      }),
+    );
+
+    renderLinking();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Linking/i })).toBeInTheDocument();
+    });
+
+    const notConnected = screen.getAllByText("Not connected");
+    expect(notConnected.length).toBe(5);
+  });
 });
