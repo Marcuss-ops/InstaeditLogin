@@ -193,7 +193,7 @@ export function Landing() {
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {FEATURES.map((f, i) => (
               <ScrollReveal key={f.title} delay={i * 80}>
-                <div className="surface-card p-8 h-full hover:bg-white/[0.06] hover:border-white/[0.20] hover:shadow-[0_12px_40px_rgba(0,0,0,0.35)] hover:-translate-y-1 transition-all duration-300">
+                <div className="surface-card p-8 h-full hover:bg-[#262638] hover:border-white/[0.30] hover:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.22)] hover:-translate-y-1 transition-all duration-300">
                   <div className="w-11 h-11 rounded-xl bg-white/[0.06] flex items-center justify-center text-[#7B61FF] mb-6">
                     {f.icon}
                   </div>

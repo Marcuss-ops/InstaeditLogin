@@ -88,21 +88,50 @@ html {
   }
 
   /*
+   * Design system palette — three distinct shades so every layer reads:
+   *   page      #030308  (RGB   3,  3,  8)  base canvas
+   *   section   #16161e  (RGB  22, 22, 30)  bg-elevated section panel
+   *   card      #1f1f2e  (RGB  31, 31, 46)  framed card on a section
+   * Each step adds ~14-25 RGB units so the difference survives monitor
+   * compression and TN-panel banding. The original 0.04-delta gradient
+   * compressed to "all the same grey" on dark-mode displays.
+   */
+
+  /*
    * Elevated section background — visibly lifts the section from the page
-   * without doubling the border thickness. Opacity bumped from 10% to 14%
-   * so alternating sections separate cleanly instead of bleeding into
-   * their neighbours.
+   * with a brighter solid shade. The inset top highlight is strong enough
+   * (alpha 0.16) that the section reads as "lit from above" instead of
+   * fading into the page.
    */
   .bg-elevated {
-    @apply bg-white/[0.03] border-y border-white/[0.14] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)];
+    background-color: #16161e;
+    border-top: 1px solid rgba(255, 255, 255, 0.22);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.16);
   }
 
   /*
-   * Card surface with a clearly defined edge. Stronger than bg-elevated so
-   * individual cards read as framed boxes that align with the page's
-   * central column, rather than floating slabs.
+   * Card surface — solid bordered box that sits visibly above the section.
+   * Same insight as .bg-elevated: dark drop-shadows on dark bg = invisible.
+   * The delta between card (#1f1f2e) and section (#16161e) is +9 RGB units
+   * — enough to be perceptible — and the 0.20-alpha border frames the edge.
    */
   .surface-card {
-    @apply rounded-2xl border border-white/[0.16] bg-white/[0.05] shadow-[0_10px_40px_rgba(0,0,0,0.4)];
+    border-radius: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.20);
+    background-color: #1f1f2e;
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.18);
+  }
+
+  /*
+   * Soft card surface — used for cards nested inside a section panel
+   * where the card-vs-section contrast would otherwise be too high.
+   * Slightly darker than .surface-card so the page receives tiered depth.
+   */
+  .surface-card-soft {
+    border-radius: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background-color: #1a1a26;
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.12);
   }
 }

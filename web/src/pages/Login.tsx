@@ -66,7 +66,7 @@ export function Login() {
         </Link>
 
         {/* Card */}
-        <div className="rounded-2xl border border-white/[0.12] bg-white/[0.04] p-10 shadow-[0_24px_60px_rgba(0,0,0,0.4)]">
+        <div className="rounded-2xl border border-white/[0.20] bg-[#1f1f2e] p-10 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.18)]">
           <h1 className="text-xl font-semibold tracking-tight mb-1">
             Welcome back
           </h1>

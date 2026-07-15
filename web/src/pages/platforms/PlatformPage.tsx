@@ -291,7 +291,7 @@ className="py-40 px-4 sm:px-6 bg-elevated"
             {/* Their API */}
             <div
               data-testid="comparison-them-card"
-              className="rounded-3xl border-2 border-white/[0.10] bg-[#030308] p-6 sm:p-10 md:p-12 shadow-xl"
+              className="rounded-3xl border border-white/[0.10] bg-[#0a0a14] p-6 sm:p-10 md:p-12"
             >
               <div className="inline-flex items-center gap-3 px-4 sm:px-6 py-2 sm:py-3 rounded-full bg-white/[0.05] border border-white/[0.05] text-[#9aa0aa] font-bold text-base sm:text-lg mb-6 sm:mb-10">
                 <X className="w-5 h-5 shrink-0" />
@@ -333,7 +333,7 @@ className="py-40 px-4 sm:px-6 bg-elevated"
           <div className="grid lg:grid-cols-3 gap-6 sm:gap-8 relative">
             {steps.map((s, i) => (
               <ScrollReveal key={s.step} delay={i * 100}>
-                <div className="h-full rounded-3xl p-6 sm:p-10 border-2 border-white/[0.14] bg-white/[0.04] relative overflow-hidden group hover:border-white/[0.25] hover:bg-white/[0.07] transition-all shadow-[0_8px_32px_rgba(0,0,0,0.32)]">
+                <div className="h-full rounded-3xl p-6 sm:p-10 border-2 border-white/[0.20] bg-[#1f1f2e] relative overflow-hidden group hover:border-white/[0.32] hover:bg-[#262638] transition-all duration-300 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.18)]">
                   <div
                     className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl flex items-center justify-center text-3xl sm:text-4xl font-bold mb-6 sm:mb-10 shadow-lg"
                     style={{ backgroundColor: `${accent}15`, color: accent }}
@@ -365,7 +365,7 @@ className="py-40 px-4 sm:px-6 bg-elevated"
           <div className="grid lg:grid-cols-3 gap-6 sm:gap-8">
             {platform.features.map((f, i) => (
               <ScrollReveal key={i} delay={i * 80}>
-                <div className="h-full rounded-3xl p-6 sm:p-10 border-2 border-white/[0.14] bg-[#030308] shadow-[0_8px_32px_rgba(0,0,0,0.32)] hover:border-white/[0.25] hover:shadow-[0_12px_40px_rgba(0,0,0,0.4)] hover:-translate-y-2 transition-all duration-300">
+                <div className="h-full rounded-3xl p-6 sm:p-10 border-2 border-white/[0.20] bg-[#1f1f2e] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.18)] hover:border-white/[0.32] hover:bg-[#262638] hover:-translate-y-2 transition-all duration-300">
                   <div
                     className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex items-center justify-center mb-6 sm:mb-8 shadow-md"
                     style={{ backgroundColor: `${accent}15`, color: accent }}
@@ -426,7 +426,7 @@ className="py-40 px-4 sm:px-6 bg-elevated"
           <div className="space-y-4 sm:space-y-6">
             {platform.faq.map((item, i) => (
               <ScrollReveal key={i} delay={i * 60}>
-                <div className="rounded-2xl border-2 border-white/[0.12] bg-[#030308] hover:border-white/[0.25] transition-colors overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
+                <div className="rounded-2xl border-2 border-white/[0.20] bg-[#1f1f2e] hover:border-white/[0.32] transition-colors overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.18)]">
                   <button
                     onClick={() => setOpenFaq(openFaq === i ? null : i)}
                     className="w-full flex items-center justify-between px-5 sm:px-10 py-6 sm:py-8 text-left focus:outline-none gap-4"
