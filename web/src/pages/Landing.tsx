@@ -139,10 +139,8 @@ export function Landing() {
         </ScrollReveal>
       </section>
 
-      <div className="section-divider" />
-
-      {/* Platforms ticker */}
-      <section className="py-24 border-y border-white/[0.10] bg-white/[0.015] overflow-hidden">
+      {/* Platforms ticker — floating card on canvas */}
+      <section className="my-20 max-w-7xl mx-auto rounded-3xl px-8 py-10 overflow-hidden border border-white/[0.12] bg-[#16161e]">
         <div className="flex items-center justify-center gap-12 md:gap-20 opacity-40">
           {PLATFORMS.map((p) => (
             <span
@@ -156,10 +154,8 @@ export function Landing() {
         </div>
       </section>
 
-      <div className="section-divider" />
-
-      {/* Stats */}
-      <section className="py-40 px-6 bg-elevated">
+      {/* Stats — floating card on canvas */}
+      <section className="my-20 max-w-7xl mx-auto rounded-3xl px-10 py-24 bg-[#16161e] border border-white/[0.12] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.16)]">
         <ScrollReveal className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-16 md:gap-8">
           {STATS.map((s) => (
             <div key={s.label} className="text-center">
@@ -172,8 +168,8 @@ export function Landing() {
         </ScrollReveal>
       </section>
 
-      {/* Features */}
-      <section id="features" className="py-40 px-6 relative">
+      {/* Features — floating card on canvas */}
+      <section id="features" className="my-20 max-w-7xl mx-auto rounded-3xl px-10 py-20 relative border border-white/[0.12] bg-[#16161e] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.16)]">
         <div className="glow-orb bg-[#7B61FF] w-[600px] h-[600px] bottom-[-250px] right-[-150px] opacity-10" />
         <div className="max-w-5xl mx-auto relative z-10">
           <ScrollReveal className="text-center mb-16">
@@ -208,13 +204,11 @@ export function Landing() {
         </div>
       </section>
 
-      <div className="section-divider" />
-
-      {/* CTA */}
-      <section className="relative py-40 px-6 overflow-hidden">
+      {/* CTA — floating card on canvas (noi vs superficie page) */}
+      <section className="relative my-20 max-w-7xl mx-auto overflow-hidden">
         <div className="glow-orb bg-[#E1306C] w-[500px] h-[500px] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-15" />
-        <ScrollReveal className="relative z-10 max-w-3xl mx-auto text-center">
-          <div className="surface-card p-12 md:p-20 shadow-[0_0_80px_-20px_rgba(123,97,255,0.18)]">
+        <ScrollReveal className="relative z-10">
+          <div className="rounded-3xl border border-white/[0.18] bg-[#1f1f2e] p-12 md:p-20 shadow-[0_0_80px_-20px_rgba(123,97,255,0.18),inset_0_1px_0_0_rgba(255,255,255,0.18)]">
             <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center mx-auto mb-8">
               <Zap className="w-5 h-5 text-white" />
             </div>
@@ -236,11 +230,9 @@ export function Landing() {
         </ScrollReveal>
       </section>
 
-      <div className="section-divider" />
-
-      {/* Footer */}
-      <footer className="pt-20 pb-12 px-6 border-t border-white/[0.10]">
-        <div className="max-w-6xl mx-auto flex flex-col items-center gap-10">
+      {/* Footer — full-bleed top border, centered content */}
+      <footer className="mt-32 border-t border-white/[0.12] bg-[#030308]">
+        <div className="max-w-7xl mx-auto px-6 pt-16 pb-12 flex flex-col items-center gap-10">
           <Link to="/" className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-md bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
               <Zap className="w-3 h-3 text-white" />

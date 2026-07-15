@@ -180,12 +180,10 @@ const PlatformPageInner = memo(function PlatformPageInner({
         </ScrollReveal>
       </section>
 
-      <div className="section-divider" />
-
-      {/* Code preview */}
+      {/* Code preview — floating card on canvas */}
       <section
         data-testid="code-preview-section"
-className="py-40 px-4 sm:px-6 bg-elevated"
+        className="my-20 max-w-7xl mx-auto rounded-3xl px-4 sm:px-6 lg:px-10 py-20 bg-[#16161e] border border-white/[0.12] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.16)]"
       >
         <ScrollReveal className="max-w-4xl mx-auto w-full min-w-0">
           <div
@@ -213,10 +211,8 @@ className="py-40 px-4 sm:px-6 bg-elevated"
         </ScrollReveal>
       </section>
 
-      <div className="section-divider" />
-
-      {/* Note Box */}
-      <section className="py-40 px-4 sm:px-6">
+      {/* Note Box — floating card on canvas */}
+      <section className="my-20 max-w-4xl mx-auto rounded-3xl px-4 sm:px-6 lg:px-10 py-8">
         <ScrollReveal className="max-w-4xl mx-auto w-full">
           <div
             className="rounded-2xl p-6 sm:p-10 md:p-14 border-l-[8px] sm:border-l-[12px] shadow-2xl bg-white/[0.04] break-words"
@@ -253,10 +249,8 @@ className="py-40 px-4 sm:px-6 bg-elevated"
         </ScrollReveal>
       </section>
 
-      <div className="section-divider" />
-
-      {/* Comparison */}
-      <section className="py-40 px-4 sm:px-6 bg-elevated">
+      {/* Comparison — floating card on canvas */}
+      <section className="my-20 max-w-7xl mx-auto rounded-3xl px-4 sm:px-6 lg:px-10 py-20 bg-[#16161e] border border-white/[0.12] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.16)]">
         <ScrollReveal className="max-w-6xl mx-auto w-full">
           <h2 className="text-3xl sm:text-4xl md:text-6xl font-bold tracking-tight text-center mb-16 sm:mb-24 break-words">
             Why InstaEdit vs {platform.name} API?
@@ -291,7 +285,7 @@ className="py-40 px-4 sm:px-6 bg-elevated"
             {/* Their API */}
             <div
               data-testid="comparison-them-card"
-              className="rounded-3xl border border-white/[0.10] bg-[#0a0a14] p-6 sm:p-10 md:p-12"
+              className="rounded-3xl border border-white/[0.20] bg-[#1f1f2e] p-6 sm:p-10 md:p-12 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.18)]"
             >
               <div className="inline-flex items-center gap-3 px-4 sm:px-6 py-2 sm:py-3 rounded-full bg-white/[0.05] border border-white/[0.05] text-[#9aa0aa] font-bold text-base sm:text-lg mb-6 sm:mb-10">
                 <X className="w-5 h-5 shrink-0" />
@@ -316,10 +310,8 @@ className="py-40 px-4 sm:px-6 bg-elevated"
         </ScrollReveal>
       </section>
 
-      <div className="section-divider" />
-
-      {/* How it works */}
-      <section id="how-it-works" className="py-40 px-4 sm:px-6">
+      {/* How it works — floating card on canvas */}
+      <section id="how-it-works" className="my-20 max-w-7xl mx-auto rounded-3xl px-4 sm:px-6 lg:px-10 py-20 border border-white/[0.12] bg-[#16161e] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.16)]">
         <div className="max-w-6xl mx-auto">
           <ScrollReveal className="text-center mb-24">
             <h2 className="text-3xl sm:text-4xl md:text-6xl font-bold tracking-tight mb-6 break-words">
@@ -353,10 +345,8 @@ className="py-40 px-4 sm:px-6 bg-elevated"
         </div>
       </section>
 
-      <div className="section-divider" />
-
-      {/* Features */}
-      <section className="py-40 px-4 sm:px-6 bg-elevated">
+      {/* Features — floating card on canvas */}
+      <section className="my-20 max-w-7xl mx-auto rounded-3xl px-4 sm:px-6 lg:px-10 py-20 bg-[#16161e] border border-white/[0.12] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.16)]">
         <ScrollReveal className="max-w-6xl mx-auto w-full">
           <h2 className="text-3xl sm:text-4xl md:text-6xl font-bold tracking-tight text-center mb-16 sm:mb-24 break-words">
             Built for scale
@@ -385,10 +375,8 @@ className="py-40 px-4 sm:px-6 bg-elevated"
         </ScrollReveal>
       </section>
 
-      <div className="section-divider" />
-
-      {/* Content types */}
-      <section className="py-40 px-4 sm:px-6">
+      {/* Content types — floating card on canvas */}
+      <section className="my-20 max-w-5xl mx-auto rounded-3xl px-4 sm:px-6 lg:px-10 py-16 border border-white/[0.10]">
         <ScrollReveal className="max-w-5xl mx-auto text-center w-full">
           <h2 className="text-2xl sm:text-3xl md:text-5xl font-bold tracking-tight mb-12 sm:mb-16 break-words">
             Supported formats
@@ -411,12 +399,10 @@ className="py-40 px-4 sm:px-6 bg-elevated"
         </ScrollReveal>
       </section>
 
-      <div className="section-divider" />
-
-      {/* FAQ */}
+      {/* FAQ — floating card on canvas */}
       <section
         data-testid="faq-section"
-className="py-40 px-4 sm:px-6 bg-elevated"
+        className="my-20 max-w-4xl mx-auto rounded-3xl px-4 sm:px-6 lg:px-10 py-20 bg-[#16161e] border border-white/[0.12] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.16)]"
       >
         <ScrollReveal className="max-w-4xl mx-auto w-full">
           <h2 className="text-3xl sm:text-4xl md:text-6xl font-bold tracking-tight text-center mb-16 sm:mb-20 break-words">
@@ -456,12 +442,10 @@ className="py-40 px-4 sm:px-6 bg-elevated"
         </ScrollReveal>
       </section>
 
-      <div className="section-divider" />
-
-      {/* CTA */}
+      {/* CTA — floating card on canvas (verrà stilizzato dal gradient wrapper interno) */}
       <section
         data-testid="cta-section"
-        className="py-40 px-4 sm:px-6"
+        className="my-20 max-w-5xl mx-auto px-4 sm:px-6 lg:px-10"
       >
         <ScrollReveal className="max-w-5xl mx-auto w-full">
           <div className="rounded-3xl p-1 bg-gradient-to-br from-white/20 via-white/5 to-white/20 shadow-2xl">
@@ -507,11 +491,9 @@ className="py-40 px-4 sm:px-6 bg-elevated"
         </ScrollReveal>
       </section>
 
-      <div className="section-divider" />
-
-      {/* Footer */}
-      <footer className="border-t border-white/[0.10] bg-[#030308]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-16 sm:py-20 flex flex-col md:flex-row items-center justify-between gap-6 sm:gap-8">
+      {/* Footer — full-bleed top border, centered content (matches Landing) */}
+      <footer className="mt-32 border-t border-white/[0.10] bg-[#030308]">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-16 pb-12 flex flex-col md:flex-row items-center justify-between gap-6 sm:gap-8">
           <Link to="/" className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
               <Zap className="w-4 h-4 text-white" />
