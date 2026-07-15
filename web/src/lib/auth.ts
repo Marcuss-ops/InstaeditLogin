@@ -15,7 +15,6 @@
 
 import { API_BASE_URL } from "./api";
 import { toastBus } from "../components/toast";
-import { DEMO_MODE, MOCK_SESSION, mockFetch } from "./demo";
 
 export type Session = {
   userId: number;
@@ -28,15 +27,6 @@ let sessionCache: Session | null | undefined = undefined;
 let sessionPromise: Promise<Session | null> | null = null;
 
 export async function fetchSession(): Promise<Session | null> {
-  // Demo-mode short-circuit: when VITE_DEMO_MODE=true, the SPA runs
-  // against mock data and there's no backend to probe. Returning
-  // MOCK_SESSION here means /accounts renders the dashboard
-  // (no redirect to /login) and every page treats the user as
-  // authenticated. See web/src/lib/demo.ts for the full contract.
-  if (DEMO_MODE) {
-    sessionCache = MOCK_SESSION;
-    return MOCK_SESSION;
-  }
   if (sessionCache !== undefined) return sessionCache;
   if (sessionPromise) return sessionPromise;
 
@@ -140,16 +130,6 @@ export async function authedFetch(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  // Demo-mode short-circuit: every call returns a synthetic Response
-  // from mockFetch() so the page state machines (await resp.json(),
-  // resp.ok, resp.status) behave identically to a real backend.
-  // Tests run with VITE_DEMO_MODE undefined → DEMO_MODE=false → this
-  // branch is skipped and the real fetch path is exercised. See
-  // web/src/lib/demo.ts.
-  if (DEMO_MODE) {
-    return mockFetch(path, init);
-  }
-
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -219,16 +199,6 @@ export async function authedFetch(
 }
 
 export async function logout(redirectTo: string = "/login"): Promise<void> {
-  // Demo-mode short-circuit: skip the network call to the (fake)
-  // backend so Vercel preview network devtools don't show a 404 on
-  // every logout click. Mirrors the demo branches in `fetchSession`
-  // and `authedFetch` — when DEMO_MODE is on, every backend-shaped
-  // request is a no-op.
-  if (DEMO_MODE) {
-    clearSessionCache();
-    window.location.href = redirectTo;
-    return;
-  }
   try {
     await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
       method: "POST",
