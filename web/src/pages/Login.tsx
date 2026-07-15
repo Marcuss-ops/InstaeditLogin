@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Zap, Mail, Lock, ArrowRight } from "lucide-react";
 import { fetchSession } from "../lib/auth";
 import { DEMO_MODE } from "../lib/demo";
+import { API_BASE_URL } from "../lib/api";
 
 export function Login() {
   const [email, setEmail] = useState("");
@@ -22,7 +23,7 @@ export function Login() {
         return;
       }
 
-      const resp = await fetch("/api/v1/auth/login", {
+      const resp = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

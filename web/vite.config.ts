@@ -58,6 +58,14 @@ function verifyApiBaseUrlPlugin() {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), verifyApiBaseUrlPlugin()],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
+  },
   test: {
     // jsdom for React component tests (Nav, DemoModal, etc.).
     // Component rendering uses jsdom; set via test.environment in vitest config.
