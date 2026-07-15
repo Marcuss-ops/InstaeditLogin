@@ -151,7 +151,7 @@ jobs:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
           vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-version: 47.2.2
+          vercel-version: latest
           # `--prod` → promote the deployment to production alias.
           # Without it, the action would create an unscoped preview URL
           # which our DNS (instaedit.org → apex) does NOT point at.
