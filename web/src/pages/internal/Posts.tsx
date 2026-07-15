@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useClickOutside } from "../../hooks/useClickOutside";
 import { Link, useNavigate } from "react-router-dom";
 import {
   FileText,
@@ -291,6 +292,11 @@ function PostRow({
   onDelete: (p: Post) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  const closeDropdown = useCallback(() => setOpen(false), []);
+  useClickOutside(dropdownRef, closeDropdown, open);
+
   const canPublish = post.status === "draft" || post.status === "published" || post.status === "failed";
   const canCancel = post.status === "queued";
   const canRetry = post.status === "failed";
@@ -329,22 +335,30 @@ function PostRow({
 
           <div className="flex items-center justify-between mt-4 pt-3 border-t border-neutral-100">
             <div className="text-[11px] text-neutral-400">Manage this post.</div>
-            <div className="relative">
+            <div className="relative" ref={dropdownRef}>
               <button
                 type="button"
+                id={`actions-toggle-${menuId}`}
                 onClick={() => setOpen((v) => !v)}
                 disabled={busy}
+                aria-expanded={open}
+                aria-haspopup="true"
+                aria-controls={open ? `actions-menu-${menuId}` : undefined}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-[12px] font-medium text-neutral-700 transition-colors disabled:opacity-50"
               >
                 Actions <ChevronDown size={12} />
               </button>
               {open && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-                  <div className="absolute right-0 mt-1 w-48 bg-white border border-neutral-200 rounded-xl shadow-lg z-20 py-1 text-[13px]">
+                <div
+                  id={`actions-menu-${menuId}`}
+                  role="menu"
+                  aria-labelledby={`actions-toggle-${menuId}`}
+                  className="absolute right-0 mt-1 w-48 bg-white border border-neutral-200 rounded-xl shadow-lg z-20 py-1 text-[13px]"
+                >
                     {canPublish && (
                       <button
                         type="button"
+                        role="menuitem"
                         disabled={busy}
                         onClick={() => {
                           onPublish(post);
@@ -358,6 +372,7 @@ function PostRow({
                     {canCancel && (
                       <button
                         type="button"
+                        role="menuitem"
                         disabled={busy}
                         onClick={() => {
                           onCancel(post);
@@ -371,6 +386,7 @@ function PostRow({
                     {canRetry && (
                       <button
                         type="button"
+                        role="menuitem"
                         disabled={busy}
                         onClick={() => {
                           onRetry(post);
@@ -383,6 +399,7 @@ function PostRow({
                     )}
                     <button
                       type="button"
+                      role="menuitem"
                       disabled={busy}
                       onClick={() => {
                         onDelete(post);
@@ -393,7 +410,6 @@ function PostRow({
                       <Trash2 size={13} /> Delete
                     </button>
                   </div>
-                </>
               )}
             </div>
           </div>
