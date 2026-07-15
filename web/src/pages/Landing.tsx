@@ -252,6 +252,25 @@ export function Landing() {
             </div>
             <span className="text-sm font-medium">InstaEdit</span>
           </div>
+          <div className="flex items-center gap-4 text-xs text-[#9aa0aa]">
+            {[
+              { name: "TikTok", slug: "tiktok", color: "#ff0050" },
+              { name: "Instagram", slug: "instagram", color: "#E1306C" },
+              { name: "Facebook", slug: "facebook", color: "#0A84FF" },
+              { name: "Threads", slug: "threads", color: "#9aa0aa" },
+              { name: "YouTube", slug: "youtube", color: "#FF0000" },
+              { name: "LinkedIn", slug: "linkedin", color: "#0077B5" },
+              { name: "X", slug: "twitter", color: "#e8e8ef" },
+            ].map((p) => (
+              <Link
+                key={p.slug}
+                to={`/${p.slug}`}
+                className="hover:text-white transition-colors"
+              >
+                {p.name}
+              </Link>
+            ))}
+          </div>
           <div className="flex items-center gap-6 text-xs text-[#9aa0aa]">
             <Link to="/privacy" className="hover:text-white transition-colors">
               Privacy
