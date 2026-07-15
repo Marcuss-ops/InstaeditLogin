@@ -86,13 +86,13 @@ const PlatformPageInner = memo(function PlatformPageInner({
   );
 
   return (
-    <div className="min-h-screen bg-[#030308] text-[#e8e8ef] font-sans antialiased overflow-hidden selection:bg-white/20">
+    <div className="min-h-screen bg-[#030308] text-[#e8e8ef] font-sans antialiased pb-20 selection:bg-white/20">
       {/* Grid background effect */}
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f1f2e08_1px,transparent_1px),linear-gradient(to_bottom,#1f1f2e08_1px,transparent_1px)] bg-[size:4rem_4rem] pointer-events-none" />
 
       {/* Nav */}
       <nav className="fixed top-0 w-full z-50 border-b border-white/[0.06] bg-[#030308]/70 backdrop-blur-md">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center shadow-[0_0_20px_rgba(10,132,255,0.3)]">
               <Zap className="w-4 h-4 text-white" />
@@ -117,7 +117,7 @@ const PlatformPageInner = memo(function PlatformPageInner({
       </nav>
 
       {/* Hero */}
-      <section className="relative pt-44 pb-32 px-6 flex flex-col items-center">
+      <section className="relative pt-48 pb-16 px-6 flex flex-col items-center">
         <div
           className="absolute top-0 left-1/2 -translate-x-1/2 w-[900px] h-[450px] blur-[120px] pointer-events-none opacity-20"
           style={{
@@ -153,7 +153,7 @@ const PlatformPageInner = memo(function PlatformPageInner({
             ))}
           </h1>
 
-          <p className="text-base sm:text-lg text-[#9aa0aa] max-w-2xl mx-auto mb-12 leading-relaxed">
+          <p className="text-base sm:text-lg text-[#9aa0aa] max-w-2xl mx-auto mb-10 leading-relaxed">
             {platform.heroDescription}
           </p>
 
@@ -175,81 +175,77 @@ const PlatformPageInner = memo(function PlatformPageInner({
         </ScrollReveal>
       </section>
 
-      {/* Code preview */}
+      {/* Code preview - Floating Card */}
       <section
         data-testid="code-preview-section"
-        className="py-16 border-t border-white/[0.06] bg-white/[0.01]"
+        className="relative my-16 max-w-5xl mx-auto px-6"
       >
-        <div className="max-w-4xl mx-auto px-6">
-          <ScrollReveal className="w-full">
-            <div
-              className="rounded-2xl border overflow-hidden shadow-2xl bg-[#07070f] max-w-full"
-              style={{ borderColor: `rgba(255, 255, 255, 0.08)` }}
-            >
-              <div className="flex items-center justify-between px-4 py-3.5 bg-white/[0.02] border-b border-white/[0.08] gap-3">
-                <div className="flex gap-2">
-                  <div className="w-3 h-3 rounded-full bg-[#FF5F56]" />
-                  <div className="w-3 h-3 rounded-full bg-[#FFBD2E]" />
-                  <div className="w-3 h-3 rounded-full bg-[#27C93F]" />
-                </div>
-                <div className="flex items-center gap-2 px-3 py-1 rounded-md bg-white/[0.04] border border-white/[0.06]">
-                  <Terminal className="w-3.5 h-3.5 text-[#9aa0aa]" />
-                  <span className="text-[11px] text-[#9aa0aa] font-mono font-medium">
-                    POST /v1/posts
-                  </span>
-                </div>
-                <div className="w-12" />
+        <ScrollReveal className="w-full">
+          <div
+            className="rounded-2xl border overflow-hidden shadow-2xl bg-[#07070f] max-w-full"
+            style={{ borderColor: `rgba(255, 255, 255, 0.08)` }}
+          >
+            <div className="flex items-center justify-between px-4 py-3.5 bg-white/[0.02] border-b border-white/[0.08] gap-3">
+              <div className="flex gap-2">
+                <div className="w-3 h-3 rounded-full bg-[#FF5F56]" />
+                <div className="w-3 h-3 rounded-full bg-[#FFBD2E]" />
+                <div className="w-3 h-3 rounded-full bg-[#27C93F]" />
               </div>
-              <pre className="p-6 text-[12px] sm:text-[13px] font-mono text-[#e8e8ef] overflow-x-auto leading-relaxed bg-[#030308]">
-                <code className="whitespace-pre">{platform.codeExample}</code>
-              </pre>
+              <div className="flex items-center gap-2 px-3 py-1 rounded-md bg-white/[0.04] border border-white/[0.06]">
+                <Terminal className="w-3.5 h-3.5 text-[#9aa0aa]" />
+                <span className="text-[11px] text-[#9aa0aa] font-mono font-medium">
+                  POST /v1/posts
+                </span>
+              </div>
+              <div className="w-12" />
             </div>
-          </ScrollReveal>
-        </div>
+            <pre className="p-6 text-[12px] sm:text-[13px] font-mono text-[#e8e8ef] overflow-x-auto leading-relaxed bg-[#030308]">
+              <code className="whitespace-pre">{platform.codeExample}</code>
+            </pre>
+          </div>
+        </ScrollReveal>
       </section>
 
-      {/* Note Box */}
-      <section className="py-16 border-t border-white/[0.06]">
-        <div className="max-w-3xl mx-auto px-6">
-          <ScrollReveal className="w-full">
-            <div
-              className="rounded-2xl p-6 sm:p-10 border shadow-2xl bg-[#0a0a12]/30"
-              style={{
-                borderLeftWidth: "6px",
-                borderLeftColor: accent,
-                borderTopColor: "rgba(255, 255, 255, 0.06)",
-                borderRightColor: "rgba(255, 255, 255, 0.06)",
-                borderBottomColor: "rgba(255, 255, 255, 0.06)",
-              }}
-            >
-              <div className="flex flex-col sm:flex-row gap-5 items-start">
-                <div
-                  className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-md"
-                  style={{ backgroundColor: `${accent}15`, color: accent }}
+      {/* Note Box - Floating Card */}
+      <section className="relative my-16 max-w-3xl mx-auto px-6">
+        <ScrollReveal className="w-full">
+          <div
+            className="rounded-2xl p-6 sm:p-8 border shadow-2xl bg-[#0d0d18]/30"
+            style={{
+              borderLeftWidth: "6px",
+              borderLeftColor: accent,
+              borderTopColor: "rgba(255, 255, 255, 0.06)",
+              borderRightColor: "rgba(255, 255, 255, 0.06)",
+              borderBottomColor: "rgba(255, 255, 255, 0.06)",
+            }}
+          >
+            <div className="flex flex-col sm:flex-row gap-5 items-start">
+              <div
+                className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-md"
+                style={{ backgroundColor: `${accent}15`, color: accent }}
+              >
+                <Info className="w-5 h-5" />
+              </div>
+              <div>
+                <h3
+                  className="text-base font-bold mb-2 text-white"
                 >
-                  <Info className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3
-                    className="text-lg font-bold mb-2 text-white"
-                  >
-                    {platform.noteTitle}
-                  </h3>
-                  <p className="text-sm text-[#9aa0aa] leading-relaxed">
-                    {platform.noteDescription}
-                  </p>
-                </div>
+                  {platform.noteTitle}
+                </h3>
+                <p className="text-xs text-[#9aa0aa] leading-relaxed">
+                  {platform.noteDescription}
+                </p>
               </div>
             </div>
-          </ScrollReveal>
-        </div>
+          </div>
+        </ScrollReveal>
       </section>
 
-      {/* Comparison */}
-      <section className="py-24 border-t border-white/[0.06] bg-white/[0.01]">
-        <div className="max-w-5xl mx-auto px-6">
+      {/* Comparison - Floating Card */}
+      <section className="relative my-16 max-w-5xl mx-auto px-6">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d18]/30 p-8 md:p-12 backdrop-blur-md">
           <ScrollReveal className="w-full">
-            <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-center text-white mb-16">
+            <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-center text-white mb-12">
               Why InstaEdit vs {platform.name} API?
             </h2>
 
@@ -271,7 +267,7 @@ const PlatformPageInner = memo(function PlatformPageInner({
                       <div className="w-6 h-6 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0 mt-0.5">
                         <Check className="w-3.5 h-3.5 text-emerald-400" />
                       </div>
-                      <span className="text-sm text-[#e8e8ef] leading-relaxed">
+                      <span className="text-xs text-[#e8e8ef] leading-relaxed">
                         {item}
                       </span>
                     </li>
@@ -282,7 +278,7 @@ const PlatformPageInner = memo(function PlatformPageInner({
               {/* Their API */}
               <div
                 data-testid="comparison-them-card"
-                className="rounded-2xl border border-white/[0.08] bg-[#0a0a12]/30 p-8"
+                className="rounded-2xl border border-white/[0.08] bg-[#0d0d18]/30 p-8"
               >
                 <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/[0.03] border border-white/[0.08] text-[#9aa0aa] font-bold text-xs mb-8">
                   <X className="w-4 h-4" />
@@ -296,7 +292,7 @@ const PlatformPageInner = memo(function PlatformPageInner({
                       <div className="w-6 h-6 rounded-full bg-white/[0.04] flex items-center justify-center shrink-0 mt-0.5">
                         <X className="w-3.5 h-3.5 text-[#9aa0aa]" />
                       </div>
-                      <span className="text-sm text-[#9aa0aa] leading-relaxed">
+                      <span className="text-xs text-[#9aa0aa] leading-relaxed">
                         {item}
                       </span>
                     </li>
@@ -308,29 +304,29 @@ const PlatformPageInner = memo(function PlatformPageInner({
         </div>
       </section>
 
-      {/* How it works */}
-      <section id="how-it-works" className="py-24 border-t border-white/[0.06]">
-        <div className="max-w-5xl mx-auto px-6">
-          <ScrollReveal className="text-center mb-16">
+      {/* How it works - Floating Card */}
+      <section id="how-it-works" className="relative my-16 max-w-5xl mx-auto px-6">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d18]/30 p-8 md:p-12 backdrop-blur-md">
+          <ScrollReveal className="text-center mb-12">
             <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-white mb-4">
               How it works
             </h2>
-            <p className="text-sm text-[#9aa0aa] max-w-lg mx-auto">
+            <p className="text-xs text-[#9aa0aa] max-w-lg mx-auto">
               Get from zero to published in three exceptionally simple steps.
             </p>
           </ScrollReveal>
 
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="grid md:grid-cols-3 gap-5">
             {steps.map((s, i) => (
               <ScrollReveal key={s.step} delay={i * 80}>
-                <div className="h-full rounded-2xl p-6 border border-white/[0.06] bg-[#0a0a12]/30 hover:border-white/[0.12] hover:bg-[#0f0f1d]/50 transition-all duration-300">
+                <div className="h-full rounded-xl p-6 border border-white/[0.05] bg-[#030308]/60 hover:border-white/[0.12] hover:bg-[#0f0f1d]/50 transition-all duration-300">
                   <div
-                    className="w-12 h-12 rounded-xl flex items-center justify-center text-lg font-bold mb-6 shadow-md"
+                    className="w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold mb-6 shadow-md"
                     style={{ backgroundColor: `${accent}15`, color: accent }}
                   >
                     {s.step}
                   </div>
-                  <h3 className="text-base font-bold text-white mb-2">
+                  <h3 className="text-sm font-bold text-white mb-2">
                     {s.title}
                   </h3>
                   <p className="text-xs text-[#9aa0aa] leading-relaxed">
@@ -343,29 +339,29 @@ const PlatformPageInner = memo(function PlatformPageInner({
         </div>
       </section>
 
-      {/* Features */}
-      <section className="py-24 border-t border-white/[0.06] bg-white/[0.01]">
-        <div className="max-w-5xl mx-auto px-6">
-          <ScrollReveal className="text-center mb-16">
+      {/* Features - Floating Card */}
+      <section className="relative my-16 max-w-5xl mx-auto px-6">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d18]/30 p-8 md:p-12 backdrop-blur-md">
+          <ScrollReveal className="text-center mb-12">
             <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-white mb-4">
               Built for scale
             </h2>
-            <p className="text-sm text-[#9aa0aa] max-w-lg mx-auto">
+            <p className="text-xs text-[#9aa0aa] max-w-lg mx-auto">
               Production-tested features designed to take the friction out of platform publishing.
             </p>
           </ScrollReveal>
 
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="grid md:grid-cols-3 gap-5">
             {platform.features.map((f, i) => (
               <ScrollReveal key={i} delay={i * 60}>
-                <div className="h-full rounded-2xl p-6 border border-white/[0.06] bg-[#0a0a12]/30 hover:border-white/[0.12] hover:bg-[#0f0f1d]/50 hover:-translate-y-1 transition-all duration-300">
+                <div className="h-full rounded-xl p-6 border border-white/[0.05] bg-[#030308]/60 hover:border-white/[0.12] hover:bg-[#0f0f1d]/50 hover:-translate-y-1 transition-all duration-300">
                   <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center mb-6 shadow-md"
+                    className="w-9 h-9 rounded-lg flex items-center justify-center mb-6 shadow-md"
                     style={{ backgroundColor: `${accent}15`, color: accent }}
                   >
-                    <div className="scale-110">{f.icon}</div>
+                    <div className="scale-100">{f.icon}</div>
                   </div>
-                  <h3 className="text-base font-bold text-white mb-2">
+                  <h3 className="text-sm font-bold text-white mb-2">
                     {f.title}
                   </h3>
                   <p className="text-xs text-[#9aa0aa] leading-relaxed">
@@ -378,18 +374,18 @@ const PlatformPageInner = memo(function PlatformPageInner({
         </div>
       </section>
 
-      {/* Content types */}
-      <section className="py-20 border-t border-white/[0.06]">
-        <div className="max-w-4xl mx-auto px-6 text-center">
+      {/* Content types - Floating Card */}
+      <section className="relative my-16 max-w-3xl mx-auto px-6">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d18]/30 p-8 text-center">
           <ScrollReveal className="w-full">
-            <h2 className="text-xl sm:text-3xl font-bold tracking-tight text-white mb-8">
+            <h2 className="text-lg font-bold tracking-tight text-white mb-6">
               Supported formats
             </h2>
-            <div className="flex flex-wrap items-center justify-center gap-3">
+            <div className="flex flex-wrap items-center justify-center gap-2">
               {platform.contentTypes.map((type) => (
                 <span
                   key={type}
-                  className="px-4 py-2 rounded-xl border text-xs font-bold shadow-md"
+                  className="px-3.5 py-1.5 rounded-lg border text-[11px] font-bold shadow-md"
                   style={{
                     borderColor: `${accent}25`,
                     backgroundColor: `${accent}08`,
@@ -404,39 +400,39 @@ const PlatformPageInner = memo(function PlatformPageInner({
         </div>
       </section>
 
-      {/* FAQ */}
+      {/* FAQ - Floating Card */}
       <section
         data-testid="faq-section"
-        className="py-24 border-t border-white/[0.06] bg-white/[0.01]"
+        className="relative my-16 max-w-4xl mx-auto px-6"
       >
-        <div className="max-w-3xl mx-auto px-6">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d18]/30 p-8 md:p-12">
           <ScrollReveal className="w-full">
-            <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-center text-white mb-16">
+            <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight center text-white mb-12">
               Common questions
             </h2>
 
             <div className="space-y-4">
               {platform.faq.map((item, i) => (
                 <ScrollReveal key={i} delay={i * 50}>
-                  <div className="rounded-xl border border-white/[0.06] bg-[#0a0a12]/30 hover:border-white/[0.12] transition-colors overflow-hidden">
+                  <div className="rounded-xl border border-white/[0.06] bg-[#030308]/60 hover:border-white/[0.12] transition-colors overflow-hidden">
                     <button
                       onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                      className="w-full flex items-center justify-between px-6 py-5 text-left focus:outline-none gap-4"
+                      className="w-full flex items-center justify-between px-6 py-4 text-left focus:outline-none gap-4"
                     >
-                      <span className="text-sm font-bold text-white">
+                      <span className="text-xs font-bold text-white">
                         {item.q}
                       </span>
                       <div
-                        className={`p-1.5 rounded-full bg-white/[0.03] transition-transform duration-300 shrink-0 ${
+                        className={`p-1 rounded-full bg-white/[0.03] transition-transform duration-300 shrink-0 ${
                           openFaq === i ? "rotate-180 bg-white/[0.08]" : ""
                         }`}
                       >
-                        <ChevronDown className="w-4 h-4 text-white" />
+                        <ChevronDown className="w-3.5 h-3.5 text-white" />
                       </div>
                     </button>
                     {openFaq === i && (
-                      <div className="px-6 pb-5 text-xs text-[#9aa0aa] leading-relaxed">
-                        <div className="pt-4 border-t border-white/[0.06]">
+                      <div className="px-6 pb-4 text-[11px] text-[#9aa0aa] leading-relaxed">
+                        <div className="pt-3 border-t border-white/[0.06]">
                           {item.a}
                         </div>
                       </div>
@@ -449,60 +445,58 @@ const PlatformPageInner = memo(function PlatformPageInner({
         </div>
       </section>
 
-      {/* CTA */}
+      {/* CTA - Floating Card */}
       <section
         data-testid="cta-section"
-        className="py-24 border-t border-white/[0.06]"
+        className="relative my-16 max-w-5xl mx-auto px-6"
       >
-        <div className="max-w-4xl mx-auto px-6">
-          <ScrollReveal className="w-full">
-            <div className="rounded-3xl border border-white/[0.08] bg-[#07070f]/50 p-12 md:p-20 text-center backdrop-blur-md shadow-2xl relative overflow-hidden">
+        <ScrollReveal className="w-full">
+          <div className="rounded-2xl border border-white/[0.08] bg-[#0d0d18]/40 p-10 md:p-16 text-center backdrop-blur-md shadow-2xl relative overflow-hidden">
+            <div
+              className="absolute inset-0 opacity-10 pointer-events-none"
+              style={{
+                background: `radial-gradient(circle at center, ${accent} 0%, transparent 70%)`,
+              }}
+            />
+            <div className="relative z-10">
               <div
-                className="absolute inset-0 opacity-10 pointer-events-none"
-                style={{
-                  background: `radial-gradient(circle at center, ${accent} 0%, transparent 70%)`,
-                }}
-              />
-              <div className="relative z-10">
-                <div
-                  className="w-12 h-12 rounded-xl flex items-center justify-center mx-auto mb-6 shadow-md"
-                  style={{ backgroundColor: `${accent}15`, color: accent }}
+                className="w-10 h-10 rounded-xl flex items-center justify-center mx-auto mb-6 shadow-md"
+                style={{ backgroundColor: `${accent}15`, color: accent }}
+              >
+                <div className="scale-100">{platform.icon}</div>
+              </div>
+              <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-white mb-4">
+                Ship your {platform.name} integration today.
+              </h2>
+              <p className="text-xs text-[#9aa0aa] mb-8 max-w-md mx-auto leading-relaxed">
+                Join thousands of developers using InstaEdit to bypass the headache of building against {platform.name}&apos;s API directly.
+              </p>
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                <Link
+                  to="/login"
+                  className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-[#030308] font-semibold text-sm hover:bg-white/90 shadow-[0_4px_16px_rgba(255,255,255,0.1)] transition-all"
                 >
-                  <div className="scale-110">{platform.icon}</div>
-                </div>
-                <h2 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-white mb-4">
-                  Ship your {platform.name} integration today.
-                </h2>
-                <p className="text-sm text-[#9aa0aa] mb-8 max-w-md mx-auto leading-relaxed">
-                  Join thousands of developers using InstaEdit to bypass the headache of building against {platform.name}&apos;s API directly.
-                </p>
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                  <Link
-                    to="/login"
-                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-[#030308] font-semibold text-sm hover:bg-white/90 shadow-[0_4px_16px_rgba(255,255,255,0.1)] transition-all"
-                  >
-                    Get started free
-                    <ArrowRight className="w-4 h-4" />
-                  </Link>
-                  <Link
-                    to="/"
-                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-white/[0.08] bg-white/[0.02] text-sm text-[#9aa0aa] hover:text-white hover:border-white/[0.15] hover:bg-white/[0.04] transition-all"
-                  >
-                    View documentation
-                  </Link>
-                </div>
+                  Get started free
+                  <ArrowRight className="w-4 h-4" />
+                </Link>
+                <Link
+                  to="/"
+                  className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-white/[0.08] bg-white/[0.02] text-sm text-[#9aa0aa] hover:text-white hover:border-white/[0.15] hover:bg-white/[0.04] transition-all"
+                >
+                  View documentation
+                </Link>
               </div>
             </div>
-          </ScrollReveal>
-        </div>
+          </div>
+        </ScrollReveal>
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-white/[0.06] bg-[#030308] relative z-10">
-        <div className="max-w-6xl mx-auto px-6 py-12 flex flex-col md:flex-row items-center justify-between gap-6">
+      <footer className="max-w-5xl mx-auto px-6 mt-20 border-t border-white/[0.06]">
+        <div className="py-10 flex flex-col md:flex-row items-center justify-between gap-6">
           <Link to="/" className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
-              <Zap className="w-3.5 h-3.5 text-white" />
+            <div className="w-5 h-5 rounded bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
+              <Zap className="w-3 text-white" />
             </div>
             <span className="text-xs font-bold text-white tracking-wider">INSTAEDIT</span>
           </Link>
