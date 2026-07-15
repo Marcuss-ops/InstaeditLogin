@@ -66,18 +66,6 @@ const LOCAL_LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
   "[::1]",
 ]);
 
-/**
- * When the SPA runs in demo mode (VITE_DEMO_MODE=true), every API
- * call short-circuits to mock data and the VITE_API_BASE_URL value
- * is unused. Skipping the URL check entirely lets the user deploy
- * a frontend preview on Vercel while the Go backend is offline
- * (e.g. Fly.io payment blocked during bootstrap). See
- * web/src/lib/demo.ts for the runtime contract.
- */
-function isDemoMode(env: Env): boolean {
-  return (env.VITE_DEMO_MODE ?? "").toLowerCase() === "true";
-}
-
 type Env = Readonly<Record<string, string | undefined>>;
 
 /**
@@ -86,32 +74,6 @@ type Env = Readonly<Record<string, string | undefined>>;
  * env object; production callers (Vite plugin, CLI) pass process.env.
  */
 export function validateApiBaseUrl(env: Env = process.env): ValidationResult {
-  // Demo mode supersedes every other check: the URL is unused at
-  // runtime (mockFetch returns canned Responses), so accepting an
-  // empty / invalid / localhost value here is intentional and the
-  // only way the user can ship a frontend-only Vercel preview.
-  if (isDemoMode(env)) {
-    const rawUrl = env.VITE_API_BASE_URL?.trim() ?? "";
-    const vercelEnv = (env.VERCEL_ENV ?? "").toLowerCase();
-    const context: ValidationContext =
-      vercelEnv === "production"
-        ? "production"
-        : vercelEnv === "preview"
-          ? "preview"
-          : vercelEnv === "development"
-            ? "vercel_dev"
-            : "local";
-    return {
-      level: "ok",
-      context,
-      messages: [
-        `VITE_DEMO_MODE=true — VITE_API_BASE_URL is ignored${rawUrl ? ` (was: ${redactUrl(rawUrl)})` : " (empty)"}. ` +
-          `Every authedFetch call returns mock data; see web/src/lib/demo.ts. ` +
-          `Remove VITE_DEMO_MODE from Vercel once the Go backend is live.`,
-      ],
-    };
-  }
-
   const rawUrl = env.VITE_API_BASE_URL?.trim() ?? "";
   const vercelEnv = (env.VERCEL_ENV ?? "").toLowerCase();
   const context: ValidationContext =

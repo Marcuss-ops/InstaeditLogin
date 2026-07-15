@@ -2,7 +2,6 @@ import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Zap, Mail, Lock, ArrowRight } from "lucide-react";
 import { fetchSession } from "../lib/auth";
-import { DEMO_MODE } from "../lib/demo";
 import { API_BASE_URL } from "../lib/api";
 
 export function Login() {
@@ -18,12 +17,6 @@ export function Login() {
     setLoading(true);
 
     try {
-      if (DEMO_MODE) {
-        console.warn("DEMO_MODE is active (VITE_DEMO_MODE=true). Skipping real API login request and redirecting to dashboard.");
-        navigate("/app/dashboard");
-        return;
-      }
-
       const resp = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
         method: "POST",
         credentials: "include",
