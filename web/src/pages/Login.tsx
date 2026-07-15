@@ -19,6 +19,7 @@ export function Login() {
 
     try {
       if (DEMO_MODE) {
+        console.warn("DEMO_MODE is active (VITE_DEMO_MODE=true). Skipping real API login request and redirecting to dashboard.");
         navigate("/app/dashboard");
         return;
       }
