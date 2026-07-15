@@ -20,14 +20,8 @@ function App() {
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/terms" element={<TermsOfService />} />
 
-            {/* Platform pages */}
-            <Route path="/tiktok" element={<PlatformPage />} />
-            <Route path="/instagram" element={<PlatformPage />} />
-            <Route path="/facebook" element={<PlatformPage />} />
-            <Route path="/threads" element={<PlatformPage />} />
-            <Route path="/youtube" element={<PlatformPage />} />
-            <Route path="/linkedin" element={<PlatformPage />} />
-            <Route path="/twitter" element={<PlatformPage />} />
+            {/* Platform pages — must be after specific routes */}
+            <Route path="/:slug" element={<PlatformPage />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
