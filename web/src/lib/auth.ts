@@ -14,6 +14,7 @@
  */
 
 import { API_BASE_URL } from "./api";
+import { apiClient } from "./api-client";
 import { toastBus } from "../components/toast";
 
 export type Session = {
@@ -32,19 +33,7 @@ export async function fetchSession(): Promise<Session | null> {
 
   sessionPromise = (async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
-        method: "GET",
-        credentials: "include",
-      });
-      if (response.status === 401) {
-        sessionCache = null;
-        return null;
-      }
-      if (!response.ok) {
-        sessionCache = null;
-        return null;
-      }
-      const data = (await response.json()) as { user_id: number };
+      const data = await apiClient<{ user_id: number }>("/api/v1/auth/me");
       sessionCache = {
         userId: data.user_id,
         name: "",
@@ -53,6 +42,8 @@ export async function fetchSession(): Promise<Session | null> {
       };
       return sessionCache;
     } catch {
+      // 401, network failure, or any other error → fail closed (no session).
+      // The caller treats null session as "not logged in" and routes to /login.
       sessionCache = null;
       return null;
     } finally {
@@ -92,39 +83,14 @@ export class ApiError extends Error {
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
- * Reads the value of a cookie by name from `document.cookie`.
- * Returns null when no cookie with that name is set, or when called
- * outside a browser (no `document` global, e.g. SSR or a node
- * worker that doesn't load jsdom).
+ * Re-exported from `./cookie` to preserve the existing
+ * `import { readCookie } from "./auth"` call surface used by other
+ * modules. The implementation lives in `./cookie` so both `auth.ts`
+ * and `api-client.ts` can import it without creating a cycle.
  *
- * Used by `authedFetch` to attach `X-CSRF-Token` on unsafe methods.
- * Browser cookie-domain scope matters: when COOKIE_DOMAIN is set to
- * e.g. ".instaedit.org" via fly secrets, the `csrf_token` cookie is
- * shared across subdomains so the SPA on `app.instaedit.org` can
- * read the value that `api.instaedit.org` set. The dev default is
- * host-only (cookie set on the API origin) and the SPA must hit the
- * API on the same browser-visible origin (e.g. via Vite proxy at
- * localhost:5173 → localhost:8080) for document.cookie to contain
- * the value.
- *
- * The lookup prefix is the literal cookie name (no URL-encoding):
- * browsers store cookie names as-is in `document.cookie` and only
- * URL-encode the value. Encoding the name would silently miss
- * cookies whose name contains a reserved character (e.g. `+`, `/`).
+ * @see web/src/lib/cookie.ts
  */
-export function readCookie(name: string): string | null {
-  if (typeof document === "undefined" || !document.cookie) {
-    return null;
-  }
-  const prefix = `${name}=`;
-  for (const part of document.cookie.split(";")) {
-    const value = part.trim();
-    if (value.startsWith(prefix)) {
-      return decodeURIComponent(value.slice(prefix.length));
-    }
-  }
-  return null;
-}
+export { readCookie } from "./cookie";
 
 export async function authedFetch(
   path: string,
