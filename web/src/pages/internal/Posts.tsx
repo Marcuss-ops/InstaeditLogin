@@ -184,7 +184,7 @@ export function InternalPosts() {
               <RefreshCw size={14} /> Refresh
             </button>
             <Link
-              to="/compose"
+              to="/app/compose"
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-black text-white text-[13px] font-semibold hover:bg-neutral-800 transition-colors no-underline"
             >
               <Sparkles size={14} /> New post
@@ -230,7 +230,7 @@ export function InternalPosts() {
             icon={<FileText size={32} />}
             cta={
               <Link
-                to="/compose"
+                to="/app/compose"
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-black text-white text-[14px] font-semibold hover:bg-neutral-800 transition-colors no-underline"
               >
                 <Sparkles size={14} /> Create post

@@ -7,6 +7,7 @@ import { PlatformPage } from "./pages/platforms/PlatformPage";
 import { InternalDashboard } from "./pages/internal/Dashboard";
 import { InternalLinking } from "./pages/internal/Linking";
 import { InternalPosts } from "./pages/internal/Posts";
+import { InternalCompose } from "./pages/internal/Compose";
 import { CookieBanner } from "./components/CookieBanner";
 import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
 import { ToastProvider } from "./components/toast";
@@ -40,6 +41,7 @@ function App() {
               <Route path="dashboard" element={<InternalDashboard />} />
               <Route path="linking" element={<InternalLinking />} />
               <Route path="posts" element={<InternalPosts />} />
+              <Route path="compose" element={<InternalCompose />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

@@ -9,6 +9,7 @@ import {
   Layers,
   Sparkles,
 } from "lucide-react";
+import { ScrollReveal } from "../components/ScrollReveal";
 
 const PLATFORMS = [
   { name: "Instagram", color: "#E1306C" },
@@ -98,8 +99,9 @@ export function Landing() {
       </nav>
 
       {/* Hero */}
-      <section className="pt-48 pb-40 px-6">
-        <div className="max-w-4xl mx-auto text-center">
+      <section className="relative pt-48 pb-40 px-6 overflow-hidden">
+        <div className="glow-orb bg-[#0A84FF] w-[700px] h-[700px] top-[-200px] left-1/2 -translate-x-1/2" />
+        <ScrollReveal className="relative z-10 max-w-4xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] text-xs text-[#9aa0aa] mb-14">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             Now managing 10,000+ publications per month
@@ -134,8 +136,10 @@ export function Landing() {
               See how it works
             </a>
           </div>
-        </div>
+        </ScrollReveal>
       </section>
+
+      <div className="section-divider" />
 
       {/* Platforms ticker */}
       <section className="py-24 border-y border-white/[0.04] overflow-hidden">
@@ -152,9 +156,11 @@ export function Landing() {
         </div>
       </section>
 
+      <div className="section-divider" />
+
       {/* Stats */}
-      <section className="py-44 px-6">
-        <div className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-16 md:gap-8">
+      <section className="py-32 px-6 bg-elevated">
+        <ScrollReveal className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-16 md:gap-8">
           {STATS.map((s) => (
             <div key={s.label} className="text-center">
               <div className="text-4xl md:text-5xl font-semibold tracking-tight mb-3">
@@ -163,53 +169,56 @@ export function Landing() {
               <div className="text-sm text-[#9aa0aa]">{s.label}</div>
             </div>
           ))}
-        </div>
+        </ScrollReveal>
       </section>
 
       {/* Features */}
-      <section id="features" className="py-44 px-6">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-24">
+      <section id="features" className="py-32 px-6 relative">
+        <div className="glow-orb bg-[#7B61FF] w-[600px] h-[600px] bottom-[-250px] right-[-150px] opacity-10" />
+        <div className="max-w-5xl mx-auto relative z-10">
+          <ScrollReveal className="text-center mb-16">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] text-xs text-[#9aa0aa] mb-6">
               <Sparkles className="w-3 h-3" />
               Features
             </div>
-            <h2 className="text-3xl md:text-4xl font-semibold tracking-tight mb-5">
+            <h2 className="text-3xl md:text-5xl font-semibold tracking-tight mb-5">
               Built for content teams
             </h2>
             <p className="text-[#9aa0aa] max-w-lg mx-auto text-lg">
               Everything you need to manage multi-platform publishing at scale.
               No bloat, no compromises.
             </p>
-          </div>
+          </ScrollReveal>
 
-          <div className="grid md:grid-cols-2 gap-8">
-            {FEATURES.map((f) => (
-              <div
-                key={f.title}
-                className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-12 hover:bg-white/[0.03] transition-colors"
-              >
-                <div className="w-11 h-11 rounded-xl bg-white/[0.06] flex items-center justify-center text-[#7B61FF] mb-6">
-                  {f.icon}
+          <div className="grid md:grid-cols-2 gap-6">
+            {FEATURES.map((f, i) => (
+              <ScrollReveal key={f.title} delay={i * 80}>
+                <div className="surface-card p-8 h-full hover:bg-white/[0.05] hover:border-white/[0.12] hover:shadow-[0_12px_40px_rgba(0,0,0,0.3)] hover:-translate-y-1 transition-all duration-300">
+                  <div className="w-11 h-11 rounded-xl bg-white/[0.06] flex items-center justify-center text-[#7B61FF] mb-6">
+                    {f.icon}
+                  </div>
+                  <h3 className="text-lg font-medium mb-3">{f.title}</h3>
+                  <p className="text-[#9aa0aa] leading-relaxed">
+                    {f.description}
+                  </p>
                 </div>
-                <h3 className="text-lg font-medium mb-3">{f.title}</h3>
-                <p className="text-[#9aa0aa] leading-relaxed">
-                  {f.description}
-                </p>
-              </div>
+              </ScrollReveal>
             ))}
           </div>
         </div>
       </section>
 
+      <div className="section-divider" />
+
       {/* CTA */}
-      <section className="py-48 px-6">
-        <div className="max-w-3xl mx-auto text-center">
-          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-16 md:p-28">
+      <section className="relative py-32 px-6 overflow-hidden">
+        <div className="glow-orb bg-[#E1306C] w-[500px] h-[500px] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-15" />
+        <ScrollReveal className="relative z-10 max-w-3xl mx-auto text-center">
+          <div className="surface-card p-12 md:p-20 shadow-[0_0_80px_-20px_rgba(123,97,255,0.18)]">
             <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center mx-auto mb-8">
               <Zap className="w-5 h-5 text-white" />
             </div>
-            <h2 className="text-3xl md:text-4xl font-semibold tracking-tight mb-5">
+            <h2 className="text-3xl md:text-5xl font-semibold tracking-tight mb-5">
               Ready to scale your content?
             </h2>
             <p className="text-[#9aa0aa] mb-10 max-w-md mx-auto text-lg">
@@ -224,11 +233,13 @@ export function Landing() {
               <ArrowRight className="w-4 h-4" />
             </Link>
           </div>
-        </div>
+        </ScrollReveal>
       </section>
 
+      <div className="section-divider" />
+
       {/* Footer */}
-      <footer className="border-t border-white/[0.04] pt-16 pb-10 px-6">
+      <footer className="pt-16 pb-10 px-6">
         <div className="max-w-6xl mx-auto flex flex-col items-center gap-10">
           <Link to="/" className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-md bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">

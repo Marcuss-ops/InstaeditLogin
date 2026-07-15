@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { Zap, ArrowRight, ChevronDown, Check, X, Code } from "lucide-react";
 import { useState } from "react";
+import { ScrollReveal } from "../../components/ScrollReveal";
 import { PLATFORMS, type PlatformData } from "./platformData";
 
 export function PlatformPage() {
@@ -58,8 +59,19 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       </nav>
 
       {/* Hero */}
-      <section className="pt-48 pb-40 px-6">
-        <div className="max-w-4xl mx-auto text-center">
+      <section className="relative pt-48 pb-32 px-6 overflow-hidden">
+        <div
+          className="glow-orb opacity-15"
+          style={{
+            backgroundColor: accent,
+            width: "600px",
+            height: "600px",
+            top: "-150px",
+            left: "50%",
+            transform: "translateX(-50%)",
+          }}
+        />
+        <ScrollReveal className="relative z-10 max-w-4xl mx-auto text-center">
           <div
             className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full border text-sm font-medium mb-14"
             style={{
@@ -106,13 +118,15 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
           <p className="text-xs text-[#9aa0aa]/60 mt-6">
             No credit card required
           </p>
-        </div>
+        </ScrollReveal>
       </section>
 
+      <div className="section-divider" />
+
       {/* Code preview */}
-      <section className="py-40 px-6">
-        <div className="max-w-3xl mx-auto">
-          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
+      <section className="py-32 px-6 bg-elevated">
+        <ScrollReveal className="max-w-3xl mx-auto">
+          <div className="surface-card overflow-hidden">
             <div className="flex items-center gap-2 px-5 py-3 border-b border-white/[0.06]">
               <Code className="w-4 h-4 text-[#9aa0aa]" />
               <span className="text-xs text-[#9aa0aa] font-mono">
@@ -123,16 +137,18 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
               <code>{platform.codeExample}</code>
             </pre>
           </div>
-        </div>
+        </ScrollReveal>
       </section>
 
+      <div className="section-divider" />
+
       {/* Note */}
-      <section className="py-40 px-6">
-        <div className="max-w-3xl mx-auto">
+      <section className="py-32 px-6">
+        <ScrollReveal className="max-w-3xl mx-auto">
           <div
-            className="rounded-2xl border p-10 md:p-14"
+            className="surface-card p-10 md:p-14"
             style={{
-              borderColor: `${accent}20`,
+              borderColor: `${accent}25`,
               backgroundColor: `${accent}08`,
             }}
           >
@@ -146,19 +162,21 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
               {platform.noteDescription}
             </p>
           </div>
-        </div>
+        </ScrollReveal>
       </section>
 
+      <div className="section-divider" />
+
       {/* Comparison */}
-      <section className="py-40 px-6">
-        <div className="max-w-4xl mx-auto">
-          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-center mb-20">
+      <section className="py-32 px-6">
+        <ScrollReveal className="max-w-4xl mx-auto">
+          <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-center mb-16">
             Why InstaEdit vs {platform.name} API?
           </h2>
 
-          <div className="grid md:grid-cols-2 gap-8">
+          <div className="grid md:grid-cols-2 gap-6">
             {/* InstaEdit */}
-            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.04] p-12">
+            <div className="surface-card border-emerald-500/20 bg-emerald-500/[0.04] p-10">
               <div className="text-sm font-semibold text-emerald-400 mb-10">
                 {platform.comparison.us.label}
               </div>
@@ -191,17 +209,24 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
               </ul>
             </div>
           </div>
-        </div>
+        </ScrollReveal>
       </section>
 
-      {/* How it works */}
-      <section id="how-it-works" className="py-40 px-6">
-        <div className="max-w-4xl mx-auto">
-          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-center mb-20">
-            How it works
-          </h2>
+      <div className="section-divider" />
 
-          <div className="grid md:grid-cols-3 gap-16">
+      {/* How it works */}
+      <section id="how-it-works" className="py-32 px-6 bg-elevated">
+        <div className="max-w-4xl mx-auto">
+          <ScrollReveal className="text-center mb-16">
+            <h2 className="text-3xl md:text-5xl font-semibold tracking-tight mb-4">
+              How it works
+            </h2>
+            <p className="text-[#9aa0aa] max-w-lg mx-auto">
+              Get from zero to published in three simple steps.
+            </p>
+          </ScrollReveal>
+
+          <div className="grid md:grid-cols-3 gap-8">
             {[
               {
                 step: "1",
@@ -218,8 +243,8 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
                 title: "We handle the rest",
                 desc: "InstaEdit publishes at your scheduled time, retries on failures, and notifies you via webhooks.",
               },
-            ].map((s) => (
-              <div key={s.step} className="text-center">
+            ].map((s, i) => (
+              <ScrollReveal key={s.step} delay={i * 100} className="text-center">
                 <div
                   className="w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-semibold mx-auto mb-8"
                   style={{
@@ -233,55 +258,58 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
                 <p className="text-[15px] text-[#9aa0aa] leading-relaxed">
                   {s.desc}
                 </p>
-              </div>
+              </ScrollReveal>
             ))}
           </div>
         </div>
       </section>
 
+      <div className="section-divider" />
+
       {/* Features */}
-      <section className="py-40 px-6">
-        <div className="max-w-4xl mx-auto">
-          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-center mb-20">
+      <section className="py-32 px-6">
+        <ScrollReveal className="max-w-4xl mx-auto">
+          <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-center mb-16">
             Features
           </h2>
 
-          <div className="grid md:grid-cols-3 gap-8">
+          <div className="grid md:grid-cols-3 gap-6">
             {platform.features.map((f, i) => (
-              <div
-                key={i}
-                className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-12"
-              >
-                <div
-                  className="w-12 h-12 rounded-xl flex items-center justify-center mb-8"
-                  style={{
-                    backgroundColor: `${accent}15`,
-                    color: accent,
-                  }}
-                >
-                  {f.icon}
+              <ScrollReveal key={i} delay={i * 80}>
+                <div className="surface-card p-8 h-full hover:bg-white/[0.05] hover:border-white/[0.12] hover:shadow-[0_12px_40px_rgba(0,0,0,0.3)] hover:-translate-y-1 transition-all duration-300">
+                  <div
+                    className="w-12 h-12 rounded-xl flex items-center justify-center mb-6"
+                    style={{
+                      backgroundColor: `${accent}15`,
+                      color: accent,
+                    }}
+                  >
+                    {f.icon}
+                  </div>
+                  <h3 className="text-lg font-medium mb-3">{f.title}</h3>
+                  <p className="text-[15px] text-[#9aa0aa] leading-relaxed">
+                    {f.description}
+                  </p>
                 </div>
-                <h3 className="text-lg font-medium mb-4">{f.title}</h3>
-                <p className="text-[15px] text-[#9aa0aa] leading-relaxed">
-                  {f.description}
-                </p>
-              </div>
+              </ScrollReveal>
             ))}
           </div>
-        </div>
+        </ScrollReveal>
       </section>
 
+      <div className="section-divider" />
+
       {/* Content types */}
-      <section className="py-40 px-6">
-        <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight mb-12">
+      <section className="py-32 px-6 bg-elevated">
+        <ScrollReveal className="max-w-3xl mx-auto text-center">
+          <h2 className="text-3xl md:text-5xl font-semibold tracking-tight mb-12">
             Content types
           </h2>
           <div className="flex flex-wrap items-center justify-center gap-4">
             {platform.contentTypes.map((type) => (
               <span
                 key={type}
-                className="px-5 py-3 rounded-xl border text-sm font-medium"
+                className="px-5 py-3 rounded-xl border text-sm font-medium surface-card"
                 style={{
                   borderColor: `${accent}25`,
                   color: accent,
@@ -291,55 +319,69 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
               </span>
             ))}
           </div>
-        </div>
+        </ScrollReveal>
       </section>
 
+      <div className="section-divider" />
+
       {/* FAQ */}
-      <section className="py-40 px-6">
-        <div className="max-w-3xl mx-auto">
-          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-center mb-20">
+      <section className="py-32 px-6">
+        <ScrollReveal className="max-w-3xl mx-auto">
+          <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-center mb-16">
             Frequently asked questions
           </h2>
 
           <div className="space-y-5">
             {platform.faq.map((item, i) => (
-              <div
-                key={i}
-                className="rounded-xl border border-white/[0.06] bg-white/[0.02] overflow-hidden"
-              >
-                <button
-                  onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                  className="w-full flex items-center justify-between px-8 py-6 text-left"
-                >
-                  <span className="text-[15px] font-medium pr-4">{item.q}</span>
-                  <ChevronDown
-                    className={`w-4 h-4 text-[#9aa0aa] shrink-0 transition-transform ${
-                      openFaq === i ? "rotate-180" : ""
-                    }`}
-                  />
-                </button>
-                {openFaq === i && (
-                  <div className="px-8 pb-6 text-[15px] text-[#9aa0aa] leading-relaxed border-t border-white/[0.06] pt-6">
-                    {item.a}
-                  </div>
-                )}
-              </div>
+              <ScrollReveal key={i} delay={i * 60}>
+                <div className="surface-card overflow-hidden">
+                  <button
+                    onClick={() => setOpenFaq(openFaq === i ? null : i)}
+                    className="w-full flex items-center justify-between px-8 py-6 text-left"
+                  >
+                    <span className="text-[15px] font-medium pr-4">{item.q}</span>
+                    <ChevronDown
+                      className={`w-4 h-4 text-[#9aa0aa] shrink-0 transition-transform ${
+                        openFaq === i ? "rotate-180" : ""
+                      }`}
+                    />
+                  </button>
+                  {openFaq === i && (
+                    <div className="px-8 pb-6 text-[15px] text-[#9aa0aa] leading-relaxed border-t border-white/[0.06] pt-6">
+                      {item.a}
+                    </div>
+                  )}
+                </div>
+              </ScrollReveal>
             ))}
           </div>
-        </div>
+        </ScrollReveal>
       </section>
 
+      <div className="section-divider" />
+
       {/* CTA */}
-      <section className="py-44 px-6">
-        <div className="max-w-3xl mx-auto text-center">
-          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-16 md:p-28">
+      <section className="relative py-32 px-6 overflow-hidden">
+        <div
+          className="glow-orb opacity-15"
+          style={{
+            backgroundColor: accent,
+            width: "500px",
+            height: "500px",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+          }}
+        />
+        <ScrollReveal className="relative z-10 max-w-3xl mx-auto text-center">
+          <div className="surface-card p-12 md:p-20 shadow-[0_0_80px_-20px_rgba(123,97,255,0.18)]">
             <div
               className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-10"
               style={{ backgroundColor: `${accent}15`, color: accent }}
             >
               {platform.icon}
             </div>
-            <h2 className="text-3xl md:text-4xl font-semibold tracking-tight mb-6">
+            <h2 className="text-3xl md:text-5xl font-semibold tracking-tight mb-6">
               Ready to ship your {platform.name} integration?
             </h2>
             <p className="text-[#9aa0aa] mb-12 max-w-md mx-auto text-lg leading-relaxed">
@@ -363,11 +405,13 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
               </Link>
             </div>
           </div>
-        </div>
+        </ScrollReveal>
       </section>
 
+      <div className="section-divider" />
+
       {/* Footer */}
-      <footer className="border-t border-white/[0.04] py-12 px-6">
+      <footer className="py-12 px-6">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <Link to="/" className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-md bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
