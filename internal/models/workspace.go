@@ -2,6 +2,9 @@ package models
 
 import "time"
 
+// WorkspaceID uniquely identifies a Workspace.
+type WorkspaceID int64
+
 // Workspace is a team/group container that owns platform accounts and posts.
 // A user can own multiple workspaces (1:N ownership). Mirrors the `workspaces`
 // table introduced by migration 003_posts_workspaces.sql.

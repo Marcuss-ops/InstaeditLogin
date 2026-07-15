@@ -2,6 +2,9 @@ package models
 
 import "time"
 
+// ApiKeyID uniquely identifies an ApiKey row.
+type ApiKeyID int64
+
 // ApiKeyEnvironment values — mirror the environment column accepted
 // by migration 017_api_keys.sql. TEXT column (not Postgres enum) so
 // adding new environments (e.g. "staging") doesn't require an

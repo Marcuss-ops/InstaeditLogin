@@ -13,6 +13,9 @@ const (
 	PlatformLinkedIn  = "linkedin"
 )
 
+// UserID uniquely identifies an application User.
+type UserID int64
+
 // User represents an application user (platform-agnostic).
 type User struct {
 	ID            int64     `json:"id"`

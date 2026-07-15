@@ -119,6 +119,9 @@ func (s *PostStatus) Scan(src any) error {
 	}
 }
 
+// PostID uniquely identifies a Post.
+type PostID int64
+
 // Post is a piece of content (idea → edit → publish pipeline) belonging to
 // a Workspace. The fan-out to multiple platform accounts is captured by
 // PostTarget rows that reference this Post.
