@@ -25,19 +25,17 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/contracts"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
-// UserWorkspaceHelper is the interface used by route handlers to
-// resolve a user's active workspace without tying pkg/api to the
-// concrete *sql.DB-bound repositories. Tests inject a stub implementing
-// these methods (see pkg/api/workspaces_test.go). Production wiring in
-// cmd/server/main.go supplies the *repository.TeamRepository +
-// *repository.WorkspaceRepository via RepoUserWorkspaceHelper.
-type UserWorkspaceHelper interface {
-	ListOwned(ctx context.Context, userID int64) ([]int64, error)
-	ListMemberships(ctx context.Context, userID int64) ([]int64, error)
-}
+// UserWorkspaceHelper is re-exported from pkg/api/contracts (see
+// contracts/users.go for the full godoc). The type alias keeps every
+// existing reference inside pkg/api and internal/* source-compatible
+// while letting the actual interface declaration live in a leaf
+// package. Once all call sites migrate to contracts.UserWorkspaceHelper
+// the alias can collapse in a single cleanup commit.
+type UserWorkspaceHelper = contracts.UserWorkspaceHelper
 
 // repoUserWorkspaceHelper implements UserWorkspaceHelper against the
 // real Postgres repositories. The methods wrap the underlying
