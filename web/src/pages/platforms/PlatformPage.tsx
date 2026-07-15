@@ -1,5 +1,13 @@
 import { Link, useParams } from "react-router-dom";
-import { Zap, ArrowRight, ChevronDown, Check, X, Code } from "lucide-react";
+import {
+  Zap,
+  ArrowRight,
+  ChevronDown,
+  Check,
+  X,
+  Terminal,
+  Info,
+} from "lucide-react";
 import { useState } from "react";
 import { ScrollReveal } from "../../components/ScrollReveal";
 import { PLATFORMS, type PlatformData } from "./platformData";
@@ -29,28 +37,26 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
   const accent = platform.color;
 
   return (
-    <div className="min-h-screen bg-[#030308] text-[#e8e8ef]">
+    <div className="min-h-screen bg-[#030308] text-[#e8e8ef] selection:bg-white/20">
       {/* Nav */}
-      <nav className="fixed top-0 w-full z-50 border-b border-white/[0.06] bg-[#030308]/80 backdrop-blur-xl">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+      <nav className="fixed top-0 w-full z-50 border-b border-white/[0.08] bg-[#030308]/80 backdrop-blur-xl">
+        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
-              <Zap className="w-4 h-4 text-white" />
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center shadow-lg">
+              <Zap className="w-5 h-5 text-white" />
             </div>
-            <span className="text-[15px] font-semibold tracking-tight">
-              InstaEdit
-            </span>
+            <span className="text-lg font-bold tracking-tight">InstaEdit</span>
           </Link>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-6">
             <Link
               to="/login"
-              className="text-sm text-[#9aa0aa] hover:text-white transition-colors"
+              className="text-base font-medium text-[#9aa0aa] hover:text-white transition-colors"
             >
               Sign in
             </Link>
             <Link
               to="/login"
-              className="text-sm font-medium px-4 py-2 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] border border-white/[0.08] transition-all"
+              className="text-base font-medium px-6 py-2.5 rounded-xl bg-white text-[#030308] hover:bg-white/90 transition-all shadow-lg"
             >
               Get started
             </Link>
@@ -59,35 +65,40 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       </nav>
 
       {/* Hero */}
-      <section className="relative pt-48 pb-32 px-6 overflow-hidden">
+      <section className="relative pt-64 pb-48 px-6 overflow-hidden flex flex-col items-center min-h-[90vh]">
         <div
-          className="glow-orb opacity-15"
+          className="glow-orb opacity-30"
           style={{
             backgroundColor: accent,
-            width: "600px",
-            height: "600px",
-            top: "-150px",
+            width: "800px",
+            height: "800px",
+            top: "-200px",
             left: "50%",
             transform: "translateX(-50%)",
           }}
         />
-        <ScrollReveal className="relative z-10 max-w-4xl mx-auto text-center">
-          <div
-            className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full border text-sm font-medium mb-14"
-            style={{
-              borderColor: `${accent}30`,
-              backgroundColor: `${accent}10`,
-              color: accent,
-            }}
-          >
-            {platform.icon}
-            {platform.name} API
+        <ScrollReveal className="relative z-10 max-w-5xl mx-auto text-center w-full">
+          <div className="flex justify-center mb-12">
+            <div
+              className="inline-flex items-center gap-3 px-6 py-2.5 rounded-full border-2 text-base font-bold shadow-xl bg-[#030308]/50 backdrop-blur-md"
+              style={{
+                borderColor: `${accent}40`,
+                color: accent,
+              }}
+            >
+              <div className="w-6 h-6 flex items-center justify-center">
+                {platform.icon}
+              </div>
+              {platform.name} API Integration
+            </div>
           </div>
 
-          <h1 className="text-4xl md:text-6xl font-semibold tracking-tight leading-[1.1] mb-10">
+          <h1 className="text-5xl md:text-7xl font-bold tracking-tight leading-[1.15] mb-10 text-white">
             {platform.heroTagline.split(",").map((part, i) => (
               <span key={i}>
-                {i === 0 ? part : (
+                {i === 0 ? (
+                  part
+                ) : (
                   <span style={{ color: accent }}>{part}</span>
                 )}
                 {i === 0 ? "," : ""}
@@ -95,27 +106,26 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
             ))}
           </h1>
 
-          <p className="text-lg md:text-xl text-[#9aa0aa] max-w-2xl mx-auto mb-14 leading-relaxed">
+          <p className="text-xl md:text-2xl text-[#9aa0aa] max-w-3xl mx-auto mb-16 leading-relaxed font-medium">
             {platform.heroDescription}
           </p>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
             <Link
               to="/login"
-              className="group flex items-center gap-2 px-7 py-3.5 rounded-xl bg-white text-[#030308] font-medium text-sm hover:bg-white/90 transition-all"
+              className="group flex items-center gap-3 px-10 py-5 rounded-2xl bg-white text-[#030308] font-bold text-lg hover:scale-105 transition-all shadow-xl"
             >
               Start free trial
-              <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+              <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </Link>
             <a
               href="#how-it-works"
-              className="flex items-center gap-2 px-7 py-3.5 rounded-xl border border-white/[0.10] text-sm text-[#9aa0aa] hover:text-white hover:border-white/[0.20] transition-all"
+              className="flex items-center gap-3 px-10 py-5 rounded-2xl border-2 border-white/10 text-lg font-bold text-[#e8e8ef] hover:bg-white/5 hover:border-white/20 transition-all"
             >
               View API docs
             </a>
           </div>
-
-          <p className="text-xs text-[#9aa0aa]/60 mt-6">
+          <p className="text-sm text-[#9aa0aa] mt-8 font-medium">
             No credit card required
           </p>
         </ScrollReveal>
@@ -124,16 +134,27 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       <div className="section-divider" />
 
       {/* Code preview */}
-      <section className="py-32 px-6 bg-elevated">
-        <ScrollReveal className="max-w-3xl mx-auto">
-          <div className="surface-card overflow-hidden">
-            <div className="flex items-center gap-2 px-5 py-3 border-b border-white/[0.06]">
-              <Code className="w-4 h-4 text-[#9aa0aa]" />
-              <span className="text-xs text-[#9aa0aa] font-mono">
-                POST /v1/posts
-              </span>
+      <section className="py-40 px-6 bg-elevated border-y border-white/[0.08]">
+        <ScrollReveal className="max-w-4xl mx-auto">
+          <div
+            className="rounded-2xl border-2 overflow-hidden shadow-2xl bg-[#030308]"
+            style={{ borderColor: `${accent}40` }}
+          >
+            <div className="flex items-center justify-between px-6 py-4 bg-white/[0.02] border-b border-white/[0.08]">
+              <div className="flex gap-2">
+                <div className="w-3.5 h-3.5 rounded-full bg-[#FF5F56]" />
+                <div className="w-3.5 h-3.5 rounded-full bg-[#FFBD2E]" />
+                <div className="w-3.5 h-3.5 rounded-full bg-[#27C93F]" />
+              </div>
+              <div className="flex items-center gap-2 px-4 py-1.5 rounded-md bg-white/[0.05] border border-white/[0.05]">
+                <Terminal className="w-4 h-4 text-[#9aa0aa]" />
+                <span className="text-sm text-[#9aa0aa] font-mono font-medium">
+                  POST /v1/posts
+                </span>
+              </div>
+              <div className="w-16" />
             </div>
-            <pre className="p-6 text-sm font-mono text-[#9aa0aa] overflow-x-auto leading-relaxed">
+            <pre className="p-8 md:p-10 text-[15px] md:text-base font-mono text-[#e8e8ef] overflow-x-auto leading-loose bg-[#030308]">
               <code>{platform.codeExample}</code>
             </pre>
           </div>
@@ -142,25 +163,40 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
 
       <div className="section-divider" />
 
-      {/* Note */}
-      <section className="py-32 px-6">
-        <ScrollReveal className="max-w-3xl mx-auto">
+      {/* Note Box */}
+      <section className="py-40 px-6">
+        <ScrollReveal className="max-w-4xl mx-auto">
           <div
-            className="surface-card p-10 md:p-14"
+            className="rounded-2xl p-10 md:p-14 border-l-[12px] shadow-2xl bg-white/[0.02]"
             style={{
-              borderColor: `${accent}25`,
-              backgroundColor: `${accent}08`,
+              borderColor: accent,
+              borderTopWidth: "2px",
+              borderRightWidth: "2px",
+              borderBottomWidth: "2px",
+              borderTopColor: `${accent}30`,
+              borderRightColor: `${accent}30`,
+              borderBottomColor: `${accent}30`,
             }}
           >
-            <div
-              className="text-base font-semibold mb-4"
-              style={{ color: accent }}
-            >
-              {platform.noteTitle}
+            <div className="flex flex-col md:flex-row gap-8 items-start">
+              <div
+                className="w-16 h-16 rounded-2xl flex items-center justify-center shrink-0 shadow-lg"
+                style={{ backgroundColor: `${accent}15`, color: accent }}
+              >
+                <Info className="w-8 h-8" />
+              </div>
+              <div>
+                <h3
+                  className="text-2xl md:text-3xl font-bold mb-4"
+                  style={{ color: accent }}
+                >
+                  {platform.noteTitle}
+                </h3>
+                <p className="text-lg md:text-xl text-[#9aa0aa] leading-relaxed">
+                  {platform.noteDescription}
+                </p>
+              </div>
             </div>
-            <p className="text-base text-[#9aa0aa] leading-relaxed">
-              {platform.noteDescription}
-            </p>
           </div>
         </ScrollReveal>
       </section>
@@ -168,23 +204,26 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       <div className="section-divider" />
 
       {/* Comparison */}
-      <section className="py-32 px-6">
-        <ScrollReveal className="max-w-4xl mx-auto">
-          <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-center mb-16">
+      <section className="py-40 px-6 bg-elevated border-y border-white/[0.08]">
+        <ScrollReveal className="max-w-6xl mx-auto">
+          <h2 className="text-4xl md:text-6xl font-bold tracking-tight text-center mb-24">
             Why InstaEdit vs {platform.name} API?
           </h2>
 
-          <div className="grid md:grid-cols-2 gap-6">
+          <div className="grid lg:grid-cols-2 gap-10">
             {/* InstaEdit */}
-            <div className="surface-card border-emerald-500/20 bg-emerald-500/[0.04] p-10">
-              <div className="text-sm font-semibold text-emerald-400 mb-10">
+            <div className="rounded-3xl border-2 border-emerald-500/30 bg-emerald-500/[0.03] p-12 shadow-[0_0_60px_-15px_rgba(16,185,129,0.1)]">
+              <div className="inline-flex items-center gap-3 px-6 py-3 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-bold text-lg mb-10">
+                <Check className="w-5 h-5" />
                 {platform.comparison.us.label}
               </div>
-              <ul className="space-y-6">
+              <ul className="space-y-8">
                 {platform.comparison.us.items.map((item, i) => (
-                  <li key={i} className="flex items-start gap-3">
-                    <Check className="w-4 h-4 text-emerald-400 mt-1.5 shrink-0" />
-                    <span className="text-[15px] text-[#e8e8ef] leading-relaxed">
+                  <li key={i} className="flex items-start gap-4">
+                    <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0 mt-1">
+                      <Check className="w-4 h-4 text-emerald-400" />
+                    </div>
+                    <span className="text-lg md:text-xl text-[#e8e8ef] font-medium leading-relaxed">
                       {item}
                     </span>
                   </li>
@@ -193,15 +232,18 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
             </div>
 
             {/* Their API */}
-            <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-12">
-              <div className="text-sm font-semibold text-[#9aa0aa] mb-10">
+            <div className="rounded-3xl border-2 border-white/[0.08] bg-[#030308] p-12 shadow-xl">
+              <div className="inline-flex items-center gap-3 px-6 py-3 rounded-full bg-white/[0.05] border border-white/[0.05] text-[#9aa0aa] font-bold text-lg mb-10">
+                <X className="w-5 h-5" />
                 {platform.comparison.them.label}
               </div>
-              <ul className="space-y-6">
+              <ul className="space-y-8">
                 {platform.comparison.them.items.map((item, i) => (
-                  <li key={i} className="flex items-start gap-3">
-                    <X className="w-4 h-4 text-red-400/60 mt-1.5 shrink-0" />
-                    <span className="text-[15px] text-[#9aa0aa] leading-relaxed">
+                  <li key={i} className="flex items-start gap-4 opacity-70">
+                    <div className="w-8 h-8 rounded-full bg-white/[0.05] flex items-center justify-center shrink-0 mt-1">
+                      <X className="w-4 h-4 text-[#9aa0aa]" />
+                    </div>
+                    <span className="text-lg md:text-xl text-[#9aa0aa] font-medium leading-relaxed">
                       {item}
                     </span>
                   </li>
@@ -215,49 +257,48 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       <div className="section-divider" />
 
       {/* How it works */}
-      <section id="how-it-works" className="py-32 px-6 bg-elevated">
-        <div className="max-w-4xl mx-auto">
-          <ScrollReveal className="text-center mb-16">
-            <h2 className="text-3xl md:text-5xl font-semibold tracking-tight mb-4">
+      <section id="how-it-works" className="py-40 px-6">
+        <div className="max-w-6xl mx-auto">
+          <ScrollReveal className="text-center mb-24">
+            <h2 className="text-4xl md:text-6xl font-bold tracking-tight mb-6">
               How it works
             </h2>
-            <p className="text-[#9aa0aa] max-w-lg mx-auto">
-              Get from zero to published in three simple steps.
+            <p className="text-xl text-[#9aa0aa] max-w-2xl mx-auto">
+              Get from zero to published in three exceptionally simple steps.
             </p>
           </ScrollReveal>
 
-          <div className="grid md:grid-cols-3 gap-8">
+          <div className="grid lg:grid-cols-3 gap-8 relative">
             {[
               {
                 step: "1",
                 title: "Connect your account",
-                desc: `Link your ${platform.name} account through our dashboard. One-click OAuth — we handle all the permissions.`,
+                desc: `Link your ${platform.name} account through our dashboard. One-click OAuth — we handle the permissions.`,
               },
               {
                 step: "2",
                 title: "Build your integration",
-                desc: "Use our simple REST API to schedule posts with text, images, videos, or links. Same pattern works for all platforms.",
+                desc: "Use our REST API to schedule posts with text or media. The exact same pattern works for all supported platforms.",
               },
               {
                 step: "3",
                 title: "We handle the rest",
-                desc: "InstaEdit publishes at your scheduled time, retries on failures, and notifies you via webhooks.",
+                desc: "InstaEdit publishes at your time, transcodes media, retries on failures, and uses webhooks for updates.",
               },
             ].map((s, i) => (
-              <ScrollReveal key={s.step} delay={i * 100} className="text-center">
-                <div
-                  className="w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-semibold mx-auto mb-8"
-                  style={{
-                    backgroundColor: `${accent}15`,
-                    color: accent,
-                  }}
-                >
-                  {s.step}
+              <ScrollReveal key={s.step} delay={i * 100}>
+                <div className="h-full rounded-3xl p-10 border-2 border-white/[0.08] bg-white/[0.02] relative overflow-hidden group hover:border-white/[0.2] hover:bg-white/[0.04] transition-all">
+                  <div
+                    className="w-20 h-20 rounded-2xl flex items-center justify-center text-4xl font-bold mb-10 shadow-lg"
+                    style={{ backgroundColor: `${accent}15`, color: accent }}
+                  >
+                    {s.step}
+                  </div>
+                  <h3 className="text-2xl font-bold mb-4">{s.title}</h3>
+                  <p className="text-lg text-[#9aa0aa] leading-relaxed">
+                    {s.desc}
+                  </p>
                 </div>
-                <h3 className="text-lg font-medium mb-4">{s.title}</h3>
-                <p className="text-[15px] text-[#9aa0aa] leading-relaxed">
-                  {s.desc}
-                </p>
               </ScrollReveal>
             ))}
           </div>
@@ -267,27 +308,24 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       <div className="section-divider" />
 
       {/* Features */}
-      <section className="py-32 px-6">
-        <ScrollReveal className="max-w-4xl mx-auto">
-          <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-center mb-16">
-            Features
+      <section className="py-40 px-6 bg-elevated border-y border-white/[0.08]">
+        <ScrollReveal className="max-w-6xl mx-auto">
+          <h2 className="text-4xl md:text-6xl font-bold tracking-tight text-center mb-24">
+            Built for scale
           </h2>
 
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="grid lg:grid-cols-3 gap-8">
             {platform.features.map((f, i) => (
               <ScrollReveal key={i} delay={i * 80}>
-                <div className="surface-card p-8 h-full hover:bg-white/[0.05] hover:border-white/[0.12] hover:shadow-[0_12px_40px_rgba(0,0,0,0.3)] hover:-translate-y-1 transition-all duration-300">
+                <div className="h-full rounded-3xl p-10 border-2 border-white/[0.06] bg-[#030308] hover:border-white/[0.3] hover:shadow-[0_12px_40px_rgba(0,0,0,0.4)] hover:-translate-y-2 transition-all duration-300">
                   <div
-                    className="w-12 h-12 rounded-xl flex items-center justify-center mb-6"
-                    style={{
-                      backgroundColor: `${accent}15`,
-                      color: accent,
-                    }}
+                    className="w-16 h-16 rounded-2xl flex items-center justify-center mb-8 shadow-md"
+                    style={{ backgroundColor: `${accent}15`, color: accent }}
                   >
-                    {f.icon}
+                    <div className="scale-150">{f.icon}</div>
                   </div>
-                  <h3 className="text-lg font-medium mb-3">{f.title}</h3>
-                  <p className="text-[15px] text-[#9aa0aa] leading-relaxed">
+                  <h3 className="text-2xl font-bold mb-4">{f.title}</h3>
+                  <p className="text-lg text-[#9aa0aa] leading-relaxed">
                     {f.description}
                   </p>
                 </div>
@@ -300,19 +338,20 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       <div className="section-divider" />
 
       {/* Content types */}
-      <section className="py-32 px-6 bg-elevated">
-        <ScrollReveal className="max-w-3xl mx-auto text-center">
-          <h2 className="text-3xl md:text-5xl font-semibold tracking-tight mb-12">
-            Content types
+      <section className="py-40 px-6">
+        <ScrollReveal className="max-w-5xl mx-auto text-center">
+          <h2 className="text-3xl md:text-5xl font-bold tracking-tight mb-16">
+            Supported formats
           </h2>
-          <div className="flex flex-wrap items-center justify-center gap-4">
+          <div className="flex flex-wrap items-center justify-center gap-6">
             {platform.contentTypes.map((type) => (
               <span
                 key={type}
-                className="px-5 py-3 rounded-xl border text-sm font-medium surface-card"
+                className="px-8 py-4 rounded-2xl border-2 text-lg font-bold shadow-lg"
                 style={{
-                  borderColor: `${accent}25`,
-                  color: accent,
+                  borderColor: `${accent}30`,
+                  backgroundColor: `${accent}10`,
+                  color: "#fff",
                 }}
               >
                 {type}
@@ -325,30 +364,34 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       <div className="section-divider" />
 
       {/* FAQ */}
-      <section className="py-32 px-6">
-        <ScrollReveal className="max-w-3xl mx-auto">
-          <h2 className="text-3xl md:text-5xl font-semibold tracking-tight text-center mb-16">
-            Frequently asked questions
+      <section className="py-40 px-6 bg-elevated border-y border-white/[0.08]">
+        <ScrollReveal className="max-w-4xl mx-auto">
+          <h2 className="text-4xl md:text-6xl font-bold tracking-tight text-center mb-20">
+            Common questions
           </h2>
 
-          <div className="space-y-5">
+          <div className="space-y-6">
             {platform.faq.map((item, i) => (
               <ScrollReveal key={i} delay={i * 60}>
-                <div className="surface-card overflow-hidden">
+                <div className="rounded-2xl border-2 border-white/[0.08] bg-[#030308] hover:border-white/[0.2] transition-colors overflow-hidden">
                   <button
                     onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                    className="w-full flex items-center justify-between px-8 py-6 text-left"
+                    className="w-full flex items-center justify-between px-10 py-8 text-left focus:outline-none"
                   >
-                    <span className="text-[15px] font-medium pr-4">{item.q}</span>
-                    <ChevronDown
-                      className={`w-4 h-4 text-[#9aa0aa] shrink-0 transition-transform ${
-                        openFaq === i ? "rotate-180" : ""
+                    <span className="text-xl font-bold pr-8">{item.q}</span>
+                    <div
+                      className={`p-2 rounded-full bg-white/[0.05] transition-transform duration-300 ${
+                        openFaq === i ? "rotate-180 bg-white/[0.1]" : ""
                       }`}
-                    />
+                    >
+                      <ChevronDown className="w-6 h-6 text-white" />
+                    </div>
                   </button>
                   {openFaq === i && (
-                    <div className="px-8 pb-6 text-[15px] text-[#9aa0aa] leading-relaxed border-t border-white/[0.06] pt-6">
-                      {item.a}
+                    <div className="px-10 pb-8 text-lg font-medium text-[#9aa0aa] leading-relaxed">
+                      <div className="pt-6 border-t border-white/[0.08]">
+                        {item.a}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -361,48 +404,46 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       <div className="section-divider" />
 
       {/* CTA */}
-      <section className="relative py-32 px-6 overflow-hidden">
-        <div
-          className="glow-orb opacity-15"
-          style={{
-            backgroundColor: accent,
-            width: "500px",
-            height: "500px",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-          }}
-        />
-        <ScrollReveal className="relative z-10 max-w-3xl mx-auto text-center">
-          <div className="surface-card p-12 md:p-20 shadow-[0_0_80px_-20px_rgba(123,97,255,0.18)]">
-            <div
-              className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-10"
-              style={{ backgroundColor: `${accent}15`, color: accent }}
-            >
-              {platform.icon}
-            </div>
-            <h2 className="text-3xl md:text-5xl font-semibold tracking-tight mb-6">
-              Ready to ship your {platform.name} integration?
-            </h2>
-            <p className="text-[#9aa0aa] mb-12 max-w-md mx-auto text-lg leading-relaxed">
-              Join thousands of developers who chose InstaEdit over building
-              with {platform.name}'s API directly. Same reliability, 10x less
-              code.
-            </p>
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <Link
-                to="/login"
-                className="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-white text-[#030308] font-medium text-sm hover:bg-white/90 transition-all"
-              >
-                Get started free
-                <ArrowRight className="w-4 h-4" />
-              </Link>
-              <Link
-                to="/"
-                className="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl border border-white/[0.10] text-sm text-[#9aa0aa] hover:text-white hover:border-white/[0.20] transition-all"
-              >
-                View documentation
-              </Link>
+      <section className="py-40 px-6">
+        <ScrollReveal className="max-w-5xl mx-auto">
+          <div className="rounded-3xl p-1 bg-gradient-to-br from-white/20 via-white/5 to-white/20 shadow-2xl">
+            <div className="rounded-[22px] bg-[#030308] p-16 md:p-24 text-center relative overflow-hidden">
+              <div
+                className="absolute inset-0 opacity-20 pointer-events-none"
+                style={{
+                  background: `radial-gradient(circle at center, ${accent} 0%, transparent 70%)`,
+                }}
+              />
+              <div className="relative z-10">
+                <div
+                  className="w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-10 shadow-lg"
+                  style={{ backgroundColor: `${accent}20`, color: accent }}
+                >
+                  <div className="scale-150">{platform.icon}</div>
+                </div>
+                <h2 className="text-4xl md:text-6xl font-bold tracking-tight mb-8">
+                  Ship your {platform.name} integration today.
+                </h2>
+                <p className="text-xl text-[#9aa0aa] mb-14 max-w-2xl mx-auto leading-relaxed">
+                  Join thousands of developers using InstaEdit to bypass the
+                  headache of building against {platform.name}&apos;s API directly.
+                </p>
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
+                  <Link
+                    to="/login"
+                    className="inline-flex items-center gap-3 px-10 py-5 rounded-xl bg-white text-[#030308] font-bold text-lg hover:scale-105 transition-all shadow-xl"
+                  >
+                    Get started free
+                    <ArrowRight className="w-5 h-5" />
+                  </Link>
+                  <Link
+                    to="/"
+                    className="inline-flex items-center gap-3 px-10 py-5 rounded-xl border-2 border-white/[0.15] text-lg font-bold text-white hover:bg-white/5 transition-all"
+                  >
+                    View documentation
+                  </Link>
+                </div>
+              </div>
             </div>
           </div>
         </ScrollReveal>
@@ -411,22 +452,30 @@ function PlatformPageInner({ platform }: { platform: PlatformData }) {
       <div className="section-divider" />
 
       {/* Footer */}
-      <footer className="py-12 px-6">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-          <Link to="/" className="flex items-center gap-2.5">
-            <div className="w-6 h-6 rounded-md bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
-              <Zap className="w-3 h-3 text-white" />
+      <footer className="border-t border-white/[0.08] bg-[#030308]">
+        <div className="max-w-7xl mx-auto px-6 py-20 flex flex-col md:flex-row items-center justify-between gap-8">
+          <Link to="/" className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
+              <Zap className="w-4 h-4 text-white" />
             </div>
-            <span className="text-sm font-medium">InstaEdit</span>
+            <span className="text-base font-bold text-white">InstaEdit</span>
           </Link>
-          <div className="flex items-center gap-6 text-xs text-[#9aa0aa]">
-            <Link to="/privacy" className="hover:text-white transition-colors">
+          <div className="flex flex-wrap items-center justify-center gap-8 text-sm font-medium text-[#9aa0aa]">
+            <Link
+              to="/privacy"
+              className="hover:text-white transition-colors"
+            >
               Privacy
             </Link>
-            <Link to="/terms" className="hover:text-white transition-colors">
+            <Link
+              to="/terms"
+              className="hover:text-white transition-colors"
+            >
               Terms
             </Link>
-            <span>&copy; {new Date().getFullYear()} InstaEdit</span>
+            <span>
+              &copy; {new Date().getFullYear()} InstaEdit. All rights reserved.
+            </span>
           </div>
         </div>
       </footer>
