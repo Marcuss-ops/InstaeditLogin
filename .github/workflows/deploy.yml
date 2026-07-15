@@ -1,0 +1,140 @@
+# .github/workflows/deploy.yml — InstaEditLogin Vercel deploy
+#
+# Independent from .github/workflows/integration.yml (which is CI-only —
+# gofmt / vet / race-test / vitest / vite build) and is responsible for
+# shipping the web bundle to Vercel production.
+#
+# Why a dedicated deploy workflow instead of relying on the
+# Vercel-for-Git integration:
+# Vercel's git-app sometimes silently stops triggering deploys on push
+# (we observed this in production — multiple pushes arrived on `main`,
+# `git log` showed them, but Vercel's edge cache never invalidated).
+# Running `npx vercel deploy --prod` from a workflow runner we control
+# makes the deploy loop durable: the next push WILL produce a deploy,
+# the build artifact WILL be re-uploaded, the CDN WILL refresh.
+#
+# Why we DON'T listen to `push` directly:
+# A `push` event fires the moment `git push` lands — BEFORE CI runs.
+# Acting on it would ship unverified code. Instead this workflow only
+# fires on `workflow_run` (after CI completes) + `workflow_dispatch`
+# (manual override). The `if:` filter below enforces success-only:
+#   - dispatch → always run
+#   - workflow_run → only if CI conclusion was 'success'
+#
+# Required GitHub repository secrets (Settings → Secrets and variables →
+# Actions → New repository secret). Every variable MUST be set BEFORE
+# the first push hits this workflow, otherwise the action fails fast:
+#
+#   VERCEL_TOKEN       https://vercel.com/account/tokens → "Create Token".
+#                       Pick scope "Full Account" so the token can resolve
+#                       which project/org it belongs to without needing
+#                       additional context. Expiry: leave at default 24h
+#                       (token is auto-issued per-deploy, low blast radius
+#                       if leaked).
+#
+#   VERCEL_ORG_ID      Visible in the response of:
+#                         curl -H "Authorization: Bearer $VERCEL_TOKEN" \
+#                              https://api.vercel.com/v2/teams
+#                       The `id` field on the team entry that owns the
+#                       project. If the project belongs to a personal
+#                       account (no team), use the personal-account `id`
+#                       returned by `/v2/user`.
+#
+#   VERCEL_PROJECT_ID  Visible in:
+#                         curl -H "Authorization: Bearer $VERCEL_TOKEN" \
+#                              https://api.vercel.com/v9/projects
+#                       The `id` of the InstaEdit project. Persisted
+#                       after the first successful Vercel-for-Git deploy
+#                       even if that integration is now broken — copy
+#                       from the Vercel dashboard → Project Settings
+#                       → General → "Project ID".
+#
+# ⚠️ DEPLOY-DUPLICATION NOTE:
+# If the Vercel-for-Git integration is STILL partially active in
+# vercel.com/dashboard (Settings → Git → Connected Git Repository),
+# it may ALSO deploy on every push. That would create a duplicate
+# deploy per commit. Mitigation: disconnect the GitHub repo from the
+# Vercel dashboard once this workflow is verified to work — both paths
+# point at the same Vercel project so duplicates are safe but wasteful.
+
+name: deploy
+
+# Minimum-needed scopes.
+#   - contents: read       → checkout repo + read vercel.json
+#   - actions: read        → workflow_run trigger needs to read sibling
+#                            workflow conclusions to gate on success
+#                            (without it some runners say: "GitHub Actions
+#                            is not permitted to access actions in this
+#                            repository")
+permissions:
+  contents: read
+  actions: read
+
+# NOTE: GitHub Actions YAML 1.2 treats `on` as a normal string, but
+# some YAML tools (yaml.safe_load in Python ≤1.1 mode, older SDK
+# parsers) interpret `on` as boolean true. Quoting the key keeps the
+# file portable across both. (Existing integration.yml has the same
+# convention — keep them aligned.)
+"on":
+  # Deploy only AFTER CI passes. workflow_run fires once per CI
+  # completion; the success/failure gate is in `if:` below.
+  workflow_run:
+    workflows: [integration]
+    types: [completed]
+  # Manual override from the GitHub Actions UI / CLI / API. Useful for
+  # emergency hot-fix deploys without pushing an empty commit, and for
+  # re-deploying the last commit when Vercel-for-Git eats a deploy.
+  workflow_dispatch:
+
+# Cancel in-progress deploys so a fast follow-up push doesn't spawn
+# duplicate runners re-uploading the same artifacts to Vercel. Group
+# by ref so PR #X deploys don't cancel main deploys.
+concurrency:
+  group: deploy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vercel:
+    name: Deploy web/app to Vercel (production)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Logic gate:
+    #   - manual dispatch → always run (no workflow_run context)
+    #   - workflow_run   → only when CI in .github/workflows/integration.yml
+    #                     concluded "success". Skips failed CI runs.
+    # This is the contract: a CI-broken commit NEVER reaches Vercel.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      # ─── 1. Checkout ─────────────────────────────────────────────
+      # actions/checkout@v4 is the pinned major used by integration.yml.
+      # Stay aligned so both workflows have identical checkout semantics.
+      - uses: actions/checkout@v4
+
+      # ─── 2. Deploy ───────────────────────────────────────────────
+      # amondnet/vercel-action reads ./web/vercel.json and runs:
+      #   install  →  npm ci
+      #   build    →  npm run build  (tsc -b && vite build)
+      #   upload   →  ./web/dist/ → Vercel production CDN
+      #
+      # We do NOT need a local Node setup step here — the Vercel action
+      # sets up its own Node toolchain matching vercel.json's build image
+      # (Node 24 currently), so adding `actions/setup-node` would only
+      # pin to the GHA runner's version (20 by default) and risk a
+      # version skew vs Vercel's own build image.
+      - name: Deploy web/app to Vercel (production)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          # `--prod` → promote the deployment to production alias.
+          # Without it, the action would create an unscoped preview URL
+          # which our DNS (instaedit.org → apex) does NOT point at.
+          vercel-args: '--prod'
+          # vercel.json (in ./web/) carries build/install/output config
+          # (buildCommand: npm run build, installCommand: npm ci,
+          # outputDirectory: dist). The action reads it automatically.
+          working-directory: ./web
