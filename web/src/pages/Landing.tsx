@@ -69,13 +69,13 @@ const FEATURES = [
 
 export function Landing() {
   return (
-    <div className="min-h-screen bg-[#030308] text-[#e8e8ef] font-sans antialiased overflow-hidden selection:bg-[#7B61FF]/30">
+    <div className="min-h-screen bg-[#030308] text-[#e8e8ef] font-sans antialiased pb-20 selection:bg-[#7B61FF]/30">
       {/* Grid background effect */}
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f1f2e08_1px,transparent_1px),linear-gradient(to_bottom,#1f1f2e08_1px,transparent_1px)] bg-[size:4rem_4rem] pointer-events-none" />
       
       {/* Nav */}
       <nav className="fixed top-0 w-full z-50 border-b border-white/[0.06] bg-[#030308]/70 backdrop-blur-md">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+        <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center shadow-[0_0_20px_rgba(10,132,255,0.3)]">
               <Zap className="w-4 h-4 text-white" />
@@ -93,7 +93,7 @@ export function Landing() {
             </Link>
             <Link
               to="/login"
-              className="text-sm font-medium px-4 py-2 rounded-lg bg-white text-black hover:bg-white/90 shadow-[0_4px_12px_rgba(255,255,255,0.15)] hover:shadow-[0_4px_20px_rgba(255,255,255,0.25)] transition-all"
+              className="text-sm font-medium px-4 py-2 rounded-lg bg-white text-black hover:bg-white/90 shadow-[0_4px_12px_rgba(255,255,255,0.15)] transition-all"
             >
               Get started
             </Link>
@@ -101,16 +101,16 @@ export function Landing() {
         </div>
       </nav>
 
-      {/* Hero */}
-      <section className="relative pt-44 pb-32 px-6">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[500px] bg-gradient-to-b from-[#7B61FF]/10 via-[#0A84FF]/5 to-transparent blur-[120px] pointer-events-none" />
+      {/* Hero (Full Bleed on top, clean padding) */}
+      <section className="relative pt-48 pb-16 px-6">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[500px] bg-gradient-to-b from-[#7B61FF]/8 via-[#0A84FF]/4 to-transparent blur-[120px] pointer-events-none" />
         <ScrollReveal className="relative z-10 max-w-4xl mx-auto text-center">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] text-xs text-[#9aa0aa] mb-12 backdrop-blur-sm">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] text-xs text-[#9aa0aa] mb-10 backdrop-blur-sm">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.5)]" />
             Now managing 10,000+ publications per month
           </div>
 
-          <h1 className="text-5xl md:text-8xl font-extrabold tracking-tight leading-[1.05] mb-8 text-white">
+          <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight leading-[1.08] mb-8 text-white">
             Your entire content
             <br />
             <span className="bg-gradient-to-r from-[#0A84FF] via-[#7B61FF] to-[#E1306C] bg-clip-text text-transparent">
@@ -118,7 +118,7 @@ export function Landing() {
             </span>
           </h1>
 
-          <p className="text-base md:text-lg text-[#9aa0aa] max-w-xl mx-auto mb-12 leading-relaxed">
+          <p className="text-base md:text-lg text-[#9aa0aa] max-w-xl mx-auto mb-10 leading-relaxed">
             We scaled production from 50 posts to 10,000 pieces of content per month across 7 platforms. InstaEdit is the high-performance infrastructure that made it possible.
           </p>
 
@@ -140,10 +140,10 @@ export function Landing() {
         </ScrollReveal>
       </section>
 
-      {/* Platforms ticker */}
-      <section className="border-y border-white/[0.06] bg-white/[0.01] py-8">
-        <div className="max-w-7xl mx-auto px-6 overflow-hidden">
-          <div className="flex flex-wrap items-center justify-center gap-8 md:gap-16 opacity-50">
+      {/* Platforms ticker - Floating Card with deep vertical space */}
+      <section className="relative my-16 max-w-5xl mx-auto px-6">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d18]/30 p-6 md:p-8 backdrop-blur-md">
+          <div className="flex flex-wrap items-center justify-center gap-8 md:gap-14 opacity-40">
             {PLATFORMS.map((p) => (
               <span
                 key={p.name}
@@ -157,70 +157,73 @@ export function Landing() {
         </div>
       </section>
 
-      {/* Stats */}
-      <section className="relative py-24 px-6 border-b border-white/[0.06]">
-        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[#7B61FF]/3 to-transparent pointer-events-none" />
-        <ScrollReveal className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-12 md:gap-8 relative z-10">
-          {STATS.map((s) => (
-            <div key={s.label} className="text-center">
-              <div className="text-4xl md:text-5xl font-extrabold tracking-tight text-white mb-2 bg-gradient-to-b from-white to-[#9aa0aa] bg-clip-text text-transparent">
-                {s.value}
+      {/* Stats - Floating Card with deep vertical space */}
+      <section className="relative my-16 max-w-5xl mx-auto px-6">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d18]/30 p-8 md:p-12 backdrop-blur-md relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[#7B61FF]/2 to-transparent pointer-events-none" />
+          <ScrollReveal className="grid grid-cols-2 md:grid-cols-4 gap-10 relative z-10">
+            {STATS.map((s) => (
+              <div key={s.label} className="text-center">
+                <div className="text-3xl md:text-4xl font-extrabold tracking-tight text-white mb-2 bg-gradient-to-b from-white to-[#9aa0aa] bg-clip-text text-transparent">
+                  {s.value}
+                </div>
+                <div className="text-[10px] font-bold text-[#9aa0aa] uppercase tracking-wider">{s.label}</div>
               </div>
-              <div className="text-xs font-medium text-[#9aa0aa] uppercase tracking-wider">{s.label}</div>
-            </div>
-          ))}
-        </ScrollReveal>
+            ))}
+          </ScrollReveal>
+        </div>
       </section>
 
-      {/* Features */}
-      <section id="features" className="relative py-32 px-6 border-b border-white/[0.06] bg-white/[0.01]">
-        <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-[#7B61FF]/5 blur-[120px] pointer-events-none" />
-        <div className="max-w-5xl mx-auto relative z-10">
-          <ScrollReveal className="text-center mb-20">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] text-xs text-[#9aa0aa] mb-4">
-              <Sparkles className="w-3 h-3 text-[#7B61FF]" />
-              Features
-            </div>
-            <h2 className="text-3xl md:text-5xl font-extrabold tracking-tight text-white mb-4">
-              Built for high-velocity teams
-            </h2>
-            <p className="text-[#9aa0aa] max-w-md mx-auto text-sm">
-              Everything you need to manage multi-platform publishing at scale. No bloat, no compromises.
-            </p>
-          </ScrollReveal>
+      {/* Features - Floating Card with deep vertical space */}
+      <section id="features" className="relative my-16 max-w-5xl mx-auto px-6">
+        <div className="rounded-2xl border border-white/[0.06] bg-[#0d0d18]/30 p-8 md:p-12 backdrop-blur-md relative overflow-hidden">
+          <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-[#7B61FF]/3 blur-[120px] pointer-events-none" />
+          <div className="relative z-10">
+            <ScrollReveal className="text-center mb-16">
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] text-xs text-[#9aa0aa] mb-4">
+                <Sparkles className="w-3 h-3 text-[#7B61FF]" />
+                Features
+              </div>
+              <h2 className="text-2xl md:text-4xl font-extrabold tracking-tight text-white mb-4">
+                Built for high-velocity teams
+              </h2>
+              <p className="text-[#9aa0aa] max-w-md mx-auto text-xs leading-relaxed">
+                Everything you need to manage multi-platform publishing at scale. No bloat, no compromises.
+              </p>
+            </ScrollReveal>
 
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {FEATURES.map((f, i) => (
-              <ScrollReveal key={f.title} delay={i * 60}>
-                <div className="p-6 rounded-2xl border border-white/[0.06] bg-[#0a0a12]/30 hover:bg-[#0f0f1d]/50 hover:border-white/[0.12] hover:shadow-[0_8px_30px_rgb(0,0,0,0.5)] transition-all duration-300 group">
-                  <div className="w-10 h-10 rounded-xl bg-white/[0.03] border border-white/[0.08] flex items-center justify-center text-[#7B61FF] group-hover:scale-110 group-hover:text-white transition-all mb-6">
-                    {f.icon}
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {FEATURES.map((f, i) => (
+                <ScrollReveal key={f.title} delay={i * 50}>
+                  <div className="p-6 rounded-xl border border-white/[0.05] bg-[#030308]/60 hover:bg-[#0f0f1d]/50 hover:border-white/[0.12] transition-all duration-300 group">
+                    <div className="w-9 h-9 rounded-lg bg-white/[0.03] border border-white/[0.08] flex items-center justify-center text-[#7B61FF] group-hover:scale-105 group-hover:text-white transition-all mb-5">
+                      {f.icon}
+                    </div>
+                    <h3 className="text-sm font-bold text-white mb-2">{f.title}</h3>
+                    <p className="text-xs text-[#9aa0aa] leading-relaxed">
+                      {f.description}
+                    </p>
                   </div>
-                  <h3 className="text-base font-bold text-white mb-2">{f.title}</h3>
-                  <p className="text-xs text-[#9aa0aa] leading-relaxed">
-                    {f.description}
-                  </p>
-                </div>
-              </ScrollReveal>
-            ))}
+                </ScrollReveal>
+              ))}
+            </div>
           </div>
         </div>
       </section>
 
-      {/* CTA */}
-      <section className="relative py-32 px-6">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[300px] bg-[#E1306C]/5 blur-[120px] pointer-events-none" />
-        <ScrollReveal className="relative z-10 max-w-4xl mx-auto">
-          <div className="rounded-3xl border border-white/[0.08] bg-[#07070f]/50 p-12 md:p-20 text-center backdrop-blur-md shadow-2xl relative overflow-hidden">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(123,97,255,0.06)_0%,transparent_70%)] pointer-events-none" />
+      {/* CTA - Floating Card with deep vertical space */}
+      <section className="relative my-16 max-w-5xl mx-auto px-6">
+        <ScrollReveal className="relative z-10">
+          <div className="rounded-2xl border border-white/[0.08] bg-[#0d0d18]/40 p-10 md:p-16 text-center backdrop-blur-md shadow-2xl relative overflow-hidden">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(123,97,255,0.05)_0%,transparent_70%)] pointer-events-none" />
             <div className="relative z-10">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center mx-auto mb-6 shadow-[0_0_20px_rgba(123,97,255,0.3)]">
-                <Zap className="w-5 h-5 text-white" />
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center mx-auto mb-6 shadow-[0_0_20px_rgba(123,97,255,0.2)]">
+                <Zap className="w-4 h-4 text-white" />
               </div>
-              <h2 className="text-3xl md:text-5xl font-extrabold tracking-tight text-white mb-4">
+              <h2 className="text-2xl md:text-4xl font-extrabold tracking-tight text-white mb-4">
                 Ready to scale your content?
               </h2>
-              <p className="text-sm text-[#9aa0aa] mb-8 max-w-xs mx-auto leading-relaxed">
+              <p className="text-xs text-[#9aa0aa] mb-8 max-w-xs mx-auto leading-relaxed">
                 Connect your first platform in under 2 minutes. No credit card required.
               </p>
               <Link
@@ -236,11 +239,11 @@ export function Landing() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-white/[0.06] bg-[#030308] relative z-10">
-        <div className="max-w-6xl mx-auto px-6 py-12 flex flex-col md:flex-row items-center justify-between gap-6">
+      <footer className="max-w-5xl mx-auto px-6 mt-20 border-t border-white/[0.06]">
+        <div className="py-10 flex flex-col md:flex-row items-center justify-between gap-6">
           <Link to="/" className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
-              <Zap className="w-3.5 h-3.5 text-white" />
+            <div className="w-5 h-5 rounded bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
+              <Zap className="w-3 text-white" />
             </div>
             <span className="text-xs font-bold text-white tracking-wider">INSTAEDIT</span>
           </Link>
