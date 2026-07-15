@@ -14,7 +14,6 @@ package metrics
 import (
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -208,21 +207,19 @@ func ErrorKind(err error) string {
 
 // --- HTTP handler --------------------------------------------------------
 
-var (
-	metricsHandlerOnce sync.Once
-	metricsHandler     http.Handler
-)
-
-// Handler returns the Prometheus exposition-format HTTP handler. The
-// underlying promhttp.Handler() is cached via sync.Once: the handler itself
-// is stateless but constructing one allocates an internal gatherer snapshot,
-// so reusing the same instance across scrapes avoids per-request churn.
+// Handler returns the Prometheus exposition-format HTTP handler.
+//
+// Commit DI refactor (commit 2 of the bootstrap DI refactor): the
+// previous sync.Once lazy-init pattern was dropped — user feedback
+// was 'drop the sync.Once sparsi (metrics handler, memory limiter)'.
+// promhttp.Handler() builds an internal gatherer snapshot on every
+// call against the default registry; per-call construction is O(1)
+// and cheap, so the cache was a false optimisation. If a future
+// caller measures non-trivial construction overhead, reintroduce a
+// sync.Once AND document the share-across-scrapes justification.
 //
 // Optional basic auth (env-driven) is layered by pkg/api/routes.handleMetrics
 // when METRICS_BASIC_AUTH_USER + METRICS_BASIC_AUTH_PASS are both configured.
 func Handler() http.Handler {
-	metricsHandlerOnce.Do(func() {
-		metricsHandler = promhttp.Handler()
-	})
-	return metricsHandler
+	return promhttp.Handler()
 }

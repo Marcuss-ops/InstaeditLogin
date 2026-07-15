@@ -39,8 +39,11 @@ import (
 //                   it on every metric at scrape time, so worker_id
 //                   appears as a Prometheus target-label on every
 //                   panel without the app code paying the cardinality
-//                   cost. Application code reads metrics.WorkerID()
-//                   for log correlation only.
+//                   cost. Application code carries the id as a struct
+//                   field on each worker / service and threads it
+//                   via constructor (commit DI refactor) — no global
+//                   reader — so workers' slog context lines carry
+//                   the id without a metrics package coupling.
 //
 //   provider      — bounded set (7 platforms). ALWAYS used when
 //                   applicable — it's the canonical breakdown.
