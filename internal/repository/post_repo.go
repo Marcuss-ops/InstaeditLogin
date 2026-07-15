@@ -25,13 +25,17 @@ import (
 // no context.Context, not-found returns (nil, nil), errors wrapped with
 // fmt.Errorf("%w", err). Transactions follow the named-err + defer-rollback
 // pattern established by TokenRepository.SaveToken.
+//
+// SQL strings live in queries.go (one place to grep during migrations).
 type PostRepository struct {
 	db *sql.DB
 }
 
 // NewPostRepository creates a new PostRepository.
 func NewPostRepository(db *sql.DB) *PostRepository {
-	return &PostRepository{db: db}
+	return &PostRepository{
+		db: db,
+	}
 }
 
 // --- Posts ---
@@ -87,9 +91,7 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 
 	// Insert the parent Post; capture auto-assigned id + created_at.
 	err = tx.QueryRow(
-		`INSERT INTO posts (workspace_id, title, caption, media_url, scheduled_at, status)
-		 VALUES ($1, $2, $3, $4, $5, $6)
-		 RETURNING id, created_at`,
+		qInsertPost,
 		post.WorkspaceID, post.Title, post.Caption, post.MediaURL, post.ScheduledAt, post.Status,
 	).Scan(&post.ID, &post.CreatedAt)
 	if err != nil {
@@ -100,9 +102,7 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 	for _, t := range targets {
 		t.PostID = post.ID
 		err = tx.QueryRow(
-			`INSERT INTO post_targets (post_id, platform_account_id, status)
-			 VALUES ($1, $2, $3)
-			 RETURNING id`,
+			qInsertPostTarget,
 			t.PostID, t.PlatformAccountID, t.Status,
 		).Scan(&t.ID)
 		if err != nil {
@@ -141,8 +141,7 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 			return fmt.Errorf("failed to marshal outbox payload for target %d: %w", t.ID, marshalErr)
 		}
 		_, err = tx.Exec(
-			`INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload)
-			 VALUES ($1, $2, $3, $4::jsonb)`,
+			qInsertOutboxEvent,
 			"post_target", t.ID, "post_target.publish_requested", string(payload),
 		)
 		if err != nil {
@@ -166,9 +165,7 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 // own.
 func (r *PostRepository) Update(post *models.Post) error {
 	result, err := r.db.Exec(
-		`UPDATE posts
-		 SET title = $1, caption = $2, media_url = $3, scheduled_at = $4, status = $5
-		 WHERE id = $6 AND workspace_id = $7`,
+		qUpdatePost,
 		post.Title, post.Caption, post.MediaURL, post.ScheduledAt, post.Status,
 		post.ID, post.WorkspaceID,
 	)
@@ -197,9 +194,7 @@ func (r *PostRepository) Update(post *models.Post) error {
 func (r *PostRepository) FindByID(id int64) (*models.Post, error) {
 	p := &models.Post{}
 	err := r.db.QueryRow(
-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
-		 FROM posts
-		 WHERE id = $1`,
+		qSelectPostByID,
 		id,
 	).Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
 		&p.ScheduledAt, &p.Status, &p.CreatedAt)
@@ -217,10 +212,7 @@ func (r *PostRepository) FindByID(id int64) (*models.Post, error) {
 // ListByPost separately to fetch the fan-out set.
 func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, error) {
 	rows, err := r.db.Query(
-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
-		 FROM posts
-		 WHERE workspace_id = $1
-		 ORDER BY created_at DESC`,
+		qSelectPostsByWorkspace,
 		workspaceID,
 	)
 	if err != nil {
@@ -246,10 +238,7 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
 // application clock, making the worker loop and tests fully deterministic.
 func (r *PostRepository) ListQueued(before time.Time) ([]models.Post, error) {
 	rows, err := r.db.Query(
-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
-		 FROM posts
-		 WHERE status = 'queued' AND scheduled_at <= $1
-		 ORDER BY scheduled_at ASC`,
+		qSelectQueuedPosts,
 		before,
 	)
 	if err != nil {
@@ -286,9 +275,7 @@ func (r *PostRepository) ListQueued(before time.Time) ([]models.Post, error) {
 // ErrPostTargetDuplicate (mapped to 409 in the API layer).
 func (r *PostRepository) Save(target *models.PostTarget) error {
 	err := r.db.QueryRow(
-		`INSERT INTO post_targets (post_id, platform_account_id, status)
-		 VALUES ($1, $2, $3)
-		 RETURNING id`,
+		qInsertPostTarget,
 		target.PostID, target.PlatformAccountID, target.Status,
 	).Scan(&target.ID)
 	if err != nil {
@@ -327,9 +314,7 @@ func (r *PostRepository) SetProviderIdempotencyKey(id int64, key string) error {
 		return fmt.Errorf("SetProviderIdempotencyKey: key is empty for post_target id=%d", id)
 	}
 	result, err := r.db.Exec(
-		`UPDATE post_targets
-		 SET provider_idempotency_key = $1
-		 WHERE id = $2`,
+		qUpdateTargetProviderIdempotencyKey,
 		key, id,
 	)
 	if err != nil {
@@ -361,10 +346,7 @@ func (r *PostRepository) SetProviderIdempotencyKey(id int64, key string) error {
 // (single UPDATE).
 func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
 	result, err := r.db.Exec(
-		`UPDATE post_targets
-		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
-		     provider_state = $6, container_id = $7
-		 WHERE id = $5`,
+		qUpdateTargetStatus,
 		target.Status, target.PlatformPostID, target.ErrorMessage,
 		target.PublishedAt, target.ID, target.ProviderState, target.ContainerID,
 	)
@@ -422,9 +404,7 @@ func (r *PostRepository) ClaimQueuedTarget(id int64) (bool, error) {
 	// and moves to the next target without stalling.
 	var foundID int64
 	err = tx.QueryRow(
-		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'queued'
-		 FOR UPDATE SKIP LOCKED`,
+		qClaimQueuedTargetSelect,
 		id,
 	).Scan(&foundID)
 	if err == sql.ErrNoRows {
@@ -440,7 +420,7 @@ func (r *PostRepository) ClaimQueuedTarget(id int64) (bool, error) {
 
 	// Row locked — we own it. Transition status.
 	_, err = tx.Exec(
-		`UPDATE post_targets SET status = 'publishing' WHERE id = $1`,
+		qClaimQueuedTargetUpdate,
 		id,
 	)
 	if err != nil {
@@ -498,9 +478,7 @@ func (r *PostRepository) ClaimQueuedTargetWithLease(id int64, ownerID string, le
 
 	var foundID int64
 	err = tx.QueryRow(
-		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'queued'
-		 FOR UPDATE SKIP LOCKED`,
+		qClaimQueuedTargetSelect,
 		id,
 	).Scan(&foundID)
 	if err == sql.ErrNoRows {
@@ -515,12 +493,7 @@ func (r *PostRepository) ClaimQueuedTargetWithLease(id int64, ownerID string, le
 	// Atomic claim + lease stamp. leased_until = NOW() + leaseTTL
 	// (computed in seconds; works for TTLs from 1s to ~68 years).
 	_, err = tx.Exec(
-		`UPDATE post_targets
-		 SET status = 'publishing',
-		     lease_owner_id = $2,
-		     leased_until = NOW() + ($3 || ' seconds')::INTERVAL,
-		     heartbeat_at = NOW()
-		 WHERE id = $1`,
+		qClaimQueuedTargetWithLeaseUpdate,
 		id, ownerID, fmt.Sprintf("%d", leaseSeconds),
 	)
 	if err != nil {
@@ -562,12 +535,7 @@ func (r *PostRepository) UpdatePublishProgress(id int64, ownerID string, uploadO
 		leaseSeconds = 1
 	}
 	_, err := r.db.Exec(
-		`UPDATE post_targets
-		 SET upload_offset = $3,
-		     provider_state = $4,
-		     heartbeat_at = NOW(),
-		     leased_until = NOW() + ($5 || ' seconds')::INTERVAL
-		 WHERE id = $1 AND lease_owner_id = $2`,
+		qUpdatePublishProgress,
 		id, ownerID, uploadOffset, providerState, fmt.Sprintf("%d", leaseSeconds),
 	)
 	if err != nil {
@@ -588,11 +556,7 @@ func (r *PostRepository) ReleaseLease(id int64, ownerID string) error {
 		return fmt.Errorf("ReleaseLease: ownerID is empty")
 	}
 	_, err := r.db.Exec(
-		`UPDATE post_targets
-		 SET lease_owner_id = NULL,
-		     leased_until = NULL,
-		     heartbeat_at = NULL
-		 WHERE id = $1 AND lease_owner_id = $2`,
+		qReleaseLease,
 		id, ownerID,
 	)
 	if err != nil {
@@ -623,15 +587,7 @@ func (r *PostRepository) MarkDeadLetter(id int64, ownerID string, lastError stri
 		return fmt.Errorf("MarkDeadLetter: ownerID is empty")
 	}
 	res, err := r.db.Exec(
-		`UPDATE post_targets
-		 SET status = 'dlq',
-		     lease_owner_id = NULL,
-		     leased_until = NULL,
-		     heartbeat_at = NULL,
-		     error_message = $3,
-		     last_error_code = 'DLQ',
-		     completed_at = NOW()
-		 WHERE id = $1 AND lease_owner_id = $2`,
+		qMarkDeadLetter,
 		id, ownerID, lastError,
 	)
 	if err != nil {
@@ -664,14 +620,7 @@ func (r *PostRepository) MarkRetrying(id int64, ownerID string, lastError string
 		return fmt.Errorf("MarkRetrying: ownerID is empty")
 	}
 	res, err := r.db.Exec(
-		`UPDATE post_targets
-		 SET attempt_count = attempt_count + 1,
-		     next_retry_at = $3,
-		     lease_owner_id = NULL,
-		     leased_until = NULL,
-		     heartbeat_at = NULL,
-		     error_message = $4
-		 WHERE id = $1 AND lease_owner_id = $2`,
+		qMarkRetrying,
 		id, ownerID, nextAttemptAt, lastError,
 	)
 	if err != nil {
@@ -705,14 +654,7 @@ func (r *PostRepository) MarkRateLimited(id int64, ownerID string, retryAfter ti
 		return fmt.Errorf("MarkRateLimited: ownerID is empty")
 	}
 	res, err := r.db.Exec(
-		`UPDATE post_targets
-		 SET next_retry_at = $3,
-		     rate_limit_reset_at = $3,
-		     lease_owner_id = NULL,
-		     leased_until = NULL,
-		     heartbeat_at = NULL,
-		     last_error_code = 'RATE_LIMITED'
-		 WHERE id = $1 AND lease_owner_id = $2`,
+		qMarkRateLimited,
 		id, ownerID, retryAfter,
 	)
 	if err != nil {
@@ -758,17 +700,7 @@ func (r *PostRepository) MarkRateLimited(id int64, ownerID string, retryAfter ti
 // already and is a no-op).
 func (r *PostRepository) ReclaimExpiredLeases(myWorkerID string) (int64, error) {
 	res, err := r.db.Exec(
-		`UPDATE post_targets
-		 SET status = 'queued',
-		     lease_owner_id = NULL,
-		     leased_until = NULL,
-		     heartbeat_at = NULL,
-		     next_retry_at = NOW()
-		 WHERE leased_until IS NOT NULL
-		   AND leased_until <= NOW()
-		   AND lease_owner_id IS NOT NULL
-		   AND lease_owner_id <> $1
-		   AND status IN ('publishing', 'queued')`,
+		qReclaimExpiredLeases,
 		myWorkerID,
 	)
 	if err != nil {
@@ -798,9 +730,7 @@ func (r *PostRepository) ClaimWaitingProviderTarget(id int64) (bool, error) {
 
 	var foundID int64
 	err = tx.QueryRow(
-		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'waiting_provider'
-		 FOR UPDATE SKIP LOCKED`,
+		qClaimWaitingProviderTargetSelect,
 		id,
 	).Scan(&foundID)
 	if err == sql.ErrNoRows {
@@ -813,7 +743,7 @@ func (r *PostRepository) ClaimWaitingProviderTarget(id int64) (bool, error) {
 	}
 
 	_, err = tx.Exec(
-		`UPDATE post_targets SET status = 'publishing' WHERE id = $1`,
+		qClaimQueuedTargetUpdate,
 		id,
 	)
 	if err != nil {
@@ -856,9 +786,7 @@ func (r *PostRepository) ClaimPublishingTarget(id int64) (bool, error) {
 
 	var foundID int64
 	err = tx.QueryRow(
-		`SELECT id FROM post_targets
-		 WHERE id = $1 AND status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
-		 FOR UPDATE SKIP LOCKED`,
+		qClaimPublishingTargetSelect,
 		id,
 	).Scan(&foundID)
 	if err == sql.ErrNoRows {
@@ -899,13 +827,7 @@ func (r *PostRepository) ClaimPublishingTarget(id int64) (bool, error) {
 // timestamps.
 func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
-		`SELECT id, post_id, platform_account_id, status,
-		        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
-		        COALESCE(provider_state, ''), COALESCE(container_id, ''),
-		        provider_idempotency_key, completed_at
-		 FROM post_targets
-		 WHERE post_id = $1
-		 ORDER BY id ASC`,
+		qSelectTargetsByPost,
 		postID,
 	)
 	if err != nil {
@@ -948,13 +870,7 @@ func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 // field is included for consistency with ListByPost).
 func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
-		`SELECT id, post_id, platform_account_id, status,
-			        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
-			        COALESCE(provider_state, ''), COALESCE(container_id, ''),
-			        provider_idempotency_key, completed_at
-			 FROM post_targets
-			 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
-			 ORDER BY id ASC`,
+		qSelectPublishingTargets,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list publishing post_targets: %w", err)
@@ -987,14 +903,7 @@ func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
 // migration 035 (SPRINT 5.2) for consistency with ListByPost/ListPublishing.
 func (r *PostRepository) ListPending(before time.Time) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
-		`SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
-		        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
-		        COALESCE(pt.provider_state, ''), COALESCE(pt.container_id, ''),
-		        pt.provider_idempotency_key, pt.completed_at
-		 FROM post_targets pt
-		 JOIN posts p ON p.id = pt.post_id
-		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider') AND p.scheduled_at <= $1
-		 ORDER BY p.scheduled_at ASC`,
+		qSelectPendingTargets,
 		before,
 	)
 	if err != nil {
@@ -1022,7 +931,7 @@ func (r *PostRepository) SaveTarget(target *models.PostTarget) error {
 
 // Delete deletes a post by ID.
 func (r *PostRepository) Delete(id int64) error {
-	_, err := r.db.Exec("DELETE FROM posts WHERE id = $1", id)
+	_, err := r.db.Exec(qDeletePost, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete post: %w", err)
 	}
@@ -1037,12 +946,12 @@ func (r *PostRepository) PublishPost(id int64) error {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec("UPDATE posts SET status = 'queued' WHERE id = $1", id)
+	_, err = tx.Exec(qPublishPostUpdateStatus, id)
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.Exec("UPDATE post_targets SET status = 'queued', error_message = '' WHERE post_id = $1", id)
+	_, err = tx.Exec(qPublishPostTargetsReset, id)
 	if err != nil {
 		return err
 	}
@@ -1052,7 +961,7 @@ func (r *PostRepository) PublishPost(id int64) error {
 
 // CancelPost updates status to draft.
 func (r *PostRepository) CancelPost(id int64) error {
-	_, err := r.db.Exec("UPDATE posts SET status = 'draft' WHERE id = $1", id)
+	_, err := r.db.Exec(qCancelPost, id)
 	if err != nil {
 		return fmt.Errorf("failed to cancel post: %w", err)
 	}
@@ -1067,12 +976,12 @@ func (r *PostRepository) RetryPost(id int64) error {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec("UPDATE posts SET status = 'queued' WHERE id = $1", id)
+	_, err = tx.Exec(qPublishPostUpdateStatus, id)
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.Exec("UPDATE post_targets SET status = 'queued', error_message = '' WHERE post_id = $1 AND status = 'failed'", id)
+	_, err = tx.Exec(qRetryPostResetFailedTargets, id)
 	if err != nil {
 		return err
 	}
@@ -1088,12 +997,12 @@ func (r *PostRepository) RetryTarget(id int64) error {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec("UPDATE post_targets SET status = 'queued', error_message = '' WHERE id = $1", id)
+	_, err = tx.Exec(qRetryTargetResetTarget, id)
 	if err != nil {
 		return err
 	}
 
-	_, err = tx.Exec("UPDATE posts SET status = 'queued' WHERE id = (SELECT post_id FROM post_targets WHERE id = $1)", id)
+	_, err = tx.Exec(qRetryTargetUpdateParent, id)
 	if err != nil {
 		return err
 	}
