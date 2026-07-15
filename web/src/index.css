@@ -51,9 +51,35 @@ html {
 }
 
 @layer utilities {
-  /* Horizontal gradient line to separate sections — visible but not loud */
+  /*
+   * Hard divider line between sections. The original 1px gradient at 20%
+   * opacity was barely visible and made adjacent sections feel "stuck
+   * together". This is now a clearly defined 2px glowing line with a soft
+   * vertical fade on each side, so each section reads as its own block
+   * without adding heavy vertical space (8px total).
+   */
   .section-divider {
-    @apply h-px w-full bg-gradient-to-r from-transparent via-white/[0.20] to-transparent;
+    position: relative;
+    height: 8px;
+    width: 100%;
+  }
+  .section-divider::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    height: 2px;
+    width: 100%;
+    border-radius: 9999px;
+    background: linear-gradient(
+      to right,
+      transparent 0%,
+      rgba(255, 255, 255, 0.30) 18%,
+      rgba(255, 255, 255, 0.55) 50%,
+      rgba(255, 255, 255, 0.30) 82%,
+      transparent 100%
+    );
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.18);
   }
 
   /* Soft glowing orb for background depth */
@@ -61,13 +87,22 @@ html {
     @apply absolute rounded-full blur-[120px] pointer-events-none opacity-20;
   }
 
-  /* Elevated section background — visibly lifts the section from the page */
+  /*
+   * Elevated section background — visibly lifts the section from the page
+   * without doubling the border thickness. Opacity bumped from 10% to 14%
+   * so alternating sections separate cleanly instead of bleeding into
+   * their neighbours.
+   */
   .bg-elevated {
-    @apply bg-white/[0.025] border-y border-white/[0.10] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)];
+    @apply bg-white/[0.03] border-y border-white/[0.14] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)];
   }
 
-  /* Card surface with defined edge — clearly framed, not floating */
+  /*
+   * Card surface with a clearly defined edge. Stronger than bg-elevated so
+   * individual cards read as framed boxes that align with the page's
+   * central column, rather than floating slabs.
+   */
   .surface-card {
-    @apply rounded-2xl border border-white/[0.12] bg-white/[0.04] shadow-[0_8px_32px_rgba(0,0,0,0.32)];
+    @apply rounded-2xl border border-white/[0.16] bg-white/[0.05] shadow-[0_10px_40px_rgba(0,0,0,0.4)];
   }
 }

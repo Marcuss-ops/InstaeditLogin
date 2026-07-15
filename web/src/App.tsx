@@ -1,9 +1,9 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Landing } from "./pages/Landing";
 import { Login } from "./pages/Login";
 import { PrivacyPolicy } from "./pages/PrivacyPolicy";
 import { TermsOfService } from "./pages/TermsOfService";
-import { PlatformPage } from "./pages/platforms/PlatformPage";
 import { InternalDashboard } from "./pages/internal/Dashboard";
 import { InternalLinking } from "./pages/internal/Linking";
 import { InternalPosts } from "./pages/internal/Posts";
@@ -13,6 +13,12 @@ import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
 import { ToastProvider } from "./components/toast";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import { InternalLayout } from "./components/layout/InternalLayout";
+
+const PlatformPage = lazy(() =>
+  import("./pages/platforms/PlatformPage").then((m) => ({
+    default: m.PlatformPage,
+  })),
+);
 
 function App() {
   return (
@@ -26,7 +32,18 @@ function App() {
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/terms" element={<TermsOfService />} />
 
-            <Route path="/:slug" element={<PlatformPage />} />
+            <Route
+              path="/:slug"
+              element={
+                <Suspense
+                  fallback={
+                    <div className="min-h-screen bg-[#030308]" />
+                  }
+                >
+                  <PlatformPage />
+                </Suspense>
+              }
+            />
 
             {/* Internal app area */}
             <Route

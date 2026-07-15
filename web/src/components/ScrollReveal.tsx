@@ -8,10 +8,36 @@ export type ScrollRevealProps = {
   once?: boolean;
 };
 
+type RevealCallback = (entry: IntersectionObserverEntry) => void;
+
+/**
+ * Shared singleton IntersectionObserver used by all ScrollReveal instances.
+ * Creating one observer per component is wasteful on pages with many reveals.
+ */
+let sharedObserver: IntersectionObserver | null = null;
+const observedElements = new Map<Element, RevealCallback>();
+
+function getSharedObserver(): IntersectionObserver | null {
+  if (typeof window === "undefined") return null;
+  if (!sharedObserver) {
+    sharedObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const cb = observedElements.get(entry.target);
+          if (cb) cb(entry);
+        });
+      },
+      { threshold: 0.1, rootMargin: "0px 0px -50px 0px" },
+    );
+  }
+  return sharedObserver;
+}
+
 /**
  * ScrollReveal — animates children into view when they scroll into the viewport.
  *
- * Uses IntersectionObserver so we don't need a heavy animation library.
+ * Uses a shared IntersectionObserver so we don't need a heavy animation
+ * library and don't create many observers on pages with lots of reveals.
  * The element starts with reduced opacity and a slight upward offset, then
  * fades/slides in once it enters the viewport. The animation is one-way
  * by default (once=true) so content stays visible after the first reveal.
@@ -33,20 +59,28 @@ export function ScrollReveal({
     const el = ref.current;
     if (!el) return;
 
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setVisible(true);
-          if (once) observer.unobserve(el);
-        } else if (!once) {
-          setVisible(false);
-        }
-      },
-      { threshold: 0.1, rootMargin: "0px 0px -50px 0px" },
-    );
+    const observer = getSharedObserver();
+    if (!observer) return;
 
+    const callback: RevealCallback = (entry) => {
+      if (entry.isIntersecting) {
+        setVisible(true);
+        if (once) {
+          observer.unobserve(el);
+          observedElements.delete(el);
+        }
+      } else if (!once) {
+        setVisible(false);
+      }
+    };
+
+    observedElements.set(el, callback);
     observer.observe(el);
-    return () => observer.disconnect();
+
+    return () => {
+      observer.unobserve(el);
+      observedElements.delete(el);
+    };
   }, [once]);
 
   return (

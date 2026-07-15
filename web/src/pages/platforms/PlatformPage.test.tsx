@@ -19,10 +19,10 @@ describe("PlatformPage", () => {
     vi.resetAllMocks();
   });
 
-  it("renders the TikTok platform page with all major sections", () => {
+  it("renders the TikTok platform page with all major sections", async () => {
     renderPlatformPage("tiktok");
 
-    expect(screen.getByText("TikTok API Integration")).toBeInTheDocument();
+    expect(await screen.findByText("TikTok API Integration")).toBeInTheDocument();
 
     expect(
       screen.getByText(/Ship your TikTok integration in minutes/i),
@@ -50,17 +50,17 @@ describe("PlatformPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders a fallback for unknown platform slugs", () => {
+  it("renders a fallback for unknown platform slugs", async () => {
     renderPlatformPage("unknown");
 
-    expect(screen.getByText("Platform not found")).toBeInTheDocument();
+    expect(await screen.findByText("Platform not found")).toBeInTheDocument();
     expect(screen.getByText("Go back home")).toBeInTheDocument();
   });
 
   it("toggles FAQ answers on click", async () => {
     renderPlatformPage("tiktok");
 
-    const firstQuestion = screen.getByText(
+    const firstQuestion = await screen.findByText(
       "How long does TikTok API approval take?",
     );
     expect(firstQuestion).toBeInTheDocument();
@@ -78,10 +78,10 @@ describe("PlatformPage", () => {
     expect(screen.queryByText(answerText)).not.toBeInTheDocument();
   });
 
-  it("renders comparison lists for the platform", () => {
+  it("renders comparison lists for the platform", async () => {
     renderPlatformPage("tiktok");
 
-    expect(screen.getByText("InstaEdit API")).toBeInTheDocument();
+    expect(await screen.findByText("InstaEdit API")).toBeInTheDocument();
     expect(screen.getByText("TikTok Content Posting API")).toBeInTheDocument();
     expect(
       screen.getByText("Simple API key — start in 30 seconds"),
@@ -91,10 +91,10 @@ describe("PlatformPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders supported content types", () => {
+  it("renders supported content types", async () => {
     renderPlatformPage("tiktok");
 
-    expect(screen.getByText("Videos")).toBeInTheDocument();
+    expect(await screen.findByText("Videos")).toBeInTheDocument();
     expect(screen.getByText("Photo Mode")).toBeInTheDocument();
   });
 });

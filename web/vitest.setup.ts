@@ -1,4 +1,4 @@
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 // Registers jest-dom's matchers with Vitest's `expect.extend(...)` at
 // runtime. Vitest runs this setup file from `vite.config.ts`'s
@@ -11,6 +11,22 @@ import { cleanup } from "@testing-library/react";
 // import there intentionally live in different files because they target
 // different toolchains (Vitest runtime vs. tsc).
 import "@testing-library/jest-dom/vitest";
+// Global IntersectionObserver mock. Several components (e.g. ScrollReveal)
+// use IntersectionObserver to trigger scroll animations. jsdom does not
+// implement it, so we provide a minimal stub that lets components mount
+// without errors. The callback is never fired, which keeps the reveal
+// elements in their initial state during tests.
+class IntersectionObserverMock {
+  observe = vi.fn();
+  disconnect = vi.fn();
+  unobserve = vi.fn();
+}
+
+Object.defineProperty(window, "IntersectionObserver", {
+  writable: true,
+  configurable: true,
+  value: IntersectionObserverMock,
+});
 // Global toast-bus reset for cross-test hygiene.
 //
 // Why: `web/src/lib/auth.ts`'s `authedFetch` auto-emits a toast.error on
