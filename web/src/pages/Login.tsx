@@ -18,7 +18,7 @@ export function Login() {
 
     try {
       if (DEMO_MODE) {
-        navigate("/accounts");
+        navigate("/app/dashboard");
         return;
       }
 
@@ -35,7 +35,7 @@ export function Login() {
       }
 
       await fetchSession();
-      navigate("/accounts");
+      navigate("/app/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
