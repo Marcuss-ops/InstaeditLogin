@@ -8,8 +8,6 @@ import {
   Clock,
   Layers,
   Sparkles,
-  Rocket,
-  Target,
 } from "lucide-react";
 
 const PLATFORMS = [
@@ -68,16 +66,6 @@ const FEATURES = [
   },
 ];
 
-function SectionDivider({ icon }: { icon: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-center py-4">
-      <div className="h-px flex-1 max-w-[120px] bg-white/[0.06]" />
-      <div className="mx-5 text-[#9aa0aa]/30">{icon}</div>
-      <div className="h-px flex-1 max-w-[120px] bg-white/[0.06]" />
-    </div>
-  );
-}
-
 export function Landing() {
   return (
     <div className="min-h-screen bg-[#030308] text-[#e8e8ef]">
@@ -110,9 +98,9 @@ export function Landing() {
       </nav>
 
       {/* Hero */}
-      <section className="pt-40 pb-32 px-6">
+      <section className="pt-48 pb-40 px-6">
         <div className="max-w-4xl mx-auto text-center">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] text-xs text-[#9aa0aa] mb-10">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] text-xs text-[#9aa0aa] mb-14">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             Now managing 10,000+ publications per month
           </div>
@@ -150,7 +138,7 @@ export function Landing() {
       </section>
 
       {/* Platforms ticker */}
-      <section className="py-16 border-y border-white/[0.04] overflow-hidden">
+      <section className="py-24 border-y border-white/[0.04] overflow-hidden">
         <div className="flex items-center justify-center gap-12 md:gap-20 opacity-40">
           {PLATFORMS.map((p) => (
             <span
@@ -165,8 +153,8 @@ export function Landing() {
       </section>
 
       {/* Stats */}
-      <section className="py-32 px-6">
-        <div className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-12 md:gap-8">
+      <section className="py-44 px-6">
+        <div className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-16 md:gap-8">
           {STATS.map((s) => (
             <div key={s.label} className="text-center">
               <div className="text-4xl md:text-5xl font-semibold tracking-tight mb-3">
@@ -178,12 +166,10 @@ export function Landing() {
         </div>
       </section>
 
-      <SectionDivider icon={<Rocket className="w-4 h-4" />} />
-
       {/* Features */}
-      <section id="features" className="py-32 px-6">
+      <section id="features" className="py-44 px-6">
         <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-20">
+          <div className="text-center mb-24">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] text-xs text-[#9aa0aa] mb-6">
               <Sparkles className="w-3 h-3" />
               Features
@@ -197,11 +183,11 @@ export function Landing() {
             </p>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-px bg-white/[0.04] rounded-2xl overflow-hidden">
+          <div className="grid md:grid-cols-2 gap-8">
             {FEATURES.map((f) => (
               <div
                 key={f.title}
-                className="bg-[#030308] p-10 hover:bg-white/[0.02] transition-colors"
+                className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-12 hover:bg-white/[0.03] transition-colors"
               >
                 <div className="w-11 h-11 rounded-xl bg-white/[0.06] flex items-center justify-center text-[#7B61FF] mb-6">
                   {f.icon}
@@ -216,12 +202,10 @@ export function Landing() {
         </div>
       </section>
 
-      <SectionDivider icon={<Target className="w-4 h-4" />} />
-
       {/* CTA */}
-      <section className="py-32 px-6">
+      <section className="py-48 px-6">
         <div className="max-w-3xl mx-auto text-center">
-          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-16 md:p-20">
+          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-16 md:p-28">
             <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center mx-auto mb-8">
               <Zap className="w-5 h-5 text-white" />
             </div>

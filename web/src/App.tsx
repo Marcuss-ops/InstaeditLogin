@@ -20,7 +20,6 @@ function App() {
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/terms" element={<TermsOfService />} />
 
-            {/* Platform pages — must be after specific routes */}
             <Route path="/:slug" element={<PlatformPage />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
