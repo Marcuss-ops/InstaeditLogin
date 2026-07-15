@@ -29,15 +29,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <aside
       className={cn(
-        "h-screen flex flex-col bg-white border-r border-neutral-200 transition-[width] duration-300 ease-in-out shrink-0",
+        "h-screen flex flex-col bg-[#030308] border-r border-white/[0.08] transition-[width] duration-300 ease-in-out shrink-0",
         collapsed ? "w-16" : "w-64",
       )}
     >
-      <div className="h-16 flex items-center justify-between px-4 border-b border-neutral-100">
+      <div className="h-16 flex items-center justify-between px-4 border-b border-white/[0.08]">
         <Link
           to="/app/dashboard"
           className={cn(
-            "flex items-center gap-2.5 font-bold text-[17px] tracking-[-0.3px] text-black no-underline transition-opacity overflow-hidden",
+            "flex items-center gap-2.5 font-bold text-[17px] tracking-[-0.3px] text-white no-underline transition-opacity overflow-hidden",
             collapsed && "opacity-0 pointer-events-none w-0",
           )}
         >
@@ -58,7 +58,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           type="button"
           onClick={onToggle}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="p-1.5 rounded-lg text-neutral-400 hover:text-black hover:bg-neutral-100 transition-colors"
+          className="p-1.5 rounded-lg text-[#9aa0aa] hover:text-white hover:bg-white/[0.06] transition-colors"
         >
           {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
         </button>
@@ -73,10 +73,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               key={item.to}
               to={item.to}
               className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all no-underline",
+                "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all no-underline border",
                 active
-                  ? "bg-neutral-100 text-black"
-                  : "text-neutral-500 hover:text-black hover:bg-neutral-50",
+                  ? "bg-white/[0.08] text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.1)] border-white/[0.08]"
+                  : "text-[#9aa0aa] hover:text-white hover:bg-white/[0.04] border-transparent",
                 collapsed && "justify-center",
               )}
               title={collapsed ? item.label : undefined}
@@ -88,12 +88,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         })}
       </nav>
 
-      <div className="p-2 border-t border-neutral-100">
+      <div className="p-2 border-t border-white/[0.08]">
         <button
           type="button"
           onClick={() => logout("/login")}
           className={cn(
-            "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-neutral-500 hover:text-red-600 hover:bg-red-50 transition-colors w-full",
+            "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-[#9aa0aa] hover:text-red-400 hover:bg-red-500/[0.08] transition-colors w-full",
             collapsed && "justify-center",
           )}
           title={collapsed ? "Log out" : undefined}

@@ -6,7 +6,7 @@ export function InternalLayout() {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
-    <div className="h-screen w-full flex bg-neutral-50 overflow-hidden">
+    <div className="h-screen w-full flex bg-[#030308] text-[#e8e8ef] overflow-hidden">
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
       <main className="flex-1 min-w-0 overflow-y-auto">
         <Outlet />

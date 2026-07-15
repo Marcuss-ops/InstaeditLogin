@@ -32,22 +32,22 @@ export function ErrorState({
     <div
       role="alert"
       className={cn(
-        "bg-white border border-neutral-200 rounded-xl p-8 text-center",
+        "bg-[#1f1f2e] border border-white/[0.12] rounded-xl p-8 text-center",
         className,
       )}
       data-testid="error-state"
     >
       <AlertCircle size={28} className="mx-auto mb-3 text-red-400" aria-hidden="true" />
-      <p className="text-red-500 font-semibold text-[15px] mb-1">{title}</p>
-      <p className="text-[14px] text-neutral-500 mb-5 break-words">{message}</p>
+      <p className="text-red-400 font-semibold text-[15px] mb-1">{title}</p>
+      <p className="text-[14px] text-[#9aa0aa] mb-5 break-words">{message}</p>
       {helpText && (
-        <p className="text-[12px] text-neutral-400 mb-5 break-words">{helpText}</p>
+        <p className="text-[12px] text-white/40 mb-5 break-words">{helpText}</p>
       )}
       {onRetry && (
         <button
           type="button"
           onClick={onRetry}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-black text-white text-[14px] font-semibold hover:bg-neutral-800 transition-colors"
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white text-black text-[14px] font-semibold hover:bg-white/90 transition-colors"
           data-testid="error-state-retry"
         >
           <RefreshCw size={14} />

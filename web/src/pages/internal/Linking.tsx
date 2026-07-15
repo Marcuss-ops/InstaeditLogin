@@ -83,15 +83,15 @@ export function InternalLinking() {
   const linkableProviders = PROVIDERS.filter((p) => LINKABLE_IDS.includes(p.id));
 
   return (
-    <div className="min-h-full p-8">
+    <div className="min-h-full p-8 bg-[#030308] text-[#e8e8ef]">
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-black flex items-center gap-3">
-              <Link2 size={28} className="text-neutral-400" />
+            <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-white flex items-center gap-3">
+              <Link2 size={28} className="text-white/40" />
               Linking
             </h1>
-            <p className="text-[15px] text-neutral-500 mt-1">
+            <p className="text-[15px] text-[#9aa0aa] mt-1">
               Connect your social profiles to publish from a single inbox.
             </p>
           </div>
@@ -99,7 +99,7 @@ export function InternalLinking() {
             <button
               type="button"
               onClick={() => void loadAccounts()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-neutral-200 text-[13px] font-semibold text-neutral-700 hover:border-neutral-400 transition-colors"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
             >
               <RefreshCw size={14} /> Refresh
             </button>
@@ -109,7 +109,7 @@ export function InternalLinking() {
         {state.kind === "loading" && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="h-32 rounded-2xl bg-neutral-200 animate-pulse" />
+              <div key={i} className="h-32 rounded-2xl bg-white/[0.06] animate-pulse" />
             ))}
           </div>
         )}
@@ -119,6 +119,7 @@ export function InternalLinking() {
             title="Couldn't load providers"
             message={state.message}
             onRetry={() => void loadAccounts()}
+            className="bg-[#1f1f2e] border-white/[0.12]"
           />
         )}
 
@@ -131,10 +132,10 @@ export function InternalLinking() {
                 <div
                   key={provider.id}
                   className={cn(
-                    "relative bg-white border rounded-2xl p-5 transition-all overflow-hidden",
+                    "relative surface-card bg-[#1f1f2e] border rounded-2xl p-5 transition-all overflow-hidden block",
                     isConnected
-                      ? "border-neutral-200"
-                      : "border-dashed border-neutral-300 hover:border-neutral-500 hover:shadow-[0_8px_24px_rgba(0,0,0,0.05)]",
+                      ? "border-white/[0.12]"
+                      : "border-dashed border-white/[0.16] hover:border-white/[0.30] hover:shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
                   )}
                 >
                   <div
@@ -154,14 +155,14 @@ export function InternalLinking() {
                         {provider.icon}
                       </div>
                       <div>
-                        <h3 className="font-bold text-[15px] text-black">{provider.name}</h3>
-                        <p className="text-[13px] text-neutral-500 mt-0.5">
+                        <h3 className="font-bold text-[15px] text-white">{provider.name}</h3>
+                        <p className="text-[13px] text-[#9aa0aa] mt-0.5">
                           {isConnected ? `@${account.username}` : "Not connected"}
                         </p>
                       </div>
                     </div>
                     {isConnected && (
-                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-50 border border-green-200 text-green-700 text-[11px] font-semibold">
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-500/[0.08] border border-emerald-500/[0.15] text-emerald-400 text-[11px] font-semibold">
                         <CheckCircle2 size={11} /> Connected
                       </span>
                     )}
@@ -169,14 +170,14 @@ export function InternalLinking() {
 
                   <div className="mt-5">
                     {isConnected ? (
-                      <div className="flex items-center gap-2 text-[13px] text-neutral-500">
-                        <span className="w-2 h-2 rounded-full bg-green-500" />
+                      <div className="flex items-center gap-2 text-[13px] text-[#9aa0aa]">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
                         Linked on {new Date(account.created_at).toLocaleDateString()}
                       </div>
                     ) : (
                       <a
                         href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}
-                        className="inline-flex items-center justify-center w-full px-4 py-2.5 rounded-xl bg-black text-white text-[13px] font-semibold hover:bg-neutral-800 transition-colors no-underline"
+                        className="inline-flex items-center justify-center w-full px-4 py-2.5 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
                       >
                         Connect {provider.name}
                       </a>

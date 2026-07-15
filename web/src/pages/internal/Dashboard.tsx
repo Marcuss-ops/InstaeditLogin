@@ -51,14 +51,14 @@ function StatCard({
   return (
     <Link
       to={to}
-      className="group bg-white border border-neutral-200 rounded-2xl p-5 hover:border-neutral-400 hover:shadow-[0_8px_24px_rgba(0,0,0,0.05)] transition-all no-underline"
+      className="group surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5 hover:border-white/[0.24] hover:shadow-[0_8px_32px_rgba(0,0,0,0.4)] transition-all no-underline block"
     >
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-[13px] font-medium text-neutral-500 mb-1">{label}</p>
-          <p className="text-[28px] font-extrabold tracking-tight text-black">{value}</p>
+          <p className="text-[13px] font-medium text-[#9aa0aa] mb-1">{label}</p>
+          <p className="text-[28px] font-extrabold tracking-tight text-white">{value}</p>
         </div>
-        <div className="w-10 h-10 rounded-xl bg-neutral-100 flex items-center justify-center text-neutral-600 group-hover:bg-black group-hover:text-white transition-colors">
+        <div className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-[#9aa0aa] group-hover:bg-white group-hover:text-[#030308] transition-colors">
           <Icon size={20} />
         </div>
       </div>
@@ -131,15 +131,15 @@ export function InternalDashboard() {
       : null;
 
   return (
-    <div className="min-h-full p-8">
+    <div className="min-h-full p-8 bg-[#030308] text-[#e8e8ef]">
       <div className="max-w-6xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-black flex items-center gap-3">
-              <LayoutDashboard size={28} className="text-neutral-400" />
+            <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-white flex items-center gap-3">
+              <LayoutDashboard size={28} className="text-white/40" />
               Dashboard
             </h1>
-            <p className="text-[15px] text-neutral-500 mt-1">
+            <p className="text-[15px] text-[#9aa0aa] mt-1">
               Overview of your connected accounts and publishing activity.
             </p>
           </div>
@@ -147,13 +147,13 @@ export function InternalDashboard() {
             <button
               type="button"
               onClick={() => void load()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-neutral-200 text-[13px] font-semibold text-neutral-700 hover:border-neutral-400 transition-colors"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
             >
               <RefreshCw size={14} /> Refresh
             </button>
             <Link
               to="/app/compose"
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-black text-white text-[13px] font-semibold hover:bg-neutral-800 transition-colors no-underline"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
             >
               <Sparkles size={14} /> New post
             </Link>
@@ -174,7 +174,7 @@ export function InternalDashboard() {
             title="Couldn't load dashboard"
             message={state.message}
             onRetry={() => void load()}
-            className="mb-8"
+            className="mb-8 bg-[#1f1f2e] border-white/[0.12]"
           />
         )}
 
@@ -188,18 +188,18 @@ export function InternalDashboard() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 bg-white border border-neutral-200 rounded-2xl p-6">
+              <div className="lg:col-span-2 surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-[16px] font-bold text-black">Connected accounts</h2>
+                  <h2 className="text-[16px] font-bold text-white">Connected accounts</h2>
                   <Link
                     to="/app/linking"
-                    className="inline-flex items-center gap-1 text-[13px] font-medium text-neutral-500 hover:text-black transition-colors no-underline"
+                    className="inline-flex items-center gap-1 text-[13px] font-medium text-[#9aa0aa] hover:text-white transition-colors no-underline"
                   >
                     Manage <ArrowRight size={14} />
                   </Link>
                 </div>
                 {state.data.accounts.length === 0 ? (
-                  <p className="text-[14px] text-neutral-500">No accounts connected yet.</p>
+                  <p className="text-[14px] text-[#9aa0aa]">No accounts connected yet.</p>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {state.data.accounts.map((account) => {
@@ -208,7 +208,7 @@ export function InternalDashboard() {
                       return (
                         <div
                           key={account.id}
-                          className="flex items-center gap-3 p-3 rounded-xl border border-neutral-100 bg-neutral-50/50"
+                          className="flex items-center gap-3 p-3 rounded-xl border border-white/[0.08] bg-white/[0.02]"
                         >
                           <div
                             className={`w-10 h-10 rounded-xl bg-gradient-to-br ${provider.color} flex items-center justify-center text-white shrink-0`}
@@ -216,10 +216,10 @@ export function InternalDashboard() {
                             {provider.icon}
                           </div>
                           <div className="min-w-0">
-                            <p className="text-[13px] font-semibold text-black truncate">
+                            <p className="text-[13px] font-semibold text-white truncate">
                               {provider.name}
                             </p>
-                            <p className="text-[12px] text-neutral-500 truncate">
+                            <p className="text-[12px] text-[#9aa0aa] truncate">
                               @{account.username || "—"}
                             </p>
                           </div>
@@ -230,21 +230,21 @@ export function InternalDashboard() {
                 )}
               </div>
 
-              <div className="bg-white border border-neutral-200 rounded-2xl p-6">
-                <h2 className="text-[16px] font-bold text-black mb-4">Quick actions</h2>
+              <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6">
+                <h2 className="text-[16px] font-bold text-white mb-4">Quick actions</h2>
                 <div className="space-y-2">
                   <Link
                     to="/app/compose"
-                    className="flex items-center gap-3 p-3 rounded-xl bg-neutral-50 hover:bg-neutral-100 transition-colors no-underline text-black"
+                    className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] transition-colors no-underline text-white"
                   >
-                    <Sparkles size={18} className="text-neutral-500" />
+                    <Sparkles size={18} className="text-[#9aa0aa]" />
                     <span className="text-[14px] font-medium">Create a post</span>
                   </Link>
                   <Link
                     to="/app/linking"
-                    className="flex items-center gap-3 p-3 rounded-xl bg-neutral-50 hover:bg-neutral-100 transition-colors no-underline text-black"
+                    className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] transition-colors no-underline text-white"
                   >
-                    <Link2 size={18} className="text-neutral-500" />
+                    <Link2 size={18} className="text-[#9aa0aa]" />
                     <span className="text-[14px] font-medium">Connect accounts</span>
                   </Link>
                 </div>

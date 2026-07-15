@@ -29,19 +29,19 @@ export function EmptyState({
     <div
       role="status"
       className={cn(
-        "bg-white border border-dashed border-neutral-300 rounded-xl p-12 text-center",
+        "bg-[#1f1f2e] border border-dashed border-white/[0.12] rounded-xl p-12 text-center",
         className,
       )}
       data-testid="empty-state"
     >
       {icon && (
-        <div className="mx-auto mb-3 text-neutral-300" aria-hidden="true">
+        <div className="mx-auto mb-3 text-white/30" aria-hidden="true">
           {icon}
         </div>
       )}
-      <h3 className="font-bold text-[16px] text-black mb-1">{title}</h3>
+      <h3 className="font-bold text-[16px] text-white mb-1">{title}</h3>
       {description && (
-        <p className="text-[14px] text-neutral-500 mb-5">{description}</p>
+        <p className="text-[14px] text-[#9aa0aa] mb-5">{description}</p>
       )}
       {cta}
     </div>

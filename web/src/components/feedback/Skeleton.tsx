@@ -21,7 +21,7 @@ export type SkeletonProps =
   | { variant: "card"; height?: number; width?: string; className?: string }
   | { variant: "list-row"; gap?: number; className?: string };
 
-const BASE_PULSE = "animate-pulse bg-neutral-200";
+const BASE_PULSE = "animate-pulse bg-white/[0.06]";
 
 export function Skeleton(props: SkeletonProps) {
   if (props.variant === "text") {

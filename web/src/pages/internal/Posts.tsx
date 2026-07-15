@@ -41,11 +41,11 @@ type FetchState =
 type StatusFilter = "all" | "draft" | "queued" | "publishing" | "published" | "failed";
 
 const STATUS_META: Record<string, { label: string; color: string; ring: string }> = {
-  draft: { label: "Draft", color: "bg-neutral-100 text-neutral-700", ring: "ring-neutral-200" },
-  queued: { label: "Scheduled", color: "bg-amber-50 text-amber-700", ring: "ring-amber-200" },
-  publishing: { label: "Publishing", color: "bg-blue-50 text-blue-700", ring: "ring-blue-200" },
-  published: { label: "Published", color: "bg-green-50 text-green-700", ring: "ring-green-200" },
-  failed: { label: "Failed", color: "bg-red-50 text-red-700", ring: "ring-red-200" },
+  draft: { label: "Draft", color: "bg-white/[0.04] text-[#9aa0aa]", ring: "ring-white/[0.08]" },
+  queued: { label: "Scheduled", color: "bg-amber-500/[0.08] text-amber-400", ring: "ring-amber-500/[0.15]" },
+  publishing: { label: "Publishing", color: "bg-blue-500/[0.08] text-blue-400", ring: "ring-blue-500/[0.15]" },
+  published: { label: "Published", color: "bg-emerald-500/[0.08] text-emerald-400", ring: "ring-emerald-500/[0.15]" },
+  failed: { label: "Failed", color: "bg-red-500/[0.08] text-red-400", ring: "ring-red-500/[0.15]" },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -164,15 +164,15 @@ export function InternalPosts() {
   const workspaceName = (id: number) => workspaces.find((w) => w.id === id)?.name;
 
   return (
-    <div className="min-h-full p-8">
+    <div className="min-h-full p-8 bg-[#030308] text-[#e8e8ef]">
       <div className="max-w-5xl mx-auto">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div>
-            <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-black flex items-center gap-3">
-              <FileText size={28} className="text-neutral-400" />
+            <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-white flex items-center gap-3">
+              <FileText size={28} className="text-white/40" />
               Posts
             </h1>
-            <p className="text-[15px] text-neutral-500 mt-1">
+            <p className="text-[15px] text-[#9aa0aa] mt-1">
               Drafts, scheduled posts, and publishing history.
             </p>
           </div>
@@ -180,27 +180,27 @@ export function InternalPosts() {
             <button
               type="button"
               onClick={() => void loadAll()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white border border-neutral-200 text-[13px] font-semibold text-neutral-700 hover:border-neutral-400 transition-colors"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
             >
               <RefreshCw size={14} /> Refresh
             </button>
             <Link
               to="/app/compose"
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-black text-white text-[13px] font-semibold hover:bg-neutral-800 transition-colors no-underline"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
             >
               <Sparkles size={14} /> New post
             </Link>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 mb-6 pb-4 border-b border-neutral-200">
-          <div className="inline-flex items-center gap-2 text-[12px] text-neutral-500">
+        <div className="flex flex-wrap items-center gap-3 mb-6 pb-4 border-b border-white/[0.08]">
+          <div className="inline-flex items-center gap-2 text-[12px] text-[#9aa0aa]">
             <Filter size={13} /> Filters
           </div>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            className="px-3 py-1.5 rounded-lg bg-white border border-neutral-200 text-[13px] font-medium text-neutral-700 focus:outline-none focus:ring-2 focus:ring-black/10"
+            className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-white focus:outline-none focus:ring-2 focus:ring-white/10"
             aria-label="Filter by status"
           >
             <option value="all">All statuses</option>
@@ -221,7 +221,12 @@ export function InternalPosts() {
         )}
 
         {state.kind === "error" && (
-          <ErrorState title="Couldn't load posts" message={state.message} onRetry={() => void loadAll()} />
+          <ErrorState
+            title="Couldn't load posts"
+            message={state.message}
+            onRetry={() => void loadAll()}
+            className="bg-[#1f1f2e] border-white/[0.12]"
+          />
         )}
 
         {state.kind === "empty" && (
@@ -229,10 +234,11 @@ export function InternalPosts() {
             title="No posts yet"
             description="Compose your first post and publish to a connected account."
             icon={<FileText size={32} />}
+            className="bg-[#1f1f2e] border-white/[0.12]"
             cta={
               <Link
                 to="/app/compose"
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-black text-white text-[14px] font-semibold hover:bg-neutral-800 transition-colors no-underline"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white text-black text-[14px] font-semibold hover:bg-white/90 transition-colors no-underline"
               >
                 <Sparkles size={14} /> Create post
               </Link>
@@ -241,12 +247,12 @@ export function InternalPosts() {
         )}
 
         {state.kind === "ready" && filtered.length === 0 && (
-          <div className="bg-white border border-dashed border-neutral-300 rounded-xl p-10 text-center">
-            <p className="text-[14px] text-neutral-500 mb-2">No posts match the current filters.</p>
+          <div className="bg-[#1f1f2e] border border-dashed border-white/[0.12] rounded-xl p-10 text-center">
+            <p className="text-[14px] text-[#9aa0aa] mb-2">No posts match the current filters.</p>
             <button
               type="button"
               onClick={() => setStatusFilter("all")}
-              className="text-[13px] text-black underline hover:no-underline"
+              className="text-[13px] text-white underline hover:no-underline"
             >
               Clear filters
             </button>
@@ -302,7 +308,7 @@ function PostRow({
   const canRetry = post.status === "failed";
 
   return (
-    <div className="bg-white border border-neutral-200 rounded-2xl p-5 hover:border-neutral-400 hover:shadow-[0_4px_16px_rgba(0,0,0,0.04)] transition-all">
+    <div className="bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5 hover:border-white/[0.24] hover:shadow-[0_4px_24px_rgba(0,0,0,0.4)] transition-all">
       <div className="flex items-start gap-4">
         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white shrink-0">
           <FileText size={18} />
@@ -310,15 +316,15 @@ function PostRow({
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1 min-w-0">
-              <h3 className="font-bold text-[15px] text-black truncate">
-                {post.title || <span className="text-neutral-400 font-normal italic">Untitled</span>}
+              <h3 className="font-bold text-[15px] text-white truncate">
+                {post.title || <span className="text-white/40 font-normal italic">Untitled</span>}
               </h3>
-              <p className="text-[13px] text-neutral-500 mt-1 break-words">{captionPreview(post.caption)}</p>
+              <p className="text-[13px] text-[#9aa0aa] mt-1 break-words">{captionPreview(post.caption)}</p>
             </div>
             <StatusBadge status={post.status} />
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[11px] text-neutral-500">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[11px] text-[#9aa0aa]">
             <span className="inline-flex items-center gap-1.5">
               <span className="font-mono">#{post.id}</span>
               <span className="opacity-50">·</span>
@@ -333,8 +339,8 @@ function PostRow({
             <span className="opacity-70">Created {formatDate(post.created_at)}</span>
           </div>
 
-          <div className="flex items-center justify-between mt-4 pt-3 border-t border-neutral-100">
-            <div className="text-[11px] text-neutral-400">Manage this post.</div>
+          <div className="flex items-center justify-between mt-4 pt-3 border-t border-white/[0.08]">
+            <div className="text-[11px] text-[#9aa0aa]">Manage this post.</div>
             <div className="relative" ref={dropdownRef}>
               <button
                 type="button"
@@ -344,7 +350,7 @@ function PostRow({
                 aria-expanded={open}
                 aria-haspopup="true"
                 aria-controls={open ? `actions-menu-${menuId}` : undefined}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-[12px] font-medium text-neutral-700 transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] text-white transition-colors disabled:opacity-50 text-[12px] font-medium"
               >
                 Actions <ChevronDown size={12} />
               </button>
@@ -353,63 +359,63 @@ function PostRow({
                   id={`actions-menu-${menuId}`}
                   role="menu"
                   aria-labelledby={`actions-toggle-${menuId}`}
-                  className="absolute right-0 mt-1 w-48 bg-white border border-neutral-200 rounded-xl shadow-lg z-20 py-1 text-[13px]"
+                  className="absolute right-0 mt-1 w-48 bg-[#1f1f2e] border border-white/[0.12] rounded-xl shadow-lg z-20 py-1 text-[13px]"
                 >
-                    {canPublish && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        disabled={busy}
-                        onClick={() => {
-                          onPublish(post);
-                          setOpen(false);
-                        }}
-                        className="w-full text-left px-3 py-2 hover:bg-neutral-50 inline-flex items-center gap-2 disabled:opacity-50"
-                      >
-                        <Send size={13} /> Publish now
-                      </button>
-                    )}
-                    {canCancel && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        disabled={busy}
-                        onClick={() => {
-                          onCancel(post);
-                          setOpen(false);
-                        }}
-                        className="w-full text-left px-3 py-2 hover:bg-neutral-50 inline-flex items-center gap-2 disabled:opacity-50"
-                      >
-                        <XCircle size={13} /> Cancel schedule
-                      </button>
-                    )}
-                    {canRetry && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        disabled={busy}
-                        onClick={() => {
-                          onRetry(post);
-                          setOpen(false);
-                        }}
-                        className="w-full text-left px-3 py-2 hover:bg-neutral-50 inline-flex items-center gap-2 disabled:opacity-50"
-                      >
-                        <RotateCcw size={13} /> Retry
-                      </button>
-                    )}
+                  {canPublish && (
                     <button
                       type="button"
                       role="menuitem"
                       disabled={busy}
                       onClick={() => {
-                        onDelete(post);
+                        onPublish(post);
                         setOpen(false);
                       }}
-                      className="w-full text-left px-3 py-2 hover:bg-red-50 text-red-600 inline-flex items-center gap-2 disabled:opacity-50"
+                      className="w-full text-left px-3 py-2 hover:bg-white/[0.06] text-white inline-flex items-center gap-2 disabled:opacity-50"
                     >
-                      <Trash2 size={13} /> Delete
+                      <Send size={13} /> Publish now
                     </button>
-                  </div>
+                  )}
+                  {canCancel && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy}
+                      onClick={() => {
+                        onCancel(post);
+                        setOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-white/[0.06] text-white inline-flex items-center gap-2 disabled:opacity-50"
+                    >
+                      <XCircle size={13} /> Cancel schedule
+                    </button>
+                  )}
+                  {canRetry && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy}
+                      onClick={() => {
+                        onRetry(post);
+                        setOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-white/[0.06] text-white inline-flex items-center gap-2 disabled:opacity-50"
+                    >
+                      <RotateCcw size={13} /> Retry
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={busy}
+                    onClick={() => {
+                      onDelete(post);
+                      setOpen(false);
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-red-500/[0.12] text-red-400 inline-flex items-center gap-2 disabled:opacity-50"
+                  >
+                    <Trash2 size={13} /> Delete
+                  </button>
+                </div>
               )}
             </div>
           </div>
