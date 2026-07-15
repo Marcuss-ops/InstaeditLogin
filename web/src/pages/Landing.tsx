@@ -7,6 +7,9 @@ import {
   BarChart3,
   Clock,
   Layers,
+  Sparkles,
+  Rocket,
+  Target,
 } from "lucide-react";
 
 const PLATFORMS = [
@@ -65,6 +68,16 @@ const FEATURES = [
   },
 ];
 
+function SectionDivider({ icon }: { icon: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-center py-4">
+      <div className="h-px flex-1 max-w-[120px] bg-white/[0.06]" />
+      <div className="mx-5 text-[#9aa0aa]/30">{icon}</div>
+      <div className="h-px flex-1 max-w-[120px] bg-white/[0.06]" />
+    </div>
+  );
+}
+
 export function Landing() {
   return (
     <div className="min-h-screen bg-[#030308] text-[#e8e8ef]">
@@ -97,14 +110,14 @@ export function Landing() {
       </nav>
 
       {/* Hero */}
-      <section className="pt-32 pb-20 px-6">
+      <section className="pt-40 pb-32 px-6">
         <div className="max-w-4xl mx-auto text-center">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] text-xs text-[#9aa0aa] mb-8">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] text-xs text-[#9aa0aa] mb-10">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             Now managing 10,000+ publications per month
           </div>
 
-          <h1 className="text-5xl md:text-7xl font-semibold tracking-tight leading-[1.08] mb-6">
+          <h1 className="text-5xl md:text-7xl font-semibold tracking-tight leading-[1.08] mb-8">
             Your entire content
             <br />
             <span className="bg-gradient-to-r from-[#0A84FF] via-[#7B61FF] to-[#E1306C] bg-clip-text text-transparent">
@@ -112,23 +125,23 @@ export function Landing() {
             </span>
           </h1>
 
-          <p className="text-lg md:text-xl text-[#9aa0aa] max-w-2xl mx-auto mb-10 leading-relaxed">
+          <p className="text-lg md:text-xl text-[#9aa0aa] max-w-2xl mx-auto mb-12 leading-relaxed">
             We are a team of editors who scaled production from 50 posts to
             10,000 pieces of content per month across 7 platforms. InstaEdit is
             the infrastructure that makes it possible.
           </p>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               to="/login"
-              className="group flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-[#030308] font-medium text-sm hover:bg-white/90 transition-all"
+              className="group flex items-center gap-2 px-7 py-3.5 rounded-xl bg-white text-[#030308] font-medium text-sm hover:bg-white/90 transition-all"
             >
               Start publishing
               <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
             </Link>
             <a
               href="#features"
-              className="flex items-center gap-2 px-6 py-3 rounded-xl border border-white/[0.10] text-sm text-[#9aa0aa] hover:text-white hover:border-white/[0.20] transition-all"
+              className="flex items-center gap-2 px-7 py-3.5 rounded-xl border border-white/[0.10] text-sm text-[#9aa0aa] hover:text-white hover:border-white/[0.20] transition-all"
             >
               See how it works
             </a>
@@ -137,8 +150,8 @@ export function Landing() {
       </section>
 
       {/* Platforms ticker */}
-      <section className="py-12 border-y border-white/[0.04] overflow-hidden">
-        <div className="flex items-center justify-center gap-10 md:gap-16 opacity-40">
+      <section className="py-16 border-y border-white/[0.04] overflow-hidden">
+        <div className="flex items-center justify-center gap-12 md:gap-20 opacity-40">
           {PLATFORMS.map((p) => (
             <span
               key={p.name}
@@ -152,11 +165,11 @@ export function Landing() {
       </section>
 
       {/* Stats */}
-      <section className="py-20 px-6">
-        <div className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-4">
+      <section className="py-32 px-6">
+        <div className="max-w-5xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-12 md:gap-8">
           {STATS.map((s) => (
             <div key={s.label} className="text-center">
-              <div className="text-3xl md:text-4xl font-semibold tracking-tight mb-2">
+              <div className="text-4xl md:text-5xl font-semibold tracking-tight mb-3">
                 {s.value}
               </div>
               <div className="text-sm text-[#9aa0aa]">{s.label}</div>
@@ -165,14 +178,20 @@ export function Landing() {
         </div>
       </section>
 
+      <SectionDivider icon={<Rocket className="w-4 h-4" />} />
+
       {/* Features */}
-      <section id="features" className="py-20 px-6">
+      <section id="features" className="py-32 px-6">
         <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl md:text-4xl font-semibold tracking-tight mb-4">
+          <div className="text-center mb-20">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] text-xs text-[#9aa0aa] mb-6">
+              <Sparkles className="w-3 h-3" />
+              Features
+            </div>
+            <h2 className="text-3xl md:text-4xl font-semibold tracking-tight mb-5">
               Built for content teams
             </h2>
-            <p className="text-[#9aa0aa] max-w-lg mx-auto">
+            <p className="text-[#9aa0aa] max-w-lg mx-auto text-lg">
               Everything you need to manage multi-platform publishing at scale.
               No bloat, no compromises.
             </p>
@@ -182,13 +201,13 @@ export function Landing() {
             {FEATURES.map((f) => (
               <div
                 key={f.title}
-                className="bg-[#030308] p-8 hover:bg-white/[0.02] transition-colors"
+                className="bg-[#030308] p-10 hover:bg-white/[0.02] transition-colors"
               >
-                <div className="w-10 h-10 rounded-xl bg-white/[0.06] flex items-center justify-center text-[#7B61FF] mb-5">
+                <div className="w-11 h-11 rounded-xl bg-white/[0.06] flex items-center justify-center text-[#7B61FF] mb-6">
                   {f.icon}
                 </div>
-                <h3 className="text-base font-medium mb-2">{f.title}</h3>
-                <p className="text-sm text-[#9aa0aa] leading-relaxed">
+                <h3 className="text-lg font-medium mb-3">{f.title}</h3>
+                <p className="text-[#9aa0aa] leading-relaxed">
                   {f.description}
                 </p>
               </div>
@@ -197,20 +216,25 @@ export function Landing() {
         </div>
       </section>
 
+      <SectionDivider icon={<Target className="w-4 h-4" />} />
+
       {/* CTA */}
-      <section className="py-20 px-6">
+      <section className="py-32 px-6">
         <div className="max-w-3xl mx-auto text-center">
-          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-12 md:p-16">
-            <h2 className="text-3xl md:text-4xl font-semibold tracking-tight mb-4">
+          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-16 md:p-20">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center mx-auto mb-8">
+              <Zap className="w-5 h-5 text-white" />
+            </div>
+            <h2 className="text-3xl md:text-4xl font-semibold tracking-tight mb-5">
               Ready to scale your content?
             </h2>
-            <p className="text-[#9aa0aa] mb-8 max-w-md mx-auto">
+            <p className="text-[#9aa0aa] mb-10 max-w-md mx-auto text-lg">
               Connect your first platform in under 2 minutes. No credit card
               required.
             </p>
             <Link
               to="/login"
-              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-[#030308] font-medium text-sm hover:bg-white/90 transition-all"
+              className="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-white text-[#030308] font-medium text-sm hover:bg-white/90 transition-all"
             >
               Get started free
               <ArrowRight className="w-4 h-4" />
@@ -220,7 +244,7 @@ export function Landing() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-white/[0.04] py-10 px-6">
+      <footer className="border-t border-white/[0.04] py-12 px-6">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-md bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
