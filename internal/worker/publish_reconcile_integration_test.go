@@ -259,11 +259,15 @@ func runWorkerPair(rig *rig) *workerPair {
 
 	pubWorker := NewPublishWorker(
 		rig.PostRepo, rig.UserRepo, rig.Router, rig.Vault,
+		"test-worker-id",
+		nil, // no MemoryLimiter needed in integration tests
 		time.Duration(rig.CFG.PublishWorkerIntervalSeconds)*time.Second,
 		nil, // inherit slog.Default() (matches cmd/server/main.go wiring)
 	)
 	recWorker := NewReconcileWorker(
 		rig.PostRepo, rig.UserRepo, rig.Router, rig.Vault,
+		"test-worker-id",
+		nil, // no MemoryLimiter needed in integration tests
 		time.Duration(rig.CFG.ReconcileWorkerIntervalSeconds)*time.Second,
 		nil,
 	)

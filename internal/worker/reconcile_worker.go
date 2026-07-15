@@ -123,12 +123,14 @@ type ReconcileUserStore = PublisherUserStore
 // platforms that want at-most-N-attempts-per-row semantics inside
 // the row itself.
 type ReconcileWorker struct {
-	postRepo ReconcilePostStore
-	userRepo ReconcileUserStore
-	router   *services.CapabilityRouter
-	vault    credentials.VaultAPI
-	interval time.Duration
-	logger   *slog.Logger
+	postRepo      ReconcilePostStore
+	userRepo      ReconcileUserStore
+	router        *services.CapabilityRouter
+	vault         credentials.VaultAPI
+	workerID      string // per-process id, threaded via constructor (no global)
+	memoryLimiter *services.MemoryLimiter // explicit DI; nil-safe in tests
+	interval      time.Duration
+	logger        *slog.Logger
 }
 
 // NewReconcileWorker wires the dependencies. interval <= 0 falls back
@@ -136,11 +138,18 @@ type ReconcileWorker struct {
 // misconfiguration. nil logger inherits slog.Default(). router and
 // vault must be non-nil; a nil will panic on the first tick
 // (fail-fast for misconfigured wiring).
+//
+// Commit DI refactor: workerID and memoryLimiter are now explicit
+// constructor arguments (no global lookup). workerID=="" is normalised
+// to "unset" so log lines stay meaningful; memoryLimiter may be nil in
+// test rigs that don't exercise rate-limit signals.
 func NewReconcileWorker(
 	postRepo ReconcilePostStore,
 	userRepo ReconcileUserStore,
 	router *services.CapabilityRouter,
 	vault credentials.VaultAPI,
+	workerID string,
+	memoryLimiter *services.MemoryLimiter,
 	interval time.Duration,
 	logger *slog.Logger,
 ) *ReconcileWorker {
@@ -150,13 +159,18 @@ func NewReconcileWorker(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if workerID == "" {
+		workerID = "unset"
+	}
 	return &ReconcileWorker{
-		postRepo: postRepo,
-		userRepo: userRepo,
-		router:   router,
-		vault:    vault,
-		interval: interval,
-		logger:   logger,
+		postRepo:      postRepo,
+		userRepo:      userRepo,
+		router:        router,
+		vault:         vault,
+		workerID:      workerID,
+		memoryLimiter: memoryLimiter,
+		interval:      interval,
+		logger:        logger,
 	}
 }
 
@@ -172,8 +186,9 @@ func NewReconcileWorker(
 // initial-drain-then-ticker shape (internal/outbox/dispatcher.go::Run).
 func (w *ReconcileWorker) Run(ctx context.Context) error {
 	w.logger.Info("reconcile worker started",
-		"interval_seconds", w.interval.Seconds())
-	defer w.logger.Info("reconcile worker stopped")
+		"interval_seconds", w.interval.Seconds(),
+		"worker_id", w.workerID)
+	defer w.logger.Info("reconcile worker stopped", "worker_id", w.workerID)
 
 	// Initial reconcile — no wait for the first sweep.
 	w.runOnce(ctx)

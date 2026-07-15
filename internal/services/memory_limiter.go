@@ -18,6 +18,7 @@ package services
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -38,11 +39,22 @@ const (
 // Each scope string maps to one *rate.Limiter; the limiter is
 // created on first access and evicted after entryTTL of
 // inactivity.
+//
+// Commit DI refactor: the stopOnce sync.Once field was removed —
+// the user's bootstrap DI refactor asked to drop "i sync.Once
+// sparsi (... memory limiter)". atomic.Bool.CompareAndSwap gives
+// the same exactly-once guarantee on close(stopCh) without
+// pulling in the sync primitive. Note the distinction: this is
+// not a process-wide lazy-init singleton (compare to pkg/metrics/
+// metrics.go's `metricsHandlerOnce`, which IS one and will be
+// dropped in commit 2 of this refactor); the CAS guard here is
+// an instance-level one-shot-close guard, equivalent to the
+// pattern used by pkg/api/onetimecode.go's stopCh lifecycle.
 type MemoryLimiter struct {
-	mu       sync.Mutex
-	entries  map[string]*memoryLimiterEntry
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	mu      sync.Mutex
+	entries map[string]*memoryLimiterEntry
+	stopCh  chan struct{}
+	closed  atomic.Bool // commit DI refactor: replaces stopOnce sync.Once
 }
 
 type memoryLimiterEntry struct {
@@ -61,11 +73,14 @@ func NewMemoryLimiter() *MemoryLimiter {
 	return ml
 }
 
-// Shutdown stops the background reaper. Idempotent.
+// Shutdown stops the background reaper. Idempotent — atomic
+// CompareAndSwap guarantees the underlying close happens exactly
+// once across all callers (replaces the previous sync.Once field;
+// commit DI refactor).
 func (ml *MemoryLimiter) Shutdown() {
-	ml.stopOnce.Do(func() {
+	if ml.closed.CompareAndSwap(false, true) {
 		close(ml.stopCh)
-	})
+	}
 }
 
 // Allow checks (and consumes) one token for the supplied scope

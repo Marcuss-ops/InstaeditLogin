@@ -585,7 +585,7 @@ func TestReconcileWorker_Run_TicksAndExitsOnCtxCancel(t *testing.T) {
 
 	router := services.NewCapabilityRouter()
 	router.Register("tiktok", svc)
-	w := NewReconcileWorker(posts, users, router, vault, 10*time.Millisecond, nil)
+	w := NewReconcileWorker(posts, users, router, vault, "test-worker-id", nil, 10*time.Millisecond, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -665,7 +665,7 @@ func TestReconcileWorker_Run_GracefulShutdown_DrainsInFlight(t *testing.T) {
 
 	router := services.NewCapabilityRouter()
 	router.Register("tiktok", svc)
-	w := NewReconcileWorker(posts, users, router, vault, 1*time.Hour, nil) // big tick so only the initial drain fires
+	w := NewReconcileWorker(posts, users, router, vault, "test-worker-id", nil, 1*time.Hour, nil) // big tick so only the initial drain fires
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

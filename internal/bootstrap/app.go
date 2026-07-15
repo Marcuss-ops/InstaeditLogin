@@ -69,6 +69,22 @@ type App struct {
 	// panic-catching middleware uses sentryhttp.New() against
 	// this hub so CaptureException flows correct on every panic.
 	SentryHub *sentry.Hub
+
+	// WorkerID (commit DI refactor) is the per-process identity
+	// generated locally via metrics.NewWorkerID and threaded into
+	// each worker's constructor — no global singleton, no
+	// sync.Once. Stored on App so external callers (and the
+	// RunWorkers goroutine-launch closures) can pass it on.
+	WorkerID string
+
+	// MemoryLimiter (commit DI refactor) is constructed once in
+	// Wire() and shared between RateLimitService (request path)
+	// and the workers (background path). Single instance per
+	// process; explicit receiver avoids a sync.Once-protected
+	// lazy global. The reaper goroutine dies with the process, so
+	// no Shutdown() wiring is strictly required — the field is
+	// exposed for future graceful-drain work.
+	MemoryLimiter *services.MemoryLimiter
 }
 
 // Wire connects to the database, builds every shared dependency, and
@@ -105,6 +121,18 @@ func Wire(ctx context.Context) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect db: %w", err)
 	}
+
+	// Per-process worker id (commit DI refactor). Generated locally
+	// rather than via metrics.InitWorkerID() so the value lives only
+	// on App.WorkerID — each consumer (workers, log context lines)
+	// receives it as an explicit value, not a global read.
+	workerID := metrics.NewWorkerID()
+	slog.Info("worker_id initialised", "worker_id", workerID)
+
+	// Per-process rate-limit MemoryLimiter (commit DI refactor).
+	// Constructed once, shared between RateLimitService and the
+	// workers — single instance, no sync.Once-protected lazy global.
+	memoryLimiter := services.NewMemoryLimiter()
 
 	// Blocco #2.2 — multi-key support. Wire() consumes the
 	// post-validated EncryptionKeys map + ActiveEncryptionKeyID
@@ -175,7 +203,7 @@ func Wire(ctx context.Context) (*App, error) {
 	sessionsSvc := services.NewSessionsService(sessionRepo, authMgr)
 
 	rateLimitRepo := repository.NewRateLimitRepository(db)
-	rateLimitSvc := services.NewRateLimitService(rateLimitRepo)
+	rateLimitSvc := services.NewRateLimitServiceWithMemory(rateLimitRepo, memoryLimiter)
 
 	webhookRepo := repository.NewWebhookRepository(db)
 
@@ -214,11 +242,6 @@ func Wire(ctx context.Context) (*App, error) {
 		// is unset, registration is disabled (handler returns 403).
 		api.WithAdminInviteToken(cfg.AdminInviteToken),
 	}
-	// Set the worker_id singleton BEFORE any goroutine comes up so log
-	// lines emitted from each worker tick carry the canonical
-	// process-local worker_id.
-	metrics.InitWorkerID()
-
 	// Blocco #5.3 — Sentry init (lazy). The user contract is
 	// "SENTRY_DSN empty == no init; non-empty == CaptureException
 	// pipeline". We honour that by short-circuiting sentry.Init
@@ -293,6 +316,8 @@ func Wire(ctx context.Context) (*App, error) {
 		Logger:       logger,
 		WorkerStatus: workerStatus,
 		SentryHub:    hub,
+		WorkerID:     workerID,
+		MemoryLimiter: memoryLimiter,
 	}, nil
 }
 
@@ -332,6 +357,8 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				repository.NewUserRepository(a.DB),
 				a.CapRouter,
 				a.Vault,
+				a.WorkerID,
+				a.MemoryLimiter,
 				time.Duration(a.Cfg.PublishWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 			)
@@ -354,6 +381,8 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				repository.NewUserRepository(a.DB),
 				a.CapRouter,
 				a.Vault,
+				a.WorkerID,
+				a.MemoryLimiter,
 				time.Duration(a.Cfg.ReconcileWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 			)

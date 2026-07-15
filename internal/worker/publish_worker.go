@@ -142,13 +142,15 @@ type PublisherUserStore interface {
 // goroutine with independent tick interval). PublishWorker now only
 // owns the queued → publishing transition.
 type PublishWorker struct {
-	postRepo PublisherPostStore
-	userRepo PublisherUserStore
-	router   *services.CapabilityRouter
-	vault    credentials.VaultAPI
-	throttle *PlatformThrottle // FASE 1.3: per-platform rate limiter
-	interval time.Duration
-	logger   *slog.Logger
+	postRepo      PublisherPostStore
+	userRepo      PublisherUserStore
+	router        *services.CapabilityRouter
+	vault         credentials.VaultAPI
+	throttle      *PlatformThrottle // FASE 1.3: per-platform rate limiter
+	workerID      string            // per-process id, threaded via constructor (no global)
+	memoryLimiter *services.MemoryLimiter // explicit DI; nil-safe in tests
+	interval      time.Duration
+	logger        *slog.Logger
 }
 
 // NewPublishWorker wires the dependencies. interval <= 0 falls back to
@@ -156,11 +158,20 @@ type PublishWorker struct {
 // nil logger inherits slog.Default(). router and vault must be
 // non-nil; a nil will panic on the first tick (fail-fast for
 // misconfigured wiring).
+//
+// Commit DI refactor: workerID and memoryLimiter are now explicit
+// constructor arguments (no global metrics.WorkerID() read, no
+// sync.Once-protected MemoryLimiter lookup). Both are nil/empty-safe:
+// an empty workerID is recorded as "unset" so log lines still
+// appear; a nil memoryLimiter is acceptable for workers that don't
+// yet consume rate-limit signals (today: publish / reconcile).
 func NewPublishWorker(
 	postRepo PublisherPostStore,
 	userRepo PublisherUserStore,
 	router *services.CapabilityRouter,
 	vault credentials.VaultAPI,
+	workerID string,
+	memoryLimiter *services.MemoryLimiter,
 	interval time.Duration,
 	logger *slog.Logger,
 ) *PublishWorker {
@@ -170,14 +181,19 @@ func NewPublishWorker(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if workerID == "" {
+		workerID = "unset"
+	}
 	return &PublishWorker{
-		postRepo: postRepo,
-		userRepo: userRepo,
-		router:   router,
-		vault:    vault,
-		throttle: NewPlatformThrottle(), // FASE 1.3
-		interval: interval,
-		logger:   logger,
+		postRepo:      postRepo,
+		userRepo:      userRepo,
+		router:        router,
+		vault:         vault,
+		throttle:      NewPlatformThrottle(), // FASE 1.3
+		workerID:      workerID,
+		memoryLimiter: memoryLimiter,
+		interval:      interval,
+		logger:        logger,
 	}
 }
 
@@ -194,8 +210,10 @@ func NewPublishWorker(
 // ClaimQueuedTarget is the only writer for queued→publishing, and
 // the reconciler is the only writer for publishing→published|failed.
 func (w *PublishWorker) Run(ctx context.Context) error {
-	w.logger.Info("publish worker started", "interval_seconds", w.interval.Seconds())
-	defer w.logger.Info("publish worker stopped")
+	w.logger.Info("publish worker started",
+		"interval_seconds", w.interval.Seconds(),
+		"worker_id", w.workerID)
+	defer w.logger.Info("publish worker stopped", "worker_id", w.workerID)
 
 	// Initial tick — no wait for the first sweep.
 	w.runOnce(ctx)

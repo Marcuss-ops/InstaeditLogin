@@ -278,6 +278,8 @@ func newTestWorker(posts PublisherPostStore, users *mockUserStore, name string, 
 		users,
 		router,
 		vault,
+		"test-worker-id",
+		nil, // no MemoryLimiter needed in unit tests
 		10*time.Millisecond,
 		nil, // inherit slog.Default()
 	)
@@ -304,6 +306,8 @@ func newTestReconcileWorker(posts ReconcilePostStore, users *mockUserStore, name
 		users,
 		router,
 		vault,
+		"test-worker-id",
+		nil, // no MemoryLimiter needed in unit tests
 		10*time.Millisecond,
 		nil, // inherit slog.Default()
 	)

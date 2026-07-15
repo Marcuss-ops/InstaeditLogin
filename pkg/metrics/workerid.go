@@ -90,19 +90,25 @@ func WorkerID() string {
 	return workerID
 }
 
-// InitWorkerID (SPRINT 6.1 / Phase 2) generates a unique per-process
-// worker_id and stamps it via SetWorkerID. The format is
-// "worker-<hostname>-<pid>-<uuid>" — log-parseable, stable across
-// the process lifetime, and unique across N replicas / restarts:
+// NewWorkerID (commit DI refactor, replaces InitWorkerID) generates a
+// fresh per-process worker id WITHOUT registering it as a process-wide
+// global. The format matches the historical InitWorkerID contract:
+// "worker-<hostname>-<pid>-<uuid>" — log-parseable, stable across the
+// process lifetime, and unique across N replicas / restarts.
 //
-//   - hostname is from os.Hostname(); "unknown" fallback handles
-//     chrooted / networkless test envs where hostname lookup errors.
-//   - pid disambiguates fast restarts on the same host where the
-//     UUID alone would not tell you "process P2" from "process P3".
-//   - uuid (crypto-random, 36-char hex-with-dashes) makes the id
-//     unique across the rest of the cluster even if two hosts
-//     coincidentally share hostname + pid at exactly the same
-//     nanosecond (impractical but the cheap guarantee).
+// Usage (explicit DI, the only supported path after commit 1 of the
+// bootstrap DI refactor):
+//
+//	workerID := metrics.NewWorkerID()
+//	slog.Info("worker_id initialised", "worker_id", workerID)
+//	pw := worker.NewPublishWorker(..., workerID, ...)
+//
+// The caller stores the value on its own struct (e.g. App.WorkerID) and
+// threads it into each worker constructor. No sync.Once + no
+// pkg/metrics.WorkerID() global reader — workers carry it as a struct
+// field. The legacy SetWorkerID / InitWorkerID / WorkerID trio is
+// deprecated and slated for removal in a future pkg/metrics cleanup
+// commit.
 //
 // Returns the generated id for callers that want to log it
 // prominently at startup ("worker_id=worker-abc-12345-<uuid> ...").
@@ -131,12 +137,25 @@ func WorkerID() string {
 // logs for cross-replica correlation. The "leak" framing is wrong:
 // this is the canonical ops-telemetry use case. Operator workstations
 // that need to redact this can run a log-rewriter at the collector.
-func InitWorkerID() string {
+func NewWorkerID() string {
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "unknown"
 	}
-	id := "worker-" + hostname + "-" + strconv.Itoa(os.Getpid()) + "-" + uuid.NewString()
-	SetWorkerID(id)
-	return id
+	return "worker-" + hostname + "-" + strconv.Itoa(os.Getpid()) + "-" + uuid.NewString()
 }
+
+// InitWorkerID (SPRINT 6.1 / Phase 2) generates a unique per-process
+// worker_id and stamps it via SetWorkerID. Deprecated: use NewWorkerID
+// and thread the value through App.WorkerID into worker constructors.
+// Kept for backwards compat with existing tests; will be removed in a
+// future pkg/metrics cleanup commit.
+//
+//   - hostname is from os.Hostname(); "unknown" fallback handles
+//     chrooted / networkless test envs where hostname lookup errors.
+//   - pid disambiguates fast restarts on the same host where the
+//     UUID alone would not tell you "process P2" from "process P3".
+//   - uuid (crypto-random, 36-char hex-with-dashes) makes the id
+//     unique across the rest of the cluster even if two hosts
+//     coincidentally share hostname + pid at exactly the same
+//     nanosecond (impractical but the cheap guarantee).
