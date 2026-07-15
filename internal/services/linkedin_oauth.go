@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
@@ -22,16 +21,21 @@ import (
 //   - ContentValidator (text required — text_only)
 //   - Publisher (POST /rest/posts, text only — Taglio 3c: articleSource removed)
 //   - AccountManager (Validate / Revoke)
+// cfg is the OAuthConfig adapter (see oauth_config.go). The provider
+// no longer imports internal/config directly — bootstrap constructs
+// a ConfigAdapter once and passes it here.
 type LinkedInOAuthService struct {
-	cfg        *config.Config
+	cfg        OAuthConfig
 	httpClient *http.Client
 	clock      func() time.Time
 }
 
-// NewLinkedInOAuthService creates a new LinkedInOAuthService. Accepts optional
-// ProviderDependencies for HTTP client injection.
-func NewLinkedInOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*LinkedInOAuthService, error) {
-	if cfg.LinkedInClientID == "" {
+// NewLinkedInOAuthService creates a new LinkedInOAuthService. Accepts
+// optional ProviderDependencies for HTTP client injection. The cfg
+// parameter is the OAuthConfig interface (see oauth_config.go); the
+// concrete *config.Config never reaches provider internals.
+func NewLinkedInOAuthService(cfg OAuthConfig, deps ...ProviderDependencies) (*LinkedInOAuthService, error) {
+	if cfg.LinkedInClientID() == "" {
 		return nil, nil // provider disabled
 	}
 	var dep ProviderDependencies
@@ -58,8 +62,8 @@ func (s *LinkedInOAuthService) Name() string { return models.PlatformLinkedIn }
 func (s *LinkedInOAuthService) GetLoginURL(state string) string {
 	params := url.Values{}
 	params.Set("response_type", "code")
-	params.Set("client_id", s.cfg.LinkedInClientID)
-	params.Set("redirect_uri", s.cfg.LinkedInRedirectURI)
+	params.Set("client_id", s.cfg.LinkedInClientID())
+	params.Set("redirect_uri", s.cfg.LinkedInRedirectURI())
 	params.Set("state", state)
 	params.Set("scope", "openid profile email w_member_social")
 
@@ -230,9 +234,9 @@ func (s *LinkedInOAuthService) exchangeCodeForToken(ctx context.Context, code st
 	body := url.Values{}
 	body.Set("grant_type", "authorization_code")
 	body.Set("code", code)
-	body.Set("redirect_uri", s.cfg.LinkedInRedirectURI)
-	body.Set("client_id", s.cfg.LinkedInClientID)
-	body.Set("client_secret", s.cfg.LinkedInClientSecret)
+	body.Set("redirect_uri", s.cfg.LinkedInRedirectURI())
+	body.Set("client_id", s.cfg.LinkedInClientID())
+	body.Set("client_secret", s.cfg.LinkedInClientSecret())
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		"https://www.linkedin.com/oauth/v2/accessToken",

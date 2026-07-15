@@ -119,6 +119,14 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 
 	router := services.NewCapabilityRouter()
 
+	// Single ConfigAdapter per BuildRegistry call. providers that have
+	// been decoupled from *config.Config (currently LinkedIn; more
+	// platforms follow in sync with internal/services/oauth_config.go)
+	// receive this adapter in their constructor. The pre-decoupled
+	// providers continue to receive cfg directly; the smell is
+	// contained to this file until each platform's PR migrates.
+	oauthCfg := services.NewConfigAdapter(cfg)
+
 	// Facebook (shared Meta OAuth credentials). Register when the
 	// Meta-family Facebook redirect URI is set AND the shared Meta
 	// credentials are both present. Taglio 2.4: each provider is
@@ -172,7 +180,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 	}
 
 	if cfg.LinkedInClientID != "" {
-		li, err := services.NewLinkedInOAuthService(cfg, b.deps)
+		li, err := services.NewLinkedInOAuthService(oauthCfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped LinkedIn provider (constructor failed)", "error", err)
 		} else if li != nil {

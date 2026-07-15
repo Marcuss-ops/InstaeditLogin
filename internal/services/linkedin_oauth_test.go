@@ -21,10 +21,13 @@ func linkedinTestCfg() *config.Config {
 }
 
 // newTestLinkedInService creates a LinkedInOAuthService pointed at the httptest server.
+// The cfg field type is OAuthConfig (interface), so tests wrap the
+// underlying *config.Config via NewConfigAdapter — same path as
+// bootstrap's production wiring.
 func newTestLinkedInService(srv *httptest.Server) *LinkedInOAuthService {
 	cfg := linkedinTestCfg()
 	return &LinkedInOAuthService{
-		cfg:        cfg,
+		cfg:        NewConfigAdapter(cfg),
 		httpClient: testClient(srv),
 	}
 }
