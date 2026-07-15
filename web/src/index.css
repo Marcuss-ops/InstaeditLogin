@@ -58,28 +58,25 @@ html {
    * vertical fade on each side, so each section reads as its own block
    * without adding heavy vertical space (8px total).
    */
+  /*
+   * Section divider — a real element with the gradient applied directly
+   * to the box. The previous ::before pseudo-element version rendered as
+   * an invisible 8px spacer on production even though it was deployed
+   * (likely browser sub-pixel anti-aliasing on a 2px-tall pseudo-element
+   * inside a positioned parent). This is now a 1px solid line that
+   * participates in normal document flow, with a soft halo so it reads
+   * as a real "edge" between sections.
+   */
   .section-divider {
-    position: relative;
-    height: 8px;
     width: 100%;
-  }
-  .section-divider::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    margin: auto;
-    height: 2px;
-    width: 100%;
-    border-radius: 9999px;
-    background: linear-gradient(
+    height: 1px;
+    background-image: linear-gradient(
       to right,
-      transparent 0%,
-      rgba(255, 255, 255, 0.30) 18%,
-      rgba(255, 255, 255, 0.55) 50%,
-      rgba(255, 255, 255, 0.30) 82%,
-      transparent 100%
+      rgba(255, 255, 255, 0) 0%,
+      rgba(255, 255, 255, 0.50) 50%,
+      rgba(255, 255, 255, 0) 100%
     );
-    box-shadow: 0 0 10px rgba(255, 255, 255, 0.18);
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.30);
   }
 
   /* Soft glowing orb for background depth */
