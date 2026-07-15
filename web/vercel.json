@@ -3,9 +3,6 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "installCommand": "npm ci",
-  "engines": {
-    "node": "22.12"
-  },
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
   ]
