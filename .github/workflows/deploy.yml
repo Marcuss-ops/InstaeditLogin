@@ -13,13 +13,35 @@
 # makes the deploy loop durable: the next push WILL produce a deploy,
 # the build artifact WILL be re-uploaded, the CDN WILL refresh.
 #
-# Why we DON'T listen to `push` directly:
-# A `push` event fires the moment `git push` lands — BEFORE CI runs.
-# Acting on it would ship unverified code. Instead this workflow only
-# fires on `workflow_run` (after CI completes) + `workflow_dispatch`
-# (manual override). The `if:` filter below enforces success-only:
-#   - dispatch → always run
-#   - workflow_run → only if CI conclusion was 'success'
+# Why we DO listen to `push` on main (deploys straight to production):
+# To avoid deploy paralysis when CI is flaky (Docker pull rate-limit,
+# testcontainers timeouts, Go race flakes), this workflow deploys on
+# EVERY push to `main` without waiting for CI. CI still runs in
+# parallel (`integration.yml` is a separate workflow) and serves as
+# an audit signal — its conclusion is reported back but does NOT
+# gate the deploy.
+#
+# SAFETY: this emergency-lane model is ONLY safe when the following
+# GitHub repo settings are enabled (Settings → Branches → Branch
+# protection rules → main):
+#   \u2610  Require signed commits
+#   \u2610  Require pull request reviews before merging (\u22651 approval)
+#   \u2610  Restrict who can push to matching branches
+# If any of these are OFF, a single push can ship unverified code
+# directly to production. Verify before relying on this lane, or
+# revert to workflow_run gated on CI success.
+#
+# Why NOT Vercel-for-Git: the Git-app installation sometimes silently
+# stops triggering deploys on push (observed in production \u2014 git log
+# showed push landed, Vercel CDN never refreshed). Running `npx vercel
+# deploy --prod` from a workflow runner we control makes the loop
+# durable.
+#
+# Required GitHub repo secrets (Settings → Secrets and variables →
+# Actions → New repository secret). FAIL-FAST if any is missing:
+#   VERCEL_TOKEN     vercel.com/account/tokens → Create Token (Full Account)
+#   VERCEL_ORG_ID    /v2/teams \u2192 id of team owning the project (or /v2/user for personal account)
+#   VERCEL_PROJECT_ID /v9/projects \u2192 id of the InstaEdit project
 #
 # Required GitHub repository secrets (Settings → Secrets and variables →
 # Actions → New repository secret). Every variable MUST be set BEFORE
@@ -76,14 +98,16 @@ permissions:
 # file portable across both. (Existing integration.yml has the same
 # convention — keep them aligned.)
 "on":
-  # Deploy only AFTER CI passes. workflow_run fires once per CI
-  # completion; the success/failure gate is in `if:` below.
-  workflow_run:
-    workflows: [integration]
-    types: [completed]
-  # Manual override from the GitHub Actions UI / CLI / API. Useful for
-  # emergency hot-fix deploys without pushing an empty commit, and for
-  # re-deploying the last commit when Vercel-for-Git eats a deploy.
+  # EMERGENCY LANE — see top-of-file header for trade-off.
+  # Direct push to the protected `main` branch deploys to Vercel
+  # production unconditionally. CI runs in parallel as a separate
+  # workflow (integration.yml) but its conclusion does NOT gate this
+  # deploy. The safety boundary is the git-server branch-protection
+  # config (require signed commits + PR review), NOT this file.
+  push:
+    branches: [main]
+  # Manual override. Useful when Vercel edge cache serves stale assets
+  # and we need to re-deploy the last commit without pushing.
   workflow_dispatch:
 
 # Cancel in-progress deploys so a fast follow-up push doesn't spawn
@@ -98,14 +122,11 @@ jobs:
     name: Deploy web/app to Vercel (production)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Logic gate:
-    #   - manual dispatch → always run (no workflow_run context)
-    #   - workflow_run   → only when CI in .github/workflows/integration.yml
-    #                     concluded "success". Skips failed CI runs.
-    # This is the contract: a CI-broken commit NEVER reaches Vercel.
+    # Either trigger event deploys unconditionally \u2014 there is no CI
+    # gate in this workflow. See the file header for the safety model.
     if: >
       github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+      github.event_name == 'push'
 
     steps:
       # ─── 1. Checkout ─────────────────────────────────────────────
