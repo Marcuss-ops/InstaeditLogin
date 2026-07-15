@@ -71,7 +71,7 @@ export function Landing() {
   return (
     <div className="min-h-screen bg-[#030308] text-[#e8e8ef]">
       {/* Nav */}
-      <nav className="fixed top-0 w-full z-50 border-b border-white/[0.06] bg-[#030308]/80 backdrop-blur-xl">
+      <nav className="fixed top-0 w-full z-50 border-b border-white/[0.10] bg-[#030308]/80 backdrop-blur-xl">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">
@@ -102,7 +102,7 @@ export function Landing() {
       <section className="relative pt-48 pb-40 px-6 overflow-hidden">
         <div className="glow-orb bg-[#0A84FF] w-[700px] h-[700px] top-[-200px] left-1/2 -translate-x-1/2" />
         <ScrollReveal className="relative z-10 max-w-4xl mx-auto text-center">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] text-xs text-[#9aa0aa] mb-16">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.15] bg-white/[0.05] text-xs text-[#9aa0aa] mb-16">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             Now managing 10,000+ publications per month
           </div>
@@ -142,7 +142,7 @@ export function Landing() {
       <div className="section-divider" />
 
       {/* Platforms ticker */}
-      <section className="py-32 border-y border-white/[0.04] overflow-hidden">
+      <section className="py-24 border-y border-white/[0.10] bg-white/[0.015] overflow-hidden">
         <div className="flex items-center justify-center gap-12 md:gap-20 opacity-40">
           {PLATFORMS.map((p) => (
             <span
@@ -177,7 +177,7 @@ export function Landing() {
         <div className="glow-orb bg-[#7B61FF] w-[600px] h-[600px] bottom-[-250px] right-[-150px] opacity-10" />
         <div className="max-w-5xl mx-auto relative z-10">
           <ScrollReveal className="text-center mb-16">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.08] bg-white/[0.04] text-xs text-[#9aa0aa] mb-6">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/[0.15] bg-white/[0.05] text-xs text-[#9aa0aa] mb-6">
               <Sparkles className="w-3 h-3" />
               Features
             </div>
@@ -190,10 +190,10 @@ export function Landing() {
             </p>
           </ScrollReveal>
 
-          <div className="grid md:grid-cols-2 gap-8">
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {FEATURES.map((f, i) => (
               <ScrollReveal key={f.title} delay={i * 80}>
-                <div className="surface-card p-10 h-full hover:bg-white/[0.05] hover:border-white/[0.12] hover:shadow-[0_12px_40px_rgba(0,0,0,0.3)] hover:-translate-y-1 transition-all duration-300">
+                <div className="surface-card p-8 h-full hover:bg-white/[0.06] hover:border-white/[0.20] hover:shadow-[0_12px_40px_rgba(0,0,0,0.35)] hover:-translate-y-1 transition-all duration-300">
                   <div className="w-11 h-11 rounded-xl bg-white/[0.06] flex items-center justify-center text-[#7B61FF] mb-6">
                     {f.icon}
                   </div>
@@ -239,7 +239,7 @@ export function Landing() {
       <div className="section-divider" />
 
       {/* Footer */}
-      <footer className="pt-20 pb-12 px-6">
+      <footer className="pt-20 pb-12 px-6 border-t border-white/[0.10]">
         <div className="max-w-6xl mx-auto flex flex-col items-center gap-10">
           <Link to="/" className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-md bg-gradient-to-br from-[#0A84FF] to-[#7B61FF] flex items-center justify-center">

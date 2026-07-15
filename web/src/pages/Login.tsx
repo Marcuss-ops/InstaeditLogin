@@ -66,7 +66,7 @@ export function Login() {
         </Link>
 
         {/* Card */}
-        <div className="rounded-2xl border border-white/[0.06] bg-white/[0.03] p-10">
+        <div className="rounded-2xl border border-white/[0.12] bg-white/[0.04] p-10 shadow-[0_24px_60px_rgba(0,0,0,0.4)]">
           <h1 className="text-xl font-semibold tracking-tight mb-1">
             Welcome back
           </h1>
@@ -92,7 +92,7 @@ export function Login() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@company.com"
-                  className="w-full h-11 pl-10 pr-4 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm placeholder:text-[#9aa0aa]/40 focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20 transition-all"
+                  className="w-full h-11 pl-10 pr-4 rounded-xl bg-white/[0.04] border border-white/[0.10] text-sm placeholder:text-[#9aa0aa]/40 focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20 transition-all"
                 />
               </div>
             </div>
@@ -114,7 +114,7 @@ export function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
-                  className="w-full h-11 pl-10 pr-4 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm placeholder:text-[#9aa0aa]/40 focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20 transition-all"
+                  className="w-full h-11 pl-10 pr-4 rounded-xl bg-white/[0.04] border border-white/[0.10] text-sm placeholder:text-[#9aa0aa]/40 focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20 transition-all"
                 />
               </div>
             </div>

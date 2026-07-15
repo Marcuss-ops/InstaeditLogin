@@ -51,9 +51,9 @@ html {
 }
 
 @layer utilities {
-  /* Subtle horizontal gradient line to separate sections */
+  /* Horizontal gradient line to separate sections — visible but not loud */
   .section-divider {
-    @apply h-px w-full bg-gradient-to-r from-transparent via-white/[0.12] to-transparent;
+    @apply h-px w-full bg-gradient-to-r from-transparent via-white/[0.20] to-transparent;
   }
 
   /* Soft glowing orb for background depth */
@@ -61,13 +61,13 @@ html {
     @apply absolute rounded-full blur-[120px] pointer-events-none opacity-20;
   }
 
-  /* Elevated section background — adds a barely-there lift from the page */
+  /* Elevated section background — visibly lifts the section from the page */
   .bg-elevated {
-    @apply bg-white/[0.015] border-y border-white/[0.05] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)];
+    @apply bg-white/[0.025] border-y border-white/[0.10] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)];
   }
 
-  /* Card surface with more depth than the flat page background */
+  /* Card surface with defined edge — clearly framed, not floating */
   .surface-card {
-    @apply rounded-2xl border border-white/[0.08] bg-white/[0.03] shadow-[0_8px_32px_rgba(0,0,0,0.24)];
+    @apply rounded-2xl border border-white/[0.12] bg-white/[0.04] shadow-[0_8px_32px_rgba(0,0,0,0.32)];
   }
 }
