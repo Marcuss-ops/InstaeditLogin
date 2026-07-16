@@ -57,12 +57,15 @@ jobs:
         env:
           VITE_DEMO_MODE: "true"
           VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || 'https://api.instaedit.org' }}
-        run: npm run build
+        run: npx vercel build
 
       - name: Deploy to Vercel (preview)
         working-directory: web
         env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          npx vercel deploy --prebuilt --token="${{ secrets.VERCEL_TOKEN }}" --yes
+          DEPLOY_URL=$(npx vercel deploy --prebuilt --yes)
+          echo "PREVIEW_URL=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+          echo "Preview URL: $DEPLOY_URL"
