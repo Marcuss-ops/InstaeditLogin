@@ -1,0 +1,41 @@
+# ops/vps/Caddyfile — Caddy configuration for the public VPS deployment of
+# InstaEdit at dev.instaedit.org.
+#
+# What this does:
+#   • Terminates TLS automatically with Let's Encrypt (or ZeroSSL).
+#   • Proxies every request under /api/* to the Go API on 127.0.0.1:8080.
+#   • Serves the compiled React SPA from /srv/instaedit/web/dist.
+#   • Falls back to index.html for unknown paths so client-side routing works.
+#
+# Requirements before this block works:
+#   1. DNS record A dev.instaedit.org → VPS public IP.
+#   2. Ports 80 (HTTP) and 443 (HTTPS) open on the VPS firewall.
+#   3. The Go API is listening on 127.0.0.1:8080.
+#   4. The frontend has been built and copied to /srv/instaedit/web/dist.
+#
+# Run with Docker (recommended):
+#   docker run -d \
+#     --name instaedit-caddy \
+#     --restart unless-stopped \
+#     --network host \
+#     -v /home/pierone/Projects/company/InstaeditLogin/ops/vps/Caddyfile:/etc/caddy/Caddyfile:ro \
+#     -v /srv/instaedit/web/dist:/srv/instaedit/web/dist:ro \
+#     -v caddy_data:/data \
+#     -v caddy_config:/config \
+#     caddy:2
+#
+# Or with systemd (after `apt install caddy`):
+#   sudo cp ops/vps/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+
+dev.instaedit.org {
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    handle {
+        root * /srv/instaedit/web/dist
+        try_files {path} /index.html
+        file_server
+    }
+}
