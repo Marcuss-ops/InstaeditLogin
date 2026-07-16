@@ -146,7 +146,35 @@ type PublishPayload struct {
 	// `json:"-"` because this field is OUR internal worker plumbing,
 	// not part of the user-facing API contract.
 	IdempotencyKey string `json:"-"`
+
+	// Source discriminates the platform-specific publish path. Empty
+	// (default) or PublishSourcePULLFromURL lets the platform fetch
+	// the video from VideoURL via CDN (TikTok Direct Post, Instagram
+	// Graph, Threads container, etc.). PublishSourcePULLFromFile
+	// triggers the chunked-upload path: backend downloads bytes from
+	// VideoURL, chunks them, PUTs each chunk to the platform's
+	// returned upload_url, and calls the platform's
+	// upload/complete/{platform} endpoint to finalize. PULL_FROM_FILE
+	// is the only way to use the platform's `video.upload` scope
+	// (Upload-as-Draft) — TikTok today; future async platforms may
+	// accept the same field.
+	Source string `json:"source,omitempty"`
 }
+
+// PublishSource* values are the canonical Source discriminator. An
+// empty PublishPayload.Source means PULL_FROM_URL (the historical
+// default); only set a Source when a per-call override is needed.
+//
+// Taglio cull (post-merge): the empty-string sentinel `PublishSource`
+// constant was removed — nothing in the codebase compares against
+// PublishPayload.Source == PublishSource (the dispatcher in
+// tiktok_oauth.go uses an explicit `strings.EqualFold(..., PublishSourcePULLFromFile)`
+// check, so anything other than `PULL_FROM_FILE` falls through to
+// the legacy PULL_FROM_URL path including the empty default).
+const (
+	PublishSourcePULLFromURL  = "PULL_FROM_URL"
+	PublishSourcePULLFromFile = "PULL_FROM_FILE"
+)
 
 // PublishResult is returned after successful content publishing.
 type PublishResult struct {

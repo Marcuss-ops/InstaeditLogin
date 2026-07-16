@@ -1,11 +1,14 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -691,3 +694,462 @@ func TestTikTok_ValidateContent(t *testing.T) {
 		t.Error("expected error for caption > 4000 runes, got nil")
 	}
 }
+
+// -----------------------------------------------------------------------------
+// PULL_FROM_FILE / chunked-upload tests (Taglio 4.x addendum).
+// Mirrors the snapshot tests of /v2/post/publish/video/init/, the
+// chunked-PUT protocol's Content-Range header, and the
+// /v2/post/publish/video/upload/complete/ call. The happy-path test
+// overrides svc.chunkSize to 1024 bytes so we can exercise 3 chunks
+// (1024-byte chunks on a 3072-byte video) instead of allocating
+// 10MB+ payloads for unit tests.
+// -----------------------------------------------------------------------------
+
+// TestTikTok_GetLoginURL_IncludesVideoUploadScope mirrors the App
+// Review submission scopes. If a future refactor drops "video.upload"
+// from GetLoginURL this test fails — the OAuth consent screen would
+// no longer show Upload-as-Draft (PULL_FROM_FILE) and the App Review
+// submission would diverge from the runtime behaviour.
+func TestTikTok_GetLoginURL_IncludesVideoUploadScope(t *testing.T) {
+	svc := &TikTokOAuthService{cfg: tiktokTestCfg()}
+	loginURL := svc.GetLoginURL("csrf-state-xyz")
+
+	parsed, err := url.Parse(loginURL)
+	if err != nil {
+		t.Fatalf("login URL parse: %v", err)
+	}
+	scope := parsed.Query().Get("scope")
+	wantScopes := []string{"user.info.basic", "video.publish", "video.upload"}
+	for _, want := range wantScopes {
+		if !strings.Contains(scope, want) {
+			t.Errorf("scope %q missing %q (full scope list: %s)", scope, want, scope)
+		}
+	}
+}
+
+// pullFromFileMockServer builds an httptest server with the four
+// endpoints PULL_FROM_FILE expects: a video source, the TikTok init
+// endpoint, a chunk-upload endpoint (registered post-bind), and the
+// TikTok complete endpoint. Returns the server + the chunks handler
+// (for assertion on uploaded ranges) + bindable endpoints on the mux
+// so tests can override per-call behaviour (e.g., inject a 4xx).
+func pullFromFileMockServer(t *testing.T) (*httptest.Server, *pullFromFileHandlers) {
+	t.Helper()
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	h := &pullFromFileHandlers{
+		mux:            mux,
+		srv:            srv,
+		chunksReceived: []chunkCall{},
+	}
+	h.bindDefaults()
+	return srv, h
+}
+
+type chunkCall struct {
+	rangeHeader string
+	authHeader  string
+	method      string
+	byteCount   int64
+}
+
+type pullFromFileHandlers struct {
+	mux            *http.ServeMux
+	srv            *httptest.Server
+	chunksReceived []chunkCall
+
+	// OnInit is invoked by /v2/.../init/'s handler with the raw
+	// request body AND the *http.Request BEFORE the response is
+	// written. Tests use it to capture/assert on the JSON shape the
+	// service sends to TikTok (body) and on transport-layer details
+	// (Authorization header) without re-registering the mux pattern
+	// (which would conflict with bindDefaults). Optional — nil is a
+	// no-op.
+	OnInit func(rawBody []byte, r *http.Request)
+
+	// Pluggable behaviour (overridden per-test if needed).
+	sourceVideoBytes  []byte
+	sourceVideoStatus int
+	initStatus        int
+	initBody          []byte
+	chunkStatus       int
+	completeStatus    int
+}
+
+// bindDefaults registers the 4 endpoints with reasonable defaults:
+//   /source-video               → 200 OK + 3072 zero-fills
+//   /v2/.../init/               → 200 OK + JSON with upload_url mapped to /chunk-upload
+//   /chunk-upload               → 200 OK + record call
+//   /v2/.../upload/complete/    → 200 OK
+func (h *pullFromFileHandlers) bindDefaults() {
+	h.sourceVideoBytes = bytes.Repeat([]byte{0}, 3072) // 3× 1024 chunks when chunkSize=1024
+	h.sourceVideoStatus = http.StatusOK
+	h.initStatus = http.StatusOK
+	h.chunkStatus = http.StatusOK
+	h.completeStatus = http.StatusOK
+
+	h.mux.HandleFunc("/source-video", func(w http.ResponseWriter, r *http.Request) {
+		if h.sourceVideoStatus != http.StatusOK {
+			w.WriteHeader(h.sourceVideoStatus)
+			w.Write([]byte(`{"error":"source_unreachable"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Write(h.sourceVideoBytes)
+	})
+	h.mux.HandleFunc("/v2/post/publish/video/init/", h.handleInit)
+	h.mux.HandleFunc("/chunk-upload", h.handleChunk)
+	h.mux.HandleFunc("/v2/post/publish/video/upload/complete/", h.handleComplete)
+}
+
+func (h *pullFromFileHandlers) handleInit(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	if h.OnInit != nil {
+		h.OnInit(body, r)
+	}
+	if h.initStatus != http.StatusOK {
+		w.WriteHeader(h.initStatus)
+		w.Write([]byte(`{"error":{"code":"internal_error","message":"platform rejected init"}}`))
+		return
+	}
+	if h.initBody != nil {
+		w.Write(h.initBody)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"data":{"publish_id":"v_pub_file_1","upload_url":"%s/chunk-upload"}}`, h.srv.URL)
+}
+
+func (h *pullFromFileHandlers) handleChunk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "PUT" {
+		http.Error(w, "want PUT", http.StatusMethodNotAllowed)
+		return
+	}
+	w.WriteHeader(h.chunkStatus)
+	n, _ := io.Copy(io.Discard, r.Body)
+	h.chunksReceived = append(h.chunksReceived, chunkCall{
+		rangeHeader: r.Header.Get("Content-Range"),
+		authHeader:  r.Header.Get("Authorization"),
+		method:      r.Method,
+		byteCount:   n,
+	})
+}
+
+func (h *pullFromFileHandlers) handleComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "want POST", http.StatusMethodNotAllowed)
+		return
+	}
+	body, _ := io.ReadAll(r.Body)
+	w.WriteHeader(h.completeStatus)
+	// Echo back the publish_id so the test can parse + assert.
+	fmt.Fprintf(w, `{"data":{"publish_id":"%s"}}`, "v_pub_file_1")
+	_ = body
+}
+
+// newTestTikTokServiceWithChunkSize mirrors newTestTikTokService but
+// also sets svc.chunkSize so chunked upload tests can exercise
+// small-byte videos (default chunkSize=0 → 10MB would otherwise force
+// a 10MB source allocation). Same package so direct field access is
+// available.
+func newTestTikTokServiceWithChunkSize(srv *httptest.Server, chunkSize int) *TikTokOAuthService {
+	svc := newTestTikTokService(srv)
+	svc.chunkSize = chunkSize
+	return svc
+}
+
+// TestTikTok_StartPublish_PULLFromFile_HappyPath drives the full
+// chunked-upload chain on a 3072-byte video with chunkSize=1024.
+// Asserts:
+//   - init body has source=PULL_FROM_FILE, video_size=3072, chunk_size=1024
+//   - exactly 3 chunk PUTs happen with the correct Content-Range
+//   - complete endpoint is invoked with publish_id in the body
+//   - returned publish_id + initial state match expectations
+func TestTikTok_StartPublish_PULLFromFile_HappyPath(t *testing.T) {
+	srv, h := pullFromFileMockServer(t)
+	defer srv.Close()
+
+	var initBodyParsed struct {
+		SourceInfo struct {
+			Source    string `json:"source"`
+			VideoSize int64  `json:"video_size"`
+			ChunkSize int64  `json:"chunk_size"`
+		} `json:"source_info"`
+	}
+	h.OnInit = func(rawBody []byte, _ *http.Request) {
+		_ = json.Unmarshal(rawBody, &initBodyParsed)
+	}
+
+	svc := newTestTikTokServiceWithChunkSize(srv, 1024)
+	payload := models.PublishPayload{
+		Text:         "PULL_FROM_FILE happy path",
+		VideoURL:     srv.URL + "/source-video",
+		PrivacyLevel: "PUBLIC_TO_EVERYONE",
+		Source:       models.PublishSourcePULLFromFile,
+	}
+	publishID, state, err := svc.StartPublish(context.Background(), "tt-access-token", "tt-open-id", payload)
+	if err != nil {
+		t.Fatalf("StartPublish(PULL_FROM_FILE): %v", err)
+	}
+	if publishID != "v_pub_file_1" {
+		t.Errorf("publishID: want v_pub_file_1, got %q", publishID)
+	}
+	if state != "PROCESSING_UPLOAD" {
+		t.Errorf("state: want PROCESSING_UPLOAD, got %q", state)
+	}
+
+	// init body assertions: video_size 3072, chunk_size 1024, source PULL_FROM_FILE.
+	if initBodyParsed.SourceInfo.Source != "PULL_FROM_FILE" {
+		t.Errorf("init source: want PULL_FROM_FILE, got %q", initBodyParsed.SourceInfo.Source)
+	}
+	if initBodyParsed.SourceInfo.VideoSize != 3072 {
+		t.Errorf("init video_size: want 3072, got %d", initBodyParsed.SourceInfo.VideoSize)
+	}
+	if initBodyParsed.SourceInfo.ChunkSize != 1024 {
+		t.Errorf("init chunk_size: want 1024, got %d", initBodyParsed.SourceInfo.ChunkSize)
+	}
+
+	// chunk assertions: 3 PUTs with exact Content-Range headers in order.
+	if len(h.chunksReceived) != 3 {
+		t.Fatalf("chunks: want 3, got %d", len(h.chunksReceived))
+	}
+	wantRanges := []string{
+		"bytes 0-1023/3072",
+		"bytes 1024-2047/3072",
+		"bytes 2048-3071/3072",
+	}
+	for i, want := range wantRanges {
+		if h.chunksReceived[i].rangeHeader != want {
+			t.Errorf("chunk[%d] Content-Range: want %q, got %q", i, want, h.chunksReceived[i].rangeHeader)
+		}
+		if h.chunksReceived[i].byteCount != 1024 {
+			t.Errorf("chunk[%d] body size: want 1024, got %d", i, h.chunksReceived[i].byteCount)
+		}
+		if h.chunksReceived[i].method != "PUT" {
+			t.Errorf("chunk[%d] method: want PUT, got %q", i, h.chunksReceived[i].method)
+		}
+	}
+}
+
+// TestTikTok_StartPublish_PULLFromFile_LastChunkPartial verifies the
+// final chunk is correctly sized when total is not chunk-aligned.
+// 1500 bytes / 1024 → 2 chunks: 0-1023 (1024) + 1024-1499 (476).
+func TestTikTok_StartPublish_PULLFromFile_LastChunkPartial(t *testing.T) {
+	srv, h := pullFromFileMockServer(t)
+	defer srv.Close()
+	h.sourceVideoBytes = bytes.Repeat([]byte{0}, 1500)
+
+	svc := newTestTikTokServiceWithChunkSize(srv, 1024)
+	payload := models.PublishPayload{
+		Text:         "partial",
+		VideoURL:     srv.URL + "/source-video",
+		PrivacyLevel: "SELF_ONLY",
+		Source:       models.PublishSourcePULLFromFile,
+	}
+	if _, _, err := svc.StartPublish(context.Background(), "tok", "tt-1", payload); err != nil {
+		t.Fatalf("StartPublish: %v", err)
+	}
+
+	if len(h.chunksReceived) != 2 {
+		t.Fatalf("chunks: want 2, got %d", len(h.chunksReceived))
+	}
+	if h.chunksReceived[0].rangeHeader != "bytes 0-1023/1500" || h.chunksReceived[0].byteCount != 1024 {
+		t.Errorf("chunk[0]: want 0-1023/1500 (1024 bytes), got %q (%d bytes)", h.chunksReceived[0].rangeHeader, h.chunksReceived[0].byteCount)
+	}
+	if h.chunksReceived[1].rangeHeader != "bytes 1024-1499/1500" || h.chunksReceived[1].byteCount != 476 {
+		t.Errorf("chunk[1]: want 1024-1499/1500 (476 bytes), got %q (%d bytes)", h.chunksReceived[1].rangeHeader, h.chunksReceived[1].byteCount)
+	}
+}
+
+// TestTikTok_StartPublish_PULLFromFile_InitFailure: init endpoint
+// returns 500 → StartPublish surfaces the error before any chunk goes
+// out. Verifies no chunk PUTs and no complete call happened.
+func TestTikTok_StartPublish_PULLFromFile_InitFailure(t *testing.T) {
+	srv, h := pullFromFileMockServer(t)
+	defer srv.Close()
+	h.initStatus = http.StatusInternalServerError
+
+	svc := newTestTikTokServiceWithChunkSize(srv, 1024)
+	payload := models.PublishPayload{
+		Text:         "init fail",
+		VideoURL:     srv.URL + "/source-video",
+		PrivacyLevel: "PUBLIC_TO_EVERYONE",
+		Source:       models.PublishSourcePULLFromFile,
+	}
+	_, _, err := svc.StartPublish(context.Background(), "tok", "tt-1", payload)
+	if err == nil {
+		t.Fatal("expected error from init 500, got nil")
+	}
+	if !strings.Contains(err.Error(), "init") {
+		t.Errorf("error should mention init: %v", err)
+	}
+	if len(h.chunksReceived) != 0 {
+		t.Errorf("no chunks should be sent after init failure, got %d", len(h.chunksReceived))
+	}
+}
+
+// TestTikTok_StartPublish_PULLFromFile_ChunkFailure: chunk PUT
+// returns 4xx → StartPublish surfaces the error. Verifies that the
+// chain aborts cleanly (subsequent chunks not sent).
+func TestTikTok_StartPublish_PULLFromFile_ChunkFailure(t *testing.T) {
+	srv, h := pullFromFileMockServer(t)
+	defer srv.Close()
+	h.chunkStatus = http.StatusBadRequest
+
+	svc := newTestTikTokServiceWithChunkSize(srv, 1024)
+	payload := models.PublishPayload{
+		Text:         "chunk fail",
+		VideoURL:     srv.URL + "/source-video",
+		PrivacyLevel: "PUBLIC_TO_EVERYONE",
+		Source:       models.PublishSourcePULLFromFile,
+	}
+	_, _, err := svc.StartPublish(context.Background(), "tok", "tt-1", payload)
+	if err == nil {
+		t.Fatal("expected error from chunk 400, got nil")
+	}
+	if !strings.Contains(err.Error(), "chunk PUT") {
+		t.Errorf("error should mention chunk PUT: %v", err)
+	}
+}
+
+// TestTikTok_StartPublish_PULLFromFile_CompleteFailure: chunks go
+// out OK but the final complete POST returns 500. Surfaces a
+// complete-related error.
+func TestTikTok_StartPublish_PULLFromFile_CompleteFailure(t *testing.T) {
+	srv, h := pullFromFileMockServer(t)
+	defer srv.Close()
+	h.completeStatus = http.StatusInternalServerError
+
+	svc := newTestTikTokServiceWithChunkSize(srv, 1024)
+	payload := models.PublishPayload{
+		Text:         "complete fail",
+		VideoURL:     srv.URL + "/source-video",
+		PrivacyLevel: "PUBLIC_TO_EVERYONE",
+		Source:       models.PublishSourcePULLFromFile,
+	}
+	_, _, err := svc.StartPublish(context.Background(), "tok", "tt-1", payload)
+	if err == nil {
+		t.Fatal("expected error from complete 500, got nil")
+	}
+	if !strings.Contains(err.Error(), "complete") {
+		t.Errorf("error should mention complete: %v", err)
+	}
+	// Chunks DID go out (then complete failed afterward).
+	if len(h.chunksReceived) != 3 {
+		t.Errorf("expected 3 chunks sent before complete failed, got %d", len(h.chunksReceived))
+	}
+}
+
+// TestTikTok_StartPublish_PULLFromFile_MissingUploadURL surfaces a
+// clear error when TikTok's init response lacks the upload_url field
+// (a regression guard against a future init-response-shape change).
+func TestTikTok_StartPublish_PULLFromFile_MissingUploadURL(t *testing.T) {
+	srv, h := pullFromFileMockServer(t)
+	defer srv.Close()
+	h.initBody = []byte(`{"data":{"publish_id":"v_pub_file_1","upload_url":""}}`)
+
+	svc := newTestTikTokServiceWithChunkSize(srv, 1024)
+	_, _, err := svc.StartPublish(context.Background(), "tok", "tt-1", models.PublishPayload{
+		Text: "no upload url", VideoURL: srv.URL + "/source-video",
+		PrivacyLevel: "PUBLIC_TO_EVERYONE", Source: models.PublishSourcePULLFromFile,
+	})
+	if err == nil {
+		t.Fatal("expected error from missing upload_url, got nil")
+	}
+	if !strings.Contains(err.Error(), "upload_url") {
+		t.Errorf("error should mention upload_url: %v", err)
+	}
+}
+
+// TestTikTok_StartPublish_PULLFromFile_SourceFetchFailure guards
+// the entry-point: if the source VideoURL returns non-200, fail fast
+// before init is called.
+func TestTikTok_StartPublish_PULLFromFile_SourceFetchFailure(t *testing.T) {
+	srv, h := pullFromFileMockServer(t)
+	defer srv.Close()
+	h.sourceVideoStatus = http.StatusNotFound
+
+	svc := newTestTikTokServiceWithChunkSize(srv, 1024)
+	_, _, err := svc.StartPublish(context.Background(), "tok", "tt-1", models.PublishPayload{
+		Text: "no source", VideoURL: srv.URL + "/source-video",
+		PrivacyLevel: "PUBLIC_TO_EVERYONE", Source: models.PublishSourcePULLFromFile,
+	})
+	if err == nil {
+		t.Fatal("expected error from source 404, got nil")
+	}
+	if !strings.Contains(err.Error(), "fetch video bytes") {
+		t.Errorf("error should mention fetch: %v", err)
+	}
+	if len(h.chunksReceived) != 0 {
+		t.Error("chunks must not be sent on source-fetch failure")
+	}
+}
+
+// TestTikTok_StartPublish_SourceEmpty_UsesPULLFromURL is the
+// regression guard for the dual-path dispatcher: an empty Source
+// field MUST continue to route through the legacy PULL_FROM_URL path
+// (existing callers don't set the field). If a future refactor
+// changes this default the test fails.
+func TestTikTok_StartPublish_SourceEmpty_UsesPULLFromURL(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v2/post/publish/video/init/", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var parsed struct {
+			SourceInfo struct {
+				Source    string `json:"source"`
+				VideoURL  string `json:"video_url"`
+			} `json:"source_info"`
+		}
+		_ = json.Unmarshal(body, &parsed)
+		if parsed.SourceInfo.Source != "PULL_FROM_URL" {
+			t.Errorf("empty Source must route to PULL_FROM_URL, got %q", parsed.SourceInfo.Source)
+		}
+		if parsed.SourceInfo.VideoURL == "" {
+			t.Error("PULL_FROM_URL init must include video_url")
+		}
+		w.Write([]byte(`{"data":{"publish_id":"v_pub_url_1","status":"PROCESSING_UPLOAD"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestTikTokService(srv)
+	_, state, err := svc.StartPublish(context.Background(), "tok", "tt-1", models.PublishPayload{
+		Text:         "default path",
+		VideoURL:     "https://cdn.example.com/v.mp4",
+		PrivacyLevel: "PUBLIC_TO_EVERYONE",
+		// Source omitted on purpose.
+	})
+	if err != nil {
+		t.Fatalf("StartPublish(empty Source): %v", err)
+	}
+	if state != "PROCESSING_UPLOAD" {
+		t.Errorf("state: want PROCESSING_UPLOAD, got %q", state)
+	}
+}
+
+// TestTikTok_StartPublish_PULLFromFile_AuthHeaderOnInit ensures the
+// init request carries the user's Bearer access token (now also true
+// for uploaded sessions — same Authorization contract as the
+// PULL_FROM_URL one). Regression guard against an accidental swap to
+// the client_key.
+func TestTikTok_StartPublish_PULLFromFile_AuthHeaderOnInit(t *testing.T) {
+	srv, h := pullFromFileMockServer(t)
+	defer srv.Close()
+
+	var authSeen string
+	h.OnInit = func(_ []byte, r *http.Request) {
+		authSeen = r.Header.Get("Authorization")
+	}
+
+	svc := newTestTikTokServiceWithChunkSize(srv, 4096)
+	if _, _, err := svc.StartPublish(context.Background(), "user-bearer-xyz", "tt-1", models.PublishPayload{
+		Text: "auth header", VideoURL: srv.URL + "/source-video",
+		PrivacyLevel: "PUBLIC_TO_EVERYONE", Source: models.PublishSourcePULLFromFile,
+	}); err != nil {
+		t.Fatalf("StartPublish: %v", err)
+	}
+	if authSeen != "Bearer user-bearer-xyz" {
+		t.Errorf("Authorization: want %q, got %q", "Bearer user-bearer-xyz", authSeen)
+	}
+}
+

@@ -27,6 +27,61 @@
 // require either per-row ordering guarantees or shardable leases —
 // the current shape is simpler and matches Medium scale (10s of
 // events/sec).
+//
+// IDEMPOTENCY CONTRACT — the dispatcher implements AT-LEAST-ONCE
+// delivery via the canonical outbox pattern. A function in this file
+// CAN return nil (or log a WARN and continue) even when the side-effect
+// was only PARTIALLY persisted. The contract is "the tick loop
+// continues, the outbox row is durable"; the side-effect (HTTP POST
+// to a provider, etc.) may have already executed. Adapters MUST
+// therefore be idempotent on the receiving side.
+//
+// Concrete partial-persistence hazards (an operator reading this
+// during a DLQ-storm investigation can use these as a checklist):
+//
+//   H1 — Mark* failure AFTER side-effect SUCCEEDED:
+//     processOne invokes ProcessFunc, which returns nil. Then
+//     OutboxStore.MarkProcessed fails (DB blip / connection drop).
+//     The dispatcher LOGS at WARN and the loop returns nil to
+//     drainOnce; the next tick re-claims the same row and runs
+//     ProcessFunc AGAIN. De-dup is the ADAPTER's job (provider-side
+//     idempotency_key, content fingerprinting, etc).
+//
+//   H2 — ProcessFunc PANIC recovery (safeProcess):
+//     A panicking adapter is converted into a transient error via
+//     safeProcess. runOnce continues the tick loop cleanly (the
+//     dispatcher goroutine does NOT die). The side-effect of the
+//     panicking adapter is undefined (may have partially executed
+//     before the panic). Re-delivery MAY re-run the partial side-
+//     effect against an idempotent receiver.
+//
+//   H3 — Lease EXPIRY mid-process:
+//     If ProcessFunc runs longer than LeaseTTL, the heartbeat
+//     goroutine's RenewLease fails (or never fires). A peer
+//     dispatcher may claim the row. We still call Mark* at the end;
+//     a peer that already marked first returns an error here, which
+//     we log at WARN and continue. The side-effect ran twice (once by
+//     us, once by the peer) — that is the at-least-once contract.
+//     Doing it ZERO times is unacceptable.
+//
+//   H4 — runOnce early-return on ctx.Err():
+//     On shutdown, drainOnce returns nil on ctx.Done. The CURRENT
+//     in-flight row finishes via processOne's own heartbeat/mark
+//     path, but any OTHER unclaimed rows in this drain pass are
+//     NOT processed this tick. The next replica picks them up via
+//     SKIP LOCKED. Side-effects for unclaimed rows: ZERO — by
+//     design (during shutdown we err toward safety).
+//
+// Operational guidance:
+//   - Inspect DLQ rows for H1 patterns: MarkProcessed errors logged
+//     shortly before the post landed on the user's timeline mean an
+//     adapter was retried → unique content is the caller's invariant.
+//   - Codify adapter idempotency: every ProcessFunc must accept the
+//     same outbox event ID twice without producing duplicate side-
+//     effects. The PublishJobs materialiser uses the
+//     provider_idempotency_key column; future adapters must follow.
+//   - Monitor `outbox processor tick duration` p99 — a rising tail
+//     points to H3 risk (slow adapters tripping LeaseTTL).
 package outbox
 
 import (

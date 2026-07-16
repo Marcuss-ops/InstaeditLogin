@@ -10,6 +10,10 @@ docker-compose.override.yml
 .DS_Store
 *.dylib
 .env
+.env.dev
+# Defence-in-depth: any `.env.<something>` filename (dev/local/staging/prod)
+# also matches so future contributor `cp .env .env.staging` doesn't leak.
+.env.*
 # Environment variables (contains secrets!)
 *.exe
 *.exe~
