@@ -33,6 +33,11 @@ function App() {
             <Route path="/terms" element={<TermsOfService />} />
 
             <Route
+              path="/connections"
+              element={<Navigate to="/app/linking" replace />}
+            />
+
+            <Route
               path="/:slug"
               element={
                 <Suspense
