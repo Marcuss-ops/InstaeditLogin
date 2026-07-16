@@ -29,8 +29,23 @@
 #   sudo systemctl reload caddy
 
 dev.instaedit.org {
+    encode gzip
+    log
+
     handle /api/* {
-        reverse_proxy 127.0.0.1:8080
+        reverse_proxy 127.0.0.1:8080 {
+            header_up Host {host}
+        }
+    }
+
+    # Dev S3 proxy: path-style presigned uploads land at
+    # /{bucket}/{key} (bucket = instaedit-dev). Caddy forwards to the
+    # host-published MinIO port; the original Host is preserved so the
+    # SigV4 `host` header MinIO validates matches the signed URL.
+    handle /instaedit-dev/* {
+        reverse_proxy 127.0.0.1:19000 {
+            header_up Host {host}
+        }
     }
 
     handle {
