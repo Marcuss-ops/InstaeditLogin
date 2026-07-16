@@ -17,6 +17,7 @@ import { API_BASE_URL } from "./api";
 import { apiClient } from "./api-client";
 import { readCookie } from "./cookie";
 import { toastBus } from "../components/toast";
+import { demoSession, handleDemoRequest, isDemoMode } from "./demo";
 
 export type Session = {
   userId: number;
@@ -31,6 +32,16 @@ let sessionPromise: Promise<Session | null> | null = null;
 export async function fetchSession(): Promise<Session | null> {
   if (sessionCache !== undefined) return sessionCache;
   if (sessionPromise) return sessionPromise;
+
+  if (isDemoMode()) {
+    sessionCache = {
+      userId: demoSession.user_id,
+      name: demoSession.name,
+      username: demoSession.username,
+      expiresAt: demoSession.expires_at,
+    };
+    return sessionCache;
+  }
 
   sessionPromise = (async () => {
     try {
@@ -97,6 +108,11 @@ export async function authedFetch(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
+  if (isDemoMode()) {
+    const demoResp = handleDemoRequest(path, init);
+    if (demoResp) return demoResp;
+  }
+
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -166,13 +182,15 @@ export async function authedFetch(
 }
 
 export async function logout(redirectTo: string = "/login"): Promise<void> {
-  try {
-    await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
-      method: "POST",
-      credentials: "include",
-    });
-  } catch {
-    // network is down — navigate anyway
+  if (!isDemoMode()) {
+    try {
+      await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // network is down — navigate anyway
+    }
   }
   clearSessionCache();
   window.location.href = redirectTo;

@@ -16,6 +16,7 @@
 
 import { API_BASE_URL } from "./api";
 import { readCookie } from "./cookie";
+import { handleDemoRequest, isDemoMode } from "./demo";
 
 // Backend CSRF protection (internal/auth/csrf.go): every unsafe method
 // MUST carry an X-CSRF-Token header matching the `csrf_token` cookie.
@@ -40,6 +41,17 @@ export async function apiClient<T = unknown>(
   path: string,
   options: ApiClientOptions = {},
 ): Promise<T> {
+  if (isDemoMode()) {
+    const demoResp = handleDemoRequest(path, options);
+    if (demoResp) {
+      if (!demoResp.ok) {
+        const text = await demoResp.text().catch(() => "demo request failed");
+        throw new ApiClientError(text, demoResp.status);
+      }
+      return (await demoResp.json().catch(() => ({}))) as T;
+    }
+  }
+
   const headers = new Headers(options.headers);
   const method = (options.method ?? "GET").toUpperCase();
   let body: string | undefined;

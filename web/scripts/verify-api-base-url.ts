@@ -86,6 +86,20 @@ export function validateApiBaseUrl(env: Env = process.env): ValidationResult {
           : "local";
   const isDeployed = context === "production" || context === "preview";
 
+  // ---- Demo mode bypass ----
+  // When VITE_DEMO_MODE is "true" the SPA runs against static fixtures
+  // and does not need a live backend. Skip the URL validation so the
+  // Vercel preview can build with an empty/placeholder API URL.
+  if (env.VITE_DEMO_MODE === "true") {
+    return {
+      level: "ok",
+      context,
+      messages: [
+        "Demo mode active (VITE_DEMO_MODE=true). Skipping VITE_API_BASE_URL validation.",
+      ],
+    };
+  }
+
   // ---- Empty value ----
   if (rawUrl === "") {
     if (isDeployed) {

@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Zap, Mail, Lock, ArrowRight } from "lucide-react";
 import { fetchSession } from "../lib/auth";
 import { API_BASE_URL } from "../lib/api";
+import { isDemoMode } from "../lib/demo";
 
 export function Login() {
   const [email, setEmail] = useState("");
@@ -15,6 +16,12 @@ export function Login() {
     e.preventDefault();
     setError(null);
     setLoading(true);
+
+    if (isDemoMode()) {
+      await fetchSession();
+      navigate("/app/dashboard");
+      return;
+    }
 
     try {
       const resp = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
