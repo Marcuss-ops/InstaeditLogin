@@ -22,7 +22,7 @@ describe("PlatformPage", () => {
   it("renders the TikTok platform page with all major sections", async () => {
     renderPlatformPage("tiktok");
 
-    expect(await screen.findByText("TikTok API Integration")).toBeInTheDocument();
+    expect(await screen.findByText("TikTok Integration")).toBeInTheDocument();
 
     expect(
       screen.getByText(/Ship your TikTok integration in minutes/i),

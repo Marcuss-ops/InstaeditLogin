@@ -8,7 +8,7 @@ describe("Skeleton", () => {
       const { container } = render(<Skeleton variant="text" />);
       const el = container.firstChild as HTMLElement;
       expect(el).toHaveClass("animate-pulse");
-      expect(el).toHaveClass("bg-neutral-200");
+      expect(el).toHaveClass("bg-white/[0.06]");
       expect(el.getAttribute("aria-hidden")).toBe("true");
     });
 

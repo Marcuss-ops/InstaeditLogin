@@ -176,7 +176,7 @@ const PlatformPageInner = memo(function PlatformPageInner({
               </div>
               <div className="w-12" />
             </div>
-            <pre className="p-5 text-[11px] sm:text-[12px] font-mono text-[#f4f4f5] overflow-x-auto leading-relaxed bg-[#09090b]">
+            <pre className="p-5 text-[11px] sm:text-[12px] font-mono text-[#f4f4f5] overflow-x-auto min-w-0 leading-relaxed bg-[#09090b]">
               <code className="whitespace-pre">{platform.codeExample}</code>
             </pre>
           </div>
@@ -341,7 +341,7 @@ const PlatformPageInner = memo(function PlatformPageInner({
         </section>
 
         {/* FAQ */}
-        <section data-testid="faq-section" className="space-y-6">
+        <section data-testid="faq-section" className="space-y-6 px-4">
           <h2 className="text-lg font-bold text-center text-white">
             Common questions
           </h2>
@@ -375,7 +375,7 @@ const PlatformPageInner = memo(function PlatformPageInner({
         </section>
 
         {/* CTA */}
-        <section data-testid="cta-section" className="p-8 rounded border border-zinc-800 bg-zinc-900/10 text-center">
+        <section data-testid="cta-section" className="py-8 px-4 rounded border border-zinc-800 bg-zinc-900/10 text-center">
           <div
             className="w-8 h-8 rounded flex items-center justify-center mx-auto mb-4"
             style={{ backgroundColor: `${accent}15`, color: accent }}
