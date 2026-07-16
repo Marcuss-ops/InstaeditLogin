@@ -1,0 +1,56 @@
+# .github/workflows/deploy-preview.yml — InstaEditLogin Vercel preview deploy
+#
+# Deploys the web bundle to a Vercel *preview* URL on demand.
+# Unlike deploy.yml (production on every push to main), this workflow
+# is meant for temporary previews, e.g. to share the demo mode build
+# before the backend is deployed.
+#
+# Required GitHub repo secrets (same as deploy.yml):
+#   VERCEL_TOKEN
+#   VERCEL_ORG_ID
+#   VERCEL_PROJECT_ID
+#
+# The preview build enables demo mode (VITE_DEMO_MODE=true) so the SPA
+# runs against the static fixtures in web/src/lib/demo.ts instead of
+# the Go backend. VITE_API_BASE_URL is set to a placeholder because the
+# validator is skipped when demo mode is active.
+
+name: deploy-preview
+
+"on":
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "VITE_API_BASE_URL for the preview build"
+        required: false
+        default: "https://api.instaedit.org"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vercel-preview:
+    name: Deploy web/app to Vercel (preview)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy web/app to Vercel (preview)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-version: latest
+          # Empty vercel-args creates a preview deployment (no --prod).
+          vercel-args: ""
+          working-directory: ./
+        env:
+          VITE_DEMO_MODE: "true"
+          VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || 'https://api.instaedit.org' }}
