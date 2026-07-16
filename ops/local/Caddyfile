@@ -1,0 +1,40 @@
+# ops/local/Caddyfile — committed, repo-friendly version of the local
+# Caddyfile used by the Docker + Caddy + SSH-tunnel development stack
+# documented in `docs/LOCAL-DEVELOPMENT.md`.
+#
+# RUNTIME USAGE (operator runs on their dev VM):
+#    mkdir -p ~/instaedit-certs
+#    cp ops/local/Caddyfile ~/Caddyfile
+#
+#    docker run -d \
+#      --name instaedit-caddy \
+#      --restart unless-stopped \
+#      --network host \
+#      -v ~/Caddyfile:/etc/caddy/Caddyfile:ro \
+#      -v ~/instaedit-certs:/certs:ro \
+#      caddy:2
+#
+# Once the certs in ~/instaedit-certs/ come from `mkcert` on the operator's
+# machine (scp'd here), Chrome trusts the localhost:8443 origin and the
+# browser can hit Vite (via this Caddy) at the same single-origin as the
+# Go API — cookies stay host-only, SessionStorage + refresh cookies work.
+
+{
+    admin off
+    auto_https off
+}
+
+# `handle` (not `handle_path`) so Go's router sees the FULL path
+# including `/api` — the API mounts under `/api/v1/...` and a stripped
+# prefix would 404 every request.
+https://localhost:8443 {
+    tls /certs/localhost.pem /certs/localhost-key.pem
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:5173
+    }
+}
