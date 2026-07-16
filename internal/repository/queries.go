@@ -61,9 +61,9 @@ const qSelectPublishingTargets = `SELECT id, post_id, platform_account_id, statu
 const qSelectPendingTargets = `SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
 		        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
 		        COALESCE(pt.provider_state, ''), COALESCE(pt.container_id, ''),
-		pt.provider_idempotency_key, pt.completed_at
+		        pt.provider_idempotency_key, pt.completed_at
 		 FROM post_targets pt
-	 JOIN posts p ON p.id = pt.post_id
+		 JOIN posts p ON p.id = pt.post_id
 		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider') AND p.scheduled_at <= $1
 		 ORDER BY p.scheduled_at ASC`
 

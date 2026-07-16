@@ -163,7 +163,9 @@ func TestLoad_CookieDomain_Env(t *testing.T) {
 func TestLoad_CookieDomain_DefaultEmpty(t *testing.T) {
 	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
 	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
-	// Deliberately do NOT set COOKIE_DOMAIN here.
+	// Explicitly clear COOKIE_DOMAIN so a local .env file cannot
+	// influence this default-value test.
+	t.Setenv("COOKIE_DOMAIN", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -183,7 +185,9 @@ func TestLoad_CookieDomain_DefaultEmpty(t *testing.T) {
 func TestLoad_AdminInviteToken_EmptyAllowed(t *testing.T) {
 	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
 	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
-	// Deliberately do NOT set ADMIN_INVITE_TOKEN here.
+	// Explicitly clear ADMIN_INVITE_TOKEN so a local .env file cannot
+	// influence this default-value test.
+	t.Setenv("ADMIN_INVITE_TOKEN", "")
 
 	cfg, err := Load()
 	if err != nil {
