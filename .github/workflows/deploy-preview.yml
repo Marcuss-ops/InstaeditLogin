@@ -41,16 +41,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy web/app to Vercel (preview)
-        uses: amondnet/vercel-action@v25
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-version: latest
-          # Empty vercel-args creates a preview deployment (no --prod).
-          vercel-args: ""
-          working-directory: ./
+          node-version: 22
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build with demo mode
+        working-directory: web
         env:
           VITE_DEMO_MODE: "true"
           VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || 'https://api.instaedit.org' }}
+        run: npm run build
+
+      - name: Deploy to Vercel (preview)
+        working-directory: web
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          npx vercel deploy --prebuilt --token="${{ secrets.VERCEL_TOKEN }}" --yes
