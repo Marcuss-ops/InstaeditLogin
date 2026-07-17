@@ -22,6 +22,14 @@ services:
       MINIO_ROOT_PASSWORD: changeMe_instaedit_minio_dev_only_password_2025
     volumes:
       - instaedit_minio_data:/data
+    # Published on 127.0.0.1:19000 so the host-network Caddy (and any
+    # host-side process) can reach MinIO for the dev S3 proxy. The S3
+    # presigned URLs are path-style under the public tunnel host, and
+    # Caddy reverse-proxies /instaedit-dev/* -> 127.0.0.1:19000.
+    # (Host :9000 is already taken by a leftover listener on this VM,
+    # so we use 19000 to avoid the conflict.)
+    ports:
+      - "127.0.0.1:19000:9000"
     # No host port mapping on purpose. The api container reaches MinIO
     # over the docker network at http://minio:9000 (compose service
     # DNS) — the port mapping was only needed if an operator wanted
@@ -61,7 +69,8 @@ services:
         sleep 2;
       done;
       mc mb --ignore-existing local/instaedit-dev;
-      echo 'minio bucket instaedit-dev ready';
+      mc anonymous set download local/instaedit-dev;
+      echo 'minio bucket instaedit-dev ready (public-read for dev media)';
       exit 0;
       "
 
