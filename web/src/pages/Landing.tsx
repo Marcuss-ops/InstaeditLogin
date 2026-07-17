@@ -43,11 +43,11 @@ export function Landing() {
       <main className="max-w-3xl mx-auto space-y-12 mt-8">
         
         {/* Hero Section - Super Simple */}
-        <section className="text-center py-12 relative overflow-hidden">
-          {/* Decorative gradient orbs behind the hero (Tailwind's -.glow-orb utility: absolute, blurred, low-opacity, pointer-events-none). */}
+        <section className="text-center py-12 relative overflow-hidden bg-gradient-to-b from-violet-500/20 via-violet-500/10 to-cyan-500/15">
+          {/* Decorative gradient orbs as accents (Tailwind's -.glow-orb utility: absolute, blurred, low-opacity, pointer-events-none). Section bg gradient does the heavy lifting for full-section color coverage. */}
           <div aria-hidden="true" className="absolute inset-0 -my-24 pointer-events-none">
-            <div className="glow-orb bg-violet-600 w-[600px] h-[600px] -top-48 left-1/4" />
-            <div className="glow-orb bg-cyan-500 w-[450px] h-[450px] top-1/3 -right-32" />
+            <div className="glow-orb bg-violet-600 w-[400px] h-[400px] -top-24 -left-24" />
+            <div className="glow-orb bg-cyan-500 w-[350px] h-[350px] -bottom-24 -right-24" />
           </div>
           <div className="relative">
             <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white mb-6">
@@ -141,9 +141,9 @@ export function Landing() {
         </section>
 
         {/* Shorts Section - Separated Border */}
-        <section className="p-6 rounded border border-zinc-800 bg-zinc-900/20 hover:border-zinc-700 transition-colors relative overflow-hidden">
+        <section className="p-6 rounded border border-zinc-800 bg-gradient-to-br from-violet-500/20 to-violet-500/5 hover:border-zinc-700 transition-colors relative overflow-hidden">
           <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
-            <div className="glow-orb bg-violet-500 w-[300px] h-[300px] -top-16 -right-16" />
+            <div className="glow-orb bg-violet-400 w-[280px] h-[280px] -top-12 -right-12" />
           </div>
           <div className="relative">
             <div className="flex justify-center mb-3">
@@ -196,10 +196,10 @@ export function Landing() {
         </section>
 
         {/* Long-Form Video Section - Separated Border */}
-        <section className="p-6 rounded border border-zinc-800 bg-zinc-900/20 hover:border-zinc-700 transition-colors relative overflow-hidden">
+        <section className="p-6 rounded border border-zinc-800 bg-gradient-to-br from-cyan-500/20 via-cyan-500/5 to-pink-500/15 hover:border-zinc-700 transition-colors relative overflow-hidden">
           <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
-            <div className="glow-orb bg-cyan-500 w-[320px] h-[320px] -top-16 -left-16" />
-            <div className="glow-orb bg-pink-500 w-[280px] h-[280px] -bottom-12 -right-12" />
+            <div className="glow-orb bg-cyan-400 w-[300px] h-[300px] -top-12 -left-12" />
+            <div className="glow-orb bg-pink-400 w-[280px] h-[280px] -bottom-12 -right-12" />
           </div>
           <div className="relative">
             <div className="flex justify-center mb-3">
@@ -252,9 +252,9 @@ export function Landing() {
         </section>
 
         {/* CTA - Separated Border */}
-        <section className="p-8 rounded border border-zinc-800 bg-zinc-900/10 text-center relative overflow-hidden">
+        <section className="p-8 rounded border border-zinc-800 bg-gradient-to-tr from-amber-500/20 to-amber-500/5 text-center relative overflow-hidden">
           <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
-            <div className="glow-orb bg-amber-500 w-[400px] h-[400px] -top-24 -right-12" />
+            <div className="glow-orb bg-amber-400 w-[320px] h-[320px] -top-20 -right-20" />
           </div>
           <div className="relative">
             <h2 className="text-lg font-bold text-white mb-2">Ready to scale your content?</h2>
