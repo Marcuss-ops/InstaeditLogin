@@ -391,15 +391,27 @@ func (s *TikTokOAuthService) effectiveChunkSize() int64 {
 // cleans up the partial upload server-side via the upload_url TTL
 // (no client-side cleanup needed).
 func (s *TikTokOAuthService) startPublishPULLFromFile(ctx context.Context, accessToken string, payload models.PublishPayload) (publishID string, state string, err error) {
-	slog.Info("TikTok: starting async publish (PULL_FROM_FILE chunked upload)")
+	slog.Info("TikTok: starting async publish (FILE_UPLOAD chunked upload)")
 
 	videoBytes, contentType, err := s.fetchVideoBytes(ctx, payload.VideoURL)
 	if err != nil {
-		return "", "", fmt.Errorf("tiktok pull_from_file: fetch video bytes: %w", err)
+		return "", "", fmt.Errorf("tiktok file_upload: fetch video bytes: %w", err)
 	}
 	if contentType == "" {
 		contentType = "video/mp4"
 	}
+
+	// TikTok's FILE_UPLOAD mode requires source="FILE_UPLOAD" (NOT
+	// "PULL_FROM_FILE", which is only our internal Source discriminator)
+	// and a total_chunk_count. Each non-final chunk must be >= 5MB;
+	// videos smaller than that must be uploaded as a single chunk whose
+	// size equals the whole file.
+	total := int64(len(videoBytes))
+	chunkSize := s.effectiveChunkSize()
+	if total <= 5*1024*1024 {
+		chunkSize = total
+	}
+	totalChunks := (total + chunkSize - 1) / chunkSize
 
 	postInfo := map[string]interface{}{
 		"title":           truncateTikTokTitle(payload.Text),
@@ -407,32 +419,33 @@ func (s *TikTokOAuthService) startPublishPULLFromFile(ctx context.Context, acces
 		"disable_comment": modeIsDisabled(payload.CommentMode),
 		"disable_duet":    modeIsDisabled(payload.DuetMode),
 	}
-	chunkSize := s.effectiveChunkSize()
 	initBody := map[string]interface{}{
 		"source_info": map[string]interface{}{
-			"source":     "PULL_FROM_FILE",
-			"video_size": int64(len(videoBytes)),
-			"chunk_size": chunkSize,
+			"source":            "FILE_UPLOAD",
+			"video_size":        total,
+			"chunk_size":        chunkSize,
+			"total_chunk_count": totalChunks,
 		},
 		"post_info": postInfo,
 	}
 	uploadURL, publishID, err := s.uploadSessionInit(ctx, accessToken, initBody)
 	if err != nil {
-		return "", "", fmt.Errorf("tiktok pull_from_file: init: %w", err)
+		return "", "", fmt.Errorf("tiktok file_upload: init: %w", err)
 	}
 
-	if err := s.chunkedUpload(ctx, accessToken, uploadURL, videoBytes, contentType); err != nil {
-		return "", "", fmt.Errorf("tiktok pull_from_file: upload chunks: %w", err)
+	if err := s.chunkedUpload(ctx, accessToken, uploadURL, videoBytes, contentType, chunkSize); err != nil {
+		return "", "", fmt.Errorf("tiktok file_upload: upload chunks: %w", err)
 	}
 
 	if err := s.uploadSessionComplete(ctx, accessToken, publishID); err != nil {
-		return "", "", fmt.Errorf("tiktok pull_from_file: complete: %w", err)
+		return "", "", fmt.Errorf("tiktok file_upload: complete: %w", err)
 	}
 
-	slog.Info("TikTok: PULL_FROM_FILE upload finalised",
+	slog.Info("TikTok: FILE_UPLOAD upload finalised",
 		"publish_id", publishID,
-		"size_bytes", len(videoBytes),
-		"chunk_size", chunkSize)
+		"size_bytes", total,
+		"chunk_size", chunkSize,
+		"total_chunks", totalChunks)
 	// TikTok returns the initial state as PROCESSING_UPLOAD; the
 	// reconciler goroutine will CheckPublishStatus on subsequent ticks
 	// until PUBLISH_COMPLETE or FAILED terminal state.
@@ -783,9 +796,8 @@ func (s *TikTokOAuthService) uploadSessionInit(ctx context.Context, accessToken 
 // upload_url expire server-side, and let the worker re-dispatch the
 // target via its retry column (next_attempt_at / attempt_count,
 // migration 018).
-func (s *TikTokOAuthService) chunkedUpload(ctx context.Context, accessToken, uploadURL string, data []byte, contentType string) error {
+func (s *TikTokOAuthService) chunkedUpload(ctx context.Context, accessToken, uploadURL string, data []byte, contentType string, chunkSize int64) error {
 	total := int64(len(data))
-	chunkSize := s.effectiveChunkSize()
 	var uploaded int64
 	chunksSent := 0
 	for uploaded < total {
@@ -820,9 +832,10 @@ func (s *TikTokOAuthService) chunkedUpload(ctx context.Context, accessToken, upl
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		// Acceptable terminal codes: 200 OK, 201 Created, 308 Resume
-		// Incomplete. Anything else fails the upload.
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusPermanentRedirect && resp.StatusCode != 308 {
+		// Acceptable terminal codes: 200 OK, 201 Created, 206
+		// Partial Content (intermediate chunk), 308 Resume Incomplete.
+		// Anything else fails the upload.
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusPermanentRedirect && resp.StatusCode != 308 {
 			return fmt.Errorf("chunk PUT returned status %d (range %s): %s", resp.StatusCode, contentRange, string(respBody))
 		}
 		chunksSent++
@@ -843,6 +856,7 @@ func (s *TikTokOAuthService) chunkedUpload(ctx context.Context, accessToken, upl
 // documented variably across TikTok Content Posting API doc versions:
 //   - /v2/post/publish/video/upload/complete/   (most pre-2025 docs)
 //   - /v2/post/publish/video/complete/          (newer / 2026 docs)
+//
 // The path in this implementation is the pre-2025 form; if App
 // Review feedback or live testing returns 404 from the completion
 // URL, swap to the alternate path here (one-line change). The init

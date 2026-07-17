@@ -146,8 +146,8 @@ type PublishWorker struct {
 	userRepo      PublisherUserStore
 	router        *services.CapabilityRouter
 	vault         credentials.VaultAPI
-	throttle      *PlatformThrottle // FASE 1.3: per-platform rate limiter
-	workerID      string            // per-process id, threaded via constructor (no global)
+	throttle      *PlatformThrottle       // FASE 1.3: per-platform rate limiter
+	workerID      string                  // per-process id, threaded via constructor (no global)
 	memoryLimiter *services.MemoryLimiter // explicit DI; nil-safe in tests
 	interval      time.Duration
 	logger        *slog.Logger
@@ -359,6 +359,14 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		}
 	}
 
+	// For providers that publish via a page-scoped token (Facebook
+	// Pages), prefer the page access token stored for the account.
+	// Page Access Tokens do not need refresh; the vault Get path
+	// returns them as long as the grant is valid.
+	if pageToken, err := w.vault.Get(ctx, account.ID, models.TokenTypePageAccess); err == nil && pageToken.AccessToken != "" {
+		oauthToken = pageToken
+	}
+
 	// 6. Build payload + publish. MediaURL goes through as VideoURL (the
 	// payload's ImageURL branch is reserved for image-only posts that
 	// don't have a content_type column — future enhancement).
@@ -424,6 +432,20 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	}
 	if post.MediaURL != "" {
 		payload.VideoURL = post.MediaURL
+	}
+	// TikTok (and some other platforms) require an explicit privacy
+	// level; the Compose UI does not yet expose a selector, so fall
+	// back to PUBLIC_TO_EVERYONE for immediate publishes.
+	if payload.PrivacyLevel == "" {
+		payload.PrivacyLevel = "PUBLIC_TO_EVERYONE"
+	}
+	// TikTok's PULL_FROM_URL mode requires the video URL's domain to be
+	// ownership-verified in the TikTok Developer Console — impossible
+	// for a dynamic dev tunnel. Route TikTok through PULL_FROM_FILE
+	// (chunked direct upload) instead, which uploads the bytes straight
+	// to TikTok and skips the URL-ownership check.
+	if account.Platform == models.PlatformTikTok && payload.Source == "" {
+		payload.Source = models.PublishSourcePULLFromFile
 	}
 	payload.IdempotencyKey = key
 

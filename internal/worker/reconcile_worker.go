@@ -127,7 +127,7 @@ type ReconcileWorker struct {
 	userRepo      ReconcileUserStore
 	router        *services.CapabilityRouter
 	vault         credentials.VaultAPI
-	workerID      string // per-process id, threaded via constructor (no global)
+	workerID      string                  // per-process id, threaded via constructor (no global)
 	memoryLimiter *services.MemoryLimiter // explicit DI; nil-safe in tests
 	interval      time.Duration
 	logger        *slog.Logger

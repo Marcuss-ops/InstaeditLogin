@@ -46,12 +46,15 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
 // ---------------------------------------------------------------------------
@@ -254,11 +257,17 @@ type CapabilityRouter struct {
 // ContentValidator = (*)X)(nil)` still compiles, but the router
 // no longer recognises the capability on Register. Re-add the
 // field + accessor when an external consumer appears.
+//
+// Taglio 5d: AccountDiscoverer was re-added because Facebook Pages
+// need per-page account discovery at OAuth-connect time. The
+// interface is consumed by pkg/api/handlers.go handleCallback to
+// create one PlatformAccount per discovered page.
 type capabilities struct {
-	raw     any
-	oauth   OAuthProvider
-	publish Publisher
-	async   AsyncPublisher
+	raw      any
+	oauth    OAuthProvider
+	publish  Publisher
+	async    AsyncPublisher
+	discover AccountDiscoverer
 }
 
 // NewCapabilityRouter creates an empty router.
@@ -266,6 +275,19 @@ func NewCapabilityRouter() *CapabilityRouter {
 	return &CapabilityRouter{
 		providers: make(map[string]*capabilities),
 	}
+}
+
+// AccountDiscoverer is implemented by providers that can enumerate
+// multiple platform accounts for a single OAuth grant. Facebook Pages
+// is the canonical example: one user grant yields N Pages, each of
+// which becomes a distinct PlatformAccount with its own access token.
+// The OAuth callback handler uses this capability to create those
+// accounts and persist their tokens.
+type AccountDiscoverer interface {
+	NameProvider
+	// DiscoverAccounts returns the platform accounts the user manages
+	// given a valid access token and the user's platform-scoped id.
+	DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*models.PlatformAccount, error)
 }
 
 // Register stores p under name, type-asserting each capability it
@@ -285,7 +307,21 @@ func (r *CapabilityRouter) Register(name string, p any) {
 	if ap, ok := p.(AsyncPublisher); ok {
 		entry.async = ap
 	}
+	if d, ok := p.(AccountDiscoverer); ok {
+		entry.discover = d
+	}
 	r.providers[name] = entry
+}
+
+// Discoverer returns the AccountDiscoverer for name, or false. Used by
+// pkg/api/handlers.go handleCallback to expand one OAuth grant into
+// multiple PlatformAccounts (e.g. Facebook Pages).
+func (r *CapabilityRouter) Discoverer(name string) (AccountDiscoverer, bool) {
+	e, ok := r.providers[name]
+	if !ok || e == nil || e.discover == nil {
+		return nil, false
+	}
+	return e.discover, true
 }
 
 // Get returns the raw provider registered under name (e.g. a concrete

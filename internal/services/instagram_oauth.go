@@ -424,8 +424,8 @@ func (s *InstagramOAuthService) publishMediaContainer(ctx context.Context, acces
 // Taglio 4.4.
 // -----------------------------------------------------------------------------
 var (
-	_ Provider           = (*InstagramOAuthService)(nil)
-	_ OAuthProvider      = (*InstagramOAuthService)(nil)
-	_ ContentValidator   = (*InstagramOAuthService)(nil)
-	_ Publisher          = (*InstagramOAuthService)(nil)
+	_ Provider         = (*InstagramOAuthService)(nil)
+	_ OAuthProvider    = (*InstagramOAuthService)(nil)
+	_ ContentValidator = (*InstagramOAuthService)(nil)
+	_ Publisher        = (*InstagramOAuthService)(nil)
 )

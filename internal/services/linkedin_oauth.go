@@ -21,6 +21,7 @@ import (
 //   - ContentValidator (text required — text_only)
 //   - Publisher (POST /rest/posts, text only — Taglio 3c: articleSource removed)
 //   - AccountManager (Validate / Revoke)
+//
 // cfg is the OAuthConfig adapter (see oauth_config.go). The provider
 // no longer imports internal/config directly — bootstrap constructs
 // a ConfigAdapter once and passes it here.

@@ -777,10 +777,11 @@ type pullFromFileHandlers struct {
 }
 
 // bindDefaults registers the 4 endpoints with reasonable defaults:
-//   /source-video               → 200 OK + 3072 zero-fills
-//   /v2/.../init/               → 200 OK + JSON with upload_url mapped to /chunk-upload
-//   /chunk-upload               → 200 OK + record call
-//   /v2/.../upload/complete/    → 200 OK
+//
+//	/source-video               → 200 OK + 3072 zero-fills
+//	/v2/.../init/               → 200 OK + JSON with upload_url mapped to /chunk-upload
+//	/chunk-upload               → 200 OK + record call
+//	/v2/.../upload/complete/    → 200 OK
 func (h *pullFromFileHandlers) bindDefaults() {
 	h.sourceVideoBytes = bytes.Repeat([]byte{0}, 3072) // 3× 1024 chunks when chunkSize=1024
 	h.sourceVideoStatus = http.StatusOK
@@ -859,21 +860,21 @@ func newTestTikTokServiceWithChunkSize(srv *httptest.Server, chunkSize int) *Tik
 }
 
 // TestTikTok_StartPublish_PULLFromFile_HappyPath drives the full
-// chunked-upload chain on a 3072-byte video with chunkSize=1024.
-// Asserts:
-//   - init body has source=PULL_FROM_FILE, video_size=3072, chunk_size=1024
-//   - exactly 3 chunk PUTs happen with the correct Content-Range
+// chunked-upload chain on a 3072-byte video. Since it is < 5MB TikTok
+// requires a single chunk whose size equals the whole file. Asserts:
+//   - init body has source=FILE_UPLOAD, video_size=3072, chunk_size=3072, total_chunk_count=1
+//   - exactly 1 chunk PUT happens with the correct Content-Range
 //   - complete endpoint is invoked with publish_id in the body
 //   - returned publish_id + initial state match expectations
 func TestTikTok_StartPublish_PULLFromFile_HappyPath(t *testing.T) {
 	srv, h := pullFromFileMockServer(t)
 	defer srv.Close()
-
 	var initBodyParsed struct {
 		SourceInfo struct {
-			Source    string `json:"source"`
-			VideoSize int64  `json:"video_size"`
-			ChunkSize int64  `json:"chunk_size"`
+			Source           string `json:"source"`
+			VideoSize        int64  `json:"video_size"`
+			ChunkSize        int64  `json:"chunk_size"`
+			TotalChunkCount  int64  `json:"total_chunk_count"`
 		} `json:"source_info"`
 	}
 	h.OnInit = func(rawBody []byte, _ *http.Request) {
@@ -898,42 +899,100 @@ func TestTikTok_StartPublish_PULLFromFile_HappyPath(t *testing.T) {
 		t.Errorf("state: want PROCESSING_UPLOAD, got %q", state)
 	}
 
-	// init body assertions: video_size 3072, chunk_size 1024, source PULL_FROM_FILE.
-	if initBodyParsed.SourceInfo.Source != "PULL_FROM_FILE" {
-		t.Errorf("init source: want PULL_FROM_FILE, got %q", initBodyParsed.SourceInfo.Source)
+	// init body assertions: TikTok's FILE_UPLOAD source value + a single
+	// whole-file chunk (video < 5MB).
+	if initBodyParsed.SourceInfo.Source != "FILE_UPLOAD" {
+		t.Errorf("init source: want FILE_UPLOAD, got %q", initBodyParsed.SourceInfo.Source)
 	}
 	if initBodyParsed.SourceInfo.VideoSize != 3072 {
 		t.Errorf("init video_size: want 3072, got %d", initBodyParsed.SourceInfo.VideoSize)
 	}
-	if initBodyParsed.SourceInfo.ChunkSize != 1024 {
-		t.Errorf("init chunk_size: want 1024, got %d", initBodyParsed.SourceInfo.ChunkSize)
+	if initBodyParsed.SourceInfo.ChunkSize != 3072 {
+		t.Errorf("init chunk_size: want 3072 (whole-file single chunk), got %d", initBodyParsed.SourceInfo.ChunkSize)
+	}
+	if initBodyParsed.SourceInfo.TotalChunkCount != 1 {
+		t.Errorf("init total_chunk_count: want 1, got %d", initBodyParsed.SourceInfo.TotalChunkCount)
 	}
 
-	// chunk assertions: 3 PUTs with exact Content-Range headers in order.
+	// chunk assertions: 1 PUT covering the whole file.
+	if len(h.chunksReceived) != 1 {
+		t.Fatalf("chunks: want 1, got %d", len(h.chunksReceived))
+	}
+	if h.chunksReceived[0].rangeHeader != "bytes 0-3071/3072" {
+		t.Errorf("chunk[0] Content-Range: want %q, got %q", "bytes 0-3071/3072", h.chunksReceived[0].rangeHeader)
+	}
+	if h.chunksReceived[0].byteCount != 3072 {
+		t.Errorf("chunk[0] body size: want 3072, got %d", h.chunksReceived[0].byteCount)
+	}
+	if h.chunksReceived[0].method != "PUT" {
+		t.Errorf("chunk[0] method: want PUT, got %q", h.chunksReceived[0].method)
+	}
+}
+
+// TestTikTok_StartPublish_PULLFromFile_MultiChunk verifies the chunk math
+// for a > 5MB video with an injected 2MB chunk size → 3 chunks. Small
+// files are forced to a single chunk, so multi-chunk coverage needs a
+// file above TikTok's 5MB single-chunk threshold.
+func TestTikTok_StartPublish_PULLFromFile_MultiChunk(t *testing.T) {
+	srv, h := pullFromFileMockServer(t)
+	defer srv.Close()
+	const total = 6 * 1024 * 1024 // 6MB
+	h.sourceVideoBytes = bytes.Repeat([]byte{0}, total)
+	const chunkSize = 2 * 1024 * 1024 // 2MB
+
+	var initBodyParsed struct {
+		SourceInfo struct {
+			Source          string `json:"source"`
+			VideoSize       int64  `json:"video_size"`
+			ChunkSize       int64  `json:"chunk_size"`
+			TotalChunkCount int64  `json:"total_chunk_count"`
+		} `json:"source_info"`
+	}
+	h.OnInit = func(rawBody []byte, _ *http.Request) {
+		_ = json.Unmarshal(rawBody, &initBodyParsed)
+	}
+
+	svc := newTestTikTokServiceWithChunkSize(srv, chunkSize)
+	payload := models.PublishPayload{
+		Text:         "multi chunk",
+		VideoURL:     srv.URL + "/source-video",
+		PrivacyLevel: "PUBLIC_TO_EVERYONE",
+		Source:       models.PublishSourcePULLFromFile,
+	}
+	if _, _, err := svc.StartPublish(context.Background(), "tok", "tt-1", payload); err != nil {
+		t.Fatalf("StartPublish: %v", err)
+	}
+
+	if initBodyParsed.SourceInfo.Source != "FILE_UPLOAD" {
+		t.Errorf("init source: want FILE_UPLOAD, got %q", initBodyParsed.SourceInfo.Source)
+	}
+	if initBodyParsed.SourceInfo.ChunkSize != chunkSize {
+		t.Errorf("init chunk_size: want %d, got %d", chunkSize, initBodyParsed.SourceInfo.ChunkSize)
+	}
+	if initBodyParsed.SourceInfo.TotalChunkCount != 3 {
+		t.Errorf("init total_chunk_count: want 3, got %d", initBodyParsed.SourceInfo.TotalChunkCount)
+	}
 	if len(h.chunksReceived) != 3 {
 		t.Fatalf("chunks: want 3, got %d", len(h.chunksReceived))
 	}
 	wantRanges := []string{
-		"bytes 0-1023/3072",
-		"bytes 1024-2047/3072",
-		"bytes 2048-3071/3072",
+		"bytes 0-2097151/6291456",
+		"bytes 2097152-4194303/6291456",
+		"bytes 4194304-6291455/6291456",
 	}
 	for i, want := range wantRanges {
 		if h.chunksReceived[i].rangeHeader != want {
 			t.Errorf("chunk[%d] Content-Range: want %q, got %q", i, want, h.chunksReceived[i].rangeHeader)
 		}
-		if h.chunksReceived[i].byteCount != 1024 {
-			t.Errorf("chunk[%d] body size: want 1024, got %d", i, h.chunksReceived[i].byteCount)
-		}
-		if h.chunksReceived[i].method != "PUT" {
-			t.Errorf("chunk[%d] method: want PUT, got %q", i, h.chunksReceived[i].method)
+		if h.chunksReceived[i].byteCount != chunkSize {
+			t.Errorf("chunk[%d] body size: want %d, got %d", i, chunkSize, h.chunksReceived[i].byteCount)
 		}
 	}
 }
 
 // TestTikTok_StartPublish_PULLFromFile_LastChunkPartial verifies the
-// final chunk is correctly sized when total is not chunk-aligned.
-// 1500 bytes / 1024 → 2 chunks: 0-1023 (1024) + 1024-1499 (476).
+// final chunk is correctly sized when total is not chunk-aligned. For a
+// < 5MB video TikTok requires a single whole-file chunk.
 func TestTikTok_StartPublish_PULLFromFile_LastChunkPartial(t *testing.T) {
 	srv, h := pullFromFileMockServer(t)
 	defer srv.Close()
@@ -950,14 +1009,11 @@ func TestTikTok_StartPublish_PULLFromFile_LastChunkPartial(t *testing.T) {
 		t.Fatalf("StartPublish: %v", err)
 	}
 
-	if len(h.chunksReceived) != 2 {
-		t.Fatalf("chunks: want 2, got %d", len(h.chunksReceived))
+	if len(h.chunksReceived) != 1 {
+		t.Fatalf("chunks: want 1 (whole-file single chunk), got %d", len(h.chunksReceived))
 	}
-	if h.chunksReceived[0].rangeHeader != "bytes 0-1023/1500" || h.chunksReceived[0].byteCount != 1024 {
-		t.Errorf("chunk[0]: want 0-1023/1500 (1024 bytes), got %q (%d bytes)", h.chunksReceived[0].rangeHeader, h.chunksReceived[0].byteCount)
-	}
-	if h.chunksReceived[1].rangeHeader != "bytes 1024-1499/1500" || h.chunksReceived[1].byteCount != 476 {
-		t.Errorf("chunk[1]: want 1024-1499/1500 (476 bytes), got %q (%d bytes)", h.chunksReceived[1].rangeHeader, h.chunksReceived[1].byteCount)
+	if h.chunksReceived[0].rangeHeader != "bytes 0-1499/1500" || h.chunksReceived[0].byteCount != 1500 {
+		t.Errorf("chunk[0]: want 0-1499/1500 (1500 bytes), got %q (%d bytes)", h.chunksReceived[0].rangeHeader, h.chunksReceived[0].byteCount)
 	}
 }
 
@@ -1034,9 +1090,10 @@ func TestTikTok_StartPublish_PULLFromFile_CompleteFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "complete") {
 		t.Errorf("error should mention complete: %v", err)
 	}
-	// Chunks DID go out (then complete failed afterward).
-	if len(h.chunksReceived) != 3 {
-		t.Errorf("expected 3 chunks sent before complete failed, got %d", len(h.chunksReceived))
+	// Chunks DID go out (then complete failed afterward). The default
+	// 3072-byte video is a single whole-file chunk.
+	if len(h.chunksReceived) != 1 {
+		t.Errorf("expected 1 chunk sent before complete failed, got %d", len(h.chunksReceived))
 	}
 }
 
@@ -1096,8 +1153,8 @@ func TestTikTok_StartPublish_SourceEmpty_UsesPULLFromURL(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var parsed struct {
 			SourceInfo struct {
-				Source    string `json:"source"`
-				VideoURL  string `json:"video_url"`
+				Source   string `json:"source"`
+				VideoURL string `json:"video_url"`
 			} `json:"source_info"`
 		}
 		_ = json.Unmarshal(body, &parsed)
@@ -1152,4 +1209,3 @@ func TestTikTok_StartPublish_PULLFromFile_AuthHeaderOnInit(t *testing.T) {
 		t.Errorf("Authorization: want %q, got %q", "Bearer user-bearer-xyz", authSeen)
 	}
 }
-

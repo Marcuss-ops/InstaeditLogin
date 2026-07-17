@@ -105,7 +105,8 @@ type S3Provider struct {
 	region    string // SigV4 credential-scope component; default "us-east-1"
 	accessKey string
 	secretKey string
-	baseHost  string // "{bucket}.{endpoint-host}" — pre-computed for SignUpload
+	baseHost  string // path-style: endpoint host; virtual-hosted: "{bucket}.{endpoint-host}"
+	pathStyle bool   // when true, objects live at /{bucket}/{key} (not {bucket}.host/{key})
 	mediaBase string // "{endpoint}/{bucket}" — pre-computed for MediaURL
 	http      *http.Client
 	logger    *slog.Logger
@@ -116,13 +117,18 @@ type S3Provider struct {
 // "https://s3.us-east-1.amazonaws.com" or "https://minio.example.com".
 // region is the SigV4 credential-scope component; pass "" to default
 // to "us-east-1" (acceptable for AWS S3, MinIO, R2, B2, Wasabi).
+// pathStyle selects the addressing scheme: virtual-hosted
+// ({bucket}.{host}/{key}, the default for AWS S3) or path-style
+// ({host}/{bucket}/{key}, required when the S3 host is a single
+// fixed origin — e.g. a Cloudflare quick tunnel — that cannot serve
+// per-bucket subdomains).
 //
 // Returns an error (NOT nil) when the endpoint is malformed: an empty
 // string, a missing scheme, a non-http(s) scheme, or a missing host.
 // This is fail-loud — a typo'd endpoint would otherwise produce a
 // syntactically valid signed URL pointing at a dead host, surfacing as
 // a confusing 403 from S3 instead of a clear Go-side error.
-func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, logger *slog.Logger) (*S3Provider, error) {
+func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, pathStyle bool, logger *slog.Logger) (*S3Provider, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -147,7 +153,10 @@ func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, logger
 	}
 	host := u.Scheme + "://" + u.Host
 	hostOnly := u.Host
-	baseHost := bucket + "." + hostOnly
+	baseHost := hostOnly
+	if !pathStyle {
+		baseHost = bucket + "." + hostOnly
+	}
 	return &S3Provider{
 		endpoint:  host,
 		bucket:    bucket,
@@ -155,24 +164,35 @@ func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, logger
 		accessKey: accessKey,
 		secretKey: secretKey,
 		baseHost:  baseHost,
+		pathStyle: pathStyle,
 		mediaBase: host + "/" + bucket,
 		http:      &http.Client{Timeout: 15 * time.Second},
 		logger:    logger,
 	}, nil
 }
 
+// objectKey returns the full object key used in the signed URL path.
+// Path-style prefixes the bucket; virtual-hosted does not (the bucket
+// lives in the host).
+func (p *S3Provider) objectKey(key string) string {
+	if p.pathStyle {
+		return p.bucket + "/" + key
+	}
+	return key
+}
+
 // Provider implements StorageProvider.
 func (p *S3Provider) Provider() string { return "s3" }
 
 // AssetURL (Taglio 3.2) returns the trusted internal S3 URL for a
-// stored object. The URL uses the same virtual-hosted scheme as the
-// presigned upload URL (https://{bucket}.{host}/{key}). This is the
-// SINGLE chokepoint through which publish-time URLs flow: a future
-// contributor adding a new field on the publish payload cannot
-// accidentally introduce SSRF because there is no public API
-// surface for user-controlled URLs.
+// stored object. The URL uses the same scheme as the presigned upload
+// URL (virtual-hosted https://{bucket}.{host}/{key} or path-style
+// https://{host}/{bucket}/{key}). This is the SINGLE chokepoint
+// through which publish-time URLs flow: a future contributor adding a
+// new field on the publish payload cannot accidentally introduce SSRF
+// because there is no public API surface for user-controlled URLs.
 func (p *S3Provider) AssetURL(key string) string {
-	return fmt.Sprintf("https://%s/%s", p.baseHost, key)
+	return fmt.Sprintf("https://%s/%s", p.baseHost, p.objectKey(key))
 }
 
 // VerifyUpload (Taglio 3.2) performs a SigV4-signed HEAD against the
@@ -190,7 +210,7 @@ func (p *S3Provider) AssetURL(key string) string {
 func (p *S3Provider) VerifyUpload(ctx context.Context, key string) (contentType string, sizeBytes int64, err error) {
 	signedURL, signErr := signS3V4URL(
 		p.baseHost, p.region, "s3",
-		key, 5*time.Minute, http.MethodHead,
+		p.objectKey(key), 5*time.Minute, http.MethodHead,
 		p.accessKey, p.secretKey,
 		time.Now(),
 	)
@@ -227,7 +247,7 @@ func (p *S3Provider) SignUpload(ctx context.Context, userID int64, key, contentT
 	_ = sizeBytes
 	uploadURL, err := signS3V4URL(
 		p.baseHost, p.region, "s3",
-		key, ttl, http.MethodPut,
+		p.objectKey(key), ttl, http.MethodPut,
 		p.accessKey, p.secretKey,
 		time.Now(),
 	)
@@ -235,7 +255,7 @@ func (p *S3Provider) SignUpload(ctx context.Context, userID int64, key, contentT
 		return nil, fmt.Errorf("failed to sign S3 URL: %w", err)
 	}
 
-	mediaURL := fmt.Sprintf("https://%s/%s", p.baseHost, key)
+	mediaURL := fmt.Sprintf("https://%s/%s", p.baseHost, p.objectKey(key))
 	return &UploadGrant{
 		UploadURL: uploadURL,
 		MediaURL:  mediaURL,
