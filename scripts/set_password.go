@@ -14,15 +14,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	db, err := sql.Open("postgres", "postgresql://instaedit:instaedit_dev_pwd@localhost:5432/instaedit_login?sslmode=disable")
+	db, err := sql.Open("postgres", "postgresql://instaedit:dev_password@localhost:5432/instaedit_login?sslmode=disable")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	_, err = db.Exec("UPDATE users SET password_hash = $1 WHERE email = $2", hash, "dev@example.com")
+	_, err = db.Exec("UPDATE users SET password_hash = $1 WHERE email = $2", hash, "dev@instaedit.dev")
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("Password set successfully to 'admin123' for dev@example.com")
+	fmt.Println("Password set successfully to 'admin123' for dev@instaedit.dev")
 }
