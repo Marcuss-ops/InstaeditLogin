@@ -7,8 +7,22 @@ import {
   Clock,
   CheckCircle2,
   Sparkles,
+  PlayCircle,
+  MonitorPlay,
 } from "lucide-react";
 import type { SVGProps } from "react";
+
+const SHORT_DEMOS: ReadonlyArray<{ id: string; title: string }> = [
+  { id: "MVwXsmRLnwM", title: "YouTube Shorts demo MVwXsmRLnwM" },
+  { id: "XCIWzK2BuRo", title: "YouTube Shorts demo XCIWzK2BuRo" },
+];
+
+const LONGFORM_DEMOS: ReadonlyArray<{ id: string; title: string }> = [
+  { id: "fLhv7d6N_3c", title: "YouTube long-form demo fLhv7d6N_3c" },
+  { id: "iA1WT69NFbw", title: "YouTube long-form demo iA1WT69NFbw" },
+  { id: "R18AVWQ92fs", title: "YouTube long-form demo R18AVWQ92fs" },
+  { id: "lpKX9SKqSMw", title: "YouTube long-form demo lpKX9SKqSMw" },
+];
 
 /* ----------------------------------------------------------------------------
  * The /editor route is a sibling marketing page (not the auth-protected
@@ -260,6 +274,125 @@ function DropzoneMockup() {
         </div>
       </div>
     </div>
+  );
+}
+
+function YouTubeEmbed({
+  id,
+  title,
+  aspect,
+}: {
+  id: string;
+  title: string;
+  aspect: "9/16" | "16/9";
+}) {
+  const aspectClass = aspect === "9/16" ? "aspect-[9/16]" : "aspect-[16/9]";
+
+  return (
+    <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-[#0a0a12] shadow-[0_25px_80px_-25px_rgba(0,0,0,0.85)]">
+      <div className={aspectClass}>
+        <iframe
+          className="w-full h-full"
+          src={`https://www.youtube.com/embed/${id}?playsinline=1`}
+          title={title}
+          loading="lazy"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowFullScreen
+          referrerPolicy="strict-origin-when-cross-origin"
+        />
+      </div>
+    </div>
+  );
+}
+
+function VideoExamplesSection() {
+  return (
+    <section className="relative py-24 sm:py-32 overflow-hidden bg-elevated">
+      <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-br from-violet-500/12 via-transparent to-cyan-500/10 pointer-events-none" />
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="max-w-3xl mb-12 animate-fade-up">
+          <div className="text-eyebrow text-violet-300/90 mb-3 inline-flex items-center gap-2">
+            <PlayCircle className="w-4 h-4" />
+            Real examples
+          </div>
+          <h2 className="text-display-2 text-white">
+            See what the editor <span className="text-gradient">actually ships.</span>
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[60ch]">
+            Our system researches the best stock footage and sound effects,
+            generates supporting AI images, and places every clip at the right
+            moment. A human stays in the loop for the final creative pass —
+            After Effects-level quality in minutes, not hours.
+          </p>
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-4 mb-20">
+          {[
+            {
+              title: "Best assets, found automatically",
+              copy: "The engine searches for the strongest stock footage and SFX for every beat of your story.",
+            },
+            {
+              title: "Placed at exactly the right moment",
+              copy: "AI images and supporting clips are timed to the narration, pacing, and emotional arc.",
+            },
+            {
+              title: "Human-in-the-loop quality",
+              copy: "Every cut gets a creative review pass for polished, After Effects-like results in minutes.",
+            },
+          ].map((feature) => (
+            <div key={feature.title} className="surface-card p-5">
+              <CheckCircle2 className="w-5 h-5 text-emerald-400 mb-3" />
+              <h3 className="text-sm font-semibold text-white">{feature.title}</h3>
+              <p className="text-sm text-zinc-400 leading-relaxed mt-2">{feature.copy}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid lg:grid-cols-12 gap-12 items-start">
+          <div className="lg:col-span-5">
+            <div className="text-eyebrow text-violet-300/90 mb-3 inline-flex items-center gap-2">
+              <PlayCircle className="w-4 h-4" />
+              Short-form
+            </div>
+            <h3 className="text-display-3 text-white mb-3">
+              Vertical videos built for the feed.
+            </h3>
+            <p className="text-sm text-zinc-400 max-w-[45ch]">
+              Native 9:16 outputs for YouTube Shorts, Instagram Reels, and
+              TikTok — ready to publish without reformatting.
+            </p>
+          </div>
+          <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-5">
+            {SHORT_DEMOS.map((demo) => (
+              <YouTubeEmbed key={demo.id} {...demo} aspect="9/16" />
+            ))}
+          </div>
+        </div>
+
+        <div className="grid lg:grid-cols-12 gap-12 items-start mt-20">
+          <div className="lg:col-span-7 lg:order-2">
+            <div className="text-eyebrow text-cyan-300/90 mb-3 inline-flex items-center gap-2">
+              <MonitorPlay className="w-4 h-4" />
+              Long-form
+            </div>
+            <h3 className="text-display-3 text-white mb-3">
+              Horizontal masters for every channel.
+            </h3>
+            <p className="text-sm text-zinc-400 max-w-[50ch]">
+              Long-form exports with the right framing, descriptions,
+              thumbnails, and chapters for YouTube, Facebook, Instagram, and
+              LinkedIn.
+            </p>
+          </div>
+          <div className="lg:col-span-5 lg:order-1 grid grid-cols-1 sm:grid-cols-2 gap-5">
+            {LONGFORM_DEMOS.map((demo) => (
+              <YouTubeEmbed key={demo.id} {...demo} aspect="16/9" />
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -735,6 +868,7 @@ export function Editor() {
           </div>
         </section>
 
+        <VideoExamplesSection />
         <div id="outputs">
           <OutputsSection />
         </div>
