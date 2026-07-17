@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Link2, RefreshCw, CheckCircle2 } from "lucide-react";
+import { Link2, RefreshCw, CheckCircle2, ChevronDown, Plus } from "lucide-react";
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
 import { API_BASE_URL } from "../../lib/api";
 import { PROVIDERS, type ProviderId } from "../../lib/providers";
@@ -73,12 +73,20 @@ export function InternalLinking() {
     };
   }, [loadAccounts, navigate]);
 
-  const accountsByProvider: Record<string, PlatformAccount | undefined> = {};
-  if (state.kind === "ready") {
-    for (const acc of state.accounts) {
-      accountsByProvider[acc.platform] = acc;
+  const [expandedProvider, setExpandedProvider] = useState<ProviderId | null>(null);
+
+  const groupedAccounts = useMemo(() => {
+    const grouped: Partial<Record<ProviderId, PlatformAccount[]>> = {};
+    if (state.kind === "ready") {
+      for (const acc of state.accounts) {
+        if (!grouped[acc.platform]) {
+          grouped[acc.platform] = [];
+        }
+        grouped[acc.platform]!.push(acc);
+      }
     }
-  }
+    return grouped;
+  }, [state]);
 
   const linkableProviders = PROVIDERS.filter((p) => LINKABLE_IDS.includes(p.id));
 
@@ -126,13 +134,14 @@ export function InternalLinking() {
         {state.kind === "ready" && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {linkableProviders.map((provider) => {
-              const account = accountsByProvider[provider.id];
-              const isConnected = !!account;
+              const accounts = groupedAccounts[provider.id] ?? [];
+              const isConnected = accounts.length > 0;
+              const isExpanded = expandedProvider === provider.id;
               return (
                 <div
                   key={provider.id}
                   className={cn(
-                    "relative surface-card bg-[#1f1f2e] border rounded-2xl p-5 transition-all overflow-hidden block",
+                    "relative surface-card bg-[#1f1f2e] border rounded-2xl transition-all overflow-hidden block",
                     isConnected
                       ? "border-white/[0.12]"
                       : "border-dashed border-white/[0.16] hover:border-white/[0.30] hover:shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
@@ -144,45 +153,99 @@ export function InternalLinking() {
                       provider.color,
                     )}
                   />
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                      <div
-                        className={cn(
-                          "w-12 h-12 rounded-xl bg-gradient-to-br flex items-center justify-center text-white shrink-0",
-                          provider.color,
-                        )}
-                      >
-                        {provider.icon}
+                  <button
+                    type="button"
+                    onClick={() => setExpandedProvider(isExpanded ? null : provider.id)}
+                    className="w-full text-left p-5"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-center gap-4">
+                        <div
+                          className={cn(
+                            "w-12 h-12 rounded-xl bg-gradient-to-br flex items-center justify-center text-white shrink-0",
+                            provider.color,
+                          )}
+                        >
+                          {provider.icon}
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-[15px] text-white">{provider.name}</h3>
+                          <p className="text-[13px] text-[#9aa0aa] mt-0.5">
+                            {isConnected
+                              ? `${accounts.length} account${accounts.length === 1 ? "" : "s"} connected`
+                              : "Not connected"}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <h3 className="font-bold text-[15px] text-white">{provider.name}</h3>
-                        <p className="text-[13px] text-[#9aa0aa] mt-0.5">
-                          {isConnected ? `@${account.username}` : "Not connected"}
-                        </p>
+                      <div className="flex items-center gap-2">
+                        {isConnected && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-500/[0.08] border border-emerald-500/[0.15] text-emerald-400 text-[11px] font-semibold">
+                            <CheckCircle2 size={11} /> Connected
+                          </span>
+                        )}
+                        <ChevronDown
+                          size={16}
+                          className={cn(
+                            "text-[#9aa0aa] transition-transform duration-200",
+                            isExpanded && "rotate-180",
+                          )}
+                        />
                       </div>
                     </div>
-                    {isConnected && (
-                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-500/[0.08] border border-emerald-500/[0.15] text-emerald-400 text-[11px] font-semibold">
-                        <CheckCircle2 size={11} /> Connected
-                      </span>
-                    )}
-                  </div>
+                  </button>
 
-                  <div className="mt-5">
-                    {isConnected ? (
-                      <div className="flex items-center gap-2 text-[13px] text-[#9aa0aa]">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                        Linked on {new Date(account.created_at).toLocaleDateString()}
+                  {isExpanded && (
+                    <div className="px-5 pb-5 pt-0">
+                      <div className="border-t border-white/[0.08] pt-4 mt-0">
+                        {isConnected ? (
+                          <div className="space-y-2">
+                            {accounts.map((account) => (
+                              <div
+                                key={account.id}
+                                className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white/[0.04] border border-white/[0.08]"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="w-8 h-8 rounded-full bg-gradient-to-br flex items-center justify-center text-white shrink-0 text-[11px] font-bold">
+                                    {account.username?.charAt(0).toUpperCase() ?? "?"}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="text-[13px] font-semibold text-white truncate">
+                                      @{account.username}
+                                    </p>
+                                    <p className="text-[11px] text-[#9aa0aa]">
+                                      Linked on {new Date(account.created_at).toLocaleDateString()}
+                                    </p>
+                                  </div>
+                                </div>
+                                <a
+                                  href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center justify-center p-2 rounded-lg bg-white/[0.06] text-[#9aa0aa] hover:bg-white/[0.10] hover:text-white transition-colors"
+                                  title="Reconnect account"
+                                >
+                                  <RefreshCw size={14} />
+                                </a>
+                              </div>
+                            ))}
+                            <a
+                              href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-xl border border-dashed border-white/[0.16] text-[13px] font-semibold text-[#9aa0aa] hover:bg-white/[0.04] hover:text-white transition-colors no-underline"
+                            >
+                              <Plus size={14} /> Connect another {provider.name} account
+                            </a>
+                          </div>
+                        ) : (
+                          <a
+                            href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}
+                            className="inline-flex items-center justify-center w-full px-4 py-2.5 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
+                          >
+                            Connect {provider.name}
+                          </a>
+                        )}
                       </div>
-                    ) : (
-                      <a
-                        href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}
-                        className="inline-flex items-center justify-center w-full px-4 py-2.5 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
-                      >
-                        Connect {provider.name}
-                      </a>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
