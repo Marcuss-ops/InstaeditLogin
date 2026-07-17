@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Landing } from "./pages/Landing";
+import { Editor } from "./pages/Editor";
 import { Login } from "./pages/Login";
 import { PrivacyPolicy } from "./pages/PrivacyPolicy";
 import { TermsOfService } from "./pages/TermsOfService";
@@ -8,6 +9,7 @@ import { InternalDashboard } from "./pages/internal/Dashboard";
 import { InternalLinking } from "./pages/internal/Linking";
 import { InternalPosts } from "./pages/internal/Posts";
 import { InternalCompose } from "./pages/internal/Compose";
+import { ScheduledByAccount } from "./pages/internal/ScheduledByAccount";
 import { CookieBanner } from "./components/CookieBanner";
 import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
 import { ToastProvider } from "./components/toast";
@@ -28,6 +30,11 @@ function App() {
           <CookieBanner />
           <Routes>
             <Route path="/" element={<Landing />} />
+            {/* /editor is a sibling marketing route (NOT inside /app/*) —
+                intentionally placed BEFORE the /:slug catch-all so React
+                Router matches it explicitly instead of treating the literal
+                "editor" as a platform slug and dispatching PlatformPage. */}
+            <Route path="/editor" element={<Editor />} />
             <Route path="/login" element={<Login />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/terms" element={<TermsOfService />} />
@@ -64,6 +71,10 @@ function App() {
               <Route path="linking" element={<InternalLinking />} />
               <Route path="posts" element={<InternalPosts />} />
               <Route path="compose" element={<InternalCompose />} />
+              <Route
+                path="uploads/calendar"
+                element={<ScheduledByAccount />}
+              />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

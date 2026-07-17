@@ -1,0 +1,748 @@
+import { Link } from "react-router-dom";
+import {
+  ArrowRight,
+  Zap,
+  UploadCloud,
+  ChevronRight,
+  Clock,
+  CheckCircle2,
+  Sparkles,
+} from "lucide-react";
+import type { SVGProps } from "react";
+
+/* ----------------------------------------------------------------------------
+ * The /editor route is a sibling marketing page (not the auth-protected
+ * /app/compose composer). Same visual DNA as Landing — surface card / glass
+ * / display text / hero-aurora — but the content reads as a "deep dive on
+ * the editor itself": a dropzone as the visual hero, then platform-by-
+ * platform outputs, then the speed/cost stats, then a CTA into /login.
+ *
+ * Platform SVG marks are duplicated here from Landing.tsx on purpose:
+ * extracting them into a shared web/src/components/PlatformLogo.tsx would
+ * touch Landing.tsx and risk regressing the existing landing. Pull them
+ * into a shared module in a follow-up if a third call-site ever appears.
+ * -------------------------------------------------------------------------- */
+
+type LogoProps = SVGProps<SVGSVGElement> & { className?: string };
+
+function InstagramLogo({ className = "w-6 h-6", ...rest }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden="true" {...rest}>
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#E4405F" />
+      <circle cx="12" cy="12" r="4.2" stroke="#fff" strokeWidth="1.6" />
+      <circle cx="17.4" cy="6.6" r="0.95" fill="#fff" />
+    </svg>
+  );
+}
+function FacebookLogo({ className = "w-6 h-6", ...rest }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden="true" {...rest}>
+      <rect x="2" y="2" width="20" height="20" rx="4" fill="#1877F2" />
+      <path
+        d="M13.6 21v-7.2h2.4l.36-2.8H13.6V9.05c0-.81.23-1.35 1.4-1.35h1.5V5.15c-.26-.03-1.15-.11-2.18-.11-2.16 0-3.64 1.32-3.64 3.74v2.22H8.32v2.8h2.36V21h2.92z"
+        fill="#fff"
+      />
+    </svg>
+  );
+}
+function YouTubeLogo({ className = "w-6 h-6", ...rest }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden="true" {...rest}>
+      <rect x="2" y="5" width="20" height="14" rx="3.5" fill="#FF0000" />
+      <path d="M10 9.2v5.6l4.4-2.8L10 9.2z" fill="#fff" />
+    </svg>
+  );
+}
+function TikTokLogo({ className = "w-6 h-6", ...rest }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden="true" {...rest}>
+      <rect x="2" y="2" width="20" height="20" rx="4.5" fill="#000" />
+      <path
+        d="M15.6 4.5v8.2a2.45 2.45 0 1 1-2.45-2.45"
+        stroke="#25F4EE"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+      <path
+        d="M15.85 4.5v8.2a2.45 2.45 0 1 1-2.45-2.45"
+        stroke="#FE2C55"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        transform="translate(0.5 -0.4)"
+      />
+      <path
+        d="M15.6 4.5a4.2 4.2 0 0 0 4.2 4.2"
+        stroke="#25F4EE"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+function XLogo({ className = "w-6 h-6", ...rest }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden="true" {...rest}>
+      <rect width="24" height="24" rx="4" fill="#fff" />
+      <path
+        d="M14.65 11l4.05-5h-1.55l-3.45 4.34L10.85 6h-4.4l4.5 7.5L6 19h1.55l3.8-4.74L14.6 19h4l-4.65-8h.7zm-2 7l-.5-.7L7.85 7h1.4l4.4 6.3 1.95 2.7.5.7-3.45 0z"
+        fill="#000"
+      />
+    </svg>
+  );
+}
+function LinkedInLogo({ className = "w-6 h-6", ...rest }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden="true" {...rest}>
+      <rect x="2" y="2" width="20" height="20" rx="3" fill="#0A66C2" />
+      <circle cx="7" cy="8" r="1.15" fill="#fff" />
+      <rect x="6.05" y="10" width="2.1" height="6.5" rx="0.3" fill="#fff" />
+      <path
+        d="M10 16.5v-6.5h2v1.1c.45-.7 1.3-1.3 2.4-1.3 1.7 0 2.6 1.1 2.6 3V16.5h-2v-3.4c0-.9-.4-1.5-1.2-1.5s-1.2.5-1.2 1.5V16.5H10z"
+        fill="#fff"
+      />
+    </svg>
+  );
+}
+function ThreadsLogo({ className = "w-6 h-6", ...rest }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden="true" {...rest}>
+      <rect width="24" height="24" rx="6" fill="#000" />
+      <path
+        d="M12 6.5c2.7 0 4.7 1.6 4.7 4.7s-2 4.7-4.7 4.7-4.7-1.6-4.7-4.7"
+        stroke="#fff"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      <path
+        d="M12 6.5c-3 0-5 2-5 5s2 5 5 5"
+        stroke="#fff"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+const PLATFORM_REGISTRY = [
+  { key: "instagram", name: "Instagram", Logo: InstagramLogo, color: "#E4405F" },
+  { key: "tiktok", name: "TikTok", Logo: TikTokLogo, color: "#25F4EE" },
+  { key: "youtube", name: "YouTube", Logo: YouTubeLogo, color: "#FF0000" },
+  { key: "facebook", name: "Facebook", Logo: FacebookLogo, color: "#1877F2" },
+  { key: "x", name: "X", Logo: XLogo, color: "#FFFFFF" },
+  { key: "linkedin", name: "LinkedIn", Logo: LinkedInLogo, color: "#0A66C2" },
+  { key: "threads", name: "Threads", Logo: ThreadsLogo, color: "#FFFFFF" },
+] as const;
+
+/* ----------------------------------------------------------------------------
+ * Top nav — same shape as Landing but with "InstaEdit" reading as a `Back to`
+ * link instead of an in-page anchor. Editor and Landing both link to the
+ * same Login CTA.
+ * -------------------------------------------------------------------------- */
+function Nav() {
+  return (
+    <nav className="fixed top-0 left-0 right-0 z-50">
+      <div className="surface-glass border-b border-white/10">
+        <div className="mx-auto max-w-7xl h-16 px-6 flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-2 group" aria-label="Back to InstaEdit">
+            <span className="inline-flex w-7 h-7 items-center justify-center rounded-md bg-white text-black shadow-[0_0_24px_-6px_rgba(255,255,255,0.4)]">
+              <Zap className="w-4 h-4" />
+            </span>
+            <span className="font-bold tracking-tight text-white text-sm">
+              InstaEdit
+            </span>
+            <span className="hidden sm:inline-flex items-center gap-1 ml-2 text-xs text-zinc-500 group-hover:text-zinc-300 transition-colors">
+              <ChevronRight className="w-3 h-3" />
+              Editor
+            </span>
+          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              to="/login"
+              className="hidden sm:inline-flex text-sm font-medium px-4 py-2 text-zinc-300 hover:text-white transition-colors"
+            >
+              Sign in
+            </Link>
+            <Link
+              to="/login"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white text-black text-sm font-semibold hover:bg-zinc-100 transition-colors shadow-[0_8px_30px_-10px_rgba(255,255,255,0.4)]"
+            >
+              Connect account
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * Dropzone mockup — pure visual, no real upload. Same surface-card/glass
+ * language as Landing's hero dashboard mockup. Disabled state via
+ * `aria-disabled` and `cursor-default` so it reads as decorative-only, not
+ * a fake submit. The animation is only `animate-pulse-glow` on the
+ * progress bar so the panel breathes.
+ * -------------------------------------------------------------------------- */
+function DropzoneMockup() {
+  return (
+    <div
+      aria-disabled="true"
+      className="relative surface-glass rounded-3xl border border-white/15 overflow-hidden shadow-[0_30px_120px_-30px_rgba(124,58,237,0.55)] animate-fade-up animation-delay-200"
+    >
+      {/* Faint outer glow */}
+      <div
+        aria-hidden="true"
+        className="absolute -inset-4 hero-aurora opacity-50 blur-2xl rounded-[2rem] pointer-events-none -z-10"
+      />
+      {/* Header strip — mimics the dashboard's window chrome so the page
+          reads as part of the same product family. */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+        <div className="flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-full bg-[#ff5f57]" />
+          <span className="w-3 h-3 rounded-full bg-[#febc2e]" />
+          <span className="w-3 h-3 rounded-full bg-[#28c840]" />
+        </div>
+        <div className="text-xs text-zinc-400 font-medium tracking-tight">
+          instaedit.app · Editor
+        </div>
+        <div className="w-12 h-6 rounded-md surface-card-soft flex items-center justify-center">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5" />
+          <span className="text-[10px] text-zinc-300">Live</span>
+        </div>
+      </div>
+
+      {/* Dropzone body */}
+      <div className="p-6 sm:p-8">
+        <div className="rounded-2xl border-2 border-dashed border-white/15 bg-[#0d0d15]/70 px-6 py-10 sm:py-14 text-center">
+          <div className="inline-flex w-14 h-14 items-center justify-center rounded-2xl ring-1 ring-violet-400/40 bg-gradient-to-br from-violet-500/30 to-cyan-500/20 text-violet-200 mb-4">
+            <UploadCloud className="w-7 h-7" />
+          </div>
+          <div className="text-lg font-semibold text-white">
+            Drop a raw video here
+          </div>
+          <div className="text-sm text-zinc-400 mt-1.5 max-w-[42ch] mx-auto">
+            MP4, MOV, WebM, or HEVC up to 4 GB. Vertical, horizontal, square — we
+            take what you have.
+          </div>
+          <div className="mt-5 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/[0.06] text-[11px] text-zinc-300 ring-1 ring-white/10">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow" />
+            or paste a YouTube / Drive link
+          </div>
+        </div>
+
+        {/* Mock processing state — purely decorative, shows the "engine at
+            work" claim with three sub-step indicators. */}
+        <div className="mt-5 space-y-2.5">
+          {[
+            { l: "Encoding · 7 platform variants", on: true },
+            { l: "Captions · auto-transcribed + translated", on: true },
+            { l: "Thumbnails · A/B test generated", on: false },
+          ].map((step) => (
+            <div
+              key={step.l}
+              className="flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.04] ring-1 ring-white/5"
+            >
+              <div className="flex items-center gap-2.5">
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    step.on
+                      ? "bg-emerald-400 animate-pulse-glow"
+                      : "bg-zinc-600"
+                  }`}
+                />
+                <span className="text-xs text-zinc-200">{step.l}</span>
+              </div>
+              <span className="text-[10px] text-zinc-500 tabular-nums">
+                {step.on ? "ok" : "queued"}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * Per-platform outputs row — the visual punchline of the editor page. Each
+ * card shows an "auto-generated" badge + the platform brand mark + a title
+ * placeholder. Together they read as "one render → 7 native posts".
+ * -------------------------------------------------------------------------- */
+function OutputCard({
+  Logo,
+  color,
+  format,
+  title,
+  delay,
+}: {
+  Logo: (props: LogoProps) => React.ReactElement;
+  color: string;
+  format: string;
+  title: string;
+  delay: string;
+}) {
+  return (
+    <div
+      className={`surface-card p-5 relative overflow-hidden animate-fade-up ${delay}`}
+    >
+      <div
+        aria-hidden="true"
+        className="absolute -top-12 -right-12 w-32 h-32 rounded-full blur-2xl pointer-events-none"
+        style={{ background: color, opacity: 0.25 }}
+      />
+      <div className="relative">
+        <div className="flex items-center justify-between mb-3.5">
+          <div className="inline-flex w-9 h-9 rounded-lg overflow-hidden ring-1 ring-white/15">
+            <Logo className="w-full h-full" />
+          </div>
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-300/90 uppercase tracking-wider">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            Auto
+          </span>
+        </div>
+        <div className="text-[11px] text-zinc-500 uppercase tracking-wider mb-1">
+          {format}
+        </div>
+        <div className="text-sm font-semibold text-white leading-snug line-clamp-2">
+          {title}
+        </div>
+        <div
+          className="mt-3 h-1 rounded-full"
+          style={{ background: color, opacity: 0.7 }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function OutputsSection() {
+  const sample = {
+    instagram: { format: "9:16 · Reels", title: "How we ship 10× faster" },
+    tiktok: { format: "9:16 · Autoplay", title: "10× faster — full demo" },
+    youtube: { format: "16:9 · Short", title: "How we ship 10× faster" },
+    facebook: { format: "1:1 · Reels", title: "How we ship 10× faster" },
+    x: { format: "16:9 · Native", title: "10× faster, one render" },
+    linkedin: { format: "1.91:1 · Post", title: "How we ship 10× faster" },
+    threads: { format: "4:5 · Post", title: "10× faster, one render" },
+  } as const;
+
+  return (
+    <section className="relative py-24 sm:py-32 overflow-hidden">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-gradient-to-br from-violet-500/12 via-transparent to-cyan-500/10 pointer-events-none"
+      />
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="glow-orb bg-violet-500 w-[420px] h-[420px] -top-20 -right-32 animate-drift-slow opacity-50" />
+        <div className="glow-orb bg-cyan-400 w-[380px] h-[380px] -bottom-32 -left-24 animate-drift-rev opacity-45" />
+      </div>
+
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="max-w-3xl mb-12 animate-fade-up">
+          <div className="text-eyebrow text-violet-300/90 mb-3">
+            One render. Seven native posts.
+          </div>
+          <h2 className="text-display-2 text-white">
+            Every output is shaped for its{" "}
+            <span className="text-gradient">platform.</span>
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[60ch]">
+            Our engine reads each platform's quirks — aspect ratio, length
+            caps, thumbnail rules, caption tone — so a single raw render
+            lands natively without you opening another tab.
+          </p>
+        </div>
+
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {PLATFORM_REGISTRY.map((p, i) => {
+            const d = sample[p.key];
+            return (
+              <OutputCard
+                key={p.key}
+                Logo={p.Logo}
+                color={p.color}
+                format={d.format}
+                title={d.title}
+                delay={`animation-delay-${i * 100}`}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * SpeedStats — three before/after stats. The "before" is what an editor
+ * typically does today; the "after" is what InstaEdit converts it to.
+ * -------------------------------------------------------------------------- */
+function SpeedStats() {
+  const stats = [
+    { before: "6 hours", after: "8 min", label: "Manual editing" },
+    { before: "14 tabs", after: "1 dashboard", label: "Per-platform reuploads" },
+    { before: "7 exports", after: "1 render", label: "Re-encoding per channel" },
+  ];
+  return (
+    <section className="relative py-20 sm:py-24 bg-elevated overflow-hidden">
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="max-w-3xl mb-12 animate-fade-up">
+          <div className="text-eyebrow text-violet-300/90 mb-3">
+            Why an editor
+          </div>
+          <h2 className="text-display-2 text-white">
+            From hours of busywork to{" "}
+            <span className="text-gradient">a single click.</span>
+          </h2>
+        </div>
+
+        <div className="grid sm:grid-cols-3 gap-4">
+          {stats.map((s, i) => (
+            <div
+              key={s.label}
+              className={`surface-card p-7 relative overflow-hidden animate-fade-up ${
+                ["", "animation-delay-100", "animation-delay-200"][i]
+              }`}
+            >
+              <div className="text-sm text-zinc-500 line-through mb-3">
+                {s.before}
+              </div>
+              <div className="text-display-3 text-white tabular-nums">
+                {s.after}
+              </div>
+              <div className="text-eyebrow text-zinc-500 mt-3">
+                {s.label}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * HowItWorks — three numbered stages with a connector line. Visual DNA
+ * matches Landing's Workflow section but tuned for the editor scene.
+ * -------------------------------------------------------------------------- */
+function HowItWorks() {
+  const steps = [
+    {
+      n: "01",
+      title: "Drop your raw clip",
+      copy: "Vertical, horizontal, or square — upload what you shot. We accept MP4, MOV, WebM, and HEVC up to 4 GB.",
+      Icon: UploadCloud,
+      ring: "ring-violet-400/40",
+      iconColor: "text-violet-300",
+    },
+    {
+      n: "02",
+      title: "Engine rewrites for each platform",
+      copy: "Captions, thumbnails, hashtags, and chapters are auto-generated per platform in one pass.",
+      Icon: Sparkles,
+      ring: "ring-cyan-400/40",
+      iconColor: "text-cyan-300",
+    },
+    {
+      n: "03",
+      title: "Schedule once. Ship everywhere.",
+      copy: "Pick a time. InstaEdit fans out per-platform slots so each audience sees it at peak engagement.",
+      Icon: Clock,
+      ring: "ring-pink-400/40",
+      iconColor: "text-pink-300",
+    },
+  ];
+  return (
+    <section className="relative py-24 sm:py-32 overflow-hidden">
+      <div
+        aria-hidden="true"
+        className="hidden lg:block absolute top-[58%] left-0 right-0 h-px bg-gradient-to-r from-transparent via-violet-400/40 to-transparent pointer-events-none"
+      />
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="max-w-3xl mb-16 animate-fade-up">
+          <div className="text-eyebrow text-violet-300/90 mb-3">
+            How it works
+          </div>
+          <h2 className="text-display-2 text-white">
+            From raw clip to <span className="text-gradient">shipped.</span>
+          </h2>
+        </div>
+
+        <ol className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5 relative">
+          {steps.map((s, i) => (
+            <li
+              key={s.n}
+              className={`surface-card p-7 relative overflow-hidden animate-fade-up ${
+                ["", "animation-delay-100", "animation-delay-200"][i]
+              }`}
+            >
+              <div
+                aria-hidden="true"
+                className="absolute -top-16 -right-16 w-44 h-44 rounded-full bg-radial from-violet-500/30 to-violet-500/0 opacity-70 blur-2xl pointer-events-none"
+              />
+              <div className="relative">
+                <div className="flex items-center justify-between mb-5">
+                  <span
+                    className={`inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ${s.ring} surface-glass ${s.iconColor}`}
+                  >
+                    <s.Icon className="w-5 h-5" />
+                  </span>
+                  <span className="text-eyebrow text-zinc-500 tabular-nums">
+                    Step {s.n}
+                  </span>
+                </div>
+                <h3 className="text-display-3 text-white mb-2">
+                  {s.title}
+                </h3>
+                <p className="text-sm text-zinc-400 leading-relaxed">
+                  {s.copy}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * FinalCTA — same shape as Landing's final CTA, but the action routes to
+ * /login (not /login) and the copy invites the user to "connect an
+ * account" rather than "start publishing" (they've already seen the
+ * editor — now they need a platform to ship to).
+ * -------------------------------------------------------------------------- */
+function FinalCTA() {
+  return (
+    <section className="relative py-24 sm:py-32 overflow-hidden">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 cta-glow pointer-events-none"
+      />
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="glow-orb bg-violet-500 w-[500px] h-[500px] -top-40 left-1/4 animate-drift-slow opacity-60" />
+        <div className="glow-orb bg-cyan-400 w-[420px] h-[420px] bottom-0 right-1/4 animate-drift-rev opacity-50" />
+      </div>
+
+      <div className="relative mx-auto max-w-5xl px-6">
+        <div className="surface-glass border border-white/15 rounded-3xl px-8 py-16 sm:px-14 sm:py-20 text-center relative overflow-hidden shadow-[0_40px_120px_-40px_rgba(124,58,237,0.5)]">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full surface-glass border border-white/15 text-xs font-medium text-zinc-200 mb-6">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Two minutes to your first platform-native render</span>
+          </div>
+          <h2 className="text-display-2 text-white max-w-[20ch] mx-auto">
+            Open the editor with{" "}
+            <span className="text-gradient">your account.</span>
+          </h2>
+          <p className="text-body-lg text-zinc-300/90 mt-6 max-w-[52ch] mx-auto">
+            Sign in, link a platform, and watch your raw clip become seven
+            native posts — credited, captioned, and ready to publish from a
+            single calendar.
+          </p>
+          <div className="mt-9 flex items-center justify-center gap-3 flex-wrap">
+            <Link
+              to="/login"
+              className="group inline-flex items-center gap-2 px-6 py-3.5 rounded-full bg-white text-black text-base font-semibold hover:bg-zinc-100 transition-colors shadow-[0_10px_40px_-10px_rgba(255,255,255,0.55)]"
+            >
+              Connect account
+              <ArrowRight className="w-5 h-5 group-hover:translate-x-0.5 transition-transform" />
+            </Link>
+            <Link
+              to="/"
+              className="inline-flex items-center gap-2 px-6 py-3.5 rounded-full surface-glass text-zinc-200 font-medium hover:text-white hover:border-white/25 transition-colors"
+            >
+              Back to InstaEdit
+              <ChevronRight className="w-5 h-5" />
+            </Link>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * Footer — same Product + Legal two-column shape as Landing. New: a single
+ * "Editor" line under Product that links back to /editor (so the page is
+ * reachable from itself once the user has scrolled past the hero).
+ * -------------------------------------------------------------------------- */
+function Footer() {
+  return (
+    <footer className="relative border-t border-white/10 bg-[#08080d]">
+      <div className="mx-auto max-w-7xl px-6 py-16 grid gap-12 lg:grid-cols-12">
+        <div className="lg:col-span-5">
+          <Link to="/" className="flex items-center gap-2">
+            <span className="inline-flex w-8 h-8 items-center justify-center rounded-lg bg-white text-black">
+              <Zap className="w-4 h-4" />
+            </span>
+            <span className="font-bold tracking-tight text-white text-base">
+              InstaEdit
+            </span>
+          </Link>
+          <p className="text-sm text-zinc-400 mt-4 max-w-[42ch] leading-relaxed">
+            The InstaEdit Editor turns raw video into seven native
+            posts — captions, chapters, and thumbnails per platform.
+          </p>
+          <div className="flex items-center gap-2 mt-5">
+            {PLATFORM_REGISTRY.map(({ key, name, Logo }) => (
+              <span
+                key={key}
+                className="inline-flex w-7 h-7 rounded-md overflow-hidden ring-1 ring-white/10 surface-glass"
+                title={name}
+                aria-label={name}
+              >
+                <Logo className="w-full h-full" />
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-8">
+          {[
+            {
+              heading: "Product",
+              links: [
+                { l: "Editor", to: "/editor" },
+                { l: "Home", to: "/" },
+                { l: "Sign in", to: "/login" },
+                { l: "Privacy", to: "/privacy" },
+              ],
+            },
+            {
+              heading: "Legal",
+              links: [
+                { l: "Privacy", to: "/privacy" },
+                { l: "Terms", to: "/terms" },
+                { l: "Data deletion", href: "/data-deletion.html" },
+              ],
+            },
+          ].map((col) => (
+            <div key={col.heading}>
+              <div className="text-eyebrow text-zinc-500 mb-4">
+                {col.heading}
+              </div>
+              <ul className="space-y-3">
+                {col.links.map((link) => (
+                  <li key={link.l}>
+                    {"to" in link ? (
+                      <Link
+                        to={link.to as string}
+                        className="text-sm text-zinc-300 hover:text-white transition-colors"
+                      >
+                        {link.l}
+                      </Link>
+                    ) : (
+                      <a
+                        href={link.href}
+                        className="text-sm text-zinc-300 hover:text-white transition-colors"
+                      >
+                        {link.l}
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="border-t border-white/5">
+        <div className="mx-auto max-w-7xl px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
+          <div>© {new Date().getFullYear()} InstaEdit, Inc.</div>
+          <div>From raw clip. To every channel. In minutes.</div>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * Editor export — mounted at the public /editor route, no auth, no
+ * /app/*-style ProtectedRoute. The page IS the marketing surface for the
+ * editor feature; the actual editing happens at /app/compose (authed).
+ * -------------------------------------------------------------------------- */
+export function Editor() {
+  return (
+    <div className="min-h-screen bg-[#030308] text-[#e8e8ef] font-sans antialiased overflow-x-hidden selection:bg-violet-500/40 selection:text-white">
+      <Nav />
+      <main className="relative">
+        <section className="relative pt-32 pb-20 overflow-hidden">
+          <div aria-hidden="true" className="absolute inset-0 hero-aurora pointer-events-none" />
+          <div aria-hidden="true" className="absolute inset-0 grid-bg pointer-events-none opacity-60" />
+          <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+            <div className="glow-orb bg-violet-500 w-[460px] h-[460px] -top-32 -left-24 animate-drift-slow opacity-70" />
+            <div className="glow-orb bg-cyan-400 w-[420px] h-[420px] -bottom-40 -right-24 animate-drift-rev opacity-60" />
+          </div>
+
+          <div className="relative mx-auto max-w-7xl px-6 grid lg:grid-cols-12 gap-10 items-center">
+            <div className="lg:col-span-7 xl:col-span-6 animate-fade-up">
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full surface-glass border border-white/15 text-xs font-medium text-zinc-200 mb-7">
+                <Sparkles className="w-3.5 h-3.5 text-violet-300" />
+                <span>The InstaEdit Editor · proprietary graphics engine</span>
+              </div>
+
+              <h1 className="text-display-1 text-white">
+                From raw clip.{" "}
+                <span className="text-gradient">To every channel.</span>{" "}
+                In minutes.
+              </h1>
+
+              <p className="text-body-lg text-zinc-300/90 mt-7 max-w-[60ch]">
+                One render in. Seven platform-native posts out — captioned,
+                thumbnailed, and ready to schedule. Our proprietary graphics
+                engine handles the encoding, captions, and per-platform
+                quirks so you ship more in less time.
+              </p>
+
+              <div className="flex flex-wrap items-center gap-3 mt-9">
+                <Link
+                  to="/login"
+                  className="group inline-flex items-center gap-2 px-5 py-3 rounded-full bg-white text-black text-sm font-semibold hover:bg-zinc-100 transition-colors shadow-[0_10px_40px_-10px_rgba(255,255,255,0.45)]"
+                >
+                  Connect account
+                  <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+                </Link>
+                <a
+                  href="#outputs"
+                  className="inline-flex items-center gap-2 px-5 py-3 rounded-full surface-glass text-sm font-medium text-zinc-200 hover:text-white hover:border-white/25 transition-colors"
+                >
+                  See what ships
+                  <ChevronRight className="w-4 h-4" />
+                </a>
+              </div>
+
+              <div className="mt-10 flex items-center gap-4 flex-wrap">
+                <span className="text-eyebrow text-zinc-500">Outputs to</span>
+                <div className="flex items-center gap-2">
+                  {PLATFORM_REGISTRY.map(({ key, name, Logo }) => (
+                    <span
+                      key={key}
+                      className="inline-flex w-7 h-7 rounded-md overflow-hidden ring-1 ring-white/15 surface-glass"
+                      title={name}
+                      aria-label={name}
+                    >
+                      <Logo className="w-full h-full" />
+                    </span>
+                  ))}
+                </div>
+                <span className="text-xs text-zinc-500">+ more each quarter</span>
+              </div>
+            </div>
+
+            <div className="lg:col-span-5 xl:col-span-6 relative">
+              <DropzoneMockup />
+            </div>
+          </div>
+        </section>
+
+        <div id="outputs">
+          <OutputsSection />
+        </div>
+        <SpeedStats />
+        <HowItWorks />
+        <FinalCTA />
+      </main>
+      <Footer />
+    </div>
+  );
+}

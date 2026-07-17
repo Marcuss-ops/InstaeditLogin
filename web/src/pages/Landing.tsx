@@ -543,6 +543,15 @@ function Nav() {
             <a href="#features" className="hover:text-white transition-colors">
               Features
             </a>
+            <Link
+              to="/editor"
+              className="hover:text-white transition-colors inline-flex items-center gap-1.5"
+            >
+              Editor
+              <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold rounded bg-violet-500/20 text-violet-200 ring-1 ring-violet-400/30">
+                New
+              </span>
+            </Link>
             <Link to="/login" className="hover:text-white transition-colors">
               Sign in
             </Link>
