@@ -370,8 +370,8 @@ function VideoExamplesSection() {
           </div>
         </div>
 
-        <div className="grid lg:grid-cols-12 gap-12 items-start mt-20">
-          <div className="lg:col-span-7 lg:order-2">
+        <div className="mt-24 rounded-3xl border border-cyan-400/15 bg-gradient-to-br from-cyan-500/[0.10] via-[#0d0d15]/80 to-pink-500/[0.08] p-6 sm:p-10 shadow-[0_30px_100px_-45px_rgba(34,211,238,0.45)]">
+          <div className="max-w-3xl mb-8">
             <div className="text-eyebrow text-cyan-300/90 mb-3 inline-flex items-center gap-2">
               <MonitorPlay className="w-4 h-4" />
               Long-form
@@ -379,13 +379,13 @@ function VideoExamplesSection() {
             <h3 className="text-display-3 text-white mb-3">
               Horizontal masters for every channel.
             </h3>
-            <p className="text-sm text-zinc-400 max-w-[50ch]">
+            <p className="text-body-lg text-zinc-400 max-w-[60ch]">
               Long-form exports with the right framing, descriptions,
               thumbnails, and chapters for YouTube, Facebook, Instagram, and
               LinkedIn.
             </p>
           </div>
-          <div className="lg:col-span-5 lg:order-1 grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {LONGFORM_DEMOS.map((demo) => (
               <YouTubeEmbed key={demo.id} {...demo} aspect="16/9" />
             ))}
