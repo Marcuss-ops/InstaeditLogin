@@ -218,10 +218,10 @@ func (m *mockAsyncProvider) Reconcile(ctx context.Context, accessToken, publishI
 // mockCredentialVault — shared between driver + reconciler.
 // ------------------------------------------------------------------
 
-// mockCredentialVault is a credentials.VaultAPI. The worker only
-// calls Renew (via the vault field on PublishWorker/ReconcileWorker),
-// so Save / Get / Revoke / Rotate are stubbed (panic if accidentally
-// called).
+// mockCredentialVault is a credentials.VaultAPI. The worker calls
+// Renew (via the vault field on PublishWorker/ReconcileWorker) and,
+// for page-scoped providers, Get to retrieve a TokenTypePageAccess.
+// Save / Revoke / Rotate are stubbed (panic if accidentally called).
 //
 // Taglio 2.2: renamed from mockTokenService. The `renewFn` signature
 // now takes a credentials.TokenRefresher (plain function) rather than
@@ -233,6 +233,7 @@ func (m *mockAsyncProvider) Reconcile(ctx context.Context, accessToken, publishI
 type mockCredentialVault struct {
 	mu          sync.Mutex
 	renewFn     func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error)
+	getFn       func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error)
 	ensureCalls int
 }
 
@@ -240,7 +241,12 @@ func (m *mockCredentialVault) Save(ctx context.Context, platformAccountID int64,
 	panic("Save not used in worker tests")
 }
 func (m *mockCredentialVault) Get(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
-	panic("Get not used in worker tests")
+	if m.getFn != nil {
+		return m.getFn(ctx, platformAccountID, tokenType)
+	}
+	// Default: behave like a real vault that has no page token stored.
+	// The publish worker will fall back to the refreshed user token.
+	return nil, errors.New("token not found")
 }
 func (m *mockCredentialVault) Renew(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
 	m.mu.Lock()

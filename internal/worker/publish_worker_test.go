@@ -234,6 +234,49 @@ func TestPublishTarget_HappyPath_ClaimThenPublishToPublished(t *testing.T) {
 	}
 }
 
+// TestPublishTarget_PrefersPageAccessToken verifies that when a
+// TokenTypePageAccess token exists in the vault (Facebook Pages), the
+// worker passes it to Publish() instead of the refreshed user token.
+func TestPublishTarget_PrefersPageAccessToken(t *testing.T) {
+	const pageAccessToken = "page-access-token-xyz"
+	posts := &mockPostStore{
+		claimFn:    func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) { return &models.Post{ID: 100, Caption: "x"}, nil },
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "facebook", PlatformUserID: "page-123"}, nil
+		},
+	}
+	var publishedToken string
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: "facebook"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			publishedToken = accessToken
+			return &models.PublishResult{PlatformMediaID: "fb-post-1"}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "user-token-refreshed", TokenType: models.TokenTypeLongLived}, nil
+		},
+		getFn: func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
+			if tokenType == models.TokenTypePageAccess {
+				return &models.OAuthToken{AccessToken: pageAccessToken, TokenType: models.TokenTypePageAccess}, nil
+			}
+			return nil, errors.New("token not found")
+		},
+	}
+	w := newTestWorkerWithoutThrottle(posts, users, "facebook", svc, vault)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
+		t.Fatalf("publishTarget: %v", err)
+	}
+	if publishedToken != pageAccessToken {
+		t.Errorf("Publish access_token: want page token %q, got %q", pageAccessToken, publishedToken)
+	}
+}
+
 // TestPublishTarget_ForwardsIdempotencyKeyOnPayload is the dedicated
 // Taglio 4.7 LEVEL 2 assertion that payload.IdempotencyKey is the
 // deterministic key the worker computed + stamped onto the target
