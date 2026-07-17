@@ -1193,6 +1193,22 @@ function FinalCTA() {
  * footer so the page feels like a product, not a placeholder.
  * -------------------------------------------------------------------------- */
 function Footer() {
+  // Two-column footer. We only expose links we *actually* have a destination
+  // for: the older draft shipped Company + Resources with `href="#"` entries
+  // (About, Contact, Status, Docs, Changelog, Help center) which all 404'd
+  // in production. Re-add those columns once their routes/pages exist —
+  // dropping the broken ones is more honest than placeholder entries that
+  // land on whatever top-of-page hash the URL has.
+  //
+  // Two CTA-stubs route to /login (Pricing, Integrations) — that's a
+  // deliberate funnel-to-signup until real Pricing + Integrations pages
+  // exist; do NOT "fix" by adding href="#" thinking it's a placeholder.
+  //
+  // `/data-deletion.html` resolves to web/public/data-deletion.html and is
+  // served by Vercel as a static file before any React route matching
+  // `web/vercel.json` rules. The static file is intentional and required by
+  // Meta's data-deletion callback-URL spec; do not collapse it into a
+  // React route (would break the public callback contract).
   const cols: Array<{ heading: string; links: Array<{ l: string; to?: string; href?: string }> }> = [
     {
       heading: "Product",
@@ -1201,22 +1217,6 @@ function Footer() {
         { l: "Features", href: "#features" },
         { l: "Pricing", to: "/login" },
         { l: "Integrations", to: "/login" },
-      ],
-    },
-    {
-      heading: "Company",
-      links: [
-        { l: "About", href: "#" },
-        { l: "Contact", href: "#" },
-        { l: "Status", href: "#" },
-      ],
-    },
-    {
-      heading: "Resources",
-      links: [
-        { l: "Docs", href: "#" },
-        { l: "Changelog", href: "#" },
-        { l: "Help center", href: "#" },
       ],
     },
     {
@@ -1259,7 +1259,10 @@ function Footer() {
           </div>
         </div>
 
-        <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-8">
+        {/* mobile-first: stack Product + Legal vertically until sm (640px),
+            then 2-up. Each sub-col on a 390px phone would otherwise cram
+            4 stacked links into ~150px and wrap "Data deletion" awkwardly. */}
+        <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-8">
           {cols.map((col) => (
             <div key={col.heading}>
               <div className="text-eyebrow text-zinc-500 mb-4">
