@@ -85,10 +85,11 @@ func (r *UploadJobRepository) ClaimNext() (*models.UploadJob, error) {
 
 	row := tx.QueryRow(
 		`SELECT id, user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption,
-		        targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at
-		 FROM upload_jobs
+		         targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at
+		  FROM upload_jobs
 		 WHERE status = 'pending'
-		 ORDER BY created_at ASC
+		   AND (scheduled_at IS NULL OR scheduled_at <= NOW())
+		 ORDER BY COALESCE(scheduled_at, created_at) ASC, id ASC
 		 FOR UPDATE SKIP LOCKED
 		 LIMIT 1`,
 	)
@@ -151,11 +152,11 @@ func (r *UploadJobRepository) MarkFailed(id int64, errMessage string) error {
 // lets the caller opt into any combination of filters without us
 // having to maintain N specialised query methods.
 type UploadJobListFilter struct {
-	AccountID *int64                   // restrict to jobs whose targets @> jsonb_build_array(AccountID)
-	Status    *models.UploadJobStatus  // restrict to one of the 4 enum values
-	From      *time.Time               // scheduled_at >= From (nil = no lower bound)
-	To        *time.Time               // scheduled_at <= To   (nil = no upper bound)
-	Limit     int                      // hard cap; 0 = default 200
+	AccountID *int64                  // restrict to jobs whose targets @> jsonb_build_array(AccountID)
+	Status    *models.UploadJobStatus // restrict to one of the 4 enum values
+	From      *time.Time              // scheduled_at >= From (nil = no lower bound)
+	To        *time.Time              // scheduled_at <= To   (nil = no upper bound)
+	Limit     int                     // hard cap; 0 = default 200
 }
 
 // ErrUploadJobNotFound is the typed sentinel Reschedule/Cancel return
@@ -187,10 +188,10 @@ func (r *UploadJobRepository) ListByUser(userID int64, filter UploadJobListFilte
 	}
 
 	var (
-		accountID  sql.NullInt64
-		status     sql.NullString
-		timeFrom   sql.NullTime
-		timeTo     sql.NullTime
+		accountID sql.NullInt64
+		status    sql.NullString
+		timeFrom  sql.NullTime
+		timeTo    sql.NullTime
 	)
 	if filter.AccountID != nil {
 		accountID = sql.NullInt64{Int64: *filter.AccountID, Valid: true}
@@ -304,6 +305,7 @@ type UploadJobPendingCount struct {
 // (cheaper than fetching rows + bucketing in Go). The query hits:
 //   - the GIN index on targets (migration 040) for the LATERAL unnesting
 //   - the (user_id, status) btree for the WHERE clause
+//
 // so it's an index range scan + a small hash aggregate. Order is
 // stable on account_id ASC so the SPA can rely on row order for
 // optimistic renders.

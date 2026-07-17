@@ -8,10 +8,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
+
+const metaRefreshedTokenFallbackTTL = 60 * 24 * time.Hour
 
 // FacebookOAuthService implements the Meta-Facebook provider as a set of
 // small capabilities. Taglio 2.1:
@@ -113,6 +116,12 @@ func (s *FacebookOAuthService) RefreshOAuthToken(ctx context.Context, currentTok
 	if err != nil {
 		return nil, fmt.Errorf("facebook refresh failed: %w", err)
 	}
+	// Meta may omit expires_in on fb_exchange_token responses. Without a
+	// fallback, the vault stores ExpiresAt=now and every publish immediately
+	// fails with "token expired" even though Meta returned HTTP 200.
+	if longLived.ExpiresIn <= 0 {
+		longLived.ExpiresIn = int64(metaRefreshedTokenFallbackTTL / time.Second)
+	}
 	return &models.TokenData{
 		AccessToken: longLived.AccessToken,
 		TokenType:   models.TokenTypeLongLived,
@@ -120,11 +129,11 @@ func (s *FacebookOAuthService) RefreshOAuthToken(ctx context.Context, currentTok
 	}, nil
 }
 
-// ValidateContent enforces Facebook's "text OR image" rule before
+// ValidateContent enforces Facebook's content rule before
 // dispatching the publish call. Empty payloads would otherwise fail
 // deep inside the Graph API with a 400.
 func (s *FacebookOAuthService) ValidateContent(payload models.PublishPayload) error {
-	if payload.Text == "" && payload.ImageURL == "" {
+	if payload.Text == "" && payload.ImageURL == "" && payload.VideoURL == "" {
 		return fmt.Errorf("facebook requires either text or media")
 	}
 	return nil
@@ -200,8 +209,8 @@ func (s *FacebookOAuthService) Revoke(ctx context.Context, accessToken string) e
 // platformUserID (which is the Page ID) using accessToken as the Page
 // Access Token. The caller (publish worker) is responsible for
 // resolving the Page Access Token from the credential vault.
-// Supports text-only posts and single-image posts. Videos, albums,
-// groups, and personal profiles are not supported yet.
+// Supports text-only, single-image, and Page video posts. Albums, groups,
+// and personal profiles are not supported.
 func (s *FacebookOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
 	defer RecordPublishMetrics(models.PlatformFacebook, s.base.now(), &err)
 
@@ -215,7 +224,9 @@ func (s *FacebookOAuthService) Publish(ctx context.Context, accessToken, platfor
 	slog.Info("Facebook: publishing to page", "page_id", platformUserID)
 
 	var mediaID string
-	if payload.ImageURL != "" {
+	if payload.VideoURL != "" {
+		mediaID, err = s.publishPageVideo(ctx, accessToken, platformUserID, payload.VideoURL, payload.Text)
+	} else if payload.ImageURL != "" {
 		mediaID, err = s.publishPagePhoto(ctx, accessToken, platformUserID, payload.ImageURL, payload.Text)
 	} else if payload.Text != "" {
 		mediaID, err = s.publishPageFeed(ctx, accessToken, platformUserID, payload.Text)
@@ -303,6 +314,39 @@ func (s *FacebookOAuthService) publishPageFeed(ctx context.Context, pageAccessTo
 		return "", fmt.Errorf("parse feed response: %w", err)
 	}
 
+	return result.ID, nil
+}
+
+func (s *FacebookOAuthService) publishPageVideo(ctx context.Context, pageAccessToken, pageID, videoURL, description string) (string, error) {
+	params := url.Values{}
+	params.Set("file_url", videoURL)
+	params.Set("description", description)
+	params.Set("published", "true")
+	params.Set("access_token", pageAccessToken)
+
+	reqURL := fmt.Sprintf("https://graph.facebook.com/v19.0/%s/videos", pageID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL+"?"+params.Encode(), nil)
+	if err != nil {
+		return "", fmt.Errorf("video request: %w", err)
+	}
+	resp, err := s.base.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("video request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read video response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("video publish failed (status %d): %s", resp.StatusCode, truncateForLog(string(body), 200))
+	}
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("parse video response: %w", err)
+	}
 	return result.ID, nil
 }
 

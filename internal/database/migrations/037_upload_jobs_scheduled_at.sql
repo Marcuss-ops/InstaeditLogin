@@ -1,7 +1,7 @@
 -- Migration 037: upload_jobs.scheduled_at
 -- Adds a nullable scheduled_at column so batch / folder-import flows can
 -- schedule posts to publish at staggered times (e.g. one Drive folder =
--- one video every 3-4.5 hours). The UploadWorker now propagates the
+-- one video every 4-6 hours). The UploadWorker now propagates the
 -- scheduled_at into the created post so the existing publish_worker's
 -- `scheduled_at <= NOW()` clause handles the gating natively.
 --

@@ -11,6 +11,8 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -23,10 +25,22 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-const (
-	userID   = 3
-	folderID = "1HregS58okcSoe8597qdXgpZM6K4CwEBD"
-)
+const defaultFolderID = "1Kssuh0eQ7Wmg8uMg29aI7fShXSLCaw3x"
+
+var postAphorisms = []string{
+	"Every small step builds something great.",
+	"Courage begins where comfort ends.",
+	"Ideas become real when you take the first step.",
+	"Consistency turns dreams into milestones.",
+	"Choose to shine, even on difficult days.",
+	"Your energy creates your direction.",
+	"Make room for possibility.",
+	"The right moment is the one you create.",
+	"Simplicity is where greatness begins.",
+	"Turn your vision into action.",
+	"Every day is a new chance to begin again.",
+	"Confidence grows when you keep promises to yourself.",
+}
 
 type driveTokenFile struct {
 	Token        string   `json:"token"`
@@ -46,6 +60,33 @@ func main() {
 
 func run() error {
 	ctx := context.Background()
+	userID, err := requiredEnvInt64("INSTAEDIT_USER_ID")
+	if err != nil {
+		return err
+	}
+	workspaceID, err := requiredEnvInt64("INSTAEDIT_WORKSPACE_ID")
+	if err != nil {
+		return err
+	}
+	facebookAccountID, err := requiredEnvInt64("FACEBOOK_PLATFORM_ACCOUNT_ID")
+	if err != nil {
+		return err
+	}
+	folderID := driveFolderID()
+	if folderID == "" {
+		return fmt.Errorf("DRIVE_FOLDER_ID or DRIVE_FOLDER_URL is required")
+	}
+	minHours, err := envFloat("DRIVE_SCHEDULE_MIN_HOURS", 4)
+	if err != nil {
+		return err
+	}
+	maxHours, err := envFloat("DRIVE_SCHEDULE_MAX_HOURS", 6)
+	if err != nil {
+		return err
+	}
+	if minHours < 0 || maxHours < minHours {
+		return fmt.Errorf("invalid schedule range: min=%g max=%g", minHours, maxHours)
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -67,16 +108,6 @@ func run() error {
 	vault := credentials.NewCredentialVault(encryptor, db, tokenRepo)
 	userRepo := repository.NewUserRepository(db)
 
-	filePath := "/home/pierone/freebuff_agents/profilo2/velox_cleanup_backup_root/VeloxLEgit_backup_20260711_121452/DataServer/.velox/secrets/drive/tokens/account_manual.json"
-	fileData, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("read token file: %w", err)
-	}
-	var tf driveTokenFile
-	if err := json.Unmarshal(fileData, &tf); err != nil {
-		return fmt.Errorf("parse token file: %w", err)
-	}
-
 	driveSvc, err := services.NewGoogleDriveOAuthService(cfg)
 	if err != nil {
 		return fmt.Errorf("new google drive service: %w", err)
@@ -85,52 +116,25 @@ func run() error {
 		return fmt.Errorf("google drive service is disabled (check GOOGLE_DRIVE_CLIENT_ID)")
 	}
 
-	// Refresh the access token so we can fetch user info and use it for listing.
-	refreshed, err := driveSvc.RefreshOAuthToken(ctx, tf.RefreshToken)
+	// Reuse the Google Drive OAuth account already linked through the app.
+	driveAccounts, err := userRepo.ListPlatformAccountsByUser(userID, "google-drive")
 	if err != nil {
-		return fmt.Errorf("refresh token: %w", err)
+		return fmt.Errorf("find linked drive account: %w", err)
 	}
+	if len(driveAccounts) == 0 {
+		return fmt.Errorf("no linked google-drive account found for user %d; complete Google Drive login first", userID)
+	}
+	driveAccountID := driveAccounts[0].ID
+	slog.Info("using linked google-drive platform account", "id", driveAccountID)
 
-	profile, err := fetchGoogleUserInfo(ctx, refreshed.AccessToken)
+	// The refresh token is encrypted in the database vault; no token file is needed.
+	refreshed, err := vault.Renew(ctx, driveAccountID, models.TokenTypeBearer,
+		func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+			return driveSvc.RefreshOAuthToken(ctx, refreshToken)
+		})
 	if err != nil {
-		return fmt.Errorf("get user info: %w", err)
+		return fmt.Errorf("refresh linked drive token: %w", err)
 	}
-
-	// Create or reuse the google-drive platform account.
-	existing, err := userRepo.FindPlatformAccount("google-drive", profile.PlatformUserID)
-	if err != nil {
-		return fmt.Errorf("find existing drive account: %w", err)
-	}
-	var driveAccountID int64
-	if existing != nil {
-		driveAccountID = existing.ID
-		slog.Info("reusing existing google-drive platform account", "id", driveAccountID)
-	} else {
-		account := &models.PlatformAccount{
-			UserID:         userID,
-			Platform:       "google-drive",
-			PlatformUserID: profile.PlatformUserID,
-			Username:       profile.Username,
-		}
-		if err := userRepo.CreatePlatformAccount(account); err != nil {
-			return fmt.Errorf("create platform account: %w", err)
-		}
-		driveAccountID = account.ID
-		slog.Info("created google-drive platform account", "id", driveAccountID)
-	}
-
-	// Persist the encrypted token (access + refresh) in the vault.
-	tokenData := &models.TokenData{
-		AccessToken:  refreshed.AccessToken,
-		RefreshToken: refreshed.RefreshToken,
-		TokenType:    models.TokenTypeBearer,
-		ExpiresIn:    refreshed.ExpiresIn,
-		Scopes:       refreshed.Scopes,
-	}
-	if err := vault.Save(ctx, driveAccountID, tokenData); err != nil {
-		return fmt.Errorf("save token: %w", err)
-	}
-	slog.Info("saved encrypted drive token", "account_id", driveAccountID)
 
 	// List the folder contents using the authenticated Drive grant (paginated).
 	folderIDVar := folderID
@@ -145,17 +149,15 @@ func run() error {
 		return nil
 	}
 
-	// Schedule upload jobs with a random 3-4.5h gap.
+	// Schedule upload jobs with a cryptographically random 4-6h gap.
 	uploadRepo := repository.NewUploadJobRepository(db)
-	workspaceID := int64(3) // user 3's personal workspace
-	facebookAccountID := int64(2)
-
 	now := time.Now()
 	cursor := now
-	minSeconds := 3 * 60 * 60
-	maxSeconds := int(4.5 * 60 * 60)
+	minSeconds := int(minHours * 60 * 60)
+	maxSeconds := int(maxHours * 60 * 60)
 
 	for idx, f := range files {
+		title := aphorismFor(idx)
 		scheduledAt := cursor
 		if idx > 0 {
 			gap, err := randomDuration(minSeconds, maxSeconds)
@@ -168,12 +170,12 @@ func run() error {
 		job := &models.UploadJob{
 			UserID:         userID,
 			WorkspaceID:    workspaceID,
-			SourceType:     models.UploadJobSourcePublicDrive,
+			SourceType:     models.UploadJobSourceAuthenticatedDrive,
 			SourceID:       f.ID,
 			DriveAccountID: &driveAccountID,
 			FolderID:       &folderIDVar,
-			Title:          f.Name,
-			Caption:        f.Name,
+			Title:          title,
+			Caption:        title,
 			Targets:        []int64{facebookAccountID},
 			Status:         models.UploadJobStatusPending,
 			ScheduledAt:    &scheduledAt,
@@ -187,6 +189,60 @@ func run() error {
 
 	slog.Info("done", "total_jobs", len(files))
 	return nil
+}
+
+func aphorismFor(index int) string {
+	if len(postAphorisms) == 0 {
+		return ""
+	}
+	return postAphorisms[index%len(postAphorisms)]
+}
+
+func envInt64(name string, fallback int64) (int64, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", name, err)
+	}
+	return n, nil
+}
+
+func requiredEnvInt64(name string) (int64, error) {
+	if strings.TrimSpace(os.Getenv(name)) == "" {
+		return 0, fmt.Errorf("%s is required (use the platform_account id for the Caleb Foster Facebook Page)", name)
+	}
+	return envInt64(name, 0)
+}
+
+func envFloat(name string, fallback float64) (float64, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number: %w", name, err)
+	}
+	return n, nil
+}
+
+func driveFolderID() string {
+	if id := strings.TrimSpace(os.Getenv("DRIVE_FOLDER_ID")); id != "" {
+		return id
+	}
+	url := strings.TrimSpace(os.Getenv("DRIVE_FOLDER_URL"))
+	if url == "" {
+		return defaultFolderID
+	}
+	const marker = "/folders/"
+	if i := strings.Index(url, marker); i >= 0 {
+		id := strings.Split(strings.TrimSpace(url[i+len(marker):]), "?")[0]
+		return strings.Trim(id, "/")
+	}
+	return url
 }
 
 func openDB(cfg *config.Config) (*sql.DB, error) {
