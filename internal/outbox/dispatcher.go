@@ -39,38 +39,38 @@
 // Concrete partial-persistence hazards (an operator reading this
 // during a DLQ-storm investigation can use these as a checklist):
 //
-//   H1 — Mark* failure AFTER side-effect SUCCEEDED:
-//     processOne invokes ProcessFunc, which returns nil. Then
-//     OutboxStore.MarkProcessed fails (DB blip / connection drop).
-//     The dispatcher LOGS at WARN and the loop returns nil to
-//     drainOnce; the next tick re-claims the same row and runs
-//     ProcessFunc AGAIN. De-dup is the ADAPTER's job (provider-side
-//     idempotency_key, content fingerprinting, etc).
+//	H1 — Mark* failure AFTER side-effect SUCCEEDED:
+//	  processOne invokes ProcessFunc, which returns nil. Then
+//	  OutboxStore.MarkProcessed fails (DB blip / connection drop).
+//	  The dispatcher LOGS at WARN and the loop returns nil to
+//	  drainOnce; the next tick re-claims the same row and runs
+//	  ProcessFunc AGAIN. De-dup is the ADAPTER's job (provider-side
+//	  idempotency_key, content fingerprinting, etc).
 //
-//   H2 — ProcessFunc PANIC recovery (safeProcess):
-//     A panicking adapter is converted into a transient error via
-//     safeProcess. runOnce continues the tick loop cleanly (the
-//     dispatcher goroutine does NOT die). The side-effect of the
-//     panicking adapter is undefined (may have partially executed
-//     before the panic). Re-delivery MAY re-run the partial side-
-//     effect against an idempotent receiver.
+//	H2 — ProcessFunc PANIC recovery (safeProcess):
+//	  A panicking adapter is converted into a transient error via
+//	  safeProcess. runOnce continues the tick loop cleanly (the
+//	  dispatcher goroutine does NOT die). The side-effect of the
+//	  panicking adapter is undefined (may have partially executed
+//	  before the panic). Re-delivery MAY re-run the partial side-
+//	  effect against an idempotent receiver.
 //
-//   H3 — Lease EXPIRY mid-process:
-//     If ProcessFunc runs longer than LeaseTTL, the heartbeat
-//     goroutine's RenewLease fails (or never fires). A peer
-//     dispatcher may claim the row. We still call Mark* at the end;
-//     a peer that already marked first returns an error here, which
-//     we log at WARN and continue. The side-effect ran twice (once by
-//     us, once by the peer) — that is the at-least-once contract.
-//     Doing it ZERO times is unacceptable.
+//	H3 — Lease EXPIRY mid-process:
+//	  If ProcessFunc runs longer than LeaseTTL, the heartbeat
+//	  goroutine's RenewLease fails (or never fires). A peer
+//	  dispatcher may claim the row. We still call Mark* at the end;
+//	  a peer that already marked first returns an error here, which
+//	  we log at WARN and continue. The side-effect ran twice (once by
+//	  us, once by the peer) — that is the at-least-once contract.
+//	  Doing it ZERO times is unacceptable.
 //
-//   H4 — runOnce early-return on ctx.Err():
-//     On shutdown, drainOnce returns nil on ctx.Done. The CURRENT
-//     in-flight row finishes via processOne's own heartbeat/mark
-//     path, but any OTHER unclaimed rows in this drain pass are
-//     NOT processed this tick. The next replica picks them up via
-//     SKIP LOCKED. Side-effects for unclaimed rows: ZERO — by
-//     design (during shutdown we err toward safety).
+//	H4 — runOnce early-return on ctx.Err():
+//	  On shutdown, drainOnce returns nil on ctx.Done. The CURRENT
+//	  in-flight row finishes via processOne's own heartbeat/mark
+//	  path, but any OTHER unclaimed rows in this drain pass are
+//	  NOT processed this tick. The next replica picks them up via
+//	  SKIP LOCKED. Side-effects for unclaimed rows: ZERO — by
+//	  design (during shutdown we err toward safety).
 //
 // Operational guidance:
 //   - Inspect DLQ rows for H1 patterns: MarkProcessed errors logged

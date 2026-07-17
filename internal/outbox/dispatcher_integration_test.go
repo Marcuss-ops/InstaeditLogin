@@ -3,21 +3,21 @@
 // "partial persistence" scenarios that an operator would observe
 // during a DLQ-storm investigation:
 //
-//   H1 — adapter succeeded but MarkProcessed failed on the DB write.
-//        Loop MUST continue to the NEXT tick (proven by enqueuing a
-//        second happy-path event that gets processed despite the
-//        first one's MarkProcessed having failed). Side-effect ran.
+//	H1 — adapter succeeded but MarkProcessed failed on the DB write.
+//	     Loop MUST continue to the NEXT tick (proven by enqueuing a
+//	     second happy-path event that gets processed despite the
+//	     first one's MarkProcessed having failed). Side-effect ran.
 //
-//   H3 — LeaseTTL expired before MarkFailed ran. ProcessFunc returned
-//        a transient; MarkFailed returns ErrOutboxGone (peer stole
-//        the lease). Loop MUST continue to the NEXT tick. Side-
-//        effect may have executed once OR twice (at-least-once).
+//	H3 — LeaseTTL expired before MarkFailed ran. ProcessFunc returned
+//	     a transient; MarkFailed returns ErrOutboxGone (peer stole
+//	     the lease). Loop MUST continue to the NEXT tick. Side-
+//	     effect may have executed once OR twice (at-least-once).
 //
-//   H4 — ctx-cancel mid-drain. ProcessFunc blocks on ctx.Done. After
-//        ctx cancel, ONLY the in-flight row gets processed; the
-//        NEXT unclaimed row in the drain pass is skipped (next
-//        replica / next tick picks it up via SKIP LOCKED). Side-
-//        effects for unclaimed rows: ZERO.
+//	H4 — ctx-cancel mid-drain. ProcessFunc blocks on ctx.Done. After
+//	     ctx cancel, ONLY the in-flight row gets processed; the
+//	     NEXT unclaimed row in the drain pass is skipped (next
+//	     replica / next tick picks it up via SKIP LOCKED). Side-
+//	     effects for unclaimed rows: ZERO.
 //
 // Note on H2 (ProcessFunc panic recovery): covered by the existing
 // unit test TestDispatcher_PanicInProcess_RecoversAsTransient in
@@ -324,4 +324,3 @@ func TestDispatcher_Integration_H4_ShutdownSkipsUnclaimedRows(t *testing.T) {
 		t.Errorf("H4: expected markProcessed=1 (only in-flight), got %d", n)
 	}
 }
-
