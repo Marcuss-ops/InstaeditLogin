@@ -51,6 +51,11 @@ type Config struct {
 	FacebookRedirectURI  string
 	ThreadsRedirectURI   string
 
+	// Threads uses its own Meta "Threads app" credentials (distinct from
+	// the parent Meta/Facebook app). Required for the Threads OAuth flow.
+	ThreadsAppID     string
+	ThreadsAppSecret string
+
 	// TikTok OAuth
 	TikTokClientID     string
 	TikTokClientSecret string
@@ -65,6 +70,11 @@ type Config struct {
 	YouTubeClientID     string
 	YouTubeClientSecret string
 	YouTubeRedirectURI  string
+
+	// Google Drive OAuth (read-only import of video clips)
+	GoogleDriveClientID     string
+	GoogleDriveClientSecret string
+	GoogleDriveRedirectURI  string
 
 	// LinkedIn OAuth
 	LinkedInClientID     string
@@ -137,12 +147,27 @@ type Config struct {
 	// drained in parallel on shutdown.
 	WebhookWorkerIntervalSeconds int
 
+	// SessionsCleanupIntervalSeconds — cadence of the retention
+	// policy goroutine (commit: cleanup-policy). Drives the
+	// periodic SessionsCleanupWorker that DELETEs rows from the
+	// `sessions` table whose revoked_at is older than 30 days OR
+	// whose refresh_expires_at is older than 7 days. Default 300s
+	// (5 min) is coarse enough to not thrash the DB under traffic
+	// spikes but fine-grained enough to keep the sessions table
+	// bounded under normal load.
+	SessionsCleanupIntervalSeconds int
+
 	// S3-compatible storage (mandatory).
 	S3Endpoint  string
 	S3Bucket    string
 	S3AccessKey string
 	S3SecretKey string
 	S3Region    string
+	// S3PathStyle selects path-style addressing ({host}/{bucket}/{key})
+	// instead of the default virtual-hosted ({bucket}.{host}/{key}).
+	// Required when S3_ENDPOINT is a single fixed origin (e.g. a
+	// Cloudflare quick tunnel) that cannot serve per-bucket subdomains.
+	S3PathStyle bool
 
 	// MaxUploadBytes caps the size of any single file upload.
 	MaxUploadBytes int64
@@ -219,18 +244,23 @@ func Load() (*Config, error) {
 		InstagramRedirectURI: getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
 		FacebookRedirectURI:  getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
 		ThreadsRedirectURI:   getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
+		ThreadsAppID:         getEnv("THREADS_APP_ID", ""),
+		ThreadsAppSecret:     getEnv("THREADS_APP_SECRET", ""),
 		TikTokClientID:       getEnv("TIKTOK_CLIENT_ID", ""),
 		TikTokClientSecret:   getEnv("TIKTOK_CLIENT_SECRET", ""),
 		TikTokRedirectURI:    getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
 		XClientID:            getEnv("X_CLIENT_ID", ""),
 		XClientSecret:        getEnv("X_CLIENT_SECRET", ""),
 		XRedirectURI:         getEnv("X_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
-		YouTubeClientID:      getEnv("YOUTUBE_CLIENT_ID", ""),
-		YouTubeClientSecret:  getEnv("YOUTUBE_CLIENT_SECRET", ""),
-		YouTubeRedirectURI:   getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
-		LinkedInClientID:     getEnv("LINKEDIN_CLIENT_ID", ""),
-		LinkedInClientSecret: getEnv("LINKEDIN_CLIENT_SECRET", ""),
-		LinkedInRedirectURI:  getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
+		YouTubeClientID:         getEnv("YOUTUBE_CLIENT_ID", ""),
+		YouTubeClientSecret:     getEnv("YOUTUBE_CLIENT_SECRET", ""),
+		YouTubeRedirectURI:      getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
+		GoogleDriveClientID:     getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
+		GoogleDriveClientSecret: getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
+		GoogleDriveRedirectURI:  getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),
+		LinkedInClientID:        getEnv("LINKEDIN_CLIENT_ID", ""),
+		LinkedInClientSecret:    getEnv("LINKEDIN_CLIENT_SECRET", ""),
+		LinkedInRedirectURI:     getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
 		EncryptionKey:        getEnv("ENCRYPTION_KEY", ""),
 		// Blocco #2.2: read the multi-key env vars. The actual
 		// parsing + validation happens in validate(); Load() only
@@ -245,8 +275,10 @@ func Load() (*Config, error) {
 		PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
 		ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
 		WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
+		SessionsCleanupIntervalSeconds: getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
 		S3Endpoint:                     getEnv("S3_ENDPOINT", ""),
 		S3Bucket:                       getEnv("S3_BUCKET", ""),
+		S3PathStyle:                    getEnvBool("S3_PATH_STYLE", false),
 		S3AccessKey:                    getEnv("S3_ACCESS_KEY", ""),
 		S3SecretKey:                    getEnv("S3_SECRET_KEY", ""),
 		S3Region:                       getEnv("S3_REGION", ""),
@@ -323,6 +355,19 @@ func (c *Config) validate() error {
 		return fmt.Errorf("META_APP_SECRET must be at least %d characters (got %d)", secretMinChars, len(c.MetaAppSecret))
 	}
 
+	// Threads OAuth (optional). Requires its own app credentials + redirect.
+	if c.ThreadsRedirectURI != "" || c.ThreadsAppID != "" || c.ThreadsAppSecret != "" {
+		if c.ThreadsAppID == "" {
+			return fmt.Errorf("THREADS_APP_ID is required when enabling the Threads provider")
+		}
+		if c.ThreadsAppSecret == "" {
+			return fmt.Errorf("THREADS_APP_SECRET is required when enabling the Threads provider")
+		}
+		if len(c.ThreadsAppSecret) < secretMinChars {
+			return fmt.Errorf("THREADS_APP_SECRET must be at least %d characters (got %d)", secretMinChars, len(c.ThreadsAppSecret))
+		}
+	}
+
 	// Encryption key (Blocco #2.2 — multi-key).
 	//
 	// Three valid configurations:
@@ -378,6 +423,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateOptionalPlatform("YOUTUBE", c.YouTubeClientID, c.YouTubeClientSecret); err != nil {
+		return err
+	}
+	if err := c.validateOptionalPlatform("GOOGLE_DRIVE", c.GoogleDriveClientID, c.GoogleDriveClientSecret); err != nil {
 		return err
 	}
 	if err := c.validateOptionalPlatform("LINKEDIN", c.LinkedInClientID, c.LinkedInClientSecret); err != nil {
@@ -567,6 +615,18 @@ func (c *Config) DSN() string {
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
+	}
+	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	if value, ok := os.LookupEnv(key); ok {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off", "":
+			return false
+		}
 	}
 	return fallback
 }
