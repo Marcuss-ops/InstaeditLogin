@@ -15,11 +15,23 @@
 //	CURSOR                    optional, RFC3339 (empty = NOW())
 //	WORKSPACE_ID              required (int)
 //	FACEBOOK_ACCOUNT_ID       required (int)
+//	MIN_JITTER_SECONDS        optional (int, >= 0). Floor of the random gap
+//	                          between consecutive scheduled posts. Unset/0
+//	                          → server default (60 s).
+//	MAX_JITTER_SECONDS        optional (int, >= MIN_JITTER_SECONDS). Ceiling
+//	                          of the same uniform gap. Unset/0 → server
+//	                          default (3600 s). If you want exact-N-second
+//	                          cadence, set both to N.
 //	GOOGLE_DRIVE_API_KEY      informational only (server-side)
 //
 // Abort: SIGINT (Ctrl-C) or SIGTERM. The in-flight HTTP request is
 // cancelled and the CLI exits 130 with a final tally of jobs that
 // were scheduled before the abort.
+//
+// Jitter field semantics: when both MIN and MAX are unset (or 0) the
+// CLI omits them from the request body so the server keeps its
+// 60-3600 s fallback. Setting either to >0 means "use this value";
+// both must be set + MIN <= MAX, otherwise loadConfig fails fast.
 package main
 
 import (
@@ -49,6 +61,8 @@ const (
 	EnvCursor            = "CURSOR"
 	EnvWorkspaceID       = "WORKSPACE_ID"
 	EnvFacebookAccountID = "FACEBOOK_ACCOUNT_ID"
+	EnvMinJitterSeconds  = "MIN_JITTER_SECONDS"
+	EnvMaxJitterSeconds  = "MAX_JITTER_SECONDS"
 	EnvDriveAPIKey       = "GOOGLE_DRIVE_API_KEY"
 )
 
@@ -72,6 +86,12 @@ type Config struct {
 	CursorRFC3339            string
 	WorkspaceID              int64
 	FacebookAccountID        int64
+	// MinJitterSeconds / MaxJitterSeconds are forwarded on every page
+	// request when non-zero; zero means "omit and let the server apply
+	// its 60-3600 s default". Both must be >= 0 and MIN <= MAX when
+	// set; loadConfig() rejects invalid combinations up-front.
+	MinJitterSeconds int64
+	MaxJitterSeconds int64
 	DriveAPIKeyInformational string // logged for the operator only
 }
 
@@ -84,6 +104,8 @@ func loadConfig() (Config, error) {
 		CursorRFC3339:            strings.TrimSpace(os.Getenv(EnvCursor)),
 		WorkspaceID:              parseInt64(os.Getenv(EnvWorkspaceID), 0),
 		FacebookAccountID:        parseInt64(os.Getenv(EnvFacebookAccountID), 0),
+		MinJitterSeconds:         parseInt64(os.Getenv(EnvMinJitterSeconds), 0),
+		MaxJitterSeconds:         parseInt64(os.Getenv(EnvMaxJitterSeconds), 0),
 		DriveAPIKeyInformational: strings.TrimSpace(os.Getenv(EnvDriveAPIKey)),
 	}
 	var missing []string
@@ -94,6 +116,29 @@ func loadConfig() (Config, error) {
 	}
 	if len(missing) > 0 {
 		return cfg, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))
+	}
+	// Jitter validation: OPTIONAL but the only valid configurations
+	// are "BOTH set AND > 0" (forward to server) or "BOTH unset / 0"
+	// (server default via JSON omitempty). Mixed states like
+	// "MIN=0 MAX>0" are rejected because Go's omitempty on int64 drops
+	// the zero field, leaving the server with an ambiguous single
+	// number (a single int in the body could be read as min OR max).
+	hasMin := cfg.MinJitterSeconds != 0
+	hasMax := cfg.MaxJitterSeconds != 0
+	if hasMin != hasMax {
+		return cfg, fmt.Errorf("if either %s or %s is set, BOTH must be set (got min=%d max=%d). Set both to 0 (or unset both) to use server defaults.",
+			EnvMinJitterSeconds, EnvMaxJitterSeconds, cfg.MinJitterSeconds, cfg.MaxJitterSeconds)
+	}
+	if hasMin {
+		if cfg.MinJitterSeconds < 0 || cfg.MaxJitterSeconds < 0 {
+			return cfg, fmt.Errorf("%s and %s must be >= 0 (got min=%d max=%d)",
+				EnvMinJitterSeconds, EnvMaxJitterSeconds, cfg.MinJitterSeconds, cfg.MaxJitterSeconds)
+		}
+		if cfg.MinJitterSeconds > cfg.MaxJitterSeconds {
+			return cfg, fmt.Errorf("%s (%d) must be <= %s (%d)",
+				EnvMinJitterSeconds, cfg.MinJitterSeconds,
+				EnvMaxJitterSeconds, cfg.MaxJitterSeconds)
+		}
 	}
 	return cfg, nil
 }
@@ -191,12 +236,22 @@ type pageResponse struct {
 // no cursor) sends a minimal body; subsequent calls include the
 // servers's last_scheduled_at as the cursor so the cumulative jitter
 // continues uninterrupted across pages.
+//
+// MinJitterSeconds / MaxJitterSeconds also carry omitempty so an
+// operator who doesn't care about cadence (or accepts the server
+// 60-3600 s default) doesn't accidentally pin a narrow gap. Setting
+// MIN == MAX == N produces an exact-N-second cadence; setting them
+// apart lets the server apply uniform-random jitter in that range,
+// which the publish worker's anti-pattern detection treats as more
+// human-like.
 type pageBody struct {
 	FolderID          string     `json:"folder_id"`
 	WorkspaceID       int64      `json:"workspace_id"`
 	FacebookAccountID int64      `json:"facebook_account_id"`
 	PageToken         string     `json:"page_token,omitempty"`
 	CursorScheduledAt *time.Time `json:"cursor_scheduled_at,omitempty"`
+	MinJitterSeconds  int64      `json:"min_jitter_seconds,omitempty"`
+	MaxJitterSeconds  int64      `json:"max_jitter_seconds,omitempty"`
 }
 
 // transportFn is a small interface so tests can plug an httptest
@@ -281,6 +336,8 @@ func buildPageBody(cfg Config, pageToken string, cursor *time.Time) []byte {
 		FacebookAccountID: cfg.FacebookAccountID,
 		PageToken:         pageToken,
 		CursorScheduledAt: cursor,
+		MinJitterSeconds:  cfg.MinJitterSeconds,
+		MaxJitterSeconds:  cfg.MaxJitterSeconds,
 	}
 	b, _ := json.Marshal(body)
 	return b
@@ -339,11 +396,12 @@ func runChain(ctx context.Context, cfg Config, session, csrf string, do transpor
 			jobIDs = append(jobIDs, e.JobID)
 		}
 
-		fmt.Fprintf(out, "[page=%d scheduled=%d first_publish=%s last_scheduled=%s job_ids=%s next_page_token=%q note=%q]\n",
+		fmt.Fprintf(out, "[page=%d scheduled=%d first_publish=%s last_scheduled=%s jitter=%s job_ids=%s next_page_token=%q note=%q]\n",
 			pageNum,
 			result.ScheduledCount,
 			formatTime(result.FirstPublishAt),
 			formatTime(result.LastScheduledAt),
+			formatJitterEcho(cfg),
 			formatJobIDs(jobIDs),
 			result.NextPageToken,
 			result.Note,
@@ -371,6 +429,18 @@ func formatTimePtr(t *time.Time) string {
 		return "(none)"
 	}
 	return formatTime(*t)
+}
+
+// formatJitterEcho renders the per-page log's jitter label so a
+// 50-page run that fails mid-pagination tells the operator the active
+// cadence without scrolling back to bootLog. Empty string when cfg
+// has jitter unset (the bootLog line already explains the
+// "server-default" choice).
+func formatJitterEcho(cfg Config) string {
+	if cfg.MinJitterSeconds == 0 && cfg.MaxJitterSeconds == 0 {
+		return "server-default (60-3600s)"
+	}
+	return fmt.Sprintf("min=%ds/max=%ds", cfg.MinJitterSeconds, cfg.MaxJitterSeconds)
 }
 
 // formatJobIDs prints `[101,102,103,…N…,201,202,203]` for long lists so
@@ -407,6 +477,12 @@ func bootLog(out io.Writer, cfg Config) {
 	} else {
 		fmt.Fprintf(out, "[info] GOOGLE_DRIVE_API_KEY present in env (len=%d) — server-side Drive listing can use it.\n",
 			len(cfg.DriveAPIKeyInformational))
+	}
+	if cfg.MinJitterSeconds > 0 || cfg.MaxJitterSeconds > 0 {
+		fmt.Fprintf(out, "[info] jitter override active: min=%ds max=%ds (forwarded on every page)\n",
+			cfg.MinJitterSeconds, cfg.MaxJitterSeconds)
+	} else {
+		fmt.Fprintln(out, "[info] jitter override unset → using server default (60-3600s). Set MIN_JITTER_SECONDS / MAX_JITTER_SECONDS to override.")
 	}
 }
 

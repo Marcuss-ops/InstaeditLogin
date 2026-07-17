@@ -126,6 +126,169 @@ func TestLoadConfig_AllEnvvarSet_NoError(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_JitterBothUnset_DefaultsToZero(t *testing.T) {
+	// Required envs set so the happy path wins.
+	t.Setenv(EnvCookieFile, "/tmp/cookies.txt")
+	t.Setenv(EnvFolderID, "fid")
+	t.Setenv(EnvWorkspaceID, "1")
+	t.Setenv(EnvFacebookAccountID, "50")
+	t.Setenv(EnvMinJitterSeconds, "")
+	t.Setenv(EnvMaxJitterSeconds, "")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig with jitter unset: %v", err)
+	}
+	if cfg.MinJitterSeconds != 0 || cfg.MaxJitterSeconds != 0 {
+		t.Errorf("unset jitter envs should parse to 0, got min=%d max=%d",
+			cfg.MinJitterSeconds, cfg.MaxJitterSeconds)
+	}
+}
+
+func TestLoadConfig_JitterBothSet_ParsedCorrectly(t *testing.T) {
+	t.Setenv(EnvCookieFile, "/tmp/cookies.txt")
+	t.Setenv(EnvFolderID, "fid")
+	t.Setenv(EnvWorkspaceID, "1")
+	t.Setenv(EnvFacebookAccountID, "50")
+	// 4h 30 min window centred on 4h (matches the user's "every 4h ±30min" cadence).
+	t.Setenv(EnvMinJitterSeconds, "12600")
+	t.Setenv(EnvMaxJitterSeconds, "16200")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig with jitter set: %v", err)
+	}
+	if cfg.MinJitterSeconds != 12600 || cfg.MaxJitterSeconds != 16200 {
+		t.Errorf("jitter parse wrong: want min=12600 max=16200, got min=%d max=%d",
+			cfg.MinJitterSeconds, cfg.MaxJitterSeconds)
+	}
+}
+
+func TestLoadConfig_JitterBothZero_AcceptsServerDefaultSentinel(t *testing.T) {
+	// Both envs explicitly set to "0" IS the same as both unset:
+	// omitempty drops the body fields, server applies 60-3600 s default.
+	// This pins the "explicit-zero" form of the sentinel so a future
+	// refactor that collapses 0+0 into "set" doesn't accidentally
+	// start sending `{"min_jitter_seconds":0,"max_jitter_seconds":0}`
+	// (which would override the server default with bogus 0-0 jitter).
+	t.Setenv(EnvCookieFile, "/tmp/cookies.txt")
+	t.Setenv(EnvFolderID, "fid")
+	t.Setenv(EnvWorkspaceID, "1")
+	t.Setenv(EnvFacebookAccountID, "50")
+	t.Setenv(EnvMinJitterSeconds, "0")
+	t.Setenv(EnvMaxJitterSeconds, "0")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("both-zero jitter should be accepted (server-default sentinel): %v", err)
+	}
+	if cfg.MinJitterSeconds != 0 || cfg.MaxJitterSeconds != 0 {
+		t.Errorf("both-zero not preserved: %d/%d", cfg.MinJitterSeconds, cfg.MaxJitterSeconds)
+	}
+}
+
+// Mixed states (only MIN set OR only MAX set) are REJECTED because
+// Go's omitempty on int64 drops a 0 field, leaving the server with
+// an ambiguous single number in the body. Catch these early at the
+// CLI boundary so the operator learns the rule at startup.
+func TestLoadConfig_JitterOnlyMinSet_Rejects(t *testing.T) {
+	t.Setenv(EnvCookieFile, "/tmp/cookies.txt")
+	t.Setenv(EnvFolderID, "fid")
+	t.Setenv(EnvWorkspaceID, "1")
+	t.Setenv(EnvFacebookAccountID, "50")
+	t.Setenv(EnvMinJitterSeconds, "60")
+	t.Setenv(EnvMaxJitterSeconds, "0")
+	_, err := loadConfig()
+	if err == nil {
+		t.Fatalf("only-MIN-set should be rejected (would emit single max=0 in body)")
+	}
+	if !strings.Contains(err.Error(), "BOTH must be set") {
+		t.Errorf("error should explain the both-or-neither rule; got: %v", err)
+	}
+}
+
+func TestLoadConfig_JitterOnlyMaxSet_Rejects(t *testing.T) {
+	t.Setenv(EnvCookieFile, "/tmp/cookies.txt")
+	t.Setenv(EnvFolderID, "fid")
+	t.Setenv(EnvWorkspaceID, "1")
+	t.Setenv(EnvFacebookAccountID, "50")
+	t.Setenv(EnvMinJitterSeconds, "0")
+	t.Setenv(EnvMaxJitterSeconds, "60")
+	_, err := loadConfig()
+	if err == nil {
+		t.Fatalf("only-MAX-set should be rejected (omitempty drops min=0, server sees ambiguous single number)")
+	}
+	if !strings.Contains(err.Error(), "BOTH must be set") {
+		t.Errorf("error should explain the both-or-neither rule; got: %v", err)
+	}
+}
+
+func TestLoadConfig_JitterMinGreaterThanMax_Rejects(t *testing.T) {
+	t.Setenv(EnvCookieFile, "/tmp/cookies.txt")
+	t.Setenv(EnvFolderID, "fid")
+	t.Setenv(EnvWorkspaceID, "1")
+	t.Setenv(EnvFacebookAccountID, "50")
+	t.Setenv(EnvMinJitterSeconds, "999")
+	t.Setenv(EnvMaxJitterSeconds, "100") // min > max
+	_, err := loadConfig()
+	if err == nil {
+		t.Fatalf("min > max should be rejected")
+	}
+	if !strings.Contains(err.Error(), EnvMinJitterSeconds) || !strings.Contains(err.Error(), EnvMaxJitterSeconds) {
+		t.Errorf("error should mention both env names so operator knows where to fix; got: %v", err)
+	}
+}
+
+func TestLoadConfig_JitterNegative_Rejects(t *testing.T) {
+	t.Setenv(EnvCookieFile, "/tmp/cookies.txt")
+	t.Setenv(EnvFolderID, "fid")
+	t.Setenv(EnvWorkspaceID, "1")
+	t.Setenv(EnvFacebookAccountID, "50")
+	t.Setenv(EnvMinJitterSeconds, "-1")
+	t.Setenv(EnvMaxJitterSeconds, "60")
+	_, err := loadConfig()
+	if err == nil {
+		t.Fatalf("negative jitter should be rejected")
+	}
+	if !strings.Contains(err.Error(), ">=") {
+		t.Errorf("error should mention the >= constraint; got: %v", err)
+	}
+}
+
+func TestBuildPageBody_IncludesJitterWhenSet(t *testing.T) {
+	cfg := Config{
+		FolderID:          "fid",
+		WorkspaceID:       1,
+		FacebookAccountID: 50,
+		MinJitterSeconds:  12600,
+		MaxJitterSeconds:  16200,
+	}
+	body := buildPageBody(cfg, "", nil)
+	var parsed pageBody
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if parsed.MinJitterSeconds != 12600 || parsed.MaxJitterSeconds != 16200 {
+		t.Errorf("jitter should be in body; got min=%d max=%d",
+			parsed.MinJitterSeconds, parsed.MaxJitterSeconds)
+	}
+}
+
+func TestBuildPageBody_OmitsJitterWhenZero(t *testing.T) {
+	// Critical: when MIN_JITTER_SECONDS / MAX_JITTER_SECONDS are unset
+	// (parsed to 0), the JSON body MUST omit them so the server applies
+	// its 60-3600 s default. Otherwise operators without jitter envs
+	// would silently get 0-0 jitter (every video published the same
+	// instant + anti-pattern-detection triggers).
+	cfg := Config{
+		FolderID:          "fid",
+		WorkspaceID:       1,
+		FacebookAccountID: 50,
+	}
+	body := buildPageBody(cfg, "", nil)
+	raw := string(body)
+	if strings.Contains(raw, "min_jitter_seconds") || strings.Contains(raw, "max_jitter_seconds") {
+		t.Errorf("zero jitter must be omitted from JSON (causes 0-0 server-side); body: %s", raw)
+	}
+}
+
 // fakePageResponse builds a JSON-encoded response for the mock server.
 func writeJSONResp(t *testing.T, w http.ResponseWriter, status int, body any) {
 	t.Helper()
@@ -225,6 +388,70 @@ func TestRunChain_HappyPath_TwoPagesThenDone(t *testing.T) {
 	}
 	if !strings.Contains(log, "[101,102,103]") {
 		t.Errorf("log should preview first page job_ids: %s", log)
+	}
+	// Per-page log MUST echo the active jitter so a multi-page run
+	// that fails mid-pagination shows the cadence without scrolling
+	// back to bootLog.
+	if !strings.Contains(log, "jitter=server-default (60-3600s)") {
+		t.Errorf("per-page log must echo server-default jitter when unset; got: %s", log)
+	}
+}
+
+func TestRunChain_HappyPath_ForwardsJitterOnEveryPage(t *testing.T) {
+	// Same shape as TestRunChain_HappyPath_TwoPagesThenDone but the
+	// cfg has jitter set — the body MUST carry min_jitter_seconds +
+	// max_jitter_seconds on every page call (multi-page exhaustiveness
+	// check: a future refactor that resets jitter mid-loop would
+	// surface as "second call's body missing the fields" here).
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var got pageBody
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode body call %d: %v", calls, err)
+		}
+		if got.MinJitterSeconds != 12600 || got.MaxJitterSeconds != 16200 {
+			t.Errorf("call %d: jitter must be forwarded; got min=%d max=%d",
+				calls, got.MinJitterSeconds, got.MaxJitterSeconds)
+		}
+		switch calls {
+		case 1:
+			writeJSONResp(t, w, 202, pageResponse{
+				FolderID:       "fid",
+				ScheduledCount: 1,
+				NextPageToken:  "tok-2",
+			})
+		case 2:
+			writeJSONResp(t, w, 202, pageResponse{
+				FolderID:       "fid",
+				ScheduledCount: 1,
+				NextPageToken:  "",
+			})
+		}
+	}))
+	defer srv.Close()
+
+	cfg := Config{
+		APIBase:           srv.URL,
+		FolderID:          "fid",
+		WorkspaceID:       1,
+		FacebookAccountID: 50,
+		MinJitterSeconds:  12600,
+		MaxJitterSeconds:  16200,
+	}
+	do := func(req *http.Request) (*http.Response, error) { return srv.Client().Do(req) }
+
+	out := &strings.Builder{}
+	if exit := runChain(context.Background(), cfg, "S", "C", do, out); exit != 0 {
+		t.Fatalf("exit: want 0, got %d (log: %s)", exit, out.String())
+	}
+	if calls != 2 {
+		t.Errorf("server should serve 2 pages, got %d", calls)
+	}
+	// Per-page log must echo the active jitter so a long-running
+	// pagination that fails on page N shows the cadence inline.
+	if !strings.Contains(out.String(), "jitter=min=12600s/max=16200s") {
+		t.Errorf("per-page log must echo active jitter; got: %s", out.String())
 	}
 }
 

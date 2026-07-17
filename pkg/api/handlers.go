@@ -339,6 +339,35 @@ type AuditLogStore interface {
 // NOT touch status transitions from the request path.
 type UploadJobStore interface {
 	Create(job *models.UploadJob) error
+	// ListByUser returns upload_jobs scoped to the caller (userID)
+	// with optional filters (account_id / status / from-to). Backs
+	// the dashboard "Programmati" view (per-account calendar) and
+	// any future "pending uploads" widget. nil filter fields are
+	// no-ops; the SQL is one statement with NULL-or-equal predicates
+	// so the planner keeps a single plan across all combinations.
+	ListByUser(userID int64, filter repository.UploadJobListFilter) ([]models.UploadJob, error)
+	// PendingCountsByAccount returns one aggregate row per target
+	// account the user has pending uploads on (count + earliest
+	// scheduled_at). Single GROUP BY query, no row cap — exact
+	// counts even when the user has 10k scheduled rows. Handler
+	// maps to GET /api/v1/uploads/counts for the dashboard widget.
+	PendingCountsByAccount(userID int64) ([]repository.UploadJobPendingCount, error)
+	// PendingDistinctCount returns the user's total number of pending
+	// upload_jobs (distinct rows, not per-target expansions). The
+	// dashboard's "Pending uploads" stat reads from this — using
+	// SUM(PendingCountsByAccount.count) over-counts one upload that
+	// targets multiple accounts.
+	PendingDistinctCount(userID int64) (int64, error)
+	// Reschedule atomically updates scheduled_at for a pending
+	// upload_job. Returns the updated row on success; typed
+	// repository.ErrUploadJobNotFound when the id is unknown OR
+	// the job has already moved past `pending` (worker claimed
+	// / completed / failed). handler maps to HTTP 404.
+	Reschedule(jobID, userID int64, newScheduledAt time.Time) (models.UploadJob, error)
+	// Cancel atomically deletes a pending upload_job. Same state-
+	// machine + authz contract as Reschedule; returns
+	// repository.ErrUploadJobNotFound on missing / non-pending rows.
+	Cancel(jobID, userID int64) error
 	// AggregateByFolder returns the per-status counts + min/max
 	// scheduled_at scoped to (folder_id, user_id). Used by
 	// GET /api/v1/media/import/drive/batch/status for the
@@ -649,7 +678,28 @@ func (r *Router) Setup() http.Handler {
 	// (pending/processing/completed/failed) and min/max scheduled_at.
 	// Mirrors the upload_jobs partial index on folder_id so polling
 	// is one index range scan + a per-status COUNT FILTER.
-	r.mux.Method(http.MethodGet, "/api/v1/media/import/drive/batch/status", r.protected(r.handleDriveBatchStatus))
+	r.mux.Method(http.MethodGet, "/api/v1/media/import/drive/batch/status", r.protected(r.handleDriveBatchStatus))	// Dashboard "Programmati" surface: per-account scheduled uploads
+	// + cross-account list + drag-drop reschedule + cancel.
+	// Sub-router pattern keeps the route table flat without leaking
+	// the new IDs into the chi-pattern matching at the top level.
+	r.mux.Route("/api/v1/uploads", func(sr chi.Router) {
+		// /counts MUST come before /{id} below — but the route
+		// below is mounted as /, not /{id}, so order doesn't
+		// matter here. We still register /counts first for
+		// readability (the cheap aggregate before any heavy by-account
+		// detail query).
+		sr.Get("/counts", r.protected(r.handleUploadCounts))
+		sr.Get("/", r.protected(r.handleListUploads))
+		sr.Get("/by-account", r.protected(r.handleListUploadsByAccount))
+		// Server-side batch folder import — one round-trip per
+		// folder regardless of size. Auto-pages Drive's
+		// next_page_token transparently (max driveBatchMaxPages
+		// = 50 pages × 200 videos = 10 000 entries).
+		// Idempotency-Key contract mirrors handleDriveBatchImport.
+		sr.Post("/batch/by-folder", r.protected(r.handleUploadsBatchByFolder))
+		sr.Patch("/{id}/reschedule", r.protected(r.handleRescheduleUpload))
+		sr.Delete("/{id}", r.protected(r.handleCancelUpload))
+	})
 
 	r.mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", r.protected(r.handleCompleteMedia))
 	r.mux.Route("/api/v1/workspaces", func(sr chi.Router) {

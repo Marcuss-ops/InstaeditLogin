@@ -15,6 +15,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -30,6 +31,12 @@ type mockDriveFolderLister struct {
 	gotToken       string
 	gotPageToken   string
 	listCallCount  int
+	// pagesFn enables multi-page simulation. When set, the mock
+	// routes ListFolder through this callback so test cases can
+	// return different files per pageToken across sequential
+	// calls. Nil → mock falls back to static files + static
+	// nextPageToken (preserves every pre-existing test).
+	pagesFn func(pageToken string) (files []services.GoogleDriveFile, next string, err error)
 }
 
 func (m *mockDriveFolderLister) Name() string { return "google-drive" }
@@ -38,6 +45,9 @@ func (m *mockDriveFolderLister) ListFolder(_ context.Context, folderID, accessTo
 	m.gotToken = accessToken
 	m.gotPageToken = pageToken
 	m.listCallCount++
+	if m.pagesFn != nil {
+		return m.pagesFn(pageToken)
+	}
 	if m.listErr != nil {
 		return nil, "", m.listErr
 	}
@@ -66,6 +76,12 @@ type mockUploadJobStore struct {
 	// response without going through Create. The default returns
 	// a zero-value BatchStatusSummary when nil.
 	aggregateFn func(folderID string, userID int64) (models.BatchStatusSummary, error)
+	// pendingCountsFn is the scripted override for PendingCountsByAccount.
+	// When nil, the mock computes the aggregate from its in-memory jobs
+	// slice — the same code path that would be exercised by a real
+	// integration test where the SQL aggregator has been run.
+	pendingCountsFn func(userID int64) ([]repository.UploadJobPendingCount, error)
+	distinctCountFn func(userID int64) (int64, error)
 }
 
 func (m *mockUploadJobStore) Create(job *models.UploadJob) error {
@@ -90,7 +106,657 @@ func (m *mockUploadJobStore) AggregateByFolder(folderID string, userID int64) (m
 	return models.BatchStatusSummary{}, nil
 }
 
-var _ UploadJobStore = (*mockUploadJobStore)(nil)
+// ListByUser mirrors the real repository's filter semantics so the
+// dashboard calendar tests can exercise the by-account bucketing and
+// the Reschedule/Cancel tests can prepare the world without going
+// through Create. matches() is filter-only — the by-account JSON
+// grouping stays in the handler (where it has the user identity to
+// short-circuit before reaching this method).
+func (m *mockUploadJobStore) ListByUser(userID int64, filter repository.UploadJobListFilter) ([]models.UploadJob, error) {
+	out := make([]models.UploadJob, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		if j.UserID != userID {
+			continue
+		}
+		if filter.AccountID != nil {
+			ok := false
+			for _, t := range j.Targets {
+				if t == *filter.AccountID {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				continue
+			}
+		}
+		if filter.Status != nil && j.Status != *filter.Status {
+			continue
+		}
+		if filter.From != nil {
+			if j.ScheduledAt == nil || j.ScheduledAt.Before(*filter.From) {
+				continue
+			}
+		}
+		if filter.To != nil {
+			if j.ScheduledAt == nil || j.ScheduledAt.After(*filter.To) {
+				continue
+			}
+		}
+		out = append(out, j)
+	}
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, nil
+}
+
+// Reschedule mirrors the real repository's contract: only pending
+// rows update; rows that already left "pending" return
+// repository.ErrUploadJobNotFound so tests can assert the handler's
+// 404 mapping.
+func (m *mockUploadJobStore) Reschedule(jobID, userID int64, newScheduledAt time.Time) (models.UploadJob, error) {
+	for i := range m.jobs {
+		if m.jobs[i].ID != jobID || m.jobs[i].UserID != userID {
+			continue
+		}
+		if m.jobs[i].Status != models.UploadJobStatusPending {
+			return models.UploadJob{}, repository.ErrUploadJobNotFound
+		}
+		t := newScheduledAt
+		m.jobs[i].ScheduledAt = &t
+		m.jobs[i].UpdatedAt = time.Now()
+		return m.jobs[i], nil
+	}
+	return models.UploadJob{}, repository.ErrUploadJobNotFound
+}
+
+// Cancel mirrors Reschedule's state-machine + authz contract.
+func (m *mockUploadJobStore) Cancel(jobID, userID int64) error {
+	for i := range m.jobs {
+		if m.jobs[i].ID != jobID || m.jobs[i].UserID != userID {
+			continue
+		}
+		if m.jobs[i].Status != models.UploadJobStatusPending {
+			return repository.ErrUploadJobNotFound
+		}
+		m.jobs = append(m.jobs[:i], m.jobs[i+1:]...)
+		return nil
+	}
+	return repository.ErrUploadJobNotFound
+}
+
+// PendingCountsByAccount mirrors the real repository's GROUP BY
+// aggregate: one row per target account that has at least one pending
+// upload_job, with the count + earliest scheduled_at. The mock walks
+// the stored slice instead of running SQL so test expectations stay
+// driven by Create invocations. Tests that need a deterministic
+// response (e.g. to assert the exact JSON shape on /uploads/counts)
+// pre-script mock.pendingCountsFn; the default falls through to the
+// in-memory aggregate below so per-job Create()'d data still drives
+// the dashboard widget in flight tests.
+func (m *mockUploadJobStore) PendingCountsByAccount(userID int64) ([]repository.UploadJobPendingCount, error) {
+	if m.pendingCountsFn != nil {
+		return m.pendingCountsFn(userID)
+	}
+	type acc struct {
+		count        int
+		earliestUnix int64 // ms since epoch; 0 means "no scheduled_at yet"
+	}
+	byAcc := map[int64]*acc{}
+	for _, j := range m.jobs {
+		if j.UserID != userID || j.Status != models.UploadJobStatusPending {
+			continue
+		}
+		var earliest int64
+		if j.ScheduledAt != nil {
+			earliest = j.ScheduledAt.Unix()
+		}
+		for _, t := range j.Targets {
+			a, ok := byAcc[t]
+			if !ok {
+				a = &acc{}
+				byAcc[t] = a
+			}
+			a.count++
+			if earliest != 0 {
+				if a.earliestUnix == 0 || earliest < a.earliestUnix {
+					a.earliestUnix = earliest
+				}
+			}
+		}
+	}
+	out := make([]repository.UploadJobPendingCount, 0, len(byAcc))
+	for id, a := range byAcc {
+		c := repository.UploadJobPendingCount{
+			AccountID: id,
+			Count:     a.count,
+		}
+		if a.earliestUnix != 0 {
+			t := time.Unix(a.earliestUnix, 0).UTC()
+			c.NextPublishAt = &t
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// PendingDistinctCount mirrors the real repository's SELECT
+// COUNT(*) FROM upload_jobs WHERE user_id=$1 AND status='pending'.
+// Defaults to the in-memory count of pending rows for the user when
+// no override is set, so the dashboard's "Pending uploads" stat stays
+// correct as long as Create()'d data drives it.
+func (m *mockUploadJobStore) PendingDistinctCount(userID int64) (int64, error) {
+	if m.distinctCountFn != nil {
+		return m.distinctCountFn(userID)
+	}
+	var n int64
+	for _, j := range m.jobs {
+		if j.UserID == userID && j.Status == models.UploadJobStatusPending {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// =====================================================================
+// /api/v1/uploads/batch/by-folder tests (handleUploadsBatchByFolder)
+//
+// The new endpoint auto-paginates the single-page handleDriveBatchImport
+// equivalent. Each test below uses mockDriveFolderLister.pagesFn to
+// drive a deterministic sequence of ListFolder responses keyed on
+// the incoming page_token.
+// =====================================================================
+
+// runUploadsBatchByFolderPost issues a POST with a fixed JWT (user 1,
+// ws 1) and an optional Idempotency-Key against the new endpoint.
+// Encapsulates the boilerplate every test repeats.
+func runUploadsBatchByFolderPost(
+	t *testing.T,
+	r *Router,
+	body, idempotencyKey string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/uploads/batch/by-folder", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	return w
+}
+
+// TestUploadsBatchByFolder_HappyPath_ThreePages_FlattenedEntryList
+// verifies the SPA-facing contract: one HTTP call produces a single
+// JSON document with every page's entries flattened, monotonically
+// increasing global Index, and a single first/last scheduled_at that
+// spans the full folder.
+func TestUploadsBatchByFolder_HappyPath_ThreePages_FlattenedEntryList(t *testing.T) {
+	lister := &mockDriveFolderLister{
+		pagesFn: func(pageToken string) ([]services.GoogleDriveFile, string, error) {
+			switch pageToken {
+			case "":
+				return []services.GoogleDriveFile{
+					{ID: "p1-a", Name: "p1-a.mp4", MimeType: "video/mp4"},
+					{ID: "p1-b", Name: "p1-b.mp4", MimeType: "video/mp4"},
+				}, "tok-2", nil
+			case "tok-2":
+				return []services.GoogleDriveFile{
+					{ID: "p2-a", Name: "p2-a.mp4", MimeType: "video/mp4"},
+				}, "tok-3", nil
+			case "tok-3":
+				return []services.GoogleDriveFile{
+					{ID: "p3-a", Name: "p3-a.mp4", MimeType: "video/mp4"},
+					{ID: "p3-b", Name: "p3-b.mp4", MimeType: "video/mp4"},
+					{ID: "p3-c", Name: "p3-c.mp4", MimeType: "video/mp4"},
+				}, "", nil // DONE
+			default:
+				return nil, "", fmt.Errorf("unexpected pageToken in mock: %q", pageToken)
+			}
+		},
+	}
+	store := &mockUploadJobStore{}
+	idemStore := newMockIdempotencyStore()
+	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
+
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`, "")
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
+	}
+	if lister.listCallCount != 3 {
+		t.Errorf("server should serve 3 pages, got %d", lister.listCallCount)
+	}
+	var resp struct {
+		FolderID         string `json:"folder_id"`
+		ScheduledCount   int    `json:"scheduled_count"`
+		PageCount        int    `json:"page_count"`
+		Entries          []struct {
+			Index       int    `json:"index"`
+			JobID       int64  `json:"job_id"`
+			Name        string `json:"name"`
+			ScheduledAt string `json:"scheduled_at"`
+		} `json:"entries"`
+		FirstPublishAt  string `json:"first_publish_at"`
+		LastScheduledAt string `json:"last_scheduled_at"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.PageCount != 3 {
+		t.Errorf("page_count: want 3, got %d", resp.PageCount)
+	}
+	if resp.ScheduledCount != 6 {
+		t.Errorf("scheduled_count: want 6 (2+1+3), got %d", resp.ScheduledCount)
+	}
+	if len(resp.Entries) != 6 {
+		t.Fatalf("entries: want 6, got %d", len(resp.Entries))
+	}
+	// Globally monotonic Index across pages — Index 4 belongs to
+	// page 3's first file, NOT 0 (which would indicate page-local
+	// numbering leak).
+	wantIndices := []int{0, 1, 2, 3, 4, 5}
+	for i, e := range resp.Entries {
+		if e.Index != wantIndices[i] {
+			t.Errorf("entry %d index: want %d, got %d", i, wantIndices[i], e.Index)
+		}
+	}
+	// First / last scheduled_at span the full timeline.
+	if resp.FirstPublishAt == "" || resp.LastScheduledAt == "" {
+		t.Errorf("first_publish_at / last_scheduled_at should be set when entries > 0")
+	}
+	if len(store.jobs) != 6 {
+		t.Errorf("upload_jobs persisted: want 6, got %d", len(store.jobs))
+	}
+}
+
+// TestUploadsBatchByFolder_ConfigGap_Returns200WithGuidance pins the
+// dedicated path: server is missing GOOGLE_DRIVE_API_KEY AND the
+// caller did not supply drive_account_id — the handler returns 200
+// (not 5xx) with the structured hint so the SPA can render a CTA.
+func TestUploadsBatchByFolder_ConfigGap_Returns200WithGuidance(t *testing.T) {
+	lister := &mockDriveFolderLister{
+		listErr: fmt.Errorf("%w: GOOGLE_DRIVE_API_KEY not configured", services.ErrDriveListRequiresAPIKey),
+	}
+	store := &mockUploadJobStore{}
+	r := newBatchImportTestRouter(lister, store)
+
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`, "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 (config gap is operator-fixable), got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		NeedsGoogleDriveAPIKey bool   `json:"needs_google_drive_api_key"`
+		NeedsDriveAccount      bool   `json:"needs_drive_account"`
+		Note                   string `json:"note"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.NeedsGoogleDriveAPIKey {
+		t.Errorf("NeedsGoogleDriveAPIKey must be true on sentinel")
+	}
+	if !resp.NeedsDriveAccount {
+		t.Errorf("NeedsDriveAccount must be true when no drive_account_id was passed")
+	}
+	if !strings.Contains(resp.Note, "GOOGLE_DRIVE_API_KEY") {
+		t.Errorf("note must mention GOOGLE_DRIVE_API_KEY, got: %q", resp.Note)
+	}
+}
+
+// TestUploadsBatchByFolder_EmptyFolder_ReturnsOkWithNote ensures an
+// empty Drive folder (page 1 returns 0 files + empty next_token) maps
+// to 200 with a human-readable note and ScheduledCount=0.
+func TestUploadsBatchByFolder_EmptyFolder_ReturnsOkWithNote(t *testing.T) {
+	lister := &mockDriveFolderLister{
+		files:         nil, // static path: returns nil on every call
+		nextPageToken: "",
+	}
+	store := &mockUploadJobStore{}
+	r := newBatchImportTestRouter(lister, store)
+
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"empty","workspace_id":1,"facebook_account_id":50}`, "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 (empty folder is operator-actionable info, not error), got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		ScheduledCount int    `json:"scheduled_count"`
+		PageCount      int    `json:"page_count"`
+		Note           string `json:"note"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ScheduledCount != 0 {
+		t.Errorf("scheduled_count: want 0, got %d", resp.ScheduledCount)
+	}
+	if resp.PageCount != 1 {
+		t.Errorf("page_count: want 1, got %d", resp.PageCount)
+	}
+	if resp.Note == "" {
+		t.Errorf("note must be set so SPA can render 'no videos found'")
+	}
+}
+
+// TestUploadsBatchByFolder_CapExceeded_Returns413 verifies the
+// driveBatchMaxPages=50 cap. After 50 successful pages, the 51st
+// call from Drive would exceed the cap → 413 + clear guidance.
+func TestUploadsBatchByFolder_CapExceeded_Returns413(t *testing.T) {
+	// Drive returns 1 file + a different next_token 50 times.
+	tokens := make([]string, 0, 50)
+	for i := 0; i < 50; i++ {
+		tokens = append(tokens, fmt.Sprintf("tok-%02d", i))
+	}
+	lister := &mockDriveFolderLister{
+		pagesFn: func(pageToken string) ([]services.GoogleDriveFile, string, error) {
+			if pageToken == "" {
+				return []services.GoogleDriveFile{{ID: "p0", Name: "p0.mp4", MimeType: "video/mp4"}}, tokens[0], nil
+			}
+			for i, t := range tokens {
+				if pageToken == t {
+					if i == 49 {
+						// We'd loop; cap should kick in before this.
+						return []services.GoogleDriveFile{{ID: "pN", Name: "pN.mp4"}}, "", nil
+					}
+					return []services.GoogleDriveFile{{ID: fmt.Sprintf("p%d", i+1), Name: fmt.Sprintf("p%d.mp4", i+1)}}, tokens[i+1], nil
+				}
+			}
+			return nil, "", fmt.Errorf("unexpected token %q", pageToken)
+		},
+	}
+	store := &mockUploadJobStore{}
+	r := newBatchImportTestRouter(lister, store)
+
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"huge","workspace_id":1,"facebook_account_id":50}`, "")
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413 (cap exceeded), got %d: %s", w.Code, w.Body.String())
+	}
+	if lister.listCallCount != 50 {
+		t.Errorf("cap MUST short-circuit BEFORE the 51st listing call: want exactly 50 calls, got %d (a 51st call means the cap fires AFTER listing, wasting an upstream slot)", lister.listCallCount)
+	}
+	// 50 already-created upload_jobs stay queued (no rollback).
+	if len(store.jobs) != 50 {
+		t.Errorf("upload_jobs already queued: want 50 (no rollback), got %d", len(store.jobs))
+	}
+}
+
+// TestUploadsBatchByFolder_PartialFailure_MidPagination_ReturnsPartialState:
+// pages 1+2 succeed, page 3 upstream blips. Handler should return
+// 200 with partial_failure=true + entries_so_far in entries[] +
+// failed_at_page_token + note pointing the operator to resume
+// manually via the existing single-page endpoint.
+func TestUploadsBatchByFolder_PartialFailure_MidPagination_ReturnsPartialState(t *testing.T) {
+	var calls int
+	lister := &mockDriveFolderLister{
+		pagesFn: func(pageToken string) ([]services.GoogleDriveFile, string, error) {
+			calls++
+			switch calls {
+			case 1:
+				return []services.GoogleDriveFile{{ID: "p1", Name: "p1.mp4"}}, "tok-2", nil
+			case 2:
+				return []services.GoogleDriveFile{
+					{ID: "p2-a", Name: "p2-a.mp4"},
+					{ID: "p2-b", Name: "p2-b.mp4"},
+				}, "tok-FAILED", nil // Drive returns token + fails on next call
+			default:
+				return nil, "", fmt.Errorf("upstream blip on call %d", calls)
+			}
+		},
+	}
+	store := &mockUploadJobStore{}
+	r := newBatchImportTestRouter(lister, store)
+
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`, "")
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202 with partial_failure=true (NOT a 5xx — operator can resume), got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		ScheduledCount    int    `json:"scheduled_count"`
+		PageCount         int    `json:"page_count"`
+		PartialFailure    bool   `json:"partial_failure"`
+		FailedAtPageToken string `json:"failed_at_page_token"`
+		FailedAtPage      int    `json:"failed_at_page"`
+		Note              string `json:"note"`
+		Entries           []struct {
+			Index int    `json:"index"`
+			Name  string `json:"name"`
+		} `json:"entries"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.PartialFailure {
+		t.Errorf("partial_failure must be true after mid-pagination upstream blip")
+	}
+	if resp.FailedAtPage != 3 {
+		t.Errorf("failed_at_page: want 3 (call count when blip happened), got %d", resp.FailedAtPage)
+	}
+	if resp.FailedAtPageToken != "tok-FAILED" {
+		t.Errorf("failed_at_page_token: want the Drive token from page 2's response, got %q", resp.FailedAtPageToken)
+	}
+	if resp.ScheduledCount != 3 {
+		t.Errorf("scheduled_count: want 3 (1 from p1 + 2 from p2), got %d", resp.ScheduledCount)
+	}
+	if len(resp.Entries) != 3 {
+		t.Errorf("entries: want 3 in the partial response, got %d", len(resp.Entries))
+	}
+	if len(store.jobs) != 3 {
+		t.Errorf("upload_jobs queued: want 3 (no rollback on partial), got %d", len(store.jobs))
+	}
+	if !strings.Contains(resp.Note, "resume") {
+		t.Errorf("note must guide operator to resume manually, got: %q", resp.Note)
+	}
+}
+
+// TestUploadsBatchByFolder_Idempotency_Replay_FullResponse pins the
+// byte-for-byte replay contract. After a successful first call,
+// retrying with the same key + same body hash should return the
+// cached response verbatim (no new upload_jobs).
+func TestUploadsBatchByFolder_Idempotency_Replay_FullResponse(t *testing.T) {
+	lister := &mockDriveFolderLister{
+		pagesFn: func(pageToken string) ([]services.GoogleDriveFile, string, error) {
+			if pageToken == "" {
+				return []services.GoogleDriveFile{
+					{ID: "p1-a", Name: "p1-a.mp4"},
+					{ID: "p1-b", Name: "p1-b.mp4"},
+				}, "", nil
+			}
+			return nil, "", fmt.Errorf("unexpected token")
+		},
+	}
+	store := &mockUploadJobStore{}
+	idemStore := newMockIdempotencyStore()
+	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
+
+	body := `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`
+	const idemKey = "byfolder-replay-key"
+	w1 := runUploadsBatchByFolderPost(t, r, body, idemKey)
+	if w1.Code != http.StatusAccepted {
+		t.Fatalf("first call want 202, got %d: %s", w1.Code, w1.Body.String())
+	}
+	firstWire := w1.Body.Bytes()
+	firstJobCount := len(store.jobs)
+
+	w2 := runUploadsBatchByFolderPost(t, r, body, idemKey)
+	if w2.Code != http.StatusAccepted {
+		t.Fatalf("replay want 202, got %d: %s", w2.Code, w2.Body.String())
+	}
+	if !bytes.Equal(w2.Body.Bytes(), firstWire) {
+		t.Errorf("replay bytes differ from original wire bytes\n   wire:  %q\n   cache: %q",
+			string(firstWire), string(w2.Body.Bytes()))
+	}
+	if len(store.jobs) != firstJobCount {
+		t.Errorf("replay must NOT create new upload_jobs; want %d, got %d", firstJobCount, len(store.jobs))
+	}
+}
+
+// TestUploadsBatchByFolder_PartialFailure_DoesNotCache: a partial
+// failure response must NOT be cached, because retrying should
+// re-run from page 1 to converge on truth (the cached bytes would
+// otherwise mislead future replays into thinking the partial state
+// is the final state).
+func TestUploadsBatchByFolder_PartialFailure_DoesNotCache(t *testing.T) {
+	var calls int
+	lister := &mockDriveFolderLister{
+		pagesFn: func(pageToken string) ([]services.GoogleDriveFile, string, error) {
+			calls++
+			if calls == 1 {
+				return []services.GoogleDriveFile{{ID: "p1", Name: "p1.mp4"}}, "tok-FAIL", nil
+			}
+			return nil, "", fmt.Errorf("upstream blip")
+		},
+	}
+	store := &mockUploadJobStore{}
+	idemStore := newMockIdempotencyStore()
+	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
+
+	const idemKey = "byfolder-partial-no-cache"
+	body := `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`
+	w := runUploadsBatchByFolderPost(t, r, body, idemKey)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("partial-failure want 202, got %d: %s", w.Code, w.Body.String())
+	}
+	// Cache MUST NOT have a row for this (workspace, key) tuple.
+	rec, err := idemStore.FindActiveByKey(1, idemKey, time.Now())
+	if err != nil {
+		t.Fatalf("FindActiveByKey: %v", err)
+	}
+	if rec != nil {
+		t.Errorf("partial failure response must NOT be cached; got record id=%d", rec.ID)
+	}
+}
+
+// TestUploadsBatchByFolder_NonOwnerWorkspace_Returns403 protects the
+// workspace-isolation contract: a caller passing another tenant's
+// workspace_id in body MUST be rejected before any listing or
+// job creation. The same defence-in-depth ordering as
+// handleDriveBatchImport.
+func TestUploadsBatchByFolder_NonOwnerWorkspace_Returns403(t *testing.T) {
+	lister := &mockDriveFolderLister{}
+	store := &mockUploadJobStore{}
+	capRouter := services.NewCapabilityRouter()
+	capRouter.Register("google-drive", lister)
+	wsStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			return &models.Workspace{ID: id, Name: "Other", OwnerID: 2}, nil // owned by user 2, NOT caller (1)
+		},
+	}
+	userStore := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return nil, nil
+		},
+		listFn: func(userID int64, _ string) ([]*models.PlatformAccount, error) {
+			return nil, nil
+		},
+	}
+	r := NewRouter(
+		capRouter,
+		userStore,
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		WithWorkspaceStore(wsStore),
+		WithUploadJobStore(store),
+	)
+
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`, "")
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("want 403 (workspace not owned by caller), got %d: %s", w.Code, w.Body.String())
+	}
+	if lister.listCallCount != 0 {
+		t.Errorf("lister must NOT be called when ownership gate fails, got %d calls", lister.listCallCount)
+	}
+	if len(store.jobs) != 0 {
+		t.Errorf("no upload_jobs should be created when ownership gate fails, got %d", len(store.jobs))
+	}
+}
+
+// TestUploadsBatchByFolder_CumulativeStagger_ClampedAt7Days ensures the
+// driveBatchJitterMaxSeconds clamp fires when a long batch's cumulative
+// stagger would otherwise schedule jobs beyond +7d. The clamp is
+// applied per-item AFTER the random gap is added, so on the boundary
+// items the scheduled_at STOPS advancing — they all collapse onto
+// the same T+7d instant. This is the documented behaviour (see the
+// godoc on batchRunUploadByFolderPage loop body) and tested here to
+// prevent regressing to "scheduler creates rows past the horizon
+// indefinitely".
+func TestUploadsBatchByFolder_CumulativeStagger_ClampedAt7Days(t *testing.T) {
+	// 200 files on page 1, then EOF. min_jitter = max_jitter = 4 hours
+	// (huge stagger — 199 × 4h = 33 DAS, well past 7d). Without the
+	// clamp, LastScheduledAt would be T+33d.
+	const minJitter = 4 * 60 * 60
+	const maxJitter = 4 * 60 * 60
+	const fileCount = 200
+	lister := &mockDriveFolderLister{
+		pagesFn: func(pageToken string) ([]services.GoogleDriveFile, string, error) {
+			if pageToken != "" {
+				return nil, "", fmt.Errorf("unexpected token %q in clamp test", pageToken)
+			}
+			files := make([]services.GoogleDriveFile, 0, fileCount)
+			for i := 0; i < fileCount; i++ {
+				files = append(files, services.GoogleDriveFile{
+					ID:       fmt.Sprintf("p%d", i),
+					Name:     fmt.Sprintf("p%d.mp4", i),
+					MimeType: "video/mp4",
+				})
+			}
+			return files, "", nil
+		},
+	}
+	store := &mockUploadJobStore{}
+	r := newBatchImportTestRouter(lister, store)
+
+	body := fmt.Sprintf(
+		`{"folder_id":"clamp","workspace_id":1,"facebook_account_id":50,"min_jitter_seconds":%d,"max_jitter_seconds":%d}`,
+		minJitter, maxJitter,
+	)
+	w := runUploadsBatchByFolderPost(t, r, body, "")
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202 (clamped at 7d), got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		ScheduledCount  int       `json:"scheduled_count"`
+		FirstPublishAt  time.Time `json:"first_publish_at"`
+		LastScheduledAt time.Time `json:"last_scheduled_at"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ScheduledCount != fileCount {
+		t.Fatalf("scheduled_count: want %d (every page-1 file MUST end up queued, even clamped), got %d",
+			fileCount, resp.ScheduledCount)
+	}
+	if store.jobs == nil || len(store.jobs) != fileCount {
+		t.Fatalf("upload_jobs queued: want %d (no skip on clamp), got %d", fileCount, len(store.jobs))
+	}
+	// Lock the single-lister-call contract: the mock returns EOF on
+	// page 2, so a regression that retries "" instead of breaking
+	// would infinite-loop (caught here before the assertion hangs the
+	// CI runner).
+	if lister.listCallCount != 1 {
+		t.Errorf("lister: want exactly 1 call (mock returns EOF on page 2), got %d — a loop regression would show here", lister.listCallCount)
+	}
+	// The clamp is per-item: scheduledAt.Sub(startedAt) > 7d → reset.
+	// We can't easily replicate startedAt (it's captured INSIDE the
+	// handler on call), but we can assert: last scheduled_at is at
+	// most +7d + one jitter past FirstPublishAt (because the boundary
+	// item itself still gets a jitter ADDED before the clamp re-clamps).
+	// In practice with min==max jitter, LastScheduledAt must be in
+	// [FP+6d23h, FP+7d+4h] for a 200-file 4h-jitter batch.
+	delta := resp.LastScheduledAt.Sub(resp.FirstPublishAt)
+	maxAllowed := 7*24*time.Hour + time.Duration(maxJitter)*time.Second
+	if delta > maxAllowed {
+		t.Errorf("LastScheduledAt exceeds 7d+jitter cap: delta=%v (max %v); the clamp regressed", delta, maxAllowed)
+	}
+}
 
 // validFacebookAccountIDs enumerates the IDs the test userStore
 // recognises as a valid Facebook Page platform_account. Anything else

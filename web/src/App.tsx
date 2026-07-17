@@ -10,6 +10,7 @@ import { InternalLinking } from "./pages/internal/Linking";
 import { InternalPosts } from "./pages/internal/Posts";
 import { InternalCompose } from "./pages/internal/Compose";
 import { ScheduledByAccount } from "./pages/internal/ScheduledByAccount";
+import { InternalUploads } from "./pages/internal/Uploads";
 import { CookieBanner } from "./components/CookieBanner";
 import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
 import { ToastProvider } from "./components/toast";
@@ -68,6 +69,12 @@ function App() {
             >
               <Route index element={<Navigate to="dashboard" replace />} />
               <Route path="dashboard" element={<InternalDashboard />} />
+              {/* /app/uploads hosts the inline form that imports a
+                  Google Drive folder in a single round-trip — the
+                  /uploads/batch/by-folder endpoint handles server-side
+                  pagination. /app/uploads/calendar stays as the per-
+                  account drag-and-drop grid. */}
+              <Route path="uploads" element={<InternalUploads />} />
               <Route path="linking" element={<InternalLinking />} />
               <Route path="posts" element={<InternalPosts />} />
               <Route path="compose" element={<InternalCompose />} />

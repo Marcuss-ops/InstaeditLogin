@@ -43,6 +43,10 @@ type AccountProgrammatoCount = {
 type DashboardData = {
   accounts: PlatformAccount[];
   posts: Post[];
+  // totalUploads is the DISTINCT count of pending upload_jobs from
+  // /uploads/counts — multi-target rows count ONCE (instead of once
+  // per target). This is the source for the "Pending uploads" stat.
+  totalUploads: number;
   // Per-account pending count + earliest scheduled_at, derived from
   // GET /api/v1/uploads/counts. The dashboard widget renders from
   // this map; the calendar page hits /uploads/by-account separately.
@@ -131,6 +135,7 @@ export function InternalDashboard() {
           count: number;
           next_publish_at: string | null;
         }>;
+        total_uploads: number;
       };
       // Project the count-rollup into a Map<account_id, count + nextAt>
       // so the per-account widget can O(1)-look-up instead of doing an
@@ -151,6 +156,7 @@ export function InternalDashboard() {
           accounts: accountsData.accounts ?? [],
           posts: postsData.posts ?? [],
           countMap,
+          totalUploads: countsData.total_uploads ?? 0,
         },
       });
     } catch (err) {
@@ -188,10 +194,10 @@ export function InternalDashboard() {
           posts: state.data.posts.length,
           published: state.data.posts.filter((p) => p.status === "published").length,
           scheduled: state.data.posts.filter((p) => p.status === "queued").length,
-          queuedUploads: Array.from(state.data.countMap.values()).reduce(
-            (sum, c) => sum + c.count,
-            0,
-          ),
+          // totalUploads comes from /uploads/counts (DISTINCT rows, not
+          // per-target expansions) so multi-target uploads count once
+          // even when the JSONB targets array fans out across accounts.
+          queuedUploads: state.data.totalUploads,
         }
       : null;
 
