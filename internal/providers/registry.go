@@ -179,6 +179,15 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		}
 	}
 
+	if cfg.GoogleDriveClientID != "" {
+		gd, err := services.NewGoogleDriveOAuthService(cfg, b.deps)
+		if err != nil {
+			b.logger.Warn("Skipped Google Drive provider (constructor failed)", "error", err)
+		} else if gd != nil {
+			router.Register(gd.Name(), gd)
+		}
+	}
+
 	if cfg.LinkedInClientID != "" {
 		li, err := services.NewLinkedInOAuthService(oauthCfg, b.deps)
 		if err != nil {

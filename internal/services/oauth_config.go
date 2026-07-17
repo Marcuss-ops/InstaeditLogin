@@ -47,7 +47,7 @@ type ConfigAdapter struct {
 // NewConfigAdapter returns a ConfigAdapter that proxies the
 // configured getters to the wrapped *config.Config. The constructor is
 // the single hand-off point callers should use to keep the concrete
-//→adapter conversion localized.
+// →adapter conversion localized.
 func NewConfigAdapter(cfg *config.Config) *ConfigAdapter {
 	return &ConfigAdapter{cfg: cfg}
 }
