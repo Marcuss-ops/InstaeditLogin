@@ -146,7 +146,7 @@ export function InternalPosts() {
     try {
       await authedFetch(endpoint, { method });
       await loadAll();
-    } catch (err) {
+    } catch {
       // errors are toasted by authedFetch
     } finally {
       setBusyId(null);

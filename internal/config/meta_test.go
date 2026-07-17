@@ -8,7 +8,7 @@ import (
 // TestMetaConfigUsesSharedCredentials verifies that all three Meta-family
 // providers (Instagram, Facebook, Threads) use META_APP_ID + META_APP_SECRET
 // instead of individual per-provider OAuth credentials. There must be no
-// INSTAGRAM_APP_SECRET, FACEBOOK_APP_SECRET, or THREADS_APP_SECRET fields.
+// INSTAGRAM_APP_SECRET or FACEBOOK_APP_SECRET fields.
 func TestMetaConfigUsesSharedCredentials(t *testing.T) {
 	cfg := minimalValidConfig(validJWTSecret())
 	// All three Meta-family providers share META_APP_ID + META_APP_SECRET.
@@ -23,9 +23,9 @@ func TestMetaConfigUsesSharedCredentials(t *testing.T) {
 	}
 
 	// Verify shared credentials are set as expected.
-	// There must be no INSTAGRAM_APP_SECRET, FACEBOOK_APP_SECRET, or
-	// THREADS_APP_SECRET on the Config struct — the shared Meta creds
-	// are the single source of truth for all Meta-family providers.
+	// There must be no INSTAGRAM_APP_SECRET or FACEBOOK_APP_SECRET on the
+	// Config struct — the shared Meta creds are the single source of truth
+	// for all Meta-family providers.
 	if cfg.MetaAppID != "test-app-id" {
 		t.Errorf("MetaAppID: want test-app-id, got %q", cfg.MetaAppID)
 	}

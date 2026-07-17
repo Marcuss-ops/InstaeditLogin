@@ -33,7 +33,7 @@ func newTestThreadsService(srv *httptest.Server) *ThreadsOAuthService {
 }
 
 // TestThreadsAuthorizationURL verifies that GetLoginURL returns a URL with:
-//   - the correct Meta OAuth base URL
+//   - the correct Threads OAuth base URL (threads.net)
 //   - the MetaAppID as client_id
 //   - the Threads-specific redirect URI
 //   - Threads-specific scopes (threads_basic, threads_content_publish)
@@ -49,11 +49,11 @@ func TestThreadsAuthorizationURL(t *testing.T) {
 		t.Fatalf("GetLoginURL returned an unparseable URL: %v\nurl: %s", err, authURL)
 	}
 
-	if parsed.Host != "www.facebook.com" {
-		t.Errorf("host: want www.facebook.com, got %s", parsed.Host)
+	if parsed.Host != "threads.net" {
+		t.Errorf("host: want threads.net, got %s", parsed.Host)
 	}
-	if parsed.Path != "/v19.0/dialog/oauth" {
-		t.Errorf("path: want /v19.0/dialog/oauth, got %s", parsed.Path)
+	if parsed.Path != "/oauth/authorize" {
+		t.Errorf("path: want /oauth/authorize, got %s", parsed.Path)
 	}
 
 	params := parsed.Query()
@@ -81,17 +81,21 @@ func TestThreadsAuthorizationURL(t *testing.T) {
 }
 
 // TestThreadsCallbackUsesCorrectRedirectURI verifies that HandleCallback
-// calls the Meta token endpoint with the Threads-specific redirect URI.
+// calls the Threads token endpoint with the Threads-specific redirect URI.
 func TestThreadsCallbackUsesCorrectRedirectURI(t *testing.T) {
 	var capturedRedirectURI string
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
-		// Only capture redirect_uri from the initial code exchange
-		// (the second call — ExchangeForLongLivedToken — also hits
-		// this path but without a "code" param; skip overwriting).
-		if r.URL.Query().Get("code") != "" {
-			capturedRedirectURI = r.URL.Query().Get("redirect_uri")
+	mux.HandleFunc("/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		// Capture redirect_uri from the initial code exchange.
+		if r.PostForm.Get("code") != "" {
+			capturedRedirectURI = r.PostForm.Get("redirect_uri")
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"access_token": "th-short-lived",
@@ -99,14 +103,14 @@ func TestThreadsCallbackUsesCorrectRedirectURI(t *testing.T) {
 			"expires_in":   3600,
 		})
 	})
-	mux.HandleFunc("/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/access_token", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"access_token": "th-long-lived",
 			"token_type":   "bearer",
 			"expires_in":   5184000,
 		})
 	})
-	mux.HandleFunc("/v19.0/me", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1.0/me", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{
 			"id":   "th-user-id",
 			"name": "Threads User",
@@ -170,21 +174,24 @@ func TestThreadsRequestsThreadsScopes(t *testing.T) {
 // returned by HandleCallback carries the Threads scopes.
 func TestThreadsHandleCallback_TokenDataScopes(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"access_token": "th-short",
 			"token_type":   "bearer",
 			"expires_in":   3600,
 		})
 	})
-	mux.HandleFunc("/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/access_token", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"access_token": "th-long",
 			"token_type":   "bearer",
 			"expires_in":   5184000,
 		})
 	})
-	mux.HandleFunc("/v19.0/me", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1.0/me", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"id": "profile", "name": "User"})
 	})
 	srv := httptest.NewServer(mux)
@@ -232,7 +239,7 @@ func TestThreadsDisabledWhenNoRedirectURI(t *testing.T) {
 // surfaces the error when the initial code exchange fails.
 func TestThreadsCallback_TokenExchangeFails(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`{"error":{"message":"Invalid code"}}`))
 	})
@@ -244,5 +251,39 @@ func TestThreadsCallback_TokenExchangeFails(t *testing.T) {
 	_, _, err := svc.HandleCallback(context.Background(), "state", "bad-code")
 	if err == nil {
 		t.Fatal("expected error when code exchange fails")
+	}
+}
+
+// TestThreadsRefreshOAuthToken verifies that RefreshOAuthToken calls the
+// Threads-specific refresh_access_token endpoint.
+func TestThreadsRefreshOAuthToken(t *testing.T) {
+	var capturedGrantType string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/refresh_access_token", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		capturedGrantType = r.URL.Query().Get("grant_type")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token": "th-refreshed",
+			"token_type":   "bearer",
+			"expires_in":   5184000,
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestThreadsService(srv)
+
+	tokenData, err := svc.RefreshOAuthToken(context.Background(), "th-existing-long-lived")
+	if err != nil {
+		t.Fatalf("RefreshOAuthToken: %v", err)
+	}
+	if tokenData.AccessToken != "th-refreshed" {
+		t.Errorf("AccessToken: want th-refreshed, got %q", tokenData.AccessToken)
+	}
+	if capturedGrantType != "th_refresh_token" {
+		t.Errorf("grant_type: want th_refresh_token, got %q", capturedGrantType)
 	}
 }

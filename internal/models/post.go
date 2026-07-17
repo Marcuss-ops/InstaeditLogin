@@ -270,6 +270,43 @@ type IdempotencyRecord struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// BatchReplay is the cached response payload for a drive_batch
+// idempotent POST (Taglio 4.7 LEVEL 1 + drive_batch).
+//
+// Lives 1:1 with IdempotencyRecord on idempotency_record_id: the
+// main row carries the lookup hot-path (workspace_id,
+// idempotency_key, request_hash) and resource_type="drive_batch";
+// this side row carries the entire serialized
+// DriveBatchImportResponse so the replay path can serve byte-identical
+// JSON without re-running the batch handler.
+//
+// Why a separate table (instead of a JSONB column on
+// idempotency_records): the resource_type="post" and
+// resource_type="drive_import" replays re-fetch from their owner
+// table (single source-of-truth row). drive_batch creates up to N=200
+// upload_jobs in one POST and there's no single underlying post row
+// to re-fetch — replaying requires the full response. Keeping the
+// payload in a side table keeps the idempotency_records row uniform
+// (resource_id + status, no BYTEA payload) so the existing CRON
+// sweeper and operator drill-down queries don't need to know about
+// batch-specific shapes. JSONB (not BYTEA) lets future operator
+// queries index interesting fields (e.g. "batches with
+// scheduled_count > 100") without re-marshalling.
+//
+// ResponsePayload is the raw JSON bytes returned by the original
+// handler — encoding/json.Marshal output on the DriveBatchImportResponse
+// struct. Marshalling in the API layer (not here) lets the same
+// bytes be both written to the SPA (via Write) and stored for replay,
+// guaranteeing byte-for-byte equality. The handler marshals once and
+// passes the bytes both ways; this avoids a roundtrip through
+// []byte → model → []byte that could subtly drift on field-order
+// changes.
+type BatchReplay struct {
+	IdempotencyRecordID int64     `json:"idempotency_record_id"`
+	ResponsePayload     []byte    `json:"response_payload"`
+	CreatedAt           time.Time `json:"created_at"`
+}
+
 // OutboxEvent is a row in the transactional-outbox table. Written atomically
 // inside the same transaction that mutates the aggregate, so downstream
 // consumers never miss an event (no dual-write problem).

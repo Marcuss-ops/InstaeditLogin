@@ -17,7 +17,7 @@ import (
 // (internal/* may import pkg/api; pkg/api never imports internal/*).
 // The WorkerStatus type itself is owned by pkg/api; internal/bootstrap
 // constructs and stores *pkg/api.WorkerStatus on App.WorkerStatus.
-var WorkerNames = []string{"publish", "reconcile", "outbox", "webhook", "metrics", "sessions_cleanup"}
+var WorkerNames = []string{"publish", "reconcile", "outbox", "webhook", "metrics", "sessions_cleanup", "upload"}
 
 // WorkerStatus holds the per-goroutine "started" signal used by the
 // /ready endpoint. Each entry is an atomic.Bool flipped to true on

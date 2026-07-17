@@ -37,7 +37,14 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
-// IdempotencyRepository handles persistence for idempotency_records.
+// IdempotencyRepository handles persistence for both
+// idempotency_records (migration 021, lookup hot-path) AND
+// idempotency_batch_replays (migration 039, drive_batch cached
+// response payload). The two tables are linked 1:1 by
+// idempotency_records.id → idempotency_batch_replays.idempotency_record_id;
+// the CASCADE FK ensures the side row dies with its parent so the
+// post-039 CRON sweeper doesn't need special-casing for batch
+// records.
 type IdempotencyRepository struct {
 	db *sql.DB
 }
@@ -56,6 +63,77 @@ func NewIdempotencyRepository(db *sql.DB) *IdempotencyRepository {
 // that retries unconditionally, but the sentinel is exported so a
 // future handler can dispatch on it.
 var ErrIdempotencyKeyCollided = errors.New("idempotency key collided on insert")
+
+// FindBatchReplay returns the cached response payload for a
+// drive_batch idempotent POST. The lookup uses the parent
+// idempotency_record_id (a primary key on idempotency_batch_replays).
+// Returns (nil, nil) when no side row matches — a drive_batch record
+// exists but its replay row wasn't written for some reason (best-effort
+// insert failed at write time). The replay path treats a nil replay
+// as "no cached response available; surface 500 to operator".
+//
+// The side table is appended to only AFTER the parent
+// idempotency_records row has been inserted (since the side row
+// requires the parent's generated id). The CASCADE FK ensures the
+// side row dies with its parent.
+func (r *IdempotencyRepository) FindBatchReplay(idempotencyRecordID int64) (*models.BatchReplay, error) {
+	if idempotencyRecordID <= 0 {
+		return nil, nil
+	}
+	rec := &models.BatchReplay{}
+	err := r.db.QueryRow(
+		`SELECT idempotency_record_id, response_payload, created_at
+		 FROM idempotency_batch_replays
+		 WHERE idempotency_record_id = $1`,
+		idempotencyRecordID,
+	).Scan(&rec.IdempotencyRecordID, &rec.ResponsePayload, &rec.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to find batch replay: %w", err)
+	}
+	return rec, nil
+}
+
+// InsertBatchReplay persists the cached response payload for a
+// drive_batch idempotent POST. The parent idempotency_record_id is
+// the PK on idempotency_batch_replays; a duplicate insert returns
+// ErrIdempotencyKeyCollided's sibling ErrBatchReplayCollision so
+// the caller can distinguish a duplicate-side-row insert from a
+// generic error. In practice this shouldn't happen (Insert is only
+// called from insertBatchIdempotentRecord AFTER a successful parent
+// insert) — the dispatch here is paranoia for future refactors.
+func (r *IdempotencyRepository) InsertBatchReplay(rec *models.BatchReplay) error {
+	if rec == nil {
+		return errors.New("nil batch replay record")
+	}
+	if rec.IdempotencyRecordID <= 0 {
+		return errors.New("idempotency_record_id is required")
+	}
+	if len(rec.ResponsePayload) == 0 {
+		return errors.New("response_payload is required")
+	}
+	err := r.db.QueryRow(
+		`INSERT INTO idempotency_batch_replays
+		   (idempotency_record_id, response_payload)
+		 VALUES ($1, $2)
+		 RETURNING created_at`,
+		rec.IdempotencyRecordID, rec.ResponsePayload,
+	).Scan(&rec.CreatedAt)
+	if err != nil {
+		// Same collision-sentinel pattern as the parent table. The
+		// PRIMARY KEY on idempotency_batch_replays is idempotency_record_id
+		// so a duplicate-side-row collision is a PK violation.
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			return fmt.Errorf("batch replay already exists for record %d: %w",
+				rec.IdempotencyRecordID, ErrIdempotencyKeyCollided)
+		}
+		return fmt.Errorf("failed to insert batch replay: %w", err)
+	}
+	return nil
+}
 
 // FindActiveByKey looks up an unexpired idempotency record for
 // (workspaceID, key). Returns (nil, nil) when no active row matches

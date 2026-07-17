@@ -1,5 +1,12 @@
 import { Link } from "react-router-dom";
-import { ArrowRight, Zap, Shield, BarChart3, Sparkles } from "lucide-react";
+import { ArrowRight, Zap, Shield, BarChart3, Sparkles, PlayCircle } from "lucide-react";
+
+// Demo YouTube Shorts shown inside the Shorts section. Single source of truth
+// so adding/removing a demo = one line in this array.
+const SHORT_DEMOS: ReadonlyArray<{ id: string; title: string }> = [
+  { id: "MVwXsmRLnwM", title: "YouTube Shorts demo MVwXsmRLnwM" },
+  { id: "XCIWzK2BuRo", title: "YouTube Shorts demo XCIWzK2BuRo" },
+];
 
 export function Landing() {
   return (
@@ -114,6 +121,56 @@ export function Landing() {
             <p className="text-xs text-zinc-400 leading-relaxed">
               Track reach, engagement, and publishing status across all platforms in one clean view.
             </p>
+          </div>
+        </section>
+
+        {/* Shorts Section - Separated Border */}
+        <section className="p-6 rounded border border-zinc-800 bg-zinc-900/20 hover:border-zinc-700 transition-colors">
+          <div className="flex justify-center mb-3">
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+              <PlayCircle className="w-3.5 h-3.5" />
+              Short-Form Video
+            </span>
+          </div>
+          <h3 className="text-base font-bold text-white mb-2 text-center">
+            Ship vertical shorts to every channel in one click
+          </h3>
+          <p className="text-xs text-zinc-400 leading-relaxed max-w-xl mx-auto text-center mb-4">
+            InstaEdit handles the quirks of each short-form platform — aspect ratio, length caps, descriptions,
+            thumbnails — so a single vertical render lands correctly on YouTube Shorts, Instagram Reels, and TikTok.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto mb-5">
+            {SHORT_DEMOS.map((demo) => (
+              <div
+                key={demo.id}
+                className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-[0_4px_24px_rgba(0,0,0,0.4)]"
+              >
+                <div className="aspect-[9/16]">
+                  <iframe
+                    className="w-full h-full"
+                    src={`https://www.youtube.com/embed/${demo.id}?playsinline=1`}
+                    title={demo.title}
+                    loading="lazy"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                    referrerPolicy="strict-origin-when-cross-origin"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs font-semibold">
+            <span className="text-zinc-400 hover:text-[#FF0000] transition-colors">
+              YouTube Shorts
+            </span>
+            <span className="text-zinc-700">·</span>
+            <span className="text-zinc-400 hover:text-[#E1306C] transition-colors">
+              Instagram Reels
+            </span>
+            <span className="text-zinc-700">·</span>
+            <span className="text-zinc-400 hover:text-white transition-colors">
+              TikTok
+            </span>
           </div>
         </section>
 

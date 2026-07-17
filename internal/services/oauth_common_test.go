@@ -277,6 +277,25 @@ func TestOAuthHandleCallback_PreservesProfileFields(t *testing.T) {
 		})
 	})
 	mux.HandleFunc("/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
+		// This path is shared in tests because the test client rewrites all
+		// hosts to the same server. Instagram/Facebook long-lived exchange hits
+		// it with GET; Threads code exchange hits it with POST. Distinguish by
+		// method so both flows get a sensible response.
+		if r.Method == http.MethodPost {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"access_token": "short-tok",
+				"token_type":   "bearer",
+				"expires_in":   3600,
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token": "long-tok",
+			"token_type":   "bearer",
+			"expires_in":   5184000,
+		})
+	})
+	mux.HandleFunc("/access_token", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"access_token": "long-tok",
 			"token_type":   "bearer",
@@ -288,6 +307,12 @@ func TestOAuthHandleCallback_PreservesProfileFields(t *testing.T) {
 			"id":    "profile-id-12345",
 			"name":  "Test User",
 			"email": "test@example.com",
+		})
+	})
+	mux.HandleFunc("/v1.0/me", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{
+			"id":   "profile-id-12345",
+			"name": "Test User",
 		})
 	})
 	srv := httptest.NewServer(mux)

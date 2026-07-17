@@ -154,6 +154,11 @@ type Router struct {
 	// that main.go spawns separately.
 	webhookStore WebhookStore
 
+	// uploadJobStore persists background upload jobs (public or
+	// authenticated Google Drive imports). When nil, the async
+	// drive-import endpoint returns 501.
+	uploadJobStore UploadJobStore
+
 	// Blocco #5.3 — Sentry hub + /ready wiring.
 	// sentryHub is nil when SENTRY_DSN is unset (operator-disables-
 	// by-omission). When set, the recovery middleware uses
@@ -298,6 +303,17 @@ type ApiKeyStore interface {
 type IdempotencyStore interface {
 	FindActiveByKey(workspaceID int64, key string, now time.Time) (*models.IdempotencyRecord, error)
 	Insert(rec *models.IdempotencyRecord) error
+	// FindBatchReplay + InsertBatchReplay (migration 039, drive_batch
+	// idempotency, Taglio 4.7 LEVEL 1 extension). drive_batch creates
+	// up to N=200 upload_jobs in one POST so there's no single source-of-truth
+	// row to re-fetch on replay; the cached response payload lives in a
+	// 1:1 side table (idempotency_batch_replays) keyed on the parent
+	// idempotency_record_id. The replay path is wired in
+	// pkg/api/idempotency.go's replayIdempotentResource ("drive_batch"
+	// branch) and the handler writes both rows via
+	// insertBatchIdempotentRecord in idempotency.go.
+	FindBatchReplay(idempotencyRecordID int64) (*models.BatchReplay, error)
+	InsertBatchReplay(rec *models.BatchReplay) error
 }
 
 type StorageProvider interface {
@@ -314,6 +330,22 @@ type StorageProvider interface {
 
 type AuditLogStore interface {
 	Log(ctx context.Context, eventType, actorID string, resourceType, resourceID string, metadata map[string]interface{}) error
+}
+
+// UploadJobStore is the persistence contract for the background
+// upload_jobs queue. The API layer both creates new jobs (batches)
+// AND reads aggregates for the dashboard status endpoint. The
+// worker claims and updates the underlying rows; the API layer does
+// NOT touch status transitions from the request path.
+type UploadJobStore interface {
+	Create(job *models.UploadJob) error
+	// AggregateByFolder returns the per-status counts + min/max
+	// scheduled_at scoped to (folder_id, user_id). Used by
+	// GET /api/v1/media/import/drive/batch/status for the
+	// dashboard. Returns a zero-value BatchStatusSummary (not an
+	// error) when no rows match — the handler turns that into a
+	// 200 + note rather than 404.
+	AggregateByFolder(folderID string, userID int64) (models.BatchStatusSummary, error)
 }
 
 type RouterOption func(*Router)
@@ -486,6 +518,13 @@ func WithRateLimitService(svc *services.RateLimitService) RouterOption {
 func WithWebhookStore(s WebhookStore) RouterOption {
 	return func(r *Router) { r.webhookStore = s }
 }
+
+// WithUploadJobStore wires the background upload_jobs queue used by
+// POST /api/v1/media/import/drive/async. When nil, the endpoint
+// returns 501.
+func WithUploadJobStore(s UploadJobStore) RouterOption {
+	return func(r *Router) { r.uploadJobStore = s }
+}
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -594,6 +633,23 @@ func (r *Router) Setup() http.Handler {
 		chain(r.protected(r.handlePresignMedia), mediaPresignMw...))
 
 	r.mux.Method(http.MethodPost, "/api/v1/media/import/drive", r.protected(r.handleDriveImport))
+
+	// Async drive import: queue a background job to download a
+	// public or authenticated Drive video and publish it later.
+	r.mux.Method(http.MethodPost, "/api/v1/media/import/drive/async", r.protected(r.handleDriveImportAsync))
+
+	// Batch drive import: list every video in a Drive folder and
+	// schedule them as posts with cumulative random gaps. The first
+	// job's scheduled_at is NOW so the publish_worker picks it up on
+	// its next tick (≈1s). Used for "I have a folder full of videos,
+	// post one every 3-4.5 hours on my Facebook Page" workflows.
+	r.mux.Method(http.MethodPost, "/api/v1/media/import/drive/folder", r.protected(r.handleDriveBatchImport))
+
+	// Batch drive status: dashboard polls this for per-folder counts
+	// (pending/processing/completed/failed) and min/max scheduled_at.
+	// Mirrors the upload_jobs partial index on folder_id so polling
+	// is one index range scan + a per-status COUNT FILTER.
+	r.mux.Method(http.MethodGet, "/api/v1/media/import/drive/batch/status", r.protected(r.handleDriveBatchStatus))
 
 	r.mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", r.protected(r.handleCompleteMedia))
 	r.mux.Route("/api/v1/workspaces", func(sr chi.Router) {

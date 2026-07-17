@@ -19,8 +19,6 @@ import (
 // upstream without blocking forever.
 const driveImportS3UploadTimeout = 30 * time.Minute
 
-
-
 // DriveImportRequest is the body for POST /api/v1/media/import/drive.
 // It imports a clip from the user's Google Drive and creates a post
 // that is immediately queued for publishing to the selected targets.
@@ -41,7 +39,7 @@ type DriveImportRequest struct {
 
 // DriveImportResponse returns the created post and the imported media asset.
 type DriveImportResponse struct {
-	Post  *models.Post     `json:"post"`
+	Post  *models.Post       `json:"post"`
 	Asset *models.MediaAsset `json:"asset"`
 }
 

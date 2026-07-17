@@ -51,11 +51,6 @@ type Config struct {
 	FacebookRedirectURI  string
 	ThreadsRedirectURI   string
 
-	// Threads uses its own Meta "Threads app" credentials (distinct from
-	// the parent Meta/Facebook app). Required for the Threads OAuth flow.
-	ThreadsAppID     string
-	ThreadsAppSecret string
-
 	// TikTok OAuth
 	TikTokClientID     string
 	TikTokClientSecret string
@@ -157,6 +152,23 @@ type Config struct {
 	// bounded under normal load.
 	SessionsCleanupIntervalSeconds int
 
+	// UploadWorkerIntervalSeconds — cadence of the background upload
+	// worker that drains upload_jobs (public or authenticated Google
+	// Drive imports). Default 30s.
+	UploadWorkerIntervalSeconds int
+
+	// GoogleDriveAPIKey is a Google Cloud API key used to list CONTENTS
+	// of a public Drive folder when the user has not linked their Drive
+	// account. Without it, batch folder imports only work for folders
+	// the linked Drive account can access (typically: nothing, since the
+	// linked account isn't the folder's owner).
+	//
+	// Create one at https://console.cloud.google.com → APIs & Services →
+	// Credentials → API key, scoped to the Google Drive API. Empty
+	// default means the batch folder endpoint can only target folders
+	// the user's Drive OAuth grant can see.
+	GoogleDriveAPIKey string
+
 	// S3-compatible storage (mandatory).
 	S3Endpoint  string
 	S3Bucket    string
@@ -229,29 +241,27 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		FrontendURL:          getEnv("FRONTEND_URL", ""),
-		AllowedCORSOrigins:   splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
-		DatabaseURL:          getEnv("DATABASE_URL", ""),
-		DBHost:               getEnv("DB_HOST", "localhost"),
-		DBPort:               getEnv("DB_PORT", "5432"),
-		DBUser:               getEnv("DB_USER", "instaedit"),
-		DBPassword:           getEnv("DB_PASSWORD", ""),
-		DBName:               getEnv("DB_NAME", "instaedit_login"),
-		DBSSLMode:            getEnv("DB_SSLMODE", "disable"),
-		MetaAppID:            getEnv("META_APP_ID", ""),
-		MetaAppSecret:        getEnv("META_APP_SECRET", ""),
-		MetaRedirectURI:      getEnv("META_REDIRECT_URI", ""),
-		InstagramRedirectURI: getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
-		FacebookRedirectURI:  getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
-		ThreadsRedirectURI:   getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
-		ThreadsAppID:         getEnv("THREADS_APP_ID", ""),
-		ThreadsAppSecret:     getEnv("THREADS_APP_SECRET", ""),
-		TikTokClientID:       getEnv("TIKTOK_CLIENT_ID", ""),
-		TikTokClientSecret:   getEnv("TIKTOK_CLIENT_SECRET", ""),
-		TikTokRedirectURI:    getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
-		XClientID:            getEnv("X_CLIENT_ID", ""),
-		XClientSecret:        getEnv("X_CLIENT_SECRET", ""),
-		XRedirectURI:         getEnv("X_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
+		FrontendURL:             getEnv("FRONTEND_URL", ""),
+		AllowedCORSOrigins:      splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
+		DatabaseURL:             getEnv("DATABASE_URL", ""),
+		DBHost:                  getEnv("DB_HOST", "localhost"),
+		DBPort:                  getEnv("DB_PORT", "5432"),
+		DBUser:                  getEnv("DB_USER", "instaedit"),
+		DBPassword:              getEnv("DB_PASSWORD", ""),
+		DBName:                  getEnv("DB_NAME", "instaedit_login"),
+		DBSSLMode:               getEnv("DB_SSLMODE", "disable"),
+		MetaAppID:               getEnv("META_APP_ID", ""),
+		MetaAppSecret:           getEnv("META_APP_SECRET", ""),
+		MetaRedirectURI:         getEnv("META_REDIRECT_URI", ""),
+		InstagramRedirectURI:    getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
+		FacebookRedirectURI:     getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
+		ThreadsRedirectURI:      getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
+		TikTokClientID:          getEnv("TIKTOK_CLIENT_ID", ""),
+		TikTokClientSecret:      getEnv("TIKTOK_CLIENT_SECRET", ""),
+		TikTokRedirectURI:       getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
+		XClientID:               getEnv("X_CLIENT_ID", ""),
+		XClientSecret:           getEnv("X_CLIENT_SECRET", ""),
+		XRedirectURI:            getEnv("X_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
 		YouTubeClientID:         getEnv("YOUTUBE_CLIENT_ID", ""),
 		YouTubeClientSecret:     getEnv("YOUTUBE_CLIENT_SECRET", ""),
 		YouTubeRedirectURI:      getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
@@ -261,7 +271,7 @@ func Load() (*Config, error) {
 		LinkedInClientID:        getEnv("LINKEDIN_CLIENT_ID", ""),
 		LinkedInClientSecret:    getEnv("LINKEDIN_CLIENT_SECRET", ""),
 		LinkedInRedirectURI:     getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
-		EncryptionKey:        getEnv("ENCRYPTION_KEY", ""),
+		EncryptionKey:           getEnv("ENCRYPTION_KEY", ""),
 		// Blocco #2.2: read the multi-key env vars. The actual
 		// parsing + validation happens in validate(); Load() only
 		// captures the raw strings so validate() can surface
@@ -276,6 +286,8 @@ func Load() (*Config, error) {
 		ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
 		WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
 		SessionsCleanupIntervalSeconds: getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
+		UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+		GoogleDriveAPIKey:              getEnv("GOOGLE_DRIVE_API_KEY", ""),
 		S3Endpoint:                     getEnv("S3_ENDPOINT", ""),
 		S3Bucket:                       getEnv("S3_BUCKET", ""),
 		S3PathStyle:                    getEnvBool("S3_PATH_STYLE", false),
@@ -353,19 +365,6 @@ func (c *Config) validate() error {
 		return fmt.Errorf("META_APP_SECRET is required when META_APP_ID is set (or unset both)")
 	} else if len(c.MetaAppSecret) < secretMinChars {
 		return fmt.Errorf("META_APP_SECRET must be at least %d characters (got %d)", secretMinChars, len(c.MetaAppSecret))
-	}
-
-	// Threads OAuth (optional). Requires its own app credentials + redirect.
-	if c.ThreadsRedirectURI != "" || c.ThreadsAppID != "" || c.ThreadsAppSecret != "" {
-		if c.ThreadsAppID == "" {
-			return fmt.Errorf("THREADS_APP_ID is required when enabling the Threads provider")
-		}
-		if c.ThreadsAppSecret == "" {
-			return fmt.Errorf("THREADS_APP_SECRET is required when enabling the Threads provider")
-		}
-		if len(c.ThreadsAppSecret) < secretMinChars {
-			return fmt.Errorf("THREADS_APP_SECRET must be at least %d characters (got %d)", secretMinChars, len(c.ThreadsAppSecret))
-		}
 	}
 
 	// Encryption key (Blocco #2.2 — multi-key).

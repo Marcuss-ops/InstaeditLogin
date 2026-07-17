@@ -8,15 +8,18 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
 // ThreadsOAuthService implements the Meta-Threads provider. Threads uses
-// Meta's Graph API with the same OAuth infrastructure as Instagram/Facebook
-// (MetaOAuthBase). **Publishing is asynchronous-only**: the initial POST
-// creates a media container whose status is polled via CheckPublishStatus,
+// its own OAuth endpoints (threads.net for authorization and
+// graph.threads.net for token exchange) while still authenticating with the
+// shared Meta App credentials. **Publishing is asynchronous-only**: the
+// initial POST creates a media container whose status is polled via
+// CheckPublishStatus,
 // then the worker publishes via ContinuePublish. The state machine is
 // driven by the AsyncPublisher interface (Taglio 4.2).
 //
@@ -41,25 +44,20 @@ import (
 type ThreadsOAuthService struct {
 	base        *MetaOAuthBase
 	redirectURI string
-	// Threads uses its own Meta "Threads app" credentials, distinct from
-	// the parent Meta/Facebook app used by Instagram/Facebook.
-	appID     string
-	appSecret string
 }
 
 // NewThreadsOAuthService creates a new ThreadsOAuthService. Returns
-// nil when the Threads app credentials or redirect URI are not configured
-// (provider disabled).
+// nil when the Threads redirect URI is not configured (provider disabled).
+// Threads reuses the shared Meta OAuth credentials (META_APP_ID / META_APP_SECRET)
+// like Instagram and Facebook.
 // Accepts optional ProviderDependencies for HTTP client injection.
 func NewThreadsOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*ThreadsOAuthService, error) {
-	if cfg.ThreadsRedirectURI == "" || cfg.ThreadsAppID == "" || cfg.ThreadsAppSecret == "" {
+	if cfg.ThreadsRedirectURI == "" {
 		return nil, nil // provider disabled
 	}
 	return &ThreadsOAuthService{
 		base:        NewMetaOAuthBase(cfg, deps...),
 		redirectURI: cfg.ThreadsRedirectURI,
-		appID:       cfg.ThreadsAppID,
-		appSecret:   cfg.ThreadsAppSecret,
 	}, nil
 }
 
@@ -67,11 +65,11 @@ func NewThreadsOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*
 func (s *ThreadsOAuthService) Name() string { return models.PlatformThreads }
 
 // GetLoginURL builds the Threads OAuth login URL with Threads scopes.
-// Threads authorizes at threads.net using the Threads app credentials,
-// NOT the parent Meta/Facebook app.
+// Threads uses its own OAuth authorization endpoint (threads.net), while
+// still authenticating with the shared Meta App credentials.
 func (s *ThreadsOAuthService) GetLoginURL(state string) string {
 	params := url.Values{}
-	params.Set("client_id", s.appID)
+	params.Set("client_id", s.base.cfg.MetaAppID)
 	params.Set("redirect_uri", s.redirectURI)
 	params.Set("state", state)
 	params.Set("scope", "threads_basic,threads_content_publish")
@@ -79,75 +77,115 @@ func (s *ThreadsOAuthService) GetLoginURL(state string) string {
 	return "https://threads.net/oauth/authorize?" + params.Encode()
 }
 
-// exchangeCodeForToken trades an OAuth authorization code for a short-lived
-// Threads access token using the Threads app credentials.
-func (s *ThreadsOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*models.MetaTokenResponse, error) {
-	params := url.Values{}
-	params.Set("client_id", s.appID)
-	params.Set("client_secret", s.appSecret)
-	params.Set("redirect_uri", s.redirectURI)
-	params.Set("code", code)
-	params.Set("grant_type", "authorization_code")
-
-	req, err := http.NewRequestWithContext(ctx, "GET",
-		"https://graph.threads.net/oauth/access_token?"+params.Encode(), nil)
+// HandleCallback processes the full OAuth callback for Threads.
+func (s *ThreadsOAuthService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
+	slog.Info("Threads: exchanging code for short-lived token")
+	shortLived, err := s.exchangeCodeForThreadsToken(ctx, code, s.redirectURI)
 	if err != nil {
-		return nil, fmt.Errorf("threads code exchange request: %w", err)
+		return nil, nil, fmt.Errorf("step 1 (code exchange): %w", err)
 	}
-	resp, err := s.base.httpClient.Do(req)
+	slog.Info("Threads: exchanging for long-lived token")
+	longLived, err := s.exchangeForLongLivedThreadsToken(ctx, shortLived.AccessToken)
 	if err != nil {
-		return nil, fmt.Errorf("threads code exchange request failed: %w", err)
+		return nil, nil, fmt.Errorf("step 2 (long-lived exchange): %w", err)
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	slog.Info("Threads: fetching user info")
+	profile, err := s.fetchThreadsUserInfo(ctx, longLived.AccessToken)
 	if err != nil {
-		return nil, fmt.Errorf("read threads token response: %w", err)
+		return nil, nil, fmt.Errorf("step 3 (user info): %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("threads code exchange failed (status %d): %s", resp.StatusCode, string(body))
-	}
-	var tok models.MetaTokenResponse
-	if err := json.Unmarshal(body, &tok); err != nil {
-		return nil, fmt.Errorf("parse threads token response: %w", err)
-	}
-	return &tok, nil
+	return profile, &models.TokenData{
+		AccessToken: longLived.AccessToken,
+		TokenType:   models.TokenTypeLongLived,
+		ExpiresIn:   longLived.ExpiresIn,
+		Scopes:      []string{"threads_basic", "threads_content_publish"},
+	}, nil
 }
 
-// exchangeLongLivedToken extends a short-lived Threads token into a long-lived
-// (~60 day) token via Threads' th_exchange_token grant.
-func (s *ThreadsOAuthService) exchangeLongLivedToken(ctx context.Context, shortLivedToken string) (*models.MetaLongLivedTokenResponse, error) {
+// exchangeCodeForThreadsToken trades an authorization code for a short-lived
+// Threads access token. This is step 1 of the Threads OAuth flow and uses the
+// Threads-specific endpoint graph.threads.net/oauth/access_token.
+func (s *ThreadsOAuthService) exchangeCodeForThreadsToken(ctx context.Context, code, redirectURI string) (*models.MetaTokenResponse, error) {
+	params := url.Values{}
+	params.Set("client_id", s.base.cfg.MetaAppID)
+	params.Set("client_secret", s.base.cfg.MetaAppSecret)
+	params.Set("grant_type", "authorization_code")
+	params.Set("redirect_uri", redirectURI)
+	params.Set("code", code)
+
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		"https://graph.threads.net/oauth/access_token", strings.NewReader(params.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Threads token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := s.base.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Threads token exchange request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Threads token response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Threads token exchange failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp models.MetaTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse Threads token response: %w", err)
+	}
+
+	return &tokenResp, nil
+}
+
+// exchangeForLongLivedThreadsToken extends a short-lived Threads token into a
+// long-lived (~60 day) token via grant_type=th_exchange_token on
+// graph.threads.net/access_token.
+func (s *ThreadsOAuthService) exchangeForLongLivedThreadsToken(ctx context.Context, shortLivedToken string) (*models.MetaLongLivedTokenResponse, error) {
 	params := url.Values{}
 	params.Set("grant_type", "th_exchange_token")
-	params.Set("client_id", s.appID)
-	params.Set("client_secret", s.appSecret)
+	params.Set("client_secret", s.base.cfg.MetaAppSecret)
 	params.Set("access_token", shortLivedToken)
 
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		"https://graph.threads.net/access_token?"+params.Encode(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("threads long-lived request: %w", err)
+		return nil, fmt.Errorf("failed to create Threads long-lived token request: %w", err)
 	}
+
 	resp, err := s.base.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("threads long-lived request failed: %w", err)
+		return nil, fmt.Errorf("Threads long-lived token request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read threads long-lived response: %w", err)
+		return nil, fmt.Errorf("failed to read Threads long-lived token response: %w", err)
 	}
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("threads long-lived exchange failed (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("Threads long-lived token exchange failed (status %d): %s", resp.StatusCode, string(body))
 	}
-	var tok models.MetaLongLivedTokenResponse
-	if err := json.Unmarshal(body, &tok); err != nil {
-		return nil, fmt.Errorf("parse threads long-lived response: %w", err)
+
+	var tokenResp models.MetaLongLivedTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse Threads long-lived token response: %w", err)
 	}
-	return &tok, nil
+
+	return &tokenResp, nil
 }
 
-// fetchUserInfo fetches the authenticated Threads user's profile.
-func (s *ThreadsOAuthService) fetchUserInfo(ctx context.Context, accessToken string) (*models.PlatformProfile, error) {
+// fetchThreadsUserInfo fetches the authenticated Threads user's profile
+// from graph.threads.net. This is distinct from MetaOAuthBase.GetUserInfo
+// (which hits Facebook's /me) because Threads publishing endpoints require
+// a Threads user id.
+func (s *ThreadsOAuthService) fetchThreadsUserInfo(ctx context.Context, accessToken string) (*models.PlatformProfile, error) {
 	params := url.Values{}
 	params.Set("fields", "id,username,name")
 	params.Set("access_token", accessToken)
@@ -188,47 +226,58 @@ func (s *ThreadsOAuthService) fetchUserInfo(ctx context.Context, accessToken str
 	}, nil
 }
 
-// HandleCallback processes the full OAuth callback for Threads.
-func (s *ThreadsOAuthService) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
-	slog.Info("Threads: exchanging code for short-lived token")
-	shortLived, err := s.exchangeCodeForToken(ctx, code)
-	if err != nil {
-		return nil, nil, fmt.Errorf("step 1 (code exchange): %w", err)
-	}
-	slog.Info("Threads: exchanging for long-lived token")
-	longLived, err := s.exchangeLongLivedToken(ctx, shortLived.AccessToken)
-	if err != nil {
-		return nil, nil, fmt.Errorf("step 2 (long-lived exchange): %w", err)
-	}
-	slog.Info("Threads: fetching user info")
-	profile, err := s.fetchUserInfo(ctx, longLived.AccessToken)
-	if err != nil {
-		return nil, nil, fmt.Errorf("step 3 (user info): %w", err)
-	}
-	return profile, &models.TokenData{
-		AccessToken: longLived.AccessToken,
-		TokenType:   models.TokenTypeLongLived,
-		ExpiresIn:   longLived.ExpiresIn,
-		Scopes:      []string{"threads_basic", "threads_content_publish"},
-	}, nil
-}
-
-// RefreshOAuthToken extends a long-lived token via Threads' th_exchange_token.
+// RefreshOAuthToken refreshes a long-lived Threads token via
+// graph.threads.net/refresh_access_token.
 func (s *ThreadsOAuthService) RefreshOAuthToken(ctx context.Context, currentToken string) (result *models.TokenData, err error) {
 	defer RecordTokenRefreshMetrics(models.PlatformThreads, &err)
 	if currentToken == "" {
 		return nil, fmt.Errorf("threads RefreshOAuthToken: empty current token")
 	}
-	slog.Info("Threads: refreshing long-lived token via th_exchange_token")
-	longLived, err := s.exchangeLongLivedToken(ctx, currentToken)
+	slog.Info("Threads: refreshing long-lived token via refresh_access_token")
+	refreshed, err := s.refreshThreadsAccessToken(ctx, currentToken)
 	if err != nil {
 		return nil, fmt.Errorf("threads refresh failed: %w", err)
 	}
 	return &models.TokenData{
-		AccessToken: longLived.AccessToken,
+		AccessToken: refreshed.AccessToken,
 		TokenType:   models.TokenTypeLongLived,
-		ExpiresIn:   longLived.ExpiresIn,
+		ExpiresIn:   refreshed.ExpiresIn,
 	}, nil
+}
+
+// refreshThreadsAccessToken refreshes an existing long-lived Threads token.
+func (s *ThreadsOAuthService) refreshThreadsAccessToken(ctx context.Context, currentToken string) (*models.MetaLongLivedTokenResponse, error) {
+	params := url.Values{}
+	params.Set("grant_type", "th_refresh_token")
+	params.Set("access_token", currentToken)
+
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"https://graph.threads.net/refresh_access_token?"+params.Encode(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Threads refresh token request: %w", err)
+	}
+
+	resp, err := s.base.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Threads refresh token request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Threads refresh token response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Threads refresh token failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp models.MetaLongLivedTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse Threads refresh token response: %w", err)
+	}
+
+	return &tokenResp, nil
 }
 
 // ValidateContent enforces Threads' content requirements.
@@ -325,7 +374,7 @@ func (s *ThreadsOAuthService) CheckPublishStatus(ctx context.Context, accessToke
 // Graph API /me endpoint because AsyncPublisher.ContinuePublish receives only
 // publishID, not the post_target row that holds provider_state.
 func (s *ThreadsOAuthService) ContinuePublish(ctx context.Context, accessToken, publishID string) error {
-	profile, err := s.fetchUserInfo(ctx, accessToken)
+	profile, err := s.fetchThreadsUserInfo(ctx, accessToken)
 	if err != nil {
 		return fmt.Errorf("threads ContinuePublish: get user info: %w", err)
 	}
@@ -357,7 +406,7 @@ func (s *ThreadsOAuthService) Reconcile(ctx context.Context, accessToken, publis
 	case threadsStateInProgress:
 		return nil, nil
 	case threadsStateFinished:
-		profile, err := s.fetchUserInfo(ctx, accessToken)
+		profile, err := s.fetchThreadsUserInfo(ctx, accessToken)
 		if err != nil {
 			return nil, fmt.Errorf("threads reconcile: get user info: %w", err)
 		}

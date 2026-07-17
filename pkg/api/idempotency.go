@@ -28,6 +28,15 @@
 // later forgot to pass the real id) and ensures the workspace
 // ownership check runs BEFORE the cache can return a resource the
 // caller does not own.
+//
+// drive_batch (Taglio 4.7 try 3): drive_batch creates up to N=200
+// upload_jobs in one POST. There is no single source-of-truth row
+// the replay path can re-fetch (cf. resource_type="post", which
+// re-fetches the post by id). drive_batch replays therefore read
+// the cached response JSON from a side table
+// (idempotency_batch_replays, migration 039) keyed on the parent
+// idempotency_records.id. The replay path is wired through the
+// drive_batch branch of replayIdempotentResource below.
 
 package api
 
@@ -43,6 +52,15 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
+
+// idempotencyResourceTypeDriveBatch is the discriminator passed to
+// idempotencyLookup and replayIdempotentResource for batch POSTs.
+// It's defined here (not in handlers.go) because both the helper
+// call and the helper implementation reference it. Resource types
+// intentionally stay namespace-flat ("post", "drive_import",
+// "drive_batch") — no nested hierarchy yet, so a single string
+// switch in replayIdempotentResource remains idiomatic.
+const idempotencyResourceTypeDriveBatch = "drive_batch"
 
 // idempotencyOutcome is the result of the cache lookup. The
 // handleCreatePost integration switches on this value (continue →
@@ -165,17 +183,30 @@ func idempotencyLookup(
 // status. The re-render deliberately bypasses the original
 // handler — the cache knows only (resource_type, resource_id, status).
 //
-// Today only resource_type="post" is implemented. Adding a new
-// resource_type means adding a case here. Each case must check
-// caller authorisation (workspace ownership) — a cached resource
-// should never leak to a caller who wouldn't have had access on
-// the originating POST.
+// Today the supported cases are:
+//
+//   - "post"        — re-fetch post by id and render.
+//   - "drive_import" — re-fetch post by id, render the same
+//                       DriveImportResponse envelope (without the
+//                       freshly-uploaded asset; clients can fetch
+//                       it separately).
+//   - "drive_batch" — read the cached response bytes from the
+//                       idempotency_batch_replays side table; write
+//                       them byte-for-byte. There is no single owner
+//                       row to re-fetch because the batch creates
+//                       N=200 upload_jobs across multiple tables.
+//
+// Adding a new resource_type means adding a case here. Each case
+// must check caller authorisation (workspace ownership) — a
+// cached resource should never leak to a caller who wouldn't
+// have had access on the originating POST.
 //
 // SECURITY: replayIdempotentResource is called ONLY after the
 // handler has already verified ws.OwnerID == userID (line in
 // handleCreatePost above the replay branch). The cached
-// resource_id belongs to that same workspace; the user is the
-// same caller. So this rebuild from resource_id is safe.
+// resource_id / cached payload belongs to that same workspace;
+// the user is the same caller. So this rebuild from the cache is
+// safe.
 func replayIdempotentResource(
 	r *Router,
 	w http.ResponseWriter,
@@ -215,6 +246,38 @@ func replayIdempotentResource(
 		// first request. The asset is omitted on replay; clients
 		// can fetch it separately via GET /api/v1/media/{id}.
 		writeJSON(w, cachedStatus, DriveImportResponse{Post: post})
+		return nil
+	case idempotencyResourceTypeDriveBatch:
+		// drive_batch replays read the cached response JSON from
+		// the idempotency_batch_replays side table (migration 039)
+		// and write it byte-for-byte. We do NOT re-fetch the
+		// underlying upload_jobs — those are mutable (the worker
+		// advances them through pending → processing → completed
+		// async), so a fresh read would drift from the originally
+		// returned response. The cached bytes are the truth.
+		if r.idempotencyStore == nil {
+			return errors.New("idempotency store not configured for batch replay")
+		}
+		side, err := r.idempotencyStore.FindBatchReplay(rec.ID)
+		if err != nil {
+			return fmt.Errorf("replay fetch batch side row for record %d: %w", rec.ID, err)
+		}
+		if side == nil {
+			// Parent idempotency_records row exists but the side
+			// row wasn't written — operator-actionable drift (the
+			// cache write at handler-success time failed). We
+			// surface as 500 with a specific message rather than
+			// silently fall through; the operator can either
+			// retry from the cache (won't work, side row missing)
+			// or trigger a manual replay through the dashboard.
+			return fmt.Errorf("cached drive_batch response missing for record %d", rec.ID)
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(cachedStatus)
+		_, err = w.Write(side.ResponsePayload)
+		if err != nil {
+			return fmt.Errorf("replay write batch bytes for record %d: %w", rec.ID, err)
+		}
 		return nil
 	default:
 		return fmt.Errorf("unknown resource_type for replay: %q", rec.ResourceType)
@@ -260,6 +323,108 @@ func insertIdempotentRecord(
 			"key", idempotencyKey,
 			"resource_type", resourceType,
 			"resource_id", resourceID)
+	}
+}
+
+// insertBatchIdempotentRecord writes BOTH the parent
+// idempotency_records row AND the idempotency_batch_replays side row
+// for a drive_batch idempotent POST. The parent row uses the first
+// scheduled job's id as resource_id (which is > 0 by construction
+// once any job was successfully created — the caller MUST only
+// invoke this helper when at least one entry was created) so the
+// existing NOT-NULL resource_id validator is satisfied without
+// inventing a synthetic batch id.
+//
+// Best-effort: the original batch is already queued for downstream
+// publishing (upload_job rows + scheduled posts), so a cache-write
+// failure means the operator loses replay support but the user's
+// actual posts are unaffected. Both Insert calls log warnings on
+// failure and never propagate because to do so would imply the
+// batch itself failed (it didn't — the cache is operator UX, not
+// part of the API contract).
+//
+// TTL is 24h like the other idempotency writes; the CASCADE FK from
+// idempotency_batch_replays → idempotency_records guarantees the
+// side row lives the same lifetime as the parent.
+//
+// responsePayload MUST be the bytes the handler actually wrote to
+// the wire (already-encoded JSON of DriveBatchImportResponse).
+// The byte-for-byte replay relies on this — any difference in
+// marshalling (e.g., a second marshal pass inside writeJSON) would
+// drift the replay output from the original.
+func insertBatchIdempotentRecord(
+	r *Router,
+	workspaceID int64,
+	idempotencyKey string,
+	resourceID int64,
+	requestHash []byte,
+	responseStatus int,
+	responsePayload []byte,
+) {
+	if r.idempotencyStore == nil || idempotencyKey == "" {
+		return
+	}
+	if resourceID <= 0 {
+		// Defence-in-depth: the caller is required to pass the
+		// first scheduled job's id (which is always > 0 by
+		// construction once uploadJobStore.Create returned). A
+		// value <= 0 here means the caller violated the contract
+		// — log loud + skip the cache write rather than poison
+		// the table with a sentinel.
+		slog.Warn("insertBatchIdempotentRecord: refusing to cache with non-positive resource_id",
+			"workspace_id", workspaceID,
+			"key", idempotencyKey,
+			"resource_id", resourceID)
+		return
+	}
+	if len(responsePayload) == 0 {
+		slog.Warn("insertBatchIdempotentRecord: refusing to cache with empty response payload",
+			"workspace_id", workspaceID,
+			"key", idempotencyKey)
+		return
+	}
+	parent := &models.IdempotencyRecord{
+		WorkspaceID:    workspaceID,
+		IdempotencyKey: idempotencyKey,
+		ResourceType:   idempotencyResourceTypeDriveBatch,
+		ResourceID:     resourceID,
+		RequestHash:    requestHash,
+		ResponseStatus: responseStatus,
+		ExpiresAt:      time.Now().Add(24 * time.Hour),
+	}
+	if err := r.idempotencyStore.Insert(parent); err != nil {
+		slog.Warn("idempotency_record insert failed (drive_batch)",
+			"error", err,
+			"workspace_id", workspaceID,
+			"key", idempotencyKey,
+			"resource_id", resourceID)
+		return
+	}
+	if parent.ID <= 0 {
+		// The store didn't populate the generated ID — production
+		// repo returns it via RETURNING; in-memory mocks that
+		// don't re-use the production repo are responsible for
+		// assigning one. Skip the side row so we don't FK-fail.
+		slog.Warn("insertBatchIdempotentRecord: parent record has no id (store didn't RETURNING); skipping side row",
+			"workspace_id", workspaceID,
+			"key", idempotencyKey,
+			"resource_id", resourceID)
+		return
+	}
+	side := &models.BatchReplay{
+		IdempotencyRecordID: parent.ID,
+		ResponsePayload:     responsePayload,
+	}
+	if err := r.idempotencyStore.InsertBatchReplay(side); err != nil {
+		// Same best-effort posture as insertIdempotentRecord:
+		// log warn, continue. The parent row exists so a
+		// follow-up replay will surface the "cached response
+		// missing" error which the operator can act on.
+		slog.Warn("idempotency_batch_replay insert failed",
+			"error", err,
+			"workspace_id", workspaceID,
+			"key", idempotencyKey,
+			"idempotency_record_id", parent.ID)
 	}
 }
 

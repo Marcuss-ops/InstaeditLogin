@@ -199,11 +199,15 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 
 	// Threads (Zernio 2.1): Meta-family async publishing.
 	if cfg.ThreadsRedirectURI != "" {
-		th, err := services.NewThreadsOAuthService(cfg, b.deps)
-		if err != nil {
-			b.logger.Warn("Skipped Threads provider (constructor failed)", "error", err)
-		} else if th != nil {
-			router.Register(th.Name(), th)
+		if cfg.MetaAppID == "" || cfg.MetaAppSecret == "" {
+			b.logger.Warn("Skipped Threads provider: META_APP_ID and META_APP_SECRET are required (or unset THREADS_REDIRECT_URI to disable)")
+		} else {
+			th, err := services.NewThreadsOAuthService(cfg, b.deps)
+			if err != nil {
+				b.logger.Warn("Skipped Threads provider (constructor failed)", "error", err)
+			} else if th != nil {
+				router.Register(th.Name(), th)
+			}
 		}
 	}
 

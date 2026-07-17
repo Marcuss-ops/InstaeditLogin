@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Link2, RefreshCw, CheckCircle2, ChevronDown, Plus } from "lucide-react";
+import {
+  Link2,
+  RefreshCw,
+  CheckCircle2,
+  ChevronDown,
+  Plus,
+  FolderInput,
+} from "lucide-react";
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
 import { API_BASE_URL } from "../../lib/api";
 import { PROVIDERS, type ProviderId } from "../../lib/providers";
 import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
+import { DriveBatchImportDialog } from "./DriveBatchImportDialog";
 
 type PlatformAccount = {
   id: number;
@@ -74,6 +82,7 @@ export function InternalLinking() {
   }, [loadAccounts, navigate]);
 
   const [expandedProvider, setExpandedProvider] = useState<ProviderId | null>(null);
+  const [isBatchOpen, setIsBatchOpen] = useState(false);
 
   const groupedAccounts = useMemo(() => {
     const grouped: Partial<Record<ProviderId, PlatformAccount[]>> = {};
@@ -104,13 +113,23 @@ export function InternalLinking() {
             </p>
           </div>
           {state.kind === "ready" && (
-            <button
-              type="button"
-              onClick={() => void loadAccounts()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
-            >
-              <RefreshCw size={14} /> Refresh
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsBatchOpen(true)}
+                data-testid="open-drive-batch"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors shadow-[0_2px_8px_rgba(255,255,255,0.10)]"
+              >
+                <FolderInput size={14} /> Auto-post Drive folder
+              </button>
+              <button
+                type="button"
+                onClick={() => void loadAccounts()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
+              >
+                <RefreshCw size={14} /> Refresh
+              </button>
+            </div>
           )}
         </div>
 
@@ -252,6 +271,10 @@ export function InternalLinking() {
           </div>
         )}
       </div>
+      <DriveBatchImportDialog
+        open={isBatchOpen}
+        onClose={() => setIsBatchOpen(false)}
+      />
     </div>
   );
 }

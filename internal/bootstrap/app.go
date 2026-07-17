@@ -86,6 +86,11 @@ type App struct {
 	// exposed for future graceful-drain work.
 	MemoryLimiter *services.MemoryLimiter
 
+	// StorageProvider is the S3-compatible storage backend. Shared
+	// between the API (presign / complete / drive import) and the
+	// upload worker (background Drive → S3 streaming).
+	StorageProvider services.StorageProvider
+
 	// SessionsSvc is the wired *SessionsService, populated by
 	// Wire(). cmd/worker reads it to drive the retention-policy
 	// goroutine (SessionsCleanupWorker); cmd/api reads it through
@@ -172,6 +177,7 @@ func Wire(ctx context.Context) (*App, error) {
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
 	postRepo := repository.NewPostRepository(db)
 	mediaRepo := repository.NewMediaAssetRepository(db)
+	uploadJobRepo := repository.NewUploadJobRepository(db)
 	connectionStateRepo := repository.NewConnectionStateRepository(db)
 	auditLogRepo := repository.NewAuditLogRepository(db)
 
@@ -230,6 +236,7 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithWorkspaceStore(workspaceRepo),
 		api.WithPostStore(postRepo),
 		api.WithMediaStore(mediaRepo),
+		api.WithUploadJobStore(uploadJobRepo),
 		api.WithConnectionStateStore(&connectionStateStoreWrapper{connectionStateRepo}),
 		api.WithAuditLogStore(&auditLogStoreWrapper{auditLogRepo}),
 		api.WithCookieSecure(true),
@@ -316,18 +323,19 @@ func Wire(ctx context.Context) (*App, error) {
 		"ready_endpoint", "/ready")
 
 	return &App{
-		Cfg:           cfg,
-		DB:            db,
-		Vault:         vault,
-		CapRouter:     capRouter,
-		WebhookRepo:   webhookRepo,
-		HTTPHandler:   router.Setup(),
-		Logger:        logger,
-		WorkerStatus:  workerStatus,
-		SentryHub:     hub,
-		WorkerID:      workerID,
-		MemoryLimiter: memoryLimiter,
-		SessionsSvc:   sessionsSvc,
+		Cfg:             cfg,
+		DB:              db,
+		Vault:           vault,
+		CapRouter:       capRouter,
+		WebhookRepo:     webhookRepo,
+		HTTPHandler:     router.Setup(),
+		Logger:          logger,
+		WorkerStatus:    workerStatus,
+		SentryHub:       hub,
+		WorkerID:        workerID,
+		MemoryLimiter:   memoryLimiter,
+		StorageProvider: storageProvider,
+		SessionsSvc:     sessionsSvc,
 	}, nil
 }
 
@@ -476,7 +484,33 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		children = append(children, &goroutineCtx{"sessions_cleanup", cancel, d})
 	}
 
-	slog.Info("6 background goroutines started: publish / reconcile / outbox / webhook / metrics / sessions_cleanup")
+	// 7. Upload worker — background import of public or authenticated
+	// Google Drive videos into S3 + posts + publish queue.
+	{
+		c, cancel := context.WithCancel(ctx)
+		d := make(chan struct{})
+		go func() {
+			defer close(d)
+			a.WorkerStatus.Mark("upload")
+			uw := worker.NewUploadWorker(
+				repository.NewUploadJobRepository(a.DB),
+				repository.NewMediaAssetRepository(a.DB),
+				repository.NewPostRepository(a.DB),
+				repository.NewUserRepository(a.DB),
+				a.StorageProvider,
+				a.CapRouter,
+				a.Vault,
+				time.Duration(a.Cfg.UploadWorkerIntervalSeconds)*time.Second,
+				slog.Default(),
+			)
+			if err := uw.Run(c); err != nil && err != context.Canceled {
+				slog.Error("upload worker exited with error", "error", err)
+			}
+		}()
+		children = append(children, &goroutineCtx{"upload", cancel, d})
+	}
+
+	slog.Info("7 background goroutines started: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / upload")
 
 	// Block until ctx is cancelled.
 	<-ctx.Done()

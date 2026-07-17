@@ -871,10 +871,10 @@ func TestTikTok_StartPublish_PULLFromFile_HappyPath(t *testing.T) {
 	defer srv.Close()
 	var initBodyParsed struct {
 		SourceInfo struct {
-			Source           string `json:"source"`
-			VideoSize        int64  `json:"video_size"`
-			ChunkSize        int64  `json:"chunk_size"`
-			TotalChunkCount  int64  `json:"total_chunk_count"`
+			Source          string `json:"source"`
+			VideoSize       int64  `json:"video_size"`
+			ChunkSize       int64  `json:"chunk_size"`
+			TotalChunkCount int64  `json:"total_chunk_count"`
 		} `json:"source_info"`
 	}
 	h.OnInit = func(rawBody []byte, _ *http.Request) {

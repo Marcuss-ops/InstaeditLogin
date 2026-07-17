@@ -17,13 +17,24 @@ import (
 )
 
 // mockIdempotencyStore is a minimal in-memory idempotency store for
-// drive-import tests.
+// drive-import + drive-batch tests.
+//
+// Tracks parent records by (workspace_id, idempotency_key) AND side
+// rows (BatchReplay) by idempotency_record_id, mirroring the real
+// Postgres FK relationship (`idempotency_batch_replays` PK is the
+// parent row's id, migration 039). Assigns monotonic IDs to Insert
+// calls so the side row's PK lookup works in replay tests.
 type mockIdempotencyStore struct {
-	records map[string]*models.IdempotencyRecord
+	records    map[string]*models.IdempotencyRecord
+	batchPlays map[int64]*models.BatchReplay
+	nextID     int64
 }
 
 func newMockIdempotencyStore() *mockIdempotencyStore {
-	return &mockIdempotencyStore{records: make(map[string]*models.IdempotencyRecord)}
+	return &mockIdempotencyStore{
+		records:    make(map[string]*models.IdempotencyRecord),
+		batchPlays: make(map[int64]*models.BatchReplay),
+	}
 }
 
 func (m *mockIdempotencyStore) FindActiveByKey(workspaceID int64, key string, now time.Time) (*models.IdempotencyRecord, error) {
@@ -34,8 +45,39 @@ func (m *mockIdempotencyStore) FindActiveByKey(workspaceID int64, key string, no
 	return rec, nil
 }
 
+// Insert mirrors the production repo: assigns a monotonic ID via
+// RETURNING-equivalent semantics so the BatchReplay side row can be
+// looked up by parent ID on replay.
 func (m *mockIdempotencyStore) Insert(rec *models.IdempotencyRecord) error {
+	if rec.ID == 0 {
+		m.nextID++
+		rec.ID = m.nextID
+	}
+	rec.CreatedAt = time.Now()
 	m.records[idempotencyCompositeKey(rec.WorkspaceID, rec.IdempotencyKey)] = rec
+	return nil
+}
+
+func (m *mockIdempotencyStore) FindBatchReplay(idempotencyRecordID int64) (*models.BatchReplay, error) {
+	rec, ok := m.batchPlays[idempotencyRecordID]
+	if !ok {
+		return nil, nil
+	}
+	return rec, nil
+}
+
+func (m *mockIdempotencyStore) InsertBatchReplay(rec *models.BatchReplay) error {
+	if rec == nil {
+		return fmt.Errorf("nil batch replay record")
+	}
+	if rec.IdempotencyRecordID <= 0 {
+		return fmt.Errorf("idempotency_record_id is required")
+	}
+	if len(rec.ResponsePayload) == 0 {
+		return fmt.Errorf("response_payload is required")
+	}
+	rec.CreatedAt = time.Now()
+	m.batchPlays[rec.IdempotencyRecordID] = rec
 	return nil
 }
 
@@ -50,7 +92,7 @@ type mockDriveImporter struct {
 	body     []byte
 }
 
-func (m *mockDriveImporter) Name() string { return "google-drive" }
+func (m *mockDriveImporter) Name() string                    { return "google-drive" }
 func (m *mockDriveImporter) GetLoginURL(state string) string { return "" }
 func (m *mockDriveImporter) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	return nil, nil, fmt.Errorf("not implemented")
@@ -62,6 +104,12 @@ func (m *mockDriveImporter) GetFileMetadata(ctx context.Context, accessToken, fi
 	return m.metadata, nil
 }
 func (m *mockDriveImporter) DownloadFile(ctx context.Context, accessToken, fileID string) (*http.Response, error) {
+	resp := httptest.NewRecorder()
+	resp.WriteHeader(http.StatusOK)
+	resp.Body.Write(m.body)
+	return resp.Result(), nil
+}
+func (m *mockDriveImporter) DownloadPublicFile(ctx context.Context, fileID string) (*http.Response, error) {
 	resp := httptest.NewRecorder()
 	resp.WriteHeader(http.StatusOK)
 	resp.Body.Write(m.body)
