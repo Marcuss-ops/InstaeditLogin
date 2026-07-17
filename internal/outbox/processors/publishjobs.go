@@ -162,8 +162,25 @@ func (m *PublishJobsMaterialiser) Process(ctx context.Context, ev *models.Outbox
 		// decided "this event is done" and we don't want to
 		// re-decide it via the retry path.
 		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
-			return nil
+		if errors.As(err, &pqErr) {
+			// SQLSTATE 23505 on the partial UNIQUE index
+			// (uniq_publish_jobs_outbox_event) means the dispatcher
+			// re-claimed an event whose publish_jobs row already
+			// exists from a previous attempt. Treat as idempotent
+			// success so MarkProcessed fires.
+			if pqErr.Code == "23505" {
+				return nil
+			}
+			// SQLSTATE 23503 on the post_target_id FK means the
+			// referenced post_target was deleted between the outbox
+			// event being written and the dispatcher picking it up.
+			// There is no publish job to materialise anymore; drop
+			// the obsolete intent as terminal so it doesn't loop
+			// through MaxAttempts.
+			if pqErr.Code == "23503" {
+				return fmt.Errorf("%w: post_target %d (outbox event %d) deleted before materialisation: %v",
+					outbox.ErrTerminal, p.TargetID, ev.ID, err)
+			}
 		}
 		// Context cancellation during INSERT is transient (a
 		// graceful shutdown mid-flight should NOT send to DLQ).
