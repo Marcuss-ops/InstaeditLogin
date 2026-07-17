@@ -192,10 +192,11 @@ func (r *OutboxRepository) ClaimNext(leaseTTL time.Duration) (*models.OutboxEven
 	)
 	ev := &models.OutboxEvent{}
 	var leaseIDOut sql.NullString
+	var lastErrorOut sql.NullString
 	if err := row.Scan(
 		&ev.ID, &ev.AggregateType, &ev.AggregateID, &ev.EventType, &ev.Payload,
 		&ev.Status, &leaseIDOut, &ev.LeaseUntil, &ev.AttemptCount,
-		&ev.NextAttemptAt, &ev.LastError, &ev.CreatedAt, &ev.ProcessedAt,
+		&ev.NextAttemptAt, &lastErrorOut, &ev.CreatedAt, &ev.ProcessedAt,
 	); err != nil {
 		// The UPDATE returned sql.ErrNoRows: a peer dispatcher committed
 		// MarkProcessed/MarkFailed/DeadLetter between our SKIP LOCKED
@@ -217,6 +218,7 @@ func (r *OutboxRepository) ClaimNext(leaseTTL time.Duration) (*models.OutboxEven
 	if leaseIDOut.Valid {
 		ev.LeaseID = &leaseIDOut.String
 	}
+	ev.LastError = lastErrorOut.String
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("outbox ClaimNext commit: %w", err)
@@ -418,10 +420,11 @@ func (r *OutboxRepository) ListPending(limit int) ([]models.OutboxEvent, error) 
 		// NULL → ev.LeaseID stays nil) from Valid==true (SQL UUID →
 		// ev.LeaseID points at the populated string).
 		var leaseIDOut sql.NullString
+		var lastErrorOut sql.NullString
 		if err := rows.Scan(
 			&ev.ID, &ev.AggregateType, &ev.AggregateID, &ev.EventType, &ev.Payload,
 			&ev.Status, &leaseIDOut, &ev.LeaseUntil, &ev.AttemptCount,
-			&ev.NextAttemptAt, &ev.LastError, &ev.CreatedAt, &ev.ProcessedAt,
+			&ev.NextAttemptAt, &lastErrorOut, &ev.CreatedAt, &ev.ProcessedAt,
 		); err != nil {
 			return nil, fmt.Errorf("outbox ListPending scan: %w", err)
 		}
@@ -429,6 +432,7 @@ func (r *OutboxRepository) ListPending(limit int) ([]models.OutboxEvent, error) 
 			s := leaseIDOut.String
 			ev.LeaseID = &s
 		}
+		ev.LastError = lastErrorOut.String
 		out = append(out, ev)
 	}
 	// pq import retained for future typed-error paths (e.g. on
