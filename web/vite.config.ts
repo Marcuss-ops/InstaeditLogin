@@ -29,7 +29,11 @@ function verifyApiBaseUrlPlugin() {
     name: 'verify-api-base-url',
     configResolved(config: ResolvedConfig) {
       const isBuild = config.command === 'build';
-      const result = validateApiBaseUrl();
+      // Vite loads .env.local into config.env (not process.env), so
+      // passing config.env is what makes the validator see the actual
+      // base URL. Defaulting to process.env would log a spurious
+      // "[WARN] VITE_API_BASE_URL is empty" every dev restart.
+      const result = validateApiBaseUrl(config.env);
 
       if (!isBuild && result.level === 'ok') {
         // dev / vitest runs: stay quiet on success to avoid per-restart noise
@@ -59,6 +63,14 @@ function verifyApiBaseUrlPlugin() {
 export default defineConfig({
   plugins: [react(), tailwindcss(), verifyApiBaseUrlPlugin()],
   server: {
+    // Vite v5+ activates DNS-rebinding host validation when bound to a
+    // non-loopback interface (--host 0.0.0.0 for cloudflared tunnel).
+    // The default rejects any Host header not in `allowedHosts` → 403.
+    // Cloudflare quick tunnels rotate their trycloudflare.com subdomain
+    // on every restart, so we can't pin the hostname. `allowedHosts: true`
+    // accepts any Host header. DEV-ONLY: production is served from
+    // Vercel (`web/vercel.json`), not this file.
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8080',

@@ -200,6 +200,22 @@ func replayIdempotentResource(
 		}
 		writeJSON(w, cachedStatus, post)
 		return nil
+	case "drive_import":
+		if r.postStore == nil {
+			return errors.New("post store not configured")
+		}
+		post, err := r.postStore.FindByID(rec.ResourceID)
+		if err != nil {
+			return fmt.Errorf("replay fetch drive_import post %d: %w", rec.ResourceID, err)
+		}
+		if post == nil {
+			return fmt.Errorf("cached drive_import post %d no longer exists", rec.ResourceID)
+		}
+		// Replay preserves the top-level response shape of the
+		// first request. The asset is omitted on replay; clients
+		// can fetch it separately via GET /api/v1/media/{id}.
+		writeJSON(w, cachedStatus, DriveImportResponse{Post: post})
+		return nil
 	default:
 		return fmt.Errorf("unknown resource_type for replay: %q", rec.ResourceType)
 	}

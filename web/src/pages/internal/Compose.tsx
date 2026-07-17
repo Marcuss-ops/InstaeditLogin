@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { PenSquare, Send, Save, AlertCircle, ArrowLeft } from "lucide-react";
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
@@ -32,8 +32,13 @@ export function InternalCompose() {
   const [title, setTitle] = useState("");
   const [caption, setCaption] = useState("");
   const [scheduledAt, setScheduledAt] = useState("");
-  const [status, setStatus] = useState<"draft" | "queued">("draft");
+  const [status, setStatus] = useState<"draft" | "queued" | "publish">("draft");
   const [selectedAccounts, setSelectedAccounts] = useState<Set<number>>(new Set());
+
+  const [mediaAssetId, setMediaAssetId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadData = useCallback(async () => {
     abortRef.current?.abort();
@@ -56,6 +61,9 @@ export function InternalCompose() {
       setState({ kind: "ready", workspaces, accounts });
       if (workspaces.length === 1) {
         setWorkspaceId(workspaces[0].id);
+      }
+      if (accounts.length === 1) {
+        setSelectedAccounts(new Set([accounts[0].id]));
       }
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -94,24 +102,86 @@ export function InternalCompose() {
     });
   };
 
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadError(null);
+    setUploading(true);
+    try {
+      const presign = await authedFetch("/api/v1/media/presign", {
+        method: "POST",
+        body: JSON.stringify({
+          filename: file.name,
+          content_type: file.type || "video/mp4",
+          size_bytes: file.size,
+        }),
+      });
+      if (!presign.ok) throw new Error("presign failed");
+      const grant = (await presign.json()) as {
+        asset_id: string;
+        upload_url: string;
+        upload_headers: Record<string, string>;
+      };
+      const putRes = await fetch(grant.upload_url, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "video/mp4" },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error("upload failed");
+      const complete = await authedFetch(`/api/v1/media/${grant.asset_id}/complete`, {
+        method: "POST",
+      });
+      if (!complete.ok) throw new Error("upload verification failed");
+      setMediaAssetId(grant.asset_id);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+      setMediaAssetId(null);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const clearMedia = () => {
+    setMediaAssetId(null);
+    setUploadError(null);
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (workspaceId === "" || selectedAccounts.size === 0 || !title.trim()) return;
 
     setIsSubmitting(true);
     try {
+      const isPublishNow = status === "publish";
       const payload = {
         workspace_id: Number(workspaceId),
-        content: { title: title.trim(), caption: caption.trim() || undefined },
-        status,
-        scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
+        content: { title: title.trim(), caption: caption.trim() || undefined, media: mediaAssetId ? [{ asset_id: mediaAssetId }] : undefined },
+        status: isPublishNow ? "draft" : status,
+        scheduled_at: isPublishNow
+          ? undefined
+          : scheduledAt
+            ? new Date(scheduledAt).toISOString()
+            : undefined,
         targets: Array.from(selectedAccounts).map((id) => ({ platform_account_id: id })),
       };
 
-      await authedFetch("/api/v1/posts", {
+      const res = await authedFetch("/api/v1/posts", {
         method: "POST",
         body: JSON.stringify(payload),
       });
+
+      if (isPublishNow && res.ok) {
+        try {
+          const created = (await res.json()) as { id: number };
+          await authedFetch(`/api/v1/posts/${created.id}/publish`, {
+            method: "POST",
+          });
+        } catch {
+          // If the immediate publish trigger fails, the post stays as a
+          // draft and can be published later from the posts list.
+        }
+      }
 
       navigate("/app/posts");
     } catch {
@@ -250,6 +320,39 @@ export function InternalCompose() {
                   className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white placeholder:text-white/20 focus:outline-none focus:border-white/[0.20] focus:ring-1 focus:ring-white/10 transition-all resize-y"
                 />
               </div>
+
+              <div>
+                <label htmlFor="media" className="block text-[13px] font-semibold text-[#9aa0aa] mb-1.5">
+                  Video
+                </label>
+                <input
+                  id="media"
+                  ref={fileInputRef}
+                  type="file"
+                  accept="video/mp4,video/quicktime"
+                  onChange={handleFileChange}
+                  disabled={uploading}
+                  className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white file:mr-3 file:px-3 file:py-1 file:rounded-lg file:border-0 file:bg-white/[0.10] file:text-white file:cursor-pointer disabled:opacity-50"
+                />
+                {uploading && (
+                  <p className="mt-1.5 text-[13px] text-[#9aa0aa]">Uploading video…</p>
+                )}
+                {uploadError && (
+                  <p className="mt-1.5 text-[13px] text-red-400">{uploadError}</p>
+                )}
+                {mediaAssetId && !uploading && (
+                  <div className="mt-1.5 flex items-center gap-2 text-[13px] text-emerald-400">
+                    <span>Video ready</span>
+                    <button
+                      type="button"
+                      onClick={clearMedia}
+                      className="text-[#9aa0aa] hover:text-white underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             <hr className="border-white/[0.08]" />
@@ -263,12 +366,13 @@ export function InternalCompose() {
                   id="scheduledAt"
                   type="datetime-local"
                   value={scheduledAt}
+                  disabled={status === "publish"}
                   onChange={(e) => {
                     setScheduledAt(e.target.value);
                     if (e.target.value) setStatus("queued");
                     else setStatus("draft");
                   }}
-                  className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white focus:outline-none focus:border-white/[0.20] focus:ring-1 focus:ring-white/10 transition-all"
+                  className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white focus:outline-none focus:border-white/[0.20] focus:ring-1 focus:ring-white/10 transition-all disabled:opacity-50"
                 />
               </div>
 
@@ -279,11 +383,16 @@ export function InternalCompose() {
                 <select
                   id="status"
                   value={status}
-                  onChange={(e) => setStatus(e.target.value as "draft" | "queued")}
+                  onChange={(e) => {
+                    const next = e.target.value as "draft" | "queued" | "publish";
+                    setStatus(next);
+                    if (next === "publish") setScheduledAt("");
+                  }}
                   className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white focus:outline-none focus:border-white/[0.20] focus:ring-1 focus:ring-white/10 transition-all"
                 >
                   <option value="draft" className="bg-[#1f1f2e]">Save as draft</option>
                   <option value="queued" className="bg-[#1f1f2e]">Queue for scheduling</option>
+                  <option value="publish" className="bg-[#1f1f2e]">Publish now</option>
                 </select>
               </div>
             </div>
@@ -301,8 +410,8 @@ export function InternalCompose() {
               disabled={!isFormValid || isSubmitting}
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-black text-[14px] font-semibold hover:bg-white/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {status === "draft" ? <Save size={16} /> : <Send size={16} />}
-              {status === "draft" ? "Save draft" : "Schedule post"}
+              {status === "publish" ? <Send size={16} /> : status === "draft" ? <Save size={16} /> : <Send size={16} />}
+              {status === "publish" ? "Publish now" : status === "draft" ? "Save draft" : "Schedule post"}
             </button>
           </div>
         </form>

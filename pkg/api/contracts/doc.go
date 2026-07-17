@@ -40,33 +40,33 @@
 // line-by-line in code review across the next ~9 commits):
 //
 //   - internal/repository       — SQL-bound persistence (pgx driver,
-//                                 connection pool, table-coupled
-//                                 structs). Importing here is the
-//                                 primary regression risk.
+//     connection pool, table-coupled
+//     structs). Importing here is the
+//     primary regression risk.
 //   - internal/services         — domain services transitively pull
-//                                 internal/repository, internal/auth,
-//                                 etc. There is no "pure services"
-//                                 path: services are categorically
-//                                 forbidden. Service-layer
-//                                 request/response DTOs that a contract
-//                                 needs MUST Domain-Shift to
-//                                 internal/models BEFORE the contract
-//                                 is extracted.
+//     internal/repository, internal/auth,
+//     etc. There is no "pure services"
+//     path: services are categorically
+//     forbidden. Service-layer
+//     request/response DTOs that a contract
+//     needs MUST Domain-Shift to
+//     internal/models BEFORE the contract
+//     is extracted.
 //   - internal/auth             — JWT/session primitives; depend on
-//                                 crypto and PostgreSQL lookups.
+//     crypto and PostgreSQL lookups.
 //   - internal/bootstrap        — wiring/composition root.
 //   - internal/credentials      — encrypted-token vault (Postgres-
-//                                 bound).
+//     bound).
 //   - internal/database         — pgx pool, query helpers.
 //   - internal/outbox           — transactional outbox.
 //   - internal/providers        — provider registry.
 //   - internal/worker           — background job runners.
 //   - internal/crypto           — AES-GCM key map.
 //   - pkg/api                   — the HTTP layer consuming this
-//                                 package (would invert the dependency
-//                                 direction).
+//     package (would invert the dependency
+//     direction).
 //   - pkg/metrics               — observation instrumentation; pulls
-//                                 Prometheus clients.
+//     Prometheus clients.
 //   - cmd/*                     — entrypoints.
 //
 // (pkg/api/contracts itself is implicitly not in the denylist by
@@ -83,22 +83,22 @@
 // a Go type alias for the moved type so every external call site
 // continues to resolve:
 //
-//   // internal/repository/connection_state_repo.go
-//   type ConnectionState = models.ConnectionState
+//	// internal/repository/connection_state_repo.go
+//	type ConnectionState = models.ConnectionState
 //
-//   // internal/services/sessions_service.go
-//   type StartSessionRequest = models.StartSessionRequest
+//	// internal/services/sessions_service.go
+//	type StartSessionRequest = models.StartSessionRequest
 //
 // ## Method-set audit before a struct Domain Shift
 //
 // Before committing any struct Domain Shift, run (against every
 // declaring file involved in the move):
 //
-//   grep -EH 'func \([a-zA-Z]+ \*?[A-Z][a-zA-Z]+\)' \
-//       internal/repository/connection_state_repo.go \
-//       internal/repository/sessions_repo.go \
-//       internal/services/sessions_service.go \
-//       internal/services/storage.go
+//	grep -EH 'func \([a-zA-Z]+ \*?[A-Z][a-zA-Z]+\)' \
+//	    internal/repository/connection_state_repo.go \
+//	    internal/repository/sessions_repo.go \
+//	    internal/services/sessions_service.go \
+//	    internal/services/storage.go
 //
 // Any methods attached to the type in its original package must move
 // to `internal/models` alongside the struct — a Go type alias
@@ -145,10 +145,10 @@
 // Any commit that introduces or modifies a contracts file MUST
 // either:
 //
-//   (a) re-justify any newly-accepted dependency in a matching
-//       comment and update the ALLOWED list above; or
-//   (b) extend or replace the Domain Shift pre-condition to cover
-//       the new dependency.
+//	(a) re-justify any newly-accepted dependency in a matching
+//	    comment and update the ALLOWED list above; or
+//	(b) extend or replace the Domain Shift pre-condition to cover
+//	    the new dependency.
 //
 // Drift that re-imports an item from the FORBIDDEN list without an
 // accompanying Domain Shift is the primary regression mode for this
