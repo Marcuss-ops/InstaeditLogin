@@ -1,11 +1,20 @@
 import { Link } from "react-router-dom";
-import { ArrowRight, Zap, Shield, BarChart3, Sparkles, PlayCircle } from "lucide-react";
+import { ArrowRight, Zap, Shield, BarChart3, Sparkles, PlayCircle, MonitorPlay } from "lucide-react";
 
 // Demo YouTube Shorts shown inside the Shorts section. Single source of truth
 // so adding/removing a demo = one line in this array.
 const SHORT_DEMOS: ReadonlyArray<{ id: string; title: string }> = [
   { id: "MVwXsmRLnwM", title: "YouTube Shorts demo MVwXsmRLnwM" },
   { id: "XCIWzK2BuRo", title: "YouTube Shorts demo XCIWzK2BuRo" },
+];
+
+// Demo YouTube long-form videos shown inside the Long-Form section.
+// URL `&pp=…` tracker (YouTube's playback param) stripped from input IDs.
+const LONGFORM_DEMOS: ReadonlyArray<{ id: string; title: string }> = [
+  { id: "fLhv7d6N_3c", title: "YouTube long-form demo fLhv7d6N_3c" },
+  { id: "iA1WT69NFbw", title: "YouTube long-form demo iA1WT69NFbw" },
+  { id: "R18AVWQ92fs", title: "YouTube long-form demo R18AVWQ92fs" },
+  { id: "lpKX9SKqSMw", title: "YouTube long-form demo lpKX9SKqSMw" },
 ];
 
 export function Landing() {
@@ -34,21 +43,28 @@ export function Landing() {
       <main className="max-w-3xl mx-auto space-y-12 mt-8">
         
         {/* Hero Section - Super Simple */}
-        <section className="text-center py-12">
-          <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white mb-6">
-            Your entire content operation, unified.
-          </h1>
-          <p className="text-sm md:text-base text-zinc-400 max-w-xl mx-auto mb-8 leading-relaxed">
-            We scale production from 50 posts to 10,000 pieces of content per month across 7 platforms. InstaEdit is the high-performance infrastructure that makes it possible.
-          </p>
-          <div className="flex items-center justify-center gap-4">
-            <Link to="/login" className="group flex items-center gap-1.5 px-5 py-2.5 rounded bg-white text-black font-semibold text-xs hover:bg-zinc-200 transition-colors">
-              Start publishing
-              <ArrowRight className="w-3.5 h-3.5" />
-            </Link>
-            <a href="#features" className="px-5 py-2.5 rounded border border-zinc-800 bg-zinc-900/50 text-xs font-medium text-zinc-400 hover:text-white hover:border-zinc-700 transition-colors">
-              See features
-            </a>
+        <section className="text-center py-12 relative overflow-hidden">
+          {/* Decorative gradient orbs behind the hero (Tailwind's -.glow-orb utility: absolute, blurred, low-opacity, pointer-events-none). */}
+          <div aria-hidden="true" className="absolute inset-0 -my-24 pointer-events-none">
+            <div className="glow-orb bg-violet-600 w-[600px] h-[600px] -top-48 left-1/4" />
+            <div className="glow-orb bg-cyan-500 w-[450px] h-[450px] top-1/3 -right-32" />
+          </div>
+          <div className="relative">
+            <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white mb-6">
+              Your entire content operation, unified.
+            </h1>
+            <p className="text-sm md:text-base text-zinc-400 max-w-xl mx-auto mb-8 leading-relaxed">
+              We scale production from 50 posts to 10,000 pieces of content per month across 7 platforms. InstaEdit is the high-performance infrastructure that makes it possible.
+            </p>
+            <div className="flex items-center justify-center gap-4">
+              <Link to="/login" className="group flex items-center gap-1.5 px-5 py-2.5 rounded bg-white text-black font-semibold text-xs hover:bg-zinc-200 transition-colors">
+                Start publishing
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+              <a href="#features" className="px-5 py-2.5 rounded border border-zinc-800 bg-zinc-900/50 text-xs font-medium text-zinc-400 hover:text-white hover:border-zinc-700 transition-colors">
+                See features
+              </a>
+            </div>
           </div>
         </section>
 
@@ -125,65 +141,131 @@ export function Landing() {
         </section>
 
         {/* Shorts Section - Separated Border */}
-        <section className="p-6 rounded border border-zinc-800 bg-zinc-900/20 hover:border-zinc-700 transition-colors">
-          <div className="flex justify-center mb-3">
-            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
-              <PlayCircle className="w-3.5 h-3.5" />
-              Short-Form Video
-            </span>
+        <section className="p-6 rounded border border-zinc-800 bg-zinc-900/20 hover:border-zinc-700 transition-colors relative overflow-hidden">
+          <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+            <div className="glow-orb bg-violet-500 w-[300px] h-[300px] -top-16 -right-16" />
           </div>
-          <h3 className="text-base font-bold text-white mb-2 text-center">
-            Ship vertical shorts to every channel in one click
-          </h3>
-          <p className="text-xs text-zinc-400 leading-relaxed max-w-xl mx-auto text-center mb-4">
-            InstaEdit handles the quirks of each short-form platform — aspect ratio, length caps, descriptions,
-            thumbnails — so a single vertical render lands correctly on YouTube Shorts, Instagram Reels, and TikTok.
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto mb-5">
-            {SHORT_DEMOS.map((demo) => (
-              <div
-                key={demo.id}
-                className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-[0_4px_24px_rgba(0,0,0,0.4)]"
-              >
-                <div className="aspect-[9/16]">
-                  <iframe
-                    className="w-full h-full"
-                    src={`https://www.youtube.com/embed/${demo.id}?playsinline=1`}
-                    title={demo.title}
-                    loading="lazy"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                    allowFullScreen
-                    referrerPolicy="strict-origin-when-cross-origin"
-                  />
+          <div className="relative">
+            <div className="flex justify-center mb-3">
+              <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                <PlayCircle className="w-3.5 h-3.5" />
+                Short-Form Video
+              </span>
+            </div>
+            <h3 className="text-base font-bold text-white mb-2 text-center">
+              Ship vertical shorts to every channel in one click
+            </h3>
+            <p className="text-xs text-zinc-400 leading-relaxed max-w-xl mx-auto text-center mb-4">
+              InstaEdit handles the quirks of each short-form platform — aspect ratio, length caps, descriptions,
+              thumbnails — so a single vertical render lands correctly on YouTube Shorts, Instagram Reels, and TikTok.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto mb-5">
+              {SHORT_DEMOS.map((demo) => (
+                <div
+                  key={demo.id}
+                  className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-[0_4px_24px_rgba(0,0,0,0.4)]"
+                >
+                  <div className="aspect-[9/16]">
+                    <iframe
+                      className="w-full h-full"
+                      src={`https://www.youtube.com/embed/${demo.id}?playsinline=1`}
+                      title={demo.title}
+                      loading="lazy"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      allowFullScreen
+                      referrerPolicy="strict-origin-when-cross-origin"
+                    />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs font-semibold">
+              <span className="text-zinc-400 hover:text-[#FF0000] transition-colors">
+                YouTube Shorts
+              </span>
+              <span className="text-zinc-700">·</span>
+              <span className="text-zinc-400 hover:text-[#E1306C] transition-colors">
+                Instagram Reels
+              </span>
+              <span className="text-zinc-700">·</span>
+              <span className="text-zinc-400 hover:text-white transition-colors">
+                TikTok
+              </span>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs font-semibold">
-            <span className="text-zinc-400 hover:text-[#FF0000] transition-colors">
-              YouTube Shorts
-            </span>
-            <span className="text-zinc-700">·</span>
-            <span className="text-zinc-400 hover:text-[#E1306C] transition-colors">
-              Instagram Reels
-            </span>
-            <span className="text-zinc-700">·</span>
-            <span className="text-zinc-400 hover:text-white transition-colors">
-              TikTok
-            </span>
+        </section>
+
+        {/* Long-Form Video Section - Separated Border */}
+        <section className="p-6 rounded border border-zinc-800 bg-zinc-900/20 hover:border-zinc-700 transition-colors relative overflow-hidden">
+          <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+            <div className="glow-orb bg-cyan-500 w-[320px] h-[320px] -top-16 -left-16" />
+            <div className="glow-orb bg-pink-500 w-[280px] h-[280px] -bottom-12 -right-12" />
+          </div>
+          <div className="relative">
+            <div className="flex justify-center mb-3">
+              <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                <MonitorPlay className="w-3.5 h-3.5" />
+                Long-Form Video
+              </span>
+            </div>
+            <h3 className="text-base font-bold text-white mb-2 text-center">
+              Ship long-form video to every major platform
+            </h3>
+            <p className="text-xs text-zinc-400 leading-relaxed max-w-xl mx-auto text-center mb-4">
+              InstaEdit handles resumable uploads, descriptions, thumbnails, and chapter markers —
+              so a single horizontal render lands correctly on YouTube, Instagram, Facebook, and LinkedIn.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-3xl mx-auto mb-5">
+              {LONGFORM_DEMOS.map((demo) => (
+                <div
+                  key={demo.id}
+                  className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-[0_4px_24px_rgba(0,0,0,0.4)]"
+                >
+                  <div className="aspect-video">
+                    <iframe
+                      className="w-full h-full"
+                      src={`https://www.youtube.com/embed/${demo.id}?playsinline=1`}
+                      title={demo.title}
+                      loading="lazy"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      allowFullScreen
+                      referrerPolicy="strict-origin-when-cross-origin"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs font-semibold">
+              <span className="text-zinc-400 hover:text-[#FF0000] transition-colors">
+                YouTube
+              </span>
+              <span className="text-zinc-700">·</span>
+              <span className="text-zinc-400 hover:text-[#E1306C] transition-colors">
+                Instagram
+              </span>
+              <span className="text-zinc-700">·</span>
+              <span className="text-zinc-400 hover:text-[#0A66C2] transition-colors">
+                LinkedIn
+              </span>
+            </div>
           </div>
         </section>
 
         {/* CTA - Separated Border */}
-        <section className="p-8 rounded border border-zinc-800 bg-zinc-900/10 text-center">
-          <h2 className="text-lg font-bold text-white mb-2">Ready to scale your content?</h2>
-          <p className="text-xs text-zinc-400 mb-6 max-w-xs mx-auto">
-            Connect your first platform in under 2 minutes. No credit card required.
-          </p>
-          <Link to="/login" className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded bg-white text-black font-semibold text-xs hover:bg-zinc-200 transition-colors">
-            Get started free
-            <ArrowRight className="w-3.5 h-3.5" />
-          </Link>
+        <section className="p-8 rounded border border-zinc-800 bg-zinc-900/10 text-center relative overflow-hidden">
+          <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+            <div className="glow-orb bg-amber-500 w-[400px] h-[400px] -top-24 -right-12" />
+          </div>
+          <div className="relative">
+            <h2 className="text-lg font-bold text-white mb-2">Ready to scale your content?</h2>
+            <p className="text-xs text-zinc-400 mb-6 max-w-xs mx-auto">
+              Connect your first platform in under 2 minutes. No credit card required.
+            </p>
+            <Link to="/login" className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded bg-white text-black font-semibold text-xs hover:bg-zinc-200 transition-colors">
+              Get started free
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
         </section>
 
       </main>
