@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { PenSquare, Send, Save, AlertCircle, ArrowLeft } from "lucide-react";
+import {
+  PenSquare,
+  Send,
+  Save,
+  AlertCircle,
+  ArrowLeft,
+  Sparkles,
+  CheckCircle2,
+} from "lucide-react";
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
 import { Skeleton, ErrorState } from "../../components/feedback";
 import { getProvider } from "../../lib/providers";
@@ -21,6 +29,92 @@ type FetchState =
   | { kind: "loading" }
   | { kind: "ready"; workspaces: Workspace[]; accounts: PlatformAccount[] }
   | { kind: "error"; message: string };
+
+const EDITOR_SHORTS = [
+  { id: "MVwXsmRLnwM", title: "Short-form example 1" },
+  { id: "XCIWzK2BuRo", title: "Short-form example 2" },
+];
+
+const EDITOR_LONGFORM = [
+  { id: "fLhv7d6N_3c", title: "Long-form example 1" },
+  { id: "iA1WT69NFbw", title: "Long-form example 2" },
+  { id: "R18AVWQ92fs", title: "Long-form example 3" },
+  { id: "lpKX9SKqSMw", title: "Long-form example 4" },
+];
+
+function EditorExamples() {
+  return (
+    <div className="mb-8 rounded-2xl border border-violet-400/20 bg-gradient-to-br from-violet-500/[0.12] via-[#1f1f2e] to-cyan-500/[0.08] p-5">
+      <div className="flex items-start gap-3">
+        <Sparkles className="mt-0.5 h-5 w-5 shrink-0 text-violet-300" />
+        <div>
+          <h2 className="text-base font-bold text-white">
+            AI-assisted editing, human-finished quality
+          </h2>
+          <p className="mt-1.5 text-sm leading-relaxed text-[#b5b7c2]">
+            InstaEdit researches the best stock footage and SFX, generates AI
+            images, and places every clip at the right moment. A human stays
+            in the loop for the final creative pass — After Effects-level
+            quality in minutes, not hours.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-300">
+            Short-form · 9:16
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {EDITOR_SHORTS.map((video) => (
+              <div key={video.id} className="aspect-[9/16] overflow-hidden rounded-xl border border-white/10 bg-black">
+                <iframe
+                  className="h-full w-full"
+                  src={`https://www.youtube.com/embed/${video.id}?playsinline=1`}
+                  title={video.title}
+                  loading="lazy"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                  referrerPolicy="strict-origin-when-cross-origin"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-cyan-300">
+            Long-form · 16:9
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {EDITOR_LONGFORM.map((video) => (
+              <div key={video.id} className="aspect-[16/9] overflow-hidden rounded-xl border border-white/10 bg-black">
+                <iframe
+                  className="h-full w-full"
+                  src={`https://www.youtube.com/embed/${video.id}?playsinline=1`}
+                  title={video.title}
+                  loading="lazy"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                  referrerPolicy="strict-origin-when-cross-origin"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-[#b5b7c2]">
+        {["Best stock and SFX selected", "AI images generated", "Human creative review"].map((item) => (
+          <span key={item} className="inline-flex items-center gap-1.5">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+            {item}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function InternalCompose() {
   const navigate = useNavigate();
@@ -233,6 +327,8 @@ export function InternalCompose() {
             Create and schedule a post across your connected accounts.
           </p>
         </div>
+
+        <EditorExamples />
 
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6 shadow-sm space-y-6">
