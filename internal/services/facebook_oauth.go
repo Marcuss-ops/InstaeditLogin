@@ -17,31 +17,25 @@ import (
 // small capabilities. Taglio 2.1:
 //
 // Taglio 4.4 split: scope formally narrowed to **Pages-only con
-// selezione**. Facebook publishing is gated by the Page model — you
-// cannot publish to a personal profile via the Graph API (/me/feed
+// selezione esplicita**. Facebook publishing is gated by the Page model —
+// you cannot publish to a personal profile via the Graph API (/me/feed
 // returns 400), so this service publishes ONLY to Pages, never to the
 // user. Selection of WHICH Page to publish to is surfaced through
 // DiscoverAccounts (which returns all Pages the user manages) so the
-// OAuth-connect handler can offer them at connect time.
-//
-// CURRENT STATE vs INTENDED STATE — the per-Page selection wiring is
-// incomplete. Today Publish() defaults to `pages[0]` (the first Page
-// returned by getPages); platformUserID carries the Facebook user id,
-// not a page id. A future commit on main will add explicit page-id
-// persistence on PlatformAccount.metadata and Publish() will read it
-// instead of calling getPages() at publish time. Tracked as a follow-up.
+// OAuth-connect handler can offer them at connect time and create one
+// PlatformAccount per Page.
 //
 // Capabilities exposed:
 //   - OAuthProvider (Meta OAuth login flow with Pages-scoped auth)
-//   - ResourceDiscoverer (= AccountDiscoverer — Facebook Pages the user
-//     manages; the OAuth-connect handler surfaces them, today the
-//     pick is implicit via pages[0])
+//   - AccountDiscoverer (Facebook Pages the user manages; the OAuth
+//     callback handler creates one PlatformAccount per Page)
 //   - ContentValidator (text or image required — text goes to /feed,
 //     image to /photos). Note: video uploads on Pages use a separate
 //     /videos endpoint and are NOT covered by the current Publisher
 //     implementation; reels/videos would be a follow-up.
-//   - Publisher (Page feed / Page photo, dispatched on pages[0] today
-//     — to be replaced by explicit page-id selection in a follow-up)
+//   - Publisher (Page feed / Page photo, dispatched using the Page ID
+//     stored in PlatformAccount.PlatformUserID and the Page Access
+//     Token persisted in the credential vault)
 //   - AccountManager (Validate / Revoke — non-interface helpers used
 //     by the handlers' account lifecycle methods).
 type FacebookOAuthService struct {
@@ -137,9 +131,11 @@ func (s *FacebookOAuthService) ValidateContent(payload models.PublishPayload) er
 }
 
 // DiscoverAccounts returns the Facebook Pages the user manages.
-// Required scope: pages_show_list. The publish flow then uses the first
-// page's access token (a Page Access Token is distinct from the user
-// access token returned by the OAuth callback).
+// Required scope: pages_show_list. Each returned PlatformAccount
+// represents a single Page; PlatformUserID is the Page ID and
+// Username is the Page name. The Page Access Token is carried in
+// Metadata["page_access_token"] so the OAuth callback handler can
+// persist it in the credential vault.
 func (s *FacebookOAuthService) DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*models.PlatformAccount, error) {
 	pages, err := s.getPages(ctx, accessToken)
 	if err != nil {
@@ -151,6 +147,9 @@ func (s *FacebookOAuthService) DiscoverAccounts(ctx context.Context, accessToken
 			Platform:       models.PlatformFacebook,
 			PlatformUserID: p.ID,
 			Username:       p.Name,
+			Metadata: models.Metadata{
+				"page_access_token": p.AccessToken,
+			},
 		})
 	}
 	return accounts, nil
@@ -197,28 +196,29 @@ func (s *FacebookOAuthService) Revoke(ctx context.Context, accessToken string) e
 	return nil
 }
 
-// Publish publishes content to a Facebook Page.
-// Supports text-only posts and single-image posts. Videos, albums, groups,
-// and personal profiles are not supported yet.
+// Publish publishes content to the Facebook Page identified by
+// platformUserID (which is the Page ID) using accessToken as the Page
+// Access Token. The caller (publish worker) is responsible for
+// resolving the Page Access Token from the credential vault.
+// Supports text-only posts and single-image posts. Videos, albums,
+// groups, and personal profiles are not supported yet.
 func (s *FacebookOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
 	defer RecordPublishMetrics(models.PlatformFacebook, s.base.now(), &err)
 
-	pages, err := s.getPages(ctx, accessToken)
-	if err != nil {
-		return nil, fmt.Errorf("facebook pages lookup: %w", err)
+	if platformUserID == "" {
+		return nil, fmt.Errorf("facebook Publish: empty platform_user_id (page id)")
 	}
-	if len(pages) == 0 {
-		return nil, fmt.Errorf("no Facebook Page found for this user — grant pages_show_list and pages_manage_posts permissions")
+	if accessToken == "" {
+		return nil, fmt.Errorf("facebook Publish: empty page access token")
 	}
 
-	page := pages[0]
-	slog.Info("Facebook: publishing to page", "page_id", page.ID, "page_name", page.Name)
+	slog.Info("Facebook: publishing to page", "page_id", platformUserID)
 
 	var mediaID string
 	if payload.ImageURL != "" {
-		mediaID, err = s.publishPagePhoto(ctx, page.AccessToken, page.ID, payload.ImageURL, payload.Text)
+		mediaID, err = s.publishPagePhoto(ctx, accessToken, platformUserID, payload.ImageURL, payload.Text)
 	} else if payload.Text != "" {
-		mediaID, err = s.publishPageFeed(ctx, page.AccessToken, page.ID, payload.Text)
+		mediaID, err = s.publishPageFeed(ctx, accessToken, platformUserID, payload.Text)
 	} else {
 		return nil, fmt.Errorf("facebook requires text or media")
 	}
@@ -310,10 +310,10 @@ func (s *FacebookOAuthService) publishPageFeed(ctx context.Context, pageAccessTo
 // Taglio 4.3.
 // -----------------------------------------------------------------------------
 var (
-	_ Provider           = (*FacebookOAuthService)(nil)
-	_ OAuthProvider      = (*FacebookOAuthService)(nil)
-	_ ContentValidator   = (*FacebookOAuthService)(nil)
-	_ Publisher          = (*FacebookOAuthService)(nil)
+	_ Provider         = (*FacebookOAuthService)(nil)
+	_ OAuthProvider    = (*FacebookOAuthService)(nil)
+	_ ContentValidator = (*FacebookOAuthService)(nil)
+	_ Publisher        = (*FacebookOAuthService)(nil)
 )
 
 func (s *FacebookOAuthService) publishPagePhoto(ctx context.Context, pageAccessToken, pageID, imageURL, caption string) (string, error) {

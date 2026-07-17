@@ -236,6 +236,11 @@ type UserStore interface {
 	AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error)
 	ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error)
 	FindPlatformAccountByID(id int64) (*models.PlatformAccount, error)
+	// FindPlatformAccount loads an existing platform account by its
+	// provider-scoped (platform, platform_user_id) tuple. Used by
+	// the OAuth callback to detect idempotent re-links for the same
+	// user and to refuse account takeovers across users.
+	FindPlatformAccount(platform, platformUserID string) (*models.PlatformAccount, error)
 	UpdatePlatformAccount(account *models.PlatformAccount) error
 	DeletePlatformAccount(id int64) error
 }
@@ -584,8 +589,12 @@ func (r *Router) Setup() http.Handler {
 	if r.rateLimitSvc != nil {
 		mediaPresignMw = append(mediaPresignMw, MediaPresignLimit(r.rateLimitSvc))
 	}
+
 	r.mux.Method(http.MethodPost, "/api/v1/media/presign",
 		chain(r.protected(r.handlePresignMedia), mediaPresignMw...))
+
+	r.mux.Method(http.MethodPost, "/api/v1/media/import/drive", r.protected(r.handleDriveImport))
+
 	r.mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", r.protected(r.handleCompleteMedia))
 	r.mux.Route("/api/v1/workspaces", func(sr chi.Router) {
 		sr.Post("/", r.protected(r.handleCreateWorkspace))
@@ -763,34 +772,48 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	}
 	userID := identity.UserID()
 
-	// Attach to the authenticated user — never auto-create.
-	account, err := r.userRepo.AttachPlatformAccount(userID, profile, provider)
-	if err != nil {
-		if errors.Is(err, repository.ErrAccountAlreadyLinked) {
-			// Operator runbook: the legal owner of the link must
-			// disconnect via DELETE /api/v1/accounts/{id} before
-			// re-link is possible.
-			writeError(w, http.StatusConflict, err.Error())
+	// Providers that expose AccountDiscoverer (Facebook Pages) expand
+	// one OAuth grant into N platform accounts. For those providers we
+	// discover the pages, create one PlatformAccount per page, and
+	// persist the per-page access token. Otherwise we fall back to the
+	// single-account attach path.
+	var account *models.PlatformAccount
+	if discoverer, ok := r.capabilities.Discoverer(provider); ok {
+		account, err = r.attachDiscoveredAccounts(req.Context(), userID, provider, discoverer, tokenData)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to attach discovered accounts: "+err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to attach platform account: "+err.Error())
-		return
+	} else {
+		// Attach to the authenticated user — never auto-create.
+		account, err = r.userRepo.AttachPlatformAccount(userID, profile, provider)
+		if err != nil {
+			if errors.Is(err, repository.ErrAccountAlreadyLinked) {
+				// Operator runbook: the legal owner of the link must
+				// disconnect via DELETE /api/v1/accounts/{id} before
+				// re-link is possible.
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to attach platform account: "+err.Error())
+			return
+		}
+
+		// Taglio 2.2: token persistence goes through CredentialVault.Save.
+		if err := r.vault.Save(req.Context(), account.ID, tokenData); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to save token: "+err.Error())
+			return
+		}
 	}
 
-	// Taglio 2.2: token persistence goes through CredentialVault.Save.
-	if err := r.vault.Save(req.Context(), account.ID, tokenData); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save token: "+err.Error())
-		return
-	}
-
-	// SPRINT 7.1 redirect target: the SPA's connections page. No
+	// SPRINT 7.1 redirect target: the SPA's account-linking page. No
 	// one-time code is needed — the session cookie validated at the
 	// top of this handler IS the active session.
 	if r.frontendURL != "" {
 		q := url.Values{}
 		q.Set("provider", provider)
 		q.Set("status", "connected")
-		http.Redirect(w, req, strings.TrimRight(r.frontendURL, "/")+"/connections?"+q.Encode(), http.StatusFound)
+		http.Redirect(w, req, strings.TrimRight(r.frontendURL, "/")+"/app/linking?"+q.Encode(), http.StatusFound)
 		return
 	}
 	// CLI / test mode (no FRONTEND_URL): typed JSON response so
@@ -801,6 +824,80 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		"user_id":    userID,
 		"account_id": account.ID,
 	})
+}
+
+// attachDiscoveredAccounts is used by handleCallback for providers that
+// expose AccountDiscoverer (Facebook Pages). It creates one
+// PlatformAccount per discovered account and persists the matching
+// access token. For Facebook, the Page Access Token is stored as
+// models.TokenTypePageAccess so the publish worker can retrieve it
+// later.
+func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, provider string, discoverer services.AccountDiscoverer, tokenData *models.TokenData) (*models.PlatformAccount, error) {
+	accounts, err := discoverer.DiscoverAccounts(ctx, tokenData.AccessToken, "")
+	if err != nil {
+		return nil, fmt.Errorf("discover accounts: %w", err)
+	}
+	if len(accounts) == 0 {
+		return nil, fmt.Errorf("no accounts discovered for provider %s", provider)
+	}
+
+	var first *models.PlatformAccount
+	for _, acc := range accounts {
+		profile := &models.PlatformProfile{
+			PlatformUserID: acc.PlatformUserID,
+			Username:       acc.Username,
+		}
+		created, err := r.userRepo.AttachPlatformAccount(userID, profile, provider)
+		if err != nil {
+			if errors.Is(err, repository.ErrAccountAlreadyLinked) {
+				// Already linked to this user — load the existing row so
+				// we can update its token below.
+				existing, findErr := r.userRepo.FindPlatformAccount(provider, acc.PlatformUserID)
+				if findErr != nil {
+					return nil, fmt.Errorf("find existing account: %w", findErr)
+				}
+				if existing == nil {
+					return nil, fmt.Errorf("account already linked but not found")
+				}
+				created = existing
+			} else {
+				return nil, fmt.Errorf("attach account %s: %w", acc.PlatformUserID, err)
+			}
+		}
+
+		if first == nil {
+			first = created
+		}
+
+		// Persist the Page Access Token. Facebook Page Access Tokens
+		// do not expire unless the grant is revoked, so we store them
+		// with a far-future expiry to satisfy the vault's non-null
+		// ExpiresAt expectation.
+		pageAccessToken, ok := acc.Metadata["page_access_token"].(string)
+		if !ok || pageAccessToken == "" {
+			return nil, fmt.Errorf("missing page_access_token for account %s", acc.PlatformUserID)
+		}
+		pageToken := &models.TokenData{
+			AccessToken: pageAccessToken,
+			TokenType:   models.TokenTypePageAccess,
+			ExpiresIn:   60 * 60 * 24 * 365 * 10, // 10 years (effectively never)
+			Scopes:      []string{"pages_manage_posts", "pages_read_engagement", "pages_show_list"},
+		}
+		if err := r.vault.Save(ctx, created.ID, pageToken); err != nil {
+			return nil, fmt.Errorf("save page token for account %d: %w", created.ID, err)
+		}
+
+		// Persist the user-level long-lived token under every discovered
+		// account so refresh/reconnect can re-exchange it from any
+		// page account. The vault prunes older rows per
+		// (platform_account_id, token_type), so this only keeps the
+		// latest user token per page.
+		if err := r.vault.Save(ctx, created.ID, tokenData); err != nil {
+			return nil, fmt.Errorf("save user token for account %d: %w", created.ID, err)
+		}
+	}
+
+	return first, nil
 }
 
 // handleExchangeCode exchanges a one-time code (from /auth/callback?code=...)

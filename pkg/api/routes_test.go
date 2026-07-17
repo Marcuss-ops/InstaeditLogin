@@ -120,11 +120,12 @@ func (m *mockCredentialVault) Rotate(ctx context.Context, platformAccountID int6
 // Tests that used to return a *models.User pair from a mock callback
 // now return only *models.PlatformAccount (the link side).
 type mockUserStore struct {
-	attachFn                func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error)
-	listFn                  func(userID int64, platform string) ([]*models.PlatformAccount, error)
-	findPlatformAccountFn   func(id int64) (*models.PlatformAccount, error)
-	updatePlatformAccountFn func(account *models.PlatformAccount) error
-	deletePlatformAccountFn func(id int64) error
+	attachFn                     func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error)
+	listFn                       func(userID int64, platform string) ([]*models.PlatformAccount, error)
+	findPlatformAccountFn        func(id int64) (*models.PlatformAccount, error)
+	findPlatformAccountByTupleFn func(platform, platformUserID string) (*models.PlatformAccount, error)
+	updatePlatformAccountFn      func(account *models.PlatformAccount) error
+	deletePlatformAccountFn      func(id int64) error
 }
 
 func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
@@ -139,6 +140,12 @@ func (m *mockUserStore) ListPlatformAccountsByUser(userID int64, platform string
 func (m *mockUserStore) FindPlatformAccountByID(id int64) (*models.PlatformAccount, error) {
 	if m.findPlatformAccountFn != nil {
 		return m.findPlatformAccountFn(id)
+	}
+	return nil, nil
+}
+func (m *mockUserStore) FindPlatformAccount(platform, platformUserID string) (*models.PlatformAccount, error) {
+	if m.findPlatformAccountByTupleFn != nil {
+		return m.findPlatformAccountByTupleFn(platform, platformUserID)
 	}
 	return nil, nil
 }
@@ -706,8 +713,8 @@ func TestHandleCallback_Success_FrontendRedirect(t *testing.T) {
 	// page with provider + status=connected query params — no one-time
 	// code, no JWT. The session cookie that validated at the top of
 	// the handler IS the active session.
-	if !strings.Contains(loc, "https://app.example.com/connections?") {
-		t.Fatalf("redirect URL must land on /connections (SPRINT 7.1): %s", loc)
+	if !strings.Contains(loc, "https://app.example.com/app/linking?") {
+		t.Fatalf("redirect URL must land on /app/linking (SPRINT 7.1): %s", loc)
 	}
 	if strings.Contains(loc, "jwt=") {
 		t.Fatalf("JWT must never appear in the redirect URL: %s", loc)

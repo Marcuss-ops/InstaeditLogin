@@ -241,16 +241,6 @@ func TestFacebookPublishesTextPost(t *testing.T) {
 	const expectedPostID = "123456789_999888777"
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("expected GET /me/accounts, got %s", r.Method)
-		}
-		json.NewEncoder(w).Encode(models.MetaAccountsResponse{
-			Data: []models.MetaPage{
-				{AccessToken: pageAccessToken, ID: pageID, Name: "Test Page"},
-			},
-		})
-	})
 	var capturedMessage string
 	mux.HandleFunc("/v19.0/"+pageID+"/feed", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -267,7 +257,7 @@ func TestFacebookPublishesTextPost(t *testing.T) {
 
 	svc := newTestFacebookService(srv)
 
-	result, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
+	result, err := svc.Publish(context.Background(), pageAccessToken, pageID,
 		models.PublishPayload{Text: "Hello from Facebook test!"})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -290,13 +280,6 @@ func TestFacebookPublishesSingleImage(t *testing.T) {
 	const caption = "My beautiful photo"
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(models.MetaAccountsResponse{
-			Data: []models.MetaPage{
-				{AccessToken: pageAccessToken, ID: pageID, Name: "Photo Page"},
-			},
-		})
-	})
 	var capturedURL, capturedCaption string
 	mux.HandleFunc("/v19.0/"+pageID+"/photos", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -314,7 +297,7 @@ func TestFacebookPublishesSingleImage(t *testing.T) {
 
 	svc := newTestFacebookService(srv)
 
-	result, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
+	result, err := svc.Publish(context.Background(), pageAccessToken, pageID,
 		models.PublishPayload{ImageURL: imageURL, Text: caption})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -337,13 +320,6 @@ func TestFacebookReturnsRemotePostID(t *testing.T) {
 	const expectedPostID = "111111_222222"
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(models.MetaAccountsResponse{
-			Data: []models.MetaPage{
-				{AccessToken: "tok", ID: pageID, Name: "P"},
-			},
-		})
-	})
 	mux.HandleFunc("/v19.0/"+pageID+"/feed", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"id": expectedPostID})
 	})
@@ -352,7 +328,7 @@ func TestFacebookReturnsRemotePostID(t *testing.T) {
 
 	svc := newTestFacebookService(srv)
 
-	result, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
+	result, err := svc.Publish(context.Background(), "page-token", pageID,
 		models.PublishPayload{Text: "test"})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -369,13 +345,6 @@ func TestFacebookReturnsRemotePostURL(t *testing.T) {
 	const postID = "333333_444444"
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(models.MetaAccountsResponse{
-			Data: []models.MetaPage{
-				{AccessToken: "tok", ID: pageID, Name: "P"},
-			},
-		})
-	})
 	mux.HandleFunc("/v19.0/"+pageID+"/feed", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"id": postID})
 	})
@@ -384,7 +353,7 @@ func TestFacebookReturnsRemotePostURL(t *testing.T) {
 
 	svc := newTestFacebookService(srv)
 
-	result, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
+	result, err := svc.Publish(context.Background(), "page-token", pageID,
 		models.PublishPayload{Text: "url test"})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -396,26 +365,11 @@ func TestFacebookReturnsRemotePostURL(t *testing.T) {
 }
 
 // TestFacebookRejectsEmptyPost verifies that Publish returns an error when
-// both Text and ImageURL are empty. Note: Publish calls getPages first,
-// then checks content — so the pages API is called once before the
-// validation failure is surfaced.
+// both Text and ImageURL are empty.
 func TestFacebookRejectsEmptyPost(t *testing.T) {
-	mux := http.NewServeMux()
-	apiHits := 0
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		apiHits++
-		json.NewEncoder(w).Encode(models.MetaAccountsResponse{
-			Data: []models.MetaPage{
-				{AccessToken: "tok", ID: "page-1", Name: "P"},
-			},
-		})
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	svc := newTestFacebookService(nil)
 
-	svc := newTestFacebookService(srv)
-
-	_, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
+	_, err := svc.Publish(context.Background(), "page-token", "page-1",
 		models.PublishPayload{})
 	if err == nil {
 		t.Fatal("expected error for empty payload, got nil")
@@ -423,41 +377,19 @@ func TestFacebookRejectsEmptyPost(t *testing.T) {
 	if !strings.Contains(err.Error(), "requires") && !strings.Contains(err.Error(), "text or media") {
 		t.Errorf("error message should mention missing content: %v", err)
 	}
-	// getPages is called before content check — 1 API call is expected.
-	if apiHits != 1 {
-		t.Errorf("expected 1 API call (getPages before validation), got %d", apiHits)
-	}
 }
 
 // TestFacebookRejectsVideoInV1 verifies that a VideoURL-only payload
-// is rejected. Publish calls getPages first, then routes to /feed
-// (text) or /photos (image) — VideoURL matches neither and hits the
+// is rejected. VideoURL matches neither /feed nor /photos and hits the
 // else branch with "requires text or media". Video publishing to
 // Pages is not implemented in v1.
 func TestFacebookRejectsVideoInV1(t *testing.T) {
-	mux := http.NewServeMux()
-	apiHits := 0
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		apiHits++
-		json.NewEncoder(w).Encode(models.MetaAccountsResponse{
-			Data: []models.MetaPage{
-				{AccessToken: "tok", ID: "page-1", Name: "P"},
-			},
-		})
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	svc := newTestFacebookService(nil)
 
-	svc := newTestFacebookService(srv)
-
-	_, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
+	_, err := svc.Publish(context.Background(), "page-token", "page-1",
 		models.PublishPayload{VideoURL: "https://cdn.example.com/video.mp4"})
 	if err == nil {
 		t.Fatal("expected error for video-only payload in v1, got nil")
-	}
-	// getPages is called before content routing — 1 API call is expected.
-	if apiHits != 1 {
-		t.Errorf("expected 1 API call (getPages before content check), got %d", apiHits)
 	}
 }
 
@@ -472,13 +404,6 @@ func TestFacebookPublishesSingleImageOnly(t *testing.T) {
 	const imageURL = "https://cdn.example.com/single.jpg"
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(models.MetaAccountsResponse{
-			Data: []models.MetaPage{
-				{AccessToken: "tok", ID: "page-1", Name: "P"},
-			},
-		})
-	})
 	var photoURLs []string
 	mux.HandleFunc("/v19.0/page-1/photos", func(w http.ResponseWriter, r *http.Request) {
 		photoURLs = append(photoURLs, r.URL.Query().Get("url"))
@@ -489,7 +414,7 @@ func TestFacebookPublishesSingleImageOnly(t *testing.T) {
 
 	svc := newTestFacebookService(srv)
 
-	_, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
+	_, err := svc.Publish(context.Background(), "page-token", "page-1",
 		models.PublishPayload{ImageURL: imageURL})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -503,136 +428,26 @@ func TestFacebookPublishesSingleImageOnly(t *testing.T) {
 	}
 }
 
-// TestFacebookRejectsPersonalProfile verifies that Publish returns an error
-// when the user has no Pages (personal profile cannot publish via Graph API).
-func TestFacebookRejectsPersonalProfile(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		// Return empty page list — user has no Pages.
-		json.NewEncoder(w).Encode(models.MetaAccountsResponse{
-			Data: []models.MetaPage{},
-		})
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+// TestFacebookRejectsEmptyPageID verifies that Publish returns an error
+// when platformUserID (the Page ID) is empty.
+func TestFacebookRejectsEmptyPageID(t *testing.T) {
+	svc := newTestFacebookService(nil)
 
-	svc := newTestFacebookService(srv)
-
-	_, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
-		models.PublishPayload{Text: "trying to post to personal profile"})
+	_, err := svc.Publish(context.Background(), "page-token", "",
+		models.PublishPayload{Text: "trying to post without page id"})
 	if err == nil {
-		t.Fatal("expected error for personal profile (no Pages), got nil")
+		t.Fatal("expected error for empty page id, got nil")
 	}
-	if !strings.Contains(err.Error(), "no Facebook Page found") {
-		t.Errorf("error should mention missing Page: %v", err)
-	}
-}
-
-// TestFacebookHandlesMissingPermission verifica che una risposta 403 da
-// /me/accounts (permissione mancante) venga propagata come errore.
-func TestFacebookHandlesMissingPermission(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte(`{"error":{"message":"(#10) This endpoint requires the pages_show_list permission","type":"OAuthException","code":10}}`))
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	svc := newTestFacebookService(srv)
-
-	_, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
-		models.PublishPayload{Text: "should fail"})
-	if err == nil {
-		t.Fatal("expected error for 403 /me/accounts, got nil")
-	}
-	if !strings.Contains(err.Error(), "403") && !strings.Contains(err.Error(), "pages") {
-		t.Errorf("error should reference 403 or missing permission: %v", err)
+	if !strings.Contains(err.Error(), "empty platform_user_id") {
+		t.Errorf("error should mention empty page id: %v", err)
 	}
 }
 
-// TestFacebookHandlesExpiredToken verifies that a 401 response from
-// /me/accounts (expired/revoked token) is propagated as an error.
-func TestFacebookHandlesExpiredToken(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte(`{"error":{"message":"The access token has expired","type":"OAuthException","code":190}}`))
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	svc := newTestFacebookService(srv)
-
-	_, err := svc.Publish(context.Background(), "expired-token", "fb-user-id",
-		models.PublishPayload{Text: "should fail with 401"})
-	if err == nil {
-		t.Fatal("expected error for 401 /me/accounts, got nil")
-	}
-	if !strings.Contains(err.Error(), "401") && !strings.Contains(err.Error(), "accounts") {
-		t.Errorf("error should reference 401 or accounts failure: %v", err)
-	}
-}
-
-// TestFacebookHandlesRateLimit verifies that a 429 (rate limit) from
-// /me/accounts is propagated as an error — the worker can retry.
-func TestFacebookHandlesRateLimit(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write([]byte(`{"error":{"message":"(#4) Application request limit reached","type":"OAuthException","code":4}}`))
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	svc := newTestFacebookService(srv)
-
-	_, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
-		models.PublishPayload{Text: "should hit rate limit"})
-	if err == nil {
-		t.Fatal("expected error for 429, got nil")
-	}
-	if !strings.Contains(err.Error(), "429") && !strings.Contains(err.Error(), "accounts") {
-		t.Errorf("error should reference 429: %v", err)
-	}
-}
-
-// TestFacebookHandlesProvider5xx verifies that 500, 502, and 503 responses
-// from /me/accounts are surfaced as errors (the worker can retry).
-func TestFacebookHandlesProvider5xx(t *testing.T) {
-	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			mux := http.NewServeMux()
-			mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(status)
-				w.Write([]byte(`{"error":{"message":"Internal server error"}}`))
-			})
-			srv := httptest.NewServer(mux)
-			defer srv.Close()
-
-			svc := newTestFacebookService(srv)
-
-			_, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
-				models.PublishPayload{Text: "test"})
-			if err == nil {
-				t.Fatalf("expected error for %d, got nil", status)
-			}
-		})
-	}
-}
-
-// TestFacebookPublish_FeedHTTPError verifies that Publish surfaces errors from
-// the /feed endpoint itself (pages lookup OK, publish step fails).
-func TestFacebookPublish_FeedHTTPError(t *testing.T) {
+// TestFacebookHandlesFeedHTTPError verifies that Publish surfaces errors from
+// the /feed endpoint itself (publish step fails).
+func TestFacebookHandlesFeedHTTPError(t *testing.T) {
 	const pageID = "page-500"
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(models.MetaAccountsResponse{
-			Data: []models.MetaPage{
-				{AccessToken: "tok", ID: pageID, Name: "Error Page"},
-			},
-		})
-	})
 	mux.HandleFunc("/v19.0/"+pageID+"/feed", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(`{"error":{"message":"Upstream error"}}`))
@@ -642,7 +457,31 @@ func TestFacebookPublish_FeedHTTPError(t *testing.T) {
 
 	svc := newTestFacebookService(srv)
 
-	_, err := svc.Publish(context.Background(), "user-token", "fb-user-id",
+	_, err := svc.Publish(context.Background(), "page-token", pageID,
+		models.PublishPayload{Text: "test"})
+	if err == nil {
+		t.Fatal("expected error from /feed 502, got nil")
+	}
+	if !strings.Contains(err.Error(), "facebook publish failed") {
+		t.Errorf("error should be wrapped: %v", err)
+	}
+}
+
+// TestFacebookPublish_FeedHTTPError verifies that Publish surfaces errors from
+// the /feed endpoint itself when the publish step fails.
+func TestFacebookPublish_FeedHTTPError(t *testing.T) {
+	const pageID = "page-500"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v19.0/"+pageID+"/feed", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(`{"error":{"message":"Upstream error"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := newTestFacebookService(srv)
+
+	_, err := svc.Publish(context.Background(), "page-token", pageID,
 		models.PublishPayload{Text: "test"})
 	if err == nil {
 		t.Fatal("expected error from /feed 502, got nil")
@@ -653,20 +492,15 @@ func TestFacebookPublish_FeedHTTPError(t *testing.T) {
 }
 
 // TestFacebookPublish_PageAccessTokenPassed verifies that the Page Access Token
-// (not the user token) is passed to the /feed endpoint.
+// passed to Publish() is forwarded to the /feed endpoint. The caller (publish
+// worker) is responsible for resolving the Page Access Token from the vault, so
+// Publish() uses the token it receives as-is.
 func TestFacebookPublish_PageAccessTokenPassed(t *testing.T) {
 	const pageAccessToken = "page-level-access-token-12345"
 	const pageID = "page-token-test"
 
 	var feedAccessToken string
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v19.0/me/accounts", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(models.MetaAccountsResponse{
-			Data: []models.MetaPage{
-				{AccessToken: pageAccessToken, ID: pageID, Name: "Token Test"},
-			},
-		})
-	})
 	mux.HandleFunc("/v19.0/"+pageID+"/feed", func(w http.ResponseWriter, r *http.Request) {
 		feedAccessToken = r.URL.Query().Get("access_token")
 		json.NewEncoder(w).Encode(map[string]string{"id": "post-id"})
@@ -676,7 +510,7 @@ func TestFacebookPublish_PageAccessTokenPassed(t *testing.T) {
 
 	svc := newTestFacebookService(srv)
 
-	_, err := svc.Publish(context.Background(), "user-level-token-different", "fb-user-id",
+	_, err := svc.Publish(context.Background(), pageAccessToken, pageID,
 		models.PublishPayload{Text: "test page token"})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)

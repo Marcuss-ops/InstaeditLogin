@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -26,12 +27,28 @@ func (rt *urlRewriteTransport) RoundTrip(req *http.Request) (*http.Response, err
 }
 
 // testClient creates an *http.Client that routes all requests through the
-// httptest server regardless of the original URL host.
+// httptest server regardless of the original URL host. Passing nil returns a
+// client that fails every request with a clear error; this is useful for
+// tests that only exercise validation paths and never hit the network.
 func testClient(srv *httptest.Server) *http.Client {
+	if srv == nil {
+		return &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				return nil, fmt.Errorf("testClient: nil server")
+			}),
+		}
+	}
 	u, _ := url.Parse(srv.URL)
 	return &http.Client{
 		Transport: &urlRewriteTransport{target: u, next: http.DefaultTransport},
 	}
+}
+
+// roundTripperFunc adapts a function to http.RoundTripper.
+type roundTripperFunc func(req *http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 // twitterTestCfg returns a minimal config that passes validate() so we can
