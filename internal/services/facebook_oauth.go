@@ -66,7 +66,7 @@ func (s *FacebookOAuthService) GetLoginURL(state string) string {
 	params.Set("client_id", s.base.cfg.MetaAppID)
 	params.Set("redirect_uri", s.redirectURI)
 	params.Set("state", state)
-	params.Set("scope", "pages_manage_posts,pages_read_engagement,pages_show_list")
+	params.Set("scope", "pages_manage_posts,pages_read_engagement,pages_show_list,business_management")
 	params.Set("response_type", "code")
 
 	return "https://www.facebook.com/v19.0/dialog/oauth?" + params.Encode()
@@ -96,7 +96,7 @@ func (s *FacebookOAuthService) HandleCallback(ctx context.Context, state, code s
 		AccessToken: longLived.AccessToken,
 		TokenType:   models.TokenTypeLongLived,
 		ExpiresIn:   longLived.ExpiresIn,
-		Scopes:      []string{"pages_manage_posts", "pages_read_engagement", "pages_show_list"},
+		Scopes:      []string{"pages_manage_posts", "pages_read_engagement", "pages_show_list", "business_management"},
 	}
 
 	return profile, tokenData, nil
@@ -254,6 +254,8 @@ func (s *FacebookOAuthService) getPages(ctx context.Context, accessToken string)
 		return nil, fmt.Errorf("read accounts response: %w", err)
 	}
 
+	slog.Info("Facebook /me/accounts response", "status", resp.StatusCode, "body", truncateForLog(string(body), 500))
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("accounts request returned status %d: %s", resp.StatusCode, truncateForLog(string(body), 200))
 	}
@@ -262,6 +264,8 @@ func (s *FacebookOAuthService) getPages(ctx context.Context, accessToken string)
 	if err := json.Unmarshal(body, &accountsResp); err != nil {
 		return nil, fmt.Errorf("parse accounts response: %w", err)
 	}
+
+	slog.Info("Facebook /me/accounts parsed pages", "count", len(accountsResp.Data))
 
 	return accountsResp.Data, nil
 }
