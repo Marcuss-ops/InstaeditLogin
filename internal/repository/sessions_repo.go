@@ -12,6 +12,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -279,4 +280,41 @@ func (r *SessionRepository) MarkUsed(id int64) error {
 		return fmt.Errorf("mark used: %w", err)
 	}
 	return nil
+}
+
+// DeleteStale hard-deletes session rows whose revocation timestamp
+// or refresh expiry has aged past the retention windows. Returns
+// the number of rows deleted.
+//
+// Eligibility (combined OR):
+//   - revoked_at IS NOT NULL AND revoked_at < NOW() - revokedDays days
+//     → 30 days keeps the audit trail ("user logged out at T")
+//     visible to operators for a month while bounding the table.
+//   - refresh_expires_at < NOW() - expiredDays days
+//     → 7 days gives the refresh-token theft detection (Rotate's
+//     reuse check) a window to settle across replicas BEFORE the
+//     row vanishes.
+//
+// Hard delete is irreversible; the policy values are documented in
+// internal/services/sessions_service.go (CleanupGraceRevokedDays /
+// CleanupGraceExpiredDays) so an operator recovering from a bad
+// run knows exactly what rows vanished.
+func (r *SessionRepository) DeleteStale(ctx context.Context, revokedDays, expiredDays int) (int64, error) {
+	if revokedDays < 0 || expiredDays < 0 {
+		return 0, fmt.Errorf("delete stale sessions: negative grace (revoked=%d expired=%d)", revokedDays, expiredDays)
+	}
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM sessions
+		 WHERE (revoked_at IS NOT NULL AND revoked_at < NOW() - ($1::int * INTERVAL '1 day'))
+		    OR (refresh_expires_at < NOW() - ($2::int * INTERVAL '1 day'))`,
+		revokedDays, expiredDays,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale sessions: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("delete stale sessions: rows affected: %w", err)
+	}
+	return n, nil
 }

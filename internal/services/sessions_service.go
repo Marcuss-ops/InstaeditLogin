@@ -10,6 +10,7 @@
 package services
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -268,6 +269,58 @@ func (s *SessionsService) WithdrawFromCookie(refreshPlain string) error {
 // IsNoSession is exported for handlers that want a 401 vs 404 split.
 func IsNoSession(err error) bool {
 	return errors.Is(err, ErrSessionNotFound)
+}
+
+// CleanupGraceRevokedDays / CleanupGraceExpiredDays document the
+// retention policy that SessionsService.Cleanup applies. Both are
+// passed to SessionRepository.DeleteStale at call time so the SQL
+// stays parametric (no policy values embedded in SQL literals —
+// dev / test can pass smaller grace values).
+const (
+	// CleanupGraceRevokedDays is the audit-retention window for
+	// revoked sessions. 30 days gives operators a month to
+	// investigate "which session was active when user X reported
+	// an incident" while still bounding table growth.
+	CleanupGraceRevokedDays = 30
+	// CleanupGraceExpiredDays is the grace window after
+	// refresh_expires_at before the row is hard-deleted. 7 days
+	// lets the refresh-token theft detection (Rotate's reuse
+	// check) have a window to settle across replicas before the
+	// row disappears.
+	CleanupGraceExpiredDays = 7
+)
+
+// CleanupResult summarises what Services.Cleanup deleted and which
+// grace values it applied. Returned to callers (worker, log
+// surface) so dashboards can introspect the policy in effect
+// without re-reading the service constants.
+type CleanupResult struct {
+	Deleted          int64
+	GraceRevokedDays int
+	GraceExpiredDays int
+}
+
+// Cleanup hard-deletes session rows whose revocation timestamp or
+// refresh expiry has aged past the retention policy. Grace values
+// come from package constants (NOT config) — operators who need
+// different windows are expected to recompile with new constants
+// rather than wire per-process overrides that can drift between
+// deployments.
+//
+// Errors are returned wrapped. The caller (cmd/worker
+// sessions_cleanup goroutine) logs at WARN but does not abort the
+// tick on transient errors — a DB blip should not kill the
+// cadence.
+func (s *SessionsService) Cleanup(ctx context.Context) (CleanupResult, error) {
+	n, err := s.repo.DeleteStale(ctx, CleanupGraceRevokedDays, CleanupGraceExpiredDays)
+	if err != nil {
+		return CleanupResult{}, fmt.Errorf("cleanup sessions: %w", err)
+	}
+	return CleanupResult{
+		Deleted:          n,
+		GraceRevokedDays: CleanupGraceRevokedDays,
+		GraceExpiredDays: CleanupGraceExpiredDays,
+	}, nil
 }
 
 // _ keeps http imported for the future Set-Cookie helper that

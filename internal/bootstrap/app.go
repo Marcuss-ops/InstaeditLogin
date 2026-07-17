@@ -85,6 +85,15 @@ type App struct {
 	// no Shutdown() wiring is strictly required — the field is
 	// exposed for future graceful-drain work.
 	MemoryLimiter *services.MemoryLimiter
+
+	// SessionsSvc is the wired *SessionsService, populated by
+	// Wire(). cmd/worker reads it to drive the retention-policy
+	// goroutine (SessionsCleanupWorker); cmd/api reads it through
+	// the router (which already gets a copy via WithSessionsService
+	// in the Wire's opts block). Exposing it as a field avoids
+	// re-constructing the service in RunWorkers — the same instance
+	// is shared across the api and worker processes.
+	SessionsSvc *services.SessionsService
 }
 
 // Wire connects to the database, builds every shared dependency, and
@@ -188,7 +197,7 @@ func Wire(ctx context.Context) (*App, error) {
 
 	storageProvider, err := services.NewS3Provider(
 		cfg.S3Endpoint, cfg.S3Bucket, cfg.S3Region,
-		cfg.S3AccessKey, cfg.S3SecretKey, slog.Default())
+		cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3PathStyle, slog.Default())
 	if err != nil {
 		return nil, fmt.Errorf("construct S3 provider: %w", err)
 	}
@@ -307,17 +316,18 @@ func Wire(ctx context.Context) (*App, error) {
 		"ready_endpoint", "/ready")
 
 	return &App{
-		Cfg:          cfg,
-		DB:           db,
-		Vault:        vault,
-		CapRouter:    capRouter,
-		WebhookRepo:  webhookRepo,
-		HTTPHandler:  router.Setup(),
-		Logger:       logger,
-		WorkerStatus: workerStatus,
-		SentryHub:    hub,
-		WorkerID:     workerID,
+		Cfg:           cfg,
+		DB:            db,
+		Vault:         vault,
+		CapRouter:     capRouter,
+		WebhookRepo:   webhookRepo,
+		HTTPHandler:   router.Setup(),
+		Logger:        logger,
+		WorkerStatus:  workerStatus,
+		SentryHub:     hub,
+		WorkerID:      workerID,
 		MemoryLimiter: memoryLimiter,
+		SessionsSvc:   sessionsSvc,
 	}, nil
 }
 
@@ -442,7 +452,31 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		children = append(children, &goroutineCtx{"metrics", cancel, d})
 	}
 
-	slog.Info("5 background goroutines started: publish / reconcile / outbox / webhook / metrics")
+	// 6. Sessions cleanup worker — retention policy (commit:
+	// cleanup-policy). Hard-deletes stale rows from `sessions` per
+	// services.SessionsService.Cleanup (30 days post revoke OR 7
+	// days post refresh expiry). Driven by
+	// cfg.SessionCleanupIntervalSeconds (env
+	// SESSION_CLEANUP_INTERVAL_SECONDS, default 300s).
+	{
+		c, cancel := context.WithCancel(ctx)
+		d := make(chan struct{})
+		go func() {
+			defer close(d)
+			a.WorkerStatus.Mark("sessions_cleanup")
+			scw := worker.NewSessionsCleanupWorker(
+				a.SessionsSvc,
+				time.Duration(a.Cfg.SessionsCleanupIntervalSeconds)*time.Second,
+				slog.Default(),
+			)
+			if err := scw.Run(c); err != nil && err != context.Canceled {
+				slog.Error("sessions cleanup worker exited with error", "error", err)
+			}
+		}()
+		children = append(children, &goroutineCtx{"sessions_cleanup", cancel, d})
+	}
+
+	slog.Info("6 background goroutines started: publish / reconcile / outbox / webhook / metrics / sessions_cleanup")
 
 	// Block until ctx is cancelled.
 	<-ctx.Done()
