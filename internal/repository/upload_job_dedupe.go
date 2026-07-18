@@ -170,5 +170,5 @@ func uploadJobSourceLockKey(job *models.UploadJob, targetsJSON []byte) string {
 	if job.DriveAccountID != nil {
 		driveAccountID = *job.DriveAccountID
 	}
-	return fmt.Sprintf("%d\x00%s\x00%s\x00%d\x00%s", job.UserID, job.SourceType, job.SourceID, driveAccountID, targetsJSON)
+	return fmt.Sprintf("%d|%s|%s|%d|%s", job.UserID, job.SourceType, job.SourceID, driveAccountID, targetsJSON)
 }
