@@ -163,6 +163,62 @@ The trade-off is the one behavioural change flagged above: **transient 5xx now t
 
 Both publish + reconcile goroutines may call `vault.Renew` on the same `account_id` per tick (driver before each `publishTarget`; reconciler before each `reconcileTarget` final transition). This is safe — the `CredentialVault` uses `pg_advisory_xact_lock` to serialise concurrent refreshes for the same account_id, so a driver-reconciler race collapses to a single round-trip (the first refresh completes; subsequent calls find the token already valid and return without work). The vault's call-count rises slightly across the two goroutines; the network / DB load stays bounded. See `internal/worker/reconcile_worker.go::reconcileTarget` step 3 for the inline callout.
 
+### Rate limiting and retry semantics
+
+Two independent mechanisms govern how the system handles backpressure from upstream platforms, plus an explicit gap that is still open on the publish path. Earlier versions of this document carried a vaguer claim ("the worker implements exponential backoff on 429") which understated the truth — the actual layering is:
+
+| Layer | Where | Behaviour | Scope |
+|---|---|---|---|
+| Preventive throttle | `internal/worker/throttle.go` (`PlatformThrottle.Wait`) | Token bucket per platform name, `defaultBurst=1`, pure spacing | Per worker replica, NOT distributed |
+| Async retry with jitter + DLQ | `internal/outbox/dispatcher.go` (`Dispatcher.computeBackoff`, `processOne`) | Decorrelated jitter, `MaxAttempts=5`, `BaseDelay=1s`, `CapDelay=1h`, `ErrTerminal→DLQ-immediate` | Outbox events audit-row materialisation |
+| Webhook outbound delivery | `internal/worker/webhook_worker.go` | Retries `5xx/408/425/429/timeout` up to `MaxAttempts` with backoff | Operator-configured webhook sinks |
+| **Gap** — final publish call retry | — | `publisher.Publish(...)` errors short-circuit to `markFailed` today; no `next_attempt_at` reschedule from the worker | To be added |
+
+#### (a) Per-process throttle (pre-call)
+
+`PublishWorker.publishTarget` blocks on `PlatformThrottle.Wait(ctx, account.Platform)` before calling `publisher.Publish(...)`. The bucket has `defaultBurst = 1` so there is no burst headroom — every call must wait its turn — and the per-platform rates are tuned conservatively against the documented platform limits:
+
+| Platform   | Default rate | Source constraint                                             |
+|------------|--------------|---------------------------------------------------------------|
+| instagram  | 2 req/s      | Meta Graph ~200 calls/user/hour ≈ 1 per 18s                   |
+| facebook   | 2 req/s      | same                                                          |
+| threads    | 2 req/s      | same                                                          |
+| tiktok     | 0.5 req/s    | documented `video.publish` limit ~1 per 2s                    |
+| youtube    | 0.33 req/s   | Data API v3 daily quota; uploads cost ~1600 units each        |
+| twitter    | 1 req/s      | v2 user-endpoint ~300 tweets/3h                               |
+| linkedin   | 0.5 req/s    | Posts API ~100 calls/day per app                              |
+
+> **The throttle is per worker replica, NOT distributed across pods.** Operators running N replicas get N independent buckets so the aggregate rate can exceed the platform's per-app limit; the throttle is a best-effort smoothing layer, not a global SLA. A cross-replica distributed limiter (Postgres counter or Redis would be the natural backends) is a future enhancement — not implemented today.
+
+#### (b) Outbox retry with decorrelated jitter + DLQ
+
+The canonical async retry curve lives in the **outbox dispatcher goroutine** (`internal/outbox/dispatcher.go`), NOT in the publish worker. Per `outbox_event` row the dispatcher applies:
+
+- **Lease**: `SELECT FOR UPDATE SKIP LOCKED` + heartbeat lease (default lease TTL 60s, heartbeat 20s, tick 5s).
+- **Retry curve** (`Dispatcher.computeBackoff`): AWS-style decorrelated jitter with `MaxAttempts = 5`, `BaseDelay = 1s`, `CapDelay = 1h`. The formula is `temp = min(cap, prev * 3)`, `sleep = uniform(base..temp)` where `prev = base * 2^(attempt-1)`. After 5 failed attempts the row is marked `dead_letter` and surfaces for operator triage.
+- **Terminal opt-out**: a provider can `fmt.Errorf("%w: …", services.ErrTerminal)` to skip retries and go straight to DLQ — used for unrecoverable conditions (schema mismatch, payload too large, business-rule violation). Anything else is treated as transient → `MarkFailed` with backoff.
+
+The transactional outbox table is the audit-only appendix to `post_targets.status`; the outbox dispatcher is a separate goroutine from the publish/reconcile workers, running on its own 5s tick with a 15s drain budget on shutdown. See [Transactional Outbox Pipeline](#transactional-outbox-pipeline).
+
+#### (c) Webhook outbound retry
+
+`internal/worker/webhook_worker.go` (seventh goroutine: [authoritative list](#authoritative-goroutine-list-mirrors-pkgapiworker_statusgoworkernames)) has its own retry curve for outbound webhooks to operator-configured HTTP sinks. Status codes `5xx / 408 / 425 / 429 / timeout` are rescheduled up to `MaxAttempts`; `2xx` is success; other `4xx` (non-408/425/429) is dead. This is a separate domain from platform publishing and is fully documented in `webhook_worker.go`.
+
+#### (d) **OPEN GAP — retry on 429/Retry-After/5xx at the final publish-platform call**
+
+The publish worker's call to `publisher.Publish(ctx, ...)` does **not** retry on platform backpressure today. The call's error path in `internal/worker/publish_worker.go::publishTarget` immediately routes through `markFailed`:
+
+```go
+result, err := publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
+if err != nil {
+    return w.markFailed(target, err.Error()) // terminal — no attempt_count bump, no next_attempt_at re-stamp
+}
+```
+
+The `post_targets` table has an `attempt_count` / `next_attempt_at` column (introduced by migration 018 — the per-target retry state machine), but no code path on the publish worker today bumps those columns on a transient platform error. The typed detection helper already exists — `internal/services/provider.go::IsRateLimitError` recognises both `*services.RateLimitError{RetryAfter: …}` and `*services.ProviderError{Code: ErrorCodeRateLimited}`, and `ParseRetryAfter` understands RFC 7231 `Retry-After` headers plus the de-facto `X-RateLimit-Reset` epoch-seconds convention. The per-process throttle in (a) already smooths steady-state rate such that `429`s should be rare in practice, but when they DO happen they currently surface as terminal `failed` rows that the operator must requeue.
+
+**Closing the gap** would mean wiring the rate-limit detection into the worker as: on `*services.RateLimitError`, stamp `next_attempt_at = NOW() + RetryAfter`, bump `attempt_count`, leave `status='queued'`, and skip the publish call this tick so a future tick picks it up. The columns and helpers are ready; the worker-side branch is the missing glue. Until that lands, treat any `429` row as operator-requeue rather than expect automatic retry.
+
 ### Seven-way shutdown
 
 `internal/bootstrap/app.go::RunWorkers` spawns all seven background goroutines in parallel at startup and shuts them down **sequentially** on SIGINT/SIGTERM. Each goroutine has its own cancellable context + `Done` channel; the cancels go out as a single broadcast on the signal, then the awaits are stacked (each with its own 15s budget), followed by the HTTP server's own 30s drain (`cmd/api` and `cmd/server` paths):
