@@ -32,6 +32,62 @@ web/                        # React + Vite SPA
 6. SPA uses the JWT for authenticated calls to posts, accounts, workspaces.
 7. Publishing creates `posts` and `post_targets`; the worker dispatches to providers.
 
+## Frontend (web/) — public pages and the AI Compose scope
+
+The React + Vite SPA in `web/` serves three classes of routes. The status of "AI Compose" — the marketing surface that promises stock-footage curation, SFX selection, AI image placement, auto-crop, auto-hashtags, and per-platform adaptation — differs sharply from what is actually production today. This section makes the truthful status of each claim explicit so investors and new collaborators do not conflate copy with capability.
+
+### Status legend (used throughout this section)
+
+| Marker             | Meaning                                                                  |
+|--------------------|--------------------------------------------------------------------------|
+| **Operative**      | In production code, covered by tests                                     |
+| **UI prototype**   | Rendered in the SPA, no production backend; pure visual proof            |
+| **Roadmap**        | Listed in copy / design docs but NOT engineered                          |
+
+### Routes at a glance
+
+| Path                              | Auth          | Owner component                              | Purpose                                          | Status                  |
+|-----------------------------------|---------------|----------------------------------------------|--------------------------------------------------|-------------------------|
+| `/`                               | public        | `web/src/pages/Landing.tsx`                  | Marketing landing                                | Operative (UI shipped)  |
+| `/editor`                         | public        | `web/src/pages/Editor.tsx`                   | AI Compose showcase page                         | **UI prototype**        |
+| `/login`                          | public        | `web/src/pages/Login.tsx`                    | Email + magic-link auth                          | Operative               |
+| `/privacy`, `/terms`, `/data-deletion.html` | public | `web/src/pages/{PrivacyPolicy,TermsOfService}.tsx` | Legal pages                              | Operative               |
+| `/app/compose`                    | JWT-required  | `web/src/pages/internal/Compose.tsx`         | Auth-protected composer (real upload + publish)  | Operative               |
+| `/app/*`                          | JWT-required  | `web/src/pages/internal/*`                   | Dashboard, accounts, posts, linking              | Operative               |
+
+The actual *publishing* work — caption/title/media_url → 1-of-N platform APIs via the Postgres-backed publish pipeline — lives at `/app/compose` and is driven server-side by `internal/worker/publish_worker.go` (driver) + `internal/worker/reconcile_worker.go` (terminal-update reconciler). The page at `/editor` does NOT exercise this path; it is a marketing demonstrator and not a working editor.
+
+### `/editor` claim → status (proof-of-positioning only)
+
+The `/editor` page (`web/src/pages/Editor.tsx`) is wholly client-side rendering. Every visible element is a hardcoded constant or decorative component — there is no `fetch`, no backend call, no AI API call. The page is intentional copy-driven proof of the product positioning; readers should not mistake it for a working editor.
+
+| Capability claimed in `/editor` copy                                                          | Status          | Evidence in `web/src/pages/Editor.tsx`                                                                                                                                                                                                                                                                            |
+|------------------------------------------------------------------------------------------------|-----------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `9:16` short-form renders (YouTube Shorts, Instagram Reels, TikTok)                              | **UI prototype**| `SHORT_DEMOS` (top of file) is a 2-element array of hardcoded YouTube `id` strings (`MVwXsmRLnwM`, `XCIWzK2BuRo`); each is rendered as an `<iframe>` at `aspect-[9/16]`. Static URLs — no algorithm picks stock footage or SFX                                                |
+| `16:9` long-form renders (YouTube, Facebook, Instagram, LinkedIn)                                | **UI prototype**| `LONGFORM_DEMOS` is a 4-element array of hardcoded YouTube `id` strings (`fLhv7d6N_3c`, `iA1WT69NFbw`, `R18AVWQ92fs`, `lpKX9SKqSMw`); each rendered at `aspect-[16/9]`. Same model — proof of pixel, not proof of pipeline                                          |
+| "Engine researches the best stock footage and SFX"                                              | **Roadmap**     | No production code path generates a video from a brief anywhere in the repo (`web/`, `internal/services/`, `internal/worker/` are all search-tested clean for stock-footage / SFX API references)                                                                                |
+| "Generates supporting AI images"                                                                | **Roadmap**     | No image-generation API call exists in the codebase                                                                                                                                                                                                                                                              |
+| "Placed at exactly the right moment"                                                            | **Roadmap**     | No narration-alignment or beat-detection logic. The per-platform `OutputCard` (renders `PLATFORM_REGISTRY`) reads from a hardcoded `sample` object with literal `format` strings ("9:16 · Reels", "1.91:1 · Post", etc.) — no engine picks the per-clip moment                          |
+| "Human-in-the-loop — After Effects-level quality in minutes"                                    | **Roadmap**     | `web/src/pages/internal/Compose.tsx` exposes a real single-upload UI on top of the publish worker, but there is no per-cut creative review, no AI grading pass, no automatic scene-split                                                                                                                                  |
+| One render → 7 native posts (per-platform aspect/format adaptation)                            | **Operative (backend only)** | The platform-aware dispatch (`CapabilityRouter`, `AsyncPublisher` capability) is implemented in `internal/services/provider.go` and exercised by `PublishWorker.publishTarget`. The publish worker correctly routes each `post_targets` row to its platform's native API without a creative pass — but the `/editor` UI's "7 native posts" rendering is the marketing wrapper around this backend capability, NOT evidence that an AI produces 7 render variants |
+| `1:1`, `1.91:1`, `4:5`, `9:16`, `16:9` aspect-ratio auto-crop per platform                        | **Roadmap**     | Per-platform aspect knowledge lives only in `Editor.tsx` as hardcoded `format` strings. No `ffmpeg` invocation, no crop codepath anywhere — `internal/worker/upload_worker.go` streams source bytes to S3 unchanged                                                |
+| Auto-hashtag generation (per-platform tokenisation, per-post trending tag extraction)          | **Roadmap**     | `internal/worker/publish_worker.go::publishTarget` builds the `PublishPayload` by forwarding `post.Caption` verbatim — no tokenisation, no per-platform hashtag block, no LLM rewriter                                                    |
+| Per-platform caption-tone adaptation (formal/quirky thread-style voice for X vs LinkedIn, etc.) | **Roadmap**     | `/app/compose` accepts a single caption field per post; no platform-aware rewriter                                                                                                                                                                                                                            |
+
+### What `/editor` is FOR (and what it is NOT)
+
+The page is **intentionally not a working editor**. It is a marketing demonstrator for the AI-assist positioning: the page team is committed to the auto-cut, AI image, stock-footage, and SFX curve, and the right-hand side of the page is the funnel into `/login` → `/app/compose` where the actual single-platform publish work happens (the publish-worker + capability-router backend, which **is** operative).
+
+When the auto-crop, hashtag generation, AI image placement, stock-footage curation, or LLM caption rewriter modules are merged into the codebase, this section's table is the audit — each roadmap row flips from Roadmap → Operative at the moment its codepath lands and its tests go green.
+
+### Honesty guard (for investors / collaborators)
+
+> "Does InstaEdit do AI Compose today?"
+>
+> - The marketing surface at `/editor` ships as written and is a genuine positioning page.
+> - The backend one-render → 7-platforms publish pipeline (PublishWorker + ReconcileWorker + CapabilityRouter in `internal/worker/` and `internal/services/provider.go`) is **operative** — single multi-platform fan-out from one user-supplied raw render works today.
+> - The creative-AI pipeline (stock footage, SFX, AI images, auto-crop, hashtag generation, per-platform caption rewriter) is **NOT built**. The copy at `/editor` reflects design intent, not engineering reality. Plan for that gap when evaluating the AI Compose roadmap.
+
 ## Background workers and Async Publishing Pipeline
 
 `internal/bootstrap/app.go::RunWorkers` starts exactly **seven independent background goroutines**, mirrored by the `cmd/worker` binary and by the `cmd/server` dev wrapper (the production topology runs `cmd/api` + `cmd/worker` as separate pods, plus a one-shot `cmd/migrate` before deploy). Each goroutine owns its own cancellable context, tick interval, and `Done` channel; the boot log line confirms it: `7 background goroutines started: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / upload`.
