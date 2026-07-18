@@ -66,6 +66,21 @@ Every goroutine flips an `atomic.Bool` on its first executable line via `WorkerS
 
 Both share the same `*CredentialVault`, the same `*CapabilityRouter`, and the same `*repository.PostRepository` — production wiring (`internal/bootstrap/app.go::Wire`) instantiates each worker from the same handles. The split is invisible to the HTTP API; the only externally observable difference vs the pre-split shape is the snappier reconciler cadence (sub-30s pickup of `publishing → published` transitions under the canonical 5s default).
 
+### Capability-based dispatch (no hardcoded provider lists)
+
+Publish-path classification per `post_targets` row is **resolved dynamically** through the `*CapabilityRouter` (`internal/services/provider.go`), NOT through a hardcoded list of provider names in the worker. The router holds all registered providers keyed by platform name; each registered provider is type-asserted against the capability interfaces at registration time. The publish worker consults the router on every tick — there is no per-platform `switch` in worker code:
+
+```
+router.AsyncPublisher(platform)?
+   ├── false → sync path:   Publish() returns the final media id inline
+   │                       (provider implements Publisher only)
+   └── true  → async path:  Publish() returns a publish_id, row stays in
+                           status='publishing', Reconcile picks it up
+                           (provider implements Publisher AND AsyncPublisher)
+```
+
+The authoritative mapping "which platforms currently satisfy which capability" lives in [`docs/PROVIDER_MATRIX.md`](./PROVIDER_MATRIX.md). Adding a new platform, or moving an existing one from sync to async, is exactly two changes: (a) the new provider struct's `var _ AsyncPublisher = (*X)(nil)` toggles the capability at registration, (b) the corresponding ○/● mark in the matrix flips — no worker code changes. **If `router.AsyncPublisher(platform)` returns `(nil, false)` at runtime**, the row still publishes via the provider's `Publisher.Publish(...)` method on the sync path and transitions straight to `published`; the reconciler no-ops that target entirely (no `AsyncPublisher` capability to reconcile against).
+
 ### Driver: `tick()` — queued → publishing transition
 
 The publish worker (`internal/worker/publish_worker.go::Run`) ticks every `interval` (default 30s) and on each tick calls `runOnce` → `tick`. For each `post_targets` row whose `status='queued'` AND whose parent `posts.scheduled_at <= now()`:
@@ -76,8 +91,8 @@ The publish worker (`internal/worker/publish_worker.go::Run`) ticks every `inter
 4. Refresh OAuth token via `vault.Renew` (the `CredentialVault` serialises concurrent refreshes with a `pg_advisory_xact_lock`).
 5. **Taglio 4.7 LEVEL 2**: stamp the deterministic `provider_idempotency_key` (`SHA-256("v1:" + post_id + ":" + account_id)[:16]`) onto the `post_targets` row so retries reuse the same key.
 6. Resolve the platform's `Publisher` capability and call `Publish(ctx, token, accountUserID, payload)`, forwarding `payload.IdempotencyKey` so providers with native per-call idempotency keys (LinkedIn "X-Restli-Idempotency-Key", Twitter v2 "request_id", TikTok "idempotent" query param) drive upstream dedup; the DB-level `UNIQUE(platform_account_id, provider_idempotency_key)` constraint is the catch-all safety net.
-7. **Sync platforms** (Meta, YouTube) complete the publish in the same `Publish` call → transition `status='published'`, set `PublishedAt`, set `PlatformPostID` to the final media id. The row leaves both filter sets (`queued` for the driver, `publishing` for the reconciler).
-8. **Async platforms** (TikTok, Threads) return immediately with a `publish_id` → store `PlatformPostID=publish_id`, KEEP `status='publishing'`. The reconciler owns the next transition.
+7. **Sync-path row** — when `router.AsyncPublisher(platform)` returned `(nil, false)` during setup (see [Capability-based dispatch](#capability-based-dispatch-no-hardcoded-provider-lists)), the provider's `Publish(...)` returns the final media id inline → transition `status='published'`, set `PublishedAt`, set `PlatformPostID` to the final media id. The row leaves both filter sets (`queued` for the driver, `publishing` for the reconciler). **The current set of providers on this path is documented in [PROVIDER_MATRIX.md](./PROVIDER_MATRIX.md); do not maintain a parallel list in worker code.**
+8. **Async-path row** — when `router.AsyncPublisher(platform)` returned a non-nil implementation, `Publish(...)` returns a publish_id immediately → store `PlatformPostID=publish_id`, KEEP `status='publishing'`. The reconciler owns the next transition. **The current set of providers on this path is documented in [PROVIDER_MATRIX.md](./PROVIDER_MATRIX.md); do not maintain a parallel list in worker code.**
 
 The driver and reconciler never both touch the same row simultaneously — **the driver owns `queued → publishing` (and the rare `publishing → failed` exits on vanished-post / missing-capability / platform-error paths), and the reconciler owns `publishing → published | failed`** under normal conditions. See [State-machine ownership](#state-machine-ownership) below for the per-transition ownership table.
 
@@ -87,7 +102,7 @@ The reconcile worker (`internal/worker/reconcile_worker.go::Run`) ticks every `i
 
 1. **`reconcileTarget(ctx, target)`** (`internal/worker/reconcile_worker.go`) drives the per-target state machine.
 2. Load `PlatformAccount` — orphan targets (account missing) are marked `failed` so they don't loop forever.
-3. **Capability lookup**: `router.AsyncPublisher(account.Platform)`. Sync platforms (no `AsyncPublisher` capability) are no-op'd: their `tick()` already completed the publish synchronously in the driver. Reconcile never touches them.
+3. **Capability lookup**: `router.AsyncPublisher(account.Platform)`. The current per-platform ○/● mapping is documented in [`docs/PROVIDER_MATRIX.md`](./PROVIDER_MATRIX.md); workers MUST NOT carry their own platform name lists. When the lookup returns `(nil, false)` (sync-path provider — the row already transitioned to `published` in the driver's `Publish` call), this target is no-op'd: there is nothing to reconcile.
 4. Refresh OAuth token via the vault. (See [Token-refresh duplication](#token-refresh-duplication-taglio-5x) for how driver + reconciler racing the same account is safe.)
 5. **Delegate to `AsyncPublisher.Reconcile`** (single GET to the platform's status endpoint + transition decision). The interface contract (`internal/services/provider.go::AsyncPublisher.Reconcile`):
 
