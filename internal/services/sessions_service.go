@@ -15,11 +15,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // Sentinel errors exposed to handlers.
@@ -106,8 +108,11 @@ func (s *SessionsService) Start(req StartSessionRequest) (*StartSessionResult, e
 	access, _, accessExp, err := s.jwt.IssueAccess(req.UserID, req.WorkspaceID, row.ID)
 	if err != nil {
 		// Best-effort cleanup: revoke the orphan row so the refresh
-		// token doesn't dangle.
-		_ = s.repo.Revoke(row.ID, "access_sign_failed")
+		// token doesn't dangle. The helper retries once with backoff
+		// before giving up (C5 hardening) — if the row truly can't be
+		// revoked, the metric increments and the periodic Cleanup()
+		// goroutine handles garbage collection later.
+		s.cleanupOrphanSession(row, err)
 		return nil, fmt.Errorf("sign access: %w", err)
 	}
 	return &StartSessionResult{
@@ -188,7 +193,10 @@ func (s *SessionsService) Refresh(req RefreshRequest) (*StartSessionResult, erro
 	}
 	access, _, accessExp, err := s.jwt.IssueAccess(row.UserID, row.WorkspaceID, newRow.ID)
 	if err != nil {
-		_ = s.repo.Revoke(newRow.ID, "access_sign_failed")
+		// Best-effort cleanup: revoke the orphan row so the refresh
+		// token doesn't dangle. C5 hardening: one-retry + bounded
+		// backoff before giving up; metric increments on final fail.
+		s.cleanupOrphanSession(newRow, err)
 		return nil, fmt.Errorf("sign access: %w", err)
 	}
 	return &StartSessionResult{
@@ -326,3 +334,85 @@ func (s *SessionsService) Cleanup(ctx context.Context) (CleanupResult, error) {
 // _ keeps http imported for the future Set-Cookie helper that
 // the api package implements; suppress the unused import warning.
 var _ = http.MethodPost
+
+// cleanupOrphanSession best-effort-revokes an orphan session row
+// after the access-token signing step failed (C5 hardening).
+//
+// Contract: revoke-on-best-effort. Two attempts total (initial + one
+// retry) with bounded backoff:
+//
+//	attempt 1          → fail
+//	sleep 50ms         →
+//	attempt 2 (retry)  → fail
+//	sleep 100ms        →
+//	increment metric   → log at WARN, give up
+//
+// Total worst-case wall time: Revoke(50ms) × 2 + 150ms sleeps. The
+// cap keeps the caller from blocking on a single orphan forever
+// while still leaving a forgiving window for transient DB blips
+// (e.g. sql.ErrConnDone on connection pool churn) to clear. On final
+// failure the orphan row stays in the sessions table until the
+// periodic Cleanup() goroutine (cmd/worker sessions_cleanup, grace
+// windows 30d revoked / 7d expired) hard-deletes it; the metric
+// `session_orphan_revoke_failures_total` records every give-up so
+// dashboards can SLO on the clean-up lag.
+//
+// `cause` is the upstream error that triggered the orphan-cleanup
+// attempt (typically the IssueAccess failure from the caller). It's
+// logged at WARN with the row IDs so an operator can correlate
+// orphan-revoke failures to their root cause in the same request.
+func (s *SessionsService) cleanupOrphanSession(row *repository.Session, cause error) {
+	if row == nil || row.ID <= 0 {
+		// Defensive: a nil or zero-id row is the caller's bug;
+		// surface in logs but don't burn the retry budget.
+		slog.Default().Warn("orphan session cleanup called with invalid row",
+			"active_id", evIDOrZero(row), "cause", cause)
+		return
+	}
+	// Two attempts; backoff sequence is consumed once per retry-fail.
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(orphanRevokeBackoffs[attempt-1])
+		}
+		if err := s.repo.Revoke(row.ID, "access_sign_failed"); err == nil {
+			return // success on initial OR retry: row is durably revoked.
+		} else {
+			lastErr = err
+		}
+	}
+	// Final 100ms grace before giving up — the spec says
+	// "50ms+100ms" backoff and we read the second slice as the
+	// post-retry-grace rather than a wasted gate. Operators can
+	// tune orphanRevokeBackoffs if a future load test shows longer
+	// pool-recovery tails than this 150ms envelope.
+	time.Sleep(orphanRevokeBackoffs[len(orphanRevokeBackoffs)-1])
+	metrics.RecordSessionOrphanRevokeFailure()
+	slog.Default().Warn("orphan session revoke failed after bounded retry; row may linger until Cleanup",
+		"session_id", row.ID,
+		"user_id", row.UserID,
+		"cause", cause,
+		"last_err", lastErr,
+	)
+}
+
+// orphanRevokeBackoffs defines the bounded retry envelope for
+// cleanupOrphanSession. The post-retry 100ms is the final grace
+// before metric+log; the pre-retry 50ms is the breathing room for
+// sql.ErrConnDone on connection-pool churn. Tuned conservatively:
+// 150ms total worst case is below the human-perceptible latency
+// for `/auth/login` and `/auth/refresh` (which already returned
+// an error to the client by this point).
+var orphanRevokeBackoffs = []time.Duration{
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+}
+
+// evIDOrZero returns row.ID or 0 if row is nil. Used in log lines
+// so a nil-deref never panics on the orphan-cleanup hot path.
+func evIDOrZero(row *repository.Session) int64 {
+	if row == nil {
+		return 0
+	}
+	return row.ID
+}

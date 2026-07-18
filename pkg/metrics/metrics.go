@@ -99,6 +99,21 @@ var (
 			Help: "JWTs issued at /api/v1/auth/{provider}/callback.",
 		},
 	)
+	// C5 orphan-session metric — counts orphan session rows that
+	// failed to revoke AFTER the helper's one-retry attempt. Each
+	// increment means an orphan row will linger in the `sessions`
+	// table until the periodic Cleanup() goroutine (sessions_cleanup,
+	// grace window 30d revoked / 7d expired) hard-deletes it.
+	// Monitor via SLO on the rate: any sustained non-zero value
+	// indicates the underlying DB blip is large enough that even
+	// 1-retry couldn't repair — investigate DB connection pool
+	// health before the Cleanup() lag accumulates.
+	sessionOrphanRevokeFailures = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "session_orphan_revoke_failures_total",
+			Help: "SessionsService.cleanupOrphanSession: revoke attempts that failed even after the helper's one-retry. Each increment = stale orphan row awaiting periodic Cleanup.",
+		},
+	)
 )
 
 func init() {
@@ -111,6 +126,7 @@ func init() {
 		tokenRefreshSuccess,
 		tokenRefreshError,
 		jwtIssued,
+		sessionOrphanRevokeFailures,
 	)
 }
 
@@ -146,6 +162,15 @@ func RecordTokenRefreshError(platform string) {
 
 func IncJWTIssued() {
 	jwtIssued.Inc()
+}
+
+// RecordSessionOrphanRevokeFailure is called by
+// SessionsService.cleanupOrphanSession when BOTH the initial
+// s.repo.Revoke attempt AND the one-retry attempt fail. The orphan
+// row stays in the sessions table until periodic Cleanup() deletes
+// it per the C5 contract.
+func RecordSessionOrphanRevokeFailure() {
+	sessionOrphanRevokeFailures.Inc()
 }
 
 // --- Error classification -------------------------------------------------
