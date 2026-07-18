@@ -62,6 +62,8 @@ type AddTargetRequest struct {
 }
 
 // --- Error mapping -----------------------------------------------------------
+
+func mapRepoError(err error) (int, string) {
 	switch {
 	case err == nil:
 		return http.StatusOK, ""
