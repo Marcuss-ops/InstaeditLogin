@@ -10,6 +10,7 @@ import { InternalLinking } from "./pages/internal/Linking";
 import { InternalPosts } from "./pages/internal/Posts";
 import { InternalCompose } from "./pages/internal/Compose";
 import { ScheduledByAccount } from "./pages/internal/ScheduledByAccount";
+import { CalendarPage } from "./pages/internal/Calendar";
 import { InternalUploads } from "./pages/internal/Uploads";
 import { CookieBanner } from "./components/CookieBanner";
 import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
@@ -78,6 +79,7 @@ function App() {
               <Route path="linking" element={<InternalLinking />} />
               <Route path="posts" element={<InternalPosts />} />
               <Route path="compose" element={<InternalCompose />} />
+              <Route path="calendar" element={<CalendarPage />} />
               <Route
                 path="uploads/calendar"
                 element={<ScheduledByAccount />}

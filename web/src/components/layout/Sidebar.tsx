@@ -6,6 +6,7 @@ import {
   FileText,
   PenSquare,
   FolderInput,
+  Calendar,
   LogOut,
   ChevronLeft,
   ChevronRight,
@@ -20,6 +21,7 @@ const navItems = [
   // dashboard and Linking because the flow is "import → published",
   // and the dashboard widget surfaces the resulting queue.
   { to: "/app/uploads", label: "Imports", icon: FolderInput },
+  { to: "/app/calendar", label: "Calendar", icon: Calendar },
   { to: "/app/linking", label: "Linking", icon: Link2 },
   { to: "/app/posts", label: "Posts", icon: FileText },
   { to: "/app/compose", label: "Editor", icon: PenSquare },
