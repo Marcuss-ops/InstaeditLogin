@@ -30,22 +30,28 @@
 //
 // IDEMPOTENCY CONTRACT — the dispatcher implements AT-LEAST-ONCE
 // delivery via the canonical outbox pattern. A function in this file
-// CAN return nil (or log a WARN and continue) even when the side-effect
-// was only PARTIALLY persisted. The contract is "the tick loop
-// continues, the outbox row is durable"; the side-effect (HTTP POST
-// to a provider, etc.) may have already executed. Adapters MUST
-// therefore be idempotent on the receiving side.
+// RETURNS A NON-NIL ERROR to its caller (drainOnce) when the
+// side-effect persisted but the outbox row's mark* step failed: the
+// loop continues, no fallback Mark* fires, and the lease naturally
+// expires so the row is re-claimable. The side-effect (HTTP POST to
+// a provider, publish_jobs INSERT, etc.) may have already executed.
+// Adapters MUST therefore be idempotent on the receiving side.
 //
 // Concrete partial-persistence hazards (an operator reading this
 // during a DLQ-storm investigation can use these as a checklist):
 //
 //	H1 — Mark* failure AFTER side-effect SUCCEEDED:
 //	  processOne invokes ProcessFunc, which returns nil. Then
-//	  OutboxStore.MarkProcessed fails (DB blip / connection drop).
-//	  The dispatcher LOGS at WARN and the loop returns nil to
-//	  drainOnce; the next tick re-claims the same row and runs
-//	  ProcessFunc AGAIN. De-dup is the ADAPTER's job (provider-side
-//	  idempotency_key, content fingerprinting, etc).
+//	  OutboxStore.Mark* fails (DB blip / connection drop). The
+//	  dispatcher LOGS at ERROR, returns a wrapped error from
+//	  processOne to drainOnce (which logs once at ERROR for the
+//	  observability layer), and does NOT attempt a different
+//	  Mark*. The lease naturally expires; the next peer replica
+//	  OR the next tick re-claims the row and re-runs ProcessFunc.
+//	  Adapter MUST be idempotent: the side-effect ran exactly
+//	  once already, this contract guarantees it will run AT LEAST
+//	  once. Provider-side idempotency_key / unique-constraint
+//	  dedupe are the callers' invariant.
 //
 //	H2 — ProcessFunc PANIC recovery (safeProcess):
 //	  A panicking adapter is converted into a transient error via
@@ -82,6 +88,9 @@
 //     provider_idempotency_key column; future adapters must follow.
 //   - Monitor `outbox processor tick duration` p99 — a rising tail
 //     points to H3 risk (slow adapters tripping LeaseTTL).
+//   - Alert on `outbox.ErrPartialPersistence` log rows: any match
+//     indicates a partial-persistence event that an operator
+//     should verify ended in re-claim + idempotent retry success.
 package outbox
 
 import (
@@ -105,6 +114,18 @@ import (
 // terminal container not yet ready, etc. → MarkFailed with the
 // decorrelated-jitter backoff.
 var ErrTerminal = errors.New("outbox: terminal error (do not retry — go to DLQ)")
+
+// ErrPartialPersistence signals that the side-effect persisted but the
+// follow-up outbox row mark* did NOT. The dispatcher returns it
+// (wrapped) from processOne whenever any of the four mark* arms
+// (MarkProcessed, MarkDeadLetter terminal, MarkDeadLetter max
+// attempts, MarkFailed) fails. Operators and alerts can grep
+// `errors.Is(err, outbox.ErrPartialPersistence)` to surface partial-
+// persistence events without substring-matching the message. The
+// underlying real error (DB blip, sql.ErrConnDone, etc.) is also
+// preserved in the chain via a second %w so callers can still
+// errors.As on the cause.
+var ErrPartialPersistence = errors.New("outbox partial persistence (side-effect ran; outbox row's mark* failed)")
 
 // OutboxStore is the narrow slice of OutboxRepository the dispatcher
 // depends on. Defining it in the dispatcher's package (not the
@@ -232,8 +253,10 @@ func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 // the current in-flight processOne completes — drain semantics
 // matching the existing PublishWorker.
 //
-// Returns ctx.Err() on shutdown. Logs non-nil errors at WARN level and
-// continues the next tick rather than aborting Run.
+// Returns ctx.Err() on shutdown. Errors inside processOne are escalated
+// inside the dispatcher's logging layer (ERROR rows) but do NOT
+// propagate up to Run — the at-least-once contract means the lease
+// expiry is the recovery vector, not caller-visible errors.
 func (d *Dispatcher) Run(ctx context.Context) error {
 	d.cfg.Logger.Info("outbox dispatcher started",
 		"tick_interval_seconds", d.cfg.TickInterval.Seconds(),
@@ -264,6 +287,11 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 // goes through processOne (heartbeat → process → mark). A genuine DB
 // error logs at WARN and breaks the drain (we don't want to spin on
 // a persistent infra issue).
+//
+// On partial persistence (processOne returns a non-nil error), drainOnce
+// logs once at ERROR and continues the drain loop. The lease stays held
+// on the failed row until the next tick (or a peer's lease-expiry
+// renewal) re-claims it; that is the at-least-once recovery vector.
 func (d *Dispatcher) drainOnce(ctx context.Context) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -290,7 +318,15 @@ func (d *Dispatcher) drainOnce(ctx context.Context) {
 			// "done draining" and don't loop infinitely.
 			return
 		}
-		d.processOne(ctx, ev)
+		if perr := d.processOne(ctx, ev); perr != nil {
+			// processOne already logged at ERROR inside the failing
+			// arm (the inner log carries the mark-call duration and
+			// the underlying error); this outer row anchors the
+			// event_id to the drain cycle so observability can group
+			// partial-persistence events with the tick window.
+			d.cfg.Logger.Error("outbox partial persistence — lease will expire; next peer/tick re-claims to re-run idempotent adapter",
+				"event_id", ev.ID, "error", perr)
+		}
 	}
 }
 
@@ -298,6 +334,19 @@ func (d *Dispatcher) drainOnce(ctx context.Context) {
 // goroutine to keep lease_until fresh while the process work runs,
 // invokes the user-supplied ProcessFunc, classifies the result,
 // and calls the appropriate Mark* method.
+//
+// Return value (C3 contract):
+//   - nil  → side-effect AND outbox row's mark* BOTH persisted. The
+//     lease is cleared and the row is durable as processed.
+//   - non-nil → the side-effect ran but the FOLLOW-UP mark* call
+//     failed (H1 partial persistence). The lease is still held by
+//     the row; it naturally expires so a peer OR the next tick
+//     re-claims and re-runs the idempotent adapter. drainOnce
+//     MUST observe the non-nil return to escalate visibility (Error
+//     log row) and NOT break the drain (lease expiry is the
+//     recovery vector). The returned error always satisfies
+//     errors.Is(err, ErrPartialPersistence) so operators/alerting
+//     can grep without substring-matching.
 //
 // Two processOne contracts worth calling out:
 //
@@ -315,12 +364,15 @@ func (d *Dispatcher) drainOnce(ctx context.Context) {
 //     cancel still allows the final Mark* call to run cleanly.
 //     Without this, a mark-after-cancel would itself fail on
 //     released DB connections.
-func (d *Dispatcher) processOne(ctx context.Context, ev *models.OutboxEvent) {
+func (d *Dispatcher) processOne(ctx context.Context, ev *models.OutboxEvent) (err error) {
 	if ev == nil || ev.LeaseID == nil {
 		// Defensive: a malformed claim cannot be heartbeat-protected.
+		// Surface as a non-nil error so observability/counters
+		// (future iteration) capture this as a logged anomaly
+		// rather than silent skip.
 		d.cfg.Logger.Warn("outbox dispatcher processOne got event without lease_id; skipping",
 			"event_id", evID(ev))
-		return
+		return fmt.Errorf("outbox event without lease_id: ev-id=%d", evID(ev))
 	}
 	leaseID := *ev.LeaseID
 
@@ -349,43 +401,60 @@ func (d *Dispatcher) processOne(ctx context.Context, ev *models.OutboxEvent) {
 	<-hbDone
 
 	// Classify the result.
+	//
+	// C3 hardening: ANY failure to call the appropriate Mark* is
+	// partial persistence (the side-effect ran but the outbox's
+	// durable acknowledgement did NOT). We do NOT log-and-continue
+	// from any branch — every Mark* failure escalates to ERROR and
+	// returns a wrapped error from processOne wrapping
+	// ErrPartialPersistence, letting drainOnce log the recovery
+	// expectation. The lease stays held on the row; tick interval OR
+	// a peer replica's lease expiry re-claims the row for another
+	// pass through the idempotent adapter (the at-least-once
+	// contract).
 	switch {
 	case processErr == nil:
 		if err := d.cfg.OutboxStore.MarkProcessed(ev.ID, leaseID); err != nil {
-			d.cfg.Logger.Warn("outbox dispatcher MarkProcessed error",
+			d.cfg.Logger.Error("outbox partial persistence: MarkProcessed failed AFTER side-effect success — lease will expire; next peer/tick re-claims to re-run idempotent adapter",
 				"event_id", ev.ID, "duration", duration, "error", err)
+			return fmt.Errorf("%w: MarkProcessed failed: %w", ErrPartialPersistence, err)
 		}
 		d.cfg.Logger.Info("outbox dispatcher processed event",
 			"event_id", ev.ID, "duration", duration)
+		return nil
 	case errors.Is(processErr, ErrTerminal):
 		// Terminal error → DLQ regardless of attempt count.
 		if err := d.cfg.OutboxStore.MarkDeadLetter(ev.ID, leaseID, processErr.Error()); err != nil {
-			d.cfg.Logger.Warn("outbox dispatcher MarkDeadLetter error",
+			d.cfg.Logger.Error("outbox partial persistence: MarkDeadLetter (terminal) failed — lease will expire; next peer/tick re-runs idempotent adapter to re-DLQ",
 				"event_id", ev.ID, "duration", duration, "error", err)
+			return fmt.Errorf("%w: MarkDeadLetter (terminal) failed: %w", ErrPartialPersistence, err)
 		}
 		d.cfg.Logger.Warn("outbox dispatcher sent event to DLQ (terminal error)",
 			"event_id", ev.ID, "error", processErr.Error())
+		return nil
 	case ev.AttemptCount >= d.cfg.MaxAttempts:
 		// Transient retries exhausted — DLQ.
-		if err := d.cfg.OutboxStore.MarkDeadLetter(
-			ev.ID, leaseID,
+		if err := d.cfg.OutboxStore.MarkDeadLetter(ev.ID, leaseID,
 			fmt.Sprintf("max attempts (%d) reached: %s", d.cfg.MaxAttempts, processErr.Error()),
 		); err != nil {
-			d.cfg.Logger.Warn("outbox dispatcher MarkDeadLetter (max attempts) error",
+			d.cfg.Logger.Error("outbox partial persistence: MarkDeadLetter (max attempts) failed — lease will expire; next peer/tick re-runs idempotent adapter to re-DLQ",
 				"event_id", ev.ID, "duration", duration, "error", err)
+			return fmt.Errorf("%w: MarkDeadLetter (max attempts) failed: %w", ErrPartialPersistence, err)
 		}
 		d.cfg.Logger.Warn("outbox dispatcher sent event to DLQ (max attempts)",
 			"event_id", ev.ID, "attempts", ev.AttemptCount, "error", processErr.Error())
+		return nil
 	default:
 		// Transient failure — backoff and retry.
 		backoff := d.computeBackoff(ev.AttemptCount)
 		if err := d.cfg.OutboxStore.MarkFailed(ev.ID, leaseID, processErr.Error(), &backoff); err != nil {
-			d.cfg.Logger.Warn("outbox dispatcher MarkFailed error",
+			d.cfg.Logger.Error("outbox partial persistence: MarkFailed failed — lease will expire; next peer/tick re-runs idempotent adapter to re-schedule",
 				"event_id", ev.ID, "duration", duration, "backoff", backoff, "error", err)
-			return
+			return fmt.Errorf("%w: MarkFailed failed: %w", ErrPartialPersistence, err)
 		}
 		d.cfg.Logger.Info("outbox dispatcher retrying event",
 			"event_id", ev.ID, "attempts", ev.AttemptCount, "backoff", backoff, "error", processErr.Error())
+		return nil
 	}
 }
 
