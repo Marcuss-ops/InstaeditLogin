@@ -88,6 +88,15 @@ func (m *mockMediaStore) MarkFailed(id, reason string) error {
 	return nil
 }
 
+// MarkFailedWithReason mirrors MarkFailed for the diagnose-friendly
+// variant. The mock doesn't log (production logs via slog); tests
+// that need to assert "the cause was preserved" can attach a
+// captures reconcile path…
+func (m *mockMediaStore) MarkFailedWithReason(id, reason string, cause error) error {
+	_ = cause // cause is logged in production; not asserted in the happy-path tests.
+	return m.MarkFailed(id, reason)
+}
+
 // --- mockStorageProvider -----------------------------------------------------
 
 // mockStorageProvider implements services.StorageProvider for the

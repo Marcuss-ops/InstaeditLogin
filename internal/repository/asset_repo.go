@@ -3,6 +3,7 @@ package repository
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -117,6 +118,32 @@ func (r *MediaAssetRepository) MarkFailed(id, reason string) error {
 		return fmt.Errorf("%w: media asset id=%s", ErrMediaAssetNotFound, id)
 	}
 	return nil
+}
+
+// MarkFailedWithReason is the diagnose-friendly variant of MarkFailed:
+// the caller passes the underlying error (`cause`) so the helper can
+// log it alongside the persist failure. The historical pattern was
+// `_ = store.MarkFailed(id, err.Error())` — silent on second-failure,
+// meaning an operator who noticed the original error rarely noticed
+// that the failure-of-the-failure also failed. Centralising the
+// "failure of the failure" log here means every "I tried to record
+// failure" path emits one structured slog line.
+//
+// `cause` may be nil (e.g. when the caller shapes the reason itself);
+// it's emitted only when non-nil. Returns the underlying persist
+// error so callers that want to take further action (e.g. escalate
+// via metric) can do so.
+func (r *MediaAssetRepository) MarkFailedWithReason(id, reason string, cause error) error {
+	err := r.MarkFailed(id, reason)
+	if err != nil {
+		slog.Error("media: failed to persist MarkFailed",
+			"asset_id", id,
+			"reason", reason,
+			"cause", cause,
+			"mark_err", err,
+		)
+	}
+	return err
 }
 
 // MarkExpired is used by the cleanup pass that transitions any

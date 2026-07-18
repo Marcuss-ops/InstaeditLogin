@@ -23,6 +23,12 @@ type MediaStore interface {
 	FindByID(id string) (*models.MediaAsset, error)
 	MarkReady(id, sha256 string, sizeBytes int64, contentType string) error
 	MarkFailed(id, reason string) error
+	// MarkFailedWithReason is the diagnose-friendly variant: passes
+	// the underlying `cause` so the implementation can log it
+	// alongside any persist failure. Use this in caller code where
+	// you have a typed `err` and want to preserve its value across
+	// the MarkFailed boundary.
+	MarkFailedWithReason(id, reason string, cause error) error
 }
 
 // WithMediaStore injects the media-asset repository into the router.

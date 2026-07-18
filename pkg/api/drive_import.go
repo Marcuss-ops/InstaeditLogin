@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -261,7 +262,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// Presign an S3 PUT for the key.
 	grant, err := r.storageProvider.SignUpload(req.Context(), userID, key, fileMeta.MimeType, sizeBytes, mediaPresignTTL)
 	if err != nil {
-		_ = r.mediaStore.MarkFailed(asset.ID, err.Error())
+		_ = r.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		writeError(w, http.StatusInternalServerError, "failed to sign s3 upload: "+err.Error())
 		return
 	}
@@ -269,7 +270,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// Stream the file from Drive to S3.
 	downloadResp, err := driveSvc.DownloadFile(req.Context(), oauthToken.AccessToken, body.DriveFileID)
 	if err != nil {
-		_ = r.mediaStore.MarkFailed(asset.ID, err.Error())
+		_ = r.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		writeError(w, http.StatusBadGateway, "failed to download drive file: "+err.Error())
 		return
 	}
@@ -277,7 +278,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 
 	uploadReq, err := http.NewRequestWithContext(req.Context(), http.MethodPut, grant.UploadURL, downloadResp.Body)
 	if err != nil {
-		_ = r.mediaStore.MarkFailed(asset.ID, err.Error())
+		_ = r.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		writeError(w, http.StatusInternalServerError, "failed to build s3 upload request: "+err.Error())
 		return
 	}
@@ -289,21 +290,22 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	s3Client := &http.Client{Timeout: driveImportS3UploadTimeout}
 	uploadResp, err := s3Client.Do(uploadReq)
 	if err != nil {
-		_ = r.mediaStore.MarkFailed(asset.ID, err.Error())
+		_ = r.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		writeError(w, http.StatusBadGateway, "failed to upload to s3: "+err.Error())
 		return
 	}
 	uploadResp.Body.Close()
 	if uploadResp.StatusCode >= 300 {
-		_ = r.mediaStore.MarkFailed(asset.ID, fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode))
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("s3 upload returned status %d", uploadResp.StatusCode))
+		reason := fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode)
+		_ = r.mediaStore.MarkFailedWithReason(asset.ID, reason, errors.New(reason))
+		writeError(w, http.StatusBadGateway, reason)
 		return
 	}
 
 	// Verify the upload and mark the asset ready.
 	verifiedContentType, verifiedSize, err := r.storageProvider.VerifyUpload(req.Context(), key)
 	if err != nil {
-		_ = r.mediaStore.MarkFailed(asset.ID, err.Error())
+		_ = r.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		writeError(w, http.StatusBadGateway, "failed to verify s3 upload: "+err.Error())
 		return
 	}

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -24,6 +25,11 @@ type UploadMediaStore interface {
 	Create(asset *models.MediaAsset) error
 	MarkReady(id, sha256 string, sizeBytes int64, contentType string) error
 	MarkFailed(id, reason string) error
+	// MarkFailedWithReason: same as pkg/api MediaStore — caller passes
+	// `cause` so the persist failure path emits a structured log
+	// line. Replaces the historical `_ = store.MarkFailed(id, err.Error())`
+	// pattern that silently lost errors on the failure-of-the-failure.
+	MarkFailedWithReason(id, reason string, cause error) error
 }
 
 // UploadPostStore is the narrow post repository interface.
@@ -185,13 +191,13 @@ func (w *UploadWorker) processJob(ctx context.Context, job *models.UploadJob) er
 	// Sign S3 PUT and stream.
 	grant, err := w.storage.SignUpload(ctx, job.UserID, key, contentType, sizeBytes, 15*time.Minute)
 	if err != nil {
-		_ = w.mediaStore.MarkFailed(asset.ID, err.Error())
+		_ = w.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		return fmt.Errorf("sign s3 upload: %w", err)
 	}
 
 	uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPut, grant.UploadURL, downloadResp.Body)
 	if err != nil {
-		_ = w.mediaStore.MarkFailed(asset.ID, err.Error())
+		_ = w.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		return fmt.Errorf("build s3 upload request: %w", err)
 	}
 	uploadReq.Header.Set("Content-Type", contentType)
@@ -200,19 +206,20 @@ func (w *UploadWorker) processJob(ctx context.Context, job *models.UploadJob) er
 	s3Client := &http.Client{Timeout: w.uploadTimeout}
 	uploadResp, err := s3Client.Do(uploadReq)
 	if err != nil {
-		_ = w.mediaStore.MarkFailed(asset.ID, err.Error())
+		_ = w.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		return fmt.Errorf("upload to s3: %w", err)
 	}
 	uploadResp.Body.Close()
 	if uploadResp.StatusCode >= 300 {
-		_ = w.mediaStore.MarkFailed(asset.ID, fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode))
-		return fmt.Errorf("s3 upload returned status %d", uploadResp.StatusCode)
+		reason := fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode)
+		_ = w.mediaStore.MarkFailedWithReason(asset.ID, reason, errors.New(reason))
+		return fmt.Errorf("%s", reason)
 	}
 
 	// Verify upload.
 	verifiedContentType, verifiedSize, err := w.storage.VerifyUpload(ctx, key)
 	if err != nil {
-		_ = w.mediaStore.MarkFailed(asset.ID, err.Error())
+		_ = w.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		return fmt.Errorf("verify s3 upload: %w", err)
 	}
 	if err := w.mediaStore.MarkReady(asset.ID, "", verifiedSize, verifiedContentType); err != nil {
