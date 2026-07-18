@@ -1572,59 +1572,150 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 		},
 	}
 
-	// Try to enrich with cached snapshot data.
-	if r.snapshotStore != nil {
-		snap, err := r.snapshotStore.GetSnapshot(account.ID)
-		if err == nil && snap != nil {
-			res := &accountResource{
-				ResourceType: snap.ResourceType,
-				FetchedAt:    snap.FetchedAt,
-			}
-			if v, ok := snap.Profile["external_id"].(string); ok {
-				res.ExternalID = v
-			}
-			if v, ok := snap.Profile["display_name"].(string); ok {
-				res.DisplayName = v
-			}
-			if v, ok := snap.Profile["handle"].(string); ok {
-				res.Handle = v
-			}
-			if v, ok := snap.Profile["description"].(string); ok {
-				res.Description = v
-			}
-			if v, ok := snap.Profile["avatar_url"].(string); ok {
-				res.AvatarURL = v
-			}
-			if v, ok := snap.Profile["banner_url"].(string); ok {
-				res.BannerURL = v
-			}
-			if v, ok := snap.Profile["public_url"].(string); ok {
-				res.PublicURL = v
-			}
+	const snapshotMaxAge = 10 * time.Minute
 
-			// Convert statistics JSONB to metrics slice.
-			for key, val := range snap.Statistics {
-				if m, ok := val.(map[string]any); ok {
-					am := accountMetric{Key: key}
-					if v, ok := m["label"].(string); ok {
-						am.Label = v
-					}
-					if v, ok := m["value"].(float64); ok {
-						am.Value = int64(v)
-					}
-					if v, ok := m["display_value"].(string); ok {
-						am.DisplayValue = v
-					}
-					res.Metrics = append(res.Metrics, am)
+	// Shortcut: no snapshot store wired → return base account without resource.
+	if r.snapshotStore == nil {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// Try to enrich with cached snapshot data. When the snapshot is fresh
+	// (< 10 min) we serve it directly; when it's stale or missing, we
+	// reach out to the provider, persist a fresh snapshot, and serve that.
+	stale, err := r.snapshotStore.IsSnapshotStale(account.ID, snapshotMaxAge)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "snapshot freshness check failed: "+err.Error())
+		return
+	}
+
+	if stale {
+		// Cache miss or stale — fetch fresh details from the provider.
+		if detailsProvider, ok := r.capabilities.AccountDetails(account.Platform); ok {
+			token, tokenErr := r.vault.Get(req.Context(), account.ID, models.TokenTypeBearer)
+			if tokenErr != nil {
+				token, tokenErr = r.vault.Get(req.Context(), account.ID, models.TokenTypeLongLived)
+				if tokenErr != nil {
+					token, tokenErr = r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
 				}
 			}
+			if tokenErr == nil {
+				details, detailsErr := detailsProvider.GetAccountDetails(req.Context(), token.AccessToken, account.PlatformUserID)
+				if detailsErr == nil {
+					// Build and persist the snapshot.
+					snap := &repository.AccountResourceSnapshot{
+						PlatformAccountID: account.ID,
+						ResourceType:      details.ResourceType,
+						Profile: map[string]any{
+							"display_name": details.DisplayName,
+							"handle":       details.Handle,
+							"description":  details.Description,
+							"avatar_url":   details.AvatarURL,
+							"banner_url":   details.BannerURL,
+							"public_url":   details.PublicURL,
+							"external_id":  details.ExternalID,
+						},
+						FetchedAt: details.FetchedAt,
+					}
+					stats := make(map[string]any)
+					for _, m := range details.Metrics {
+						stats[m.Key] = map[string]any{
+							"label":         m.Label,
+							"value":         m.Value,
+							"display_value": m.DisplayValue,
+						}
+					}
+					snap.Statistics = stats
+					if details.Properties != nil {
+						snap.Content = details.Properties
+					}
+					// Best-effort save — if it fails we're already holding the
+					// fresh data in memory and can serve it.
+					_ = r.snapshotStore.UpsertSnapshot(snap)
 
-			if snap.Content != nil {
-				res.Properties = snap.Content
+					// Build resource from the fresh details.
+					res := &accountResource{
+						ResourceType: details.ResourceType,
+						ExternalID:   details.ExternalID,
+						DisplayName:  details.DisplayName,
+						Handle:       details.Handle,
+						Description:  details.Description,
+						AvatarURL:    details.AvatarURL,
+						BannerURL:    details.BannerURL,
+						PublicURL:    details.PublicURL,
+						FetchedAt:    details.FetchedAt,
+					}
+					for _, m := range details.Metrics {
+						res.Metrics = append(res.Metrics, accountMetric{
+							Key:          m.Key,
+							Label:        m.Label,
+							Value:        m.Value,
+							DisplayValue: m.DisplayValue,
+						})
+					}
+					if details.Properties != nil {
+						res.Properties = details.Properties
+					}
+					resp.Resource = res
+					writeJSON(w, http.StatusOK, resp)
+					return
+				}
 			}
-
-			resp.Resource = res
 		}
+		// Fall through: provider call failed or platform doesn't support
+		// details — serve whatever stale snapshot (if any) is still in the DB.
+	}
+
+	// Serve from cache (fresh snapshot, or stale snapshot as fallback).
+	snap, snapErr := r.snapshotStore.GetSnapshot(account.ID)
+	if snapErr == nil && snap != nil {
+		res := &accountResource{
+			ResourceType: snap.ResourceType,
+			FetchedAt:    snap.FetchedAt,
+		}
+		if v, ok := snap.Profile["external_id"].(string); ok {
+			res.ExternalID = v
+		}
+		if v, ok := snap.Profile["display_name"].(string); ok {
+			res.DisplayName = v
+		}
+		if v, ok := snap.Profile["handle"].(string); ok {
+			res.Handle = v
+		}
+		if v, ok := snap.Profile["description"].(string); ok {
+			res.Description = v
+		}
+		if v, ok := snap.Profile["avatar_url"].(string); ok {
+			res.AvatarURL = v
+		}
+		if v, ok := snap.Profile["banner_url"].(string); ok {
+			res.BannerURL = v
+		}
+		if v, ok := snap.Profile["public_url"].(string); ok {
+			res.PublicURL = v
+		}
+
+		for key, val := range snap.Statistics {
+			if m, ok := val.(map[string]any); ok {
+				am := accountMetric{Key: key}
+				if v, ok := m["label"].(string); ok {
+					am.Label = v
+				}
+				if v, ok := m["value"].(float64); ok {
+					am.Value = int64(v)
+				}
+				if v, ok := m["display_value"].(string); ok {
+					am.DisplayValue = v
+				}
+				res.Metrics = append(res.Metrics, am)
+			}
+		}
+
+		if snap.Content != nil {
+			res.Properties = snap.Content
+		}
+
+		resp.Resource = res
 	}
 
 	writeJSON(w, http.StatusOK, resp)
