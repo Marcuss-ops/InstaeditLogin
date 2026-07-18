@@ -5,11 +5,11 @@ import (
 	"sync/atomic"
 )
 
-// WorkerNames lists the 6 background goroutines RunWorkers spawns.
+// WorkerNames lists the 7 background goroutines RunWorkers spawns.
 // The list is the canonical "what should the /ready endpoint check"
 // surface used by WorkerStatus. Keep in sync with
 // internal/bootstrap/app.go::RunWorkers' spawn order (publish,
-// reconcile, outbox, webhook, metrics).
+// reconcile, outbox, webhook, metrics, sessions_cleanup, upload).
 //
 // Lives in pkg/api (not in internal/bootstrap) because the /ready
 // handler is in pkg/api and the type visibility must satisfy BOTH
@@ -42,7 +42,7 @@ type WorkerStatus struct {
 }
 
 // NewWorkerStatus constructs a status monitor with one flag per name.
-// Names are typically WorkerNames (the canonical 5 goroutines), but
+// Names are typically WorkerNames (the canonical 7 goroutines), but
 // tests can supply a smaller list.
 func NewWorkerStatus(names []string) *WorkerStatus {
 	flags := make(map[string]*atomic.Bool, len(names))

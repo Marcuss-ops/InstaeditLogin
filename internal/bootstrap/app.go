@@ -3,7 +3,8 @@
 //
 // Blocco #2.1 split cmd/server/main.go into:
 //   - cmd/api     — HTTP only
-//   - cmd/worker  — 5 background goroutines
+//   - cmd/worker  — 7 background goroutines (publish, reconcile, outbox,
+//     webhook, metrics, sessions_cleanup, upload)
 //   - cmd/migrate — Connect + Migrate + exit (one-shot pre-deploy job)
 //   - cmd/server  — wrapper: dev/local-compat single-bundle that runs
 //     migrate + api + (optionally) workers in one process.
@@ -46,7 +47,7 @@ import (
 // App is the wired runtime holding every dependency that the api and
 // worker binaries share. cmd/api reads App.HTTPHandler (and App.Cfg for
 // PORT); cmd/worker reads App.DB / App.Vault / App.CapRouter /
-// App.WebhookRepo to construct + supervise the 5 goroutines; cmd/server
+// App.WebhookRepo to construct + supervise the 7 goroutines; cmd/server
 // (the wrapper) reads both halves.
 type App struct {
 	Cfg         *config.Config
@@ -339,8 +340,9 @@ func Wire(ctx context.Context) (*App, error) {
 	}, nil
 }
 
-// RunWorkers starts the 5 background goroutines (publish worker, reconcile
-// worker, outbox dispatcher, webhook worker, metrics collector) and
+// RunWorkers starts the 7 background goroutines (publish worker, reconcile
+// worker, outbox dispatcher, webhook worker, metrics collector,
+// sessions cleanup worker, upload worker) and
 // blocks until ctx is cancelled. On cancellation it cancels every
 // goroutine concurrently and waits up to 15s per goroutine for their
 // Run loops to drain gracefully.
@@ -514,7 +516,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 
 	// Block until ctx is cancelled.
 	<-ctx.Done()
-	slog.Info("context cancelled, broadcasting shutdown to all 5 goroutines")
+	slog.Info("context cancelled, broadcasting shutdown to all 7 goroutines")
 	for _, child := range children {
 		child.cancel()
 	}

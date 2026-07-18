@@ -32,13 +32,27 @@ web/                        # React + Vite SPA
 6. SPA uses the JWT for authenticated calls to posts, accounts, workspaces.
 7. Publishing creates `posts` and `post_targets`; the worker dispatches to providers.
 
-## Async Publishing Pipeline
+## Background workers and Async Publishing Pipeline
 
-The publishing pipeline has TWO surfaces and TWO goroutines: a **driver** that performs the platform call (queued → publishing), and a **reconciler** that polls for the asynchronous completion of that call (publishing → published | failed). Each runs as an independent background goroutine with INDEPENDENT tick intervals — the driver defaults to 30s (`PUBLISH_WORKER_INTERVAL_SECONDS`), the reconciler to 5s (`RECONCILE_WORKER_INTERVAL_SECONDS`). Taglio 5.x split them out of the previous in-`runOnce` shape; this section documents the post-split architecture.
+`internal/bootstrap/app.go::RunWorkers` starts exactly **seven independent background goroutines**, mirrored by the `cmd/worker` binary and by the `cmd/server` dev wrapper (the production topology runs `cmd/api` + `cmd/worker` as separate pods, plus a one-shot `cmd/migrate` before deploy). Each goroutine owns its own cancellable context, tick interval, and `Done` channel; the boot log line confirms it: `7 background goroutines started: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / upload`.
 
-A THIRD background goroutine — the **outbox dispatcher** (`internal/outbox/dispatcher.go`, see [Transactional Outbox Pipeline](#transactional-outbox-pipeline)) — sits alongside the two publish-pipeline goroutines and materialises `publish_jobs` audit rows. Three goroutines in total, three independent contexts, three shutdown Done channels.
+> **Documentation drift (Taglio 5.x)**: earlier versions of this document described the runtime as a "two- / three-goroutine" pipeline because only the publish + reconcile + outbox triple was tracked in the indexed case study. The other four (`webhook`, `metrics`, `sessions_cleanup`, `upload`) have been part of the boot surface since Blocco #2.1 — readers should treat the canonical table below as authoritative and ignore the older "TWO/THREE/5" references that may still appear in commit-message archaeology or `cmd/server/main.go` comments.
 
-### Two goroutines, independent cadence
+### Authoritative goroutine list (mirrors `pkg/api/worker_status.go::WorkerNames`)
+
+| # | Name              | Component                              | Default tick                       | Env var                              | Responsibility                                                                 | Drain budget |
+|---|-------------------|----------------------------------------|------------------------------------|--------------------------------------|--------------------------------------------------------------------------------|--------------|
+| 1 | `publish`         | `worker.PublishWorker`                 | 30s                                | `PUBLISH_WORKER_INTERVAL_SECONDS`    | Driver: claim `post_targets` (queued → publishing) + sync-platform dispatch    | 15s          |
+| 2 | `reconcile`       | `worker.ReconcileWorker`               | 5s                                 | `RECONCILE_WORKER_INTERVAL_SECONDS`  | Reconciler: terminal `publishing → published \| failed` via `AsyncPublisher`   | 15s          |
+| 3 | `outbox`          | `outbox.Dispatcher`                    | 5s tick + 60s lease + 20s heartbeat | n/a (constants)                      | Materialise `publish_jobs` audit rows via `SELECT FOR UPDATE SKIP LOCKED`       | 15s          |
+| 4 | `webhook`         | `worker.WebhookWorker`                 | 5s                                 | `WEBHOOK_WORKER_INTERVAL_SECONDS`     | Drain `webhook_deliveries` (HMAC sign + HTTP POST + retry)                     | 15s          |
+| 5 | `metrics`         | `metrics.RunPeriodicCollector`         | 10s                                | n/a (`DefaultCollectorInterval`)     | Refresh Prometheus gauges (queue depth, age, publish state counts)             | 15s          |
+| 6 | `sessions_cleanup`| `worker.SessionsCleanupWorker`         | 300s                               | `SESSION_CLEANUP_INTERVAL_SECONDS`   | Retention-policy hard delete on `sessions` (revoked > 30d OR refresh expired > 7d) | 15s          |
+| 7 | `upload`          | `worker.UploadWorker`                  | 30s                                | `UPLOAD_WORKER_INTERVAL_SECONDS`     | Stream `upload_jobs` (queued) → fetch Google Drive → S3 → posts + publish queue | 15s          |
+
+Every goroutine flips an `atomic.Bool` on its first executable line via `WorkerStatus.Mark(name)`; the `/ready` endpoint aggregates the same set. The `publish` + `reconcile` + `outbox` triple drives the publishing pipeline detailed below; the other four are documented in their own package files (`internal/worker/`, `internal/outbox/`, `pkg/metrics/`).
+
+### Pipeline-specific cadence (publish + reconcile)
 
 ```
  PublishWorker.Run(ctx)   — driver:    queued → publishing
@@ -50,7 +64,7 @@ A THIRD background goroutine — the **outbox dispatcher** (`internal/outbox/dis
    each tick: ListPublishing + per-row reconcileTarget
 ```
 
-Both share the same `*CredentialVault`, the same `*CapabilityRouter`, and the same `*repository.PostRepository` — production wiring (`cmd/server/main.go`) instantiates each worker from the same handles. The split is invisible to the HTTP API; the only externally observable difference vs the pre-split shape is the snappier reconciler cadence (sub-30s pickup of `publishing → published` transitions under the canonical 5s default).
+Both share the same `*CredentialVault`, the same `*CapabilityRouter`, and the same `*repository.PostRepository` — production wiring (`internal/bootstrap/app.go::Wire`) instantiates each worker from the same handles. The split is invisible to the HTTP API; the only externally observable difference vs the pre-split shape is the snappier reconciler cadence (sub-30s pickup of `publishing → published` transitions under the canonical 5s default).
 
 ### Driver: `tick()` — queued → publishing transition
 
@@ -134,33 +148,41 @@ The trade-off is the one behavioural change flagged above: **transient 5xx now t
 
 Both publish + reconcile goroutines may call `vault.Renew` on the same `account_id` per tick (driver before each `publishTarget`; reconciler before each `reconcileTarget` final transition). This is safe — the `CredentialVault` uses `pg_advisory_xact_lock` to serialise concurrent refreshes for the same account_id, so a driver-reconciler race collapses to a single round-trip (the first refresh completes; subsequent calls find the token already valid and return without work). The vault's call-count rises slightly across the two goroutines; the network / DB load stays bounded. See `internal/worker/reconcile_worker.go::reconcileTarget` step 3 for the inline callout.
 
-### Three-way shutdown
+### Seven-way shutdown
 
-`cmd/server/main.go` spawns all three background goroutines in parallel at startup and shuts them down **sequentially** on SIGINT/SIGTERM. Each goroutine has its own cancellable context + `Done` channel; the cancels go out as a single broadcast on the signal, then the awaits are stacked (each with its own 15s budget), followed by the HTTP server's own 30s drain:
+`internal/bootstrap/app.go::RunWorkers` spawns all seven background goroutines in parallel at startup and shuts them down **sequentially** on SIGINT/SIGTERM. Each goroutine has its own cancellable context + `Done` channel; the cancels go out as a single broadcast on the signal, then the awaits are stacked (each with its own 15s budget), followed by the HTTP server's own 30s drain (`cmd/api` and `cmd/server` paths):
 
 ```
-go publishWorker.Run(workerCtx)        // [1] driver    — 30s tick interval
-go reconcileWorker.Run(reconcileCtx)    // [2] reconciler — 5s tick interval
-go dispatcher.Run(dispatcherCtx)        // [3] outbox    — SKIP LOCKED + 60s lease
+go publishWorker.Run(workerCtx)         // [1] driver                — 30s tick
+go reconcileWorker.Run(reconcileCtx)     // [2] reconciler            — 5s tick
+go dispatcher.Run(dispatcherCtx)         // [3] outbox                — SKIP LOCKED + 60s lease
+go webhookWorker.Run(webhookCtx)         // [4] webhook               — 5s tick
+go metricsCollector.Run(metricsCtx)      // [5] metrics               — 10s tick
+go sessionsCleanupWorker.Run(sessionsCtx)// [6] sessions_cleanup     — 300s tick
+go uploadWorker.Run(uploadCtx)           // [7] upload                — 30s tick
 
-<-quit (SIGINT/SIGTERM)
-workerCancel(); reconcileCancel(); dispatcherCancel()            // single broadcast
+<-ctx.Done() (SIGINT/SIGTERM)
+workerCancel(); reconcileCancel(); dispatcherCancel(); webhookCancel()
+metricsCancel(); sessionsCleanupCancel(); uploadCancel()            // single broadcast
 
-select { <-workerDone,    15s }          // drain budget [1] (driver)
-select { <-reconcileDone, 15s }          // drain budget [2] (reconciler)
-select { <-dispatcherDone, 15s }         // drain budget [3] (outbox dispatcher)
-
-srv.Shutdown(ctx) with 30s budget       // HTTP server drain — runs AFTER goroutine drains
+select { <-workerDone,            15s }    // drain budget [1]
+select { <-reconcileDone,         15s }    // drain budget [2]
+select { <-dispatcherDone,        15s }    // drain budget [3]
+select { <-webhookDone,           15s }    // drain budget [4]
+select { <-metricsDone,           15s }    // drain budget [5]
+select { <-sessionsCleanupDone,   15s }    // drain budget [6]
+select { <-uploadDone,            15s }    // drain budget [7]
+srv.Shutdown(ctx) with 30s budget          // HTTP server drain — runs AFTER goroutine drains
 ```
 
-Each goroutine performs a graceful drain on its own context: when `ctx.Done()` fires while a tick is mid-flight, the current tick completes naturally and `Run` returns only after that. A slow shutdown on one goroutine (e.g. a hung platform call in the reconciler) does NOT block the other two — each `Done` channel is independent, so the corresponding `select` returns via the timeout path while the healthy ones drain as they go.
+Each goroutine performs a graceful drain on its own context: when `ctx.Done()` fires while a tick is mid-flight, the current tick completes naturally and `Run` returns only after that. A slow shutdown on one goroutine (e.g. a hung platform call in the reconciler, or a hung S3 PUT in the upload worker) does NOT block the others — each `Done` channel is independent, so the corresponding `select` returns via the timeout path while the healthy ones drain as they go.
 
 Wall-clock bounds on shutdown:
 
-- **Graceful drain** (default path): ms-level per goroutine. On a clean SIGTERM each goroutine returns within ms of the cancel broadcast and the three `Done` channels close at sub-second timescales. The HTTP server's 30s drain then begins.
-- **Hard hangs** (e.g. platform API stuck on one tick, or a goroutine ignoring `ctx.Done()`): each governance budget fires sequentially. The stacked `<-time.After(15s)` design caps the **goroutine-drain** window at `3 × 15s = 45s` before the operator logs "drain timeout, continuing shutdown" for the still-pending goroutine. After the goroutines settle (clean or timed-out), `srv.Shutdown(30s)` kicks off another 30s budget for the HTTP server. Total worst-case wall-clock: `45s (goroutines) + 30s (HTTP) = up to 75s`.
+- **Graceful drain** (default path): ms-level per goroutine. On a clean SIGTERM each goroutine returns within ms of the cancel broadcast and all seven `Done` channels close at sub-second timescales. The HTTP server's 30s drain then begins.
+- **Hard hangs** (e.g. platform API stuck on one tick, or a goroutine ignoring `ctx.Done()`): each governance budget fires sequentially. The stacked `<-time.After(15s)` design caps the **goroutine-drain** window at `7 × 15s = 105s` before the operator logs "drain timeout, continuing shutdown" for the still-pending goroutine(s). After the goroutines settle (clean or timed-out), `srv.Shutdown(30s)` kicks off another 30s budget for the HTTP server. Total worst-case wall-clock: `105s (goroutines) + 30s (HTTP) = up to 135s`.
 
-The goroutine-drain stack and the HTTP-server drain are **sequential, not concurrent** — this matches the production wiring in `cmd/server/main.go::main` (the three `<-XxxDone` selects come before `srv.Shutdown(ctx)` in the source order). Operators tuning the shutdown budgets should bound total shutdown at the worst case (`75s`) plus any operator-imposed `kill -9` wait time.
+The goroutine-drain stack and the HTTP-server drain are **sequential, not concurrent** — this matches the production wiring in `internal/bootstrap/app.go::RunWorkers` and `cmd/server/main.go::main` (the seven `<-XxxDone` selects come before `srv.Shutdown(ctx)` in the source order). Operators tuning the shutdown budgets should bound total shutdown at the worst case (`135s`) plus any operator-imposed `kill -9` wait time.
 
 ### Cross-references
 
@@ -173,7 +195,7 @@ The goroutine-drain stack and the HTTP-server drain are **sequential, not concur
   - **Reconciler tests** (`internal/worker/reconcile_worker_test.go`): `TestReconcileTarget_*` (6 tests covering PublishComplete, Failed, InFlight, SyncPlatform, OrphanAccount, TransientError); `TestTickReconcile_*` (3 tests covering iterates-all / empty-list / list-error); `TestReconcileWorker_Run_*` (2 Run-loop tests: `TicksAndExitsOnCtxCancel` + `GracefulShutdown_DrainsInFlight`, mirroring the outbox dispatcher's Run test shape).
   - The transient-error behavioural change under `Reconcile`'s contract is asserted by `TestReconcileTarget_TransientError_TerminalFailure`.
 - **Configuration**: `internal/config/config.go::PublishWorkerIntervalSeconds` (default 30) + `::ReconcileWorkerIntervalSeconds` (default 5). Environment variables: `PUBLISH_WORKER_INTERVAL_SECONDS`, `RECONCILE_WORKER_INTERVAL_SECONDS`. Both fall back to defaults on ≤0 inside their respective `NewXxxWorker` constructors (defensive constructor logic, not config-validation logic — operators can simply leave env unset to get the canonical defaults).
-- **Two-goroutine split commit** (`ca7c879`, Taglio 5.x): extracted `tickReconcile` / `reconcileTarget` / `markFailedAndReturn` from `PublishWorker` into a new `ReconcileWorker` struct with its own `Run` goroutine, mirroring the outbox dispatcher. Verified via `git show --stat ca7c879` (touches `internal/worker/reconcile_worker.go` + `reconcile_worker_test.go` + `mocks_test.go` + slims `publish_worker.go` + `publish_worker_test.go` + adds `cfg.ReconcileWorkerIntervalSeconds` + wires 3-way shutdown in `cmd/server/main.go`).
+- **Driver/reconciler split commit** (`ca7c879`, Taglio 5.x): extracted `tickReconcile` / `reconcileTarget` / `markFailedAndReturn` from `PublishWorker` into a new `ReconcileWorker` struct with its own `Run` goroutine, mirroring the outbox dispatcher. Verified via `git show --stat ca7c879` (touches `internal/worker/reconcile_worker.go` + `reconcile_worker_test.go` + `mocks_test.go` + slims `publish_worker.go` + `publish_worker_test.go` + adds `cfg.ReconcileWorkerIntervalSeconds`). The pre-Blocco #5.x wiring collapsed the whole shutdown into a 3-way stack; the post-Blocco #2.1 / Taglio 5.x runtime is a 7-goroutine stack (see "Seven-way shutdown" above).
 
 ## Transactional Outbox Pipeline
 
