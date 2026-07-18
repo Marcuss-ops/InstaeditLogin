@@ -330,6 +330,80 @@ The goroutine-drain stack and the HTTP-server drain are **sequential, not concur
 
 `PostRepository.Create` writes `posts + post_targets + outbox_events` in one `BEGIN/COMMIT` tx. A background goroutine (`outbox.NewDispatcher`) reads `outbox_events` via `SELECT FOR UPDATE SKIP LOCKED` + heartbeat lease, then calls `processors.NewPublishJobsMaterialiser` to insert the audit row. Both run parallel to the publish worker with independent 15s drain budgets on shutdown. The PublishJob table is the audit-only appendix; `post_targets.status` remains the source of truth for current publish state.
 
+## Google Drive folder import (POST `/api/v1/media/import/drive/folder`)
+
+The Drive import endpoint fans a (public or authenticated) Google Drive folder out into a staggered schedule of `upload_jobs` that the [upload worker](#authoritative-goroutine-list-mirrors-pkgapiworker_statusgoworkernames) drains in the background. It is **NOT** a publish API — it queues and spreads the work across time, then exits. The endpoint, the request body, and the CLI that drives it from an operator shell are documented below.
+
+### Endpoints
+
+| Method | Path                                                | Handler                                                | Purpose                                                                                                       |
+|--------|-----------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+| POST   | `/api/v1/media/import/drive/folder`                 | `pkg/api/drive_batch.go::handleDriveBatchImport`         | Schedule a folder import with cumulative stagger per job. Returns 202 with the DriveBatchImportResponse body. |
+| GET    | `/api/v1/media/import/drive/batch/status`           | `pkg/api/drive_batch.go::handleDriveBatchStatus`        | Dashboard-friendly aggregate (pending/processing/completed/failed) per folder id, scoped to the caller.        |
+| POST   | `/api/v1/media/import/drive/async`                  | `pkg/api/drive_import_async.go::handleDriveImportAsync` | Same source code path as `/folder`; surfaced when the SPA cannot hold a long blocking HTTP connection.       |
+| POST   | `/api/v1/media/import/drive`                        | `pkg/api/drive_import.go::handleDriveImport`             | Single-file import — different surface, same `upload_jobs` queue.                                            |
+
+> The legacy path string `/api/v1/drive/batch-import` does **not** exist in the current router. The canonical folder-batch path is `/api/v1/media/import/drive/folder`. Any docs or runbook that says otherwise is stale.
+
+### Request body for `POST /api/v1/media/import/drive/folder`
+
+```jsonc
+{
+  "folder_id":           "1Kssuh0eQ7Wmg8uMg29aI7fShXSLCaw3x", // required (string)
+  "drive_account_id":    1234,   // optional int64 — use the user's linked Drive OAuth grant to list private/shared folders
+  "workspace_id":        42,     // required int64  — owns the scheduled upload_jobs
+  "facebook_account_id": 7,      // required int64  — platform_accounts.id of the target Facebook Page
+  "title":               "",     // optional       — empty = per-post title = Drive filename
+  "caption_prefix":      "",     // optional       — prepended to every caption with ` — ` separator
+  "min_jitter_seconds":  10800,  // optional int   — see "Stagger windows" below; min 60
+  "max_jitter_seconds":  16200,  // optional int   — must be >= min_jitter_seconds
+  "page_token":          "",     // optional       — Drive nextPageToken for folders > 200 items
+  "cursor_scheduled_at": null    // optional time  — continuation cursor across pages (RFC3339)
+}
+```
+
+### Stagger windows: API defaults vs CLI defaults
+
+The two surfaces have **deliberately different default windows** because they target different use cases:
+
+| Surface                                          | `min_jitter_seconds`                       | `max_jitter_seconds`                       | Source os.Getenv / const                 |
+|-------------------------------------------------|-------------------------------------------|-------------------------------------------|------------------------------------------|
+| API `POST /api/v1/media/import/drive/folder`    | `10800` (3h)                               | `16200` (4.5h)                             | `pkg/api/drive_batch.go` constants injected when both fields are zero in the body |
+| CLI `cmd/link-drive-and-import`                  | `DRIVE_SCHEDULE_MIN_HOURS` → `14400` (4h)  | `DRIVE_SCHEDULE_MAX_HOURS` → `21600` (6h)  | `cmd/link-drive-and-import/main.go` (envFloat calls at lines 79–83)        |
+
+> **Both surfaces contract**: jitter is sampled per-job from `crypto/rand` uniformly on `[min, max]`; the API enforces `min_jitter_seconds >= 60` and rejects mismatches with HTTP 422; the CLI exits with a non-zero status on the same invalid ranges. **The legacy 3–4.5h vs 4–6h difference is by design** — the API tunes to "shipping cadence" for the dashboard SPA, the CLI to a wider non-blocking window for ops/sandbox imports.
+
+### What the staggering does (and what it does NOT)
+
+The stagger is **configurable load distribution** — it spreads queued publishes evenly across a window so the platform APIs see a natural spacing instead of a burst. The root cause is the rates documented in [Rate limiting and retry semantics](#rate-limiting-and-retry-semantics): the per-platform `defaultPlatformLimits` are conservative but still below the published rate ceilings the providers monitor (Meta `video.upload` burst, TikTok `video.publish` per-app-per-second, YouTube Data API v3 daily quota units, etc.). A folder of 30 videos queued at the same minute would otherwise publish 30 in a single worker tick and trip the per-account rate counter on the provider side.
+
+What it does NOT do:
+
+- It does **not** simulate a human posting cadence. The pacing is randomised against `[min, max]` per job, but the rate-limit reason stands regardless of perceived "humanness".
+- It does **not** "avoid shadowban"; that phrasing has no technical basis in this codebase. The actual mitigation is the configurable jitter uniform against the per-platform perforated rate budgets in `internal/worker/throttle.go`.
+- It does **not** guarantee delivery — it only queues `upload_jobs`. The upload worker owns the actual streaming-to-S3 + publish hand-off. Provider-side `*services.RateLimitError` responses are caught at the worker layer (see the **OPEN GAP — retry on 429/Retry-After/5xx** under [Rate limiting and retry semantics](#rate-limiting-and-retry-semantics)).
+
+### CLI: `cmd/link-drive-and-import` env vars
+
+The operator-facing CLI for one-off folder imports (no HTTP server involved). Reads from the environment:
+
+| Env var                       | Required | Default                | Purpose                                                                                                            |
+|-------------------------------|----------|------------------------|--------------------------------------------------------------------------------------------------------------------|
+| `INSTAEDIT_USER_ID`           | YES      | —                      | The `users.id` of the workspace owner.                                                                             |
+| `INSTAEDIT_WORKSPACE_ID`      | YES      | —                      | The `workspaces.id` owning the scheduled `upload_jobs`.                                                            |
+| `FACEBOOK_PLATFORM_ACCOUNT_ID`| YES      | —                      | The `platform_accounts.id` of the target Facebook Page.                                                            |
+| `DRIVE_FOLDER_ID` **OR** `DRIVE_FOLDER_URL` | YES at least one | hard-coded `defaultFolderID` constant | Drive folder id (raw) OR share URL — the URL form is parsed for the `/folders/<id>/` segment by `driveFolderID()`. |
+| `DRIVE_SCHEDULE_MIN_HOURS`    | NO       | `4`                    | Lower bound of the cumulative stagger (in hours).                                                                  |
+| `DRIVE_SCHEDULE_MAX_HOURS`    | NO       | `6`                    | Upper bound; must be `>= MIN`.                                                                                    |
+
+Both `DRIVE_FOLDER_ID` and `DRIVE_FOLDER_URL` are accepted. The URL parser strips the query string and the trailing slash: `https://drive.google.com/drive/folders/<id>?usp=sharing` resolves to `<id>`. When neither is set, the CLI falls back to the compile-time constant `defaultFolderID` in `cmd/link-drive-and-import/main.go` — operators should set one explicitly to avoid silent surprises.
+
+### What the endpoint cannot do (and what it does in those cases)
+
+- **Private folders require the user's linked Drive OAuth grant.** Set `drive_account_id > 0` in the body. Without it the server falls back to public listing via `GOOGLE_DRIVE_API_KEY`. If neither is configured, the response is **HTTP 200** with `needs_drive_account: true` and/or `needs_google_drive_api_key: true` plus a `note` field explaining what to configure — NOT a fatal error.
+- **Folder paging is at most 200 per response** (Google's quirk). The response always carries `next_page_token` — an empty string means "you got everything". To continue a multi-page import, re-call the endpoint with `page_token` set **and** `cursor_scheduled_at` set to the previous response's `last_scheduled_at` (RFC3339). Sending `cursor_scheduled_at` empty collapses the random gap at page boundaries (the page would publish back-to-back).
+- **7-day silent cap on cumulative schedule** (`driveBatchJitterMaxSeconds` const in `pkg/api/drive_batch.go`). Cumulative schedules past 7 days are clamped without telling the caller; bump the constant (and surface the clamp in the response `note` if you do) if your folder workflow demands 2-week+ stagger horizons.
+
 ## Security
 
 - Tokens are encrypted at rest with AES-256-GCM.
