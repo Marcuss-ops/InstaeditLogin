@@ -149,17 +149,32 @@ func run() error {
 		return nil
 	}
 
-	// Schedule upload jobs with a cryptographically random 4-6h gap.
+	// Remove duplicate rows left by older scheduler runs before adding anything
+	// new. Only redundant pending rows are failed; completed/processing history
+	// remains intact and failed sources can still be retried.
 	uploadRepo := repository.NewUploadJobRepository(db)
+	suppressed, err := uploadRepo.SuppressPendingDuplicates(userID)
+	if err != nil {
+		return fmt.Errorf("suppress pending duplicate uploads: %w", err)
+	}
+	if suppressed > 0 {
+		slog.Warn("suppressed duplicate pending upload jobs", "count", suppressed)
+	}
+
+	// Schedule only Drive files that have never been queued, processed, or
+	// completed for this page. Gaps advance only when a new job is created, so
+	// skipped duplicates do not push valid videos farther into the future.
 	now := time.Now()
 	cursor := now
 	minSeconds := int(minHours * 60 * 60)
 	maxSeconds := int(maxHours * 60 * 60)
+	createdJobs := 0
+	skippedDuplicates := 0
 
 	for idx, f := range files {
 		title := aphorismFor(idx)
 		scheduledAt := cursor
-		if idx > 0 {
+		if createdJobs > 0 {
 			gap, err := randomDuration(minSeconds, maxSeconds)
 			if err != nil {
 				return fmt.Errorf("random duration: %w", err)
@@ -180,14 +195,28 @@ func run() error {
 			Status:         models.UploadJobStatusPending,
 			ScheduledAt:    &scheduledAt,
 		}
-		if err := uploadRepo.Create(job); err != nil {
+		created, err := uploadRepo.CreateIfSourceAbsent(job)
+		if err != nil {
 			return fmt.Errorf("create upload job for %s: %w", f.Name, err)
 		}
+		if !created {
+			skippedDuplicates++
+			slog.Info("skipping already queued or uploaded drive video", "file", f.Name, "source_id", f.ID)
+			continue
+		}
+
 		slog.Info("scheduled upload job", "job_id", job.ID, "file", f.Name, "scheduled_at", scheduledAt)
 		cursor = scheduledAt
+		createdJobs++
 	}
 
-	slog.Info("done", "total_jobs", len(files))
+	slog.Info(
+		"done",
+		"folder_videos", len(files),
+		"new_jobs", createdJobs,
+		"skipped_duplicates", skippedDuplicates,
+		"suppressed_pending_duplicates", suppressed,
+	)
 	return nil
 }
 
