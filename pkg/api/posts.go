@@ -62,8 +62,6 @@ type AddTargetRequest struct {
 }
 
 // --- Error mapping -----------------------------------------------------------
-
-func mapRepoError(err error) (int, string) {
 	switch {
 	case err == nil:
 		return http.StatusOK, ""
@@ -664,21 +662,15 @@ func (r *Router) handleRetryPost(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
-}
-
-// handleGetPostTargets lists all targets for a post.
+}// handleGetPostTargets lists all targets for a post.
 // GET /api/v1/posts/{id}/targets
 func (r *Router) handleGetPostTargets(w http.ResponseWriter, req *http.Request) {
 	if r.postStore == nil {
 		writeError(w, http.StatusNotImplemented, "posts not configured on this server")
 		return
 	}
-	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid post id: "+err.Error())
-		return
-	}
-	_ = id // Taglio 3.x: wire ListByPost into PostStore, then use it here.
+	// Taglio 3.x: wire ListByPost into PostStore, then read chi.URLParam(req, "id").
+	// Until then, return empty targets without consuming the post id param.
 	writeJSON(w, http.StatusOK, map[string]interface{}{"targets": []interface{}{}})
 }
 

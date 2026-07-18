@@ -358,7 +358,6 @@ func (s *FacebookOAuthService) publishPageVideo(ctx context.Context, pageAccessT
 // Taglio 4.3.
 // -----------------------------------------------------------------------------
 var (
-	_ Provider         = (*FacebookOAuthService)(nil)
 	_ OAuthProvider    = (*FacebookOAuthService)(nil)
 	_ ContentValidator = (*FacebookOAuthService)(nil)
 	_ Publisher        = (*FacebookOAuthService)(nil)

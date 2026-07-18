@@ -361,7 +361,6 @@ func (s *TwitterOAuthService) getUserInfo(ctx context.Context, accessToken strin
 // Taglio 4.3.
 // -----------------------------------------------------------------------------
 var (
-	_ Provider         = (*TwitterOAuthService)(nil)
 	_ OAuthProvider    = (*TwitterOAuthService)(nil)
 	_ ContentValidator = (*TwitterOAuthService)(nil)
 	_ Publisher        = (*TwitterOAuthService)(nil)

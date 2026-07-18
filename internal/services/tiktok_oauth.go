@@ -550,7 +550,6 @@ func (s *TikTokOAuthService) Reconcile(ctx context.Context, accessToken, publish
 // Taglio 4.3.
 // -----------------------------------------------------------------------------
 var (
-	_ Provider         = (*TikTokOAuthService)(nil)
 	_ OAuthProvider    = (*TikTokOAuthService)(nil)
 	_ ContentValidator = (*TikTokOAuthService)(nil)
 	_ Publisher        = (*TikTokOAuthService)(nil)

@@ -210,28 +210,6 @@ func (m *Manager) IssueAccess(userID, wsID, sessionID int64) (string, string, ti
 	return signed, jti, exp, nil
 }
 
-// Deprecated: Issue is the legacy signing path used by the unit tests. It now
-// requires ALL three IDs (userID, workspaceID, sessionID) to be > 0,
-// matching the post-SPRINT-2.1 contract mirrored by IssueAccess.
-// A token with sessionID=0 would be rejected by Verify (and would
-// defeat the post-SPRINT-2.1 session-split), so we fail fast at
-// issue time with an explicit error rather than mint a token that
-// downstream middleware would 401.
-//
-// Production callers must use SessionsService.Start (which creates
-// a session row FIRST and then calls IssueAccess with the row's
-// positive ID). This Issue() variant is retained only for unit
-// tests that don't have a sessions repo. Any production caller
-// that lands here will fail at runtime — that is INTENDED, the
-// error is loud so the offending caller is flagged.
-//
-// Variadic for backward-compat:
-//   - Issue(userID)                    // wsID = 0, sessionID = 0 → ERR
-//   - Issue(userID, wsID)              // sessionID = 0 → ERR (Blocco #1.4)
-//   - Issue(userID, wsID, sessionID)  // all three must be > 0
-//   - IssueAccess(userID, wsID, sid)   // full 3-arg production form
-//
-// Deprecated: use SessionsService.Start → IssueAccess instead.
 func (m *Manager) Issue(userID int64, rest ...int64) (string, string, time.Time, error) {
 	wsID, sessionID := int64(0), int64(0)
 	switch len(rest) {

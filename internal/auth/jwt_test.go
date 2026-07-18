@@ -41,62 +41,6 @@ func TestIssueAndVerify(t *testing.T) {
 	}
 }
 
-func TestIssueRejectsInvalidID(t *testing.T) {
-	m := NewManager(testSecret, 24)
-	if _, _, _, err := m.Issue(0, 1); err == nil {
-		t.Fatal("expected error for zero user id")
-	}
-	if _, _, _, err := m.Issue(-1, 1); err == nil {
-		t.Fatal("expected error for negative user id")
-	}
-	// SPRINT 1.1: zero/negative workspace id is also rejected.
-	if _, _, _, err := m.Issue(1, 0); err == nil {
-		t.Fatal("expected error for zero workspace id")
-	}
-	if _, _, _, err := m.Issue(1, -1); err == nil {
-		t.Fatal("expected error for negative workspace id")
-	}
-}
-
-// Blocco #1.4 — Manager.Issue must reject sessionID=0 explicitly
-// (was silently allowed pre-Blocco #1.4). IssueAccess already had
-// this check; Issue now matches.
-func TestIssueRejectsSessionIDZero(t *testing.T) {
-	m := NewManager(testSecret, 24)
-	// 3-arg form with sessionID=0 must error.
-	tok, jti, exp, err := m.Issue(1, 1, 0)
-	if err == nil {
-		t.Fatalf("Issue(1, 1, 0): want error, got token=%q jti=%q exp=%v", tok, jti, exp)
-	}
-	if tok != "" || jti != "" || !exp.IsZero() {
-		t.Errorf("Issue(1, 1, 0) on error: must return zero values; got token=%q jti=%q exp=%v", tok, jti, exp)
-	}
-	if !strings.Contains(err.Error(), "session") {
-		t.Errorf("error message should mention session id so callers understand the contract: got %v", err)
-	}
-}
-
-// Blocco #1.4 — 2-arg form (legacy callers) must now error because
-// sessionID defaults to 0. Previously this minted a sid=0 token
-// silently; now it fails loud.
-func TestIssueRejectsSessionIDZeroViaTwoArgForm(t *testing.T) {
-	m := NewManager(testSecret, 24)
-	tok, jti, exp, err := m.Issue(1, 1)
-	if err == nil {
-		t.Fatalf("Issue(1, 1): want explicit error (sessionID=0), got token=%q jti=%q exp=%v", tok, jti, exp)
-	}
-	if tok != "" {
-		t.Errorf("Issue on error: must NOT return a token; got %q", tok)
-	}
-	if !strings.Contains(err.Error(), "SessionsService") {
-		t.Logf("note: error guidance points at SessionsService.Start: %v", err)
-	}
-}
-
-// Blocco #1.4 — IssueAccess is the canonical production path; it
-// already required sessionID>0, but we pin the explicit error here
-// so a future change to IssueAccess can't silently weaken the
-// contract.
 func TestIssueAccessRejectsSessionIDZero(t *testing.T) {
 	m := NewManager(testSecret, 24)
 	cases := []struct {

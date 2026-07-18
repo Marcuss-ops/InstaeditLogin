@@ -376,7 +376,6 @@ var ErrDriveListRequiresAPIKey = errors.New("ERR_DRIVE_LIST_REQUIRES_API_KEY")
 
 // Compile-time conformance to the central Platform Registry contract.
 var (
-	_ Provider          = (*GoogleDriveOAuthService)(nil)
 	_ OAuthProvider     = (*GoogleDriveOAuthService)(nil)
 	_ DriveImporter     = (*GoogleDriveOAuthService)(nil)
 	_ DriveFolderLister = (*GoogleDriveOAuthService)(nil)

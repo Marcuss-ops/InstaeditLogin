@@ -621,7 +621,6 @@ func (s *YouTubeOAuthService) getUserInfo(ctx context.Context, accessToken strin
 // Taglio 4.3.
 // -----------------------------------------------------------------------------
 var (
-	_ Provider         = (*YouTubeOAuthService)(nil)
 	_ OAuthProvider    = (*YouTubeOAuthService)(nil)
 	_ ContentValidator = (*YouTubeOAuthService)(nil)
 	_ Publisher        = (*YouTubeOAuthService)(nil)

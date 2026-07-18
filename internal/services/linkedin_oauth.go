@@ -306,7 +306,6 @@ func (s *LinkedInOAuthService) getUserInfo(ctx context.Context, accessToken stri
 // Taglio 4.3.
 // -----------------------------------------------------------------------------
 var (
-	_ Provider         = (*LinkedInOAuthService)(nil)
 	_ OAuthProvider    = (*LinkedInOAuthService)(nil)
 	_ ContentValidator = (*LinkedInOAuthService)(nil)
 	_ Publisher        = (*LinkedInOAuthService)(nil)

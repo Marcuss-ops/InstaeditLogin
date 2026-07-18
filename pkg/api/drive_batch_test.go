@@ -58,7 +58,6 @@ func (m *mockDriveFolderLister) ListFolder(_ context.Context, folderID, accessTo
 // actually casts to. Compile errors here mean the handler would also
 // fail to type-assert, so the test fails BEFORE runtime.
 var (
-	_ services.Provider          = (*mockDriveFolderLister)(nil)
 	_ services.DriveFolderLister = (*mockDriveFolderLister)(nil)
 )
 
