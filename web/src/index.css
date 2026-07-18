@@ -265,3 +265,118 @@ html {
     }
   }
 }
+
+/* =====================================================================
+ * FULLCALENDAR DARK-THEME OVERRIDES
+ * FullCalendar ships with light-theme defaults. These overrides align
+ * the calendar surface with the rest of the InstaEdit dark UI.
+ * ================================================================== */
+.fc {
+  --fc-border-color: rgba(255, 255, 255, 0.12);
+  --fc-page-bg-color: #030308;
+  --fc-neutral-bg-color: #1f1f2e;
+  --fc-neutral-text-color: #9aa0aa;
+  --fc-button-text-color: #e8e8ef;
+  --fc-button-bg-color: #1f1f2e;
+  --fc-button-border-color: rgba(255, 255, 255, 0.12);
+  --fc-button-hover-bg-color: #252536;
+  --fc-button-hover-border-color: rgba(255, 255, 255, 0.24);
+  --fc-button-active-bg-color: #252536;
+  --fc-button-active-border-color: rgba(255, 255, 255, 0.24);
+  --fc-event-bg-color: transparent;
+  --fc-event-border-color: transparent;
+  --fc-today-bg-color: rgba(139, 92, 246, 0.08);
+  --fc-now-indicator-color: #22d3ee;
+  --fc-highlight-color: rgba(139, 92, 246, 0.12);
+  --fc-non-business-color: rgba(255, 255, 255, 0.02);
+  font-family: var(--font-sans);
+}
+
+.fc .fc-scrollgrid,
+.fc .fc-scrollgrid-section > td,
+.fc .fc-scrollgrid-section-liquid > td,
+.fc .fc-timegrid-divider,
+.fc .fc-col-header-cell,
+.fc .fc-daygrid-day,
+.fc .fc-timegrid-slot,
+.fc .fc-timegrid-slot-label,
+.fc .fc-timegrid-axis,
+.fc .fc-list-event-dot,
+.fc .fc-list-day-cushion {
+  border-color: var(--fc-border-color) !important;
+}
+
+.fc .fc-col-header-cell {
+  padding: 0.75rem 0;
+  font-weight: 600;
+  color: #e8e8ef;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+}
+
+.fc .fc-daygrid-day-number,
+.fc .fc-timegrid-slot-label-cushion,
+.fc .fc-timegrid-axis-cushion {
+  color: #9aa0aa;
+  font-size: 0.75rem;
+}
+
+.fc .fc-day-today .fc-daygrid-day-number {
+  color: #22d3ee;
+  font-weight: 700;
+}
+
+.fc .fc-timegrid-now-indicator-line {
+  border-color: #22d3ee;
+}
+
+.fc .fc-timegrid-now-indicator-arrow {
+  border-color: #22d3ee;
+  color: #22d3ee;
+}
+
+.fc .fc-event {
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.fc .fc-event-main {
+  background-color: transparent !important;
+  border: none !important;
+}
+
+.fc .fc-timegrid-event-harness-inset .fc-timegrid-event {
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.fc .fc-daygrid-dot-event:hover,
+.fc .fc-daygrid-event:hover {
+  background-color: transparent !important;
+}
+
+.fc .fc-timegrid-col-events {
+  margin: 0 2px;
+}
+
+.fc .fc-timegrid-event {
+  border-radius: 0.375rem;
+  margin-bottom: 2px;
+}
+
+.fc .fc-daygrid-event {
+  border-radius: 0.375rem;
+  margin: 1px 2px;
+}
+
+.fc .fc-more-link {
+  color: #9aa0aa;
+  font-size: 0.7rem;
+}
+
+.fc .fc-bg-event {
+  opacity: 0.25;
+}

@@ -1,33 +1,73 @@
-import { useState, type ElementType } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
   ChevronRight,
   LayoutGrid,
-  List as ListIcon,
   Clock,
   Filter,
   Plus,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { authedFetch, AuthError, ApiError } from "../../lib/auth";
+import { CalendarGrid, type CalendarViewMode } from "./CalendarGrid";
+import { Skeleton, ErrorState } from "../../components/feedback";
 
-type ViewMode = "month" | "week" | "day";
+type Post = {
+  id: number;
+  workspace_id: number;
+  title?: string;
+  caption?: string;
+  scheduled_at?: string | null;
+  status: string;
+  created_at: string;
+};
 
-const viewTabs: { id: ViewMode; label: string; icon: ElementType }[] = [
+type FetchState =
+  | { kind: "loading" }
+  | { kind: "ready"; posts: Post[] }
+  | { kind: "error"; message: string };
+
+const viewTabs: { id: CalendarViewMode; label: string; icon: React.ElementType }[] = [
   { id: "month", label: "Month", icon: CalendarIcon },
   { id: "week", label: "Week", icon: LayoutGrid },
   { id: "day", label: "Day", icon: Clock },
 ];
 
 export function CalendarPage() {
-  const [view, setView] = useState<ViewMode>("week");
+  const navigate = useNavigate();
+  const abortRef = useRef<AbortController | null>(null);
+  const [state, setState] = useState<FetchState>({ kind: "loading" });
+  const [view, setView] = useState<CalendarViewMode>("week");
   const [currentDate, setCurrentDate] = useState(new Date());
 
-  const formattedDate = currentDate.toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric",
-  });
+  const load = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setState({ kind: "loading" });
+
+    try {
+      const resp = await authedFetch("/api/v1/posts", { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      const data = (await resp.json()) as { posts: Post[] };
+      setState({ kind: "ready", posts: data.posts ?? [] });
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      if (err instanceof AuthError) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      const message = err instanceof ApiError ? err.message : "Unable to load posts.";
+      setState({ kind: "error", message });
+    }
+  }, [navigate]);
+
+  useEffect(() => {
+    void load();
+    return () => abortRef.current?.abort();
+  }, [load]);
 
   function shiftDate(delta: number) {
     setCurrentDate((prev) => {
@@ -39,11 +79,16 @@ export function CalendarPage() {
     });
   }
 
+  const formattedDate = currentDate.toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric",
+  });
+
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8 bg-[#030308] text-[#e8e8ef]">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-7xl mx-auto h-[calc(100vh-64px-2rem)] flex flex-col">
         {/* Header */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6 shrink-0">
           <div>
             <h1 className="text-[24px] sm:text-[28px] font-extrabold tracking-[-0.02em] text-white flex items-center gap-3">
               <CalendarIcon size={28} className="text-white/40" />
@@ -65,7 +110,7 @@ export function CalendarPage() {
         </div>
 
         {/* Toolbar */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 shrink-0">
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -129,21 +174,31 @@ export function CalendarPage() {
         </div>
 
         {/* Calendar surface */}
-        <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-4 sm:p-6 min-h-[400px] flex flex-col">
-          <div className="flex-1 flex items-center justify-center rounded-xl border border-dashed border-white/[0.12] bg-white/[0.02]">
-            <div className="text-center max-w-md px-6">
-              <div className="w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center mx-auto mb-4">
-                <ListIcon size={24} className="text-[#9aa0aa]" />
-              </div>
-              <h3 className="text-[16px] font-bold text-white mb-2">
-                {viewTabs.find((t) => t.id === view)?.label} view
-              </h3>
-              <p className="text-[14px] text-[#9aa0aa]">
-                The interactive drag & drop grid will be rendered here. Connect
-                the calendar data source to see your scheduled posts.
-              </p>
+        <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-4 sm:p-6 flex-1 min-h-0 flex flex-col">
+          {state.kind === "loading" && (
+            <div className="flex-1 flex flex-col gap-4">
+              <Skeleton variant="card" height={48} />
+              <Skeleton variant="card" className="flex-1" />
             </div>
-          </div>
+          )}
+
+          {state.kind === "error" && (
+            <ErrorState
+              title="Couldn't load calendar"
+              message={state.message}
+              onRetry={() => void load()}
+              className="bg-[#1f1f2e] border-white/[0.12]"
+            />
+          )}
+
+          {state.kind === "ready" && (
+            <CalendarGrid
+              view={view}
+              currentDate={currentDate}
+              posts={state.posts}
+              onPostsChange={load}
+            />
+          )}
         </div>
       </div>
     </div>
