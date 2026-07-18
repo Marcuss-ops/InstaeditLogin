@@ -439,6 +439,12 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	if payload.PrivacyLevel == "" {
 		payload.PrivacyLevel = "PUBLIC_TO_EVERYONE"
 	}
+	// YouTube requires lowercase privacy levels (public/unlisted/private)
+	// and rejects the generic PUBLIC_TO_EVERYONE default. Use private as
+	// the safe fallback — unverified apps' uploads are force-private anyway.
+	if account.Platform == models.PlatformYouTube && (payload.PrivacyLevel == "" || payload.PrivacyLevel == "PUBLIC_TO_EVERYONE") {
+		payload.PrivacyLevel = "private"
+	}
 	// TikTok's PULL_FROM_URL mode requires the video URL's domain to be
 	// ownership-verified in the TikTok Developer Console — impossible
 	// for a dynamic dev tunnel. Route TikTok through PULL_FROM_FILE
