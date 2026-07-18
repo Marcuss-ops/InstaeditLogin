@@ -56,6 +56,13 @@ func (s *GoogleDriveOAuthService) Name() string { return "google-drive" }
 // GetLoginURL builds the Google OAuth authorization URL with the
 // drive.readonly scope so the user can pick a video clip from Drive.
 func (s *GoogleDriveOAuthService) GetLoginURL(state string) string {
+	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
+}
+
+// GetLoginURLWithOptions builds the Google OAuth authorization URL with the
+// drive.readonly scope so the user can pick a video clip from Drive.
+// Google Drive does not use OAuthLoginOptions; options are ignored.
+func (s *GoogleDriveOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
 	params.Set("client_id", s.cfg.GoogleDriveClientID)
 	params.Set("redirect_uri", s.cfg.GoogleDriveRedirectURI)

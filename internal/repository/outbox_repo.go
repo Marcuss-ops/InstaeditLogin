@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -435,12 +434,16 @@ func (r *OutboxRepository) ListPending(limit int) ([]models.OutboxEvent, error) 
 		ev.LastError = lastErrorOut.String
 		out = append(out, ev)
 	}
-	// pq import retained for future typed-error paths (e.g. on
-	// future contention constraints). Currently unused at the
-	// repository surface — the pq import is referenced via the
-	// discovery Scan path in post_repo.go (via errors.As).
 	return out, nil
 }
+
+// countPending, countDeadLetter, etc. above do not require the
+// github.com/lib/pq typed-error path because their underlying
+// statements are read-only COUNT(*)s that cannot raise SQLSTATE
+// 23505 unique-violation or 40001 serialization-failure. If any
+// future write path is added here (e.g. a DeleteOlderThan that
+// returns a typed pq.Error to the caller), import lib/pq at that
+// point to enable `errors.As(&pqErr)`.
 
 // CountPending returns the number of pending rows (zero-leased ∪
 // unleased) for metric dashboards. Cheap query that hits

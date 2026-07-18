@@ -65,6 +65,12 @@ func (s *FacebookOAuthService) Name() string { return models.PlatformFacebook }
 
 // GetLoginURL builds the Meta OAuth login URL with Facebook Page scopes.
 func (s *FacebookOAuthService) GetLoginURL(state string) string {
+	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
+}
+
+// GetLoginURLWithOptions builds the Meta OAuth login URL with Facebook Page scopes.
+// Facebook does not use OAuthLoginOptions; options are ignored.
+func (s *FacebookOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
 	params.Set("client_id", s.base.cfg.MetaAppID)
 	params.Set("redirect_uri", s.redirectURI)
@@ -140,25 +146,28 @@ func (s *FacebookOAuthService) ValidateContent(payload models.PublishPayload) er
 }
 
 // DiscoverAccounts returns the Facebook Pages the user manages.
-// Required scope: pages_show_list. Each returned PlatformAccount
-// represents a single Page; PlatformUserID is the Page ID and
-// Username is the Page name. The Page Access Token is carried in
-// Metadata["page_access_token"] so the OAuth callback handler can
-// persist it in the credential vault.
-func (s *FacebookOAuthService) DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*models.PlatformAccount, error) {
+// Required scope: pages_show_list. Each returned DiscoveredAccount
+// represents a single Page; the Page Access Token is carried in
+// SupplementalTokens so the OAuth callback handler can persist it
+// in the credential vault without a provider-specific Metadata key.
+func (s *FacebookOAuthService) DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*DiscoveredAccount, error) {
 	pages, err := s.getPages(ctx, accessToken)
 	if err != nil {
 		return nil, fmt.Errorf("facebook pages lookup: %w", err)
 	}
-	accounts := make([]*models.PlatformAccount, 0, len(pages))
+	accounts := make([]*DiscoveredAccount, 0, len(pages))
 	for _, p := range pages {
-		accounts = append(accounts, &models.PlatformAccount{
-			Platform:       models.PlatformFacebook,
-			PlatformUserID: p.ID,
-			Username:       p.Name,
-			Metadata: models.Metadata{
-				"page_access_token": p.AccessToken,
+		accounts = append(accounts, &DiscoveredAccount{
+			Profile: models.PlatformProfile{
+				PlatformUserID: p.ID,
+				Username:       p.Name,
 			},
+			SupplementalTokens: []*models.TokenData{{
+				AccessToken: p.AccessToken,
+				TokenType:   models.TokenTypePageAccess,
+				ExpiresIn:   60 * 60 * 24 * 365 * 10, // 10 years (effectively never)
+				Scopes:      []string{"pages_manage_posts", "pages_read_engagement", "pages_show_list"},
+			}},
 		})
 	}
 	return accounts, nil

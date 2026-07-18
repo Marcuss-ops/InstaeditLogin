@@ -7,6 +7,7 @@ import { PrivacyPolicy } from "./pages/PrivacyPolicy";
 import { TermsOfService } from "./pages/TermsOfService";
 import { InternalDashboard } from "./pages/internal/Dashboard";
 import { InternalLinking } from "./pages/internal/Linking";
+import { AccountDetailsPage } from "./pages/internal/AccountDetails";
 import { InternalPosts } from "./pages/internal/Posts";
 import { InternalCompose } from "./pages/internal/Compose";
 import { CalendarPage } from "./pages/internal/Calendar";
@@ -78,6 +79,7 @@ function App() {
                   surface. */}
                 <Route path="uploads" element={<InternalUploads />} />
                 <Route path="linking" element={<InternalLinking />} />
+                <Route path="accounts/:accountId" element={<AccountDetailsPage />} />
                 <Route path="posts" element={<InternalPosts />} />
                 <Route path="compose" element={<InternalCompose />} />
                 <Route path="calendar" element={<CalendarPage />} />

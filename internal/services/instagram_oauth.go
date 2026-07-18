@@ -61,6 +61,12 @@ func (s *InstagramOAuthService) Name() string { return models.PlatformInstagram 
 //     to the user's Pages (a personal IG without a linked Page cannot
 //     be published to via the Graph API)
 func (s *InstagramOAuthService) GetLoginURL(state string) string {
+	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
+}
+
+// GetLoginURLWithOptions builds the Meta OAuth login URL with Instagram-specific
+// scopes. Instagram does not use OAuthLoginOptions; options are ignored.
+func (s *InstagramOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
 	params.Set("client_id", s.base.cfg.MetaAppID)
 	params.Set("redirect_uri", s.redirectURI)
@@ -150,17 +156,18 @@ func (s *InstagramOAuthService) ValidateContent(payload models.PublishPayload) e
 // (the IG business account id). The OAuth callback returns ONE Facebook
 // user; we expand that into N PlatformAccounts (one per linked IG business
 // account) here so the worker can later route by IG id.
-func (s *InstagramOAuthService) DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*models.PlatformAccount, error) {
+func (s *InstagramOAuthService) DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*DiscoveredAccount, error) {
 	igAccounts, err := s.discoverInstagramBusinessAccounts(ctx, accessToken)
 	if err != nil {
 		return nil, fmt.Errorf("instagram business account lookup: %w", err)
 	}
-	accounts := make([]*models.PlatformAccount, 0, len(igAccounts))
+	accounts := make([]*DiscoveredAccount, 0, len(igAccounts))
 	for _, ig := range igAccounts {
-		accounts = append(accounts, &models.PlatformAccount{
-			Platform:       models.PlatformInstagram,
-			PlatformUserID: ig.ID,
-			Username:       ig.Username,
+		accounts = append(accounts, &DiscoveredAccount{
+			Profile: models.PlatformProfile{
+				PlatformUserID: ig.ID,
+				Username:       ig.Username,
+			},
 		})
 	}
 	return accounts, nil

@@ -94,6 +94,9 @@ type mockDriveImporter struct {
 
 func (m *mockDriveImporter) Name() string                    { return "google-drive" }
 func (m *mockDriveImporter) GetLoginURL(state string) string { return "" }
+func (m *mockDriveImporter) GetLoginURLWithOptions(state string, _ services.OAuthLoginOptions) string {
+	return ""
+}
 func (m *mockDriveImporter) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	return nil, nil, fmt.Errorf("not implemented")
 }

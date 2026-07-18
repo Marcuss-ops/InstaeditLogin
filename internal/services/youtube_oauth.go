@@ -57,13 +57,33 @@ func (s *YouTubeOAuthService) now() time.Time {
 func (s *YouTubeOAuthService) Name() string { return models.PlatformYouTube }
 
 func (s *YouTubeOAuthService) GetLoginURL(state string) string {
+	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
+}
+
+func (s *YouTubeOAuthService) GetLoginURLWithOptions(state string, options OAuthLoginOptions) string {
 	params := url.Values{}
 	params.Set("client_id", s.cfg.YouTubeClientID)
 	params.Set("redirect_uri", s.cfg.YouTubeRedirectURI)
 	params.Set("state", state)
-	params.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/userinfo.profile")
+	params.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly openid email profile")
 	params.Set("response_type", "code")
 	params.Set("access_type", "offline")
+	params.Set("include_granted_scopes", "true")
+
+	if options.ForceConsent || options.SelectAccount {
+		var prompts []string
+		if options.SelectAccount {
+			prompts = append(prompts, "select_account")
+		}
+		if options.ForceConsent {
+			prompts = append(prompts, "consent")
+		}
+		params.Set("prompt", strings.Join(prompts, " "))
+	}
+
+	if options.LoginHint != "" {
+		params.Set("login_hint", options.LoginHint)
+	}
 
 	return "https://accounts.google.com/o/oauth2/v2/auth?" + params.Encode()
 }
@@ -536,6 +556,514 @@ func normalizeYouTubePrivacyLevel(level string) string {
 	return strings.ToLower(strings.TrimSpace(level))
 }
 
+// DiscoverAccounts returns the YouTube channels owned by the authenticated
+// Google account. Uses channels.list with mine=true to retrieve all channels
+// linked to the OAuth grant. Each channel becomes a distinct PlatformAccount
+// with the real YouTube channel ID (UC...) as PlatformUserID.
+func (s *YouTubeOAuthService) DiscoverAccounts(ctx context.Context, accessToken, _ string) ([]*DiscoveredAccount, error) {
+	const maxChannels = 500
+
+	params := url.Values{}
+	params.Set("part", "snippet,statistics,contentDetails,status,brandingSettings")
+	params.Set("mine", "true")
+	params.Set("maxResults", "50")
+
+	var allAccounts []*DiscoveredAccount
+	var pageToken string
+
+	for {
+		if pageToken != "" {
+			params.Set("pageToken", pageToken)
+		} else {
+			params.Del("pageToken")
+		}
+
+		reqURL := "https://www.googleapis.com/youtube/v3/channels?" + params.Encode()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create youtube channel request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("youtube channel discovery: %w", err)
+		}
+
+		var result youtubeChannelsResponse
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+			resp.Body.Close()
+			return nil, fmt.Errorf("youtube channel discovery returned %d: %s", resp.StatusCode, string(body))
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("decode youtube channels: %w", err)
+		}
+		resp.Body.Close()
+
+		for _, ch := range result.Items {
+			allAccounts = append(allAccounts, &DiscoveredAccount{
+				Profile: models.PlatformProfile{
+					PlatformUserID: ch.ID,
+					Username:       ch.Snippet.Title,
+				},
+				Metadata: models.Metadata{
+					"description":               ch.Snippet.Description,
+					"handle":                    ch.Snippet.CustomURL,
+					"avatar_url":                youtubeBestThumbnail(ch.Snippet.Thumbnails),
+					"uploads_playlist_id":       ch.ContentDetails.RelatedPlaylists.Uploads,
+					"country":                   ch.Snippet.Country,
+					"subscriber_count":          ch.Statistics.SubscriberCount,
+					"hidden_subscriber_count":   ch.Statistics.HiddenSubscriberCount,
+					"video_count":               ch.Statistics.VideoCount,
+					"view_count":                ch.Statistics.ViewCount,
+				},
+			})
+		}
+
+		if len(allAccounts) >= maxChannels {
+			break
+		}
+
+		if result.NextPageToken == "" {
+			break
+		}
+		pageToken = result.NextPageToken
+	}
+
+	if len(allAccounts) == 0 {
+		return nil, fmt.Errorf("the authenticated Google account has no YouTube channel")
+	}
+
+	return allAccounts, nil
+}
+
+// youtubeBestThumbnail selects the highest-resolution thumbnail from a
+// YouTube thumbnail set, falling back to default → medium → high.
+func youtubeBestThumbnail(thumbs *youtubeThumbnails) string {
+	if thumbs == nil {
+		return ""
+	}
+	if thumbs.Maxres != nil && thumbs.Maxres.URL != "" {
+		return thumbs.Maxres.URL
+	}
+	if thumbs.Standard != nil && thumbs.Standard.URL != "" {
+		return thumbs.Standard.URL
+	}
+	if thumbs.High != nil && thumbs.High.URL != "" {
+		return thumbs.High.URL
+	}
+	if thumbs.Medium != nil && thumbs.Medium.URL != "" {
+		return thumbs.Medium.URL
+	}
+	if thumbs.Default != nil && thumbs.Default.URL != "" {
+		return thumbs.Default.URL
+	}
+	return ""
+}
+
+// GetAccountDetails fetches the current state of a YouTube channel via
+// channels.list with id=<platformUserID>. Returns rich account details
+// including statistics, branding, and upload playlist ID.
+func (s *YouTubeOAuthService) GetAccountDetails(ctx context.Context, accessToken, platformUserID string) (*models.AccountDetails, error) {
+	reqURL := "https://www.googleapis.com/youtube/v3/channels" +
+		"?part=snippet,statistics,contentDetails,status,brandingSettings" +
+		"&id=" + url.QueryEscape(platformUserID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create youtube channel details request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("youtube channel details: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return nil, fmt.Errorf("youtube channel details returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result youtubeChannelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode youtube channel details: %w", err)
+	}
+
+	if len(result.Items) == 0 {
+		return nil, fmt.Errorf("youtube channel %s not found", platformUserID)
+	}
+
+	ch := result.Items[0]
+	now := s.now()
+
+	details := &models.AccountDetails{
+		ResourceType: "channel",
+		ExternalID:   ch.ID,
+		DisplayName:  ch.Snippet.Title,
+		Description:  ch.Snippet.Description,
+		Handle:       ch.Snippet.CustomURL,
+		AvatarURL:    youtubeBestThumbnail(ch.Snippet.Thumbnails),
+		PublicURL:    "https://www.youtube.com/channel/" + ch.ID,
+		FetchedAt:    now,
+		Metrics: []models.AccountMetric{
+			{
+				Key:          "subscribers",
+				Label:        "Subscribers",
+				Value:        ch.Statistics.SubscriberCount,
+				DisplayValue: formatCount(ch.Statistics.SubscriberCount),
+			},
+			{
+				Key:          "views",
+				Label:        "Views",
+				Value:        ch.Statistics.ViewCount,
+				DisplayValue: formatCount(ch.Statistics.ViewCount),
+			},
+			{
+				Key:          "videos",
+				Label:        "Videos",
+				Value:        ch.Statistics.VideoCount,
+				DisplayValue: formatCount(ch.Statistics.VideoCount),
+			},
+		},
+	}
+
+	// Banner URL from branding settings.
+	if ch.BrandingSettings.Image != nil {
+		details.BannerURL = ch.BrandingSettings.Image.BannerImageUrl
+	}
+
+	// Platform-specific properties.
+	details.Properties = map[string]any{
+		"country":                  ch.Snippet.Country,
+		"uploads_playlist_id":      ch.ContentDetails.RelatedPlaylists.Uploads,
+		"hidden_subscriber_count":  ch.Statistics.HiddenSubscriberCount,
+	}
+
+	return details, nil
+}
+
+// ListAccountContent returns recent videos from a YouTube channel by
+// reading the channel's uploads playlist and then fetching video
+// details. Pagination is supported via the cursor (nextPageToken).
+func (s *YouTubeOAuthService) ListAccountContent(ctx context.Context, accessToken, platformUserID string, cursor string, limit int) (*models.AccountContentPage, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+
+	// Step 1: Get the uploads playlist ID for this channel.
+	uploadsPlaylist, err := s.getUploadsPlaylistID(ctx, accessToken, platformUserID)
+	if err != nil {
+		return nil, fmt.Errorf("get uploads playlist: %w", err)
+	}
+
+	// Step 2: List recent items from the uploads playlist.
+	videoIDs, nextPageToken, err := s.listPlaylistItems(ctx, accessToken, uploadsPlaylist, cursor, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list playlist items: %w", err)
+	}
+
+	if len(videoIDs) == 0 {
+		return &models.AccountContentPage{Items: []models.AccountContentItem{}}, nil
+	}
+
+	// Step 3: Fetch video details (snippet, statistics, contentDetails, status).
+	items, err := s.getVideoDetails(ctx, accessToken, videoIDs)
+	if err != nil {
+		return nil, fmt.Errorf("get video details: %w", err)
+	}
+
+	return &models.AccountContentPage{
+		Items:      items,
+		NextCursor: nextPageToken,
+	}, nil
+}
+
+func (s *YouTubeOAuthService) getUploadsPlaylistID(ctx context.Context, accessToken, channelID string) (string, error) {
+	reqURL := "https://www.googleapis.com/youtube/v3/channels" +
+		"?part=contentDetails" +
+		"&id=" + url.QueryEscape(channelID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return "", fmt.Errorf("channels.list returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result youtubeChannelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+
+	if len(result.Items) == 0 {
+		return "", fmt.Errorf("channel %s not found", channelID)
+	}
+
+	return result.Items[0].ContentDetails.RelatedPlaylists.Uploads, nil
+}
+
+func (s *YouTubeOAuthService) listPlaylistItems(ctx context.Context, accessToken, playlistID, pageToken string, maxResults int) (videoIDs []string, nextPage string, err error) {
+	params := url.Values{}
+	params.Set("part", "snippet,contentDetails")
+	params.Set("playlistId", playlistID)
+	params.Set("maxResults", fmt.Sprintf("%d", maxResults))
+	if pageToken != "" {
+		params.Set("pageToken", pageToken)
+	}
+
+	reqURL := "https://www.googleapis.com/youtube/v3/playlistItems?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return nil, "", fmt.Errorf("playlistItems.list returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result youtubePlaylistItemsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", err
+	}
+
+	ids := make([]string, 0, len(result.Items))
+	for _, item := range result.Items {
+		if item.ContentDetails.VideoID != "" {
+			ids = append(ids, item.ContentDetails.VideoID)
+		}
+	}
+
+	return ids, result.NextPageToken, nil
+}
+
+func (s *YouTubeOAuthService) getVideoDetails(ctx context.Context, accessToken string, videoIDs []string) ([]models.AccountContentItem, error) {
+	params := url.Values{}
+	params.Set("part", "snippet,statistics,contentDetails,status")
+	params.Set("id", strings.Join(videoIDs, ","))
+
+	reqURL := "https://www.googleapis.com/youtube/v3/videos?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return nil, fmt.Errorf("videos.list returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result youtubeVideosResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	items := make([]models.AccountContentItem, 0, len(result.Items))
+	for _, v := range result.Items {
+		item := models.AccountContentItem{
+			ExternalID:   v.ID,
+			Title:        v.Snippet.Title,
+			Description:  v.Snippet.Description,
+			ThumbnailURL: youtubeBestThumbnail(v.Snippet.Thumbnails),
+			PublicURL:    "https://www.youtube.com/watch?v=" + v.ID,
+			Privacy:      v.Status.PrivacyStatus,
+			Status:       v.Status.UploadStatus,
+			Metrics: []models.AccountMetric{
+				{
+					Key:          "views",
+					Label:        "Views",
+					Value:        v.Statistics.ViewCount,
+					DisplayValue: formatCount(v.Statistics.ViewCount),
+				},
+				{
+					Key:          "likes",
+					Label:        "Likes",
+					Value:        v.Statistics.LikeCount,
+					DisplayValue: formatCount(v.Statistics.LikeCount),
+				},
+				{
+					Key:          "comments",
+					Label:        "Comments",
+					Value:        v.Statistics.CommentCount,
+					DisplayValue: formatCount(v.Statistics.CommentCount),
+				},
+			},
+		}
+
+		if v.Snippet.PublishedAt != "" {
+			if t, err := time.Parse(time.RFC3339, v.Snippet.PublishedAt); err == nil {
+				item.PublishedAt = &t
+			}
+		}
+
+		item.Properties = map[string]any{
+			"duration": v.ContentDetails.Duration,
+		}
+
+		items = append(items, item)
+	}
+
+	return items, nil
+}
+
+// formatCount returns a human-readable count string (e.g. "125K", "1.2M").
+func formatCount(n int64) string {
+	switch {
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.1fB", float64(n)/1_000_000_000)
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+// --- YouTube Data API v3 response types ---
+
+type youtubeChannelsResponse struct {
+	Items         []youtubeChannel `json:"items"`
+	NextPageToken string           `json:"nextPageToken"`
+	PageInfo      youtubePageInfo  `json:"pageInfo"`
+}
+
+type youtubePageInfo struct {
+	TotalResults   int `json:"totalResults"`
+	ResultsPerPage int `json:"resultsPerPage"`
+}
+
+type youtubeChannel struct {
+	ID              string                `json:"id"`
+	Snippet         youtubeChannelSnippet `json:"snippet"`
+	Statistics      youtubeStatistics     `json:"statistics"`
+	ContentDetails  youtubeContentDetails `json:"contentDetails"`
+	BrandingSettings youtubeBranding      `json:"brandingSettings"`
+}
+
+type youtubeChannelSnippet struct {
+	Title       string            `json:"title"`
+	Description string            `json:"description"`
+	CustomURL   string            `json:"customUrl"`
+	Country     string            `json:"country"`
+	Thumbnails  *youtubeThumbnails `json:"thumbnails"`
+}
+
+type youtubeStatistics struct {
+	SubscriberCount      int64 `json:"subscriberCount"`
+	HiddenSubscriberCount bool  `json:"hiddenSubscriberCount"`
+	ViewCount            int64 `json:"viewCount"`
+	VideoCount           int64 `json:"videoCount"`
+}
+
+type youtubeContentDetails struct {
+	RelatedPlaylists youtubeRelatedPlaylists `json:"relatedPlaylists"`
+}
+
+type youtubeRelatedPlaylists struct {
+	Uploads string `json:"uploads"`
+}
+
+type youtubeBranding struct {
+	Image *youtubeBrandingImage `json:"image"`
+}
+
+type youtubeBrandingImage struct {
+	BannerExternalURL string `json:"bannerExternalUrl"`
+	BannerImageUrl    string `json:"bannerImageUrl"`
+	BannerMobileExtra  string `json:"bannerMobileExtraDevicesImageUrl"`
+}
+
+type youtubeThumbnails struct {
+	Default  *youtubeThumbnail `json:"default"`
+	Medium   *youtubeThumbnail `json:"medium"`
+	High     *youtubeThumbnail `json:"high"`
+	Standard *youtubeThumbnail `json:"standard"`
+	Maxres   *youtubeThumbnail `json:"maxres"`
+}
+
+type youtubeThumbnail struct {
+	URL    string `json:"url"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+type youtubePlaylistItemsResponse struct {
+	Items          []youtubePlaylistItem `json:"items"`
+	NextPageToken  string                `json:"nextPageToken"`
+}
+
+type youtubePlaylistItem struct {
+	ContentDetails youtubePlaylistItemContentDetails `json:"contentDetails"`
+}
+
+type youtubePlaylistItemContentDetails struct {
+	VideoID string `json:"videoId"`
+}
+
+type youtubeVideosResponse struct {
+	Items []youtubeVideo `json:"items"`
+}
+
+type youtubeVideo struct {
+	ID             string              `json:"id"`
+	Snippet        youtubeVideoSnippet `json:"snippet"`
+	Statistics     youtubeVideoStats   `json:"statistics"`
+	ContentDetails youtubeVideoContent `json:"contentDetails"`
+	Status         youtubeVideoStatus  `json:"status"`
+}
+
+type youtubeVideoSnippet struct {
+	Title       string            `json:"title"`
+	Description string            `json:"description"`
+	PublishedAt string            `json:"publishedAt"`
+	Thumbnails  *youtubeThumbnails `json:"thumbnails"`
+}
+
+type youtubeVideoStats struct {
+	ViewCount    int64 `json:"viewCount"`
+	LikeCount    int64 `json:"likeCount"`
+	CommentCount int64 `json:"commentCount"`
+}
+
+type youtubeVideoContent struct {
+	Duration string `json:"duration"`
+}
+
+type youtubeVideoStatus struct {
+	PrivacyStatus string `json:"privacyStatus"`
+	UploadStatus  string `json:"uploadStatus"`
+}
+
 // --- Private ---
 
 type youtubeTokenResponse struct {
@@ -621,7 +1149,10 @@ func (s *YouTubeOAuthService) getUserInfo(ctx context.Context, accessToken strin
 // Taglio 4.3.
 // -----------------------------------------------------------------------------
 var (
-	_ OAuthProvider    = (*YouTubeOAuthService)(nil)
-	_ ContentValidator = (*YouTubeOAuthService)(nil)
-	_ Publisher        = (*YouTubeOAuthService)(nil)
+	_ OAuthProvider         = (*YouTubeOAuthService)(nil)
+	_ ContentValidator      = (*YouTubeOAuthService)(nil)
+	_ Publisher             = (*YouTubeOAuthService)(nil)
+	_ AccountDiscoverer     = (*YouTubeOAuthService)(nil)
+	_ AccountDetailsProvider = (*YouTubeOAuthService)(nil)
+	_ AccountContentProvider = (*YouTubeOAuthService)(nil)
 )

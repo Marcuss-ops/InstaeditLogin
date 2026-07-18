@@ -88,6 +88,9 @@ type mockProvider struct {
 func (m *mockProvider) GetLoginURL(state string) string {
 	panic("GetLoginURL not used in worker tests")
 }
+func (m *mockProvider) GetLoginURLWithOptions(state string, _ services.OAuthLoginOptions) string {
+	panic("GetLoginURLWithOptions not used in worker tests")
+}
 func (m *mockProvider) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	panic("HandleCallback not used in worker tests")
 }
@@ -130,6 +133,9 @@ type mockAsyncProvider struct {
 
 func (m *mockAsyncProvider) GetLoginURL(state string) string {
 	panic("GetLoginURL not used in worker tests")
+}
+func (m *mockAsyncProvider) GetLoginURLWithOptions(state string, _ services.OAuthLoginOptions) string {
+	panic("GetLoginURLWithOptions not used in worker tests")
 }
 func (m *mockAsyncProvider) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 	panic("HandleCallback not used in worker tests")

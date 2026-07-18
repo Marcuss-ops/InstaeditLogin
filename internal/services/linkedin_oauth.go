@@ -61,6 +61,10 @@ func (s *LinkedInOAuthService) now() time.Time {
 func (s *LinkedInOAuthService) Name() string { return models.PlatformLinkedIn }
 
 func (s *LinkedInOAuthService) GetLoginURL(state string) string {
+	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
+}
+
+func (s *LinkedInOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
 	params.Set("response_type", "code")
 	params.Set("client_id", s.cfg.LinkedInClientID())

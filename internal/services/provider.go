@@ -268,6 +268,8 @@ type capabilities struct {
 	publish  Publisher
 	async    AsyncPublisher
 	discover AccountDiscoverer
+	details  AccountDetailsProvider
+	content  AccountContentProvider
 }
 
 // NewCapabilityRouter creates an empty router.
@@ -275,6 +277,28 @@ func NewCapabilityRouter() *CapabilityRouter {
 	return &CapabilityRouter{
 		providers: make(map[string]*capabilities),
 	}
+}
+
+// DiscoveredAccount is the canonical return type from AccountDiscoverer.
+// It generalizes the Facebook-Pages-specific contract so every provider
+// (YouTube channels, Instagram business accounts, TikTok accounts, etc.)
+// can return 0..N accounts from a single OAuth grant with a uniform shape.
+//
+//   - Profile carries the identity fields needed to create or re-link a
+//     platform_accounts row (PlatformUserID + Username).
+//   - Metadata carries platform-specific stable identity data (handle,
+//     avatar_url, uploads_playlist_id, country, etc.) that is persisted
+//     on the platform_accounts row in the JSONB metadata column.
+//   - SupplementalTokens carries additional tokens the provider needs
+//     persisted beyond the root OAuth token. Facebook Pages use this for
+//     the per-Page Page Access Token. YouTube channels carry none (the
+//     root bearer token is shared). Providers that don't need supplemental
+//     tokens leave the slice nil or empty — the OAuth callback handler
+//     skips them with zero overhead.
+type DiscoveredAccount struct {
+	Profile            models.PlatformProfile
+	Metadata           models.Metadata
+	SupplementalTokens []*models.TokenData
 }
 
 // AccountDiscoverer is implemented by providers that can enumerate
@@ -287,7 +311,7 @@ type AccountDiscoverer interface {
 	NameProvider
 	// DiscoverAccounts returns the platform accounts the user manages
 	// given a valid access token and the user's platform-scoped id.
-	DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*models.PlatformAccount, error)
+	DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*DiscoveredAccount, error)
 }
 
 // Register stores p under name, type-asserting each capability it
@@ -309,6 +333,12 @@ func (r *CapabilityRouter) Register(name string, p any) {
 	}
 	if d, ok := p.(AccountDiscoverer); ok {
 		entry.discover = d
+	}
+	if dp, ok := p.(AccountDetailsProvider); ok {
+		entry.details = dp
+	}
+	if cp, ok := p.(AccountContentProvider); ok {
+		entry.content = cp
 	}
 	r.providers[name] = entry
 }
@@ -378,6 +408,26 @@ func (r *CapabilityRouter) AsyncPublisher(name string) (AsyncPublisher, bool) {
 		return nil, false
 	}
 	return e.async, true
+}
+
+// AccountDetails returns the AccountDetailsProvider for name, or false.
+// Used by GET /api/v1/accounts/{id} to fetch rich account details.
+func (r *CapabilityRouter) AccountDetails(name string) (AccountDetailsProvider, bool) {
+	e, ok := r.providers[name]
+	if !ok || e == nil || e.details == nil {
+		return nil, false
+	}
+	return e.details, true
+}
+
+// AccountContent returns the AccountContentProvider for name, or false.
+// Used by GET /api/v1/accounts/{id}/content to list content items.
+func (r *CapabilityRouter) AccountContent(name string) (AccountContentProvider, bool) {
+	e, ok := r.providers[name]
+	if !ok || e == nil || e.content == nil {
+		return nil, false
+	}
+	return e.content, true
 }
 
 // Names returns the list of registered platform names. The order is

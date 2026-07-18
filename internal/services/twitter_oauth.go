@@ -59,6 +59,10 @@ func (s *TwitterOAuthService) now() time.Time {
 func (s *TwitterOAuthService) Name() string { return models.PlatformTwitter }
 
 func (s *TwitterOAuthService) GetLoginURL(state string) string {
+	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
+}
+
+func (s *TwitterOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	verifierBytes := make([]byte, 64)
 	var verifier string
 	if _, err := rand.Read(verifierBytes); err != nil {

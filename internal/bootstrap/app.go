@@ -100,6 +100,16 @@ type App struct {
 	// re-constructing the service in RunWorkers — the same instance
 	// is shared across the api and worker processes.
 	SessionsSvc *services.SessionsService
+
+	// OneTimeCodes is the in-memory OAuth-callback bridge store (Taglio
+	// 1.2). cmd/api consumes it via the router's WithOneTimeCodeStore
+	// option (redirect/exchange handlers); cmd/worker's RunWorkers
+	// calls OneTimeCodes.Stop() during graceful shutdown so the
+	// background sweep goroutine exits cleanly. Without this
+	// wiring, SIGTERM would let the sweeper become a zombie until
+	// the process is killed — the user's E8 fix ships this
+	// drop-in alignment with the other 7 workers.
+	OneTimeCodes *api.OneTimeCodeStore
 }
 
 // Wire connects to the database, builds every shared dependency, and
@@ -192,10 +202,14 @@ func Wire(ctx context.Context) (*App, error) {
 
 	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours).WithEnv(cfg.AppEnv)
 	oneTimeCodes := api.NewOneTimeCodeStore(60 * time.Second)
-	// oneTimeCodes ticker terminates with the process — no explicit
-	// Stop() needed. The original cmd/server/main.go did `defer
-	// oneTimeCodes.Stop()` as defensive cleanup; we drop that here
-	// because process termination collects the ticker anyway.
+	// oneTimeCodes sweeper is gracefully stopped by RunWorkers (E8
+	// fix — the cmd/worker shutdown handler now calls
+	// OneTimeCodes.Stop() as the 8th goroutine drain step). cmd/api
+	// (HTTP-only binary) does not run RunWorkers, so the sweeper
+	// is collected at process termination there. Exposing the
+	// store on App avoids re-constructing it in RunWorkers —
+	// the same instance is shared across api + worker processes
+	// when cmd/server bundles both.
 
 	corsOrigins := cfg.AllowedCORSOrigins
 	if len(corsOrigins) == 0 && cfg.FrontendURL != "" {
@@ -258,6 +272,7 @@ func Wire(ctx context.Context) (*App, error) {
 		// ADMIN_INVITE_TOKEN gates public registration. If the env
 		// is unset, registration is disabled (handler returns 403).
 		api.WithAdminInviteToken(cfg.AdminInviteToken),
+		api.WithSnapshotStore(repository.NewSnapshotRepository(db)),
 	}
 	// Blocco #5.3 — Sentry init (lazy). The user contract is
 	// "SENTRY_DSN empty == no init; non-empty == CaptureException
@@ -337,6 +352,7 @@ func Wire(ctx context.Context) (*App, error) {
 		MemoryLimiter:   memoryLimiter,
 		StorageProvider: storageProvider,
 		SessionsSvc:     sessionsSvc,
+		OneTimeCodes:    oneTimeCodes,
 	}, nil
 }
 
@@ -530,6 +546,20 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		}
 	}
 	slog.Info("all background goroutines drained")
+
+	// E8 — graceful-shutdown wiring for the OneTimeCodeStore sweeper.
+	// Stop() is idempotent (sync.Once inside) and closes the stop
+	// channel that sweepLoop selects on; the goroutine returns on
+	// its next tick boundary (≤1s by the sweeper's cadence). No 15s
+	// timeout is needed because Stop() is a synchronous signal.
+	// When cmd/api runs WITHOUT RunWorkers (HTTP-only binary),
+	// this path is skipped — process termination collects the
+	// sweeper.
+	if a.OneTimeCodes != nil {
+		a.OneTimeCodes.Stop()
+		slog.Info("OneTimeCodeStore sweeper stopped")
+	}
+
 	return nil
 }
 

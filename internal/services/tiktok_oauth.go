@@ -102,6 +102,10 @@ func truncateForLog(s string, maxLen int) string {
 }
 
 func (s *TikTokOAuthService) GetLoginURL(state string) string {
+	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
+}
+
+func (s *TikTokOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
 	params.Set("client_key", s.cfg.TikTokClientID)
 	params.Set("redirect_uri", s.cfg.TikTokRedirectURI)

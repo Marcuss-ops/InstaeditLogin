@@ -68,6 +68,12 @@ func (s *ThreadsOAuthService) Name() string { return models.PlatformThreads }
 // Threads uses its own OAuth authorization endpoint (threads.net), while
 // still authenticating with the shared Meta App credentials.
 func (s *ThreadsOAuthService) GetLoginURL(state string) string {
+	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
+}
+
+// GetLoginURLWithOptions builds the Threads OAuth login URL with Threads scopes.
+// Threads does not use OAuthLoginOptions; options are ignored.
+func (s *ThreadsOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
 	params.Set("client_id", s.base.cfg.MetaAppID)
 	params.Set("redirect_uri", s.redirectURI)

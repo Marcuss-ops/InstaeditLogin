@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   Link2,
   RefreshCw,
@@ -18,7 +18,9 @@ import { DriveBatchImportDialog } from "./DriveBatchImportDialog";
 type PlatformAccount = {
   id: number;
   platform: ProviderId;
+  platform_user_id: string;
   username: string;
+  status: string;
   created_at: string;
 };
 
@@ -219,9 +221,10 @@ export function InternalLinking() {
                         {isConnected ? (
                           <div className="space-y-2">
                             {accounts.map((account) => (
-                              <div
+                              <Link
                                 key={account.id}
-                                className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white/[0.04] border border-white/[0.08]"
+                                to={`/app/accounts/${account.id}`}
+                                className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] transition-colors no-underline"
                               >
                                 <div className="flex items-center gap-3 min-w-0">
                                   <div className="w-8 h-8 rounded-full bg-gradient-to-br flex items-center justify-center text-white shrink-0 text-[11px] font-bold">
@@ -236,15 +239,11 @@ export function InternalLinking() {
                                     </p>
                                   </div>
                                 </div>
-                                <a
-                                  href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="inline-flex items-center justify-center p-2 rounded-lg bg-white/[0.06] text-[#9aa0aa] hover:bg-white/[0.10] hover:text-white transition-colors"
-                                  title="Reconnect account"
-                                >
-                                  <RefreshCw size={14} />
-                                </a>
-                              </div>
+                                <RefreshCw
+                                  size={14}
+                                  className="text-[#9aa0aa] shrink-0"
+                                />
+                              </Link>
                             ))}
                             <a
                               href={`${API_BASE_URL}/api/v1/auth/${provider.id}/login`}

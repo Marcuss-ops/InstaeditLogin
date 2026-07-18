@@ -99,6 +99,11 @@ type Router struct {
 	authEmailSvc     AuthEmailStore
 	teamStore        TeamStore
 	billingSvc       BillingServiceAPI
+	// groupStore backs /api/v1/groups/* (TAGLIO X.Y). Optional —
+	// mirrors the WorkspaceStore / PostStore nil-guard pattern: if
+	// not wired, every handler returns 501 Not Implemented. Wired
+	// in internal/bootstrap/app.go via api.WithGroupStore(repo).
+	groupStore GroupStore
 	// userAndWorkspaceHelper resolves a user's active workspace during
 	// OAuth callback / exchange (and switch endpoint). Wired in
 	// cmd/server/main.go via WithUserWorkspaceHelper(); defaults to nil
@@ -158,6 +163,13 @@ type Router struct {
 	// authenticated Google Drive imports). When nil, the async
 	// drive-import endpoint returns 501.
 	uploadJobStore UploadJobStore
+
+	// snapshotStore caches remote resource data (channel stats,
+	// profile, branding) so the frontend doesn't trigger a provider
+	// API call on every render. Wired via WithSnapshotStore;
+	// when nil, GET /accounts/{id} returns the base 6-field shape
+	// (no resource details) and /accounts/{id}/sync returns 501.
+	snapshotStore SnapshotStore
 
 	// Blocco #5.3 — Sentry hub + /ready wiring.
 	// sentryHub is nil when SENTRY_DSN is unset (operator-disables-
@@ -268,6 +280,34 @@ type PostStore interface {
 	CancelPost(id int64) error
 	RetryPost(id int64) error
 	RetryTarget(id int64) error
+}
+
+// GroupStore mirrors the subset of repository.GroupRepository that
+// the /api/v1/groups handlers need. Same pattern as WorkspaceStore /
+// PostStore: interface is local to pkg/api so test fixtures can supply
+// an in-memory fake. Production wiring in internal/bootstrap/app.go
+// passes *repository.GroupRepository which satisfies this contract.
+//
+// ValidateAccountOwnership takes (userID, workspaceID) so the API
+// layer can defend against the rare "user owns this account in a
+// DIFFERENT workspace" cross-attach attempt — defence-in-depth on top
+// of the SQL FK chain.
+type GroupStore interface {
+	Create(g *models.Group) error
+	FindByID(id int64) (*models.Group, error)
+	Update(g *models.Group) error
+	Delete(id int64) error
+	ListByWorkspace(workspaceID int64) ([]models.Group, error)
+	ListAccountsInGroup(groupID int64) ([]int64, error)
+	// ValidateAccountOwnership returns the subset of supplied
+	// accountIDs that are visible to (userID, workspaceID). The
+	// PUT /api/v1/groups/{id}/accounts handler intersects the
+	// caller-supplied list against this before SetAccounts so a
+	// hostile payload cannot attach an account the caller does not
+	// own to a foreign group. Empty slice + nil error when none
+	// of the supplied ids belong to the caller.
+	ValidateAccountOwnership(userID, workspaceID int64, accountIDs []int64) ([]int64, error)
+	SetAccounts(groupID int64, accountIDs []int64) error
 }
 
 // ApiKeyStore mirrors the subset of repository.ApiKeyRepository that
@@ -463,6 +503,16 @@ func WithTeamStore(s TeamStore) RouterOption {
 	return func(r *Router) { r.teamStore = s }
 }
 
+// WithGroupStore wires the hierarchical-groups repository used by
+// /api/v1/groups/* endpoints (TAGLIO X.Y). When nil, every handler
+// in pkg/api/groups.go returns 501 Not Implemented (matches the
+// postStore / workspaceStore / billingSvc feature-flag nil-guard
+// pattern). Production wiring in internal/bootstrap/app.go passes
+// repository.NewGroupRepository(db).
+func WithGroupStore(s GroupStore) RouterOption {
+	return func(r *Router) { r.groupStore = s }
+}
+
 // WithBillingService injects the Stripe billing service for checkout,
 // customer portal, and webhook handling. When not set, /api/v1/billing/*
 // endpoints return 501 Not Implemented.
@@ -554,6 +604,24 @@ func WithWebhookStore(s WebhookStore) RouterOption {
 func WithUploadJobStore(s UploadJobStore) RouterOption {
 	return func(r *Router) { r.uploadJobStore = s }
 }
+
+// SnapshotStore is the persistence contract for
+// account_resource_snapshots. Defined inline to keep pkg/api off
+// internal/repository imports; main.go injects
+// *repository.SnapshotRepository which satisfies this interface.
+type SnapshotStore interface {
+	GetSnapshot(platformAccountID int64) (*repository.AccountResourceSnapshot, error)
+	UpsertSnapshot(snap *repository.AccountResourceSnapshot) error
+	IsSnapshotStale(platformAccountID int64, maxAge time.Duration) (bool, error)
+}
+
+// WithSnapshotStore wires the account resource snapshot cache. When
+// nil, GET /accounts/{id} returns the base 6-field shape and
+// /accounts/{id}/sync returns 501.
+func WithSnapshotStore(s SnapshotStore) RouterOption {
+	return func(r *Router) { r.snapshotStore = s }
+}
+
 func NewRouter(
 	capRouter *services.CapabilityRouter,
 	userRepo UserStore,
@@ -645,6 +713,8 @@ func (r *Router) Setup() http.Handler {
 	r.mux.Method(http.MethodPost, "/api/v1/accounts/{id}/validate", r.protected(r.handleValidateAccount))
 	r.mux.Method(http.MethodPost, "/api/v1/accounts/{id}/reconnect", r.protected(r.handleReconnectAccount))
 	r.mux.Method(http.MethodDelete, "/api/v1/accounts/{id}", r.protected(r.handleDeleteAccount))
+	r.mux.Method(http.MethodPost, "/api/v1/accounts/{id}/sync", r.protected(r.handleSyncAccount))
+	r.mux.Method(http.MethodGet, "/api/v1/accounts/{id}/content", r.protected(r.handleAccountContent))
 	r.mux.Method(http.MethodGet, "/api/v1/metrics", http.HandlerFunc(r.handleMetrics))
 	// Taglio 3.2: the old /api/v1/storage/upload-url endpoint is
 	// replaced by /api/v1/media/presign (see pkg/api/media.go). The
@@ -711,6 +781,28 @@ func (r *Router) Setup() http.Handler {
 		// the new ws claim and sets a fresh HttpOnly session cookie.
 		sr.Post("/{id}/switch", r.protected(r.handleSwitchWorkspace))
 	})
+
+	// TAGLIO X.Y — hierarchical groups for organizing connected
+	// platform accounts. The sub-router is registered behind a
+	// feature-flag nil-guard so a server that hasn't wired
+	// WithGroupStore (yet) returns 501 instead of crashing. Every
+	// handler enforces workspace ownership via
+	// requireWorkspaceOwnership → JWT-deposited userID, so the
+	// tenant boundary mirrors /api/v1/workspaces/*.
+	if r.groupStore != nil {
+		r.mux.Route("/api/v1/groups", func(sr chi.Router) {
+			// Mount list/create BEFORE the parameterised {id}
+			// routes so the order reads top-down: list → create
+			// → by-id → accounts.
+			sr.Get("/", r.protected(r.handleListGroups))
+			sr.Post("/", r.protected(r.handleCreateGroup))
+			sr.Get("/{id}", r.protected(r.handleGetGroup))
+			sr.Patch("/{id}", r.protected(r.handleUpdateGroup))
+			sr.Delete("/{id}", r.protected(r.handleDeleteGroup))
+			sr.Get("/{id}/accounts", r.protected(r.handleListGroupAccounts))
+			sr.Put("/{id}/accounts", r.protected(r.handleSetGroupAccounts))
+		})
+	}
 	r.mux.Route("/api/v1/posts", func(sr chi.Router) {
 		// SPRINT 2.2: per-workspace POST budget (60/min/workspace,
 		// Postgres-backed). Outer to the auth-protected handler so
@@ -832,7 +924,21 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to start oauth flow")
 		return
 	}
-	http.Redirect(w, req, p.GetLoginURL(state), http.StatusFound)
+
+	// Translate ?mode=add|reconnect into OAuthLoginOptions.
+	// "add" forces account selection (Google account picker).
+	// "reconnect" forces consent re-approval.
+	mode := req.URL.Query().Get("mode")
+	var options services.OAuthLoginOptions
+	switch mode {
+	case "add":
+		options.SelectAccount = true
+		options.ForceConsent = true
+	case "reconnect":
+		options.ForceConsent = true
+	}
+
+	http.Redirect(w, req, p.GetLoginURLWithOptions(state, options), http.StatusFound)
 }
 
 func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
@@ -933,11 +1039,26 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 }
 
 // attachDiscoveredAccounts is used by handleCallback for providers that
-// expose AccountDiscoverer (Facebook Pages). It creates one
-// PlatformAccount per discovered account and persists the matching
-// access token. For Facebook, the Page Access Token is stored as
-// models.TokenTypePageAccess so the publish worker can retrieve it
-// later.
+// expose AccountDiscoverer (Facebook Pages, YouTube Channels). It creates
+// one PlatformAccount per discovered account and persists tokens.
+//
+// Token strategy per provider:
+//   - YouTube: every discovered channel receives the root OAuth bearer
+//     token (the same token is shared across all channels from one grant).
+//     SupplementalTokens is nil/empty for YouTube.
+//   - Facebook Pages: each Page carries a SupplementalToken
+//     (TokenTypePageAccess) with the per-Page Page Access Token, plus the
+//     root long-lived user token stored as TokenTypeLongLived on every
+//     discovered page (so refresh can re-exchange from any page).
+//
+// The generalized flow:
+//  1. Discover accounts via the provider's DiscoverAccounts.
+//  2. For each DiscoveredAccount, AttachPlatformAccount (idempotent).
+//  3. Save metadata from DiscoveredAccount.Metadata on the account row.
+//  4. Save the root token on every discovered account.
+//  5. Save every DiscoveredAccount.SupplementalTokens entry as an
+//     additional token in the vault. This replaces the old provider-
+//     specific hack that checked for Metadata["page_access_token"].
 func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, provider string, discoverer services.AccountDiscoverer, tokenData *models.TokenData) (*models.PlatformAccount, error) {
 	accounts, err := discoverer.DiscoverAccounts(ctx, tokenData.AccessToken, "")
 	if err != nil {
@@ -950,15 +1071,15 @@ func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, pro
 	var first *models.PlatformAccount
 	for _, acc := range accounts {
 		profile := &models.PlatformProfile{
-			PlatformUserID: acc.PlatformUserID,
-			Username:       acc.Username,
+			PlatformUserID: acc.Profile.PlatformUserID,
+			Username:       acc.Profile.Username,
 		}
 		created, err := r.userRepo.AttachPlatformAccount(userID, profile, provider)
 		if err != nil {
 			if errors.Is(err, repository.ErrAccountAlreadyLinked) {
 				// Already linked to this user — load the existing row so
 				// we can update its token below.
-				existing, findErr := r.userRepo.FindPlatformAccount(provider, acc.PlatformUserID)
+				existing, findErr := r.userRepo.FindPlatformAccount(provider, acc.Profile.PlatformUserID)
 				if findErr != nil {
 					return nil, fmt.Errorf("find existing account: %w", findErr)
 				}
@@ -967,7 +1088,7 @@ func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, pro
 				}
 				created = existing
 			} else {
-				return nil, fmt.Errorf("attach account %s: %w", acc.PlatformUserID, err)
+				return nil, fmt.Errorf("attach account %s: %w", acc.Profile.PlatformUserID, err)
 			}
 		}
 
@@ -975,31 +1096,36 @@ func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, pro
 			first = created
 		}
 
-		// Persist the Page Access Token. Facebook Page Access Tokens
-		// do not expire unless the grant is revoked, so we store them
-		// with a far-future expiry to satisfy the vault's non-null
-		// ExpiresAt expectation.
-		pageAccessToken, ok := acc.Metadata["page_access_token"].(string)
-		if !ok || pageAccessToken == "" {
-			return nil, fmt.Errorf("missing page_access_token for account %s", acc.PlatformUserID)
-		}
-		pageToken := &models.TokenData{
-			AccessToken: pageAccessToken,
-			TokenType:   models.TokenTypePageAccess,
-			ExpiresIn:   60 * 60 * 24 * 365 * 10, // 10 years (effectively never)
-			Scopes:      []string{"pages_manage_posts", "pages_read_engagement", "pages_show_list"},
-		}
-		if err := r.vault.Save(ctx, created.ID, pageToken); err != nil {
-			return nil, fmt.Errorf("save page token for account %d: %w", created.ID, err)
+		// Persist metadata from discovery (handle, avatar, stats, etc.)
+		if len(acc.Metadata) > 0 {
+			if created.Metadata == nil {
+				created.Metadata = make(models.Metadata)
+			}
+			for k, v := range acc.Metadata {
+				// Do not overwrite existing metadata keys.
+				if _, exists := created.Metadata[k]; !exists {
+					created.Metadata[k] = v
+				}
+			}
+			if err := r.userRepo.UpdatePlatformAccount(created); err != nil {
+				return nil, fmt.Errorf("update metadata for account %d: %w", created.ID, err)
+			}
 		}
 
-		// Persist the user-level long-lived token under every discovered
-		// account so refresh/reconnect can re-exchange it from any
-		// page account. The vault prunes older rows per
-		// (platform_account_id, token_type), so this only keeps the
-		// latest user token per page.
+		// Save the root OAuth token for this account. For YouTube this
+		// is the bearer token; for Facebook this is the long-lived user
+		// token. The vault prunes older rows per (account_id, token_type).
 		if err := r.vault.Save(ctx, created.ID, tokenData); err != nil {
-			return nil, fmt.Errorf("save user token for account %d: %w", created.ID, err)
+			return nil, fmt.Errorf("save root token for account %d: %w", created.ID, err)
+		}
+
+		// Save every supplemental token the provider declared.
+		// Facebook Pages carry a Page Access Token here; YouTube
+		// channels carry none (the root bearer token is shared).
+		for _, supplemental := range acc.SupplementalTokens {
+			if err := r.vault.Save(ctx, created.ID, supplemental); err != nil {
+				return nil, fmt.Errorf("save supplemental token (%s) for account %d: %w", supplemental.TokenType, created.ID, err)
+			}
 		}
 	}
 
@@ -1397,12 +1523,10 @@ func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identi
 }
 
 // handleGetAccount returns a single platform account owned by the
-// authenticated user. The wire shape is the same as the list
-// endpoint (6-field accountListItem) so the SPA decodes both
-// responses with the same shape. The platform_accounts row stays
-// after disconnect (status='disconnected'); this handler returns
-// it so the /connections page can render a "reconnect" CTA on a
-// row that was previously deleted.
+// authenticated user. When the provider implements AccountDetailsProvider
+// and a cached snapshot exists, the response includes a "resource" field
+// with rich details (metrics, branding, stats). The base 6-field shape
+// is always present for backward compatibility.
 func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 	id, ok := parsePathIDAsInt64(w, req, "id")
 	if !ok {
@@ -1412,14 +1536,98 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, accountListItem{
-		ID:             account.ID,
-		Platform:       account.Platform,
-		PlatformUserID: account.PlatformUserID,
-		Username:       account.Username,
-		Status:         account.Status,
-		CreatedAt:      account.CreatedAt,
-	})
+
+	type accountMetric struct {
+		Key          string `json:"key"`
+		Label        string `json:"label"`
+		Value        int64  `json:"value"`
+		DisplayValue string `json:"display_value"`
+	}
+	type accountResource struct {
+		ResourceType string          `json:"resource_type"`
+		ExternalID   string          `json:"external_id"`
+		DisplayName  string          `json:"display_name"`
+		Handle       string          `json:"handle,omitempty"`
+		Description  string          `json:"description,omitempty"`
+		AvatarURL    string          `json:"avatar_url,omitempty"`
+		BannerURL    string          `json:"banner_url,omitempty"`
+		PublicURL    string          `json:"public_url,omitempty"`
+		Metrics      []accountMetric `json:"metrics"`
+		Properties   map[string]any  `json:"properties,omitempty"`
+		FetchedAt    time.Time       `json:"fetched_at"`
+	}
+	type accountDetailResponse struct {
+		accountListItem
+		Resource *accountResource `json:"resource,omitempty"`
+	}
+
+	resp := accountDetailResponse{
+		accountListItem: accountListItem{
+			ID:             account.ID,
+			Platform:       account.Platform,
+			PlatformUserID: account.PlatformUserID,
+			Username:       account.Username,
+			Status:         account.Status,
+			CreatedAt:      account.CreatedAt,
+		},
+	}
+
+	// Try to enrich with cached snapshot data.
+	if r.snapshotStore != nil {
+		snap, err := r.snapshotStore.GetSnapshot(account.ID)
+		if err == nil && snap != nil {
+			res := &accountResource{
+				ResourceType: snap.ResourceType,
+				FetchedAt:    snap.FetchedAt,
+			}
+			if v, ok := snap.Profile["external_id"].(string); ok {
+				res.ExternalID = v
+			}
+			if v, ok := snap.Profile["display_name"].(string); ok {
+				res.DisplayName = v
+			}
+			if v, ok := snap.Profile["handle"].(string); ok {
+				res.Handle = v
+			}
+			if v, ok := snap.Profile["description"].(string); ok {
+				res.Description = v
+			}
+			if v, ok := snap.Profile["avatar_url"].(string); ok {
+				res.AvatarURL = v
+			}
+			if v, ok := snap.Profile["banner_url"].(string); ok {
+				res.BannerURL = v
+			}
+			if v, ok := snap.Profile["public_url"].(string); ok {
+				res.PublicURL = v
+			}
+
+			// Convert statistics JSONB to metrics slice.
+			for key, val := range snap.Statistics {
+				if m, ok := val.(map[string]any); ok {
+					am := accountMetric{Key: key}
+					if v, ok := m["label"].(string); ok {
+						am.Label = v
+					}
+					if v, ok := m["value"].(float64); ok {
+						am.Value = int64(v)
+					}
+					if v, ok := m["display_value"].(string); ok {
+						am.DisplayValue = v
+					}
+					res.Metrics = append(res.Metrics, am)
+				}
+			}
+
+			if snap.Content != nil {
+				res.Properties = snap.Content
+			}
+
+			resp.Resource = res
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleValidateAccount probes token freshness via vault.Get. The
@@ -1445,17 +1653,37 @@ func (r *Router) handleValidateAccount(w http.ResponseWriter, req *http.Request)
 	now := time.Now()
 	account.LastValidatedAt = &now
 
-	// Both token types are checked: short-lived for YouTube /
-	// Twitter / TikTok; long-lived for Meta. A platform having any
-	// non-expired stored token is "active"; both-expired/no-token
-	// is "expired"; neither nor "expired" (i.e. decrypt error or DB
-	// unreachable) is "reauth_required".
-	_, shortErr := r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
-	_, longErr := r.vault.Get(req.Context(), account.ID, models.TokenTypeLongLived)
+	// Every token type the platform may store is checked. A platform
+	// having any non-expired stored token is "active"; all-found-
+	// tokens-expired is "expired"; neither found nor "expired" (i.e.
+	// decrypt error or DB unreachable) is "reauth_required".
+	//
+	// Token types:
+	//   - short_lived  — YouTube / Twitter / TikTok (legacy)
+	//   - long_lived   — Meta
+	//   - bearer       — YouTube (canonical)
+	//   - page_access  — Facebook Page Access Tokens
+	tokenTypes := []string{
+		models.TokenTypeShortLived,
+		models.TokenTypeLongLived,
+		models.TokenTypeBearer,
+		models.TokenTypePageAccess,
+	}
+	active := false
+	expired := false
+	for _, tt := range tokenTypes {
+		_, err := r.vault.Get(req.Context(), account.ID, tt)
+		switch {
+		case err == nil:
+			active = true
+		case isTokenExpired(err):
+			expired = true
+		}
+	}
 	switch {
-	case shortErr == nil || longErr == nil:
+	case active:
 		account.Status = models.AccountStatusActive
-	case isTokenExpired(shortErr) || isTokenExpired(longErr):
+	case expired:
 		account.Status = models.AccountStatusExpired
 	default:
 		account.Status = models.AccountStatusReauthRequired
@@ -1557,6 +1785,143 @@ func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
 	}
 	r.auditAccountEvent(req.Context(), "account.disconnected", identity, account)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSyncAccount forces a refresh of the remote resource snapshot
+// for the given account. The snapshot caches channel stats, profile,
+// and branding so the frontend doesn't trigger a provider API call on
+// every render. POST /accounts/{id}/sync bypasses the 10-minute cache.
+//
+// When snapshotStore is nil, returns 501. When the provider does not
+// implement AccountDetailsProvider, returns 400.
+func (r *Router) handleSyncAccount(w http.ResponseWriter, req *http.Request) {
+	if r.snapshotStore == nil {
+		writeError(w, http.StatusNotImplemented, "snapshot store not configured")
+		return
+	}
+
+	id, ok := parsePathIDAsInt64(w, req, "id")
+	if !ok {
+		return
+	}
+	account, _, ok := r.loadOwnAccountByID(w, req, id)
+	if !ok {
+		return
+	}
+
+	detailsProvider, ok := r.capabilities.AccountDetails(account.Platform)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "platform "+account.Platform+" does not support account details")
+		return
+	}
+
+	// Retrieve the access token from the vault.
+	token, err := r.vault.Get(req.Context(), account.ID, models.TokenTypeBearer)
+	if err != nil {
+		// Fall back to other token types.
+		token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeLongLived)
+		if err != nil {
+			token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "no valid token found for this account")
+				return
+			}
+		}
+	}
+
+	details, err := detailsProvider.GetAccountDetails(req.Context(), token.AccessToken, account.PlatformUserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fetch account details: "+err.Error())
+		return
+	}
+
+	// Build the snapshot from the details response.
+	snap := &repository.AccountResourceSnapshot{
+		PlatformAccountID: account.ID,
+		ResourceType:      details.ResourceType,
+		Profile: map[string]any{
+			"display_name": details.DisplayName,
+			"handle":       details.Handle,
+			"description":  details.Description,
+			"avatar_url":   details.AvatarURL,
+			"banner_url":   details.BannerURL,
+			"public_url":   details.PublicURL,
+			"external_id":  details.ExternalID,
+		},
+		FetchedAt: details.FetchedAt,
+	}
+
+	// Metrics → statistics JSONB.
+	stats := make(map[string]any)
+	for _, m := range details.Metrics {
+		stats[m.Key] = map[string]any{
+			"label":         m.Label,
+			"value":         m.Value,
+			"display_value": m.DisplayValue,
+		}
+	}
+	snap.Statistics = stats
+
+	// Platform-specific properties → content JSONB.
+	if details.Properties != nil {
+		snap.Content = details.Properties
+	}
+
+	if err := r.snapshotStore.UpsertSnapshot(snap); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save snapshot: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, details)
+}
+
+// handleAccountContent returns a paginated list of content items
+// (videos, posts) for a connected account. The provider must implement
+// AccountContentProvider. Supports ?cursor and ?query.limit parameters.
+func (r *Router) handleAccountContent(w http.ResponseWriter, req *http.Request) {
+	id, ok := parsePathIDAsInt64(w, req, "id")
+	if !ok {
+		return
+	}
+	account, _, ok := r.loadOwnAccountByID(w, req, id)
+	if !ok {
+		return
+	}
+
+	contentProvider, ok := r.capabilities.AccountContent(account.Platform)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "platform "+account.Platform+" does not support account content")
+		return
+	}
+
+	// Retrieve the access token from the vault.
+	token, err := r.vault.Get(req.Context(), account.ID, models.TokenTypeBearer)
+	if err != nil {
+		token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeLongLived)
+		if err != nil {
+			token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "no valid token found for this account")
+				return
+			}
+		}
+	}
+
+	cursor := req.URL.Query().Get("cursor")
+	limit := 20
+	if l := req.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 50 {
+			limit = parsed
+		}
+	}
+
+	page, err := contentProvider.ListAccountContent(req.Context(), token.AccessToken, account.PlatformUserID, cursor, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list account content: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, page)
 }
 
 // ----------------------------------------------------------------------- Middleware

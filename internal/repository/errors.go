@@ -113,4 +113,31 @@ var (
 	// provider-user-id) is already linked to another InstaEdit account
 	// (re-binding would be an account-takeover vector).
 	ErrAccountAlreadyLinked = errors.New("platform account already linked to another user")
+
+	// --- Groups (TAGLIO X.Y) ---------------------------------------------
+	// ErrGroupNotFound is returned by GroupRepository FindByID /
+	// Delete / Update when no row matches the supplied id. Maps to
+	// HTTP 404 in pkg/api/groups.go via mapGroupError.
+	ErrGroupNotFound = errors.New("group not found")
+
+	// ErrGroupWorkspaceMismatch is returned when a foreign workspace's
+	// parent_group_id is supplied during Create / Update — even if the
+	// parent row exists, it MUST belong to the same workspace. Mismatched
+	// group ownership across workspaces is rejected at SQL level by the
+	// user_id-intersecting WHERE clause. Maps to HTTP 422.
+	ErrGroupWorkspaceMismatch = errors.New("parent_group_id must belong to the same workspace")
+
+	// ErrGroupCycle is returned when a Create / Update would create an
+	// ancestry loop (parent_group_id points to one of the group's own
+	// descendants). Detection is performed by a single recursive CTE
+	// walk in the repo; maps to HTTP 422 at the API layer so the
+	// frontend can show a "can't nest a folder under itself" message.
+	ErrGroupCycle = errors.New("group parent would create a cycle")
+
+	// ErrGroupDuplicate is returned by GroupRepository.Create when a
+	// root-level group with the same (workspace_id, name) already
+	// exists. Enforced by the partial UNIQUE INDEX in migration 041
+	// (where parent_group_id IS NULL). Subgroups reuse the workspace
+	// uniqueness via their parent chain. Maps to HTTP 409.
+	ErrGroupDuplicate = errors.New("group with this name already exists at this level")
 )
