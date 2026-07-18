@@ -202,7 +202,7 @@ The transactional outbox table is the audit-only appendix to `post_targets.statu
 
 #### (c) Webhook outbound retry
 
-`internal/worker/webhook_worker.go` (seventh goroutine: [authoritative list](#authoritative-goroutine-list-mirrors-pkgapiworker_statusgoworkernames)) has its own retry curve for outbound webhooks to operator-configured HTTP sinks. Status codes `5xx / 408 / 425 / 429 / timeout` are rescheduled up to `MaxAttempts`; `2xx` is success; other `4xx` (non-408/425/429) is dead. This is a separate domain from platform publishing and is fully documented in `webhook_worker.go`.
+`internal/worker/webhook_worker.go` (seventh goroutine in the **Authoritative goroutine list** subsection above) has its own retry curve for outbound webhooks to operator-configured HTTP sinks. Status codes `5xx / 408 / 425 / 429 / timeout` are rescheduled up to `MaxAttempts`; `2xx` is success; other `4xx` (non-408/425/429) is dead. This is a separate domain from platform publishing and is fully documented in `webhook_worker.go`.
 
 #### (d) **OPEN GAP — retry on 429/Retry-After/5xx at the final publish-platform call**
 
