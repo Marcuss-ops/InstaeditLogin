@@ -166,7 +166,9 @@ export function CalendarPage() {
 
             <button
               type="button"
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-[#9aa0aa] hover:text-white hover:bg-white/[0.08] transition-colors"
+              disabled
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-[#9aa0aa] transition-colors opacity-60 cursor-not-allowed"
+              aria-label="Filter (coming soon)"
             >
               <Filter size={14} /> Filter
             </button>
