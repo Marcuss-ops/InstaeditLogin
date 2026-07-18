@@ -439,7 +439,6 @@ func (r *OutboxRepository) ListPending(limit int) ([]models.OutboxEvent, error) 
 	// future contention constraints). Currently unused at the
 	// repository surface — the pq import is referenced via the
 	// discovery Scan path in post_repo.go (via errors.As).
-	_ = pq.Error{}
 	return out, nil
 }
 

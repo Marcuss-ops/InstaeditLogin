@@ -41,6 +41,23 @@ func TestIssueAndVerify(t *testing.T) {
 	}
 }
 
+func TestIssueRejectsInvalidID(t *testing.T) {
+	m := NewManager(testSecret, 24)
+	if _, _, _, err := m.Issue(0, 1); err == nil {
+		t.Fatal("expected error for zero user id")
+	}
+	if _, _, _, err := m.Issue(-1, 1); err == nil {
+		t.Fatal("expected error for negative user id")
+	}
+	// SPRINT 1.1: zero/negative workspace id is also rejected.
+	if _, _, _, err := m.Issue(1, 0); err == nil {
+		t.Fatal("expected error for zero workspace id")
+	}
+	if _, _, _, err := m.Issue(1, -1); err == nil {
+		t.Fatal("expected error for negative workspace id")
+	}
+}
+
 func TestIssueAccessRejectsSessionIDZero(t *testing.T) {
 	m := NewManager(testSecret, 24)
 	cases := []struct {
