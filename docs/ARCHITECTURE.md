@@ -332,7 +332,7 @@ The goroutine-drain stack and the HTTP-server drain are **sequential, not concur
 
 ## Google Drive folder import (POST `/api/v1/media/import/drive/folder`)
 
-The Drive import endpoint fans a (public or authenticated) Google Drive folder out into a staggered schedule of `upload_jobs` that the [upload worker](#authoritative-goroutine-list-mirrors-pkgapiworker_statusgoworkernames) drains in the background. It is **NOT** a publish API — it queues and spreads the work across time, then exits. The endpoint, the request body, and the CLI that drives it from an operator shell are documented below.
+The Drive import endpoint fans a (public or authenticated) Google Drive folder out into a staggered schedule of `upload_jobs` that the upload worker (seventh goroutine, **Authoritative goroutine list** subsection above) drains in the background. It is **NOT** a publish API — it queues and spreads the work across time, then exits. The endpoint, the request body, and the CLI that drives it from an operator shell are documented below.
 
 ### Endpoints
 
