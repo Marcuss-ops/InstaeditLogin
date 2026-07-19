@@ -216,7 +216,7 @@ Dopo che il flow locale funziona, per andare in produzione:
 |---------|---------------------|----------------------------|
 | Database | `instaedit-dev` | `instaedit-prod` |
 | `DATABASE_URL` | `postgresql://user:[DEV-PW]@dev-host:5432/instaedit` | `postgresql://user:[PROD-PW]@prod-host:5432/instaedit` |
-| `S3_BUCKET` | `instaedit-dev-uploads` | `instaedit-prod-uploads` |
+| `S3_BUCKET` | `instaedit-dev` (matches docker-compose.local.yml's `mc mb`) | `instaedit-prod-uploads` |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:4173` (no pubblici!) | `https://app.example.com,https://www.app.example.com` (no localhost!) |
 | `JWT_SECRET` | un valore generato localmente | un valore separato, generato sul server di deploy |
 | `ENCRYPTION_KEY` | un valore generato localmente | un valore separato (i token persistiti sono criptati con questa chiave!) |
