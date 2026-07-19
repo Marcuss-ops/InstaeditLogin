@@ -544,15 +544,6 @@ function Nav() {
             <a href="#who-are-we" className="hover:text-white transition-colors">
               Who I am
             </a>
-            <Link
-              to="/editor"
-              className="hover:text-white transition-colors inline-flex items-center gap-1.5"
-            >
-              Editor
-              <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold rounded bg-violet-500/20 text-violet-200 ring-1 ring-violet-400/30">
-                New
-              </span>
-            </Link>
           </div>
 
         </div>
@@ -1228,8 +1219,8 @@ function WhoAreWe() {
       {/* Hero image with darkened overlay */}
       <div className="relative h-[70vh] min-h-[500px] flex items-center justify-center overflow-hidden">
         <img
-          src="/founder.png"
-          alt=""
+          src="/founder.jpg"
+          alt="InstaEdit team working on video automation"
           className="absolute inset-0 w-full h-full object-cover"
         />
         <div className="absolute inset-0 bg-black/65" />
