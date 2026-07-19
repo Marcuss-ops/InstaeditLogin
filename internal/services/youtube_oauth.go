@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -305,6 +306,85 @@ func (s *YouTubeOAuthService) ValidateChannelBinding(ctx context.Context, access
 // services.YouTubeChannelBinder capability interface. Caught by
 // `go vet`, not at runtime.
 var _ YouTubeChannelBinder = (*YouTubeOAuthService)(nil)
+
+// ErrYouTubeAmbiguousAuthorization is the canonical sentinel returned
+// by BindGrantToChannel when channels.list(mine=true) reports >1
+// channels for the authenticated Google account AND no
+// expected_channel_id was supplied at login time. Co-exists with the
+// same-text declaration in pkg/api/handlers.go (the HTTP layer keeps
+// a local copy for its 409 Conflict mapping); both layers own their
+// own discovery flow.
+//
+// Cross-references:
+//   - pkg/api/routes_test.go::TestHandleCallback_YouTube_MultipleChannels_NoExpected_Conflict
+//   - pkg/api/handlers.go::attachDiscoveredAccounts (YouTube branch
+//     + 409 mapping)
+var ErrYouTubeAmbiguousAuthorization = errors.New("youtube authorization is ambiguous: re-authorize with expected_channel_id")
+
+// BindGrantToChannel consolidates the 1-OAuth-grant-per-1-channel
+// policy at the provider level. It is the YouTube analogue of
+// "validate before you store": the OAuth callback handler (and any
+// future per-channel re-link flow) calls this to ensure the bearer
+// token is saved EXACTLY ONCE — for the channel the operator
+// verified — and is never cloned across the whole
+// channels.list(mine=true) result set.
+//
+// Behaviour matrix:
+//   - expectedChannelID == "" AND len(discovered) == 1 → returns
+//     the single *DiscoveredAccount, nil error (canonical happy
+//     path for one-Google-account-one-channel operators).
+//   - expectedChannelID == "" AND len(discovered) != 1 → returns
+//     nil, ErrYouTubeAmbiguousAuthorization wrapped with the
+//     observed channel count. Cloning the token across N channels
+//     is wrong: YouTube's OAuth grant is bound to whichever Brand
+//     Account the operator selected at consent, and silently
+//     fanning the token out is exactly the misroute Google warns
+//     about for third-party apps that ignore Brand Account
+//     selection.
+//   - expectedChannelID set AND present in the discovery set →
+//     returns the matching *DiscoveredAccount, nil error.
+//   - expectedChannelID set AND NOT present → returns nil, an
+//     error wrapping ErrYouTubeChannelMismatch (the operator
+//     authenticated the wrong Google account, mistyped the id, or
+//     imported a Brand Account ID that has since been moved /
+//     removed).
+//   - transient (5xx / network / decode error, or 0-channels
+//     reported by DiscoverAccounts) → returns nil and the error
+//     un-sentineled so the caller retries rather than
+//     misclassifying a transient as a reauth-required state.
+//
+// This method does NOT save or clone the token. It is the SINGLE
+// source of truth for the YouTube 1:1 policy: any consumer tempted
+// to "for each channel save the token" should defer to this method,
+// which guarantees at most one *DiscoveredAccount is returned.
+func (s *YouTubeOAuthService) BindGrantToChannel(ctx context.Context, accessToken, expectedChannelID string) (*DiscoveredAccount, error) {
+	accounts, err := s.DiscoverAccounts(ctx, accessToken, "")
+	if err != nil {
+		// Preserve the existing 0-channel / network behaviour:
+		// DiscoverAccounts already produces a typed error ("the
+		// authenticated Google account has no YouTube channel")
+		// that callers rely on. Re-wrap so the bind call site is
+		// unambiguous in logs but keep the sentinel-free shape so
+		// transient errors aren't misclassified as reauth.
+		return nil, fmt.Errorf("youtube bind: discover channels: %w", err)
+	}
+
+	if expectedChannelID != "" {
+		for _, acc := range accounts {
+			if acc.Profile.PlatformUserID == expectedChannelID {
+				return acc, nil
+			}
+		}
+		return nil, fmt.Errorf("%w: %q is not in channels.list(mine=true) result",
+			ErrYouTubeChannelMismatch, expectedChannelID)
+	}
+
+	if len(accounts) != 1 {
+		return nil, fmt.Errorf("%w: got %d channels, expected 1",
+			ErrYouTubeAmbiguousAuthorization, len(accounts))
+	}
+	return accounts[0], nil
+}
 
 func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})

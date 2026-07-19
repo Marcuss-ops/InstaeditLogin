@@ -1007,6 +1007,280 @@ func containsPrompt(prompt, target string) bool {
 	return false
 }
 
+// ---------------------------------------------------------------------------
+// BindGrantToChannel — provider-level tests for the P0 1-grant-1-channel rule
+// (Taglio P0#1 — see github issue / repo discussion for context).
+//
+// What this proves at the provider layer: a YouTubeOAuthService wired
+// with a fake channels.list endpoint enforces the same rule the HTTP
+// handler already enforces end-to-end (see pkg/api/routes_test.go's
+// TestHandleCallback_YouTube_*), so any future consumer of
+// BindGrantToChannel (e.g. a per-channel reconnect endpoint, an
+// admin re-bind tool) inherits the same safety guarantees without
+// re-implementing the filter.
+//
+// The integration tests in pkg/api/routes_test.go already count the
+// vault.Save calls; these unit tests count the *DiscoveredAccount
+// returned and the sentinel surfaced. Together they prove the rule
+// end-to-end at both layers.
+// ---------------------------------------------------------------------------
+
+// TestYouTubeBindGrantToChannel_OneChannel_NoExpected returns the
+// single channel without any sentinel (canonical happy path for the
+// most common operator: one Google account, one channel).
+func TestYouTubeBindGrantToChannel_OneChannel_NoExpected(t *testing.T) {
+	const channelID = "UCaaaaaaaaaaaaaaaaaaaaa1"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("mine") != "true" {
+			t.Errorf("DiscoverAccounts must call channels.list with mine=true, got query=%q", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"items": []map[string]interface{}{
+				{"id": channelID, "snippet": map[string]string{"title": "Solo Channel"}},
+			},
+			"pageInfo": map[string]int{"totalResults": 1, "resultsPerPage": 1},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	acc, err := svc.BindGrantToChannel(context.Background(), "fake-bearer", "")
+	if err != nil {
+		t.Fatalf("BindGrantToChannel: %v", err)
+	}
+	if acc == nil {
+		t.Fatal("expected a single *DiscoveredAccount, got nil")
+	}
+	if acc.Profile.PlatformUserID != channelID {
+		t.Errorf("channelID: want %q, got %q", channelID, acc.Profile.PlatformUserID)
+	}
+}
+
+// TestYouTubeBindGrantToChannel_MultipleChannels_NoExpected_Ambiguous
+// returns ErrYouTubeAmbiguousAuthorization — the bearer token must
+// NEVER be cloned across N>1 channels. The error message must
+// surface the observed channel count so the operator's runbook can
+// say "your Google account owns X channels, please re-authorize with
+// expected_channel_id".
+func TestYouTubeBindGrantToChannel_MultipleChannels_NoExpected_Ambiguous(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"items": []map[string]interface{}{
+				{"id": "UCaaaaaaaaaaaaaaaaaaaaa1", "snippet": map[string]string{"title": "Channel A"}},
+				{"id": "UCaaaaaaaaaaaaaaaaaaaaa2", "snippet": map[string]string{"title": "Channel B"}},
+			},
+			"pageInfo": map[string]int{"totalResults": 2, "resultsPerPage": 2},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	acc, err := svc.BindGrantToChannel(context.Background(), "fake-bearer", "")
+	if err == nil {
+		t.Fatalf("expected ErrYouTubeAmbiguousAuthorization, got nil and account=%+v", acc)
+	}
+	if acc != nil {
+		t.Errorf("ambiguous: account must be nil, got %+v", acc)
+	}
+	if !errors.Is(err, ErrYouTubeAmbiguousAuthorization) {
+		t.Errorf("errors.Is(err, ErrYouTubeAmbiguousAuthorization) = false; err=%v", err)
+	}
+	if !strings.Contains(err.Error(), "got 2 channels") {
+		t.Errorf("error should report the observed channel count, got %q", err.Error())
+	}
+}
+
+// TestYouTubeBindGrantToChannel_MultipleChannels_ExpectedMatches
+// returns the matching channel from a multi-channel grant (canonical
+// expected_channel_id happy path).
+func TestYouTubeBindGrantToChannel_MultipleChannels_ExpectedMatches(t *testing.T) {
+	const expectedID = "UCaaaaaaaaaaaaaaaaaaaaa2"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"items": []map[string]interface{}{
+				{"id": "UCaaaaaaaaaaaaaaaaaaaaa1", "snippet": map[string]string{"title": "Channel A"}},
+				{"id": expectedID, "snippet": map[string]string{"title": "Channel B"}},
+				{"id": "UCaaaaaaaaaaaaaaaaaaaaa3", "snippet": map[string]string{"title": "Channel C"}},
+			},
+			"pageInfo": map[string]int{"totalResults": 3, "resultsPerPage": 3},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	acc, err := svc.BindGrantToChannel(context.Background(), "fake-bearer", expectedID)
+	if err != nil {
+		t.Fatalf("BindGrantToChannel: %v", err)
+	}
+	if acc == nil {
+		t.Fatal("expected the matching channel, got nil")
+	}
+	if acc.Profile.PlatformUserID != expectedID {
+		t.Errorf("channelID: want %q, got %q", expectedID, acc.Profile.PlatformUserID)
+	}
+}
+
+// TestYouTubeBindGrantToChannel_OneChannel_ExpectedNoMatch_Mismatch
+// returns a wrapped ErrYouTubeChannelMismatch — the operator
+// authenticated the wrong Google account (or imported a Brand
+// Account id that no longer exists).
+func TestYouTubeBindGrantToChannel_OneChannel_ExpectedNoMatch_Mismatch(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"items": []map[string]interface{}{
+				{"id": "UCaaaaaaaaaaaaaaaaaaaaa1", "snippet": map[string]string{"title": "Channel A"}},
+			},
+			"pageInfo": map[string]int{"totalResults": 1, "resultsPerPage": 1},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	acc, err := svc.BindGrantToChannel(context.Background(), "fake-bearer", "UCaaaaaaaaaaaaaaaaaaaaaZ")
+	if err == nil {
+		t.Fatalf("expected ErrYouTubeChannelMismatch, got nil and account=%+v", acc)
+	}
+	if acc != nil {
+		t.Errorf("mismatch: account must be nil, got %+v", acc)
+	}
+	if !errors.Is(err, ErrYouTubeChannelMismatch) {
+		t.Errorf("errors.Is(err, ErrYouTubeChannelMismatch) = false; err=%v", err)
+	}
+	if !strings.Contains(err.Error(), "UCaaaaaaaaaaaaaaaaaaaaaZ") {
+		t.Errorf("error should quote the expected channel id, got %q", err.Error())
+	}
+}
+
+// TestYouTubeBindGrantToChannel_NoChannels_PreservesZeroChannelError
+// preserves the existing 0-channel behaviour: DiscoverAccounts
+// returns a typed error (the grant is bound to zero channels),
+// BindGrantToChannel wraps but does NOT reclassify it as
+// ErrYouTubeAmbiguousAuthorization. A zero-channel grant is a
+// structurally distinct class of failure (likely a revoked Brand
+// Account, not an ambiguous multi-channel one) and must not be
+// misrouted by the caller — the handler would otherwise map it to
+// 409 Conflict with the wrong operator runbook.
+func TestYouTubeBindGrantToChannel_NoChannels_PreservesZeroChannelError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Mimics the Google-side response when the OAuth grant is
+		// bound to zero channels (revoked Brand Account, etc.).
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"items":    []map[string]interface{}{},
+			"pageInfo": map[string]int{"totalResults": 0, "resultsPerPage": 0},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	acc, err := svc.BindGrantToChannel(context.Background(), "fake-bearer", "")
+	if err == nil {
+		t.Fatalf("expected error on 0 channels, got nil and account=%+v", acc)
+	}
+	if acc != nil {
+		t.Errorf("0 channels: account must be nil, got %+v", acc)
+	}
+	if errors.Is(err, ErrYouTubeAmbiguousAuthorization) {
+		t.Errorf("0 channels must not be misclassified as ErrYouTubeAmbiguousAuthorization (would misroute to reauth path): %v", err)
+	}
+	if errors.Is(err, ErrYouTubeChannelMismatch) {
+		t.Errorf("0 channels must not be misclassified as ErrYouTubeChannelMismatch either: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no YouTube channel") {
+		t.Errorf("error should preserve the upstream 'no YouTube channel' message for operator diagnostics, got %q", err.Error())
+	}
+}
+
+// TestYouTubeBindGrantToChannel_ExpectedAndZeroChannels_PreservesUpstreamError
+// covers the structural edge case: the operator supplied an
+// expected_channel_id at /auth/youtube/login but the OAuth grant
+// bound to ZERO channels (Brand Account revoked, account
+// re-rotated, etc.). BindGrantToChannel must NOT wrap this as
+// ErrYouTubeChannelMismatch — a 0-channel grant and a non-matching
+// grant are structurally distinct failures with different operator
+// runbooks ("re-authorize" vs "the channel id is wrong"), and the
+// upstream error already communicates the right diagnostic.
+func TestYouTubeBindGrantToChannel_ExpectedAndZeroChannels_PreservesUpstreamError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"items":    []map[string]interface{}{},
+			"pageInfo": map[string]int{"totalResults": 0, "resultsPerPage": 0},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	acc, err := svc.BindGrantToChannel(context.Background(), "fake-bearer", "UCaaaaaaaaaaaaaaaaaaaaaX")
+	if err == nil {
+		t.Fatalf("expected error on 0 channels with expected set, got nil and account=%+v", acc)
+	}
+	if acc != nil {
+		t.Errorf("0 channels: account must be nil, got %+v", acc)
+	}
+	if errors.Is(err, ErrYouTubeChannelMismatch) {
+		t.Errorf("0 channels must NOT be misclassified as ErrYouTubeChannelMismatch — different runbook (re-authorize vs id mismatch): %v", err)
+	}
+	if errors.Is(err, ErrYouTubeAmbiguousAuthorization) {
+		t.Errorf("0 channels must NOT be misclassified as ErrYouTubeAmbiguousAuthorization either: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no YouTube channel") {
+		t.Errorf("error should preserve the upstream 'no YouTube channel' message, got %q", err.Error())
+	}
+}
+
+// TestYouTubeBindGrantToChannel_Transient5xx_NoSentinelMisclassification
+// proves that transient (5xx) errors from channels.list do NOT
+// carry either sentinel — the worker / future reconnect callers
+// must retry rather than misclassify a 502 as a reauth-required
+// state. This is the reverse of the existing TestYouTubeValidateChannelBinding_5xx_NoSentinel
+// pattern in this file: it asserts the same property on the
+// BindGrantToChannel path.
+func TestYouTubeBindGrantToChannel_Transient5xx_NoSentinelMisclassification(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":{"code":502,"message":"Upstream Google error"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	acc, err := svc.BindGrantToChannel(context.Background(), "fake-bearer", "")
+	if err == nil {
+		t.Fatalf("expected error on 5xx, got nil and account=%+v", acc)
+	}
+	if acc != nil {
+		t.Errorf("5xx: account must be nil, got %+v", acc)
+	}
+	if errors.Is(err, ErrYouTubeAmbiguousAuthorization) {
+		t.Errorf("transient 5xx must NOT wrap ErrYouTubeAmbiguousAuthorization (worker would misroute to reauth): %v", err)
+	}
+	if errors.Is(err, ErrYouTubeChannelMismatch) {
+		t.Errorf("transient 5xx must NOT wrap ErrYouTubeChannelMismatch (worker would misroute to reauth): %v", err)
+	}
+	if !strings.Contains(err.Error(), "502") {
+		t.Errorf("error should surface the upstream status for the worker's logged breadcrumb, got %q", err.Error())
+	}
+}
+
+
 // TestYouTubeDiscoverAccounts_Pagination verifies that DiscoverAccounts
 // follows nextPageToken to collect all channels across multiple pages.
 func TestYouTubeDiscoverAccounts_Pagination(t *testing.T) {
