@@ -595,12 +595,12 @@ func TestVeloxCallback_DefaultEventIDFormat(t *testing.T) {
 }
 
 func TestVeloxCallback_AllSevenEventsAreDispatchedAndAudited(t *testing.T) {
-	// Smoke test only — it pins the spec's contract: the dispatcher
-	// routes ALL seven documented events (artifact_verified, queued,
-	// publishing, published, blocked_auth, failed, dead_letter).
-	// Per-event signature/retry/4xx semantics live in the focused
-	// TestVeloxCallback_* tests.
-	events := []string{
+	// Smoke test only — pins the spec contract: the dispatcher
+	// routes ALL seven documented events through Dispatch and
+	// emits exactly one VeloxCallbackSent audit row per call.
+	// Per-event signature + retry + 4xx semantics live in the
+	// focused TestVeloxCallback_* tests above.
+	events := []VeloxCallbackEvent{
 		VeloxCallbackArtifactVerified,
 		VeloxCallbackQueued,
 		VeloxCallbackPublishing,
@@ -609,38 +609,31 @@ func TestVeloxCallback_AllSevenEventsAreDispatchedAndAudited(t *testing.T) {
 		VeloxCallbackFailed,
 		VeloxCallbackDeadLetter,
 	}
-	callbackURL := ""
-	delivery := &models.ExternalDelivery{
-		ID:                 "sdel_smoke",
-		ExternalDeliveryID: "delivery_smoke",
-		Status:             models.ExternalDeliveryStatusAccepted,
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	delivery.CallbackURL = &srv.URL
 	for _, event := range events {
-		t.Run(event, func(t *testing.T) {
+		t.Run(string(event), func(t *testing.T) {
 			audit := &mockAuditStore{}
-			d := newTestDispatcher(t, srv.URL, audit)
-			payload := &VeloxCallbackPayload{
-				EventID:            "evt_smoke_" + event,
-				SocialDeliveryID:   "sdel_smoke",
-				ExternalDeliveryID: "delivery_smoke",
-				Status:             string(models.ExternalDeliveryStatusAccepted),
+			d := newTestDispatcher(t, nil, &http.Client{Timeout: 5 * time.Second}, audit, nil)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+			cb := srv.URL
+			delivery := &models.ExternalDelivery{
+				ID:                 "sdel_" + string(event),
+				ExternalDeliveryID: "delivery_" + string(event),
+				CallbackURL:        &cb,
 			}
-			if err := d.Dispatch(context.Background(), delivery, event, payload); err != nil {
+			if err := d.Dispatch(context.Background(), delivery, event, &VeloxCallbackPayload{EventID: "evt_" + string(event)}); err != nil {
 				t.Fatalf("dispatch failed for %q: %v", event, err)
 			}
 			if got := audit.entryCount(); got != 1 {
-				t.Fatalf("audit store: expected 1 entry for %q, got %d", event, got)
+				t.Errorf("audit store: expected 1 entry for %q, got %d", event, got)
 			}
 			entry := audit.lastEntry(t)
 			if entry == nil {
 				t.Fatalf("audit store: nil entry for %q", event)
 			}
-			if entry.Action != string(models.AuditActionVeloxCallbackSent) {
+			if entry.Action != models.AuditActionVeloxCallbackSent {
 				t.Errorf("audit Action for %q: want %q, got %q", event, models.AuditActionVeloxCallbackSent, entry.Action)
 			}
 		})
