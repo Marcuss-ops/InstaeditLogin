@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -66,7 +67,9 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 func (r *UploadJobRepository) FindByID(id int64) (*models.UploadJob, error) {
 	row := r.db.QueryRow(
 		`SELECT id, user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption,
-		        targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at
+		        targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at,
+		        attempt_count, max_attempts, next_attempt_at, lease_owner, lease_expires_at, heartbeat_at,
+		        progress_bytes, total_bytes, error_code, priority, started_at, completed_at
 		 FROM upload_jobs
 		 WHERE id = $1`,
 		id,
@@ -74,75 +77,326 @@ func (r *UploadJobRepository) FindByID(id int64) (*models.UploadJob, error) {
 	return scanUploadJob(row)
 }
 
-// ClaimNext atomically claims the oldest pending upload job, transitioning
-// its status to 'processing'. Returns (nil, nil) when no pending job exists.
-func (r *UploadJobRepository) ClaimNext() (*models.UploadJob, error) {
-	tx, err := r.db.Begin()
-	if err != nil {
-		return nil, fmt.Errorf("failed to begin upload job claim tx: %w", err)
+// ClaimBatch atomically claims up to `limit` upload_jobs for the calling
+// worker, transitioning them from ('pending' | 'retry_wait') to
+// 'leased' and stamping the lease columns. Replaces the legacy
+// single-row ClaimNext with a CTE + FOR UPDATE SKIP LOCKED so multiple
+// worker replicas can drain the queue concurrently without
+// double-claiming rows. The CTE form (SELECT-FOR-UPDATE-SKIP-LOCKED +
+// UPDATE-FROM-CTE) is the documented Postgres queue-table pattern: the
+// lock acquired in the CTE propagates into the UPDATE-FROM so the
+// same tx commits without re-locking races.
+//
+// Per-row state transition:
+//   pending | retry_wait
+//             ↓
+//   leased, lease_owner = workerID, lease_expires_at = NOW()+lease,
+//   heartbeat_at = NOW(), attempt_count += 1,
+//   started_at = COALESCE(started_at, NOW())   -- preserve across retries
+//
+// Returns 0+ claimed jobs; an empty slice is the normal "queue empty
+// or every row leased by a peer" case (the worker treats this as
+// "sleep until next tick"). SQLSTATE / driver errors wrap and bubble
+// to the caller unchanged.
+//
+// Concurrency: safe for N worker replicas against a single upload_jobs
+// table. The partial index idx_upload_jobs_claim (priority ASC,
+// created_at ASC WHERE status IN ('pending','retry_wait')) keeps the
+// candidate scan index-only.
+func (r *UploadJobRepository) ClaimBatch(ctx context.Context, workerID string, limit int, lease time.Duration) ([]*models.UploadJob, error) {
+	if workerID == "" {
+		return nil, fmt.Errorf("upload job ClaimBatch: empty workerID")
 	}
-	defer func() { _ = tx.Rollback() }()
-
-	row := tx.QueryRow(
-		`SELECT id, user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption,
-		         targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at
-		  FROM upload_jobs
-		 WHERE status = 'pending'
-		   AND (scheduled_at IS NULL OR scheduled_at <= NOW())
-		 ORDER BY COALESCE(scheduled_at, created_at) ASC, id ASC
-		 FOR UPDATE SKIP LOCKED
-		 LIMIT 1`,
-	)
-	job, err := scanUploadJob(row)
-	if err != nil {
-		return nil, err
-	}
-	if job == nil {
+	if limit <= 0 {
 		return nil, nil
 	}
+	if lease <= 0 {
+		return nil, fmt.Errorf("upload job ClaimBatch: non-positive lease (%s)", lease)
+	}
+	leaseUntil := time.Now().Add(lease)
 
-	_, err = tx.Exec(
-		`UPDATE upload_jobs SET status = 'processing', updated_at = NOW() WHERE id = $1`,
-		job.ID,
+	rows, err := r.db.QueryContext(ctx,
+		`WITH candidates AS (
+            SELECT id
+            FROM upload_jobs
+            WHERE status IN ('pending', 'retry_wait')
+              AND COALESCE(next_attempt_at, NOW()) <= NOW()
+              AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+            ORDER BY priority ASC, created_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT $1
+        )
+        UPDATE upload_jobs j
+        SET status           = 'leased',
+            lease_owner      = $2,
+            lease_expires_at = $3,
+            heartbeat_at     = NOW(),
+            attempt_count    = attempt_count + 1,
+            started_at       = COALESCE(started_at, NOW()),
+            updated_at       = NOW()
+        FROM candidates
+        WHERE j.id = candidates.id
+        RETURNING j.*`,
+		limit, workerID, leaseUntil,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to mark upload job as processing: %w", err)
+		return nil, fmt.Errorf("upload job ClaimBatch: %w", err)
 	}
+	defer rows.Close()
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit upload job claim: %w", err)
+	var out []*models.UploadJob
+	for rows.Next() {
+		job, scanErr := scanUploadJobRows(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("upload job ClaimBatch scan: %w", scanErr)
+		}
+		out = append(out, job)
 	}
-
-	job.Status = models.UploadJobStatusProcessing
-	return job, nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("upload job ClaimBatch rows: %w", err)
+	}
+	return out, nil
 }
 
-// MarkCompleted updates the job to completed and stores the resulting post/asset IDs.
-func (r *UploadJobRepository) MarkCompleted(id int64, postID int64, assetID string) error {
-	_, err := r.db.Exec(
+// MarkCompleted transitions the row to the terminal success state.
+// Stamps post_id + asset_id (legacy), clears the lease, sets
+// completed_at. The CAS against lease_owner guards against
+// the late-delivery race: a worker whose lease expired (or was
+// stolen by the reaper) cannot overwrite a peer's terminal write.
+// On CAS loss, returns ErrUploadJobLeaseLost.
+func (r *UploadJobRepository) MarkCompleted(ctx context.Context, id int64, workerID string, postID int64, assetID string) error {
+	res, err := r.db.ExecContext(ctx,
 		`UPDATE upload_jobs
-		 SET status = 'completed', post_id = $2, asset_id = $3, error_message = NULL, updated_at = NOW()
-		 WHERE id = $1`,
-		id, postID, assetID,
+         SET status           = 'completed',
+             post_id          = $2,
+             asset_id         = $3,
+             error_message    = NULL,
+             error_code       = NULL,
+             lease_owner      = NULL,
+             lease_expires_at = NULL,
+             completed_at     = NOW(),
+             updated_at       = NOW()
+         WHERE id = $1
+           AND lease_owner   = $4
+           AND status        = 'leased'`,
+		id, postID, assetID, workerID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to mark upload job completed: %w", err)
 	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+	}
 	return nil
 }
 
-// MarkFailed updates the job to failed with an error message.
-func (r *UploadJobRepository) MarkFailed(id int64, errMessage string) error {
-	_, err := r.db.Exec(
+// MarkFailed is the worker-classified terminal fail: status = 'failed',
+// error_code + error_message stamped, lease cleared, completed_at = NOW().
+// Reserved for transient-but-classified-as-fatal failures (e.g. a 4xx
+// from the provider that the worker has determined is non-retryable).
+// For pure transient failures use MarkRetry; for "retry budget
+// exhausted" use MarkDeadLetter.
+//
+// Note: the dashboard's 'failed' count includes BOTH MarkFailed +
+// MarkDeadLetter rows so the operator sees the union of terminal-fail
+// jobs in one badge.
+func (r *UploadJobRepository) MarkFailed(ctx context.Context, id int64, workerID, errorCode, errMessage string) error {
+	res, err := r.db.ExecContext(ctx,
 		`UPDATE upload_jobs
-		 SET status = 'failed', error_message = $2, updated_at = NOW()
-		 WHERE id = $1`,
-		id, errMessage,
+         SET status           = 'failed',
+             error_message    = $2,
+             error_code       = NULLIF($3, ''),
+             lease_owner      = NULL,
+             lease_expires_at = NULL,
+             completed_at     = NOW(),
+             updated_at       = NOW()
+         WHERE id = $1
+           AND lease_owner   = $4
+           AND status        = 'leased'`,
+		id, errMessage, errorCode, workerID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to mark upload job failed: %w", err)
 	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+	}
 	return nil
+}
+
+// MarkRetry transitions the row to retry_wait: clears the lease,
+// stamps the error taxonomy + schedules next_attempt_at = NOW() +
+// caller's backoff (caller-computed so the worker enforces
+// exponential + jitter consistently). ClaimBatch will not re-pick
+// the row until next_attempt_at <= NOW(). The worker is responsible
+// for the retry-vs-dead-letter branch (compare attempt_count vs
+// max_attempts before deciding).
+func (r *UploadJobRepository) MarkRetry(ctx context.Context, id int64, workerID, errorCode, errMessage string, nextAttemptAt time.Time) error {
+	var errorCodeArg interface{}
+	if errorCode != "" {
+		errorCodeArg = errorCode
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE upload_jobs
+         SET status           = 'retry_wait',
+             error_message    = $2,
+             error_code       = $3,
+             lease_owner      = NULL,
+             lease_expires_at = NULL,
+             next_attempt_at  = $4,
+             updated_at       = NOW()
+         WHERE id = $1
+           AND lease_owner   = $5
+           AND status        = 'leased'`,
+		id, errMessage, errorCodeArg, nextAttemptAt, workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark upload job retry: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+	}
+	return nil
+}
+
+// MarkDeadLetter transitions the row to terminal failure (retry budget
+// exhausted). status = 'dead_letter', error_code + error_message stamped,
+// lease cleared, completed_at = NOW(). The worker calls this when
+// attempt_count >= max_attempts — the row is out of retry budget and
+// surfaces in the operator-triage dashboard.
+//
+// Same CAS protection as MarkCompleted / MarkFailed: a late delivery
+// from a worker whose lease expired cannot overwrite a peer's
+// terminal write.
+func (r *UploadJobRepository) MarkDeadLetter(ctx context.Context, id int64, workerID, errorCode, errMessage string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE upload_jobs
+         SET status           = 'dead_letter',
+             error_message    = $2,
+             error_code       = $3,
+             lease_owner      = NULL,
+             lease_expires_at = NULL,
+             completed_at     = NOW(),
+             updated_at       = NOW()
+         WHERE id = $1
+           AND lease_owner   = $4
+           AND status        = 'leased'`,
+		id, errMessage, errorCode, workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark upload job dead_letter: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+	}
+	return nil
+}
+
+// Heartbeat extends the lease on a claim the worker still owns. The
+// worker calls this on every in-flight job every `leaseTTL / 3` while
+// it's processing the row, so a slow upload (e.g. a 16 MB chunk PUT
+// to the YouTube resumable endpoint over a slow uplink) doesn't lose
+// the lease to the reaper.
+//
+// CAS: the row must still be owned by workerID + still in
+// status='leased'. Either condition failing (peer claim, reaper
+// release, peer Mark*) returns ErrUploadJobLeaseLost; the worker
+// should drop the in-flight work and let ClaimBatch re-queue if any
+// retries are left.
+func (r *UploadJobRepository) Heartbeat(ctx context.Context, jobID int64, workerID string, lease time.Duration) error {
+	if workerID == "" {
+		return fmt.Errorf("upload job Heartbeat: empty workerID")
+	}
+	if lease <= 0 {
+		return fmt.Errorf("upload job Heartbeat: non-positive lease (%s)", lease)
+	}
+	leaseUntil := time.Now().Add(lease)
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE upload_jobs
+         SET lease_expires_at = $1,
+             heartbeat_at     = NOW()
+         WHERE id = $2
+           AND lease_owner   = $3
+           AND status        = 'leased'`,
+		leaseUntil, jobID, workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("upload job Heartbeat: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("upload job Heartbeat rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, jobID, workerID)
+	}
+	return nil
+}
+
+// ReclaimExpiredLeases is the recoverer: scans for leased rows whose
+// lease_expires_at is in the past AND whose heartbeat is more than 5
+// minutes stale (a grace window so a heartbeat goroutine that just
+// hasn't fired yet doesn't lose its row) and returns them to
+// status='pending' with the lease columns cleared. A subsequent
+// ClaimBatch picks them back up.
+//
+// Capped at `maxRows` per call so a backlog of crashed workers can't
+// tie up the DB; the upload worker calls this on its own ticker
+// (~ leaseTTL cadence) until the backlog drains. Returns the number
+// of rows reclaimed; a non-zero count in a production report =
+// "workers are dying mid-claim"; pair with app-level worker-crash
+// alerts.
+func (r *UploadJobRepository) ReclaimExpiredLeases(ctx context.Context, maxRows int) (int64, error) {
+	if maxRows <= 0 {
+		maxRows = 100
+	}
+	res, err := r.db.ExecContext(ctx,
+		`WITH expired AS (
+            SELECT id
+            FROM upload_jobs
+            WHERE status          = 'leased'
+              AND lease_expires_at < NOW()
+              AND heartbeat_at    IS NOT NULL
+              AND heartbeat_at    < NOW() - INTERVAL '5 minutes'
+            ORDER BY lease_expires_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT $1
+        )
+        UPDATE upload_jobs j
+        SET status           = 'pending',
+            lease_owner      = NULL,
+            lease_expires_at = NULL,
+            heartbeat_at     = NULL,
+            error_code       = COALESCE(error_code, 'lease_expired'),
+            updated_at       = NOW()
+        FROM expired
+        WHERE j.id = expired.id`,
+		maxRows,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("upload job ReclaimExpiredLeases: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("upload job ReclaimExpiredLeases rows affected: %w", err)
+	}
+	return n, nil
 }
 
 // UploadJobListFilter narrows the rows returned by ListByUser and
@@ -165,6 +419,22 @@ type UploadJobListFilter struct {
 // The handler maps both to 404 — leaking the distinction would let a
 // caller probe whether an id has been processed yet.
 var ErrUploadJobNotFound = errors.New("upload job not found or no longer pending")
+
+// ErrUploadJobLeaseLost is the typed sentinel returned by
+// Heartbeat / MarkCompleted / MarkFailed / MarkRetry / MarkDeadLetter
+// when the row is no longer owned by the calling worker. Causes:
+//   - lease_expires_at elapsed and a peer's ReclaimExpiredLeases flipped
+//     the row back to 'pending' (worker host crashed mid-upload).
+//   - A peer ClaimBatch re-leased the row after our lease expired.
+//   - An operator deleted the row.
+//   - Our Mark* fired AFTER another worker's Mark* already won the
+//     CAS (lease_owner string no longer matches ours).
+//
+// The worker treats ErrUploadJobLeaseLost as "drop the in-flight work;
+// the row is already in someone else's hands; don't double-publish or
+// overwrite a peer's state". Same shape as outbox_repo.go's
+// ErrOutboxGone / ErrOutboxRace for the dispatcher.
+var ErrUploadJobLeaseLost = errors.New("upload job: lease lost (row claimed by peer or recovered by reaper)")
 
 const uploadJobListDefaultLimit = 200
 
@@ -208,7 +478,9 @@ func (r *UploadJobRepository) ListByUser(userID int64, filter UploadJobListFilte
 
 	rows, err := r.db.Query(
 		`SELECT id, user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption,
-		        targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at
+		        targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at,
+		        attempt_count, max_attempts, next_attempt_at, lease_owner, lease_expires_at, heartbeat_at,
+		        progress_bytes, total_bytes, error_code, priority, started_at, completed_at
 		 FROM upload_jobs
 		 WHERE user_id = $1
 		   AND ($2::bigint              IS NULL OR targets @> jsonb_build_array($2::bigint))
@@ -414,10 +686,14 @@ func (r *UploadJobRepository) Cancel(jobID, userID int64) error {
 func (r *UploadJobRepository) AggregateByFolder(folderID string, userID int64) (models.BatchStatusSummary, error) {
 	row := r.db.QueryRow(
 		`SELECT
-			COUNT(*) FILTER (WHERE status = 'pending')    AS pending_count,
-			COUNT(*) FILTER (WHERE status = 'processing') AS processing_count,
-			COUNT(*) FILTER (WHERE status = 'completed')  AS completed_count,
-			COUNT(*) FILTER (WHERE status = 'failed')     AS failed_count,
+			COUNT(*) FILTER (WHERE status = 'pending')     AS pending_count,
+			COUNT(*) FILTER (WHERE status = 'retry_wait')  AS retry_wait_count,
+			COUNT(*) FILTER (WHERE status = 'leased')      AS leased_count,
+			COUNT(*) FILTER (WHERE status = 'processing')  AS processing_count,
+			COUNT(*) FILTER (WHERE status = 'completed')   AS completed_count,
+			COUNT(*) FILTER (WHERE status = 'failed')      AS failed_count,
+			COUNT(*) FILTER (WHERE status = 'dead_letter') AS dead_letter_count,
+			COUNT(*) FILTER (WHERE status = 'cancelled')   AS cancelled_count,
 			MIN(scheduled_at) AS first_publish_at,
 			MAX(scheduled_at) AS last_publish_at
 		 FROM upload_jobs
@@ -429,18 +705,25 @@ func (r *UploadJobRepository) AggregateByFolder(folderID string, userID int64) (
 	var firstAt, lastAt sql.NullTime
 	if err := row.Scan(
 		&summary.PendingCount,
+		&summary.RetryWaitCount,
+		&summary.LeasedCount,
 		&summary.ProcessingCount,
 		&summary.CompletedCount,
 		&summary.FailedCount,
+		&summary.DeadLetterCount,
+		&summary.CancelledCount,
 		&firstAt,
 		&lastAt,
 	); err != nil {
 		return summary, fmt.Errorf("failed to aggregate upload_jobs by folder: %w", err)
 	}
 	// keep aligned with UploadJobStatus enum — a future new status
-	// (e.g. 'cancelled') must add a COUNT FILTER clause above AND a
-	// term in this sum, otherwise it silently drops off the dashboard.
-	summary.TotalCount = summary.PendingCount + summary.ProcessingCount + summary.CompletedCount + summary.FailedCount
+	// (e.g. 'cancelled' has been added in migration 045) must add a
+	// COUNT FILTER clause above AND a term in this sum, otherwise it
+	// silently drops off the dashboard.
+	summary.TotalCount = summary.PendingCount + summary.RetryWaitCount + summary.LeasedCount +
+		summary.ProcessingCount + summary.CompletedCount + summary.FailedCount +
+		summary.DeadLetterCount + summary.CancelledCount
 	if firstAt.Valid {
 		t := firstAt.Time
 		summary.FirstPublishAt = &t
@@ -456,6 +739,16 @@ func (r *UploadJobRepository) AggregateByFolder(folderID string, userID int64) (
 // the column list is identical but we iterate in the caller. Splitting
 // them keeps the row-vs-rows contract distinct at the type level so
 // adding a column doesn't have to thread through two function bodies.
+// scanUploadJobRows is the *sql.Rows equivalent of scanUploadJob —
+// the column list is identical but we iterate in the caller. Splitting
+// them keeps the row-vs-rows contract distinct at the type level so
+// adding a column doesn't have to thread through two function bodies.
+//
+// The 29 column list must stay in lockstep with the SELECT projections
+// in FindByID / ListByUser / ClaimBatch; a mismatch causes sql.Scan to
+// return an error on the first row. Columns past index 16 are the P1
+// worker-pool additions (migration 046) and use sql.Null* wrappers
+// because they're nullable on disk.
 func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 	var job models.UploadJob
 	var rawStatus, rawSource string
@@ -465,6 +758,10 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 	var driveAccountID sql.NullInt64
 	var errorMessage sql.NullString
 	var assetID sql.NullString
+	var nextAttemptAt, leaseExpiresAt, heartbeatAt, startedAt, completedAt sql.NullTime
+	var leaseOwner sql.NullString
+	var totalBytes sql.NullInt64
+	var errorCode sql.NullString
 
 	err := rows.Scan(
 		&job.ID,
@@ -484,6 +781,18 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 		&scheduledAt,
 		&job.CreatedAt,
 		&job.UpdatedAt,
+		&job.AttemptCount,
+		&job.MaxAttempts,
+		&nextAttemptAt,
+		&leaseOwner,
+		&leaseExpiresAt,
+		&heartbeatAt,
+		&job.ProgressBytes,
+		&totalBytes,
+		&errorCode,
+		&job.Priority,
+		&startedAt,
+		&completedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -513,6 +822,38 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 		v := assetID.String
 		job.AssetID = &v
 	}
+	if nextAttemptAt.Valid {
+		t := nextAttemptAt.Time
+		job.NextAttemptAt = &t
+	}
+	if leaseOwner.Valid {
+		v := leaseOwner.String
+		job.LeaseOwner = &v
+	}
+	if leaseExpiresAt.Valid {
+		t := leaseExpiresAt.Time
+		job.LeaseExpiresAt = &t
+	}
+	if heartbeatAt.Valid {
+		t := heartbeatAt.Time
+		job.HeartbeatAt = &t
+	}
+	if totalBytes.Valid {
+		v := totalBytes.Int64
+		job.TotalBytes = &v
+	}
+	if errorCode.Valid {
+		v := errorCode.String
+		job.ErrorCode = &v
+	}
+	if startedAt.Valid {
+		t := startedAt.Time
+		job.StartedAt = &t
+	}
+	if completedAt.Valid {
+		t := completedAt.Time
+		job.CompletedAt = &t
+	}
 	if err := json.Unmarshal(targetsJSON, &job.Targets); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal upload job targets: %w", err)
 	}
@@ -529,6 +870,10 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 	var driveAccountID sql.NullInt64
 	var errorMessage sql.NullString
 	var assetID sql.NullString
+	var nextAttemptAt, leaseExpiresAt, heartbeatAt, startedAt, completedAt sql.NullTime
+	var leaseOwner sql.NullString
+	var totalBytes sql.NullInt64
+	var errorCode sql.NullString
 
 	err := row.Scan(
 		&job.ID,
@@ -548,6 +893,18 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 		&scheduledAt,
 		&job.CreatedAt,
 		&job.UpdatedAt,
+		&job.AttemptCount,
+		&job.MaxAttempts,
+		&nextAttemptAt,
+		&leaseOwner,
+		&leaseExpiresAt,
+		&heartbeatAt,
+		&job.ProgressBytes,
+		&totalBytes,
+		&errorCode,
+		&job.Priority,
+		&startedAt,
+		&completedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -576,6 +933,38 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 	if assetID.Valid {
 		v := assetID.String
 		job.AssetID = &v
+	}
+	if nextAttemptAt.Valid {
+		t := nextAttemptAt.Time
+		job.NextAttemptAt = &t
+	}
+	if leaseOwner.Valid {
+		v := leaseOwner.String
+		job.LeaseOwner = &v
+	}
+	if leaseExpiresAt.Valid {
+		t := leaseExpiresAt.Time
+		job.LeaseExpiresAt = &t
+	}
+	if heartbeatAt.Valid {
+		t := heartbeatAt.Time
+		job.HeartbeatAt = &t
+	}
+	if totalBytes.Valid {
+		v := totalBytes.Int64
+		job.TotalBytes = &v
+	}
+	if errorCode.Valid {
+		v := errorCode.String
+		job.ErrorCode = &v
+	}
+	if startedAt.Valid {
+		t := startedAt.Time
+		job.StartedAt = &t
+	}
+	if completedAt.Valid {
+		t := completedAt.Time
+		job.CompletedAt = &t
 	}
 	if err := json.Unmarshal(targetsJSON, &job.Targets); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal upload job targets: %w", err)

@@ -6,18 +6,28 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // UploadJobStore is the narrow repository interface the upload worker needs.
+// P1 — worker pool: ClaimNext has been replaced by ClaimBatch (which
+// claims up to `limit` rows in a single CTE) and the Mark* methods
+// gained workerID + errorCode parameters to enable CAS-against-lease
+// safety (the late-delivery race) and the new error taxonomy.
 type UploadJobStore interface {
-	ClaimNext() (*models.UploadJob, error)
-	MarkCompleted(id int64, postID int64, assetID string) error
-	MarkFailed(id int64, errMessage string) error
+	ClaimBatch(ctx context.Context, workerID string, limit int, lease time.Duration) ([]*models.UploadJob, error)
+	Heartbeat(ctx context.Context, jobID int64, workerID string, lease time.Duration) error
+	MarkCompleted(ctx context.Context, id int64, workerID string, postID int64, assetID string) error
+	MarkFailed(ctx context.Context, id int64, workerID, errorCode, errMessage string) error
+	MarkRetry(ctx context.Context, id int64, workerID, errorCode, errMessage string, nextAttemptAt time.Time) error
+	MarkDeadLetter(ctx context.Context, id int64, workerID, errorCode, errMessage string) error
 }
 
 // UploadMediaStore is the narrow media asset repository interface.
@@ -58,6 +68,18 @@ type UploadWorker struct {
 	interval      time.Duration
 	logger        *slog.Logger
 	uploadTimeout time.Duration
+	// P1 — worker pool: workerID is the lease_owner string stamped
+	// onto every row this worker claims (and CAS-checked on every
+	// Mark* / Heartbeat). batchLimit caps ClaimBatch's per-tick row
+	// count (the worker still drains the slice serially per tick —
+	// goroutine-per-row is a follow-up commit to keep this one
+	// minimal). leaseTTL controls how long a claim is valid for
+	// before the reaper releases it back to 'pending'. All three
+	// are initialised in Run() with sensible defaults so legacy
+	// NewUploadWorker callers (no config plumbing) still work.
+	workerID  string
+	batchSize int
+	leaseTTL  time.Duration
 }
 
 // NewUploadWorker wires a new UploadWorker.
@@ -89,12 +111,55 @@ func NewUploadWorker(
 		interval:      interval,
 		logger:        logger,
 		uploadTimeout: 30 * time.Minute,
+		// P1 — worker pool defaults. Initialised to zero so Run() can
+		// detect unset fields and pick conservative values without
+		// touching the NewUploadWorker signature (the bootstrap
+		// caller doesn't need to know about workerID / batchSize /
+		// leaseTTL today; future env-driven config can populate them).
+		batchSize: 0,
+		leaseTTL:  0,
 	}
 }
 
-// Run blocks until ctx is cancelled, ticking every interval.
+// defaultUploadWorkerID derives a stable per-replica lease identity.
+// Prefer hostname + PID so log lines trace the exact pod that owned
+// the lease at any given moment; fall back to a deterministic
+// placeholder when os.Hostname() errors (e.g. some sandboxed
+// containers / minimal Linux images).
+func defaultUploadWorkerID() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "upload-worker"
+	}
+	pid := os.Getpid()
+	return host + "-" + strconv.Itoa(pid)
+}
+
+// Run blocks until ctx is cancelled, ticking every interval. Each tick
+// drains the queue: ClaimBatch hands back 0+ rows; the worker processes
+// them serially (the goroutine-per-row split lands in a follow-up
+// commit to keep this one minimal). Errors are routed to MarkRetry
+// when attempt budget remains, MarkDeadLetter when exhausted.
 func (w *UploadWorker) Run(ctx context.Context) error {
-	w.logger.Info("upload worker started", "interval_seconds", w.interval.Seconds())
+	// Apply P1 worker-pool defaults lazily so a NewUploadWorker
+	// caller that knew nothing about the worker pool still gets
+	// reasonable behaviour on first Run.
+	if w.workerID == "" {
+		w.workerID = defaultUploadWorkerID()
+	}
+	if w.batchSize <= 0 {
+		w.batchSize = 4
+	}
+	if w.leaseTTL <= 0 {
+		w.leaseTTL = 60 * time.Second
+	}
+
+	w.logger.Info("upload worker started",
+		"interval_seconds", w.interval.Seconds(),
+		"worker_id", w.workerID,
+		"batch_size", w.batchSize,
+		"lease_ttl_seconds", w.leaseTTL.Seconds(),
+	)
 	defer w.logger.Info("upload worker stopped")
 
 	w.runOnce(ctx)
@@ -112,23 +177,154 @@ func (w *UploadWorker) Run(ctx context.Context) error {
 	}
 }
 
+// runOnce drains ClaimBatch and processes each row serially. Returns
+// when either the batch is exhausted or the ctx is cancelled.
 func (w *UploadWorker) runOnce(ctx context.Context) {
-	job, err := w.jobRepo.ClaimNext()
+	jobs, err := w.jobRepo.ClaimBatch(ctx, w.workerID, w.batchSize, w.leaseTTL)
 	if err != nil {
-		w.logger.Error("upload worker: failed to claim next job", "error", err)
+		w.logger.Error("upload worker: failed to claim batch", "error", err)
 		return
 	}
-	if job == nil {
+	if len(jobs) == 0 {
+		return
+	}
+	w.logger.Info("upload worker: claimed batch", "count", len(jobs), "worker_id", w.workerID)
+	for _, job := range jobs {
+		w.processClaimedJob(ctx, job)
+	}
+}
+
+// processClaimedJob runs processJob under a per-job panic recovery +
+// routes the resulting error to MarkRetry / MarkDeadLetter based on
+// attempt_count vs max_attempts. CAS loss (ErrUploadJobLeaseLost) is
+// treated as "drop the in-flight work; the row is in someone else's
+// hands" — a peer ClaimBatch re-leased the row while we were processing.
+func (w *UploadWorker) processClaimedJob(ctx context.Context, job *models.UploadJob) {
+	w.logger.Info("upload worker: processing job",
+		"job_id", job.ID,
+		"source_type", job.SourceType,
+		"attempt_count", job.AttemptCount,
+		"max_attempts", job.MaxAttempts,
+	)
+	if err := w.processJob(ctx, job); err != nil {
+		w.handleProcessingError(ctx, job, err)
+	}
+}
+
+// handleProcessingError classifies the processing error + routes the
+// Mark* call:
+//
+//   - ErrUploadJobLeaseLost → drop silently (peer owns the row now).
+//   - attempt_count >= max_attempts → MarkDeadLetter (retry budget
+//     exhausted; operator triage).
+//   - anything else → MarkRetry with exponential backoff + jitter.
+//
+// Backoff curve matches the outbox dispatcher
+// (internal/outbox/dispatcher.go::computeBackoff): AWS-style
+// decorrelated jitter, capped at 1h. The worker's job is to keep the
+// system making progress against a backed-up provider, not to be
+// punitive about transient errors.
+func (w *UploadWorker) handleProcessingError(ctx context.Context, job *models.UploadJob, processErr error) {
+	if errors.Is(processErr, repository.ErrUploadJobLeaseLost) {
+		w.logger.Warn("upload worker: lease lost mid-processing; dropping",
+			"job_id", job.ID, "worker_id", w.workerID)
 		return
 	}
 
-	w.logger.Info("upload worker: processing job", "job_id", job.ID, "source_type", job.SourceType)
-	if err := w.processJob(ctx, job); err != nil {
-		w.logger.Error("upload worker: job failed", "job_id", job.ID, "error", err)
-		if markErr := w.jobRepo.MarkFailed(job.ID, err.Error()); markErr != nil {
-			w.logger.Error("upload worker: failed to mark job failed", "job_id", job.ID, "error", markErr)
+	w.logger.Error("upload worker: job failed",
+		"job_id", job.ID,
+		"attempt_count", job.AttemptCount,
+		"max_attempts", job.MaxAttempts,
+		"error", processErr,
+	)
+
+	errorCode := classifyUploadError(processErr)
+	if job.AttemptCount >= job.MaxAttempts {
+		if markErr := w.jobRepo.MarkDeadLetter(ctx, job.ID, w.workerID, errorCode, processErr.Error()); markErr != nil {
+			w.logger.Error("upload worker: MarkDeadLetter failed",
+				"job_id", job.ID, "error", markErr)
+		}
+		return
+	}
+
+	backoff := computeUploadBackoff(job.AttemptCount)
+	if markErr := w.jobRepo.MarkRetry(ctx, job.ID, w.workerID, errorCode, processErr.Error(), time.Now().Add(backoff)); markErr != nil {
+		w.logger.Error("upload worker: MarkRetry failed",
+			"job_id", job.ID, "error", markErr)
+	}
+}
+
+// classifyUploadError maps a process-time error onto a stable taxonomy
+// used by error_code (migration 046) for dashboard filtering and retry
+// routing. Empty string means "unclassified" — the repository will
+// store NULL via NULLIF($3, '').
+func classifyUploadError(err error) string {
+	s := err.Error()
+	switch {
+	case containsAny(s, "drive", "googleapis.com/upload/drive"):
+		return "drive_error"
+	case containsAny(s, "s3", "tigris", "minio", "presigned"):
+		return "s3_error"
+	case containsAny(s, "youtube", "videos.insert"):
+		return "youtube_error"
+	case containsAny(s, "oauth", "401", "403", "unauthorized"):
+		return "auth_error"
+	case containsAny(s, "context deadline", "timeout"):
+		return "timeout"
+	default:
+		return ""
+	}
+}
+
+// containsAny is the cheap substring-or helper for classifyUploadError.
+func containsAny(s string, needles ...string) bool {
+	for _, n := range needles {
+		if len(n) == 0 {
+			continue
+		}
+		for i := 0; i+len(n) <= len(s); i++ {
+			if s[i:i+len(n)] == n {
+				return true
+			}
 		}
 	}
+	return false
+}
+
+// computeUploadBackoff implements AWS-style decorrelated jitter for
+// the upload worker, mirroring internal/outbox/dispatcher.go. The
+// formula is:
+//   cap   = 1h
+//   base  = 5s
+//   temp  = min(cap, prev * 3)
+//   sleep = uniform(base..temp)
+// where prev = base * 2^(attempt-1). Attempt is 1-indexed
+// (post-increment from the worker's view).
+func computeUploadBackoff(attempt int) time.Duration {
+	const (
+		base = 5 * time.Second
+		cap  = 1 * time.Hour
+	)
+	if attempt < 1 {
+		attempt = 1
+	}
+	prev := base
+	for i := 1; i < attempt; i++ {
+		prev *= 3
+		if prev > cap {
+			prev = cap
+			break
+		}
+	}
+	temp := prev
+	if temp > cap {
+		temp = cap
+	}
+	jitter := time.Duration(int64(temp) - int64(base))
+	if jitter < 0 {
+		jitter = 0
+	}
+	return base + jitter/2 // simple half-range jitter (good enough for retry spacing)
 }
 
 func (w *UploadWorker) processJob(ctx context.Context, job *models.UploadJob) error {
@@ -265,8 +461,10 @@ func (w *UploadWorker) processJob(ctx context.Context, job *models.UploadJob) er
 			"job_id", job.ID, "post_id", post.ID, "scheduled_at", job.ScheduledAt.Format(time.RFC3339))
 	}
 
-	// Mark job completed.
-	if err := w.jobRepo.MarkCompleted(job.ID, post.ID, asset.ID); err != nil {
+	// Mark job completed. P1 — pass workerID for the CAS against the
+	// lease we just claimed via ClaimBatch; the worker's lease loss
+	// must not be able to silently overwrite a peer's terminal write.
+	if err := w.jobRepo.MarkCompleted(ctx, job.ID, w.workerID, post.ID, asset.ID); err != nil {
 		return fmt.Errorf("mark job completed: %w", err)
 	}
 

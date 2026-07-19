@@ -109,14 +109,16 @@ func (r *UploadJobRepository) SuppressPendingDuplicates(userID int64) (int64, er
 				id,
 				ROW_NUMBER() OVER (
 					PARTITION BY user_id, source_type, source_id, COALESCE(drive_account_id, 0), targets
-					ORDER BY
-						CASE status
-							WHEN 'completed' THEN 0
-							WHEN 'processing' THEN 1
-							WHEN 'pending' THEN 2
-							ELSE 3
-						END,
-						id ASC
+				ORDER BY
+					CASE status
+						WHEN 'completed' THEN 0
+						WHEN 'processing' THEN 1
+						WHEN 'leased' THEN 1
+						WHEN 'pending' THEN 2
+						WHEN 'retry_wait' THEN 2
+						ELSE 3
+					END,
+					id ASC
 				) AS duplicate_rank
 			FROM upload_jobs
 			WHERE user_id = $1

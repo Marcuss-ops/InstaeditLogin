@@ -23,6 +23,13 @@ const (
 	UploadJobStatusProcessing UploadJobStatus = "processing"
 	UploadJobStatusCompleted  UploadJobStatus = "completed"
 	UploadJobStatusFailed     UploadJobStatus = "failed"
+	// P1 — worker pool (migration 045). New lifecycle states that
+	// ClaimBatch / Heartbeat / MarkRetry / MarkDeadLetter use. See
+	// the migration header for the full transition diagram.
+	UploadJobStatusLeased     UploadJobStatus = "leased"      // claimed; lease_owner + heartbeat alive
+	UploadJobStatusRetryWait  UploadJobStatus = "retry_wait"  // transient failure; backoff not yet elapsed
+	UploadJobStatusDeadLetter UploadJobStatus = "dead_letter" // retry budget exhausted; operator triage
+	UploadJobStatusCancelled  UploadJobStatus = "cancelled"   // user cancelled before claim
 )
 
 // UploadJob is a background job that downloads a video from a source
@@ -59,6 +66,23 @@ type UploadJob struct {
 	ScheduledAt    *time.Time      `json:"scheduled_at,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
+	// P1 — worker pool (migration 046). Server-side DEFAULTs keep
+	// legacy Insert/CreateIfSourceAbsent callers compatible: they
+	// can write rows without mentioning these fields and ClaimBatch
+	// / MarkRetry / MarkDeadLetter pick the rows up with sensible
+	// values.
+	AttemptCount   int        `json:"attempt_count"`
+	MaxAttempts    int        `json:"max_attempts"`
+	NextAttemptAt  *time.Time `json:"next_attempt_at,omitempty"`
+	LeaseOwner     *string    `json:"lease_owner,omitempty"`
+	LeaseExpiresAt *time.Time `json:"lease_expires_at,omitempty"`
+	HeartbeatAt    *time.Time `json:"heartbeat_at,omitempty"`
+	ProgressBytes  int64      `json:"progress_bytes"`
+	TotalBytes     *int64     `json:"total_bytes,omitempty"`
+	ErrorCode      *string    `json:"error_code,omitempty"`
+	Priority       int        `json:"priority"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 }
 
 // ScanTargets unmarshals the JSONB targets column into the Targets slice.
@@ -128,11 +152,19 @@ func (s *UploadJobStatus) Scan(src any) error {
 // Pointer timestamps are nil when the folder has zero jobs OR when
 // every job's scheduled_at is NULL (single-file legacy imports).
 type BatchStatusSummary struct {
-	PendingCount    int        `json:"pending_count"`
-	ProcessingCount int        `json:"processing_count"`
-	CompletedCount  int        `json:"completed_count"`
-	FailedCount     int        `json:"failed_count"`
-	TotalCount      int        `json:"total_count"`
-	FirstPublishAt  *time.Time `json:"first_publish_at,omitempty"`
-	LastPublishAt   *time.Time `json:"last_publish_at,omitempty"`
+	PendingCount     int        `json:"pending_count"`
+	ProcessingCount  int        `json:"processing_count"`
+	CompletedCount   int        `json:"completed_count"`
+	FailedCount      int        `json:"failed_count"`
+	TotalCount       int        `json:"total_count"`
+	FirstPublishAt   *time.Time `json:"first_publish_at,omitempty"`
+	LastPublishAt    *time.Time `json:"last_publish_at,omitempty"`
+	// P1 — worker pool states (migration 045). New columns appear in
+	// the dashboard JSON so the SPA can show 'leased' / 'retry_wait'
+	// / 'dead_letter' badges without re-fetching; legacy clients
+	// ignore the unknown fields.
+	LeasedCount     int `json:"leased_count,omitempty"`
+	RetryWaitCount  int `json:"retry_wait_count,omitempty"`
+	DeadLetterCount int `json:"dead_letter_count,omitempty"`
+	CancelledCount  int `json:"cancelled_count,omitempty"`
 }
