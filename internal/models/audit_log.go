@@ -30,6 +30,19 @@ const (
 	AuditActionApiKeyCreated = "api_key.created"
 	AuditActionApiKeyRevoked = "api_key.revoked"
 	AuditActionApiKeyRotated = "api_key.rotated"
+
+	// P1#8 — Velox callback dispatcher (pkg/api/internal_velox_callback_dispatcher.go).
+	// Emitted exactly once per Dispatch invocation regardless of
+	// retry count. Success → AuditActionVeloxCallbackSent +
+	// result=success. Terminal failure (after max_attempts OR a
+	// non-retryable 4xx) → AuditActionVeloxCallbackFailed +
+	// result=failure. The audit row's metadata JSON carries
+	// external_delivery_id + event + event_id + attempts + last_status
+	// for postmortem grep; ResourceID stays 0 because
+	// external_deliveries.id is TEXT (ULID-shaped) — the string
+	// id lives in metadata.
+	AuditActionVeloxCallbackSent   = "velox_callback.sent"
+	AuditActionVeloxCallbackFailed = "velox_callback.failed"
 )
 
 // Audit log result constants.
