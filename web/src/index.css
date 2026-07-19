@@ -249,6 +249,63 @@ html {
       radial-gradient(ellipse 60% 60% at 50% 50%, rgba(236, 72, 153, 0.40), transparent 60%);
   }
 
+  /* =====================================================================
+   * PREMIUM WORD ANIMATIONS — animated gradient text, glow pulse, float.
+   * Applied to key words in headings for a living, premium feel.
+   * ================================================================== */
+  @keyframes gradient-shift {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+  @keyframes glow-breathe {
+    0%, 100% { text-shadow: 0 0 20px rgba(167, 139, 250, 0.4), 0 0 40px rgba(167, 139, 250, 0.2); }
+    50%      { text-shadow: 0 0 30px rgba(167, 139, 250, 0.7), 0 0 60px rgba(167, 139, 250, 0.35), 0 0 90px rgba(34, 211, 238, 0.2); }
+  }
+  @keyframes word-float {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-4px); }
+  }
+  @keyframes letter-sparkle {
+    0%, 100% { opacity: 1; filter: brightness(1); }
+    50%      { opacity: 0.85; filter: brightness(1.4); }
+  }
+
+  .text-gradient-animated {
+    background: linear-gradient(135deg, #a78bfa 0%, #22d3ee 30%, #f472b6 60%, #a78bfa 100%);
+    background-size: 300% 300%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: gradient-shift 6s ease infinite;
+  }
+
+  .text-glow {
+    animation: glow-breathe 4s ease-in-out infinite;
+  }
+
+  .word-float {
+    display: inline-block;
+    animation: word-float 3s ease-in-out infinite;
+  }
+
+  .word-float-delay {
+    display: inline-block;
+    animation: word-float 3s ease-in-out infinite;
+    animation-delay: 0.5s;
+  }
+
+  .word-sparkle {
+    display: inline-block;
+    animation: letter-sparkle 2.5s ease-in-out infinite;
+  }
+
+  .word-sparkle-delay {
+    display: inline-block;
+    animation: letter-sparkle 2.5s ease-in-out infinite;
+    animation-delay: 0.8s;
+  }
+
   /* Honor user motion preferences — disable drift/pulse/fade-up so the
    * page is still readable for vestibular-sensitive visitors. The fade-up
    * exit state still "lands" instantly, no flash. */
@@ -258,7 +315,13 @@ html {
     .animate-drift-slow,
     .animate-drift-rev,
     .animate-pulse-glow,
-    .animate-shimmer {
+    .animate-shimmer,
+    .text-gradient-animated,
+    .text-glow,
+    .word-float,
+    .word-float-delay,
+    .word-sparkle,
+    .word-sparkle-delay {
       animation: none !important;
       opacity: 1 !important;
       transform: none !important;

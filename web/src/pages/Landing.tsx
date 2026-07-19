@@ -589,9 +589,9 @@ function Hero() {
           </div>
 
           <h1 className="text-display-1 text-white">
-            Publish <span className="text-gradient">once.</span>
+            Publish <span className="text-gradient-animated word-sparkle">once.</span>
             <br />
-            Ship to <span className="text-gradient">every channel.</span>
+            Ship to <span className="text-gradient-animated word-float">every channel.</span>
           </h1>
 
           <p className="text-body-lg text-zinc-300/90 mt-7 max-w-[60ch]">
@@ -734,7 +734,7 @@ function Workflow() {
             The workflow
           </div>
           <h2 className="text-display-2 text-white">
-            From render to <span className="text-gradient">every channel</span> in
+            From render to <span className="text-gradient-animated">every channel</span> in
             four steps.
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
@@ -974,7 +974,7 @@ function ShortsSection() {
           </div>
           <h2 className="text-display-2 text-white mb-5">
             One vertical render.{" "}
-            <span className="text-gradient">Three platforms.</span> Zero
+            <span className="text-gradient-animated word-sparkle-delay">Three platforms.</span> Zero
             reuploads.
           </h2>
           <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-7">
@@ -1045,7 +1045,7 @@ function LongFormSection() {
           </div>
           <h2 className="text-display-2 text-white mb-5">
             Horizontal masters,{" "}
-            <span className="text-gradient">shipped everywhere.</span>
+            <span className="text-gradient-animated word-float-delay">shipped everywhere.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-7 lg:ml-auto">
             Resumable uploads, descriptions, thumbnails, and chapter markers —
@@ -1237,7 +1237,7 @@ function WhoAreWe() {
         <div className="relative z-10 text-center px-6 max-w-4xl mx-auto animate-fade-up">
           <h2 className="text-display-1 text-white mb-6">
             We are making video accessible{" "}
-            <span className="text-gradient">for everyone.</span>
+            <span className="text-gradient-animated word-float">for everyone.</span>
           </h2>
           <p className="text-body-lg text-zinc-300/90 max-w-[55ch] mx-auto">
             Our mission is to remove every barrier between a creator and their
@@ -1262,7 +1262,7 @@ function WhoAreWe() {
             </div>
             <h2 className="text-display-2 text-white mb-6">
               Automate video creation{" "}
-              <span className="text-gradient">for everyone.</span>
+              <span className="text-gradient-animated">for everyone.</span>
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[55ch] mb-6">
               We exist to help anyone work for themselves. Creating content
