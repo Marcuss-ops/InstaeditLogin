@@ -145,6 +145,7 @@ func init() {
 		tokenRefreshError,
 		jwtIssued,
 		sessionOrphanRevokeFailures,
+		veloxDownloadJobDrops,
 		oauthConnectionsPerSubject,
 	)
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // ExternalDestinationStore is the persistence contract for
@@ -392,6 +393,16 @@ const maxDeliveryBodyBytes = 8 * 1024 * 1024
 // to per-router config (when Dropbox joins the same code path)
 // will lift this into a WithVeloxSourceSystem option.
 const veloxSourceSystemTag = "velox"
+
+// veloxProducerSourcePostDeliveries is the stable label value emitted
+// to velox_download_job_drops_total{source="..."} at the producer-side
+// drop site + the sibling "source" log key, so an operator can grep
+// logs and match the counter on the SAME tag. Forward-compat:
+// Dropbox joins later under a copy of this declaration with
+// "dropbox" / "dropbox_post" etc. — keep the constant co-located with
+// the production call sites that use it so future producers copy the
+// pattern (one declaration, two intent-distinct uses).
+const veloxProducerSourcePostDeliveries = "post_deliveries"
 
 // generateVeloxDestinationID mints a unique opaque ULID-shaped id
 // for external_destinations.id. Strategy mirrors
@@ -803,8 +814,16 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 		case r.downloadJobCh <- job:
 			// Queued. Worker drains.
 		default:
-			slog.Warn("velox deliver: download job queue full; reaper will pick up",
-				"social_delivery_id", inserted.ID)
+			// Fail-loudly per docs/INTEGRATIONS.md cutover spec: paired
+			// metric + Error log so the operator can grep log + match
+			// the counter in Grafana. Warn→Error because dashboard
+			// alerts fire on Error level (sat'd buffer means external
+			// rows stay in status='accepted' without transitioning —
+			// page-able).
+			metrics.RecordVeloxDownloadJobDrop(veloxProducerSourcePostDeliveries)
+			slog.Error("velox deliver: download job queue full; reaper will pick up",
+				"social_delivery_id", inserted.ID,
+				"source", veloxProducerSourcePostDeliveries)
 		}
 	}
 
