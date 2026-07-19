@@ -31,7 +31,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -77,6 +79,39 @@ type StorageProvider interface {
 	// contributor accidentally exposes a "url" field somewhere, the
 	// only path the platform API ever sees is AssetURL(key).
 	AssetURL(key string) string
+	// Upload (P1 Velox integration) streams `body` directly into the
+	// bucket at `key`. Used by the worker's server-side ingest paths
+	// — primarily VeloxArtifactStream drain after the size+SHA
+	// validation pass — replacing the historical
+	// PresignedURL-then-PUT-from-the-client pattern that doesn't
+	// fit a server-to-server flow.
+	//
+	// Contract:
+	//   * sizeBytes MUST equal the body length on success (Content-Length
+	//     header is set accordingly). A short body yields a truncated
+	//     upload; S3 will reject it on its own MD5/size check, but we
+	//     surface a clear error regardless.
+	//   * contentType is forwarded as the Content-Type header.
+	//     Pass "" to skip the header (S3 will infer from the object
+	//     extension or default to application/octet-stream).
+	//   * SIGV4 signing reuses the same signer with UNSIGNED-PAYLOAD
+	//     (same approach as SignUpload / VerifyUpload). The tradeoff:
+	//     S3 disables payload-integrity verification on UNSIGNED-PAYLOAD
+	//     requests. That's acceptable here because (a) the body has
+	//     already been SHA-256 validated by the upstream source (the
+	//     VeloxArtifactStream), and (b) the request itself is
+	//     authenticated via X-Amz-Signature — a network attacker
+	//     cannot MITM without also forging the signature.
+	//   * Time-bound: the caller MUST pass a ctx with a deadline. The
+	//     struct's 15s http.Timeout is a fail-safe only; large uploads
+	//     (>15s of streamed bytes) need a generous ctx timeout.
+	//
+	// Returns the number of bytes uploaded (== sizeBytes on success) or
+	// a non-nil error on transport failure, sign failure, body read
+	// failure, or non-2xx response. Errors are wrapped with `fmt.Errorf`
+	// + `%w` so callers can `errors.Is` for specific sentinels if
+	// desired (none defined yet).
+	Upload(ctx context.Context, body io.Reader, key, contentType string, sizeBytes int64) (int64, error)
 }
 
 // S3Provider generates an AWS SigV4-signed PUT URL against an arbitrary
@@ -183,6 +218,72 @@ func (p *S3Provider) objectKey(key string) string {
 
 // Provider implements StorageProvider.
 func (p *S3Provider) Provider() string { return "s3" }
+
+// Upload (P1 Velox integration) streams body directly into the bucket
+// at key. See the StorageProvider.Upload interface comment for the
+// full contract. Implementation choices:
+//
+//  1. SignS3V4URL with method=PUT, TTL=5m — same signer as
+//     SignUpload / VerifyUpload. Reusing it avoids a 200-line second
+//     copy of the SigV4 algorithm. The 5-minute TTL is more than
+//     enough for server-side workloads (vs. client presigned URLs
+//     which might sit for hours).
+//
+//  2. http.Request body = `body` (the io.Reader the caller passed).
+//     Streaming: we DO NOT buffer. The Go HTTP client will write
+//     the body to the connection as fast as S3 reads it.
+//
+//  3. Content-Length header set from sizeBytes. S3 MUST know the
+//     body length in advance for PUT (you cannot PUT without
+//     Content-Length OR chunked transfer encoding — and our SigV4
+//     signer uses UNSIGNED-PAYLOAD, NOT the AWS streaming v4
+//     algorithm that supports chunked transfer). So sizeBytes must
+//     match the actual body length, otherwise S3 will reject the
+//     upload.
+//
+//  4. Returns sizeBytes on success — NOT len(io.Copy(...)) — because
+//     we don't have a separate "how many bytes did the body yield"
+//     counter and the contract guarantees the body yielded exactly
+//     sizeBytes (caller's responsibility).
+//
+//  5. Any non-2xx response returns an error wrapped with the
+//     status code + key so on-call can grep the logs.
+func (p *S3Provider) Upload(ctx context.Context, body io.Reader, key, contentType string, sizeBytes int64) (int64, error) {
+	if body == nil {
+		return 0, errors.New("storage: Upload: body is nil")
+	}
+	if sizeBytes <= 0 {
+		return 0, fmt.Errorf("storage: Upload: sizeBytes must be > 0 (got %d)", sizeBytes)
+	}
+	signedURL, signErr := signS3V4URL(
+		p.baseHost, p.region, "s3",
+		p.objectKey(key), 5*time.Minute, http.MethodPut,
+		p.accessKey, p.secretKey,
+		time.Now(),
+	)
+	if signErr != nil {
+		return 0, fmt.Errorf("storage: Upload: sign PUT URL for key %q: %w", key, signErr)
+	}
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, signedURL, body)
+	if reqErr != nil {
+		return 0, fmt.Errorf("storage: Upload: build PUT request for key %q: %w", key, reqErr)
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if sizeBytes > 0 {
+		req.ContentLength = sizeBytes
+	}
+	resp, doErr := p.http.Do(req)
+	if doErr != nil {
+		return 0, fmt.Errorf("storage: Upload: PUT %s failed: %w", key, doErr)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("storage: Upload: S3 PUT returned status %d for key %q", resp.StatusCode, key)
+	}
+	return sizeBytes, nil
+}
 
 // AssetURL (Taglio 3.2) returns the trusted internal S3 URL for a
 // stored object. The URL uses the same scheme as the presigned upload

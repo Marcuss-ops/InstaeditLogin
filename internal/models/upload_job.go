@@ -35,6 +35,16 @@ const (
 	// `Authorization: Bearer <access_token>` + files.get?alt=media
 	// (see internal/services/google_drive_oauth.go::DownloadFile).
 	UploadJobSourceAuthenticatedDrive UploadJobSource = "authenticated_drive"
+	// UploadJobSourceVeloxArtifact is the upload-source tag created
+	// by the Velox→InstaEdit ingestion pipeline. Velox POSTs a
+	// delivery to /internal/v1/deliveries carrying a one-shot
+	// (download_url, expected_sha256, expected_size_bytes) triple;
+	// the worker stamps an upload_jobs row with this value so the
+	// feed ingest pool's source switch routes to the Velox
+	// implementation. See internal/worker/sources/velox_source.go
+	// for the implementation (HEAD + GET with streaming SHA
+	// compute + size cap + PermanentError on mismatch).
+	UploadJobSourceVeloxArtifact UploadJobSource = "velox_artifact"
 )
 
 // UploadJobStatus tracks the lifecycle of an upload job.
