@@ -11,7 +11,9 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -27,16 +29,17 @@ import (
 // repository.NewExternalDestinationRepository(db) which satisfies
 // this contract.
 //
-// Method scope is intentionally narrow — only the read methods
-// the Velox validate path needs. Mutators (Create / Update /
-// Delete) live on the SAME repository struct but are NOT in
-// this interface because the API surface for service-to-service
-// integrations today only reads; mutations go through the
-// user-facing admin endpoint POST
-// /api/v1/integrations/velox/destinations which uses a different
-// (yet unwritten) writer path.
+// Method scope expanded in Phase 2 to include Create — the
+// user-facing endpoint POST /api/v1/integrations/velox/destinations
+// (pkg/api/admin_velox_destinations.go) writes new rows; the
+// service-to-service Velox validate path reads. Mutators beyond
+// Create (Update* / Delete) live on the SAME repository struct
+// but are NOT in this interface today; they can be lifted here
+// when the operator-side UI grows an "unlink this channel"
+// surface.
 type ExternalDestinationStore interface {
 	GetByID(ctx context.Context, id string) (*models.ExternalDestination, error)
+	Create(ctx context.Context, d *models.ExternalDestination) error
 }
 
 // ExternalDeliveryStore is the persistence contract for
@@ -257,6 +260,102 @@ var mimeAllowlist = map[string]bool{
 	"video/x-matroska": true,
 }
 
+// --- /internal/v1/destinations/{id}/validate rate limiter ----------
+//
+// validateRateLimiter is a per-destination-id sliding-window
+// rate limiter. The Velox peer requests validate before every
+// delivery; a worker stuck in a hot-loop (e.g. exponential-retry
+// without backoff, mis-wired destination id) could fire hundreds of
+// validates per second against a single destination. The limiter
+// rejects with 429 + Retry-After so the peer can spread its retry
+// load without saturating the InstaEdit DB.
+//
+// Sliding window: an entry per destination_id is allocated the
+// first time take(key) is called. Each subsequent call within the
+// window increments the slot's count; when count exceeds limit,
+// take returns (allowed=false, retryAfter=time-until-slot.resetAt).
+// After resetAt elapses, the next take re-allocates the slot.
+//
+// Concurrency: sync.Mutex serialises the read+increment so a
+// single destination_id's counter is atomic. Across distinct
+// destination_ids, contention is bounded by the mutex held
+// briefly during take(); the operation is O(1) and the hot-path
+// (limit-check without DB) does not block on database I/O.
+//
+// nil *validateRateLimiter is the documented "no limit"
+// sentinel — handlers check `if r.veloxValidateRateLimiter != nil`
+// before consulting it, so a process that never wired
+// WithVeloxValidateRateLimit behaves as before.
+type validateRateLimiter struct {
+	mu     sync.Mutex
+	slots  map[string]*validateSlot
+	limit  int
+	window time.Duration
+}
+
+// validateSlot tracks one destination's request count within a
+// sliding window. resetAt is the moment the count resets to zero
+// and the slot becomes eligible for `limit` fresh requests.
+type validateSlot struct {
+	count   int
+	resetAt time.Time
+}
+
+// take increments the counter for key and returns whether the
+// request is allowed. retryAfter is the time until the current
+// window resets; nonzero ONLY when allowed=false (Retry-After
+// header value). On a nil receiver this is a no-op pass-through
+// (mirrors the documented "no limit" sentinel).
+func (l *validateRateLimiter) take(key string) (allowed bool, retryAfter time.Duration) {
+	if l == nil {
+		return true, 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	slot, ok := l.slots[key]
+	if !ok || now.After(slot.resetAt) {
+		l.slots[key] = &validateSlot{count: 1, resetAt: now.Add(l.window)}
+		return true, 0
+	}
+	if slot.count >= l.limit {
+		return false, slot.resetAt.Sub(now)
+	}
+	slot.count++
+	return true, 0
+}
+
+// defaultValidateRateLimit is the production-bound default
+// (60 validations per minute per destination_id). Operators can
+// override via WithVeloxValidateRateLimit(...).
+const defaultValidateRateLimit = 60
+
+// defaultValidateRateWindow is the sliding-window duration for
+// the production default. Aligned with minute-bucket semantics
+// so dashboards that group by minute report stable counts.
+const defaultValidateRateWindow = 1 * time.Minute
+
+// WithVeloxValidateRateLimit wires a custom per-destination-id
+// rate limit on the validate endpoint. Passing 0 disables the
+// limiter (handler becomes a no-op take). Most production
+// deployments can skip this option and rely on the default
+// constants above; tests USE this option to set a low limit
+// (e.g. 2) so the 429 path is reachable in O(few) requests.
+func WithVeloxValidateRateLimit(limit int, window time.Duration) RouterOption {
+	if limit <= 0 || window <= 0 {
+		// Zero / negative → disable the limiter. Saves a
+		// heap allocation in main.go for the "no limit"
+		// deployment shape.
+		return func(r *Router) { r.veloxValidateRateLimiter = nil }
+	}
+	rl := &validateRateLimiter{
+		slots:  make(map[string]*validateSlot),
+		limit:  limit,
+		window: window,
+	}
+	return func(r *Router) { r.veloxValidateRateLimiter = rl }
+}
+
 // maxDeliveryBodyBytes is the hard cap on POST /deliveries body
 // size. Phase 1 metadata-only deliveries (the artifact is
 // referenced by download_url, not uploaded inline) cap the
@@ -271,6 +370,33 @@ const maxDeliveryBodyBytes = 8 * 1024 * 1024
 // to per-router config (when Dropbox joins the same code path)
 // will lift this into a WithVeloxSourceSystem option.
 const veloxSourceSystemTag = "velox"
+
+// generateVeloxDestinationID mints a unique opaque ULID-shaped id
+// for external_destinations.id. Strategy mirrors
+// generateVeloxDeliveryID with a different prefix: 7-char prefix
+// ("extdst_") + 3-char ULID legacy timestamp segment ("01J") +
+// 16 bytes (128 bits) of crypto-rand encoded as 26-char base32
+// (StdEncoding without padding). Total = 36 chars.
+//
+// Used by the user-facing POST
+// /api/v1/integrations/velox/destinations (Phase 2). The
+// repository's Create method stores the byte payload verbatim;
+// callers consume the opaque id as a stable reference (the
+// Velox service-to-surface references the same id in
+// /internal/v1/destinations/{id}/validate + /internal/v1/deliveries).
+//
+// Returns (id, error). Errors only occur on crypto/rand.Read
+// failures (extremely rare; usually means the OS entropy source
+// is broken — fatal at boot, but defensive here so the handler
+// returns 500 instead of panicking).
+func generateVeloxDestinationID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("velox destination id mint: rand.Read: %w", err)
+	}
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b[:])
+	return "extdst_01J" + strings.ToLower(encoded), nil
+}
 
 // generateVeloxDeliveryID mints a unique opaque ULID-shaped id
 // for the social_delivery_id column. Strategy: 5-char prefix
@@ -619,6 +745,27 @@ func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *h
 		return
 	}
 
+	// 0. Per-destination rate limit. Runs BEFORE any DB lookup
+	// so a Velox hot-loop on a single id is rejected cheaply
+	// without saturating the destination / workspace /
+	// platform_account downstreams. 429 + Retry-After header
+	// signals the peer to spread its retry load.
+	if r.veloxValidateRateLimiter != nil {
+		allowed, retryAfter := r.veloxValidateRateLimiter.take(id)
+		if !allowed {
+			seconds := int(retryAfter.Seconds())
+			if seconds < 1 {
+				seconds = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
+			slog.Warn("velox validate: rate limit exceeded",
+				"destination_id", id, "retry_after_seconds", seconds)
+			writeError(w, http.StatusTooManyRequests,
+				fmt.Sprintf("rate limit exceeded; retry after %d seconds", seconds))
+			return
+		}
+	}
+
 	// 1. Destination lookup.
 	dest, err := r.externalDestinations.GetByID(req.Context(), id)
 	if err != nil {
@@ -678,6 +825,24 @@ func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *h
 		slog.Warn("velox validate: destination has reauth_required channel",
 			"destination_id", id, "platform_account_id", pa.ID)
 		writeError(w, http.StatusNotFound, "destination requires reauth")
+		return
+	}
+
+	// P1 deletion check: refuse explicitly-cancelled accounts
+	// (status="revoked" OR status="disconnected"). These mean
+	// the user took an explicit action to terminate the OAuth
+	// grant, so keeping the destination enabled-but-unusable
+	// would surface as a publish-time blocked_auth. Returning
+	// 404 here gives Velox the same "destination not found"
+	// signal as a removed row so the worker reissues with a
+	// fresh id (matches the reauth_required collapse semantics
+	// documented at the file header).
+	if pa.Status == "revoked" || pa.Status == models.AccountStatusRevoked ||
+		pa.Status == "disconnected" || pa.Status == models.AccountStatusDisconnected {
+		slog.Warn("velox validate: destination has cancelled channel",
+			"destination_id", id, "platform_account_id", pa.ID,
+			"status", pa.Status)
+		writeError(w, http.StatusNotFound, "destination cancelled")
 		return
 	}
 

@@ -228,6 +228,33 @@ type Router struct {
 	// the validate route is mounted (matches the per-route
 	// Optional-wiring pattern used for the other feature flags).
 	externalDeliveries ExternalDeliveryStore
+
+	// veloxValidateRateLimiter (P2 Velox integration — Phase 2
+	// rate-limit on the /internal/v1/destinations/{id}/validate
+	// endpoint). nil → no rate limit (the closest production
+	// deployment opted-out via WithVeloxValidateRateLimit(0,0) or
+	// simply never wired the option). When non-nil, the handler
+	// rejects with 429 + Retry-After after `limit` requests per
+	// `window` per destination_id. See
+	// pkg/api/internal_velox.go::validateRateLimiter.
+	veloxValidateRateLimiter *validateRateLimiter
+
+	// csrfMiddleware (P2 Velox integration — Phase 2) wraps the
+	// user-facing /api/v1/integrations/velox/destinations route
+	// with the project's canonical CSRF check. nil when not
+	// wired; tests pass passthrough stubs. cmd/server/main.go
+	// wires it via WithCsrfMiddleware(auth.NewCSRF(r.csrfConfig(),
+	// _)). Production MUST wire this; the field exists so the
+	// route registration can reference it without a compile
+	// error.
+	csrfMiddleware func(http.Handler) http.Handler
+
+	// authMiddleware (P2 Velox integration — Phase 2) mirrors
+	// csrfMiddleware for the JWT identity layer on
+	// /api/v1/integrations/velox/destinations. nil when not
+	// wired; tests pass passthrough stubs. cmd/server/main.go
+	// wires it via WithAuthMiddleware(r.auth.Middleware).
+	authMiddleware func(http.Handler) http.Handler
 }
 
 // WithDB wires the database for the /ready handler's DB ping +

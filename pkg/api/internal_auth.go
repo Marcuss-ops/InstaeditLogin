@@ -144,3 +144,28 @@ const authHeaderAuthorization = "Authorization"
 func WithVeloxAPIToken(token string) RouterOption {
 	return func(r *Router) { r.veloxAPIToken = token }
 }
+
+// WithCsrfMiddleware wires the CSRF middleware used to wrap
+// the user-facing /api/v1/integrations/velox/destinations
+// endpoint. Production wiring in cmd/server/main.go will
+// pass auth.NewCSRF(r.csrfConfig(), http.NotFoundHandler())
+// so the registered route gets the project's canonical CSRF
+// chain. Tests pass a passthrough func to bypass CSRF
+// verification. When empty (nil), the route is mounted
+// WITHOUT CSRF — acceptable in dev/staging; production MUST
+// wire this.
+func WithCsrfMiddleware(mw func(http.Handler) http.Handler) RouterOption {
+	return func(r *Router) { r.csrfMiddleware = mw }
+}
+
+// WithAuthMiddleware wires the JWT-auth middleware used to
+// wrap the user-facing /api/v1/integrations/velox/destinations
+// endpoint. Production wiring in cmd/server/main.go will
+// pass r.auth.Middleware. Tests pass a passthrough func
+// to bypass JWT verification (and inject Identity directly
+// into request context via auth.IdentityToContext helper).
+// Same nil-on-not-wired semantics as WithCsrfMiddleware.
+func WithAuthMiddleware(mw func(http.Handler) http.Handler) RouterOption {
+	return func(r *Router) { r.authMiddleware = mw }
+}
+
