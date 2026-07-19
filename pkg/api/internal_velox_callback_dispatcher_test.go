@@ -593,3 +593,62 @@ func TestVeloxCallback_DefaultEventIDFormat(t *testing.T) {
 		t.Errorf("default event id should be 36 chars (evt_ + 32 hex); got %q (%d chars)", got, len(got))
 	}
 }
+
+// TestVeloxCallback_AllEventsAreDispatchedAndAudited is a smoke test that
+// pins the contract: ALL seven documented events (artifact_verified, queued,
+// publishing, published, blocked_auth, failed, dead_letter) are routed through
+// Dispatch without being filtered out, and each is recorded by the audit
+// store with its event name. Production code may add more events in the
+// future, but the existing seven are the API contract — if one were silently
+// dropped we'd lose observability into the Velox→InstaEdit pipeline.
+//
+// The test uses httptest.Server returning 200 OK + verifies the audit store
+// saw the event name verbatim. Per-event correctness (signature, retries,
+// 4xx/5xx handling) is covered by the focused TestVeloxCallback_* tests.
+func TestVeloxCallback_AllEventsAreDispatchedAndAudited(t *testing.T) {
+	events := []models.VeloxCallbackEvent{
+		models.VeloxCallbackArtifactVerified,
+		models.VeloxCallbackQueued,
+		models.VeloxCallbackPublishing,
+		models.VeloxCallbackPublished,
+		models.VeloxCallbackBlockedAuth,
+		models.VeloxCallbackFailed,
+		models.VeloxCallbackDeadLetter,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	for _, event := range events {
+		t.Run(string(event), func(t *testing.T) {
+			audit := newMockAuditStore()
+			d := newTestDispatcher(t, srv.URL, audit)
+			payload := &models.VeloxCallbackPayload{
+				EventID:            "evt_smoke",
+				Event:              event,
+				HashAlgo:           models.VeloxCallbackHashAlgoSha256,
+				DeliveryID:         "sdel_smoke",
+				ExternalDeliveryID: "delivery_smoke",
+				Timestamp:          time.Now().UTC(),
+				CallbackURL:        srv.URL,
+				Status:             models.ExternalDeliveryStatusAccepted,
+			}
+			if err := d.Dispatch(context.Background(), payload); err != nil {
+				t.Fatalf("dispatch failed: %v", err)
+			}
+			// Audit must contain the event name verbatim + a successful delivery record.
+			records := audit.Records()
+			found := false
+			for _, rec := range records {
+				if rec.Action == string(models.AuditActionVeloxCallbackDelivered) &&
+					strings.Contains(rec.Details, string(event)) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("audit store missing delivered record for event %q; got %+v", event, records)
+			}
+		})
+	}
+}

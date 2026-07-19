@@ -14,16 +14,16 @@
 // Signature scheme — mirrors the architectural contract
 // verbatim:
 //
-//   signed_string = "<unix_timestamp>.<raw_body>"
-//   signature      = hex(HMAC-SHA256(secret, signed_string))
+//	signed_string = "<unix_timestamp>.<raw_body>"
+//	signature      = hex(HMAC-SHA256(secret, signed_string))
 //
 // Headers:
 //
-//   X-Velox-Event-ID:    <opaque event id, "evt_<32-hex>">
-//   X-Velox-Timestamp:   <unix seconds>
-//   X-Velox-Signature:   "sha256=<hex digest of signed_string>"
-//   Content-Type:        application/json
-//   User-Agent:          InstaEditLogin-Velox-Callbacks/1.0
+//	X-Velox-Event-ID:    <opaque event id, "evt_<32-hex>">
+//	X-Velox-Timestamp:   <unix seconds>
+//	X-Velox-Signature:   "sha256=<hex digest of signed_string>"
+//	Content-Type:        application/json
+//	User-Agent:          InstaEditLogin-Velox-Callbacks/1.0
 //
 // Retry policy — bounded attempts (default 5). 5xx + network
 // errors retry; 4xx is terminal (receiver's bug, retrying is
@@ -45,8 +45,8 @@
 // Event types — exactly 7 (matches the external_deliveries
 // status names that trigger callbacks):
 //
-//   artifact_verified, queued, publishing, published,
-//   blocked_auth, failed, dead_letter
+//	artifact_verified, queued, publishing, published,
+//	blocked_auth, failed, dead_letter
 //
 // Adding a new event type is a 2-step change: add the const
 // here + emit from the appropriate worker hook.
@@ -402,7 +402,18 @@ func (d *VeloxCallbackDispatcher) Dispatch(
 			// would re-confuse the receiver (signature would
 			// still fail validation, body would still parse
 			// to the same error). Break out to audit + return.
-			lastErr = fmt.Errorf("velox callback: attempt %d client error %d (terminal, no retry)", attempt, resp.StatusCode)
+			// [client_4xx] is an upstream-audit-parser marker so
+			// postmortem search/jq filters can immediately
+			// distinguish this terminal outcome from a 5xx transient.
+			d.logger.Warn(
+				"velox callback: client error (4xx terminal, no retry)",
+				"event", event,
+				"event_id", eventID,
+				"callback_url", p.CallbackURL,
+				"status_code", resp.StatusCode,
+				"attempt", attempt,
+			)
+			lastErr = fmt.Errorf("[client_4xx] velox callback: attempt %d client error %d (terminal, no retry)", attempt, resp.StatusCode)
 			break
 		default:
 			// 1xx / 3xx — unexpected; treat as terminal.
