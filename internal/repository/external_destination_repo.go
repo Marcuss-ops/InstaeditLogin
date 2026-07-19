@@ -6,11 +6,55 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/lib/pq"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
+
+// uniqueViolationDestTripleDetailRegex matches the pq.Error Detail
+// content for the UNIQUE(source_system, workspace_id,
+// platform_account_id) constraint on external_destinations. Anchored
+// on the column-list LHS (not the inner tuple) so the regex is
+// agnostic to row values and matches any Postgres version detail
+// that follows the documented
+//
+//	Key (source_system, workspace_id, platform_account_id)=(...) already exists.
+//
+// shape (Postgres 9.6+ user-visible SQLSTATE 23505 message format
+// — confirmed stable in the Postgres docs as the "Detailed
+// Errors" convention which doesn't change across pg_dump/restore
+// or major version upgrades). The dispatch was previously keyed on
+// pqErr.Constraint name (auto-generated
+// "external_destinations_source_system_workspace_id_platform_account_id_key");
+// switching to Detail eliminates the auto-name drift risk (a
+// Postgres upgrade, schema rename, or pg_restore into a different
+// search_path could rename the auto-NAME without changing the
+// semantics).
+var uniqueViolationDestTripleDetailRegex = regexp.MustCompile(
+	`Key \(source_system, workspace_id, platform_account_id\)=`)
+
+// fkReferencingExternalDestinationsDetailRegex matches the
+// pq.Error Detail content for ANY foreign-key violation against
+// the external_destinations row being acted on (the FK could be
+// referenced from external_deliveries today, from a future
+// external_audit_log table, or from any other present-or-future
+// table holding REFERENCES external_destinations(id)). The
+// canonical Postgres Detail shape for an FK violation on a
+// DELETE FROM external_destinations WHERE id=X is:
+//
+//	Key (id)=(extdst_01JABC) is still referenced from table "<REF>".
+//
+// The capture group ([^"]+) extracts the REFERENCING table name so
+// the wrapped error can surface WHICH table blocked the deletion
+// (operator-grade diagnostics). The dispatch sentinel
+// (ErrExternalDestinationHasDependents) is GENERIC across all
+// such FKs so the API handler doesn't need per-table dispatch
+// logic — it always maps to 409 Conflict regardless of which table
+// is the blocker.
+var fkReferencingExternalDestinationsDetailRegex = regexp.MustCompile(
+	`Key \(id\)=.+? is still referenced from table "([^"]+)"`)
 
 // ExternalDestinationRepository handles persistence for the
 // external_destinations table (migration 054_external_destinations.sql).
@@ -88,12 +132,18 @@ func (r *ExternalDestinationRepository) Create(ctx context.Context, d *models.Ex
 		[]byte(d.DefaultMetadata),
 	).Scan(&d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
-		// SQLSTATE 23505 (unique_violation) +
-		// external_destinations_source_system_workspace_id_platform_account_id_key
-		// constraint (auto-named from migration 054's UNIQUE clause).
+		// SQLSTATE 23505 (unique_violation) + Detail content
+		// matches the UNIQUE(source_system, workspace_id,
+		// platform_account_id) triple column-list prefix. Matches
+		// any Postgres 13+ Detail-formatted error for this
+		// constraint (post-extension the dispatch was keyed on
+		// pqErr.Constraint name; switching to Detail-content
+		// match avoids auto-name drift across pg_dump/pg_restore
+		// or future constraint-renaming migrations).
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" &&
-			pqErr.Constraint == "external_destinations_source_system_workspace_id_platform_account_id_key" {
+			pqErr.Detail != "" &&
+			uniqueViolationDestTripleDetailRegex.MatchString(pqErr.Detail) {
 			return fmt.Errorf("%w: source_system=%s workspace_id=%d platform_account_id=%d",
 				ErrExternalDestinationAlreadyExists, d.SourceSystem, d.WorkspaceID, d.PlatformAccountID)
 		}
@@ -290,14 +340,32 @@ func (r *ExternalDestinationRepository) Delete(ctx context.Context, id string) e
 		id,
 	)
 	if err != nil {
-		// SQLSTATE 23503 (foreign_key_violation) when external_deliveries
-		// still references this destination via FK. The handler maps
-		// this to HTTP 409 Conflict so the operator sees
-		// "destination has in-flight deliveries; disable instead".
+		// SQLSTATE 23503 (foreign_key_violation) AND Detail content
+		// matches the canonical
+		//   Key (id)=... is still referenced from table "<REF>"
+		// shape. The regex doesn't hardcode the REFERENCING table
+		// name, so ANY FK that targets external_destinations.id
+		// (external_deliveries today; an external_audit_log table
+		// tomorrow) surfaces as the same typed sentinel. The
+		// capture group extracts the table name verbatim so the
+		// wrapped error gives operators a "blocked by table X"
+		// diagnostic without forcing the handler to maintain a
+		// per-table dispatch map.
+		//
+		// Note: a future FK direction (external_destinations
+		// referencing SOME other table — not the current schema,
+		// but forward-compat thought) would NOT match this regex
+		// because the Detail would surface the REFERENCED table,
+		// not external_destinations. Such a config is impossible
+		// today (external_destinations has no outgoing FKs per
+		// migration 054), so the regex is currently safe.
 		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && pqErr.Code == "23503" {
-			return fmt.Errorf("%w: in-flight deliveries prevent deletion (id=%s)",
-				ErrExternalDestinationHasDeliveries, id)
+		if errors.As(err, &pqErr) && pqErr.Code == "23503" && pqErr.Detail != "" {
+			if matches := fkReferencingExternalDestinationsDetailRegex.FindStringSubmatch(pqErr.Detail); len(matches) > 1 {
+				referencingTable := matches[1]
+				return fmt.Errorf("%w: blocked by referencing table %q (id=%s)",
+					ErrExternalDestinationHasDependents, referencingTable, id)
+			}
 		}
 		return fmt.Errorf("external destination Delete: %w", err)
 	}
@@ -311,12 +379,25 @@ func (r *ExternalDestinationRepository) Delete(ctx context.Context, id string) e
 	return nil
 }
 
-// ErrExternalDestinationHasDeliveries is the typed sentinel for the
-// ON DELETE RESTRICT violation on external_deliveries. The handler
-// surfaces this as 409 Conflict so the operator sees a clean
-// "destination is in use" message — pointing them at UpdateEnabled
-// instead of Delete.
-var ErrExternalDestinationHasDeliveries = errors.New("external destination has in-flight deliveries")
+// ErrExternalDestinationHasDependents is the typed sentinel for
+// any ON DELETE RESTRICT violation on external_destinations
+// (regardless of which REFERENCING table blocked the delete —
+// external_deliveries today, a future external_audit_log table,
+// etc.). The handler maps this sentinel to HTTP 409 Conflict so
+// the operator sees "destination still has references; disable
+// instead". The wrapped error carries the referencing table name
+// from the regex capture group so the operator gets a clean
+// "blocked by table X" diagnostic without forcing the handler
+// layer to maintain a per-table dispatcher.
+//
+// Historical alias: ErrExternalDestinationHasDeliveries points at
+// the same value to keep pkg/api layer code that previously
+// typed-dispatched on the old name working without churn. New
+// callers should reference ErrExternalDestinationHasDependents.
+var (
+	ErrExternalDestinationHasDependents = errors.New("external destination has dependent rows (referencing table blocks delete)")
+	ErrExternalDestinationHasDeliveries = ErrExternalDestinationHasDependents // legacy alias
+)
 
 // ExternalDeliveryLockNamespace constant is defined in
 // external_delivery_repo.go (used by Insert). Declared here as a

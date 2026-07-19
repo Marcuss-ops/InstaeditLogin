@@ -12,6 +12,8 @@
 package metrics
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 
@@ -114,6 +116,22 @@ var (
 			Help: "SessionsService.cleanupOrphanSession: revoke attempts that failed even after the helper's one-retry. Each increment = stale orphan row awaiting periodic Cleanup.",
 		},
 	)
+	// P2 ops — Token rotation alert. GaugeVec labeled by
+	// (provider, subject) so the periodic collector (collector.go)
+	// populates one series per Google manager Account. The naming
+	// follows the user's spec ("oauth_connections_per_subject_total")
+	// verbatim; the "_total" suffix suggests counter but the metric
+	// is GAUGE because the value can go DOWN when a connection is
+	// revoked (counters are forbidden to decrease). Alert when
+	// value > 80 (operator's chosen soft margin under Google's
+	// 100-refresh-token-per-client-ID cap).
+	oauthConnectionsPerSubject = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "oauth_connections_per_subject_total",
+			Help: "Active oauth_connections rows grouped by provider and the granter's stable subject id. Google subjects above 80 risk the 100-refresh-token cap. Runbook: docs/OPERATIONS.md \u00a78.",
+		},
+		[]string{"provider", "subject"},
+	)
 )
 
 func init() {
@@ -127,6 +145,7 @@ func init() {
 		tokenRefreshError,
 		jwtIssued,
 		sessionOrphanRevokeFailures,
+		oauthConnectionsPerSubject,
 	)
 }
 
@@ -171,6 +190,51 @@ func IncJWTIssued() {
 // it per the C5 contract.
 func RecordSessionOrphanRevokeFailure() {
 	sessionOrphanRevokeFailures.Inc()
+}
+
+// SetOAuthConnectionsPerSubject is called by the periodic
+// collector (pkg/metrics/collector.go::collectOAuthConnectionsPerSubject)
+// once per tick AFTER ResetOAuthConnectionsPerSubjectMetrics so a
+// revoked connection immediately stops emitting. Each call writes
+// one series (provider, subject) -> count.
+//
+// `subject` MUST be label-safe (≤64 chars, no null bytes);
+// collectors SHOULD pass TruncateSubjectForLabel() before calling
+// here. The cap is a soft guard against accidental unbounded
+// series memory growth (Prometheus best practice: each label
+// series costs ~3KB of process memory).
+func SetOAuthConnectionsPerSubject(provider, subject string, count int64) {
+	oauthConnectionsPerSubject.WithLabelValues(provider, subject).Set(float64(count))
+}
+
+// ResetOAuthConnectionsPerSubjectMetrics clears ALL series on the
+// oauthConnectionsPerSubject gauge. Called once per tick BEFORE
+// the new SET loop so a revoked connection's series is removed
+// from the scrape (a missing series is more operator-honest than
+// a stale series at the old count). Costs O(N) where N is the
+// current subject count — at 200 subjects that's a no-op.
+func ResetOAuthConnectionsPerSubjectMetrics() {
+	oauthConnectionsPerSubject.Reset()
+}
+
+// TruncateSubjectForLabel promotes a raw Google subject id
+// (which can be up to 255 chars per Google's OIDC spec) to a
+// label-safe value (<=64 chars). Strategy: sha256 hex of the
+// raw id keeps the cardinality AND uniqueness — different
+// subjects map to different hex strings, and Prometheus sees
+// `subject=ai3f...` labels instead of the raw id. Operators
+// querying PromQL can still aggregate by the truncated form.
+//
+// NOTE: the sha256 hex output is 64 chars = at the Prometheus
+// label-length ceiling. Inputs <= 64 chars pass through verbatim
+// so production IDs are operator-readable in /metrics output.
+func TruncateSubjectForLabel(subject string) string {
+	const maxLabelLen = 64
+	if len(subject) <= maxLabelLen && !strings.ContainsAny(subject, "\x00") {
+		return subject
+	}
+	sum := sha256.Sum256([]byte(subject))
+	return hex.EncodeToString(sum[:])
 }
 
 // --- Error classification -------------------------------------------------

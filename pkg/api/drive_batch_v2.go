@@ -25,13 +25,20 @@ import (
 // an env-driven config in a follow-up so the SPA can show "max
 // horizon: 90 days" without redeploying the server.
 //
-// Track D6 from the thinker's D1-D7 review: the handler applies
-// the heuristic clamp PRE-insert based on a no-files-yet estimate;
-// the runtime crawler applies the EXACT clamp ONCE file_count is
-// known (which is always ≤ the heuristic). The heuristic gives
-// the user immediate feedback; the runtime write makes the DB
-// state truthful.
+// P1 refactor: this is now a HARD cap. When the heuristic projects
+// the schedule past the horizon, the handler returns 422 with an
+// explicit clamped=true body (see DriveBatchImportV2OverflowResponse).
+// The runtime crawler still applies the EXACT re-stamp ONCE file_count
+// is known (D6 from the prior thinker review) so the DB end-state
+// is truthful, but the user-facing contract is now fail-loud rather
+// than accept-and-warn.
 const scheduleClampHorizonDays = 90
+
+// scheduleClampHeuristicMaxFiles is the worst-case projection N used
+// by the heuristic. Drive folders in practice max at a few thousand
+// files; 10_000 is generous margin. Configurable in a follow-up via
+// env if operators see false positives.
+const scheduleClampHeuristicMaxFiles = 10_000
 
 // driveBatchFolderIDPatternRegex mirrors the historical pattern
 // kept in drive_batch.go. Duplicating here means a malformed id
@@ -59,43 +66,55 @@ type ImportBatchStore interface {
 }
 
 // DriveBatchImportV2Request is the body for
-// POST /api/v1/media/import/drive/folder/async (P1#7).
+// POST /api/v1/media/import/drive/folder/async.
 //
-// Replaces the historical shape (FacebookAccountID + folder_id +
-// jitter seconds + page_token + cursor_scheduled_at) with a
-// generic source envelope + target union + publish_schedule
-// envelope. The handler returns IMMEDIATELY with
-// {batch_id, status:"queued", schedule_clamped, ...}; the
-// background folder crawler (internal/worker/drive_batch_crawler.go)
-// is responsible for the actual Drive pagination + upload_job
-// creation.
+// P1 refactor (current spec): the request DTO is FLAT — target_account_ids
+// and target_group_id sit at the top level alongside source/workspace_id/
+// default_privacy_level/publish_schedule (no nested `targets{}` envelope
+// any more). The previous P1#7 shape kept them inside a BatchTargetsRef
+// envelope for visual grouping; the new spec moves them out per the user's
+// request and adds the new default_privacy_level field.
 //
-// Per spec (D2.a + D3.a + D7.c from the thinker's D1-D7 review):
-//   * source.provider is validated against {"google_drive"} (extensible
-//     forward-compatible — a future Dropbox endpoint registers
-//     "dropbox" here).
-//   * targets.account_ids XOR targets.group_name; supplying both
-//     or neither is a 400.
-//   * publish_schedule.start_at must be in the future and
-//     min_gap_seconds <= max_gap_seconds.
+// Producer returns 202 + {batch_id, status:"queued", schedule_clamped}
+// immediately; the background folder crawler
+// (internal/worker/drive_batch_crawler.go) drives the Drive pagination
+// + per-file upload_job fan-out.
+//
+// XOR invariant: target_account_ids XOR target_group_id; supplying both
+// or neither is a 422.
+// Schedule invariant: publish_schedule.start_at must be in the future
+// AND min_gap_seconds <= max_gap_seconds AND the heuristic clamp must
+// not exceed the 90-day horizon (otherwise 422 with explicit clamped=true).
+// Privacy invariant: default_privacy_level must be one of public/unlisted/private.
 type DriveBatchImportV2Request struct {
-	Source         models.DriveSourceRef   `json:"source"`
-	WorkspaceID    int64                   `json:"workspace_id"`
-	Targets        models.BatchTargetsRef  `json:"targets"`
-	PublishSchedule models.PublishScheduleRef `json:"publish_schedule"`
-	Title          string                  `json:"title,omitempty"`
-	CaptionPrefix  string                  `json:"caption_prefix,omitempty"`
+	Source              models.DriveSourceRef     `json:"source"`
+	WorkspaceID         int64                     `json:"workspace_id"`
+	TargetAccountIDs    []int64                   `json:"target_account_ids"`
+	TargetGroupID       *string                   `json:"target_group_id,omitempty"`
+	DefaultPrivacyLevel string                    `json:"default_privacy_level"`
+	PublishSchedule     models.PublishScheduleRef `json:"publish_schedule"`
 }
 
-// DriveBatchImportV2Response is the producer-side response. Always
-// 202 Accepted on success; the caller polls
+// DriveBatchImportV2Response is the producer-side success body.
+// Always 202 Accepted on success; the caller polls
 // GET /api/v1/media/import/drive/folder/async/{id} for status.
 type DriveBatchImportV2Response struct {
 	BatchID             uuid.UUID `json:"batch_id"`
 	Status              string    `json:"status"` // "queued" immediately; "processing" / "completed" / "failed" on poll
 	ScheduleClamped     bool      `json:"schedule_clamped"`
 	ScheduleClampReason *string   `json:"schedule_clamp_reason,omitempty"`
-	Notice              string    `json:"notice,omitempty"`
+}
+
+// DriveBatchImportV2OverflowResponse is the 422 body returned when
+// the publish schedule's projected horizon exceeds the cap. The
+// caller can show this verbatim in the SPA's "your batch was too
+// long" toast; no silent truncation.
+type DriveBatchImportV2OverflowResponse struct {
+	Error                string `json:"error"`
+	Clamped              bool   `json:"clamped"`
+	ClampReason          string `json:"clamp_reason"`
+	ProjectedHorizonDays int    `json:"projected_horizon_days"`
+	MaxHorizonDays       int    `json:"max_horizon_days"`
 }
 
 // handleDriveBatchImportV2 implements
@@ -169,9 +188,9 @@ func (r *Router) handleDriveBatchImportV2(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	// Resolve target account list — XOR rule (D3.a) was enforced in
-	// validateDriveBatchV2Request; here we expand group_name → accounts.
-	accountIDs, err := r.resolveV2Targets(req.Context(), userID, ws.ID, &body.Targets)
+	// Resolve target account list — XOR rule was enforced in
+	// validateDriveBatchV2Request; here we expand target_group_id → accounts.
+	accountIDs, err := r.resolveV2Targets(req.Context(), userID, ws.ID, body.TargetGroupID)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "could not resolve targets: "+err.Error())
 		return
@@ -181,12 +200,32 @@ func (r *Router) handleDriveBatchImportV2(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	// Schedule heuristic clamp — file count is unknown at producer-
-	// side, so we use a worst-case projection. The real clamp fires
-	// in the crawler when file_count is known (D6 from the thinker
-	// review — keep both stages; the heuristic is for honest UX, the
-	// runtime is for DB-truth).
-	clamped, clampReason := heuristicScheduleClamp(body.PublishSchedule)
+	// Schedule overflow check — P1 refactor: HARD 422. The previous
+	// heuristic returned 202 + clamped=true flag; the user explicitly
+	// asked for the silent-truncation behaviour to stop. When the
+	// worst-case projection (heuristic) would exceed the 90-day cap,
+	// we refuse the batch up-front so the SPA can prompt the operator
+	// to widen the gap or shorten the horizon.
+	projectedDays := heuristicScheduleClampProjectedDays(body.PublishSchedule)
+	if projectedDays > scheduleClampHorizonDays {
+		reason := fmt.Sprintf(
+			"projected horizon %d days exceeds the %d-day cap (worst-case %d files × min_gap %ds)",
+			projectedDays, scheduleClampHorizonDays,
+			scheduleClampHeuristicMaxFiles, body.PublishSchedule.MinGapSeconds,
+		)
+		slog.Info("drive batch v2: schedule overflow → 422",
+			"user_id", userID, "workspace_id", ws.ID,
+			"projected_days", projectedDays, "max_days", scheduleClampHorizonDays,
+		)
+		writeJSON(w, http.StatusUnprocessableEntity, DriveBatchImportV2OverflowResponse{
+			Error:                "schedule would exceed the publish horizon cap",
+			Clamped:              true,
+			ClampReason:          reason,
+			ProjectedHorizonDays: projectedDays,
+			MaxHorizonDays:       scheduleClampHorizonDays,
+		})
+		return
+	}
 
 	header := &models.ImportBatch{
 		UserID:                 userID,
@@ -195,13 +234,12 @@ func (r *Router) handleDriveBatchImportV2(w http.ResponseWriter, req *http.Reque
 		SourceDriveAccountID:   body.Source.DriveAccountID,
 		SourceFolderID:         body.Source.FolderID,
 		TargetAccountIDs:       accountIDs,
-		TargetGroupName:        body.Targets.GroupName,
+		TargetGroupName:        body.TargetGroupID,
 		PublishScheduleStartAt: body.PublishSchedule.StartAt,
 		PublishScheduleMinGap:  body.PublishSchedule.MinGapSeconds,
 		PublishScheduleMaxGap:  body.PublishSchedule.MaxGapSeconds,
+		DefaultPrivacyLevel:    body.DefaultPrivacyLevel,
 		Status:                 models.ImportBatchStatusQueued,
-		ScheduleClamped:        clamped,
-		ScheduleClampReason:    clampReason,
 	}
 	if err := r.importBatchStore.Create(header); err != nil {
 		slog.Error("drive batch v2: create header failed",
@@ -217,20 +255,15 @@ func (r *Router) handleDriveBatchImportV2(w http.ResponseWriter, req *http.Reque
 		"batch_id", header.ID, "user_id", userID, "workspace_id", ws.ID,
 		"target_count", len(accountIDs),
 		"schedule_start_at", body.PublishSchedule.StartAt.Format(time.RFC3339),
-		"schedule_clamped", clamped,
+		"default_privacy_level", body.DefaultPrivacyLevel,
 	)
 
-	resp := DriveBatchImportV2Response{
+	writeJSON(w, http.StatusAccepted, DriveBatchImportV2Response{
 		BatchID:             header.ID,
 		Status:              string(models.ImportBatchStatusQueued),
-		ScheduleClamped:     clamped,
-		ScheduleClampReason: clampReason,
-	}
-	if clamped && clampReason != nil {
-		resp.Notice = "The cumulative publish schedule would have exceeded the " +
-			fmt.Sprintf("%d-day horizon; the heuristic clamp is a worst-case projection. The runtime crawler applies the EXACT clamp when file count is known.", scheduleClampHorizonDays)
-	}
-	writeJSON(w, http.StatusAccepted, resp)
+		ScheduleClamped:     false,
+		ScheduleClampReason: nil,
+	})
 }
 
 // handleDriveBatchV2Status implements
@@ -278,8 +311,15 @@ func (r *Router) handleDriveBatchV2Status(w http.ResponseWriter, req *http.Reque
 	writeJSON(w, http.StatusOK, batch)
 }
 
-// validateDriveBatchV2Request enforces the producer-side invariants
-// (D2.a strict provider, D3.a XOR targets, schedule envelope shape).
+// validateDriveBatchV2Request enforces the producer-side invariants:
+//   * source.provider must be "google_drive" (extensible forward)
+//   * source.folder_id must match the URL-safe regex
+//   * workspace_id must be positive
+//   * target_account_ids XOR target_group_id
+//   * publish_schedule envelope shape + start_at in the future +
+//     min_gap_seconds <= max_gap_seconds
+//   * default_privacy_level must be one of public/unlisted/private
+//
 // Returned as typed errors so the handler maps to 422 — separate
 // from JSON-parse errors (400) so the SPA can distinguish "fix your
 // payload" from "fill in missing fields".
@@ -300,21 +340,33 @@ func validateDriveBatchV2Request(req *DriveBatchImportV2Request) error {
 		return errors.New("workspace_id must be a positive integer")
 	}
 
-	// XOR: account_ids OR group_name, never both.
-	hasAccounts := len(req.Targets.AccountIDs) > 0
-	hasGroup := req.Targets.GroupName != nil && *req.Targets.GroupName != ""
+	// XOR: account_ids OR group_id, never both.
+	hasAccounts := len(req.TargetAccountIDs) > 0
+	hasGroup := req.TargetGroupID != nil && *req.TargetGroupID != ""
 	if hasAccounts && hasGroup {
-		return errors.New("targets: supply either account_ids or group_name, not both")
+		return errors.New("supply either target_account_ids or target_group_id, not both")
 	}
 	if !hasAccounts && !hasGroup {
-		return errors.New("targets: supply either account_ids[] or group_name")
+		return errors.New("supply either target_account_ids[] or target_group_id")
 	}
 	if hasAccounts {
-		for _, id := range req.Targets.AccountIDs {
+		for _, id := range req.TargetAccountIDs {
 			if id <= 0 {
-				return errors.New("targets.account_ids must contain positive integers only")
+				return errors.New("target_account_ids must contain positive integers only")
 			}
 		}
+	}
+
+	// Default privacy — YouTube allowlist at the producer boundary so
+	// the publish_worker never has to second-guess the value. The
+	// publish_worker normalises TikTok/LinkedIn at the platform edge.
+	if req.DefaultPrivacyLevel == "" {
+		return errors.New("default_privacy_level is required")
+	}
+	switch req.DefaultPrivacyLevel {
+	case "public", "unlisted", "private":
+	default:
+		return fmt.Errorf("default_privacy_level must be one of public, unlisted, private (got %q)", req.DefaultPrivacyLevel)
 	}
 
 	// Schedule envelope invariant.
@@ -333,24 +385,17 @@ func validateDriveBatchV2Request(req *DriveBatchImportV2Request) error {
 	return nil
 }
 
-// resolveV2Targets expands the XOR `targets` envelope into the final
-// []int64 list. For targets.account_ids, returns the list verbatim
-// (after a duplicate-cull). For targets.group_name, queries
+// resolveV2Targets expands the top-level target union into the final
+// []int64 list. For target_account_ids, returns the list verbatim
+// (after a duplicate-cull). For target_group_id, queries
 // workspace_channels where group_name = $1 AND workspace_id = $2
 // AND enabled IS TRUE.
-func (r *Router) resolveV2Targets(ctx context.Context, userID, workspaceID int64, targets *models.BatchTargetsRef) ([]int64, error) {
-	if len(targets.AccountIDs) > 0 {
-		// Caller-supplied list — dedupe + return.
-		seen := make(map[int64]struct{}, len(targets.AccountIDs))
-		out := make([]int64, 0, len(targets.AccountIDs))
-		for _, id := range targets.AccountIDs {
-			if _, dup := seen[id]; dup {
-				continue
-			}
-			seen[id] = struct{}{}
-			out = append(out, id)
-		}
-		return out, nil
+func (r *Router) resolveV2Targets(ctx context.Context, userID, workspaceID int64, groupID *string) ([]int64, error) {
+	if groupID == nil || *groupID == "" {
+		// Should never reach here — validateDriveBatchV2Request
+		// enforces XOR, so by this point either target_account_ids
+		// or target_group_id is non-empty. Defensive return.
+		return nil, fmt.Errorf("resolveV2Targets: no target set supplied (caller must enforce XOR)")
 	}
 
 	// Group-name path: enumerate workspace_channels rows where
@@ -358,19 +403,19 @@ func (r *Router) resolveV2Targets(ctx context.Context, userID, workspaceID int64
 	// doesn't expose a "ListByGroupName" method yet (P0#4 — only
 	// ListChannels(workspaceID) exists); reuse ListChannels and
 	// filter in-process. For workspaces with hundreds of channels
-	// this is suboptimal, but acceptable for the P1#7 cut — the
+	// this is suboptimal, but acceptable for the P1 cut — the
 	// follow-up commit adds ListChannelsByGroupName to the repo.
 	channels, err := r.workspaceStore.ListChannels(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	wantGroup := *targets.GroupName
+	wantGroup := *groupID
 	out := make([]int64, 0, len(channels))
 	for _, ch := range channels {
 		// WorkspaceChannel.GroupName is a string column (no
 		// nullable wrapper); an absent grouping serialises to
 		// the empty string. Skip rows outside the requested
-		// group_name + skip disabled rows.
+		// group_id + skip disabled rows.
 		if ch.GroupName != wantGroup {
 			continue
 		}
@@ -386,38 +431,30 @@ func (r *Router) resolveV2Targets(ctx context.Context, userID, workspaceID int64
 	return out, nil
 }
 
-// heuristicScheduleClamp projects the cumulative publish schedule
-// against the configured horizon (D6's two-stage clamping).
+// heuristicScheduleClampProjectedDays projects the worst-case horizon
+// in DAYS from start_at (caller adds schedule.StartAt to get the
+// absolute end-time).
 //
 // At producer time we don't yet know file_count, so we project the
-// WORST-CASE: 10_000 files (Drive folders in practice max ~few
-// thousand but the cap is generous). The runtime crawler applies
-// the EXACT clamp once file_count is known.
+// WORST-CASE: scheduleClampHeuristicMaxFiles (10_000 by default).
+// The runtime crawler applies the EXACT re-stamp once file_count is
+// known (separate code path: the per-job PublishAt write in
+// upload_worker.go::processIngestJob already respects the schedule
+// envelope and is bounded by the same horizon).
 //
-// Returns (true, reason) when the projected end-of-roll pushes past
-// the horizon; (false, nil) otherwise.
-//
-// Documented in the constructor's swagger-style header so
-// operators can find the constant easily.
-func heuristicScheduleClamp(schedule models.PublishScheduleRef) (bool, *string) {
-	const projectedMaxFiles = 10_000
-	horizon := time.Duration(scheduleClampHorizonDays) * 24 * time.Hour
-	// Worst-case gap is min_gap (every file uses the smallest
-	// gap), so the projected end is min_gap * N; if even that
-	// fits, we'd never clamp. Whether to clamp is decided by
-	// whether (start + projected_min_gap_window) exceeds horizon.
-	projectedMinGapWindow := time.Duration(schedule.MinGapSeconds) * time.Second * projectedMaxFiles
-	end := schedule.StartAt.Add(projectedMinGapWindow)
-	if end.Sub(schedule.StartAt) <= horizon {
-		return false, nil
+// The handler compares the returned days to scheduleClampHorizonDays;
+// if greater, the request is refused with a HARD 422 (P1 refactor).
+func heuristicScheduleClampProjectedDays(schedule models.PublishScheduleRef) int {
+	if schedule.MinGapSeconds <= 0 {
+		// Zero/negative gap means every file publishes at start_at —
+		// never exceeds the horizon. The handler's envelope
+		// validation already rejected negative gaps; this is the
+		// defensive floor for zero.
+		return 0
 	}
-	reason := fmt.Sprintf("projected horizon %s exceeds cap %s (worst-case %d files × min_gap %ds)",
-		end.Sub(schedule.StartAt).Round(time.Minute),
-		horizon.Round(time.Minute),
-		projectedMaxFiles,
-		schedule.MinGapSeconds,
-	)
-	return true, &reason
+	totalSec := int64(schedule.MinGapSeconds) * int64(scheduleClampHeuristicMaxFiles)
+	totalDays := int((totalSec + 86399) / 86400) // round up
+	return totalDays
 }
 
 // Compile-time assertion that *repository.ImportBatchRepository

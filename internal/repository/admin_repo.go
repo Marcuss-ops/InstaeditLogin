@@ -477,3 +477,87 @@ func (r *AdminRepository) YouTubeQuotaApproximation(ctx context.Context, window 
 func (r *AdminRepository) UpsertPendingChannel(ctx context.Context, ownerUserID int64, rows []channelimport.ImportRow) (channelimport.Result, error) {
 	return channelimport.ImportToDB(ctx, r.db, ownerUserID, rows)
 }
+
+// AdminSubjectRow is one row in the /admin/health "Token rotation"
+// section AND the underlying data shape for the
+// oauth_connections_per_subject_total Prometheus gauge.
+//
+// The Subject field is the granter's stable subject id (Google
+// Account's stable OIDC `sub` claim — internally a long opaque
+// string, ~22 chars per Google's docs). Treat it as sensitive:
+// the handler layer MUST truncate it before returning to the SPA
+// (e.g. first 4 chars + last 4 chars + "…") so a copy/paste into
+// a public channel doesn't leak a stable identifier. The
+// collector passes it raw to the gauge label — that's intentional
+// because Prometheus queries can group by subject ("which subject
+// is at 90 connections?") and operators can rename/redact via
+// Grafana legend processing.
+type AdminSubjectRow struct {
+	Subject             string     `json:"subject"`
+	Provider            string     `json:"provider"`
+	ConnectionCount     int        `json:"connection_count"`
+	LastRefreshAt       *time.Time `json:"last_refresh_at,omitempty"`
+	EarliestExpiresAt   *time.Time `json:"earliest_expires_at,omitempty"`
+	ReauthRequiredCount int        `json:"reauth_required_count"`
+}
+
+// ConnectionsPerSubject (P2 ops — Token rotation + the alert at >=80)
+// returns one AdminSubjectRow per (provider, provider_subject_id)
+// where the count crosses the supplied threshold.
+//
+// Two call sites intentional:
+//   - pkg/metrics/collector.go::collectOAuthConnectionsPerSubject
+//     passes threshold=0 + provider="google" to see EVERY Google
+//     subject on the fleet (drives the gauge + the alert at >80).
+//   - pkg/api/admin_health.go::handleAdminHealth passes
+//     threshold=50 + provider="google" to render only subjects
+//     approaching the cap (keeps the JSON bounded for a 4×50
+//     fleet; the long tail below 50 is implicit in the
+//     Prometheus scrape data instead).
+//
+// expireWindow filters EarliestExpiresAt to tokens whose refresh
+// window falls within the supplied lookahead. Default 7d
+// (matches the JWT refresh cadence for most OAuth providers).
+func (r *AdminRepository) ConnectionsPerSubject(ctx context.Context, provider string, threshold int, expireWindow time.Duration) ([]AdminSubjectRow, error) {
+	if provider == "" {
+		provider = "google"
+	}
+	if expireWindow <= 0 {
+		expireWindow = 7 * 24 * time.Hour
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT provider_subject_id AS subject,
+		        provider,
+		        COUNT(*)                 AS connection_count,
+		        MAX(last_refresh_at)     AS last_refresh_at,
+		        MIN(expires_at) FILTER (
+		            WHERE expires_at IS NOT NULL
+		              AND expires_at <= NOW() + ($2 || ' seconds')::interval
+		        ) AS earliest_expires_at,
+		        COUNT(*) FILTER (WHERE status = 'reauth_required') AS reauth_required_count
+		 FROM oauth_connections
+		 WHERE provider = $1
+		 GROUP BY provider_subject_id, provider
+		 HAVING COUNT(*) >= $3
+		 ORDER BY connection_count DESC
+		 LIMIT 200`,
+		provider, int64(expireWindow.Seconds()), threshold,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("admin: connections per subject: %w", err)
+	}
+	defer rows.Close()
+
+	var out []AdminSubjectRow
+	for rows.Next() {
+		var row AdminSubjectRow
+		if err := rows.Scan(
+			&row.Subject, &row.Provider, &row.ConnectionCount,
+			&row.LastRefreshAt, &row.EarliestExpiresAt, &row.ReauthRequiredCount,
+		); err != nil {
+			return nil, fmt.Errorf("admin: scan connections subject row: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}

@@ -282,7 +282,7 @@ function DropzoneMockup() {
             <UploadCloud className="w-7 h-7" />
           </div>
           <div className="text-lg font-semibold text-white">
-            Drop a raw video here
+            Drop a Raw idea here
           </div>
           <div className="text-sm text-zinc-400 mt-1.5 max-w-[42ch] mx-auto">
             MP4, MOV, WebM, or HEVC up to 4 GB. Vertical, horizontal, square — we
@@ -612,7 +612,7 @@ function HowItWorks() {
   const steps = [
     {
       n: "01",
-      title: "Drop your raw clip",
+      title: "Drop your Raw idea",
       copy: "Vertical, horizontal, or square — upload what you shot. We accept MP4, MOV, WebM, and HEVC up to 4 GB.",
       Icon: UploadCloud,
       ring: "ring-violet-400/40",
@@ -647,7 +647,7 @@ function HowItWorks() {
             How it works
           </div>
           <h2 className="text-display-2 text-white">
-            From raw clip to <span className="text-gradient">shipped.</span>
+            From Raw idea to <span className="text-gradient">shipped.</span>
           </h2>
         </div>
 
@@ -1519,7 +1519,7 @@ function FinalCTA() {
             <span className="text-gradient">your account.</span>
           </h2>
           <p className="text-body-lg text-zinc-300/90 mt-6 max-w-[52ch] mx-auto">
-            Sign in, link a platform, and watch your raw clip become seven
+            Sign in, link a platform, and watch your Raw idea become seven
             native posts — credited, captioned, and ready to publish from a
             single calendar.
           </p>
@@ -1633,7 +1633,7 @@ function Footer() {
       <div className="border-t border-white/5">
         <div className="mx-auto max-w-7xl px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
           <div>© {new Date().getFullYear()} InstaEdit, Inc.</div>
-          <div>From raw clip. To every channel. In minutes.</div>
+          <div>From Raw idea. To every channel. In minutes.</div>
         </div>
       </div>
     </footer>
@@ -1666,7 +1666,7 @@ export function Editor() {
               </div>
 
               <h1 className="text-display-1 text-white">
-                From raw clip.{" "}
+                From Raw idea.{" "}
                 <span className="text-gradient">To every channel.</span>{" "}
                 In minutes.
               </h1>

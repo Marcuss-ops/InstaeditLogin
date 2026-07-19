@@ -72,6 +72,12 @@ type ImportBatch struct {
 	PublishScheduleStartAt time.Time         `json:"publish_schedule_start_at"`
 	PublishScheduleMinGap  int               `json:"publish_schedule_min_gap_seconds"`
 	PublishScheduleMaxGap  int               `json:"publish_schedule_max_gap_seconds"`
+	// DefaultPrivacyLevel (P1 refactor) is the per-batch YouTube
+	// privacy (public/unlisted/private) stamped onto every
+	// upload_job the crawler fans out. The publish_worker reads
+	// upload_job.default_privacy_level to populate PublishPayload.
+	// PrivacyLevel when the per-post payload doesn't carry one.
+	DefaultPrivacyLevel    string            `json:"default_privacy_level"`
 	Status                 ImportBatchStatus `json:"status"`
 	CursorPageToken        *string           `json:"cursor_page_token,omitempty"`
 	CursorIndexedCount     int               `json:"cursor_indexed_count"`
