@@ -255,6 +255,17 @@ type Router struct {
 	// wired; tests pass passthrough stubs. cmd/server/main.go
 	// wires it via WithAuthMiddleware(r.auth.Middleware).
 	authMiddleware func(http.Handler) http.Handler
+
+	// downloadJobCh is the buffered channel into which POST
+	// /internal/v1/deliveries fires accepted-download work. The
+	// download worker pool drains it. Optional: if nil the handler
+	// drops the enqueue (logged at WARN) and accepts the delivery
+	// anyway; a row-level reaper handles abandoned rows later.
+	// Buffer size 64 absorbs typical bursts; on overflow the handler
+	// logs WARN + drops so the 500ms p99 SLA is preserved. See
+	// pkg/api/internal_velox.go::handleCreateInternalDelivery for
+	// the dispatch path + VeloxDownloadJob for the payload shape.
+	downloadJobCh chan<- VeloxDownloadJob
 }
 
 // WithDB wires the database for the /ready handler's DB ping +

@@ -1478,67 +1478,6 @@ function ContactSection() {
               </span>
             </a>
           </div>
-
-          <div className="mt-7 text-xs text-zinc-500 flex items-center justify-center gap-2 flex-wrap">
-            <span>Mon–Fri · 09:00–18:00 CET</span>
-            <span aria-hidden="true">·</span>
-            <span>WhatsApp also OK</span>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ----------------------------------------------------------------------------
- * FinalCTA — same shape as Landing's final CTA, but the action routes to
- * /login (not /login) and the copy invites the user to "connect an
- * account" rather than "start publishing" (they've already seen the
- * editor — now they need a platform to ship to).
- * -------------------------------------------------------------------------- */
-function FinalCTA() {
-  return (
-    <section className="relative py-24 sm:py-32 overflow-hidden">
-      <div
-        aria-hidden="true"
-        className="absolute inset-0 cta-glow pointer-events-none"
-      />
-      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
-        <div className="glow-orb bg-violet-500 w-[500px] h-[500px] -top-40 left-1/4 animate-drift-slow opacity-60" />
-        <div className="glow-orb bg-cyan-400 w-[420px] h-[420px] bottom-0 right-1/4 animate-drift-rev opacity-50" />
-      </div>
-
-      <div className="relative mx-auto max-w-5xl px-6">
-        <div className="surface-glass border border-white/15 rounded-3xl px-8 py-16 sm:px-14 sm:py-20 text-center relative overflow-hidden shadow-[0_40px_120px_-40px_rgba(124,58,237,0.5)]">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full surface-glass border border-white/15 text-xs font-medium text-zinc-200 mb-6">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Two minutes to your first platform-native render</span>
-          </div>
-          <h2 className="text-display-2 text-white max-w-[20ch] mx-auto">
-            Open the editor with{" "}
-            <span className="text-gradient">your account.</span>
-          </h2>
-          <p className="text-body-lg text-zinc-300/90 mt-6 max-w-[52ch] mx-auto">
-            Sign in, link a platform, and watch your Raw idea become seven
-            native posts — credited, captioned, and ready to publish from a
-            single calendar.
-          </p>
-          <div className="mt-9 flex items-center justify-center gap-3 flex-wrap">
-            <Link
-              to="/login"
-              className="group inline-flex items-center gap-2 px-6 py-3.5 rounded-full bg-white text-black text-base font-semibold hover:bg-zinc-100 transition-colors shadow-[0_10px_40px_-10px_rgba(255,255,255,0.55)]"
-            >
-              Connect account
-              <ArrowRight className="w-5 h-5 group-hover:translate-x-0.5 transition-transform" />
-            </Link>
-            <Link
-              to="/"
-              className="inline-flex items-center gap-2 px-6 py-3.5 rounded-full surface-glass text-zinc-200 font-medium hover:text-white hover:border-white/25 transition-colors"
-            >
-              Back to InstaEdit
-              <ChevronRight className="w-5 h-5" />
-            </Link>
-          </div>
         </div>
       </div>
     </section>
@@ -1737,7 +1676,6 @@ export function Editor() {
         />
         <StreamSection />
         <ContactSection />
-        <FinalCTA />
       </main>
       <Footer />
     </div>

@@ -249,7 +249,13 @@ func (r *Router) registerUserVeloxDestinations() {
 		// used by the rest of pkg/api/.
 		return
 	}
-	handler := http.HandlerFunc(r.handleCreateIntegrationVeloxDestination)
+	// handler is typed http.Handler (NOT http.HandlerFunc) so the
+	// subsequent r.csrfMiddleware / r.authMiddleware assignments
+	// compile — both middleware funcs return http.Handler. The
+	// underlying value is still an http.HandlerFunc (a func literal
+	// that implements http.Handler) so the dispatch semantics are
+	// identical to a HandlerFunc-only declaration.
+	var handler http.Handler = http.HandlerFunc(r.handleCreateIntegrationVeloxDestination)
 	// Wrap with the project's canonical user-auth + CSRF chain.
 	// Order: CSRF first (rejects bad-cookie callers BEFORE we do
 	// any DB work), then auth (extracts JWT identity for handlers

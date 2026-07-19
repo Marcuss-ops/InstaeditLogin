@@ -241,6 +241,33 @@ type VeloxDeliverArtifactConflictResponse struct {
 	IdempotencyKey string `json:"idempotency_key"` // the conflicting key
 }
 
+// VeloxDownloadJob is the enqueue payload for the download worker
+// pool that POST /internal/v1/deliveries fires into r.downloadJobCh
+// after a successful Insert (and BEFORE the 202 response write, so
+// the 500ms p99 SLA is preserved even if the channel is buffered).
+//
+// Carry the bare minimum needed by the worker: the social_delivery_id
+// (so the worker can UPDATE status without an extra round trip) plus
+// the artifact triple for the streaming GET against DownloadURL.
+// DownloadURL is flattened from *string → string at enqueue time so
+// metadata-only deliveries (where artifact.download_url is omitempty
+// in the wire contract) don't trigger a nil deref panic in the
+// worker.
+//
+// Deliberately OMITTED:
+//   - context.Context — the worker's lifecycle is OWNED by the pool,
+//     not the HTTP request. Carrying the request context would force
+//     premature cancel when the HTTP request finishes.
+//   - PublishAt / CallbackURL — live on the external_deliveries row;
+//     worker reads them via external_delivery_repo.GetByID.
+type VeloxDownloadJob struct {
+	ExternalDeliveryID string // social_delivery_id (sdel_01J…)
+	ArtifactSHA256     string // expected_sha256 (64 lowercase hex)
+	DownloadURL        string // artifact.download_url — flattened (nil-safe)
+	MimeType           string // expected_mime_type
+	SizeBytes          int64  // expected_size_bytes — ceiling for streaming GET
+}
+
 // SHA-256 lowercase-hex regex. Compiled once at package init.
 // 64 chars, [0-9a-f]{64}. Uppercase hex is rejected (callers
 // must lowercase before submitting to match the canonical
@@ -602,9 +629,17 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 		return
 	}
 	if dest == nil {
-		writeError(w, http.StatusUnprocessableEntity,
-			fmt.Sprintf("validation: external_destination_id %q not found",
-				veloxReq.ExternalDestinationID))
+		// Spec mandate: a missing destination row is NOT a
+		// payload validation failure (the body IS well-formed) —
+		// return 404 because the resource the request refers to
+		// doesn't exist. This matches the user spec
+		// "ErrExternalDeliveryNotFound → 404 (se destination_id
+		// manca)" + collapses with the /validate 404 "destination
+		// not found" so the Velox consumer treats both
+		// identically and a missing row never leaks a 422/500
+		// distinction.
+		writeError(w, http.StatusNotFound,
+			fmt.Sprintf("destination %q not found", veloxReq.ExternalDestinationID))
 		return
 	}
 
@@ -679,6 +714,39 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 		"already_exists", alreadyExists,
 		"elapsed_ms", elapsed.Milliseconds(),
 	)
+
+	// Async download-job enqueue. Non-blocking + nil-safe so the
+	// handler MUST NOT stall on a backed-up worker pool AND test
+	// fake routers (which never wire the channel) don't crash. On
+	// overflow we LOG warn + drop the enqueue: the row is already
+	// accepted in the DB, and a periodic reaper that scans rows in
+	// status='accepted' with download NOT_STARTED older than
+	// downloadStuckAfter picks up abandoned deliveries.
+	//
+	// DownloadURL is flattened *string → string via the nil-check
+	// to avoid a deref panic on metadata-only deliveries where
+	// artifact.download_url is omitempty in the wire contract.
+	if r.downloadJobCh != nil {
+		var downloadURL string
+		if veloxReq.Artifact.DownloadURL != nil {
+			downloadURL = *veloxReq.Artifact.DownloadURL
+		}
+		job := VeloxDownloadJob{
+			ExternalDeliveryID: inserted.ID,
+			ArtifactSHA256:     veloxReq.Artifact.SHA256,
+			DownloadURL:        downloadURL,
+			MimeType:           veloxReq.Artifact.MimeType,
+			SizeBytes:          veloxReq.Artifact.SizeBytes,
+		}
+		select {
+		case r.downloadJobCh <- job:
+			// Queued. Worker drains.
+		default:
+			slog.Warn("velox deliver: download job queue full; reaper will pick up",
+				"social_delivery_id", inserted.ID)
+		}
+	}
+
 	writeJSON(w, http.StatusAccepted, VeloxDeliverArtifactResponse{
 		SocialDeliveryID: inserted.ID,
 		Status:           "accepted",
