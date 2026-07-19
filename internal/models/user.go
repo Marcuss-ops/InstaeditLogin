@@ -52,8 +52,17 @@ type PlatformAccount struct {
 	LastErrorCode    string     `json:"last_error_code,omitempty"`
 	LastErrorMessage string     `json:"last_error_message,omitempty"`
 	Metadata         Metadata   `json:"metadata,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	// OAuthConnectionID is the FK to oauth_connections.id (migration
+	// 043). Populated by the backfill for historical rows (one
+	// oauth_connection per (user, platform, platform_user_id)
+	// tuple, provider_subject_id left empty until the next
+	// callback re-stores the token under the lineage). For rows
+	// created AFTER migration 043, the handler / repo must INSERT
+	// into oauth_connections at attach time AND link this FK in
+	// the same statement (a follow-up commit wires that lifecycle).
+	OAuthConnectionID *int64    `json:"oauth_connection_id,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // Metadata is a generic JSONB container for platform-specific account data.
@@ -159,6 +168,12 @@ type PublishPayload struct {
 	// (Upload-as-Draft) — TikTok today; future async platforms may
 	// accept the same field.
 	Source string `json:"source,omitempty"`
+
+	// PublishAt is the desired public publish time for platforms that
+	// support scheduled publishing (YouTube). When set and in the
+	// future, the provider uploads the video as private and asks the
+	// platform to make it public at the specified time.
+	PublishAt *time.Time `json:"publish_at,omitempty"`
 }
 
 // PublishSource* values are the canonical Source discriminator. An
