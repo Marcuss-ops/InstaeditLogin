@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 )
 
@@ -24,6 +25,21 @@ import (
 //	blocked_auth   — reauth_required on platform_account, halts
 //	failed         — terminal non-recoverable
 //	dead_letter    — max_attempts exhausted
+// ─── ON-CALL DBA CAVEAT (read this BEFORE issuing a direct-SQL UPDATE) ───
+//
+// The Go-layer guard (CanTransitionTo + transitionMap) is BYPASSED
+// when you issue a raw `UPDATE external_deliveries SET status = '...'`
+// via psql or a migration script. The model layer never runs; the
+// SQL CHECK only validates the value set (one of the 11 strings),
+// not the transition graph. Direct-SQL repairs carry the operator's
+// FULL responsibility: review the transitionMap comments below AND
+// docs/OPERATIONS.md "external_deliveries status column" before any
+// UPDATE. An illegal transition landed via psql will surface as
+// stale-state rows in the dashboard and is impossible to detect
+// automatically. Use the Go worker or admin tools (handler-level
+// transitions) whenever a fix can go through them; reserve
+// direct-SQL for true emergencies and document the rationale in
+// the change ticket.
 type ExternalDeliveryStatus string
 
 const (
@@ -104,10 +120,17 @@ func (s ExternalDeliveryStatus) IsRetryable() bool {
 	return false
 }
 
-// Next returns the canonical next-state successor for the publish
-// pipeline. Returned status is "" when no further transition is
-// allowed (terminal states). The publish-worker uses this in
-// MarkIngested → MarkQueued → MarkPublishing transitions.
+// Next returns the canonical HAPPY-PATH one-step successor for
+// the publish pipeline. Returned status is "" when no further
+// transition is allowed via THIS method (terminal states OR
+// side-states like retry_wait / blocked_auth). For the canonical
+// state-machine graph (which includes error exits + resume
+// transitions), use LegalTransitions() or CanTransitionTo().
+//
+// The publish-worker uses this in the no-error-exit branch
+// (MarkIngested → MarkQueued → MarkPublishing when everything
+// succeeds). Branching decisions (retry vs fail vs block vs
+// dead-letter) use CanTransitionTo directly.
 func (s ExternalDeliveryStatus) Next() ExternalDeliveryStatus {
 	switch s {
 	case ExternalDeliveryStatusAccepted:
@@ -124,6 +147,211 @@ func (s ExternalDeliveryStatus) Next() ExternalDeliveryStatus {
 		return ExternalDeliveryStatusPublished
 	}
 	return ""
+}
+
+// transitionMap enumerates the LEGAL state-to-state transitions
+// in the Velox→InstaEdit delivery lifecycle. The map is the
+// single source of truth — CanTransitionTo + LegalTransitions
+// both derive from here. SQL CHECK constraint only enforces the
+// value set, not the transition graph, so the model layer is
+// the contract.
+//
+// Every enum value MUST have an entry (possibly empty for
+// terminal states); the TestTransitionMapEnumCoverage test
+// guards against accidentally omitting a new enum value.
+//
+// OPERATOR DIRECT-SQL CAVEAT (read this if you're an on-call DBA
+// fixing a stuck row via psql): the Go-layer guard is BYPASSED
+// when you issue a raw UPDATE on external_deliveries. The model
+// layer's ContractTransition doesn't run; the SQL CHECK only
+// validates the value set. Direct-SQL repairs carry the
+// operator's full responsibility: review the transition map
+// above AND docs/OPERATIONS.md before writing the UPDATE. An
+// illegal transition landed via psql will surface as stale-state
+// rows in the dashboard and is impossible to detect automatically.
+//
+//	from → targets (legal successors only)
+//
+// Happy-path forward (the 6 stage advance transitions) are
+// always present; error exits (→ retry_wait / blocked_auth /
+// failed) are present from every pre-terminal state; resume
+// transitions (retry_wait → downloading OR queued,
+// blocked_auth → queued) and the dead_letter exit
+// (retry_wait only) round out the closure.
+//
+// Terminal states (published / failed / dead_letter) have
+// EMPTY successor maps — no outgoing transitions of any kind.
+// A terminal → non-terminal transition is rejected by
+// CanTransitionTo (would surface as a SQL update with rows
+// affected = 1 but the journal now holds an illegal tuple).
+var transitionMap = map[ExternalDeliveryStatus]map[ExternalDeliveryStatus]bool{
+	ExternalDeliveryStatusAccepted: {
+		ExternalDeliveryStatusDownloading: true, // happy-path forward
+		ExternalDeliveryStatusRetryWait:    true, // file fetch transient (5xx, etc)
+		ExternalDeliveryStatusBlockedAuth:  true, // auth failure mid-fetch
+		ExternalDeliveryStatusFailed:       true, // JSON validation / permanent
+	},
+	ExternalDeliveryStatusDownloading: {
+		ExternalDeliveryStatusArtifactVerified: true,
+		ExternalDeliveryStatusRetryWait:        true,
+		ExternalDeliveryStatusBlockedAuth:      true,
+		ExternalDeliveryStatusFailed:           true, // SHA mismatch / MIME mismatch
+	},
+	ExternalDeliveryStatusArtifactVerified: {
+		ExternalDeliveryStatusIngestCompleted: true,
+		ExternalDeliveryStatusRetryWait:       true,
+		ExternalDeliveryStatusBlockedAuth:     true,
+		ExternalDeliveryStatusFailed:          true, // storage upload permanent
+	},
+	ExternalDeliveryStatusIngestCompleted: {
+		ExternalDeliveryStatusQueued:      true,
+		ExternalDeliveryStatusRetryWait:   true,
+		ExternalDeliveryStatusBlockedAuth: true,
+		ExternalDeliveryStatusFailed:      true,
+	},
+	ExternalDeliveryStatusQueued: {
+		ExternalDeliveryStatusPublishing:  true,
+		ExternalDeliveryStatusRetryWait:   true,
+		ExternalDeliveryStatusBlockedAuth: true, // platform_account reauth mid-schedule
+		ExternalDeliveryStatusFailed:      true,
+	},
+	ExternalDeliveryStatusPublishing: {
+		ExternalDeliveryStatusPublished:  true, // success
+		ExternalDeliveryStatusRetryWait:   true, // transient API failure
+		ExternalDeliveryStatusBlockedAuth: true, // auth refresh during upload
+		ExternalDeliveryStatusFailed:      true, // quota / permanent
+	},
+	// Published → terminal — no outgoing transitions of any kind.
+	ExternalDeliveryStatusPublished: {},
+
+	// retry_wait has TWO legal resume targets (downloading vs
+	// queued). Use CanonicalResume() to pick deterministically
+	// based on download_url expiration; both are listed here
+	// because the worker CAN pick either at runtime and the
+	// state-machine graph must permit both.
+	ExternalDeliveryStatusRetryWait: {
+		ExternalDeliveryStatusDownloading: true, // re-fetch artifact on URL expiry
+		ExternalDeliveryStatusQueued:      true, // resume from queue (skip re-fetch)
+		ExternalDeliveryStatusBlockedAuth: true,
+		ExternalDeliveryStatusFailed:      true,
+		ExternalDeliveryStatusDeadLetter:  true, // retry budget exhausted
+	},
+	ExternalDeliveryStatusBlockedAuth: {
+		ExternalDeliveryStatusQueued: true, // admin reconnect handler resumes publish
+	},
+	// Failed → terminal — no outgoing transitions.
+	ExternalDeliveryStatusFailed:     {},
+	// DeadLetter → terminal — no outgoing transitions.
+	ExternalDeliveryStatusDeadLetter: {},
+}
+
+// CanTransitionTo returns whether the proposed transition is
+// legal per the state-machine map. Returns false for terminal
+// states (no outgoing transitions), for unknown enum values
+// (defensive), or when source/target is empty (caller bug — an
+// empty status is never a legal transition target).
+//
+// Worker / handler / dashboard code MUST call this BEFORE
+// external_delivery_repo.UpdateStatus; UpdateStatus accepts
+// any of the 11 values silently (the SQL CHECK constraint
+// only validates the value set, not the transition graph),
+// so an absent guard would let a buggy transition like
+// `published → accepted` regress the journal in a way that's
+// invisible until the dashboard reports stale-state rows.
+//
+// Empty source OR empty target → false (defensive; an empty
+// status indicates a caller bug — the SQL column never holds
+// the empty string because the CHECK rejects it).
+func (s ExternalDeliveryStatus) CanTransitionTo(target ExternalDeliveryStatus) bool {
+	if s == "" || target == "" {
+		return false
+	}
+	successors, ok := transitionMap[s]
+	if !ok {
+		return false
+	}
+	return successors[target]
+}
+
+// LegalTransitions returns the deterministically-ordered set of
+// statuses that may legally follow s. Returns nil for terminal
+// states. Used by:
+//   - The dashboard's "what's next" hint UI (operator surface)
+//   - The audit log's allowed-action surface
+//   - The integration tests (full transition-graph coverage)
+//
+// Order is by string-sort of the status values — stable across
+// process restarts and platform-independent. Don't assume a
+// specific physical order; consume via the typed slice and
+// string-compare if a specific order matters.
+func (s ExternalDeliveryStatus) LegalTransitions() []ExternalDeliveryStatus {
+	successors, ok := transitionMap[s]
+	if !ok || len(successors) == 0 {
+		return nil
+	}
+	out := make([]ExternalDeliveryStatus, 0, len(successors))
+	for tgt, allowed := range successors {
+		if allowed {
+			out = append(out, tgt)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// CanonicalResume encodes the OPERATOR-CHOSEN DEFAULT for picking
+// between the two legal retry_wait resume targets (downloading
+// vs queued). The worker calls this instead of asserting its
+// own opinion on which resume path to take.
+//
+// The "Canonical" name reflects the operator-runbook default for
+// the COMMON case; the worker MAY override for exceptional cases
+// (download-URL-pinned retries that intentionally bypass the
+// URL re-validation, manual ops interventions, etc). Both targets
+// are LEGAL transitions per transitionMap, so an override that
+// picks the OTHER target is fine — just confirm CanTransitionTo
+// first.
+//
+// Rule (per Operator decision in ARCHITECTURE.md):
+//
+//   - download_url_valid=true: signer URL TTL hasn't elapsed, or
+//     the HMAC signature is still within its 30-min validity
+//     window at resume time. Worker resumes from `queued` — the
+//     artifact is already in InstaEdit storage; no re-fetch
+//     needed.
+//   - download_url_valid=false: signed URL expired, signature
+//     stale, etc. Worker re-fetches from `downloading` — the
+//     artifact must be re-validated (re-hashed SHA + size + MIME)
+//     before re-entering the pipeline.
+//
+// ASSUMPTION (callers MUST verify before calling): the caller has
+// already verified that ExternalDelivery.DownloadURL is non-nil.
+// The migration allows nullable DownloadURL because of "metadata
+// only" deliveries that have no artifact at all; CanonicalResume
+// has no visibility into the URL pointer — passing the metadata-only
+// path through CanonicalResume(true) → `queued` would be a
+// semantic bug (no artifact exists to skip re-fetch). Worker
+// MUST special-case the metadata-only delivery BEFORE calling
+// CanonicalResume, or rely on the helper's empty-return to signal
+// "don't resume through this path".
+//
+// Returns the default resume state. Returns "" when the input is
+// not retry_wait — there's no canonical resume target for other
+// states (use Next() for happy-path forward or CanTransitionTo()
+// for free-form transitions).
+//
+// The download_url_valid parameter is supplied by the worker
+// after a HEAD probe against the URL's signer metadata (S3
+// presigned: parse the X-Amz-Expires query param; HMAC
+// endpoint: re-derive the signature TTL).
+func (s ExternalDeliveryStatus) CanonicalResume(downloadURLValid bool) ExternalDeliveryStatus {
+	if s != ExternalDeliveryStatusRetryWait {
+		return ""
+	}
+	if downloadURLValid {
+		return ExternalDeliveryStatusQueued
+	}
+	return ExternalDeliveryStatusDownloading
 }
 
 // ExternalDelivery is the 11-state lifecycle journal for POST
