@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +39,29 @@ type YouTubeOAuthService struct {
 	// nil in production: NewYouTubeOAuthService installs the
 	// defaults (computeYouTubeBackoff + defaultYouTubeSleep).
 	uploadDeps *youTubeUploadDeps
+	// sessionStore persists the resumable-upload session URI + offset
+	// across worker crashes (P1#5 / migration 048). Wired in
+	// NewYouTubeOAuthService from *repository.UploadJobRepository
+	// (concrete type kept out of this struct via the
+	// YouTubeSessionStore narrow interface). Optional in tests.
+	sessionStore YouTubeSessionStore
+	// sessionEncryptor wraps the YouTube session URI before
+	// persistence. Required when sessionStore != nil: storing the
+	// plaintext URI in upload_jobs.youtube_session_uri defeats the
+	// "credential-adjacent" intent of migration 048 + the
+	// json:"-" redaction on the Go side. nil encryptor on a nil
+	// store is the production default (the publish path doesn't
+	// need it for single-shot uploads); nil encryptor on a non-nil
+	// store surfaces as a constructor error.
+	sessionEncryptor SessionEncryptor
+	// sessionJobID + sessionWorkerID are stamped onto every
+	// sessionStore.* call so the CAS in SaveYouTubeSession /
+	// ClearYouTubeSession can refuse a write against a row that
+	// has been re-claimed (or lease-expired) by another worker.
+	// Defaults to empty; the upload worker injects both via
+	// SetSessionContext before calling Publish/StartPublish.
+	sessionJobID    int64
+	sessionWorkerID string
 }
 
 // youTubeUploadOptions captures the P1#6 chunking knobs. Loaded
@@ -158,6 +182,122 @@ func defaultYouTubeSleep(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// AttachUploadSession wires the upload job context the chunk loop
+// needs to (a) persist resumable-session state across worker
+// crashes via sessionStore, (b) encrypt the session URI before
+// persistence via sessionEncryptor, (c) propagate workerID +
+// jobID so the repo's CAS-style SaveYouTubeSession /
+// ClearYouTubeSession methods can refuse a write against a row
+// whose lease has been re-claimed (or lease-expired) by a more
+// recent worker. Called by the upload worker via the YouTube
+// provider capability right before invoking Publish /
+// StartPublish. Without this call the upload proceeds in-memory
+// only — exactly the pre-P1#5 behaviour — so callers that don't
+// care about persistence can keep using the service unchanged.
+//
+// Both sessionStore and sessionEncryptor must be non-nil together:
+// storing the URI without encryption defeats the migration-048
+// "credential-adjacent" intent; encrypting without a store just
+// wastes CPU. The constructor refuses a (store, nil) or (nil,
+// encryptor) combination to keep the invariant reachable from a
+// single code path.
+func (s *YouTubeOAuthService) AttachUploadSession(jobID int64, workerID string, store YouTubeSessionStore, encryptor SessionEncryptor) {
+	s.sessionJobID = jobID
+	s.sessionWorkerID = workerID
+	s.sessionStore = store
+	s.sessionEncryptor = encryptor
+}
+
+// persistSessionProgress encrypts the resumable upload URL and
+// stamps (url, offset, chunk_size, expires_at) onto the
+// upload_jobs row via sessionStore.Save. Called once per
+// successful chunk (after the 308/200 server ack) so a worker
+// crash mid-upload can resume from the persisted offset on the
+// next claim. Tightly scoped: anything that touches the URI passes
+// through redactYouTubeSessionURI first so a console log or
+// panic dump doesn't leak the full value.
+//
+// The ciphertext-shape contract: base64.StdEncoding of the raw
+// Encryptor output. Storing as a TEXT column means the repo
+// doesn't need to be aware of the encryption scheme (the
+// companion Load path on the worker side does base64-decode then
+// Decrypt). Skips silently when sessionStore OR sessionEncryptor
+// is nil; the legacy pre-P1#5 in-memory path stays valid.
+// Logged at Debug so the missing-wiring breadcrumb is observable
+// without polluting Info under normal operation.
+func (s *YouTubeOAuthService) persistSessionProgress(ctx context.Context, uploadURL string, offset int64) {
+	if s.sessionStore == nil || s.sessionEncryptor == nil {
+		slog.Debug("youtube: persistSessionProgress skipped (no sessionStore/encryptor wired)",
+			"job_id", s.sessionJobID, "redacted_url", redactYouTubeSessionURI(uploadURL))
+		return
+	}
+	cipher, err := s.sessionEncryptor.Encrypt(uploadURL)
+	if err != nil {
+		slog.Warn("youtube: session URI encrypt failed; progress NOT persisted (next claim will resume in-memory only)",
+			"job_id", s.sessionJobID, "redacted_url", redactYouTubeSessionURI(uploadURL), "error", err)
+		return
+	}
+	encoded := base64.StdEncoding.EncodeToString(cipher)
+	if err := s.sessionStore.Save(ctx, s.sessionJobID, s.sessionWorkerID, encoded, offset,
+		s.uploadOpts.ChunkSize, s.sessionExpiresAt()); err != nil {
+		slog.Warn("youtube: session URI persist failed (worker will retry on next chunk)",
+			"job_id", s.sessionJobID, "offset", offset, "redacted_url", redactYouTubeSessionURI(uploadURL), "error", err)
+	}
+}
+
+// sessionExpiresAt returns NOW()+24h as the YouTube session TTL.
+// YouTube's documented session lifetime is "at least 24 hours";
+// the worker reads this back via the upload_jobs row on the next
+// claim and refuses to reuse an expired URI. Centralised so a
+// future fix ("actually it's 12h") is a one-line change instead
+// of open-coding 24*time.Hour at every persist caller.
+func (s *YouTubeOAuthService) sessionExpiresAt() time.Time {
+	return s.now().Add(24 * time.Hour)
+}
+
+// handleSessionLost runs in the uploadVideoChunks recovery branch
+// when queryUploadStatus reports ErrYouTubeSessionLost. Clears
+// the persisted session columns so the NEXT worker's ClaimBatch
+// sees a clean slate (a stale ciphertext pointing at the dead
+// URI could otherwise be loaded and re-attempted). Caller is
+// expected to follow up with a fresh initiateResumableSession.
+// Logging uses the redacted form of any URI.
+func (s *YouTubeOAuthService) handleSessionLost(ctx context.Context, deadUploadURL string) error {
+	slog.Warn("youtube: session URI lost (404); clearing persisted state and re-initiating",
+		"job_id", s.sessionJobID,
+		"redacted_url", redactYouTubeSessionURI(deadUploadURL),
+	)
+	if s.sessionStore != nil {
+		if err := s.sessionStore.Clear(ctx, s.sessionJobID); err != nil {
+			slog.Warn("youtube: clear-session-after-404 failed (next worker will overwrite)",
+				"job_id", s.sessionJobID, "error", err)
+			// Don't surface Clear failure — recovery proceeds either way.
+		}
+	}
+	return nil
+}
+
+// redactYouTubeSessionURI returns a redacted representation of a
+// YouTube session URI that is safe to log. YouTube session URIs
+// look like `http://uploads.youtube.com/upload?upload_id=...&key=...&cp=...&cid=...`
+// where the key/token parts are credential-adjacent. The
+// redaction strategy keeps the first 12 + last 4 chars of the URL
+// so operators can correlate two log lines with the same session
+// while never exposing the secret-bearing portion. Used everywhere
+// uploadURL appears in a log/slog call. The companion rule: in
+// this file, slog.X(...) MUST take the redacted form before the
+// URI ever reaches the Logger. Tests assert "the full URL never
+// appears in a test-loop's captured slog output".
+func redactYouTubeSessionURI(uploadURL string) string {
+	if uploadURL == "" {
+		return ""
+	}
+	if len(uploadURL) <= 16 {
+		return uploadURL
+	}
+	return uploadURL[:12] + "…" + uploadURL[len(uploadURL)-4:]
 }
 
 // parseRetryAfterHeader parses the canonical Retry-After header
@@ -306,6 +446,64 @@ func (s *YouTubeOAuthService) ValidateChannelBinding(ctx context.Context, access
 // services.YouTubeChannelBinder capability interface. Caught by
 // `go vet`, not at runtime.
 var _ YouTubeChannelBinder = (*YouTubeOAuthService)(nil)
+
+// ErrYouTubeSessionLost is the canonical sentinel returned by
+// queryUploadStatus when YouTube's resumable-upload endpoint replies
+// HTTP 404 to the `Content-Range: bytes */TOTAL` probe. 404 means the
+// session URI either expired (>24h) or was never valid for this
+// channel/title combination; the upload MUST switch to a fresh
+// initiateResumableSession call instead of trying the same dead URI
+// again. Co-exists with the many peer sentinels in this package; the
+// uploadVideoChunks loop matches against this exact error string at
+// the recovery site (see handleSessionLost below).
+//
+// Why a sentinel: queryUploadStatusWithRetry is wrapped through the
+// generic retry/backoff path and would otherwise swallow a 404 into a
+// generic "unexpected status" fmt.Errorf, which would then bypass the
+// recovery branch in uploadVideoChunks and let a dead session blow up
+// the whole publish. Surfacing ErrYouTubeSessionLost means the retry
+// loop can hand off cleanly to the recovery branch without losing the
+// 404-classification guarantee.
+var ErrYouTubeSessionLost = errors.New("youtube upload session URI was rejected (404); resumption lost \u2014 re-initiating")
+
+// YouTubeSessionStore is the narrow persistence contract the
+// YouTubeOAuthService uses to persist the resumable-upload session
+// URI + offset across worker crashes. The current implementation is
+// *repository.UploadJobRepository (Save/Clear) but the service does
+// NOT depend on that concrete type \u2014 the narrow interface here
+// matches the post-P1#5 columns and lets an in-memory mock stand in
+// during tests.
+//
+// IMPORTANT: the `sessionURICiphertext` argument MUST already be
+// encrypted+base64'd (or otherwise scrubbed of the plaintext YouTube
+// `Location:` URL); the repo writes the value verbatim into the
+// `youtube_session_uri` TEXT column. The service holds the encryptor
+// so callers MUST inject it; nil-encryptor is a constructor error.
+//
+// P1 hardening follow-up: add `Load(ctx, jobID) (uri, offset int64,
+// expiresAt time.Time, error)` so a cross-crash resume can pick up
+// where the previous worker left off. Today the service falls back to
+// the `job.YouTubeSessionURI` columns hydrated by the repository's
+// existing scanUploadJob (FindByID) path; the same encrypt/decrypt
+// convention applies when those fields are read by the worker.
+type YouTubeSessionStore interface {
+	Save(ctx context.Context, jobID int64, workerID, sessionURICiphertext string, offset, chunkSize int64, expiresAt time.Time) error
+	Clear(ctx context.Context, jobID int64) error
+}
+
+// SessionEncryptor is the narrow cipher contract the service uses to
+// wrap the resumable-upload `Location:` URL before persistence.
+// *crypto.Encryptor satisfies this interface; tests inject a
+// deterministic replacement so assertions on ciphertext vs plaintext
+// are deterministic. A nil encryptor on the service is treated as a
+// fail-fast (the constructor returns an error) \u2014 there is no
+// "best-effort plaintext" mode, because the YouTube session URI is
+// a credential per Google's resumable upload protocol and storing it
+// unencrypted defeats the entire point of the migration.
+type SessionEncryptor interface {
+	Encrypt(plaintext string) ([]byte, error)
+	Decrypt(ciphertext []byte) (string, error)
+}
 
 // ErrYouTubeAmbiguousAuthorization is the canonical sentinel returned
 // by BindGrantToChannel when channels.list(mine=true) reports >1
@@ -601,15 +799,62 @@ func (s *YouTubeOAuthService) StartPublish(ctx context.Context, accessToken, pla
 
 	metadata := s.buildUploadMetadata(payload)
 
-	uploadURL, err := s.initiateResumableSession(ctx, accessToken, metadata, fileSize, contentType)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to initiate resumable session: %w", err)
+	// P1 hardening: a 404 from the chunk loop's status-query probe
+	// (ErrYouTubeSessionLost) means the URI went dead — re-initiate
+	// once. Cap at 1 extra attempt so a session that loses twice
+	// doesn't loop us into a quota spiral; after the cap the chunk
+	// loop's underlying error bubbles up to the outer upload-job
+	// worker (MarkDeadLetter via attempt_count + max_attempts).
+	// The redacted log shape carries no credential information,
+	// matching the "MAI loggarli" half of the spec.
+	var (
+		videoID     string
+		uploadURL   string
+		publishErr  error
+		sessRetried bool
+	)
+	for attempt := 0; attempt <= 1; attempt++ {
+		var iErr error
+		uploadURL, iErr = s.initiateResumableSession(ctx, accessToken, metadata, fileSize, contentType)
+		if iErr != nil {
+			publishErr = fmt.Errorf("failed to initiate resumable session: %w", iErr)
+			break
+		}
+		slog.Debug("YouTube: resumable session initiated",
+			"attempt", attempt,
+			"redacted_url", redactYouTubeSessionURI(uploadURL),
+		)
+		videoID, iErr = s.uploadVideoChunks(ctx, uploadURL, payload.VideoURL, fileSize)
+		if iErr == nil {
+			publishErr = nil
+			break
+		}
+		publishErr = iErr
+		if !errors.Is(iErr, ErrYouTubeSessionLost) {
+			// Non-404 error (e.g. 5xx already exhausted the retry
+			// budget, or 4xx-not-429 permanent). Don't loop — let
+			// the outer worker MarkRetry / MarkDeadLetter decide.
+			break
+		}
+		if sessRetried {
+			// Cap reached. Don't retry a 2nd time.
+			break
+		}
+		sessRetried = true
+		slog.Warn("YouTube: session URI lost (404); clearing persisted state + re-initiating",
+			"attempt", attempt,
+			"redacted_url", redactYouTubeSessionURI(uploadURL),
+			"error", iErr,
+		)
+		if clearErr := s.handleSessionLost(ctx, uploadURL); clearErr != nil {
+			slog.Warn("YouTube: clear-session-on-404 failed (recovery proceeds regardless)",
+				"redacted_url", redactYouTubeSessionURI(uploadURL),
+				"error", clearErr,
+			)
+		}
 	}
-	slog.Debug("YouTube: resumable session initiated", "upload_url", uploadURL)
-
-	videoID, err := s.uploadVideoChunks(ctx, uploadURL, payload.VideoURL, fileSize)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to stream video: %w", err)
+	if publishErr != nil {
+		return "", "", fmt.Errorf("failed to stream video: %w", publishErr)
 	}
 
 	slog.Info("YouTube: video uploaded successfully", "video_id", videoID)
@@ -947,6 +1192,15 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 			continue
 		}
 
+		// P1 hardening: stamp progress + session URI to upload_jobs
+		// after every successful chunk. The helper encrypts the URI
+		// via the sessionEncryptor + base64's the ciphertext; a
+		// service without attachment falls back to in-memory exactly
+		// like pre-P1#5. Logged breadcrumb (Debug) uses the redacted
+		// URI shape so an SRE tailing logs can't reconstruct the
+		// full Location header from a sequence of related events.
+		s.persistSessionProgress(ctx, uploadURL, uploaded+int64(n))
+
 		if videoID != "" {
 			resp.Body.Close()
 			return videoID, nil
@@ -1064,6 +1318,21 @@ func (s *YouTubeOAuthService) queryUploadStatus(ctx context.Context, uploadURL s
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		// P1 hardening: a 404 from the status-query probe means the
+		// session URI is dead — either expired (>24h since the
+		// Location: header was minted), or metadata-incompatible with
+		// the resumable session (e.g. channel re-bound under a
+		// different oauth_connection_id). Surface as the typed
+		// sentinel so the chunk loop's recovery branch can clear +
+		// re-initiate, instead of getting swallowed by the generic
+		// retry path. Any retry of a 404 just wastes a round-trip
+		// (YouTube will keep returning 404 forever for a dead URI),
+		// so queryUploadStatusWithRetry MUST NOT swallow this \u2014
+		// the upstream caller matches on ErrYouTubeSessionLost
+		// explicitly and switches to a fresh initiateResumableSession.
+		return 0, ErrYouTubeSessionLost
+	}
 	if resp.StatusCode != 308 {
 		return 0, fmt.Errorf("unexpected status query response: %d", resp.StatusCode)
 	}
