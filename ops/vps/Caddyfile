@@ -32,6 +32,21 @@ dev.instaedit.org {
     encode gzip
     log
 
+    # Velox internal endpoints (service-to-service only). These
+    # routes are NOT supposed to resolve on the public hostname;
+    # the InstaEdit API guards them with the VELOX_API_TOKEN
+    # constant-time Bearer check, and the Velox master reaches them
+    # over the in-cluster `media-backend` docker network (see
+    # docker-compose.yml) — never over the public Internet. The
+    # explicit `abort` here is a belt-and-braces defence: even if
+    # the reverse proxy is ever misconfigured to forward `/internal/*`
+    # by accident, the connection is closed without returning body
+    # or status (an HTTP scanner sees nothing useful to fingerprint).
+    # Listed FIRST so the matcher wins before the API/SPA catch-all.
+    handle /internal/* {
+        abort
+    }
+
     handle /api/* {
         reverse_proxy 127.0.0.1:8080 {
             header_up Host {host}

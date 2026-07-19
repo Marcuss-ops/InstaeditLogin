@@ -60,8 +60,29 @@ services:
     environment:
       - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
       - PORT=8080
+      # Velox integration (Phase 1 — destination + handoff). When
+      # VELOX_INTEGRATION_ENABLED=false the /internal/v1/* router hides
+      # every Velox-facing route AND the artifact_source_registry refuses
+      # to register UploadJobSourceVeloxArtifact — i.e. zero behavioural
+      # change for the default fleet. Token + webhook secret are read
+      # from .env.dev (via the ${VAR} interpolation below) so they
+      # never appear in the committed file. The download timeout +
+      # max-bytes cap match the values documented in
+      # docs/ARCHITECTURE.md §Velox integration limits.
+      - VELOX_INTEGRATION_ENABLED=true
+      - VELOX_API_TOKEN=${VELOX_API_TOKEN}
+      - VELOX_WEBHOOK_SECRET=${VELOX_WEBHOOK_SECRET}
+      - VELOX_DOWNLOAD_TIMEOUT_SECONDS=1800
+      - VELOX_MAX_ARTIFACT_BYTES=2147483648
     ports:
       - "8080:8080"
+    # Sit on the default bridge for db/minio/s3 DNS AND on the internal
+    # media-backend network for Velox handoff. Listing both keeps the
+    # api reachable on `:8080` from the host while restricting Velox
+    # traffic to the internal bridge (no Internet egress).
+    networks:
+      - default
+      - media-backend
     depends_on:
       db:
         condition: service_healthy
@@ -79,6 +100,22 @@ services:
       - .env.dev
     environment:
       - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      # Velox integration (mirrors the api service). The worker reads
+      # Velox-resumable YouTube sessions + velox_artifact upload_jobs
+      # from the same env block — having the same VELOX_* keys on
+      # both processes means a single .env.dev update flips the
+      # feature on for the whole fleet.
+      - VELOX_INTEGRATION_ENABLED=true
+      - VELOX_API_TOKEN=${VELOX_API_TOKEN}
+      - VELOX_WEBHOOK_SECRET=${VELOX_WEBHOOK_SECRET}
+      - VELOX_DOWNLOAD_TIMEOUT_SECONDS=1800
+      - VELOX_MAX_ARTIFACT_BYTES=2147483648
+    # Worker lives ONLY on the internal bridge — does NOT need the
+    # default network because it speaks to Postgres over its service
+    # name (`db`) via the same Compose-wide service DNS regardless.
+    networks:
+      - default
+      - media-backend
     depends_on:
       db:
         condition: service_healthy
@@ -134,6 +171,15 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    # Same dual-network reasoning as api/worker: default for the
+    # host-published port (path-style uploads from the SPA arrive at
+    # 127.0.0.1:9000 → host port forward → minio container on default
+    # bridge), media-backend for any future internal-only bucket that
+    # the Velox handoff might use as a staging area before promotion
+    # into `instaedit-local`.
+    networks:
+      - default
+      - media-backend
 
   # One-shot sidecar: blocks api startup until the bucket exists.
   # `mc alias set` retries until MinIO accepts the credentials (the
@@ -162,6 +208,36 @@ services:
 volumes:
   instaedit_pg_data:
   instaedit_minio_data:
+
+# Velox internal bridge — see docs/ARCHITECTURE.md §Velox integration.
+#
+# `internal: true` disables the default gateway for every container
+# attached to this network. The implication is hard: a compromised
+# api/worker cannot egress to the public Internet (no apt-get, no
+# curl-to-attacker, no DNS leak). The only paths outbound are the
+# Velox master node on its service port and Postgres/MinIO on the
+# default bridge (which has its OWN gateway and is documented
+# separately).
+#
+# The InstaEdit-side /internal/v1/* endpoints (destinations/validate,
+# deliveries POST + GET) are guarded by the VELOX_API_TOKEN
+# constant-time Bearer check (pkg/api/internal_auth.go). The public
+# Caddyfile (ops/vps/Caddyfile + ops/local/Caddyfile) explicitly
+# aborts requests for /internal/* before any reverse-proxy pass.
+#
+# velox-master placeholder — when the Velox image lands in a
+# registry, UNCOMMENT the stub below to spin up the full Phase 1
+# pipeline locally (api worker → velox artifact)
+#
+#  velox-master:
+#    image: ghcr.io/velox/master:dev
+#    container_name: instaedit-velox
+#    networks:
+#      - media-backend
+#    profiles: ["velox"]
+networks:
+  media-backend:
+    internal: true
 
 # ──────────────────────────────────────────────────────────────────
 # (Kept separate from the api/worker/migrate block above so a frontend

@@ -43,6 +43,28 @@ services:
       retries: 10
     ports:
       - "127.0.0.1:19000:9000"
+    # Re-declared alongside the base file's [default, media-backend]
+    # so the host-port override at 127.0.0.1:19000 keeps working AND
+    # the container still has a presence on the Velox internal bridge
+    # (handy for staging buckets to bridge velox → instaedit in
+    # local-only end-to-end testing).
+    networks:
+      - default
+      - media-backend
+
+  # Local-only velox-master override — by default this overlay does
+  # NOT start velox-master (the operator manually runs it via
+  # `docker compose --profile velox up`), but the explicit profile
+  # marker keeps the local-only 127.0.0.1 host binding behaviour
+  # even after the eventual upstream image lands in a registry.
+  # UNCOMMENT to enable the local Phase 1 pipeline.
+  #
+  #  velox-master:
+  #    image: ghcr.io/velox/master:dev
+  #    container_name: instaedit-velox
+  #    networks:
+  #      - media-backend
+  #    profiles: ["velox"]
 
 volumes:
   instaedit_minio_data:

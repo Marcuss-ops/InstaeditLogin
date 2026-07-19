@@ -44,6 +44,19 @@
 https://:8443 {
     tls /certs/localhost.pem /certs/localhost-key.pem
 
+    # Velox internal endpoints (service-to-service only). These
+    # routes are NOT supposed to resolve on the local-dev origin;
+    # they live on the InstaEdit API but the host-published PORT
+    # 8080 should NEVER be reverse-proxied for them — Velox talks
+    # to /internal/v1/* directly over the `media-backend` docker
+    # network (see docker-compose.yml / docker-compose.local.yml).
+    # The explicit `abort` here mirrors the VPS hardening so the
+    # dev tunnel (cloudflared → :8443 → api) also aborts if anyone
+    # ever tries to probe internal paths externally.
+    handle /internal/* {
+        abort
+    }
+
     handle /api/* {
         reverse_proxy 127.0.0.1:8080
     }
