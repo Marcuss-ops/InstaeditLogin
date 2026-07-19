@@ -22,6 +22,81 @@ func NewUploadJobRepository(db *sql.DB) *UploadJobRepository {
 	return &UploadJobRepository{db: db}
 }
 
+// ExternalDeliveryLinker is the narrow persistence contract
+// LinkToExternalDelivery forwards through. The real impl is
+// *ExternalDeliveryRepository (LinkUploadJob); defined inline so
+// upload_job_repo doesn't import the other repo + so tests can
+// inject fakes without dragging the full repo surface.
+//
+// Forwarder-only — does NOT validate the supplied status against
+// the external_deliveries row. The FSM (internal/worker/ingest_fsm.go)
+// owns CAN-transitionTo enforcement; this helper owns the SQL
+// FK-stamp path ONLY. A caller that wants "stamp only if external
+// delivery is in <expected> state" wraps this in
+//
+//	if d, _ := linker.GetByID(ctx, externalDeliveryID); d.Status != expectedStatus {
+//	    return ErrStatusMismatch
+//	}
+//	return r.LinkToExternalDelivery(ctx, linker, ...)
+//
+// at the worker level. See internal/worker/ingest_fsm.go::Transition
+// for the canonical pattern.
+type ExternalDeliveryLinker interface {
+	LinkUploadJob(ctx context.Context, deliveryID string, uploadJobID int64) error
+}
+
+// LinkToExternalDelivery is the upload-job-side bridge: forwards
+// to ExternalDeliveryLinker.LinkUploadJob, which stamps the
+// upload_job_id FK on the external_deliveries row (single-source-
+// of-truth direction per migration 055). Called once per delivery
+// from the worker right after upload_job Create() succeeds.
+//
+// Parameters:
+//
+//	uploadJobID       — the new upload_job row id (int64, must be > 0)
+//	externalDeliveryID — the sdel_01J... id from external_deliveries
+//
+// NOTE: an earlier draft of this method included a third `status` parameter
+// (the expected external_delivery status at link-time). The code-reviewer
+// flagged it as BLOCKING because the helper did NOT validate or use the value
+// — keeping a dead parameter misleads callers. The status check is the FSM's
+// job (internal/worker/ingest_fsm.go::Transition, called IMMEDIATELY before this
+// helper at the worker boundary). Canonical worker pattern:
+//
+//	if !fsm.Transition(ctx, deliveryID, currentStatus, models.ExternalDeliveryStatusArtifactVerified, ...) {
+//		return // operator runbook
+//	}
+//	r.LinkToExternalDelivery(ctx, linker, uploadJobID, externalDeliveryID)
+//   - empty externalDeliveryID
+//   - uploadJobID <= 0
+//
+// Idempotency: LinkUploadJob uses COALESCE(upload_job_id, $new) so
+// a re-call with the SAME uploadJobID is a no-op; a re-call with
+// a DIFFERENT uploadJobID is silently rejected by the COALESCE
+// (upload_job_id stays NULL if the original INSERT left it that
+// way, or stays at the original value if it was set). Operator
+// runbook territory; see external_delivery_repo.LinkUploadJob doc.
+func (r *UploadJobRepository) LinkToExternalDelivery(
+	ctx context.Context,
+	linker ExternalDeliveryLinker,
+	uploadJobID int64,
+	externalDeliveryID string,
+) error {
+	if linker == nil {
+		return errors.New("upload job LinkToExternalDelivery: nil linker (wire external_delivery_repo at bootstrap)")
+	}
+	if uploadJobID <= 0 {
+		return fmt.Errorf("upload job LinkToExternalDelivery: uploadJobID must be positive (got %d)", uploadJobID)
+	}
+	if externalDeliveryID == "" {
+		return errors.New("upload job LinkToExternalDelivery: empty externalDeliveryID")
+	}
+	if err := linker.LinkUploadJob(ctx, externalDeliveryID, uploadJobID); err != nil {
+		return fmt.Errorf("upload job LinkToExternalDelivery: forward to external_delivery_repo.LinkUploadJob: %w", err)
+	}
+	return nil
+}
+
 // Create inserts a new upload job and returns the generated id plus timestamps.
 // P1#4 — ingest_after + publish_at replace the old scheduled_at column
 // (migration 049c). ingest_after is server-side DEFAULT NOW() so a
