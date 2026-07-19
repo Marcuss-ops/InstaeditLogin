@@ -1133,6 +1133,203 @@ func TestComputeProviderIdempotencyKey_DifferentInputs(t *testing.T) {
 }
 
 // ------------------------------------------------------------------
+// P1 — YouTube privacy_level precedence cascade tests
+// (migration 053 + internal/worker/publish_worker.go)
+// The cascade is:
+//
+//   payload override (post.PrivacyLevel)        [highest]
+//   > post.DefaultPrivacyLevel                  [middle]
+//   > "unlisted"                                [YouTube fallback]
+//   > "PUBLIC_TO_EVERYONE"                      [other platforms]
+//
+// The boundary allowlist (public|unlisted|private) is enforced at
+// youtube_oauth.go::ValidateContent → validateYouTubePrivacyLevel.
+// These tests verify the worker produces the correct intermediate
+// PublishPayload.PrivacyLevel value; the allowlist test that rejects
+// an invalid value lives in services/youtube_oauth_test.go.
+// ------------------------------------------------------------------
+
+// TestPublishTarget_PrivacyLevel_PostOverrideWins confirms the highest
+// precedence term: post.PrivacyLevel (set by the post-update endpoint)
+// wins over post.DefaultPrivacyLevel and over the YouTube "unlisted"
+// fallback. The expected PublishPayload.PrivacyLevel on the captured
+// call is the post's override.
+func TestPublishTarget_PrivacyLevel_PostOverrideWins(t *testing.T) {
+	posts := &mockPostStore{
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{
+				ID:                 100,
+				Caption:            "x",
+				MediaURL:           "https://cdn.example.com/video.mp4",
+				PrivacyLevel:       "private", // highest term
+				DefaultPrivacyLevel: "unlisted", // middle term
+			}, nil
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "youtube", PlatformUserID: "UC-chan"}, nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: "youtube"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: "yt-id"}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "t"}, nil
+		},
+	}
+	w := newTestWorker(posts, users, "youtube", svc, vault)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
+		t.Fatalf("publishTarget: %v", err)
+	}
+	if svc.capturedPayload == nil {
+		t.Fatal("Publish never called — worker bug")
+	}
+	if svc.capturedPayload.PrivacyLevel != "private" {
+		t.Errorf("payload.PrivacyLevel: want \"private\" (post.PrivacyLevel wins), got %q",
+			svc.capturedPayload.PrivacyLevel)
+	}
+}
+
+// TestPublishTarget_PrivacyLevel_PostDefaultWinsOverFallback confirms
+// the middle term: post.DefaultPrivacyLevel (inherited from
+// upload_job → import_batch) is preferred over the YouTube "unlisted"
+// fallback when post.PrivacyLevel is empty.
+func TestPublishTarget_PrivacyLevel_PostDefaultWinsOverFallback(t *testing.T) {
+	posts := &mockPostStore{
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{
+				ID:          100,
+				Caption:     "x",
+				MediaURL:    "https://cdn.example.com/video.mp4",
+				// PrivacyLevel empty → falls through to DefaultPrivacyLevel
+				DefaultPrivacyLevel: "public",
+			}, nil
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "youtube", PlatformUserID: "UC-chan"}, nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: "youtube"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: "yt-id"}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "t"}, nil
+		},
+	}
+	w := newTestWorker(posts, users, "youtube", svc, vault)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
+		t.Fatalf("publishTarget: %v", err)
+	}
+	if svc.capturedPayload.PrivacyLevel != "public" {
+		t.Errorf("payload.PrivacyLevel: want \"public\" (post.DefaultPrivacyLevel wins over fallback), got %q",
+			svc.capturedPayload.PrivacyLevel)
+	}
+}
+
+// TestPublishTarget_PrivacyLevel_YouTubeFallbackIsUnlisted confirms
+// the bottom term: when both post-side fields are empty AND the
+// platform is YouTube, the worker falls back to "unlisted" (NOT
+// "private" as in the legacy hardcoded default).
+func TestPublishTarget_PrivacyLevel_YouTubeFallbackIsUnlisted(t *testing.T) {
+	posts := &mockPostStore{
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{
+				ID:          100,
+				Caption:     "x",
+				MediaURL:    "https://cdn.example.com/video.mp4",
+				// Both privacy fields empty — must reach the platform fallback
+			}, nil
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "youtube", PlatformUserID: "UC-chan"}, nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: "youtube"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: "yt-id"}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "t"}, nil
+		},
+	}
+	w := newTestWorker(posts, users, "youtube", svc, vault)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
+		t.Fatalf("publishTarget: %v", err)
+	}
+	if svc.capturedPayload.PrivacyLevel != "unlisted" {
+		t.Errorf("payload.PrivacyLevel: want \"unlisted\" (YouTube fallback replaces legacy \"private\"), got %q",
+			svc.capturedPayload.PrivacyLevel)
+	}
+}
+
+// TestPublishTarget_PrivacyLevel_NonYouTubeKeepsPublicToEveryone
+// confirms the worker does NOT stamp the YouTube-specific "unlisted"
+// fallback on non-YouTube platforms; Instagram / TikTok etc. keep
+// their historical "PUBLIC_TO_EVERYONE" default when both post-side
+// fields are empty.
+func TestPublishTarget_PrivacyLevel_NonYouTubeKeepsPublicToEveryone(t *testing.T) {
+	posts := &mockPostStore{
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{
+				ID:                 100,
+				Caption:            "ig-caption",
+				MediaURL:           "https://cdn.example.com/ig.mp4",
+				Status:             models.PostStatusScheduled,
+				// Both privacy fields empty
+			}, nil
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, Platform: "instagram", PlatformUserID: "ig-1"}, nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: "instagram"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			return &models.PublishResult{PlatformMediaID: "ig-id"}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "t"}, nil
+		},
+	}
+	w := newTestWorker(posts, users, "instagram", svc, vault)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err != nil {
+		t.Fatalf("publishTarget: %v", err)
+	}
+	if svc.capturedPayload.PrivacyLevel != "PUBLIC_TO_EVERYONE" {
+		t.Errorf("payload.PrivacyLevel: want \"PUBLIC_TO_EVERYONE\" (non-YouTube keeps generic default), got %q",
+			svc.capturedPayload.PrivacyLevel)
+	}
+}
+
+// ------------------------------------------------------------------
 // P0#3 — server-side YouTube pre-upload channel binding check
 // ------------------------------------------------------------------
 

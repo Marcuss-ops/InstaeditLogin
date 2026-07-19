@@ -153,6 +153,20 @@ type UploadJob struct {
 	FolderID       *string         `json:"folder_id,omitempty"`
 	Title          string          `json:"title"`
 	Caption        string          `json:"caption"`
+	// P1 (migration 053) — DefaultPrivacyLevel is the per-batch YouTube
+	// privacy (public|unlisted|private) stamped onto every upload_job the
+	// Drive batch crawler fans out. The crawler copies it from
+	// import_batch.default_privacy_level verbatim. The upload_worker then
+	// propagates it to post.default_privacy_level when materialising a
+	// Post (see internal/worker/upload_worker.go::processPublishJob).
+	// The publish_worker applies the precedence cascade:
+	//   payload override (post.privacy_level)
+	//   > upload_job.default_privacy_level (mapped onto post.default_privacy_level)
+	//   > "unlisted" (YouTube fallback)
+	// Empty string means "no batch-default was provided"; the publish_worker
+	// then falls back to "unlisted" for YouTube or "PUBLIC_TO_EVERYONE"
+	// for the other platforms that require an explicit value.
+	DefaultPrivacyLevel string   `json:"default_privacy_level"`
 	Targets        []int64         `json:"targets"`
 	Status         UploadJobStatus `json:"status"`
 	ErrorMessage   string          `json:"error_message,omitempty"`

@@ -15,8 +15,8 @@ package repository
 
 // --- post_create.go ---
 
-const qInsertPost = `INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, status)
- VALUES ($1, $2, $3, $4, $5, $6, $7)
+const qInsertPost = `INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
  RETURNING id, created_at`
 
 const qInsertPostTarget = `INSERT INTO post_targets (post_id, platform_account_id, status)
@@ -28,16 +28,26 @@ const qInsertOutboxEvent = `INSERT INTO outbox_events (aggregate_type, aggregate
 
 // --- post_query.go ---
 
-const qSelectPostByID = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, created_at
+// P1 (migration 053) — schema-wide: every SELECT against posts now
+// returns the two new privacy columns (privacy_level, default_privacy_level)
+// so the publish_worker can apply the precedence cascade without an extra
+// round-trip. Column order is canonicalised: ingest_after, publish_at,
+// status, privacy_level, default_privacy_level, created_at. Whatever order
+// the caller reads the row via Scan, the same ORDER BY must stay in sync
+// here — post_repo_test.go's mock assertions live here. The created_at
+// timestamp is intentionally last so existing test regex anchors don't
+// need to be updated (the implicit invariant: tests assert on the FIRST
+// N columns they care about).
+const qSelectPostByID = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
  FROM posts
  WHERE id = $1`
 
-const qSelectPostsByWorkspace = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, created_at
+const qSelectPostsByWorkspace = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
  FROM posts
  WHERE workspace_id = $1
  ORDER BY created_at DESC`
 
-const qSelectQueuedPosts = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, created_at
+const qSelectQueuedPosts = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
  FROM posts
  WHERE status = 'queued' AND (publish_at IS NULL OR publish_at <= $1)
  ORDER BY publish_at ASC NULLS FIRST`
@@ -70,9 +80,12 @@ const qSelectPendingTargets = `SELECT pt.id, pt.post_id, pt.platform_account_id,
 
 // --- post_update.go ---
 
+// P1 (migration 053) — qUpdatePost now writes the two privacy columns so
+// the editor endpoint can persist a per-post privacy_level override in
+// the same atomic UPDATE. order matches insertion above.
 const qUpdatePost = `UPDATE posts
- SET title = $1, caption = $2, media_url = $3, publish_at = $4, status = $5
- WHERE id = $6 AND workspace_id = $7`
+ SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7
+ WHERE id = $8 AND workspace_id = $9`
 
 const qUpdateTargetProviderIdempotencyKey = `UPDATE post_targets
  SET provider_idempotency_key = $1

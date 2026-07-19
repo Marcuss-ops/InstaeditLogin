@@ -683,6 +683,15 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 		// gates on publish_at <= NOW(), so the post stays queued
 		// until the cursor elapses.
 		PublishAt: job.PublishAt,
+		// P1 (migration 053) — propagate the inherited batch default
+		// onto the post. The publish_worker uses this as the middle
+		// term of the precedence cascade:
+		//   payload override (post.PrivacyLevel) > post.DefaultPrivacyLevel
+		//   > "unlisted" (YouTube fallback) > PUBLIC_TO_EVERYONE (other platforms)
+		// post.PrivacyLevel is left empty by this flow — the operator
+		// sets it explicitly via the post-update endpoint when they want a
+		// per-post override.
+		DefaultPrivacyLevel: job.DefaultPrivacyLevel,
 	}
 	targets := make([]*models.PostTarget, 0, len(job.Targets))
 	for _, accountID := range job.Targets {

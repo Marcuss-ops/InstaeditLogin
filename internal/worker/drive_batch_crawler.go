@@ -387,6 +387,12 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 			// removed from the Drive service). SourceDriveAccountID
 			// is guaranteed non-nil by the guard at the top of
 			// processBatch, so the dereference is safe.
+			// P1 (migration 053) — propagate the per-batch YouTube
+			// default (set by pkg/api/drive_batch_v2.go handler
+			// allowlist-validated at producer boundary) onto every
+			// upload_job we fan out. The upload_worker then copies
+			// this onto post.default_privacy_level; the publish_worker
+			// uses it as the middle term in its precedence cascade.
 			job := &models.UploadJob{
 				UserID:         batch.UserID,
 				WorkspaceID:    batch.WorkspaceID,
@@ -401,6 +407,7 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 				IngestAfter:    time.Now(),
 				PublishAt:      &currentPublishAt,
 				BatchID:        &batch.ID,
+				DefaultPrivacyLevel: batch.DefaultPrivacyLevel,
 			}
 			if err := c.uploadRepo.Create(job); err != nil {
 				terminalErr = fmt.Errorf("Create upload_job at page %d for file %s: %w", pageCount, f.ID, err)

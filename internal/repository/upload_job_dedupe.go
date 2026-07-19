@@ -73,10 +73,13 @@ func (r *UploadJobRepository) CreateIfSourceAbsent(job *models.UploadJob) (bool,
 		return false, nil
 	}
 
+	// P1 (migration 053) — INSERT now writes the inherited batch default.
+	// Like every other INSERT in this repo, column-list-vs-bind-list is a
+	// manual invariant. $13 is the new column slot.
 	if err := tx.QueryRow(
 		`INSERT INTO upload_jobs
-			(user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption, targets, status, ingest_after, publish_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			(user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption, targets, status, ingest_after, publish_at, default_privacy_level)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id, created_at, updated_at`,
 		job.UserID,
 		job.WorkspaceID,
@@ -90,6 +93,7 @@ func (r *UploadJobRepository) CreateIfSourceAbsent(job *models.UploadJob) (bool,
 		string(job.Status),
 		job.IngestAfter,
 		publishAt,
+		job.DefaultPrivacyLevel,
 	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt); err != nil {
 		return false, fmt.Errorf("failed to create upload job: %w", err)
 	}

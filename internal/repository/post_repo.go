@@ -96,10 +96,18 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 	// explicit value (the common case), we pass an explicit NOW()
 	// here so the row is immutable to clock drift between Go's
 	// time.Now() and Postgres' NOW() inside the same transaction.
+	// P1 (migration 053) — bind the inherited batch default + the explicit
+	// per-post override. Order MUST match qInsertPost's column list; the
+	// schema-side VALIDATE() of qInsertPost (via go vet) doesn't run on
+	// raw SQL strings so order is a manual invariant here. A future
+	// taglio can swap to a small struct-bound builder to compile-enforce
+	// this.
 	err = tx.QueryRow(
 		qInsertPost,
 		post.WorkspaceID, post.Title, post.Caption, post.MediaURL,
-		post.IngestAfter, post.PublishAt, post.Status,
+		post.IngestAfter, post.PublishAt,
+		post.DefaultPrivacyLevel, post.PrivacyLevel,
+		post.Status,
 	).Scan(&post.ID, &post.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to create post: %w", err)
@@ -184,9 +192,13 @@ func (r *PostRepository) Update(post *models.Post) error {
 	// NOW() — caller can set post.IngestAfter explicitly to override,
 	// otherwise the row keeps its prior value (the SQL UPDATE does not
 	// touch ingest_after by design).
+	// P1 (migration 053) — qUpdatePost now writes the privacy columns; arg
+	// order MUST match the SET clause in queries.go.
 	result, err := r.db.Exec(
 		qUpdatePost,
-		post.Title, post.Caption, post.MediaURL, post.PublishAt, post.Status,
+		post.Title, post.Caption, post.MediaURL, post.PublishAt,
+		post.PrivacyLevel, post.DefaultPrivacyLevel,
+		post.Status,
 		post.ID, post.WorkspaceID,
 	)
 	if err != nil {
@@ -215,11 +227,17 @@ func (r *PostRepository) FindByID(id int64) (*models.Post, error) {
 	p := &models.Post{}
 	// P1#4 — qSelectPostByID now SELECTs ingest_after, publish_at
 	// instead of scheduled_at (queries.go).
+	// P1 (migration 053) — read the two new privacy columns too. Order
+	// MUST match qSelectPostByID's column list. PrivacyLevel + DefaultPrivacyLevel
+	// are NON-NULL strings (default empty) so plain &p.PrivacyLevel works
+	// — no sql.NullString wrapping required.
 	err := r.db.QueryRow(
 		qSelectPostByID,
 		id,
 	).Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
-		&p.IngestAfter, &p.PublishAt, &p.Status, &p.CreatedAt)
+		&p.IngestAfter, &p.PublishAt, &p.Status,
+		&p.PrivacyLevel, &p.DefaultPrivacyLevel,
+		&p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -245,9 +263,12 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
 	var posts []models.Post
 	for rows.Next() {
 		p := models.Post{}
-		// P1#4 — read ingest_after + publish_at instead of scheduled_at.
+		// P1 (migration 053) — also read the two new privacy columns; order
+		// matches qSelectPostsByWorkspace's column list.
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
-			&p.IngestAfter, &p.PublishAt, &p.Status, &p.CreatedAt); err != nil {
+			&p.IngestAfter, &p.PublishAt, &p.Status,
+			&p.PrivacyLevel, &p.DefaultPrivacyLevel,
+			&p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, p)
@@ -273,9 +294,12 @@ func (r *PostRepository) ListQueued(before time.Time) ([]models.Post, error) {
 	var posts []models.Post
 	for rows.Next() {
 		p := models.Post{}
-		// P1#4 — read ingest_after + publish_at instead of scheduled_at.
+		// P1 (migration 053) — also read the two new privacy columns; order
+		// matches qSelectQueuedPosts's column list.
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
-			&p.IngestAfter, &p.PublishAt, &p.Status, &p.CreatedAt); err != nil {
+			&p.IngestAfter, &p.PublishAt, &p.Status,
+			&p.PrivacyLevel, &p.DefaultPrivacyLevel,
+			&p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, p)

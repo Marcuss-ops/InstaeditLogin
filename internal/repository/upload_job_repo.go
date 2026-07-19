@@ -55,11 +55,16 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 		batchID = job.BatchID.String()
 	}
 
+	// P1 (migration 053) — INSERT now writes the inherited batch
+	// default_privacy_level verbatim. Bound as $14 so caller-passed nil/empty
+	// also writes placeholder "" (DEFAULT '' from migration 053). order
+	// matches the column list verbatim — column-list-vs-bind-list is a manual
+	// invariant here, like every other INSERT in this repo.
 	return r.db.QueryRow(
 		`INSERT INTO upload_jobs
 			(user_id, workspace_id, source_type, source_id, drive_account_id, folder_id,
-			 title, caption, targets, status, ingest_after, publish_at, batch_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			 title, caption, targets, status, ingest_after, publish_at, batch_id, default_privacy_level)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id, created_at, updated_at`,
 		job.UserID,
 		job.WorkspaceID,
@@ -74,17 +79,23 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 		job.IngestAfter,
 		publishAt,
 		batchID,
+		job.DefaultPrivacyLevel,
 	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt)
 }
 
 // FindByID returns the upload job with the given id, or (nil, nil) if not found.
 func (r *UploadJobRepository) FindByID(id int64) (*models.UploadJob, error) {
+	// P1 (migration 053) — every SELECT projection against upload_jobs now
+	// includes default_privacy_level. Column-list-vs-Scan-list is a manual
+	// invariant; lookups and inserts both include this column in the same
+	// position (last, before the column-set the worker touches most).
 	row := r.db.QueryRow(
 		`SELECT id, user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption,
 		        targets, status, error_message, post_id, asset_id, ingest_after, publish_at, created_at, updated_at,
 		        attempt_count, max_attempts, next_attempt_at, lease_owner, lease_expires_at, heartbeat_at,
 		        progress_bytes, total_bytes, error_code, priority, started_at, completed_at,
-		        youtube_session_uri, youtube_session_offset, youtube_session_expires_at, youtube_chunk_size, youtube_last_chunk_at
+		        youtube_session_uri, youtube_session_offset, youtube_session_expires_at, youtube_chunk_size, youtube_last_chunk_at,
+		        default_privacy_level
 		 FROM upload_jobs
 		 WHERE id = $1`,
 		id,
@@ -644,12 +655,16 @@ func (r *UploadJobRepository) ListByUser(userID int64, filter UploadJobListFilte
 		timeTo = sql.NullTime{Time: *filter.To, Valid: true}
 	}
 
+	// P1 (migration 053) — appended default_privacy_level to the projection so
+	// ListByUser returns it for the dashboard's "what privacy will this row
+	// publish at" preview column (future taglio).
 	rows, err := r.db.Query(
 		`SELECT id, user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption,
 		        targets, status, error_message, post_id, asset_id, ingest_after, publish_at, created_at, updated_at,
 		        attempt_count, max_attempts, next_attempt_at, lease_owner, lease_expires_at, heartbeat_at,
 		        progress_bytes, total_bytes, error_code, priority, started_at, completed_at,
-		        youtube_session_uri, youtube_session_offset, youtube_session_expires_at, youtube_chunk_size, youtube_last_chunk_at
+		        youtube_session_uri, youtube_session_offset, youtube_session_expires_at, youtube_chunk_size, youtube_last_chunk_at,
+		        default_privacy_level
 		 FROM upload_jobs
 		 WHERE user_id = $1
 		   AND ($2::bigint              IS NULL OR targets @> jsonb_build_array($2::bigint))
@@ -1072,6 +1087,7 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 		&youtubeSessionExpiresAt,
 		&youtubeChunkSize,
 		&youtubeLastChunkAt,
+		&job.DefaultPrivacyLevel,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1220,6 +1236,7 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 		&youtubeSessionExpiresAt,
 		&youtubeChunkSize,
 		&youtubeLastChunkAt,
+		&job.DefaultPrivacyLevel,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

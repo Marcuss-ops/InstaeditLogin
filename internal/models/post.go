@@ -151,6 +151,23 @@ type Post struct {
 	Title          string     `json:"title,omitempty"`
 	Caption        string     `json:"caption,omitempty"`
 	MediaURL       string     `json:"media_url,omitempty"`
+	// P1 (migration 053) — PrivacyLevel is the per-post override set by
+	// the API endpoints (POST /posts and PATCH /posts/:id). Highest
+	// precedence term in the publish_worker cascade:
+	//   post.PrivacyLevel > post.DefaultPrivacyLevel > "unlisted"/PUBLIC_TO_EVERYONE
+	// Empty = no override; the worker falls back to post.DefaultPrivacyLevel.
+	// Boundary allowlist is enforced at the YouTube capability boundary by
+	// internal/services/youtube_oauth.go::ValidateContent (alias
+	// validateYouTubePrivacyLevel — public|unlisted|private).
+	PrivacyLevel string `json:"privacy_level,omitempty"`
+	// P1 (migration 053) — DefaultPrivacyLevel is the inherited batch
+	// default propagated from upload_job.default_privacy_level (set by
+	// the Drive batch crawler from import_batch.default_privacy_level).
+	// Middle precedence term in the publish_worker cascade. Empty = no
+	// batch default stamped; the worker then falls through to the
+	// platform-specific fallback ("unlisted" for YouTube,
+	// "PUBLIC_TO_EVERYONE" for TikTok / other platforms).
+	DefaultPrivacyLevel string `json:"default_privacy_level,omitempty"`
 	// P1#4 — split of the old scheduled_at field.
 	// IngestAfter: NOT NULL DEFAULT NOW() at the SQL level; ingest
 	//             happens at insert time (or at the row's first
