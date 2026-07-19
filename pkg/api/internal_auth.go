@@ -33,12 +33,29 @@ import (
 //   - VELOX_API_TOKEN empty at process start → 503 Service
 //     Unavailable + an error log so operators can fix the env
 //     var without chasing a mysterious 403.
-//   - Authorization header absent OR not "Bearer <token>" →
-//     401 MissingToken.
-//   - Authorization header present but token mismatches →
-//     401 TokenMismatch. Same status code as missing so a
-//     peer probing the endpoint can't tell "no attempt"
-//     from "wrong attempt" — reduces the oracle surface.
+//   - Authorization header absent OR malformed (not "Bearer
+//     <token>" shape, case-insensitive) → 401 Unauthorized
+//     with the JSON body `{"error":"missing or malformed
+//     Authorization header"}`. Semantically the peer has not
+//     attempted authentication, so 401 — "you need to
+//     authenticate" — is the right code.
+//   - Authorization header well-formed but token mismatches
+//     → 403 Forbidden with the JSON body `{"error":"token
+//     mismatch"}`. The peer DID authenticate (presented a
+//     well-formed header with a credential), but the
+//     credential is wrong. RFC 7235 maps this to 403.
+//
+//     Why 401/403 rather than collapsing both to 401: the
+//     Velox contract treats 401 as a per-request retry hint
+//     ("missing header — maybe your client library is set up
+//     wrong, don't bust the queue retrying") and 403 as a
+//     deploy-time escalations ("token doesn't match — page
+//     the operator and rotate VELOX_API_TOKEN on both
+//     sides"). Operators read 403 spikes in the metrics
+//     pipeline and page immediately; 401 spikes are
+//     diagnostic-only and don't page. The bucket separation
+//     matters more here than the small oracle surface of
+//     "yes/no token guess".
 //
 // Constant-time compare (crypto/subtle.ConstantTimeCompare)
 // prevents timing-based token recovery. The two strings MUST
@@ -48,11 +65,24 @@ import (
 // (32 chars from a 16-byte secret → boot-time rotation
 // lengthens if a higher-entropy deployment requires it).
 //
-// Response format parity: 401/503 paths use the standard
+// Response format parity: 401/403/503 paths use the standard
 // writeError JSON envelope so Velox gets a uniform
 // application/json response shape regardless of which path
 // fired (unlike http.Error which writes text/plain and
 // breaks contract parity with the handler paths).
+//
+// Forward-compat: the 401-missing / 403-mismatch split is
+// Velox-specific (maps "you need to authenticate" vs "you
+// tried with a wrong credential" to RFC 7235 + the Velox
+// retry/escalation contract). This DEVIATES from the
+// GitHub/Stripe/AWS convention where wrong API keys return
+// 401. The internal_velox contract doc (docs/ENDPOINTS.md
+// "Internal /internal/v1 contract") MUST tag this difference
+// explicitly so a future provider (Dropbox is mentioned in
+// the /internal/v1 design doc) that drops in expecting
+// standard HTTP semantics knows to opt back into 401-for-both
+// via a dedicated `WithWrongTokenStatus(http.StatusUnauthorized)`
+// Router option — see TODO-velox-auth-status-config follow-up.
 func (r *Router) internalVeloxAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if r.veloxAPIToken == "" {
@@ -75,14 +105,16 @@ func (r *Router) internalVeloxAuth(next http.Handler) http.Handler {
 		// subtle.ConstantTimeCompare on byte slices prevents
 		// timing-based recovery. Length-mismatch short-circuits
 		// to 0 (acceptable per file-level doc-comment).
+		//
+		// 403 (NOT 401) here per the failure-mode rationale in
+		// the file-level doc-comment: the peer DID present a
+		// well-formed Authorization header, so this maps to
+		// "authenticated attempt rejected" rather than
+		// "authentication required".
 		provided := []byte(token)
 		expected := []byte(r.veloxAPIToken)
 		if subtle.ConstantTimeCompare(provided, expected) != 1 {
-			// Same status code as the missing-token path so
-			// an attacker probing the endpoint can't tell
-			// "no attempt" from "wrong attempt" — reduces
-			// the oracle surface.
-			writeError(w, http.StatusUnauthorized, "unauthorized")
+			writeError(w, http.StatusForbidden, "token mismatch")
 			return
 		}
 		next.ServeHTTP(w, req)

@@ -208,15 +208,17 @@ func TestValidate_PrefixOnly(t *testing.T) {
 }
 
 // TestValidate_WrongToken verifies the constant-time token
-// mismatch path returns 401 AND the destination store counter
-// stays at zero (timing-leak defense).
+// mismatch path returns 403 (peer DID authenticate — wrong
+// credential — rather than 401 "you need to authenticate")
+// AND the destination store counter stays at zero
+// (timing-leak defense).
 func TestValidate_WrongToken(t *testing.T) {
 	dst := &mockExternalDestinationStore{}
 	w := runValidate(t, dst, &mockWorkspaceLookup{}, &mockUserLookup{},
 		testVeloxAPIToken, "extdst_01JABC",
 		"Bearer wrong-token-32-chars-aaaaaa", "")
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401, got %d", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d", w.Code)
 	}
 	if dst.GetByIDCalls != 0 {
 		t.Errorf("destination store must NOT be called when token mismatches; got %d calls", dst.GetByIDCalls)
@@ -225,7 +227,7 @@ func TestValidate_WrongToken(t *testing.T) {
 
 // TestValidate_TokenMismatchSameLength closes an unlikely but
 // possible read of subtle.ConstantTimeCompare: same length +
-// wrong content. The compare returns 0 → 401. Verifies the
+// wrong content. The compare returns 0 → 403. Verifies the
 // happy-length-mismatch path uses the constant-time compare
 // (vs. a naive bytewise compare that would leak per-byte
 // equality on first match).
@@ -236,8 +238,8 @@ func TestValidate_TokenMismatchSameLength(t *testing.T) {
 	w := runValidate(t, dst, &mockWorkspaceLookup{}, &mockUserLookup{},
 		testVeloxAPIToken, "extdst_01JABC",
 		"Bearer "+wrong, "")
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("same-length wrong token: want 401, got %d", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("same-length wrong token: want 403, got %d", w.Code)
 	}
 }
 
