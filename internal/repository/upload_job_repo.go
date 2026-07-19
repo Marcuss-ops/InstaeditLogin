@@ -69,7 +69,8 @@ func (r *UploadJobRepository) FindByID(id int64) (*models.UploadJob, error) {
 		`SELECT id, user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption,
 		        targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at,
 		        attempt_count, max_attempts, next_attempt_at, lease_owner, lease_expires_at, heartbeat_at,
-		        progress_bytes, total_bytes, error_code, priority, started_at, completed_at
+		        progress_bytes, total_bytes, error_code, priority, started_at, completed_at,
+		        youtube_session_uri, youtube_session_offset, youtube_session_expires_at, youtube_chunk_size, youtube_last_chunk_at
 		 FROM upload_jobs
 		 WHERE id = $1`,
 		id,
@@ -505,12 +506,17 @@ func (r *UploadJobRepository) ReclaimExpiredLeases(ctx context.Context, maxRows 
             LIMIT $1
         )
         UPDATE upload_jobs j
-        SET status           = 'pending',
-            lease_owner      = NULL,
-            lease_expires_at = NULL,
-            heartbeat_at     = NULL,
-            error_code       = COALESCE(error_code, 'lease_expired'),
-            updated_at       = NOW()
+        SET status                    = 'pending',
+            lease_owner               = NULL,
+            lease_expires_at          = NULL,
+            heartbeat_at              = NULL,
+            error_code                = COALESCE(error_code, 'lease_expired'),
+            youtube_session_uri       = NULL,
+            youtube_session_offset    = NULL,
+            youtube_session_expires_at = NULL,
+            youtube_chunk_size        = NULL,
+            youtube_last_chunk_at     = NULL,
+            updated_at                = NOW()
         FROM expired
         WHERE j.id = expired.id`,
 		maxRows,
@@ -606,7 +612,8 @@ func (r *UploadJobRepository) ListByUser(userID int64, filter UploadJobListFilte
 		`SELECT id, user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption,
 		        targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at,
 		        attempt_count, max_attempts, next_attempt_at, lease_owner, lease_expires_at, heartbeat_at,
-		        progress_bytes, total_bytes, error_code, priority, started_at, completed_at
+		        progress_bytes, total_bytes, error_code, priority, started_at, completed_at,
+		        youtube_session_uri, youtube_session_offset, youtube_session_expires_at, youtube_chunk_size, youtube_last_chunk_at
 		 FROM upload_jobs
 		 WHERE user_id = $1
 		   AND ($2::bigint              IS NULL OR targets @> jsonb_build_array($2::bigint))
@@ -875,6 +882,103 @@ func (r *UploadJobRepository) AggregateByFolder(folderID string, userID int64) (
 // return an error on the first row. Columns past index 16 are the P1
 // worker-pool additions (migration 046) and use sql.Null* wrappers
 // because they're nullable on disk.
+// SaveYouTubeSession (P1#5) persists the resumable-upload state
+// after every successful chunk PUT so a worker restart can pick up
+// from youtube_session_offset instead of restreaming the entire
+// file from byte 0. CAS-guarded against lease_owner so a peer
+// that stole the lease (reaper release + re-claim) cannot overwrite
+// our writes. Caller (the worker's processPublishJob) computes the
+// offset from the Content-Range header on the successful PUT
+// response.
+//
+// expiresAt is set to NOW() + YOUTUBE_SESSION_DEFAULT_TTL_HOURS
+// (default 168 = 7 days, matching YouTube's documented default).
+// The worker checks NOW() >= expiresAt before trusting the URI for
+// a ResumeSession probe; if past, the URI is treated as dead and the
+// worker re-initiates via the existing POST path.
+func (r *UploadJobRepository) SaveYouTubeSession(ctx context.Context, id int64, workerID, sessionURI string, offset, chunkSize int64, expiresAt time.Time) error {
+	if workerID == "" {
+		return fmt.Errorf("upload job SaveYouTubeSession: empty workerID")
+	}
+	if sessionURI == "" {
+		return fmt.Errorf("upload job SaveYouTubeSession: empty sessionURI")
+	}
+	if chunkSize <= 0 {
+		return fmt.Errorf("upload job SaveYouTubeSession: non-positive chunkSize (%d)", chunkSize)
+	}
+	if offset < 0 {
+		return fmt.Errorf("upload job SaveYouTubeSession: negative offset (%d)", offset)
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE upload_jobs
+         SET youtube_session_uri       = $2,
+             youtube_session_offset    = $3,
+             youtube_session_expires_at = $4,
+             youtube_chunk_size        = $5,
+             youtube_last_chunk_at     = NOW(),
+             progress_bytes            = $3,
+             updated_at                = NOW()
+         WHERE id = $1
+           AND lease_owner            = $6
+           AND status                 = 'leased'`,
+		id, sessionURI, offset, expiresAt, chunkSize, workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("upload job SaveYouTubeSession: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("upload job SaveYouTubeSession rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+	}
+	return nil
+}
+
+// ClearYouTubeSession (P1#5) removes any persisted resumable-upload
+// state from the row. Used by processPublishJob on three paths:
+//   - MarkCompleted: terminal-success row is no longer in flight;
+//     the URI is dead to anyone with read access, so nulling the
+//     5 columns keeps the row tidy.
+//   - ResumeSession probe returned 404 (session expired): the URI
+//     is confirmed dead but the row WILL re-initiate immediately,
+//     so clearing is the right call.
+//   - On MarkDeadLetter we KEEP the session fields (operator triage
+//     needs the URI + offset to resume by hand) — caller invokes
+//     SaveYouTubeSession on retry rather than Clear here.
+//
+// Same CAS protection as the other Mark* helpers.
+func (r *UploadJobRepository) ClearYouTubeSession(ctx context.Context, id int64, workerID string) error {
+	if workerID == "" {
+		return fmt.Errorf("upload job ClearYouTubeSession: empty workerID")
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE upload_jobs
+         SET youtube_session_uri       = NULL,
+             youtube_session_offset    = NULL,
+             youtube_session_expires_at = NULL,
+             youtube_chunk_size        = NULL,
+             youtube_last_chunk_at     = NULL,
+             updated_at                = NOW()
+         WHERE id = $1
+           AND lease_owner            = $2
+           AND status                 = 'leased'`,
+		id, workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("upload job ClearYouTubeSession: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("upload job ClearYouTubeSession rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+	}
+	return nil
+}
+
 func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 	var job models.UploadJob
 	var rawStatus, rawSource string
@@ -888,6 +992,11 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 	var leaseOwner sql.NullString
 	var totalBytes sql.NullInt64
 	var errorCode sql.NullString
+	// P1#5 — YouTube resumable session columns (migration 048). All
+	// nullable: NULL means "no session yet" or "session was cleared".
+	var youtubeSessionURI sql.NullString
+	var youtubeSessionOffset, youtubeChunkSize sql.NullInt64
+	var youtubeSessionExpiresAt, youtubeLastChunkAt sql.NullTime
 
 	err := rows.Scan(
 		&job.ID,
@@ -919,6 +1028,11 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 		&job.Priority,
 		&startedAt,
 		&completedAt,
+		&youtubeSessionURI,
+		&youtubeSessionOffset,
+		&youtubeSessionExpiresAt,
+		&youtubeChunkSize,
+		&youtubeLastChunkAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -979,6 +1093,31 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 	if completedAt.Valid {
 		t := completedAt.Time
 		job.CompletedAt = &t
+	}
+	// P1#5 — YouTube session field assignments. youtube_session_uri
+	// is the only credential-adjacent field; it carries the
+	// `json:"-"` tag on the model so it never leaves the backend
+	// via any API response. Workers MUST redact it on log lines
+	// (see internal/worker/redactYouTubeSessionURI).
+	if youtubeSessionURI.Valid {
+		v := youtubeSessionURI.String
+		job.YouTubeSessionURI = &v
+	}
+	if youtubeSessionOffset.Valid {
+		v := youtubeSessionOffset.Int64
+		job.YouTubeSessionOffset = &v
+	}
+	if youtubeSessionExpiresAt.Valid {
+		t := youtubeSessionExpiresAt.Time
+		job.YouTubeSessionExpiresAt = &t
+	}
+	if youtubeChunkSize.Valid {
+		v := youtubeChunkSize.Int64
+		job.YouTubeChunkSize = &v
+	}
+	if youtubeLastChunkAt.Valid {
+		t := youtubeLastChunkAt.Time
+		job.YouTubeLastChunkAt = &t
 	}
 	if err := json.Unmarshal(targetsJSON, &job.Targets); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal upload job targets: %w", err)
@@ -1091,6 +1230,31 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 	if completedAt.Valid {
 		t := completedAt.Time
 		job.CompletedAt = &t
+	}
+	// P1#5 — YouTube session field assignments. youtube_session_uri
+	// is the only credential-adjacent field; it carries the
+	// `json:"-"` tag on the model so it never leaves the backend
+	// via any API response. Workers MUST redact it on log lines
+	// (see internal/worker/redactYouTubeSessionURI).
+	if youtubeSessionURI.Valid {
+		v := youtubeSessionURI.String
+		job.YouTubeSessionURI = &v
+	}
+	if youtubeSessionOffset.Valid {
+		v := youtubeSessionOffset.Int64
+		job.YouTubeSessionOffset = &v
+	}
+	if youtubeSessionExpiresAt.Valid {
+		t := youtubeSessionExpiresAt.Time
+		job.YouTubeSessionExpiresAt = &t
+	}
+	if youtubeChunkSize.Valid {
+		v := youtubeChunkSize.Int64
+		job.YouTubeChunkSize = &v
+	}
+	if youtubeLastChunkAt.Valid {
+		t := youtubeLastChunkAt.Time
+		job.YouTubeLastChunkAt = &t
 	}
 	if err := json.Unmarshal(targetsJSON, &job.Targets); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal upload job targets: %w", err)

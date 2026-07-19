@@ -41,6 +41,10 @@ type UploadJobStore interface {
 	MarkDeadLetter(ctx context.Context, id int64, workerID, errorCode, errMessage string) error
 	MarkIngested(ctx context.Context, id int64, workerID, assetID string, totalBytes int64) error
 	ReclaimExpiredLeases(ctx context.Context, maxRows int) (int64, error)
+	// P1#5 — YouTube resumable session persistence. Called per-chunk
+	// (Save) and once at terminal-success / session-expired (Clear).
+	SaveYouTubeSession(ctx context.Context, id int64, workerID, sessionURI string, offset, chunkSize int64, expiresAt time.Time) error
+	ClearYouTubeSession(ctx context.Context, id int64, workerID string) error
 }
 
 // UploadMediaStore is the narrow media asset repository interface.

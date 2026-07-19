@@ -88,6 +88,27 @@ type UploadJob struct {
 	Priority       int        `json:"priority"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	// P1#5 — YouTube resumable-upload session state. A worker that
+	// crashes mid-upload can pick up where it left off instead of
+	// restreaming the whole file from byte 0. TreatYouTubeSessionURI
+	// as credential-adjacent — the `json:"-"` tag prevents it from
+	// ever leaving the backend via any API response; workers
+	// must redact it (first-8-chars+…) when logging.
+	//
+	// YouTubeSessionOffset is the bytes the server has
+	// acknowledged (NULL = no progress / fresh session).
+	// YouTubeSessionExpiresAt is YouTube-side expiry. The worker
+	// checks this before trusting the URI.
+	// YouTubeChunkSize is the chunk size the worker used to
+	// stamp YouTubeSessionOffset; persisted so a restart uses
+	// the same value.
+	// YouTubeLastChunkAt is the wall-clock of the last successful
+	// chunk PUT (dashboard + future per-session-idleness reaper).
+	YouTubeSessionURI        *string    `json:"-"`
+	YouTubeSessionOffset     *int64     `json:"youtube_session_offset,omitempty"`
+	YouTubeSessionExpiresAt  *time.Time `json:"youtube_session_expires_at,omitempty"`
+	YouTubeChunkSize         *int64     `json:"youtube_chunk_size,omitempty"`
+	YouTubeLastChunkAt       *time.Time `json:"youtube_last_chunk_at,omitempty"`
 }
 
 // ScanTargets unmarshals the JSONB targets column into the Targets slice.
