@@ -12,6 +12,9 @@ import {
   Phone,
   Send,
   Mail,
+  Globe,
+  Scissors,
+  Radio,
 } from "lucide-react";
 import type { SVGProps } from "react";
 
@@ -148,6 +151,50 @@ const PLATFORM_REGISTRY = [
   { key: "x", name: "X", Logo: XLogo, color: "#FFFFFF" },
   { key: "linkedin", name: "LinkedIn", Logo: LinkedInLogo, color: "#0A66C2" },
   { key: "threads", name: "Threads", Logo: ThreadsLogo, color: "#FFFFFF" },
+] as const;
+
+/* ----------------------------------------------------------------------------
+ * Curated list of supported translation markets. Headline copy claims
+ * 50+; this list shows the 30 most-requested locales with flag emoji +
+ * ISO code + native name so the row reads as a real product surface,
+ * not a vague claim. Append here to add a market.
+ *
+ * Code uses BCP-47 syntax for split locales (e.g. zh-Hant). Flag emojis
+ * are used as the visual kink — they're rendered as glyphs, no Twemoji
+ * dependency — so flag rendering falls back gracefully on platforms
+ * that strip emoji (Linux server-side, headless email).
+ * -------------------------------------------------------------------------- */
+const LANGUAGES = [
+  { code: "en", name: "English", flag: "🇬🇧" },
+  { code: "es", name: "Español", flag: "🇪🇸" },
+  { code: "pt", name: "Português", flag: "🇵🇹" },
+  { code: "fr", name: "Français", flag: "🇫🇷" },
+  { code: "de", name: "Deutsch", flag: "🇩🇪" },
+  { code: "it", name: "Italiano", flag: "🇮🇹" },
+  { code: "nl", name: "Nederlands", flag: "🇳🇱" },
+  { code: "pl", name: "Polski", flag: "🇵🇱" },
+  { code: "sv", name: "Svenska", flag: "🇸🇪" },
+  { code: "da", name: "Dansk", flag: "🇩🇰" },
+  { code: "no", name: "Norsk", flag: "🇳🇴" },
+  { code: "fi", name: "Suomi", flag: "🇫🇮" },
+  { code: "cs", name: "Čeština", flag: "🇨🇿" },
+  { code: "el", name: "Ελληνικά", flag: "🇬🇷" },
+  { code: "tr", name: "Türkçe", flag: "🇹🇷" },
+  { code: "ru", name: "Русский", flag: "🇷🇺" },
+  { code: "uk", name: "Українська", flag: "🇺🇦" },
+  { code: "ar", name: "العربية", flag: "🇸🇦" },
+  { code: "he", name: "עברית", flag: "🇮🇱" },
+  { code: "hi", name: "हिन्दी", flag: "🇮🇳" },
+  { code: "bn", name: "বাংলা", flag: "🇧🇩" },
+  { code: "th", name: "ไทย", flag: "🇹🇭" },
+  { code: "vi", name: "Tiếng Việt", flag: "🇻🇳" },
+  { code: "id", name: "Bahasa Indonesia", flag: "🇮🇩" },
+  { code: "ms", name: "Bahasa Melayu", flag: "🇲🇾" },
+  { code: "tl", name: "Filipino", flag: "🇵🇭" },
+  { code: "ja", name: "日本語", flag: "🇯🇵" },
+  { code: "ko", name: "한국어", flag: "🇰🇷" },
+  { code: "zh", name: "中文", flag: "🇨🇳" },
+  { code: "zh-Hant", name: "繁體中文", flag: "🇹🇼" },
 ] as const;
 
 /* ----------------------------------------------------------------------------
@@ -643,6 +690,660 @@ function HowItWorks() {
 }
 
 /* ----------------------------------------------------------------------------
+ * TranslateSection — marketing mockup for the 50+ language localization
+ * feature. Same 12-col grid rhythm as OutputsSection/HowItWorks. Left
+ * column = eyebrow + headline + 3 feature bullets. Right column = a
+ * window-chromed "Translate preview" panel showing the original English
+ * line stacked against 4 native-script translations, plus a curated
+ * chip grid of supported locales with a "+ 20 more" tail that visually
+ * closes the gap to the 50+ claim.
+ *
+ * The mock text lines are tuned to feel like real subtitles — short,
+ * idiomatic, and culturally natural (Italian flips "of five" to a
+ * singular team reference, Japanese uses "午後に一人で完結する" which
+ * reads as natural JP rather than a literal calque). They're decorative —
+ * do not use them to claim actual localized output.
+ * -------------------------------------------------------------------------- */
+function TranslateSection() {
+  const previewLines = [
+    {
+      flag: "🇮🇹",
+      lang: "Italiano",
+      text: "Prima serviva un team di cinque. Ora mi basta un pomeriggio.",
+    },
+    {
+      flag: "🇯🇵",
+      lang: "日本語",
+      text: "かつて 5 人のチームが必要だった。今は午後に一人で完結する。",
+    },
+    {
+      flag: "🇧🇷",
+      lang: "Português",
+      text: "Antes precisava de cinco. Hoje faço numa tarde.",
+    },
+    {
+      flag: "🇩🇪",
+      lang: "Deutsch",
+      text: "Früher brauchte es fünf Leute. Heute reicht ein Nachmittag.",
+    },
+  ] as const;
+  return (
+    <section className="relative py-24 sm:py-32 overflow-hidden bg-elevated">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-gradient-to-br from-violet-500/[0.10] via-transparent to-cyan-500/[0.10] pointer-events-none"
+      />
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="glow-orb bg-violet-500 w-[400px] h-[400px] -top-20 -right-32 animate-drift-slow opacity-50" />
+        <div className="glow-orb bg-cyan-400 w-[360px] h-[360px] -bottom-32 -left-24 animate-drift-rev opacity-40" />
+      </div>
+
+      <div className="relative mx-auto max-w-7xl px-6 grid lg:grid-cols-12 gap-12 items-center">
+        <div className="lg:col-span-5 animate-fade-up">
+          <div className="text-eyebrow text-violet-300/90 mb-3 inline-flex items-center gap-2">
+            <Globe className="w-4 h-4" />
+            Translate
+          </div>
+          <h2 className="text-display-2 text-white">
+            Reach 50+ markets.{" "}
+            <span className="text-gradient">In their language.</span>
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
+            Captions, titles, and chapters auto-localized in a single pass —
+            with culturally tuned phrasing, not a literal word swap. Optional
+            AI voice dubbing matches the original cadence.
+          </p>
+
+          <ul className="mt-7 space-y-3">
+            {[
+              {
+                t: "Cultural tone, not just translation",
+                d: "Models per market — idioms, formality, and brand voice preserved.",
+              },
+              {
+                t: "Captions and chapters timed precisely",
+                d: "Subtitle tracks baked into each platform-native render.",
+              },
+              {
+                t: "Optional AI dubbing",
+                d: "Voice-cloned or picked from a library — sync to the edit.",
+              },
+            ].map((it) => (
+              <li key={it.t} className="flex items-start gap-3">
+                <span className="mt-0.5 inline-flex w-5 h-5 items-center justify-center rounded-md bg-emerald-500/15 ring-1 ring-emerald-400/25 flex-shrink-0">
+                  <CheckCircle2
+                    className="w-3.5 h-3.5 text-emerald-300"
+                    aria-hidden="true"
+                  />
+                </span>
+                <div>
+                  <div className="text-sm font-medium text-white leading-snug">
+                    {it.t}
+                  </div>
+                  <div className="text-[13px] text-zinc-400 mt-0.5 leading-relaxed">
+                    {it.d}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="lg:col-span-7 grid gap-5 animate-fade-up animation-delay-200">
+          {/* Translation preview panel — window-chromed mockup */}
+          <div className="surface-glass border border-white/15 rounded-2xl overflow-hidden shadow-[0_30px_100px_-40px_rgba(124,58,237,0.45)]">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
+                <span className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
+                <span className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
+              </div>
+              <div className="text-xs text-zinc-400 font-medium tracking-tight">
+                Translate · preview
+              </div>
+              <div className="text-[10px] inline-flex items-center gap-1.5 text-zinc-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow" />
+                <span>
+                  EN → <span className="tabular-nums font-semibold text-white">12</span>
+                </span>
+              </div>
+            </div>
+
+            <div className="p-5 sm:p-6 grid sm:grid-cols-2 gap-4">
+              {/* Original */}
+              <div className="surface-card-soft rounded-xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-eyebrow text-zinc-500">Original</div>
+                  <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400">
+                    <span className="text-base leading-none">🇬🇧</span>
+                    EN
+                  </span>
+                </div>
+                <div className="text-sm text-zinc-200 leading-relaxed">
+                  “Shipping content to seven platforms used to take a team of
+                  five. Now it takes me an afternoon.”
+                </div>
+              </div>
+              {/* Translated stack */}
+              <div className="space-y-2.5">
+                {previewLines.map((p) => (
+                  <div
+                    key={p.lang}
+                    className="surface-card-soft rounded-lg p-3 flex gap-3"
+                  >
+                    <span
+                      className="text-2xl leading-none flex-shrink-0 mt-0.5"
+                      aria-hidden="true"
+                    >
+                      {p.flag}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">
+                        {p.lang}
+                      </div>
+                      <div className="text-[13px] text-zinc-200 leading-snug">
+                        {p.text}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Supported languages grid */}
+          <div className="surface-card p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-3.5">
+              <div className="text-eyebrow text-violet-300/90">
+                Supported locales
+              </div>
+              <div className="text-xs text-zinc-400">
+                <span className="text-white font-bold tabular-nums">50+</span>
+                <span className="ml-1.5">markets covered</span>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {LANGUAGES.map((lang) => (
+                <span
+                  key={lang.code}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full surface-glass border border-white/10 hover:border-white/25 transition-colors"
+                  title={`${lang.name} · ${lang.code}`}
+                >
+                  <span className="text-base leading-none" aria-hidden="true">
+                    {lang.flag}
+                  </span>
+                  <span className="text-[12px] text-zinc-200">{lang.name}</span>
+                  <span className="text-[10px] text-zinc-500 tabular-nums">
+                    {lang.code}
+                  </span>
+                </span>
+              ))}
+              <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-violet-500/10 border border-violet-400/20 text-[11px] text-violet-200/90 font-medium">
+                + 20 more
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * ShortsCutSection — marketing mockup for the auto-cut feature that
+ * pulls 9:16 verticals out of a horizontal long-form. Right column =
+ * window-chromed timeline mockup with the source bar at the top and
+ * six auto-detected cut segments highlighted across it; below the bar
+ * sits a 3-column queue of cards, one per cut, with timestamp ranges
+ * and mini progress fills. Times on the timeline are mocked (24:13
+ * source) but they read like real editor scrubbing numbers.
+ *
+ * AUTO-DETECT label (top-right) is intentional copy — it sets the
+ * expectation that the editor picks the cuts itself, which is the
+ * whole value-prop of the section.
+ * -------------------------------------------------------------------------- */
+function ShortsCutSection() {
+  const cuts = [
+    { id: "01", label: "Hook", start: 14, end: 38, color: "from-violet-500 to-fuchsia-500" },
+    { id: "02", label: "Stat", start: 92, end: 124, color: "from-cyan-500 to-sky-500" },
+    { id: "03", label: "Tip", start: 188, end: 222, color: "from-pink-500 to-rose-500" },
+    { id: "04", label: "Demo", start: 296, end: 332, color: "from-amber-500 to-orange-500" },
+    { id: "05", label: "Reveal", start: 410, end: 442, color: "from-emerald-500 to-teal-500" },
+    { id: "06", label: "CTA", start: 522, end: 552, color: "from-indigo-500 to-violet-500" },
+  ];
+  const TOTAL_SECONDS = 24 * 60 + 13; // 24:13
+  // Longest cut boundary so the inner progress fill is non-trivial
+  // visually (~30-40% on the widest card, ~20% on the narrowest).
+  const MAX_CUT_SECONDS = 36;
+  const formatTime = (sec: number) =>
+    `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+
+  return (
+    <section className="relative py-24 sm:py-32 overflow-hidden">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-gradient-to-tr from-cyan-500/[0.10] via-transparent to-pink-500/[0.10] pointer-events-none"
+      />
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="glow-orb bg-cyan-400 w-[400px] h-[400px] -top-32 -right-20 animate-drift-rev opacity-45" />
+        <div className="glow-orb bg-pink-500 w-[360px] h-[360px] -bottom-32 -left-24 animate-drift-slow opacity-40" />
+      </div>
+
+      <div className="relative mx-auto max-w-7xl px-6 grid lg:grid-cols-12 gap-12 items-center">
+        <div className="lg:col-span-5 lg:order-2 animate-fade-up">
+          <div className="text-eyebrow text-cyan-300/90 mb-3 inline-flex items-center gap-2">
+            <Scissors className="w-4 h-4" />
+            Cut for shorts
+          </div>
+          <h2 className="text-display-2 text-white">
+            One long-form.{" "}
+            <span className="text-gradient">Six shorts.</span> Auto-cut.
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
+            The cut engine finds the highest-tension moments — hooks, stats,
+            reveals, CTAs — and pulls each one out as a vertical 9:16 clip,
+            ready for Shorts, Reels, and TikTok. Reframe, recaption, ship.
+          </p>
+
+          <ul className="mt-7 space-y-3">
+            {[
+              {
+                t: "Tension-aware extraction",
+                d: "Score each segment by hook and payout — keep only the bangers.",
+              },
+              {
+                t: "AI reframing 16:9 → 9:16",
+                d: "Face-tracking + rule-of-thirds crops that feel designed.",
+              },
+              {
+                t: "Captions burned in",
+                d: "Per-locale captions baked into each cut, b-roll optional.",
+              },
+            ].map((it) => (
+              <li key={it.t} className="flex items-start gap-3">
+                <span className="mt-0.5 inline-flex w-5 h-5 items-center justify-center rounded-md bg-emerald-500/15 ring-1 ring-emerald-400/25 flex-shrink-0">
+                  <CheckCircle2
+                    className="w-3.5 h-3.5 text-emerald-300"
+                    aria-hidden="true"
+                  />
+                </span>
+                <div>
+                  <div className="text-sm font-medium text-white leading-snug">
+                    {it.t}
+                  </div>
+                  <div className="text-[13px] text-zinc-400 mt-0.5 leading-relaxed">
+                    {it.d}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="lg:col-span-7 lg:order-1 animate-fade-up animation-delay-200">
+          <div className="surface-glass border border-white/15 rounded-2xl overflow-hidden shadow-[0_30px_100px_-40px_rgba(34,211,238,0.45)]">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
+                <span className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
+                <span className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
+              </div>
+              <div className="text-xs text-zinc-400 font-medium tracking-tight">
+                how-we-ship.mov · 24:13 · 6 cuts detected
+              </div>
+              <div className="w-14 h-6 rounded-md surface-card-soft flex items-center justify-center">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse-glow" />
+                <span className="text-[10px] text-zinc-300 tracking-wide">
+                  Auto
+                </span>
+              </div>
+            </div>
+
+            <div className="p-5 sm:p-6 space-y-5">
+              {/* Timeline */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-eyebrow text-zinc-500">Timeline</div>
+                  <div className="text-[10px] text-zinc-500 tabular-nums">
+                    Source · 24:13
+                  </div>
+                </div>
+                <div className="relative h-14 rounded-lg bg-gradient-to-r from-zinc-800/80 via-zinc-700/60 to-zinc-800/80 ring-1 ring-white/10 overflow-hidden">
+                  {/* Detected cuts as gradient spans */}
+                  {cuts.map((c) => {
+                    const left = (c.start / TOTAL_SECONDS) * 100;
+                    const width = ((c.end - c.start) / TOTAL_SECONDS) * 100;
+                    return (
+                      <div
+                        key={c.id}
+                        className={`absolute top-1.5 bottom-1.5 rounded-md bg-gradient-to-r ${c.color} opacity-85 ring-1 ring-white/20 shadow-[0_0_10px_rgba(255,255,255,0.06)]`}
+                        style={{ left: `${left}%`, width: `${width}%` }}
+                        aria-label={`Cut ${c.id}: ${c.label}`}
+                      />
+                    );
+                  })}
+                  {/* Playhead */}
+                  <div
+                    className="absolute top-0 bottom-0 w-px bg-white/90 shadow-[0_0_8px_rgba(255,255,255,0.7)]"
+                    style={{ left: "32%" }}
+                    aria-hidden="true"
+                  />
+                  {/* Playhead topper */}
+                  <div
+                    className="absolute -top-0.5 w-2 h-2 -translate-x-1/2 rotate-45 bg-white shadow-[0_0_8px_rgba(255,255,255,0.7)]"
+                    style={{ left: "32%" }}
+                    aria-hidden="true"
+                  />
+                </div>
+                <div className="mt-2 flex justify-between text-[10px] text-zinc-500 tabular-nums">
+                  <span>0:00</span>
+                  <span>6:00</span>
+                  <span>12:00</span>
+                  <span>18:00</span>
+                  <span>24:13</span>
+                </div>
+              </div>
+
+              {/* Cuts queue */}
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="text-eyebrow text-zinc-500">
+                    Cuts queued
+                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] text-zinc-300 tabular-nums">
+                      6
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-emerald-300/90 font-medium inline-flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow" />
+                    Ready · 9:16 each
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                  {cuts.map((c) => (
+                    <div
+                      key={c.id}
+                      className="surface-card-soft rounded-lg p-3 relative overflow-hidden"
+                    >
+                      <div
+                        aria-hidden="true"
+                        className={`absolute -top-12 -right-12 w-24 h-24 rounded-full blur-2xl bg-gradient-to-br ${c.color} opacity-50`}
+                      />
+                      <div className="relative">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-eyebrow text-zinc-500 tabular-nums">
+                            {c.id}
+                          </span>
+                          <span className="text-[10px] text-zinc-400 tabular-nums">
+                            {formatTime(c.start)}–{formatTime(c.end)}
+                          </span>
+                        </div>
+                        <div className="text-sm font-semibold text-white leading-tight">
+                          {c.label}
+                        </div>
+                        <div className="mt-2 h-1 rounded-full bg-white/[0.06] overflow-hidden">
+                          <div
+                            className={`h-full bg-gradient-to-r ${c.color}`}
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                ((c.end - c.start) / MAX_CUT_SECONDS) * 100,
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * StreamSection — marketing mockup for the 24/7 multistream feature
+ * that fans one source out to 7 live destinations. Right column =
+ * window-chromed control-room panel: a large 16:8 LIVE hero preview
+ * block at the top (showing the now-playing program + aggregate
+ * viewer count + uptime), then a 4-up channel grid covering all
+ * entries in PLATFORM_REGISTRY. Each channel tile shows its logo,
+ * status pill (LIVE or SOON), and a mocked viewer count.
+ *
+ * The control-room panel intentionally does NOT mirror the real
+ * product's publishing UI — the Dashboard does that already. This
+ * panel reads as "broadcast equipment" so the page differentiates
+ * the stream feature visually from the calendar/queue surfaces.
+ * -------------------------------------------------------------------------- */
+function StreamSection() {
+  type ChannelTile = {
+    platform: "youtube" | "facebook" | "instagram" | "tiktok" | "x" | "linkedin" | "threads";
+    viewers: number;
+    status: "live" | "queued";
+    show: string;
+  };
+  // Per-platform program names so the control-room tiles don't read as a
+  // copy-paste — each destination shows what's actually airing on it.
+  // Threads runs later (queued → SOON), the rest are LIVE in the mocked
+  // snapshot. Aggregate viewers correctly excludes the queued channel.
+  const channels: ReadonlyArray<ChannelTile> = [
+    { platform: "youtube", viewers: 12483, status: "live", show: "Loop → AMA replay" },
+    { platform: "facebook", viewers: 3142, status: "live", show: "Loop → Live Q&A" },
+    { platform: "instagram", viewers: 4217, status: "live", show: "Loop → Reels-live" },
+    { platform: "tiktok", viewers: 9821, status: "live", show: "Loop → Live drop" },
+    { platform: "x", viewers: 1844, status: "live", show: "Loop → Spaces prep" },
+    { platform: "linkedin", viewers: 612, status: "live", show: "Loop → Industry chat" },
+    { platform: "threads", viewers: 504, status: "queued", show: "Scheduled · 18:30" },
+  ];
+  const aggregateViewers = channels
+    .filter((c) => c.status === "live")
+    .reduce((sum, c) => sum + c.viewers, 0);
+
+  return (
+    <section className="relative py-24 sm:py-32 overflow-hidden">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-gradient-to-bl from-violet-500/[0.10] via-transparent to-rose-500/[0.10] pointer-events-none"
+      />
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="glow-orb bg-violet-500 w-[440px] h-[440px] -top-32 -left-24 animate-drift-slow opacity-50" />
+        <div className="glow-orb bg-rose-400 w-[360px] h-[360px] -bottom-32 -right-20 animate-drift-rev opacity-40" />
+      </div>
+
+      <div className="relative mx-auto max-w-7xl px-6 grid lg:grid-cols-12 gap-12 items-center">
+        <div className="lg:col-span-5 animate-fade-up">
+          <div className="text-eyebrow text-rose-300/90 mb-3 inline-flex items-center gap-2">
+            <Radio className="w-4 h-4" />
+            Stream 24/7
+          </div>
+          <h2 className="text-display-2 text-white">
+            One source.{" "}
+            <span className="text-gradient">Seven live destinations.</span>
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
+            A single control room fans out to every channel — auto-loop your
+            library, drop in scheduled programs, and keep broadcasting 24/7,
+            even while you sleep.
+          </p>
+
+          <ul className="mt-7 space-y-3">
+            {[
+              {
+                t: "Multistream to 7 channels",
+                d: "Simultaneous push to YouTube, Facebook, Instagram, TikTok, X, LinkedIn, and Threads.",
+              },
+              {
+                t: "Loop + scheduled programming",
+                d: "Built-in scheduler for show blocks, replays, and live drops.",
+              },
+              {
+                t: "Always-on with fallback",
+                d: "If a source disconnects, the loop keeps airing until the next slot.",
+              },
+            ].map((it) => (
+              <li key={it.t} className="flex items-start gap-3">
+                <span className="mt-0.5 inline-flex w-5 h-5 items-center justify-center rounded-md bg-emerald-500/15 ring-1 ring-emerald-400/25 flex-shrink-0">
+                  <CheckCircle2
+                    className="w-3.5 h-3.5 text-emerald-300"
+                    aria-hidden="true"
+                  />
+                </span>
+                <div>
+                  <div className="text-sm font-medium text-white leading-snug">
+                    {it.t}
+                  </div>
+                  <div className="text-[13px] text-zinc-400 mt-0.5 leading-relaxed">
+                    {it.d}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="lg:col-span-7 animate-fade-up animation-delay-200">
+          <div className="surface-glass border border-white/15 rounded-2xl overflow-hidden shadow-[0_30px_100px_-40px_rgba(244,114,182,0.45)]">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
+                <span className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
+                <span className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
+              </div>
+              <div className="text-xs text-zinc-400 font-medium tracking-tight">
+                Control room
+                <span className="ml-2 text-zinc-500">
+                  · {channels.length} destinations
+                </span>
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-rose-500/15 ring-1 ring-rose-400/30">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse-glow" />
+                <span className="text-[10px] font-bold text-rose-200 tracking-wider">
+                  LIVE
+                </span>
+              </div>
+            </div>
+
+            <div className="p-5 sm:p-6 space-y-5">
+              {/* Hero live preview */}
+              <div className="relative aspect-[16/8] rounded-xl overflow-hidden ring-1 ring-white/10 bg-gradient-to-br from-violet-700 via-fuchsia-600 to-cyan-500">
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(255,255,255,0.25),transparent_55%),radial-gradient(circle_at_72%_62%,rgba(0,0,0,0.45),transparent_60%)]"
+                />
+                <div className="absolute top-3 left-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-500/90 text-[10px] font-bold tracking-wider text-white shadow-[0_0_18px_-2px_rgba(244,63,94,0.6)]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse-glow" />
+                  LIVE 24/7
+                </div>
+                <div className="absolute top-3 right-3 text-[10px] text-white/85">
+                  Uptime{" "}
+                  <span className="tabular-nums font-semibold">21h 04m</span>
+                </div>
+                <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] uppercase tracking-wider text-white/70 mb-0.5">
+                      Multistream
+                    </div>
+                    <div className="text-base sm:text-lg font-semibold text-white leading-tight truncate">
+                      Shared broadcast ·{" "}
+                      <span className="text-white/70">6 destinations live</span>
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="text-[10px] uppercase tracking-wider text-white/70 mb-0.5">
+                      Aggregate viewers
+                    </div>
+                    <div className="text-lg sm:text-2xl font-bold text-white tabular-nums leading-none">
+                      {aggregateViewers.toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Channels grid */}
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="text-eyebrow text-zinc-500">Channels</div>
+                  <div className="text-[10px] text-zinc-500">
+                    <span className="text-white font-semibold tabular-nums">
+                      6
+                    </span>
+                    <span className="mx-1">live ·</span>
+                    <span className="text-white font-semibold tabular-nums">
+                      1
+                    </span>
+                    <span className="ml-1">scheduled</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {channels.map((ch) => {
+                    const entry = PLATFORM_REGISTRY.find(
+                      (p) => p.key === ch.platform,
+                    );
+                    if (!entry) return null;
+                    const Logo = entry.Logo;
+                    const isLive = ch.status === "live";
+                    return (
+                      <div
+                        key={ch.platform}
+                        className="surface-card-soft rounded-lg p-3 relative overflow-hidden"
+                      >
+                        <div
+                          aria-hidden="true"
+                          className="absolute -top-12 -right-12 w-24 h-24 rounded-full blur-2xl pointer-events-none"
+                          style={{
+                            background: entry.color,
+                            opacity: isLive ? 0.30 : 0.14,
+                          }}
+                        />
+                        <div className="relative">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="inline-flex w-6 h-6 rounded-md overflow-hidden ring-1 ring-white/15">
+                              <Logo className="w-full h-full" />
+                            </span>
+                            {isLive ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wider text-rose-300">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse-glow" />
+                                LIVE
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold tracking-wider text-amber-300">
+                                SOON
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+                            {entry.name}
+                          </div>
+                          <div className="flex items-baseline gap-1.5 mt-0.5">
+                            <span
+                              className={`text-sm font-bold tabular-nums ${isLive ? "text-white" : "text-zinc-400"}`}
+                            >
+                              {isLive
+                                ? ch.viewers.toLocaleString()
+                                : "—"}
+                            </span>
+                            <span className="text-[10px] text-zinc-500">
+                              {isLive ? "viewers" : ch.show}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
  * ContactSection — a direct phone line for prospects who want a human
  * conversation before signing up. Sits between HowItWorks and FinalCTA so
  * the page reads top-to-bottom as: "see the editor → speak to the team →
@@ -1024,6 +1725,17 @@ export function Editor() {
         </div>
         <SpeedStats />
         <HowItWorks />
+        <TranslateSection />
+        <ShortsCutSection />
+        {/* Thin divider between ShortsCut and Stream — both sit on the page
+            background (no bg-elevated) so without this cue the eye reads
+            them as one continuous slab. Mirrors the section-divider utility
+            already defined in index.css. Purely decorative (aria-hidden). */}
+        <div
+          aria-hidden="true"
+          className="section-divider mx-auto max-w-7xl"
+        />
+        <StreamSection />
         <ContactSection />
         <FinalCTA />
       </main>
