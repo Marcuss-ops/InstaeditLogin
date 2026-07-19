@@ -67,6 +67,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
 
   worker:
     build:
@@ -104,11 +106,63 @@ services:
       db:
         condition: service_healthy
 
+# MinIO — local S3-compatible object store. The credentials below
+  # MUST match S3_ACCESS_KEY / S3_SECRET_KEY in `.env.dev` (referenced
+  # via env_file). `minio-init` is a one-shot sidecar that creates the
+  # `instaedit-local` bucket on first boot so the api's first S3 PUT
+  # does not race against bucket creation. Pinned to a stable tag
+  # (`RELEASE.2024-09-13T16-55-53Z`) — the `latest` tag is not safe
+  # because MinIO's release cadence occasionally breaks the mc↔server
+  # compatibility contract.
+  minio:
+    image: minio/minio:RELEASE.2024-09-13T16-55-53Z
+    container_name: instaedit-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: instaedit
+      # Local-dev password only. Operators shipping this file
+      # externally MUST change it; the value matches S3_SECRET_KEY
+      # in `.env.dev`.
+      MINIO_ROOT_PASSWORD: change-this-local-secret
+    volumes:
+      - instaedit_minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot sidecar: blocks api startup until the bucket exists.
+  # `mc alias set` retries until MinIO accepts the credentials (the
+  # short window between MinIO listening and its healthcheck being
+  # observed by Docker is bridged by the `until` loop). `mc mb
+  # --ignore-existing` is idempotent — re-runs are no-ops, so the
+  # container can be safely re-created on every boot.
+  minio-init:
+    image: minio/mc:RELEASE.2024-09-13T20-29-44Z
+    container_name: instaedit-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      set -e;
+      until mc alias set local http://minio:9000 instaedit change-this-local-secret; do
+        echo 'minio alias set failed, retrying in 2s';
+        sleep 2;
+      done;
+      mc mb --ignore-existing local/instaedit-local;
+      echo 'minio bucket instaedit-local ready';
+      exit 0;
+      "
+
 volumes:
   instaedit_pg_data:
+  instaedit_minio_data:
 
-# ──────────────────────────────────────────────────────────────────
-# Frontend service — unchanged from the Blocco #2.1 baseline shape.
 # ──────────────────────────────────────────────────────────────────
 # (Kept separate from the api/worker/migrate block above so a frontend
 #  refresh doesn't require rediscovering the wire-up.)

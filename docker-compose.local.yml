@@ -1,83 +1,48 @@
 # InstaEditLogin — local-only overlay for dev without Fly/Vercel/Cloudflare.
 #
-# Adds MinIO + a minio-init helper so `api` can boot without a real S3.
-# Loaded as `-f docker-compose.local.yml` on top of `docker-compose.yml`,
-# so every service in the base file still resolves and the `api` service's
-# `depends_on.minio-init: service_completed_successfully` keeps the boot
-# order correct (bucket created BEFORE the api container can read S3).
+# Loaded as `-f docker-compose.local.yml` on top of `docker-compose.yml`.
 #
-# IMPORTANT: passwords here MUST match S3_SECRET_KEY in `.env.dev`.
-# The init container reads the same S3_ACCESS_KEY/S3_SECRET_KEY from the
-# api service's env_file, so keep them in lockstep.
+# IMPORTANT — Compose merge semantics caveat:
+#   Defining `services.minio:` here REPLACES (not merges into) the base
+#   file's full minio service map. So we MUST redeclare every field the
+#   base minio defines (image, healthcheck, env, volumes) — otherwise the
+#   base's `healthcheck` is lost and `minio-init`'s `depends_on:
+#   { minio: { condition: service_healthy } }` will never satisfy, which
+#   in turn blocks the api service from ever starting. The base image
+#   tag is pinned to a known-good MinIO release; keep this overlay in
+#   lock-step when bumping the base.
+#
+# Local-only quirk carried here: 127.0.0.1:19000 host binding for VMs
+# where host :9000 is occupied by a leftover listener. The api container
+# still reaches MinIO over the docker network at http://minio:9000
+# (compose service DNS) regardless of this host mapping.
+#
+# PASSWORDS MUST MATCH: MINIO_ROOT_PASSWORD below is the SAME string as
+# S3_SECRET_KEY in `.env.dev`. If you rotate one without the other, the
+# api silently fails auth on the first S3 PUT/GET. Operators can verify
+# with:
+#   grep '^S3_SECRET_KEY=' .env.dev | cut -d= -f2-
+#   grep '^MINIO_ROOT_PASSWORD:' docker-compose.local.yml
 
 services:
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2024-09-13T16-55-53Z
     container_name: instaedit-minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: instaedit_local
-      # Password is local-only (a single-VM dev token). Operators who ship
-      # this file externally MUST change it; the value matches S3_SECRET_KEY.
-      MINIO_ROOT_PASSWORD: changeMe_instaedit_minio_dev_only_password_2025
+      MINIO_ROOT_USER: instaedit
+      MINIO_ROOT_PASSWORD: change-this-local-secret
     volumes:
       - instaedit_minio_data:/data
-    # Published on 127.0.0.1:19000 so the host-network Caddy (and any
-    # host-side process) can reach MinIO for the dev S3 proxy. The S3
-    # presigned URLs are path-style under the public tunnel host, and
-    # Caddy reverse-proxies /instaedit-dev/* -> 127.0.0.1:19000.
-    # (Host :9000 is already taken by a leftover listener on this VM,
-    # so we use 19000 to avoid the conflict.)
-    ports:
-      - "127.0.0.1:19000:9000"
-    # No host port mapping on purpose. The api container reaches MinIO
-    # over the docker network at http://minio:9000 (compose service
-    # DNS) — the port mapping was only needed if an operator wanted
-    # to inspect MinIO from the host (e.g. via mc alias on the host).
-    # A previous operator's leftover listener on host :9000 was
-    # blocking the binding; removing the mapping is the
-    # dev-environment default. To re-enable host access for debugging,
-    # append `127.0.0.1:9000:9000` and `127.0.0.1:9001:9001` here.
-    # PASSWORDS MUST MATCH: the value below is the SAME string as
-    # S3_SECRET_KEY in `../../.env.dev`. If you rotate one without the
-    # other, the api silently fails auth on the first S3 PUT/GET.
-    # Operators can verify with:
-    #   grep '^S3_SECRET_KEY=' ../../.env.dev | cut -d= -f2-
-    #   grep '^MINIO_ROOT_PASSWORD:' docker-compose.local.yml
+    # Compose-merge requires healthcheck to be redeclared here so
+    # `condition: service_healthy` is satisfiable in the merged config.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 5s
       retries: 10
-
-  minio-init:
-    image: minio/mc:latest
-    container_name: instaedit-minio-init
-    depends_on:
-      minio:
-        condition: service_healthy
-    # Creates the dev bucket that api expects. `mc alias set` abbreviates
-    # the `${VAR}` shell expansion under /bin/sh -c; the loop handles the
-    # short window where MinIO is up but the healthcheck hasn't been
-    # observed by Docker yet (the alias command retries on transport
-    # failure).
-    entrypoint: >
-      /bin/sh -c "
-      set -e;
-      until mc alias set local http://minio:9000 instaedit_local changeMe_instaedit_minio_dev_only_password_2025; do
-        echo 'minio alias set failed, retrying in 2s';
-        sleep 2;
-      done;
-      mc mb --ignore-existing local/instaedit-dev;
-      mc anonymous set download local/instaedit-dev;
-      echo 'minio bucket instaedit-dev ready (public-read for dev media)';
-      exit 0;
-      "
-
-  api:
-    depends_on:
-      minio-init:
-        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:19000:9000"
 
 volumes:
   instaedit_minio_data:
