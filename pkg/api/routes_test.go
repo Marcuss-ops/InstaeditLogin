@@ -157,6 +157,7 @@ type mockUserStore struct {
 	updatePlatformAccountFn      func(account *models.PlatformAccount) error
 	deletePlatformAccountFn      func(id int64) error
 	findUserIDByEmailFn          func(ctx context.Context, email string) (int64, error)
+	finalizeAttachFn             func(ctx context.Context, accountID int64, scopes []string) (int64, error)
 }
 
 func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
@@ -201,6 +202,19 @@ func (m *mockUserStore) DeletePlatformAccount(id int64) error {
 func (m *mockUserStore) FindUserIDByEmail(ctx context.Context, email string) (int64, error) {
 	if m.findUserIDByEmailFn != nil {
 		return m.findUserIDByEmailFn(ctx, email)
+	}
+	return 0, nil
+}
+
+// FinalizeAttach implements the UserStore method added for the P2
+// admin connect-link surface (POST /admin/channels/{id}/connect-link
+// + the OAuth callback's oauth_connection promotion). Default
+// returns (0, nil) so tests that don't exercise the connect-link
+// flow don't need to wire it up. Tests that DO exercise it override
+// finalizeAttachFn.
+func (m *mockUserStore) FinalizeAttach(ctx context.Context, accountID int64, scopes []string) (int64, error) {
+	if m.finalizeAttachFn != nil {
+		return m.finalizeAttachFn(ctx, accountID, scopes)
 	}
 	return 0, nil
 }

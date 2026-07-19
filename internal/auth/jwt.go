@@ -477,3 +477,108 @@ func randomHex(n int) (string, error) {
 // that need to generate opaque identifiers without importing crypto
 // packages directly.
 func RandomHex(n int) (string, error) { return randomHex(n) }
+
+// ConnectLinkStateClaims (P2 — admin connect-link) carries the
+// expected YouTube channel id inside the OAuth state JWT.
+// The full token is signed HS256 with the same secret as auth
+// tokens, so the callback can verify via Manager without needing
+// a browser cookie (the manager's browser is not involved).
+//
+// The state_type claim keyword makes the JWT self-identifying in
+// the callback's verifyOAuthState path: a cookie-backed CSRF state
+// nonce never has this keyword, so the callback cleanly branches
+// on `if strings.Contains(state, ".")` (JWT shape) vs the
+// legacy cookie path.
+type ConnectLinkStateClaims struct {
+	StateType         string `json:"stp"`
+	ExpectedChannelID string `json:"ech"`
+	Nonce             string `json:"nonce"`
+	jwt.RegisteredClaims
+}
+
+// IssueConnectLinkState signs a short-lived HS256 JWT carrying the
+// expected_channel_id. TTL is 30 minutes — long enough for the
+// manager to complete the OAuth flow on their browser, short enough
+// that an intercepted URL has a tight replay window.
+//
+// nonce is a 16-byte random hex value so two URLs issued for the
+// same channel in quick succession differ (defence against an
+// operator pasting a stale manage-Email link).
+func (m *Manager) IssueConnectLinkState(expectedChannelID string) (string, error) {
+	if expectedChannelID == "" {
+		return "", errors.New("connect-link state: expected_channel_id is required")
+	}
+	nonce, err := randomHex(16)
+	if err != nil {
+		return "", fmt.Errorf("connect-link state: nonce generation: %w", err)
+	}
+	now := time.Now()
+	claims := ConnectLinkStateClaims{
+		StateType:         "connect_link",
+		ExpectedChannelID: expectedChannelID,
+		Nonce:             nonce,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    m.issuer,
+			Audience:  jwt.ClaimStrings{m.audience},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(30 * time.Minute)),
+		},
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := tok.SignedString(m.secret)
+	if err != nil {
+		return "", fmt.Errorf("connect-link state: sign: %w", err)
+	}
+	return signed, nil
+}
+
+// VerifyConnectLinkState validates a state JWT and returns the
+// expected channel id. Returns ErrMalformedConnectLinkState when
+// the token isn't a JWT, doesn't carry the connect-link state_type,
+// is expired, or has a signature mismatch.
+//
+// The returned channel id is the only authoritative source — the
+// callback MUST use it for the expected_channel_id argument to
+// attachDiscoveredAccounts so the channels.list(mine=true) result
+// is filtered against the operator's intent. A discovery that
+// returns a different channel id (ErrYouTubeChannelMismatch) is
+// the user-facing 422.
+func (m *Manager) VerifyConnectLinkState(raw string) (string, error) {
+	if raw == "" {
+		return "", ErrMalformedConnectLinkState
+	}
+	// Cheap shape check: a JWT has exactly 2 dots (header.payload.sig).
+	// The cookie-backed state nonce has none. Skip the parse path
+	// when the shape is wrong so callers don't get a JWT parse error
+	// for a non-JWT state nonce.
+	if strings.Count(raw, ".") != 2 {
+		return "", ErrMalformedConnectLinkState
+	}
+	claims := &ConnectLinkStateClaims{}
+	tok, err := jwt.ParseWithClaims(raw, claims, func(t *jwt.Token) (interface{}, error) {
+		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return m.secret, nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrMalformedConnectLinkState, err)
+	}
+	if !tok.Valid {
+		return "", ErrMalformedConnectLinkState
+	}
+	if claims.StateType != "connect_link" {
+		return "", fmt.Errorf("%w: state_type=%q", ErrMalformedConnectLinkState, claims.StateType)
+	}
+	if claims.ExpectedChannelID == "" {
+		return "", fmt.Errorf("%w: missing expected_channel_id", ErrMalformedConnectLinkState)
+	}
+	return claims.ExpectedChannelID, nil
+}
+
+// ErrMalformedConnectLinkState is the canonical sentinel returned
+// by VerifyConnectLinkState when the state param is not a JWT, not
+// expirable, expired, doesn't carry state_type=connect_link, or
+// signature mismatch. Wrapped errors.Is is what the callback uses
+// to decide on a 4xx response (vs a 500 for unrelated parse failures).
+var ErrMalformedConnectLinkState = errors.New("malformed connect-link state")

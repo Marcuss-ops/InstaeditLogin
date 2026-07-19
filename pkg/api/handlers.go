@@ -284,6 +284,17 @@ type UserStore interface {
 	// uses the same method via a *repository.UserRepository wrapper.
 	// Returns ErrUserNotFound when the email is unknown.
 	FindUserIDByEmail(ctx context.Context, email string) (int64, error)
+	// FinalizeAttach (P2 — admin connect-link) is invoked by the
+	// OAuth callback AFTER a successful AttachPlatformAccount +
+	// vault.Save. It UPSERTs the oauth_connections row (keyed on
+	// (user_id, provider, provider_resource_id)) and promotes the
+	// platform_account from 'pending_authorization' to 'active'.
+	// The vault's token row requires oauth_connection_id to be set
+	// (FK); FinalizeAttach is what stamps that FK onto the row.
+	// Idempotent on re-auth for the same channel — refreshes
+	// connected_at + scopes without losing the oauth_connections
+	// row. Returns the oauth_connection_id used.
+	FinalizeAttach(ctx context.Context, accountID int64, scopes []string) (int64, error)
 }
 
 type WorkspaceStore interface {
@@ -766,6 +777,15 @@ func (r *Router) Setup() http.Handler {
 		// the existing flag).
 		r.mux.Method(http.MethodPost, "/admin/channels/import-csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminImportChannelsCSV)))
 		r.mux.Method(http.MethodGet, "/admin/channels/pending", adminAuthMiddleware(http.HandlerFunc(r.handleAdminPendingChannels)))
+		// P2 — admin connect-link. POST /admin/channels/{channel_id}/connect-link
+		// returns a signed OAuth URL with prompt=consent + select_account
+		// + login_hint=manager_email_hint. The callback (handlers.go
+		// handleCallback) detects the JWT-shaped state and refuses the
+		// 422/409 mismatch cleanly. Intentional split between this
+		// admin-side URL issuer (here) AND the OAuth callback (universal
+		// /api/v1/auth/{provider}/callback, NOT in /admin/) — the
+		// callback is per-provider, the URL issuer is per-channel.
+		r.mux.Method(http.MethodPost, "/admin/channels/{channel_id}/connect-link", adminAuthMiddleware(http.HandlerFunc(r.handleAdminChannelConnectLink)))
 	}
 
 	r.mux.Method(http.MethodGet, "/api/v1/health", http.HandlerFunc(r.handleHealth))
@@ -1117,10 +1137,34 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing state parameter")
 		return
 	}
-	expectedChannelID, err := verifyOAuthState(w, req, provider, state)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid state: "+err.Error())
-		return
+	// P2 — admin connect-link. When the state param is JWT-shaped
+	// (2 dots: header.payload.sig), it was issued by the admin
+	// POST /admin/channels/{channel_id}/connect-link handler and
+	// already carries the expected_channel_id, signed HS256 with
+	// the same secret as the auth JWTs. We re-verify here so the
+	// callback can refuse forged / replayed connect-link state
+	// without involving the CSRF state-cookie row (the connect
+	// flow has the manager browser, not the admin's). The
+	// boolean return is threaded down so the ErrYouTubeChannelMismatch
+	// mapping at the bottom of this handler can switch its status
+	// code from 409 (legacy cookie path) to 422 (P2 connect-link
+	// per the operator's intent).
+	expectedChannelID := ""
+	fromConnectLinkState := false
+	var stateErr error
+	if strings.Count(state, ".") == 2 {
+		expectedChannelID, stateErr = r.auth.VerifyConnectLinkState(state)
+		if stateErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid connect-link state: "+stateErr.Error())
+			return
+		}
+		fromConnectLinkState = true
+	} else {
+		expectedChannelID, stateErr = verifyOAuthState(w, req, provider, state)
+		if stateErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid state: "+stateErr.Error())
+			return
+		}
 	}
 	profile, tokenData, err := p.HandleCallback(req.Context(), state, code)
 	if err != nil {
@@ -1157,7 +1201,23 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 			// SPA knows to ask the operator to disambiguate before
 			// retrying. Other discoverer failures stay 500 (genuine
 			// server / DB problems).
-			if errors.Is(err, ErrYouTubeAmbiguousAuthorization) || errors.Is(err, ErrYouTubeChannelMismatch) {
+			if errors.Is(err, ErrYouTubeAmbiguousAuthorization) {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+			if errors.Is(err, ErrYouTubeChannelMismatch) {
+				// P2 — connect-link refinement: 422 when the state
+				// was a JWT issued by /admin/channels/{id}/connect-link
+				// (the operator bound a specific channel_id via
+				// the admin dashboard; mismatch is a semantic
+				// contradiction, prefer 422). Legacy path
+				// (?expected_channel_id=UC… cookie) keeps 409 for
+				// backwards-compat with operators wired before
+				// the connect-link flow landed.
+				if fromConnectLinkState {
+					writeError(w, http.StatusUnprocessableEntity, err.Error())
+					return
+				}
 				writeError(w, http.StatusConflict, err.Error())
 				return
 			}
@@ -1334,6 +1394,18 @@ func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, pro
 			if err := r.userRepo.UpdatePlatformAccount(created); err != nil {
 				return nil, fmt.Errorf("update metadata for account %d: %w", created.ID, err)
 			}
+		}
+
+		// P2 — admin connect-link: promote the row from
+		// 'pending_authorization' to 'active' and link the FK to
+		// the oauth_connections row that the vault depends on.
+		// FinalizeAttach is idempotent on (user_id, provider,
+		// provider_resource_id) so a re-auth (same channel,
+		// new consent) refreshes connected_at + scopes without
+		// rewriting the row. Called BEFORE vault.Save so the FK
+		// from tokens → oauth_connections resolves.
+		if _, err := r.userRepo.FinalizeAttach(ctx, created.ID, tokenData.Scopes); err != nil {
+			return nil, fmt.Errorf("finalize oauth connection for account %d: %w", created.ID, err)
 		}
 
 		// Save the root OAuth token for this account. For YouTube this

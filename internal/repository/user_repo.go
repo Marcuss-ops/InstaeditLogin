@@ -51,6 +51,106 @@ func (r *UserRepository) FindUserIDByEmail(ctx context.Context, email string) (i
 	return id, nil
 }
 
+// FinalizeAttach (P2 — admin connect-link) creates (or reuses) the
+// oauth_connections row that anchors the platform_account ↔ encrypted
+// token storage relationship, and promotes the platform_account from
+// 'pending_authorization' (the CSV-import reset state) to 'active'
+// with a fresh connected_at. Called by the OAuth callback AFTER a
+// successful AttachPlatformAccount + vault.Save wire-up so the
+// flow order is:
+//
+//	1. AttachPlatformAccount (creates platform_accounts row, NULL
+//	   oauth_connection_id, status='pending_authorization')
+//	2. FinalizeAttach (UPSERT oauth_connections; UPDATE
+//	   platform_accounts.oauth_connection_id + status +
+//	   connected_at; in one tx so a partial failure can't leave
+//	   the FK dangling)
+//	3. vault.Save (FK oauth_connection_id is now set in
+//	   platform_accounts so the FK from tokens → oauth_connections
+//	   resolves)
+//
+// Idempotent on (user_id, provider, provider_resource_id) via ON
+// CONFLICT DO UPDATE so a re-authorize for the same channel flips
+// status back to 'active' + refreshes connected_at + scopes
+// without losing the existing oauth_connection row.
+//
+// Returns the oauth_connection_id used so the caller can verify
+// what was stamped onto platform_accounts.
+func (r *UserRepository) FinalizeAttach(ctx context.Context, accountID int64, scopes []string) (int64, error) {
+	if accountID <= 0 {
+		return 0, fmt.Errorf("finalize attach: accountID must be > 0 (got %d)", accountID)
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("finalize attach: begin tx: %w", err)
+	}
+	defer func() {
+		// Rollback is a no-op after a successful Commit; this is
+		// the standard pgx/database/sql idiom.
+		_, _ = tx.ExecContext(ctx, "SELECT 1")
+		_ = tx.Rollback()
+	}()
+
+	var (
+		platform          string
+		providerResourceID string
+		userID            int64
+	)
+	if err := tx.QueryRowContext(ctx,
+		`SELECT platform, platform_user_id, user_id FROM platform_accounts WHERE id = $1`,
+		accountID,
+	).Scan(&platform, &providerResourceID, &userID); err != nil {
+		return 0, fmt.Errorf("finalize attach: load account %d: %w", accountID, err)
+	}
+	if userID <= 0 {
+		return 0, fmt.Errorf("finalize attach: platform_accounts.user_id is zero for account %d", accountID)
+	}
+
+	// UPSERT oauth_connections. The unique key (user_id, provider,
+	// provider_resource_id) makes this idempotent across rechannels
+	// of the same grant (e.g. if a manager reconsents after a
+	// token rotation). pgx v5 stdlib binds Go []string → TEXT[]
+	// natively through its default type map; textual literal
+	// formatting is NOT needed.
+	var oauthConnID int64
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO oauth_connections (user_id, provider, provider_resource_id, scopes, last_validated_at)
+		 VALUES ($1, $2, $3, $4, NOW())
+		 ON CONFLICT (user_id, provider, provider_resource_id)
+		 DO UPDATE SET scopes = EXCLUDED.scopes, last_validated_at = NOW(), updated_at = NOW()
+		 RETURNING id`,
+		userID, platform, providerResourceID, scopes,
+	).Scan(&oauthConnID); err != nil {
+		return 0, fmt.Errorf("finalize attach: upsert oauth_connections: %w", err)
+	}
+
+	// Promote the platform_account: link the FK, status='active',
+	// connected_at=NOW(). connected_at is what the dashboard's
+	// "last successful auth" freshness field reads from.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE platform_accounts
+		     SET oauth_connection_id = $1,
+		         status = 'active',
+		         connected_at = NOW(),
+		         last_validated_at = NOW(),
+		         reauth_required_at = NULL,
+		         last_error_code = NULL,
+		         last_error_message = NULL,
+		         updated_at = NOW()
+		   WHERE id = $2`,
+		oauthConnID, accountID,
+	); err != nil {
+		return 0, fmt.Errorf("finalize attach: update platform_accounts %d: %w", accountID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("finalize attach: commit: %w", err)
+	}
+	return oauthConnID, nil
+}
+
+
+
 func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
 	user := &models.User{}
 	err := r.db.QueryRow(
