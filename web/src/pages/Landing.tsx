@@ -132,47 +132,11 @@ const PLATFORM_REGISTRY = [
  * Inline SVG icons
  * -------------------------------------------------------------------------- */
 
-function IconIdeate({ className = "w-5 h-5" }: LogoProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <path d="M9.5 2A7.5 7.5 0 0 0 2 9.5c0 2.4 1.1 4.5 2.9 5.9l-.9 5.6 5.6-.9A7.48 7.48 0 0 0 17 9.5 7.5 7.5 0 0 0 9.5 2z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-      <path d="M9.5 6.5v6M6.5 9.5h6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconCreate({ className = "w-5 h-5" }: LogoProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" strokeWidth="1.7" fill="none" />
-      <path d="M12 8v8M8 12h8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconAI({ className = "w-5 h-5" }: LogoProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <path d="M12 2a3 3 0 0 0-3 3c0 .8.3 1.5.8 2H7a3 3 0 0 0 0 6h2.8c-.5.5-.8 1.2-.8 2a3 3 0 0 0 3 3 3 3 0 0 0 2-.8v2.8a3 3 0 0 0 6 0V17a3 3 0 0 0-.8-2H17a3 3 0 0 0 0-6h-2.8c.5-.5.8-1.2.8-2a3 3 0 0 0-3-3z" stroke="currentColor" strokeWidth="1.7" fill="none" />
-      <circle cx="12" cy="12" r="2" stroke="currentColor" strokeWidth="1.3" />
-    </svg>
-  );
-}
-
 function IconSchedule({ className = "w-5 h-5" }: LogoProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
       <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.7" />
       <path d="M12 7v5l3 2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function IconPublish({ className = "w-5 h-5" }: LogoProps) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
-      <path d="M3.5 12L20 4l-3.8 16.5L11 13l-7.5-1z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" fill="none" />
-      <path d="M11 13l9-9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
     </svg>
   );
 }
