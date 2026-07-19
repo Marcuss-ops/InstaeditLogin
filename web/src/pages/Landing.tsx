@@ -542,7 +542,7 @@ function Nav() {
               Features
             </a>
             <a href="#who-are-we" className="hover:text-white transition-colors">
-              Who are we
+              Who I am
             </a>
             <Link
               to="/editor"
