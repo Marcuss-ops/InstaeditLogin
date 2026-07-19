@@ -44,12 +44,22 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 	if job.FolderID != nil {
 		folderID = sql.NullString{String: *job.FolderID, Valid: true}
 	}
+	// P1#7 — batch_id optional FK to import_batches. NULL for
+	// single-file imports + the synchronous v1 Drive folder endpoint;
+	// non-NULL when the async folder crawler stamped the row.
+	// Encode to a string explicitly so lib/pq emits the UUID form
+	// (Pg parameter type) without relying on the uuid.UUID
+	// driver.Valuer path.
+	var batchID interface{}
+	if job.BatchID != nil {
+		batchID = job.BatchID.String()
+	}
 
 	return r.db.QueryRow(
 		`INSERT INTO upload_jobs
 			(user_id, workspace_id, source_type, source_id, drive_account_id, folder_id,
-			 title, caption, targets, status, ingest_after, publish_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			 title, caption, targets, status, ingest_after, publish_at, batch_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id, created_at, updated_at`,
 		job.UserID,
 		job.WorkspaceID,
@@ -63,6 +73,7 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 		string(job.Status),
 		job.IngestAfter,
 		publishAt,
+		batchID,
 	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt)
 }
 

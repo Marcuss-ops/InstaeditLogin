@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // UploadJobSource identifies where the video should be fetched from.
@@ -187,6 +189,13 @@ type UploadJob struct {
 	YouTubeSessionExpiresAt  *time.Time `json:"youtube_session_expires_at,omitempty"`
 	YouTubeChunkSize         *int64     `json:"youtube_chunk_size,omitempty"`
 	YouTubeLastChunkAt       *time.Time `json:"youtube_last_chunk_at,omitempty"`
+	// P1#7 — import_batches FK. NULL for single-file imports (the
+	// historical POST /media/import/drive shape) and for the
+	// synchronous v1 Drive folder endpoint; non-NULL when the
+	// async producer-side handler (POST /media/import/drive/
+	// folder/async) created this row. Pointer + omitempty so the
+	// JSON shape stays identical for legacy clients.
+	BatchID *uuid.UUID `json:"batch_id,omitempty"`
 }
 
 // ScanTargets unmarshals the JSONB targets column into the Targets slice.

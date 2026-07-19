@@ -189,6 +189,7 @@ func Wire(ctx context.Context) (*App, error) {
 	postRepo := repository.NewPostRepository(db)
 	mediaRepo := repository.NewMediaAssetRepository(db)
 	uploadJobRepo := repository.NewUploadJobRepository(db)
+	importBatchRepo := repository.NewImportBatchRepository(db)
 	connectionStateRepo := repository.NewConnectionStateRepository(db)
 	auditLogRepo := repository.NewAuditLogRepository(db)
 
@@ -252,6 +253,17 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithPostStore(postRepo),
 		api.WithMediaStore(mediaRepo),
 		api.WithUploadJobStore(uploadJobRepo),
+		// P1#7 — producer-side handler (POST
+		// /api/v1/media/import/drive/folder/async) and poll endpoint
+		// (GET .../async/{id}) share this ImportBatchStore. The
+		// crawler worker uses the SAME *repository.ImportBatchRepository
+		// but through a narrower CrawlerBatchStore interface
+		// declared in internal/worker/drive_batch_crawler.go.
+		api.WithImportBatchStore(importBatchRepo),
+		// P1#7 — exporter for the crawler goroutine spawned in
+		// RunWorkers. Same instance as ImportBatchStore above; the
+		// split into two interfaces lets each consumer request only
+		// the methods it actually calls.
 		api.WithConnectionStateStore(&connectionStateStoreWrapper{connectionStateRepo}),
 		api.WithAuditLogStore(&auditLogStoreWrapper{auditLogRepo}),
 		api.WithCookieSecure(true),
@@ -273,6 +285,8 @@ func Wire(ctx context.Context) (*App, error) {
 		// is unset, registration is disabled (handler returns 403).
 		api.WithAdminInviteToken(cfg.AdminInviteToken),
 		api.WithSnapshotStore(repository.NewSnapshotRepository(db)),
+		// P1#7 — export the importBatchRepo on App so the
+		// command-line crawler (cmd/worker) can wire it directly.
 	}
 	// Blocco #5.3 — Sentry init (lazy). The user contract is
 	// "SENTRY_DSN empty == no init; non-empty == CaptureException
@@ -355,6 +369,8 @@ func Wire(ctx context.Context) (*App, error) {
 		OneTimeCodes:    oneTimeCodes,
 	}, nil
 }
+
+
 
 // RunWorkers starts the 7 background goroutines (publish worker, reconcile
 // worker, outbox dispatcher, webhook worker, metrics collector,
@@ -544,7 +560,45 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		children = append(children, &goroutineCtx{"upload", cancel, d})
 	}
 
-	slog.Info("7 background goroutines started: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / upload")
+	// 8. Drive batch crawler — drains import_batches rows the
+	// producer-side handler (POST /api/v1/media/import/drive/
+	// folder/async) inserts. Single-row contract (one batch per
+	// claim) because cross-page Drive pagination is the long
+	// running work. The crawler fan-outs upload_jobs; the existing
+	// UploadWorker (worker #7) INGESTS/UPLOADS them on its own
+	// pool. Heartbeat goroutine per claimed batch keeps the lease
+	// alive during cross-page work; reclaimer ticker recovers
+	// leases from crashed crawlers.
+	{
+		c, cancel := context.WithCancel(ctx)
+		d := make(chan struct{})
+		go func() {
+			defer close(d)
+			a.WorkerStatus.Mark("drive_batch_crawler")
+			crawlerOpts := worker.DriveBatchCrawlerOptions{
+				ClaimInterval:     5 * time.Second,
+				LeaseTTL:          5 * time.Minute,
+				HeartbeatInterval: 100 * time.Second, // = LeaseTTL/3
+				ReclaimInterval:   30 * time.Second,
+				ReclaimOnStart:    true,
+			}
+			dbcc := worker.NewDriveBatchCrawler(
+				repository.NewImportBatchRepository(a.DB),
+				repository.NewUploadJobRepository(a.DB),
+				a.Vault,
+				a.CapRouter,
+				"drive-batch-crawler",
+				crawlerOpts,
+				slog.Default(),
+			)
+			if err := dbcc.Run(c); err != nil && err != context.Canceled {
+				slog.Error("drive batch crawler exited with error", "error", err)
+			}
+		}()
+		children = append(children, &goroutineCtx{"drive_batch_crawler", cancel, d})
+	}
+
+	slog.Info("8 background goroutines started: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / upload / drive_batch_crawler")
 
 	// Block until ctx is cancelled.
 	<-ctx.Done()

@@ -17,7 +17,14 @@ import (
 // (internal/* may import pkg/api; pkg/api never imports internal/*).
 // The WorkerStatus type itself is owned by pkg/api; internal/bootstrap
 // constructs and stores *pkg/api.WorkerStatus on App.WorkerStatus.
-var WorkerNames = []string{"publish", "reconcile", "outbox", "webhook", "metrics", "sessions_cleanup", "upload"}
+// WorkerNames is the authoritative list of background goroutines
+// RunWorkers spawns. The /ready endpoint's AllStarted check
+// compares WorkerStatus.MarkedCount against len(WorkerNames); a
+// mismatch means /ready reports a permanently-stuck "1 of N not
+// started" badge until the missing goroutine is added here AND
+// spawned by RunWorkers. P1#7 added drive_batch_crawler to the
+// list. Future worker additions must append here in lockstep.
+var WorkerNames = []string{"publish", "reconcile", "outbox", "webhook", "metrics", "sessions_cleanup", "upload", "drive_batch_crawler"}
 
 // WorkerStatus holds the per-goroutine "started" signal used by the
 // /ready endpoint. Each entry is an atomic.Bool flipped to true on

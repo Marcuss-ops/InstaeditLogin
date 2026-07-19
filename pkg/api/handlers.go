@@ -164,6 +164,15 @@ type Router struct {
 	// drive-import endpoint returns 501.
 	uploadJobStore UploadJobStore
 
+	// importBatchStore persists the P1#7 header row for an async
+	// folder-batch import. The producer handler (POST
+	// /api/v1/media/import/drive/folder/async) inserts one row
+	// IMMEDIATELY and returns {batch_id, status:"queued"}; the
+	// background crawler (internal/worker/drive_batch_crawler.go)
+	// claims + processes + completes the row. When nil, the
+	// producer endpoint AND/OR the poll endpoint return 501.
+	importBatchStore ImportBatchStore
+
 	// snapshotStore caches remote resource data (channel stats,
 	// profile, branding) so the frontend doesn't trigger a provider
 	// API call on every render. Wired via WithSnapshotStore;
@@ -631,6 +640,16 @@ func WithUploadJobStore(s UploadJobStore) RouterOption {
 	return func(r *Router) { r.uploadJobStore = s }
 }
 
+// WithImportBatchStore wires the P1#7 async folder-batch header
+// table. When nil, POST /api/v1/media/import/drive/folder/async and
+// GET /api/v1/media/import/drive/folder/async/{id} return 501. The
+// background crawler is wired separately (see
+// internal/bootstrap.Wire — that's where the *repository.ImportBatchRepository
+// is also injected).
+func WithImportBatchStore(s ImportBatchStore) RouterOption {
+	return func(r *Router) { r.importBatchStore = s }
+}
+
 // SnapshotStore is the persistence contract for
 // account_resource_snapshots. Defined inline to keep pkg/api off
 // internal/repository imports; main.go injects
@@ -769,6 +788,16 @@ func (r *Router) Setup() http.Handler {
 	// its next tick (≈1s). Used for "I have a folder full of videos,
 	// post one every 3-4.5 hours on my Facebook Page" workflows.
 	r.mux.Method(http.MethodPost, "/api/v1/media/import/drive/folder", r.protected(r.handleDriveBatchImport))
+
+	// P1#7 — async folder-batch producer/consumer.
+	// POST /folder/async returns {batch_id, status:"queued"} immediately;
+	// the background crawler (internal/worker/drive_batch_crawler.go)
+	// does the Drive pagination + upload_job creation. The OLD
+	// /folder endpoint above is kept as a synchronous back-compat
+	// path for clients on the v1 shape; clients should migrate to
+	// /folder/async for the new multi-platform semantics.
+	r.mux.Method(http.MethodPost, "/api/v1/media/import/drive/folder/async", r.protected(r.handleDriveBatchImportV2))
+	r.mux.Method(http.MethodGet, "/api/v1/media/import/drive/folder/async/{id}", r.protected(r.handleDriveBatchV2Status))
 
 	// Batch drive status: dashboard polls this for per-folder counts
 	// (pending/processing/completed/failed) and min/max scheduled_at.
