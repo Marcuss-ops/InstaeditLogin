@@ -46,15 +46,25 @@ var uniqueViolationDestTripleDetailRegex = regexp.MustCompile(
 //
 //	Key (id)=(extdst_01JABC) is still referenced from table "<REF>".
 //
-// The capture group ([^"]+) extracts the REFERENCING table name so
-// the wrapped error can surface WHICH table blocked the deletion
-// (operator-grade diagnostics). The dispatch sentinel
+// The capture group accepts BOTH the QUOTED and the UNQUOTED
+// Detail shapes and ALWAYS yields a BARE REFERENCING table
+// name (no surrounding quotes inside group 1) so that:
+//   - QUOTED FKs (DBA created the identifier with double-quotes)
+//     match: `from table "<REF>".`
+//   - UNQUOTED FKs (the canonical case for our lowercase
+//     identifiers-not-created-with-quotes schema)
+//     match: `from table <REF>.`
+//
+// The wrapping fmt.Errorf applies %q so operators see a tidy
+// "external_deliveries" diagnostic in the slog log regardless
+// of input Detail shape. The dispatch sentinel
 // (ErrExternalDestinationHasDependents) is GENERIC across all
 // such FKs so the API handler doesn't need per-table dispatch
-// logic — it always maps to 409 Conflict regardless of which table
-// is the blocker.
+// logic — it always maps to 409 Conflict regardless of which
+// table is the blocker (or which Postgres version / pg_restore
+// variant emitted the Detail).
 var fkReferencingExternalDestinationsDetailRegex = regexp.MustCompile(
-	`Key \(id\)=.+? is still referenced from table "([^"]+)"`)
+	`Key \(id\)=.+? is still referenced from table "?([^".\s]+)"?`)
 
 // ExternalDestinationRepository handles persistence for the
 // external_destinations table (migration 054_external_destinations.sql).
