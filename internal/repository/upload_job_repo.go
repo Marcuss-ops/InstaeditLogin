@@ -63,19 +63,24 @@ type ExternalDeliveryLinker interface {
 // job (internal/worker/ingest_fsm.go::Transition, called IMMEDIATELY before this
 // helper at the worker boundary). Canonical worker pattern:
 //
-//	if !fsm.Transition(ctx, deliveryID, currentStatus, models.ExternalDeliveryStatusArtifactVerified, ...) {
-//		return // operator runbook
-//	}
-//	r.LinkToExternalDelivery(ctx, linker, uploadJobID, externalDeliveryID)
-//   - empty externalDeliveryID
-//   - uploadJobID <= 0
+//		if !fsm.Transition(ctx, deliveryID, currentStatus, models.ExternalDeliveryStatusArtifactVerified, ...) {
+//			return // operator runbook
+//		}
+//		r.LinkToExternalDelivery(ctx, linker, uploadJobID, externalDeliveryID)
+//	  - empty externalDeliveryID
+//	  - uploadJobID <= 0
 //
-// Idempotency: LinkUploadJob uses COALESCE(upload_job_id, $new) so
-// a re-call with the SAME uploadJobID is a no-op; a re-call with
-// a DIFFERENT uploadJobID is silently rejected by the COALESCE
-// (upload_job_id stays NULL if the original INSERT left it that
-// way, or stays at the original value if it was set). Operator
-// runbook territory; see external_delivery_repo.LinkUploadJob doc.
+// Single-shot (NOT idempotent): LinkUploadJob filters on
+// `upload_job_id IS NULL` so a second call with the SAME uploadJobID
+// returns 0 rows → ErrExternalDeliveryNotFound (forwarder wraps into
+// `forward to external_delivery_repo.LinkUploadJob`). A re-call with
+// a DIFFERENT uploadJobID surfaces the same error — symmetric fail-
+// loud contract catches accidental FK-swap bugs in worker retry
+// paths. Operator recovery for "link didn't land because the row was
+// already linked": DELETE the orphan upload_job (triggers ON DELETE
+// SET NULL on the FK column), then the next LinkUploadJob succeeds.
+// See external_delivery_repo.LinkUploadJob doc for the full recovery
+// path.
 func (r *UploadJobRepository) LinkToExternalDelivery(
 	ctx context.Context,
 	linker ExternalDeliveryLinker,
@@ -187,10 +192,11 @@ func (r *UploadJobRepository) FindByID(id int64) (*models.UploadJob, error) {
 // indefinitely (no lease held during the wait).
 //
 // Selection:
-//   status = 'ingest_completed'              (P1#4 rename; was 'ready_to_publish')
-//   publish_at IS NULL OR publish_at <= NOW() (P1#4 — the time gate)
-//   next_attempt_at <= NOW() (or NULL)
-//   no active lease
+//
+//	status = 'ingest_completed'              (P1#4 rename; was 'ready_to_publish')
+//	publish_at IS NULL OR publish_at <= NOW() (P1#4 — the time gate)
+//	next_attempt_at <= NOW() (or NULL)
+//	no active lease
 //
 // CTE + UPDATE-FROM + RETURNING shape mirrors ClaimBatch. Same row-
 // state transition (leased + lease_owner + heartbeat + attempt_count
@@ -277,11 +283,12 @@ func (r *UploadJobRepository) ClaimBatchForPublish(ctx context.Context, workerID
 // (ClaimBatchForPublish).
 //
 // Per-row state transition:
-//   pending | retry_wait
-//             ↓
-//   leased, lease_owner = workerID, lease_expires_at = NOW()+lease,
-//   heartbeat_at = NOW(), attempt_count += 1,
-//   started_at = COALESCE(started_at, NOW())   -- preserve across retries
+//
+//	pending | retry_wait
+//	          ↓
+//	leased, lease_owner = workerID, lease_expires_at = NOW()+lease,
+//	heartbeat_at = NOW(), attempt_count += 1,
+//	started_at = COALESCE(started_at, NOW())   -- preserve across retries
 //
 // Returns 0+ claimed jobs; an empty slice is the normal "queue empty
 // or every row leased by a peer" case (the worker treats this as

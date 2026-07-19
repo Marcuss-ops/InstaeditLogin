@@ -60,16 +60,16 @@ func fixtureDelivery() (*models.ExternalDelivery, []byte, time.Time) {
 	sum := sha256.Sum256(body)
 	sha := hex.EncodeToString(sum[:])
 	e := &models.ExternalDelivery{
-		ID:                   "sdel_01JDEF",
-		SourceSystem:         "velox",
-		ExternalDeliveryID:   "delivery_8cc0f...",
-		IdempotencyKey:       "delivery_8cc0f...|dest_345",
+		ID:                    "sdel_01JDEF",
+		SourceSystem:          "velox",
+		ExternalDeliveryID:    "delivery_8cc0f...",
+		IdempotencyKey:        "delivery_8cc0f...|dest_345",
 		ExternalDestinationID: "extdst_01JABC",
-		SourceArtifactID:     "artifact_01JXYZ",
-		ExpectedSHA256:       sha,
-		ExpectedSizeBytes:    184729302,
-		ExpectedMimeType:     "video/mp4",
-		Status:               models.ExternalDeliveryStatusAccepted,
+		SourceArtifactID:      "artifact_01JXYZ",
+		ExpectedSHA256:        sha,
+		ExpectedSizeBytes:     184729302,
+		ExpectedMimeType:      "video/mp4",
+		Status:                models.ExternalDeliveryStatusAccepted,
 		// RequestSHA256 mirrors the SHA the handler computes from
 		// rawBody (or the pre-computed value the handler passes via
 		// sha256.Sum256 directly). Insert requires the field to be
@@ -357,13 +357,79 @@ func TestExternalDeliveryRepository_UpdateStatus_NotFound(t *testing.T) {
 	}
 }
 
-// TestExternalDeliveryRepository_LinkUploadJob pins the cross-table
-// bridge: stamps upload_job_id on an existing delivery via
-// COALESCE(upload_job_id, $2). Re-stamping with a DIFFERENT id is
-// also a no-op via COALESCE (preserves the original); the test
-// verifies the simple-update path runs without error.
-func TestExternalDeliveryRepository_LinkUploadJob(t *testing.T) {
-	db, mock, err := sqlmock.New()
+// TestExternalDeliveryRepository_LinkUploadJob_FirstLink covers the
+// happy-path: a delivery row whose upload_job_id IS NULL is stamped
+// to the supplied ID. The NEW SQL form (no COALESCE, literal $2 +
+// AND upload_job_id IS NULL in the WHERE) is matched here via
+// sqlmock's regex matcher so the test is robust to whitespace +
+// binding-order changes in the production SQL (matches the
+// query-matcher style already used by TestExternalDeliveryRepository_*
+// for the INSERT path).
+func TestExternalDeliveryRepository_LinkUploadJob_FirstLink(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(`(?s)UPDATE external_deliveries\s+SET\s+upload_job_id\s+=\s+\$2.*WHERE\s+id\s+=\s+\$1\s+AND\s+upload_job_id\s+IS\s+NULL`).
+		WithArgs("sdel_01JDEF", int64(999)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	repo := NewExternalDeliveryRepository(db)
+	if err := repo.LinkUploadJob(context.Background(), "sdel_01JDEF", 999); err != nil {
+		t.Errorf("LinkUploadJob first link: want nil, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("mock expectations: %v", err)
+	}
+}
+
+// TestExternalDeliveryRepository_LinkUploadJob_RelinkDifferentID
+// pins the NEW fail-loud behaviour: a re-link attempt with a
+// DIFFERENT upload_job_id (e.g. a retry path that recreated the
+// upload_job under a new auto-inc id) MUST surface
+// ErrExternalDeliveryNotFound via rowsAffected = 0, NOT silently
+// no-op like the prior COALESCE form. The test simulates the "row
+// exists but upload_job_id was already stamped" state by
+// returning 0 rows affected.
+//
+// Operator recovery: DELETE the orphan upload_job (triggers ON
+// DELETE SET NULL on the FK column); the next LinkUploadJob call
+// then sees upload_job_id IS NULL again and succeeds.
+func TestExternalDeliveryRepository_LinkUploadJob_RelinkDifferentID(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(`UPDATE external_deliveries`).
+		WithArgs("sdel_01JDEF", int64(1234)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	repo := NewExternalDeliveryRepository(db)
+	err = repo.LinkUploadJob(context.Background(), "sdel_01JDEF", 1234)
+	if err == nil {
+		t.Fatal("LinkUploadJob re-link with different id: want ErrExternalDeliveryNotFound, got nil")
+	}
+	if !errors.Is(err, ErrExternalDeliveryNotFound) {
+		t.Errorf("LinkUploadJob re-link with different id: want ErrExternalDeliveryNotFound in chain, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("mock expectations: %v", err)
+	}
+}
+
+// TestExternalDeliveryRepository_LinkUploadJob_RelinkSameID pins
+// the symmetry: a re-link attempt with the SAME upload_job_id
+// (the duplicate-worker-run case) is treated identically to a
+// re-link with a different id and surfaces
+// ErrExternalDeliveryNotFound. Pre-extension COALESCE would have
+// silently no-op'd here; post-extension both re-link shapes
+// fail loud.
+func TestExternalDeliveryRepository_LinkUploadJob_RelinkSameID(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
@@ -371,11 +437,46 @@ func TestExternalDeliveryRepository_LinkUploadJob(t *testing.T) {
 
 	mock.ExpectExec(`UPDATE external_deliveries`).
 		WithArgs("sdel_01JDEF", int64(999)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	repo := NewExternalDeliveryRepository(db)
-	if err := repo.LinkUploadJob(context.Background(), "sdel_01JDEF", 999); err != nil {
-		t.Errorf("LinkUploadJob: want nil, got %v", err)
+	err = repo.LinkUploadJob(context.Background(), "sdel_01JDEF", 999)
+	if err == nil {
+		t.Fatal("LinkUploadJob re-link with same id: want ErrExternalDeliveryNotFound, got nil")
+	}
+	if !errors.Is(err, ErrExternalDeliveryNotFound) {
+		t.Errorf("LinkUploadJob re-link with same id: want ErrExternalDeliveryNotFound in chain, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("mock expectations: %v", err)
+	}
+}
+
+// TestExternalDeliveryRepository_LinkUploadJob_NotFound covers
+// the missing-row branch (delivery id doesn't exist): also
+// surfaces ErrExternalDeliveryNotFound via rowsAffected = 0.
+// Same error shape as the re-link cases; the wrapped %w context
+// (delivery id + "rows affected" detail) is what differentiates
+// "missing delivery" from "already linked" in the operator's
+// dashboard logs.
+func TestExternalDeliveryRepository_LinkUploadJob_NotFound(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(`UPDATE external_deliveries`).
+		WithArgs("sdel_01JNOTHING", int64(999)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	repo := NewExternalDeliveryRepository(db)
+	err = repo.LinkUploadJob(context.Background(), "sdel_01JNOTHING", 999)
+	if err == nil {
+		t.Fatal("LinkUploadJob missing delivery: want error, got nil")
+	}
+	if !errors.Is(err, ErrExternalDeliveryNotFound) {
+		t.Errorf("LinkUploadJob missing delivery: want ErrExternalDeliveryNotFound in chain, got %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("mock expectations: %v", err)

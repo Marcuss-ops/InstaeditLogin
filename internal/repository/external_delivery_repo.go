@@ -39,32 +39,32 @@ const ExternalDeliveryLockNamespace int32 = 0xB8111E
 // Velox ↔ InstaEdit delivery contract has a precise three-way
 // outcome on POST /internal/v1/deliveries:
 //
-//   (a) first-ever POST for idempotency_key K → INSERT a new row,
-//       return (new record, nil)
-//   (b) replay of POST for K + SAME body SHA-256 → return the
-//       existing row unchanged (no second INSERT), to honour
-//       "at-most-once" semantics across Velox retries
-//   (c) replay of POST for K + DIFFERENT body SHA-256 → return
-//       ErrIdempotencyConflict; the handler maps this to 409 so the
-//       upstream sees "your retry carries a different payload — fix
-//       your code, don't retry with new body" without ever
-//       persisting the conflicting record
+//	(a) first-ever POST for idempotency_key K → INSERT a new row,
+//	    return (new record, nil)
+//	(b) replay of POST for K + SAME body SHA-256 → return the
+//	    existing row unchanged (no second INSERT), to honour
+//	    "at-most-once" semantics across Velox retries
+//	(c) replay of POST for K + DIFFERENT body SHA-256 → return
+//	    ErrIdempotencyConflict; the handler maps this to 409 so the
+//	    upstream sees "your retry carries a different payload — fix
+//	    your code, don't retry with new body" without ever
+//	    persisting the conflicting record
 //
 // All three outcomes share a single transaction:
 //
-//   1. SELECT pg_advisory_xact_lock($1, hashtext($2 || ':' || $3))
-//        — serialises concurrent inserts/replays of the same key
-//          (release on COMMIT/ROLLBACK). $1 is the namespace
-//          ExternalDeliveryLockNamespace (0xB8111E). hashtext() is
-//          Postgres' stable 32-bit hash; pg_advisory_xact_lock(int4,
-//          int4) is the two-key form.
-//   2. SELECT existing row by (source_system, idempotency_key).
-//      Compare request_sha256 →
-//        - match → reuse, COMMIT, return existing
-//        - mismatch → ROLLBACK, return ErrIdempotencyConflict
-//        - no row → INSERT (the advisory lock guarantees no peer
-//          can race an INSERT for the same key in this window)
-//   3. INSERT the new row, COMMIT, return the new row.
+//  1. SELECT pg_advisory_xact_lock($1, hashtext($2 || ':' || $3))
+//     — serialises concurrent inserts/replays of the same key
+//     (release on COMMIT/ROLLBACK). $1 is the namespace
+//     ExternalDeliveryLockNamespace (0xB8111E). hashtext() is
+//     Postgres' stable 32-bit hash; pg_advisory_xact_lock(int4,
+//     int4) is the two-key form.
+//  2. SELECT existing row by (source_system, idempotency_key).
+//     Compare request_sha256 →
+//     - match → reuse, COMMIT, return existing
+//     - mismatch → ROLLBACK, return ErrIdempotencyConflict
+//     - no row → INSERT (the advisory lock guarantees no peer
+//     can race an INSERT for the same key in this window)
+//  3. INSERT the new row, COMMIT, return the new row.
 //
 // ON CONFLICT DO NOTHING is intentionally NOT used here: the lock
 // already guarantees no peer can race, so ON CONFLICT would be
@@ -196,10 +196,15 @@ func (r *ExternalDeliveryRepository) Insert(ctx context.Context, e *models.Exter
 	// upload_job_id and post_id are intentionally NOT bound at INSERT
 	// time — the canonical pattern is: Worker → Insert external_delivery →
 	// create upload_job (with batch_id or external_delivery link) →
-	// LinkUploadJob stamps the FK after creation. INSERTing here with
-	// either or both would break LinkUploadJob's COALESCE semantic
-	// (a re-stamp would silently no-op instead of erroring on a
-	// mismatched FK).
+	// LinkUploadJob stamps the FK after creation through a separate
+	// single-shot UPDATE (filters on upload_job_id IS NULL). INSERTing
+	// here with either or both would be silently overwritten by the
+	// later LinkUploadJob stamp OR create a 2-step stale FK state
+	// (insert with FK + link with NEW FK) that the new
+	// WHERE upload_job_id IS NULL clause cannot recover from. The
+	// INSERT-then-LINK order keeps the NOT NULL partial index for the
+	// publish-pool claim scan free of half-stamped rows
+	// (upload_job_id IS NULL → claim pool skips).
 	var (
 		downloadURL interface{}
 		callbackURL interface{}
@@ -683,12 +688,22 @@ func (r *ExternalDeliveryRepository) UpdateStatus(ctx context.Context, id string
 // upload_job_id FK on the delivery row AFTER the worker has
 // successfully created the upload_job (status transitions to
 // 'artifact_verified' → 'ingest_completed' / 'queued'). Called once
-// per delivery; idempotent ON CONFLICT-friendly via COALESCE on
-// upload_job_id (a re-stamp with the SAME id is a no-op; a re-stamp
-// with a DIFFERENT id is rejected because that would imply the
-// delivery was wrongly routed to a different upload job — operator
-// runbook territory, NOT a happy-path). Returns
-// ErrExternalDeliveryNotFound wrapped when zero rows match.
+// per delivery; NOT idempotent — the WHERE clause filters to rows
+// whose upload_job_id IS NULL, so a second call with the SAME id
+// returns 0 rows affected → ErrExternalDeliveryNotFound, and a
+// second call with a DIFFERENT id surfaces the same error so a
+// silently-overwritten FK (the prior COALESCE semantics) becomes
+// operator-runbook-detectable. Callers that legitimately need to
+// re-link (e.g. operator DELETE'd the orphan upload_job) recover
+// via the ON DELETE SET NULL cascade; the next LinkUploadJob call
+// then sees upload_job_id IS NULL again and succeeds.
+//
+// Returns ErrExternalDeliveryNotFound wrapped when zero rows match
+// (missing row OR row already linked). The error shape is kept
+// identical for both cases so callers (wrappers in
+// upload_job_repo.go::LinkToExternalDelivery) treat them
+// uniformly; debug-by-message-context remains available via the
+// wrapped %w + id suffix.
 //
 // Note: the upload_job_id column has ON DELETE SET NULL (migration
 // 055). If the caller subsequently deletes the upload_job, the
@@ -705,9 +720,10 @@ func (r *ExternalDeliveryRepository) LinkUploadJob(ctx context.Context, delivery
 	}
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE external_deliveries
-		 SET upload_job_id = COALESCE(upload_job_id, $2),
+		 SET upload_job_id = $2,
 		     updated_at     = NOW()
-		 WHERE id = $1`,
+		 WHERE id = $1
+		   AND upload_job_id IS NULL`,
 		deliveryID, uploadJobID,
 	)
 	if err != nil {
@@ -727,6 +743,7 @@ func (r *ExternalDeliveryRepository) LinkUploadJob(ctx context.Context, delivery
 // worker via errors.Is dispatch) match against when no
 // external_delivery row is linked to the upload_job yet.
 var ErrExternalDeliveryNotLinked = errors.New("external delivery not linked to upload job")
+
 // ErrExternalDeliveryNoExpectedTriple is the typed sentinel
 // when the external_delivery row exists but (size, sha) fields
 // are empty/zero.
