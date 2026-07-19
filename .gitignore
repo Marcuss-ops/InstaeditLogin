@@ -20,6 +20,7 @@ docker-compose.override.yml
 # Go build artifacts
 /seed
 go.work
+/test-youtube-upload
 # IDE
 .idea/
 *.log
