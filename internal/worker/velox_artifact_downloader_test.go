@@ -152,6 +152,12 @@ func newFakeExternalDeliveryStoreForFSM() *fakeExternalDeliveryStoreForFSM {
 	return &fakeExternalDeliveryStoreForFSM{states: map[string]models.ExternalDeliveryStatus{}}
 }
 
+func (f *fakeExternalDeliveryStoreForFSM) seed(id string, status models.ExternalDeliveryStatus) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.states[id] = status
+}
+
 func (f *fakeExternalDeliveryStoreForFSM) UpdateStatus(_ context.Context, id string, newStatus models.ExternalDeliveryStatus, _, _, _, _ *string) error {
 	atomic.AddInt32(&f.calls, 1)
 	f.mu.Lock()
@@ -593,10 +599,11 @@ func TestVeloxArtifactDownloader_ToDownloadingSkew_LogsAndContinues(t *testing.T
 	dl.Status = models.ExternalDeliveryStatusArtifactVerified
 	lookup := newFakeExtDeliveryLookup()
 	lookup.seed(dl)
+	store := newFakeExternalDeliveryStoreForFSM()
+	store.seed(dl.ID, models.ExternalDeliveryStatusArtifactVerified)
 
 	uploads := newFakeUploadJobCreator()
 	links := newFakeExtDeliveryLinker()
-	store := newFakeExternalDeliveryStoreForFSM()
 	fsm := NewIngestFSM(store, slog.Default())
 	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
 
@@ -614,13 +621,15 @@ func TestVeloxArtifactDownloader_ToDownloadingSkew_LogsAndContinues(t *testing.T
 	if c := atomic.LoadInt32(&links.calls); c != 1 {
 		t.Errorf("LinkUploadJob calls = %d; want 1 (link runs even on FSM skew)", c)
 	}
-	if c := atomic.LoadInt32(&store.calls); c != 1 {
-		t.Errorf("UpdateStatus calls = %d; want 1 (FSM attempt logged)", c)
+	// The FSM transition accepted → downloading is illegal when the
+	// row has already advanced to artifact_verified. The FSM guard
+	// rejects it BEFORE touching the store, so no UpdateStatus call
+	// is expected and the row stays in artifact_verified.
+	if c := atomic.LoadInt32(&store.calls); c != 0 {
+		t.Errorf("UpdateStatus calls = %d; want 0 (illegal transition not persisted)", c)
 	}
-	// Even though ToDownloading was attempted, the fake's UpdateStatus
-	// records the requested target, so we can see what was tried.
-	if got := store.status(dl.ID); got != models.ExternalDeliveryStatusDownloading {
-		t.Logf("UpdateStatus recorded target = %q (test accepts either; production flips ErrIllegalTransition)", got)
+	if got := store.status(dl.ID); got != models.ExternalDeliveryStatusArtifactVerified {
+		t.Errorf("status = %q; want %q (illegal transition leaves row unchanged)", got, models.ExternalDeliveryStatusArtifactVerified)
 	}
 }
 
