@@ -18,7 +18,39 @@ type UserRepository struct {
 // NewUserRepository creates a new UserRepository.
 func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
-}// FindByEmail finds a user by their email address.
+}
+
+// FindUserIDByEmail (P2 — admin CSV import) resolves an email to the
+// underlying user_id (FK on platform_accounts). The admin /channels
+// /import-csv endpoint uses this to honour the owner_email form field;
+// the CLI (scripts/import_channels_csv.go) reuses the same method via
+// a *repository.UserRepository wrapper.
+//
+// Returns ErrUserNotFound when the email is unknown (consistent with
+// the rest of the package's "wrap with id" convention; callers do
+// errors.Is(err, repository.ErrUserNotFound)). ctx is honoured for
+// cancellation/deadline propagation under import load.
+func (r *UserRepository) FindUserIDByEmail(ctx context.Context, email string) (int64, error) {
+	if email == "" {
+		return 0, fmt.Errorf("find user id by email: empty email")
+	}
+	var id int64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id FROM users WHERE email = $1`,
+		email,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("%w: email=%q", ErrUserNotFound, email)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("find user id by email: %w", err)
+	}
+	if id <= 0 {
+		return 0, fmt.Errorf("find user id by email: zero id for %q", email)
+	}
+	return id, nil
+}
+
 func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
 	user := &models.User{}
 	err := r.db.QueryRow(

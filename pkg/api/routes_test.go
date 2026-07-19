@@ -156,6 +156,7 @@ type mockUserStore struct {
 	findPlatformAccountByTupleFn func(platform, platformUserID string) (*models.PlatformAccount, error)
 	updatePlatformAccountFn      func(account *models.PlatformAccount) error
 	deletePlatformAccountFn      func(id int64) error
+	findUserIDByEmailFn          func(ctx context.Context, email string) (int64, error)
 }
 
 func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
@@ -190,6 +191,18 @@ func (m *mockUserStore) DeletePlatformAccount(id int64) error {
 		return m.deletePlatformAccountFn(id)
 	}
 	return nil
+}
+
+// FindUserIDByEmail implements the UserStore method added for the
+// P2 admin CSV import surface (POST /admin/channels/import-csv).
+// Default returns (0, nil) so tests that don't exercise the import
+// path don't need to wire it up. Tests that DO exercise the path
+// override findUserIDByEmailFn.
+func (m *mockUserStore) FindUserIDByEmail(ctx context.Context, email string) (int64, error) {
+	if m.findUserIDByEmailFn != nil {
+		return m.findUserIDByEmailFn(ctx, email)
+	}
+	return 0, nil
 }
 
 // mockWorkspaceStore implements WorkspaceStore with configurable function fields.

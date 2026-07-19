@@ -125,6 +125,9 @@ func (m *stubUserStoreV2) FindPlatformAccount(string, string) (*models.PlatformA
 }
 func (m *stubUserStoreV2) UpdatePlatformAccount(*models.PlatformAccount) error { return nil }
 func (m *stubUserStoreV2) DeletePlatformAccount(int64) error                { return nil }
+func (m *stubUserStoreV2) FindUserIDByEmail(context.Context, string) (int64, error) {
+	return 0, nil // not exercised by handleDriveBatchImportV2; satisfies UserStore contract
+}
 
 // stubWorkspaceStoreV2 lets the handler resolve body.WorkspaceID
 // against an in-memory ownership map. ownedWorkspaces[wid]=true means

@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/channelimport"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
@@ -276,6 +277,13 @@ type UserStore interface {
 	FindPlatformAccount(platform, platformUserID string) (*models.PlatformAccount, error)
 	UpdatePlatformAccount(account *models.PlatformAccount) error
 	DeletePlatformAccount(id int64) error
+	// FindUserIDByEmail (P2 — admin CSV import) resolves an email to
+	// the underlying user_id (FK on platform_accounts). The admin
+	// /channels/import-csv endpoint uses this to honour the
+	// owner_email form field; the CLI (scripts/import_channels_csv.go)
+	// uses the same method via a *repository.UserRepository wrapper.
+	// Returns ErrUserNotFound when the email is unknown.
+	FindUserIDByEmail(ctx context.Context, email string) (int64, error)
 }
 
 type WorkspaceStore interface {
@@ -678,6 +686,20 @@ type AdminStore interface {
 	ListStuckJobs(ctx context.Context, limit int) ([]repository.AdminStuckJobRow, error)
 	ErrorRatePerChannel(ctx context.Context, windowInterval, windowLabel string, limit int) ([]repository.AdminErrorRateRow, error)
 	YouTubeQuotaApproximation(ctx context.Context, window time.Duration, dailyBudgetUnits, costPerUploadUnits int64) (repository.AdminYouTubeQuota, error)
+	// UpsertPendingChannel (P2 — admin CSV import) bulk-upserts
+	// pre-resolved channel rows into platform_accounts at
+	// status='pending_authorization'. Mirrors the production
+	// /admin/channels/import-csv endpoint's DB-write contract:
+	// UPSERT on (platform, platform_user_id), last-write-wins,
+	// status ALWAYS reset to 'pending_authorization', metadata
+	// refreshed. NEVER writes tokens (the OAuth callback is the
+	// only path that sets the cipher row in credentials.vault).
+	//
+	// Per-row DB failures surface in Result.Errors as
+	// channelimport.RowError slices (not return-as-error) so
+	// partial-success visibility is preserved when an operator
+	// uploads 500-channel sheets.
+	UpsertPendingChannel(ctx context.Context, ownerUserID int64, rows []channelimport.ImportRow) (channelimport.Result, error)
 }
 
 	// SnapshotStore is the persistence contract for
@@ -734,6 +756,16 @@ func (r *Router) Setup() http.Handler {
 		r.mux.Method(http.MethodGet, "/admin/queue.csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminQueueCSV)))
 		r.mux.Method(http.MethodGet, "/admin/health", adminAuthMiddleware(http.HandlerFunc(r.handleAdminHealth)))
 		r.mux.Method(http.MethodGet, "/admin/health.csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminHealthCSV)))
+		// P2 — operator-side channel onboarding surface (P2 task).
+		// POST /admin/channels/import-csv: multipart CSV upload →
+		// status='pending_authorization' upserts. GET
+		// /admin/channels/pending: filter view of the same store
+		// (hard-codes status='pending_authorization' on the
+		// existing ListChannelsForOps path — no new SQL). Both
+		// gated on the AdminStore wiring (no new option — reuses
+		// the existing flag).
+		r.mux.Method(http.MethodPost, "/admin/channels/import-csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminImportChannelsCSV)))
+		r.mux.Method(http.MethodGet, "/admin/channels/pending", adminAuthMiddleware(http.HandlerFunc(r.handleAdminPendingChannels)))
 	}
 
 	r.mux.Method(http.MethodGet, "/api/v1/health", http.HandlerFunc(r.handleHealth))
