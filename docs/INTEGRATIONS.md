@@ -47,7 +47,7 @@ endpoints gets an indistinguishable body. This closes a status-code
 oracle / existence-leak surface that would otherwise let an attacker
 enumerate valid resource ids.
 
-### Failure-path observability
+### Velox download-job saturation
 
 The download-job channel between the producer (handler) and the worker
 (downloader) has a 64-slot buffer. When the buffer is saturated, the
