@@ -13,7 +13,27 @@ import (
 type UploadJobSource string
 
 const (
-	UploadJobSourcePublicDrive        UploadJobSource = "public_drive"
+	// UploadJobSourcePublicDrive is DEPRECATED as of the Drive
+	// pipeline hardening refactor (Blocco #2.1 polish). The
+	// download path that handled this source — the unauthenticated
+	// `drive.google.com/uc` export endpoint with HTML
+	// confirmation-token scraping — has been REMOVED entirely.
+	//
+	// The constant is retained so any rows already in
+	// upload_jobs.source_type with the legacy value continue to
+	// scan into a typed Go value (PostgreSQL stores the literal
+	// string; dropping the Go const would break SELECT scans until
+	// a follow-up migration swept the rows).
+	//
+	// The upload_worker rejects any row with this source_type as a
+	// terminal "no longer supported" error, and the drive-batch
+	// crawler no longer creates new rows with this value. Future
+	// migrations should sweep the remaining rows + drop this const.
+	UploadJobSourcePublicDrive UploadJobSource = "public_drive"
+	// UploadJobSourceAuthenticatedDrive is the SOLE source type
+	// the Drive pipeline creates today. Downloads use
+	// `Authorization: Bearer <access_token>` + files.get?alt=media
+	// (see internal/services/google_drive_oauth.go::DownloadFile).
 	UploadJobSourceAuthenticatedDrive UploadJobSource = "authenticated_drive"
 )
 

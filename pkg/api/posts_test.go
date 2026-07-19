@@ -376,7 +376,7 @@ func TestCreatePostResponse_FlatDecoder_PopulatesTopLevelFields(t *testing.T) {
 	createdAt := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	post := &models.Post{
 		ID: 100, WorkspaceID: 1, Title: "hello", Caption: "world",
-		MediaURL: "https://cdn.example.com/x.jpg", ScheduledAt: &scheduledAt,
+		MediaURL: "https://cdn.example.com/x.jpg", PublishAt: &scheduledAt,
 		Status: models.PostStatusScheduled, CreatedAt: createdAt,
 	}
 	targets := []*models.PostTarget{
@@ -410,7 +410,7 @@ func TestCreatePostResponse_NestedDecoder_PopulatesPostAndTargets(t *testing.T) 
 	createdAt := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	post := &models.Post{
 		ID: 100, WorkspaceID: 1, Title: "hello", Caption: "world",
-		MediaURL: "https://cdn.example.com/x.jpg", ScheduledAt: &scheduledAt,
+		MediaURL: "https://cdn.example.com/x.jpg", PublishAt: &scheduledAt,
 		Status: models.PostStatusScheduled, CreatedAt: createdAt,
 	}
 	targets := []*models.PostTarget{

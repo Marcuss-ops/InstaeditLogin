@@ -245,7 +245,7 @@ func TestPostRepository_Update_Success(t *testing.T) {
 
 	post := &models.Post{
 		ID: 100, WorkspaceID: 1, Title: "new", Caption: "cap",
-		MediaURL: "url", ScheduledAt: &now, Status: models.PostStatusScheduled,
+		MediaURL: "url", PublishAt: &now, Status: models.PostStatusScheduled,
 	}
 	if err := repo.Update(post); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -432,8 +432,8 @@ func TestPostFindByID_FoundWithNullableTime(t *testing.T) {
 	if p == nil {
 		t.Fatal("post nil, want populated")
 	}
-	if p.ScheduledAt == nil || !p.ScheduledAt.Equal(now) {
-		t.Errorf("ScheduledAt: want %v, got %v", now, p.ScheduledAt)
+	if p.PublishAt == nil || !p.PublishAt.Equal(now) {
+		t.Errorf("PublishAt: want %v, got %v", now, p.PublishAt)
 	}
 	if p.Status != models.PostStatusScheduled {
 		t.Errorf("Status: want scheduled, got %q", p.Status)
@@ -460,8 +460,8 @@ func TestPostFindByID_NilScheduledAt_RoundTripsClean(t *testing.T) {
 	if p == nil {
 		t.Fatal("post nil")
 	}
-	if p.ScheduledAt != nil {
-		t.Errorf("ScheduledAt: want nil, got %v", p.ScheduledAt)
+	if p.PublishAt != nil {
+		t.Errorf("PublishAt: want nil, got %v", p.PublishAt)
 	}
 }
 

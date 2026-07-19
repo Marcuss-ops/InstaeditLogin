@@ -32,7 +32,7 @@ func TestCreateIfSourceAbsentCreatesCanonicalJob(t *testing.T) {
 		Caption:        "Caption",
 		Targets:        []int64{8, 4, 8},
 		Status:         models.UploadJobStatusPending,
-		ScheduledAt:    &scheduledAt,
+		PublishAt:    &scheduledAt,
 	}
 
 	mock.ExpectBegin()
@@ -88,7 +88,7 @@ func TestCreateIfSourceAbsentSkipsExistingSource(t *testing.T) {
 	job := &models.UploadJob{
 		UserID:      3,
 		WorkspaceID: 9,
-		SourceType:  models.UploadJobSourcePublicDrive,
+		SourceType:  models.UploadJobSourceAuthenticatedDrive,
 		SourceID:    "drive-file-123",
 		Targets:     []int64{4},
 		Status:      models.UploadJobStatusPending,

@@ -53,15 +53,98 @@ func (s *GoogleDriveOAuthService) now() time.Time {
 // Name returns the platform identifier.
 func (s *GoogleDriveOAuthService) Name() string { return "google-drive" }
 
+// driveDownloadMaxBytes caps every Drive download at 10 GiB. Files
+// larger than this are rejected by limitReadCloser with a typed error
+// rather than silently truncating. The 10 GiB ceiling matches the
+// valutazione doc's "operator-side cap" — a 4-hour 4K clip is
+// ~120 GiB, well above the cap, so operators splitting their ingest
+// into smaller files is the expected workflow. We deliberately do
+// NOT rely on the response's Content-Length header (Drive omits it
+// on chunked transfer-encoding responses); the cap is enforced at
+// the reader layer so the caller can't bypass it by ignoring
+// Content-Length.
+const driveDownloadMaxBytes = 10 * 1024 * 1024 * 1024
+
+// driveFileFields is the canonical `fields=` projection for files.get
+// and files.list. Extended in this refactor (vs the prior version
+// which only had id,name,mimeType,size) to include:
+//
+//   - sha256Checksum        — optional hex digest Drive computes for
+//     some files; absent for older / non-checksummed entries
+//   - capabilities.canDownload — boolean; missing for some legacy
+//     files, but when present-and-false we fail-fast instead of
+//     surfacing a 403 mid-download
+//   - driveId               — set for Shared Drive files; empty for
+//     My Drive files
+//   - parents               — used by future nested-folder traversal
+//   - createdTime, modifiedTime — for batch-crawler ordering
+const driveFileFields = "id,name,mimeType,size,sha256Checksum,capabilities,driveId,parents,createdTime,modifiedTime"
+
+// driveListFields wraps driveFileFields in the `files(...)` envelope
+// the files.list response uses, plus the nextPageToken pagination
+// cursor. Kept as a constant so the two callsites (files.list + the
+// custom query) can't drift.
+const driveListFields = "files(" + driveFileFields + "),nextPageToken"
+
+// ErrDriveDownloadTooLarge is the typed sentinel limitReadCloser
+// returns when a Drive response body exceeds driveDownloadMaxBytes.
+// Handlers use errors.Is to map this to HTTP 422 Unprocessable
+// Entity (caller can show a clear "file too big" toast) instead of
+// the generic 502 Bad Gateway they'd otherwise return on a body-read
+// error.
+var ErrDriveDownloadTooLarge = errors.New("ERR_DRIVE_DOWNLOAD_TOO_LARGE")
+
+// limitReadCloser wraps an io.ReadCloser and rejects any read that
+// would push the cumulative byte count past `cap`. Returns the typed
+// ErrDriveDownloadTooLarge (wrapped with the actual cap) so callers
+// can map the error to the correct HTTP status instead of seeing a
+// generic "unexpected EOF" or partial-file behavior.
+//
+// We use a custom type instead of io.LimitReader because the latter
+// silently returns io.EOF at the cap, which the caller can't
+// distinguish from "the file is exactly N bytes". The custom type
+// makes the cap explicit at the failure boundary.
+type limitReadCloser struct {
+	rc   io.ReadCloser
+	cap  int64
+	read int64
+}
+
+func (l *limitReadCloser) Read(p []byte) (n int, err error) {
+	if l.read >= l.cap {
+		return 0, fmt.Errorf("%w: read=%d cap=%d", ErrDriveDownloadTooLarge, l.read, l.cap)
+	}
+	remaining := l.cap - l.read
+	if int64(len(p)) > remaining {
+		p = p[:remaining]
+	}
+	n, err = l.rc.Read(p)
+	l.read += int64(n)
+	return n, err
+}
+
+func (l *limitReadCloser) Close() error {
+	return l.rc.Close()
+}
+
 // GetLoginURL builds the Google OAuth authorization URL with the
-// drive.readonly scope so the user can pick a video clip from Drive.
+// drive.file scope so the user can pick a video clip from Drive via
+// the Google Picker (per-file access; non-sensitive).
 func (s *GoogleDriveOAuthService) GetLoginURL(state string) string {
 	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
 }
 
-// GetLoginURLWithOptions builds the Google OAuth authorization URL with the
-// drive.readonly scope so the user can pick a video clip from Drive.
+// GetLoginURLWithOptions builds the Google OAuth authorization URL.
 // Google Drive does not use OAuthLoginOptions; options are ignored.
+//
+// Scope choice (UNCHANGED from prior versions — do not regress):
+//   - drive.readonly — required for folder-level listing (the
+//     crawler walks arbitrary folders). We deliberately do NOT use
+//     `drive.file` because that scope only grants access to files
+//     the user explicitly opens via the Google Picker API; it
+//     cannot list arbitrary folders and would break the
+//     folder-batch import feature entirely.
+//   - userinfo.profile — operator display name in the dashboard.
 func (s *GoogleDriveOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
 	params.Set("client_id", s.cfg.GoogleDriveClientID)
@@ -137,10 +220,21 @@ func (s *GoogleDriveOAuthService) RefreshOAuthToken(ctx context.Context, refresh
 	}, nil
 }
 
-// GetFileMetadata fetches Drive file metadata (name, mimeType, size).
-// This is a Google-Drive-specific helper used by the import endpoint.
+// GetFileMetadata fetches Drive file metadata. Returns the expanded
+// GoogleDriveFile struct including sha256Checksum, capabilities, and
+// driveId — the caller is expected to inspect Capabilities.CanDownload
+// (when non-nil) and fail-fast on a false value, but the absence of
+// the Capabilities field is NOT treated as a rejection (some legacy
+// files omit it).
+//
+// Note: Drive returns `size` as a JSON STRING (a quirk of the v3 API;
+// the underlying value is bytes). We keep it as a string here and
+// let the caller ParseInt when needed so the parser can stay in one
+// place. The Sha256Checksum / DriveID / CreatedTime fields are
+// pointers-to-string in the underlying JSON shape; we surface them
+// as plain strings with `omitempty` so callers see "" when absent.
 func (s *GoogleDriveOAuthService) GetFileMetadata(ctx context.Context, accessToken, fileID string) (*GoogleDriveFile, error) {
-	urlStr := "https://www.googleapis.com/drive/v3/files/" + url.PathEscape(fileID) + "?fields=id,name,mimeType,size"
+	urlStr := "https://www.googleapis.com/drive/v3/files/" + url.PathEscape(fileID) + "?fields=" + url.QueryEscape(driveFileFields) + "&supportsAllDrives=true"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, err
@@ -162,11 +256,20 @@ func (s *GoogleDriveOAuthService) GetFileMetadata(ctx context.Context, accessTok
 	return &file, nil
 }
 
-// DownloadFile streams a Drive file's bytes. The caller must close the
-// response body. fileID is the Drive file id; accessToken is a valid
-// Google access token with drive.readonly scope.
+// DownloadFile streams a Drive file's bytes via the authenticated
+// files.get?alt=media endpoint. The caller MUST close the response
+// body (the returned *http.Response has Body wrapped by
+// limitReadCloser, which closes the underlying conn on Close).
+//
+// The response body is wrapped by limitReadCloser(driveDownloadMaxBytes)
+// so any read past 10 GiB returns the typed ErrDriveDownloadTooLarge.
+// This is enforced at the reader layer — we deliberately do NOT rely
+// on the response's Content-Length header because Drive omits it on
+// chunked transfer-encoding responses. A missing Content-Length MUST
+// NOT cause a rejection (per the user's invariant); the limit applies
+// either way.
 func (s *GoogleDriveOAuthService) DownloadFile(ctx context.Context, accessToken, fileID string) (*http.Response, error) {
-	urlStr := "https://www.googleapis.com/drive/v3/files/" + url.PathEscape(fileID) + "?alt=media"
+	urlStr := "https://www.googleapis.com/drive/v3/files/" + url.PathEscape(fileID) + "?alt=media&supportsAllDrives=true"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, err
@@ -180,87 +283,10 @@ func (s *GoogleDriveOAuthService) DownloadFile(ctx context.Context, accessToken,
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("google drive download failed (status %d)", resp.StatusCode)
 	}
+	// Enforce the cap at the reader layer (defence-in-depth — the
+	// caller might forget to check Content-Length on the upload side).
+	resp.Body = &limitReadCloser{rc: resp.Body, cap: driveDownloadMaxBytes}
 	return resp, nil
-}
-
-// DownloadPublicFile streams a publicly shared Drive file's bytes without
-// authentication. It follows the standard Google Drive export redirect and
-// handles the virus-scan confirmation page for large files.
-func (s *GoogleDriveOAuthService) DownloadPublicFile(ctx context.Context, fileID string) (*http.Response, error) {
-	exportURL := "https://drive.google.com/uc?export=download&id=" + url.QueryEscape(fileID)
-	return s.downloadPublicFileWithConfirm(ctx, exportURL, 0)
-}
-
-func (s *GoogleDriveOAuthService) downloadPublicFileWithConfirm(ctx context.Context, reqURL string, depth int) (*http.Response, error) {
-	if depth > 2 {
-		return nil, fmt.Errorf("google drive public download: too many redirects/confirmations")
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	// Google blocks non-browser user-agents for public downloads. Use a
-	// realistic browser User-Agent to avoid 403s on the export endpoint.
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("google drive public download request: %w", err)
-	}
-
-	// Happy path: direct binary stream.
-	if resp.StatusCode == http.StatusOK && isVideoContentType(resp.Header.Get("Content-Type")) {
-		return resp, nil
-	}
-
-	// Drive may return an HTML confirmation page for large files. Read a
-	// small prefix to extract the confirm token, then replay the request.
-	if isHTMLContentType(resp.Header.Get("Content-Type")) {
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-
-		confirm := extractDriveConfirmToken(string(body))
-		if confirm == "" {
-			return nil, fmt.Errorf("google drive public download: unable to confirm large file download")
-		}
-
-		u, err := url.Parse(reqURL)
-		if err != nil {
-			return nil, fmt.Errorf("google drive public download: invalid url: %w", err)
-		}
-		q := u.Query()
-		q.Set("confirm", confirm)
-		u.RawQuery = q.Encode()
-		return s.downloadPublicFileWithConfirm(ctx, u.String(), depth+1)
-	}
-
-	_ = resp.Body.Close()
-	return nil, fmt.Errorf("google drive public download failed (status %d)", resp.StatusCode)
-}
-
-func isVideoContentType(ct string) bool {
-	return strings.HasPrefix(ct, "video/") || ct == "application/octet-stream"
-}
-
-func isHTMLContentType(ct string) bool {
-	return strings.HasPrefix(ct, "text/html") || ct == "application/xhtml+xml"
-}
-
-func extractDriveConfirmToken(html string) string {
-	// The confirmation token is typically in a form or link as
-	// confirm=XYZ. Scrape the first occurrence.
-	idx := strings.Index(html, "confirm=")
-	if idx == -1 {
-		return ""
-	}
-	token := html[idx+len("confirm="):]
-	for i, ch := range token {
-		if ch == '&' || ch == '"' || ch == '\'' || ch == ' ' || ch == '>' {
-			return token[:i]
-		}
-	}
-	return token
 }
 
 func (s *GoogleDriveOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*googleDriveTokenResponse, error) {
@@ -335,26 +361,58 @@ type googleDriveTokenResponse struct {
 }
 
 // GoogleDriveFile is the subset of the Drive v3 file resource the
-// import endpoint needs.
+// import endpoint + folder crawler need. Extended from the prior
+// (id/name/mimeType/size) shape to include the metadata fields the
+// P0 hardening refactor surfaces: SHA256Checksum for end-to-end
+// integrity verification, Capabilities.CanDownload for fail-fast on
+// read-only ACLs, DriveID for Shared Drive scoping, and Parents for
+// future nested-folder traversal.
+//
+// `size` remains a string because the Drive v3 API returns it as a
+// JSON STRING (not a number — the underlying protobuf uses string for
+// int64). Callers ParseInt when they need the numeric value.
 type GoogleDriveFile struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	MimeType string `json:"mimeType"`
-	Size     string `json:"size"`
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	MimeType       string        `json:"mimeType"`
+	Size           string        `json:"size"`
+	SHA256Checksum string        `json:"sha256Checksum,omitempty"`
+	DriveID        string        `json:"driveId,omitempty"`
+	Parents        []string      `json:"parents,omitempty"`
+	CreatedTime    string        `json:"createdTime,omitempty"`
+	ModifiedTime   string        `json:"modifiedTime,omitempty"`
+	Capabilities   *Capabilities `json:"capabilities,omitempty"`
+}
+
+// Capabilities is the subset of the Drive file resource's capabilities
+// map we act on. Drive returns many capability flags (canEdit,
+// canComment, canShare, etc.); we only surface CanDownload because
+// that's the one the import endpoint needs to fail-fast on a
+// read-only ACL.
+//
+// `CanDownload == false` is treated as a hard reject. A nil
+// Capabilities pointer (the field is absent from the response) is
+// NOT treated as a reject — some legacy files omit the capabilities
+// field entirely, and we don't want to break those imports.
+type Capabilities struct {
+	CanDownload bool `json:"canDownload"`
 }
 
 // DriveImporter is the narrow interface the drive-import handler needs
 // from the Google Drive provider. Keeping the interface in the
 // services package lets pkg/api depend on the abstraction rather
 // than the concrete *GoogleDriveOAuthService.
+//
+// Note: the prior version of this interface exposed DownloadPublicFile
+// (a `drive.google.com/uc` + HTML-confirmation-scraping fallback).
+// The P0 hardening refactor removed it — every call site now uses the
+// authenticated DownloadFile path, and the bearer token is fetched
+// from the vault via Renew. There is no longer a "public anonymous
+// download" surface in this codebase.
 type DriveImporter interface {
 	RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error)
 	GetFileMetadata(ctx context.Context, accessToken, fileID string) (*GoogleDriveFile, error)
 	DownloadFile(ctx context.Context, accessToken, fileID string) (*http.Response, error)
-	// DownloadPublicFile streams a publicly shared Drive file's bytes
-	// without authentication. Used by the background upload worker for
-	// public_drive jobs.
-	DownloadPublicFile(ctx context.Context, fileID string) (*http.Response, error)
 }
 
 // DriveFolderLister is the narrow interface the batch
@@ -365,13 +423,20 @@ type DriveImporter interface {
 // own Drive OAuth grant (accessToken non-empty) or as a public folder
 // via the Drive v3 API key configured at the deployment level
 // (cfg.GoogleDriveAPIKey). Pass empty accessToken for the public flow.
+//
+// driveID is optional: when empty, the lister uses the default My
+// Drive corpus; when non-empty, the lister scopes the listing to the
+// specific Shared Drive via `corpora=drive&driveId=X`. The Crawler
+// currently passes empty (the Shared Drive scoping refinement is a
+// follow-up once the crawler fetches folder metadata to learn the
+// driveId before the listing).
 type DriveFolderLister interface {
 	// ListFolder returns one page (up to 200) of folderID's immediate
 	// children in Drive's natural order (createdTime ASC). To iterate,
 	// re-call with pageToken set to the previous response's nextPageToken
 	// (empty pageToken means "first page"). When the folder has more
 	// items beyond this page, nextPageToken is non-empty in the response.
-	ListFolder(ctx context.Context, folderID, accessToken, pageToken string) (files []GoogleDriveFile, nextPageToken string, err error)
+	ListFolder(ctx context.Context, folderID, driveID, accessToken, pageToken string) (files []GoogleDriveFile, nextPageToken string, err error)
 }
 
 // ErrDriveListRequiresAPIKey is the typed sentinel ListFolder returns
@@ -408,6 +473,15 @@ var driveFolderIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
 //     Returns ErrDriveListRequiresAPIKey (wrapped) when the key is
 //     missing — handlers use errors.Is to map this to HTTP 503.
 //
+// driveID selects the corpus: empty → "user" (default My Drive);
+// non-empty → "drive" + the specific Shared Drive. The latter is the
+// recommended pattern for operators who keep their content on a
+// Shared Drive; the current crawler doesn't yet populate driveID, so
+// we always include `supportsAllDrives=true` + `includeItemsFromAllDrives=true`
+// to ensure Shared Drive folders don't 404 out when the caller
+// forgets to scope. (The flags are safe no-ops when the folder is in
+// My Drive.)
+//
 // Paginated: returns one page (up to 200 entries). To walk a folder
 // containing more than 200 items, re-call with pageToken set to the
 // previous response's nextPageToken. When the folder has no more
@@ -415,7 +489,7 @@ var driveFolderIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
 //
 // Folders are skipped (Drive returns a folder mimeType of
 // `application/vnd.google-apps.folder`); we only want video files.
-func (s *GoogleDriveOAuthService) ListFolder(ctx context.Context, folderID, accessToken, pageToken string) ([]GoogleDriveFile, string, error) {
+func (s *GoogleDriveOAuthService) ListFolder(ctx context.Context, folderID, driveID, accessToken, pageToken string) ([]GoogleDriveFile, string, error) {
 	if folderID == "" {
 		return nil, "", fmt.Errorf("google drive ListFolder: empty folder id")
 	}
@@ -433,9 +507,21 @@ func (s *GoogleDriveOAuthService) ListFolder(ctx context.Context, folderID, acce
 	q := "'" + folderID + "' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'"
 	params := url.Values{}
 	params.Set("q", q)
-	params.Set("fields", "files(id,name,mimeType,size),nextPageToken")
+	params.Set("fields", driveListFields)
 	params.Set("pageSize", strconv.Itoa(pageSize))
 	params.Set("orderBy", "createdTime")
+	// Shared Drive support — these two flags are the v3 API contract
+	// for accessing Shared Drive content; they're safe no-ops when
+	// the folder is in My Drive. The Crawler currently lists without
+	// driveID scoping, so this is the floor; Shared Drive scoping
+	// (corpora=drive) is layered on top when the caller passes a
+	// non-empty driveID.
+	params.Set("supportsAllDrives", "true")
+	params.Set("includeItemsFromAllDrives", "true")
+	if driveID != "" {
+		params.Set("corpora", "drive")
+		params.Set("driveId", driveID)
+	}
 	if pageToken != "" {
 		// Round-tripping an opaque string from a previous response; url.Values
 		// encodes it so any chars Drive returns are safely carried through.

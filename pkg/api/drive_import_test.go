@@ -112,12 +112,6 @@ func (m *mockDriveImporter) DownloadFile(ctx context.Context, accessToken, fileI
 	resp.Body.Write(m.body)
 	return resp.Result(), nil
 }
-func (m *mockDriveImporter) DownloadPublicFile(ctx context.Context, fileID string) (*http.Response, error) {
-	resp := httptest.NewRecorder()
-	resp.WriteHeader(http.StatusOK)
-	resp.Body.Write(m.body)
-	return resp.Result(), nil
-}
 
 func TestDriveImport_Happy(t *testing.T) {
 	capRouter := services.NewCapabilityRouter()

@@ -299,6 +299,26 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 		}
 	}()
 
+	// P0 hardening refactor: every drive-batch job requires an
+	// authenticated Drive account. The legacy public_drive path
+	// (unauthenticated drive.google.com/uc scraping) has been
+	// removed from the Drive service entirely, so a batch with
+	// SourceDriveAccountID=nil can never be processed — fail it
+	// here with a clear operator-facing message rather than letting
+	// the per-page worker surface a confusing 5xx later.
+	if batch.SourceDriveAccountID == nil {
+		terminalErr = fmt.Errorf(
+			"drive batch %s: SourceDriveAccountID is required (the public_drive download path was removed in the Drive pipeline hardening refactor; re-import via POST /api/v1/media/import/drive/folder/async with a connected Drive account)",
+			batch.ID,
+		)
+		c.logger.Error("drive batch crawler: missing drive account (legacy public_drive path removed)",
+			"batch_id", batch.ID,
+			"source_provider", batch.SourceProvider,
+			"source_folder_id", batch.SourceFolderID,
+		)
+		return
+	}
+
 	// Provider-specific folder lister. Today: google_drive.
 	lister, accessToken, err := c.resolveFolderLister(ctx, batch)
 	if err != nil {
@@ -345,7 +365,7 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 			return
 		}
 
-		files, nextPageToken, listErr := lister.ListFolder(ctx, batch.SourceFolderID, accessToken, cursorToken)
+		files, nextPageToken, listErr := lister.ListFolder(ctx, batch.SourceFolderID, "" /*driveID — see ListFolder godoc*/, accessToken, cursorToken)
 		if listErr != nil {
 			terminalErr = fmt.Errorf("ListFolder page %d: %w", pageCount, listErr)
 			c.logger.Error("drive batch crawler: ListFolder failed",
@@ -362,26 +382,25 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 			if !IsVideoMime(f.MimeType) {
 				continue
 			}
+			// P0 hardening refactor: every job in a drive-batch
+			// is authenticated_drive (the public_drive path was
+			// removed from the Drive service). SourceDriveAccountID
+			// is guaranteed non-nil by the guard at the top of
+			// processBatch, so the dereference is safe.
 			job := &models.UploadJob{
-				UserID:      batch.UserID,
-				WorkspaceID: batch.WorkspaceID,
-				SourceType:  models.UploadJobSourceAuthenticatedDrive,
-				SourceID:    f.ID,
-				FolderID:    &batch.SourceFolderID,
-				Title:       f.Name,
-				Caption:     "",
-				Targets:     append([]int64{}, batch.TargetAccountIDs...),
-				Status:      models.UploadJobStatusPending,
-				IngestAfter: time.Now(),
-				PublishAt:   &currentPublishAt,
-				BatchID:     &batch.ID,
-			}
-			if batch.SourceDriveAccountID != nil {
-				job.SourceType = models.UploadJobSourceAuthenticatedDrive
-				id := *batch.SourceDriveAccountID
-				job.DriveAccountID = &id
-			} else {
-				job.SourceType = models.UploadJobSourcePublicDrive
+				UserID:         batch.UserID,
+				WorkspaceID:    batch.WorkspaceID,
+				SourceType:     models.UploadJobSourceAuthenticatedDrive,
+				SourceID:       f.ID,
+				DriveAccountID: batch.SourceDriveAccountID, // pointer alias — safe per the guard above
+				FolderID:       &batch.SourceFolderID,
+				Title:          f.Name,
+				Caption:        "",
+				Targets:        append([]int64{}, batch.TargetAccountIDs...),
+				Status:         models.UploadJobStatusPending,
+				IngestAfter:    time.Now(),
+				PublishAt:      &currentPublishAt,
+				BatchID:        &batch.ID,
 			}
 			if err := c.uploadRepo.Create(job); err != nil {
 				terminalErr = fmt.Errorf("Create upload_job at page %d for file %s: %w", pageCount, f.ID, err)

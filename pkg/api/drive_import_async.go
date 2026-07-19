@@ -57,9 +57,14 @@ func (r *Router) handleDriveImportAsync(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	if body.SourceType != string(models.UploadJobSourcePublicDrive) &&
-		body.SourceType != string(models.UploadJobSourceAuthenticatedDrive) {
-		writeError(w, http.StatusUnprocessableEntity, "source_type must be public_drive or authenticated_drive")
+	// P0 hardening refactor: the public_drive source_type was
+	// REMOVED from the Drive pipeline alongside the
+	// `drive.google.com/uc` + HTML-scraping fallback. Only the
+	// authenticated_drive path remains — every drive import must
+	// go through a connected Drive account's OAuth grant.
+	if body.SourceType != string(models.UploadJobSourceAuthenticatedDrive) {
+		writeError(w, http.StatusUnprocessableEntity,
+			"source_type must be \"authenticated_drive\" (the public_drive download path was removed in the Drive pipeline hardening refactor)")
 		return
 	}
 	if strings.TrimSpace(body.SourceID) == "" {

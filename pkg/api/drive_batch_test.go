@@ -40,7 +40,7 @@ type mockDriveFolderLister struct {
 }
 
 func (m *mockDriveFolderLister) Name() string { return "google-drive" }
-func (m *mockDriveFolderLister) ListFolder(_ context.Context, folderID, accessToken, pageToken string) ([]services.GoogleDriveFile, string, error) {
+func (m *mockDriveFolderLister) ListFolder(_ context.Context, folderID, driveID, accessToken, pageToken string) ([]services.GoogleDriveFile, string, error) {
 	m.gotFolderID = folderID
 	m.gotToken = accessToken
 	m.gotPageToken = pageToken
@@ -133,12 +133,12 @@ func (m *mockUploadJobStore) ListByUser(userID int64, filter repository.UploadJo
 			continue
 		}
 		if filter.From != nil {
-			if j.ScheduledAt == nil || j.ScheduledAt.Before(*filter.From) {
+			if j.PublishAt == nil || j.PublishAt.Before(*filter.From) {
 				continue
 			}
 		}
 		if filter.To != nil {
-			if j.ScheduledAt == nil || j.ScheduledAt.After(*filter.To) {
+			if j.PublishAt == nil || j.PublishAt.After(*filter.To) {
 				continue
 			}
 		}
@@ -163,7 +163,7 @@ func (m *mockUploadJobStore) Reschedule(jobID, userID int64, newScheduledAt time
 			return models.UploadJob{}, repository.ErrUploadJobNotFound
 		}
 		t := newScheduledAt
-		m.jobs[i].ScheduledAt = &t
+		m.jobs[i].PublishAt = &t
 		m.jobs[i].UpdatedAt = time.Now()
 		return m.jobs[i], nil
 	}
@@ -208,8 +208,8 @@ func (m *mockUploadJobStore) PendingCountsByAccount(userID int64) ([]repository.
 			continue
 		}
 		var earliest int64
-		if j.ScheduledAt != nil {
-			earliest = j.ScheduledAt.Unix()
+		if j.PublishAt != nil {
+			earliest = j.PublishAt.Unix()
 		}
 		for _, t := range j.Targets {
 			a, ok := byAcc[t]
@@ -320,7 +320,7 @@ func TestUploadsBatchByFolder_HappyPath_ThreePages_FlattenedEntryList(t *testing
 	idemStore := newMockIdempotencyStore()
 	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
 
-	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`, "")
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`, "")
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
@@ -382,7 +382,7 @@ func TestUploadsBatchByFolder_ConfigGap_Returns200WithGuidance(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`, "")
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`, "")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200 (config gap is operator-fixable), got %d: %s", w.Code, w.Body.String())
@@ -417,7 +417,7 @@ func TestUploadsBatchByFolder_EmptyFolder_ReturnsOkWithNote(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"empty","workspace_id":1,"facebook_account_id":50}`, "")
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"empty","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`, "")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200 (empty folder is operator-actionable info, not error), got %d: %s", w.Code, w.Body.String())
@@ -470,7 +470,7 @@ func TestUploadsBatchByFolder_CapExceeded_Returns413(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"huge","workspace_id":1,"facebook_account_id":50}`, "")
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"huge","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`, "")
 
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("want 413 (cap exceeded), got %d: %s", w.Code, w.Body.String())
@@ -510,7 +510,7 @@ func TestUploadsBatchByFolder_PartialFailure_MidPagination_ReturnsPartialState(t
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`, "")
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`, "")
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202 with partial_failure=true (NOT a 5xx — operator can resume), got %d: %s", w.Code, w.Body.String())
@@ -573,7 +573,7 @@ func TestUploadsBatchByFolder_Idempotency_Replay_FullResponse(t *testing.T) {
 	idemStore := newMockIdempotencyStore()
 	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
 
-	body := `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	const idemKey = "byfolder-replay-key"
 	w1 := runUploadsBatchByFolderPost(t, r, body, idemKey)
 	if w1.Code != http.StatusAccepted {
@@ -616,7 +616,7 @@ func TestUploadsBatchByFolder_PartialFailure_DoesNotCache(t *testing.T) {
 	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
 
 	const idemKey = "byfolder-partial-no-cache"
-	body := `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	w := runUploadsBatchByFolderPost(t, r, body, idemKey)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("partial-failure want 202, got %d: %s", w.Code, w.Body.String())
@@ -664,7 +664,7 @@ func TestUploadsBatchByFolder_NonOwnerWorkspace_Returns403(t *testing.T) {
 		WithUploadJobStore(store),
 	)
 
-	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50}`, "")
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`, "")
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("want 403 (workspace not owned by caller), got %d: %s", w.Code, w.Body.String())
@@ -713,7 +713,7 @@ func TestUploadsBatchByFolder_CumulativeStagger_ClampedAt7Days(t *testing.T) {
 	r := newBatchImportTestRouter(lister, store)
 
 	body := fmt.Sprintf(
-		`{"folder_id":"clamp","workspace_id":1,"facebook_account_id":50,"min_jitter_seconds":%d,"max_jitter_seconds":%d}`,
+		`{"folder_id":"clamp","workspace_id":1,"facebook_account_id":50, "drive_account_id":99,"min_jitter_seconds":%d,"max_jitter_seconds":%d}`,
 		minJitter, maxJitter,
 	)
 	w := runUploadsBatchByFolderPost(t, r, body, "")
@@ -837,7 +837,7 @@ func TestDriveBatchImport_Happy_CreatesJobsWithStaggeredSchedule(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	body := `{"folder_id":"abc-folder","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"abc-folder","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Force-200", "n/a") // placeholder for future debugging
@@ -864,7 +864,7 @@ func TestDriveBatchImport_Happy_CreatesJobsWithStaggeredSchedule(t *testing.T) {
 
 	// First entry publishes NOW (scheduled_at <= now + 5s tolerance).
 	now := time.Now()
-	first := store.jobs[0].ScheduledAt
+	first := store.jobs[0].PublishAt
 	if first == nil {
 		t.Fatalf("first job scheduled_at is nil — should be approximately now")
 	}
@@ -877,8 +877,8 @@ func TestDriveBatchImport_Happy_CreatesJobsWithStaggeredSchedule(t *testing.T) {
 	// would break the test), only that each next entry is strictly
 	// later than the previous.
 	for i := 1; i < len(store.jobs); i++ {
-		cur := store.jobs[i].ScheduledAt
-		prev := store.jobs[i-1].ScheduledAt
+		cur := store.jobs[i].PublishAt
+		prev := store.jobs[i-1].PublishAt
 		if cur == nil || prev == nil {
 			t.Fatalf("entry %d: scheduled_at is nil", i)
 		}
@@ -889,10 +889,12 @@ func TestDriveBatchImport_Happy_CreatesJobsWithStaggeredSchedule(t *testing.T) {
 	}
 
 	// Defaults applied: every job targets the requested facebook_account_id
-	// and uses source_type=public_drive.
+	// and uses source_type=authenticated_drive (the public_drive path was
+	// removed in the Blocco #2.1 hardening refactor; producer-side
+	// handlers now require drive_account_id and would 422 otherwise).
 	for i, j := range store.jobs {
-		if j.SourceType != models.UploadJobSourcePublicDrive {
-			t.Errorf("job %d source_type: want public_drive, got %s", i, j.SourceType)
+		if j.SourceType != models.UploadJobSourceAuthenticatedDrive {
+			t.Errorf("job %d source_type: want authenticated_drive, got %s", i, j.SourceType)
 		}
 		if len(j.Targets) != 1 || j.Targets[0] != 50 {
 			t.Errorf("job %d targets: want [50], got %v", i, j.Targets)
@@ -910,7 +912,7 @@ func TestDriveBatchImport_EmptyFolder_ReturnsOkWithEmptyEntries(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	body := `{"folder_id":"empty","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"empty","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -946,7 +948,7 @@ func TestDriveBatchImport_NoAPIKey_Returns200WithGuidance(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	body := `{"folder_id":"public","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"public","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -983,7 +985,7 @@ func TestDriveBatchImport_UpstreamErrorReturns502_NoLeak(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	body := `{"folder_id":"any","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"any","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -1003,7 +1005,7 @@ func TestDriveBatchImport_InvalidJitter_422(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	body := `{"folder_id":"any","workspace_id":1,"facebook_account_id":50,"min_jitter_seconds":10000,"max_jitter_seconds":5000}`
+	body := `{"folder_id":"any","workspace_id":1,"facebook_account_id":50, "drive_account_id":99,"min_jitter_seconds":10000,"max_jitter_seconds":5000}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -1040,7 +1042,7 @@ func TestDriveBatchImport_FacebookAccountNotFound_404(t *testing.T) {
 	// facebook_account_id=9999 is not in validFacebookAccountIDs so the
 	// userStore mock returns (nil, nil) — closer to a real "account not
 	// found" than the previous fallback default.
-	body := `{"folder_id":"any","workspace_id":1,"facebook_account_id":9999}`
+	body := `{"folder_id":"any","workspace_id":1,"facebook_account_id":9999, "drive_account_id":99}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -1063,7 +1065,7 @@ func TestDriveBatchImport_CumulativeJitter_GrowsMonotonically(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	body := `{"folder_id":"folder","workspace_id":1,"facebook_account_id":50,"min_jitter_seconds":60,"max_jitter_seconds":3600}`
+	body := `{"folder_id":"folder","workspace_id":1,"facebook_account_id":50, "drive_account_id":99,"min_jitter_seconds":60,"max_jitter_seconds":3600}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -1075,13 +1077,13 @@ func TestDriveBatchImport_CumulativeJitter_GrowsMonotonically(t *testing.T) {
 	}
 	var last time.Time
 	for i, j := range store.jobs {
-		if j.ScheduledAt == nil {
+		if j.PublishAt == nil {
 			t.Fatalf("job %d scheduled_at nil", i)
 		}
-		if i > 0 && !(*j.ScheduledAt).After(last) {
-			t.Errorf("job %d not strictly after previous: %v (prev: %v)", i, *j.ScheduledAt, last)
+		if i > 0 && !(*j.PublishAt).After(last) {
+			t.Errorf("job %d not strictly after previous: %v (prev: %v)", i, *j.PublishAt, last)
 		}
-		last = *j.ScheduledAt
+		last = *j.PublishAt
 	}
 }
 
@@ -1097,7 +1099,7 @@ func TestDriveBatchImport_PageToken_PassedToLister(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50,"page_token":"opaque-from-drive-abc123"}`
+	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50, "drive_account_id":99,"page_token":"opaque-from-drive-abc123"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -1127,7 +1129,7 @@ func TestDriveBatchImport_NextPageTokenInResponseAndNote(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -1170,7 +1172,7 @@ func TestDriveBatchImport_EmptyNextPageTokenAlwaysEmitted(t *testing.T) {
 	store := &mockUploadJobStore{}
 	r := newBatchImportTestRouter(lister, store)
 
-	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -1209,7 +1211,7 @@ func TestDriveBatchImport_CursorScheduledAt_AnchorsStagger(t *testing.T) {
 
 	// Cursor = 1h in the future (the page-1 last_scheduled_at).
 	cursor := time.Now().Add(time.Hour).Format(time.RFC3339Nano)
-	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50,"cursor_scheduled_at":"` + cursor + `","min_jitter_seconds":60,"max_jitter_seconds":60}`
+	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50, "drive_account_id":99,"cursor_scheduled_at":"` + cursor + `","min_jitter_seconds":60,"max_jitter_seconds":60}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -1225,7 +1227,7 @@ func TestDriveBatchImport_CursorScheduledAt_AnchorsStagger(t *testing.T) {
 		t.Fatalf("parse cursor: %v", err)
 	}
 
-	first := store.jobs[0].ScheduledAt
+	first := store.jobs[0].PublishAt
 	if first == nil {
 		t.Fatal("first job scheduled_at nil")
 	}
@@ -1238,7 +1240,7 @@ func TestDriveBatchImport_CursorScheduledAt_AnchorsStagger(t *testing.T) {
 	}
 
 	// Second job should be ~1 minute after the first (jitter [60,60]).
-	second := store.jobs[1].ScheduledAt
+	second := store.jobs[1].PublishAt
 	if second == nil {
 		t.Fatal("second job scheduled_at nil")
 	}
@@ -1263,7 +1265,7 @@ func TestDriveBatchImport_CursorInPast_ClampsToNow(t *testing.T) {
 
 	// Cursor = 2h in the PAST — handler should ignore it.
 	pastCursor := time.Now().Add(-2 * time.Hour).Format(time.RFC3339Nano)
-	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50,"cursor_scheduled_at":"` + pastCursor + `"}`
+	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50, "drive_account_id":99,"cursor_scheduled_at":"` + pastCursor + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -1274,7 +1276,7 @@ func TestDriveBatchImport_CursorInPast_ClampsToNow(t *testing.T) {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
 	}
 	now := time.Now()
-	first := *store.jobs[0].ScheduledAt
+	first := *store.jobs[0].PublishAt
 	if first.Before(now.Add(-1 * time.Second)) {
 		t.Errorf("past cursor should be clamped to now: first=%v, now=%v", first, now)
 	}
@@ -1299,7 +1301,7 @@ func TestDriveBatchImport_CursorInFuture_FlagNotSet(t *testing.T) {
 	r := newBatchImportTestRouter(lister, store)
 
 	futureCursor := time.Now().Add(1 * time.Hour).Format(time.RFC3339Nano)
-	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50,"cursor_scheduled_at":"` + futureCursor + `"}`
+	body := `{"folder_id":"abc","workspace_id":1,"facebook_account_id":50, "drive_account_id":99,"cursor_scheduled_at":"` + futureCursor + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
@@ -1357,7 +1359,7 @@ func TestDriveBatchImport_IdempotencyKey_HappyPath_InsertsCache(t *testing.T) {
 	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
 
 	const idemKey = "batch-key-v1"
-	body := `{"folder_id":"abc-folder","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"abc-folder","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	w := runBatchImportPost(t, r, body, idemKey)
 
 	if w.Code != http.StatusAccepted {
@@ -1428,7 +1430,7 @@ func TestDriveBatchImport_IdempotencyKey_ReplaySameHash_ReturnsCachedEntries(t *
 	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
 
 	const idemKey = "batch-replay-key"
-	body := `{"folder_id":"replay-folder","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"replay-folder","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 
 	// First call writes to cache.
 	w1 := runBatchImportPost(t, r, body, idemKey)
@@ -1469,8 +1471,8 @@ func TestDriveBatchImport_IdempotencyKey_DifferentHash_Returns409(t *testing.T) 
 	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
 
 	const idemKey = "conflict-key"
-	bodyA := `{"folder_id":"folder-A","workspace_id":1,"facebook_account_id":50}`
-	bodyB := `{"folder_id":"folder-B","workspace_id":1,"facebook_account_id":50}`
+	bodyA := `{"folder_id":"folder-A","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
+	bodyB := `{"folder_id":"folder-B","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 
 	w1 := runBatchImportPost(t, r, bodyA, idemKey)
 	if w1.Code != http.StatusAccepted {
@@ -1500,7 +1502,7 @@ func TestDriveBatchImport_IdempotencyKey_NoHeader_DoesNotCache(t *testing.T) {
 	idemStore := newMockIdempotencyStore()
 	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
 
-	body := `{"folder_id":"no-key","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"no-key","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	w := runBatchImportPost(t, r, body, "")
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("no-header want 202, got %d: %s", w.Code, w.Body.String())
@@ -1532,7 +1534,7 @@ func TestDriveBatchImport_IdempotencyKey_TooLong_Returns400(t *testing.T) {
 	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
 
 	longKey := strings.Repeat("k", 256) // 256 > 255 (Stripe limit)
-	body := `{"folder_id":"long-key","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"long-key","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	w := runBatchImportPost(t, r, body, longKey)
 
 	if w.Code != http.StatusBadRequest {
@@ -1558,7 +1560,7 @@ func TestDriveBatchImport_IdempotencyKey_EmptyBatchNotCached(t *testing.T) {
 	r := newBatchImportTestRouterWithIdem(lister, store, idemStore)
 
 	const idemKey = "empty-folder-key"
-	body := `{"folder_id":"empty","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"empty","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
 	w := runBatchImportPost(t, r, body, idemKey)
 
 	if w.Code != http.StatusOK {
@@ -1612,7 +1614,7 @@ func TestDriveBatchImport_IdempotencyKey_CrossTenant_DoesNotReplay(t *testing.T)
 	)
 
 	const idemKey = "cross-tenant-key"
-	body := `{"folder_id":"x","workspace_id":1,"facebook_account_id":1}`
+	body := `{"folder_id":"x","workspace_id":1,"facebook_account_id":1, "drive_account_id":99}`
 
 	// User 1 (JWT) targets workspace 1 (their own). Cache populates
 	// under (workspace_id=1, idempotency_key=cross-tenant-key).

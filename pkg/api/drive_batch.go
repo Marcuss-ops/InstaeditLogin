@@ -298,6 +298,16 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 		writeError(w, http.StatusUnprocessableEntity, "facebook_account_id is required")
 		return
 	}
+	// P0 hardening refactor: the public_drive download path was
+	// removed from the Drive service. Every batch import must
+	// flow through an authenticated Drive account's OAuth grant,
+	// so drive_account_id is now required (was previously optional
+	// for the legacy public-folder path).
+	if body.DriveAccountID == 0 {
+		writeError(w, http.StatusUnprocessableEntity,
+			"drive_account_id is required (the public_drive download path was removed in the Drive pipeline hardening refactor)")
+		return
+	}
 
 	// Default jitter bounds: 3h-4.5h (matches the user-facing spec).
 	if body.MinJitterSeconds == 0 {
@@ -432,7 +442,7 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 
 	// List folder contents — page_token (when present) makes Drive
 	// continue from the previous page instead of returning page 1.
-	files, nextPageToken, err := folderLister.ListFolder(req.Context(), body.FolderID, listingAccessToken, body.PageToken)
+	files, nextPageToken, err := folderLister.ListFolder(req.Context(), body.FolderID, "" /*driveID — My Drive corpus*/, listingAccessToken, body.PageToken)
 	if err != nil {
 		// Typed sentinel: missing API key on the server is a deploy
 		// configuration gap (operator-fixable), NOT a transient
@@ -528,7 +538,8 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 	job := &models.UploadJob{
 		UserID:      userID,
 		WorkspaceID: body.WorkspaceID,
-		SourceType:  models.UploadJobSourcePublicDrive,
+		SourceType:     models.UploadJobSourceAuthenticatedDrive,
+		DriveAccountID: &body.DriveAccountID,
 		SourceID:    f.ID,
 		// FolderID is the new migration-038 column. Wiring it here so the
 		// dashboard status endpoint can GROUP BY folder and report counts

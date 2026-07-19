@@ -159,6 +159,16 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 		writeError(w, http.StatusUnprocessableEntity, "facebook_account_id is required")
 		return
 	}
+	// P0 hardening refactor: the public_drive download path was
+	// removed from the Drive service. Every batch import must
+	// flow through an authenticated Drive account's OAuth grant,
+	// so drive_account_id is now required (was previously optional
+	// for the legacy public-folder path).
+	if body.DriveAccountID == 0 {
+		writeError(w, http.StatusUnprocessableEntity,
+			"drive_account_id is required (the public_drive download path was removed in the Drive pipeline hardening refactor)")
+		return
+	}
 
 	// Default jitter: 3h-4.5h (matches the user-facing spec + the
 	// single-page endpoint). Anything tighter than 60s collapses
@@ -310,7 +320,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 				fmt.Sprintf("folder has more than driveBatchMaxPages=%d pages; split the import into smaller chunks or use the CLI", driveBatchMaxPages))
 			return
 		}
-		files, nextPageToken, err := folderLister.ListFolder(req.Context(), body.FolderID, listingAccessToken, pageToken)
+		files, nextPageToken, err := folderLister.ListFolder(req.Context(), body.FolderID, "" /*driveID — My Drive corpus*/, listingAccessToken, pageToken)
 		if err != nil {
 			// Config gap (server-side GOOGLE_DRIVE_API_KEY missing
 			// AND no per-user Drive grant provided) is detected on
@@ -405,7 +415,8 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 			job := &models.UploadJob{
 				UserID:      userID,
 				WorkspaceID: body.WorkspaceID,
-				SourceType:  models.UploadJobSourcePublicDrive,
+				SourceType:     models.UploadJobSourceAuthenticatedDrive,
+				DriveAccountID: &body.DriveAccountID,
 				SourceID:    f.ID,
 				FolderID:    &body.FolderID,
 				Title:       title,

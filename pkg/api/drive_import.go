@@ -213,12 +213,33 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// Fetch Drive file metadata.
 	fileMeta, err := driveSvc.GetFileMetadata(req.Context(), oauthToken.AccessToken, body.DriveFileID)
 	if err != nil {
+		// Note: ErrDriveDownloadTooLarge is only returned by the
+		// limitReadCloser wrapping DownloadFile's body, NOT by
+		// GetFileMetadata (which uses io.ReadAll on the small JSON
+		// metadata payload). We still keep this defensive check in
+		// case a future refactor extends the limit to metadata too.
+		if errors.Is(err, services.ErrDriveDownloadTooLarge) {
+			writeError(w, http.StatusUnprocessableEntity,
+				"drive file exceeds the 10 GiB download cap; split the file or contact support")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "failed to fetch drive file metadata: "+err.Error())
 		return
 	}
 	if !isDriveVideoMimeType(fileMeta.MimeType, fileMeta.Name) {
 		writeError(w, http.StatusUnprocessableEntity,
 			fmt.Sprintf("drive file is not a supported video type (got %s)", fileMeta.MimeType))
+		return
+	}
+	// P0 hardening refactor: fail-fast on Drive's capabilities
+	// block when it explicitly says canDownload=false (the file
+	// is shared read-only OR is a shortcut whose target isn't
+	// downloadable, etc.). ABSENT capabilities field is NOT a
+	// rejection — legacy Drive files omit the field entirely
+	// and we don't want to break those imports.
+	if fileMeta.Capabilities != nil && !fileMeta.Capabilities.CanDownload {
+		writeError(w, http.StatusUnprocessableEntity,
+			"drive file is not downloadable (capabilities.canDownload=false); check the file's sharing settings")
 		return
 	}
 
@@ -271,6 +292,15 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	downloadResp, err := driveSvc.DownloadFile(req.Context(), oauthToken.AccessToken, body.DriveFileID)
 	if err != nil {
 		_ = r.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
+		// P0 hardening refactor: ErrDriveDownloadTooLarge is the
+		// reader-layer cap firing on a > 10 GiB file. Map it to
+		// 422 (operator can split the file) instead of the generic
+		// 502 (which would suggest a transient upstream outage).
+		if errors.Is(err, services.ErrDriveDownloadTooLarge) {
+			writeError(w, http.StatusUnprocessableEntity,
+				"drive file exceeds the 10 GiB download cap; split the file or contact support")
+			return
+		}
 		writeError(w, http.StatusBadGateway, "failed to download drive file: "+err.Error())
 		return
 	}

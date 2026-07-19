@@ -556,7 +556,18 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 		}
 		downloadResp, err = importer.DownloadFile(ctx, oauthToken.AccessToken, job.SourceID)
 	case models.UploadJobSourcePublicDrive:
-		downloadResp, err = importer.DownloadPublicFile(ctx, job.SourceID)
+		// DEPRECATED source type — the unauthenticated
+		// `drive.google.com/uc` export endpoint with HTML
+		// confirmation-token scraping has been REMOVED from the
+		// Drive service as of the Blocco #2.1 hardening refactor.
+		// Any row still carrying this source_type is a legacy row
+		// from before the cutover; we reject it loudly so the
+		// operator gets a clear "re-import via authenticated Drive"
+		// signal instead of a silent 502 / opaque parse failure.
+		return fmt.Errorf(
+			"unsupported source type %q: the public_drive download path was removed in the Drive pipeline hardening refactor; re-import this file via the authenticated Drive flow (POST /api/v1/media/import/drive with a connected Drive account)",
+			job.SourceType,
+		)
 	default:
 		return fmt.Errorf("unsupported source type: %s", job.SourceType)
 	}

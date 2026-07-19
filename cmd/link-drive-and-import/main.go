@@ -337,7 +337,7 @@ func listAllFolderFiles(ctx context.Context, svc *services.GoogleDriveOAuthServi
 	var all []services.GoogleDriveFile
 	pageToken := ""
 	for {
-		files, nextPageToken, err := svc.ListFolder(ctx, folderID, accessToken, pageToken)
+		files, nextPageToken, err := svc.ListFolder(ctx, folderID, "" /*driveID — My Drive corpus*/, accessToken, pageToken)
 		if err != nil {
 			return nil, err
 		}
