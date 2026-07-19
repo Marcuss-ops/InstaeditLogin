@@ -186,7 +186,10 @@ func (r *Router) handleGetInternalDelivery(w http.ResponseWriter, req *http.Requ
 	}
 
 	resp := VeloxGetDeliveryResponse{
-		Status: string(delivery.Status),
+		ID:        delivery.ID,
+		Status:    string(delivery.Status),
+		CreatedAt: delivery.CreatedAt,
+		UpdatedAt: delivery.UpdatedAt,
 	}
 	// Surface LastErrorCode + Message verbatim. omitempty drops
 	// the field on rows that haven't seen a failed transition
@@ -884,13 +887,12 @@ type VeloxValidateDestinationResponse struct {
 	DestinationID string `json:"destination_id"`
 	Status        string `json:"status"`
 	Platform      string `json:"platform"`
-}
-
-// VeloxGetDeliveryResponse is the body returned by
+} // VeloxGetDeliveryResponse is the body returned by
 // GET /internal/v1/deliveries/{id}. Mirrors the user's spec
 // verbatim:
 //
 //	{
+//	  "id":                 "sdel_01JABCDEX..."  // mirrors the URL path id (canonical social_delivery_id)
 //	  "status":             "queued"|"published"|"failed"|"dead_letter"|...
 //	  "retry_wait_reason":  "auth_token_expired"        // populated only when status == retry_wait
 //	  "last_error_code":    "auth_error"                // typed code from classifyUploadError
@@ -898,9 +900,18 @@ type VeloxValidateDestinationResponse struct {
 //	  "platform_media_id":  "dQw4w9WgXcQ"               // e.g. YouTube video id, set on terminal publish
 //	  "platform_url":       "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 //	  "published_at":       "2026-07-20T18:03:21Z"      // set ONLY when status == published
+//	  "created_at":         "2026-07-20T17:59:42Z"      // row insert time (always set on a real row)
+//	  "updated_at":         "2026-07-20T18:03:21Z"      // last UpdateStatus time (always set on a real row)
 //	}
 //
 // Field taxonomy:
+//   - id                  : mirrors the URL path id (the canonical sdel_01J...
+//     social_delivery_id). Surrendering the same id on
+//     the response body lets Velox correlate the round
+//     trip without remembering which path it queried —
+//     useful for client-side cache-key generation and
+//     log aggregation where the response body is the
+//     canonical record (NOT the URL).
 //   - status              : mirrors models.ExternalDeliveryStatus string rep
 //   - retry_wait_reason   : derived from last_error_code when status == retry_wait;
 //     empty string in all other states (operators reading
@@ -914,12 +925,29 @@ type VeloxValidateDestinationResponse struct {
 //   - published_at        : populated from completed_at IF status == published;
 //     empty for any other state (failed/deleted/completed-but-
 //     not-published are not "published_at")
+//   - created_at          : row's INSERT time (set by repo: NOW() at insert).
+//     Always present on a real row because the migration
+//     timestamp column is NOT NULL.
+//   - updated_at          : row's last UpdateStatus stamp (set by repo:
+//     NOW() on every UpdateStatus). Always present on a
+//     real row for the same reason; diverges from created_at
+//     after the worker's first transition.
+//
+// The id + created_at + updated_at trio pin the response to the
+// row's audit reality (when did this row arrive, when was it last
+// touched). Velox's reconciliation/poll endpoint needs these so it
+// can SKIP a payload whose (id, status) tuple matches an earlier
+// poll without re-fetching auxiliary tables — the timestamps let
+// the peer implement a "ignore stale updates older than X" filter
+// in O(1) without an extra database round trip.
 //
 // The omitempty tags keep the JSON shape minimal: a brand-new row
-// returns just {"status": "accepted"}. The shape is forward-compat:
-// future fields (e.g., "scheduled_publish_at" from PublishAt) slot
-// in without breaking existing consumers.
+// returns {"id":"...","status":"accepted","created_at":"...","created_at":"..."}.
+// The shape is forward-compat: future fields (e.g.,
+// "scheduled_publish_at" from PublishAt) slot in without breaking
+// existing consumers.
 type VeloxGetDeliveryResponse struct {
+	ID               string     `json:"id"`
 	Status           string     `json:"status"`
 	RetryWaitReason  string     `json:"retry_wait_reason,omitempty"`
 	LastErrorCode    string     `json:"last_error_code,omitempty"`
@@ -927,6 +955,8 @@ type VeloxGetDeliveryResponse struct {
 	PlatformMediaID  string     `json:"platform_media_id,omitempty"`
 	PlatformURL      string     `json:"platform_url,omitempty"`
 	PublishedAt      *time.Time `json:"published_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // registerInternalVeloxRoutes wires the /internal/v1
