@@ -919,12 +919,6 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotFound, "unsupported provider: "+provider)
 		return
 	}
-	state, err := generateOAuthState(w, provider)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start oauth flow")
-		return
-	}
-
 	// Translate ?mode=add|reconnect into OAuthLoginOptions.
 	// "add" forces account selection (Google account picker).
 	// "reconnect" forces consent re-approval.
@@ -936,6 +930,31 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		options.ForceConsent = true
 	case "reconnect":
 		options.ForceConsent = true
+	}
+	// YouTube-only: ?expected_channel_id=UC... tells the server which
+	// channel the operator intends to bind the OAuth grant to. Without
+	// it, a Google account with N>1 channels cannot be attached safely
+	// (channels.list(mine=true) returns every Brand Account under the
+	// grant, and the bearer token is bound to one channel per
+	// Brand-Account selection). The hint round-trips through a sibling
+	// HttpOnly cookie (NOT the URL state param — Google echoes the URL
+	// state verbatim, and we keep it a pure CSRF nonce).
+	expectedChannelID := ""
+	if raw := req.URL.Query().Get("expected_channel_id"); raw != "" {
+		if provider == models.PlatformYouTube && isValidYouTubeChannelID(raw) {
+			expectedChannelID = raw
+			// expected_channel_id ALWAYS implies account picker +
+			// consent so a previously-cached grant cannot bind to a
+			// different Brand Account.
+			options.SelectAccount = true
+			options.ForceConsent = true
+		}
+	}
+
+	state, err := generateOAuthState(w, provider, expectedChannelID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start oauth flow")
+		return
 	}
 
 	http.Redirect(w, req, p.GetLoginURLWithOptions(state, options), http.StatusFound)
@@ -958,7 +977,8 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing state parameter")
 		return
 	}
-	if err := verifyOAuthState(w, req, provider, state); err != nil {
+	expectedChannelID, err := verifyOAuthState(w, req, provider, state)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid state: "+err.Error())
 		return
 	}
@@ -991,8 +1011,16 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	// single-account attach path.
 	var account *models.PlatformAccount
 	if discoverer, ok := r.capabilities.Discoverer(provider); ok {
-		account, err = r.attachDiscoveredAccounts(req.Context(), userID, provider, discoverer, tokenData)
+		account, err = r.attachDiscoveredAccounts(req.Context(), userID, provider, discoverer, tokenData, expectedChannelID)
 		if err != nil {
+			// YouTube-only typed errors surface as 409 Conflict so the
+			// SPA knows to ask the operator to disambiguate before
+			// retrying. Other discoverer failures stay 500 (genuine
+			// server / DB problems).
+			if errors.Is(err, ErrYouTubeAmbiguousAuthorization) || errors.Is(err, ErrYouTubeChannelMismatch) {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "failed to attach discovered accounts: "+err.Error())
 			return
 		}
@@ -1059,13 +1087,69 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 //  5. Save every DiscoveredAccount.SupplementalTokens entry as an
 //     additional token in the vault. This replaces the old provider-
 //     specific hack that checked for Metadata["page_access_token"].
-func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, provider string, discoverer services.AccountDiscoverer, tokenData *models.TokenData) (*models.PlatformAccount, error) {
+// ErrYouTubeAmbiguousAuthorization is returned by attachDiscoveredAccounts
+// when a YouTube OAuth grant's channels.list(mine=true) returns >1
+// channel AND no expected_channel_id was supplied at login time.
+//
+// P0: a single Google account can own multiple YouTube channels
+// (Brand Accounts, multi-channel networks). YouTube's OAuth grant is
+// bound to ONE channel per Brand-Account selection at consent time.
+// Cloning the root bearer token across every channel silently
+// violates Google's YouTube Data API contract and misroutes uploads
+// to whatever channel the grant happens to target. The operator must
+// re-authorize via /api/v1/auth/youtube/login with
+// ?expected_channel_id=UC... so channels.list can be filtered to a
+// single channel before any token is saved. Handler maps this to
+// HTTP 409 Conflict so the SPA can ask the operator to disambiguate.
+var ErrYouTubeAmbiguousAuthorization = errors.New("youtube authorization is ambiguous: re-authorize with expected_channel_id")
+
+// ErrYouTubeChannelMismatch is returned when expected_channel_id was
+// supplied but channels.list(mine=true) does NOT contain that ID. The
+// operator authenticated the wrong Google account, mistyped the ID,
+// or a Brand Account was added since the inventory was imported. We
+// refuse to attach ANY account because saving the root token on a
+// different channel would silently misroute uploads. Handler maps
+// this to HTTP 409 Conflict.
+var ErrYouTubeChannelMismatch = errors.New("youtube authorized channel does not match expected channel")
+
+func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, provider string, discoverer services.AccountDiscoverer, tokenData *models.TokenData, expectedChannelID string) (*models.PlatformAccount, error) {
 	accounts, err := discoverer.DiscoverAccounts(ctx, tokenData.AccessToken, "")
 	if err != nil {
 		return nil, fmt.Errorf("discover accounts: %w", err)
 	}
 	if len(accounts) == 0 {
 		return nil, fmt.Errorf("no accounts discovered for provider %s", provider)
+	}
+
+	// YouTube enforces a 1:1 OAuth-grant-to-channel mapping. The
+	// root bearer token is bound to whichever Brand Account the
+	// operator selected in Google's consent screen; cloning it
+	// across every channel silently misroutes uploads. Other
+	// AccountDiscoverer providers (Facebook Pages, Instagram
+	// Business Accounts) intentionally fan the root token out to
+	// every discovered account — that path stays unchanged.
+	if provider == models.PlatformYouTube {
+		if expectedChannelID != "" {
+			filtered := accounts[:0]
+			matched := 0
+			for _, acc := range accounts {
+				if acc.Profile.PlatformUserID == expectedChannelID {
+					filtered = append(filtered, acc)
+					matched++
+				}
+			}
+			if matched == 0 {
+				return nil, fmt.Errorf("%w: %q is not in channels.list(mine=true) result", ErrYouTubeChannelMismatch, expectedChannelID)
+			}
+			if matched > 1 {
+				// Defensive against channels.list returning duplicates
+				// for the same resource; the first match wins.
+				filtered = filtered[:1]
+			}
+			accounts = filtered
+		} else if len(accounts) != 1 {
+			return nil, fmt.Errorf("%w: channels.list returned %d channels for this grant", ErrYouTubeAmbiguousAuthorization, len(accounts))
+		}
 	}
 
 	var first *models.PlatformAccount
@@ -2164,9 +2248,52 @@ const (
 	oauthStateMaxAge       = 10 * time.Minute
 )
 
+// oauthStateExpectedChannelSuffix is appended to oauth_state_{provider}
+// to form the sibling cookie that round-trips an optional
+// expected_channel_id across the OAuth callback. Kept distinct from the
+// state cookie (which holds the pure-CSRF nonce) so the URL state param
+// remains a 32-byte base64url random — verified by
+// TestHandleLogin_RedirectsToProviderURL (length 43 invariant).
+const oauthStateExpectedChannelSuffix = "_expected_channel"
+
 func OAuthStateCookieName(provider string) string { return oauthStateCookiePrefix + provider }
 
-func generateOAuthState(w http.ResponseWriter, provider string) (string, error) {
+// OAuthStateExpectedChannelCookieName returns the sibling cookie name used
+// when /api/v1/auth/{provider}/login is invoked with
+// ?expected_channel_id=. The cookie is HttpOnly Secure SameSite=Lax with
+// MaxAge matching the state cookie; it's deleted together with the state
+// cookie on successful verifyOAuthState. Kept outside the URL state
+// parameter (which Google echoes back verbatim, so we keep it a pure
+// CSRF nonce).
+func OAuthStateExpectedChannelCookieName(provider string) string {
+	return oauthStateCookiePrefix + provider + oauthStateExpectedChannelSuffix
+}
+
+// isValidYouTubeChannelID returns true for strings that look like a
+// YouTube channel ID (e.g. UC_x5XG1OV2P6uZZ5FSM9Ttw): "UC" + 22 chars,
+// drawn from the URL-safe alphabet [A-Za-z0-9_-]. Used server-side to
+// reject malformed expected_channel_id query params before storing them
+// in the round-trip cookie. Failure mode: silently drop the hint — the
+// OAuth flow still proceeds without the binding assertion; the actual
+// binding check happens inside attachDiscoveredAccounts.
+func isValidYouTubeChannelID(s string) bool {
+	if len(s) != 24 || !strings.HasPrefix(s, "UC") {
+		return false
+	}
+	for _, r := range s[2:] {
+		switch {
+		case r >= 'A' && r <= 'Z',
+			r >= 'a' && r <= 'z',
+			r >= '0' && r <= '9',
+			r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func generateOAuthState(w http.ResponseWriter, provider, expectedChannelID string) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("oauth state rand failed: %w", err)
@@ -2177,23 +2304,71 @@ func generateOAuthState(w http.ResponseWriter, provider string) (string, error) 
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 		MaxAge: int(oauthStateMaxAge.Seconds()),
 	})
+	if expectedChannelID != "" {
+		// Sibling cookie carries the operator-supplied binding hint.
+		// The URL state param stays a pure CSRF nonce (Google echoes
+		// it back verbatim) and this HttpOnly cookie is the only path
+		// for the hint to round-trip. Issued only when handleLogin
+		// saw a validated ?expected_channel_id=; deleted on
+		// verifyOAuthState.
+		//
+		// Value format: "<state_nonce>:<channelID>". The state prefix
+		// binds the channel hint to the SAME flow — a stale sibling
+		// cookie from a previous OAuth round-trip cannot silently
+		// leak into a new one (e.g., operator clicked Connect without
+		// ?expected_channel_id= after a previous abandoned flow).
+		http.SetCookie(w, &http.Cookie{
+			Name: OAuthStateExpectedChannelCookieName(provider), Value: state + ":" + expectedChannelID, Path: "/",
+			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+			MaxAge: int(oauthStateMaxAge.Seconds()),
+		})
+	}
 	return state, nil
 }
 
-func verifyOAuthState(w http.ResponseWriter, req *http.Request, provider, stateParam string) error {
+// verifyOAuthState checks the CSRF nonce against the
+// oauth_state_{provider} cookie and (if present) reads + deletes the
+// sibling oauth_state_{provider}_expected_channel cookie. The returned
+// expectedChannelID is "" when no hint was set; a non-empty value means
+// the operator told us which channel/resource the OAuth grant must
+// bind to.
+func verifyOAuthState(w http.ResponseWriter, req *http.Request, provider, stateParam string) (string, error) {
 	c, err := req.Cookie(OAuthStateCookieName(provider))
 	if err != nil {
-		return fmt.Errorf("oauth state cookie missing for provider %q", provider)
+		return "", fmt.Errorf("oauth state cookie missing for provider %q", provider)
 	}
 	if subtle.ConstantTimeCompare([]byte(c.Value), []byte(stateParam)) != 1 {
-		return fmt.Errorf("oauth state mismatch for provider %q (CSRF protection)", provider)
+		return "", fmt.Errorf("oauth state mismatch for provider %q (CSRF protection)", provider)
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: OAuthStateCookieName(provider), Value: "", Path: "/",
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 		MaxAge: -1, Expires: time.Unix(1, 0),
 	})
-	return nil
+	expectedChannelID := ""
+	if ec, ecErr := req.Cookie(OAuthStateExpectedChannelCookieName(provider)); ecErr == nil && ec.Value != "" {
+		// Strip the "<state_nonce>:" prefix; only return the channel ID
+		// when it matches the current flow's just-verified state
+		// nonce. A stale sibling cookie from a previous OAuth
+		// round-trip (different state) is silently ignored — the
+		// operator must re-issue ?expected_channel_id= to bind it
+		// explicitly. Defence-in-depth on top of the bearer-validated
+		// channels.list(mine=true) check inside attachDiscoveredAccounts.
+		// Also run the extracted channel ID through the same
+		// isValidYouTubeChannelID gate handleLogin uses, so a malformed
+		// value (e.g. someone forged "<state>:<bogus>:<extra>") cannot
+		// pass through here — it would always 409 via the channels.list
+		// mismatch anyway, but the gate keeps the error surface clean.
+		if id, ok := strings.CutPrefix(ec.Value, stateParam+":"); ok && isValidYouTubeChannelID(id) {
+			expectedChannelID = id
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name: OAuthStateExpectedChannelCookieName(provider), Value: "", Path: "/",
+			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+			MaxAge: -1, Expires: time.Unix(1, 0),
+		})
+	}
+	return expectedChannelID, nil
 }
 
 func logAndError(w http.ResponseWriter, msg string, err error, kv ...any) {

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -710,6 +711,91 @@ func TestYouTubeAsyncPublish_CheckPublishStatus_ReturnsStatus(t *testing.T) {
 	}
 	if state != "succeeded" {
 		t.Errorf("state: want succeeded, got %q", state)
+	}
+}
+
+// TestYouTubeBuildUploadMetadata_ScheduledPublish sets privacy to private
+// and includes publishAt when PublishAt is in the future.
+func TestYouTubeBuildUploadMetadata_ScheduledPublish(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	future := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	payload := models.PublishPayload{
+		Title:        "Scheduled Video",
+		Text:         "A scheduled video",
+		PrivacyLevel: "public",
+		PublishAt:    &future,
+	}
+
+	meta := svc.buildUploadMetadata(payload)
+
+	status, ok := meta["status"].(map[string]string)
+	if !ok {
+		t.Fatalf("status metadata type: want map[string]string, got %T", meta["status"])
+	}
+	if status["privacyStatus"] != "private" {
+		t.Errorf("privacyStatus: want private, got %q", status["privacyStatus"])
+	}
+	if status["publishAt"] != future.UTC().Format(time.RFC3339) {
+		t.Errorf("publishAt: want %q, got %q", future.UTC().Format(time.RFC3339), status["publishAt"])
+	}
+}
+
+// TestYouTubeBuildUploadMetadata_ImmediatePublish uses the requested
+// privacy level when no future PublishAt is set.
+func TestYouTubeBuildUploadMetadata_ImmediatePublish(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	payload := models.PublishPayload{
+		Title:        "Immediate Video",
+		Text:         "An immediate video",
+		PrivacyLevel: "unlisted",
+	}
+
+	meta := svc.buildUploadMetadata(payload)
+
+	status, ok := meta["status"].(map[string]string)
+	if !ok {
+		t.Fatalf("status metadata type: want map[string]string, got %T", meta["status"])
+	}
+	if status["privacyStatus"] != "unlisted" {
+		t.Errorf("privacyStatus: want unlisted, got %q", status["privacyStatus"])
+	}
+	if _, exists := status["publishAt"]; exists {
+		t.Errorf("publishAt should not be set for immediate publishes")
+	}
+}
+
+// TestYouTubeBuildUploadMetadata_PastPublishAt_Ignored verifies that a
+// PublishAt in the past is ignored and the requested privacy is used.
+func TestYouTubeBuildUploadMetadata_PastPublishAt_Ignored(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	past := time.Now().UTC().Add(-2 * time.Hour)
+	payload := models.PublishPayload{
+		Title:        "Past Video",
+		Text:         "A past video",
+		PrivacyLevel: "public",
+		PublishAt:    &past,
+	}
+
+	meta := svc.buildUploadMetadata(payload)
+
+	status, ok := meta["status"].(map[string]string)
+	if !ok {
+		t.Fatalf("status metadata type: want map[string]string, got %T", meta["status"])
+	}
+	if status["privacyStatus"] != "public" {
+		t.Errorf("privacyStatus: want public, got %q", status["privacyStatus"])
+	}
+	if _, exists := status["publishAt"]; exists {
+		t.Errorf("publishAt should not be set for past timestamps")
 	}
 }
 

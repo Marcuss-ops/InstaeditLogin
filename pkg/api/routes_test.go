@@ -423,6 +423,26 @@ func setOAuthStateCookieForTest(req *http.Request, provider, state string) {
 	})
 }
 
+// setOAuthExpectedChannelCookieForTest mirrors setOAuthStateCookieForTest
+// for the sibling oauth_state_{provider}_expected_channel cookie used by
+// the YouTube P0 fix to round-trip ?expected_channel_id=UC... across
+// the OAuth callback. The cookie value is "<state>:<channelID>" — the
+// state nonce prefix binds the channel hint to the SAME flow so a
+// stale sibling cookie from a previous OAuth round-trip cannot leak
+// into a new one (the production code in handlers.go enforces this
+// prefix check; this helper just mirrors the production format for
+// tests).
+func setOAuthExpectedChannelCookieForTest(req *http.Request, provider, state, channelID string) {
+	req.AddCookie(&http.Cookie{
+		Name:     OAuthStateExpectedChannelCookieName(provider),
+		Value:    state + ":" + channelID,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 // ---------------------------------------------------------------------------
 // handleLogin tests
 // ---------------------------------------------------------------------------
@@ -831,6 +851,374 @@ func TestHandleCallback_Facebook_SavesPageAccessToken(t *testing.T) {
 		if savedByType[foundID][models.TokenTypeLongLived] != userLongLivedToken {
 			t.Errorf("page %s: want user token %q, got %q", p.Profile.PlatformUserID, userLongLivedToken, savedByType[foundID][models.TokenTypeLongLived])
 		}
+	}
+}
+
+// TestHandleLogin_YouTube_ExpectedChannelID_SetsSiblingCookie proves
+// the login half of the YouTube P0 fix: a validated
+// ?expected_channel_id=UC... round-trips through the sibling
+// oauth_state_youtube_expected_channel cookie and also forces
+// prompt=consent select_account so a cached grant cannot bind to
+// a different Brand Account on consent.
+func TestHandleLogin_YouTube_ExpectedChannelID_SetsSiblingCookie(t *testing.T) {
+	svc := &mockProvider{platform: "youtube", loginURL: "https://auth.youtube.com/oauth"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/login?expected_channel_id=UCabcdefghijklmnopqrstuv", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("want 302, got %d: %s", w.Code, w.Body.String())
+	}
+	loc := w.Header().Get("Location")
+	if !strings.HasPrefix(loc, "https://auth.youtube.com/oauth?") {
+		t.Fatalf("redirect URL must target the YouTube auth dialog, got %q", loc)
+	}
+	// State length must still be 43 chars (CSRF nonce invariant verified
+	// by TestHandleLogin_RedirectsToProviderURL).
+	_, after, ok := strings.Cut(loc, "state=")
+	if !ok {
+		t.Fatalf("redirect must carry a state= param, got %q", loc)
+	}
+	stateParam, _, _ := strings.Cut(after, "&")
+	if len(stateParam) != 43 {
+		t.Errorf("state length: want 43 (32-byte base64 URL-safe), got %d (%q)", len(stateParam), stateParam)
+	}
+	// Sibling cookie must carry the channel ID and use the same
+	// HttpOnly / Secure / SameSite=Lax attributes as the state cookie.
+	var sib *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateExpectedChannelCookieName("youtube") {
+			sib = c
+			break
+		}
+	}
+	if sib == nil {
+		t.Fatal("oauth_state_youtube_expected_channel cookie not set; the operator's intended channel ID cannot round-trip to the callback")
+	}
+	want := stateParam + ":UCabcdefghijklmnopqrstuv"
+	if sib.Value != want {
+		t.Errorf("sibling cookie value: want %q (state + %q:UCabcdefghijklmnopqrstuv), got %q", want, stateParam, sib.Value)
+	}
+	if !sib.HttpOnly {
+		t.Error("sibling cookie must be HttpOnly (XSS exfiltration defense)")
+	}
+	if !sib.Secure {
+		t.Error("sibling cookie must be Secure (HTTPS-only)")
+	}
+	if sib.SameSite != http.SameSiteLaxMode {
+		t.Errorf("sibling cookie SameSite: want Lax, got %v", sib.SameSite)
+	}
+}
+
+// TestHandleLogin_YouTube_ExpectedChannelID_InvalidFormat_NotSet proves
+// that a malformed ?expected_channel_id= (not UC + 22 base64url chars)
+// is silently dropped: no sibling cookie issued, OAuth flow still
+// proceeds. attachDiscoveredAccounts at callback time catches a real
+// mismatch instead — we don't want a 400 here on a typo because the
+// real check is downstream.
+func TestHandleLogin_YouTube_ExpectedChannelID_InvalidFormat_NotSet(t *testing.T) {
+	svc := &mockProvider{platform: "youtube", loginURL: "https://auth.youtube.com/oauth"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/login?expected_channel_id=not-a-real-channel-id", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("want 302, got %d", w.Code)
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateExpectedChannelCookieName("youtube") && c.MaxAge > 0 {
+			t.Errorf("malformed expected_channel_id must NOT issue the sibling cookie: %+v", c)
+		}
+	}
+}
+
+// TestHandleLogin_YouTube_ExpectedChannelID_IgnoredForNonYouTube proves
+// ?expected_channel_id= is silently ignored on non-YouTube providers.
+// Instagram / TikTok / Facebook don't have Brand Accounts and don't
+// need the binding hint.
+func TestHandleLogin_YouTube_ExpectedChannelID_IgnoredForNonYouTube(t *testing.T) {
+	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.instagram.com/oauth"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login?expected_channel_id=UCtest123channelID", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("want 302, got %d", w.Code)
+	}
+	for _, c := range w.Result().Cookies() {
+		if c.Name == OAuthStateExpectedChannelCookieName("instagram") && c.MaxAge > 0 {
+			t.Errorf("expected_channel_id must be ignored on non-YouTube providers: %+v", c)
+		}
+	}
+}
+
+// TestHandleCallback_YouTube_OneChannel_OneSave proves the P0 fix in its
+// simplest form: a single-channel grant (the common case) saves the root
+// bearer token exactly once on the only discovered channel.
+func TestHandleCallback_YouTube_OneChannel_OneSave(t *testing.T) {
+	const bearerToken = "yt-bearer-token-1"
+	channels := []*services.DiscoveredAccount{
+		{Profile: models.PlatformProfile{PlatformUserID: "UCsoloChannel", Username: "Solo Channel"}},
+	}
+	svc := &mockDiscoverableProvider{
+		mockProvider: mockProvider{
+			platform: "youtube",
+			handleCallback: func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
+				return &models.PlatformProfile{PlatformUserID: "g-acc-1", Username: "G Acc"}, &models.TokenData{
+					AccessToken: bearerToken, TokenType: models.TokenTypeBearer, ExpiresIn: 3600,
+				}, nil
+			},
+		},
+		discoverFn: func(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error) {
+			return channels, nil
+		},
+	}
+	type saveCall struct {
+		accountID int64
+		token     string
+	}
+	var saves []saveCall
+	store := &mockUserStore{
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{
+				ID: 10, UserID: userID, Platform: platform,
+				PlatformUserID: profile.PlatformUserID, Username: profile.Username,
+			}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
+			saves = append(saves, saveCall{platformAccountID, tokenData.AccessToken})
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "youtube", "test-state")
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(saves) != 1 {
+		t.Fatalf("want exactly 1 vault.Save call (single channel), got %d: %+v", len(saves), saves)
+	}
+	if saves[0].accountID != 10 || saves[0].token != bearerToken {
+		t.Errorf("save mismatch: %+v", saves[0])
+	}
+}
+
+// TestHandleCallback_YouTube_MultipleChannels_NoExpected_Conflict proves
+// the BUG fix: an ambiguous multi-channel grant returns HTTP 409 and
+// DOES NOT save the token on ANY account. Without the fix, every
+// discovered channel would receive a PlatformAccount row + a clone of
+// the root bearer token — exactly the misroute risk Google warns about
+// when a third-party app ignores Brand Account selection.
+func TestHandleCallback_YouTube_MultipleChannels_NoExpected_Conflict(t *testing.T) {
+	channels := []*services.DiscoveredAccount{
+		{Profile: models.PlatformProfile{PlatformUserID: "UCaaaaaaaaaaaaaaaaaaaaa1", Username: "Channel A"}},
+		{Profile: models.PlatformProfile{PlatformUserID: "UCaaaaaaaaaaaaaaaaaaaaa2", Username: "Channel B"}},
+	}
+	svc := &mockDiscoverableProvider{
+		mockProvider: mockProvider{
+			platform: "youtube",
+			handleCallback: func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
+				return &models.PlatformProfile{PlatformUserID: "g-acc", Username: "G"}, &models.TokenData{
+					AccessToken: "bearer", TokenType: models.TokenTypeBearer, ExpiresIn: 3600,
+				}, nil
+			},
+		},
+		discoverFn: func(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error) {
+			return channels, nil
+		},
+	}
+	saves := 0
+	store := &mockUserStore{
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			// attachFn must NOT be called when discovery is ambiguous —
+			// if it is, the bug is back.
+			return &models.PlatformAccount{
+				ID: 10, UserID: userID, Platform: platform,
+				PlatformUserID: profile.PlatformUserID,
+			}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
+			saves++
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "youtube", "test-state")
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("ambiguous grant: want 409 Conflict, got %d: %s", w.Code, w.Body.String())
+	}
+	if saves != 0 {
+		t.Fatalf("ambiguous grant must NOT save the token on ANY channel; got %d save(s)", saves)
+	}
+	if !strings.Contains(w.Body.String(), "ambiguous") {
+		t.Errorf("response body should explain the ambiguity, got %q", w.Body.String())
+	}
+}
+
+// TestHandleCallback_YouTube_MultipleChannels_ExpectedMatches_OneSave
+// proves the canonical use case: 3 channels discovered, expected
+// matches the second — the token is saved exactly once on that
+// single channel, NEVER on the other two.
+func TestHandleCallback_YouTube_MultipleChannels_ExpectedMatches_OneSave(t *testing.T) {
+	const expectedID = "UCaaaaaaaaaaaaaaaaaaaaa2"
+	channels := []*services.DiscoveredAccount{
+		{Profile: models.PlatformProfile{PlatformUserID: "UCaaaaaaaaaaaaaaaaaaaaa1", Username: "Channel A"}},
+		{Profile: models.PlatformProfile{PlatformUserID: expectedID, Username: "Channel B"}},
+		{Profile: models.PlatformProfile{PlatformUserID: "UCaaaaaaaaaaaaaaaaaaaaa3", Username: "Channel C"}},
+	}
+	svc := &mockDiscoverableProvider{
+		mockProvider: mockProvider{
+			platform: "youtube",
+			handleCallback: func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
+				return &models.PlatformProfile{PlatformUserID: "g-acc", Username: "G"}, &models.TokenData{
+					AccessToken: "yt-bearer", TokenType: models.TokenTypeBearer, ExpiresIn: 3600,
+				}, nil
+			},
+		},
+		discoverFn: func(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error) {
+			return channels, nil
+		},
+	}
+	// Fixed account-ID <-> channel-ID mapping so vault.Save can be
+	// reverse-traced to the channel it was attached to.
+	accountIDsByChannel := map[string]int64{
+		"UCaaaaaaaaaaaaaaaaaaaaa1": 101,
+		expectedID: 102,
+		"UCaaaaaaaaaaaaaaaaaaaaa3": 103,
+	}
+	attachedChannels := []string{}
+	type saveCall struct {
+		accountID int64
+		token     string
+	}
+	var saves []saveCall
+	store := &mockUserStore{
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			id, ok := accountIDsByChannel[profile.PlatformUserID]
+			if !ok {
+				return nil, fmt.Errorf("unexpected channel %q in attachFn", profile.PlatformUserID)
+			}
+			attachedChannels = append(attachedChannels, profile.PlatformUserID)
+			return &models.PlatformAccount{
+				ID: id, UserID: userID, Platform: platform,
+				PlatformUserID: profile.PlatformUserID, Username: profile.Username,
+			}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
+			saves = append(saves, saveCall{platformAccountID, tokenData.AccessToken})
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "youtube", "test-state")
+	setOAuthExpectedChannelCookieForTest(req, "youtube", "test-state", expectedID)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(attachedChannels) != 1 {
+		t.Fatalf("attachFn must be called exactly once (only expected channel); got %d calls for channels %v", len(attachedChannels), attachedChannels)
+	}
+	if attachedChannels[0] != expectedID {
+		t.Errorf("attachFn must target expected channel %q; got %q", expectedID, attachedChannels[0])
+	}
+	if len(saves) != 1 {
+		t.Fatalf("vault.Save must be called exactly once; got %d: %+v", len(saves), saves)
+	}
+	if saves[0].accountID != accountIDsByChannel[expectedID] {
+		t.Errorf("save accountID: want %d (channel %q), got %d", accountIDsByChannel[expectedID], expectedID, saves[0].accountID)
+	}
+	if saves[0].token != "yt-bearer" {
+		t.Errorf("save token: want yt-bearer, got %q", saves[0].token)
+	}
+}
+
+// TestHandleCallback_YouTube_ExpectedNoMatch_Conflict proves that an
+// expected_channel_id which does NOT appear in channels.list(mine=true)
+// returns 409 and saves no token — the operator authenticated the wrong
+// Google account (or the inventory imported a Brand Account that has
+// since been moved / removed).
+func TestHandleCallback_YouTube_ExpectedNoMatch_Conflict(t *testing.T) {
+	channels := []*services.DiscoveredAccount{
+		{Profile: models.PlatformProfile{PlatformUserID: "UCaaaaaaaaaaaaaaaaaaaaa1", Username: "Channel A"}},
+	}
+	svc := &mockDiscoverableProvider{
+		mockProvider: mockProvider{
+			platform: "youtube",
+			handleCallback: func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
+				return &models.PlatformProfile{PlatformUserID: "g-acc", Username: "G"}, &models.TokenData{
+					AccessToken: "bearer", TokenType: models.TokenTypeBearer, ExpiresIn: 3600,
+				}, nil
+			},
+		},
+		discoverFn: func(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error) {
+			return channels, nil
+		},
+	}
+	saves := 0
+	store := &mockUserStore{
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, UserID: userID, Platform: platform, PlatformUserID: profile.PlatformUserID}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
+			saves++
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "youtube", "test-state")
+	setOAuthExpectedChannelCookieForTest(req, "youtube", "test-state", "UCaaaaaaaaaaaaaaaaaaaaaZ")
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("mismatched expected: want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	if saves != 0 {
+		t.Fatalf("mismatch must NOT save the token; got %d save(s)", saves)
+	}
+	if !strings.Contains(w.Body.String(), "does not match expected channel") {
+		t.Errorf("response body should reference the mismatch, got %q", w.Body.String())
 	}
 }
 
