@@ -49,6 +49,13 @@ describe("InternalDashboard", () => {
             ],
           });
         }
+        if (url.endsWith("/api/v1/uploads/counts")) {
+          return mockJsonResponse({
+            counts: [{ account_id: 1, count: 0, next_publish_at: null }],
+            total_uploads: 0,
+            total_targets: 0,
+          });
+        }
         return mockJsonResponse({}, false, 404);
       }),
     );
@@ -62,7 +69,7 @@ describe("InternalDashboard", () => {
     expect(screen.getByRole("heading", { name: "Connected accounts" })).toBeInTheDocument();
     expect(screen.getByText("Total posts")).toBeInTheDocument();
     expect(screen.getByText("Published")).toBeInTheDocument();
-    expect(screen.getByText("Scheduled")).toBeInTheDocument();
+    expect(screen.getByText("Pending uploads")).toBeInTheDocument();
   });
 
   it("shows an error state when data cannot be loaded", async () => {
@@ -97,6 +104,13 @@ describe("InternalDashboard", () => {
         }
         if (url.endsWith("/api/v1/posts")) {
           return mockJsonResponse({ posts: [] });
+        }
+        if (url.endsWith("/api/v1/uploads/counts")) {
+          return mockJsonResponse({
+            counts: [],
+            total_uploads: 0,
+            total_targets: 0,
+          });
         }
         return mockJsonResponse({}, false, 404);
       }),
