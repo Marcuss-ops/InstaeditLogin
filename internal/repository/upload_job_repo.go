@@ -77,6 +77,83 @@ func (r *UploadJobRepository) FindByID(id int64) (*models.UploadJob, error) {
 	return scanUploadJob(row)
 }
 
+// ClaimBatchForPublish is the publish-pool counterpart to
+// ClaimBatch: claims rows whose status = 'ready_to_publish' (the
+// ingest pool has streamed them to S3 and stamped asset_id).
+//
+// Selection:
+//   status = 'ready_to_publish'
+//   next_attempt_at <= NOW() (or NULL)
+//   no active lease
+//
+// Same CTE + UPDATE-FROM + RETURNING shape as ClaimBatch; the only
+// difference is the status filter (single value vs the
+// 'pending'|'retry_wait' IN-list). The workerID prefix should be
+// 'upload-<host>-<pid>' so the ingest pool's leases are visibly
+// disjoint. Same row-state transition (leased + lease_owner +
+// heartbeat + attempt_count += 1).
+//
+// Note that the attempt budget is SHARED across ingest + publish:
+// each phase increments attempt_count on claim, so 4 ingest fails + 4
+// publish fails still exhaust max_attempts (default 8). Operators
+// observing 'attempts exhausted' on a publish-pool failure should
+// investigate the ingest pool separately — the budget shape is
+// intentionally flat for now to keep the state machine simple.
+func (r *UploadJobRepository) ClaimBatchForPublish(ctx context.Context, workerID string, limit int, lease time.Duration) ([]*models.UploadJob, error) {
+	if workerID == "" {
+		return nil, fmt.Errorf("upload job ClaimBatchForPublish: empty workerID")
+	}
+	if limit <= 0 {
+		return nil, nil
+	}
+	if lease <= 0 {
+		return nil, fmt.Errorf("upload job ClaimBatchForPublish: non-positive lease (%s)", lease)
+	}
+	leaseUntil := time.Now().Add(lease)
+
+	rows, err := r.db.QueryContext(ctx,
+		`WITH candidates AS (
+            SELECT id
+            FROM upload_jobs
+            WHERE status = 'ready_to_publish'
+              AND COALESCE(next_attempt_at, NOW()) <= NOW()
+              AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+            ORDER BY priority ASC, created_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT $1
+        )
+        UPDATE upload_jobs j
+        SET status           = 'leased',
+            lease_owner      = $2,
+            lease_expires_at = $3,
+            heartbeat_at     = NOW(),
+            attempt_count    = attempt_count + 1,
+            started_at       = COALESCE(started_at, NOW()),
+            updated_at       = NOW()
+        FROM candidates
+        WHERE j.id = candidates.id
+        RETURNING j.*`,
+		limit, workerID, leaseUntil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("upload job ClaimBatchForPublish: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*models.UploadJob
+	for rows.Next() {
+		job, scanErr := scanUploadJobRows(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("upload job ClaimBatchForPublish scan: %w", scanErr)
+		}
+		out = append(out, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("upload job ClaimBatchForPublish rows: %w", err)
+	}
+	return out, nil
+}
+
 // ClaimBatch atomically claims up to `limit` upload_jobs for the calling
 // worker, transitioning them from ('pending' | 'retry_wait') to
 // 'leased' and stamping the lease columns. Replaces the legacy
@@ -297,6 +374,55 @@ func (r *UploadJobRepository) MarkDeadLetter(ctx context.Context, id int64, work
 	)
 	if err != nil {
 		return fmt.Errorf("failed to mark upload job dead_letter: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+	}
+	return nil
+}
+
+// MarkIngested transitions the row from 'leased' (claimed by the
+// ingest pool) to 'ready_to_publish' (publish pool eligible), stamps
+// the asset_id + total_bytes + progress_bytes, and clears the lease
+// columns. Called by the ingest pool AFTER mediaStore.MarkReady has
+// streamed the bytes to S3.
+//
+// CAS against lease_owner guards the late-delivery race: a worker
+// whose lease expired cannot overwrite a peer's terminal write.
+// On CAS loss, returns ErrUploadJobLeaseLost.
+//
+// total_bytes is also written to progress_bytes so the dashboard's
+// resumable-upload progress reads 100% the instant the ingest
+// completes; future code (P1#5 resumable YouTube) will overwrite
+// progress_bytes with the streaming-uploader's byte counter.
+func (r *UploadJobRepository) MarkIngested(ctx context.Context, id int64, workerID, assetID string, totalBytes int64) error {
+	if workerID == "" {
+		return fmt.Errorf("upload job MarkIngested: empty workerID")
+	}
+	if assetID == "" {
+		return fmt.Errorf("upload job MarkIngested: empty assetID")
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE upload_jobs
+         SET status           = 'ready_to_publish',
+             asset_id         = $2,
+             total_bytes      = $3,
+             progress_bytes   = $3,
+             lease_owner      = NULL,
+             lease_expires_at = NULL,
+             heartbeat_at     = NULL,
+             updated_at       = NOW()
+         WHERE id = $1
+           AND lease_owner   = $4
+           AND status        = 'leased'`,
+		id, assetID, totalBytes, workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark upload job ingested: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {

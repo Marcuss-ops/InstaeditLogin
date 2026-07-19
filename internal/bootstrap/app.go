@@ -504,12 +504,27 @@ func (a *App) RunWorkers(ctx context.Context) error {
 
 	// 7. Upload worker — background import of public or authenticated
 	// Google Drive videos into S3 + posts + publish queue.
+	// P1 step 2 — split into ingest + upload pools via UploadWorkerOptions
+	// built from the cfg-driven env vars (UPLOAD_INGEST_CONCURRENCY,
+	// YOUTUBE_UPLOAD_CONCURRENCY, UPLOAD_LEASE_TTL_SECONDS,
+	// UPLOAD_HEARTBEAT_INTERVAL_SECONDS, UPLOAD_RECLAIM_INTERVAL_SECONDS,
+	// UPLOAD_RECLAIM_ON_START). The upload_worker internally spawns 3
+	// goroutines (reclaimer + ingest pool + upload pool) coordinated
+	// via sync.WaitGroup for graceful shutdown.
 	{
 		c, cancel := context.WithCancel(ctx)
 		d := make(chan struct{})
 		go func() {
 			defer close(d)
 			a.WorkerStatus.Mark("upload")
+			uploadOpts := worker.UploadWorkerOptions{
+				IngestConcurrency:  a.Cfg.UploadIngestConcurrency,
+				UploadConcurrency:  a.Cfg.YouTubeUploadConcurrency,
+				LeaseTTL:           time.Duration(a.Cfg.UploadLeaseTTLSeconds) * time.Second,
+				HeartbeatInterval:  time.Duration(a.Cfg.UploadHeartbeatIntervalSeconds) * time.Second,
+				ReclaimInterval:    time.Duration(a.Cfg.UploadReclaimIntervalSeconds) * time.Second,
+				ReclaimOnStart:     a.Cfg.UploadReclaimOnStart,
+			}
 			uw := worker.NewUploadWorker(
 				repository.NewUploadJobRepository(a.DB),
 				repository.NewMediaAssetRepository(a.DB),
@@ -520,6 +535,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				a.Vault,
 				time.Duration(a.Cfg.UploadWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
+				uploadOpts,
 			)
 			if err := uw.Run(c); err != nil && err != context.Canceled {
 				slog.Error("upload worker exited with error", "error", err)

@@ -7,8 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strconv"
+	"runtime/debug"
+	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -17,17 +20,27 @@ import (
 )
 
 // UploadJobStore is the narrow repository interface the upload worker needs.
-// P1 — worker pool: ClaimNext has been replaced by ClaimBatch (which
-// claims up to `limit` rows in a single CTE) and the Mark* methods
-// gained workerID + errorCode parameters to enable CAS-against-lease
-// safety (the late-delivery race) and the new error taxonomy.
+// P1 step 2 — ingest + upload pools:
+//   - ClaimBatch          ingest pool claims status IN ('pending','retry_wait').
+//   - ClaimBatchForPublish upload pool claims status = 'ready_to_publish' (the
+//     ingest pool's MarkIngested output).
+//   - MarkIngested         ingest pool's terminal-for-ingest: leased →
+//     ready_to_publish + asset_id stamp + total_bytes/progress_bytes
+//     set to the streamed size.
+//   - ReclaimExpiredLeases reaper: returned leased rows past lease_expires_at
+//     (5-min heartbeat grace window) back to 'pending'. Called both
+//     synchronously on startup (ReclaimOnStart) and on a background
+//     ticker cadence.
 type UploadJobStore interface {
 	ClaimBatch(ctx context.Context, workerID string, limit int, lease time.Duration) ([]*models.UploadJob, error)
+	ClaimBatchForPublish(ctx context.Context, workerID string, limit int, lease time.Duration) ([]*models.UploadJob, error)
 	Heartbeat(ctx context.Context, jobID int64, workerID string, lease time.Duration) error
 	MarkCompleted(ctx context.Context, id int64, workerID string, postID int64, assetID string) error
 	MarkFailed(ctx context.Context, id int64, workerID, errorCode, errMessage string) error
 	MarkRetry(ctx context.Context, id int64, workerID, errorCode, errMessage string, nextAttemptAt time.Time) error
 	MarkDeadLetter(ctx context.Context, id int64, workerID, errorCode, errMessage string) error
+	MarkIngested(ctx context.Context, id int64, workerID, assetID string, totalBytes int64) error
+	ReclaimExpiredLeases(ctx context.Context, maxRows int) (int64, error)
 }
 
 // UploadMediaStore is the narrow media asset repository interface.
@@ -53,10 +66,47 @@ type UploadUserStore interface {
 	FindPlatformAccountByID(id int64) (*models.PlatformAccount, error)
 }
 
+// UploadWorkerOptions configures the worker pool sizing + cadence.
+// All fields are zero-value safe; defaults are applied in Run() so
+// NewUploadWorker never panics on a half-initialised options struct.
+type UploadWorkerOptions struct {
+	// IngestConcurrency caps the per-tick concurrent goroutines
+	// the ingest pool can run (Drive → S3 streaming). The valutazione
+	// doc recommends 2–3 on a dev box; default 3.
+	IngestConcurrency int
+	// UploadConcurrency caps the per-tick concurrent goroutines
+	// the upload pool can run (videos.insert per-channel). The
+	// valutazione doc recommends 3–4 on a dev box; default 4.
+	UploadConcurrency int
+	// LeaseTTL is the lifetime of a claim before ReclaimExpiredLeases
+	// recovers it. Heartbeat must run at leaseTTL/3 so the lease
+	// is renewed twice before expiry. Default 60s.
+	LeaseTTL time.Duration
+	// HeartbeatInterval is the cadence of the per-claimed-row
+	// heartbeat goroutine. Default LeaseTTL/3 (e.g. 20s for a 60s
+	// lease); three renewals before expiry is the safety margin.
+	HeartbeatInterval time.Duration
+	// ReclaimInterval is the cadence of the background
+	// ReclaimExpiredLeases ticker (separate goroutine from the
+	// per-row heartbeats). Default 30s.
+	ReclaimInterval time.Duration
+	// ReclaimOnStart, when true, runs ReclaimExpiredLeases
+	// synchronously BEFORE the first tick of the pools so workers
+	// don't race against any leases left over by a previous
+	// crash. Default true.
+	ReclaimOnStart bool
+}
+
 // UploadWorker processes upload_jobs in the background. It downloads
 // videos from public or authenticated Google Drive, uploads them to S3,
 // creates posts + targets, and triggers publishing. Jobs survive server
 // restarts because they are persisted in the upload_jobs table.
+//
+// P1 step 2 — the worker is split into an ingest pool (Drive → S3)
+// and an upload pool (S3 → posts → YouTube videos.insert). Both
+// pools share the lease + heartbeat machinery added in P1 step 1
+// (commit 4888c40). Per-claimed-row heartbeat goroutines keep the
+// lease alive during the long streaming phases.
 type UploadWorker struct {
 	jobRepo       UploadJobStore
 	mediaStore    UploadMediaStore
@@ -68,31 +118,23 @@ type UploadWorker struct {
 	interval      time.Duration
 	logger        *slog.Logger
 	uploadTimeout time.Duration
-	// P1 — worker pool: workerID is the lease_owner string stamped
-	// onto every row this worker claims (and CAS-checked on every
-	// Mark* / Heartbeat). batchLimit caps ClaimBatch's per-tick row
-	// count (the worker still drains the slice serially per tick —
-	// goroutine-per-row is a follow-up commit to keep this one
-	// minimal). leaseTTL controls how long a claim is valid for
-	// before the reaper releases it back to 'pending'. All three
-	// are initialised in Run() with sensible defaults so legacy
-	// NewUploadWorker callers (no config plumbing) still work.
-	workerID  string
-	batchSize int
-	leaseTTL  time.Duration
+	opts          UploadWorkerOptions
 }
 
-// NewUploadWorker wires a new UploadWorker.
+// NewUploadWorker wires a new UploadWorker. opts fields default in
+// Run() when zero; the bootstrap should pass an explicit options
+// struct built from cfg so the operator-facing env vars take effect.
 func NewUploadWorker(
 	jobRepo UploadJobStore,
 	mediaStore UploadMediaStore,
 	postStore UploadPostStore,
-	userRepo UploadUserStore,
+	userStore UploadUserStore,
 	storage services.StorageProvider,
 	capRouter *services.CapabilityRouter,
 	vault credentials.VaultAPI,
 	interval time.Duration,
 	logger *slog.Logger,
+	opts UploadWorkerOptions,
 ) *UploadWorker {
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -104,230 +146,384 @@ func NewUploadWorker(
 		jobRepo:       jobRepo,
 		mediaStore:    mediaStore,
 		postStore:     postStore,
-		userRepo:      userRepo,
+		userRepo:      userStore,
 		storage:       storage,
 		capRouter:     capRouter,
 		vault:         vault,
 		interval:      interval,
 		logger:        logger,
 		uploadTimeout: 30 * time.Minute,
-		// P1 — worker pool defaults. Initialised to zero so Run() can
-		// detect unset fields and pick conservative values without
-		// touching the NewUploadWorker signature (the bootstrap
-		// caller doesn't need to know about workerID / batchSize /
-		// leaseTTL today; future env-driven config can populate them).
-		batchSize: 0,
-		leaseTTL:  0,
+		opts:          opts,
 	}
 }
 
-// defaultUploadWorkerID derives a stable per-replica lease identity.
-// Prefer hostname + PID so log lines trace the exact pod that owned
-// the lease at any given moment; fall back to a deterministic
-// placeholder when os.Hostname() errors (e.g. some sandboxed
-// containers / minimal Linux images).
-func defaultUploadWorkerID() string {
+// uniqueWorkerID derives a per-pod, per-restart lease identity.
+// Format: "{prefix}-{host}-{pid}-{shortUUID}". Hostname + PID + a
+// short UUID suffix avoids collisions across replicas / restarts
+// on the same pod (Kubernetes always gives PID 1; multiple replicas
+// of the same pool on the same host is rare but possible).
+func uniqueWorkerID(prefix string) string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
 		host = "upload-worker"
 	}
-	pid := os.Getpid()
-	return host + "-" + strconv.Itoa(pid)
+	shortUUID := uuid.NewString()[:8] // first 8 chars of UUIDv4
+	return fmt.Sprintf("%s-%s-%d-%s", prefix, host, os.Getpid(), shortUUID)
 }
 
-// Run blocks until ctx is cancelled, ticking every interval. Each tick
-// drains the queue: ClaimBatch hands back 0+ rows; the worker processes
-// them serially (the goroutine-per-row split lands in a follow-up
-// commit to keep this one minimal). Errors are routed to MarkRetry
-// when attempt budget remains, MarkDeadLetter when exhausted.
+// applyDefaults fills zero-valued opts fields with conservative
+// defaults. Called once at Run start.
+func (w *UploadWorker) applyDefaults() {
+	if w.opts.IngestConcurrency <= 0 {
+		w.opts.IngestConcurrency = 3
+	}
+	if w.opts.UploadConcurrency <= 0 {
+		w.opts.UploadConcurrency = 4
+	}
+	if w.opts.LeaseTTL <= 0 {
+		w.opts.LeaseTTL = 60 * time.Second
+	}
+	if w.opts.HeartbeatInterval <= 0 {
+		w.opts.HeartbeatInterval = w.opts.LeaseTTL / 3 // three renewals before expiry
+	}
+	if w.opts.ReclaimInterval <= 0 {
+		w.opts.ReclaimInterval = 30 * time.Second
+	}
+}
+
+// Run orchestrates the upload-worker-pool goroutines:
+//
+//  1. Apply lazy defaults on opts.
+//  2. Synchronously reclaim stuck leases on startup (if ReclaimOnStart).
+//  3. Spawn the reclaimer ticker (background cadence reclaim).
+//  4. Spawn the ingest pool (N ingest goroutines, per-row heartbeat).
+//  5. Spawn the upload pool (M upload goroutines, per-row heartbeat).
+//  6. Block on ctx.Done() + waitGroup.Wait() for graceful shutdown.
+//
+// Each top-level goroutine exits cleanly on ctx.Done(); the per-row
+// heartbeat goroutines exit via their own context cancel when
+// processIngestJob / processPublishJob returns.
 func (w *UploadWorker) Run(ctx context.Context) error {
-	// Apply P1 worker-pool defaults lazily so a NewUploadWorker
-	// caller that knew nothing about the worker pool still gets
-	// reasonable behaviour on first Run.
-	if w.workerID == "" {
-		w.workerID = defaultUploadWorkerID()
-	}
-	if w.batchSize <= 0 {
-		w.batchSize = 4
-	}
-	if w.leaseTTL <= 0 {
-		w.leaseTTL = 60 * time.Second
-	}
+	w.applyDefaults()
 
-	w.logger.Info("upload worker started",
+	w.logger.Info("upload worker pool started",
 		"interval_seconds", w.interval.Seconds(),
-		"worker_id", w.workerID,
-		"batch_size", w.batchSize,
-		"lease_ttl_seconds", w.leaseTTL.Seconds(),
+		"ingest_concurrency", w.opts.IngestConcurrency,
+		"upload_concurrency", w.opts.UploadConcurrency,
+		"lease_ttl_seconds", w.opts.LeaseTTL.Seconds(),
+		"heartbeat_interval_seconds", w.opts.HeartbeatInterval.Seconds(),
+		"reclaim_interval_seconds", w.opts.ReclaimInterval.Seconds(),
+		"reclaim_on_start", w.opts.ReclaimOnStart,
 	)
-	defer w.logger.Info("upload worker stopped")
+	defer w.logger.Info("upload worker pool stopped")
 
-	w.runOnce(ctx)
+	// (2) Startup reclaim synchronous — recover any rows left
+	// 'leased' by a previous crash before the pools start claiming
+	// so workers don't race against leases with dead heartbeats.
+	if w.opts.ReclaimOnStart {
+		n, err := w.jobRepo.ReclaimExpiredLeases(ctx, 10000)
+		if err != nil {
+			w.logger.Error("upload worker: startup reclaim failed", "error", err)
+		} else if n > 0 {
+			w.logger.Info("upload worker: startup reclaim recovered rows", "count", n)
+		}
+	}
 
-	ticker := time.NewTicker(w.interval)
+	var wg sync.WaitGroup
+
+	// (3) Reclaimer ticker — background, separate from per-row heartbeats.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.runReclaimerLoop(ctx)
+	}()
+
+	// (4) Ingest pool — claims status IN ('pending','retry_wait'),
+	// transitions rows to 'ready_to_publish' via MarkIngested.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.runIngestPool(ctx)
+	}()
+
+	// (5) Upload pool — claims status = 'ready_to_publish',
+	// completes rows via MarkCompleted.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.runUploadPool(ctx)
+	}()
+
+	wg.Wait()
+	return ctx.Err()
+}
+
+// runReclaimerLoop ticks on opts.ReclaimInterval, calling
+// ReclaimExpiredLeases with a 100-row per-tick cap so a backlog
+// can't tie up the DB.
+func (w *UploadWorker) runReclaimerLoop(ctx context.Context) {
+	ticker := time.NewTicker(w.opts.ReclaimInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return
 		case <-ticker.C:
-			w.runOnce(ctx)
+			n, err := w.jobRepo.ReclaimExpiredLeases(ctx, 100)
+			if err != nil {
+				w.logger.Error("upload worker: reclaimer tick failed", "error", err)
+			} else if n > 0 {
+				w.logger.Info("upload worker: reclaimer recovered rows", "count", n)
+			}
 		}
 	}
 }
 
-// runOnce drains ClaimBatch and processes each row serially. Returns
-// when either the batch is exhausted or the ctx is cancelled.
-func (w *UploadWorker) runOnce(ctx context.Context) {
-	jobs, err := w.jobRepo.ClaimBatch(ctx, w.workerID, w.batchSize, w.leaseTTL)
+// runIngestPool is the ingest side of the worker: Drive → S3
+// streaming, transitions to ready_to_publish. Pool's workerID is
+// "ingest-..." so a Mark* CAS can never collide with the upload
+// pool's leases.
+func (w *UploadWorker) runIngestPool(ctx context.Context) {
+	poolWorkerID := uniqueWorkerID("ingest")
+	w.runPoolLoop(ctx, "ingest", w.opts.IngestConcurrency,
+		func(c context.Context, limit int, lease time.Duration) ([]*models.UploadJob, error) {
+			return w.jobRepo.ClaimBatch(c, poolWorkerID, limit, lease)
+		},
+		w.processIngestJob,
+		poolWorkerID,
+	)
+}
+
+// runUploadPool is the upload side: S3 → post → YouTube
+// videos.insert. Pool's workerID is "upload-...".
+func (w *UploadWorker) runUploadPool(ctx context.Context) {
+	poolWorkerID := uniqueWorkerID("upload")
+	w.runPoolLoop(ctx, "upload", w.opts.UploadConcurrency,
+		func(c context.Context, limit int, lease time.Duration) ([]*models.UploadJob, error) {
+			return w.jobRepo.ClaimBatchForPublish(c, poolWorkerID, limit, lease)
+		},
+		w.processPublishJob,
+		poolWorkerID,
+	)
+}
+
+// claimFn is the per-pool signature: returns rows claimed for the
+// calling worker's workerID. Each pool binds its own concrete
+// implementation (ClaimBatch for ingest, ClaimBatchForPublish for
+// upload).
+type claimFn func(ctx context.Context, limit int, lease time.Duration) ([]*models.UploadJob, error)
+
+// processFn is the per-row processing: returns nil on success or
+// an error wrapped with a typed sentinel where appropriate.
+type processFn func(ctx context.Context, job *models.UploadJob, workerID string) error
+
+// runPoolLoop is the generic pool loop. Tick cadence is
+// w.interval (legacy shared cadence). Concurrency is bounded by a
+// semaphore of size `concurrency`. Per claimed row, spawn a
+// goroutine that wraps processFn in a per-row heartbeat. The
+// poolWorkerID is the same string for every claim made by this
+// pool during the process — all rows in a single ClaimBatch share
+// it as their lease_owner.
+func (w *UploadWorker) runPoolLoop(
+	ctx context.Context,
+	poolName string,
+	concurrency int,
+	claimer claimFn,
+	processor processFn,
+	poolWorkerID string,
+) {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	sem := make(chan struct{}, concurrency)
+
+	// Run once immediately so we don't wait `interval` on the
+	// first tick after startup.
+	w.runPoolTick(ctx, poolName, sem, claimer, processor, poolWorkerID)
+
+	ticker := time.NewTicker(w.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w.runPoolTick(ctx, poolName, sem, claimer, processor, poolWorkerID)
+		}
+	}
+}
+
+func (w *UploadWorker) runPoolTick(
+	ctx context.Context,
+	poolName string,
+	sem chan struct{},
+	claimer claimFn,
+	processor processFn,
+	poolWorkerID string,
+) {
+	jobs, err := claimer(ctx, cap(sem), w.opts.LeaseTTL)
 	if err != nil {
-		w.logger.Error("upload worker: failed to claim batch", "error", err)
+		w.logger.Error("upload worker: claim batch failed", "pool", poolName, "error", err)
 		return
 	}
 	if len(jobs) == 0 {
 		return
 	}
-	w.logger.Info("upload worker: claimed batch", "count", len(jobs), "worker_id", w.workerID)
+	w.logger.Info("upload worker: claimed batch", "pool", poolName, "count", len(jobs), "worker_id", poolWorkerID)
+
 	for _, job := range jobs {
-		w.processClaimedJob(ctx, job)
+		select {
+		case <-ctx.Done():
+			return
+		case sem <- struct{}{}:
+		}
+		go func(j *models.UploadJob) {
+			defer func() { <-sem }()
+
+			w.logger.Info("upload worker: processing job",
+				"pool", poolName, "job_id", j.ID, "source_type", j.SourceType,
+				"attempt_count", j.AttemptCount, "max_attempts", j.MaxAttempts,
+			)
+
+			if err := w.runWithHeartbeat(ctx, j, poolWorkerID, poolName, processor); err != nil {
+				w.handleProcessingError(ctx, poolName, poolWorkerID, j, err)
+			}
+		}(job)
 	}
 }
 
-// processClaimedJob runs processJob under a per-job panic recovery +
-// routes the resulting error to MarkRetry / MarkDeadLetter based on
-// attempt_count vs max_attempts. CAS loss (ErrUploadJobLeaseLost) is
-// treated as "drop the in-flight work; the row is in someone else's
-// hands" — a peer ClaimBatch re-leased the row while we were processing.
-func (w *UploadWorker) processClaimedJob(ctx context.Context, job *models.UploadJob) {
-	w.logger.Info("upload worker: processing job",
-		"job_id", job.ID,
-		"source_type", job.SourceType,
-		"attempt_count", job.AttemptCount,
-		"max_attempts", job.MaxAttempts,
-	)
-	if err := w.processJob(ctx, job); err != nil {
-		w.handleProcessingError(ctx, job, err)
-	}
+// runWithHeartbeat spawns a per-row heartbeat goroutine that ticks
+// every opts.HeartbeatInterval calling Heartbeat; the goroutine
+// exits via hbCtx cancel when processFn returns. If Heartbeat
+// returns ErrUploadJobLeaseLost (peer stole the lease during
+// processing), the heartbeat goroutine logs + exits silently — the
+// worker has already lost the row to a peer.
+//
+// Defer ordering — single defer matters:
+// Go defers run LIFO. We intentionally keep cancel + wg.Wait +
+// recover in ONE defer so the execution order on return is:
+//   1. recover()                  catches a panic from processor().
+//   2. MarkDeadLetter + err wrap  persists the dead-letter row.
+//   3. cancel()                   signals hbCtx.Done() to the goroutine.
+//   4. wg.Wait()                  blocks until the goroutine exits.
+// Without this consolidation, splitting the three into separate
+// defers creates a deadlock — wg.Wait must run AFTER cancel or it
+// can never return (the goroutine only exits on hbCtx.Done()), but
+// LIFO forces the cancel defer (declared first) to run LAST.
+//
+// Panic safety: processFn can panic (third-party SDK bug, nil-deref
+// in a model field, etc.). Without recover() the goroutine crash
+// would propagate to the runtime and terminate the entire process —
+// taking down BOTH pools (ingest + upload) and the reclaimer. The
+// named-return + defer/recover catches every panic, logs it with
+// stack trace, and routes the row to dead_letter (error_code =
+// 'panic') so the operator-triage dashboard surfaces it instead of
+// letting the row sit in 'leased' forever.
+func (w *UploadWorker) runWithHeartbeat(
+	ctx context.Context,
+	job *models.UploadJob,
+	workerID string,
+	poolName string,
+	processor processFn,
+) (err error) {
+	hbCtx, cancel := context.WithCancel(context.Background())
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(w.opts.HeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-hbCtx.Done():
+				return
+			case <-ticker.C:
+				if err := w.jobRepo.Heartbeat(hbCtx, job.ID, workerID, w.opts.LeaseTTL); err != nil {
+					if errors.Is(err, repository.ErrUploadJobLeaseLost) {
+						w.logger.Warn("upload worker: heartbeat lost lease", "job_id", job.ID, "pool", poolName)
+						return
+					}
+					w.logger.Error("upload worker: heartbeat failed", "job_id", job.ID, "pool", poolName, "error", err)
+				}
+			}
+		}
+	}()
+
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			w.logger.Error("upload worker: processFn PANIC; routing to MarkDeadLetter",
+				"pool", poolName, "job_id", job.ID, "worker_id", workerID,
+				"panic", fmt.Sprintf("%v", r),
+				"stack", string(stack),
+			)
+			// Use a fresh context for the MarkDeadLetter call: the
+			// parent ctx might be cancelled (graceful shutdown in
+			// flight when the panic fired). Worst case is that the
+			// mark fails to persist and the reaper recovers the row
+			// once the lease expires.
+			bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer bgCancel()
+			if markErr := w.jobRepo.MarkDeadLetter(bgCtx, job.ID, workerID, "panic",
+				fmt.Sprintf("processFn panicked for job %d: %v", job.ID, r)); markErr != nil {
+				w.logger.Error("upload worker: MarkDeadLetter after panic failed",
+					"pool", poolName, "job_id", job.ID, "error", markErr)
+			}
+			err = fmt.Errorf("processFn panicked for job %d: %v", job.ID, r)
+		}
+		// Cancel first to signal hbCtx.Done(), THEN wait for the
+		// goroutine to exit. Inverted order = deadlock.
+		cancel()
+		wg.Wait()
+	}()
+
+	return processor(ctx, job, workerID)
 }
 
-// handleProcessingError classifies the processing error + routes the
-// Mark* call:
-//
-//   - ErrUploadJobLeaseLost → drop silently (peer owns the row now).
-//   - attempt_count >= max_attempts → MarkDeadLetter (retry budget
-//     exhausted; operator triage).
-//   - anything else → MarkRetry with exponential backoff + jitter.
-//
-// Backoff curve matches the outbox dispatcher
-// (internal/outbox/dispatcher.go::computeBackoff): AWS-style
-// decorrelated jitter, capped at 1h. The worker's job is to keep the
-// system making progress against a backed-up provider, not to be
-// punitive about transient errors.
-func (w *UploadWorker) handleProcessingError(ctx context.Context, job *models.UploadJob, processErr error) {
+// handleProcessingError classifies the error and routes MarkRetry
+// vs MarkDeadLetter based on attempt_count vs max_attempts.
+// ErrUploadJobLeaseLost is treated as "drop silently" (peer owns
+// the row).
+func (w *UploadWorker) handleProcessingError(
+	ctx context.Context,
+	poolName string,
+	workerID string,
+	job *models.UploadJob,
+	processErr error,
+) {
 	if errors.Is(processErr, repository.ErrUploadJobLeaseLost) {
 		w.logger.Warn("upload worker: lease lost mid-processing; dropping",
-			"job_id", job.ID, "worker_id", w.workerID)
+			"pool", poolName, "job_id", job.ID, "worker_id", workerID)
 		return
 	}
 
 	w.logger.Error("upload worker: job failed",
-		"job_id", job.ID,
-		"attempt_count", job.AttemptCount,
-		"max_attempts", job.MaxAttempts,
+		"pool", poolName, "job_id", job.ID,
+		"attempt_count", job.AttemptCount, "max_attempts", job.MaxAttempts,
 		"error", processErr,
 	)
 
 	errorCode := classifyUploadError(processErr)
 	if job.AttemptCount >= job.MaxAttempts {
-		if markErr := w.jobRepo.MarkDeadLetter(ctx, job.ID, w.workerID, errorCode, processErr.Error()); markErr != nil {
+		if markErr := w.jobRepo.MarkDeadLetter(ctx, job.ID, workerID, errorCode, processErr.Error()); markErr != nil {
 			w.logger.Error("upload worker: MarkDeadLetter failed",
-				"job_id", job.ID, "error", markErr)
+				"pool", poolName, "job_id", job.ID, "error", markErr)
 		}
 		return
 	}
 
 	backoff := computeUploadBackoff(job.AttemptCount)
-	if markErr := w.jobRepo.MarkRetry(ctx, job.ID, w.workerID, errorCode, processErr.Error(), time.Now().Add(backoff)); markErr != nil {
+	if markErr := w.jobRepo.MarkRetry(ctx, job.ID, workerID, errorCode, processErr.Error(), time.Now().Add(backoff)); markErr != nil {
 		w.logger.Error("upload worker: MarkRetry failed",
-			"job_id", job.ID, "error", markErr)
+			"pool", poolName, "job_id", job.ID, "error", markErr)
 	}
 }
 
-// classifyUploadError maps a process-time error onto a stable taxonomy
-// used by error_code (migration 046) for dashboard filtering and retry
-// routing. Empty string means "unclassified" — the repository will
-// store NULL via NULLIF($3, '').
-func classifyUploadError(err error) string {
-	s := err.Error()
-	switch {
-	case containsAny(s, "drive", "googleapis.com/upload/drive"):
-		return "drive_error"
-	case containsAny(s, "s3", "tigris", "minio", "presigned"):
-		return "s3_error"
-	case containsAny(s, "youtube", "videos.insert"):
-		return "youtube_error"
-	case containsAny(s, "oauth", "401", "403", "unauthorized"):
-		return "auth_error"
-	case containsAny(s, "context deadline", "timeout"):
-		return "timeout"
-	default:
-		return ""
-	}
-}
-
-// containsAny is the cheap substring-or helper for classifyUploadError.
-func containsAny(s string, needles ...string) bool {
-	for _, n := range needles {
-		if len(n) == 0 {
-			continue
-		}
-		for i := 0; i+len(n) <= len(s); i++ {
-			if s[i:i+len(n)] == n {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// computeUploadBackoff implements AWS-style decorrelated jitter for
-// the upload worker, mirroring internal/outbox/dispatcher.go. The
-// formula is:
-//   cap   = 1h
-//   base  = 5s
-//   temp  = min(cap, prev * 3)
-//   sleep = uniform(base..temp)
-// where prev = base * 2^(attempt-1). Attempt is 1-indexed
-// (post-increment from the worker's view).
-func computeUploadBackoff(attempt int) time.Duration {
-	const (
-		base = 5 * time.Second
-		cap  = 1 * time.Hour
-	)
-	if attempt < 1 {
-		attempt = 1
-	}
-	prev := base
-	for i := 1; i < attempt; i++ {
-		prev *= 3
-		if prev > cap {
-			prev = cap
-			break
-		}
-	}
-	temp := prev
-	if temp > cap {
-		temp = cap
-	}
-	jitter := time.Duration(int64(temp) - int64(base))
-	if jitter < 0 {
-		jitter = 0
-	}
-	return base + jitter/2 // simple half-range jitter (good enough for retry spacing)
-}
-
-func (w *UploadWorker) processJob(ctx context.Context, job *models.UploadJob) error {
+// processIngestJob handles the Drive → S3 ingest path. On success
+// transitions the row to ready_to_publish via MarkIngested so the
+// upload pool can claim it next.
+func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJob, workerID string) error {
 	// Resolve the Drive importer capability.
 	provider, ok := w.capRouter.Get("google-drive")
 	if !ok {
@@ -422,12 +618,29 @@ func (w *UploadWorker) processJob(ctx context.Context, job *models.UploadJob) er
 		return fmt.Errorf("mark media asset ready: %w", err)
 	}
 
-	// Create post with targets. The optional job.ScheduledAt (migration
-	// 037) is propagated into post.ScheduledAt so the existing
-	// publish_worker `WHERE scheduled_at <= NOW()` predicate gates the
-	// publish until the right time. Nil => existing immediate-publish
-	// behaviour is preserved for legacy sync-style async calls.
+	// Transition the row: leased → ready_to_publish + asset_id +
+	// total_bytes/progress_bytes (CAS against workerID that
+	// ClaimBatch stamped on the row).
+	if err := w.jobRepo.MarkIngested(ctx, job.ID, workerID, asset.ID, verifiedSize); err != nil {
+		return fmt.Errorf("mark ingested: %w", err)
+	}
+
+	w.logger.Info("upload worker: ingest done",
+		"pool", "ingest", "job_id", job.ID, "asset_id", asset.ID, "size", verifiedSize)
+	return nil
+}
+
+// processPublishJob handles the S3 → post → YouTube publish path.
+// Assumes the row is in 'ready_to_publish' state with asset_id set.
+func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.UploadJob, workerID string) error {
+	if job.AssetID == nil || *job.AssetID == "" {
+		return fmt.Errorf("publish job %d missing asset_id; ingest did not complete", job.ID)
+	}
+	assetID := *job.AssetID
+
+	key := services.BuildUploadKey(job.UserID, job.SourceID)
 	mediaURL := w.storage.AssetURL(key)
+
 	post := &models.Post{
 		WorkspaceID: job.WorkspaceID,
 		Title:       job.Title,
@@ -461,17 +674,83 @@ func (w *UploadWorker) processJob(ctx context.Context, job *models.UploadJob) er
 			"job_id", job.ID, "post_id", post.ID, "scheduled_at", job.ScheduledAt.Format(time.RFC3339))
 	}
 
-	// Mark job completed. P1 — pass workerID for the CAS against the
-	// lease we just claimed via ClaimBatch; the worker's lease loss
-	// must not be able to silently overwrite a peer's terminal write.
-	if err := w.jobRepo.MarkCompleted(ctx, job.ID, w.workerID, post.ID, asset.ID); err != nil {
+	// Mark job completed. CAS against workerID ensures a peer that
+	// stole the lease (reaper release + peer's ClaimBatch
+	// re-claim) cannot overwrite a peer's terminal write.
+	if err := w.jobRepo.MarkCompleted(ctx, job.ID, workerID, post.ID, assetID); err != nil {
 		return fmt.Errorf("mark job completed: %w", err)
 	}
 
-	w.logger.Info("upload worker: job completed",
-		"job_id", job.ID,
-		"post_id", post.ID,
-		"asset_id", asset.ID,
-	)
+	w.logger.Info("upload worker: publish done",
+		"pool", "upload", "job_id", job.ID, "post_id", post.ID, "asset_id", assetID)
 	return nil
+}
+
+// classifyUploadError maps a process-time error onto a stable taxonomy
+// used by error_code (migration 046) for dashboard filtering and retry
+// routing. Empty string means "unclassified" — the repository will
+// store NULL via NULLIF.
+func classifyUploadError(err error) string {
+	s := err.Error()
+	switch {
+	case containsAny(s, "drive", "googleapis.com/upload/drive"):
+		return "drive_error"
+	case containsAny(s, "s3", "tigris", "minio", "presigned"):
+		return "s3_error"
+	case containsAny(s, "youtube", "videos.insert"):
+		return "youtube_error"
+	case containsAny(s, "oauth", "401", "403", "unauthorized"):
+		return "auth_error"
+	case containsAny(s, "context deadline", "timeout"):
+		return "timeout"
+	default:
+		return ""
+	}
+}
+
+// containsAny is the cheap substring-or helper for classifyUploadError.
+func containsAny(s string, needles ...string) bool {
+	for _, n := range needles {
+		if len(n) == 0 {
+			continue
+		}
+		for i := 0; i+len(n) <= len(s); i++ {
+			if s[i:i+len(n)] == n {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// computeUploadBackoff implements a deterministic decorrelated-jitter
+// curve for the upload worker. AWS-style: temp = min(cap, prev * 3),
+// sleep = base + (temp - base) / 2. Capped at 1h. Production polish
+// in a follow-up commit replaces this with math/rand-based uniform
+// sampling (mirroring internal/outbox/dispatcher.go::computeBackoff).
+func computeUploadBackoff(attempt int) time.Duration {
+	const (
+		base = 5 * time.Second
+		cap  = 1 * time.Hour
+	)
+	if attempt < 1 {
+		attempt = 1
+	}
+	prev := base
+	for i := 1; i < attempt; i++ {
+		prev *= 3
+		if prev > cap {
+			prev = cap
+			break
+		}
+	}
+	temp := prev
+	if temp > cap {
+		temp = cap
+	}
+	jitter := time.Duration(int64(temp) - int64(base))
+	if jitter < 0 {
+		jitter = 0
+	}
+	return base + jitter/2
 }

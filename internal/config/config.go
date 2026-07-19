@@ -157,6 +157,24 @@ type Config struct {
 	// Drive imports). Default 30s.
 	UploadWorkerIntervalSeconds int
 
+	// P1 step 2 — ingest pool / upload pool split. The upload_worker
+	// package now spawns two parallel pools against the upload_jobs
+	// queue, each with its own concurrency cap (the valutazione doc
+	// recommends 2–3 ingest + 3–4 YouTube-upload on dev boxen,
+	// scaling only after RAM/disk/bandwidth measurements).
+	//
+	// The ingest pool claims status IN ('pending','retry_wait') and
+	// streams Drive→S3; the upload pool claims status =
+	// 'ready_to_publish' and runs videos.insert. Both pools use the
+	// same lease + heartbeat machinery, with distinct workerID
+	// prefixes so a Mark* CAS can never collide.
+	UploadIngestConcurrency        int           // UPLOAD_INGEST_CONCURRENCY; default 3
+	YouTubeUploadConcurrency       int           // YOUTUBE_UPLOAD_CONCURRENCY; default 4
+	UploadLeaseTTLSeconds          int           // UPLOAD_LEASE_TTL_SECONDS; default 60
+	UploadHeartbeatIntervalSeconds int           // UPLOAD_HEARTBEAT_INTERVAL_SECONDS; default 20
+	UploadReclaimIntervalSeconds   int           // UPLOAD_RECLAIM_INTERVAL_SECONDS; default 30
+	UploadReclaimOnStart           bool          // UPLOAD_RECLAIM_ON_START; default true
+
 	// GoogleDriveAPIKey is a Google Cloud API key used to list CONTENTS
 	// of a public Drive folder when the user has not linked their Drive
 	// account. Without it, batch folder imports only work for folders
@@ -287,6 +305,13 @@ func Load() (*Config, error) {
 		WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
 		SessionsCleanupIntervalSeconds: getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
 		UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+		// P1 step 2 — worker pool config (see struct comment above).
+		UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
+		YouTubeUploadConcurrency:       getEnvInt("YOUTUBE_UPLOAD_CONCURRENCY", 4),
+		UploadLeaseTTLSeconds:          getEnvInt("UPLOAD_LEASE_TTL_SECONDS", 60),
+		UploadHeartbeatIntervalSeconds: getEnvInt("UPLOAD_HEARTBEAT_INTERVAL_SECONDS", 20),
+		UploadReclaimIntervalSeconds:   getEnvInt("UPLOAD_RECLAIM_INTERVAL_SECONDS", 30),
+		UploadReclaimOnStart:           getEnvBool("UPLOAD_RECLAIM_ON_START", true),
 		GoogleDriveAPIKey:              getEnv("GOOGLE_DRIVE_API_KEY", ""),
 		S3Endpoint:                     getEnv("S3_ENDPOINT", ""),
 		S3Bucket:                       getEnv("S3_BUCKET", ""),

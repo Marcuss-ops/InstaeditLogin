@@ -26,10 +26,15 @@ const (
 	// P1 — worker pool (migration 045). New lifecycle states that
 	// ClaimBatch / Heartbeat / MarkRetry / MarkDeadLetter use. See
 	// the migration header for the full transition diagram.
-	UploadJobStatusLeased     UploadJobStatus = "leased"      // claimed; lease_owner + heartbeat alive
-	UploadJobStatusRetryWait  UploadJobStatus = "retry_wait"  // transient failure; backoff not yet elapsed
-	UploadJobStatusDeadLetter UploadJobStatus = "dead_letter" // retry budget exhausted; operator triage
-	UploadJobStatusCancelled  UploadJobStatus = "cancelled"   // user cancelled before claim
+	UploadJobStatusLeased         UploadJobStatus = "leased"          // claimed; lease_owner + heartbeat alive
+	UploadJobStatusRetryWait      UploadJobStatus = "retry_wait"      // transient failure; backoff not yet elapsed
+	UploadJobStatusDeadLetter     UploadJobStatus = "dead_letter"     // retry budget exhausted; operator triage
+	UploadJobStatusCancelled      UploadJobStatus = "cancelled"       // user cancelled before claim
+	// P1 step 2 — ingest pool / upload pool split (migration 047).
+	// After the ingest pool streams Drive→S3 it transitions the row
+	// from 'leased' to 'ready_to_publish' (asset_id set). The upload
+	// pool's CTE then claims status='ready_to_publish'.
+	UploadJobStatusReadyToPublish UploadJobStatus = "ready_to_publish"
 )
 
 // UploadJob is a background job that downloads a video from a source
