@@ -1022,12 +1022,21 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    EntityTooLargeError:
+      description: |
+        413 returned by POST /internal/v1/deliveries when the body
+        exceeds the producer-side 8 MB cap.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/EntityTooLargeError'
+    
     VeloxValidationError:
       description: 422 returned by the producer-side validation chain (fast-fail order in handler doc-comment).
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error'
+            $ref: '#/components/schemas/VeloxValidationError'
     VeloxTransientError:
       description: |
         503 returned for transient workspace lookups. Per the Velox
