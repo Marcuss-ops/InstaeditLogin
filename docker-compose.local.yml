@@ -66,5 +66,25 @@ services:
   #      - media-backend
   #    profiles: ["velox"]
 
+# Velox internal bridge — redeclared for self-containment so the
+# overlay runs correctly when invoked as `docker compose -f
+# docker-compose.local.yml up` (without the base file the network
+# reference above would fail). `internal: true` disables the
+# default gateway for any container on this bridge; the same
+# hardening rationale as in docker-compose.yml applies.
+#
+# IMPORTANT: under the merged shape (`-f docker-compose.yml
+# -f docker-compose.local.yml`) Compose's network-map merge is
+# REPLACE-at-the-named-network level — the overlay's entire
+# value-object for `media-backend` replaces the base's. If this
+# overlay ever flips `internal` to `false`, the overlay WINS and the
+# Velox handoff bridge is silently downgraded (containers regain
+# Internet egress). Always keep `internal: true` here unless you
+# also add a host-firewall compensating control (iptables rules on
+# the bridge, ufw policies, etc.).
+networks:
+  media-backend:
+    internal: true
+
 volumes:
   instaedit_minio_data:
