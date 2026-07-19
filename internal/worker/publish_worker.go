@@ -36,6 +36,8 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // providerIdempotencyKeyPrefix is the namespace marker baked into the
@@ -407,28 +409,39 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		raw, hasRaw := w.router.Get(account.Platform)
 		if hasRaw {
 			if binder, ok := raw.(services.YouTubeChannelBinder); ok {
-				if bindErr := binder.ValidateChannelBinding(ctx, oauthToken.AccessToken, account.PlatformUserID); bindErr != nil {
-					if errors.Is(bindErr, services.ErrYouTubeChannelMismatch) {
-						if flagErr := w.userRepo.MarkReauthRequired(ctx, account.ID, "youtube_channel_mismatch", bindErr.Error()); flagErr != nil {
-							// Soft error — the post_target still goes
-							// to 'failed' below; we just couldn't
-							// stamp the platform_account's flag. Log
-							// so the operator sees both signals.
-							w.logger.Warn("could not flag platform_account reauth_required after youtube channel mismatch",
-								"platform_account_id", account.ID, "post_id", target.PostID, "flag_error", flagErr)
-						}
-						w.logger.Warn("youtube channel binding mismatch; refusing upload",
-							"target_id", target.ID, "post_id", target.PostID,
-							"platform_account_id", account.ID,
-							"expected_channel_id", account.PlatformUserID,
-							"error", bindErr)
-					} else {
-						w.logger.Warn("youtube channel binding check failed (transient); will retry",
-							"target_id", target.ID, "post_id", target.PostID,
-							"platform_account_id", account.ID, "error", bindErr)
+			if bindErr := binder.ValidateChannelBinding(ctx, oauthToken.AccessToken, account.PlatformUserID); bindErr != nil {
+				if errors.Is(bindErr, services.ErrYouTubeChannelMismatch) {
+					if flagErr := w.userRepo.MarkReauthRequired(ctx, account.ID, "youtube_channel_mismatch", bindErr.Error()); flagErr != nil {
+						// Soft error — the post_target still goes
+						// to 'failed' below; we just couldn't
+						// stamp the platform_account's flag. Log
+						// so the operator sees both signals.
+						w.logger.Warn("could not flag platform_account reauth_required after youtube channel mismatch",
+							"platform_account_id", account.ID, "post_id", target.PostID, "flag_error", flagErr)
 					}
-					return w.markFailed(target, "youtube channel binding check: "+bindErr.Error())
+					// P0 #2: increment the operator-facing /
+					// dashboard signal alongside the DB-side
+					// flag. Drift up means Google silently
+					// re-bound the OAuth grant to a different
+					// Brand Account — the operator must
+					// investigate before reconnecting.
+					// Increment is UNCONDITIONAL on mismatch
+					// detection (not on DB-write success) so a
+					// transient MarkReauthRequired blip cannot
+					// hide reauth rates from the dashboard.
+					metrics.RecordYouTubePublishChannelMismatch(account.Platform)
+					w.logger.Warn("youtube channel binding mismatch; refusing upload",
+						"target_id", target.ID, "post_id", target.PostID,
+						"platform_account_id", account.ID,
+						"expected_channel_id", account.PlatformUserID,
+						"error", bindErr)
+				} else {
+					w.logger.Warn("youtube channel binding check failed (transient); will retry",
+						"target_id", target.ID, "post_id", target.PostID,
+						"platform_account_id", account.ID, "error", bindErr)
 				}
+				return w.markFailed(target, "youtube channel binding check: "+bindErr.Error())
+			}
 			}
 			// If the registered provider doesn't implement the
 			// binder (older test fixtures, future non-YouTube

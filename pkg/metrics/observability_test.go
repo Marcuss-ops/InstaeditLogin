@@ -69,6 +69,7 @@ func TestObservability_MetricNamesRegistered(t *testing.T) {
 	providerRateLimits.WithLabelValues("__registration_probe__").Add(0)
 	tokenRefreshFailures.WithLabelValues("__registration_probe__", "test").Add(0)
 	reauthRequiredAccounts.WithLabelValues("__registration_probe__").Add(0)
+	YouTubePublishChannelMismatch.WithLabelValues("__registration_probe__").Add(0)
 	webhookDeliveryFailures.WithLabelValues("__registration_probe__", "test").Add(0)
 	httpRequestsTotal.WithLabelValues("__registration_probe__", "GET", "200").Add(0)
 	httpRequestLatencySeconds.WithLabelValues("__registration_probe__").Observe(0)
@@ -86,6 +87,7 @@ func TestObservability_MetricNamesRegistered(t *testing.T) {
 		"provider_rate_limits_total",
 		"token_refresh_failures_total",
 		"reauth_required_accounts_total",
+		"youtube_publish_channel_mismatch_total",
 		"webhook_delivery_failures_total",
 		// Histograms
 		"provider_latency_seconds",
@@ -131,6 +133,7 @@ func TestObservability_CountersHaveTotalSuffix(t *testing.T) {
 		"provider_rate_limits_total",
 		"token_refresh_failures_total",
 		"reauth_required_accounts_total",
+		"youtube_publish_channel_mismatch_total",
 		"webhook_delivery_failures_total",
 		"http_requests_total",
 	}
@@ -272,6 +275,43 @@ func TestRecordPublishAttempt_EmptyProviderSkipped(t *testing.T) {
 func TestRecordProviderLatency_EmptyProviderSkipped(t *testing.T) {
 	// Should not panic.
 	RecordProviderLatency("", OperationPublish, 0.5)
+}
+
+// ---------------------------------------------------------------------------
+// youtube_publish_channel_mismatch_total tests (P0 #2).
+//
+// The metric increments in the publish worker's
+// ErrYouTubeChannelMismatch branch (alongside the
+// MarkReauthRequired DB write). Drift up means Google silently
+// re-bound the OAuth grant to a different Brand Account — the
+// operator must investigate before reconnecting. Tests assert the
+// happy-path increment + the empty-provider skip path.
+// ---------------------------------------------------------------------------
+
+// TestRecordYouTubePublishChannelMismatch_HappyPath verifies that
+// the helper increments the labeled series by exactly 1 on each
+// call (the canonical counter semantics). Uses testutil.ToFloat64
+// to read a single labeled series without mutating global state.
+func TestRecordYouTubePublishChannelMismatch_HappyPath(t *testing.T) {
+	YouTubePublishChannelMismatch.Reset()
+	RecordYouTubePublishChannelMismatch("youtube")
+	if got := testutil.ToFloat64(YouTubePublishChannelMismatch.WithLabelValues("youtube")); got != 1 {
+		t.Errorf("youtube_publish_channel_mismatch_total{youtube}: want 1, got %v", got)
+	}
+}
+
+// TestRecordYouTubePublishChannelMismatch_EmptyProviderSkipped is
+// the defensive guard: an empty provider label would create a
+// phantom series unattributable to any specific platform, so the
+// helper returns early without recording. Mirrors the empty-input
+// policy of the sibling RecordReauthRequired / RecordPublishAttempt
+// helpers.
+func TestRecordYouTubePublishChannelMismatch_EmptyProviderSkipped(t *testing.T) {
+	YouTubePublishChannelMismatch.Reset()
+	RecordYouTubePublishChannelMismatch("")
+	if got := testutil.ToFloat64(YouTubePublishChannelMismatch.WithLabelValues("")); got != 0 {
+		t.Errorf("empty provider must NOT increment (avoid phantom series); got %v", got)
+	}
 }
 
 // ---------------------------------------------------------------------------

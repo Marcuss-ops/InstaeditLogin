@@ -19,10 +19,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // ------------------------------------------------------------------
@@ -1422,4 +1425,114 @@ func TestPublishTarget_YouTube_ChannelCheck_Transient_FailsTargetWithoutFlagging
 		t.Errorf("ErrorMessage should mention the binding check, got %q", posts.updateTargets[0].ErrorMessage)
 	}
 	_ = err
+}
+
+// TestPublishTarget_YouTube_ChannelBindingMismatch_IncrementsMetric (P0 #2)
+// is the table-driven coverage of the
+// youtube_publish_channel_mismatch_total counter. The metric MUST
+// increment ONLY on the ErrYouTubeChannelMismatch branch (which
+// ALSO calls MarkReauthRequired); the match branch and the
+// transient 5xx branch MUST NOT increment because no reauth flag
+// is written on those paths (drift up = Google silently re-bound
+// the OAuth grant to a different Brand Account).
+//
+// Delta-based assertion (read before + read after) instead of
+// Reset() so other parallel-sibling metric tests that share the
+// global CounterVec don't get wiped between cases. The
+// (provider="youtube") label is the only series this test reads;
+// sibling tests use other labels.
+func TestPublishTarget_YouTube_ChannelBindingMismatch_IncrementsMetric(t *testing.T) {
+	cases := []struct {
+		name                  string
+		bindResultErr         error
+		wantMetricDelta       float64
+		wantMarkReauthCalls   int
+	}{
+		{
+			name:                "match_does_not_increment",
+			bindResultErr:       nil,
+			wantMetricDelta:     0,
+			wantMarkReauthCalls: 0,
+		},
+		{
+			name: "mismatch_increments_by_one",
+			bindResultErr: fmt.Errorf("%w: %q is not in channels.list(mine=true) result",
+				services.ErrYouTubeChannelMismatch, "UCexpectedChanID"),
+			wantMetricDelta:     1,
+			wantMarkReauthCalls: 1,
+		},
+		{
+			name: "transient_does_not_increment",
+			// 503 from channels.list — MISMATCH PATH MUST NOT FIRE
+			// because this is wrapped plainly (no ErrYouTubeChannelMismatch
+			// in the chain). Mirrors the existing
+			// TestPublishTarget_YouTube_ChannelCheck_Transient_ path.
+			bindResultErr:       errors.New("youtube channel binding: channels.list returned 503: upstream"),
+			wantMetricDelta:     0,
+			wantMarkReauthCalls: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := testutil.ToFloat64(metrics.YouTubePublishChannelMismatch.WithLabelValues("youtube"))
+
+			posts := &mockPostStore{
+				claimFn: func(id int64) (bool, error) { return true, nil },
+				findByIDFn: func(id int64) (*models.Post, error) {
+					return &models.Post{ID: 100, Caption: "x", MediaURL: "https://cdn.example.com/v.mp4"}, nil
+				},
+			}
+			users := &mockUserStore{
+				findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+					return &models.PlatformAccount{
+						ID:             11,
+						Platform:       models.PlatformYouTube,
+						PlatformUserID: "UCexpectedChanID",
+					}, nil
+				},
+				markReauthRequiredFn: func(ctx context.Context, id int64, code, message string) error {
+					if tc.wantMarkReauthCalls == 0 {
+						t.Errorf("MarkReauthRequired MUST NOT be called when bindResultErr is non-mismatch (%v)", tc.bindResultErr)
+					}
+					return nil
+				},
+			}
+			svc := &mockProvider{
+				baseMockProvider: baseMockProvider{platform: "youtube"},
+				publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+					// For match sub-case Publish is expected to be
+					// called. For mismatch/transient the
+					// channel-binding branch short-circuits BEFORE
+					// Publish and the existing tests
+					// (TestPublishTarget_YouTube_ChannelMismatch_FlagsReauthAndFailsTarget_
+					// + TestPublishTarget_YouTube_ChannelCheck_Transient_)
+					// assert that. Returning a non-nil result here
+					// keeps the sync publishing path (which reads
+					// result.PlatformMediaID) free of nil-deref in
+					// the match happy path.
+					return &models.PublishResult{PlatformMediaID: "yt-test-media"}, nil
+				},
+				validateChannelBindingFn: func(ctx context.Context, accessToken, expectedChannelID string) error {
+					return tc.bindResultErr
+				},
+			}
+			vault := &mockCredentialVault{
+				renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+					return &models.OAuthToken{AccessToken: "t"}, nil
+				},
+			}
+			w := newTestWorker(posts, users, "youtube", svc, vault)
+
+			_ = w.publishTarget(context.Background(), scheduledTarget())
+
+			after := testutil.ToFloat64(metrics.YouTubePublishChannelMismatch.WithLabelValues("youtube"))
+			delta := after - before
+			if delta != tc.wantMetricDelta {
+				t.Errorf("youtube_publish_channel_mismatch_total{youtube} delta: want %v, got %v", tc.wantMetricDelta, delta)
+			}
+			if users.markReauthRequiredCalls != tc.wantMarkReauthCalls {
+				t.Errorf("MarkReauthRequired calls: want %d, got %d (must match metric increment: the two fire together)", tc.wantMarkReauthCalls, users.markReauthRequiredCalls)
+			}
+		})
+	}
 }

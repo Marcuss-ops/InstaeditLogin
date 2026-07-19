@@ -242,6 +242,33 @@ var (
 		[]string{"provider"},
 	)
 
+	// youtubePublishChannelMismatch (P0 #2 — pre-upload channel binding
+	// re-check). Counts every YouTube publish attempt where the
+	// channels.list?mine=true response reports a channel set that does
+	// NOT contain the channel id stored on platform_accounts.
+	// platform_user_id. Each increment means a publish was refused AND
+	// the platform_account was flagged status='reauth_required' +
+	// reauth_required_at=NOW() so the operator's dashboard prompts
+	// the user to reconnect. Drift up here typically means Google
+	// silently re-bound the OAuth grant to a different Brand Account
+	// (operator migration or fraud); the operator should investigate
+	// before reconnecting.
+	//
+	// Exported (capital Y) so cross-package consumers (notably
+	// internal/worker/publish_worker_test.go) can read the counter
+	// value with prometheus/client_golang/prometheus/testutil for
+	// behaviour assertions. The other counters in this file are
+	// unexported because their tests live in this same package;
+	// this one needs cross-package access because the detection
+	// site lives one package over.
+	YouTubePublishChannelMismatch = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "youtube_publish_channel_mismatch_total",
+			Help: "YouTube OAuth grants that are bound to a different channel than the platform_account row expected. Each increment means a publish attempt was refused AND the platform_account was flagged reauth_required. Drift up here typically means Google silently re-bound the grant to a different Brand Account.",
+		},
+		[]string{"provider"},
+	)
+
 	// webhookDeliveryFailures counts webhook delivery outcomes that
 	// did NOT succeed (retry or dead). Three series:
 	//   - "event_type" — webhook event name. CARDINALITY ALERT IDEA
@@ -335,6 +362,7 @@ func init() {
 		providerRateLimits,
 		tokenRefreshFailures,
 		reauthRequiredAccounts,
+		YouTubePublishChannelMismatch,
 		webhookDeliveryFailures,
 		uploadThroughputBytes,
 		httpRequestsTotal,
@@ -421,6 +449,28 @@ func RecordReauthRequired(provider string) {
 		return
 	}
 	reauthRequiredAccounts.WithLabelValues(provider).Inc()
+}
+
+// RecordYouTubePublishChannelMismatch (P0 #2) increments
+// youtube_publish_channel_mismatch_total. Called from the publish
+// worker when YouTubeOAuthService.ValidateChannelBinding returns
+// ErrYouTubeChannelMismatch (the channels.list?mine=true response
+// does not contain the channel id stored on
+// platform_accounts.platform_user_id). The worker ALSO writes
+// platform_accounts.status='reauth_required' + reauth_required_at
+// =NOW() via UserStore.MarkReauthRequired in the same branch; the
+// metric is the operator-facing / dashboard signal alongside the
+// DB-side flag.
+//
+// Increment is unconditional on the mismatch DETECTION (not on
+// DB-write success): a transient MarkReauthRequired blip must NOT
+// hide reauth rates from the dashboard, which is the operator's
+// signal to investigate before reconnecting.
+func RecordYouTubePublishChannelMismatch(provider string) {
+	if provider == "" {
+		return
+	}
+	YouTubePublishChannelMismatch.WithLabelValues(provider).Inc()
 }
 
 // RecordWebhookDeliveryFailure increments webhook_delivery_failures_total.
