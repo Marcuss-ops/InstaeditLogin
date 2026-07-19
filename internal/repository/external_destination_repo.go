@@ -41,10 +41,14 @@ var uniqueViolationDestTripleDetailRegex = regexp.MustCompile(
 // referenced from external_deliveries today, from a future
 // external_audit_log table, or from any other present-or-future
 // table holding REFERENCES external_destinations(id)). The
-// canonical Postgres Detail shape for an FK violation on a
-// DELETE FROM external_destinations WHERE id=X is:
+// Postgres emits the REFERENCING table identifier in EITHER of
+// two Detail shapes for an FK violation on a
+// DELETE FROM external_destinations WHERE id=X, depending on
+// whether the FK identifier was created with double-quotes
+// (mixed-case preservation):
 //
-//	Key (id)=(extdst_01JABC) is still referenced from table "<REF>".
+//	Key (id)=(extdst_01JABC) is still referenced from table "<REF>".   // QUOTED — FK identifier was created with "MixedCase" (preserves case when emitting Detail)
+//	Key (id)=(extdst_01JABC) is still referenced from table <REF>.     // UNQUOTED — FK identifier is bare lowercase / created without quotes (the canonical case for our schema)
 //
 // The capture group accepts BOTH the QUOTED and the UNQUOTED
 // Detail shapes and ALWAYS yields a BARE REFERENCING table
