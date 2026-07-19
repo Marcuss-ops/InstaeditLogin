@@ -200,6 +200,26 @@ type Router struct {
 	// SchemaHealthy. Nil disables both (test fixture path); the
 	// production wiring in cmd/server/main.go passes app.DB.
 	dbForReady *sql.DB
+
+	// veloxAPIToken (P1 Velox integration) is the static shared
+	// secret used by the service-to-service /internal/v1/* routes.
+	// Loaded from env VELOX_API_TOKEN via internal/config + wired
+	// with api.WithVeloxAPIToken. When empty AND registerInternalVeloxRoutes
+	// is called, the route refuses to register (operator-safe boot
+	// fail-fast). When empty AT REQUEST TIME (the route was
+	// registered), the middleware returns 503 + an error log.
+	veloxAPIToken string
+
+	// externalDestinations (P1 Velox integration) is the
+	// persistence contract wired via WithExternalDestinationStore.
+	// When nil, the /internal/v1 routes are not registered
+	// (matches the postStore / workspaceStore nil-guard
+	// pattern). Read directly from the Router field — the
+	// handler does NOT go through a captured-config struct to
+	// avoid an option-order trap (snapshotting r.workspaceStore /
+	// r.userRepo at option-call time would capture nil if
+	// wired in the wrong order).
+	externalDestinations ExternalDestinationStore
 }
 
 // WithDB wires the database for the /ready handler's DB ping +
@@ -777,16 +797,25 @@ func (r *Router) Setup() http.Handler {
 		// the existing flag).
 		r.mux.Method(http.MethodPost, "/admin/channels/import-csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminImportChannelsCSV)))
 		r.mux.Method(http.MethodGet, "/admin/channels/pending", adminAuthMiddleware(http.HandlerFunc(r.handleAdminPendingChannels)))
-		// P2 — admin connect-link. POST /admin/channels/{channel_id}/connect-link
-		// returns a signed OAuth URL with prompt=consent + select_account
-		// + login_hint=manager_email_hint. The callback (handlers.go
-		// handleCallback) detects the JWT-shaped state and refuses the
-		// 422/409 mismatch cleanly. Intentional split between this
-		// admin-side URL issuer (here) AND the OAuth callback (universal
-		// /api/v1/auth/{provider}/callback, NOT in /admin/) — the
-		// callback is per-provider, the URL issuer is per-channel.
-		r.mux.Method(http.MethodPost, "/admin/channels/{channel_id}/connect-link", adminAuthMiddleware(http.HandlerFunc(r.handleAdminChannelConnectLink)))
+	// P2 — admin connect-link. POST /admin/channels/{channel_id}/connect-link
+	// returns a signed OAuth URL with prompt=consent + select_account
+	// + login_hint=manager_email_hint. The callback (handlers.go
+	// handleCallback) detects the JWT-shaped state and refuses the
+	// 422/409 mismatch cleanly. Intentional split between this
+	// admin-side URL issuer (here) AND the OAuth callback (universal
+	// /api/v1/auth/{provider}/callback, NOT in /admin/) — the
+	// callback is per-provider, the URL issuer is per-channel.
+	r.mux.Method(http.MethodPost, "/admin/channels/{channel_id}/connect-link", adminAuthMiddleware(http.HandlerFunc(r.handleAdminChannelConnectLink)))
 	}
+
+	// P1 Velox integration — service-to-service /internal/v1 routes.
+	// Registered LAST in Setup() because the path prefix is most
+	// specific (no share with /api/v1/*). registerInternalVeloxRoutes
+	// is a no-op if either VELOX_API_TOKEN OR the destination
+	// store is unwired (boot-time fail-fast per
+	// internal_velox.go::registerInternalVeloxRoutes contract).
+	// Production wiring in internal/bootstrap.Wire passes both.
+	r.registerInternalVeloxRoutes()
 
 	r.mux.Method(http.MethodGet, "/api/v1/health", http.HandlerFunc(r.handleHealth))
 	// Blocco #5.3 — /ready is top-level + public. Readiness
