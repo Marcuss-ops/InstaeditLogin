@@ -210,6 +210,23 @@ func RecordVeloxDownloadJobDrop(source string) {
 	veloxDownloadJobDrops.WithLabelValues(source).Inc()
 }
 
+// RecordVeloxDownloadJobDrop increments the velox_download_job_drops_total
+// counter for a specific source label. Called from the producer-side
+// enqueue block in pkg/api/internal_velox.go when the select/default
+// fires (r.downloadJobCh is saturated). Pair the Inc() with a sibling
+// slog.Error that carries social_delivery_id so an operator can grep
+// the log + match the value against the counter in a Grafana panel.
+//
+// Currently the only source is "post_deliveries"; future producers
+// (Dropbox upload-batch handoffs, operator-side re-enqueue tools)
+// register their own source label without widening the scrape.
+func RecordVeloxDownloadJobDrop(source string) {
+	if source == "" {
+		source = "unknown"
+	}
+	veloxDownloadJobDrops.WithLabelValues(source).Inc()
+}
+
 // SetOAuthConnectionsPerSubject is called by the periodic
 // collector (pkg/metrics/collector.go::collectOAuthConnectionsPerSubject)
 // once per tick AFTER ResetOAuthConnectionsPerSubjectMetrics so a
