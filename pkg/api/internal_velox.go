@@ -166,7 +166,8 @@ type VeloxDeliverArtifactResponse struct {
 // not configured) are emitted by the internalVeloxAuth
 // middleware BEFORE this handler runs; the spec is satisfied
 // via the middleware's existing behaviour, no per-handler code.
-func (r *Router) handleGetInternalDelivery(w http.ResponseWriter, req *http.Request) {	id := req.PathValue("id")
+func (r *Router) handleGetInternalDelivery(w http.ResponseWriter, req *http.Request) {
+	id := req.PathValue("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "delivery id required")
 		return
@@ -249,10 +250,10 @@ var sha256HexRegex = regexp.MustCompile(`^[a-f0-9]{64}$`)
 // a delivery row's expected_mime_type from disagreeing with
 // the actual streamed bytes' detected mime_type.
 //
-//   video/mp4        — MP4 container, canonical for YouTube ingest
-//   video/quicktime  — MOV container (Apple ecosystem export)
-//   video/webm       — WebM (low-bitrate alternative)
-//   video/x-matroska — MKV (less common but spec'd)
+//	video/mp4        — MP4 container, canonical for YouTube ingest
+//	video/quicktime  — MOV container (Apple ecosystem export)
+//	video/webm       — WebM (low-bitrate alternative)
+//	video/x-matroska — MKV (less common but spec'd)
 var mimeAllowlist = map[string]bool{
 	"video/mp4":        true,
 	"video/quicktime":  true,
@@ -455,18 +456,18 @@ func isNonEmptyJSONObject(raw json.RawMessage) bool {
 // contract.
 //
 // IDEMPOTENCY CONTRACT (per user spec):
-//   1. Compute request_sha256 = sha256(raw_body_bytes) inside
-//      external_delivery_repo.Insert (the Insert computes the
-//      hex from rawBody internally).
-//   2. INSERT path look-and-write happens under a single
-//      pg_advisory_xact_lock so concurrent replays serialise.
-//   3. SAME SHA → reuse social_delivery_id, return 202 with
-//      already_exists=true.
-//   4. DIFFERENT SHA → 409 with structured
-//      VeloxDeliverArtifactConflictResponse body
-//      (error/code/idempotency_key).
-//   5. NOT FOUND → INSERT new row, return 202 with
-//      already_exists=false.
+//  1. Compute request_sha256 = sha256(raw_body_bytes) inside
+//     external_delivery_repo.Insert (the Insert computes the
+//     hex from rawBody internally).
+//  2. INSERT path look-and-write happens under a single
+//     pg_advisory_xact_lock so concurrent replays serialise.
+//  3. SAME SHA → reuse social_delivery_id, return 202 with
+//     already_exists=true.
+//  4. DIFFERENT SHA → 409 with structured
+//     VeloxDeliverArtifactConflictResponse body
+//     (error/code/idempotency_key).
+//  5. NOT FOUND → INSERT new row, return 202 with
+//     already_exists=false.
 //
 // The three-way outcome is detected in the handler by comparing
 // the returned record's ID to the minted ID: equal → freshly
@@ -481,15 +482,15 @@ func isNonEmptyJSONObject(raw json.RawMessage) bool {
 // alert on slow path without paging.
 //
 // VALIDATION CHAIN (fast-fail-first, ordered by error cost):
-//   1. Authorization (Bearer middleware, 401/403/503)
-//   2. Body cap (8 MB → 413 if over)
-//   3. JSON parsing (400 if malformed)
-//   4. idempotency_key presence + length ≤ 256 (422)
-//   5. artifact.sha256 regex (422)
-//   6. artifact.size_bytes > 0 (422)
-//   7. artifact.mime_type allowlist (422)
-//   8. metadata non-empty JSON object (422)
-//   9. external_destination_id present in DB (422)
+//  1. Authorization (Bearer middleware, 401/403/503)
+//  2. Body cap (8 MB → 413 if over)
+//  3. JSON parsing (400 if malformed)
+//  4. idempotency_key presence + length ≤ 256 (422)
+//  5. artifact.sha256 regex (422)
+//  6. artifact.size_bytes > 0 (422)
+//  7. artifact.mime_type allowlist (422)
+//  8. metadata non-empty JSON object (422)
+//  9. external_destination_id present in DB (422)
 //  10. Insert call (3-way outcome)
 //
 // All 422 paths funnel through writeError so callers see the
@@ -688,14 +689,14 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 //
 // RATIONALE — five server-side checks:
 //
-//   1. Destination row exists.
-//   2. Destination row enabled = TRUE.
-//   3. Workspace row exists (workspaces has no archived_at column;
-//      "attivo" maps to "row present"; FindByID non-nil == active).
-//   4. Platform_account exists.
-//   5. Platform_account NOT in reauth_required — both signals
-//      (status enum + reauth_required_at timestamp) checked
-//      defense-in-depth.
+//  1. Destination row exists.
+//  2. Destination row enabled = TRUE.
+//  3. Workspace row exists (workspaces has no archived_at column;
+//     "attivo" maps to "row present"; FindByID non-nil == active).
+//  4. Platform_account exists.
+//  5. Platform_account NOT in reauth_required — both signals
+//     (status enum + reauth_required_at timestamp) checked
+//     defense-in-depth.
 //
 // All dependent stores (workspaceStore + userRepo) are read
 // from Router fields DIRECTLY (not via a captured config
@@ -829,16 +830,24 @@ func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *h
 	}
 
 	// P1 deletion check: refuse explicitly-cancelled accounts
-	// (status="revoked" OR status="disconnected"). These mean
-	// the user took an explicit action to terminate the OAuth
-	// grant, so keeping the destination enabled-but-unusable
-	// would surface as a publish-time blocked_auth. Returning
-	// 404 here gives Velox the same "destination not found"
-	// signal as a removed row so the worker reissues with a
-	// fresh id (matches the reauth_required collapse semantics
-	// documented at the file header).
-	if pa.Status == "revoked" || pa.Status == models.AccountStatusRevoked ||
-		pa.Status == "disconnected" || pa.Status == models.AccountStatusDisconnected {
+	// (status=AccountStatusRevoked OR AccountStatusDisconnected).
+	// These mean the user took an explicit action to terminate
+	// the OAuth grant, so keeping the destination
+	// enabled-but-unusable would surface as a publish-time
+	// blocked_auth. Returning 404 here gives Velox the same
+	// "destination not found" signal as a removed row so the
+	// worker reissues with a fresh id (matches the
+	// reauth_required collapse semantics documented at the
+	// file header).
+	//
+	// The check uses the typed AccountStatus* constants from
+	// internal/models/user.go — they ARE the canonical string
+	// aliases ("revoked", "disconnected"); checking the model
+	// constants instead of bare literals removes the
+	// maintenance trap of a literal drifting from the canonical
+	// value during a future status-rename migration.
+	if pa.Status == models.AccountStatusRevoked ||
+		pa.Status == models.AccountStatusDisconnected {
 		slog.Warn("velox validate: destination has cancelled channel",
 			"destination_id", id, "platform_account_id", pa.ID,
 			"status", pa.Status)
@@ -894,17 +903,17 @@ type VeloxValidateDestinationResponse struct {
 // Field taxonomy:
 //   - status              : mirrors models.ExternalDeliveryStatus string rep
 //   - retry_wait_reason   : derived from last_error_code when status == retry_wait;
-//                           empty string in all other states (operators reading
-//                           the GET body know to ignore the field unless status is
-//                           retry_wait)
+//     empty string in all other states (operators reading
+//     the GET body know to ignore the field unless status is
+//     retry_wait)
 //   - last_error_code     : whatever UpdateStatus most recently stamped; empty
-//                           before any error transition
+//     before any error transition
 //   - last_error_message  : human-readable counterpart to last_error_code
 //   - platform_media_id   : populated from platform_provider after publish
 //   - platform_url        : same
 //   - published_at        : populated from completed_at IF status == published;
-//                           empty for any other state (failed/deleted/completed-but-
-//                           not-published are not "published_at")
+//     empty for any other state (failed/deleted/completed-but-
+//     not-published are not "published_at")
 //
 // The omitempty tags keep the JSON shape minimal: a brand-new row
 // returns just {"status": "accepted"}. The shape is forward-compat:
@@ -934,7 +943,7 @@ type VeloxGetDeliveryResponse struct {
 //     veloxAPIToken (workspaceStore + userRepo required at
 //     handler-time for the full happy path; checked inline).
 //   - deliveries: externalDestinations + externalDeliveries
-//     + veloxAPIToken (all three required AT register-time;
+//   - veloxAPIToken (all three required AT register-time;
 //     the handler's defensive nil-checks also catch a
 //     misordered wiring).
 //
