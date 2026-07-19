@@ -26,6 +26,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/contracts"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
@@ -77,6 +78,15 @@ func (h repoUserWorkspaceHelper) ListMemberships(_ context.Context, userID int64
 	}
 	return out, nil
 }
+
+// VeloxDownloadJob aliases the worker-package type so handlers and
+// local test files (package api) can refer to it WITHOUT an explicit
+// worker. prefix at the call site. The canonical channel-item shape
+// lives in internal/worker/velox_artifact_downloader.go; pkg/api only
+// re-exports the name. Type aliases (Token `=`, NOT `type X Y`) are
+// structurally identical to their target so channel assignments,
+// field accesses, and test unmarshalling all work identically.
+type VeloxDownloadJob = worker.VeloxDownloadJob
 
 type Router struct {
 	mux              *chi.Mux
