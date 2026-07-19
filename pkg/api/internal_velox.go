@@ -41,24 +41,35 @@ type ExternalDestinationStore interface {
 
 // ExternalDeliveryStore is the persistence contract for
 // external_deliveries. Mirrors the ExternalDestinationStore
-// pattern above. Method scope at Phase 1 = Insert ONLY (write-
-// path of POST /deliveries).
+// pattern above. Method scope at Phase 1 = Insert + GetByID —
+// Insert is the write-path of POST /deliveries; GetByID is the
+// read-path of GET /internal/v1/deliveries/{id} (Velox
+// reconciliation/poll when the callback channel drops a
+// packet).
 //
-// Reads (GetByID, GetByIdempotencyKey, GetByExternalDeliveryID,
-// ListByStatus) and mutators (UpdateStatus,
-// LinkUploadJob) live on the SAME *repository.ExternalDeliveryRepository
-// struct but are NOT in this interface because the API surface
-// for POST /deliveries today only writes; the GET endpoint is
-// scoped to the future /internal/v1/deliveries/{id} (P1
-// follow-up) which will use its own narrower interface.
+// Reads beyond GetByID (GetByIdempotencyKey,
+// GetByExternalDeliveryID, ListByStatus) and other mutators
+// (UpdateStatus, LinkUploadJob) live on the SAME
+// *repository.ExternalDeliveryRepository struct but are NOT
+// in this interface because the API surface today only writes
+// (POST /deliveries) AND reads by primary key (GET
+// /deliveries/{id}); reconciliation workers poll primary
+// keys, not idempotency- or status-keyed indexes. A future
+// /admin/velox/deliveries endpoint could expand the interface
+// once the operator-side UI needs status filtering.
 //
-// The handler uses the three-way Insert outcome (fresh insert
-// vs same-SHA reuse vs different-SHA ErrIdempotencyConflict)
-// implemented via pg_advisory_xact_lock + SELECT + INSERT in
-// the same transaction (see the repo doc-comment for the
-// full idempotency semantics).
+// POST /deliveries uses the three-way Insert outcome (fresh
+// insert vs same-SHA reuse vs different-SHA
+// ErrIdempotencyConflict) implemented via pg_advisory_xact_lock
+// + SELECT + INSERT in the same transaction (see the repo
+// doc-comment for the full idempotency semantics). GET
+// /deliveries/{id} returns (nil, nil) on miss — the handler
+// turns that into 404 with no existence leak; a non-nil error
+// from the repo surfaces as 500 (operator-pageable DB
+// incident, not a clean 404).
 type ExternalDeliveryStore interface {
 	Insert(ctx context.Context, e *models.ExternalDelivery, rawBody []byte) (*models.ExternalDelivery, error)
+	GetByID(ctx context.Context, id string) (*models.ExternalDelivery, error)
 }
 
 // Compile-time assertions the production repository satisfies
@@ -134,6 +145,81 @@ type VeloxDeliverArtifactResponse struct {
 	SocialDeliveryID string `json:"social_delivery_id"`
 	Status           string `json:"status"` // always "accepted"
 	AlreadyExists    bool   `json:"already_exists"`
+}
+
+// handleGetInternalDelivery implements
+// GET /internal/v1/deliveries/{id} for the Velox integration
+// contract. Velox uses this for reconciliation/poll when its
+// callback channel drops a packet (network blip, peer restarts,
+// webhook 5xx storm). Returns a small JSON shape with the
+// delivery's authoritative state at lookup time.
+//
+// 404 is reserved for "id never accepted" — distinct from "we
+// accepted then lost it" semantics. We deliberately collapse
+// unknown-id and rejected/cancelled rows into 404 so the
+// caller cannot use the response to enumerate row ids.
+//
+// 401 (Bearer missing) AND 403 (token mismatch) AND 503 (token
+// not configured) are emitted by the internalVeloxAuth
+// middleware BEFORE this handler runs; the spec is satisfied
+// via the middleware's existing behaviour, no per-handler code.
+func (r *Router) handleGetInternalDelivery(w http.ResponseWriter, req *http.Request) {	id := req.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "delivery id required")
+		return
+	}
+
+	delivery, err := r.externalDeliveries.GetByID(req.Context(), id)
+	if err != nil {
+		slog.Error("velox get delivery: lookup failed",
+			"social_delivery_id", id, "err", err)
+		writeError(w, http.StatusInternalServerError, "delivery lookup failed")
+		return
+	}
+	if delivery == nil {
+		writeError(w, http.StatusNotFound, "delivery not found")
+		return
+	}
+
+	resp := VeloxGetDeliveryResponse{
+		Status: string(delivery.Status),
+	}
+	// Surface LastErrorCode + Message verbatim. omitempty drops
+	// the field on rows that haven't seen a failed transition
+	// yet (the brand-new accepted row).
+	if delivery.LastErrorCode != nil {
+		resp.LastErrorCode = *delivery.LastErrorCode
+		// retry_wait_reason mirrors last_error_code ONLY when
+		// status == retry_wait — the operator's "why is this
+		// sitting in retry?" question is answered by this field.
+		// In any other state the field is empty.
+		if delivery.Status == models.ExternalDeliveryStatusRetryWait {
+			resp.RetryWaitReason = *delivery.LastErrorCode
+		}
+	}
+	if delivery.LastErrorMessage != nil {
+		resp.LastErrorMessage = *delivery.LastErrorMessage
+	}
+	if delivery.PlatformMediaID != nil {
+		resp.PlatformMediaID = *delivery.PlatformMediaID
+	}
+	if delivery.PlatformURL != nil {
+		resp.PlatformURL = *delivery.PlatformURL
+	}
+	// published_at is ONLY set when the row reached the published
+	// terminal state. For other terminal states (failed,
+	// dead_letter) the user spec explicitly maps "published_at"
+	// to the success path.
+	if delivery.Status == models.ExternalDeliveryStatusPublished &&
+		delivery.CompletedAt != nil {
+		resp.PublishedAt = delivery.CompletedAt
+	}
+
+	slog.Info("velox get delivery",
+		"social_delivery_id", delivery.ID,
+		"status", delivery.Status,
+	)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // VeloxDeliverArtifactConflictResponse is the 409 body shape
@@ -626,6 +712,49 @@ type VeloxValidateDestinationResponse struct {
 	Platform      string `json:"platform"`
 }
 
+// VeloxGetDeliveryResponse is the body returned by
+// GET /internal/v1/deliveries/{id}. Mirrors the user's spec
+// verbatim:
+//
+//	{
+//	  "status":             "queued"|"published"|"failed"|"dead_letter"|...
+//	  "retry_wait_reason":  "auth_token_expired"        // populated only when status == retry_wait
+//	  "last_error_code":    "auth_error"                // typed code from classifyUploadError
+//	  "last_error_message": "401 Unauthorized: invalid_grant"
+//	  "platform_media_id":  "dQw4w9WgXcQ"               // e.g. YouTube video id, set on terminal publish
+//	  "platform_url":       "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+//	  "published_at":       "2026-07-20T18:03:21Z"      // set ONLY when status == published
+//	}
+//
+// Field taxonomy:
+//   - status              : mirrors models.ExternalDeliveryStatus string rep
+//   - retry_wait_reason   : derived from last_error_code when status == retry_wait;
+//                           empty string in all other states (operators reading
+//                           the GET body know to ignore the field unless status is
+//                           retry_wait)
+//   - last_error_code     : whatever UpdateStatus most recently stamped; empty
+//                           before any error transition
+//   - last_error_message  : human-readable counterpart to last_error_code
+//   - platform_media_id   : populated from platform_provider after publish
+//   - platform_url        : same
+//   - published_at        : populated from completed_at IF status == published;
+//                           empty for any other state (failed/deleted/completed-but-
+//                           not-published are not "published_at")
+//
+// The omitempty tags keep the JSON shape minimal: a brand-new row
+// returns just {"status": "accepted"}. The shape is forward-compat:
+// future fields (e.g., "scheduled_publish_at" from PublishAt) slot
+// in without breaking existing consumers.
+type VeloxGetDeliveryResponse struct {
+	Status           string     `json:"status"`
+	RetryWaitReason  string     `json:"retry_wait_reason,omitempty"`
+	LastErrorCode    string     `json:"last_error_code,omitempty"`
+	LastErrorMessage string     `json:"last_error_message,omitempty"`
+	PlatformMediaID  string     `json:"platform_media_id,omitempty"`
+	PlatformURL      string     `json:"platform_url,omitempty"`
+	PublishedAt      *time.Time `json:"published_at,omitempty"`
+}
+
 // registerInternalVeloxRoutes wires the /internal/v1
 // service-to-service routes. Called from Router.Setup().
 // Refuses to register if the per-route dependencies aren't
@@ -659,6 +788,16 @@ func (r *Router) registerInternalVeloxRoutes() {
 	if r.externalDeliveries != nil {
 		r.mux.Method(http.MethodPost, "/internal/v1/deliveries",
 			r.internalVeloxAuth(http.HandlerFunc(r.handleCreateInternalDelivery)))
+		// GET /internal/v1/deliveries/{id} — Velox reconciliation/poll.
+		// The id is the social_delivery_id minted by handleCreateInternalDelivery
+		// (shape: "sdel_01J…"). Velox polls this endpoint when its
+		// outbound callback channel drops a packet (network blip,
+		// peer restarts, 502 storm). Same Bearer auth as the other
+		// /internal/v1 routes — the middleware separately handles
+		// 401 missing-header / 403 token-mismatch before this handler
+		// runs.
+		r.mux.Method(http.MethodGet, "/internal/v1/deliveries/{id}",
+			r.internalVeloxAuth(http.HandlerFunc(r.handleGetInternalDelivery)))
 	}
 }
 

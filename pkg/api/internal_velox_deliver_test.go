@@ -88,6 +88,15 @@ func (m *mockExternalDeliveries) Insert(_ context.Context, e *models.ExternalDel
 	return m.InsertResult, m.InsertErr
 }
 
+// GetByID is a stub so mockExternalDeliveries satisfies the
+// expanded ExternalDeliveryStore interface (Phase 1 GET
+// /internal/v1/deliveries/{id}). POST /deliveries tests dont
+// exercise GetByID; the GET handler tests use a different
+// fakeDeliveryStorage. (nil, nil) mirrors the production-repo
+// semantic of id-never-accepted.
+func (m *mockExternalDeliveries) GetByID(_ context.Context, _ string) (*models.ExternalDelivery, error) {
+	return nil, nil
+}
 // deliveriesAdapter: embed ExternalDeliveryStore once + carry
 // the mock. Depth-0 override shadows the promoted Insert.
 type deliveriesAdapter struct {
@@ -99,6 +108,16 @@ func (a *deliveriesAdapter) Insert(ctx context.Context, e *models.ExternalDelive
 	return a.m.Insert(ctx, e, rawBody)
 }
 
+// GetByID depth-0 override — required because the adapter embeds
+// ExternalDeliveryStore as a nil interface field. Without an
+// explicit override, dispatch falls through to the nil embedded
+// interface and PANICS at runtime. Depth-0 shadows promotion.
+func (a *deliveriesAdapter) GetByID(ctx context.Context, id string) (*models.ExternalDelivery, error) {
+	if a.m != nil {
+		return a.m.GetByID(ctx, id)
+	}
+	return nil, nil
+}
 func wrapDeliveries(m *mockExternalDeliveries) ExternalDeliveryStore {
 	return &deliveriesAdapter{m: m}
 }
