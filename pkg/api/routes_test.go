@@ -2512,6 +2512,80 @@ func TestHandleSyncAccount_Happy(t *testing.T) {
 	}
 }
 
+// TestAccountSync_RefreshesStaleSnapshot proves that POST /accounts/{id}/sync
+// fetches fresh details from the provider and overwrites a stale snapshot.
+func TestAccountSync_RefreshesStaleSnapshot(t *testing.T) {
+	callCount := 0
+	svc := &mockDetailProvider{
+		mockProvider: mockProvider{platform: "youtube"},
+		detailsFn: func(ctx context.Context, accessToken, platformUserID string) (*models.AccountDetails, error) {
+			callCount++
+			return &models.AccountDetails{
+				ResourceType: "channel",
+				ExternalID:   platformUserID,
+				DisplayName:  "Fresh Channel Name",
+				Metrics: []models.AccountMetric{
+					{Key: "subscribers", Label: "Subscribers", Value: 9999, DisplayValue: "10.0K"},
+				},
+				FetchedAt: time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC),
+			}, nil
+		},
+	}
+	owner := ownedAccountFixture(1, "youtube")
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		getFn: func(ctx context.Context, id int64, tt string) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "test-token"}, nil
+		},
+	}
+	var upserted *repository.AccountResourceSnapshot
+	snapStore := &mockSnapshotStore{
+		staleFn: func(platformAccountID int64, maxAge time.Duration) (bool, error) {
+			return true, nil
+		},
+		upsertFn: func(snap *repository.AccountResourceSnapshot) error {
+			upserted = snap
+			return nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault), WithSnapshotStore(snapStore))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/sync", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("sync: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if callCount != 1 {
+		t.Errorf("provider called %d times, want 1", callCount)
+	}
+	if upserted == nil {
+		t.Fatal("snapshot was not upserted")
+	}
+	if upserted.PlatformAccountID != 21 {
+		t.Errorf("upserted platform_account_id: want 21, got %d", upserted.PlatformAccountID)
+	}
+	if upserted.ResourceType != "channel" {
+		t.Errorf("upserted resource_type: want channel, got %q", upserted.ResourceType)
+	}
+
+	var resp struct {
+		DisplayName string `json:"display_name"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode sync response: %v", err)
+	}
+	if resp.DisplayName != "Fresh Channel Name" {
+		t.Errorf("display_name: want Fresh Channel Name, got %q", resp.DisplayName)
+	}
+}
+
 // TestHandleSyncAccount_NoSnapshotStore_501 proves sync returns 501 when
 // snapshot store is not wired.
 func TestHandleSyncAccount_NoSnapshotStore_501(t *testing.T) {
@@ -2621,6 +2695,71 @@ func TestHandleAccountContent_Happy(t *testing.T) {
 	}
 	if resp.NextCursor != "next-page-token" {
 		t.Errorf("next_cursor: want next-page-token, got %q", resp.NextCursor)
+	}
+}
+
+// TestAccountContent_Paginates proves that cursor and limit query params
+// are forwarded to the provider and the next_cursor is returned to the client.
+func TestAccountContent_Paginates(t *testing.T) {
+	var gotCursor string
+	var gotLimit int
+	svc := &mockDetailProvider{
+		mockProvider: mockProvider{platform: "youtube"},
+		contentFn: func(ctx context.Context, accessToken, platformUserID string, cursor string, limit int) (*models.AccountContentPage, error) {
+			gotCursor = cursor
+			gotLimit = limit
+			return &models.AccountContentPage{
+				Items: []models.AccountContentItem{
+					{ExternalID: "vid1", Title: "Video One"},
+					{ExternalID: "vid2", Title: "Video Two"},
+				},
+				NextCursor: "page-2-token",
+			}, nil
+		},
+	}
+	owner := ownedAccountFixture(1, "youtube")
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		getFn: func(ctx context.Context, id int64, tt string) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "test-token"}, nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/21/content?cursor=page-1-token&limit=5", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("content: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if gotCursor != "page-1-token" {
+		t.Errorf("cursor forwarded: want page-1-token, got %q", gotCursor)
+	}
+	if gotLimit != 5 {
+		t.Errorf("limit forwarded: want 5, got %d", gotLimit)
+	}
+
+	var resp struct {
+		Items      []struct{ ExternalID string `json:"external_id"` } `json:"items"`
+		NextCursor string                                                `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode content response: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("items: want 2, got %d", len(resp.Items))
+	}
+	if resp.Items[0].ExternalID != "vid1" {
+		t.Errorf("first item: want vid1, got %q", resp.Items[0].ExternalID)
+	}
+	if resp.NextCursor != "page-2-token" {
+		t.Errorf("next_cursor: want page-2-token, got %q", resp.NextCursor)
 	}
 }
 

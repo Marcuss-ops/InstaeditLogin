@@ -224,6 +224,80 @@ func TestYouTubeDiscoverAccounts_OneChannel(t *testing.T) {
 	}
 }
 
+// TestYouTubeDiscoverAccounts_MultipleChannels verifies that DiscoverAccounts
+// returns all channels when the authenticated user manages more than one.
+func TestYouTubeDiscoverAccounts_MultipleChannels(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(youtubeChannelsResponse{
+			Items: []youtubeChannel{
+				{
+					ID: "UCchannelOne",
+					Snippet: youtubeChannelSnippet{
+						Title:     "First Channel",
+						CustomURL: "@firstchannel",
+					},
+					Statistics: youtubeStatistics{
+						SubscriberCount: 1000,
+						ViewCount:       50000,
+						VideoCount:      25,
+					},
+					ContentDetails: youtubeContentDetails{
+						RelatedPlaylists: youtubeRelatedPlaylists{Uploads: "UUchannelOne"},
+					},
+				},
+				{
+					ID: "UCchannelTwo",
+					Snippet: youtubeChannelSnippet{
+						Title:     "Second Channel",
+						CustomURL: "@secondchannel",
+					},
+					Statistics: youtubeStatistics{
+						SubscriberCount: 50000,
+						ViewCount:       2000000,
+						VideoCount:      150,
+					},
+					ContentDetails: youtubeContentDetails{
+						RelatedPlaylists: youtubeRelatedPlaylists{Uploads: "UUchannelTwo"},
+					},
+				},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	accounts, err := svc.DiscoverAccounts(context.Background(), "fake-token", "")
+	if err != nil {
+		t.Fatalf("DiscoverAccounts failed: %v", err)
+	}
+
+	if len(accounts) != 2 {
+		t.Fatalf("expected 2 accounts, got %d", len(accounts))
+	}
+
+	if accounts[0].Profile.PlatformUserID != "UCchannelOne" {
+		t.Errorf("first account ID: want UCchannelOne, got %q", accounts[0].Profile.PlatformUserID)
+	}
+	if accounts[0].Profile.Username != "First Channel" {
+		t.Errorf("first account username: want First Channel, got %q", accounts[0].Profile.Username)
+	}
+	if accounts[0].Metadata["uploads_playlist_id"] != "UUchannelOne" {
+		t.Errorf("first uploads playlist: want UUchannelOne, got %v", accounts[0].Metadata["uploads_playlist_id"])
+	}
+
+	if accounts[1].Profile.PlatformUserID != "UCchannelTwo" {
+		t.Errorf("second account ID: want UCchannelTwo, got %q", accounts[1].Profile.PlatformUserID)
+	}
+	if accounts[1].Profile.Username != "Second Channel" {
+		t.Errorf("second account username: want Second Channel, got %q", accounts[1].Profile.Username)
+	}
+	if accounts[1].Metadata["uploads_playlist_id"] != "UUchannelTwo" {
+		t.Errorf("second uploads playlist: want UUchannelTwo, got %v", accounts[1].Metadata["uploads_playlist_id"])
+	}
+}
+
 // TestYouTubeDiscoverAccounts_NoChannel verifies that DiscoverAccounts
 // returns an error when the Google account has no YouTube channel.
 func TestYouTubeDiscoverAccounts_NoChannel(t *testing.T) {
