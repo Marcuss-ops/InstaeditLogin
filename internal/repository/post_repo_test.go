@@ -79,10 +79,10 @@ func TestPostCreate_AtomicTx_Happy(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(
-		`INSERT INTO posts (workspace_id, title, caption, media_url, scheduled_at, status)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id, created_at`,
-	).WithArgs(int64(1), "hello", "world", "", (*time.Time)(nil), models.PostStatusDraft).
+	).WithArgs(int64(1), "hello", "world", "", time.Time{}, (*time.Time)(nil), "", "", models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
 	// Target A: id=200 from RETURNING (first iteration of targets loop).
 	mock.ExpectQuery(
@@ -153,10 +153,10 @@ func TestPostCreate_EmptyTargets_OKSkipsTargetInserts(t *testing.T) {
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, scheduled_at, status)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id, created_at`).
-		WithArgs(int64(1), "draft", "", "", (*time.Time)(nil), models.PostStatusDraft).
+		WithArgs(int64(1), "draft", "", "", time.Time{}, (*time.Time)(nil), "", "", models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
 	// No target insert expectations — we pass nil/empty targets.
 	// No outbox insert expectations either — no targets means no outbox events.
@@ -181,10 +181,10 @@ func TestPostRepository_Create_TxRollback(t *testing.T) {
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, scheduled_at, status)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id, created_at`).
-		WithArgs(int64(1), "hello", "", "", (*time.Time)(nil), models.PostStatusDraft).
+		WithArgs(int64(1), "hello", "", "", time.Time{}, (*time.Time)(nil), "", "", models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
 	mock.ExpectQuery(`INSERT INTO post_targets (post_id, platform_account_id, status)
 		 VALUES ($1, $2, $3)
@@ -649,10 +649,10 @@ func TestPostCreate_ConcurrentGoroutines_NoSharedState(t *testing.T) {
 
 			mock.ExpectBegin()
 			mock.ExpectQuery(
-				`INSERT INTO posts (workspace_id, title, caption, media_url, scheduled_at, status)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+				`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id, created_at`,
-			).WithArgs(int64(1), "title", "", "", (*time.Time)(nil), models.PostStatusDraft).
+			).WithArgs(int64(1), "title", "", "", time.Time{}, (*time.Time)(nil), "", "", models.PostStatusDraft).
 				WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(postID, now))
 			// Taglio 5.0 STEP 1: BOTH post_targets INSERT first (so the
 			// RETURNING ids fill target.ID for both rows), THEN BOTH
