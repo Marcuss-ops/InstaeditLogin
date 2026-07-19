@@ -220,6 +220,14 @@ type Router struct {
 	// r.userRepo at option-call time would capture nil if
 	// wired in the wrong order).
 	externalDestinations ExternalDestinationStore
+	// externalDeliveries (P1 Velox integration, POST /internal/v1/deliveries)
+	// is the persistence contract wired via WithExternalDeliveryStore.
+	// Per-route guarded in registerInternalVeloxRoutes — the validate
+	// route (destinations/{id}/validate) does NOT require it; the
+	// deliveries route (POST /deliveries) REQUIRES it. When nil, only
+	// the validate route is mounted (matches the per-route
+	// Optional-wiring pattern used for the other feature flags).
+	externalDeliveries ExternalDeliveryStore
 }
 
 // WithDB wires the database for the /ready handler's DB ping +
