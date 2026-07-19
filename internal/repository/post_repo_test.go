@@ -82,7 +82,7 @@ func TestPostCreate_AtomicTx_Happy(t *testing.T) {
 		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id, created_at`,
-	).WithArgs(int64(1), "hello", "world", "", time.Time{}, (*time.Time)(nil), "", "", models.PostStatusDraft).
+	).WithArgs(int64(1), "hello", "world", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
 	// Target A: id=200 from RETURNING (first iteration of targets loop).
 	mock.ExpectQuery(
@@ -156,7 +156,7 @@ func TestPostCreate_EmptyTargets_OKSkipsTargetInserts(t *testing.T) {
 	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id, created_at`).
-		WithArgs(int64(1), "draft", "", "", time.Time{}, (*time.Time)(nil), "", "", models.PostStatusDraft).
+		WithArgs(int64(1), "draft", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
 	// No target insert expectations — we pass nil/empty targets.
 	// No outbox insert expectations either — no targets means no outbox events.
@@ -184,7 +184,7 @@ func TestPostRepository_Create_TxRollback(t *testing.T) {
 	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id, created_at`).
-		WithArgs(int64(1), "hello", "", "", time.Time{}, (*time.Time)(nil), "", "", models.PostStatusDraft).
+		WithArgs(int64(1), "hello", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
 	mock.ExpectQuery(`INSERT INTO post_targets (post_id, platform_account_id, status)
 		 VALUES ($1, $2, $3)
@@ -615,6 +615,120 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
 	}
 }
 
+// TestPostCreate_ZeroIngestAfter_AutoStampsBeforeBind is the regression
+// guard for the latent production bug fixed by the post_repo.go::Create
+// IsZero() gate. History: the prior binding unconditionally passed
+// `post.IngestAfter` to $5. If a caller zero-initialised Post (the
+// common case for the API layer that constructs &models.Post{} then
+// sets only workspace_id/title/status), SQL received
+// '0001-01-01 00:00:00 UTC' instead of NOW() — a footgun the
+// docstring's stated rationale ("we pass an explicit NOW() here…")
+// silently violated. The fix gates the binding: caller-supplied
+// non-zero is honoured verbatim; caller-supplied zero is replaced
+// with Go-side time.Now().UTC() so SQL NEVER receives the Go zero.
+// The SQL column's NOT NULL DEFAULT NOW() remains as the safety-net
+// path for direct-SQL writers (psql scripts, admin tooling).
+//
+// Branches exercised:
+//  1. Zero IngestAfter in → a non-zero time gets bound (auto-stamp).
+//  2. Caller-supplied non-zero IngestAfter in → that exact value
+//     gets bound verbatim (override-respecting).
+func TestPostCreate_ZeroIngestAfter_AutoStampsBeforeBind(t *testing.T) {
+	// ── Branch 1: zero IngestAfter → auto-stamp path ───────────────────
+	// Caller passes &models.Post{} with no IngestAfter set (the API-layer
+	// default construction pattern). The gate must rewrite post.IngestAfter
+	// to a non-zero time.Now().UTC() BEFORE the SQL bind, so sqlmock
+	// receives non-zero and the row NEVER lands as the Go zero value.
+	t.Run("zero_ingest_after_is_auto_stamped", func(t *testing.T) {
+		db, mock := newMockPostDBExact(t)
+		repo := repository.NewPostRepository(db)
+		before := time.Now().UTC()
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(
+			`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			 RETURNING id, created_at`,
+		// sqlmock.AnyArg at position $5 is sufficient for the auto-stamp
+		// branch: the production code's `if post.IngestAfter.IsZero()`
+		// gate rewrites $5 to a non-zero time.Time before sqlmock sees
+		// it, so the bracket assertion below catches the zero regression.
+		// A wrong-TYPE regression (e.g. future bug sends string "now")
+		// would still slip past AnyArg; the type assertion in the
+		// post-call bracket (post.IngestAfter, Location, etc.) catches
+		// that too because the bind result is whatever the gate stamped.
+		).WithArgs(int64(1), "auto-stamp", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
+		mock.ExpectCommit()
+
+		post := &models.Post{
+			WorkspaceID: 1, Title: "auto-stamp", Status: models.PostStatusDraft,
+			// IngestAfter intentionally NOT set → zero value.
+		}
+		if err := repo.Create(post, nil); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		after := time.Now().UTC()
+
+		if post.IngestAfter.IsZero() {
+			t.Fatalf("post.IngestAfter zero after Create — gate failed to auto-stamp")
+		}
+		if post.IngestAfter.Before(before) || post.IngestAfter.After(after) {
+			t.Errorf("post.IngestAfter=%v not bracketed by [%v, %v] (gate should stamp inside this window)",
+				post.IngestAfter, before, after)
+		}
+		// UTC explicit check: a future regression that drops the
+		// `.UTC()` from the gate would still produce a value inside
+		// the [before, after] bracket (local and UTC happen to have
+		// the same wall-clock value in this millisecond), so the
+		// bracket alone wouldn't catch it. Asserting Location()
+		// catches a silent `.Local()` regression loudly.
+		if post.IngestAfter.Location() != time.UTC {
+			t.Errorf("post.IngestAfter.Location=%v, want UTC (a future regression that drops the gate's `.UTC()` would slip past the bracket alone)",
+				post.IngestAfter.Location())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+
+	// ── Branch 2: non-zero IngestAfter → override-respecting path ──────
+	// Caller explicitly sets IngestAfter (e.g. the drive_batch crawler
+	// that back-dates import timestamps). The gate MUST respect the
+	// caller's value verbatim — no rewriting, no clamping.
+	t.Run("explicit_ingest_after_is_honoured_verbatim", func(t *testing.T) {
+		db, mock := newMockPostDBExact(t)
+		repo := repository.NewPostRepository(db)
+		explicitTime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(
+			`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			 RETURNING id, created_at`,
+		).WithArgs(int64(2), "override", "", "", explicitTime, (*time.Time)(nil), "", "", models.PostStatusDraft).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(200, now))
+		mock.ExpectCommit()
+
+		post := &models.Post{
+			WorkspaceID: 2, Title: "override", Status: models.PostStatusDraft,
+			IngestAfter: explicitTime,
+		}
+		if err := repo.Create(post, nil); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if !post.IngestAfter.Equal(explicitTime) {
+			t.Errorf("post.IngestAfter=%v, want verbatim %v (gate must NOT rewrite a non-zero value)",
+				post.IngestAfter, explicitTime)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unmet expectations: %v", err)
+		}
+	})
+}
+
 // TestPostCreate_ConcurrentGoroutines_NoSharedState covers the user's
 // "transazioni concorrenti" requirement.
 //
@@ -652,7 +766,7 @@ func TestPostCreate_ConcurrentGoroutines_NoSharedState(t *testing.T) {
 				`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id, created_at`,
-			).WithArgs(int64(1), "title", "", "", time.Time{}, (*time.Time)(nil), "", "", models.PostStatusDraft).
+			).WithArgs(int64(1), "title", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft).
 				WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(postID, now))
 			// Taglio 5.0 STEP 1: BOTH post_targets INSERT first (so the
 			// RETURNING ids fill target.ID for both rows), THEN BOTH

@@ -46,6 +46,15 @@ func NewPostRepository(db *sql.DB) *PostRepository {
 // each target is filled in (silently overwriting any value the caller
 // supplied — the relationship is owned by the parent insert).
 //
+// IngestAfter is auto-stamped to time.Now().UTC() when the caller passes
+// the Go zero value `time.Time{}` (the common API-layer construction
+// pattern of `&models.Post{}.fillInFields()`). Caller-supplied non-zero
+// values are honoured verbatim as per-post overrides. The SQL column's
+// NOT NULL DEFAULT NOW() remains as the safety-net for direct-SQL writers
+// (psql scripts, admin tooling) that bypass this chokepoint. The dedicated
+// regression test (zero-auto-stamp + override-verbatim branches) pins
+// both sides of this contract.
+//
 // Empty targets is valid (e.g. a draft that will get targets later via
 // Save). The transaction guarantees no orphan post is ever visible
 // without its initial fan-out, and that a partial failure rolls back
@@ -89,13 +98,28 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 		}
 	}()
 
-	// Insert the parent Post; capture auto-assigned id + created_at.
 	// P1#4 — ingest_after + publish_at replace the old scheduled_at
-	// column (migration 049b). ingest_after is server-side DEFAULT
-	// NOW() at the SQL level; for callers that don't compute an
-	// explicit value (the common case), we pass an explicit NOW()
-	// here so the row is immutable to clock drift between Go's
-	// time.Now() and Postgres' NOW() inside the same transaction.
+	// column (migration 049b). The contract for IngestAfter binding:
+	//   * Caller-supplied non-zero value  → honour verbatim (per-post override).
+	//   * Caller leaves time.Time{}       → fill with Go-side time.Now().UTC()
+	//                                       so we never write the Go zero
+	//                                       value '0001-01-01 00:00:00 UTC'
+	//                                       into a NOT NULL column. The
+	//                                       SQL column's DEFAULT NOW() remains
+	//                                       as the safety net for direct-SQL
+	//                                       writers (psql scripts, admin
+	//                                       tools) that bypass this path.
+	// The bound value is computed ONCE here so a clock-skew between Go's
+	// time.Now() and Postgres' NOW() (NTP drift, typically <100ms) is the
+	// SAME drift that qInsertPost already tolerates today. The gate mirrors
+	// the prior docstring's intent ("we pass an explicit NOW() here…") that
+	// the unconditional-time.Time binding silently violated for zero-init
+	// callers.
+	if post.IngestAfter.IsZero() {
+		post.IngestAfter = time.Now().UTC()
+	}
+
+	// Insert the parent Post; capture auto-assigned id + created_at.
 	// P1 (migration 053) — bind the inherited batch default + the explicit
 	// per-post override. Order MUST match qInsertPost's column list; the
 	// schema-side VALIDATE() of qInsertPost (via go vet) doesn't run on
