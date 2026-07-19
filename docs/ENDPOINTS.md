@@ -32,6 +32,10 @@ Providers: `meta`, `tiktok`, `twitter`, `youtube`, `linkedin`.
 | GET | `/api/v1/workspaces` | List workspaces |
 | GET | `/api/v1/workspaces/{id}` | Get workspace |
 | DELETE | `/api/v1/workspaces/{id}` | Delete workspace |
+| POST | `/api/v1/workspaces/{id}/channels` | Attach a platform_account to the workspace (P0#4, idempotent UPSERT) |
+| GET | `/api/v1/workspaces/{id}/channels` | List channels bound to the workspace |
+| PATCH | `/api/v1/workspaces/{id}/channels/{accountId}` | Update a binding's `group_name` / `enabled` flag |
+| DELETE | `/api/v1/workspaces/{id}/channels/{accountId}` | Detach a platform_account from the workspace |
 
 ## Posts
 

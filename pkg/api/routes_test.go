@@ -194,10 +194,15 @@ func (m *mockUserStore) DeletePlatformAccount(id int64) error {
 
 // mockWorkspaceStore implements WorkspaceStore with configurable function fields.
 type mockWorkspaceStore struct {
-	createFn      func(*models.Workspace) error
-	findByIDFn    func(id int64) (*models.Workspace, error)
-	listByOwnerFn func(ownerID int64) ([]models.Workspace, error)
-	deleteFn      func(id int64) error
+	createFn       func(*models.Workspace) error
+	findByIDFn     func(id int64) (*models.Workspace, error)
+	listByOwnerFn  func(ownerID int64) ([]models.Workspace, error)
+	deleteFn       func(id int64) error
+	attachChFn     func(ctx context.Context, workspaceID, platformAccountID int64, groupName string) (*models.WorkspaceChannel, error)
+	listChannelsFn func(ctx context.Context, workspaceID int64) ([]models.WorkspaceChannel, error)
+	updateChFn     func(ctx context.Context, workspaceID, platformAccountID int64, groupName *string, enabled *bool) error
+	detachChFn     func(ctx context.Context, workspaceID, platformAccountID int64) error
+	findChannelFn  func(ctx context.Context, workspaceID, platformAccountID int64) (*models.WorkspaceChannel, error)
 }
 
 func (m *mockWorkspaceStore) Create(w *models.Workspace) error {
@@ -228,6 +233,42 @@ func (m *mockWorkspaceStore) Delete(id int64) error {
 		return nil
 	}
 	return m.deleteFn(id)
+}
+func (m *mockWorkspaceStore) AttachChannel(ctx context.Context, workspaceID, platformAccountID int64, groupName string) (*models.WorkspaceChannel, error) {
+	if m.attachChFn != nil {
+		return m.attachChFn(ctx, workspaceID, platformAccountID, groupName)
+	}
+	return &models.WorkspaceChannel{
+		WorkspaceID:       workspaceID,
+		PlatformAccountID: platformAccountID,
+		GroupName:         groupName,
+		Enabled:           true,
+		CreatedAt:         time.Now(),
+	}, nil
+}
+func (m *mockWorkspaceStore) ListChannels(ctx context.Context, workspaceID int64) ([]models.WorkspaceChannel, error) {
+	if m.listChannelsFn != nil {
+		return m.listChannelsFn(ctx, workspaceID)
+	}
+	return []models.WorkspaceChannel{}, nil
+}
+func (m *mockWorkspaceStore) UpdateChannel(ctx context.Context, workspaceID, platformAccountID int64, groupName *string, enabled *bool) error {
+	if m.updateChFn != nil {
+		return m.updateChFn(ctx, workspaceID, platformAccountID, groupName, enabled)
+	}
+	return nil
+}
+func (m *mockWorkspaceStore) DetachChannel(ctx context.Context, workspaceID, platformAccountID int64) error {
+	if m.detachChFn != nil {
+		return m.detachChFn(ctx, workspaceID, platformAccountID)
+	}
+	return nil
+}
+func (m *mockWorkspaceStore) FindChannel(ctx context.Context, workspaceID, platformAccountID int64) (*models.WorkspaceChannel, error) {
+	if m.findChannelFn != nil {
+		return m.findChannelFn(ctx, workspaceID, platformAccountID)
+	}
+	return nil, nil
 }
 
 // mockPostStore implements PostStore with configurable function fields.

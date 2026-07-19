@@ -40,3 +40,23 @@ type WorkspaceInvite struct {
 	AcceptedAt  *time.Time `json:"accepted_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
+
+// WorkspaceChannel binds a PlatformAccount to a Workspace under an
+// optional group_name tag. Mirrors the workspace_channels table
+// (migration 044). Composite PK (workspace_id, platform_account_id)
+// means a single platform_account can belong to many workspaces
+// simultaneously (shared-agency pool) without losing per-binding state
+// (group_name, enabled).
+//
+// enabled lets the operator soft-disable a channel in a specific
+// workspace (e.g. a YouTube channel muted in the marketing workspace
+// but active in the editorial one). A future publish-worker step will
+// filter on enabled=true; for now it is just metadata the operator
+// can flip via PATCH /api/v1/workspaces/{id}/channels/{accountId}.
+type WorkspaceChannel struct {
+	WorkspaceID       int64     `json:"workspace_id"`
+	PlatformAccountID int64     `json:"platform_account_id"`
+	GroupName         string    `json:"group_name,omitempty"`
+	Enabled           bool      `json:"enabled"`
+	CreatedAt         time.Time `json:"created_at"`
+}

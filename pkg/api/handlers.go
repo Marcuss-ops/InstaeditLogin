@@ -267,6 +267,21 @@ type WorkspaceStore interface {
 	FindByID(id int64) (*models.Workspace, error)
 	ListByOwner(ownerID int64) ([]models.Workspace, error)
 	Delete(id int64) error
+	// P0#4 — workspace_channels join surfaces. Matched 1:1 by
+	// repository.WorkspaceRepository.* — owner implements every
+	// method here, and mockWorkspaceStore keeps the test fixtures in
+	// lockstep. Method bodies are: AttachChannel (UPSERT,
+	// group_name refresh on conflict), ListChannels (newest-first,
+	// bounded by workspace_id), UpdateChannel (COALESCE on
+	// group_name / enabled for partial-update semantics),
+	// DetachChannel (404 on no-row), FindChannel (PK-indexed
+	// single-row read-back; used after UpdateChannel to avoid
+	// paying the ListChannels + scan cost on every PATCH).
+	AttachChannel(ctx context.Context, workspaceID, platformAccountID int64, groupName string) (*models.WorkspaceChannel, error)
+	ListChannels(ctx context.Context, workspaceID int64) ([]models.WorkspaceChannel, error)
+	UpdateChannel(ctx context.Context, workspaceID, platformAccountID int64, groupName *string, enabled *bool) error
+	DetachChannel(ctx context.Context, workspaceID, platformAccountID int64) error
+	FindChannel(ctx context.Context, workspaceID, platformAccountID int64) (*models.WorkspaceChannel, error)
 }
 
 type PostStore interface {
@@ -422,6 +437,17 @@ type RouterOption func(*Router)
 func WithWorkspaceStore(repo WorkspaceStore) RouterOption {
 	return func(r *Router) { r.workspaceStore = repo }
 }
+
+// Compile-time assertion that *repository.WorkspaceRepository
+// satisfies the extended WorkspaceStore interface (post-P0#4
+// channel surfaces). Caught at go vet time, not at runtime.
+// Mirrors the team's `var _ UserStore = (*mockUserStore)(nil)`
+// pattern in routes_test.go. The assertion lives in pkg/api (NOT
+// in internal/repository) because the WorkspaceStore interface is
+// declared here — internal/repository cannot import pkg/api (it
+// would create an import cycle, since pkg/api already imports
+// internal/repository).
+var _ WorkspaceStore = (*repository.WorkspaceRepository)(nil)
 func WithPostStore(repo PostStore) RouterOption {
 	return func(r *Router) { r.postStore = repo }
 }
@@ -780,6 +806,15 @@ func (r *Router) Setup() http.Handler {
 		// SPRINT 1.1: switch active workspace. Re-issues the JWT with
 		// the new ws claim and sets a fresh HttpOnly session cookie.
 		sr.Post("/{id}/switch", r.protected(r.handleSwitchWorkspace))
+		// P0#4 — bind a platform_account to this workspace under
+		// an optional group_name tag. Idempotent (ON CONFLICT
+		// DO UPDATE on the workspace_id + platform_account_id
+		// composite PK). 404 on cross-tenant; 400 on missing
+		// body fields. See pkg/api/workspace_channels.go.
+		sr.Post("/{id}/channels", r.protected(r.handleAttachWorkspaceChannel))
+		sr.Get("/{id}/channels", r.protected(r.handleListWorkspaceChannels))
+		sr.Patch("/{id}/channels/{accountId}", r.protected(r.handleUpdateWorkspaceChannel))
+		sr.Delete("/{id}/channels/{accountId}", r.protected(r.handleDetachWorkspaceChannel))
 	})
 
 	// TAGLIO X.Y — hierarchical groups for organizing connected
