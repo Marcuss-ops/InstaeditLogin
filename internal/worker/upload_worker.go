@@ -118,9 +118,11 @@ type UploadWorker struct {
 	postStore     UploadPostStore
 	userRepo      UploadUserStore
 	storage       services.StorageProvider
-	capRouter     *services.CapabilityRouter
-	vault         credentials.VaultAPI
-	interval      time.Duration
+	capRouter        *services.CapabilityRouter
+	vault            credentials.VaultAPI
+	sourceRegistry   *ArtifactSourceRegistry
+	deliveryVerifier ExternalDeliveryVerifier
+	interval         time.Duration
 	logger        *slog.Logger
 	uploadTimeout time.Duration
 	opts          UploadWorkerOptions
@@ -137,6 +139,8 @@ func NewUploadWorker(
 	storage services.StorageProvider,
 	capRouter *services.CapabilityRouter,
 	vault credentials.VaultAPI,
+	sourceRegistry *ArtifactSourceRegistry,
+	deliveryVerifier ExternalDeliveryVerifier,
 	interval time.Duration,
 	logger *slog.Logger,
 	opts UploadWorkerOptions,
@@ -153,9 +157,11 @@ func NewUploadWorker(
 		postStore:     postStore,
 		userRepo:      userStore,
 		storage:       storage,
-		capRouter:     capRouter,
-		vault:         vault,
-		interval:      interval,
+		capRouter:        capRouter,
+		vault:            vault,
+		sourceRegistry:   sourceRegistry,
+		deliveryVerifier: deliveryVerifier,
+		interval:         interval,
 		logger:        logger,
 		uploadTimeout: 30 * time.Minute,
 		opts:          opts,
@@ -525,61 +531,90 @@ func (w *UploadWorker) handleProcessingError(
 	}
 }
 
-// processIngestJob handles the Drive → S3 ingest path. On success
+// processIngestJob handles the per-source ingest path. On success
 // transitions the row to ready_to_publish via MarkIngested so the
 // upload pool can claim it next.
+//
+// Phase 1 (registry refactor): the legacy switch over source_type is
+// REPLACED by `sourceRegistry.Resolve(job.SourceType)`. The worker is
+// generic — every per-source concern (OAuth refresh for Drive, signed
+// URL GET for Velox, deprecation for PublicDrive) lives in the
+// corresponding ArtifactSource implementation invoked here via the
+// registry key.
+//
+// Worker-layer invariants (force-fail BEFORE storage.Upload):
+//   - job.SourceType must be registered (else "unsupported source type")
+//   - Inspect pre-flight surfaces size + mime used to size the asset + S3 PUT
+//   - Open returns an io.ReadCloser that the worker drains through S3
+//   - The downstream storage.Upload path is unchanged from the prior
+//     revision; the only thing that moved is the bytestream source.
 func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJob, workerID string) error {
-	// Resolve the Drive importer capability.
-	provider, ok := w.capRouter.Get("google-drive")
+	// (1) Resolve the source via the registry. ok=false means the
+	// worker doesn't recognise this SourceType — caller bug if we
+	// ever see one (an upload_job's SourceType comes from the producer
+	// and matches an enum value the worker must have a source for).
+	src, ok := w.sourceRegistry.Resolve(job.SourceType)
 	if !ok {
-		return fmt.Errorf("google drive provider not configured")
-	}
-	importer, ok := provider.(services.DriveImporter)
-	if !ok {
-		return fmt.Errorf("google drive provider misconfigured")
-	}
-
-	// Download the file.
-	var downloadResp *http.Response
-	var err error
-	switch job.SourceType {
-	case models.UploadJobSourceAuthenticatedDrive:
-		if job.DriveAccountID == nil {
-			return fmt.Errorf("authenticated drive source requires drive_account_id")
-		}
-		oauthToken, tokenErr := w.vault.Renew(ctx, *job.DriveAccountID, models.TokenTypeBearer,
-			func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
-				return importer.RefreshOAuthToken(ctx, refreshToken)
-			})
-		if tokenErr != nil {
-			return fmt.Errorf("refresh drive token: %w", tokenErr)
-		}
-		downloadResp, err = importer.DownloadFile(ctx, oauthToken.AccessToken, job.SourceID)
-	case models.UploadJobSourcePublicDrive:
-		// DEPRECATED source type — the unauthenticated
-		// `drive.google.com/uc` export endpoint with HTML
-		// confirmation-token scraping has been REMOVED from the
-		// Drive service as of the Blocco #2.1 hardening refactor.
-		// Any row still carrying this source_type is a legacy row
-		// from before the cutover; we reject it loudly so the
-		// operator gets a clear "re-import via authenticated Drive"
-		// signal instead of a silent 502 / opaque parse failure.
-		return fmt.Errorf(
-			"unsupported source type %q: the public_drive download path was removed in the Drive pipeline hardening refactor; re-import this file via the authenticated Drive flow (POST /api/v1/media/import/drive with a connected Drive account)",
-			job.SourceType,
-		)
-	default:
 		return fmt.Errorf("unsupported source type: %s", job.SourceType)
 	}
-	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
-	}
-	defer downloadResp.Body.Close()
 
-	contentType := downloadResp.Header.Get("Content-Type")
-	sizeBytes := downloadResp.ContentLength
+	// (2) Optional Inspect for pre-flight metadata. Most sources
+	// implement it (Velox HEAD, Drive GetFileMetadata); the deprecated
+	// PublicDrive source returns the actionable error verbatim. The
+	// worker treats Inspect as best-effort: tolerate ErrInspectNotImplemented
+	// as a soft no-op (no metadata means Open is the only source of
+	// truth for ingest invariants).
+	var sizeBytes int64
+	var contentType string
+	if md, inspectErr := src.Inspect(ctx, job); inspectErr == nil && md != nil {
+		sizeBytes = md.SizeBytes
+		contentType = md.MimeType
+	} else if inspectErr != nil && !errors.Is(inspectErr, ErrInspectNotImplemented) {
+		// PublicDrive's deprecation error (or any non-soft-Inspect
+		// error from another source) bubbles up so the operator sees
+		// the same guidance regardless of which entry point surfaced
+		// the rejection.
+		return fmt.Errorf("inspect source: %w", inspectErr)
+	}
+
+	// (3) Open the byte stream. The worker drains this through S3;
+	// per-source OAuth refresh / signed URL GET / deprecation gates
+	// live inside the source.
+	srcBody, err := src.Open(ctx, job)
+	if err != nil {
+		return fmt.Errorf("open source: %w", err)
+	}
+	defer srcBody.Close()
+
 	if sizeBytes <= 0 {
-		return fmt.Errorf("drive file size is unknown or zero; cannot import")
+		return fmt.Errorf("source returned unknown or zero size for job %d; cannot import", job.ID)
+	}
+
+	// (3.5) Velox-scope SHA + size verification AT THE WORKER LAYER.
+	// The simpler Open(io.ReadCloser) signature moved the streaming
+	// hasher + size-guard OUT of the source per the registry refactor;
+	// we restore them here for Velox rows so the integrity invariants
+	// aren't regressed. Other SourceType paths use Inspect's size
+	// alone — Drive surfaces SHA-256 too but defense-in-depth says
+	// hash during Open; that follow-up isn't blocking this commit.
+	var verifyReader *veloxVerifyReader
+	var verifyExpectedSize int64
+	var verifyExpectedSHA string
+	if job.SourceType == models.UploadJobSourceVeloxArtifact && w.deliveryVerifier != nil {
+		expSize, expSHA, vErr := w.deliveryVerifier.GetExpectedTripleByUploadJobID(ctx, job.ID)
+		switch {
+		case vErr == nil && expSize > 0:
+			verifyReader = NewVeloxVerifyReader(srcBody, expSize)
+			verifyExpectedSize = expSize
+			verifyExpectedSHA = expSHA
+			srcBody = verifyReader // S3 PUT now reads via the verify wrapper
+		case IsDeliveryVerificationSkipErr(vErr):
+			// linked row missing OR empty triple (peek-ordering race
+			// or legacy row without a triple) — best-effort no-op
+		default:
+			// asset row not yet created at this code path (build-key + Create runs after Open)
+			return fmt.Errorf("velox: load expected triple: %w", vErr)
+		}
 	}
 
 	// Build S3 key and create pending media asset.
@@ -603,7 +638,7 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 		return fmt.Errorf("sign s3 upload: %w", err)
 	}
 
-	uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPut, grant.UploadURL, downloadResp.Body)
+	uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPut, grant.UploadURL, srcBody)
 	if err != nil {
 		_ = w.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		return fmt.Errorf("build s3 upload request: %w", err)
@@ -618,6 +653,18 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 		return fmt.Errorf("upload to s3: %w", err)
 	}
 	uploadResp.Body.Close()
+
+	// Velox post-Read SHA + size verification. MUST run AFTER
+	// s3Client.Do has fully drained srcBody + BEFORE MarkReady /
+	// MarkIngested so a SHA or size mismatch fails loud before
+	// the row transitions to ready_to_publish (artifacts must
+	// remain trustworthy at ingest).
+	if verifyReader != nil {
+		if vErr := verifyReader.Verify(verifyExpectedSize, verifyExpectedSHA); vErr != nil {
+			_ = w.mediaStore.MarkFailedWithReason(asset.ID, vErr.Error(), vErr)
+			return fmt.Errorf("velox post-ingest verification: %w", vErr)
+		}
+	}
 	if uploadResp.StatusCode >= 300 {
 		reason := fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode)
 		_ = w.mediaStore.MarkFailedWithReason(asset.ID, reason, errors.New(reason))

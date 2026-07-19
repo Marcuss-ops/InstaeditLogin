@@ -546,18 +546,49 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				ReclaimInterval:    time.Duration(a.Cfg.UploadReclaimIntervalSeconds) * time.Second,
 				ReclaimOnStart:     a.Cfg.UploadReclaimOnStart,
 			}
-			uw := worker.NewUploadWorker(
-				repository.NewUploadJobRepository(a.DB),
-				repository.NewMediaAssetRepository(a.DB),
-				repository.NewPostRepository(a.DB),
-				repository.NewUserRepository(a.DB),
-				a.StorageProvider,
-				a.CapRouter,
-				a.Vault,
-				time.Duration(a.Cfg.UploadWorkerIntervalSeconds)*time.Second,
-				slog.Default(),
-				uploadOpts,
-			)
+	// Build the artifact-source registry before constructing the
+	// upload worker — the worker needs the wired registry as a
+	// constructor argument. Each per-source concern (OAuth refresh
+	// for Drive, signed URL GET for Velox, deprecation for
+	// PublicDrive) lives in its own ArtifactSource implementation;
+	// processIngestJob resolves via sourceRegistry.Resolve(...).
+	sourceRegistry := worker.NewArtifactSourceRegistry()
+	if provider, ok := a.CapRouter.Get("google-drive"); ok {
+		if driveImporter, typeOK := provider.(services.DriveImporter); typeOK {
+			if authDriveSrc, buildErr := worker.NewAuthenticatedDriveSource(driveImporter, a.Vault); buildErr == nil {
+				if regErr := sourceRegistry.Register(authDriveSrc); regErr != nil {
+					a.Logger.Error("upload worker: register authenticated drive source", "error", regErr)
+				}
+			} else {
+				a.Logger.Error("upload worker: build authenticated drive source", "error", buildErr)
+			}
+		}
+	}
+	if regErr := sourceRegistry.Register(worker.NewVeloxSource(a.Logger)); regErr != nil {
+		a.Logger.Error("upload worker: register velox source", "error", regErr)
+	}
+	a.Logger.Info("upload worker: source registry built",
+		"sources_registered", sourceRegistry.Names())
+
+	uw := worker.NewUploadWorker(
+		repository.NewUploadJobRepository(a.DB),
+		repository.NewMediaAssetRepository(a.DB),
+		repository.NewPostRepository(a.DB),
+		repository.NewUserRepository(a.DB),
+		a.StorageProvider,
+		a.CapRouter,
+		a.Vault,
+		sourceRegistry,
+		// ExternalDeliveryRepository satisfies worker.ExternalDeliveryVerifier
+		// structurally via GetExpectedTripleByUploadJobID; passing
+		// directly avoids an adapter while keeping the worker layer
+		// decoupled from the repository package (test fakes are just
+		// structs with the matching method).
+		repository.NewExternalDeliveryRepository(a.DB),
+		time.Duration(a.Cfg.UploadWorkerIntervalSeconds)*time.Second,
+		slog.Default(),
+		uploadOpts,
+	)
 			if err := uw.Run(c); err != nil && err != context.Canceled {
 				slog.Error("upload worker exited with error", "error", err)
 			}

@@ -722,3 +722,39 @@ func (r *ExternalDeliveryRepository) LinkUploadJob(ctx context.Context, delivery
 	}
 	return nil
 }
+
+// ErrExternalDeliveryNotLinked is the typed sentinel callers (the
+// worker via errors.Is dispatch) match against when no
+// external_delivery row is linked to the upload_job yet.
+var ErrExternalDeliveryNotLinked = errors.New("external delivery not linked to upload job")
+// ErrExternalDeliveryNoExpectedTriple is the typed sentinel
+// when the external_delivery row exists but (size, sha) fields
+// are empty/zero.
+var ErrExternalDeliveryNoExpectedTriple = errors.New("external delivery has no expected triple")
+
+// GetExpectedTripleByUploadJobID returns (expected_size_bytes,
+// expected_sha256_hex) for the external_delivery row linked to
+// uploadJobID. Sentinel dispatch is via errors.Is.
+func (r *ExternalDeliveryRepository) GetExpectedTripleByUploadJobID(ctx context.Context, uploadJobID int64) (int64, string, error) {
+	if uploadJobID <= 0 {
+		return 0, "", fmt.Errorf("external delivery GetExpectedTripleByUploadJobID: non-positive uploadJobID %d", uploadJobID)
+	}
+	var size sql.NullInt64
+	var sha sql.NullString
+	err := r.db.QueryRowContext(ctx,
+		`SELECT expected_size_bytes, expected_sha256
+		 FROM external_deliveries
+		 WHERE upload_job_id = $1`,
+		uploadJobID,
+	).Scan(&size, &sha)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, "", ErrExternalDeliveryNotLinked
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("external delivery GetExpectedTripleByUploadJobID scan: %w", err)
+	}
+	if !size.Valid || size.Int64 <= 0 || !sha.Valid || sha.String == "" {
+		return 0, "", ErrExternalDeliveryNoExpectedTriple
+	}
+	return size.Int64, sha.String, nil
+}
