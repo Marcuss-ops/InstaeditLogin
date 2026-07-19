@@ -1,13 +1,11 @@
 import { Link } from "react-router-dom";
 import {
-  ArrowRight,
   Zap,
   Shield,
   Sparkles,
   PlayCircle,
   MonitorPlay,
   Plus,
-  ChevronRight,
 } from "lucide-react";
 import type { SVGProps } from "react";
 
@@ -543,6 +541,9 @@ function Nav() {
             <a href="#features" className="hover:text-white transition-colors">
               Features
             </a>
+            <a href="#who-are-we" className="hover:text-white transition-colors">
+              Who are we
+            </a>
             <Link
               to="/editor"
               className="hover:text-white transition-colors inline-flex items-center gap-1.5"
@@ -552,25 +553,8 @@ function Nav() {
                 New
               </span>
             </Link>
-            <Link to="/login" className="hover:text-white transition-colors">
-              Sign in
-            </Link>
           </div>
-          <div className="flex items-center gap-2">
-            <Link
-              to="/login"
-              className="hidden sm:inline-flex text-sm font-medium px-4 py-2 text-zinc-300 hover:text-white transition-colors"
-            >
-              Sign in
-            </Link>
-            <Link
-              to="/login"
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white text-black text-sm font-semibold hover:bg-zinc-100 transition-colors shadow-[0_8px_30px_-10px_rgba(255,255,255,0.4)]"
-            >
-              Get started
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-          </div>
+
         </div>
       </div>
     </nav>
@@ -616,22 +600,7 @@ function Hero() {
             running 10,000+ pieces of content a month.
           </p>
 
-          <div className="flex flex-wrap items-center gap-3 mt-9">
-            <Link
-              to="/login"
-              className="group inline-flex items-center gap-2 px-5 py-3 rounded-full bg-white text-black text-sm font-semibold hover:bg-zinc-100 transition-colors shadow-[0_10px_40px_-10px_rgba(255,255,255,0.45)]"
-            >
-              Start publishing
-              <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
-            </Link>
-            <a
-              href="#workflow"
-              className="inline-flex items-center gap-2 px-5 py-3 rounded-full surface-glass text-sm font-medium text-zinc-200 hover:text-white hover:border-white/25 transition-colors"
-            >
-              See how it works
-              <ChevronRight className="w-4 h-4" />
-            </a>
-          </div>
+
 
           {/* Trust row — small platform chips with copy */}
           <div className="mt-10 flex items-center gap-4 flex-wrap">
@@ -1139,65 +1108,6 @@ function LongFormSection() {
 }
 
 /* ----------------------------------------------------------------------------
- * Final CTA — full-width gradient panel with a strong single action. Sized
- * like real SaaS end-of-page CTAs (Vercel / Linear style), not a small
- * 200px box.
- * -------------------------------------------------------------------------- */
-function FinalCTA() {
-  return (
-    <section className="relative py-24 sm:py-32 overflow-hidden">
-      <div
-        aria-hidden="true"
-        className="absolute inset-0 cta-glow pointer-events-none"
-      />
-      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
-        <div className="glow-orb bg-violet-500 w-[500px] h-[500px] -top-40 left-1/4 animate-drift-slow opacity-60" />
-        <div className="glow-orb bg-cyan-400 w-[420px] h-[420px] bottom-0 right-1/4 animate-drift-rev opacity-50" />
-      </div>
-
-      <div className="relative mx-auto max-w-5xl px-6">
-        <div className="surface-glass border border-white/15 rounded-3xl px-8 py-16 sm:px-14 sm:py-20 text-center relative overflow-hidden shadow-[0_40px_120px_-40px_rgba(124,58,237,0.5)]">
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 animate-shimmer bg-gradient-to-r from-transparent via-white/[0.06] to-transparent pointer-events-none"
-          />
-          <div className="text-eyebrow text-zinc-200 mb-5">
-            Get started in under 2 minutes
-          </div>
-          <h2 className="text-display-2 text-white max-w-[20ch] mx-auto">
-            Ship your next{" "}
-            <span className="text-gradient">10,000 posts</span> this month.
-          </h2>
-          <p className="text-body-lg text-zinc-300/90 mt-6 max-w-[52ch] mx-auto">
-            Connect your first platform, drop in a render, and InstaEdit takes
-            it from there. No credit card. No per-platform tabs to babysit.
-          </p>
-          <div className="mt-9 flex items-center justify-center gap-3 flex-wrap">
-            <Link
-              to="/login"
-              className="group inline-flex items-center gap-2 px-6 py-3.5 rounded-full bg-white text-black text-base font-semibold hover:bg-zinc-100 transition-colors shadow-[0_10px_40px_-10px_rgba(255,255,255,0.55)]"
-            >
-              Get started free
-              <ArrowRight className="w-5 h-5 group-hover:translate-x-0.5 transition-transform" />
-            </Link>
-            <a
-              href="#workflow"
-              className="inline-flex items-center gap-2 px-6 py-3.5 rounded-full surface-glass text-zinc-200 font-medium hover:text-white hover:border-white/25 transition-colors"
-            >
-              Tour the product
-              <ChevronRight className="w-5 h-5" />
-            </a>
-          </div>
-          <div className="mt-7 text-xs text-zinc-500">
-            Free preview during onboarding · no card · cancel any time
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* ----------------------------------------------------------------------------
  * Footer — multi-column link grid + tagline at top. Replaces the single-row
  * footer so the page feels like a product, not a placeholder.
  * -------------------------------------------------------------------------- */
@@ -1208,10 +1118,6 @@ function Footer() {
   // in production. Re-add those columns once their routes/pages exist —
   // dropping the broken ones is more honest than placeholder entries that
   // land on whatever top-of-page hash the URL has.
-  //
-  // Two CTA-stubs route to /login (Pricing, Integrations) — that's a
-  // deliberate funnel-to-signup until real Pricing + Integrations pages
-  // exist; do NOT "fix" by adding href="#" thinking it's a placeholder.
   //
   // `/data-deletion.html` resolves to web/public/data-deletion.html and is
   // served by Vercel as a static file before any React route matching
@@ -1224,8 +1130,6 @@ function Footer() {
       links: [
         { l: "Workflow", href: "#workflow" },
         { l: "Features", href: "#features" },
-        { l: "Pricing", to: "/login" },
-        { l: "Integrations", to: "/login" },
       ],
     },
     {
@@ -1315,6 +1219,104 @@ function Footer() {
 }
 
 /* ----------------------------------------------------------------------------
+ * Who are we — short brand-story section placed right after the hero so
+ * visitors immediately understand who is behind InstaEdit. Two-column at
+ * lg, stacked on mobile.
+ * -------------------------------------------------------------------------- */
+function WhoAreWe() {
+  return (
+    <section
+      id="who-are-we"
+      className="relative py-24 sm:py-32 overflow-hidden bg-elevated"
+    >
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 hero-aurora opacity-20 pointer-events-none"
+      />
+
+      <div className="relative mx-auto max-w-7xl px-6 grid lg:grid-cols-2 gap-12 items-center">
+        <div className="animate-fade-up">
+          <div className="text-eyebrow text-violet-300/90 mb-3">
+            Who we are
+          </div>
+          <h2 className="text-display-2 text-white mb-5">
+            We build the infrastructure behind{" "}
+            <span className="text-gradient">your content.</span>
+          </h2>
+          <p className="text-body-lg text-zinc-400 max-w-[55ch] mb-6">
+            InstaEdit is built by a small, focused team obsessed with the
+            pain of multi-platform publishing. We lived the 14-tab,
+            7-export workflow ourselves — and decided to replace it with
+            a single pipeline that just works.
+          </p>
+          <p className="text-body-lg text-zinc-400 max-w-[55ch] mb-8">
+            Our mission is simple: let creators and content teams focus on
+            making great content while we handle every encoding, caption,
+            thumbnail, and scheduling task across all platforms.
+          </p>
+
+          <div className="grid grid-cols-3 gap-4">
+            {[
+              { v: "7", l: "Platforms" },
+              { v: "50+", l: "Languages" },
+              { v: "24/7", l: "Uptime" },
+            ].map((s) => (
+              <div key={s.l} className="surface-card p-4 text-center">
+                <div className="text-xl font-bold text-white tabular-nums">
+                  {s.v}
+                </div>
+                <div className="text-eyebrow text-zinc-500 mt-1">{s.l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="relative animate-fade-up animation-delay-200">
+          <div className="surface-glass border border-white/15 rounded-2xl p-8 relative overflow-hidden shadow-[0_30px_100px_-40px_rgba(124,58,237,0.4)]">
+            <div
+              aria-hidden="true"
+              className="absolute -top-20 -right-20 w-60 h-60 rounded-full bg-violet-500/25 blur-3xl pointer-events-none"
+            />
+            <div className="relative">
+              <div className="flex items-center gap-3 mb-6">
+                <span className="inline-flex w-10 h-10 items-center justify-center rounded-xl bg-white text-black shadow-[0_0_20px_-4px_rgba(255,255,255,0.3)]">
+                  <Zap className="w-5 h-5" />
+                </span>
+                <div>
+                  <div className="text-sm font-semibold text-white">InstaEdit</div>
+                  <div className="text-[11px] text-zinc-500">Multi-platform publishing</div>
+                </div>
+              </div>
+
+              <blockquote className="border-l-2 border-violet-400/50 pl-4 mb-6">
+                <p className="text-sm text-zinc-300 leading-relaxed italic">
+                  "We started InstaEdit because publishing to 7 platforms
+                  felt like a full-time job. Now it takes one afternoon."
+                </p>
+              </blockquote>
+
+              <div className="space-y-3 text-sm">
+                {[
+                  "Built for teams shipping 10K+ posts/month",
+                  "One render → 7 platform-native outputs",
+                  "From idea to published — in minutes, not hours",
+                  "No per-platform tab juggling required",
+                ].map((line) => (
+                  <div key={line} className="flex items-start gap-2.5">
+                    <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-violet-400 flex-shrink-0" />
+                    <span className="text-zinc-300">{line}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
  * Main landing export.
  * -------------------------------------------------------------------------- */
 export function Landing() {
@@ -1323,12 +1325,13 @@ export function Landing() {
       <Nav />
       <main className="relative">
         <Hero />
+        <WhoAreWe />
         <StatsStrip />
         <Workflow />
         <Features />
         <ShortsSection />
         <LongFormSection />
-        <FinalCTA />
+
       </main>
       <Footer />
     </div>
