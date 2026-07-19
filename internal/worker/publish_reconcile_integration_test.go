@@ -336,6 +336,31 @@ func seedTestFixtures(t *testing.T, db *sql.DB, enc *crypto.Encryptor) (workspac
 
 	// 5. post — minimal.
 	if err := db.QueryRow(
+		// ──────────────────────────────────────────────────────────────────
+		//  Seed depends on canonical migration DEFAULTs for the `posts` table.
+		//
+		//  Every NOT NULL column that this INSERT does not explicitly supply
+		//  has a DEFAULT clause in the canonical migrations listed below:
+		//   - 003_posts_workspaces.sql: status DEFAULT 'draft', created_at DEFAULT NOW()
+		//   - 012_async_threads_support.sql: version DEFAULT 1, updated_at DEFAULT NOW()
+		//     (idempotency_key is nullable — NULL when omitted)
+		//   - 049b_posts_ingest_after_publish_at.sql: ingest_after DEFAULT NOW()
+		//     (publish_at nullable — NULL when omitted)
+		//   - 053_upload_jobs_and_posts_default_privacy_level.sql:
+		//     default_privacy_level DEFAULT '', privacy_level DEFAULT ''
+		//   - The `title`, `caption`, `media_url`, and original `scheduled_at`
+		//     columns are explicitly nullable (no DEFAULT) — NULL when omitted.
+		//
+		//  DO NOT add a NOT NULL column WITHOUT a DEFAULT clause to any future
+		//  migration on the posts table — this seed will fail loud at
+		//  integration-test runtime. Either use a DEFAULT or update THIS seed
+		//  to enumerate the new column explicitly.
+		//
+		//  See the cited migrations for the authoritative column-level DEFAULT
+		//  map; the doc-comment above is a contract assertion. The 3 file
+		//  seeds all depend on the same canonical schema + migrations and
+		//  share this comment.
+		// ──────────────────────────────────────────────────────────────────
 		`INSERT INTO posts (workspace_id, title, caption, media_url, status)
 		 VALUES ($1, 'integration-test', 'integration-test caption', 'https://example.com/video.mp4', 'draft') RETURNING id`,
 		workspaceID,
