@@ -42,6 +42,17 @@ func (m *mockExternalDestinationStore) GetByID(_ context.Context, _ string) (*mo
 	return m.GetByIDResult, m.GetByIDErr
 }
 
+// Create satisfies ExternalDestinationStore. Required since the
+// POST /internal/v1/deliveries cut added Create to the
+// interface. The validate handler under test never reaches
+// Create (POST flows use the richer fakeDestinationEnv in
+// internal_velox_deliveries_test.go); this stub returns nil
+// so the compile-time interface check passes without touching
+// a real DB.
+func (m *mockExternalDestinationStore) Create(_ context.Context, _ *models.ExternalDestination) error {
+	return nil
+}
+
 // mockWorkspaceLookup holds the test data + call counter for the
 // ONE WorkspaceStore method the validate handler reaches
 // (FindByID). The adapter wraps it so the lookup-edge failure
@@ -316,9 +327,9 @@ func TestValidate_HappyPathNoDiagnostic(t *testing.T) {
 	}
 	user := &mockUserLookup{
 		findPlatformAccountByIDResult: &models.PlatformAccount{
-			ID:     345,
+			ID:       345,
 			Platform: "youtube",
-			Status: "active",
+			Status:   "active",
 		},
 	}
 	w := runValidate(t, dst, ws, user, testVeloxAPIToken, "extdst_01JABC",
@@ -352,17 +363,17 @@ func TestValidate_ReauthRequired(t *testing.T) {
 		{
 			name: "status enum is reauth_required",
 			pa: &models.PlatformAccount{
-				ID:     345,
+				ID:       345,
 				Platform: "youtube",
-				Status: "reauth_required",
+				Status:   "reauth_required",
 			},
 		},
 		{
 			name: "reauth_required_at timestamp is non-nil",
 			pa: &models.PlatformAccount{
-				ID:     345,
-				Platform: "youtube",
-				Status: "active",
+				ID:               345,
+				Platform:         "youtube",
+				Status:           "active",
 				ReauthRequiredAt: &now,
 			},
 		},
@@ -416,9 +427,9 @@ func TestValidate_DiagnosticQueryParam(t *testing.T) {
 	}
 	user := &mockUserLookup{
 		findPlatformAccountByIDResult: &models.PlatformAccount{
-			ID:     345,
+			ID:       345,
 			Platform: "youtube",
-			Status: "active",
+			Status:   "active",
 		},
 	}
 	w := runValidate(t, dst, ws, user, testVeloxAPIToken, "extdst_01JABC",
@@ -464,9 +475,9 @@ func TestValidate_DiagnosticHeader(t *testing.T) {
 	}
 	user := &mockUserLookup{
 		findPlatformAccountByIDResult: &models.PlatformAccount{
-			ID:     345,
+			ID:       345,
 			Platform: "youtube",
-			Status: "active",
+			Status:   "active",
 		},
 	}
 	// Custom httptest invocation with header.
@@ -575,9 +586,9 @@ func TestValidate_PlatformAccountRevoked(t *testing.T) {
 			}
 			user := &mockUserLookup{
 				findPlatformAccountByIDResult: &models.PlatformAccount{
-					ID:     345,
+					ID:       345,
 					Platform: "youtube",
-					Status: tc.status,
+					Status:   tc.status,
 				},
 			}
 			w := runValidate(t, dst, ws, user, testVeloxAPIToken, "extdst_01JABC",
@@ -621,9 +632,9 @@ func TestValidate_PlatformAccountDisconnected(t *testing.T) {
 			}
 			user := &mockUserLookup{
 				findPlatformAccountByIDResult: &models.PlatformAccount{
-					ID:     345,
+					ID:       345,
 					Platform: "youtube",
-					Status: tc.status,
+					Status:   tc.status,
 				},
 			}
 			w := runValidate(t, dst, ws, user, testVeloxAPIToken, "extdst_01JABC",
@@ -660,9 +671,9 @@ func TestValidate_RateLimitExceeded(t *testing.T) {
 	}
 	user := &mockUserLookup{
 		findPlatformAccountByIDResult: &models.PlatformAccount{
-			ID:     345,
+			ID:       345,
 			Platform: "youtube",
-			Status: "active",
+			Status:   "active",
 		},
 	}
 	r := buildVeloxTestRouter(dst, ws, user, testVeloxAPIToken)
@@ -735,9 +746,9 @@ func TestValidate_RateLimitDisabledByZeroOption(t *testing.T) {
 	}
 	user := &mockUserLookup{
 		findPlatformAccountByIDResult: &models.PlatformAccount{
-			ID:     345,
+			ID:       345,
 			Platform: "youtube",
-			Status: "active",
+			Status:   "active",
 		},
 	}
 	r := buildVeloxTestRouter(dst, ws, user, testVeloxAPIToken)

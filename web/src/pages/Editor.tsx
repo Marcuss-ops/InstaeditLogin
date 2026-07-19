@@ -1478,6 +1478,12 @@ function ContactSection() {
               </span>
             </a>
           </div>
+
+          <div className="mt-7 text-xs text-zinc-500 flex items-center justify-center gap-2 flex-wrap">
+            <span>Mon–Fri · 09:00–18:00 CET</span>
+            <span aria-hidden="true">·</span>
+            <span>WhatsApp also OK</span>
+          </div>
         </div>
       </div>
     </section>

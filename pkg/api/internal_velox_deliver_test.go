@@ -38,6 +38,13 @@ type mockExternalDestinations struct {
 	GetByIDResult *models.ExternalDestination
 	GetByIDErr    error
 	GetByIDCalls  int
+	CreateErr     error
+	CreateCalls   int
+}
+
+func (m *mockExternalDestinations) Create(_ context.Context, _ *models.ExternalDestination) error {
+	m.CreateCalls++
+	return m.CreateErr
 }
 
 func (m *mockExternalDestinations) GetByID(_ context.Context, _ string) (*models.ExternalDestination, error) {
@@ -65,9 +72,9 @@ func wrapDestinations(m *mockExternalDestinations) ExternalDestinationStore {
 // mockExternalDeliveries is the deliveries-side mock. Insert is
 // the only method the deliveries handler calls today.
 type mockExternalDeliveries struct {
-	InsertResult      *models.ExternalDelivery
-	InsertErr         error
-	InsertCalls       int
+	InsertResult       *models.ExternalDelivery
+	InsertErr          error
+	InsertCalls        int
 	LastInsertDelivery *models.ExternalDelivery
 	LastInsertRawBody  []byte
 }
@@ -97,6 +104,7 @@ func (m *mockExternalDeliveries) Insert(_ context.Context, e *models.ExternalDel
 func (m *mockExternalDeliveries) GetByID(_ context.Context, _ string) (*models.ExternalDelivery, error) {
 	return nil, nil
 }
+
 // deliveriesAdapter: embed ExternalDeliveryStore once + carry
 // the mock. Depth-0 override shadows the promoted Insert.
 type deliveriesAdapter struct {
@@ -350,6 +358,7 @@ func TestDeliver_IdempotencyKeyTooLong(t *testing.T) {
 //   - short length
 //   - uppercase hex
 //   - non-hex characters
+//
 // All three return 422.
 func TestDeliver_InvalidSHA(t *testing.T) {
 	dst := &mockExternalDestinations{}

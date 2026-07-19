@@ -265,7 +265,13 @@ type Router struct {
 	// logs WARN + drops so the 500ms p99 SLA is preserved. See
 	// pkg/api/internal_velox.go::handleCreateInternalDelivery for
 	// the dispatch path + VeloxDownloadJob for the payload shape.
-	downloadJobCh chan<- VeloxDownloadJob
+	// downloadJobCh is the buffered fan-out from /internal/v1/deliveries
+	// (handleCreateInternalDelivery) into the Velox artifact-download worker
+	// pool. Buffer of 64 absorbs the 9-tenant peak burst (6 tenants × 2 jittered
+	// retries per the channel-import cutover). Bidirectional (not chan<-) so
+	// the test harness can drain it without needing a separate handle to the
+	// underlying OS pipe.
+	downloadJobCh chan VeloxDownloadJob
 }
 
 // WithDB wires the database for the /ready handler's DB ping +
@@ -549,6 +555,7 @@ func WithWorkspaceStore(repo WorkspaceStore) RouterOption {
 // would create an import cycle, since pkg/api already imports
 // internal/repository).
 var _ WorkspaceStore = (*repository.WorkspaceRepository)(nil)
+
 func WithPostStore(repo PostStore) RouterOption {
 	return func(r *Router) { r.postStore = repo }
 }
@@ -779,7 +786,7 @@ type AdminStore interface {
 	UpsertPendingChannel(ctx context.Context, ownerUserID int64, rows []channelimport.ImportRow) (channelimport.Result, error)
 }
 
-	// SnapshotStore is the persistence contract for
+// SnapshotStore is the persistence contract for
 // account_resource_snapshots. Defined inline to keep pkg/api off
 // internal/repository imports; main.go injects
 // *repository.SnapshotRepository which satisfies this interface.
@@ -843,15 +850,15 @@ func (r *Router) Setup() http.Handler {
 		// the existing flag).
 		r.mux.Method(http.MethodPost, "/admin/channels/import-csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminImportChannelsCSV)))
 		r.mux.Method(http.MethodGet, "/admin/channels/pending", adminAuthMiddleware(http.HandlerFunc(r.handleAdminPendingChannels)))
-	// P2 — admin connect-link. POST /admin/channels/{channel_id}/connect-link
-	// returns a signed OAuth URL with prompt=consent + select_account
-	// + login_hint=manager_email_hint. The callback (handlers.go
-	// handleCallback) detects the JWT-shaped state and refuses the
-	// 422/409 mismatch cleanly. Intentional split between this
-	// admin-side URL issuer (here) AND the OAuth callback (universal
-	// /api/v1/auth/{provider}/callback, NOT in /admin/) — the
-	// callback is per-provider, the URL issuer is per-channel.
-	r.mux.Method(http.MethodPost, "/admin/channels/{channel_id}/connect-link", adminAuthMiddleware(http.HandlerFunc(r.handleAdminChannelConnectLink)))
+		// P2 — admin connect-link. POST /admin/channels/{channel_id}/connect-link
+		// returns a signed OAuth URL with prompt=consent + select_account
+		// + login_hint=manager_email_hint. The callback (handlers.go
+		// handleCallback) detects the JWT-shaped state and refuses the
+		// 422/409 mismatch cleanly. Intentional split between this
+		// admin-side URL issuer (here) AND the OAuth callback (universal
+		// /api/v1/auth/{provider}/callback, NOT in /admin/) — the
+		// callback is per-provider, the URL issuer is per-channel.
+		r.mux.Method(http.MethodPost, "/admin/channels/{channel_id}/connect-link", adminAuthMiddleware(http.HandlerFunc(r.handleAdminChannelConnectLink)))
 	}
 
 	// P1 Velox integration — service-to-service /internal/v1 routes.
@@ -974,7 +981,7 @@ func (r *Router) Setup() http.Handler {
 	// (pending/processing/completed/failed) and min/max scheduled_at.
 	// Mirrors the upload_jobs partial index on folder_id so polling
 	// is one index range scan + a per-status COUNT FILTER.
-	r.mux.Method(http.MethodGet, "/api/v1/media/import/drive/batch/status", r.protected(r.handleDriveBatchStatus))	// Dashboard "Programmati" surface: per-account scheduled uploads
+	r.mux.Method(http.MethodGet, "/api/v1/media/import/drive/batch/status", r.protected(r.handleDriveBatchStatus)) // Dashboard "Programmati" surface: per-account scheduled uploads
 	// + cross-account list + drag-drop reschedule + cancel.
 	// Sub-router pattern keeps the route table flat without leaking
 	// the new IDs into the chi-pattern matching at the top level.
@@ -1362,6 +1369,7 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 //  5. Save every DiscoveredAccount.SupplementalTokens entry as an
 //     additional token in the vault. This replaces the old provider-
 //     specific hack that checked for Metadata["page_access_token"].
+//
 // ErrYouTubeAmbiguousAuthorization is returned by attachDiscoveredAccounts
 // when a YouTube OAuth grant's channels.list(mine=true) returns >1
 // channel AND no expected_channel_id was supplied at login time.

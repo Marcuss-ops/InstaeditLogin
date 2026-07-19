@@ -622,6 +622,17 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 	// Step 9 — external_destination_id must exist.
 	dest, err := r.externalDestinations.GetByID(ctx, veloxReq.ExternalDestinationID)
 	if err != nil {
+		// Sentinel-aware: a not-found sentinel from the
+		// destination repo is the SAME 404 a missing-row
+		// produces, so the caller can't distinguish them
+		// (closes a timing-oracle / existence-leak path that
+		// would otherwise let a probe iterate destination IDs
+		// to enumerate which are live).
+		if errors.Is(err, repository.ErrExternalDestinationNotFound) {
+			writeError(w, http.StatusNotFound,
+				fmt.Sprintf("destination %q not found", veloxReq.ExternalDestinationID))
+			return
+		}
 		slog.Error("velox deliver: destination lookup failed",
 			"external_destination_id", veloxReq.ExternalDestinationID,
 			"err", err)

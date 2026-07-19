@@ -64,6 +64,16 @@ func (f *fakeDestinationStorage) GetByID(_ context.Context, _ string) (*models.E
 	return nil, nil
 }
 
+// Create is required by ExternalDestinationStore since the
+// POST /internal/v1/deliveries cut added it. The GET handler
+// under test never reaches Create (the POST tests use the
+// richer fakeDestinationEnv in internal_velox_deliveries_test.go);
+// this stub returns nil so the compile-time interface check
+// and chi route-mount guard pass without touching a real DB.
+func (f *fakeDestinationStorage) Create(_ context.Context, _ *models.ExternalDestination) error {
+	return nil
+}
+
 // compile-time assertion the fake satisfies the production
 // interfaces. If the GET handler expands the interface I'll
 // catch the drift here.
@@ -76,9 +86,9 @@ var (
 // test's scenario. Returns the row id for assertions.
 func (f *fakeDeliveryStorage) seedRow(id string, status models.ExternalDeliveryStatus, lastErrCode, lastErrMsg, platformMediaID, platformURL string, completedAt *time.Time) {
 	row := &models.ExternalDelivery{
-		ID:             id,
-		SourceSystem:   "velox",
-		Status:         status,
+		ID:           id,
+		SourceSystem: "velox",
+		Status:       status,
 	}
 	if lastErrCode != "" {
 		s := lastErrCode
@@ -119,7 +129,7 @@ func (f *fakeDeliveryStorage) seedRow(id string, status models.ExternalDeliveryS
 func newVeloxTestRouter(t *testing.T, deliveries ExternalDeliveryStore, token string) *Router {
 	t.Helper()
 	r := &Router{
-		mux:                 chi.NewRouter(),
+		mux:                  chi.NewRouter(),
 		externalDestinations: &fakeDestinationStorage{},
 		externalDeliveries:   deliveries,
 		veloxAPIToken:        token,
@@ -283,7 +293,6 @@ func TestHandleGetInternalDelivery_StoreUnconfigured(t *testing.T) {
 			w.Code, w.Body.String())
 	}
 }
-
 
 // TestHandleGetInternalDelivery_LookupFailure — repo returns
 // non-nil error → 500. Body uses standard writeError shape.

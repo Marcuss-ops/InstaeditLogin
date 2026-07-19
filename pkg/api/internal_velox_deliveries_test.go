@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 // fakeDeliveryEnv is the in-package ExternalDeliveryStore fake
@@ -21,8 +22,11 @@ import (
 // minimal version so this file is self-contained (no cross-file
 // helper import for tests).
 type fakeDeliveryEnv struct {
-	rows      map[string]*models.ExternalDelivery
-	lookupErr error
+	rows              map[string]*models.ExternalDelivery
+	lookupErr         error
+	insertReturnErr   error                    // Set to inject a sentinel-error path (ErrIdempotencyConflict -> 409)
+	insertReturnValue *models.ExternalDelivery // Set to make Insert return this pre-seeded row (replay test -> 202 already_exists=true)
+	insertCallCount   int                      // Counts every Insert invocation; validation tests assert 0
 }
 
 func newFakeDeliveryEnv() *fakeDeliveryEnv {
@@ -45,6 +49,16 @@ func (f *fakeDeliveryEnv) GetByID(_ context.Context, id string) (*models.Externa
 // path; this stub satisfies the compile-time interface assertion
 // and gives row-seed helpers a single install path.
 func (f *fakeDeliveryEnv) Insert(_ context.Context, e *models.ExternalDelivery, _ []byte) (*models.ExternalDelivery, error) {
+	f.insertCallCount++
+	if f.insertReturnErr != nil {
+		return nil, f.insertReturnErr
+	}
+	if f.insertReturnValue != nil {
+		// Caller-controlled REPLAY path: returns the pre-seeded row
+		// regardless of input `e`. Handler comparison mintedID !=
+		// inserted.ID fires the `already_exists=true` branch.
+		return f.insertReturnValue, nil
+	}
 	f.rows[e.ID] = e
 	return e, nil
 }
@@ -421,5 +435,270 @@ func TestGetInternalDelivery_RowIDRoundtripsThroughResponse(t *testing.T) {
 				t.Errorf("response ID = %q; want %q (must match URL path)", got.ID, id)
 			}
 		})
+	}
+}
+
+// --- POST /internal/v1/deliveries test fixtures ---------------------------------
+
+// fakeDestinationEnv is the in-package ExternalDestinationStore fake for POST tests.
+// Mirrors fakeDeliveryEnv shape (rows + lookupErr) but for the destination side.
+// POST step 9 calls r.externalDestinations.GetByID BEFORE Insert; a nil store
+// would fail the handler's first defensive check (-> 500), so this fake must be
+// wired explicitly.
+type fakeDestinationEnv struct {
+	rows        map[string]*models.ExternalDestination
+	lookupErr   error
+	createErr   error // Set to inject a sentinel-error path on Create (handler maps to 500)
+	createCalls int   // Counts every Create invocation
+}
+
+// GetByID satisfies ExternalDestinationStore. When lookupErr is set the
+// fake returns it verbatim (this is how TestPostInternalDelivery_DestinationNotFound
+// drives the handler's 404 path with the production sentinel); otherwise it
+// returns the seeded row OR repository.ErrExternalDestinationNotFound so the
+// test harness never has to know the exact sentinel's name.
+func (f *fakeDestinationEnv) GetByID(_ context.Context, id string) (*models.ExternalDestination, error) {
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+	if d, ok := f.rows[id]; ok {
+		return d, nil
+	}
+	return nil, repository.ErrExternalDestinationNotFound
+}
+
+func (f *fakeDestinationEnv) Create(_ context.Context, _ *models.ExternalDestination) error {
+	f.createCalls++
+	return f.createErr
+}
+
+// newPostVeloxTestRouter wires BOTH stores + the bearer + registers routes.
+// Distinct from newDeliveriesTestRouter (used by GET tests) because the POST
+// handler depends on externalDestinations for step 9.
+func newPostVeloxTestRouter(t *testing.T, deliveries ExternalDeliveryStore, destinations ExternalDestinationStore, token string) *Router {
+	t.Helper()
+	downloadJobs := make(chan VeloxDownloadJob, 64)
+	r := &Router{
+		mux:                  chi.NewRouter(),
+		externalDeliveries:   deliveries,
+		externalDestinations: destinations,
+		veloxAPIToken:        token,
+		downloadJobCh:        downloadJobs,
+	}
+	r.registerInternalVeloxRoutes()
+	return r
+}
+
+// drainDownloadJobs reads up to one job from the router's downloadJobCh.
+// Returns (job, true) if a job was queued, (nil, false) if the channel was
+// empty (default-triggered drop or stale-test). Tests use this via the
+// router.downloadJobCh field for channel-verification per the spec.
+func drainDownloadJobs(t *testing.T, r *Router) (*VeloxDownloadJob, bool) {
+	t.Helper()
+	select {
+	case job := <-r.downloadJobCh:
+		return &job, true
+	default:
+		return nil, false
+	}
+}
+
+// buildValidVeloxDeliveryRequest returns a JSON body that PASSES every handler
+// validation. Tests override size_bytes (or another field) via json.Unmarshal +
+// json.Marshal round-trip to exercise validation-rejection paths.
+func buildValidVeloxDeliveryRequest(t *testing.T, idempotencyKey, externalDeliveryID string) []byte {
+	t.Helper()
+	payload := map[string]any{
+		"external_delivery_id":    externalDeliveryID,
+		"idempotency_key":         idempotencyKey,
+		"external_destination_id": "extdst_01JABC",
+		"artifact": map[string]any{
+			"artifact_id":  "artifact_01JXYZ",
+			"sha256":       "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", // sha256("test") canonical 64-hex (was a typed-too-short placeholder; regex requires ^[a-f0-9]{64}$)
+			"size_bytes":   184729302,
+			"mime_type":    "video/mp4",
+			"download_url": "https://velox.internal/artifacts/artifact_01JXYZ/download",
+		},
+		"metadata": map[string]any{
+			"title":          "Test Title",
+			"description":    "Test description",
+			"privacy_status": "private",
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return body
+}
+
+// firePostDeliveryRequest wraps httptest.NewRecorder + the Bearer header so each
+// POST test reads as a one-line assertion. Body via strings.NewReader (matches the
+// pattern used in internal_velox_e2e_test.go).
+func firePostDeliveryRequest(t *testing.T, r *Router, body []byte, authHeader string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/deliveries", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", authHeader)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+	return w
+}
+
+// TestPostInternalDelivery_IdempotentReplay pins the spec invariant: SAME
+// idempotency_key + SAME raw_body SHA -> handler Insert returns the pre-seeded
+// record (mintedID != inserted.ID branch) -> 202 with already_exists=true. The
+// Velox peer can safely replay the same body after a network blip without
+// triggering duplicate work downstream.
+func TestPostInternalDelivery_IdempotentReplay(t *testing.T) {
+	store := &fakeDeliveryEnv{rows: make(map[string]*models.ExternalDelivery)}
+	preSeededID := "sdel_01JABC"
+	store.insertReturnValue = &models.ExternalDelivery{ID: preSeededID, SourceSystem: "velox", Status: models.ExternalDeliveryStatusAccepted}
+	destStore := &fakeDestinationEnv{rows: map[string]*models.ExternalDestination{}}
+	destStore.rows["extdst_01JABC"] = &models.ExternalDestination{ID: "extdst_01JABC", SourceSystem: "velox", Enabled: true}
+	r := newPostVeloxTestRouter(t, store, destStore, "secret-token")
+	body := buildValidVeloxDeliveryRequest(t, "delivery_8cc0f|destination_12", "delivery_8cc0f")
+	w := firePostDeliveryRequest(t, r, body, "Bearer secret-token")
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status=%d; want 202; body=%s", w.Code, w.Body.String())
+	}
+	var got VeloxDeliverArtifactResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.SocialDeliveryID != preSeededID {
+		t.Errorf("SocialDeliveryID=%q; want %q (replay must reuse the pre-seeded row)", got.SocialDeliveryID, preSeededID)
+	}
+	if !got.AlreadyExists {
+		t.Errorf("AlreadyExists=false; want true (replay path fires mintedID != inserted.ID)")
+	}
+	if store.insertCallCount != 1 {
+		t.Errorf("insertCallCount=%d; want 1", store.insertCallCount)
+	}
+}
+
+// TestPostInternalDelivery_IdempotencyConflict pins SAME key + DIFFERENT SHA -> 409
+// with the structured VeloxDeliverArtifactConflictResponse body. The peer MUST NOT
+// retry (replay with different body always re-triggers 409); they must regenerate
+// a fresh idempotency_key with the new payload.
+func TestPostInternalDelivery_IdempotencyConflict(t *testing.T) {
+	store := &fakeDeliveryEnv{rows: make(map[string]*models.ExternalDelivery)}
+	store.insertReturnErr = repository.ErrIdempotencyConflict
+	destStore := &fakeDestinationEnv{rows: map[string]*models.ExternalDestination{}}
+	destStore.rows["extdst_01JABC"] = &models.ExternalDestination{ID: "extdst_01JABC", SourceSystem: "velox", Enabled: true}
+	r := newPostVeloxTestRouter(t, store, destStore, "secret-token")
+	body := buildValidVeloxDeliveryRequest(t, "delivery_8cc0f|destination_12", "delivery_8cc0f")
+	w := firePostDeliveryRequest(t, r, body, "Bearer secret-token")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status=%d; want 409; body=%s", w.Code, w.Body.String())
+	}
+	var got VeloxDeliverArtifactConflictResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Code != "idempotency_key_conflict" {
+		t.Errorf("Code=%q; want idempotency_key_conflict", got.Code)
+	}
+	if got.IdempotencyKey != "delivery_8cc0f|destination_12" {
+		t.Errorf("IdempotencyKey=%q; want delivery_8cc0f|destination_12", got.IdempotencyKey)
+	}
+	if store.insertCallCount != 1 {
+		t.Errorf("insertCallCount=%d; want 1", store.insertCallCount)
+	}
+}
+
+// TestPostInternalDelivery_ValidationSizeZero pins the validation fast-fail:
+// size_bytes=0 -> handler step 6 returns 422 BEFORE calling Insert (sanity:
+// insertCallCount=0 proves validation defeats the Insert). This is the spec
+// invariant "altrimenti 422 per validation failure".
+func TestPostInternalDelivery_ValidationSizeZero(t *testing.T) {
+	store := &fakeDeliveryEnv{rows: make(map[string]*models.ExternalDelivery)}
+	destStore := &fakeDestinationEnv{rows: map[string]*models.ExternalDestination{}}
+	r := newPostVeloxTestRouter(t, store, destStore, "secret-token")
+	body := buildValidVeloxDeliveryRequest(t, "delivery_9xx|destination_12", "delivery_9xx")
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	payload["artifact"].(map[string]any)["size_bytes"] = 0
+	body, _ = json.Marshal(payload)
+	w := firePostDeliveryRequest(t, r, body, "Bearer secret-token")
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d; want 422; body=%s", w.Code, w.Body.String())
+	}
+	if store.insertCallCount != 0 {
+		t.Errorf("insertCallCount=%d; want 0 (validation must short-circuit)", store.insertCallCount)
+	}
+}
+
+// TestPostInternalDelivery_DestinationNotFound pins the spec invariant:
+// external_destination_id pointing at a NON-EXISTENT row -> handler step 9 returns
+// 404 (per user spec "ErrExternalDeliveryNotFound -> 404 (se destination_id manca)").
+// The destination fake deliberately omits the row so GetByID returns (nil, nil)
+// and the handler maps to 404 BEFORE reaching the Insert call.
+func TestPostInternalDelivery_DestinationNotFound(t *testing.T) {
+	store := &fakeDeliveryEnv{rows: make(map[string]*models.ExternalDelivery)}
+	destStore := &fakeDestinationEnv{rows: map[string]*models.ExternalDestination{}}
+	// No row seeded -- GetByID will return (nil, nil).
+	r := newPostVeloxTestRouter(t, store, destStore, "secret-token")
+	body := buildValidVeloxDeliveryRequest(t, "delivery_x|nonexistent_dest", "delivery_x")
+	w := firePostDeliveryRequest(t, r, body, "Bearer secret-token")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status=%d; want 404; body=%s", w.Code, w.Body.String())
+	}
+	if store.insertCallCount != 0 {
+		t.Errorf("insertCallCount=%d; want 0 (404 must short-circuit Insert)", store.insertCallCount)
+	}
+}
+
+// TestPostInternalDelivery_EnqueuesDownloadJob pins the spec's HEADLINE
+// async-pipeline invariant: after a successful POST, the handler MUST
+// enqueue a VeloxDownloadJob into r.downloadJobCh before returning 202.
+// Without this test, the async enqueue path is implemented-but-unverified
+// (the newPostVeloxTestRouter nil-channels the field by default for the
+// other 4 tests). The 5th test wires a buffered channel + verifies the
+// real enqueue payload shape matches the heading contract.
+//
+// Nil-safe DownloadURL flattening is asserted by sending request WITHOUT
+// artifact.download_url (a metadata-only delivery, the wire contract's
+// omitempty case). The flattened string MUST be empty (not panic from
+// *string deref).
+func TestPostInternalDelivery_EnqueuesDownloadJob(t *testing.T) {
+	store := &fakeDeliveryEnv{rows: make(map[string]*models.ExternalDelivery)}
+	destStore := &fakeDestinationEnv{rows: map[string]*models.ExternalDestination{}}
+	destStore.rows["extdst_01JABC"] = &models.ExternalDestination{ID: "extdst_01JABC", SourceSystem: "velox", Enabled: true}
+	r := newPostVeloxTestRouter(t, store, destStore, "secret-token")
+	body := buildValidVeloxDeliveryRequest(t, "delivery_enqueue|destination_12", "delivery_enqueue")
+	// Drop artifact.download_url to exercise the *string nil-flatten path.
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	delete(payload["artifact"].(map[string]any), "download_url")
+	body, _ = json.Marshal(payload)
+	w := firePostDeliveryRequest(t, r, body, "Bearer secret-token")
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status=%d; want 202; body=%s", w.Code, w.Body.String())
+	}
+	job, ok := drainDownloadJobs(t, r)
+	if !ok {
+		t.Fatal("downloadJobCh empty after 202 — async enqueue DID NOT fire (spec violation)")
+	}
+	if job.ArtifactSHA256 != "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" {
+		t.Errorf("ArtifactSHA256=%q; want e5f2...345 (must propagate from request)", job.ArtifactSHA256)
+	}
+	if job.MimeType != "video/mp4" {
+		t.Errorf("MimeType=%q; want video/mp4", job.MimeType)
+	}
+	if job.SizeBytes <= 0 {
+		t.Errorf("SizeBytes=%d; want > 0", job.SizeBytes)
+	}
+	if !strings.HasPrefix(job.ExternalDeliveryID, "sdel_01J") {
+		t.Errorf("ExternalDeliveryID=%q; want sdel_01J prefix (mint format)", job.ExternalDeliveryID)
+	}
+	if job.DownloadURL != "" {
+		t.Errorf("DownloadURL=%q; want empty (nil-safe flatten: download_url absent in payload)", job.DownloadURL)
+	}
+	if store.insertCallCount != 1 {
+		t.Errorf("insertCallCount=%d; want 1", store.insertCallCount)
 	}
 }

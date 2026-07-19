@@ -172,14 +172,14 @@ func setupRouterForCreateDestination() (*Router, *fakeExternalDestinationStore, 
 	userStore := &fakeUserStore{}
 	auditStore := &fakeAuditLogStore{}
 	r := &Router{
-		mux:                 chi.NewRouter(),
+		mux:                  chi.NewRouter(),
 		externalDestinations: destStore,
-		workspaceStore:      wsStore,
-		userRepo:            userStore,
-		auditLogStore:       auditStore,
-		auth:                auth.NewManager("test-secret-32-chars-aaaaaaaaaa", 24),
-		csrfMiddleware:      passthroughCSRF, // bypass CSRF for test
-		authMiddleware:      passthroughAuth, // bypass JWT for test
+		workspaceStore:       wsStore,
+		userRepo:             userStore,
+		auditLogStore:        auditStore,
+		auth:                 auth.NewManager("test-secret-32-chars-aaaaaaaaaa", 24),
+		csrfMiddleware:       passthroughCSRF, // bypass CSRF for test
+		authMiddleware:       passthroughAuth, // bypass JWT for test
 	}
 	r.registerUserVeloxDestinations()
 	return r, destStore, wsStore, userStore, auditStore
@@ -198,8 +198,8 @@ func passthroughAuth(next http.Handler) http.Handler {
 
 // helper to inject user identity directly into context.
 func reqWithUser(req *http.Request, userID int64) *http.Request {
-	id := auth.NewUserIdentity(userID)
-	return req.WithContext(auth.IdentityToContext(req.Context(), id))
+	id := auth.NewUserIdentity(int64(userID), 0, 0)
+	return req.WithContext(auth.WithIdentity(req.Context(), id))
 }
 
 // -----------------------------------------------------------------------
@@ -327,12 +327,12 @@ func TestCreateIntegrationVeloxDestination_422_PlatformAccountMissing(t *testing
 func TestCreateIntegrationVeloxDestination_422_PlatformAccountDisabled(t *testing.T) {
 	ws := &models.Workspace{ID: 12, OwnerID: 123}
 	reauthAt := models.PlatformAccount{}.ReauthRequiredAt // dummy helper; replaced below
-	_ = reauthAt // ignore; real value constructed inline
+	_ = reauthAt                                          // ignore; real value constructed inline
 
 	pa := &models.PlatformAccount{
-		ID:              345,
-		Platform:        "youtube",
-		Status:          "reauth_required",
+		ID:               345,
+		Platform:         "youtube",
+		Status:           "reauth_required",
 		ReauthRequiredAt: ptrTime(),
 	}
 
