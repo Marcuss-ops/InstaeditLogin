@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 // testVeloxAPIToken is a fixed string for httptest. Production
@@ -803,5 +804,51 @@ func TestValidate_TransientPlatformAccountLookupError(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "platform_account") {
 		t.Errorf("body should mention platform_account for operator triage; got %q", w.Body.String())
+	}
+}
+
+// TestValidate_DestinationNotFoundBySentinelErr covers the
+// post-fix sentinel-aware 404 mapping on the validate
+// path. The mock's GetByIDErr is set to
+// repository.ErrExternalDestinationNotFound so the handler's NEW
+// `if errors.Is(err, repository.ErrExternalDestinationNotFound){ writeError(404) ... }`
+// branch fires (vs. the existing `if dest == nil` branch which
+// never runs because the sentinel branch returns first). Without
+// this test, the mirror fix is unverified AND a future refactor
+// that accidentally drops the sentinel branch would silently
+// regress the validate path to a 500 on production missing rows.
+// The body's bare text matches the veloxDestinationNotFoundBody
+// constant on the package. We additionally confirm downstream
+// lookups (workspace + platform_account) are NOT triggered so a
+// missing-row probe can't be made to enumerate other resources.
+func TestValidate_DestinationNotFoundBySentinelErr(t *testing.T) {
+	dst := &mockExternalDestinationStore{
+		GetByIDErr: repository.ErrExternalDestinationNotFound,
+	}
+	ws := &mockWorkspaceLookup{
+		findByIDErr: context.Canceled, // sentinel branch must short-circuit BEFORE this fires
+	}
+	user := &mockUserLookup{
+		findPlatformAccountByIDErr: context.Canceled, // same
+	}
+	w := runValidate(t, dst, ws, user,
+		testVeloxAPIToken, "extdst_01JSENT",
+		"Bearer "+testVeloxAPIToken, "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("sentinel-err destination: want 404, got %d (body=%q)",
+			w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "destination not found") {
+		t.Errorf("body should mention 'destination not found'; got %q",
+			w.Body.String())
+	}
+	if dst.GetByIDCalls != 1 {
+		t.Errorf("GetByIDCalls = %d; want 1", dst.GetByIDCalls)
+	}
+	if ws.findByIDCalls != 0 {
+		t.Errorf("workspace.findByIDCalls = %d; want 0 (sentinel branch must short-circuit before downstream lookups)", ws.findByIDCalls)
+	}
+	if user.findPlatformAccountByIDCalls != 0 {
+		t.Errorf("user.findPlatformAccountByIDCalls = %d; want 0 (sentinel branch must short-circuit before downstream lookups)", user.findPlatformAccountByIDCalls)
 	}
 }

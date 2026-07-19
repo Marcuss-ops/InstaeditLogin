@@ -272,6 +272,23 @@ type VeloxDownloadJob struct {
 // 64 chars, [0-9a-f]{64}. Uppercase hex is rejected (callers
 // must lowercase before submitting to match the canonical
 // representation produced by sha256.Sum256().hex.EncodeToString()).
+
+// veloxDestinationNotFoundBody is the single source of truth for
+// the 404 response body when a destination is missing. Both
+// handleCreateInternalDelivery (POST /deliveries) and
+// handleValidateInternalDestination (POST /destinations/{id}/validate)
+// use this exact text so a probe hitting either path gets an
+// indistinguishable body — closes the cross-handler body-shape
+// asymmetry that the code-reviewer flagged as a residual
+// status-code-oracle surface (status code is uniform but body
+// was not, allowing an attacker to distinguish routes by the
+// presence/absence of the ID-quoted prefix).
+//
+// Deliberately bare (no destination_id quoted in the body):
+// the request URL already carries the id, so writing it into
+// the body widens the oracle surface for no diagnostic gain.
+const veloxDestinationNotFoundBody = "destination not found"
+
 var sha256HexRegex = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 // MIME allowlist. Phase 1 video-only. The worker downstream
@@ -625,12 +642,12 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 		// Sentinel-aware: a not-found sentinel from the
 		// destination repo is the SAME 404 a missing-row
 		// produces, so the caller can't distinguish them
-		// (closes a timing-oracle / existence-leak path that
-		// would otherwise let a probe iterate destination IDs
-		// to enumerate which are live).
+		// (closes a status-code-oracle / existence-leak path:
+		// without this branch, the 500/404 split on missing
+		// destinations would let a malicious Velox peer iterate
+		// IDs and enumerate which are live).
 		if errors.Is(err, repository.ErrExternalDestinationNotFound) {
-			writeError(w, http.StatusNotFound,
-				fmt.Sprintf("destination %q not found", veloxReq.ExternalDestinationID))
+			writeError(w, http.StatusNotFound, veloxDestinationNotFoundBody)
 			return
 		}
 		slog.Error("velox deliver: destination lookup failed",
@@ -649,8 +666,7 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 		// not found" so the Velox consumer treats both
 		// identically and a missing row never leaks a 422/500
 		// distinction.
-		writeError(w, http.StatusNotFound,
-			fmt.Sprintf("destination %q not found", veloxReq.ExternalDestinationID))
+		writeError(w, http.StatusNotFound, veloxDestinationNotFoundBody)
 		return
 	}
 
@@ -852,6 +868,19 @@ func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *h
 	// 1. Destination lookup.
 	dest, err := r.externalDestinations.GetByID(req.Context(), id)
 	if err != nil {
+		// Mirror of handleCreateInternalDelivery's sentinel-aware
+		// 404: production repos wrap the missing-row case as
+		// (nil, ErrExternalDestinationNotFound); the validate-side
+		// mock returns (nil, nil) for missing rows, so the L862
+		// nil-dest branch covers tests. Real production code
+		// hits this branch on missing rows and we MUST map it
+		// to 404 (not 500) to keep the validate path consistent
+		// with the POST path — a 500 here would let a probe
+		// iterate IDs and enumerate which are live.
+		if errors.Is(err, repository.ErrExternalDestinationNotFound) {
+			writeError(w, http.StatusNotFound, veloxDestinationNotFoundBody)
+			return
+		}
 		slog.Error("velox validate: destination lookup failed",
 			"id", id, "err", err)
 		writeError(w, http.StatusInternalServerError, "destination lookup failed")
@@ -860,7 +889,7 @@ func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *h
 	if dest == nil || !dest.Enabled {
 		// Disabled = 404 (uniform with not-found; doesn't leak
 		// existence).
-		writeError(w, http.StatusNotFound, "destination not found")
+		writeError(w, http.StatusNotFound, veloxDestinationNotFoundBody)
 		return
 	}
 
