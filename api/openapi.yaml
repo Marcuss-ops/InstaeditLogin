@@ -41,6 +41,16 @@ tags:
     description: Universal-publishing API (`targets[]` discriminated union).
   - name: PostTargets
     description: Async state of a single post target.
+  - name: Velox Internal
+    description: |
+      Service-to-service API for Velox handoff. Requires
+      `Authorization: Bearer <VELOX_API_TOKEN>` (server-shared
+      secret). NOT exposed to the public Caddyfile — only
+      reachable from peers on the `media-backend` internal Docker
+      network. Constant-time token compare via
+      `crypto/subtle.ConstantTimeCompare`; 401 (missing/malformed
+      header), 403 (token mismatch), 503 (token not configured)
+      per RFC 7235 + the Velox retry contract.
 
 paths:
 
@@ -736,6 +746,127 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
 
 # ─────────────────────────────────────────────────────────────────────────────
+  /internal/v1/destinations/{id}/validate:
+    post:
+      tags: [Velox Internal]
+      operationId: postInternalVeloxDestinationValidate
+      summary: Validate that a Velox destination is ready.
+      description: |
+        Velox calls this BEFORE every `/internal/v1/deliveries`
+        request to verify the destination + workspace +
+        platform_account are all in the canonical active shape.
+        Default returns 204 No Content (Velox consumes only
+        the status code). Diagnostic JSON opt-in via
+        `?diagnostic=true` OR `X-Velox-Diagnostic: true`.
+        Per-destination rate limit: 60/minute default.
+      security:
+        - VeloxServiceAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: |
+            External destination opaque id (`extdst_01J...`,
+            base32, no padding).
+      responses:
+        '204':
+          $ref: '#/components/responses/VeloxDestinationValid'
+        '200':
+          $ref: '#/components/responses/VeloxDestinationDiagnostic'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/VeloxServiceAuthMissing'
+        '403':
+          $ref: '#/components/responses/VeloxServiceAuthMismatch'
+        '404':
+          $ref: '#/components/responses/VeloxResourceNotFound'
+        '429':
+          $ref: '#/components/responses/VeloxRateLimit'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/VeloxServiceAuthUnconfigured'
+  /internal/v1/deliveries:
+    post:
+      tags: [Velox Internal]
+      operationId: postInternalVeloxDelivery
+      summary: Accept a Velox-handoff artifact for ingest + publish.
+      description: |
+        Producer-side correlation-keyed accept. SLA target 500ms p99.
+        IDEMPOTENCY: `request_sha256 = sha256(raw_body)` is computed
+        inside the INSERT transaction; same-key same-SHA replays
+        reuse the original row (returns 202 + already_exists=true);
+        same-key different-SHA returns 409. INSERT path holds a
+        `pg_advisory_xact_lock` so concurrent replays serialise.
+        Async enqueue into the worker download channel is
+        non-blocking (warn + drop on overflow).
+      security:
+        - VeloxServiceAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VeloxDeliverArtifactRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/VeloxDeliveryAccepted'
+        '401':
+          $ref: '#/components/responses/VeloxServiceAuthMissing'
+        '403':
+          $ref: '#/components/responses/VeloxServiceAuthMismatch'
+        '404':
+          $ref: '#/components/responses/VeloxResourceNotFound'
+        '409':
+          $ref: '#/components/responses/VeloxIdempotencyConflict'
+        '413':
+          $ref: '#/components/responses/EntityTooLargeError'
+        '422':
+          $ref: '#/components/responses/VeloxValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/VeloxServiceAuthUnconfigured'
+  /internal/v1/deliveries/{id}:
+    get:
+      tags: [Velox Internal]
+      operationId: getInternalVeloxDelivery
+      summary: Poll a Velox delivery's authoritative state.
+      description: |
+        Reconciliation/poll path. Velox uses this when its
+        outbound callback channel drops a packet (network blip,
+        peer restart, 502 storm). The `id` path parameter is
+        the `social_delivery_id` minted by POST `/internal/v1/deliveries`.
+        404 deliberately collapses "id never accepted" with
+        "we accepted then lost it" — closes an enumeration
+        oracle a malicious peer could otherwise use.
+      security:
+        - VeloxServiceAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Social delivery opaque id (`sdel_01J...`, base32, no padding).
+      responses:
+        '200':
+          $ref: '#/components/responses/VeloxDeliveryPolled'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/VeloxServiceAuthMissing'
+        '403':
+          $ref: '#/components/responses/VeloxServiceAuthMismatch'
+        '404':
+          $ref: '#/components/responses/VeloxResourceNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/VeloxServiceAuthUnconfigured'
 components:
 
   securitySchemes:
@@ -757,6 +888,18 @@ components:
       description: |
         HttpOnly JWT session cookie set by `POST /api/v1/auth/exchange`.
         SameSite=None; Secure. Browser SPA flow only.
+    VeloxServiceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: 32+ char opaque hex token (VELOX_API_TOKEN)
+      description: |
+        Service-to-service Bearer auth for `/internal/v1/*`.
+        Token loaded from `VELOX_API_TOKEN` env var at boot
+        (roll via `set-fly-secrets.sh`). Compared constant-time
+        via `crypto/subtle.ConstantTimeCompare`. Distinct from
+        `JwtCookie` (user) and `ApiKeyAuth` (machine user):
+        this scheme is for trusted peer systems, NOT for SPA
+        or third-party API consumers.
 
   parameters:
     PathId:
@@ -819,6 +962,126 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
 
+    VeloxResourceNotFound:
+      description: |
+        Cross-handler-uniform 404 body used by:
+        - POST `/internal/v1/destinations/{id}/validate` when id unknown /
+          disabled / reauth-required / cancelled
+        - POST `/internal/v1/deliveries` when `external_destination_id`
+          is unknown
+        - GET `/internal/v1/deliveries/{id}` when social_delivery_id
+          is unknown
+        Body deliberately bare (no resource id echoed back) to avoid
+        turning the 404 status into an enumeration oracle for a
+        probe against random ids. The URL carries the id; reading
+        it back in the body would widen the oracle surface for no
+        diagnostic gain.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxResourceNotFound'
+    VeloxIdempotencyConflict:
+      description: |
+        409 returned when the same `idempotency_key` was replayed
+        with a different body SHA-256. Structured body so callers
+        can pattern-match reliably without parsing the message prose.
+        The INSERT path is wired under a `pg_advisory_xact_lock`
+        so concurrent replays serialise; a different-SHA replay
+        deterministically lands here per the consumer contract.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxIdempotencyConflict'
+    VeloxServiceAuthMissing:
+      description: |
+        401 returned by the internal_velox auth middleware when the
+        `Authorization` header is absent or malformed (not the
+        `Bearer <token>` shape). Distinct from `VeloxServiceAuthMismatch`
+        (403) per RFC 7235: the peer has not yet authenticated, so
+        a 401 hint tells them to wire their client before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    VeloxServiceAuthMismatch:
+      description: |
+        403 returned when the Bearer token does NOT match the
+        deployed `VELOX_API_TOKEN` (constant-time compared).
+        Operator-actionable: pages on a 403 spike.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    VeloxServiceAuthUnconfigured:
+      description: |
+        503 returned when `VELOX_API_TOKEN` was empty at boot.
+        Operator must set the env var + restart the process.
+        Distinct from 401/403 because the failure is a misconfiguration,
+        not a per-request client error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    VeloxValidationError:
+      description: 422 returned by the producer-side validation chain (fast-fail order in handler doc-comment).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    VeloxTransientError:
+      description: |
+        503 returned for transient workspace lookups. Per the Velox
+        retry contract: 5xx = retry, so Velox backs off and re-issues.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    VeloxDeliveryAccepted:
+      description: |
+        202 returned by POST `/internal/v1/deliveries` on both
+        fresh-insert AND same-SHA replay. The `already_exists`
+        boolean tells the caller which path fired.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxDeliverArtifactResponse'
+    VeloxDeliveryPolled:
+      description: |
+        200 returned by GET `/internal/v1/deliveries/{id}` with
+        the row's authoritative state. Retry-wait fields surface
+        only when `status == retry_wait`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxGetDeliveryResponse'
+    VeloxDestinationValid:
+      description: |
+        204 happy path returned by POST `/internal/v1/destinations/{id}/validate`.
+        Velox consumes only the status code; the body is empty.
+        Diagnostic JSON is opt-in via `?diagnostic=true` or
+        `X-Velox-Diagnostic: true` and uses the 200 + body shape below.
+    VeloxDestinationDiagnostic:
+      description: |
+        200 returned by the `?diagnostic=true` / `X-Velox-Diagnostic: true`
+        opt-in path on POST `/internal/v1/destinations/{id}/validate`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxValidateDestinationResponse'
+    VeloxRateLimit:
+      description: |
+        429 returned when a per-destination sliding window exceeds
+        the limit (>60 validations/minute default). The `Retry-After`
+        header carries the integer seconds the peer should wait.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
   schemas:
 
     # ────── Errors (canonical envelope, Taglio 5.x design) ──────────
@@ -1429,3 +1692,176 @@ components:
             When `true`, allows retrying from `partially_published`
             or `waiting_provider` states. Default retry is `failed`
             only.
+    VeloxArtifactRef:
+      type: object
+      required: [artifact_id, sha256, size_bytes, mime_type]
+      properties:
+        artifact_id:
+          type: string
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+          description: Lowercase hex; uppercase hex is rejected (handlers enforce).
+        size_bytes:
+          type: integer
+          minimum: 1
+        mime_type:
+          type: string
+          enum:
+            - video/mp4
+            - video/quicktime
+            - video/webm
+            - video/x-matroska
+        download_url:
+          type: string
+          format: uri
+    VeloxDeliverArtifactRequest:
+      type: object
+      required:
+        - external_delivery_id
+        - idempotency_key
+        - external_destination_id
+        - artifact
+        - metadata
+      properties:
+        external_delivery_id:
+          type: string
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 256
+        external_destination_id:
+          type: string
+          description: Opaque ULID-shaped id `extdst_01J...` (base32, no padding).
+        artifact:
+          $ref: '#/components/schemas/VeloxArtifactRef'
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Non-empty JSON object; the worker reads `title`, `description`, `privacy_status` from here.
+        publish_at:
+          type: string
+          format: date-time
+          description: Optional; null = publish immediately.
+        callback_url:
+          type: string
+          format: uri
+      description: |
+        Producer-side envelope from Velox. Field naming is byte-for-byte
+        aligned with the upstream JSON so `encoding/json.Marshal`
+        round-trips cleanly. Request body is capped at 8 MB (handler
+        enforces via `http.MaxBytesReader`).
+    VeloxDeliverArtifactResponse:
+      type: object
+      required: [social_delivery_id, status, already_exists]
+      properties:
+        social_delivery_id:
+          type: string
+          description: Opaque ULID-shaped id `sdel_01J...`.
+        status:
+          type: string
+          enum: [accepted]
+        already_exists:
+          type: boolean
+          description: |
+            True when the prior row matched this idempotency_key+
+            SHA combo; false on a fresh insert. Always 202; the
+            boolean tells the caller which branch fired.
+    VeloxGetDeliveryResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          description: Mirrors the URL path id (sdel_01J...); surrendered so Velox correlates responses without remembering the queried path.
+        status:
+          type: string
+          enum:
+            - accepted
+            - downloading
+            - artifact_verified
+            - ingest_completed
+            - queued
+            - publishing
+            - published
+            - retry_wait
+            - blocked_auth
+            - failed
+            - dead_letter
+        retry_wait_reason:
+          type: string
+          description: Set ONLY when `status == retry_wait`. Mirrors `last_error_code`. Empty string in any other state.
+        last_error_code:
+          type: string
+        last_error_message:
+          type: string
+        platform_media_id:
+          type: string
+          description: e.g. `dQw4w9WgXcQ` on YouTube; set on terminal publish.
+        platform_url:
+          type: string
+          format: uri
+        published_at:
+          type: string
+          format: date-time
+          description: Set ONLY when `status == published`; carves the success timestamp off `completed_at`.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    VeloxValidateDestinationResponse:
+      type: object
+      required: [valid, destination_id, status, platform]
+      properties:
+        valid:
+          type: boolean
+          enum: [true]
+          description: Always true on 200 — the 404/410 paths are separate.
+        destination_id:
+          type: string
+        status:
+          type: string
+          enum: [active]
+        platform:
+          type: string
+      description: |
+        Diagnostic-mode body returned when the `?diagnostic=true`
+        query parameter OR `X-Velox-Diagnostic: true` request
+        header is present. The default behaviour is 204 No Content.
+    VeloxResourceNotFound:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum:
+            - destination not found
+            - workspace not found
+            - platform_account not found
+            - destination requires reauth
+            - destination cancelled
+            - delivery not found
+      description: |
+        Cross-handler 404 body. The `error` strings map to the
+        `veloxDestinationNotFoundBody` constant in
+        `pkg/api/internal_velox.go` + analogous consts for
+        delivery / workspace / platform_account / reauth.
+    VeloxIdempotencyConflict:
+      type: object
+      required: [error, code, idempotency_key]
+      properties:
+        error:
+          type: string
+          enum: [idempotency_key_conflict]
+        code:
+          type: string
+          enum: [idempotency_key_conflict]
+        idempotency_key:
+          type: string
+      description: |
+        Maps to `VeloxDeliverArtifactConflictResponse` in
+        `pkg/api/internal_velox.go`. Both `error` and `code`
+        carry the same string so a peer can pattern-match on
+        either key without coupling to the message prose.
