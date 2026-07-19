@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +29,158 @@ type YouTubeOAuthService struct {
 	cfg        *config.Config
 	httpClient *http.Client
 	clock      func() time.Time
+	// uploadOpts (P1#6) — every chunked-PUT retry + backoff knob.
+	// Populated from cfg in NewYouTubeOAuthService; tests override
+	// backoff/sleep via the unexported uploadDeps fields.
+	uploadOpts youTubeUploadOptions
+	// uploadDeps (P1#6) — test-injectable backoff/sleep functions.
+	// nil in production: NewYouTubeOAuthService installs the
+	// defaults (computeYouTubeBackoff + defaultYouTubeSleep).
+	uploadDeps *youTubeUploadDeps
+}
+
+// youTubeUploadOptions captures the P1#6 chunking knobs. Loaded
+// from cfg in NewYouTubeOAuthService; also re-readable as
+// YouTubeUploadOptions for documentation + future public exposure
+// (a future Build(deps, opts...) constructor could pass it in
+// directly; today the constructor pulls every field from cfg).
+type youTubeUploadOptions struct {
+	ChunkSize   int64         // bytes per chunk; must be multiple of 262144 (validated by cfg.validate)
+	MaxRetries  int           // per-chunk PUT retry budget (distinct from upload-job-level retries)
+	BackoffBase time.Duration // exp-backoff base for the calculated fallback
+	BackoffCap  time.Duration // exp-backoff cap for the calculated fallback; Retry-After bypasses this
+}
+
+// youTubeUploadDeps lets tests swap the production backoff / sleep
+// implementations. Production wiring: NewYouTubeOAuthService
+// installs the defaults returned by loadYouTubeUploadDeps(opts).
+// Tests (in this package) reach into the unexported fields
+// directly and override uploadDeps.backoff / uploadDeps.sleep.
+type youTubeUploadDeps struct {
+	backoff func(attempt int) time.Duration
+	sleep   func(ctx context.Context, d time.Duration) error
+}
+
+// loadYouTubeUploadOptions reads the four P1#6 knobs from cfg with
+// safe defaults if any field happens to be zero (defensive — the
+// boot-time validate() rejects bad shapes, but a test that builds
+// cfg manually might skip Validate()).
+func loadYouTubeUploadOptions(cfg *config.Config) youTubeUploadOptions {
+	o := youTubeUploadOptions{
+		ChunkSize:   cfg.YouTubeUploadChunkBytes,
+		MaxRetries:  cfg.YouTubeUploadMaxRetries,
+		BackoffBase: time.Duration(cfg.YouTubeUploadBackoffBaseMs) * time.Millisecond,
+		BackoffCap:  time.Duration(cfg.YouTubeUploadBackoffCapMs) * time.Millisecond,
+	}
+	if o.ChunkSize <= 0 {
+		o.ChunkSize = 16 * 1024 * 1024
+	}
+	if o.MaxRetries <= 0 {
+		o.MaxRetries = 5
+	}
+	if o.BackoffBase <= 0 {
+		o.BackoffBase = time.Second
+	}
+	if o.BackoffCap < o.BackoffBase {
+		o.BackoffCap = 5 * time.Minute
+	}
+	return o
+}
+
+// loadYouTubeUploadDeps returns the production defaults used by
+// NewYouTubeOAuthService. Each field is an independent function so
+// tests can swap one without recomputing the other.
+func loadYouTubeUploadDeps(o youTubeUploadOptions) *youTubeUploadDeps {
+	return &youTubeUploadDeps{
+		backoff: computeYouTubeBackoff(o.BackoffBase, o.BackoffCap),
+		sleep:   defaultYouTubeSleep,
+	}
+}
+
+// computeYouTubeBackoff implements AWS-style decorrelated jitter
+// for chunk-level retries: temp = min(cap, base * 3^attempt), sleep =
+// base + rand(0..temp-base). Capped at the configured cap. Production
+// polish: a future commit can switch this to math/rand/v2 with a
+// per-pool source for better concurrency characteristics; today the
+// global math/rand source is sufficient for the chunk-loop's
+// concurrency (a single worker process is the only caller).
+//
+// Tests inject a deterministic replacement via the uploadDeps.backoff
+// field on the service struct.
+func computeYouTubeBackoff(base, cap time.Duration) func(int) time.Duration {
+	if base <= 0 {
+		base = time.Second
+	}
+	if cap < base {
+		cap = base
+	}
+	return func(attempt int) time.Duration {
+		if attempt < 1 {
+			attempt = 1
+		}
+		prev := base
+		for i := 1; i < attempt; i++ {
+			prev *= 3
+			if prev > cap {
+				prev = cap
+				break
+			}
+		}
+		if prev < base {
+			prev = base
+		}
+		// Full jitter: rand in [base, prev]. rand.Int63n(n) returns
+		// [0, n) so the upper bound is exclusive; widen by 1 to keep
+		// prev as a possible outcome when prev > base.
+		span := int64(prev) - int64(base)
+		if span < 1 {
+			return base
+		}
+		return base + time.Duration(rand.Int63n(span))
+	}
+}
+
+// defaultYouTubeSleep is the interruptible sleep used between
+// chunked-PUT retries. time.NewTimer + select on ctx.Done() is the
+// canonical shutdown-safe shape; time.Sleep() would block past
+// graceful-shutdown cancellation and break the worker's
+// drain-then-stop contract.
+func defaultYouTubeSleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// parseRetryAfterHeader parses the canonical Retry-After header
+// (RFC 7231 §7.1.3 — delta-seconds OR HTTP-date), returning
+// time.Duration(0) on any parse error or empty input. Already-
+// elapsed delta-seconds clamp to 0 so the worker doesn't wait a
+// negative amount of time. Per RFC 7231, an HTTP-date (deprecated
+// but seen in the wild) is converted to "until that instant".
+func parseRetryAfterHeader(h string) time.Duration {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(h); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(h); err == nil {
+		d := time.Until(t)
+		if d < 0 {
+			return 0
+		}
+		return d
+	}
+	return 0
 }
 
 // NewYouTubeOAuthService creates a new YouTubeOAuthService. Accepts optional
@@ -39,10 +193,13 @@ func NewYouTubeOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*
 	if len(deps) > 0 {
 		dep = deps[0]
 	}
+	opts := loadYouTubeUploadOptions(cfg)
 	return &YouTubeOAuthService{
 		cfg:        cfg,
 		httpClient: dep.resolveHTTPClient(),
 		clock:      dep.resolveClock(),
+		uploadOpts: opts,
+		uploadDeps: loadYouTubeUploadDeps(opts),
 	}, nil
 }
 
@@ -318,7 +475,9 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 	}, nil
 }
 
-const youtubeUploadChunkSize = 256 * 1024
+// P1#6 — chunk size is now configurable via cfg.YouTubeUploadChunkBytes
+// (env YOUTUBE_UPLOAD_CHUNK_BYTES, default 16 MB / 16777216, must be a
+// multiple of 262144 = 256 KB per Google's resumable upload protocol).
 
 // Publish uploads a video to YouTube using the resumable upload protocol.
 // For YouTube this is the async entrypoint: the upload completes synchronously
@@ -597,6 +756,13 @@ func (s *YouTubeOAuthService) initiateResumableSession(ctx context.Context, acce
 	return uploadURL, nil
 }
 
+// uploadVideoChunks streams the entire source video to YouTube in
+// ChunkSize-sized chunks, applying Retry-After-aware exponential
+// backoff on transient 5xx/429 PUT failures. P1#6 — replaces the
+// pre-P1 hardcoded 256 KB chunks and the bare 3-retry no-backoff loop.
+// Per-chunk retry budget is s.uploadOpts.MaxRetries; on exhaustion
+// the error bubbles up so the outer upload-job worker can MarkRetry
+// or MarkDeadLetter based on the upload_jobs.attempt_count budget.
 func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, sourceURL string, fileSize int64) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
 	if err != nil {
@@ -609,6 +775,7 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return "", fmt.Errorf("source video returned status %d", resp.StatusCode)
 	}
 
@@ -622,18 +789,19 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 
 	var uploaded int64
 	var retries int
-	const maxRetries = 3
-	buf := make([]byte, youtubeUploadChunkSize)
+	buf := make([]byte, s.uploadOpts.ChunkSize)
 
 	for {
 		select {
 		case <-ctx.Done():
+			resp.Body.Close()
 			return "", fmt.Errorf("upload cancelled: %w", ctx.Err())
 		default:
 		}
 
 		n, readErr := io.ReadFull(resp.Body, buf)
 		if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
+			resp.Body.Close()
 			return "", fmt.Errorf("failed to read video chunk: %w", readErr)
 		}
 
@@ -643,20 +811,47 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 
 		contentRange := fmt.Sprintf("bytes %d-%d/%d", uploaded, uploaded+int64(n)-1, fileSize)
 
-		videoID, uploadErr := s.putChunk(ctx, uploadURL, buf[:n], contentRange, int64(n))
+		videoID, retryAfter, retryable, uploadErr := s.putChunk(ctx, uploadURL, buf[:n], contentRange, int64(n))
 		if uploadErr != nil {
-			retries++
-			if retries > maxRetries {
+			if !retryable {
+				// 4xx-not-429: permanent client error, fail fast
+				// so the outer worker can MarkDeadLetter on attempt 1.
 				resp.Body.Close()
-				return "", fmt.Errorf("upload failed at byte %d after %d retries: %w", uploaded, maxRetries, uploadErr)
+				return "", uploadErr
+			}
+			if retries >= s.uploadOpts.MaxRetries {
+				resp.Body.Close()
+				return "", fmt.Errorf("upload failed at byte %d after %d retries: %w", uploaded, retries, uploadErr)
+			}
+			retries++
+
+			// Retry-After ALWAYS wins. Capping a server hint would
+			// guarantee we hammer the API mid-quota-window and risk
+			// a temporary blacklisting — the cap only applies to
+			// the CALCULATED fallback when the server didn't send one.
+			var sleepFor time.Duration
+			if retryAfter > 0 {
+				sleepFor = retryAfter
+			} else {
+				sleepFor = s.uploadDeps.backoff(retries)
 			}
 
-			slog.Warn("YouTube: chunk upload failed, attempting recovery", "byte", uploaded, "retry", retries, "error", uploadErr)
+			slog.Warn("YouTube: chunk upload failed, sleeping then retrying",
+				"byte", uploaded, "retry", retries, "max_retries", s.uploadOpts.MaxRetries,
+				"sleep_for", sleepFor, "error", uploadErr,
+			)
 
-			resumedAt, qErr := s.queryUploadStatus(ctx, uploadURL, fileSize)
+			if err := s.uploadDeps.sleep(ctx, sleepFor); err != nil {
+				resp.Body.Close()
+				return "", fmt.Errorf("upload cancelled during backoff at byte %d: %w", uploaded, err)
+			}
+
+			// Recover the byte offset the server actually has via
+			// the 308-Range response (with its own small retry budget).
+			resumedAt, qErr := s.queryUploadStatusWithRetry(ctx, uploadURL, fileSize, 2)
 			if qErr != nil {
 				resp.Body.Close()
-				return "", fmt.Errorf("upload failed at byte %d (status query also failed): %w", uploaded, uploadErr)
+				return "", fmt.Errorf("upload failed at byte %d (status query failed): %w", uploaded, qErr)
 			}
 			slog.Info("YouTube: resuming upload from byte", "resumed_at", resumedAt)
 
@@ -688,40 +883,93 @@ func (s *YouTubeOAuthService) uploadVideoChunks(ctx context.Context, uploadURL, 
 	return "", fmt.Errorf("upload completed but no video ID returned")
 }
 
-func (s *YouTubeOAuthService) putChunk(ctx context.Context, uploadURL string, data []byte, contentRange string, expectedLen int64) (string, error) {
+// putChunk performs a single resumable-upload PUT and returns:
+//   - videoID string — the upload's permanent id when the response
+//     is the terminal 200/201 with the { "id": ... } JSON body.
+//   - retryAfter time.Duration — server-supplied Retry-After (parsed
+//     from the response header via parseRetryAfterHeader). Zero when
+//     the server didn't send one; the caller decides whether to use
+//     it or fall back to computed exp backoff.
+//   - retryable bool — true for transient failures (5xx, 429, network
+//     error) so the uploadVideoChunks loop can sleep + retry; false
+//     for terminal failures (200/201 with bad body, 308 [happy path],
+//     or 4xx-not-429 [permanent client error]). 4xx-not-429 bubbling
+//     up cleanly lets the worker's MarkDeadLetter path classify the
+//     row on attempt 1 instead of wasting the entire retry budget
+//     on a row YouTube will reject forever.
+//   - err error — non-nil on any failure path; nil on 200/201
+//     success or 308 "more bytes please".
+func (s *YouTubeOAuthService) putChunk(ctx context.Context, uploadURL string, data []byte, contentRange string, expectedLen int64) (videoID string, retryAfter time.Duration, retryable bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, "PUT", uploadURL, bytes.NewReader(data))
 	if err != nil {
-		return "", err
+		return "", 0, false, err
 	}
 	req.Header.Set("Content-Range", contentRange)
 	req.ContentLength = expectedLen
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("PUT chunk failed: %w", err)
+		// Network error (DNS, TCP reset, ctx-cancelled before
+		// connect): treat as retryable so uploadVideoChunks can
+		// resume the byte range from queryUploadStatus.
+		return "", 0, true, fmt.Errorf("PUT chunk failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	retryAfter = parseRetryAfterHeader(resp.Header.Get("Retry-After"))
 
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusCreated:
+	switch {
+	case resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated:
 		var result struct {
 			ID string `json:"id"`
 		}
-		if err := json.Unmarshal(body, &result); err != nil {
-			return "", fmt.Errorf("failed to parse upload completion response: %w", err)
+		if jerr := json.Unmarshal(body, &result); jerr != nil {
+			return "", 0, false, fmt.Errorf("failed to parse upload completion response: %w", jerr)
 		}
-		return result.ID, nil
+		return result.ID, 0, false, nil
 
-	case 308:
-		return "", nil
+	case resp.StatusCode == 308:
+		// Resume Incomplete — the canonical "more bytes please"
+		// response. The Range header on the 308 tells us how far
+		// we got, which the caller uses via queryUploadStatus for
+		// the next Content-Range. 308 is not an error: it's a
+		// normal continuation marker.
+		return "", 0, false, nil
+
+	case resp.StatusCode == http.StatusTooManyRequests:
+		// 429 — always retryable. The server's Retry-After (if
+		// any) is parsed above; when > 0 the caller honors it.
+		return "", retryAfter, true, fmt.Errorf("rate limited (status 429, retry_after=%s)", retryAfter)
+
+	case resp.StatusCode >= 500:
+		// 5xx — retryable. Honor Retry-After when present, fall
+		// back to the configured exp backoff otherwise.
+		if retryAfter > 0 {
+			return "", retryAfter, true, fmt.Errorf("server error (status %d, retry_after=%s)", resp.StatusCode, retryAfter)
+		}
+		return "", 0, true, fmt.Errorf("server error (status %d)", resp.StatusCode)
 
 	default:
-		return "", fmt.Errorf("unexpected PUT response (status %d): %s", resp.StatusCode, string(body))
+		// 4xx (excluding 429) — permanent client error. YouTube's
+		// docs are clear: bad metadata, body validation errors, etc.
+		// won't fix themselves on retry. Bubble up so the outer
+		// upload-job worker can MarkDeadLetter on attempt 1 with
+		// error_code = 'youtube_error'.
+		return "", 0, false, fmt.Errorf("unexpected PUT response (status %d): %s", resp.StatusCode, string(body))
 	}
 }
 
+// queryUploadStatus issues the canonical status check used on the
+// recovery path: PUT with Content-Range: bytes */TOTAL. The 308
+// response carries a Range header indicating the next byte offset.
+// Non-308 here is unexpected (we expect 308 with a Range after a
+// partial upload) — surfaced as a non-retryable error so the caller
+// can decide whether to fail or wrap in a higher-level retry.
+//
+// Single PUT only — its caller
+// (uploadVideoChunks::queryUploadStatusWithRetry) owns the small
+// retry budget. Splitting the two keeps each function single-purpose.
 func (s *YouTubeOAuthService) queryUploadStatus(ctx context.Context, uploadURL string, fileSize int64) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, "PUT", uploadURL, http.NoBody)
 	if err != nil {
@@ -760,6 +1008,36 @@ func (s *YouTubeOAuthService) queryUploadStatus(ctx context.Context, uploadURL s
 	}
 
 	return lastByte + 1, nil
+}
+
+// queryUploadStatusWithRetry wraps queryUploadStatus with a small
+// independent retry budget (default 2 attempts). P1#6 — the
+// status-check PUT itself can hit a 5xx/429 transient; without
+// this wrapper we'd abandon the entire upload and force the worker
+// to re-claim from byte 0 on the next tick, which is wasteful when
+// only the status-query failed. The retry budget is intentionally
+// tiny (2) — it covers a single retry, not the full chunk budget,
+// because the chunk budget already drove the failure into this
+// path in the first place.
+func (s *YouTubeOAuthService) queryUploadStatusWithRetry(ctx context.Context, uploadURL string, fileSize int64, maxAttempts int) (int64, error) {
+	if maxAttempts <= 0 {
+		maxAttempts = 2
+	}
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		offset, err := s.queryUploadStatus(ctx, uploadURL, fileSize)
+		if err == nil {
+			return offset, nil
+		}
+		lastErr = err
+		if attempt < maxAttempts {
+			sleepFor := s.uploadDeps.backoff(attempt)
+			if sleepErr := s.uploadDeps.sleep(ctx, sleepFor); sleepErr != nil {
+				return 0, sleepErr
+			}
+		}
+	}
+	return 0, lastErr
 }
 
 // buildUploadMetadata constructs the JSON metadata payload for a YouTube

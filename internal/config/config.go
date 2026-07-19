@@ -66,6 +66,27 @@ type Config struct {
 	YouTubeClientSecret string
 	YouTubeRedirectURI  string
 
+	// P1#6 — YouTube resumable-upload tuning. The resumable upload
+	// protocol streams the binary in N chunks; Google requires each
+	// chunk be a multiple of 256 KB (262144 bytes) and recommends
+	// larger chunks for fewer round-trips (valutazione doc spec:
+	// 16 MB default). Backoff uses full-jitter exponential growth
+	// capped at 5 min, with Retry-After from the server ALWAYS honored
+	// (the cap applies only to the calculated fallback when the
+	// server didn't send a hint — see youtube_oauth.go for the
+	// rationale: capping a server hint to a smaller value guarantees
+	// we'd hammer the API mid-quota-window and risk blacklisting).
+	//
+	// These are independent of the upload-job-level retries in
+	// internal/worker/upload_worker.go::computeUploadBackoff; chunk
+	// retries recover a transient network blip during the PUT, while
+	// job-level retries recover a budget-exhausted publish that the
+	// inner chunk loop couldn't escape.
+	YouTubeUploadChunkBytes       int64 // YOUTUBE_UPLOAD_CHUNK_BYTES; default 16777216 (16 MB), MUST be multiple of 262144 (256 KB)
+	YouTubeUploadMaxRetries       int   // YOUTUBE_UPLOAD_MAX_RETRIES; default 5 (per-chunk PUT budget, distinct from upload-job retries)
+	YouTubeUploadBackoffBaseMs    int   // YOUTUBE_UPLOAD_BACKOFF_BASE_MS; default 1000 (1 s)
+	YouTubeUploadBackoffCapMs     int   // YOUTUBE_UPLOAD_BACKOFF_CAP_MS; default 300000 (5 min); applies to CALCULATED backoff only, NOT server Retry-After
+
 	// Google Drive OAuth (read-only import of video clips)
 	GoogleDriveClientID     string
 	GoogleDriveClientSecret string
@@ -283,6 +304,14 @@ func Load() (*Config, error) {
 		YouTubeClientID:         getEnv("YOUTUBE_CLIENT_ID", ""),
 		YouTubeClientSecret:     getEnv("YOUTUBE_CLIENT_SECRET", ""),
 		YouTubeRedirectURI:      getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
+		// P1#6 — YouTube resumable upload tuning. Defaults mirror the
+		// valutazione doc spec (16 MB chunks, 5 per-chunk retries, 1 s/5 min
+		// backoff). Validation runs unconditionally (so an operator typo
+		// surfaces at boot, not first upload).
+		YouTubeUploadChunkBytes:    getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
+		YouTubeUploadMaxRetries:    getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
+		YouTubeUploadBackoffBaseMs: getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
+		YouTubeUploadBackoffCapMs:  getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
 		GoogleDriveClientID:     getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
 		GoogleDriveClientSecret: getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
 		GoogleDriveRedirectURI:  getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),
@@ -448,6 +477,33 @@ func (c *Config) validate() error {
 	}
 	if err := c.validateOptionalPlatform("YOUTUBE", c.YouTubeClientID, c.YouTubeClientSecret); err != nil {
 		return err
+	}
+
+	// P1#6 — YouTube resumable-upload tuning. Gated behind YouTube being
+	// enabled (the same pattern as validateOptionalPlatform above): when
+	// YouTube is fully disabled the upload knobs are inert and the
+	// zero-defaults applied by getEnvInt64/getEnvInt must not block the
+	// boot of a config built by tests or a YouTube-less deployment.
+	// Per Google's resumable upload protocol, each chunk must be a
+	// multiple of 256 KB (262144 bytes); values below the minimum or
+	// non-multiples are silently rejected by the API with a generic 400,
+	// which is hard to triage. The backoff env vars share one cross-check:
+	// cap >= base; otherwise the calculated fallback would be capped
+	// immediately and the chunk-loop would poll as fast as the worker can
+	// count.
+	if c.YouTubeClientID != "" {
+		if c.YouTubeUploadChunkBytes <= 0 || c.YouTubeUploadChunkBytes%262144 != 0 {
+			return fmt.Errorf("YOUTUBE_UPLOAD_CHUNK_BYTES must be a positive multiple of 256 KB (262144 bytes); got %d (default 16777216 = 16 MB)", c.YouTubeUploadChunkBytes)
+		}
+		if c.YouTubeUploadMaxRetries < 1 {
+			return fmt.Errorf("YOUTUBE_UPLOAD_MAX_RETRIES must be at least 1 (got %d)", c.YouTubeUploadMaxRetries)
+		}
+		if c.YouTubeUploadBackoffBaseMs <= 0 {
+			return fmt.Errorf("YOUTUBE_UPLOAD_BACKOFF_BASE_MS must be positive (got %d)", c.YouTubeUploadBackoffBaseMs)
+		}
+		if c.YouTubeUploadBackoffCapMs < c.YouTubeUploadBackoffBaseMs {
+			return fmt.Errorf("YOUTUBE_UPLOAD_BACKOFF_CAP_MS (%d) must be >= YOUTUBE_UPLOAD_BACKOFF_BASE_MS (%d)", c.YouTubeUploadBackoffCapMs, c.YouTubeUploadBackoffBaseMs)
+		}
 	}
 	if err := c.validateOptionalPlatform("GOOGLE_DRIVE", c.GoogleDriveClientID, c.GoogleDriveClientSecret); err != nil {
 		return err
