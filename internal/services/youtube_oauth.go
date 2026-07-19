@@ -239,17 +239,39 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 const youtubeUploadChunkSize = 256 * 1024
 
 // Publish uploads a video to YouTube using the resumable upload protocol.
+// For YouTube this is the async entrypoint: the upload completes synchronously
+// and returns a composite publishID (channelID:videoID). The reconciler will
+// then poll videos.list processingDetails until the video is fully processed.
 func (s *YouTubeOAuthService) Publish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (result *models.PublishResult, err error) {
 	defer RecordPublishMetrics(models.PlatformYouTube, s.now(), &err)
-	if err := s.ValidateContent(payload); err != nil {
+	publishID, _, err := s.StartPublish(ctx, accessToken, platformUserID, payload)
+	if err != nil {
 		return nil, err
+	}
+	_, videoID, err := decodeYouTubePublishID(publishID)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("YouTube: async publish initiated, reconciler will poll processing status",
+		"publish_id", publishID, "video_id", videoID)
+	return &models.PublishResult{
+		PlatformMediaID: publishID,
+		PlatformURL:     "https://www.youtube.com/watch?v=" + videoID,
+	}, nil
+}
+
+// StartPublish performs the resumable upload and returns a composite
+// publishID (channelID:videoID) plus the initial "processing" state.
+func (s *YouTubeOAuthService) StartPublish(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (publishID string, state string, err error) {
+	if err := s.ValidateContent(payload); err != nil {
+		return "", "", err
 	}
 
 	slog.Info("YouTube: starting resumable video upload", "source", payload.VideoURL)
 
 	fileSize, contentType, err := s.headVideo(ctx, payload.VideoURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to inspect source video: %w", err)
+		return "", "", fmt.Errorf("failed to inspect source video: %w", err)
 	}
 	if contentType == "" {
 		contentType = "video/mp4"
@@ -268,21 +290,152 @@ func (s *YouTubeOAuthService) Publish(ctx context.Context, accessToken, platform
 
 	uploadURL, err := s.initiateResumableSession(ctx, accessToken, metadata, fileSize, contentType)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initiate resumable session: %w", err)
+		return "", "", fmt.Errorf("failed to initiate resumable session: %w", err)
 	}
 	slog.Debug("YouTube: resumable session initiated", "upload_url", uploadURL)
 
 	videoID, err := s.uploadVideoChunks(ctx, uploadURL, payload.VideoURL, fileSize)
 	if err != nil {
-		return nil, fmt.Errorf("failed to stream video: %w", err)
+		return "", "", fmt.Errorf("failed to stream video: %w", err)
 	}
 
 	slog.Info("YouTube: video uploaded successfully", "video_id", videoID)
 
-	return &models.PublishResult{
-		PlatformMediaID: videoID,
-		PlatformURL:     "https://www.youtube.com/watch?v=" + videoID,
-	}, nil
+	return encodeYouTubePublishID(platformUserID, videoID), "processing", nil
+}
+
+// CheckPublishStatus returns the processing status of a YouTube video by
+// calling videos.list with part=processingDetails.
+func (s *YouTubeOAuthService) CheckPublishStatus(ctx context.Context, accessToken, publishID string) (state string, err error) {
+	_, videoID, err := decodeYouTubePublishID(publishID)
+	if err != nil {
+		return "", err
+	}
+
+	video, err := s.fetchVideoStatus(ctx, accessToken, videoID)
+	if err != nil {
+		return "", err
+	}
+
+	if video.ProcessingDetails == nil {
+		// No processing details yet; assume still processing.
+		return "processing", nil
+	}
+	return video.ProcessingDetails.ProcessingStatus, nil
+}
+
+// ContinuePublish is a no-op for YouTube. The full resumable upload is
+// performed inside StartPublish.
+func (s *YouTubeOAuthService) ContinuePublish(ctx context.Context, accessToken, publishID string) error {
+	return nil
+}
+
+// Reconcile polls the YouTube video status and drives the async state machine.
+// It verifies the video belongs to the expected channel (snippet.channelId)
+// and maps processingDetails.processingStatus to terminal or in-flight.
+//
+//   processing  → (nil, nil)   // still in flight
+//   succeeded   → (*PublishResult, nil)
+//   failed      → (nil, error)  // terminal failure
+//   terminated  → (nil, error)  // terminal failure
+func (s *YouTubeOAuthService) Reconcile(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
+	platformUserID, videoID, err := decodeYouTubePublishID(publishID)
+	if err != nil {
+		return nil, err
+	}
+
+	video, err := s.fetchVideoStatus(ctx, accessToken, videoID)
+	if err != nil {
+		return nil, err
+	}
+
+	// The upload was performed with the account's token, but verify the
+	// video landed on the expected channel. A missing channelId is treated
+	// as a failure because we cannot confirm ownership.
+	if video.Snippet.ChannelID != platformUserID {
+		return nil, fmt.Errorf("youtube channel mismatch: expected %s, got %s", platformUserID, video.Snippet.ChannelID)
+	}
+
+	processingStatus := ""
+	if video.ProcessingDetails != nil {
+		processingStatus = video.ProcessingDetails.ProcessingStatus
+	}
+
+	switch processingStatus {
+	case "", "processing":
+		// Still processing or no processing details yet.
+		return nil, nil
+	case "succeeded":
+		return &models.PublishResult{
+			PlatformMediaID: videoID,
+			PlatformURL:     "https://www.youtube.com/watch?v=" + videoID,
+		}, nil
+	case "failed":
+		return nil, fmt.Errorf("youtube processing failed for video %s", videoID)
+	case "terminated":
+		return nil, fmt.Errorf("youtube processing terminated for video %s", videoID)
+	default:
+		// Unknown status; treat as in-flight to avoid premature failure.
+		slog.Warn("YouTube: unknown processing status, treating as in-flight",
+			"video_id", videoID, "status", processingStatus)
+		return nil, nil
+	}
+}
+
+// fetchVideoStatus calls videos.list with part=snippet,status,processingDetails
+// for a single video ID and returns the first (and only) item.
+func (s *YouTubeOAuthService) fetchVideoStatus(ctx context.Context, accessToken, videoID string) (*youtubeVideo, error) {
+	reqURL := "https://www.googleapis.com/youtube/v3/videos" +
+		"?part=snippet,status,processingDetails" +
+		"&id=" + url.QueryEscape(videoID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create youtube video status request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("youtube video status request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return nil, fmt.Errorf("youtube video status returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result youtubeVideosResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode youtube video status: %w", err)
+	}
+
+	if len(result.Items) == 0 {
+		return nil, fmt.Errorf("youtube video %s not found", videoID)
+	}
+
+	return &result.Items[0], nil
+}
+
+// encodeYouTubePublishID encodes the channel ID and video ID into a single
+// opaque publish ID used during the async publishing lifecycle.
+//
+// The composite is stored temporarily in post_target.platform_post_id while
+// the target is in 'publishing' status. On a successful Reconcile, the final
+// stored value is overwritten with the plain video ID.
+func encodeYouTubePublishID(channelID, videoID string) string {
+	return channelID + ":" + videoID
+}
+
+// decodeYouTubePublishID splits an encoded publish ID back into channel ID
+// and video ID.
+func decodeYouTubePublishID(publishID string) (channelID, videoID string, err error) {
+	parts := strings.SplitN(publishID, ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("invalid youtube publish id: %s", publishID)
+	}
+	return parts[0], parts[1], nil
 }
 
 // --- Upload helpers ---
@@ -1046,17 +1199,19 @@ type youtubeVideosResponse struct {
 }
 
 type youtubeVideo struct {
-	ID             string              `json:"id"`
-	Snippet        youtubeVideoSnippet `json:"snippet"`
-	Statistics     youtubeVideoStats   `json:"statistics"`
-	ContentDetails youtubeVideoContent `json:"contentDetails"`
-	Status         youtubeVideoStatus  `json:"status"`
+	ID                string                         `json:"id"`
+	Snippet           youtubeVideoSnippet            `json:"snippet"`
+	Statistics        youtubeVideoStats              `json:"statistics"`
+	ContentDetails    youtubeVideoContent            `json:"contentDetails"`
+	Status            youtubeVideoStatus             `json:"status"`
+	ProcessingDetails *youtubeVideoProcessingDetails `json:"processingDetails,omitempty"`
 }
 
 type youtubeVideoSnippet struct {
 	Title       string            `json:"title"`
 	Description string            `json:"description"`
 	PublishedAt string            `json:"publishedAt"`
+	ChannelID   string            `json:"channelId"`
 	Thumbnails  *youtubeThumbnails `json:"thumbnails"`
 }
 
@@ -1073,6 +1228,10 @@ type youtubeVideoContent struct {
 type youtubeVideoStatus struct {
 	PrivacyStatus string `json:"privacyStatus"`
 	UploadStatus  string `json:"uploadStatus"`
+}
+
+type youtubeVideoProcessingDetails struct {
+	ProcessingStatus string `json:"processingStatus"`
 }
 
 // --- Private ---
@@ -1163,6 +1322,7 @@ var (
 	_ OAuthProvider         = (*YouTubeOAuthService)(nil)
 	_ ContentValidator      = (*YouTubeOAuthService)(nil)
 	_ Publisher             = (*YouTubeOAuthService)(nil)
+	_ AsyncPublisher        = (*YouTubeOAuthService)(nil)
 	_ AccountDiscoverer     = (*YouTubeOAuthService)(nil)
 	_ AccountDetailsProvider = (*YouTubeOAuthService)(nil)
 	_ AccountContentProvider = (*YouTubeOAuthService)(nil)

@@ -265,9 +265,9 @@ func TestReconcileTarget_InFlight_LeavesStatusUnchanged(t *testing.T) {
 
 // TestReconcileTarget_SyncPlatform_LeavesAlone covers the case
 // where the platform doesn't have the AsyncPublisher capability
-// (e.g. Instagram, YouTube — they complete their publish in the
-// driver's publishTarget() call, no polling needed). The
-// reconciler must not touch these targets.
+// (e.g. Instagram — it completes its publish in the driver's
+// publishTarget() call, no polling needed). The reconciler must
+// not touch these targets.
 func TestReconcileTarget_SyncPlatform_LeavesAlone(t *testing.T) {
 	posts := &mockReconcilePostStore{}
 	users := &mockUserStore{
