@@ -259,6 +259,24 @@ var (
 		[]string{"event_type", "reason"},
 	)
 
+	// uploadThroughputBytes (P2 — ops dashboard) tracks bytes that
+	// crossed a worker boundary. provider discriminates the
+	// upstream (google_drive for ingest; youtube for publish);
+	// phase discriminates the pipeline boundary (ingest when bytes
+	// land in S3; publish when YouTube acks). The dashboard derives
+	// "upload throughput" via rate(this_counter[5m])/300 — the raw
+	// counter stays cheap so the hot path is one IncBy call. The
+	// 200-channel rollout ingest baseline (~1 MB/s drive-side) and
+	// publish baseline (~10–30 MB/s YouTube-side) both fit inside
+	// the int64 counter envelope indefinitely.
+	uploadThroughputBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "upload_throughput_bytes_total",
+			Help: "Bytes that crossed a worker boundary (provider=google_drive/youtube; phase=ingest/publish). Derive throughput via rate(this_counter[5m])/300.",
+		},
+		[]string{"provider", "phase"},
+	)
+
 	// ------------------------------------------------------------------
 	// HTTP request metrics — wired by Phase 6 (request middleware).
 	// ------------------------------------------------------------------
@@ -318,6 +336,7 @@ func init() {
 		tokenRefreshFailures,
 		reauthRequiredAccounts,
 		webhookDeliveryFailures,
+		uploadThroughputBytes,
 		httpRequestsTotal,
 		httpRequestLatencySeconds,
 	)
@@ -411,6 +430,21 @@ func RecordWebhookDeliveryFailure(eventType, reason string) {
 		return
 	}
 	webhookDeliveryFailures.WithLabelValues(eventType, reason).Inc()
+}
+
+// RecordUploadBytes (P2) increments upload_throughput_bytes_total
+// for the ingest → publish pipeline. provider is the upstream
+// (google_drive for ingest; youtube for publish); phase is the
+// pipeline boundary crossed (ingest when bytes land in S3; publish
+// when YouTube acks the upload). The worker's hot path stays a
+// single IncBy — a no-op on empty labels or non-positive bytes so
+// the helper tolerates the MarkIngested / MarkCompleted branches
+// that fire on partial-state rows.
+func RecordUploadBytes(provider, phase string, bytes int64) {
+	if provider == "" || phase == "" || bytes <= 0 {
+		return
+	}
+	uploadThroughputBytes.WithLabelValues(provider, phase).Add(float64(bytes))
 }
 
 // ObserveHTTPRequest increments http_requests_total AND observes

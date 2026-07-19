@@ -164,6 +164,13 @@ type Router struct {
 	// drive-import endpoint returns 501.
 	uploadJobStore UploadJobStore
 
+	// adminStore backs the P2 ops dashboard (/admin/channels,
+	// /admin/queue, /admin/health + their .csv variants). When
+	// nil, every admin endpoint returns 501. Wiring happens in
+	// internal/bootstrap/app.go via WithAdminStore passing the
+	// production *repository.AdminRepository.
+	adminStore AdminStore
+
 	// importBatchStore persists the P1#7 header row for an async
 	// folder-batch import. The producer handler (POST
 	// /api/v1/media/import/drive/folder/async) inserts one row
@@ -640,6 +647,13 @@ func WithUploadJobStore(s UploadJobStore) RouterOption {
 	return func(r *Router) { r.uploadJobStore = s }
 }
 
+// WithAdminStore wires the P2 ops dashboard store. When nil,
+// every /admin/* handler returns 501 (mirroring the
+// PostStore / WorkspaceStore nil-guard pattern).
+func WithAdminStore(s AdminStore) RouterOption {
+	return func(r *Router) { r.adminStore = s }
+}
+
 // WithImportBatchStore wires the P1#7 async folder-batch header
 // table. When nil, POST /api/v1/media/import/drive/folder/async and
 // GET /api/v1/media/import/drive/folder/async/{id} return 501. The
@@ -650,7 +664,23 @@ func WithImportBatchStore(s ImportBatchStore) RouterOption {
 	return func(r *Router) { r.importBatchStore = s }
 }
 
-// SnapshotStore is the persistence contract for
+// P2 — ops dashboard store. AdminStore is the read-side
+// contract for the /admin/* endpoints; the AdminRepository
+// implementation in internal/repository/admin_repo.go owns
+// all the queries. Same pattern as UploadJobStore: a local
+// interface so tests can supply an in-memory fake without
+// dragging the *sql.DB-bound concrete type.
+type AdminStore interface {
+	ChannelCounts(ctx context.Context) (repository.AdminChannelCounts, error)
+	ListChannelsForOps(ctx context.Context, statusFilter, platformFilter string, limit int) ([]repository.AdminChannelRow, error)
+	QueueCounts(ctx context.Context) (repository.AdminQueueCounts, error)
+	InFlightPerWorker(ctx context.Context) ([]repository.AdminInFlightRow, error)
+	ListStuckJobs(ctx context.Context, limit int) ([]repository.AdminStuckJobRow, error)
+	ErrorRatePerChannel(ctx context.Context, windowInterval, windowLabel string, limit int) ([]repository.AdminErrorRateRow, error)
+	YouTubeQuotaApproximation(ctx context.Context, window time.Duration, dailyBudgetUnits, costPerUploadUnits int64) (repository.AdminYouTubeQuota, error)
+}
+
+	// SnapshotStore is the persistence contract for
 // account_resource_snapshots. Defined inline to keep pkg/api off
 // internal/repository imports; main.go injects
 // *repository.SnapshotRepository which satisfies this interface.
@@ -692,6 +722,20 @@ func NewRouter(
 
 func (r *Router) Setup() http.Handler {
 	r.mux = chi.NewRouter()
+	// P2 — ops dashboard. Standalone /admin/* prefix (per D7
+	// verdict: avoid SPA-side CORS overhead while keeping chi's
+	// root-router middleware). Each handler is gated by
+	// adminAuthMiddleware (Identity.IsAdmin()==true); non-admin
+	// callers get 403, unauthenticated callers get 401.
+	if r.adminStore != nil {
+		r.mux.Method(http.MethodGet, "/admin/channels", adminAuthMiddleware(http.HandlerFunc(r.handleAdminChannels)))
+		r.mux.Method(http.MethodGet, "/admin/channels.csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminChannelsCSV)))
+		r.mux.Method(http.MethodGet, "/admin/queue", adminAuthMiddleware(http.HandlerFunc(r.handleAdminQueue)))
+		r.mux.Method(http.MethodGet, "/admin/queue.csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminQueueCSV)))
+		r.mux.Method(http.MethodGet, "/admin/health", adminAuthMiddleware(http.HandlerFunc(r.handleAdminHealth)))
+		r.mux.Method(http.MethodGet, "/admin/health.csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminHealthCSV)))
+	}
+
 	r.mux.Method(http.MethodGet, "/api/v1/health", http.HandlerFunc(r.handleHealth))
 	// Blocco #5.3 — /ready is top-level + public. Readiness
 	// probes never carry credentials; routers must NOT have to

@@ -18,16 +18,16 @@ type UserRepository struct {
 // NewUserRepository creates a new UserRepository.
 func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
-}
-
-// FindByEmail finds a user by their email address.
+}// FindByEmail finds a user by their email address.
 func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
 	user := &models.User{}
 	err := r.db.QueryRow(
 		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-		       created_at, updated_at FROM users WHERE email = $1`,
+	       is_admin, admin_granted_at, admin_granted_by,
+	       created_at, updated_at FROM users WHERE email = $1`,
 		email,
 	).Scan(&user.ID, &user.Email, &user.Name, &user.PasswordHash, &user.EmailVerified,
+		&user.IsAdmin, &user.AdminGrantedAt, &user.AdminGrantedBy,
 		&user.CreatedAt, &user.UpdatedAt)
 
 	if err == sql.ErrNoRows {
@@ -44,9 +44,11 @@ func (r *UserRepository) FindByID(id int64) (*models.User, error) {
 	user := &models.User{}
 	err := r.db.QueryRow(
 		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-		       created_at, updated_at FROM users WHERE id = $1`,
+	       is_admin, admin_granted_at, admin_granted_by,
+	       created_at, updated_at FROM users WHERE id = $1`,
 		id,
 	).Scan(&user.ID, &user.Email, &user.Name, &user.PasswordHash, &user.EmailVerified,
+		&user.IsAdmin, &user.AdminGrantedAt, &user.AdminGrantedBy,
 		&user.CreatedAt, &user.UpdatedAt)
 
 	if err == sql.ErrNoRows {
@@ -56,6 +58,46 @@ func (r *UserRepository) FindByID(id int64) (*models.User, error) {
 		return nil, fmt.Errorf("failed to find user by id: %w", err)
 	}
 	return user, nil
+}
+
+// GrantAdmin (P2 — ops dashboard) atomically promotes a user to
+// admin. Idempotent: re-calling on an already-admin user is a no-op
+// that RE-stamps the granted_at + granted_by fields (audit-trail
+// contract: every grant records WHO promoted WHEN, even if the
+// user was already admin). Returns ErrUserNotFound when id is
+// unknown.
+//
+// Bootstrap: cmd/grant-admin --email calls FindByEmail then this
+// method (grantedBy is the bootstrapping operator's id, or self
+// for the very first promotion).
+func (r *UserRepository) GrantAdmin(ctx context.Context, id, grantedBy int64) error {
+	if id <= 0 {
+		return fmt.Errorf("grant admin: invalid target id %d", id)
+	}
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users
+		 SET is_admin         = TRUE,
+		     admin_granted_at = NOW(),
+		     admin_granted_by = $2,
+		     updated_at       = NOW()
+		 WHERE id = $1`,
+		id, grantedBy,
+	)
+	if err != nil {
+		return fmt.Errorf("grant admin: update users: %w", err)
+	}
+	// UPDATE without a row returns RowsAffected=0; we treat unknown
+	// id as a soft error here (callers want to know the id was
+	// wrong, not silent). Wrap ErrUserNotFound the same way as
+	// MarkReauthRequired.
+	var n int64
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE id = $1`, id).Scan(&n); err != nil {
+		return fmt.Errorf("grant admin: verify row exists: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrUserNotFound, id)
+	}
+	return nil
 }
 
 // Create inserts a new user into the database.

@@ -253,6 +253,11 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithPostStore(postRepo),
 		api.WithMediaStore(mediaRepo),
 		api.WithUploadJobStore(uploadJobRepo),
+		// P2 — ops dashboard store. AdminRepository powers every
+		// /admin/* endpoint (channels / queue / health + their
+		// .csv variants). When nil the route table short-circuits
+		// the admin registration block (handlers.go Setup()).
+		api.WithAdminStore(repository.NewAdminRepository(db)),
 		// P1#7 — producer-side handler (POST
 		// /api/v1/media/import/drive/folder/async) and poll endpoint
 		// (GET .../async/{id}) share this ImportBatchStore. The

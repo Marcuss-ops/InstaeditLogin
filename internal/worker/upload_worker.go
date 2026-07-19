@@ -17,6 +17,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // UploadJobStore is the narrow repository interface the upload worker needs.
@@ -622,6 +623,16 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 		return fmt.Errorf("mark media asset ready: %w", err)
 	}
 
+	// P2 — ops dashboard throughput counter. Increment BEFORE
+	// the MarkIngested CAS so a worker crash between the
+	// successful S3 verify and the DB stamp doesn't double-count
+	// the bytes on retry. The "ingest phase" gate is implicit:
+	// the upload worker only reaches this point on the ingest
+	// pool's hot path, never on publish.
+	if verifiedSize > 0 {
+		metrics.RecordUploadBytes(models.PlatformYouTube, "ingest", verifiedSize)
+	}
+
 	// Transition the row: leased → ready_to_publish + asset_id +
 	// total_bytes/progress_bytes (CAS against workerID that
 	// ClaimBatch stamped on the row).
@@ -696,6 +707,17 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 	} else {
 		w.logger.Info("upload worker: post scheduled for future publish",
 			"job_id", job.ID, "post_id", post.ID, "publish_at", job.PublishAt.Format(time.RFC3339))
+	}
+
+	// P2 — publish-phase throughput counter. Increment on the
+	// hot path after the post + targets are persisted but BEFORE
+	// the MarkCompleted CAS so a worker crash between persist
+	// and the CAS double-counts on retry (acceptable: the
+	// operator's "throughput" is a 5-minute rate over a counter,
+	// not a strict sum, so a one-byte overcount per failed
+	// transition is invisible at the dashboard).
+	if assetID != "" && job.TotalBytes != nil && *job.TotalBytes > 0 {
+		metrics.RecordUploadBytes(models.PlatformYouTube, "publish", *job.TotalBytes)
 	}
 
 	// Mark job completed. CAS against workerID ensures a peer that

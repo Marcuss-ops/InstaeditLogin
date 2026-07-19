@@ -25,6 +25,18 @@ type User struct {
 	EmailVerified bool      `json:"email_verified"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+	// P2 — ops dashboard admin gate. Bootstrap via
+	// cmd/grant-admin --email <email>; the JWT admin claim
+	// surfaces IsAdmin() through Identity. Stored per-row so
+	// admin promotion is a single UPDATE + immediate token
+	// re-mint, with no separate permissions table needed.
+	// Legacy User-id-only SELECTs continue to return zero-valued
+	// admin fields (which is the safe default for the rest of
+	// the codebase); the admin endpoints read via FindByEmail /
+	// FindByID (extended in migration 051 + user_repo extensions).
+	IsAdmin        bool       `json:"is_admin"`
+	AdminGrantedAt *time.Time `json:"admin_granted_at,omitempty"`
+	AdminGrantedBy *int64     `json:"admin_granted_by,omitempty"`
 }
 
 // Account status constants for the lifecycle of a linked social account.

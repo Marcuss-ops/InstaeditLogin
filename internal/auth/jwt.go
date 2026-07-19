@@ -75,6 +75,13 @@ type Claims struct {
 	WorkspaceID int64  `json:"ws"`
 	SessionID   int64  `json:"sid"`
 	Env         string `json:"env,omitempty"`
+	// Admin (P2 — ops dashboard) gates /admin/* endpoints via
+	// requireAdmin() middleware. Stamped at Issue* time from the
+	// caller-supplied isAdmin bool. omitempty so legacy tokens
+	// minted before P2 carry admin=false (the safe default).
+	// Operators bootstrap via cmd/grant-admin --email <email>; the
+	// next Issue starts minting admin=true tokens for that user.
+	Admin bool `json:"adm,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -276,11 +283,24 @@ func HashRefreshToken(plaintext string) []byte {
 // Verify parses + validates a JWT, returning (userID, workspaceID,
 // sessionID, err). Tokens with a missing/zero sessionID are rejected
 // — this is a forced re-auth for pre-SPRINT-2.1 tokens. The 4-tuple
-// is a breaking change versus the pre-SPRINT-2.1 3-tuple; callers
-// must update.
+// is preserved across the P2 admin-claim addition: callers that don't
+// care about the admin claim continue binding 4 vars. To surface the
+// P2 admin claim, use VerifyWithAdmin (returns a 5-tuple). A single
+// underlying parse means both Verify and VerifyWithAdmin apply the
+// same env / sig / expiry checks before the bool diff lands.
 func (m *Manager) Verify(raw string) (int64, int64, int64, error) {
+	uid, wsID, sid, _, err := m.VerifyWithAdmin(raw)
+	return uid, wsID, sid, err
+}
+
+// VerifyWithAdmin (P2) is the 5-tuple counterpart to Verify. Same
+// parse + sig + env + expiry checks; additionally returns the admin
+// claim so /admin/* middleware can branch on it without a re-parse.
+// Manager.Middleware calls this; non-admin paths use plain Verify
+// to keep the call-site shape unchanged.
+func (m *Manager) VerifyWithAdmin(raw string) (int64, int64, int64, bool, error) {
 	if raw == "" {
-		return 0, 0, 0, errors.New("empty token")
+		return 0, 0, 0, false, errors.New("empty token")
 	}
 	token, err := jwt.ParseWithClaims(raw, &Claims{}, func(t *jwt.Token) (interface{}, error) {
 		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
@@ -289,20 +309,20 @@ func (m *Manager) Verify(raw string) (int64, int64, int64, error) {
 		return m.secret, nil
 	})
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, false, err
 	}
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
-		return 0, 0, 0, errors.New("invalid token")
+		return 0, 0, 0, false, errors.New("invalid token")
 	}
 	if claims.UserID <= 0 {
-		return 0, 0, 0, errors.New("missing user id in claims")
+		return 0, 0, 0, false, errors.New("missing user id in claims")
 	}
 	if claims.WorkspaceID <= 0 {
-		return 0, 0, 0, errors.New("missing workspace id in claims")
+		return 0, 0, 0, false, errors.New("missing workspace id in claims")
 	}
 	if claims.SessionID <= 0 {
-		return 0, 0, 0, errors.New("missing session id in claims (pre-SPRINT-2.1 or invalid)")
+		return 0, 0, 0, false, errors.New("missing session id in claims (pre-SPRINT-2.1 or invalid)")
 	}
 	// Blocco #5.2 — cross-environment rejection. When the
 	// Manager was configured with an env (via WithEnv at
@@ -314,9 +334,48 @@ func (m *Manager) Verify(raw string) (int64, int64, int64, error) {
 	// expiry failures). Verifies where Manager.env == "" (the
 	// test-default) skip this check.
 	if m.env != "" && claims.Env != m.env {
-		return 0, 0, 0, errCrossEnvMismatch
+		return 0, 0, 0, false, errCrossEnvMismatch
 	}
-	return claims.UserID, claims.WorkspaceID, claims.SessionID, nil
+	return claims.UserID, claims.WorkspaceID, claims.SessionID, claims.Admin, nil
+}
+
+// IssueAccessAdmin (P2) signs a JWT with the admin claim set. Same
+// semantics as IssueAccess + an extra isAdmin arg. Use this for the
+// admin user's session tokens; non-admin users continue to use
+// IssueAccess (admin=false). The 4th arg is the on-the-wire
+// representation of users.is_admin (read by cmd/grant-admin or the
+// followup POST /admin/users/{id}/grant-admin).
+func (m *Manager) IssueAccessAdmin(userID, wsID, sessionID int64, isAdmin bool) (string, string, time.Time, error) {
+	if userID <= 0 || wsID <= 0 || sessionID <= 0 {
+		return "", "", time.Time{}, fmt.Errorf("invalid ids: user=%d ws=%d session=%d", userID, wsID, sessionID)
+	}
+	jti, err := randomHex(16)
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("jti generation failed: %w", err)
+	}
+	now := time.Now()
+	exp := now.Add(m.accessTTL)
+	claims := Claims{
+		UserID:      userID,
+		WorkspaceID: wsID,
+		SessionID:   sessionID,
+		Env:         m.env,
+		Admin:       isAdmin,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   fmt.Sprintf("%d", userID),
+			Issuer:    m.issuer,
+			Audience:  jwt.ClaimStrings{m.audience},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(exp),
+			ID:        jti,
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(m.secret)
+	if err != nil {
+		return "", "", time.Time{}, fmt.Errorf("sign failed: %w", err)
+	}
+	return signed, jti, exp, nil
 }
 
 // errCrossEnvMismatch (Blocco #5.2) is the canonical sentinel
@@ -328,7 +387,10 @@ func (m *Manager) Verify(raw string) (int64, int64, int64, error) {
 // distinguishable to operators reading the Sentry / log feed.
 var errCrossEnvMismatch = errors.New("token environment mismatch: explicit cross-env rejection")
 
-// Middleware returns a handler that enforces auth.
+// Middleware returns a handler that enforces auth. P2: this is the
+// call site that resolves the admin claim and threads it into the
+// context-stamped Identity so downstream handlers (requireAdmin,
+// /admin/*) can branch on IsAdmin() without a re-parse.
 func (m *Manager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if header := r.Header.Get("Authorization"); header != "" {
@@ -342,18 +404,18 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			uid, wsID, sid, err := m.Verify(raw)
+			uid, wsID, sid, isAdmin, err := m.VerifyWithAdmin(raw)
 			if err != nil {
 				writeVerifyError(w, err) // Blocco #5.2: differentiate explicit cross-env 401 from generic 401
 				return
 			}
-			m.putIdentity(r, w, next, NewUserIdentity(uid, wsID, sid))
+			m.putIdentity(r, w, next, NewUserIdentityWithAdmin(uid, wsID, sid, isAdmin))
 			return
 		}
 		if c, err := r.Cookie(SessionCookieName); err == nil && c.Value != "" {
-			uid, wsID, sid, err := m.Verify(c.Value)
+			uid, wsID, sid, isAdmin, err := m.VerifyWithAdmin(c.Value)
 			if err == nil && uid > 0 && wsID > 0 && sid > 0 {
-				m.putIdentity(r, w, next, NewUserIdentity(uid, wsID, sid))
+				m.putIdentity(r, w, next, NewUserIdentityWithAdmin(uid, wsID, sid, isAdmin))
 				return
 			}
 		}

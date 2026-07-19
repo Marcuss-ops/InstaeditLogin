@@ -61,6 +61,14 @@ type Identity interface {
 	// HasPermission reports whether this identity grants the named
 	// permission. Implementations treat "admin" as the wildcard.
 	HasPermission(p string) bool
+
+	// IsAdmin (P2 — ops dashboard) reports whether this identity
+	// grants elevated /admin/* access independent of any API-key
+	// permission set. JWT-derived identities carry the value
+	// minted at Issue* time; API-key identities never satisfy
+	// IsAdmin (their HasPermission("admin") already covers the
+	// wildcard for api-key-protected endpoints).
+	IsAdmin() bool
 }
 
 // identityCtxKey is the unexported context-key type.
@@ -90,15 +98,31 @@ func WithIdentity(ctx context.Context, id Identity) context.Context {
 // dashboard user. SPRINT 2.1+ adds the SessionID field; tokens minted
 // before that sprint carried no session_id claim and are rejected by
 // Manager.Verify, so the zero default is unreachable in production.
+//
+// P2 adds isAdmin (mirrors claims.Admin / users.is_admin). Set via
+// NewUserIdentityWithAdmin at the middleware call site. The legacy
+// NewUserIdentity(uid, ws, sid) constructor defaults isAdmin to
+// false — preserved for callers that don't surface admin yet (test
+// fixtures not yet migrated).
 type UserIdentity struct {
-	uid int64
-	ws  int64
-	sid int64
+	uid     int64
+	ws      int64
+	sid     int64
+	isAdmin bool
 }
 
 // NewUserIdentity constructs a UserIdentity with explicit fields.
+// Preserved for backward-compat: isAdmin defaults to false. New
+// callers should use NewUserIdentityWithAdmin.
 func NewUserIdentity(uid, ws, sid int64) UserIdentity {
 	return UserIdentity{uid: uid, ws: ws, sid: sid}
+}
+
+// NewUserIdentityWithAdmin (P2) constructs a UserIdentity with the
+// admin claim set. This is the constructor the Manager.Middleware
+// calls after a successful Verify.
+func NewUserIdentityWithAdmin(uid, ws, sid int64, isAdmin bool) UserIdentity {
+	return UserIdentity{uid: uid, ws: ws, sid: sid, isAdmin: isAdmin}
 }
 
 // IsAPIKey implements Identity.
@@ -121,6 +145,10 @@ func (u UserIdentity) Permissions() []string { return nil }
 
 // HasPermission implements Identity.
 func (u UserIdentity) HasPermission(_ string) bool { return false }
+
+// IsAdmin implements Identity. Returns the admin claim verified at
+// JWT-parse time; gates /admin/* handlers via requireAdmin().
+func (u UserIdentity) IsAdmin() bool { return u.isAdmin }
 
 // --- ApiKeyIdentity ---------------------------------------------------------
 
@@ -179,3 +207,13 @@ func (a ApiKeyIdentity) HasPermission(p string) bool {
 	}
 	return false
 }
+
+// IsAdmin implements Identity. API keys never satisfy IsAdmin at the
+// JWT-user level — their HasPermission already covers the wildcard
+// for the api-key-protected subset. /admin/* endpoints require a
+// JWT-authenticated human (the operator), so fake-true here would
+// broaden the attack surface (a stolen API key with perm=admin
+// would let the holder skip JWT-only gates). Returning false is the
+// explicit safe default; any future org-level operator API key
+// would resolve here against a separate api_keys.is_operator flag.
+func (a ApiKeyIdentity) IsAdmin() bool { return false }
