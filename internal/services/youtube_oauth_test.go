@@ -25,10 +25,10 @@ func newTestYouTubeService(srv *httptest.Server) *YouTubeOAuthService {
 	return svc
 }
 
-// TestYouTubeLoginURL_IncludesReadonlyAndUploadScopes verifies that
-// GetLoginURL requests both youtube.upload and youtube.readonly scopes
-// along with openid, email, and profile.
-func TestYouTubeLoginURL_IncludesReadonlyAndUploadScopes(t *testing.T) {
+// TestYouTubeLoginURL_IncludesRequiredScopes verifies that GetLoginURL
+// requests all required YouTube scopes (upload, readonly, analytics) along
+// with openid, email, and profile.
+func TestYouTubeLoginURL_IncludesRequiredScopes(t *testing.T) {
 	srv := httptest.NewServer(http.NewServeMux())
 	defer srv.Close()
 	svc := newTestYouTubeService(srv)
@@ -46,6 +46,7 @@ func TestYouTubeLoginURL_IncludesReadonlyAndUploadScopes(t *testing.T) {
 	for _, want := range []string{
 		"https://www.googleapis.com/auth/youtube.upload",
 		"https://www.googleapis.com/auth/youtube.readonly",
+		"https://www.googleapis.com/auth/yt-analytics.readonly",
 		"openid",
 		"email",
 		"profile",

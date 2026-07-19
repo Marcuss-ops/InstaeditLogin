@@ -65,7 +65,7 @@ func (s *YouTubeOAuthService) GetLoginURLWithOptions(state string, options OAuth
 	params.Set("client_id", s.cfg.YouTubeClientID)
 	params.Set("redirect_uri", s.cfg.YouTubeRedirectURI)
 	params.Set("state", state)
-	params.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly openid email profile")
+	params.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly openid email profile")
 	params.Set("response_type", "code")
 	params.Set("access_type", "offline")
 	params.Set("include_granted_scopes", "true")
