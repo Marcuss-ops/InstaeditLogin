@@ -409,6 +409,7 @@ func (d *VeloxCallbackDispatcher) Dispatch(
 				"velox callback: client error (4xx terminal, no retry)",
 				"event", event,
 				"event_id", eventID,
+				"callback_url", derefString(delivery.CallbackURL),
 				"status_code", resp.StatusCode,
 				"attempt", attempt,
 			)
