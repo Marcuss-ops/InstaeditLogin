@@ -412,7 +412,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 				Caption:     caption,
 				Targets:     []int64{body.FacebookAccountID},
 				Status:      models.UploadJobStatusPending,
-				ScheduledAt: &scheduledAt,
+		PublishAt:   &scheduledAt,
 			}
 			if err := r.uploadJobStore.Create(job); err != nil {
 				writeError(w, http.StatusInternalServerError, fmt.Sprintf("create upload job for %s: %v", f.Name, err))
@@ -425,13 +425,13 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 				Name:          f.Name,
 				MimeType:      f.MimeType,
 				JobID:         job.ID,
-				ScheduledAt:   scheduledAt,
+				PublishAt:   scheduledAt,
 				RelativeHours: scheduledAt.Sub(startedAt).Hours(),
 			})
 			cursor = scheduledAt
 		}
 		if firstPublish.IsZero() && len(pageEntries) > 0 {
-			firstPublish = pageEntries[0].ScheduledAt
+			firstPublish = pageEntries[0].PublishAt
 		}
 		allEntries = append(allEntries, pageEntries...)
 
@@ -454,8 +454,8 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 	}
 	if len(allEntries) > 0 {
 		resp.FirstPublishAt = firstPublish
-		resp.LastScheduledAt = allEntries[len(allEntries)-1].ScheduledAt
-		resp.TotalRuntimeSeconds = int(allEntries[len(allEntries)-1].ScheduledAt.Sub(startedAt).Seconds())
+		resp.LastScheduledAt = allEntries[len(allEntries)-1].PublishAt
+		resp.TotalRuntimeSeconds = int(allEntries[len(allEntries)-1].PublishAt.Sub(startedAt).Seconds())
 	} else {
 		resp.Note = "no videos found in the folder"
 	}

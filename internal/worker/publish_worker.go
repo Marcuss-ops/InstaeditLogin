@@ -502,7 +502,7 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	payload := models.PublishPayload{
 		Text:      post.Caption,
 		Title:     post.Title,
-		PublishAt: post.ScheduledAt,
+		PublishAt: post.PublishAt,
 	}
 	if post.MediaURL != "" {
 		payload.VideoURL = post.MediaURL

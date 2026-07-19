@@ -248,7 +248,7 @@ func collectDBGaugesXact(ctx context.Context, db *sql.DB, logger *slog.Logger) e
 	// force the Gauge.Set call to skip via the helper's silent-zero path).
 	var queueLagSeconds float64
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(p.scheduled_at))), 0)
+		`SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(p.publish_at))), 0)
 		 FROM post_targets pt
 		 JOIN posts p ON p.id = pt.post_id
 		 WHERE pt.status IN ('queued','waiting_provider')`,

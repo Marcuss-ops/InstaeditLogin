@@ -23,21 +23,22 @@ func NewUploadJobRepository(db *sql.DB) *UploadJobRepository {
 }
 
 // Create inserts a new upload job and returns the generated id plus timestamps.
-// scheduled_at and folder_id are written as sql.Null* so the nullable
-// migration-037 + migration-038 columns accept both NULL (legacy
-// single-file imports without a folder scope) and a populated value.
-// Note that Today we use folder_id only on batch-driven drive imports;
-// single-file async imports leave it NULL and are excluded from per-folder
-// status queries (the partial index covers only non-NULL rows).
+// P1#4 — ingest_after + publish_at replace the old scheduled_at column
+// (migration 049c). ingest_after is server-side DEFAULT NOW() so a
+// fresh Insert without an explicit value lands at NOW() (the user's
+// published window does not block ingest from ClaimBatch's
+// perspective). publish_at is nullable so callers that want
+// immediate publish (single-file imports, the historical default)
+// pass nil. folder_id continues to be nullable (migration 038).
 func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 	targetsJSON, err := job.TargetsJSON()
 	if err != nil {
 		return fmt.Errorf("failed to marshal upload job targets: %w", err)
 	}
 
-	var scheduledAt sql.NullTime
-	if job.ScheduledAt != nil {
-		scheduledAt = sql.NullTime{Time: *job.ScheduledAt, Valid: true}
+	var publishAt sql.NullTime
+	if job.PublishAt != nil {
+		publishAt = sql.NullTime{Time: *job.PublishAt, Valid: true}
 	}
 	var folderID sql.NullString
 	if job.FolderID != nil {
@@ -46,8 +47,9 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 
 	return r.db.QueryRow(
 		`INSERT INTO upload_jobs
-			(user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption, targets, status, scheduled_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			(user_id, workspace_id, source_type, source_id, drive_account_id, folder_id,
+			 title, caption, targets, status, ingest_after, publish_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id, created_at, updated_at`,
 		job.UserID,
 		job.WorkspaceID,
@@ -59,7 +61,8 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 		job.Caption,
 		targetsJSON,
 		string(job.Status),
-		scheduledAt,
+		job.IngestAfter,
+		publishAt,
 	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt)
 }
 
@@ -67,7 +70,7 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 func (r *UploadJobRepository) FindByID(id int64) (*models.UploadJob, error) {
 	row := r.db.QueryRow(
 		`SELECT id, user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption,
-		        targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at,
+		        targets, status, error_message, post_id, asset_id, ingest_after, publish_at, created_at, updated_at,
 		        attempt_count, max_attempts, next_attempt_at, lease_owner, lease_expires_at, heartbeat_at,
 		        progress_bytes, total_bytes, error_code, priority, started_at, completed_at,
 		        youtube_session_uri, youtube_session_offset, youtube_session_expires_at, youtube_chunk_size, youtube_last_chunk_at
@@ -79,20 +82,23 @@ func (r *UploadJobRepository) FindByID(id int64) (*models.UploadJob, error) {
 }
 
 // ClaimBatchForPublish is the publish-pool counterpart to
-// ClaimBatch: claims rows whose status = 'ready_to_publish' (the
-// ingest pool has streamed them to S3 and stamped asset_id).
+// ClaimBatch: claims rows whose status = 'ingest_completed' (the
+// ingest pool has streamed them to S3 and stamped asset_id) AND
+// whose publish_at cursor is now-or-past. P1#4 — the publish pool
+// no longer races the user-supplied schedule; rows that have not
+// reached their publish_at sit at-rest in 'ingest_completed'
+// indefinitely (no lease held during the wait).
 //
 // Selection:
-//   status = 'ready_to_publish'
+//   status = 'ingest_completed'              (P1#4 rename; was 'ready_to_publish')
+//   publish_at IS NULL OR publish_at <= NOW() (P1#4 — the time gate)
 //   next_attempt_at <= NOW() (or NULL)
 //   no active lease
 //
-// Same CTE + UPDATE-FROM + RETURNING shape as ClaimBatch; the only
-// difference is the status filter (single value vs the
-// 'pending'|'retry_wait' IN-list). The workerID prefix should be
-// 'upload-<host>-<pid>' so the ingest pool's leases are visibly
-// disjoint. Same row-state transition (leased + lease_owner +
-// heartbeat + attempt_count += 1).
+// CTE + UPDATE-FROM + RETURNING shape mirrors ClaimBatch. Same row-
+// state transition (leased + lease_owner + heartbeat + attempt_count
+// += 1). The workerID prefix should be 'upload-<host>-<pid>' so the
+// ingest pool's leases are visibly disjoint.
 //
 // Note that the attempt budget is SHARED across ingest + publish:
 // each phase increments attempt_count on claim, so 4 ingest fails + 4
@@ -116,7 +122,8 @@ func (r *UploadJobRepository) ClaimBatchForPublish(ctx context.Context, workerID
 		`WITH candidates AS (
             SELECT id
             FROM upload_jobs
-            WHERE status = 'ready_to_publish'
+            WHERE status = 'ingest_completed'
+              AND (publish_at IS NULL OR publish_at <= NOW())
               AND COALESCE(next_attempt_at, NOW()) <= NOW()
               AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
             ORDER BY priority ASC, created_at ASC
@@ -165,6 +172,13 @@ func (r *UploadJobRepository) ClaimBatchForPublish(ctx context.Context, workerID
 // lock acquired in the CTE propagates into the UPDATE-FROM so the
 // same tx commits without re-locking races.
 //
+// P1#4 — the SELECT adds a time gate on ingest_after so the ingest
+// pool skips rows whose ingest_after is in the future (operators
+// can stage "ingest starting at T+0" schedules without blocking on
+// the row's existence). The publish_at cursor lives on the row too
+// but is NOT gated here — that gate is publish-pool's job
+// (ClaimBatchForPublish).
+//
 // Per-row state transition:
 //   pending | retry_wait
 //             ↓
@@ -199,6 +213,7 @@ func (r *UploadJobRepository) ClaimBatch(ctx context.Context, workerID string, l
             FROM upload_jobs
             WHERE status IN ('pending', 'retry_wait')
               AND COALESCE(next_attempt_at, NOW()) <= NOW()
+              AND (ingest_after IS NULL OR ingest_after <= NOW())
               AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
             ORDER BY priority ASC, created_at ASC
             FOR UPDATE SKIP LOCKED
@@ -237,6 +252,11 @@ func (r *UploadJobRepository) ClaimBatch(ctx context.Context, workerID string, l
 }
 
 // MarkCompleted transitions the row to the terminal success state.
+// P1#4 — renamed from 'completed' to 'publish_completed' so the
+// upload_job lifecycle halves map 1:1 to the user's mental model:
+// ingest_completed = ingest done, publish_completed = ingest AND
+// publish done (terminal).
+//
 // Stamps post_id + asset_id (legacy), clears the lease, sets
 // completed_at. The CAS against lease_owner guards against
 // the late-delivery race: a worker whose lease expired (or was
@@ -245,7 +265,7 @@ func (r *UploadJobRepository) ClaimBatch(ctx context.Context, workerID string, l
 func (r *UploadJobRepository) MarkCompleted(ctx context.Context, id int64, workerID string, postID int64, assetID string) error {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE upload_jobs
-         SET status           = 'completed',
+         SET status           = 'publish_completed',
              post_id          = $2,
              asset_id         = $3,
              error_message    = NULL,
@@ -387,10 +407,15 @@ func (r *UploadJobRepository) MarkDeadLetter(ctx context.Context, id int64, work
 }
 
 // MarkIngested transitions the row from 'leased' (claimed by the
-// ingest pool) to 'ready_to_publish' (publish pool eligible), stamps
+// ingest pool) to 'ingest_completed' (publish pool eligible), stamps
 // the asset_id + total_bytes + progress_bytes, and clears the lease
 // columns. Called by the ingest pool AFTER mediaStore.MarkReady has
 // streamed the bytes to S3.
+//
+// P1#4 rename: 'ready_to_publish' → 'ingest_completed'. The row now
+// sits at-rest in 'ingest_completed', waiting for its publish_at
+// cursor to elapse. When (publish_at <= NOW()) ClaimBatchForPublish
+// picks it up and transitions to 'leased'.
 //
 // CAS against lease_owner guards the late-delivery race: a worker
 // whose lease expired cannot overwrite a peer's terminal write.
@@ -409,7 +434,7 @@ func (r *UploadJobRepository) MarkIngested(ctx context.Context, id int64, worker
 	}
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE upload_jobs
-         SET status           = 'ready_to_publish',
+         SET status           = 'ingest_completed',
              asset_id         = $2,
              total_bytes      = $3,
              progress_bytes   = $3,
@@ -610,7 +635,7 @@ func (r *UploadJobRepository) ListByUser(userID int64, filter UploadJobListFilte
 
 	rows, err := r.db.Query(
 		`SELECT id, user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption,
-		        targets, status, error_message, post_id, asset_id, scheduled_at, created_at, updated_at,
+		        targets, status, error_message, post_id, asset_id, ingest_after, publish_at, created_at, updated_at,
 		        attempt_count, max_attempts, next_attempt_at, lease_owner, lease_expires_at, heartbeat_at,
 		        progress_bytes, total_bytes, error_code, priority, started_at, completed_at,
 		        youtube_session_uri, youtube_session_offset, youtube_session_expires_at, youtube_chunk_size, youtube_last_chunk_at
@@ -618,9 +643,9 @@ func (r *UploadJobRepository) ListByUser(userID int64, filter UploadJobListFilte
 		 WHERE user_id = $1
 		   AND ($2::bigint              IS NULL OR targets @> jsonb_build_array($2::bigint))
 		   AND ($3::upload_job_status   IS NULL OR status = $3::upload_job_status)
-		   AND ($4::timestamptz         IS NULL OR scheduled_at >= $4)
-		   AND ($5::timestamptz         IS NULL OR scheduled_at <= $5)
-		 ORDER BY scheduled_at ASC NULLS LAST, id ASC
+		   AND ($4::timestamptz         IS NULL OR publish_at >= $4)
+		   AND ($5::timestamptz         IS NULL OR publish_at <= $5)
+		 ORDER BY publish_at ASC NULLS LAST, id ASC
 		 LIMIT $6`,
 		userID, accountID, status, timeFrom, timeTo, filter.Limit,
 	)
@@ -659,12 +684,12 @@ func (r *UploadJobRepository) ListByUser(userID int64, filter UploadJobListFilte
 // 400; the repository itself is permissive (operator scripts may want
 // to backdate for testing) — defence-in-depth without an opinionated
 // invariant.
-func (r *UploadJobRepository) Reschedule(jobID, userID int64, newScheduledAt time.Time) (models.UploadJob, error) {
+func (r *UploadJobRepository) Reschedule(jobID, userID int64, newPublishAt time.Time) (models.UploadJob, error) {
 	res, err := r.db.Exec(
 		`UPDATE upload_jobs
-		 SET scheduled_at = $3, updated_at = NOW()
+		 SET publish_at = $3, updated_at = NOW()
 		 WHERE id = $1 AND user_id = $2 AND status = 'pending'`,
-		jobID, userID, newScheduledAt,
+		jobID, userID, newPublishAt,
 	)
 	if err != nil {
 		return models.UploadJob{}, fmt.Errorf("failed to reschedule upload job: %w", err)
@@ -675,7 +700,7 @@ func (r *UploadJobRepository) Reschedule(jobID, userID int64, newScheduledAt tim
 	}
 	if n == 0 {
 		// Either id is wrong, id belongs to another tenant, OR the
-		// row already left 'pending' (worker claimed / published / failed).
+		// row already left 'pending' (worker claimed / ingested / publish_failed).
 		// All three return the same sentinel — no information leak.
 		return models.UploadJob{}, ErrUploadJobNotFound
 	}
@@ -719,12 +744,12 @@ func (r *UploadJobRepository) PendingCountsByAccount(userID int64) ([]UploadJobP
 		`SELECT
 			e.elem::bigint        AS account_id,
 			COUNT(*)              AS pending_count,
-			MIN(u.scheduled_at)   AS next_publish_at
+			MIN(u.publish_at)     AS next_publish_at
 		 FROM upload_jobs u
 		 CROSS JOIN LATERAL jsonb_array_elements_text(u.targets) AS e(elem)
 		 WHERE u.user_id    = $1
 		   AND u.status     = 'pending'
-		   AND u.scheduled_at IS NOT NULL
+		   AND u.publish_at IS NOT NULL
 		 GROUP BY e.elem::bigint
 		 ORDER BY account_id ASC`,
 		userID,
@@ -819,16 +844,17 @@ func (r *UploadJobRepository) Cancel(jobID, userID int64) error {
 func (r *UploadJobRepository) AggregateByFolder(folderID string, userID int64) (models.BatchStatusSummary, error) {
 	row := r.db.QueryRow(
 		`SELECT
-			COUNT(*) FILTER (WHERE status = 'pending')     AS pending_count,
-			COUNT(*) FILTER (WHERE status = 'retry_wait')  AS retry_wait_count,
-			COUNT(*) FILTER (WHERE status = 'leased')      AS leased_count,
-			COUNT(*) FILTER (WHERE status = 'processing')  AS processing_count,
-			COUNT(*) FILTER (WHERE status = 'completed')   AS completed_count,
-			COUNT(*) FILTER (WHERE status = 'failed')      AS failed_count,
-			COUNT(*) FILTER (WHERE status = 'dead_letter') AS dead_letter_count,
-			COUNT(*) FILTER (WHERE status = 'cancelled')   AS cancelled_count,
-			MIN(scheduled_at) AS first_publish_at,
-			MAX(scheduled_at) AS last_publish_at
+			COUNT(*) FILTER (WHERE status = 'pending')         AS pending_count,
+			COUNT(*) FILTER (WHERE status = 'retry_wait')      AS retry_wait_count,
+			COUNT(*) FILTER (WHERE status = 'leased')          AS leased_count,
+			COUNT(*) FILTER (WHERE status = 'processing')      AS processing_count,
+			COUNT(*) FILTER (WHERE status = 'ingest_completed') AS ready_to_publish_count,
+			COUNT(*) FILTER (WHERE status = 'publish_completed') AS completed_count,
+			COUNT(*) FILTER (WHERE status = 'failed')          AS failed_count,
+			COUNT(*) FILTER (WHERE status = 'dead_letter')     AS dead_letter_count,
+			COUNT(*) FILTER (WHERE status = 'cancelled')       AS cancelled_count,
+			MIN(publish_at) AS first_publish_at,
+			MAX(publish_at) AS last_publish_at
 		 FROM upload_jobs
 		 WHERE folder_id = $1
 		   AND user_id    = $2`,
@@ -841,6 +867,7 @@ func (r *UploadJobRepository) AggregateByFolder(folderID string, userID int64) (
 		&summary.RetryWaitCount,
 		&summary.LeasedCount,
 		&summary.ProcessingCount,
+		&summary.ReadyToPublishCount,
 		&summary.CompletedCount,
 		&summary.FailedCount,
 		&summary.DeadLetterCount,
@@ -855,8 +882,8 @@ func (r *UploadJobRepository) AggregateByFolder(folderID string, userID int64) (
 	// COUNT FILTER clause above AND a term in this sum, otherwise it
 	// silently drops off the dashboard.
 	summary.TotalCount = summary.PendingCount + summary.RetryWaitCount + summary.LeasedCount +
-		summary.ProcessingCount + summary.CompletedCount + summary.FailedCount +
-		summary.DeadLetterCount + summary.CancelledCount
+		summary.ProcessingCount + summary.ReadyToPublishCount + summary.CompletedCount +
+		summary.FailedCount + summary.DeadLetterCount + summary.CancelledCount
 	if firstAt.Valid {
 		t := firstAt.Time
 		summary.FirstPublishAt = &t
@@ -983,7 +1010,7 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 	var job models.UploadJob
 	var rawStatus, rawSource string
 	var targetsJSON []byte
-	var scheduledAt sql.NullTime
+	var publishAt sql.NullTime
 	var folderID sql.NullString
 	var driveAccountID sql.NullInt64
 	var errorMessage sql.NullString
@@ -1013,7 +1040,8 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 		&errorMessage,
 		&job.PostID,
 		&assetID,
-		&scheduledAt,
+		&job.IngestAfter,
+		&publishAt,
 		&job.CreatedAt,
 		&job.UpdatedAt,
 		&job.AttemptCount,
@@ -1051,9 +1079,9 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 		v := folderID.String
 		job.FolderID = &v
 	}
-	if scheduledAt.Valid {
-		t := scheduledAt.Time
-		job.ScheduledAt = &t
+	if publishAt.Valid {
+		t := publishAt.Time
+		job.PublishAt = &t
 	}
 	if errorMessage.Valid {
 		job.ErrorMessage = errorMessage.String
@@ -1130,7 +1158,7 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 	var job models.UploadJob
 	var rawStatus, rawSource string
 	var targetsJSON []byte
-	var scheduledAt sql.NullTime
+	var publishAt sql.NullTime
 	var folderID sql.NullString
 	var driveAccountID sql.NullInt64
 	var errorMessage sql.NullString
@@ -1139,6 +1167,11 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 	var leaseOwner sql.NullString
 	var totalBytes sql.NullInt64
 	var errorCode sql.NullString
+	// P1#5 — YouTube resumable session columns (migration 048). All
+	// nullable: NULL means "no session yet" or "session was cleared".
+	var youtubeSessionURI sql.NullString
+	var youtubeSessionOffset, youtubeChunkSize sql.NullInt64
+	var youtubeSessionExpiresAt, youtubeLastChunkAt sql.NullTime
 
 	err := row.Scan(
 		&job.ID,
@@ -1155,7 +1188,8 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 		&errorMessage,
 		&job.PostID,
 		&assetID,
-		&scheduledAt,
+		&job.IngestAfter,
+		&publishAt,
 		&job.CreatedAt,
 		&job.UpdatedAt,
 		&job.AttemptCount,
@@ -1170,6 +1204,11 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 		&job.Priority,
 		&startedAt,
 		&completedAt,
+		&youtubeSessionURI,
+		&youtubeSessionOffset,
+		&youtubeSessionExpiresAt,
+		&youtubeChunkSize,
+		&youtubeLastChunkAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1188,9 +1227,9 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 		v := folderID.String
 		job.FolderID = &v
 	}
-	if scheduledAt.Valid {
-		t := scheduledAt.Time
-		job.ScheduledAt = &t
+	if publishAt.Valid {
+		t := publishAt.Time
+		job.PublishAt = &t
 	}
 	if errorMessage.Valid {
 		job.ErrorMessage = errorMessage.String

@@ -43,17 +43,54 @@ const uploadJobMaxScheduleHorizonDays = 60
 // targets is kept (the SPA uses it to determine which platforms an
 // upload covers — useful for the multi-account "this video publishes
 // to FB + YT simultaneously" hint).
+//
+// P1#4 — ScheduledAt is replaced by PublishAt (canonical) AND we
+// surface both keys on the wire. The MarshalJSON below emits
+// publish_at (canonical) AND scheduled_at (legacy alias mirrored
+// from publish_at) so legacy SPA clients reading scheduled_at
+// continue to work until they migrate.
 type UploadJobDTO struct {
 	ID          int64      `json:"id"`
 	WorkspaceID int64      `json:"workspace_id"`
 	Title       string     `json:"title"`
 	Caption     string     `json:"caption,omitempty"`
 	Status      string     `json:"status"`
-	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	Targets     []int64    `json:"targets"`
-	SourceType  string     `json:"source_type"`
-	Error       string     `json:"error_message,omitempty"`
+	// P1#4 — canonical user-facing publish time. NULL for
+	// never-scheduled single-file flows (publish immediately).
+	PublishAt  *time.Time `json:"publish_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	Targets    []int64    `json:"targets"`
+	SourceType string     `json:"source_type"`
+	Error      string     `json:"error_message,omitempty"`
+}
+
+// MarshalJSON emits both publish_at (canonical) and scheduled_at
+// (legacy alias mirrored from publish_at) so legacy SPA clients
+// continue to render the calendar until they migrate. Pointer
+// created_at avoids the JSON null-vs-absent distinction that some
+// older flex parsers mishandle.
+func (d UploadJobDTO) MarshalJSON() ([]byte, error) {
+	type alias UploadJobDTO // avoid recursive MarshalJSON call
+	a := alias(d)
+	base := map[string]interface{}{
+		"id":           a.ID,
+		"workspace_id": a.WorkspaceID,
+		"title":        a.Title,
+		"caption":      a.Caption,
+		"status":       a.Status,
+		"created_at":   a.CreatedAt,
+		"targets":      a.Targets,
+		"source_type":  a.SourceType,
+		"error_message": a.Error,
+		"publish_at":    a.PublishAt,
+	}
+	if a.PublishAt != nil {
+		t := *a.PublishAt
+		base["scheduled_at"] = &t
+	} else {
+		base["scheduled_at"] = nil
+	}
+	return json.Marshal(base)
 }
 
 func toUploadJobDTO(j *models.UploadJob) UploadJobDTO {
@@ -67,7 +104,7 @@ func toUploadJobDTO(j *models.UploadJob) UploadJobDTO {
 		Title:       j.Title,
 		Caption:     j.Caption,
 		Status:      string(j.Status),
-		ScheduledAt: j.ScheduledAt,
+		PublishAt:   j.PublishAt,
 		CreatedAt:   j.CreatedAt,
 		Targets:     targets,
 		SourceType:  string(j.SourceType),
@@ -191,26 +228,37 @@ func (r *Router) handleListUploadsByAccount(w http.ResponseWriter, req *http.Req
 	var firstScheduled, lastScheduled *time.Time
 	for i := range jobs {
 		dto := toUploadJobDTO(&jobs[i])
+		// P1#4 — collapse both old `processing` (legacy state) + new
+		// `ingest_completed` (Drive → S3 done, awaiting publish_at)
+		// into the existing processing_count bucket. Dashboard
+		// badges had a single "in-flight" badge before; the rename
+		// preserves the same semantic so user-facing render is
+		// unchanged. ingest_completed rows with a future publish_at
+		// CANNOT contribute to processing_count because the publish
+		// pool hasn't claimed them — those rows surface in
+		// ready_to_publish_count (the new badge).
 		switch models.UploadJobStatus(dto.Status) {
 		case models.UploadJobStatusPending:
 			pending++
-		case models.UploadJobStatusProcessing:
+		case models.UploadJobStatusProcessing,
+			models.UploadJobStatusIngestCompleted:
 			processing++
-		case models.UploadJobStatusCompleted:
+		case models.UploadJobStatusPublishCompleted,
+			models.UploadJobStatusCompleted:
 			completed++
 		case models.UploadJobStatusFailed:
 			failed++
 		}
-		if dto.ScheduledAt != nil {
-			if firstScheduled == nil || dto.ScheduledAt.Before(*firstScheduled) {
-				t := *dto.ScheduledAt
+		if dto.PublishAt != nil {
+			if firstScheduled == nil || dto.PublishAt.Before(*firstScheduled) {
+				t := *dto.PublishAt
 				firstScheduled = &t
 			}
-			if lastScheduled == nil || dto.ScheduledAt.After(*lastScheduled) {
-				t := *dto.ScheduledAt
+			if lastScheduled == nil || dto.PublishAt.After(*lastScheduled) {
+				t := *dto.PublishAt
 				lastScheduled = &t
 			}
-			key := dto.ScheduledAt.UTC().Format("2006-01-02")
+			key := dto.PublishAt.UTC().Format("2006-01-02")
 			b, ok := bucketByDate[key]
 			if !ok {
 				b = &UploadJobBucket{Date: key, Jobs: []UploadJobDTO{}}
@@ -303,15 +351,32 @@ func (r *Router) handleUploadCounts(w http.ResponseWriter, req *http.Request) {
 }
 
 // rescheduleUploadRequest is the body for PATCH /api/v1/uploads/{id}/reschedule.
-// We accept only the new scheduled_at — title, caption, and targets
+// We accept only the new publish_at — title, caption, and targets
 // remain unchanged (a future "edit" endpoint can fan those out).
+//
+// P1#4 — publish_at is canonical; scheduled_at is the legacy alias
+// kept for one-minor-version back-compat. If both keys are present
+// and parseable, publish_at wins (consistent with
+// CreatePostRequest.ResolvePublishAt).
 type rescheduleUploadRequest struct {
+	// publish_at is canonical.
+	PublishAt *time.Time `json:"publish_at,omitempty"`
+	// scheduled_at is the legacy alias.
 	ScheduledAt time.Time `json:"scheduled_at"`
 }
 
+// resolvePublishAt returns the canonical cursor with publish_at
+// precedence.
+func (r rescheduleUploadRequest) resolvePublishAt() time.Time {
+	if r.PublishAt != nil && !r.PublishAt.IsZero() {
+		return *r.PublishAt
+	}
+	return r.ScheduledAt
+}
+
 // handleRescheduleUpload moves a pending upload_job to a new
-// scheduled_at. The dashboard calendar uses this on drag-drop.
-// Returns 200 with the updated row.
+// publish_at. The dashboard calendar uses this on drag-drop. Returns
+// 200 with the updated row.
 func (r *Router) handleRescheduleUpload(w http.ResponseWriter, req *http.Request) {
 	if r.uploadJobStore == nil {
 		writeError(w, http.StatusNotImplemented, "upload jobs not configured on this server")
@@ -334,18 +399,21 @@ func (r *Router) handleRescheduleUpload(w http.ResponseWriter, req *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if body.ScheduledAt.IsZero() {
-		writeError(w, http.StatusBadRequest, "scheduled_at is required (RFC3339)")
+	// P1#4 — canonical publish_at wins; scheduled_at falls back.
+	newPublishAt := body.resolvePublishAt()
+	if newPublishAt.IsZero() {
+		writeError(w, http.StatusBadRequest, "publish_at (or scheduled_at alias) is required (RFC3339)")
 		return
 	}
-	if body.ScheduledAt.Before(time.Now().Add(-1 * time.Minute)) {
+	if newPublishAt.Before(time.Now().Add(-1 * time.Minute)) {
 		// Past dates collapse the anti-pattern-detection jitter: a
 		// video "scheduled for yesterday" publishes immediately on
 		// the next worker tick. The publish-flow ALREADY supports
 		// that (manual "Publish now" path), so dashboard reschedule
 		// intentionally rejects past dates and forces the user to
 		// use Publish-now if that's what they want.
-		writeError(w, http.StatusBadRequest, "scheduled_at must be in the future (use /api/v1/posts/{id}/publish to publish immediately instead)")
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("publish_at must be in the future (use /api/v1/posts/{id}/publish to publish immediately instead) [got %s]", newPublishAt.Format(time.RFC3339)))
 		return
 	}
 	// 5-second floor: a drag-drop that resolves to "literally now"
@@ -353,19 +421,19 @@ func (r *Router) handleRescheduleUpload(w http.ResponseWriter, req *http.Request
 	// "completed before the SPA optimistic update" race. Require a
 	// few seconds of headroom so the optimistic UI sees the chip in
 	// its new bucket before the worker picks it up.
-	if body.ScheduledAt.Before(time.Now().Add(5 * time.Second)) {
-		writeError(w, http.StatusBadRequest, "scheduled_at must be at least 5 seconds in the future")
+	if newPublishAt.Before(time.Now().Add(5 * time.Second)) {
+		writeError(w, http.StatusBadRequest, "publish_at must be at least 5 seconds in the future")
 		return
 	}
 	maxHorizon := time.Now().Add(time.Duration(uploadJobMaxScheduleHorizonDays) * 24 * time.Hour)
-	if body.ScheduledAt.After(maxHorizon) {
+	if newPublishAt.After(maxHorizon) {
 		writeError(w, http.StatusBadRequest,
-			fmt.Sprintf("scheduled_at must be within %d days from now", uploadJobMaxScheduleHorizonDays),
+			fmt.Sprintf("publish_at must be within %d days from now", uploadJobMaxScheduleHorizonDays),
 		)
 		return
 	}
 
-	job, err := r.uploadJobStore.Reschedule(jobID, identity.UserID(), body.ScheduledAt)
+	job, err := r.uploadJobStore.Reschedule(jobID, identity.UserID(), newPublishAt)
 	if err != nil {
 		if errors.Is(err, repository.ErrUploadJobNotFound) {
 			writeError(w, http.StatusNotFound,
@@ -456,14 +524,27 @@ func parseUploadJobFilter(q map[string][]string, allowEmpty bool) (repository.Up
 
 	if v, ok := q["status"]; ok && len(v) > 0 && v[0] != "" {
 		s := models.UploadJobStatus(v[0])
+		// P1#4 — accept the new ingest_completed + publish_completed
+		// names (canonical post-rename) AND the legacy aliases
+		// (ready_to_publish, completed) so a SPA mid-migration
+		// doesn't 400-filter. The repository's enum stores the
+		// canonical case-insensitive string; the rewrite SQL in 049c
+		// UPDATE'd any pre-existing rows out of the legacy values.
 		switch s {
 		case models.UploadJobStatusPending,
 			models.UploadJobStatusProcessing,
 			models.UploadJobStatusCompleted,
-			models.UploadJobStatusFailed:
+			models.UploadJobStatusFailed,
+			models.UploadJobStatusLeased,
+			models.UploadJobStatusRetryWait,
+			models.UploadJobStatusDeadLetter,
+			models.UploadJobStatusCancelled,
+			models.UploadJobStatusIngestCompleted,
+			models.UploadJobStatusPublishCompleted,
+			models.UploadJobStatusReadyToPublish:
 			filter.Status = &s
 		default:
-			return filter, errors.New("status must be one of: pending, processing, completed, failed")
+			return filter, errors.New("status must be one of: pending, processing, completed, failed, leased, retry_wait, dead_letter, cancelled, ingest_completed, publish_completed")
 		}
 	}
 

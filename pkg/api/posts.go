@@ -43,17 +43,84 @@ type CreatePostTarget struct {
 }
 
 // CreatePostRequest is the universal JSON body for POST /api/v1/posts.
+//
+// P1#4 — scheduled_at was split into ingest_after + publish_at. The
+// canonical field name on the wire is publish_at (the user-facing
+// "what time should this fire" cursor). scheduled_at remains on the
+// wire as a one-minor-version alias so existing SPA / mobile / curl
+// clients continue to work without a coordinated deploy. Server-side
+// helper resolvePublishAt applies the alias precedence:
+//
+//	publish_at set (non-nil) AND scheduled_at set → publish_at wins
+//	publish_at set (non-nil) AND scheduled_at nil → publish_at wins
+//	publish_at nil          AND scheduled_at set → scheduled_at becomes publish_at
+//	publish_at nil          AND scheduled_at nil → nil (legacy single-file flow)
+//
+// ingest_after is server-computed (DEFAULT NOW() at the SQL level);
+// clients do NOT pass it. Future ingress-time controls (e.g.
+// INGEST_LEAD_TIME_MINUTES env) live here, not in the wire shape.
 type CreatePostRequest struct {
 	WorkspaceID int64              `json:"workspace_id"`
 	Content     CreatePostContent  `json:"content"`
-	ScheduledAt *time.Time         `json:"scheduled_at,omitempty"`
-	Status      models.PostStatus  `json:"status,omitempty"`
-	Targets     []CreatePostTarget `json:"targets"`
+	// scheduled_at is the legacy alias. New callers should send
+	// publish_at; both keys are accepted, publish_at wins if both
+	// are set. The struct pair is preserved for one minor version;
+	// P1#5 removes scheduled_at from the wire.
+	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+	// publish_at is the canonical user-facing cursor.
+	PublishAt *time.Time          `json:"publish_at,omitempty"`
+	Status    models.PostStatus   `json:"status,omitempty"`
+	Targets   []CreatePostTarget  `json:"targets"`
+}
+
+// ResolvePublishAt returns the canonical publish_at cursor for the
+// request, falling back to the scheduled_at alias when publish_at is
+// not supplied. Centralised here so every handler applies identical
+// precedence rules.
+func (r CreatePostRequest) ResolvePublishAt() *time.Time {
+	if r.PublishAt != nil {
+		return r.PublishAt
+	}
+	return r.ScheduledAt
 }
 
 // SchedulePostRequest is the JSON body for POST /posts/{id}/schedule.
+// P1#4 — publish_at is canonical; scheduled_at is the legacy alias
+// kept for one-minor-version back-compat.
 type SchedulePostRequest struct {
+	// publish_at is canonical.
+	PublishAt *time.Time `json:"publish_at,omitempty"`
+	// scheduled_at is the legacy alias. If both are set, publish_at
+	// wins (consistent with CreatePostRequest.ResolvePublishAt).
 	ScheduledAt time.Time `json:"scheduled_at"`
+}
+
+// ResolvePublishAt applies the same precedence rules as
+// CreatePostRequest. Both fields can't be nil because the handler
+// returns 400 when both are nil; this helper just picks one when both
+// are set.
+func (r SchedulePostRequest) ResolvePublishAt() time.Time {
+	if r.PublishAt != nil && !r.PublishAt.IsZero() {
+		return *r.PublishAt
+	}
+	return r.ScheduledAt
+}
+
+// publishAtJSON returns both scheduled_at and publish_at keys for the
+// outgoing JSON so legacy SPA clients continue to render the calendar
+// until they migrate to the new canonical key.
+func publishAtJSON(publishAt *time.Time) map[string]interface{} {
+	out := map[string]interface{}{
+		"publish_at": publishAt,
+	}
+	if publishAt != nil {
+		// Mirror as scheduled_at for back-compat.
+		t := *publishAt
+		out["scheduled_at"] = &t
+	} else {
+		out["scheduled_at"] = nil
+	}
+	return out
 }
 
 // AddTargetRequest is the JSON body for POST /posts/{id}/targets.
@@ -220,10 +287,13 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 		// Fall through to the rest of the handler.
 	}
 
+	// P1#4 — resolve the canonical publish cursor via the alias
+	// helper (publish_at wins; scheduled_at falls back).
+	publishAt := body.ResolvePublishAt()
 	status := models.PostStatusDraft
 	if body.Status != "" {
 		status = body.Status
-	} else if body.ScheduledAt != nil {
+	} else if publishAt != nil {
 		status = models.PostStatusQueued
 	}
 
@@ -244,8 +314,11 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 		Title:       body.Content.Title,
 		Caption:     body.Content.Caption,
 		MediaURL:    mediaURL,
-		ScheduledAt: body.ScheduledAt,
-		Status:      status,
+		// P1#4 — ingest_after is server-side DEFAULT NOW() at SQL
+		// level; we leave zero-value here so the SQL DEFAULT fires.
+		// publish_at comes from the body's canonical-or-alias cursor.
+		PublishAt: publishAt,
+		Status:    status,
 	}
 	targets := make([]*models.PostTarget, 0, len(body.Targets))
 	for _, t := range body.Targets {
@@ -274,20 +347,23 @@ type createPostResponse struct {
 }
 
 func (c createPostResponse) MarshalJSON() ([]byte, error) {
-	return json.Marshal(map[string]interface{}{
-		"id":           c.post.ID,
-		"workspace_id": c.post.WorkspaceID,
-		"title":        c.post.Title,
-		"caption":      c.post.Caption,
-		"media_url":    c.post.MediaURL,
-		"scheduled_at": c.post.ScheduledAt,
-		"status":       c.post.Status,
-		"version":      c.post.Version,
-		"created_at":   c.post.CreatedAt,
-		"updated_at":   c.post.UpdatedAt,
-		"post":         c.post,
-		"targets":      c.targets,
-	})
+	// P1#4 — emit BOTH publish_at (canonical) AND scheduled_at
+	// (legacy alias) on the wire so legacy SPA clients continue to
+	// render the calendar until they migrate. The post pointer also
+	// serialises since the marshaler is on the wrapper struct.
+	base := publishAtJSON(c.post.PublishAt)
+	base["id"] = c.post.ID
+	base["workspace_id"] = c.post.WorkspaceID
+	base["title"] = c.post.Title
+	base["caption"] = c.post.Caption
+	base["media_url"] = c.post.MediaURL
+	base["status"] = c.post.Status
+	base["version"] = c.post.Version
+	base["created_at"] = c.post.CreatedAt
+	base["updated_at"] = c.post.UpdatedAt
+	base["post"] = c.post
+	base["targets"] = c.targets
+	return json.Marshal(base)
 }
 
 // handleAddTarget appends a post_target to an existing post.
@@ -352,8 +428,10 @@ func (r *Router) handleSchedulePost(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if body.ScheduledAt.IsZero() {
-		writeError(w, http.StatusBadRequest, "scheduled_at is required")
+	// P1#4 — canonical publish_at wins; scheduled_at falls back.
+	publishAt := body.ResolvePublishAt()
+	if publishAt.IsZero() {
+		writeError(w, http.StatusBadRequest, "publish_at (or scheduled_at alias) is required")
 		return
 	}
 	existing, err := r.postStore.FindByID(id)
@@ -372,7 +450,7 @@ func (r *Router) handleSchedulePost(w http.ResponseWriter, req *http.Request) {
 		Title:       existing.Title,
 		Caption:     existing.Caption,
 		MediaURL:    existing.MediaURL,
-		ScheduledAt: &body.ScheduledAt,
+		PublishAt:   &publishAt,
 		Status:      models.PostStatusQueued,
 		Version:     existing.Version,
 	}
@@ -552,9 +630,10 @@ func (r *Router) handlePatchPost(w http.ResponseWriter, req *http.Request) {
 		Title:       existing.Title,
 		Caption:     existing.Caption,
 		MediaURL:    existing.MediaURL,
-		ScheduledAt: existing.ScheduledAt,
-		Status:      existing.Status,
-		Version:     existing.Version,
+		// P1#4 — preserve the existing publish_at (was scheduled_at).
+		PublishAt: existing.PublishAt,
+		Status:    existing.Status,
+		Version:   existing.Version,
 	}
 	if body.Title != "" {
 		post.Title = body.Title

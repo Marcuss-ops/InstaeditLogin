@@ -125,14 +125,40 @@ type PostID int64
 // Post is a piece of content (idea → edit → publish pipeline) belonging to
 // a Workspace. The fan-out to multiple platform accounts is captured by
 // PostTarget rows that reference this Post.
+//
+// IngestAfter (P1#4, migration 049b) is the earliest time the asset
+// ingest may run. Server-side DEFAULT NOW() lands the column on
+// insert; for posts created outside the upload_jobs batching flow
+// (e.g. POST /posts direct), ingest_after is essentially "now" by
+// the time the row reaches the publish path. NOT NULL, stored as
+// time.Time (never nil). Replaces migration-003's posts.scheduled_at
+// column.
+//
+// PublishAt (P1#4, migration 049b) is the user-supplied "what time
+// should this post go live" cursor. PublishWorker's ListPending
+// `(publish_at IS NULL OR publish_at <= NOW())` predicate gates
+// staging until the cursor. NULL = publish immediately. Pointer-
+// typed so NULL ↔ omitempty maps cleanly through the API JSON
+// contract.
+//
+// JSON tags: include `scheduled_at` alias so legacy SPA clients
+// continue rendering the calendar UI until they migrate to the new
+// canonical key. The alias is populated server-side from PublishAt
+// in the API response layer (pkg/api/posts.go).
 type Post struct {
 	ID             int64      `json:"id"`
 	WorkspaceID    int64      `json:"workspace_id"`
 	Title          string     `json:"title,omitempty"`
 	Caption        string     `json:"caption,omitempty"`
 	MediaURL       string     `json:"media_url,omitempty"`
-	ScheduledAt    *time.Time `json:"scheduled_at,omitempty"`
-	Status         PostStatus `json:"status"`
+	// P1#4 — split of the old scheduled_at field.
+	// IngestAfter: NOT NULL DEFAULT NOW() at the SQL level; ingest
+	//             happens at insert time (or at the row's first
+	//             publish_worker tick for pre-migration rows).
+	// PublishAt:  user-supplied schedule (NULL = publish now).
+	IngestAfter time.Time  `json:"ingest_after"`
+	PublishAt   *time.Time `json:"publish_at,omitempty"`
+	Status      PostStatus `json:"status"`
 	IdempotencyKey *string    `json:"idempotency_key,omitempty"`
 	Version        int64      `json:"version"`
 	CreatedAt      time.Time  `json:"created_at"`

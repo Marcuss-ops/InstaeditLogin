@@ -90,9 +90,16 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 	}()
 
 	// Insert the parent Post; capture auto-assigned id + created_at.
+	// P1#4 — ingest_after + publish_at replace the old scheduled_at
+	// column (migration 049b). ingest_after is server-side DEFAULT
+	// NOW() at the SQL level; for callers that don't compute an
+	// explicit value (the common case), we pass an explicit NOW()
+	// here so the row is immutable to clock drift between Go's
+	// time.Now() and Postgres' NOW() inside the same transaction.
 	err = tx.QueryRow(
 		qInsertPost,
-		post.WorkspaceID, post.Title, post.Caption, post.MediaURL, post.ScheduledAt, post.Status,
+		post.WorkspaceID, post.Title, post.Caption, post.MediaURL,
+		post.IngestAfter, post.PublishAt, post.Status,
 	).Scan(&post.ID, &post.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to create post: %w", err)
@@ -126,13 +133,21 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 	// parent-post mutation between Create and the dispatch pickup would
 	// leave the dispatcher acting on stale data.)
 	for _, t := range targets {
+		// P1#4 — the outbox payload now carries publish_at instead
+		// of scheduled_at to keep the dispatcher contract consistent
+		// with the post.publish_at column the worker reads in the
+		// reconciler tick. ingest_after is computed at Create-time
+		// server-side (DEFAULT NOW()) and is not part of the
+		// publish-time payload — the worker doesn't need it; only
+		// the snapshot "what time should this fire" cursor flows
+		// downstream.
 		payload, marshalErr := json.Marshal(map[string]any{
 			"event_version":       "v1",
 			"post_id":             post.ID,
 			"target_id":           t.ID,
 			"workspace_id":        post.WorkspaceID,
 			"platform_account_id": t.PlatformAccountID,
-			"scheduled_at":        post.ScheduledAt,
+			"publish_at":          post.PublishAt,
 			"title":               post.Title,
 			"caption":             post.Caption,
 			"media_url":           post.MediaURL,
@@ -164,9 +179,14 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 // guard against any caller passing a post.id from a workspace they don't
 // own.
 func (r *PostRepository) Update(post *models.Post) error {
+	// P1#4 — qUpdatePost's UPDATE list now writes publish_at instead
+	// of scheduled_at (queries.go). ingest_after is server-side DEFAULT
+	// NOW() — caller can set post.IngestAfter explicitly to override,
+	// otherwise the row keeps its prior value (the SQL UPDATE does not
+	// touch ingest_after by design).
 	result, err := r.db.Exec(
 		qUpdatePost,
-		post.Title, post.Caption, post.MediaURL, post.ScheduledAt, post.Status,
+		post.Title, post.Caption, post.MediaURL, post.PublishAt, post.Status,
 		post.ID, post.WorkspaceID,
 	)
 	if err != nil {
@@ -193,11 +213,13 @@ func (r *PostRepository) Update(post *models.Post) error {
 // or (nil, nil) when no row matches. Use ListByPost for the target fan-out.
 func (r *PostRepository) FindByID(id int64) (*models.Post, error) {
 	p := &models.Post{}
+	// P1#4 — qSelectPostByID now SELECTs ingest_after, publish_at
+	// instead of scheduled_at (queries.go).
 	err := r.db.QueryRow(
 		qSelectPostByID,
 		id,
 	).Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
-		&p.ScheduledAt, &p.Status, &p.CreatedAt)
+		&p.IngestAfter, &p.PublishAt, &p.Status, &p.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -223,8 +245,9 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
 	var posts []models.Post
 	for rows.Next() {
 		p := models.Post{}
+		// P1#4 — read ingest_after + publish_at instead of scheduled_at.
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
-			&p.ScheduledAt, &p.Status, &p.CreatedAt); err != nil {
+			&p.IngestAfter, &p.PublishAt, &p.Status, &p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, p)
@@ -232,10 +255,11 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
 	return posts, nil
 }
 
-// ListQueued returns posts whose status='queued' AND scheduled_at <=
-// before. `before` is the cutoff time (typically time.Now()); passing it
-// from Go (instead of using SQL NOW()) decouples the DB clock from the
-// application clock, making the worker loop and tests fully deterministic.
+// ListQueued returns posts whose status='queued' AND (publish_at IS NULL
+// OR publish_at <= before). P1#4 — renamed from scheduled_at to
+// publish_at. `before` is the cutoff time (typically time.Now()); passing
+// it from Go (instead of using SQL NOW()) decouples the DB clock from
+// the application clock, making the worker loop and tests fully deterministic.
 func (r *PostRepository) ListQueued(before time.Time) ([]models.Post, error) {
 	rows, err := r.db.Query(
 		qSelectQueuedPosts,
@@ -249,8 +273,9 @@ func (r *PostRepository) ListQueued(before time.Time) ([]models.Post, error) {
 	var posts []models.Post
 	for rows.Next() {
 		p := models.Post{}
+		// P1#4 — read ingest_after + publish_at instead of scheduled_at.
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
-			&p.ScheduledAt, &p.Status, &p.CreatedAt); err != nil {
+			&p.IngestAfter, &p.PublishAt, &p.Status, &p.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, p)
@@ -891,12 +916,13 @@ func (r *PostRepository) ListPublishing() ([]models.PostTarget, error) {
 }
 
 // ListPending returns post_targets whose status='queued' AND whose parent
-// post is due (scheduled_at <= before). This is the worker's main pickup
-// query, called periodically (e.g. every 30s) by the publishing worker.
+// post is due (publish_at <= before). P1#4 — renamed from scheduled_at
+// to publish_at. This is the worker's main pickup query, called
+// periodically (e.g. every 30s) by the publishing worker.
 //
 // The JOIN with posts is essential: a target whose parent post is scheduled
 // for tomorrow is NOT pending today. Without the JOIN we'd waste cycles
-// re-checking and would still race on scheduled_at boundaries. Includes
+// re-checking and would still race on publish_at boundaries. Includes
 // the provider_idempotency_key column added by migration 022 so the
 // worker can read the existing key (preserved across retries) without
 // an extra round-trip. Includes the completed_at column added by

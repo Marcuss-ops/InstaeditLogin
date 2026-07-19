@@ -15,8 +15,8 @@ package repository
 
 // --- post_create.go ---
 
-const qInsertPost = `INSERT INTO posts (workspace_id, title, caption, media_url, scheduled_at, status)
- VALUES ($1, $2, $3, $4, $5, $6)
+const qInsertPost = `INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, status)
+ VALUES ($1, $2, $3, $4, $5, $6, $7)
  RETURNING id, created_at`
 
 const qInsertPostTarget = `INSERT INTO post_targets (post_id, platform_account_id, status)
@@ -28,19 +28,19 @@ const qInsertOutboxEvent = `INSERT INTO outbox_events (aggregate_type, aggregate
 
 // --- post_query.go ---
 
-const qSelectPostByID = `SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
+const qSelectPostByID = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, created_at
  FROM posts
  WHERE id = $1`
 
-const qSelectPostsByWorkspace = `SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
+const qSelectPostsByWorkspace = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, created_at
  FROM posts
  WHERE workspace_id = $1
  ORDER BY created_at DESC`
 
-const qSelectQueuedPosts = `SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
+const qSelectQueuedPosts = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, created_at
  FROM posts
- WHERE status = 'queued' AND scheduled_at <= $1
- ORDER BY scheduled_at ASC`
+ WHERE status = 'queued' AND (publish_at IS NULL OR publish_at <= $1)
+ ORDER BY publish_at ASC NULLS FIRST`
 
 const qSelectTargetsByPost = `SELECT id, post_id, platform_account_id, status,
 		        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
@@ -62,16 +62,16 @@ const qSelectPendingTargets = `SELECT pt.id, pt.post_id, pt.platform_account_id,
 		        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
 		        COALESCE(pt.provider_state, ''), COALESCE(pt.container_id, ''),
 		        pt.provider_idempotency_key, pt.completed_at
-		 FROM post_targets pt
-		 JOIN posts p ON p.id = pt.post_id
-		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider')
-		   AND (p.scheduled_at IS NULL OR p.scheduled_at <= $1)
-		 ORDER BY p.scheduled_at ASC NULLS FIRST`
+	 FROM post_targets pt
+	 JOIN posts p ON p.id = pt.post_id
+	 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider')
+	   AND (p.publish_at IS NULL OR p.publish_at <= $1)
+	 ORDER BY p.publish_at ASC NULLS FIRST`
 
 // --- post_update.go ---
 
 const qUpdatePost = `UPDATE posts
- SET title = $1, caption = $2, media_url = $3, scheduled_at = $4, status = $5
+ SET title = $1, caption = $2, media_url = $3, publish_at = $4, status = $5
  WHERE id = $6 AND workspace_id = $7`
 
 const qUpdateTargetProviderIdempotencyKey = `UPDATE post_targets

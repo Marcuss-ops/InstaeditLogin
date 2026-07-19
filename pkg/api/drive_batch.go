@@ -123,7 +123,7 @@ type DriveBatchImportItem struct {
 	Name         string    `json:"name"`
 	MimeType     string    `json:"mime_type"`
 	JobID        int64     `json:"job_id"`
-	ScheduledAt  time.Time `json:"scheduled_at"`
+	PublishAt  time.Time `json:"scheduled_at"`
 	RelativeHours float64  `json:"relative_hours_from_now"`
 }
 
@@ -538,7 +538,7 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 		Caption:     caption,
 		Targets:     []int64{body.FacebookAccountID},
 		Status:      models.UploadJobStatusPending,
-		ScheduledAt: &scheduledAt,
+		PublishAt: &scheduledAt,
 	}
 		if err := r.uploadJobStore.Create(job); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("create upload job for %s: %v", f.Name, err))
@@ -551,9 +551,9 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 			Name:          f.Name,
 			MimeType:      f.MimeType,
 			JobID:         job.ID,
-			ScheduledAt:   scheduledAt,
-			RelativeHours: scheduledAt.Sub(now).Hours(),
-		})
+		PublishAt:     scheduledAt,
+		RelativeHours: scheduledAt.Sub(now).Hours(),
+	})
 		cursor = scheduledAt
 	}
 
@@ -561,8 +561,8 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 		FolderID:            body.FolderID,
 		ScheduledCount:      len(entries),
 		TotalRuntimeSeconds: int(cursor.Sub(now).Seconds()),
-		FirstPublishAt:      entries[0].ScheduledAt,
-		LastScheduledAt:     entries[len(entries)-1].ScheduledAt,
+		FirstPublishAt:      entries[0].PublishAt,
+		LastScheduledAt:     entries[len(entries)-1].PublishAt,
 		NextPageToken:       nextPageToken,
 		Entries:             entries,
 		NeedsDriveAccount:   needsDriveAccount,

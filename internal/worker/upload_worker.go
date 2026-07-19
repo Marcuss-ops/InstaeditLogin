@@ -651,7 +651,16 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 		Caption:     job.Caption,
 		MediaURL:    mediaURL,
 		Status:      models.PostStatusQueued,
-		ScheduledAt: job.ScheduledAt,
+		// P1#4 — IngestAfter is server-side DEFAULT NOW() at SQL
+		// level; we pass job.IngestAfter through so a queued
+		// ingest-after-future row preserves its ingest schedule.
+		IngestAfter: job.IngestAfter,
+		// PublishAt stamps the user-facing "what time should this
+		// fire" cursor onto the created post. The publish_worker
+		// ListPending predicate (queries.go::qSelectPendingTargets)
+		// gates on publish_at <= NOW(), so the post stays queued
+		// until the cursor elapses.
+		PublishAt: job.PublishAt,
 	}
 	targets := make([]*models.PostTarget, 0, len(job.Targets))
 	for _, accountID := range job.Targets {
@@ -665,17 +674,28 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 	}
 
 	// Trigger publishing only for jobs that should publish NOW.
-	// Future-scheduled jobs (job.ScheduledAt > now) stay in the
+	// Future-scheduled jobs (job.PublishAt > now) stay in the
 	// `status='queued'` state and the publish_worker picks them up
-	// when scheduled_at <= now(). Calling PublishPost on a future
-	// post would race the scheduler and risk an out-of-order publish.
-	if job.ScheduledAt == nil || !job.ScheduledAt.After(time.Now()) {
+	// when publish_at <= now(). Calling PublishPost on a future post
+	// would race the scheduler and risk an out-of-order publish.
+	//
+	// P1#4 — defense-in-depth keep this go-level gate: ingest and
+	// publish pools are separate goroutines; the publish pool's
+	// ClaimBatchForPublish CTE also gates on (publish_at IS NULL OR
+	// publish_at <= NOW()) so under normal conditions a row claimed
+	// here already has publish_at <= now. The go-level check stays
+	// for legacy single-file flows (POST /posts direct + cmd
+	// binaries) where rows bypass the upload_jobs batching path and
+	// the publish pool's CTE has no claim opportunity. A future
+	// Taskilino can remove this check once every flow routes through
+	// ClaimBatchForPublish.
+	if job.PublishAt == nil || !job.PublishAt.After(time.Now()) {
 		if err := w.postStore.PublishPost(post.ID); err != nil {
 			return fmt.Errorf("trigger publish: %w", err)
 		}
 	} else {
 		w.logger.Info("upload worker: post scheduled for future publish",
-			"job_id", job.ID, "post_id", post.ID, "scheduled_at", job.ScheduledAt.Format(time.RFC3339))
+			"job_id", job.ID, "post_id", post.ID, "publish_at", job.PublishAt.Format(time.RFC3339))
 	}
 
 	// Mark job completed. CAS against workerID ensures a peer that

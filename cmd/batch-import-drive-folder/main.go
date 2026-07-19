@@ -213,7 +213,7 @@ type entry struct {
 	DriveFileID string    `json:"drive_file_id"`
 	Name        string    `json:"name"`
 	JobID       int64     `json:"job_id"`
-	ScheduledAt time.Time `json:"scheduled_at"`
+	PublishAt time.Time `json:"scheduled_at"`
 }
 
 // pageResponse mirrors pkg/api/drive_batch.go's DriveBatchImportResponse.

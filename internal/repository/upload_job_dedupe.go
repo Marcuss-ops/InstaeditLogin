@@ -25,9 +25,9 @@ func (r *UploadJobRepository) CreateIfSourceAbsent(job *models.UploadJob) (bool,
 		return false, fmt.Errorf("failed to marshal upload job targets: %w", err)
 	}
 
-	var scheduledAt sql.NullTime
-	if job.ScheduledAt != nil {
-		scheduledAt = sql.NullTime{Time: *job.ScheduledAt, Valid: true}
+	var publishAt sql.NullTime
+	if job.PublishAt != nil {
+		publishAt = sql.NullTime{Time: *job.PublishAt, Valid: true}
 	}
 	var folderID sql.NullString
 	if job.FolderID != nil {
@@ -75,8 +75,8 @@ func (r *UploadJobRepository) CreateIfSourceAbsent(job *models.UploadJob) (bool,
 
 	if err := tx.QueryRow(
 		`INSERT INTO upload_jobs
-			(user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption, targets, status, scheduled_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			(user_id, workspace_id, source_type, source_id, drive_account_id, folder_id, title, caption, targets, status, ingest_after, publish_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id, created_at, updated_at`,
 		job.UserID,
 		job.WorkspaceID,
@@ -88,7 +88,8 @@ func (r *UploadJobRepository) CreateIfSourceAbsent(job *models.UploadJob) (bool,
 		job.Caption,
 		targetsJSON,
 		string(job.Status),
-		scheduledAt,
+		job.IngestAfter,
+		publishAt,
 	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt); err != nil {
 		return false, fmt.Errorf("failed to create upload job: %w", err)
 	}

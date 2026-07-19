@@ -193,7 +193,7 @@ func run() error {
 			Caption:        title,
 			Targets:        []int64{facebookAccountID},
 			Status:         models.UploadJobStatusPending,
-			ScheduledAt:    &scheduledAt,
+			PublishAt:      &scheduledAt,
 		}
 		created, err := uploadRepo.CreateIfSourceAbsent(job)
 		if err != nil {
@@ -205,7 +205,7 @@ func run() error {
 			continue
 		}
 
-		slog.Info("scheduled upload job", "job_id", job.ID, "file", f.Name, "scheduled_at", scheduledAt)
+		slog.Info("scheduled upload job", "job_id", job.ID, "file", f.Name, "publish_at", scheduledAt)
 		cursor = scheduledAt
 		createdJobs++
 	}
