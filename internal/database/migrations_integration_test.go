@@ -39,6 +39,14 @@ var migrationsToTest = []string{
 	"011_target_provider_state.sql",
 	"012_add_post_status_enum.sql",
 	"012_async_threads_support.sql",
+	// 043 + 053 — oauth_connections lineage + tokens oauth_connection_id FK
+	// (P0#3 vault retarget). Migration 053 is guarded by a DO block that
+	// only backfills/SET NOT NULL if platform_accounts.oauth_connection_id
+	// already exists, so the order-independence test against this set
+	// stays stable whether the migration runner applies 043 before 053
+	// or vice versa.
+	"043_oauth_connections.sql",
+	"053_oauth_tokens_retargeted.sql",
 }
 
 // expectedPostStatusActive is the documented active enum set
@@ -73,7 +81,7 @@ var requiredColumns = []struct{ Table, Column string }{
 	{"platform_accounts", "id"}, {"platform_accounts", "user_id"}, {"platform_accounts", "platform"}, {"platform_accounts", "platform_user_id"},
 	{"platform_accounts", "username"}, {"platform_accounts", "created_at"}, {"platform_accounts", "updated_at"},
 	{"tokens", "id"}, {"tokens", "platform_account_id"}, {"tokens", "token_type"}, {"tokens", "encrypted_token"},
-	{"tokens", "expires_at"}, {"tokens", "scopes"}, {"tokens", "created_at"},
+	{"tokens", "expires_at"}, {"tokens", "scopes"}, {"tokens", "created_at"}, {"tokens", "oauth_connection_id"},
 	// 002_add_refresh_token
 	{"tokens", "encrypted_refresh_token"},
 	// 003_posts_workspaces

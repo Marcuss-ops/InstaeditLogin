@@ -83,7 +83,16 @@ type Metadata map[string]interface{}
 // Token represents an encrypted OAuth token stored in the database.
 type Token struct {
 	ID                    int64      `json:"id"`
-	PlatformAccountID     int64      `json:"platform_account_id"`
+	PlatformAccountID     int64      `json:"platform_account_id,omitempty"`
+	// OAuthConnectionID (P0#3 — migration 053) is the vault's PRIMARY
+	// storage key. The vault resolves it from platform_account_id via
+	// platform_accounts.oauth_connection_id on every Save/Get/Renew/Revoke
+	// (the lookup is a single indexed SELECT — the resolver is internal to
+	// internal/credentials/vault.go so caller signatures stay
+	// backwards-compatible on platformAccountID). Set after migration 053
+	// has applied; pre-053 rows have it populated by the migration's
+	// backfill, NOT NULL.
+	OAuthConnectionID     int64      `json:"-"`
 	TokenType             string     `json:"token_type"`
 	EncryptedToken        []byte     `json:"-"`
 	EncryptedRefreshToken []byte     `json:"-"`

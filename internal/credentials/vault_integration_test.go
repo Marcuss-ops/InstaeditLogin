@@ -95,11 +95,21 @@ func integrationDB(t *testing.T) *sql.DB {
 	// to keep this test self-contained — only the columns the vault
 	// actually reads/writes are created.
 	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS oauth_connections (
+			id BIGSERIAL PRIMARY KEY,
+			user_id BIGINT NOT NULL DEFAULT 1,
+			provider VARCHAR(50) NOT NULL DEFAULT 'instagram',
+			provider_resource_id VARCHAR(255) NOT NULL DEFAULT 'test',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE(user_id, provider, provider_resource_id)
+		)`,
 		`CREATE TABLE IF NOT EXISTS platform_accounts (
 			id BIGSERIAL PRIMARY KEY,
 			user_id BIGINT NOT NULL DEFAULT 1,
 			platform VARCHAR(50) NOT NULL DEFAULT 'instagram',
 			platform_user_id VARCHAR(255) NOT NULL DEFAULT 'test',
+			oauth_connection_id BIGINT,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE(platform, platform_user_id)
@@ -107,6 +117,7 @@ func integrationDB(t *testing.T) *sql.DB {
 		`CREATE TABLE IF NOT EXISTS tokens (
 			id BIGSERIAL PRIMARY KEY,
 			platform_account_id BIGINT NOT NULL REFERENCES platform_accounts(id) ON DELETE CASCADE,
+			oauth_connection_id BIGINT NOT NULL REFERENCES oauth_connections(id) ON DELETE CASCADE,
 			token_type VARCHAR(50) NOT NULL,
 			encrypted_token BYTEA NOT NULL,
 			encrypted_refresh_token BYTEA,
@@ -114,7 +125,7 @@ func integrationDB(t *testing.T) *sql.DB {
 			scopes TEXT[],
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_tokens_platform_account_id ON tokens(platform_account_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_tokens_oauth_connection_id ON tokens(oauth_connection_id)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.ExecContext(context.Background(), s); err != nil {
@@ -127,22 +138,37 @@ func integrationDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() {
 		_, _ = db.ExecContext(context.Background(), "TRUNCATE tokens RESTART IDENTITY CASCADE")
 		_, _ = db.ExecContext(context.Background(), "TRUNCATE platform_accounts RESTART IDENTITY CASCADE")
+		_, _ = db.ExecContext(context.Background(), "TRUNCATE oauth_connections RESTART IDENTITY CASCADE")
 	})
 	return db
 }
 
-// seedAccountAndExpiredToken inserts a fresh platform_accounts row
-// and one expired token for it. The token's EncryptedToken is
-// decryptable by the vault (real AES-256-GCM via the given encryptor),
-// and EncryptedRefreshToken holds a known plaintext ("the-refresh") so
-// the test can assert what the refresher receives.
+// seedAccountAndExpiredToken inserts a fresh oauth_connections row +
+// platform_account row (linked to it) + one expired token. The token's
+// EncryptedToken is decryptable by the vault (real AES-256-GCM via
+// the given encryptor), and EncryptedRefreshToken holds a known
+// plaintext ("the-refresh") so the test can assert what the
+// refresher receives.
+//
+// P0#3 retarget: every row now carries the canonical
+// oauth_connection_id — the platform_accounts → oauth_connections
+// lineage is populated, and tokens.oauth_connection_id is NOT NULL
+// per migration 053's SET NOT NULL invariant.
 func seedAccountAndExpiredToken(t *testing.T, db *sql.DB, enc *crypto.Encryptor, refreshPlaintext string) int64 {
 	t.Helper()
 	ctx := context.Background()
+	resourceID := fmt.Sprintf("iact-%d", time.Now().UnixNano())
+	var connID int64
+	if err := db.QueryRowContext(ctx,
+		`INSERT INTO oauth_connections (user_id, provider, provider_resource_id) VALUES (1, 'instagram', $1) RETURNING id`,
+		resourceID,
+	).Scan(&connID); err != nil {
+		t.Fatalf("insert oauth_connection: %v", err)
+	}
 	var accountID int64
 	if err := db.QueryRowContext(ctx,
-		`INSERT INTO platform_accounts (user_id, platform, platform_user_id) VALUES (1, 'instagram', $1) RETURNING id`,
-		fmt.Sprintf("iact-%d", time.Now().UnixNano()),
+		`INSERT INTO platform_accounts (user_id, platform, platform_user_id, oauth_connection_id) VALUES (1, 'instagram', $2, $1) RETURNING id`,
+		connID, resourceID,
 	).Scan(&accountID); err != nil {
 		t.Fatalf("insert platform_account: %v", err)
 	}
@@ -157,9 +183,9 @@ func seedAccountAndExpiredToken(t *testing.T, db *sql.DB, enc *crypto.Encryptor,
 	// Insert with expires_at 1 minute in the PAST so the slow path
 	// is taken immediately (no fast-path short-circuit).
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO tokens (platform_account_id, token_type, encrypted_token, encrypted_refresh_token, expires_at)
-		 VALUES ($1, $2, $3, $4, NOW() - INTERVAL '1 minute')`,
-		accountID, models.TokenTypeBearer, encAccess, encRefresh,
+		`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW() - INTERVAL '1 minute')`,
+		accountID, connID, models.TokenTypeBearer, encAccess, encRefresh,
 	); err != nil {
 		t.Fatalf("insert token: %v", err)
 	}

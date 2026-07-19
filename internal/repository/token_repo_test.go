@@ -65,39 +65,39 @@ func TestTokenRepository_DeleteToken_NotFound(t *testing.T) {
 	}
 }
 
-// TestTokenRepository_DeleteAllTokensForPlatformAccount_Success covers
+// TestTokenRepository_DeleteAllTokensForOAuthConnection_Success covers
 // the bulk-delete happy path: 3 rows for the platform_account → nil.
 // Different from the singleton path because RowsAffected can be any
 // positive integer here.
-func TestTokenRepository_DeleteAllTokensForPlatformAccount_Success(t *testing.T) {
+func TestTokenRepository_DeleteAllTokensForOAuthConnection_Success(t *testing.T) {
 	db, mock := newMockTokenDB(t)
 	repo := repository.NewTokenRepository(db)
 
-	mock.ExpectExec(`DELETE FROM tokens WHERE platform_account_id = $1`).
+	mock.ExpectExec(`DELETE FROM tokens WHERE oauth_connection_id = $1`).
 		WithArgs(int64(7)).
 		WillReturnResult(sqlmock.NewResult(0, 3))
 
-	if err := repo.DeleteAllTokensForPlatformAccount(7); err != nil {
-		t.Fatalf("DeleteAllTokensForPlatformAccount: %v", err)
+	if err := repo.DeleteAllTokensForOAuthConnection(7); err != nil {
+		t.Fatalf("DeleteAllTokensForOAuthConnection: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
 	}
 }
 
-// TestTokenRepository_DeleteAllTokensForPlatformAccount_NotFound locks
+// TestTokenRepository_DeleteAllTokensForOAuthConnection_NotFound locks
 // in the audit contract: zero rows match → ErrTokenNotFound wrapped
 // with platform_account_id. Callers (logout / revoke) should treat
 // this as a non-fatal idempotent no-op via errors.Is.
-func TestTokenRepository_DeleteAllTokensForPlatformAccount_NotFound(t *testing.T) {
+func TestTokenRepository_DeleteAllTokensForOAuthConnection_NotFound(t *testing.T) {
 	db, mock := newMockTokenDB(t)
 	repo := repository.NewTokenRepository(db)
 
-	mock.ExpectExec(`DELETE FROM tokens WHERE platform_account_id = $1`).
+	mock.ExpectExec(`DELETE FROM tokens WHERE oauth_connection_id = $1`).
 		WithArgs(int64(999)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	err := repo.DeleteAllTokensForPlatformAccount(999)
+	err := repo.DeleteAllTokensForOAuthConnection(999)
 	if err == nil {
 		t.Fatal("expected sentinel error, got nil")
 	}

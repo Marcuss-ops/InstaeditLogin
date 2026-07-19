@@ -20,9 +20,16 @@ func NewTokenRepository(db *sql.DB) *TokenRepository {
 }
 
 // SaveToken saves a new encrypted token for a platform account and prunes
-// older rows for the same (platform_account_id, token_type) so the table does
+// older rows for the same (oauth_connection_id, token_type) so the table does
 // not grow unbounded across refreshes. Encrypted refresh tokens are stored
 // alongside access tokens when present (PostgreSQL treats nil []byte as NULL bytea).
+//
+// Cryptographic invariant (P0#3): the encrypted_token +
+// encrypted_refresh_token columns are byte-for-byte preserved across
+// the migration — the encryptor key ids + envelope format are
+// unchanged. Only the indexing key has shifted from
+// platform_account_id to oauth_connection_id; the ciphertext bytes
+// themselves are not re-encrypted by this method.
 func (r *TokenRepository) SaveToken(token *models.Token) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -35,9 +42,9 @@ func (r *TokenRepository) SaveToken(token *models.Token) error {
 	}()
 
 	err = tx.QueryRow(
-		`INSERT INTO tokens (platform_account_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at`,
-		token.PlatformAccountID, token.TokenType, token.EncryptedToken,
+		`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`,
+		token.PlatformAccountID, token.OAuthConnectionID, token.TokenType, token.EncryptedToken,
 		token.EncryptedRefreshToken, token.ExpiresAt, pq.Array(token.Scopes),
 	).Scan(&token.ID, &token.CreatedAt)
 	if err != nil {
@@ -45,8 +52,8 @@ func (r *TokenRepository) SaveToken(token *models.Token) error {
 	}
 
 	if _, err = tx.Exec(
-		`DELETE FROM tokens WHERE platform_account_id = $1 AND token_type = $2 AND id <> $3`,
-		token.PlatformAccountID, token.TokenType, token.ID,
+		`DELETE FROM tokens WHERE oauth_connection_id = $1 AND token_type = $2 AND id <> $3`,
+		token.OAuthConnectionID, token.TokenType, token.ID,
 	); err != nil {
 		return fmt.Errorf("failed to prune older tokens: %w", err)
 	}
@@ -57,17 +64,23 @@ func (r *TokenRepository) SaveToken(token *models.Token) error {
 	return nil
 }
 
-// FindLatestToken finds the most recent token for a platform account of a given type.
-// The encrypted refresh token is included (may be nil if the platform did not issue one).
-func (r *TokenRepository) FindLatestToken(platformAccountID int64, tokenType string) (*models.Token, error) {
+// FindLatestToken finds the most recent token for an oauth connection of a given
+// type. The encrypted refresh token is included (may be nil if the platform did
+// not issue one).
+//
+// P0#3 retarget: arguments are keyed by oauth_connection_id (the
+// canonical grant lineage). Pre-053 callers passed platform_account_id
+// — the vault's public API keeps that on the wire and resolves to
+// oauth_connection_id internally before reaching this method.
+func (r *TokenRepository) FindLatestToken(oauthConnectionID int64, tokenType string) (*models.Token, error) {
 	token := &models.Token{}
 	err := r.db.QueryRow(
-		`SELECT id, platform_account_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes, created_at
+		`SELECT id, oauth_connection_id, platform_account_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes, created_at
 		 FROM tokens
-		 WHERE platform_account_id = $1 AND token_type = $2
+		 WHERE oauth_connection_id = $1 AND token_type = $2
 		 ORDER BY created_at DESC LIMIT 1`,
-		platformAccountID, tokenType,
-	).Scan(&token.ID, &token.PlatformAccountID, &token.TokenType,
+		oauthConnectionID, tokenType,
+	).Scan(&token.ID, &token.OAuthConnectionID, &token.PlatformAccountID, &token.TokenType,
 		&token.EncryptedToken, &token.EncryptedRefreshToken, &token.ExpiresAt, pq.Array(&token.Scopes), &token.CreatedAt)
 
 	if err == sql.ErrNoRows {
@@ -98,23 +111,29 @@ func (r *TokenRepository) DeleteToken(tokenID int64) error {
 	return nil
 }
 
-// DeleteAllTokensForPlatformAccount removes all tokens for a given
-// platform account. Returns ErrTokenNotFound (wrapped with
-// platform_account_id context) when zero rows match — this is the
-// legitimate "account has no tokens" idempotent case, e.g. on user
-// logout. Callers in revoke/disconnect flows should use
+// DeleteAllTokensForOAuthConnection removes all tokens for a given
+// oauth connection. Returns ErrTokenNotFound (wrapped with
+// oauth_connection_id context) when zero rows match — this is the
+// legitimate "connection has no tokens" idempotent case, e.g. on
+// user logout. Callers in revoke/disconnect flows should use
 // errors.Is(err, ErrTokenNotFound) to treat this as non-fatal.
-func (r *TokenRepository) DeleteAllTokensForPlatformAccount(platformAccountID int64) error {
-	result, err := r.db.Exec(`DELETE FROM tokens WHERE platform_account_id = $1`, platformAccountID)
+//
+// P0#3 retarget: was previously DeleteAllTokensForPlatformAccount
+// (keyed by platform_account_id); the @043 oauth_connections lineage
+// made the grant the more correct anchor, and migration 053
+// transitioned the tokens table itself to oauth_connection_id FK,
+// so this method's key matches the new schema.
+func (r *TokenRepository) DeleteAllTokensForOAuthConnection(oauthConnectionID int64) error {
+	result, err := r.db.Exec(`DELETE FROM tokens WHERE oauth_connection_id = $1`, oauthConnectionID)
 	if err != nil {
-		return fmt.Errorf("failed to delete tokens for platform account: %w", err)
+		return fmt.Errorf("failed to delete tokens for oauth connection: %w", err)
 	}
 	n, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("failed to read rows affected: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("%w: platform_account_id=%d", ErrTokenNotFound, platformAccountID)
+		return fmt.Errorf("%w: oauth_connection_id=%d", ErrTokenNotFound, oauthConnectionID)
 	}
 	return nil
 }
