@@ -39,8 +39,20 @@ import (
 // mockUserStore is a PublisherUserStore with a configurable lookup.
 // Pass into NewPublishWorker / NewReconcileWorker via the userRepo
 // argument; both share the same FindPlatformAccountByID contract.
+//
+// Taglio P0#3: added MarkReauthRequiredFn + a counter so tests can
+// assert on whether the worker flagged the platform_account
+// reauth_required after a YouTube channel binding mismatch. The
+// counter is increment-protected because some tests drive multiple
+// targets concurrently.
 type mockUserStore struct {
-	findPlatformAccountFn func(id int64) (*models.PlatformAccount, error)
+	mu                       sync.Mutex
+	findPlatformAccountFn    func(id int64) (*models.PlatformAccount, error)
+	markReauthRequiredFn     func(ctx context.Context, id int64, code, message string) error
+	markReauthRequiredCalls  int
+	lastMarkReauthCode       string
+	lastMarkReauthMessage    string
+	lastMarkReauthAccountID  int64
 }
 
 func (m *mockUserStore) FindPlatformAccountByID(id int64) (*models.PlatformAccount, error) {
@@ -48,6 +60,27 @@ func (m *mockUserStore) FindPlatformAccountByID(id int64) (*models.PlatformAccou
 		return nil, errors.New("FindPlatformAccountByID not implemented in this test")
 	}
 	return m.findPlatformAccountFn(id)
+}
+
+// MarkReauthRequired (P0#3 server-side YouTube channel binding
+// check) delegates to the configured function. Tests assert on
+// either the returned error, the recorded call count, or the
+// (code, message) passed by the worker. The default (no fn
+// configured) succeeds silently so existing tests that don't
+// exercise the channel-binding check keep their prior assertion
+// surface — the new interface method compiles in cleanly without
+// disrupting the publisher flow.
+func (m *mockUserStore) MarkReauthRequired(ctx context.Context, id int64, code, message string) error {
+	m.mu.Lock()
+	m.markReauthRequiredCalls++
+	m.lastMarkReauthCode = code
+	m.lastMarkReauthMessage = message
+	m.lastMarkReauthAccountID = id
+	m.mu.Unlock()
+	if m.markReauthRequiredFn == nil {
+		return nil
+	}
+	return m.markReauthRequiredFn(ctx, id, code, message)
 }
 
 // ------------------------------------------------------------------
@@ -71,6 +104,13 @@ func (b *baseMockProvider) Name() string { return b.platform }
 // and there is no async state machine to drive.
 //
 // For TikTok-style async platforms, use mockAsyncProvider below.
+//
+// Taglio P0#3: added an OPTIONAL validateChannelBindingFn +
+// ValidateChannelBinding method so the same struct doubles as a
+// services.YouTubeChannelBinder. Tests that exercise the YouTube
+// pre-upload channel binding check set the fn; tests that don't
+// (Instagram, Twitter, etc.) leave it nil and ValidateChannelBinding
+// returns nil — the existing publish path proceeds unaffected.
 type mockProvider struct {
 	mu sync.Mutex
 	baseMockProvider
@@ -83,6 +123,20 @@ type mockProvider struct {
 	// forwarded. Tests assert on fields like payload.IdempotencyKey
 	// (Taglio 4.7 LEVEL 2 stamp-and-forward invariant).
 	capturedPayload *models.PublishPayload
+	// validateChannelBindingFn (P0#3) — when non-nil, the worker's
+	// YouTube pre-upload binding check delegates to this function.
+	// When nil (default), ValidateChannelBinding returns nil and the
+	// publish path proceeds as if the check passed.
+	validateChannelBindingFn func(ctx context.Context, accessToken, expectedChannelID string) error
+	// validateChannelBindingCalls — mu-protected counter for tests
+	// asserting the check was invoked exactly once per target.
+	validateChannelBindingCalls int
+	// capturedAccessToken / capturedExpectedChannelID record the
+	// inputs to ValidateChannelBinding so tests can assert the
+	// worker forwarded the post-renew access_token + the platform
+	// account's platform_user_id (not stale values).
+	capturedAccessToken      string
+	capturedExpectedChannel  string
 }
 
 func (m *mockProvider) GetLoginURL(state string) string {
@@ -106,6 +160,28 @@ func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID 
 		return nil, errors.New("Publish not implemented in this test")
 	}
 	return m.publishFn(ctx, accessToken, platformUserID, payload)
+}
+
+// ValidateChannelBinding (P0#3) implements services.YouTubeChannelBinder
+// when the test has set validateChannelBindingFn. When the fn is nil
+// (default for non-YouTube tests), returns nil so the worker's
+// publish path proceeds unchanged. Tests that exercise the mismatch /
+// transient path set the fn accordingly.
+//
+// captures accessToken + expectedChannelID so tests can assert the
+// worker forwarded the post-renew token (NOT a stale pre-renew
+// value) and the platform_account.platform_user_id (NOT a hard-coded
+// placeholder).
+func (m *mockProvider) ValidateChannelBinding(ctx context.Context, accessToken, expectedChannelID string) error {
+	m.mu.Lock()
+	m.validateChannelBindingCalls++
+	m.capturedAccessToken = accessToken
+	m.capturedExpectedChannel = expectedChannelID
+	m.mu.Unlock()
+	if m.validateChannelBindingFn == nil {
+		return nil
+	}
+	return m.validateChannelBindingFn(ctx, accessToken, expectedChannelID)
 }
 
 // mockAsyncProvider (Taglio 4.2) satisfies services.AsyncPublisher

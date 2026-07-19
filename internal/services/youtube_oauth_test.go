@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -796,6 +798,143 @@ func TestYouTubeBuildUploadMetadata_PastPublishAt_Ignored(t *testing.T) {
 	}
 	if _, exists := status["publishAt"]; exists {
 		t.Errorf("publishAt should not be set for past timestamps")
+	}
+}
+
+// TestYouTubeValidateChannelBinding_Match verifies that a single-
+// channel grant returns nil when the channel id matches the expected
+// id. exercises the happy path of services.YouTubeChannelBinder.
+func TestYouTubeValidateChannelBinding_Match(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(youtubeChannelsResponse{
+			Items: []youtubeChannel{
+				{ID: "UCexpectedChanID", Snippet: youtubeChannelSnippet{Title: "My Channel"}},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	if err := svc.ValidateChannelBinding(context.Background(), "fresh-access-token", "UCexpectedChanID"); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+// TestYouTubeValidateChannelBinding_MultiChannelIncludesExpected
+// verifies the multi-channel case (a single grant can manage up to
+// 100 channels). The expected id is present in the set, so the check
+// succeeds even though N=3 channels are returned.
+func TestYouTubeValidateChannelBinding_MultiChannelIncludesExpected(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(youtubeChannelsResponse{
+			Items: []youtubeChannel{
+				{ID: "UCmanagedByA", Snippet: youtubeChannelSnippet{Title: "First"}},
+				{ID: "UCexpectedChanID", Snippet: youtubeChannelSnippet{Title: "Second"}},
+				{ID: "UCmanagedByB", Snippet: youtubeChannelSnippet{Title: "Third"}},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	if err := svc.ValidateChannelBinding(context.Background(), "fresh-access-token", "UCexpectedChanID"); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+// TestYouTubeValidateChannelBinding_Mismatch verifies that a grant
+// reporting only DIFFERENT channel ids returns ErrYouTubeChannelMismatch
+// (detectable via errors.Is). The expected id is NOT in the returned set.
+func TestYouTubeValidateChannelBinding_Mismatch(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(youtubeChannelsResponse{
+			Items: []youtubeChannel{
+				{ID: "UCdifferentChanID", Snippet: youtubeChannelSnippet{Title: "Some Other Channel"}},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	err := svc.ValidateChannelBinding(context.Background(), "fresh-access-token", "UCexpectedChanID")
+	if err == nil {
+		t.Fatalf("expected ErrYouTubeChannelMismatch, got nil")
+	}
+	if !errors.Is(err, ErrYouTubeChannelMismatch) {
+		t.Errorf("expected errors.Is to match ErrYouTubeChannelMismatch, got error: %v", err)
+	}
+	// Sanity: the diagnostic message includes BOTH the expected id and
+	// the actual channel set so the operator sees what drifted.
+	if !strings.Contains(err.Error(), "UCexpectedChanID") {
+		t.Errorf("expected error message to include expected channel id, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "UCdifferentChanID") {
+		t.Errorf("expected error message to include actual channel id, got %q", err.Error())
+	}
+}
+
+// TestYouTubeValidateChannelBinding_ZeroChannels verifies that an
+// empty channels.list response is treated as a structural mismatch
+// (the grant has lost all bindings). Returns ErrYouTubeChannelMismatch.
+func TestYouTubeValidateChannelBinding_ZeroChannels(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(youtubeChannelsResponse{Items: []youtubeChannel{}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	err := svc.ValidateChannelBinding(context.Background(), "fresh-access-token", "UCexpectedChanID")
+	if !errors.Is(err, ErrYouTubeChannelMismatch) {
+		t.Fatalf("expected ErrYouTubeChannelMismatch, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "0 channels") {
+		t.Errorf("expected message to mention 0 channels, got %q", err.Error())
+	}
+}
+
+// TestYouTubeValidateChannelBinding_Transient5xx verifies that a
+// non-200 response from channels.list returns a plain error WITHOUT
+// wrapping ErrYouTubeChannelMismatch. The worker must treat this as
+// transient and NOT flag the platform_account reauth_required.
+func TestYouTubeValidateChannelBinding_Transient5xx(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "google internal error", http.StatusServiceUnavailable)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	err := svc.ValidateChannelBinding(context.Background(), "fresh-access-token", "UCexpectedChanID")
+	if err == nil {
+		t.Fatalf("expected error on 5xx, got nil")
+	}
+	if errors.Is(err, ErrYouTubeChannelMismatch) {
+		t.Errorf("5xx must NOT wrap ErrYouTubeChannelMismatch (worker would flag reauth on transient); got %v", err)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("expected message to include status code 503, got %q", err.Error())
+	}
+}
+
+// TestYouTubeValidateChannelBinding_EmptyExpectedChannelID verifies
+// the empty-input guard: an empty expectedChannelID returns an error
+// without any HTTP round-trip.
+func TestYouTubeValidateChannelBinding_EmptyExpectedChannelID(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	if err := svc.ValidateChannelBinding(context.Background(), "token", ""); err == nil {
+		t.Fatal("expected error on empty expectedChannelID, got nil")
 	}
 }
 

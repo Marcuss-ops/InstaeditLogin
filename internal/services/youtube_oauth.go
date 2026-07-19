@@ -67,6 +67,88 @@ func (s *YouTubeOAuthService) PreferredTokenTypes() []string {
 	}
 }
 
+// ValidateChannelBinding implements services.YouTubeChannelBinder.
+// It calls channels.list?part=id&mine=true with a fresh access token
+// (the worker has already refreshed via the vault before calling)
+// and verifies the returned channel id set includes expectedChannelID.
+//
+// Behaviour matrix:
+//   - 200 OK with single matching channel → nil
+//   - 200 OK with multi-channel set INCLUDING expected → nil
+//     (a single Grant can manage up to 100 channels; the upload is
+//     bound to the one the operator selected)
+//   - 200 OK with 0 channels or NO match →
+//        fmt.Errorf("...%w...: expected %q, channels=[...]",
+//            ErrYouTubeChannelMismatch, expectedChannelID, ...)
+//   - 200 OK with 0 channels (grant lost all bindings) → same sentinel
+//   - Non-200 / network / decode error → plain wrapped error,
+//     DO NOT use the sentinel so the worker treats it as transient.
+//
+// The method is a single GET; it does NOT re-refresh the access token
+// to avoid double-quota usage (the publish worker already refreshed
+// in step 5 of publishTarget). The token MUST therefore be a fresh
+// bearer token; OAuth-only access tokens (no refresh) are not
+// supported on this path — they're an immediate 401 and the worker
+// should treat them as reauth-required via the existing token-refresh
+// error path.
+func (s *YouTubeOAuthService) ValidateChannelBinding(ctx context.Context, accessToken, expectedChannelID string) error {
+	if expectedChannelID == "" {
+		return fmt.Errorf("youtube channel binding check: empty expected channel id")
+	}
+
+	params := url.Values{}
+	params.Set("part", "id")
+	params.Set("mine", "true")
+	params.Set("maxResults", "50")
+
+	reqURL := "https://www.googleapis.com/youtube/v3/channels?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return fmt.Errorf("youtube channel binding: create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("youtube channel binding: channels.list request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return fmt.Errorf("youtube channel binding: channels.list returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result youtubeChannelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("youtube channel binding: decode channels.list: %w", err)
+	}
+
+	if len(result.Items) == 0 {
+		// Grant has zero channels: structurally invalid. Flag as
+		// mismatch (operators should see reauth_required immediately
+		// — there is no acceptable network-retry semantics here).
+		return fmt.Errorf("%w: expected %q, grant has 0 channels", ErrYouTubeChannelMismatch, expectedChannelID)
+	}
+
+	for _, ch := range result.Items {
+		if ch.ID == expectedChannelID {
+			return nil // bound to expected channel — proceed with upload
+		}
+	}
+
+	ids := make([]string, 0, len(result.Items))
+	for _, ch := range result.Items {
+		ids = append(ids, ch.ID)
+	}
+	return fmt.Errorf("%w: expected %q, grant-bound channels=%v", ErrYouTubeChannelMismatch, expectedChannelID, ids)
+}
+
+// Compile-time assertion: YouTubeOAuthService satisfies the
+// services.YouTubeChannelBinder capability interface. Caught by
+// `go vet`, not at runtime.
+var _ YouTubeChannelBinder = (*YouTubeOAuthService)(nil)
+
 func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
 }
@@ -278,15 +360,7 @@ func (s *YouTubeOAuthService) StartPublish(ctx context.Context, accessToken, pla
 	}
 	slog.Info("YouTube: source video info", "size", fileSize, "content_type", contentType)
 
-	metadata := map[string]interface{}{
-		"snippet": map[string]string{
-			"title":       defaultVideoTitle(payload),
-			"description": payload.Text,
-		},
-		"status": map[string]string{
-			"privacyStatus": normalizeYouTubePrivacyLevel(payload.PrivacyLevel),
-		},
-	}
+	metadata := s.buildUploadMetadata(payload)
 
 	uploadURL, err := s.initiateResumableSession(ctx, accessToken, metadata, fileSize, contentType)
 	if err != nil {
@@ -686,6 +760,31 @@ func (s *YouTubeOAuthService) queryUploadStatus(ctx context.Context, uploadURL s
 	}
 
 	return lastByte + 1, nil
+}
+
+// buildUploadMetadata constructs the JSON metadata payload for a YouTube
+// resumable upload. When PublishAt is set and in the future, the video is
+// uploaded as private and YouTube is asked to make it public at that time.
+func (s *YouTubeOAuthService) buildUploadMetadata(payload models.PublishPayload) map[string]interface{} {
+	status := map[string]string{
+		"privacyStatus": normalizeYouTubePrivacyLevel(payload.PrivacyLevel),
+	}
+
+	// YouTube only accepts publishAt when the video is private and has
+	// never been published before. If a future publish time is provided,
+	// force privacy to private and set publishAt.
+	if payload.PublishAt != nil && payload.PublishAt.After(s.now()) {
+		status["privacyStatus"] = "private"
+		status["publishAt"] = payload.PublishAt.UTC().Format(time.RFC3339)
+	}
+
+	return map[string]interface{}{
+		"snippet": map[string]string{
+			"title":       defaultVideoTitle(payload),
+			"description": payload.Text,
+		},
+		"status": status,
+	}
 }
 
 func defaultVideoTitle(payload models.PublishPayload) string {

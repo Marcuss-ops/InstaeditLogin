@@ -122,6 +122,17 @@ type PublisherUserStore interface {
 	// FindPlatformAccountByID returns (nil, nil) when no row matches, matching
 	// the codebase's repository convention (nil/nil not-found, no ErrNoRows).
 	FindPlatformAccountByID(id int64) (*models.PlatformAccount, error)
+	// MarkReauthRequired (P0#3 server-side channel binding check)
+	// atomically flips the platform_account's status to
+	// 'reauth_required', stamps reauth_required_at with NOW(), and
+	// records the failure code + message. Called by the publish
+	// worker when a YouTube pre-upload channel binding check fails
+	// (or any future per-platform credential rotation that is not
+	// transient). Other platforms (Twitter, LinkedIn, etc.) may add
+	// similar paths using the same method. Idempotent: re-flags with
+	// a fresh reauth_required_at on each call (caller does NOT need
+	// to read-then-write).
+	MarkReauthRequired(ctx context.Context, id int64, code, message string) error
 }
 
 // PublishWorker periodically dispatches scheduled posts to their
@@ -367,6 +378,68 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		oauthToken = pageToken
 	}
 
+	// 5b. YOUTUBE ONLY — P0#3 server-side channel binding check.
+	//
+	// The OAuth grant we just refreshed MUST be bound to the SAME
+	// channel as platform_account.platform_user_id. The refresh above
+	// doesn't tell us; only channels.list?mine=true can confirm.
+	// Without this check, a grant that was silently re-bound to a
+	// different channel (Google rotation, operator migration, fraud)
+	// would happily upload the video to the wrong channel.
+	//
+	// Placement rationale:
+	//   - AFTER refresh + page-token override so oauthToken is the
+	//     final access token we will pass to Publish (the check uses
+	//     it AND the publish uses it; no double-refresh).
+	//   - BEFORE the idempotency-key stamp so a flag-failed upload
+	//     does NOT stamp a key (the post_target is going to
+	//     'failed', not 'publishing'; no future retries should
+	//     dedup against it).
+	//
+	// On ErrYouTubeChannelMismatch (channel id NOT in the grant's
+	// channel set): flag the platform_account reauth_required (so
+	// the dashboard prompts the operator to reconnect) AND mark
+	// this post_target failed (so the worker stops trying).
+	//
+	// On any other error (5xx, network, decode): treat as transient
+	// — DO NOT flag reauth — and let the next tick retry.
+	if account.Platform == models.PlatformYouTube {
+		raw, hasRaw := w.router.Get(account.Platform)
+		if hasRaw {
+			if binder, ok := raw.(services.YouTubeChannelBinder); ok {
+				if bindErr := binder.ValidateChannelBinding(ctx, oauthToken.AccessToken, account.PlatformUserID); bindErr != nil {
+					if errors.Is(bindErr, services.ErrYouTubeChannelMismatch) {
+						if flagErr := w.userRepo.MarkReauthRequired(ctx, account.ID, "youtube_channel_mismatch", bindErr.Error()); flagErr != nil {
+							// Soft error — the post_target still goes
+							// to 'failed' below; we just couldn't
+							// stamp the platform_account's flag. Log
+							// so the operator sees both signals.
+							w.logger.Warn("could not flag platform_account reauth_required after youtube channel mismatch",
+								"platform_account_id", account.ID, "post_id", target.PostID, "flag_error", flagErr)
+						}
+						w.logger.Warn("youtube channel binding mismatch; refusing upload",
+							"target_id", target.ID, "post_id", target.PostID,
+							"platform_account_id", account.ID,
+							"expected_channel_id", account.PlatformUserID,
+							"error", bindErr)
+					} else {
+						w.logger.Warn("youtube channel binding check failed (transient); will retry",
+							"target_id", target.ID, "post_id", target.PostID,
+							"platform_account_id", account.ID, "error", bindErr)
+					}
+					return w.markFailed(target, "youtube channel binding check: "+bindErr.Error())
+				}
+			}
+			// If the registered provider doesn't implement the
+			// binder (older test fixtures, future non-YouTube
+			// provider that accidentally registers under the
+			// youtube name), the check is skipped — the existing
+			// publish path proceeds. New YouTubeOAuthService
+			// implementations MUST satisfy the compile-time
+			// assertion in services/youtube_oauth.go.
+		}
+	}
+
 	// 6. Build payload + publish. MediaURL goes through as VideoURL (the
 	// payload's ImageURL branch is reserved for image-only posts that
 	// don't have a content_type column — future enhancement).
@@ -427,8 +500,9 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		}
 	}
 	payload := models.PublishPayload{
-		Text:  post.Caption,
-		Title: post.Title,
+		Text:      post.Caption,
+		Title:     post.Title,
+		PublishAt: post.ScheduledAt,
 	}
 	if post.MediaURL != "" {
 		payload.VideoURL = post.MediaURL
