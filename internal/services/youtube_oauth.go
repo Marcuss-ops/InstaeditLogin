@@ -56,6 +56,17 @@ func (s *YouTubeOAuthService) now() time.Time {
 
 func (s *YouTubeOAuthService) Name() string { return models.PlatformYouTube }
 
+// PreferredTokenTypes declares that YouTube stores the OAuth grant as a
+// bearer token. Validation checks bearer first, then falls back to the
+// other common token types for backwards compatibility.
+func (s *YouTubeOAuthService) PreferredTokenTypes() []string {
+	return []string{
+		models.TokenTypeBearer,
+		models.TokenTypeShortLived,
+		models.TokenTypeLongLived,
+	}
+}
+
 func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
 }

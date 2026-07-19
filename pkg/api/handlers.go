@@ -1749,16 +1749,14 @@ func (r *Router) handleValidateAccount(w http.ResponseWriter, req *http.Request)
 	// tokens-expired is "expired"; neither found nor "expired" (i.e.
 	// decrypt error or DB unreachable) is "reauth_required".
 	//
-	// Token types:
-	//   - short_lived  — YouTube / Twitter / TikTok (legacy)
-	//   - long_lived   — Meta
-	//   - bearer       — YouTube (canonical)
-	//   - page_access  — Facebook Page Access Tokens
-	tokenTypes := []string{
-		models.TokenTypeShortLived,
-		models.TokenTypeLongLived,
-		models.TokenTypeBearer,
-		models.TokenTypePageAccess,
+	// Providers can declare their preferred token types via the
+	// TokenPolicyProvider capability; otherwise we fall back to the
+	// union of token types used across all platforms.
+	var tokenTypes []string
+	if tp, ok := r.capabilities.TokenPolicy(account.Platform); ok {
+		tokenTypes = tp.PreferredTokenTypes()
+	} else {
+		tokenTypes = services.DefaultTokenTypes()
 	}
 	active := false
 	expired := false

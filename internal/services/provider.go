@@ -263,13 +263,14 @@ type CapabilityRouter struct {
 // interface is consumed by pkg/api/handlers.go handleCallback to
 // create one PlatformAccount per discovered page.
 type capabilities struct {
-	raw      any
-	oauth    OAuthProvider
-	publish  Publisher
-	async    AsyncPublisher
-	discover AccountDiscoverer
-	details  AccountDetailsProvider
-	content  AccountContentProvider
+	raw        any
+	oauth      OAuthProvider
+	publish    Publisher
+	async      AsyncPublisher
+	discover   AccountDiscoverer
+	details    AccountDetailsProvider
+	content    AccountContentProvider
+	tokenPolicy TokenPolicyProvider
 }
 
 // NewCapabilityRouter creates an empty router.
@@ -340,6 +341,9 @@ func (r *CapabilityRouter) Register(name string, p any) {
 	if cp, ok := p.(AccountContentProvider); ok {
 		entry.content = cp
 	}
+	if tp, ok := p.(TokenPolicyProvider); ok {
+		entry.tokenPolicy = tp
+	}
 	r.providers[name] = entry
 }
 
@@ -408,6 +412,17 @@ func (r *CapabilityRouter) AsyncPublisher(name string) (AsyncPublisher, bool) {
 		return nil, false
 	}
 	return e.async, true
+}
+
+// TokenPolicy returns the TokenPolicyProvider for name, or false. Used by
+// POST /api/v1/accounts/{id}/validate to determine which token types to
+// check for the platform.
+func (r *CapabilityRouter) TokenPolicy(name string) (TokenPolicyProvider, bool) {
+	e, ok := r.providers[name]
+	if !ok || e == nil || e.tokenPolicy == nil {
+		return nil, false
+	}
+	return e.tokenPolicy, true
 }
 
 // AccountDetails returns the AccountDetailsProvider for name, or false.

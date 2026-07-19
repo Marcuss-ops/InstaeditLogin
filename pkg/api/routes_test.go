@@ -69,6 +69,18 @@ type mockDiscoverableProvider struct {
 	discoverFn func(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error)
 }
 
+// mockTokenPolicyProvider extends mockProvider with TokenPolicyProvider.
+// Use it when testing handleValidateAccount's provider-specific token
+// type resolution.
+type mockTokenPolicyProvider struct {
+	mockProvider
+	preferredTokenTypes []string
+}
+
+func (m *mockTokenPolicyProvider) PreferredTokenTypes() []string {
+	return m.preferredTokenTypes
+}
+
 func (m *mockDiscoverableProvider) DiscoverAccounts(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error) {
 	if m.discoverFn != nil {
 		return m.discoverFn(ctx, accessToken, platformUserID)
@@ -2875,6 +2887,53 @@ func TestOAuthCallback_YoutubeChannelAttachesChannelID(t *testing.T) {
 	}
 	if savedAccountID != 42 {
 		t.Errorf("saved account ID: want 42, got %d", savedAccountID)
+	}
+}
+
+// TestHandleValidateAccount_UsesProviderTokenPolicy proves that when a
+// provider implements TokenPolicyProvider, handleValidateAccount checks
+// only the declared token types.
+func TestHandleValidateAccount_UsesProviderTokenPolicy(t *testing.T) {
+	svc := &mockProvider{platform: "youtube"}
+	owner := ownedAccountFixture(1, "youtube")
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		getFn: func(ctx context.Context, id int64, tt string) (*models.OAuthToken, error) {
+			if tt == models.TokenTypeBearer {
+				return &models.OAuthToken{AccessToken: "test-token"}, nil
+			}
+			return nil, fmt.Errorf("token not found")
+		},
+	}
+
+	capRouter := services.NewCapabilityRouter()
+	capRouter.Register("youtube", &mockTokenPolicyProvider{
+		mockProvider:        *svc,
+		preferredTokenTypes: []string{models.TokenTypeBearer},
+	})
+
+	r := NewRouter(capRouter, store, auth.NewManager(testJWTSecret, 24), "", nil, WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/validate", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode validate response: %v", err)
+	}
+	if resp.Status != models.AccountStatusActive {
+		t.Errorf("status: want active, got %q", resp.Status)
 	}
 }
 

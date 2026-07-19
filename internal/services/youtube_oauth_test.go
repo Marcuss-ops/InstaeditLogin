@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
 func youtubeTestCfg() *config.Config {
@@ -112,6 +113,22 @@ func TestYouTubeLoginURL_ReconnectModeForcesConsent(t *testing.T) {
 	}
 	if containsPrompt(prompt, "select_account") {
 		t.Errorf("prompt should NOT contain select_account in reconnect mode, got: %s", prompt)
+	}
+}
+
+// TestYouTubePreferredTokenTypes verifies that YouTube declares its
+// canonical token types for account validation.
+func TestYouTubePreferredTokenTypes(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	types := svc.PreferredTokenTypes()
+	if len(types) == 0 {
+		t.Fatal("expected at least one preferred token type")
+	}
+	if types[0] != models.TokenTypeBearer {
+		t.Errorf("first token type: want %q, got %q", models.TokenTypeBearer, types[0])
 	}
 }
 
