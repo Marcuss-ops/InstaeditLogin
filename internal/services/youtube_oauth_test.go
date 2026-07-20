@@ -1086,11 +1086,17 @@ func TestYouTubeValidateChannelBinding_SafetyCapReachedAt200_ReturnsMismatch(t *
 	if handlerCalls != 4 {
 		t.Errorf("loop must short-circuit before page 5; want 4 page(s) requested, got %d", handlerCalls)
 	}
-	// Guard against the loop overshooting into a 5th page. The 4th
-	// request MUST carry pageToken=tok-5 (would-have-been-next if the
-	// cap had not short-circuited); the test asserts we never read it.
-	if lastPageToken != "tok-5" {
-		t.Errorf("4th request pageToken: want tok-5 (cap short-circuit), got %q", lastPageToken)
+	// Production reads `result.NextPageToken` from page N to drive page N+1.
+	// The handler emits `nextPageToken=tok-%d` based on handlerCalls+1, so:
+	//   request 1 in=""  -> out=tok-2; request 2 in=tok-2 -> out=tok-3;
+	//   request 3 in=tok-3 -> out=tok-4; request 4 in=tok-4 -> out=tok-5.
+	// After 4 the safety cap fires and the loop stops. The 4th request's
+	// incoming pageToken is therefore "tok-4" -- NOT "tok-5" (which would
+	// be the would-have-been 5th request's incoming, but the cap prevents it).
+	// Mirrors the sibling PaginationAcrossThreePages test (lastPageToken
+	// == "page3t" after 3 requests where request 3's incoming is "page3t").
+	if lastPageToken != "tok-4" {
+		t.Errorf("4th request pageToken: want tok-4 (cap short-circuit at request 4); got %q", lastPageToken)
 	}
 }
 
