@@ -553,6 +553,25 @@ func (w *UploadWorker) handleProcessingError(
 	)
 
 	errorCode := classifyUploadError(processErr)
+	// Task 5/10 — permanent-error fast-path. Drive files with
+	// capabilities.canDownload=false (and SHA / size / MIME mismatch
+	// failures from artifact_verify) wrap PermanentError via errors.Join
+	// upstream so the canDownload false case matches the same sentinel.
+	// Short-circuit to MarkDeadLetter WITHOUT consuming the retry
+	// budget — a non-downloadable file will not become downloadable on
+	// retry; burning attempt_count for ~5 min × 8 attempts (max_attempts
+	// envelope) before dead-letter triggers anyway is purely wasted
+	// wall-clock + DB log noise. Routed BEFORE the attempt-count gate
+	// so a single canDownload=false rejection lands the row in
+	// 'dead_letter' (= 'perm_error' per the docs/OPERATIONS.md
+	// runbook) on the very first failed tick.
+	if errors.Is(processErr, ErrPermanent) {
+		if markErr := w.jobRepo.MarkDeadLetter(ctx, job.ID, workerID, errorCode, processErr.Error()); markErr != nil {
+			w.logger.Error("upload worker: MarkDeadLetter (permanent) failed",
+				"pool", poolName, "job_id", job.ID, "error", markErr)
+		}
+		return
+	}
 	if job.AttemptCount >= job.MaxAttempts {
 		if markErr := w.jobRepo.MarkDeadLetter(ctx, job.ID, workerID, errorCode, processErr.Error()); markErr != nil {
 			w.logger.Error("upload worker: MarkDeadLetter failed",

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -90,8 +91,28 @@ func (s *AuthenticatedDriveSource) Inspect(ctx context.Context, job *models.Uplo
 	// mirrors the HTTP-layer policy: legacy files where the API
 	// cannot determine the boolean are NOT rejected (matches the
 	// godoc on google_drive_oauth.go::Capabilities).
+	//
+	// The returned error is intentionally multi-target via
+	// errors.Join so the upstream worker routing code can match on
+	// EITHER sentinel without parsing the message blob:
+	//   - errors.Is(err, services.ErrDriveNotDownloadable) — true
+	//     for the existing operator-triage dashboard grouping
+	//     (the MUST-be-rejected-but-MUST-not-be-MarkReadied contract).
+	//   - errors.Is(err, ErrPermanent) — true so the upload_worker's
+	//     handleProcessingError fast-paths to MarkDeadLetter on the
+	//     FIRST call, bypassing the retry budget. A canDownload=false
+	//     file is not going to become downloadable on retry — the
+	//     retry loop would only burn the attempt_count clock for the
+	//     ~5 min × 8 attempts the budget stretches to before
+	//     dead-letter kicks in anyway.
 	if md.Capabilities != nil && !md.Capabilities.CanDownload {
-		return nil, fmt.Errorf("%w: file %s (Drive reported capabilities.canDownload=false; check DLP rules / IRM / share-settings)", services.ErrDriveNotDownloadable, job.SourceID)
+		return nil, errors.Join(
+			fmt.Errorf("%w: file %s (Drive reported capabilities.canDownload=false; check DLP rules / IRM / share-settings)", services.ErrDriveNotDownloadable, job.SourceID),
+			PermanentError{
+				Code:    CodeDriveNotDownloadable,
+				Message: fmt.Sprintf("drive file %s reported capabilities.canDownload=false; cannot be ingested", job.SourceID),
+			},
+		)
 	}
 	size, err := strconv.ParseInt(md.Size, 10, 64)
 	if err != nil {

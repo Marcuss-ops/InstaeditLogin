@@ -323,12 +323,12 @@ func TestAuthenticatedDriveSource_Open_DownloadFails(t *testing.T) {
 // matrix surfaces loudly here.
 func TestAuthenticatedDriveSource_Inspect_CanDownloadFalse(t *testing.T) {
 	cases := []struct {
-		name           string
-		capabilities   *services.Capabilities
-		driveChecksum  string
-		wantErrMatch   bool              // true → errors.Is(ErrDriveNotDownloadable)
-		wantErrSubstr  string            // expected substring for the unexpected error case
-		wantSHAInMeta  string            // expected md.SHA256Hex (defense-in-depth: empty when Drive didn't surface)
+		name          string
+		capabilities  *services.Capabilities
+		driveChecksum string
+		wantErrMatch  bool   // true → errors.Is(ErrDriveNotDownloadable)
+		wantErrSubstr string // expected substring for the unexpected error case
+		wantSHAInMeta string // expected md.SHA256Hex (defense-in-depth: empty when Drive didn't surface)
 	}{
 		{
 			name:          "candownload_false_rejects_with_sentinel",
@@ -388,6 +388,29 @@ func TestAuthenticatedDriveSource_Inspect_CanDownloadFalse(t *testing.T) {
 				}
 				if !errors.Is(err, services.ErrDriveNotDownloadable) {
 					t.Errorf("err MUST wrap ErrDriveNotDownloadable (errors.Is contract for operator dashboard grouping), got %v", err)
+				}
+				// Task 5/10 follow-up: the canDownload=false reject
+				// MUST also be a PermanentError so the upload worker's
+				// handleProcessingError fast-paths to MarkDeadLetter on
+				// the FIRST tick (rather than burning the retry budget
+				// up to max_attempts × computeUploadBackoff before
+				// dead-letter kicks in). errors.Is(err, ErrPermanent)
+				// matches the sentinel defined in permanent_error.go::ErrPermanent.
+				if !errors.Is(err, ErrPermanent) {
+					t.Errorf("err MUST wrap ErrPermanent sentinel (Task 5/10 routing contract), got %v", err)
+				}
+				// Drill into the wrapped PermanentError struct so a
+				// regression that flips the Code value trips this
+				// assertion. Today the canonical Code is CodeDriveNotDownloadable
+				// (= "DRIVE_NOT_DOWNLOADABLE"); the dashboard filter by
+				// error_code breaks if a future change adds whitespace
+				// or renames the constant.
+				var pe PermanentError
+				if !errors.As(err, &pe) {
+					t.Errorf("err MUST unwrap to worker.PermanentError struct (so error_code taxonomy column carries the canonical Code), got %T %v", err, err)
+				}
+				if pe.Code != CodeDriveNotDownloadable {
+					t.Errorf("PermanentError.Code = %q; want %q (the canonical dashboard filter key)", pe.Code, CodeDriveNotDownloadable)
 				}
 				return
 			}

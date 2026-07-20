@@ -10,12 +10,12 @@ import (
 // the standard `error` type because the worker's failure-routing
 // logic needs to distinguish:
 //
-//   (a) transient errors — retry with backoff (network blip, 5xx,
-//       Velox download_url expired)
-//   (b) permanent errors — terminate via MarkDeadLetter (no retry
-//       would help) because the artifact itself violates the
-//       contract (size_mismatch, sha_mismatch, mime_mismatch)
-//   (c) programming errors — panic recovery path handles these
+//	(a) transient errors — retry with backoff (network blip, 5xx,
+//	    Velox download_url expired)
+//	(b) permanent errors — terminate via MarkDeadLetter (no retry
+//	    would help) because the artifact itself violates the
+//	    contract (size_mismatch, sha_mismatch, mime_mismatch)
+//	(c) programming errors — panic recovery path handles these
 //
 // PermanentError carries the (Code, Message) pair. Code is a stable
 // string ("ARTIFACT_SIZE_MISMATCH", "ARTIFACT_SHA256_MISMATCH",
@@ -57,4 +57,12 @@ const (
 	CodeArtifactSizeMismatch   = "ARTIFACT_SIZE_MISMATCH"
 	CodeArtifactSHA256Mismatch = "ARTIFACT_SHA256_MISMATCH"
 	CodeArtifactMIMEMismatch   = "ARTIFACT_MIME_MISMATCH"
+	// Task 5/10 — Drive canDownload=false path. Matched by
+	// errors.Is(err, ErrPermanent) on the canDownload reject branch
+	// (internal/worker/authenticated_drive_source.go::Inspect) so the
+	// upload worker's handleProcessingError fast-paths to
+	// MarkDeadLetter immediately, bypassing the retry budget. Same
+	// short-circuit as the SHA/size/mime mismatch categories — the
+	// file's bytes cannot be obtained so retries never help.
+	CodeDriveNotDownloadable = "DRIVE_NOT_DOWNLOADABLE"
 )
