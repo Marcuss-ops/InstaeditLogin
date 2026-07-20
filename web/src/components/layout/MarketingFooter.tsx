@@ -5,12 +5,12 @@ import { PLATFORM_REGISTRY } from "../marketing/PlatformLogos";
 const COLS: Array<{ heading: string; links: Array<{ l: string; to?: string; href?: string }> }> = [
   {
     heading: "Prodotto",
-    links: [
-      { l: "Pipeline AI", href: "/#pipeline" },
-      { l: "Workflow", href: "/#workflow" },
-      { l: "Features", href: "/#features" },
-      { l: "Per agenzie", href: "/#agency" },
-      { l: "Programmi", to: "/programs" },
+    links: [        { l: "Pipeline AI", href: "/#pipeline" },
+        { l: "Workflow", href: "/#workflow" },
+        { l: "Features", href: "/#features" },
+        { l: "Per agenzie", href: "/#agency" },
+        { l: "Programmi", to: "/programs" },
+        { l: "Mentoring", to: "/mentoring" },
     ],
   },
   {

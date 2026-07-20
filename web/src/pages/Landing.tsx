@@ -307,6 +307,7 @@ function Nav() {
     { label: "Features", href: "#features" },
     { label: "Agenzie", href: "#agency" },
     { label: "Programmi", to: "/programs" },
+    { label: "Mentoring", to: "/mentoring" },
     { label: "Chi siamo", href: "#who-are-we" },
   ];
 
@@ -920,6 +921,7 @@ function Footer() {
         { l: "Features", href: "#features" },
         { l: "Per agenzie", href: "#agency" },
         { l: "Programmi", to: "/programs" },
+        { l: "Mentoring", to: "/mentoring" },
       ],
     },
     {

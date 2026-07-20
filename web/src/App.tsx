@@ -6,6 +6,7 @@ import { Login } from "./pages/Login";
 import { PrivacyPolicy } from "./pages/PrivacyPolicy";
 import { TermsOfService } from "./pages/TermsOfService";
 import { Programs } from "./pages/Programs";
+import { Mentoring } from "./pages/Mentoring";
 import { InternalDashboard } from "./pages/internal/Dashboard";
 import { InternalLinking } from "./pages/internal/Linking";
 import { AccountDetailsPage } from "./pages/internal/AccountDetails";
@@ -42,6 +43,7 @@ function App() {
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/terms" element={<TermsOfService />} />
             <Route path="/programs" element={<Programs />} />
+            <Route path="/mentoring" element={<Mentoring />} />
 
             <Route
               path="/connections"
