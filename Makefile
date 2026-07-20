@@ -91,6 +91,24 @@ backend-test:
 test-integration:
 	go test -tags=integration -v -timeout 10m ./internal/database/... ./internal/worker/... ./internal/testutil/redis/...
 
+# Task 9/10: end-to-end pipeline suite. Spins up Postgres via
+# testcontainers-go + boots in-process httptest fakes for Drive /
+# YouTube / Velox. Drives the 7-scenario acceptance matrix pinned
+# by the source document (Drive ingest 201/no-dupes, crash+resume,
+# Velox idempotency, S3 verify, schedule gate, YouTube crash+resume,
+# Velox callback).
+#
+# Requires Docker on the runner. Local dev: install Docker
+# Desktop or use `make test-integration` which is hermetic.
+# CI: runs in the dedicated `e2e` job in
+# .github/workflows/integration.yml so the fast unit PR gate stays
+# untouched. ~5-15 s of container spin-up runs once per suite.
+#
+# Build tag `e2e` is required because tests/e2e/*.go is gated
+# behind `//go:build e2e` — `go test ./...` won't see them at all.
+test-e2e:
+	go test -tags=e2e -timeout 15m -v ./tests/e2e/...
+
 
 # Run frontend lint, tests and build
 frontend-test:

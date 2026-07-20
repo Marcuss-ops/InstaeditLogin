@@ -204,3 +204,49 @@ jobs:
           echo "  make lint-check"
           echo "  make test-integration"
           echo "  cd web && npm ci && npm run lint && npm run test && npm run build"
+
+  # ─── Task 9/10: E2E pipeline suite (Drive → Velox → S3 → callback)
+  # Separate job so the fast unit PR gate stays fast (~5-15 s of
+  # testcontainers-go Postgres spin-up runs once, AFTER the unit
+  # job completes). Docker is pre-installed on ubuntu-latest and
+  # has full socket access for testcontainers-go. The build tag
+  # `e2e` keeps `go test ./...` clean (tests/e2e/*.go is gated).
+  #
+  # This job ALSO depends implicitly on `ci` completing first via
+  # the workflow's natural order — if `ci` fails, E2E still tries
+  # to run so a green E2E + red unit signal surfaces both in CI.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    concurrency:
+      group: e2e-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Delegates to the Makefile — single source of truth. Edit
+      # `make test-e2e`, not this step.
+      - name: Run E2E pipeline suite (Docker required)
+        run: make test-e2e
+
+      - name: Dump E2E summary on failure
+        if: failure()
+        run: |
+          echo "=== Likely causes ==="
+          echo "  - Docker not available on runner (ubuntu-latest ships it pre-installed)"
+          echo "  - Postgres container start race (120 s ceiling in tests/e2e/e2e_harness.go)"
+          echo "  - pgx/v5 stdlib driver missing — verify github.com/jackc/pgx/v5 is in go.mod"
+          echo "  - A scenario subtest logged a diff at the failing t.Logf line — read upwards"
+          echo "  - Apparent MinIO gap is intentional: storage_test.go covers S3;"
+          echo "    Task 9.10 followup plans a MinIO testcontainer + aws-sdk-v2"
+          echo
+          echo "Run locally: make test-e2e"
+          echo "Run with -tags=e2e only (no need for `make`): go test -tags=e2e -timeout 15m ./tests/e2e/..."
