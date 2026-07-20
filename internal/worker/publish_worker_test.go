@@ -26,6 +26,8 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
+	"encoding/json"
+
 )
 
 // ------------------------------------------------------------------
@@ -1159,10 +1161,10 @@ func TestPublishTarget_PrivacyLevel_PostOverrideWins(t *testing.T) {
 		claimFn: func(id int64) (bool, error) { return true, nil },
 		findByIDFn: func(id int64) (*models.Post, error) {
 			return &models.Post{
-				ID:                 100,
-				Caption:            "x",
-				MediaURL:           "https://cdn.example.com/video.mp4",
-				PrivacyLevel:       "private", // highest term
+				ID:                  100,
+				Caption:             "x",
+				MediaURL:            "https://cdn.example.com/video.mp4",
+				PrivacyLevel:        "private",  // highest term
 				DefaultPrivacyLevel: "unlisted", // middle term
 			}, nil
 		},
@@ -1206,9 +1208,9 @@ func TestPublishTarget_PrivacyLevel_PostDefaultWinsOverFallback(t *testing.T) {
 		claimFn: func(id int64) (bool, error) { return true, nil },
 		findByIDFn: func(id int64) (*models.Post, error) {
 			return &models.Post{
-				ID:          100,
-				Caption:     "x",
-				MediaURL:    "https://cdn.example.com/video.mp4",
+				ID:       100,
+				Caption:  "x",
+				MediaURL: "https://cdn.example.com/video.mp4",
 				// PrivacyLevel empty → falls through to DefaultPrivacyLevel
 				DefaultPrivacyLevel: "public",
 			}, nil
@@ -1250,9 +1252,9 @@ func TestPublishTarget_PrivacyLevel_YouTubeFallbackIsUnlisted(t *testing.T) {
 		claimFn: func(id int64) (bool, error) { return true, nil },
 		findByIDFn: func(id int64) (*models.Post, error) {
 			return &models.Post{
-				ID:          100,
-				Caption:     "x",
-				MediaURL:    "https://cdn.example.com/video.mp4",
+				ID:       100,
+				Caption:  "x",
+				MediaURL: "https://cdn.example.com/video.mp4",
 				// Both privacy fields empty — must reach the platform fallback
 			}, nil
 		},
@@ -1294,10 +1296,10 @@ func TestPublishTarget_PrivacyLevel_NonYouTubeKeepsPublicToEveryone(t *testing.T
 		claimFn: func(id int64) (bool, error) { return true, nil },
 		findByIDFn: func(id int64) (*models.Post, error) {
 			return &models.Post{
-				ID:                 100,
-				Caption:            "ig-caption",
-				MediaURL:           "https://cdn.example.com/ig.mp4",
-				Status:             models.PostStatusScheduled,
+				ID:       100,
+				Caption:  "ig-caption",
+				MediaURL: "https://cdn.example.com/ig.mp4",
+				Status:   models.PostStatusScheduled,
 				// Both privacy fields empty
 			}, nil
 		},
@@ -1349,11 +1351,11 @@ func TestPublishTarget_YouTube_ChannelMatch_PublishesNormally(t *testing.T) {
 		claimFn: func(id int64) (bool, error) { return true, nil },
 		findByIDFn: func(id int64) (*models.Post, error) {
 			return &models.Post{
-				ID:          100,
-				Caption:     "yt-caption",
-				Title:       "yt-title",
-				MediaURL:    "https://cdn.example.com/yt-video.mp4",
-				Status:      models.PostStatusScheduled,
+				ID:       100,
+				Caption:  "yt-caption",
+				Title:    "yt-title",
+				MediaURL: "https://cdn.example.com/yt-video.mp4",
+				Status:   models.PostStatusScheduled,
 			}, nil
 		},
 	}
@@ -1751,10 +1753,10 @@ func TestPublishTarget_YouTube_ChannelCheck_Transient_FailsTargetWithoutFlagging
 // sibling tests use other labels.
 func TestPublishTarget_YouTube_ChannelBindingMismatch_IncrementsMetric(t *testing.T) {
 	cases := []struct {
-		name                  string
-		bindResultErr         error
-		wantMetricDelta       float64
-		wantMarkReauthCalls   int
+		name                string
+		bindResultErr       error
+		wantMetricDelta     float64
+		wantMarkReauthCalls int
 	}{
 		{
 			name:                "match_does_not_increment",
@@ -1843,4 +1845,15 @@ func TestPublishTarget_YouTube_ChannelBindingMismatch_IncrementsMetric(t *testin
 			}
 		})
 	}
+}
+
+
+// GetMetadata (Task 7/10) stub on mockPostStore — nil/no-op default.
+func (m *mockPostStore) GetMetadata(postID int64) (json.RawMessage, error) {
+	return nil, nil
+}
+
+// SetTargetCanaryVideoID (Task 7/10) stub on mockPostStore — nil default.
+func (m *mockPostStore) SetTargetCanaryVideoID(targetID int64, videoID string) error {
+	return nil
 }

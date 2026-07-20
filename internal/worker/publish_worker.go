@@ -113,6 +113,12 @@ type PublisherPostStore interface {
 	//   * ErrPostTargetNotFound: id is stale.
 	//   * Other: wrapped DB error.
 	SetProviderIdempotencyKey(id int64, key string) error
+
+
+	// GetMetadata (Task 7/10) — post metadata JSON column accessor.
+	GetMetadata(id int64) (json.RawMessage, error)
+	// SetTargetCanaryVideoID (Task 7/10) — stamps canary upload video id.
+	SetTargetCanaryVideoID(targetID int64, videoID string) error
 }
 
 // PublisherUserStore is the narrow slice of the user /
@@ -171,6 +177,13 @@ type PublishWorker struct {
 	// NewPublishWorker (the existing constructor's positional args
 	// are pinned by every test rig in this package).
 	deliveryRegistry *services.DeliveryRegistry
+
+
+	// canonicalCanaryUploader (Task 7/10) — the YouTube canary pre-flight
+	// capability wired at startup via SetCanonicalCanaryUploader (test
+	// harness uses that setter). Nil-safe at runtime: a nil uploader
+	// makes the canary block warn + fall through to markPublishBlockedAuth.
+	canonicalCanaryUploader	services.YouTubeCanaryUploader
 }
 
 // NewPublishWorker wires the dependencies. interval <= 0 falls back to
