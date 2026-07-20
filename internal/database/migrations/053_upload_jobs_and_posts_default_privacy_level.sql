@@ -46,13 +46,13 @@
 -- CHECK would be a single-shot tripwire — a future taglio may add it).
 
 ALTER TABLE upload_jobs
-    ADD COLUMN default_privacy_level VARCHAR(50) NOT NULL DEFAULT '';
+    ADD COLUMN IF NOT EXISTS default_privacy_level VARCHAR(50) NOT NULL DEFAULT '';
 
 ALTER TABLE posts
-    ADD COLUMN default_privacy_level VARCHAR(50) NOT NULL DEFAULT '';
+    ADD COLUMN IF NOT EXISTS default_privacy_level VARCHAR(50) NOT NULL DEFAULT '';
 
 ALTER TABLE posts
-    ADD COLUMN privacy_level        VARCHAR(50) NOT NULL DEFAULT '';
+    ADD COLUMN IF NOT EXISTS privacy_level        VARCHAR(50) NOT NULL DEFAULT '';
 
 -- DOWN
 -- (manual operator invocations; the up above is the canonical direction)

@@ -152,7 +152,11 @@ services:
   # because MinIO's release cadence occasionally breaks the mc↔server
   # compatibility contract.
   minio:
-    image: minio/minio:RELEASE.2024-09-13T16-55-53Z
+    # Pinned to a stable tag when possible, but MinIO prunes older
+    # RELEASE tags from Docker Hub. `latest` is used here for local
+    # dev resilience; update to a specific release tag when one is
+    # reliably available in your registry mirror.
+    image: minio/minio:latest
     container_name: instaedit-minio
     command: server /data --console-address ":9001"
     environment:
@@ -163,9 +167,9 @@ services:
       MINIO_ROOT_PASSWORD: change-this-local-secret
     volumes:
       - instaedit_minio_data:/data
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+    # Host port mapping lives in docker-compose.local.yml so the
+    # base stack can be used without binding to :9000 (which is
+    # often occupied by other local services).
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -188,7 +192,11 @@ services:
   # --ignore-existing` is idempotent — re-runs are no-ops, so the
   # container can be safely re-created on every boot.
   minio-init:
-    image: minio/mc:RELEASE.2024-09-13T20-29-44Z
+    # Pinned to the matching mc release for the minio server above.
+    # MinIO prunes older mc RELEASE tags, so `latest` is used here
+    # to keep local dev working; pin to a specific release in
+    # production/mirrored registries.
+    image: minio/mc:latest
     container_name: instaedit-minio-init
     depends_on:
       minio:

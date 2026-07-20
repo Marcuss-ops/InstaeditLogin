@@ -50,15 +50,15 @@
 -- layer and a derived-key lookup at the Go layer.
 -- =============================================================================
 
+-- 1. Add the column nullable (idempotent ADD COLUMN IF NOT EXISTS).
+ALTER TABLE tokens
+    ADD COLUMN IF NOT EXISTS oauth_connection_id BIGINT;
+
 -- New lookup index. Sibling index idx_tokens_platform_account_id is
 -- left in place so existing admin/tooling queries on the legacy key
 -- still scan reasonably.
 CREATE INDEX IF NOT EXISTS idx_tokens_oauth_connection_id
     ON tokens (oauth_connection_id);
-
--- 1. Add the column nullable (idempotent ADD COLUMN IF NOT EXISTS).
-ALTER TABLE tokens
-    ADD COLUMN IF NOT EXISTS oauth_connection_id BIGINT;
 
 -- 2. Backfill from the platform_accounts reference table — wrapped
 --    in a DO block so the migration is ORDER-INDEPENDENT with respect

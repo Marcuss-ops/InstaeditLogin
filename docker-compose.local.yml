@@ -26,7 +26,11 @@
 
 services:
   minio:
-    image: minio/minio:RELEASE.2024-09-13T16-55-53Z
+    # Pinned to a stable tag when possible, but MinIO prunes older
+    # RELEASE tags from Docker Hub. `latest` is used here for local
+    # dev resilience; update to a specific release tag when one is
+    # reliably available in your registry mirror.
+    image: minio/minio:latest
     container_name: instaedit-minio
     command: server /data --console-address ":9001"
     environment:

@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS post_targets (
 --   - post_targets(post_id, status): composite, drives the publishing worker
 --     to enumerate "all targets of post X with status scheduled/publishing"
 --     atomically per fan-out.
+-- Idempotent guard: if the posts table was created by an previous
+-- (partial/failed) run of this same migration, the column may be
+-- missing. Adding it explicitly before the index keeps re-runs safe.
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_posts_workspace_scheduled
     ON posts(workspace_id, scheduled_at);
 
