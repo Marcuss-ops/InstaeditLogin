@@ -1412,9 +1412,39 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		// Taglio 2.2: token persistence goes through CredentialVault.Save.
-		if err := r.vault.Save(req.Context(), account.ID, tokenData); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to save token: "+err.Error())
+		// Task 1/10 — atomic OAuth finalize. We use the
+		// services.ChannelAuthorizer (wired via WithChannelAuthorizer
+		// in internal/bootstrap.Wire) for the non-discoverer branch
+		// too: passing expectedChannelID="" tells the service to
+		// skip the channels.list(mine=true) YouTube-only pre-tx
+		// guard, but the (UPSERT oauth_connections + INSERT tokens
+		// via SaveTokenTx + UPDATE platform_accounts.status='active')
+		// atomic flow still applies. Any partial failure rolls back
+		// BOTH writes plus the status flip so a process crash
+		// between AttachPlatformAccount (commits row at pending_authorization)
+		// and this AuthorizeChannel call leaves the account in
+		// pending_authorization, never in the legacy "active but
+		// no cipher row" failure mode.
+		//
+		// expectedChannelID "" → no YouTube binder call (binder
+		// may still be wired for other providers' flows). The
+		// service's empty-string short-circuit is the documented
+		// no-op for non-YouTube paths (Facebook Pages, Threads,
+		// TikTok, …).
+		if r.authorizer == nil {
+			// Fail-fast on misconfiguration (mirrors the postStore /
+			// workspaceStore nil-guard pattern). A misconfigured
+			// main.go that forgets WithChannelAuthorizer would never
+			// have been caught by Wire() but would silently leave
+			// platform_accounts in pending_authorization forever
+			// on every callback — the operator's dashboard would
+			// show a stuck "needs reconnect" storm. Fail-fast
+			// surfaces the wiring mistake at first-callback time.
+			writeError(w, http.StatusInternalServerError, "channel authorizer not configured")
+			return
+		}
+		if _, err := r.authorizer.AuthorizeChannel(req.Context(), account.ID, "", tokenData.Scopes, tokenData); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to authorize channel: "+err.Error())
 			return
 		}
 	}
@@ -1593,6 +1623,19 @@ func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, pro
 		channelTokens := make([]*models.TokenData, 0, 1+len(acc.SupplementalTokens))
 		channelTokens = append(channelTokens, tokenData)
 		channelTokens = append(channelTokens, acc.SupplementalTokens...)
+		if r.authorizer == nil {
+			// Fail-fast on misconfiguration (symmetric to the
+			// non-discoverer branch). Mirrors the postStore /
+			// workspaceStore nil-guard pattern. Without this,
+			// a misconfigured main.go (missing
+			// WithChannelAuthorizer) would silently leave every
+			// discovered-discoverer account stuck at
+			// pending_authorization with no encrypted token
+			// row, even though AttachPlatformAccount's commit
+			// looks successful. The fail-fast 500 surfaces the
+			// wiring mistake at first-callback time.
+			return nil, errors.New("channel authorizer not configured")
+		}
 		if _, err := r.authorizer.AuthorizeChannel(ctx, created.ID, expectedChannelID, tokenData.Scopes, channelTokens...); err != nil {
 			return nil, fmt.Errorf("authorize channel for account %d: %w", created.ID, err)
 		}

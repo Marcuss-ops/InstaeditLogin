@@ -59,15 +59,15 @@ func (r *UserRepository) FindUserIDByEmail(ctx context.Context, email string) (i
 // successful AttachPlatformAccount + vault.Save wire-up so the
 // flow order is:
 //
-//	1. AttachPlatformAccount (creates platform_accounts row, NULL
-//	   oauth_connection_id, status='pending_authorization')
-//	2. FinalizeAttach (UPSERT oauth_connections; UPDATE
-//	   platform_accounts.oauth_connection_id + status +
-//	   connected_at; in one tx so a partial failure can't leave
-//	   the FK dangling)
-//	3. vault.Save (FK oauth_connection_id is now set in
-//	   platform_accounts so the FK from tokens → oauth_connections
-//	   resolves)
+//  1. AttachPlatformAccount (creates platform_accounts row, NULL
+//     oauth_connection_id, status='pending_authorization')
+//  2. FinalizeAttach (UPSERT oauth_connections; UPDATE
+//     platform_accounts.oauth_connection_id + status +
+//     connected_at; in one tx so a partial failure can't leave
+//     the FK dangling)
+//  3. vault.Save (FK oauth_connection_id is now set in
+//     platform_accounts so the FK from tokens → oauth_connections
+//     resolves)
 //
 // Idempotent on (user_id, provider, provider_resource_id) via ON
 // CONFLICT DO UPDATE so a re-authorize for the same channel flips
@@ -92,9 +92,9 @@ func (r *UserRepository) FinalizeAttach(ctx context.Context, accountID int64, sc
 	}()
 
 	var (
-		platform          string
+		platform           string
 		providerResourceID string
-		userID            int64
+		userID             int64
 	)
 	if err := tx.QueryRowContext(ctx,
 		`SELECT platform, platform_user_id, user_id FROM platform_accounts WHERE id = $1`,
@@ -148,8 +148,6 @@ func (r *UserRepository) FinalizeAttach(ctx context.Context, accountID int64, sc
 	}
 	return oauthConnID, nil
 }
-
-
 
 func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
 	user := &models.User{}
@@ -455,9 +453,25 @@ func (r *UserRepository) FindPlatformAccountByID(id int64) (*models.PlatformAcco
 // Behaviour:
 //   - If (platform, platform_user_id) does not exist → INSERT a new
 //     platform_accounts row bound to userID. Returns the new row.
+//     NEW rows default to status='pending_authorization' (NOT
+//     'active') so the row CANNOT be observed in the
+//     "active-but-no-oauth_connection-and-no-token" state that the
+//     Task 1/10 OAuth-atomic-flip guarantee forbids. The companion
+//     flip to 'active' is the sole responsibility of
+//     services.ChannelAuthorizationService.AuthorizeChannel: it
+//     UPSERTs oauth_connections, writes the encrypted token row,
+//     and UPDATE-promotes status='active' inside ONE transaction.
+//     A process crash between AttachPlatformAccount (commit) and
+//     AuthorizeChannel (BEGIN) leaves the row in
+//     'pending_authorization' — recoverable by retrying the OAuth
+//     callback via /admin/channels/{id}/connect-link, never by
+//     silently leaving a phantom-active row.
 //   - If (platform, platform_user_id) exists AND existing.UserID == userID
 //     → idempotent: update the username in place (provider-side renames
-//     do happen) and return the existing row.
+//     do happen) and return the existing row. Status is not touched:
+//     AuthorizeChannel is the sole gate that flips pending → active;
+//     a same-user re-link will go through AuthorizeChannel again and
+//     naturally re-validate.
 //   - If (platform, platform_user_id) exists AND existing.UserID != userID
 //     → return ErrAccountAlreadyLinked. We never silently rebind a
 //     platform identity to a different session user; that's an
@@ -510,12 +524,21 @@ func (r *UserRepository) AttachPlatformAccount(userID int64, profile *models.Pla
 	}
 
 	// No prior link — create bound to the authenticated user.
+	// Default status to 'pending_authorization' (NOT 'active'):
+	// services.ChannelAuthorizationService.AuthorizeChannel is the
+	// sole atomic gate that flips pending → active together with
+	// the oauth_connections upsert + tokens write. Defaulting to
+	// 'active' here would re-introduce the pre-Task-1/10
+	// "active row without oauth_connection_id and without
+	// encrypted token" failure mode that the user's DoD explicitly
+	// forbids ("status='active' means: channel ID verified, OAuth
+	// connection present, refresh token encrypted recoverable").
 	account := &models.PlatformAccount{
 		UserID:         userID,
 		Platform:       platform,
 		PlatformUserID: profile.PlatformUserID,
 		Username:       profile.Username,
-		Status:         models.AccountStatusActive,
+		Status:         models.AccountStatusPendingAuthorization,
 	}
 	now := time.Now()
 	account.ConnectedAt = &now

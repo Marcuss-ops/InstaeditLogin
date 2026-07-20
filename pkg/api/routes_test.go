@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,6 +144,94 @@ func (m *mockCredentialVault) Rotate(ctx context.Context, platformAccountID int6
 	return m.Save(ctx, platformAccountID, tokenData)
 }
 
+// fakeChannelAuthorizer (Task 1/10 test seam) is the no-op
+// implementation of services.ChannelAuthorizer that newTestRouter
+// wires by default. Each AuthorizeChannel call records every
+// TokenData into tokenWrites (mirroring the production sequence:
+// UPSERT oauth_connections + SaveTokenTx + status flip ⇒ produce a
+// single cipher write per token). Tests inspect tokenWrites to
+// assert the atomic-flow contract — exactly how many tokens were
+// saved, on which (accountID, tokenType) pair, with which
+// AccessToken.
+//
+// Production wiring in internal/bootstrap.Wire passes a real
+// *services.ChannelAuthorizationService; tests override via
+// WithChannelAuthorizer(&fakeChannelAuthorizer{...}) when they
+// need to inject specific behaviour (failure injection on
+// authorizeErr, channel guard verification on lastExpectedCh, etc.).
+type fakeChannelAuthorizer struct {
+	authorizeCalls atomic.Int32
+	lastAccountID  int64
+	lastExpectedCh string
+	lastScopes     []string
+	lastTokens     []*models.TokenData
+	// tokenWrites is the per-token independent audit trail. Tests
+	// assert len(tokenWrites) for "exactly N cipher writes on
+	// success" and len(tokenWrites)==0 for "no writes on failure".
+	// Concurrency: protected by mu because the production router
+	// does not parallelize AuthorizeChannel calls, but the
+	// invariant makes future races safe.
+	mu           sync.Mutex
+	tokenWrites  []fakeAuthTokenWrite
+	// authorizeErr is returned (early) when non-nil. Replaces the
+	// old vault.Save-error tests; tokenWrites stays empty when
+	// authorizeErr fires before any token is processed.
+	authorizeErr error
+	// oauthConnectionID is returned as the AuthorizeChannel
+	// oauth_connection_id; tests that read it (none today) can
+	// override.
+	oauthConnectionID int64
+}
+
+type fakeAuthTokenWrite struct {
+	AccountID     int64
+	TokenType     string
+	AccessToken   string
+	RefreshToken  string
+}
+
+func (f *fakeChannelAuthorizer) AuthorizeChannel(ctx context.Context, accountID int64, expectedChannelID string, scopes []string, tokens ...*models.TokenData) (int64, error) {
+	f.authorizeCalls.Add(1)
+	f.lastAccountID = accountID
+	f.lastExpectedCh = expectedChannelID
+	f.lastScopes = scopes
+	// Make a defensive copy of the variadic token slice so tests
+	// can inspect the inputs without aliasing.
+	tokensCopy := make([]*models.TokenData, len(tokens))
+	copy(tokensCopy, tokens)
+	f.lastTokens = tokensCopy
+	if f.authorizeErr != nil {
+		return 0, f.authorizeErr
+	}
+	f.mu.Lock()
+	for _, td := range tokens {
+		if td == nil {
+			continue
+		}
+		f.tokenWrites = append(f.tokenWrites, fakeAuthTokenWrite{
+			AccountID:    accountID,
+			TokenType:    td.TokenType,
+			AccessToken:  td.AccessToken,
+			RefreshToken: td.RefreshToken,
+		})
+	}
+	f.mu.Unlock()
+	if f.oauthConnectionID == 0 {
+		return 424242, nil
+	}
+	return f.oauthConnectionID, nil
+}
+
+// tokenWriteCount is a snapshot helper used by tests that don't
+// care about value-level inspection, only the count.
+func (f *fakeChannelAuthorizer) tokenWriteCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.tokenWrites)
+}
+
+var _ services.ChannelAuthorizer = (*fakeChannelAuthorizer)(nil)
+
 // mockUserStore implements UserStore with configurable function fields.
 //
 // SPRINT 7.1 (P0#14): FindOrCreateUserByPlatform is gone from the
@@ -237,6 +327,8 @@ func (m *mockUserStore) MarkReauthRequired(ctx context.Context, accountID int64,
 	}
 	return nil
 }
+
+
 
 // mockWorkspaceStore implements WorkspaceStore with configurable function fields.
 type mockWorkspaceStore struct {
@@ -449,6 +541,15 @@ func newTestRouter(
 		append([]RouterOption{
 			WithOneTimeCodeStore(otc),
 			WithCredentialVault(defaultVault),
+			// Task 1/10 — atomic OAuth finalize. newTestRouter
+			// wires a default fakeChannelAuthorizer that
+			// independently records every token write in
+			// tokenWrites. Tests assert len(tokenWrites) for
+			// the cipher-write count semantic and override
+			// the canonical seam via WithChannelAuthorizer
+			// only when they need specific failure injection
+			// (e.g. TestHandleCallback_AuthorizeChannelError).
+			WithChannelAuthorizer(&fakeChannelAuthorizer{}),
 		}, opts...)...,
 	)
 }
@@ -749,10 +850,23 @@ func TestHandleCallback_AttachError_500(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_SaveTokenError asserts that an error from the
-// CredentialVault.Save call surfaces as a 500. The test wires a
-// mockCredentialVault with a saveFn that errors.
-func TestHandleCallback_SaveTokenError(t *testing.T) {
+// TestHandleCallback_AuthorizeChannelError asserts that an error from
+// the Task 1/10 atomic authorizer surfaces as a 500. The test wires a
+// fakeChannelAuthorizer with an authorizeErr that simulates a
+// token-write failure mid-transaction (the production service's
+// ROLLBACK path). This is the non-discoverer analog of the legacy
+// TestHandleCallback_SaveTokenError: the SAME invariant ("cipher
+// write failure ⇒ 500") is enforced via the atomic primitive rather
+// than the old separate vault.Save call.
+//
+// ALSO asserts that, on early failure (authorizeErr fires before
+// tokens are recorded), zero cipher writes land — proving that the
+// ROLLBACK semantics of the production service are honoured by the
+// router's call-site: a successful pre-tx guard + an empty
+// tokenWrites slice == platform_accounts row stays at
+// pending_authorization (the legacy "active without cipher"
+// failure mode is FORBIDDEN by the spec).
+func TestHandleCallback_AuthorizeChannelError(t *testing.T) {
 	svc := &mockProvider{
 		platform:       "instagram",
 		handleCallback: successCallback,
@@ -760,12 +874,10 @@ func TestHandleCallback_SaveTokenError(t *testing.T) {
 	store := &mockUserStore{
 		attachFn: successAttach,
 	}
-	vault := &mockCredentialVault{
-		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
-			return fmt.Errorf("token save error")
-		},
+	authorizer := &fakeChannelAuthorizer{
+		authorizeErr: fmt.Errorf("token save error"),
 	}
-	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "instagram", "test-state")
@@ -775,6 +887,84 @@ func TestHandleCallback_SaveTokenError(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d", w.Code)
+	}
+	if authorizer.authorizeCalls.Load() != 1 {
+		t.Fatalf("AuthorizeChannel must be called exactly once; got %d", authorizer.authorizeCalls.Load())
+	}
+	// Acceptance-closure on the legacy failure mode: zero cipher
+	// writes when authorizeErr fires means the production ROLLBACK
+	// along the row's pending_authorization stay is reproduced.
+	if n := authorizer.tokenWriteCount(); n != 0 {
+		t.Errorf("tokenWrites len on authorizeErr: want 0 (ROLLBACK semantic), got %d", n)
+	}
+}
+
+// TestAcceptance_NonDiscovererUsesAtomicAuthorizer is the regression-closure
+// acceptance test for Task 1/10. It proves that the OAuth callback's
+// non-discoverer branch (the legacy r.vault.Save path before the
+// refactor) now routes through r.authorizer.AuthorizeChannel
+// atomically — the SAME primitive used by the discoverer branch —
+// not through a direct r.vault.Save call.
+//
+// Three pre-conditions are asserted:
+//   1. r.authorizer.AuthorizeChannel is invoked exactly once
+//      (NO direct r.vault.Save call paths remain on this code path).
+//   2. The argument shape matches the documented Service contract:
+//      (account.ID, expectedChannelID="", tokenData.Scopes, tokenData…).
+//      expectedChannelID="" tells the YouTube channels.list(mine=true)
+//      binder to short-circuit (this is the non-YouTube flow).
+//   3. Exactly one cipher write lands in tokenWrites — matching the
+//      legacy "1 vault.Save call" semantic the production service
+//      replaces.
+func TestAcceptance_NonDiscovererUsesAtomicAuthorizer(t *testing.T) {
+	svc := &mockProvider{
+		platform:       "instagram",
+		handleCallback: successCallback,
+	}
+	store := &mockUserStore{
+		attachFn: successAttach,
+	}
+	authorizer := &fakeChannelAuthorizer{}
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "instagram", "test-state")
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	// (1) exactly one AuthorizeChannel call on the non-discoverer path.
+	if authorizer.authorizeCalls.Load() != 1 {
+		t.Fatalf("AuthorizeChannel must be called exactly once on the non-discoverer path; got %d (legacy direct vault.Save path is BACK)", authorizer.authorizeCalls.Load())
+	}
+	// (2) argument shape: account.ID (single account), no YouTube
+	// expected_channel (empty string), variadic token list contains
+	// the principal TokenData. Scopes MAY be nil for the Instagram
+	// happy-path fixture (successCallback omits the Scopes field)
+	// and that is documented and OK — the production service passes
+	// the slice through pq.Array, which serialises nil as NULL.
+	if authorizer.lastAccountID != 10 {
+		t.Errorf("lastAccountID: want 10 (from successAttach), got %d", authorizer.lastAccountID)
+	}
+	if authorizer.lastExpectedCh != "" {
+		t.Errorf("lastExpectedCh: want \"\" (non-YouTube path; binder short-circuits), got %q", authorizer.lastExpectedCh)
+	}
+	if got := len(authorizer.lastTokens); got != 1 {
+		t.Fatalf("lastTokens len: want 1 (principal token only on non-YouTube path), got %d", got)
+	}
+	if authorizer.lastTokens[0] == nil || authorizer.lastTokens[0].AccessToken != "at-secret" {
+		t.Errorf("lastTokens[0]: want TokenData{AccessToken: \"at-secret\"}, got %+v", authorizer.lastTokens[0])
+	}
+	// (3) tokenWrites independent audit: exactly one cipher row
+	// written for this single-account Instagram happy path.
+	if n := authorizer.tokenWriteCount(); n != 1 {
+		t.Errorf("tokenWrites len: want 1 (single principal token on non-YouTube path), got %d", n)
+	}
+	if w := authorizer.tokenWrites[0]; w.AccountID != 10 || w.TokenType != "bearer" || w.AccessToken != "at-secret" {
+		t.Errorf("tokenWrites[0]: want (accountID=10, tokenType=bearer, access=at-secret), got %+v", w)
 	}
 }
 
@@ -835,13 +1025,13 @@ func TestHandleCallback_Facebook_SavesPageAccessToken(t *testing.T) {
 	const userLongLivedToken = "user-long-lived-token"
 	pages := []*services.DiscoveredAccount{
 		{
-			Profile:  models.PlatformProfile{PlatformUserID: "page-1", Username: "Page One"},
+			Profile: models.PlatformProfile{PlatformUserID: "page-1", Username: "Page One"},
 			SupplementalTokens: []*models.TokenData{
 				{AccessToken: "page-token-1", TokenType: models.TokenTypePageAccess, ExpiresIn: 60 * 60 * 24 * 365 * 10, Scopes: []string{"pages_manage_posts", "pages_read_engagement", "pages_show_list"}},
 			},
 		},
 		{
-			Profile:  models.PlatformProfile{PlatformUserID: "page-2", Username: "Page Two"},
+			Profile: models.PlatformProfile{PlatformUserID: "page-2", Username: "Page Two"},
 			SupplementalTokens: []*models.TokenData{
 				{AccessToken: "page-token-2", TokenType: models.TokenTypePageAccess, ExpiresIn: 60 * 60 * 24 * 365 * 10, Scopes: []string{"pages_manage_posts", "pages_read_engagement", "pages_show_list"}},
 			},
@@ -867,15 +1057,12 @@ func TestHandleCallback_Facebook_SavesPageAccessToken(t *testing.T) {
 		},
 	}
 
-	var saved []struct {
-		accountID int64
-		tokenType string
-		token     string
-	}
+	var attachCount int
 	store := &mockUserStore{
 		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			attachCount++
 			return &models.PlatformAccount{
-				ID:             int64(10 + len(saved)),
+				ID:             int64(10 + attachCount),
 				UserID:         userID,
 				Platform:       platform,
 				PlatformUserID: profile.PlatformUserID,
@@ -883,17 +1070,13 @@ func TestHandleCallback_Facebook_SavesPageAccessToken(t *testing.T) {
 			}, nil
 		},
 	}
-	vault := &mockCredentialVault{
-		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
-			saved = append(saved, struct {
-				accountID int64
-				tokenType string
-				token     string
-			}{platformAccountID, tokenData.TokenType, tokenData.AccessToken})
-			return nil
-		},
-	}
-	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	// Task 1/10 — atomic OAuth finalize: token-write visibility is
+	// owned by the fakeChannelAuthorizer (independent audit trail
+	// in tokenWrites). The vault mock is no longer in this code
+	// path's call chain so we don't even need WithCredentialVault
+	// override for the cipher count.
+	authorizer := &fakeChannelAuthorizer{}
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/facebook/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "facebook", "test-state")
@@ -905,25 +1088,30 @@ func TestHandleCallback_Facebook_SavesPageAccessToken(t *testing.T) {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Expect 4 saves: page token + user token for each of the 2 pages.
-	if len(saved) != 4 {
-		t.Fatalf("want 4 token saves (2 page + 2 user), got %d: %+v", len(saved), saved)
+	// Expect 4 token writes: page token + user token for each of the 2 pages.
+	// The atomic AuthorizeChannel call records both principal
+	// (user long-lived) AND supplemental (page access) tokens in the
+	// SAME call — same surface contract as the legacy non-atomic
+	// path that issued two separate r.vault.Save calls per page.
+	if authorizer.tokenWriteCount() != 4 {
+		t.Fatalf("want 4 token writes (2 page + 2 user), got %d: %+v", authorizer.tokenWriteCount(), authorizer.tokenWrites)
 	}
 	// Build a map keyed by (accountID, tokenType) to avoid relying on save order.
-	savedByType := make(map[int64]map[string]string)
-	for _, s := range saved {
-		if savedByType[s.accountID] == nil {
-			savedByType[s.accountID] = make(map[string]string)
+	writtenByType := make(map[int64]map[string]string)
+	authorizer.mu.Lock()
+	for _, w := range authorizer.tokenWrites {			if writtenByType[w.AccountID] == nil {
+				writtenByType[w.AccountID] = make(map[string]string)
+			}
+			writtenByType[w.AccountID][w.TokenType] = w.AccessToken
 		}
-		savedByType[s.accountID][s.tokenType] = s.token
-	}
+	authorizer.mu.Unlock()
 	for _, p := range pages {
 		// The account IDs are generated by attachFn as 10, 11, ...
 		// SupplementalTokens carry the page token — find by matching
 		// the AccessToken from SupplementalTokens[0].
 		var foundID int64
 		expectedPageToken := p.SupplementalTokens[0].AccessToken
-		for id, tokens := range savedByType {
+		for id, tokens := range writtenByType {
 			if tokens[models.TokenTypePageAccess] == expectedPageToken {
 				foundID = id
 				break
@@ -932,11 +1120,11 @@ func TestHandleCallback_Facebook_SavesPageAccessToken(t *testing.T) {
 		if foundID == 0 {
 			t.Fatalf("missing page token save for page %s", p.Profile.PlatformUserID)
 		}
-		if savedByType[foundID][models.TokenTypePageAccess] != expectedPageToken {
-			t.Errorf("page %s: want page token %q, got %q", p.Profile.PlatformUserID, expectedPageToken, savedByType[foundID][models.TokenTypePageAccess])
+		if writtenByType[foundID][models.TokenTypePageAccess] != expectedPageToken {
+			t.Errorf("page %s: want page token %q, got %q", p.Profile.PlatformUserID, expectedPageToken, writtenByType[foundID][models.TokenTypePageAccess])
 		}
-		if savedByType[foundID][models.TokenTypeLongLived] != userLongLivedToken {
-			t.Errorf("page %s: want user token %q, got %q", p.Profile.PlatformUserID, userLongLivedToken, savedByType[foundID][models.TokenTypeLongLived])
+		if writtenByType[foundID][models.TokenTypeLongLived] != userLongLivedToken {
+			t.Errorf("page %s: want user token %q, got %q", p.Profile.PlatformUserID, userLongLivedToken, writtenByType[foundID][models.TokenTypeLongLived])
 		}
 	}
 }
@@ -1076,7 +1264,6 @@ func TestHandleCallback_YouTube_OneChannel_OneSave(t *testing.T) {
 		accountID int64
 		token     string
 	}
-	var saves []saveCall
 	store := &mockUserStore{
 		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
 			return &models.PlatformAccount{
@@ -1085,13 +1272,10 @@ func TestHandleCallback_YouTube_OneChannel_OneSave(t *testing.T) {
 			}, nil
 		},
 	}
-	vault := &mockCredentialVault{
-		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
-			saves = append(saves, saveCall{platformAccountID, tokenData.AccessToken})
-			return nil
-		},
-	}
-	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	// Task 1/10 — atomically via r.authorizer.AuthorizeChannel.
+	// tokenWrites is the independent audit trail in the fake.
+	authorizer := &fakeChannelAuthorizer{}
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "youtube", "test-state")
@@ -1102,11 +1286,12 @@ func TestHandleCallback_YouTube_OneChannel_OneSave(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if len(saves) != 1 {
-		t.Fatalf("want exactly 1 vault.Save call (single channel), got %d: %+v", len(saves), saves)
+	if authorizer.tokenWriteCount() != 1 {
+		t.Fatalf("tokenWrites must be exactly 1 (single channel, atomic), got %d: %+v", authorizer.tokenWriteCount(), authorizer.tokenWrites)
 	}
-	if saves[0].accountID != 10 || saves[0].token != bearerToken {
-		t.Errorf("save mismatch: %+v", saves[0])
+	w0 := authorizer.tokenWrites[0]
+	if w0.AccountID != 10 || w0.AccessToken != bearerToken {
+		t.Errorf("tokenWrites[0]: want (accountID=10, access=%q), got %+v", bearerToken, w0)
 	}
 }
 
@@ -1134,7 +1319,7 @@ func TestHandleCallback_YouTube_MultipleChannels_NoExpected_Conflict(t *testing.
 			return channels, nil
 		},
 	}
-	saves := 0
+	authorizer := &fakeChannelAuthorizer{}
 	store := &mockUserStore{
 		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
 			// attachFn must NOT be called when discovery is ambiguous —
@@ -1145,13 +1330,7 @@ func TestHandleCallback_YouTube_MultipleChannels_NoExpected_Conflict(t *testing.
 			}, nil
 		},
 	}
-	vault := &mockCredentialVault{
-		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
-			saves++
-			return nil
-		},
-	}
-	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "youtube", "test-state")
@@ -1162,8 +1341,11 @@ func TestHandleCallback_YouTube_MultipleChannels_NoExpected_Conflict(t *testing.
 	if w.Code != http.StatusConflict {
 		t.Fatalf("ambiguous grant: want 409 Conflict, got %d: %s", w.Code, w.Body.String())
 	}
-	if saves != 0 {
-		t.Fatalf("ambiguous grant must NOT save the token on ANY channel; got %d save(s)", saves)
+	if authorizer.tokenWriteCount() != 0 {
+		t.Fatalf("ambiguous grant must NOT write tokens on ANY channel; got %d write(s)", authorizer.tokenWriteCount())
+	}
+	if authorizer.authorizeCalls.Load() != 0 {
+		t.Fatalf("ambiguous grant must NOT invoke AuthorizeChannel at all (channels.list guard rejects pre-tx); got %d call(s)", authorizer.authorizeCalls.Load())
 	}
 	if !strings.Contains(w.Body.String(), "ambiguous") {
 		t.Errorf("response body should explain the ambiguity, got %q", w.Body.String())
@@ -1198,15 +1380,10 @@ func TestHandleCallback_YouTube_MultipleChannels_ExpectedMatches_OneSave(t *test
 	// reverse-traced to the channel it was attached to.
 	accountIDsByChannel := map[string]int64{
 		"UCaaaaaaaaaaaaaaaaaaaaa1": 101,
-		expectedID: 102,
+		expectedID:                 102,
 		"UCaaaaaaaaaaaaaaaaaaaaa3": 103,
 	}
 	attachedChannels := []string{}
-	type saveCall struct {
-		accountID int64
-		token     string
-	}
-	var saves []saveCall
 	store := &mockUserStore{
 		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
 			id, ok := accountIDsByChannel[profile.PlatformUserID]
@@ -1220,13 +1397,8 @@ func TestHandleCallback_YouTube_MultipleChannels_ExpectedMatches_OneSave(t *test
 			}, nil
 		},
 	}
-	vault := &mockCredentialVault{
-		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
-			saves = append(saves, saveCall{platformAccountID, tokenData.AccessToken})
-			return nil
-		},
-	}
-	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	authorizer := &fakeChannelAuthorizer{}
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "youtube", "test-state")
@@ -1244,14 +1416,15 @@ func TestHandleCallback_YouTube_MultipleChannels_ExpectedMatches_OneSave(t *test
 	if attachedChannels[0] != expectedID {
 		t.Errorf("attachFn must target expected channel %q; got %q", expectedID, attachedChannels[0])
 	}
-	if len(saves) != 1 {
-		t.Fatalf("vault.Save must be called exactly once; got %d: %+v", len(saves), saves)
+	if authorizer.tokenWriteCount() != 1 {
+		t.Fatalf("tokenWrites must be exactly once; got %d: %+v", authorizer.tokenWriteCount(), authorizer.tokenWrites)
 	}
-	if saves[0].accountID != accountIDsByChannel[expectedID] {
-		t.Errorf("save accountID: want %d (channel %q), got %d", accountIDsByChannel[expectedID], expectedID, saves[0].accountID)
+	w0 := authorizer.tokenWrites[0]
+	if w0.AccountID != accountIDsByChannel[expectedID] {
+		t.Errorf("tokenWrites[0] accountID: want %d (channel %q), got %d", accountIDsByChannel[expectedID], expectedID, w0.AccountID)
 	}
-	if saves[0].token != "yt-bearer" {
-		t.Errorf("save token: want yt-bearer, got %q", saves[0].token)
+	if w0.AccessToken != "yt-bearer" {
+		t.Errorf("tokenWrites[0] access: want yt-bearer, got %q", w0.AccessToken)
 	}
 }
 
@@ -1277,19 +1450,13 @@ func TestHandleCallback_YouTube_ExpectedNoMatch_Conflict(t *testing.T) {
 			return channels, nil
 		},
 	}
-	saves := 0
+	authorizer := &fakeChannelAuthorizer{}
 	store := &mockUserStore{
 		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
 			return &models.PlatformAccount{ID: 10, UserID: userID, Platform: platform, PlatformUserID: profile.PlatformUserID}, nil
 		},
 	}
-	vault := &mockCredentialVault{
-		saveFn: func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
-			saves++
-			return nil
-		},
-	}
-	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
 	setOAuthStateCookieForTest(req, "youtube", "test-state")
@@ -1301,8 +1468,11 @@ func TestHandleCallback_YouTube_ExpectedNoMatch_Conflict(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("mismatched expected: want 409, got %d: %s", w.Code, w.Body.String())
 	}
-	if saves != 0 {
-		t.Fatalf("mismatch must NOT save the token; got %d save(s)", saves)
+	if authorizer.tokenWriteCount() != 0 {
+		t.Fatalf("mismatch must NOT write tokens; got %d write(s)", authorizer.tokenWriteCount())
+	}
+	if authorizer.authorizeCalls.Load() != 0 {
+		t.Fatalf("mismatch must NOT invoke AuthorizeChannel (channels.list guard rejects pre-tx); got %d call(s)", authorizer.authorizeCalls.Load())
 	}
 	if !strings.Contains(w.Body.String(), "does not match expected channel") {
 		t.Errorf("response body should reference the mismatch, got %q", w.Body.String())
@@ -3165,7 +3335,7 @@ func TestHandleAccountContent_Happy(t *testing.T) {
 	}
 
 	var resp struct {
-		Items      []struct {
+		Items []struct {
 			ExternalID string `json:"external_id"`
 			Title      string `json:"title"`
 		} `json:"items"`
@@ -3233,8 +3403,10 @@ func TestAccountContent_Paginates(t *testing.T) {
 	}
 
 	var resp struct {
-		Items      []struct{ ExternalID string `json:"external_id"` } `json:"items"`
-		NextCursor string                                                `json:"next_cursor"`
+		Items []struct {
+			ExternalID string `json:"external_id"`
+		} `json:"items"`
+		NextCursor string `json:"next_cursor"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode content response: %v", err)
@@ -3287,14 +3459,14 @@ func TestOAuthCallback_YoutubeChannelAttachesChannelID(t *testing.T) {
 			platform: "youtube",
 			handleCallback: func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 				return &models.PlatformProfile{
-					PlatformUserID: "google-user-id-123",
-					Username:       "Google User",
-				}, &models.TokenData{
-					AccessToken:  "bearer-token-abc",
-					RefreshToken: "refresh-xyz",
-					TokenType:    models.TokenTypeBearer,
-					ExpiresIn:    3600,
-				}, nil
+						PlatformUserID: "google-user-id-123",
+						Username:       "Google User",
+					}, &models.TokenData{
+						AccessToken:  "bearer-token-abc",
+						RefreshToken: "refresh-xyz",
+						TokenType:    models.TokenTypeBearer,
+						ExpiresIn:    3600,
+					}, nil
 			},
 		},
 		discoverFn: func(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error) {
@@ -3470,13 +3642,13 @@ func TestOAuthCallback_FacebookPageToken_SupplementalSaved(t *testing.T) {
 			platform: "facebook",
 			handleCallback: func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
 				return &models.PlatformProfile{
-					PlatformUserID: "fb-user-123",
-					Username:       "FB User",
-				}, &models.TokenData{
-					AccessToken: "long-lived-token",
-					TokenType:   models.TokenTypeLongLived,
-					ExpiresIn:   60 * 24 * 60 * 60,
-				}, nil
+						PlatformUserID: "fb-user-123",
+						Username:       "FB User",
+					}, &models.TokenData{
+						AccessToken: "long-lived-token",
+						TokenType:   models.TokenTypeLongLived,
+						ExpiresIn:   60 * 24 * 60 * 60,
+					}, nil
 			},
 		},
 		discoverFn: func(ctx context.Context, accessToken, platformUserID string) ([]*services.DiscoveredAccount, error) {
