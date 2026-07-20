@@ -68,6 +68,9 @@ function EditorExamples() {
           <div className="grid grid-cols-2 gap-2">
             {EDITOR_SHORTS.map((video) => (
               <div key={video.id} className="aspect-[9/16] overflow-hidden rounded-xl border border-white/10 bg-black">
+                {/* `web-share` removed from Chromium 120+ Permissions-Policy
+                    allow-list (triggers `[warn] Unrecognized feature: 'web-share']`
+                    in DevTools). See commit 2902c76. */}
                 <iframe
                   className="h-full w-full"
                   src={`https://www.youtube.com/embed/${video.id}?playsinline=1`}
@@ -89,6 +92,9 @@ function EditorExamples() {
           <div className="grid grid-cols-2 gap-2">
             {EDITOR_LONGFORM.map((video) => (
               <div key={video.id} className="aspect-[16/9] overflow-hidden rounded-xl border border-white/10 bg-black">
+                {/* `web-share` removed from Chromium 120+ Permissions-Policy
+                    allow-list (triggers `[warn] Unrecognized feature: 'web-share']`
+                    in DevTools). See commit 2902c76. */}
                 <iframe
                   className="h-full w-full"
                   src={`https://www.youtube.com/embed/${video.id}?playsinline=1`}
