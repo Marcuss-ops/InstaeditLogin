@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { Seo } from "../components/seo/Seo";
 import {
   ArrowRight,
   Users,
@@ -12,6 +13,13 @@ import {
 } from "lucide-react";
 import { MarketingNav } from "../components/layout/MarketingNav";
 import { MarketingFooter } from "../components/layout/MarketingFooter";
+
+const SEO = {
+  title: "InstaEdit Programs — Creator, Agency & Enterprise",
+  description:
+    "Choose the program that fits your ambitions — Creator, Agency, or Enterprise — with defined duration, deliverables, and pricing.",
+  canonical: "https://app.instaedit.org/programs",
+} as const;
 
 const NAV_LINKS = [
   { label: "How it works", href: "/#pipeline" },
@@ -551,6 +559,7 @@ function TestimonialsSection() {
 export function Programs() {
   return (
     <div className="min-h-screen bg-[#030308]">
+      <Seo {...SEO} />
       <MarketingNav links={NAV_LINKS} />
       <main>
         <Hero />
