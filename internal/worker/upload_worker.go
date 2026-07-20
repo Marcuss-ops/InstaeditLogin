@@ -113,19 +113,19 @@ type UploadWorkerOptions struct {
 // (commit 4888c40). Per-claimed-row heartbeat goroutines keep the
 // lease alive during the long streaming phases.
 type UploadWorker struct {
-	jobRepo       UploadJobStore
-	mediaStore    UploadMediaStore
-	postStore     UploadPostStore
-	userRepo      UploadUserStore
-	storage       services.StorageProvider
+	jobRepo          UploadJobStore
+	mediaStore       UploadMediaStore
+	postStore        UploadPostStore
+	userRepo         UploadUserStore
+	storage          services.StorageProvider
 	capRouter        *services.CapabilityRouter
 	vault            credentials.VaultAPI
 	sourceRegistry   *ArtifactSourceRegistry
 	deliveryVerifier ExternalDeliveryVerifier
 	interval         time.Duration
-	logger        *slog.Logger
-	uploadTimeout time.Duration
-	opts          UploadWorkerOptions
+	logger           *slog.Logger
+	uploadTimeout    time.Duration
+	opts             UploadWorkerOptions
 }
 
 // NewUploadWorker wires a new UploadWorker. opts fields default in
@@ -152,19 +152,19 @@ func NewUploadWorker(
 		logger = slog.Default()
 	}
 	return &UploadWorker{
-		jobRepo:       jobRepo,
-		mediaStore:    mediaStore,
-		postStore:     postStore,
-		userRepo:      userStore,
-		storage:       storage,
+		jobRepo:          jobRepo,
+		mediaStore:       mediaStore,
+		postStore:        postStore,
+		userRepo:         userStore,
+		storage:          storage,
 		capRouter:        capRouter,
 		vault:            vault,
 		sourceRegistry:   sourceRegistry,
 		deliveryVerifier: deliveryVerifier,
 		interval:         interval,
-		logger:        logger,
-		uploadTimeout: 30 * time.Minute,
-		opts:          opts,
+		logger:           logger,
+		uploadTimeout:    30 * time.Minute,
+		opts:             opts,
 	}
 }
 
@@ -271,7 +271,13 @@ func (w *UploadWorker) Run(ctx context.Context) error {
 
 // runReclaimerLoop ticks on opts.ReclaimInterval, calling
 // ReclaimExpiredLeases with a 100-row per-tick cap so a backlog
-// can't tie up the DB.
+// can't tie up the DB. Task 10/10: each successful reclaim
+// increments metrics.lease_expiry_total{upload} by the row-count so
+// the metric preserves per-row fidelity (a tick that recovers 7
+// rows shows +7, not +1). The recovery test
+// (TestReclaimExpiredLeases_FailsIfReclaimRemoved) asserts this
+// wire-up is in place; removing the line below causes the metric
+// to stay flat against the asserted value and the test to fail.
 func (w *UploadWorker) runReclaimerLoop(ctx context.Context) {
 	ticker := time.NewTicker(w.opts.ReclaimInterval)
 	defer ticker.Stop()
@@ -285,6 +291,7 @@ func (w *UploadWorker) runReclaimerLoop(ctx context.Context) {
 				w.logger.Error("upload worker: reclaimer tick failed", "error", err)
 			} else if n > 0 {
 				w.logger.Info("upload worker: reclaimer recovered rows", "count", n)
+				metrics.RecordLeaseExpiry("upload", n)
 			}
 		}
 	}
@@ -413,10 +420,11 @@ func (w *UploadWorker) runPoolTick(
 // Defer ordering — single defer matters:
 // Go defers run LIFO. We intentionally keep cancel + wg.Wait +
 // recover in ONE defer so the execution order on return is:
-//   1. recover()                  catches a panic from processor().
-//   2. MarkDeadLetter + err wrap  persists the dead-letter row.
-//   3. cancel()                   signals hbCtx.Done() to the goroutine.
-//   4. wg.Wait()                  blocks until the goroutine exits.
+//  1. recover()                  catches a panic from processor().
+//  2. MarkDeadLetter + err wrap  persists the dead-letter row.
+//  3. cancel()                   signals hbCtx.Done() to the goroutine.
+//  4. wg.Wait()                  blocks until the goroutine exits.
+//
 // Without this consolidation, splitting the three into separate
 // defers creates a deadlock — wg.Wait must run AFTER cancel or it
 // can never return (the goroutine only exits on hbCtx.Done()), but

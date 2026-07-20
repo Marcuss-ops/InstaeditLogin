@@ -51,13 +51,13 @@ type AdminChannelRow struct {
 // dashboard renders "active 187 / reauth_required 13" as a single
 // SUM-after-FILTER query so a 200-channel fleet is one roundtrip.
 type AdminChannelCounts struct {
-	Active           int
-	Expired          int
-	ReauthRequired   int
-	Revoked          int
-	Disconnected     int
-	Error            int
-	Total            int
+	Active         int
+	Expired        int
+	ReauthRequired int
+	Revoked        int
+	Disconnected   int
+	Error          int
+	Total          int
 }
 
 // ChannelCounts returns the per-status counts + total. One
@@ -154,16 +154,16 @@ func (r *AdminRepository) ListChannelsForOps(ctx context.Context, statusFilter, 
 // dashboard renders "depth=47 / stuck=2 / in-flight=3" without
 // hitting the upload_jobs table for every row.
 type AdminQueueCounts struct {
-	PendingCount    int
-	LeasedCount     int
-	ProcessingCount int
-	IngestCompleted int
+	PendingCount     int
+	LeasedCount      int
+	ProcessingCount  int
+	IngestCompleted  int
 	PublishCompleted int
-	FailedCount     int
-	DeadLetterCount int
-	CancelledCount  int
-	RetryWaitCount  int
-	Total           int
+	FailedCount      int
+	DeadLetterCount  int
+	CancelledCount   int
+	RetryWaitCount   int
+	Total            int
 	// StuckCount is the combined D3.c ∪ D3.a match: rows that are
 	// (status='leased' AND heartbeat stale AND lease_expired) OR
 	// (status IN ('processing','leased') AND started_at < NOW() - 15m).
@@ -238,8 +238,8 @@ func (r *AdminRepository) InFlightPerWorker(ctx context.Context) ([]AdminInFligh
 	var out []AdminInFlightRow
 	for rows.Next() {
 		var (
-			w        AdminInFlightRow
-			oldestS  sql.NullFloat64
+			w       AdminInFlightRow
+			oldestS sql.NullFloat64
 		)
 		if err := rows.Scan(&w.WorkerID, &w.JobCount, &oldestS); err != nil {
 			return nil, fmt.Errorf("admin: scan in-flight row: %w", err)
@@ -258,19 +258,19 @@ func (r *AdminRepository) InFlightPerWorker(ctx context.Context) ([]AdminInFligh
 // operator doesn't have to guess whether D3.c (wall-clock) or D3.a
 // (lease + heartbeat) fired.
 type AdminStuckJobRow struct {
-	JobID         int64
-	UserID        int64
-	WorkspaceID   int64
-	SourceType    string
-	SourceID      string
-	Title         string
-	Status        string
-	AttemptCount  int
-	LeaseOwner    string
-	HeartbeatAt   *time.Time
+	JobID          int64
+	UserID         int64
+	WorkspaceID    int64
+	SourceType     string
+	SourceID       string
+	Title          string
+	Status         string
+	AttemptCount   int
+	LeaseOwner     string
+	HeartbeatAt    *time.Time
 	LeaseExpiresAt *time.Time
-	StartedAt     *time.Time
-	StuckReason   string
+	StartedAt      *time.Time
+	StuckReason    string
 }
 
 // ListStuckJobs returns the rows matching D3.c ∪ D3.a. LIMIT 200
@@ -330,6 +330,94 @@ func (r *AdminRepository) ListStuckJobs(ctx context.Context, limit int) ([]Admin
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// AdminDeadLetterJobRow (Task 10/10 — operator triage endpoint)
+// surfaces upload_jobs rows whose retry budget has been
+// exhausted (status='dead_letter'). The handler at
+// /admin/upload_jobs/dead_letter (and its .csv companion) renders
+// the operator's actionable triage list. Distinct from
+// AdminStuckJobRow because (a) the filter is terminal-status only
+// (no wall-clock/heartbeat coupling) and (b) the operator wants
+// `error_code` + `error_message` to drive the triage decision, not
+// the row internals.
+type AdminDeadLetterJobRow struct {
+	JobID          int64      `json:"job_id"`
+	UserID         int64      `json:"user_id"`
+	WorkspaceID    int64      `json:"workspace_id"`
+	SourceType     string     `json:"source_type"`
+	SourceID       string     `json:"source_id"`
+	Title          string     `json:"title"`
+	Status         string     `json:"status"`
+	AttemptCount   int        `json:"attempt_count"`
+	ErrorCode      string     `json:"error_code"`
+	ErrorMessage   string     `json:"error_message"`
+	DeadLetteredAt *time.Time `json:"dead_lettered_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+}
+
+// ListDeadLetterJobs returns upload_jobs rows in status='dead_letter',
+// ordered by completed_at DESC NULLS LAST (most recent failures
+// first). Bounded by `limit` (max 500) so the JSON payload stays
+// under the dashboard render budget. The Task 10/10 acceptance
+// criterion: a row that hits max_attempts MUST surface here so the
+// operator can decide between manual retry / cancel / ignore.
+//
+// Single-statement SELECT — no joins, no aggregation. The columns
+// are documented in migration 046 (upload_jobs.error_code,
+// error_message, completed_at). Migration 045 added the 'dead_letter'
+// enum value; the index idx_upload_jobs_status_dead_letter (added
+// in migration 046) keeps this query fast even at 1M+ row scale.
+func (r *AdminRepository) ListDeadLetterJobs(ctx context.Context, limit int) ([]AdminDeadLetterJobRow, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, user_id, workspace_id, source_type, source_id,
+		        COALESCE(title, '') AS title,
+		        status, attempt_count,
+		        COALESCE(error_code, '') AS error_code,
+		        COALESCE(error_message, '') AS error_message,
+		        completed_at
+		 FROM upload_jobs
+		 WHERE status = 'dead_letter'
+		 ORDER BY completed_at DESC NULLS LAST
+		 LIMIT $1`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("admin: list dead-letter jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []AdminDeadLetterJobRow
+	for rows.Next() {
+		var jr AdminDeadLetterJobRow
+		if err := rows.Scan(
+			&jr.JobID, &jr.UserID, &jr.WorkspaceID,
+			&jr.SourceType, &jr.SourceID, &jr.Title,
+			&jr.Status, &jr.AttemptCount,
+			&jr.ErrorCode, &jr.ErrorMessage,
+			&jr.CompletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("admin: scan dead-letter row: %w", err)
+		}
+		// deadLetteredAt mirrors completed_at for terminal-status
+		// rows: completed_at is set when the row reaches a
+		// terminal status (published/failed/dead_letter/etc per
+		// migration 046's CHECK constraint). The dashboard prefers
+		// the semantic name; SQL stays neutral for non-terminal
+		// rows that share the same column.
+		if jr.CompletedAt != nil {
+			t := *jr.CompletedAt
+			jr.DeadLetteredAt = &t
+		}
+		out = append(out, jr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("admin: iterate dead-letter jobs: %w", err)
+	}
+	return out, nil
 }
 
 // AdminErrorRateRow is one channel's error rate over a single
@@ -399,13 +487,13 @@ func (r *AdminRepository) ErrorRatePerChannel(ctx context.Context, windowInterva
 // v3 docs); an operator may lower it if their traffic is dominantly
 // cheaper endpoints. DailyBudgetUnits defaults to 10000.
 type AdminYouTubeQuota struct {
-	WindowHours         int
-	EstimatedUnits      int64
-	SuccessCount        int
-	QuotaFailures       int
-	DailyBudgetUnits    int64
-	RemainingEstimate   int64
-	CostPerUploadUnits  int64
+	WindowHours        int
+	EstimatedUnits     int64
+	SuccessCount       int
+	QuotaFailures      int
+	DailyBudgetUnits   int64
+	RemainingEstimate  int64
+	CostPerUploadUnits int64
 }
 
 // YouTubeQuotaApproximation (D2.b) reads the existing

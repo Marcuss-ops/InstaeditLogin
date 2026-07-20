@@ -103,3 +103,10 @@ Content-Type: `application/json` (NOT `text/plain`).
 - Reverse proxy (Caddy / Cloudflare / nginx) MUST refuse public access to `/internal/v1/*`
 - Docker Compose local: `instaedit-api` consumes the var via `internal/config.Config.VeloxAPIToken`
 - Production (Fly): var is a secret; set via `flyctl secrets set VELOX_API_TOKEN=...` (see `scripts/verify-fly-secrets.sh`)
+
+## Admin · Dead-letter job triage (Task 10/10 — operator runbook)
+
+- `GET /admin/upload_jobs/dead_letter` — JSON list (up to 500 rows) of `upload_jobs` rows whose retry budget has been exhausted (`status='dead_letter'`). Returns `{count, jobs[], generated_at_unix}`. Each job row carries: `job_id`, `user_id`, `workspace_id`, `source_type`, `source_id`, `title`, `status`, `attempt_count`, `error_code`, `error_message`, `dead_lettered_at`. Auth: admin bearer JWT or admin API key; 401/403 for non-admin callers; 501 if the admin store is not wired.
+- `GET /admin/upload_jobs/dead_letter.csv` — CSV companion; identical row shape + a single-row header so spreadsheet imports work without a manual header pre-pend.
+
+The operator-facing row shape mirrors the JSON table-header in the response. `error_code` is one of the canonical taxonomy (`drive_error` / `s3_error` / `youtube_error` / `auth_error` / `timeout` / `""`) — see `internal/worker/upload_worker.go::classifyUploadError`.

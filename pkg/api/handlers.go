@@ -108,15 +108,15 @@ type Router struct {
 	// vault.Save sequence (kept on UserStore / VaultAPI for back-compat
 	// and unit-test seams). Nil is a startup wiring mistake — every
 	// router serving /api/v1/auth/... callbacks must supply one.
-	authorizer       services.ChannelAuthorizer
-	oneTimeCodes     *OneTimeCodeStore
-	frontendURL      string
-	allowedOrigin    []string
-	maxUploadBytes   int64
-	rateLimiter      *rateLimiter // FASE 1.2: per-IP token bucket
-	authEmailSvc     AuthEmailStore
-	teamStore        TeamStore
-	billingSvc       BillingServiceAPI
+	authorizer     services.ChannelAuthorizer
+	oneTimeCodes   *OneTimeCodeStore
+	frontendURL    string
+	allowedOrigin  []string
+	maxUploadBytes int64
+	rateLimiter    *rateLimiter // FASE 1.2: per-IP token bucket
+	authEmailSvc   AuthEmailStore
+	teamStore      TeamStore
+	billingSvc     BillingServiceAPI
 	// groupStore backs /api/v1/groups/* (TAGLIO X.Y). Optional —
 	// mirrors the WorkspaceStore / PostStore nil-guard pattern: if
 	// not wired, every handler returns 501 Not Implemented. Wired
@@ -578,6 +578,12 @@ type UploadJobStore interface {
 
 type RouterOption func(*Router)
 
+// WithVeloxDownloadJobChannel wires the durable Velox→InstaEdit handoff
+// queue. The API only enqueues; the worker process consumes it.
+func WithVeloxDownloadJobChannel(ch chan VeloxDownloadJob) RouterOption {
+	return func(r *Router) { r.downloadJobCh = ch }
+}
+
 func WithWorkspaceStore(repo WorkspaceStore) RouterOption {
 	return func(r *Router) { r.workspaceStore = repo }
 }
@@ -819,6 +825,12 @@ type AdminStore interface {
 	QueueCounts(ctx context.Context) (repository.AdminQueueCounts, error)
 	InFlightPerWorker(ctx context.Context) ([]repository.AdminInFlightRow, error)
 	ListStuckJobs(ctx context.Context, limit int) ([]repository.AdminStuckJobRow, error)
+	// ListDeadLetterJobs (Task 10/10) surfaces upload_jobs in
+	// status='dead_letter' so the operator can triage retry-budget
+	// exhaustions. JSON via /admin/upload_jobs/dead_letter; CSV via
+	// /admin/upload_jobs/dead_letter.csv. Bounded by 500 so the
+	// response stays under the dashboard render budget.
+	ListDeadLetterJobs(ctx context.Context, limit int) ([]repository.AdminDeadLetterJobRow, error)
 	ErrorRatePerChannel(ctx context.Context, windowInterval, windowLabel string, limit int) ([]repository.AdminErrorRateRow, error)
 	YouTubeQuotaApproximation(ctx context.Context, window time.Duration, dailyBudgetUnits, costPerUploadUnits int64) (repository.AdminYouTubeQuota, error)
 	// UpsertPendingChannel (P2 — admin CSV import) bulk-upserts
@@ -889,6 +901,16 @@ func (r *Router) Setup() http.Handler {
 		r.mux.Method(http.MethodGet, "/admin/channels.csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminChannelsCSV)))
 		r.mux.Method(http.MethodGet, "/admin/queue", adminAuthMiddleware(http.HandlerFunc(r.handleAdminQueue)))
 		r.mux.Method(http.MethodGet, "/admin/queue.csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminQueueCSV)))
+		// Task 10/10 — operator-triage endpoints for dead-lettered
+		// upload_jobs. Two-sibling JSON + CSV convention mirrors
+		// /admin/queue.{csv} so operators can wire the same dashboard
+		// + spreadsheet export pipeline they already use for the
+		// stuck-job list. 500-row hard cap stays under the dashboard
+		// render budget; the `error_code` + `error_message` columns
+		// let the operator decide retry / cancel / ignore without
+		// paging through the full DB.
+		r.mux.Method(http.MethodGet, "/admin/upload_jobs/dead_letter", adminAuthMiddleware(http.HandlerFunc(r.handleAdminUploadJobsDeadLetter)))
+		r.mux.Method(http.MethodGet, "/admin/upload_jobs/dead_letter.csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminUploadJobsDeadLetterCSV)))
 		r.mux.Method(http.MethodGet, "/admin/health", adminAuthMiddleware(http.HandlerFunc(r.handleAdminHealth)))
 		r.mux.Method(http.MethodGet, "/admin/health.csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminHealthCSV)))
 		// P2 — operator-side channel onboarding surface (P2 task).

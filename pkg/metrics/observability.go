@@ -286,6 +286,47 @@ var (
 		[]string{"event_type", "reason"},
 	)
 
+	// leaseExpiryCount (Task 10/10) tracks lease expiries
+	// reclaimed by the background reclaimer. Labelled by source so
+	// the operator can distinguish an upload-pool reclaim storm
+	// from a publish-pool reclaim storm. An uptick typically means
+	// a worker crash mid-flight (heartbeat stopped) — the reaper
+	// recovers the row so the next pool tick can re-claim it.
+	// Couple with the upload_job_count-by-status gauge for the
+	// full picture (claim_rate vs expire_rate).
+	//
+	// Exported (capitalised L) so cross-package test rigs
+	// (notably internal/worker/task_10_10_recovery_test.go) can
+	// assert the counter increments via prometheus/testutil.
+	// Mirrors the YouTubePublishChannelMismatch export pattern.
+	LeaseExpiryCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "lease_expiry_total",
+			Help: "Worker lease expiries reclaimed by the background reclaimer, labelled by source (upload / publish). Each increment represents one tick of the reclaimer recovering N rows; the Add-by-N variant preserves per-row fidelity.",
+		},
+		[]string{"source"},
+	)
+
+	// resumableRecoveryCount (Task 10/10) tracks YouTube resumable
+	// session recoveries. Labelled by reason so the operator can
+	// distinguish a worker_restart (cold start, expected) from a
+	// chunk_lost (mid-upload crash, careful) from an upstream
+	// _timeout or _5xx (YouTube side degraded). This is the metric
+	// the runbook anchors for "is the upload path surviving crashes".
+	//
+	// Exported (capitalised R) so cross-package test rigs
+	// (notably internal/worker/task_10_10_recovery_test.go) can
+	// assert the counter increments via prometheus/testutil. Same
+	// trade-off as YouTubePublishChannelMismatch — production path
+	// is unexported call sites, test path needs cross-package read.
+	ResumableRecoveryCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "resumable_recovery_total",
+			Help: "YouTube resumable session recoveries, labelled by reason (worker_restart / chunk_lost / upstream_timeout / upstream_5xx). The metric behind the upload-path survival SLO; rate(this[5m]) > 0.1/min trips a warning.",
+		},
+		[]string{"reason"},
+	)
+
 	// uploadThroughputBytes (P2 — ops dashboard) tracks bytes that
 	// crossed a worker boundary. provider discriminates the
 	// upstream (google_drive for ingest; youtube for publish);
@@ -364,6 +405,8 @@ func init() {
 		reauthRequiredAccounts,
 		YouTubePublishChannelMismatch,
 		webhookDeliveryFailures,
+		LeaseExpiryCount,
+		ResumableRecoveryCount,
 		uploadThroughputBytes,
 		httpRequestsTotal,
 		httpRequestLatencySeconds,
@@ -506,6 +549,53 @@ func ObserveHTTPRequest(route, method, status string, seconds float64) {
 	}
 	httpRequestsTotal.WithLabelValues(route, method, status).Inc()
 	httpRequestLatencySeconds.WithLabelValues(route).Observe(seconds)
+}
+
+// RecordLeaseExpiry (Task 10/10) increments lease_expiry_total with
+// the per-row Add so a tick that recovers 7 rows shows up as +7 on
+// the counter, not +1. The source label scopes the metric to the
+// pool whose reclaim tick fired (upload today; publish will be
+// added as Task 10.10 follow-up).
+//
+// Callers: pkg.Worker.ReclaimerLoop ticks, after a successful
+// ReclaimExpiredLeases + affected > 0.
+//
+// Reason values (when defined): see WorkerLeaseSource* constants
+// below.
+func RecordLeaseExpiry(source string, recoveredRows int64) {
+	if source == "" || recoveredRows <= 0 {
+		return
+	}
+	LeaseExpiryCount.WithLabelValues(source).Add(float64(recoveredRows))
+}
+
+// Worker lease source label vocabulary for lease_expiry_total{source}.
+const (
+	WorkerLeaseSourceUpload  = "upload"  // upload_worker.runReclaimerLoop
+	WorkerLeaseSourcePublish = "publish" // publish_worker.runReclaimerLoop (future)
+	WorkerLeaseSourceIngest  = "ingest"  // ingest pool (alias to upload)
+)
+
+// ResumableRecoveryReason label values for resumable_recovery_total{reason}.
+const (
+	ResumableRecoveryReasonWorkerRestart = "worker_restart" // process restarted; persisted session URI reloaded
+	ResumableRecoveryReasonChunkLost     = "chunk_lost"     // mid-chunk crash; offset resumes from DB
+	ResumableRecoveryReasonUpstream5xx   = "upstream_5xx"   // YouTube replied 500/503; retried from offset
+	ResumableRecoveryReasonUpstreamTO    = "upstream_timeout"
+)
+
+// RecordResumableRecovery (Task 10/10) increments
+// resumable_recovery_total. Called whenever the worker re-attaches
+// to a persisted YouTube session URI + offset (SaveYouTubeSession
+// path) OR re-initiates a session after a recoverable upstream
+// failure (chunk PUT 308 + session URI persisting the offset).
+//
+// Reason vocabulary is canonical for grep / dashboard filter.
+func RecordResumableRecovery(reason string) {
+	if reason == "" {
+		reason = ResumableRecoveryReasonChunkLost
+	}
+	ResumableRecoveryCount.WithLabelValues(reason).Inc()
 }
 
 // SetQueueDepth / SetQueueLagSeconds / SetTargetsByStatus / SetDeadLetterCount /

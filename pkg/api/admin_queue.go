@@ -10,9 +10,23 @@ import (
 // queue depth by status (counts), stuck-job count (D3.c ∪ D3.a
 // combined), and per-worker in-flight breakdown.
 type AdminQueueResponse struct {
-	Counts        repository.AdminQueueCounts      `json:"counts"`
-	InFlight      []repository.AdminInFlightRow    `json:"in_flight_per_worker"`
-	Generated     int64                            `json:"generated_at_unix"`
+	Counts    repository.AdminQueueCounts   `json:"counts"`
+	InFlight  []repository.AdminInFlightRow `json:"in_flight_per_worker"`
+	Generated int64                         `json:"generated_at_unix"`
+}
+
+// AdminDeadLetterJobsResponse (Task 10/10) is the JSON body for
+// GET /admin/upload_jobs/dead_letter. Lists upload_jobs rows
+// whose retry budget has been exhausted (status='dead_letter'),
+// ordered by completed_at DESC. The dashboard renders this list
+// so operators can triage retry-budget exhaustions and decide
+// between manual retry / cancel / ignore per row. Bounded by 500
+// rows per the repo's hard cap; subsequent pages are a future
+// cursor-based follow-up.
+type AdminDeadLetterJobsResponse struct {
+	Jobs      []repository.AdminDeadLetterJobRow `json:"jobs"`
+	Count     int                                `json:"count"`
+	Generated int64                              `json:"generated_at_unix"`
 }
 
 // handleAdminQueue (GET /admin/queue) returns the queue depth +
@@ -88,5 +102,78 @@ func (r *Router) handleAdminQueueCSV(w http.ResponseWriter, req *http.Request) {
 	}
 	if err := flush(); err != nil {
 		slogCSVStreamError("queue-stuck", err)
+	}
+}
+
+// handleAdminUploadJobsDeadLetter (Task 10/10 —
+// GET /admin/upload_jobs/dead_letter) returns up to 500
+// dead-lettered upload_jobs in JSON form. Sibling CSV variant
+// handleAdminUploadJobsDeadLetterCSV is the stream-out shape for
+// the same data. The handler is the operator-triage endpoint
+// defined in the Definition of Done: every retry-exhausted row
+// surfaces here so an operator can decide retry / cancel / ignore
+// per row.
+func (r *Router) handleAdminUploadJobsDeadLetter(w http.ResponseWriter, req *http.Request) {
+	if r.adminStore == nil {
+		writeError(w, http.StatusNotImplemented, "admin store not configured")
+		return
+	}
+	jobs, err := r.adminStore.ListDeadLetterJobs(req.Context(), 500)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list dead-letter jobs: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminDeadLetterJobsResponse{
+		Jobs:      jobs,
+		Count:     len(jobs),
+		Generated: nowUnix(),
+	})
+}
+
+// handleAdminUploadJobsDeadLetterCSV (Task 10/10 —
+// GET /admin/upload_jobs/dead_letter.csv) streams the dead-lettered
+// rows as CSV. Same row shape as the JSON variant but columns
+// are first-row-stable so a spreadsheet import "just works".
+// Columns: job_id, user_id, workspace_id, source_type, source_id,
+// title, status, attempt_count, error_code, error_message,
+// dead_lettered_at.
+func (r *Router) handleAdminUploadJobsDeadLetterCSV(w http.ResponseWriter, req *http.Request) {
+	if r.adminStore == nil {
+		writeError(w, http.StatusNotImplemented, "admin store not configured")
+		return
+	}
+	jobs, err := r.adminStore.ListDeadLetterJobs(req.Context(), 500)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not list dead-letter jobs: "+err.Error())
+		return
+	}
+
+	_, csvw, flush, err := writeAdminCSV(w, "upload-jobs-dead_letter")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "csv writer init failed")
+		return
+	}
+	_ = csvw.Write([]string{
+		"job_id", "user_id", "workspace_id", "source_type", "source_id", "title",
+		"status", "attempt_count", "error_code", "error_message", "dead_lettered_at",
+	})
+	for _, j := range jobs {
+		_ = csvw.Write([]string{
+			itoa(j.JobID),
+			itoa(j.UserID),
+			itoa(j.WorkspaceID),
+			j.SourceType,
+			j.SourceID,
+			j.Title,
+			j.Status,
+			itoa(int64(j.AttemptCount)),
+			j.ErrorCode,
+			j.ErrorMessage,
+			formatTimePtr(j.DeadLetteredAt),
+		})
+	}
+	if err := flush(); err != nil {
+		slogCSVStreamError("upload-jobs-dead_letter", err)
 	}
 }

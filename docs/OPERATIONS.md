@@ -625,3 +625,36 @@ The provider key has different capture semantics than the rest of the `.env.prod
 | Fly doc / API URL contract | `api/openapi.yaml` |
 | Cookie / CSRF cross-subdomain semantic | `internal/auth/csrf.go` + `internal/config/config.go` Blocco #2.4 |
 | Free-tier provider matrix (TikTok/X/YouTube/LinkedIn/Stripe disabled in beta) | `docs/PROVIDER_MATRIX.md` |
+
+## §10 Worker Recovery (Task 10/10 — final pillar of the Definition of Done)
+
+Task 10/10 wires the operator-triage workflow for all six worker failure-path scenarios. Operators reading this section find the dead-letter endpoint + the recovery metrics they need to spot a worker crash storm before it cascades.
+
+### Dead-letter endpoint (Task 10/10)
+
+| Endpoint | Shape | Notes |
+| --- | --- | --- |
+| `GET /admin/upload_jobs/dead_letter` | JSON | Up to 500 upload_jobs in `status='dead_letter'`, ordered by `completed_at DESC`. Auth: admin JWT or admin API key. 401/403 for non-admin callers; 501 if the admin store is not wired. |
+| `GET /admin/upload_jobs/dead_letter.csv` | CSV | Same row shape, single-row header for spreadsheet import. 501 if the admin store is not wired. |
+
+A row appears in this list ONLY when `MarkDeadLetter` runs, which itself fires from `internal/worker/upload_worker.go::handleProcessingError` when `job.AttemptCount >= job.MaxAttempts` (the retry budget has been exhausted). The operator decides per row: manual retry, cancel, or ignore.
+
+### Recovery metrics (Prometheus)
+
+| Metric | Labels | Description |
+| --- | --- | --- |
+| `lease_expiry_total` | `source="upload"` (today; `publish`/`ingest` come as the publish pool's reclaim lands) | Worker lease expiries reclaimed by the background reclaimer. An uptick typically means a worker crash mid-flight (heartbeat stopped); the reaper recovers the row so the next pool tick can re-claim it. |
+| `resumable_recovery_total` | `reason="worker_restart"\|"chunk_lost"\|"upstream_5xx"\|"upstream_timeout"` | YouTube resumable session recoveries. `worker_restart` is the cold-start expected-rate; `chunk_lost` and `upstream_*` are the alerting signals. Rate > 0.1/min for `chunk_lost` warrants an operator scrapbook entry. |
+
+### Explicit-protection tests (Task 10/10)
+
+Six unit tests live in `internal/worker/task_10_10_recovery_test.go` and each one FAILS when its protection is removed (sqlmock + Prometheus testutil double-check). Coverage matrix:
+
+1. Lease-expiry reclaim — `TestReclaimExpiredLeases_RecoversOrphanedJob` (SQL update + counter delta).
+2. YouTube resumable recovery — `TestYouTubeResumableRecovery_FailsIfClearNotCalled` (SaveYouTubeSession + counter delta).
+3. Concurrent-claim single-winner — `TestConcurrentClaim_OnlyOneOwner_FailsIfNoAdvisoryLock` (SKIP LOCKED + pg_advisory_xact_lock SQL primitives).
+4. publish_at future gate — `TestPublishAtFuture_ClaimGateFiltersBeforePublish` (CTE predicate shape).
+5. Worker-retry idempotency — `TestWorkerRetry_Idempotency_KeepsSamePayloadIdempotencyKey` (deterministic key across N attempts).
+6. Retry-exhausted dead-letter — `TestRetryExhausted_MarkDeadLetterAndAdminEndpointVisible` (MarkDeadLetter + ListDeadLetterJobs query).
+
+Each test fails in CI if the protection under test is removed — the runbook anchor here is "if you change a worker-side retry / lease / upload path, the matching test should break first".
