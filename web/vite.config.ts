@@ -62,6 +62,13 @@ function verifyApiBaseUrlPlugin() {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), verifyApiBaseUrlPlugin()],
+  build: {
+    // The main app chunk contains React, React Router, Tailwind runtime
+    // and most page components; ~830 kB is expected for this SPA. Raise
+    // the warning threshold instead of forcing artificial splits that would
+    // not improve runtime performance.
+    chunkSizeWarningLimit: 1000,
+  },
   server: {
     // Vite v5+ activates DNS-rebinding host validation when bound to a
     // non-loopback interface (--host 0.0.0.0 for cloudflared tunnel).
