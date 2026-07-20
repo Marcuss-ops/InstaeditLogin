@@ -351,9 +351,11 @@ func TestAuthorizeChannel_IneligibleStatusRejects(t *testing.T) {
 // TestAuthorizeChannel_ReauthFromExpiredStatusRejected is the
 // negative sym-pair to TestAuthorizeChannel_ReauthKeepsSameOAuthConnection.
 // It anchors the production-code rationale documented at
-// AuthorizeChannel: 'expired' is intentionally NOT in the eligibility
-// allow-list (pending_authorization, active, reauth_required), so the
-// reauth path that passes a fresh token MUST still be rejected — a
+// AuthorizeChannel (internal/services/channel_authorization.go
+// 'eligible' map lines ~228-232 + the rejection return ~234-236):
+// 'expired' is intentionally NOT in the eligibility allow-list
+// (pending_authorization, active, reauth_required), so the reauth
+// path that passes a fresh token MUST still be rejected — a
 // regression that widened the allow-list would silently resurrect a
 // stale grant whose refresh-token stream has been lost in the worker.
 // Surface error must mention both the eligibility gate AND the
