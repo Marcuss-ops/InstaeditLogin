@@ -293,6 +293,7 @@ func (s *ThreadsOAuthService) ValidateContent(payload models.PublishPayload) err
 	}
 	return nil
 }
+
 // =========================================================================
 // Publisher — synchronous path (creates container + publishes immediately)
 // =========================================================================
@@ -443,7 +444,6 @@ var (
 // =========================================================================
 // Helpers
 // =========================================================================
-
 
 func (s *ThreadsOAuthService) createContainer(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (string, error) {
 	slog.Info("Threads: creating media container", "user_id", platformUserID)

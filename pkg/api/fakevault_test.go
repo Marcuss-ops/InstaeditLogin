@@ -39,6 +39,26 @@ type fakeVault struct {
 	renewErr    error
 	saveErr     error
 	getErr      error
+	// renewCalls counts invocations of Renew (mirrors saveCount +
+	// revokeCount). Default 0; tests that need to assert "Renew was
+	// called exactly once" read this field after the request. The
+	// credential.VaultAPI compile-time assertion further down this
+	// file pins the interface — a regression that swapped the
+	// type would surface here as a build error before the test
+	// even runs.
+	renewCalls int
+	// renewFn overrides the canned Renew behaviour when set. When
+	// nil, Renew returns AccessToken="fake-renewed-bearer-for-test"
+	// verbatim (preserves the existing batch-import tests' canned
+	// semantics without forcing every test to wire a refresh
+	// closure). Tests that want to exercise the real refresh
+	// chain — vault → refresher → TokenData → OAuthToken → listing
+	// — wire this to invoke `ref(ctx, refreshString)` and echo the
+	// returned TokenData's AccessToken into the OAuthToken so the
+	// handler sees the post-refresh bearer, not a decoupled
+	// sentinel. See
+	// pkg/api/drive_batch_test.go::TestDriveBatchImport_EndToEndAuth_VaultRefreshChainDrivesFolderListing.
+	renewFn func(ctx context.Context, accountID int64, tokenType string, ref credentials.TokenRefresher) (*models.OAuthToken, error)
 }
 
 // fakeVaultPair is the (accountID, tokenData) helper used by
@@ -81,11 +101,22 @@ func (f *fakeVault) Rotate(_ context.Context, _ int64, _ *models.TokenData) erro
 	return nil
 }
 
-// Renew returns a canned access token, or renewErr if a test
-// pre-scripted (e.g. simulating refresh-token-revoked path).
-func (f *fakeVault) Renew(_ context.Context, _ int64, tokenType string, _ credentials.TokenRefresher) (*models.OAuthToken, error) {
+// Renew returns a canned access token by default (the existing
+// batch-import tests rely on this so they don't have to wire a
+// refresher closure). When renewFn is set, dispatches to it and
+// counts the call in renewCalls — tests that exercise the
+// production refresh chain (vault → refresher → TokenData →
+// OAuthToken → listing) set renewFn to a closure that invokes
+// `ref(...)` with a known refresh string. See
+// pkg/api/drive_batch_test.go::TestDriveBatchImport_EndToEndAuth_VaultRefreshChainDrivesFolderListing
+// for the canonical consumer.
+func (f *fakeVault) Renew(ctx context.Context, accountID int64, tokenType string, ref credentials.TokenRefresher) (*models.OAuthToken, error) {
 	if f.renewErr != nil {
 		return nil, f.renewErr
+	}
+	if f.renewFn != nil {
+		f.renewCalls++
+		return f.renewFn(ctx, accountID, tokenType, ref)
 	}
 	return &models.OAuthToken{
 		TokenType:   tokenType,

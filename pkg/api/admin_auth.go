@@ -10,15 +10,15 @@ import (
 // Manager.Middleware on each /admin/* route so the request context
 // already carries the Identity. The handler enforces:
 //
-//   1. Identity must be present (Manager.Middleware either
-//      deposited a UserIdentity or rejected with 401 — a missing
-//      Identity here is a routing bug, not a user error, and the
-//      401 fallback keeps the failure mode consistent).
-//   2. Identity.IsAdmin() must be true. API-key identities never
-//      satisfy this (ApiKeyIdentity.IsAdmin returns false) —
-//      operator endpoints are JWT-user only. The dashboard SPA's
-//      bootstrap operator mints a JWT with claims.Admin=true after
-//      cmd/grant-admin --email <email> flips users.is_admin.
+//  1. Identity must be present (Manager.Middleware either
+//     deposited a UserIdentity or rejected with 401 — a missing
+//     Identity here is a routing bug, not a user error, and the
+//     401 fallback keeps the failure mode consistent).
+//  2. Identity.IsAdmin() must be true. API-key identities never
+//     satisfy this (ApiKeyIdentity.IsAdmin returns false) —
+//     operator endpoints are JWT-user only. The dashboard SPA's
+//     bootstrap operator mints a JWT with claims.Admin=true after
+//     cmd/grant-admin --email <email> flips users.is_admin.
 //
 // Status codes:
 //   - 401 unauthorized: no Identity (no JWT, no API key, or a

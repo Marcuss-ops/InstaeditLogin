@@ -45,6 +45,7 @@ const veloxDownloadTimeout = 5 * time.Minute
 // invariants are unchanged — only their location moved up.
 type VeloxSource struct {
 	client *http.Client
+	token  string
 	logger *slog.Logger
 }
 
@@ -53,12 +54,17 @@ type VeloxSource struct {
 // inherits slog.Default(). Pool one VeloxSource across the
 // registry (http.Client has its own Transport-level concurrency;
 // reusing the same client across goroutines is safe AND efficient).
-func NewVeloxSource(logger *slog.Logger) *VeloxSource {
+func NewVeloxSource(logger *slog.Logger, tokens ...string) *VeloxSource {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	token := ""
+	if len(tokens) > 0 {
+		token = strings.TrimSpace(tokens[0])
+	}
 	return &VeloxSource{
 		client: &http.Client{Timeout: veloxDownloadTimeout},
+		token:  token,
 		logger: logger,
 	}
 }
@@ -87,6 +93,7 @@ func (s *VeloxSource) Inspect(ctx context.Context, job *models.UploadJob) (*Sour
 	if err != nil {
 		return nil, fmt.Errorf("velox inspect: build HEAD request: %w", err)
 	}
+	s.authorize(req)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("velox inspect: HEAD failed: %w", err)
@@ -142,6 +149,7 @@ func (s *VeloxSource) Open(ctx context.Context, job *models.UploadJob) (io.ReadC
 	if err != nil {
 		return nil, fmt.Errorf("velox open: build GET request: %w", err)
 	}
+	s.authorize(req)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("velox open: GET failed: %w", err)
@@ -151,6 +159,12 @@ func (s *VeloxSource) Open(ctx context.Context, job *models.UploadJob) (io.ReadC
 		return nil, fmt.Errorf("velox open: GET returned status %d", resp.StatusCode)
 	}
 	return resp.Body, nil
+}
+
+func (s *VeloxSource) authorize(req *http.Request) {
+	if s.token != "" {
+		req.Header.Set("Authorization", "Bearer "+s.token)
+	}
 }
 
 // resolveVeloxDownloadURL is the per-job download_url extractor.

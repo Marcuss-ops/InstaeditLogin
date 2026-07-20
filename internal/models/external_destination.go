@@ -23,12 +23,12 @@ import (
 // corresponding read endpoint. Field names are camelCase to mirror
 // the spec's "external_destination_id" rather than snake_case.
 type ExternalDestination struct {
-	ID                string          `json:"id"`                  // extdst_01J...
-	SourceSystem      string          `json:"source_system"`       // "velox" today
+	ID                string          `json:"id"`            // extdst_01J...
+	SourceSystem      string          `json:"source_system"` // "velox" today
 	WorkspaceID       int64           `json:"workspace_id"`
 	PlatformAccountID int64           `json:"platform_account_id"`
-	Enabled           bool            `json:"enabled"`             // operator toggle
-	DefaultMetadata   json.RawMessage `json:"default_metadata"`    // JSONB byte slice (round-trip)
+	Enabled           bool            `json:"enabled"`          // operator toggle
+	DefaultMetadata   json.RawMessage `json:"default_metadata"` // JSONB byte slice (round-trip)
 	CreatedAt         time.Time       `json:"created_at"`
 	UpdatedAt         time.Time       `json:"updated_at"`
 }

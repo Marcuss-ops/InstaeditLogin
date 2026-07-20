@@ -77,28 +77,28 @@ var ErrInspectNotImplemented = errors.New("artifact source: inspect not implemen
 // SourceMetadata is the artifact metadata extracted from Inspect.
 // Field rationale:
 //
-//   SizeBytes: server-reported length (HEAD Content-Length or
-//     equivalent). Used by the UI to show "importing a 800 MiB file".
-//     For ingest, the worker ALSO reads Content-Length from the
-//     Open response headers or the external_deliveries row when
-//     Inspect is not implemented by the source.
+//	SizeBytes: server-reported length (HEAD Content-Length or
+//	  equivalent). Used by the UI to show "importing a 800 MiB file".
+//	  For ingest, the worker ALSO reads Content-Length from the
+//	  Open response headers or the external_deliveries row when
+//	  Inspect is not implemented by the source.
 //
-//   MimeType: server-reported. Used by the UI for the "we're
-//     uploading a video/mp4" badge. The ingest layer uses
-//     external_deliveries.expected_mime_type (the upstream's
-//     declared mime) NOT this, when both are present.
+//	MimeType: server-reported. Used by the UI for the "we're
+//	  uploading a video/mp4" badge. The ingest layer uses
+//	  external_deliveries.expected_mime_type (the upstream's
+//	  declared mime) NOT this, when both are present.
 //
-//   ETag: server-reported cache validator. Used to short-circuit
-//     repeated Inspects (cheap); for ingest, the worker's
-//     comparison is byte-level via SHA so the etag is purely
-//     observational.
+//	ETag: server-reported cache validator. Used to short-circuit
+//	  repeated Inspects (cheap); for ingest, the worker's
+//	  comparison is byte-level via SHA so the etag is purely
+//	  observational.
 //
-//   SHA256Hex: server-reported SHA-256 (some S3-compatible stores
-//     surface this via x-amz-checksum-sha256 or similar; Velox may
-//     or may not). When present, a fast-path source MAY use it
-//     to skip the on-the-fly hasher and trust the upstream; when
-//     absent, the source stays honest and the worker hashes via
-//     TeeReader. Empty string means "I don't have it".
+//	SHA256Hex: server-reported SHA-256 (some S3-compatible stores
+//	  surface this via x-amz-checksum-sha256 or similar; Velox may
+//	  or may not). When present, a fast-path source MAY use it
+//	  to skip the on-the-fly hasher and trust the upstream; when
+//	  absent, the source stays honest and the worker hashes via
+//	  TeeReader. Empty string means "I don't have it".
 type SourceMetadata struct {
 	SizeBytes int64
 	MimeType  string

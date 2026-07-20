@@ -136,18 +136,18 @@ type DriveBatchImportV2OverflowResponse struct {
 // lock pattern in repository.queries.go::CreateIfSourceAbsent).
 //
 // Flow:
-//   1. requireUserID → JWT identity.
-//   2. parse + validate body (XOR targets; provider == "google_drive"; folder_id shape; schedule envelope).
-//   3. resolveWorkspace → workspace ownership check.
-//   4. resolve targets — if targets.group_name is set, expand to
-//      workspace_channels via WorkspaceRepository. Else use
-//      targets.account_ids verbatim.
-//   5. schedule heuristic clamp — compute projected horizon
-//      against the (estimated) file count zero or a cached value
-//      from prior crawls; surface schedule_clamped flag immediately
-//      so the SPA can say "your batch was truncated to N days".
-//   6. Insert header row (import_batches).
-//   7. Return 202 + {batch_id, status, schedule_clamped, reason}.
+//  1. requireUserID → JWT identity.
+//  2. parse + validate body (XOR targets; provider == "google_drive"; folder_id shape; schedule envelope).
+//  3. resolveWorkspace → workspace ownership check.
+//  4. resolve targets — if targets.group_name is set, expand to
+//     workspace_channels via WorkspaceRepository. Else use
+//     targets.account_ids verbatim.
+//  5. schedule heuristic clamp — compute projected horizon
+//     against the (estimated) file count zero or a cached value
+//     from prior crawls; surface schedule_clamped flag immediately
+//     so the SPA can say "your batch was truncated to N days".
+//  6. Insert header row (import_batches).
+//  7. Return 202 + {batch_id, status, schedule_clamped, reason}.
 func (r *Router) handleDriveBatchImportV2(w http.ResponseWriter, req *http.Request) {
 	if r.importBatchStore == nil {
 		writeError(w, http.StatusNotImplemented, "import batches not configured on this server")
@@ -312,13 +312,13 @@ func (r *Router) handleDriveBatchV2Status(w http.ResponseWriter, req *http.Reque
 }
 
 // validateDriveBatchV2Request enforces the producer-side invariants:
-//   * source.provider must be "google_drive" (extensible forward)
-//   * source.folder_id must match the URL-safe regex
-//   * workspace_id must be positive
-//   * target_account_ids XOR target_group_id
-//   * publish_schedule envelope shape + start_at in the future +
+//   - source.provider must be "google_drive" (extensible forward)
+//   - source.folder_id must match the URL-safe regex
+//   - workspace_id must be positive
+//   - target_account_ids XOR target_group_id
+//   - publish_schedule envelope shape + start_at in the future +
 //     min_gap_seconds <= max_gap_seconds
-//   * default_privacy_level must be one of public/unlisted/private
+//   - default_privacy_level must be one of public/unlisted/private
 //
 // Returned as typed errors so the handler maps to 422 — separate
 // from JSON-parse errors (400) so the SPA can distinguish "fix your

@@ -60,17 +60,17 @@ type CreatePostTarget struct {
 // clients do NOT pass it. Future ingress-time controls (e.g.
 // INGEST_LEAD_TIME_MINUTES env) live here, not in the wire shape.
 type CreatePostRequest struct {
-	WorkspaceID int64              `json:"workspace_id"`
-	Content     CreatePostContent  `json:"content"`
+	WorkspaceID int64             `json:"workspace_id"`
+	Content     CreatePostContent `json:"content"`
 	// scheduled_at is the legacy alias. New callers should send
 	// publish_at; both keys are accepted, publish_at wins if both
 	// are set. The struct pair is preserved for one minor version;
 	// P1#5 removes scheduled_at from the wire.
 	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
 	// publish_at is the canonical user-facing cursor.
-	PublishAt *time.Time          `json:"publish_at,omitempty"`
-	Status    models.PostStatus   `json:"status,omitempty"`
-	Targets   []CreatePostTarget  `json:"targets"`
+	PublishAt *time.Time         `json:"publish_at,omitempty"`
+	Status    models.PostStatus  `json:"status,omitempty"`
+	Targets   []CreatePostTarget `json:"targets"`
 }
 
 // ResolvePublishAt returns the canonical publish_at cursor for the
@@ -743,7 +743,7 @@ func (r *Router) handleRetryPost(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
-}// handleGetPostTargets lists all targets for a post.
+} // handleGetPostTargets lists all targets for a post.
 // GET /api/v1/posts/{id}/targets
 func (r *Router) handleGetPostTargets(w http.ResponseWriter, req *http.Request) {
 	if r.postStore == nil {

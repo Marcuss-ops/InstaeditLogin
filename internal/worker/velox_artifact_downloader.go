@@ -20,6 +20,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -70,6 +71,9 @@ type VeloxDownloadJob struct {
 	MimeType            string
 	DownloadURL         string
 	PublishAt           *time.Time
+	Targets             []int64
+	DriveAccountID      *int64
+	FolderID            *string
 }
 
 // ExternalDeliveryLookup is the minimal GetByID surface the
@@ -79,6 +83,14 @@ type VeloxDownloadJob struct {
 // doesn't reach into the repository package for one method.
 type ExternalDeliveryLookup interface {
 	GetByID(ctx context.Context, id string) (*models.ExternalDelivery, error)
+}
+
+type externalDeliveryLister interface {
+	ListByStatus(ctx context.Context, status models.ExternalDeliveryStatus, limit int) ([]models.ExternalDelivery, error)
+}
+
+type externalDeliveryByExternalID interface {
+	GetByExternalDeliveryID(ctx context.Context, sourceSystem, id string) (*models.ExternalDelivery, error)
 }
 
 // UploadJobCreator is the minimal Insert surface for the
@@ -166,6 +178,44 @@ func (d *VeloxArtifactDownloader) Run(ctx context.Context, ch <-chan VeloxDownlo
 	}
 }
 
+// RunPersistent also polls the durable external_deliveries journal. This is
+// required when the API and worker run as separate processes: their Go
+// channels are intentionally not shared across containers.
+func (d *VeloxArtifactDownloader) RunPersistent(ctx context.Context, ch <-chan VeloxDownloadJob, resolve func(context.Context, models.ExternalDelivery) (VeloxDownloadJob, bool)) error {
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case j, ok := <-ch:
+			if !ok {
+				ch = nil
+				continue
+			}
+			d.processOne(ctx, j)
+		case <-t.C:
+			lister, ok := d.extDeliveryLookup.(externalDeliveryLister)
+			if !ok || resolve == nil {
+				continue
+			}
+			rows, err := lister.ListByStatus(ctx, models.ExternalDeliveryStatusAccepted, 32)
+			if err != nil {
+				d.logger.Warn("velox downloader: durable poll failed", "error", err)
+				continue
+			}
+			for _, delivery := range rows {
+				if delivery.UploadJobID != nil || delivery.DownloadURL == nil || *delivery.DownloadURL == "" {
+					continue
+				}
+				if j, ok := resolve(ctx, delivery); ok {
+					d.processOne(ctx, j)
+				}
+			}
+		}
+	}
+}
+
 // processOne handles a single incoming download job. Each step has
 // fail-loud semantics: a failure logs WARN and skips the remainder
 // without rolling back earlier successful steps. The pool's claim
@@ -178,6 +228,11 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 	// source of truth for status (a peer may have stamped it
 	// between channel-enqueue and our pull).
 	delivery, err := d.extDeliveryLookup.GetByID(ctx, j.ExternalDeliveryID)
+	if delivery == nil {
+		if byExternal, ok := d.extDeliveryLookup.(externalDeliveryByExternalID); ok {
+			delivery, err = byExternal.GetByExternalDeliveryID(ctx, "velox", j.ExternalDeliveryID)
+		}
+	}
 	if err != nil {
 		d.logger.Warn("velox downloader: GetByID failed; skipping",
 			"external_delivery_id", j.ExternalDeliveryID, "error", err)
@@ -187,6 +242,10 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 		d.logger.Warn("velox downloader: external_delivery row missing; skipping",
 			"external_delivery_id", j.ExternalDeliveryID)
 		return
+	}
+	deliveryKey := delivery.ID
+	if deliveryKey == "" {
+		deliveryKey = j.ExternalDeliveryID
 	}
 
 	// (1a) Metadata-only delivery — the producer's payload omits
@@ -202,7 +261,7 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 	if isMetadataOnly {
 		code := "VELOX_METADATA_ONLY"
 		msg := "delivery has no download_url; metadata-only"
-		if tErr := d.fsm.ToBlockedAuth(ctx, j.ExternalDeliveryID, delivery.Status, code, msg); tErr != nil {
+		if tErr := d.fsm.ToBlockedAuth(ctx, deliveryKey, delivery.Status, code, msg); tErr != nil {
 			d.logger.Warn("velox downloader: ToBlockedAuth (metadata-only) failed; ignoring",
 				"external_delivery_id", j.ExternalDeliveryID, "error", tErr)
 		}
@@ -231,7 +290,7 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 	if srcID == "" {
 		code := "VELOX_DOWNLOAD_URL_EMPTY"
 		msg := "delivery.DownloadURL is empty at consumer time"
-		if tErr := d.fsm.ToBlockedAuth(ctx, j.ExternalDeliveryID, delivery.Status, code, msg); tErr != nil {
+		if tErr := d.fsm.ToBlockedAuth(ctx, deliveryKey, delivery.Status, code, msg); tErr != nil {
 			d.logger.Warn("velox downloader: empty-url ToBlockedAuth failed",
 				"external_delivery_id", j.ExternalDeliveryID, "error", tErr)
 		}
@@ -242,10 +301,14 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 		WorkspaceID:         j.WorkspaceID,
 		SourceType:          models.UploadJobSourceVeloxArtifact,
 		SourceID:            srcID,
+		Status:              models.UploadJobStatusPending,
 		Title:               j.Title,
 		Caption:             j.Caption,
 		DefaultPrivacyLevel: j.DefaultPrivacyLevel,
 		PublishAt:           j.PublishAt,
+		Targets:             extractMetadataInt64s(delivery.Metadata, "target_account_ids"),
+		DriveAccountID:      extractMetadataInt64Ptr(delivery.Metadata, "drive_account_id"),
+		FolderID:            extractMetadataStringPtr(delivery.Metadata, "folder_id"),
 	}
 	if createErr := d.uploadJobs.Create(uploadJob); createErr != nil {
 		d.logger.Warn("velox downloader: UploadJobRepository.Create failed; skipping",
@@ -268,7 +331,7 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 	// triple for verification. Without the link the row's
 	// deliveryVerifier returns nothing and the pool silently
 	// no-ops the integrity check.
-	if linkErr := d.extDeliveryLinker.LinkUploadJob(ctx, j.ExternalDeliveryID, newJobID); linkErr != nil {
+	if linkErr := d.extDeliveryLinker.LinkUploadJob(ctx, deliveryKey, newJobID); linkErr != nil {
 		d.logger.Warn("velox downloader: LinkUploadJob failed; upload_job orphan, reaper will recover",
 			"external_delivery_id", j.ExternalDeliveryID,
 			"upload_job_id", newJobID, "error", linkErr)
@@ -280,7 +343,7 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 	// it anyway. A FSM skew usually means a peer already-stamped
 	// the row, in which case ErrIllegalTransition is the expected
 	// outcome (drop silently, log WARN).
-	if fsmErr := d.fsm.ToDownloading(ctx, j.ExternalDeliveryID, delivery.Status); fsmErr != nil {
+	if fsmErr := d.fsm.ToDownloading(ctx, deliveryKey, delivery.Status); fsmErr != nil {
 		d.logger.Warn("velox downloader: ToDownloading failed; upload_job still linked",
 			"external_delivery_id", j.ExternalDeliveryID,
 			"from_status", delivery.Status, "error", fsmErr)
@@ -291,4 +354,43 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 		"external_delivery_id", j.ExternalDeliveryID,
 		"upload_job_id", newJobID,
 		"size_bytes", j.SizeBytes)
+}
+
+func extractMetadataMap(raw json.RawMessage) map[string]any {
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	return m
+}
+
+func extractMetadataInt64s(raw json.RawMessage, key string) []int64 {
+	v, ok := extractMetadataMap(raw)[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]int64, 0, len(v))
+	for _, item := range v {
+		if n, ok := item.(float64); ok && n > 0 {
+			out = append(out, int64(n))
+		}
+	}
+	return out
+}
+
+func extractMetadataInt64Ptr(raw json.RawMessage, key string) *int64 {
+	v, ok := extractMetadataMap(raw)[key].(float64)
+	if !ok || v <= 0 {
+		return nil
+	}
+	n := int64(v)
+	return &n
+}
+
+func extractMetadataStringPtr(raw json.RawMessage, key string) *string {
+	v, ok := extractMetadataMap(raw)[key].(string)
+	if !ok || v == "" {
+		return nil
+	}
+	return &v
 }

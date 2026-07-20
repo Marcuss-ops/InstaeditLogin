@@ -19,6 +19,7 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -641,7 +642,26 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				worker.NewIngestFSM(deliveryRepo, slog.Default()),
 				slog.Default(),
 			)
-			if err := downloader.Run(c, a.VeloxDownloadJobs); err != nil && err != context.Canceled {
+			destinationRepo := repository.NewExternalDestinationRepository(a.DB)
+			workspaceRepo := repository.NewWorkspaceRepository(a.DB)
+			resolve := func(ctx context.Context, delivery models.ExternalDelivery) (worker.VeloxDownloadJob, bool) {
+				dst, err := destinationRepo.GetByID(ctx, delivery.ExternalDestinationID)
+				if err != nil || dst == nil {
+					return worker.VeloxDownloadJob{}, false
+				}
+				ws, err := workspaceRepo.FindByID(dst.WorkspaceID)
+				if err != nil || ws == nil {
+					return worker.VeloxDownloadJob{}, false
+				}
+				var meta map[string]any
+				_ = json.Unmarshal(delivery.Metadata, &meta)
+				j := worker.VeloxDownloadJob{ExternalDeliveryID: delivery.ExternalDeliveryID, UserID: ws.OwnerID, WorkspaceID: ws.ID,
+					ArtifactSHA256: delivery.ExpectedSHA256, SizeBytes: delivery.ExpectedSizeBytes, MimeType: delivery.ExpectedMimeType,
+					DownloadURL: valueString(delivery.DownloadURL), Title: valueStringMap(meta, "title"), Caption: valueStringMap(meta, "caption"),
+					Targets: valueIntsMap(meta, "target_account_ids"), DriveAccountID: valueIntPtrMap(meta, "drive_account_id"), FolderID: valueStringPtrMap(meta, "folder_id"), PublishAt: delivery.PublishAt}
+				return j, j.DownloadURL != ""
+			}
+			if err := downloader.RunPersistent(c, a.VeloxDownloadJobs, resolve); err != nil && err != context.Canceled {
 				slog.Error("velox artifact downloader exited with error", "error", err)
 			}
 		}()
@@ -684,7 +704,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 					}
 				}
 			}
-			if regErr := sourceRegistry.Register(worker.NewVeloxSource(a.Logger)); regErr != nil {
+			if regErr := sourceRegistry.Register(worker.NewVeloxSource(a.Logger, a.Cfg.VeloxAPIToken)); regErr != nil {
 				a.Logger.Error("upload worker: register velox source", "error", regErr)
 			}
 			a.Logger.Info("upload worker: source registry built",
@@ -787,6 +807,39 @@ func (a *App) RunWorkers(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func valueString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+func valueStringMap(m map[string]any, k string) string { v, _ := m[k].(string); return v }
+func valueStringPtrMap(m map[string]any, k string) *string {
+	v := valueStringMap(m, k)
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+func valueIntPtrMap(m map[string]any, k string) *int64 {
+	v, ok := m[k].(float64)
+	if !ok {
+		return nil
+	}
+	n := int64(v)
+	return &n
+}
+func valueIntsMap(m map[string]any, k string) []int64 {
+	raw, _ := m[k].([]any)
+	out := make([]int64, 0, len(raw))
+	for _, x := range raw {
+		if v, ok := x.(float64); ok {
+			out = append(out, int64(v))
+		}
+	}
+	return out
 }
 
 type connectionStateStoreWrapper struct {

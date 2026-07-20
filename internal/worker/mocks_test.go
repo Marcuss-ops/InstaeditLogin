@@ -46,13 +46,13 @@ import (
 // counter is increment-protected because some tests drive multiple
 // targets concurrently.
 type mockUserStore struct {
-	mu                       sync.Mutex
-	findPlatformAccountFn    func(id int64) (*models.PlatformAccount, error)
-	markReauthRequiredFn     func(ctx context.Context, id int64, code, message string) error
-	markReauthRequiredCalls  int
-	lastMarkReauthCode       string
-	lastMarkReauthMessage    string
-	lastMarkReauthAccountID  int64
+	mu                      sync.Mutex
+	findPlatformAccountFn   func(id int64) (*models.PlatformAccount, error)
+	markReauthRequiredFn    func(ctx context.Context, id int64, code, message string) error
+	markReauthRequiredCalls int
+	lastMarkReauthCode      string
+	lastMarkReauthMessage   string
+	lastMarkReauthAccountID int64
 }
 
 func (m *mockUserStore) FindPlatformAccountByID(id int64) (*models.PlatformAccount, error) {
@@ -131,12 +131,20 @@ type mockProvider struct {
 	// validateChannelBindingCalls — mu-protected counter for tests
 	// asserting the check was invoked exactly once per target.
 	validateChannelBindingCalls int
+	// canaryUploadFn (Task 7/10) — when non-nil, CanaryUpload returns
+	// whatever this fn returns. When nil (default), returns nil +
+	// services.ErrYouTubeCanaryRejected so the worker's
+	// SetCanonicalCanaryUploader(nil) defensive path is exercised.
+	canaryUploadFn func(ctx context.Context, accessToken, expectedChannelID string) (*services.CanaryUploadResult, error)
+	// canaryUploadCalls — mu-protected counter so tests can assert the
+	// pre-flight was invoked exactly N times.
+	canaryUploadCalls int
 	// capturedAccessToken / capturedExpectedChannelID record the
 	// inputs to ValidateChannelBinding so tests can assert the
 	// worker forwarded the post-renew access_token + the platform
 	// account's platform_user_id (not stale values).
-	capturedAccessToken      string
-	capturedExpectedChannel  string
+	capturedAccessToken     string
+	capturedExpectedChannel string
 }
 
 func (m *mockProvider) GetLoginURL(state string) string {
@@ -183,6 +191,21 @@ func (m *mockProvider) ValidateChannelBinding(ctx context.Context, accessToken, 
 	}
 	return m.validateChannelBindingFn(ctx, accessToken, expectedChannelID)
 }
+
+// CanaryUpload (Task 7/10) implements services.YouTubeCanaryUploader.
+// When canaryUploadFn is nil (default), returns nil +
+// services.ErrYouTubeCanaryRejected — matches the production
+// shape when the canary capability is absent.
+func (m *mockProvider) CanaryUpload(ctx context.Context, accessToken, expectedChannelID string) (*services.CanaryUploadResult, error) {
+	m.mu.Lock()
+	m.canaryUploadCalls++
+	m.mu.Unlock()
+	if m.canaryUploadFn == nil {
+		return nil, services.ErrYouTubeCanaryRejected
+	}
+	return m.canaryUploadFn(ctx, accessToken, expectedChannelID)
+}
+
 
 // mockAsyncProvider (Taglio 4.2) satisfies services.AsyncPublisher
 // in addition to Publisher. The router will register it under the

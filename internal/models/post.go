@@ -162,11 +162,11 @@ type PostID int64
 // canonical key. The alias is populated server-side from PublishAt
 // in the API response layer (pkg/api/posts.go).
 type Post struct {
-	ID             int64      `json:"id"`
-	WorkspaceID    int64      `json:"workspace_id"`
-	Title          string     `json:"title,omitempty"`
-	Caption        string     `json:"caption,omitempty"`
-	MediaURL       string     `json:"media_url,omitempty"`
+	ID          int64  `json:"id"`
+	WorkspaceID int64  `json:"workspace_id"`
+	Title       string `json:"title,omitempty"`
+	Caption     string `json:"caption,omitempty"`
+	MediaURL    string `json:"media_url,omitempty"`
 	// P1 (migration 053) — PrivacyLevel is the per-post override set by
 	// the API endpoints (POST /posts and PATCH /posts/:id). Highest
 	// precedence term in the publish_worker cascade:
@@ -189,11 +189,17 @@ type Post struct {
 	//             happens at insert time (or at the row's first
 	//             publish_worker tick for pre-migration rows).
 	// PublishAt:  user-supplied schedule (NULL = publish now).
-	IngestAfter time.Time  `json:"ingest_after"`
-	PublishAt   *time.Time `json:"publish_at,omitempty"`
-	Status      PostStatus `json:"status"`
+	IngestAfter    time.Time  `json:"ingest_after"`
+	PublishAt      *time.Time `json:"publish_at,omitempty"`
+	Status         PostStatus `json:"status"`
 	IdempotencyKey *string    `json:"idempotency_key,omitempty"`
-	Version        int64      `json:"version"`
+	// Metadata is the free-form JSON payload callers can attach to a post.
+	// Today it surfaces one flag:
+	//   * canary_upload (bool) — when true, publish_worker.go runs the YouTube
+	//     canary pre-flight BEFORE the real publish (Task 7/10).
+	// Malformed JSON is treated as canary_upload=false (safe default).
+	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	Version        int64           `json:"version"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }

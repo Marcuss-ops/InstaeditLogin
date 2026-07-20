@@ -187,14 +187,14 @@ func idempotencyLookup(
 //
 //   - "post"        — re-fetch post by id and render.
 //   - "drive_import" — re-fetch post by id, render the same
-//                       DriveImportResponse envelope (without the
-//                       freshly-uploaded asset; clients can fetch
-//                       it separately).
+//     DriveImportResponse envelope (without the
+//     freshly-uploaded asset; clients can fetch
+//     it separately).
 //   - "drive_batch" — read the cached response bytes from the
-//                       idempotency_batch_replays side table; write
-//                       them byte-for-byte. There is no single owner
-//                       row to re-fetch because the batch creates
-//                       N=200 upload_jobs across multiple tables.
+//     idempotency_batch_replays side table; write
+//     them byte-for-byte. There is no single owner
+//     row to re-fetch because the batch creates
+//     N=200 upload_jobs across multiple tables.
 //
 // Adding a new resource_type means adding a case here. Each case
 // must check caller authorisation (workspace ownership) — a

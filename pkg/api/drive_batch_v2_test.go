@@ -62,11 +62,11 @@ import (
 // remembered" (can be muted by accident) into "the call site
 // would have failed the test at the moment of the violation".
 type mockImportBatchStoreV2 struct {
-	t                    *testing.T
-	createCalls          int
-	createErr            error
-	forbidCreateOnTest   bool
-	createdBatches       []models.ImportBatch
+	t                  *testing.T
+	createCalls        int
+	createErr          error
+	forbidCreateOnTest bool
+	createdBatches     []models.ImportBatch
 }
 
 func (m *mockImportBatchStoreV2) Create(b *models.ImportBatch) error {
@@ -124,7 +124,7 @@ func (m *stubUserStoreV2) FindPlatformAccount(string, string) (*models.PlatformA
 	return nil, nil
 }
 func (m *stubUserStoreV2) UpdatePlatformAccount(*models.PlatformAccount) error { return nil }
-func (m *stubUserStoreV2) DeletePlatformAccount(int64) error                { return nil }
+func (m *stubUserStoreV2) DeletePlatformAccount(int64) error                   { return nil }
 func (m *stubUserStoreV2) FindUserIDByEmail(context.Context, string) (int64, error) {
 	return 0, nil // not exercised by handleDriveBatchImportV2; satisfies UserStore contract
 }
@@ -182,6 +182,7 @@ func (m *stubWorkspaceStoreV2) Delete(int64) error { return nil }
 func (m *stubWorkspaceStoreV2) AttachChannel(context.Context, int64, int64, string) (*models.WorkspaceChannel, error) {
 	return nil, nil
 }
+
 // ListChannels seeds ONE channel with GroupName="test-group" and
 // Enabled=true so resolveV2Targets("test-group") → returns
 // [PlatformAccountID=42]. This is the bridge the handler needs to

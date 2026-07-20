@@ -368,7 +368,7 @@ func TestVault_Renew_SlowPath_ExpiredToken_AcquiresLockAndCommits(t *testing.T) 
 	// (accountID=42 maps identity → oauthConnectionID=42 for the
 	// advisory lock key in the BEGIN block below.)
 	expectOauthConnLookup(mock, accountID, accountID)
-	
+
 	// SQL sequence (strict order):
 	//   BEGIN                       (lockTx)
 	//   SELECT oauth_connection_id  (lookup inside lockTx)
@@ -436,7 +436,7 @@ func TestVault_Renew_SlowPath_WithinGraceWindow_AcquiresLock(t *testing.T) {
 	soonExpiring := newEncryptedToken(t, v, accountID, 30*time.Second, "old-refresh")
 	store.seedToken(soonExpiring)
 	expectOauthConnLookup(mock, accountID, accountID)
-		mock.ExpectBegin()
+	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL`).
 		WithArgs(accountID).
 		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(accountID))
@@ -551,7 +551,7 @@ func TestVault_Renew_LongLivedToken_UsesAccessTokenAsRefreshMaterial(t *testing.
 	expired.TokenType = models.TokenTypeLongLived
 	store.seedToken(expired)
 	expectOauthConnLookup(mock, accountID, accountID)
-	
+
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL`).
 		WithArgs(accountID).

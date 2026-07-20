@@ -62,18 +62,19 @@ type DeliveryDestination struct {
 // Status follows the same lifecycle conventions as
 // models.PublishResult.Status so the publish_worker can treat the
 // two as a union without inventing a parallel state machine:
-//   "published"   — the delivery succeeded; post_targets.status
-//                   flips to published and the lease is released.
-//   "processing"  — the provider accepted the work but the
-//                   terminal state lives elsewhere (e.g. an async
-//                   video processing pipeline). Same shape as
-//                   models.PublishResult.Status == "processing".
-//   "retrying"    — a typed transient failure; the publisher
-//                   schedules the next attempt via the existing
-//                   upload-job retry budget. Metadata may carry
-//                   the retry-after seconds.
-//   "failed"      — terminal failure; post_targets.status stays
-//                   failed and the row is dead-lettered.
+//
+//	"published"   — the delivery succeeded; post_targets.status
+//	                flips to published and the lease is released.
+//	"processing"  — the provider accepted the work but the
+//	                terminal state lives elsewhere (e.g. an async
+//	                video processing pipeline). Same shape as
+//	                models.PublishResult.Status == "processing".
+//	"retrying"    — a typed transient failure; the publisher
+//	                schedules the next attempt via the existing
+//	                upload-job retry budget. Metadata may carry
+//	                the retry-after seconds.
+//	"failed"      — terminal failure; post_targets.status stays
+//	                failed and the row is dead-lettered.
 //
 // Providers MUST return a non-nil DeliveryResult on terminal
 // outcomes. Transient retriable failures should still return a

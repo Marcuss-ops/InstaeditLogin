@@ -50,11 +50,11 @@ const uploadJobMaxScheduleHorizonDays = 60
 // from publish_at) so legacy SPA clients reading scheduled_at
 // continue to work until they migrate.
 type UploadJobDTO struct {
-	ID          int64      `json:"id"`
-	WorkspaceID int64      `json:"workspace_id"`
-	Title       string     `json:"title"`
-	Caption     string     `json:"caption,omitempty"`
-	Status      string     `json:"status"`
+	ID          int64  `json:"id"`
+	WorkspaceID int64  `json:"workspace_id"`
+	Title       string `json:"title"`
+	Caption     string `json:"caption,omitempty"`
+	Status      string `json:"status"`
 	// P1#4 — canonical user-facing publish time. NULL for
 	// never-scheduled single-file flows (publish immediately).
 	PublishAt  *time.Time `json:"publish_at,omitempty"`
@@ -73,14 +73,14 @@ func (d UploadJobDTO) MarshalJSON() ([]byte, error) {
 	type alias UploadJobDTO // avoid recursive MarshalJSON call
 	a := alias(d)
 	base := map[string]interface{}{
-		"id":           a.ID,
-		"workspace_id": a.WorkspaceID,
-		"title":        a.Title,
-		"caption":      a.Caption,
-		"status":       a.Status,
-		"created_at":   a.CreatedAt,
-		"targets":      a.Targets,
-		"source_type":  a.SourceType,
+		"id":            a.ID,
+		"workspace_id":  a.WorkspaceID,
+		"title":         a.Title,
+		"caption":       a.Caption,
+		"status":        a.Status,
+		"created_at":    a.CreatedAt,
+		"targets":       a.Targets,
+		"source_type":   a.SourceType,
 		"error_message": a.Error,
 		"publish_at":    a.PublishAt,
 	}
@@ -120,10 +120,11 @@ func toUploadJobDTO(j *models.UploadJob) UploadJobDTO {
 // per-account endpoint.
 //
 // Query params (all optional):
-//   account_id (positive int) — restrict to matching targets
-//   status     (upload_job_status enum value) — restrict to status
-//   from, to   (RFC3339) — scheduled_at range filter
-//   limit      (positive int) — default 200
+//
+//	account_id (positive int) — restrict to matching targets
+//	status     (upload_job_status enum value) — restrict to status
+//	from, to   (RFC3339) — scheduled_at range filter
+//	limit      (positive int) — default 200
 func (r *Router) handleListUploads(w http.ResponseWriter, req *http.Request) {
 	if r.uploadJobStore == nil {
 		writeError(w, http.StatusNotImplemented, "upload jobs not configured on this server")
@@ -218,7 +219,7 @@ func (r *Router) handleListUploadsByAccount(w http.ResponseWriter, req *http.Req
 	}
 
 	type UploadJobBucket struct {
-		Date  string         `json:"date"`  // YYYY-MM-DD UTC
+		Date  string         `json:"date"` // YYYY-MM-DD UTC
 		Jobs  []UploadJobDTO `json:"jobs"`
 		Count int            `json:"count"`
 	}

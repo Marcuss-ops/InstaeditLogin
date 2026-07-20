@@ -296,11 +296,11 @@ func runImport(ctx context.Context, log *slog.Logger, cfg runConfig, wanted map[
 	}
 
 	out := struct {
-		File           string                  `json:"file"`
-		OwnerUserID    int64                   `json:"owner_user_id"`
-		Platform       string                  `json:"platform"`
-		Imported       int                     `json:"imported"`
-		SkippedTotal   int                     `json:"skipped"`
+		File           string                   `json:"file"`
+		OwnerUserID    int64                    `json:"owner_user_id"`
+		Platform       string                   `json:"platform"`
+		Imported       int                      `json:"imported"`
+		SkippedTotal   int                      `json:"skipped"`
 		SkippedEntries []channelimport.RowError `json:"skipped_entries,omitempty"`
 	}{
 		File:           cfg.FilePath,

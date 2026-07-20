@@ -263,13 +263,13 @@ type CapabilityRouter struct {
 // interface is consumed by pkg/api/handlers.go handleCallback to
 // create one PlatformAccount per discovered page.
 type capabilities struct {
-	raw        any
-	oauth      OAuthProvider
-	publish    Publisher
-	async      AsyncPublisher
-	discover   AccountDiscoverer
-	details    AccountDetailsProvider
-	content    AccountContentProvider
+	raw         any
+	oauth       OAuthProvider
+	publish     Publisher
+	async       AsyncPublisher
+	discover    AccountDiscoverer
+	details     AccountDetailsProvider
+	content     AccountContentProvider
 	tokenPolicy TokenPolicyProvider
 }
 

@@ -25,7 +25,7 @@ var defaultPlatformLimits = map[string]rate.Limit{
 	"tiktok": rate.Limit(0.5), // 1 req every 2s
 
 	// YouTube: Data API v3 has a quota system (10,000 units/day).
-	// Uploads cost ~1600 units each. 0.33 req/s ≈ ~3 uploads every
+	// Uploads cost 1 bucket unit each (YouTube 2026 model). 0.33 req/s ≈ ~3 uploads every
 	// 10s, which stays under the quota for typical usage.
 	"youtube": rate.Limit(0.33), // ~1 req every 3s
 

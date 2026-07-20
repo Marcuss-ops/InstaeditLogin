@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -48,6 +49,16 @@ type mockDriveFolderLister struct {
 	// every existing test that doesn't override this field).
 	folderMetadataFn func(fileID string) (*services.GoogleDriveFile, error)
 	metadataCalls    int // captured for the Shared Drive propagation test
+	// refreshCallCount + lastRefreshInput capture the refresh chain
+	// exercised by handleDriveBatchImport → driveAccessToken →
+	// vault.Renew → importer.RefreshOAuthToken. The capture reflects
+	// the production chain contract: the vault invokes the refresher
+	// closure with the encrypted-stored refresh string, and the
+	// returned TokenData's AccessToken is what ends up forwarded to
+	// ListFolder. Default 0 + "" — tests that don't exercise this
+	// path (every pre-existing batch-import test) are unaffected.
+	refreshCallCount int
+	lastRefreshInput string
 }
 
 func (m *mockDriveFolderLister) Name() string { return "google-drive" }
@@ -95,7 +106,9 @@ func (m *mockDriveFolderLister) GetFileMetadata(_ context.Context, _, fileID str
 // nil so any future call would force the caller to short-circuit
 // (less surprising than returning a fake response.Body the caller
 // has to close).
-func (m *mockDriveFolderLister) RefreshOAuthToken(_ context.Context, _ string) (*models.TokenData, error) {
+func (m *mockDriveFolderLister) RefreshOAuthToken(_ context.Context, refresh string) (*models.TokenData, error) {
+	m.refreshCallCount++
+	m.lastRefreshInput = refresh
 	return &models.TokenData{
 		AccessToken: "fake-mock-refreshed-bearer",
 		TokenType:   "Bearer",
@@ -1418,6 +1431,16 @@ func TestDriveBatchImport_CursorInFuture_FlagNotSet(t *testing.T) {
 func TestDriveBatchImport_SharedDrive_ResolvesAndPropagatesDriveID(t *testing.T) {
 	const sharedDriveID = "0ABC-shared-drive-folder-x"
 	lister := &mockDriveFolderLister{
+		// Single file so the handler returns 202 ("accepts N jobs")
+		// instead of 200 "no videos found"; the test's real concern
+		// is the resolver + ListFolder wiring (asserted below) and
+		// those assertions are unchanged when ListFolder returns
+		// at least one entry. The current drive_batch.go handler
+		// short-circuits on `len(files) == 0` to 200 OK + a
+		// "no videos found" note — by design.
+		files: []services.GoogleDriveFile{
+			{ID: "f-shared", Name: "shared-video.mp4", MimeType: "video/mp4"},
+		},
 		folderMetadataFn: func(fileID string) (*services.GoogleDriveFile, error) {
 			if fileID != "shared-folder" {
 				t.Errorf("resolver called with wrong fileID: want %q, got %q", "shared-folder", fileID)
@@ -1461,6 +1484,14 @@ func TestDriveBatchImport_SharedDrive_ResolvesAndPropagatesDriveID(t *testing.T)
 // operator using personal Drive still works unchanged.
 func TestDriveBatchImport_PrivateFolder_DriveIDRemainsEmpty(t *testing.T) {
 	lister := &mockDriveFolderLister{
+		// Same rationale as the SharedDrive test: a non-empty
+		// files slice drives the handler down the 202 path. The
+		// My-Drive back-compat assertion (driveID stays empty
+		// after GetFileMetadata returns "") is independent of
+		// the file count.
+		files: []services.GoogleDriveFile{
+			{ID: "f-personal", Name: "personal-video.mp4", MimeType: "video/mp4"},
+		},
 		folderMetadataFn: func(fileID string) (*services.GoogleDriveFile, error) {
 			return &services.GoogleDriveFile{
 				ID:      fileID,
@@ -1855,13 +1886,34 @@ func TestDriveBatchImport_IdempotencyKey_CrossTenant_DoesNotReplay(t *testing.T)
 	store := &mockUploadJobStore{}
 	idemStore := newMockIdempotencyStore()
 	userStore := &mockUserStore{
+		// Body uses drive_account_id=99 + facebook_account_id=1.
+		// Drive lookup must resolve to a google-drive account
+		// owned by the JWT caller (user 1 on the first call); the
+		// previous generic lookup returned Platform=Facebook
+		// for id=99, which made the handler short-circuit on the
+		// platform check with 404 "google drive account not
+		// found". User 2's cross-tenant retry never reaches
+		// this lookup — the workspace-ownership gate fires
+		// first (ws 1 owner=1, JWT user 2 → 403).
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if id == 99 {
+				return &models.PlatformAccount{ID: 99, UserID: 1, Platform: "google-drive"}, nil
+			}
 			return &models.PlatformAccount{ID: id, UserID: id, Platform: models.PlatformFacebook}, nil
 		},
 		listFn: func(userID int64, _ string) ([]*models.PlatformAccount, error) {
 			return nil, nil
 		},
 	}
+	// WithCredentialVault is REQUIRED: after fix #1 (userStore
+	// resolving drive_account_id=99 to google-drive + user 1),
+	// the next failure point along the drive-batch import flow
+	// is the vault check — handleDriveBatchImport returns 501
+	// "credential vault not configured" when r.vault == nil.
+	// fakeVault in fakevault_test.go implements
+	// credentials.VaultAPI without hitting Postgres so the
+	// existing driveAccessToken path returns a canned bearer
+	// for the (idempotent, fully-cached) replay assertion below.
 	r := NewRouter(
 		capRouter,
 		userStore,
@@ -1871,6 +1923,7 @@ func TestDriveBatchImport_IdempotencyKey_CrossTenant_DoesNotReplay(t *testing.T)
 		WithWorkspaceStore(wsStore),
 		WithUploadJobStore(store),
 		WithIdempotencyStore(idemStore),
+		WithCredentialVault(&fakeVault{}),
 	)
 
 	const idemKey = "cross-tenant-key"
@@ -1899,6 +1952,168 @@ func TestDriveBatchImport_IdempotencyKey_CrossTenant_DoesNotReplay(t *testing.T)
 	// Also: no cross-tenant cache row under user 2's scope.
 	if got, _ := idemStore.FindActiveByKey(2, idemKey, time.Now()); got != nil {
 		t.Errorf("user 2 must not have a cache row for that key (would indicate cache leak)")
+	}
+}
+
+// =====================================================================
+// TestDriveBatchImport_EndToEndAuth_VaultRefreshChainDrivesFolderListing
+//
+// Verifies the full auth+token+listing integration chain through
+// the single-page POST /api/v1/media/import/drive/folder endpoint —
+// the chain that the other ~30 batch-import tests don't exercise
+// because they use the canned fakeVault whose Renew bypasses the
+// closure:
+//
+//  1. Client → POST with valid workspace_id (owned by JWT caller)
+//     + drive_account_id (a google-drive platform_account owned
+//     by the JWT caller).
+//  2. Handler → workspace ownership check passes.
+//  3. Handler → userRepo.FindPlatformAccountByID(drive_account_id)
+//     resolves the google-drive account.
+//  4. Handler → vault.Renew(accountID, TokenTypeBearer, refreshFn).
+//     Here the production-relevant chain runs end-to-end: a
+//     recording-style renewFn override invokes the closure with
+//     a hardcoded refresh string ("vault-decrypted-refresh-XYZ")
+//     so we can verify it flowed through. The closure is the
+//     lister's RefreshOAuthToken which returns a canned TokenData
+//     with AccessToken="fake-mock-refreshed-bearer"; the renewFn
+//     echoes the TokenData's AccessToken into the OAuthToken so
+//     the handler sees the SAME bearer the refresher produced
+//     (not a decoupled sentinel that would mask a swap).
+//  5. Handler → ListFolder(ctx, folderID, driveID, AccessToken, pageToken).
+//     gotToken captures the access_token the handler forwarded.
+//  6. Handler → 202 + DriveBatchImportResponse with N=filesCount
+//     upload_jobs queued.
+//
+// Pins the production-relevant integration invariant:
+//   - vault.Renew invoked exactly once per request
+//   - lister.RefreshOAuthToken invoked exactly once, with the
+//     refresh token the vault resolved from encrypted storage
+//   - ListFolder invoked exactly once, with the access_token the
+//     vault produced (echoed from RefreshOAuthToken's TokenData)
+//
+// A regression that breaks any link — replacing the real Vault
+// with a no-op, swapping the refresh closure, or feeding the
+// wrong token to ListFolder — surfaces here rather than in
+// production. Mirrors the assertVaultRenewedOnce /
+// driveBatchFakeVault pattern in
+// internal/worker/drive_batch_crawler_test.go.
+// =====================================================================
+func TestDriveBatchImport_EndToEndAuth_VaultRefreshChainDrivesFolderListing(t *testing.T) {
+	const (
+		specificRefresh   = "vault-decrypted-refresh-XYZ"
+		echoedAccessToken = "fake-mock-refreshed-bearer" // value returned by lister.RefreshOAuthToken
+	)
+	files := []services.GoogleDriveFile{
+		{ID: "e2e-1", Name: "e2e-1.mp4", MimeType: "video/mp4"},
+		{ID: "e2e-2", Name: "e2e-2.mp4", MimeType: "video/mp4"},
+		{ID: "e2e-3", Name: "e2e-3.mp4", MimeType: "video/mp4"},
+	}
+	lister := &mockDriveFolderLister{files: files}
+
+	// Recording-style override: actually invoke the refresher
+	// closure with the hardcoded refresh token (mirrors what the
+	// production CredentialVault does — looks up the encrypted
+	// refresh from Postgres, invokes the closure, encrypts +
+	// persists the returned TokenData). The TokenData returned
+	// by RefreshOAuthToken is echoed into the OAuthToken so the
+	// handler sees the SAME AccessToken the refresher produced,
+	// not a decoupled sentinel that would mask a swap.
+	vault := &fakeVault{
+		renewFn: func(ctx context.Context, _ int64, _ string, ref credentials.TokenRefresher) (*models.OAuthToken, error) {
+			td, refreshErr := ref(ctx, specificRefresh)
+			if refreshErr != nil {
+				return nil, refreshErr
+			}
+			return &models.OAuthToken{
+				TokenType:   models.TokenTypeBearer,
+				AccessToken: td.AccessToken,
+			}, nil
+		},
+	}
+
+	// Build the router inline (not via newBatchImportTestRouter
+	// because the helper hardwires a vanilla fakeVault and we
+	// need the recording-style override).
+	capRouter := services.NewCapabilityRouter()
+	capRouter.Register("google-drive", lister)
+	wsStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			return &models.Workspace{ID: id, Name: "Mine", OwnerID: 1}, nil
+		},
+	}
+	userStore := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if id == 99 {
+				return &models.PlatformAccount{ID: 99, UserID: 1, Platform: "google-drive"}, nil
+			}
+			if validFacebookAccountIDs[id] {
+				return &models.PlatformAccount{ID: id, UserID: 1, Platform: models.PlatformFacebook}, nil
+			}
+			return nil, nil
+		},
+		listFn: func(userID int64, _ string) ([]*models.PlatformAccount, error) {
+			return nil, nil
+		},
+	}
+	store := &mockUploadJobStore{}
+	r := NewRouter(
+		capRouter,
+		userStore,
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		WithWorkspaceStore(wsStore),
+		WithUploadJobStore(store),
+		WithCredentialVault(vault),
+	)
+
+	body := `{"folder_id":"e2e-folder","workspace_id":1,"facebook_account_id":50,"drive_account_id":99}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202 (full chain success), got %d: %s", w.Code, w.Body.String())
+	}
+
+	// ─── Chain assertions ───
+	if vault.renewCalls != 1 {
+		t.Errorf("vault.Renew calls: want 1, got %d", vault.renewCalls)
+	}
+	if lister.refreshCallCount != 1 {
+		t.Errorf("lister.RefreshOAuthToken calls: want 1, got %d", lister.refreshCallCount)
+	}
+	if lister.lastRefreshInput != specificRefresh {
+		t.Errorf("lister.RefreshOAuthToken input: want %q (the refresh vault resolved from encrypted storage), got %q",
+			specificRefresh, lister.lastRefreshInput)
+	}
+	// Note: the exact-match check above also catches an empty
+	// lastRefreshInput (specificRefresh is non-empty, so any
+	// "" against it triggers the t.Errorf). No separate empty
+	// guard required — keeps the assertion set minimal.
+	if lister.gotToken != echoedAccessToken {
+		t.Errorf("lister.ListFolder access_token: want %q (the AccessToken from RefreshOAuthToken's TokenData), got %q",
+			echoedAccessToken, lister.gotToken)
+	}
+	if lister.gotFolderID != "e2e-folder" {
+		t.Errorf("lister.ListFolder folderID: want e2e-folder, got %q", lister.gotFolderID)
+	}
+	if lister.listCallCount != 1 {
+		t.Errorf("lister.ListFolder calls: want 1, got %d", lister.listCallCount)
+	}
+	if len(store.jobs) != len(files) {
+		t.Errorf("upload_jobs queued: want %d, got %d", len(files), len(store.jobs))
+	}
+
+	var resp DriveBatchImportResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ScheduledCount != len(files) {
+		t.Errorf("response ScheduledCount: want %d, got %d", len(files), resp.ScheduledCount)
 	}
 }
 

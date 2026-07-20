@@ -10,32 +10,32 @@
 //
 // Design rules pinned by the valutazione-doc P2 spec:
 //
-//   1. NEVER write OAuth tokens. The whole point of importing a
-//      channel via CSV is to create a row at
-//      status='pending_authorization' so the operator can drive the
-//      OAuth dance manually (with the manager's account). Storing
-//      a token here would defeat the 1-OAuth-grant-per-1-channel
-//      guard the production OAuth callback enforces (see
-//      internal/services/youtube_oauth.go::BindGrantToChannel).
+//  1. NEVER write OAuth tokens. The whole point of importing a
+//     channel via CSV is to create a row at
+//     status='pending_authorization' so the operator can drive the
+//     OAuth dance manually (with the manager's account). Storing
+//     a token here would defeat the 1-OAuth-grant-per-1-channel
+//     guard the production OAuth callback enforces (see
+//     internal/services/youtube_oauth.go::BindGrantToChannel).
 //
-//   2. UPSERT (last-write-wins) on (platform, platform_user_id).
-//      Re-importing a CSV that mentions the same channel_id MUST
-//      not error — the operator might be updating language/timezone
-//      metadata, refreshing a reauth_required row, or batching
-//      updates from an external source-of-truth sheet.
+//  2. UPSERT (last-write-wins) on (platform, platform_user_id).
+//     Re-importing a CSV that mentions the same channel_id MUST
+//     not error — the operator might be updating language/timezone
+//     metadata, refreshing a reauth_required row, or batching
+//     updates from an external source-of-truth sheet.
 //
-//   3. Cross-platform defaults. The CSV column set is YouTube
-//      shaped (no "platform" column — a future followup may add
-//      this), so every row lands as platform='youtube'. The OAuth
-//      callback can switch the platform on successful grant
-//      (currently only YouTube OAuth is wired here; TikTok/Meta
-//      have separate flows that don't go through this surface).
+//  3. Cross-platform defaults. The CSV column set is YouTube
+//     shaped (no "platform" column — a future followup may add
+//     this), so every row lands as platform='youtube'. The OAuth
+//     callback can switch the platform on successful grant
+//     (currently only YouTube OAuth is wired here; TikTok/Meta
+//     have separate flows that don't go through this surface).
 //
-//   4. Edge cases: missing channel_id / unresolved workspace →
-//      skip the row + record a Skipped entry in the Result.
-//      Never fail-loud mid-CSV — operators upload 500-channel
-//      sheets and need partial-success visibility rather than
-//      "row 412 killed the whole import".
+//  4. Edge cases: missing channel_id / unresolved workspace →
+//     skip the row + record a Skipped entry in the Result.
+//     Never fail-loud mid-CSV — operators upload 500-channel
+//     sheets and need partial-success visibility rather than
+//     "row 412 killed the whole import".
 package channelimport
 
 import (
@@ -79,7 +79,7 @@ type ImportRow struct {
 	Group                 string // CSV group → metadata["group"]
 	Language              string // CSV language → metadata["language"]
 	Timezone              string // CSV timezone → metadata["timezone"]
-	ExpectedUploadFreqRaw  string // CSV expected_upload_frequency (kept as string; UI/scheduler interprets)
+	ExpectedUploadFreqRaw string // CSV expected_upload_frequency (kept as string; UI/scheduler interprets)
 	Platform              string // default + future-flexible; "youtube" today
 }
 
@@ -92,10 +92,10 @@ type ImportRow struct {
 // "5/week" or accidentally pasted a UTF-8 quote.
 func (r ImportRow) MetaMap() map[string]any {
 	return map[string]any{
-		"manager_email_hint":      SanitizeForJSON(r.ManagerEmailHint),
-		"group":                   SanitizeForJSON(r.Group),
-		"language":                SanitizeForJSON(r.Language),
-		"timezone":                SanitizeForJSON(r.Timezone),
+		"manager_email_hint":        SanitizeForJSON(r.ManagerEmailHint),
+		"group":                     SanitizeForJSON(r.Group),
+		"language":                  SanitizeForJSON(r.Language),
+		"timezone":                  SanitizeForJSON(r.Timezone),
 		"expected_upload_frequency": SanitizeForJSON(r.ExpectedUploadFreqRaw),
 	}
 }
@@ -194,15 +194,15 @@ func Parse(r io.Reader, platform string, workspaceLookup func(name string) (id i
 			continue
 		}
 		row := ImportRow{
-			ChannelID:            channelID,
-			ChannelName:          strings.TrimSpace(padded[headerIndex["channel_name"]]),
-			ManagerEmailHint:     padded[headerIndex["manager_email_hint"]],
-			WorkspaceID:          workspaceID,
-			Group:                padded[headerIndex["group"]],
-			Language:             padded[headerIndex["language"]],
-			Timezone:             padded[headerIndex["timezone"]],
+			ChannelID:             channelID,
+			ChannelName:           strings.TrimSpace(padded[headerIndex["channel_name"]]),
+			ManagerEmailHint:      padded[headerIndex["manager_email_hint"]],
+			WorkspaceID:           workspaceID,
+			Group:                 padded[headerIndex["group"]],
+			Language:              padded[headerIndex["language"]],
+			Timezone:              padded[headerIndex["timezone"]],
 			ExpectedUploadFreqRaw: padded[headerIndex["expected_upload_frequency"]],
-			Platform:             platform,
+			Platform:              platform,
 		}
 		rows = append(rows, row)
 	}

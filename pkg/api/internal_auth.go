@@ -16,29 +16,31 @@ import (
 //
 // Why a SEPARATE middleware from r.protected / r.auth.Middleware:
 //
-//   1. r.protected expects a JWT (cookie or Authorization Bearer
-//      shaped like an InstaEdit JWT). A static shared secret
-//      has no signature, no expiry, no per-tenant claim — the
-//      JWT parser path would either reject or, worse, succeed
-//      against a forged token.
-//   2. CSRF middleware (cookie-jar) doesn't apply — this is
-//      server-to-server with no browser involvement, so the
-//      CSRF nonce cookie is noise (Velox can't access our
-//      cookies anyway).
-//   3. /admin/* uses a JWT-deposited Identity.IsAdmin() gate;
-//      Velox has no user context, so admin is the wrong axis.
+//  1. r.protected expects a JWT (cookie or Authorization Bearer
+//     shaped like an InstaEdit JWT). A static shared secret
+//     has no signature, no expiry, no per-tenant claim — the
+//     JWT parser path would either reject or, worse, succeed
+//     against a forged token.
+//  2. CSRF middleware (cookie-jar) doesn't apply — this is
+//     server-to-server with no browser involvement, so the
+//     CSRF nonce cookie is noise (Velox can't access our
+//     cookies anyway).
+//  3. /admin/* uses a JWT-deposited Identity.IsAdmin() gate;
+//     Velox has no user context, so admin is the wrong axis.
 //
 // Failure modes:
 //
 //   - VELOX_API_TOKEN empty at process start → 503 Service
 //     Unavailable + an error log so operators can fix the env
 //     var without chasing a mysterious 403.
+//
 //   - Authorization header absent OR malformed (not "Bearer
 //     <token>" shape, case-insensitive) → 401 Unauthorized
 //     with the JSON body `{"error":"missing or malformed
 //     Authorization header"}`. Semantically the peer has not
 //     attempted authentication, so 401 — "you need to
 //     authenticate" — is the right code.
+//
 //   - Authorization header well-formed but token mismatches
 //     → 403 Forbidden with the JSON body `{"error":"token
 //     mismatch"}`. The peer DID authenticate (presented a
@@ -168,4 +170,3 @@ func WithCsrfMiddleware(mw func(http.Handler) http.Handler) RouterOption {
 func WithAuthMiddleware(mw func(http.Handler) http.Handler) RouterOption {
 	return func(r *Router) { r.authMiddleware = mw }
 }
-

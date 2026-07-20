@@ -417,19 +417,19 @@ func first16(hexHash string) string {
 // writer-side stamps via MarkIngested.
 //
 // Three subtleties deliberately exercised:
-//   1. ingest_after is set to NOW() (immediate claim) so the
-//      ingest pool's CTE predicate `ingest_after <= NOW()` is
-//      satisfied AT INSERT TIME without any clock advance.
-//   2. publish_at is set to NOW() + INTERVAL '2 hours' so the
-//      publish window is unambiguously in the future; a regression
-//      that collapsed the two columns would surface here as the
-//      CTE returning 1 row instead of 0.
-//   3. The MarkIngested transition in this test is invoked
-//      DIRECTLY via raw SQL (not via repo.MarkIngested) because
-//      this file is in `package database`, not `package repository`;
-//      the SQL shape is identical to what upload_job_repo.go
-//      issues, so a divergence in the repo query would be caught
-//      by schemaFingerprint drift in the order-independence test.
+//  1. ingest_after is set to NOW() (immediate claim) so the
+//     ingest pool's CTE predicate `ingest_after <= NOW()` is
+//     satisfied AT INSERT TIME without any clock advance.
+//  2. publish_at is set to NOW() + INTERVAL '2 hours' so the
+//     publish window is unambiguously in the future; a regression
+//     that collapsed the two columns would surface here as the
+//     CTE returning 1 row instead of 0.
+//  3. The MarkIngested transition in this test is invoked
+//     DIRECTLY via raw SQL (not via repo.MarkIngested) because
+//     this file is in `package database`, not `package repository`;
+//     the SQL shape is identical to what upload_job_repo.go
+//     issues, so a divergence in the repo query would be caught
+//     by schemaFingerprint drift in the order-independence test.
 //
 // The timing budget (`entro 30s`) the user spec gives the
 // operational pipeline is logged as telemetry — the test itself
@@ -481,9 +481,9 @@ func TestUploadJobs_IngestToPublishWindow(t *testing.T) {
 	// publish_at=NOW()+2h (publish window opens in 2h, so the
 	// row MUST be deferred past publish-completion).
 	var (
-		jobID            int64
-		insertIngest     time.Time
-		insertPublishAt  time.Time
+		jobID           int64
+		insertIngest    time.Time
+		insertPublishAt time.Time
 	)
 	err := db.QueryRow(`
 		INSERT INTO upload_jobs (
@@ -519,10 +519,10 @@ func TestUploadJobs_IngestToPublishWindow(t *testing.T) {
 	// schema correctly (status=pending + targets as JSONB + publish_at
 	// preserved through the default vs explicit value).
 	var (
-		roundTripStatus       string
-		roundTripIngestAfter  time.Time
-		roundTripPublishAt    sql.NullTime
-		roundTripTargets      []byte
+		roundTripStatus      string
+		roundTripIngestAfter time.Time
+		roundTripPublishAt   sql.NullTime
+		roundTripTargets     []byte
 	)
 	err = db.QueryRow(`
 		SELECT status, ingest_after, publish_at, targets
@@ -566,10 +566,10 @@ func TestUploadJobs_IngestToPublishWindow(t *testing.T) {
 	// on the ingest side (e.g. a migration that confused the two
 	// columns) would surface here.
 	var (
-		flippedStatus       string
-		flippedIngestAfter  time.Time
-		flippedPublishAt    sql.NullTime
-		flippedUpdatedAt    time.Time
+		flippedStatus      string
+		flippedIngestAfter time.Time
+		flippedPublishAt   sql.NullTime
+		flippedUpdatedAt   time.Time
 	)
 	err = db.QueryRow(`
 		SELECT status, ingest_after, publish_at, updated_at

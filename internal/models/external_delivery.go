@@ -25,6 +25,7 @@ import (
 //	blocked_auth   — reauth_required on platform_account, halts
 //	failed         — terminal non-recoverable
 //	dead_letter    — max_attempts exhausted
+//
 // ─── ON-CALL DBA CAVEAT (read this BEFORE issuing a direct-SQL UPDATE) ───
 //
 // The Go-layer guard (CanTransitionTo + transitionMap) is BYPASSED
@@ -187,9 +188,9 @@ func (s ExternalDeliveryStatus) Next() ExternalDeliveryStatus {
 var transitionMap = map[ExternalDeliveryStatus]map[ExternalDeliveryStatus]bool{
 	ExternalDeliveryStatusAccepted: {
 		ExternalDeliveryStatusDownloading: true, // happy-path forward
-		ExternalDeliveryStatusRetryWait:    true, // file fetch transient (5xx, etc)
-		ExternalDeliveryStatusBlockedAuth:  true, // auth failure mid-fetch
-		ExternalDeliveryStatusFailed:       true, // JSON validation / permanent
+		ExternalDeliveryStatusRetryWait:   true, // file fetch transient (5xx, etc)
+		ExternalDeliveryStatusBlockedAuth: true, // auth failure mid-fetch
+		ExternalDeliveryStatusFailed:      true, // JSON validation / permanent
 	},
 	ExternalDeliveryStatusDownloading: {
 		ExternalDeliveryStatusArtifactVerified: true,
@@ -216,7 +217,7 @@ var transitionMap = map[ExternalDeliveryStatus]map[ExternalDeliveryStatus]bool{
 		ExternalDeliveryStatusFailed:      true,
 	},
 	ExternalDeliveryStatusPublishing: {
-		ExternalDeliveryStatusPublished:  true, // success
+		ExternalDeliveryStatusPublished:   true, // success
 		ExternalDeliveryStatusRetryWait:   true, // transient API failure
 		ExternalDeliveryStatusBlockedAuth: true, // auth refresh during upload
 		ExternalDeliveryStatusFailed:      true, // quota / permanent
@@ -240,7 +241,7 @@ var transitionMap = map[ExternalDeliveryStatus]map[ExternalDeliveryStatus]bool{
 		ExternalDeliveryStatusQueued: true, // admin reconnect handler resumes publish
 	},
 	// Failed → terminal — no outgoing transitions.
-	ExternalDeliveryStatusFailed:     {},
+	ExternalDeliveryStatusFailed: {},
 	// DeadLetter → terminal — no outgoing transitions.
 	ExternalDeliveryStatusDeadLetter: {},
 }
@@ -367,34 +368,34 @@ func (s ExternalDeliveryStatus) CanonicalResume(downloadURLValid bool) ExternalD
 //
 // Mirrors migration 055_external_deliveries.sql.
 type ExternalDelivery struct {
-	ID                   string                 `json:"id"`                       // sdel_01J...
-	SourceSystem         string                 `json:"source_system"`            // "velox"
-	ExternalDeliveryID   string                 `json:"external_delivery_id"`     // upstream's id
-	IdempotencyKey       string                 `json:"idempotency_key"`          // upstream's composite key
-	ExternalDestinationID string                `json:"external_destination_id"` // FK to extdst_01J...
+	ID                    string `json:"id"`                      // sdel_01J...
+	SourceSystem          string `json:"source_system"`           // "velox"
+	ExternalDeliveryID    string `json:"external_delivery_id"`    // upstream's id
+	IdempotencyKey        string `json:"idempotency_key"`         // upstream's composite key
+	ExternalDestinationID string `json:"external_destination_id"` // FK to extdst_01J...
 
-	SourceArtifactID     string                 `json:"source_artifact_id"`       // upstream's artifact
-	ExpectedSHA256       string                 `json:"expected_sha256"`          // hex 64-char
-	ExpectedSizeBytes    int64                  `json:"expected_size_bytes"`      // bytes
-	ExpectedMimeType     string                 `json:"expected_mime_type"`       // MIME
+	SourceArtifactID  string `json:"source_artifact_id"`  // upstream's artifact
+	ExpectedSHA256    string `json:"expected_sha256"`     // hex 64-char
+	ExpectedSizeBytes int64  `json:"expected_size_bytes"` // bytes
+	ExpectedMimeType  string `json:"expected_mime_type"`  // MIME
 
-	DownloadURL          *string                `json:"download_url,omitempty"`   // presigned S3 / HMAC artifact endpoint
-	Metadata             json.RawMessage        `json:"metadata"`                 // JSONB publish envelope
-	PublishAt            *time.Time             `json:"publish_at,omitempty"`     // scheduled wall-clock
-	CallbackURL          *string                `json:"callback_url,omitempty"`   // Velox HMAC webhook
+	DownloadURL *string         `json:"download_url,omitempty"` // presigned S3 / HMAC artifact endpoint
+	Metadata    json.RawMessage `json:"metadata"`               // JSONB publish envelope
+	PublishAt   *time.Time      `json:"publish_at,omitempty"`   // scheduled wall-clock
+	CallbackURL *string         `json:"callback_url,omitempty"` // Velox HMAC webhook
 
-	Status               ExternalDeliveryStatus `json:"status"`                   // 11-value CHECK
-	RequestSHA256        string                 `json:"-"`                        // body hash for 409 detection; never serialised
+	Status        ExternalDeliveryStatus `json:"status"` // 11-value CHECK
+	RequestSHA256 string                 `json:"-"`      // body hash for 409 detection; never serialised
 
-	UploadJobID          *int64                 `json:"upload_job_id,omitempty"`  // FK to upload_jobs(id)
-	PostID               *int64                 `json:"post_id,omitempty"`        // BIGINT no FK per spec
-	PlatformMediaID      *string                `json:"platform_media_id,omitempty"`
-	PlatformURL          *string                `json:"platform_url,omitempty"`
+	UploadJobID     *int64  `json:"upload_job_id,omitempty"` // FK to upload_jobs(id)
+	PostID          *int64  `json:"post_id,omitempty"`       // BIGINT no FK per spec
+	PlatformMediaID *string `json:"platform_media_id,omitempty"`
+	PlatformURL     *string `json:"platform_url,omitempty"`
 
-	LastErrorCode        *string                `json:"last_error_code,omitempty"`
-	LastErrorMessage     *string                `json:"last_error_message,omitempty"`
+	LastErrorCode    *string `json:"last_error_code,omitempty"`
+	LastErrorMessage *string `json:"last_error_message,omitempty"`
 
-	CreatedAt            time.Time              `json:"created_at"`
-	UpdatedAt            time.Time              `json:"updated_at"`
-	CompletedAt          *time.Time             `json:"completed_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }

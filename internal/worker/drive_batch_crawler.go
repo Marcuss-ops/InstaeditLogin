@@ -76,17 +76,17 @@ type DriveBatchCrawlerOptions struct {
 
 // DriveBatchCrawler is the P1#7 background consumer that drains
 // import_batches rows. Each tick:
-//   1. ClaimNextBatch (single-row contract; a crawler owns one
-//      batch at a time because cross-page Drive pagination is the
-//      long-running work — N concurrent batches would let one
-//      batch starve the others).
-//   2. For each page of source files: ListFolder, then loop over
-//      the entries, writing one upload_job per file with the
-//      batch_id FK stamped + stagger publish_at across the
-//      schedule envelope (random uniform [min_gap,max_gap]).
-//   3. After every page: UpdateCursor(cursor_page_token) so a
-//      crash mid-batch resumes from the LAST produced page.
-//   4. When Drive's nextPageToken is empty: MarkCompleted.
+//  1. ClaimNextBatch (single-row contract; a crawler owns one
+//     batch at a time because cross-page Drive pagination is the
+//     long-running work — N concurrent batches would let one
+//     batch starve the others).
+//  2. For each page of source files: ListFolder, then loop over
+//     the entries, writing one upload_job per file with the
+//     batch_id FK stamped + stagger publish_at across the
+//     schedule envelope (random uniform [min_gap,max_gap]).
+//  3. After every page: UpdateCursor(cursor_page_token) so a
+//     crash mid-batch resumes from the LAST produced page.
+//  4. When Drive's nextPageToken is empty: MarkCompleted.
 //
 // Per the thinker's D5.b+cursor recommendation, the cursor pattern
 // is per-page (NOT per-file) so crashed-restart does not double-
@@ -148,12 +148,12 @@ func (c *DriveBatchCrawler) applyDefaults() {
 }
 
 // Run orchestrates the crawler goroutines:
-//   1. Apply lazy defaults on opts.
-//   2. Synchronously reclaim stuck leases on startup.
-//   3. Spawn the reclaimer ticker.
-//   4. Spawn the claimer loop (single-row contract).
-//   5. Block on ctx.Done() + waitGroup.Wait() for graceful shutdown.
-//   6. The per-batch processing happens inline (one batch at a time).
+//  1. Apply lazy defaults on opts.
+//  2. Synchronously reclaim stuck leases on startup.
+//  3. Spawn the reclaimer ticker.
+//  4. Spawn the claimer loop (single-row contract).
+//  5. Block on ctx.Done() + waitGroup.Wait() for graceful shutdown.
+//  6. The per-batch processing happens inline (one batch at a time).
 func (c *DriveBatchCrawler) Run(ctx context.Context) error {
 	c.applyDefaults()
 
@@ -416,19 +416,19 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 			// this onto post.default_privacy_level; the publish_worker
 			// uses it as the middle term in its precedence cascade.
 			job := &models.UploadJob{
-				UserID:         batch.UserID,
-				WorkspaceID:    batch.WorkspaceID,
-				SourceType:     models.UploadJobSourceAuthenticatedDrive,
-				SourceID:       f.ID,
-				DriveAccountID: batch.SourceDriveAccountID, // pointer alias — safe per the guard above
-				FolderID:       &batch.SourceFolderID,
-				Title:          f.Name,
-				Caption:        "",
-				Targets:        append([]int64{}, batch.TargetAccountIDs...),
-				Status:         models.UploadJobStatusPending,
-				IngestAfter:    time.Now(),
-				PublishAt:      &currentPublishAt,
-				BatchID:        &batch.ID,
+				UserID:              batch.UserID,
+				WorkspaceID:         batch.WorkspaceID,
+				SourceType:          models.UploadJobSourceAuthenticatedDrive,
+				SourceID:            f.ID,
+				DriveAccountID:      batch.SourceDriveAccountID, // pointer alias — safe per the guard above
+				FolderID:            &batch.SourceFolderID,
+				Title:               f.Name,
+				Caption:             "",
+				Targets:             append([]int64{}, batch.TargetAccountIDs...),
+				Status:              models.UploadJobStatusPending,
+				IngestAfter:         time.Now(),
+				PublishAt:           &currentPublishAt,
+				BatchID:             &batch.ID,
 				DefaultPrivacyLevel: batch.DefaultPrivacyLevel,
 			}
 			if err := c.uploadRepo.Create(job); err != nil {

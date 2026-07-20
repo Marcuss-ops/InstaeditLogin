@@ -32,7 +32,7 @@ func TestCreateIfSourceAbsentCreatesCanonicalJob(t *testing.T) {
 		Caption:        "Caption",
 		Targets:        []int64{8, 4, 8},
 		Status:         models.UploadJobStatusPending,
-		PublishAt:    &scheduledAt,
+		PublishAt:      &scheduledAt,
 	}
 
 	mock.ExpectBegin()

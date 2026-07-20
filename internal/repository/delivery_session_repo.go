@@ -64,9 +64,9 @@ var ErrDeliverySessionVersionMismatch = errors.New("delivery session version CAS
 //
 // Parameters:
 //
-//   ds — must have non-zero DeliverableType, IdempotencyKey, TotalBytes,
-//        ChunkSize, MIMEType. ID + timestamps are populated by the
-//        RETURNING clause.
+//	ds — must have non-zero DeliverableType, IdempotencyKey, TotalBytes,
+//	     ChunkSize, MIMEType. ID + timestamps are populated by the
+//	     RETURNING clause.
 func (r *DeliverySessionRepository) Create(ctx context.Context, ds *models.DeliverySession) error {
 	if ds == nil {
 		return errors.New("delivery session Create: nil session")

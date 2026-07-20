@@ -386,11 +386,11 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 			// Mid-pagination empty is treated as end-of-folder.
 			if pageNum == 1 {
 				writeJSON(w, http.StatusOK, UploadsBatchByFolderResponse{
-					FolderID:        body.FolderID,
-					ScheduledCount:  0,
-					PageCount:       1,
-					Entries:         []DriveBatchImportItem{},
-					Note:            "no videos found in the folder",
+					FolderID:          body.FolderID,
+					ScheduledCount:    0,
+					PageCount:         1,
+					Entries:           []DriveBatchImportItem{},
+					Note:              "no videos found in the folder",
 					NeedsDriveAccount: needsDriveAccount,
 				})
 				return
@@ -431,17 +431,17 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 			}
 
 			job := &models.UploadJob{
-				UserID:      userID,
-				WorkspaceID: body.WorkspaceID,
+				UserID:         userID,
+				WorkspaceID:    body.WorkspaceID,
 				SourceType:     models.UploadJobSourceAuthenticatedDrive,
 				DriveAccountID: &body.DriveAccountID,
-				SourceID:    f.ID,
-				FolderID:    &body.FolderID,
-				Title:       title,
-				Caption:     caption,
-				Targets:     []int64{body.FacebookAccountID},
-				Status:      models.UploadJobStatusPending,
-		PublishAt:   &scheduledAt,
+				SourceID:       f.ID,
+				FolderID:       &body.FolderID,
+				Title:          title,
+				Caption:        caption,
+				Targets:        []int64{body.FacebookAccountID},
+				Status:         models.UploadJobStatusPending,
+				PublishAt:      &scheduledAt,
 			}
 			if err := r.uploadJobStore.Create(job); err != nil {
 				writeError(w, http.StatusInternalServerError, fmt.Sprintf("create upload job for %s: %v", f.Name, err))
@@ -454,7 +454,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 				Name:          f.Name,
 				MimeType:      f.MimeType,
 				JobID:         job.ID,
-				PublishAt:   scheduledAt,
+				PublishAt:     scheduledAt,
 				RelativeHours: scheduledAt.Sub(startedAt).Hours(),
 			})
 			cursor = scheduledAt
@@ -472,14 +472,14 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 
 	// Build the flat response.
 	resp := UploadsBatchByFolderResponse{
-		FolderID:        body.FolderID,
-		ScheduledCount:  len(allEntries),
-		PageCount:       pageNum,
-		Entries:         allEntries,
+		FolderID:          body.FolderID,
+		ScheduledCount:    len(allEntries),
+		PageCount:         pageNum,
+		Entries:           allEntries,
 		NeedsDriveAccount: needsDriveAccount,
-		PartialFailure:  partialFailure,
+		PartialFailure:    partialFailure,
 		FailedAtPageToken: failedAtPageToken,
-		FailedAtPage:    failedAtPage,
+		FailedAtPage:      failedAtPage,
 	}
 	if len(allEntries) > 0 {
 		resp.FirstPublishAt = firstPublish

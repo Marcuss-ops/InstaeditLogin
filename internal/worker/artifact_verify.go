@@ -8,12 +8,12 @@
 // ArtifactVerificationPolicy.
 //
 // The verifier enforces:
-//   * size cap via a TeeReader-equivalent over the underlying body so
+//   - size cap via a TeeReader-equivalent over the underlying body so
 //     an over-size stream surfaces as PermanentError BEFORE the bytes
 //     hit storage.Upload (defence-in-depth against runaway upstreams)
-//   * streamed SHA-256 computation during the same single pass that
+//   - streamed SHA-256 computation during the same single pass that
 //     drains into storage.Upload
-//   * post-Read comparison of (size + SHA) against the policy
+//   - post-Read comparison of (size + SHA) against the policy
 //
 // The verifier does NOT enforce ExpectedMIME — MIME is a header-level
 // concept that is correctly compared against the S3 response's

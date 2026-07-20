@@ -240,7 +240,7 @@ Two independent mechanisms govern how the system handles backpressure from upstr
 | facebook   | 2 req/s      | same                                                          |
 | threads    | 2 req/s      | same                                                          |
 | tiktok     | 0.5 req/s    | documented `video.publish` limit ~1 per 2s                    |
-| youtube    | 0.33 req/s   | Data API v3 daily quota; uploads cost ~1600 units each        |
+| youtube    | 0.33 req/s   | Data API v3 daily quota; uploads cost 1 bucket unit each (YouTube 2026 bucket model: default 100/day, expandable to 300-400/day for 200-channel rollout)        |
 | twitter    | 1 req/s      | v2 user-endpoint ~300 tweets/3h                               |
 | linkedin   | 0.5 req/s    | Posts API ~100 calls/day per app                              |
 

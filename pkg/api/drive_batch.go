@@ -92,11 +92,11 @@ type DriveBatchImportRequest struct {
 
 // DriveBatchImportResponse returns the scheduled jobs.
 type DriveBatchImportResponse struct {
-	FolderID               string                 `json:"folder_id"`
-	ScheduledCount         int                    `json:"scheduled_count"`
-	TotalRuntimeSeconds    int                    `json:"total_runtime_estimate_seconds"`
-	FirstPublishAt         time.Time              `json:"first_publish_at"`
-	LastScheduledAt        time.Time              `json:"last_scheduled_at"`
+	FolderID            string    `json:"folder_id"`
+	ScheduledCount      int       `json:"scheduled_count"`
+	TotalRuntimeSeconds int       `json:"total_runtime_estimate_seconds"`
+	FirstPublishAt      time.Time `json:"first_publish_at"`
+	LastScheduledAt     time.Time `json:"last_scheduled_at"`
 	// NextPageToken is ALWAYS emitted (no `omitempty`) so callers can
 	// reliably distinguish "got everything (token === "")" from "you
 	// forgot to read it". The earlier omitempty hid the boundary case
@@ -118,13 +118,13 @@ type DriveBatchImportResponse struct {
 
 // DriveBatchImportItem describes one queued upload_job.
 type DriveBatchImportItem struct {
-	Index        int       `json:"index"`
-	DriveFileID  string    `json:"drive_file_id"`
-	Name         string    `json:"name"`
-	MimeType     string    `json:"mime_type"`
-	JobID        int64     `json:"job_id"`
-	PublishAt  time.Time `json:"scheduled_at"`
-	RelativeHours float64  `json:"relative_hours_from_now"`
+	Index         int       `json:"index"`
+	DriveFileID   string    `json:"drive_file_id"`
+	Name          string    `json:"name"`
+	MimeType      string    `json:"mime_type"`
+	JobID         int64     `json:"job_id"`
+	PublishAt     time.Time `json:"scheduled_at"`
+	RelativeHours float64   `json:"relative_hours_from_now"`
 }
 
 // DriveBatchStatusResponse is the dashboard-friendly aggregate for a
@@ -146,16 +146,16 @@ type DriveBatchImportItem struct {
 // distinguishes an empty/cancelled batch from a fresh non-existent
 // folder id.
 type DriveBatchStatusResponse struct {
-	FolderID         string     `json:"folder_id"`
-	UserID           int64      `json:"user_id"`
-	PendingCount     int        `json:"pending_count"`
-	ProcessingCount  int        `json:"processing_count"`
-	CompletedCount   int        `json:"completed_count"`
-	FailedCount      int        `json:"failed_count"`
-	TotalCount       int        `json:"total_count"`
-	FirstPublishAt   *time.Time `json:"first_publish_at,omitempty"`
-	LastPublishAt    *time.Time `json:"last_publish_at,omitempty"`
-	Note             string     `json:"note,omitempty"`
+	FolderID        string     `json:"folder_id"`
+	UserID          int64      `json:"user_id"`
+	PendingCount    int        `json:"pending_count"`
+	ProcessingCount int        `json:"processing_count"`
+	CompletedCount  int        `json:"completed_count"`
+	FailedCount     int        `json:"failed_count"`
+	TotalCount      int        `json:"total_count"`
+	FirstPublishAt  *time.Time `json:"first_publish_at,omitempty"`
+	LastPublishAt   *time.Time `json:"last_publish_at,omitempty"`
+	Note            string     `json:"note,omitempty"`
 }
 
 // driveFolderIDPatternRegex mirrors the service-level regex that
@@ -495,10 +495,10 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 		// Empty or non-existent folder. 200 OK so the SPA renders a
 		// productive "no videos found" message instead of an error.
 		writeJSON(w, http.StatusOK, DriveBatchImportResponse{
-			FolderID:        body.FolderID,
-			ScheduledCount:  0,
-			Entries:         []DriveBatchImportItem{},
-			Note:            "no videos found in the folder (or folder is empty / has zero video files)",
+			FolderID:          body.FolderID,
+			ScheduledCount:    0,
+			Entries:           []DriveBatchImportItem{},
+			Note:              "no videos found in the folder (or folder is empty / has zero video files)",
 			NeedsDriveAccount: needsDriveAccount,
 		})
 		return
@@ -558,22 +558,22 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 			caption = caption + " — " + f.Name
 		}
 
-	job := &models.UploadJob{
-		UserID:      userID,
-		WorkspaceID: body.WorkspaceID,
-		SourceType:     models.UploadJobSourceAuthenticatedDrive,
-		DriveAccountID: &body.DriveAccountID,
-		SourceID:    f.ID,
-		// FolderID is the new migration-038 column. Wiring it here so the
-		// dashboard status endpoint can GROUP BY folder and report counts
-		// without scanning the entire upload_jobs table on every poll.
-		FolderID:    &body.FolderID, // pointer so SQL NULL when empty
-		Title:       title,
-		Caption:     caption,
-		Targets:     []int64{body.FacebookAccountID},
-		Status:      models.UploadJobStatusPending,
-		PublishAt: &scheduledAt,
-	}
+		job := &models.UploadJob{
+			UserID:         userID,
+			WorkspaceID:    body.WorkspaceID,
+			SourceType:     models.UploadJobSourceAuthenticatedDrive,
+			DriveAccountID: &body.DriveAccountID,
+			SourceID:       f.ID,
+			// FolderID is the new migration-038 column. Wiring it here so the
+			// dashboard status endpoint can GROUP BY folder and report counts
+			// without scanning the entire upload_jobs table on every poll.
+			FolderID:  &body.FolderID, // pointer so SQL NULL when empty
+			Title:     title,
+			Caption:   caption,
+			Targets:   []int64{body.FacebookAccountID},
+			Status:    models.UploadJobStatusPending,
+			PublishAt: &scheduledAt,
+		}
 		if err := r.uploadJobStore.Create(job); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("create upload job for %s: %v", f.Name, err))
 			return
@@ -585,9 +585,9 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 			Name:          f.Name,
 			MimeType:      f.MimeType,
 			JobID:         job.ID,
-		PublishAt:     scheduledAt,
-		RelativeHours: scheduledAt.Sub(now).Hours(),
-	})
+			PublishAt:     scheduledAt,
+			RelativeHours: scheduledAt.Sub(now).Hours(),
+		})
 		cursor = scheduledAt
 	}
 

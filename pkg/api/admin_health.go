@@ -11,11 +11,11 @@ import (
 // Includes YouTube quota estimate (D2.b derived), 1h + 24h
 // per-channel error rate (D5.a), and headline queue + retry counts.
 type AdminHealthResponse struct {
-	YouTubeQuota       repository.AdminYouTubeQuota         `json:"youtube_quota_estimate"`
-	ErrorRate1h        []repository.AdminErrorRateRow       `json:"error_rate_1h"`
-	ErrorRate24h       []repository.AdminErrorRateRow       `json:"error_rate_24h"`
-	QueueCounts        repository.AdminQueueCounts          `json:"queue_counts"`
-	Generated          int64                                `json:"generated_at_unix"`
+	YouTubeQuota repository.AdminYouTubeQuota   `json:"youtube_quota_estimate"`
+	ErrorRate1h  []repository.AdminErrorRateRow `json:"error_rate_1h"`
+	ErrorRate24h []repository.AdminErrorRateRow `json:"error_rate_24h"`
+	QueueCounts  repository.AdminQueueCounts    `json:"queue_counts"`
+	Generated    int64                          `json:"generated_at_unix"`
 }
 
 // handleAdminHealth (GET /admin/health) returns the cross-cutting
@@ -30,7 +30,7 @@ func (r *Router) handleAdminHealth(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	quota, err := r.adminStore.YouTubeQuotaApproximation(req.Context(), 24*time.Hour, 10000, 1600)
+	quota, err := r.adminStore.YouTubeQuotaApproximation(req.Context(), 24*time.Hour, 10000, 1)  // 2026 bucket model: 1 unit per videos.insert
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load youtube quota: "+err.Error())
 		return

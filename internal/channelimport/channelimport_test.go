@@ -108,8 +108,8 @@ func TestParse_DefaultPlatformWhenEmpty(t *testing.T) {
 func TestParse_MissingChannelID_SkipRow(t *testing.T) {
 	csv := strings.NewReader(strings.Join([]string{
 		"channel_id,channel_name,manager_email_hint,workspace,group,language,timezone,expected_upload_frequency",
-		",name-only-row,,,,,,",                                 // missing channel_id
-		"UCok,OK row,a@b,alpha,,,,",                            // valid
+		",name-only-row,,,,,,",      // missing channel_id
+		"UCok,OK row,a@b,alpha,,,,", // valid
 	}, "\n"))
 	rows, errs, err := Parse(csv, "youtube", fakeWorkspace)
 	if err != nil {
@@ -364,8 +364,8 @@ func TestImportToDB_DBIntegration_InsertAndReimport(t *testing.T) {
 	}
 	// Fly back the new metadata the operator inserted in run 2.
 	var (
-		gotChannelName  string
-		gotWorkspaceID  int64
+		gotChannelName string
+		gotWorkspaceID int64
 	)
 	if err := db.QueryRow(
 		`SELECT username, workspace_id FROM platform_accounts WHERE platform_user_id = $1`,

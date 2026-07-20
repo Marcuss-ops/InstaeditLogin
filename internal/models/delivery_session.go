@@ -11,21 +11,21 @@ import "time"
 //
 // Lifecycle:
 //
-//   initiated  — POST /upload/drive/v3/files returned a session
-//                URI; uploaded_bytes=0; about to stream chunk 1.
-//   uploading  — at least one chunk PUT acknowledged (HTTP 308 +
-//                Range header); uploaded_bytes reflects the
-//                server-confirmed offset (NOT what we sent — what
-//                the server accepted).
-//   completed  — final 200 received; remote_file_id + remote_url
-//                stamped; session_uri_encrypted cleared so the
-//                row doesn't carry a dead URI.
-//   failed     — error_message + error_code stamped; row is a
-//                retry candidate (counter increments on each
-//                retry attempt, gated by app-property dedupe).
-//   expired    — Google's 7-day resumable session TTL elapsed
-//                between restarts. full re-initiation required
-//                on the next Deliver call.
+//	initiated  — POST /upload/drive/v3/files returned a session
+//	             URI; uploaded_bytes=0; about to stream chunk 1.
+//	uploading  — at least one chunk PUT acknowledged (HTTP 308 +
+//	             Range header); uploaded_bytes reflects the
+//	             server-confirmed offset (NOT what we sent — what
+//	             the server accepted).
+//	completed  — final 200 received; remote_file_id + remote_url
+//	             stamped; session_uri_encrypted cleared so the
+//	             row doesn't carry a dead URI.
+//	failed     — error_message + error_code stamped; row is a
+//	             retry candidate (counter increments on each
+//	             retry attempt, gated by app-property dedupe).
+//	expired    — Google's 7-day resumable session TTL elapsed
+//	             between restarts. full re-initiation required
+//	             on the next Deliver call.
 //
 // Identity (deliverable_type, idempotency_key) is the canonical
 // dedupe pair: the database UNIQUE constraint enforces it (a

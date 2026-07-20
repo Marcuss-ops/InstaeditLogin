@@ -654,6 +654,10 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 		writeError(w, http.StatusNotFound, veloxDestinationNotFoundBody)
 		return
 	}
+	// Destination defaults are authoritative for the downstream uploader.
+	// Merge them before persistence so the Velox peer remains opaque while
+	// InstaEdit resolves the Drive account and folder locally.
+	veloxReq.Metadata = mergeVeloxDestinationMetadata(dest, veloxReq.Metadata)
 
 	// Step 9b — workspace lookup. Produces the WorkspaceID +
 	// OwnerUserID the producer-side carryover binds onto the
@@ -832,6 +836,28 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 		Status:           "accepted",
 		AlreadyExists:    alreadyExists,
 	})
+}
+
+func mergeVeloxDestinationMetadata(dest *models.ExternalDestination, raw json.RawMessage) json.RawMessage {
+	meta := make(map[string]any)
+	_ = json.Unmarshal(raw, &meta)
+	defaults, err := dest.DefaultMetadataAsMap()
+	if err == nil {
+		for k, v := range defaults {
+			if _, exists := meta[k]; !exists {
+				meta[k] = v
+			}
+		}
+	}
+	// The destination row, not Velox, chooses the actual InstaEdit target.
+	if _, exists := meta["target_account_ids"]; !exists {
+		meta["target_account_ids"] = []int64{dest.PlatformAccountID}
+	}
+	merged, err := json.Marshal(meta)
+	if err != nil {
+		return raw
+	}
+	return merged
 }
 
 // extractVeloxMetaString best-effort-parses the JSONB metadata blob

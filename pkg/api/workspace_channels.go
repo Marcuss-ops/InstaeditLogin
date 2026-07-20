@@ -59,7 +59,7 @@ func mapWorkspaceChannelError(err error) (int, string) {
 	if errors.As(err, &pqErr) && pqErr.Code == "23503" {
 		return http.StatusBadRequest, "foreign key violation: " + pqErr.Message
 	}
-	return http.StatusInternalServerError, "failed to process workspace channel: "+err.Error()
+	return http.StatusInternalServerError, "failed to process workspace channel: " + err.Error()
 }
 
 // --- Handlers ---------------------------------------------------------------

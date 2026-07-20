@@ -27,9 +27,9 @@ type recordingStore struct {
 // test can assert (delivery id, new status, error args, media args)
 // tuple-by-tuple.
 type updateCall struct {
-	DeliveryID                                string
-	NewStatus                                 models.ExternalDeliveryStatus
-	ErrCode, ErrMsg, MediaID, MediaURL        *string
+	DeliveryID                         string
+	NewStatus                          models.ExternalDeliveryStatus
+	ErrCode, ErrMsg, MediaID, MediaURL *string
 }
 
 func (m *recordingStore) UpdateStatus(

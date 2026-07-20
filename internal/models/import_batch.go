@@ -9,16 +9,16 @@ import (
 // ImportBatchStatus tracks the lifecycle of an async folder-batch
 // import (P1#7).
 //
-//   queued        — the producer handler inserted the row; the
-//                   background folder crawler has not claimed it yet.
-//   processing    — crawler claimed the row; cursor_page_token may be
-//                   non-null mid-flight.
-//   completed     — full folder listing processed; upload_jobs.batch_id
-//                   collapses all per-file jobs.
-//   failed        — terminal fail (Drive permission 403, source bad,
-//                   etc); recoverable via operator retry (not DLQ).
-//   dead_letter   — retry budget exhausted; operator triage.
-//   cancelled     — user requested cancel before completion.
+//	queued        — the producer handler inserted the row; the
+//	                background folder crawler has not claimed it yet.
+//	processing    — crawler claimed the row; cursor_page_token may be
+//	                non-null mid-flight.
+//	completed     — full folder listing processed; upload_jobs.batch_id
+//	                collapses all per-file jobs.
+//	failed        — terminal fail (Drive permission 403, source bad,
+//	                etc); recoverable via operator retry (not DLQ).
+//	dead_letter   — retry budget exhausted; operator triage.
+//	cancelled     — user requested cancel before completion.
 type ImportBatchStatus string
 
 const (
@@ -47,48 +47,48 @@ func (s ImportBatchStatus) IsTerminal() bool {
 // upload_jobs rows with batch_id FK stamping.
 //
 // P1#7 design choices (per thinker verdict):
-//   * D1 — header lives in import_batches; upload_jobs.batch_id UUID FK
+//   - D1 — header lives in import_batches; upload_jobs.batch_id UUID FK
 //     joins cleanly without cramming source/schedule metadata into
 //     per-file ingest rows.
-//   * D3 — XOR (handler validates either target_account_ids XOR
+//   - D3 — XOR (handler validates either target_account_ids XOR
 //     target_group_name, never both).
-//   * D4 — workspace_channels.group_name is the ad-hoc string key
+//   - D4 — workspace_channels.group_name is the ad-hoc string key
 //     until a future migration adds a UUID column.
-//   * D5.b+cursor — the crawler crash-recovery path requires the
+//   - D5.b+cursor — the crawler crash-recovery path requires the
 //     cursor_page_token + cursor_indexed_count fields to checkpoint
 //     per page; a reaper-restarted crawler resumes from there.
-//   * D6 — schedule_clamped + schedule_clamp_reason are surfaced in the
+//   - D6 — schedule_clamped + schedule_clamp_reason are surfaced in the
 //     handler response (best-effort from file_count estimate) AND in
 //     the runtime result (exact horizon once file_count is known).
 type ImportBatch struct {
-	ID                     uuid.UUID         `json:"id"`
-	UserID                 int64             `json:"user_id"`
-	WorkspaceID            int64             `json:"workspace_id"`
-	SourceProvider         string            `json:"source_provider"` // "google_drive" today
-	SourceDriveAccountID   *int64            `json:"source_drive_account_id,omitempty"`
-	SourceFolderID         string            `json:"source_folder_id"`
-	TargetAccountIDs       []int64           `json:"target_account_ids"`
-	TargetGroupName        *string           `json:"target_group_name,omitempty"`
-	PublishScheduleStartAt time.Time         `json:"publish_schedule_start_at"`
-	PublishScheduleMinGap  int               `json:"publish_schedule_min_gap_seconds"`
-	PublishScheduleMaxGap  int               `json:"publish_schedule_max_gap_seconds"`
+	ID                     uuid.UUID `json:"id"`
+	UserID                 int64     `json:"user_id"`
+	WorkspaceID            int64     `json:"workspace_id"`
+	SourceProvider         string    `json:"source_provider"` // "google_drive" today
+	SourceDriveAccountID   *int64    `json:"source_drive_account_id,omitempty"`
+	SourceFolderID         string    `json:"source_folder_id"`
+	TargetAccountIDs       []int64   `json:"target_account_ids"`
+	TargetGroupName        *string   `json:"target_group_name,omitempty"`
+	PublishScheduleStartAt time.Time `json:"publish_schedule_start_at"`
+	PublishScheduleMinGap  int       `json:"publish_schedule_min_gap_seconds"`
+	PublishScheduleMaxGap  int       `json:"publish_schedule_max_gap_seconds"`
 	// DefaultPrivacyLevel (P1 refactor) is the per-batch YouTube
 	// privacy (public/unlisted/private) stamped onto every
 	// upload_job the crawler fans out. The publish_worker reads
 	// upload_job.default_privacy_level to populate PublishPayload.
 	// PrivacyLevel when the per-post payload doesn't carry one.
-	DefaultPrivacyLevel    string            `json:"default_privacy_level"`
-	Status                 ImportBatchStatus `json:"status"`
-	CursorPageToken        *string           `json:"cursor_page_token,omitempty"`
-	CursorIndexedCount     int               `json:"cursor_indexed_count"`
-	ScheduleClamped        bool              `json:"schedule_clamped"`
-	ScheduleClampReason    *string           `json:"schedule_clamp_reason,omitempty"`
-	Warnings               []string          `json:"warnings,omitempty"`
-	ErrorMessage           *string           `json:"error_message,omitempty"`
-	CreatedCount           int               `json:"created_count"`
-	CreatedAt              time.Time         `json:"created_at"`
-	UpdatedAt              time.Time         `json:"updated_at"`
-	CompletedAt            *time.Time        `json:"completed_at,omitempty"`
+	DefaultPrivacyLevel string            `json:"default_privacy_level"`
+	Status              ImportBatchStatus `json:"status"`
+	CursorPageToken     *string           `json:"cursor_page_token,omitempty"`
+	CursorIndexedCount  int               `json:"cursor_indexed_count"`
+	ScheduleClamped     bool              `json:"schedule_clamped"`
+	ScheduleClampReason *string           `json:"schedule_clamp_reason,omitempty"`
+	Warnings            []string          `json:"warnings,omitempty"`
+	ErrorMessage        *string           `json:"error_message,omitempty"`
+	CreatedCount        int               `json:"created_count"`
+	CreatedAt           time.Time         `json:"created_at"`
+	UpdatedAt           time.Time         `json:"updated_at"`
+	CompletedAt         *time.Time        `json:"completed_at,omitempty"`
 }
 
 // DriveSourceRef is the triple {provider, drive_account_id, folder_id}
@@ -133,10 +133,10 @@ type DriveBatchImportRequest struct {
 // GET /api/v1/media/import/drive/folder/async/{id} which returns
 // the import_batches header + child upload_jobs.
 type DriveBatchImportResponse struct {
-	BatchID            uuid.UUID `json:"batch_id"`
-	Status             string    `json:"status"` // "queued" on producer response
-	ScheduleClamped    bool      `json:"schedule_clamped"`
-	ScheduleClampReason *string  `json:"schedule_clamp_reason,omitempty"`
-	EstimatedFileCount int       `json:"estimated_file_count"`
-	Notice             string    `json:"notice,omitempty"`
+	BatchID             uuid.UUID `json:"batch_id"`
+	Status              string    `json:"status"` // "queued" on producer response
+	ScheduleClamped     bool      `json:"schedule_clamped"`
+	ScheduleClampReason *string   `json:"schedule_clamp_reason,omitempty"`
+	EstimatedFileCount  int       `json:"estimated_file_count"`
+	Notice              string    `json:"notice,omitempty"`
 }

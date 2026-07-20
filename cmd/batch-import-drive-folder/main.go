@@ -79,19 +79,19 @@ var requiredEnvs = []string{
 
 // Config holds the values parsed from process env at startup.
 type Config struct {
-	APIBase                  string
-	CookieFile               string
-	FolderID                 string
-	PageToken                string
-	CursorRFC3339            string
-	WorkspaceID              int64
-	FacebookAccountID        int64
+	APIBase           string
+	CookieFile        string
+	FolderID          string
+	PageToken         string
+	CursorRFC3339     string
+	WorkspaceID       int64
+	FacebookAccountID int64
 	// MinJitterSeconds / MaxJitterSeconds are forwarded on every page
 	// request when non-zero; zero means "omit and let the server apply
 	// its 60-3600 s default". Both must be >= 0 and MIN <= MAX when
 	// set; loadConfig() rejects invalid combinations up-front.
-	MinJitterSeconds int64
-	MaxJitterSeconds int64
+	MinJitterSeconds         int64
+	MaxJitterSeconds         int64
 	DriveAPIKeyInformational string // logged for the operator only
 }
 
@@ -213,7 +213,7 @@ type entry struct {
 	DriveFileID string    `json:"drive_file_id"`
 	Name        string    `json:"name"`
 	JobID       int64     `json:"job_id"`
-	PublishAt time.Time `json:"scheduled_at"`
+	PublishAt   time.Time `json:"scheduled_at"`
 }
 
 // pageResponse mirrors pkg/api/drive_batch.go's DriveBatchImportResponse.

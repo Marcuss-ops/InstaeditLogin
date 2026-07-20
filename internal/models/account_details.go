@@ -41,15 +41,15 @@ type AccountContentPage struct {
 // AccountContentItem represents a single content item (video, post)
 // belonging to a platform account.
 type AccountContentItem struct {
-	ExternalID     string         `json:"external_id"`
-	Title          string         `json:"title,omitempty"`
-	Description    string         `json:"description,omitempty"`
-	ThumbnailURL   string         `json:"thumbnail_url,omitempty"`
-	PublicURL      string         `json:"public_url,omitempty"`
-	Privacy        string         `json:"privacy,omitempty"`
-	Status         string         `json:"status,omitempty"`
-	PublishedAt    *time.Time     `json:"published_at,omitempty"`
-	Duration       string         `json:"duration,omitempty"`
-	Metrics        []AccountMetric `json:"metrics"`
-	Properties     map[string]any  `json:"properties,omitempty"`
+	ExternalID   string          `json:"external_id"`
+	Title        string          `json:"title,omitempty"`
+	Description  string          `json:"description,omitempty"`
+	ThumbnailURL string          `json:"thumbnail_url,omitempty"`
+	PublicURL    string          `json:"public_url,omitempty"`
+	Privacy      string          `json:"privacy,omitempty"`
+	Status       string          `json:"status,omitempty"`
+	PublishedAt  *time.Time      `json:"published_at,omitempty"`
+	Duration     string          `json:"duration,omitempty"`
+	Metrics      []AccountMetric `json:"metrics"`
+	Properties   map[string]any  `json:"properties,omitempty"`
 }

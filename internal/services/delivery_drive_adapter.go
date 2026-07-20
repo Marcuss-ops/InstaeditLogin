@@ -35,8 +35,8 @@ import (
 // destination (produced by NewGoogleDriveDestination in the same
 // bootstrap scope) and forwards Deliver calls to it. Bootstrap:
 //
-//   dst, _ := NewGoogleDriveDestination(sessionRepo, tokenProvider, encryptor, httpClient, 16*1024*1024)
-//   _ = registry.Register(NewGoogleDriveDeliveryAdapter(dst))
+//	dst, _ := NewGoogleDriveDestination(sessionRepo, tokenProvider, encryptor, httpClient, 16*1024*1024)
+//	_ = registry.Register(NewGoogleDriveDeliveryAdapter(dst))
 //
 // If the destination constructor returns an error (e.g. chunk size
 // below Drive's 256 KiB minimum), the adapter construction refuses.

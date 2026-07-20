@@ -352,15 +352,15 @@ func TestHandleDetachWorkspaceChannel_MissingBinding_404(t *testing.T) {
 //     the bad accountId parse must surface as 400 from the handler.
 func TestHandleWorkspaceChannel_BadPathID_400(t *testing.T) {
 	cases := []struct {
-		name             string
-		method, path     string
-		body             string
-		findByIDFn       func(id int64) (*models.Workspace, error)
+		name         string
+		method, path string
+		body         string
+		findByIDFn   func(id int64) (*models.Workspace, error)
 	}{
 		{
 			name:   "POST bad workspace id",
 			method: http.MethodPost, path: "/api/v1/workspaces/not-a-number/channels",
-			body:   `{"platform_account_id": 42}`,
+			body: `{"platform_account_id": 42}`,
 			findByIDFn: func(id int64) (*models.Workspace, error) {
 				t.Errorf("FindByID MUST NOT be called with bad workspace id; got id=%d", id)
 				return nil, nil
@@ -369,7 +369,7 @@ func TestHandleWorkspaceChannel_BadPathID_400(t *testing.T) {
 		{
 			name:   "GET bad workspace id",
 			method: http.MethodGet, path: "/api/v1/workspaces/abc/channels",
-			body:   "",
+			body: "",
 			findByIDFn: func(id int64) (*models.Workspace, error) {
 				t.Errorf("FindByID MUST NOT be called with bad workspace id; got id=%d", id)
 				return nil, nil
@@ -378,7 +378,7 @@ func TestHandleWorkspaceChannel_BadPathID_400(t *testing.T) {
 		{
 			name:   "PATCH bad account id",
 			method: http.MethodPatch, path: "/api/v1/workspaces/1/channels/abc",
-			body:   `{"enabled": false}`,
+			body: `{"enabled": false}`,
 			findByIDFn: func(id int64) (*models.Workspace, error) {
 				return &models.Workspace{ID: id, OwnerID: 1}, nil
 			},
@@ -386,7 +386,7 @@ func TestHandleWorkspaceChannel_BadPathID_400(t *testing.T) {
 		{
 			name:   "DELETE bad account id",
 			method: http.MethodDelete, path: "/api/v1/workspaces/1/channels/xyz",
-			body:   "",
+			body: "",
 			findByIDFn: func(id int64) (*models.Workspace, error) {
 				return &models.Workspace{ID: id, OwnerID: 1}, nil
 			},

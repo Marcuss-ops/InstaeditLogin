@@ -42,6 +42,7 @@ func TestExternalDeliveryStatus_IsTerminal(t *testing.T) {
 // Seven values are "worker pool claimable":
 //   - The 6 happy-path forward states: accepted → publishing
 //   - retry_wait: re-claim when next_attempt_at elapses
+//
 // Four values exclude the worker pool claim:
 //   - Terminal: published / failed / dead_letter (no successor)
 //   - blocked_auth: re-claim only AFTER admin reconnects

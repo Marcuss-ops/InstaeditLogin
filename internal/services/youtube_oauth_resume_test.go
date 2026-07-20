@@ -47,10 +47,10 @@ func validBase64Key32() string {
 // Records each Save call so a test can assert the *encrypted*
 // ciphertext (never plaintext) was passed through.
 type memSessionStore struct {
-	mu      sync.Mutex
-	saves   []sessionSaveCall
-	clears  int
-	saveErr error // optional — set to force Save to error and exercise the warn path
+	mu       sync.Mutex
+	saves    []sessionSaveCall
+	clears   int
+	saveErr  error // optional — set to force Save to error and exercise the warn path
 	clearErr error
 }
 
@@ -135,11 +135,11 @@ func newResumeReadyService(t *testing.T, store YouTubeSessionStore, enc SessionE
 	// the production constructor (which would refuse our
 	// encryption-less wiring) and build the struct directly.
 	cfg := &config.Config{
-		YouTubeClientID:               "test-client",
-		YouTubeUploadChunkBytes:       256 * 1024,
-		YouTubeUploadMaxRetries:       2,
-		YouTubeUploadBackoffBaseMs:    1000,
-		YouTubeUploadBackoffCapMs:     300000,
+		YouTubeClientID:            "test-client",
+		YouTubeUploadChunkBytes:    256 * 1024,
+		YouTubeUploadMaxRetries:    2,
+		YouTubeUploadBackoffBaseMs: 1000,
+		YouTubeUploadBackoffCapMs:  300000,
 	}
 	opts := loadYouTubeUploadOptions(cfg)
 	svc := &YouTubeOAuthService{
