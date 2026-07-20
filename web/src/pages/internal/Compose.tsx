@@ -73,7 +73,7 @@ function EditorExamples() {
                   src={`https://www.youtube.com/embed/${video.id}?playsinline=1`}
                   title={video.title}
                   loading="lazy"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
                   referrerPolicy="strict-origin-when-cross-origin"
                 />
@@ -94,7 +94,7 @@ function EditorExamples() {
                   src={`https://www.youtube.com/embed/${video.id}?playsinline=1`}
                   title={video.title}
                   loading="lazy"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
                   referrerPolicy="strict-origin-when-cross-origin"
                 />
