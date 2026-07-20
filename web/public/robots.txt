@@ -11,6 +11,9 @@ Disallow: /settings/
 
 # Public marketing/legal surfaces.
 Allow: /
+Allow: /editor
+Allow: /programs
+Allow: /mentoring
 Allow: /login
 Allow: /privacy
 Allow: /terms
