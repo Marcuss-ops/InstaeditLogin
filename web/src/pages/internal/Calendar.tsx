@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -8,11 +8,13 @@ import {
   Clock,
   Filter,
   Plus,
+  X,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { authedFetch, AuthError, ApiError } from "../../lib/auth";
 import { CalendarGrid, type CalendarViewMode } from "./CalendarGrid";
 import { Skeleton, ErrorState } from "../../components/feedback";
+import { EmptyState } from "../../components/feedback/EmptyState";
 
 type Post = {
   id: number;
@@ -24,9 +26,11 @@ type Post = {
   created_at: string;
 };
 
+type Workspace = { id: number; name: string };
+
 type FetchState =
   | { kind: "loading" }
-  | { kind: "ready"; posts: Post[] }
+  | { kind: "ready"; posts: Post[]; workspaces: Workspace[] }
   | { kind: "error"; message: string };
 
 const viewTabs: { id: CalendarViewMode; label: string; icon: React.ElementType }[] = [
@@ -37,10 +41,15 @@ const viewTabs: { id: CalendarViewMode; label: string; icon: React.ElementType }
 
 export function CalendarPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const abortRef = useRef<AbortController | null>(null);
   const [state, setState] = useState<FetchState>({ kind: "loading" });
   const [view, setView] = useState<CalendarViewMode>("week");
   const [currentDate, setCurrentDate] = useState(new Date());
+
+
+  const statusFilter = searchParams.get("status") || "all";
+  const workspaceFilter = searchParams.get("workspace_id") || "all";
 
   const load = useCallback(async () => {
     abortRef.current?.abort();
@@ -48,11 +57,20 @@ export function CalendarPage() {
     abortRef.current = controller;
     setState({ kind: "loading" });
 
+
     try {
-      const resp = await authedFetch("/api/v1/posts", { signal: controller.signal });
+      const [postsResp, workspacesResp] = await Promise.all([
+        authedFetch("/api/v1/posts", { signal: controller.signal }),
+        authedFetch("/api/v1/workspaces", { signal: controller.signal }).catch(() => null),
+      ]);
       if (controller.signal.aborted) return;
-      const data = (await resp.json()) as { posts: Post[] };
-      setState({ kind: "ready", posts: data.posts ?? [] });
+      const data = (await postsResp.json()) as { posts: Post[] };
+      let workspaces: Workspace[] = [];
+      if (workspacesResp && workspacesResp.ok) {
+        const wsData = (await workspacesResp.json()) as { workspaces: Workspace[] };
+        workspaces = wsData.workspaces ?? [];
+      }
+      setState({ kind: "ready", posts: data.posts ?? [], workspaces });
     } catch (err) {
       if (controller.signal.aborted) return;
       if (err instanceof AuthError) {
@@ -83,6 +101,62 @@ export function CalendarPage() {
     month: "long",
     year: "numeric",
   });
+
+  const filteredPosts =
+    state.kind === "ready"
+      ? state.posts.filter((post) => {
+          if (statusFilter !== "all" && post.status !== statusFilter) return false;
+          if (workspaceFilter !== "all" && String(post.workspace_id) !== workspaceFilter) return false;
+          return true;
+        })
+      : [];
+
+  const hasActiveFilters = statusFilter !== "all" || workspaceFilter !== "all";
+
+  const setStatusFilter = (value: string) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value === "all") next.delete("status");
+        else next.set("status", value);
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
+  const setWorkspaceFilter = (value: string) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value === "all") next.delete("workspace_id");
+        else next.set("workspace_id", value);
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
+  const clearFilters = () => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("status");
+        next.delete("workspace_id");
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
+  const statusOptions = [
+    { value: "all", label: "All statuses" },
+    { value: "draft", label: "Draft" },
+    { value: "queued", label: "Scheduled" },
+    { value: "publishing", label: "Publishing" },
+    { value: "published", label: "Published" },
+    { value: "failed", label: "Failed" },
+  ];
 
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8 bg-[#030308] text-[#e8e8ef]">
@@ -164,14 +238,48 @@ export function CalendarPage() {
               })}
             </div>
 
-            <button
-              type="button"
-              disabled
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-[#9aa0aa] transition-colors opacity-60 cursor-not-allowed"
-              aria-label="Filter (coming soon)"
-            >
-              <Filter size={14} /> Filter
-            </button>
+            <div className="flex items-center gap-2">
+              <select
+                data-testid="calendar-filter-status"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-white focus:outline-none focus:border-white/[0.20]"
+                aria-label="Filter by status"
+              >
+                {statusOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              {state.kind === "ready" && state.workspaces.length > 0 && (
+                <select
+                  data-testid="calendar-filter-workspace"
+                  value={workspaceFilter}
+                  onChange={(e) => setWorkspaceFilter(e.target.value)}
+                  className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-white focus:outline-none focus:border-white/[0.20]"
+                  aria-label="Filter by workspace"
+                >
+                  <option value="all">All workspaces</option>
+                  {state.workspaces.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  data-testid="calendar-filter-clear"
+                  onClick={clearFilters}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-[#9aa0aa] hover:text-white hover:bg-white/[0.08] transition-colors"
+                  aria-label="Clear filters"
+                >
+                  <X size={14} /> Clear
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -193,14 +301,51 @@ export function CalendarPage() {
             />
           )}
 
-          {state.kind === "ready" && (
-            <CalendarGrid
-              view={view}
-              currentDate={currentDate}
-              posts={state.posts}
-              onPostsChange={load}
+          {state.kind === "ready" && state.posts.length === 0 && (
+            <EmptyState
+              title="No posts scheduled yet"
+              description="Create your first post to see it on the calendar."
+              icon={<Plus size={32} />}
+              cta={
+                <Link
+                  to="/app/compose"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
+                  data-testid="calendar-empty-compose"
+                >
+                  <Plus size={16} /> New post
+                </Link>
+              }
+              className="bg-[#1f1f2e] border-white/[0.12]"
             />
           )}
+
+          {state.kind === "ready" &&
+            state.posts.length > 0 &&
+            (hasActiveFilters && filteredPosts.length === 0 ? (
+              <EmptyState
+                title="No posts match the filters"
+                description="Try clearing the filters or create a new post."
+                icon={<Filter size={32} />}
+                cta={
+                  <button
+                    type="button"
+                    data-testid="calendar-empty-clear"
+                    onClick={clearFilters}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors"
+                  >
+                    <X size={16} /> Clear filters
+                  </button>
+                }
+                className="bg-[#1f1f2e] border-white/[0.12]"
+              />
+            ) : (
+              <CalendarGrid
+                view={view}
+                currentDate={currentDate}
+                posts={filteredPosts}
+                onPostsChange={load}
+              />
+            ))}
         </div>
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ToastProvider } from "../../components/toast";
@@ -254,7 +254,7 @@ describe("InternalUploads (/app/uploads)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("uploads-partial")).toBeInTheDocument();
     });
-    expect(screen.getByText(/Partial/i)).toBeInTheDocument();
+    expect(within(screen.getByTestId("uploads-partial")).getByText(/Partial/i)).toBeInTheDocument();
     expect(screen.getByText(/tok-FAILED/)).toBeInTheDocument();
     expect(
       screen.getByText(/POST \/api\/v1\/media\/import\/drive\/folder/i),
@@ -315,7 +315,7 @@ describe("InternalUploads (/app/uploads)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("uploads-error")).toBeInTheDocument();
     });
-    expect(screen.getByText(/Drive listing returned 502/i)).toBeInTheDocument();
+    expect(within(screen.getByTestId("uploads-error")).getByText(/Drive listing returned 502/i)).toBeInTheDocument();
   });
 
   it("sends advanced jitter settings when the toggle is expanded", async () => {
