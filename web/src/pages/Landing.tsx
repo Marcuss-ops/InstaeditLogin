@@ -442,7 +442,7 @@ function Hero() {
 }
 
 /* ----------------------------------------------------------------------------
- * AI Pipeline Visualization — "Dall'idea alla pubblicazione"
+ * AI Pipeline Visualization — "From idea to publication"
  * -------------------------------------------------------------------------- */
 
 function PipelineSection() {
@@ -701,7 +701,7 @@ function Features() {
             </div>
             <h3 className="text-display-3 text-white mb-2">Built-in approval flows.</h3>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              Drafts in revisione, blocca versioni finali, e pubblica con audit trail su ogni account.
+              Drafts under review, lock final versions, and publish with a full audit trail on each account.
             </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden lg:col-span-3 animate-fade-up animation-delay-300 hover:border-amber-400/30 transition-all duration-300">
@@ -947,7 +947,7 @@ function Footer() {
           </Link>
           <p className="text-sm text-zinc-400 mt-4 max-w-[42ch] leading-relaxed">
             Multi-platform publishing infrastructure for teams producing content every day.
-            Un render, ogni canale, ogni volta.
+            One render, every channel, every time.
           </p>
           <div className="flex items-center gap-2 mt-5">
             {PLATFORM_REGISTRY.map(({ key, name, Logo }) => (
@@ -977,7 +977,7 @@ function Footer() {
       <div className="border-t border-white/5">
         <div className="mx-auto max-w-7xl px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
           <div>© {new Date().getFullYear()} InstaEdit, Inc.</div>
-          <div>Costruito per creator e team di content operations.</div>
+          <div>Built for creators and content operations teams.</div>
         </div>
       </div>
     </footer>
