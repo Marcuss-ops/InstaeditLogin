@@ -1,14 +1,16 @@
-# Google OAuth Production Setup — YouTube + Drive
+# Google OAuth Production Setup — YouTube and Drive
 
-Step-by-step procedure for pushing the InstaEdit YouTube + Google Drive
-OAuth client out of **Testing mode** (the default for newly created apps)
-into **Production mode** (required for the 200-channel operator rollout
-and for Drive folder-batch imports).
+Step-by-step procedure for pushing the InstaEdit **YouTube** and
+**Google Drive** OAuth clients out of **Testing mode** (the default
+for newly created apps) into **Production mode** (required for the
+200-channel operator rollout and for Drive folder-batch imports).
 
-This document is scoped to the **YouTube Data API v3** + **Google
-Drive API v3** client (the InstaEdit app combines them under one
-consent screen because the operator's flow is "import a folder from
-Drive → publish to YouTube"). The same shape applies to Meta /
+This document is scoped to the **YouTube Data API v3** and **Google
+Drive API v3** clients. InstaEdit uses **two separate OAuth grants**:
+one for YouTube and one for Google Drive. The operator's flow is
+"import a folder from Drive → publish to YouTube", but each provider
+is authorized independently through its own consent screen and its own
+set of scopes. The same shape applies to Meta /
 LinkedIn / TikTok clients — those flows are covered by `docs/DEPLOY.md`
 and the `META_*` / `TIKTOK_*` sections of `.env.production.example`.
 
@@ -22,29 +24,32 @@ list can use the app for more than 7 days at a time.
 2. [ ] **OAuth consent screen** filled (app name, support email, app
    domain, authorized domain, home page, privacy policy, ToS,
    developer contact).
-3. [ ] **Minimum scopes** declared:
+3. [ ] **YouTube OAuth grant scopes** declared:
    - `youtube.upload` (videos.insert)
    - `youtube.readonly` (channels.list for P0#3 binding check +
      processing-status poll)
-   - `drive.readonly` (Drive folder import; restricted scope — folder-level listing required for the production batch-crawler)
-   - `userinfo.email` + `userinfo.profile` + `openid` (operator identity)
-4. [ ] **Sensitive scope justification** filled in the verification
+   - `userinfo.email`, `userinfo.profile`, `openid` (operator identity)
+4. [ ] **Google Drive OAuth grant scopes** declared:
+   - `drive.readonly` (Drive folder import; restricted scope —
+     folder-level listing required for the production batch-crawler)
+   - `userinfo.email`, `userinfo.profile`, `openid` (operator identity)
+5. [ ] **Sensitive scope justification** filled in the verification
    form (see "Scopes justification" below).
-5. [ ] **Brand verification** approved by Google (typically 4+ weeks
+6. [ ] **Brand verification** approved by Google (typically 4+ weeks
    for sensitive scopes).
-6. [ ] **Consent screen published** (one-way switch from Testing to
+7. [ ] **Consent screens published** (one-way switch from Testing to
    Production; see Step 5).
-7. [ ] **Refresh-token TTL monitoring** wired up so the 7-day Testing
+8. [ ] **Refresh-token TTL monitoring** wired up so the 7-day Testing
    trap and the user-revocation case both produce alerts (see
    "Monitoring refresh-token TTL" below).
-8. [ ] **7-day reconnect test** passes on a fresh non-tester Google
+9. [ ] **7-day reconnect test** passes on a fresh non-tester Google
    Account (refresh token still valid after a week).
-9. [ ] **Quota increase** approved by Google (recommended **300–400
-   videos.insert/day** in the dedicated "Video Uploads" bucket; default
-   today is 100/day at 1 bucket unit per call — bucket units are spent
-   1-to-1 with daily upload capacity, so the legacy `units ÷ 1600` math no
-   longer applies anywhere in this pipeline).
-10. [ ] **Manager Google Accounts** created + OAuth dance complete for
+10. [ ] **Quota increase** approved by Google (recommended **300–400
+    videos.insert/day** in the dedicated "Video Uploads" bucket; default
+    today is 100/day at 1 bucket unit per call — bucket units are spent
+    1-to-1 with daily upload capacity, so the legacy `units ÷ 1600` math no
+    longer applies anywhere in this pipeline).
+11. [ ] **Manager Google Accounts** created + OAuth dance complete for
     each (4–5 accounts × ≤ 50 channels each, see "Distribute the 200
     channels").
 
@@ -278,20 +283,23 @@ visits them during verification.
 Under **Scopes for Google APIs**, add only what the app exercises
 in production. The principle of least privilege matters here:
 **restricted** scopes (`drive.readonly`) require a deeper, more
-expensive Google security audit. The cost is justified because the
-Drive batch-crawler walks arbitrary folders at install time and
-needs `drive.readonly` — `drive.file` would let the user open
-individual files via the Google Picker API but cannot enumerate
-folder contents, which the production batch-import flow requires.
+expensive Google security audit. InstaEdit uses **two independent
+OAuth grants** — one for YouTube and one for Google Drive — so
+declare the scopes for each grant separately. The Drive grant is
+required because the batch-crawler walks arbitrary folders at
+install time and needs `drive.readonly` — `drive.file` would let the
+user open individual files via the Google Picker API but cannot
+enumerate folder contents, which the production batch-import flow
+requires.
 
-| Scope                                                            | Sensitivity    | Why we need it                                                                                            |
-| ---                                                              | ---            | ---                                                                                                       |
-| `https://www.googleapis.com/auth/youtube.upload`                 | Sensitive      | `videos.insert` (upload a video) — required for the entire publish path                                   |
-| `https://www.googleapis.com/auth/youtube.readonly`              | Sensitive      | `channels.list?mine=true` (P0#3 channel binding check), `videos.list` (processing-status poll)             |
-| `https://www.googleapis.com/auth/drive.readonly`                | Restricted     | Drive folder import — folder-level listing for the batch crawler (the production batch-import flow walks arbitrary folder contents at install time) |
-| `https://www.googleapis.com/auth/userinfo.email`                 | Non-sensitive  | Identify the operator's Google Account during OAuth                                                       |
-| `https://www.googleapis.com/auth/userinfo.profile`               | Non-sensitive  | Display name + avatar for the dashboard                                                                   |
-| `openid`                                                         | Non-sensitive  | Standard OIDC identifier                                                                                  |
+| Grant | Scope                                                            | Sensitivity    | Why we need it                                                                                            |
+| --- | ---                                                              | ---            | ---                                                                                                       |
+| YouTube | `https://www.googleapis.com/auth/youtube.upload`                 | Sensitive      | `videos.insert` (upload a video) — required for the entire publish path                                   |
+| YouTube | `https://www.googleapis.com/auth/youtube.readonly`              | Sensitive      | `channels.list?mine=true` (P0#3 channel binding check), `videos.list` (processing-status poll)             |
+| Drive | `https://www.googleapis.com/auth/drive.readonly`                | Restricted     | Drive folder import — folder-level listing for the batch crawler (the production batch-import flow walks arbitrary folder contents at install time) |
+| Identity | `https://www.googleapis.com/auth/userinfo.email`                 | Non-sensitive  | Identify the operator's Google Account during OAuth                                                       |
+| Identity | `https://www.googleapis.com/auth/userinfo.profile`               | Non-sensitive  | Display name + avatar for the dashboard                                                                   |
+| Identity | `openid`                                                         | Non-sensitive  | Standard OIDC identifier                                                                                  |
 
 > **Why `drive.readonly` and not `drive` or `drive.file`?** The
 > full `drive` scope is **restricted**: it triggers a deeper Google
@@ -331,8 +339,17 @@ folder contents, which the production batch-import flow requires.
 
 ### Scopes justification (paste into the verification form)
 
-The YouTube Data API verification form asks "why does your app need
-this scope?". Recommended copy:
+Each OAuth grant is verified independently. Use the relevant
+justification block below when submitting the corresponding grant
+for verification.
+
+> **Note on identity scopes.** Both grants request `userinfo.email`,
+> `userinfo.profile`, and `openid` because each OAuth flow needs to
+> identify the Google Account that is consenting. This duplication is
+> expected; each grant is a separate token and cannot read identity
+> information from the other grant.
+
+#### YouTube grant
 
 * **youtube.upload**: "InstaEdit is a content publishing tool.
   Operators connect their YouTube channels once, then schedule
@@ -346,6 +363,12 @@ this scope?". Recommended copy:
   failure mode Google explicitly warns about — and (b) poll
   processing status after upload so the dashboard can show
   'published' once YouTube finishes processing the video."
+* **userinfo.email / userinfo.profile / openid**: "Standard
+  operator identity — display name + avatar in the dashboard,
+  email for security notifications."
+
+#### Drive grant
+
 * **drive.readonly**: "Used solely to list the contents of, and
   download video files from, the operator-chosen Google Drive
   folder that boots the batch-crawler. Read-only — InstaEdit never
@@ -388,9 +411,10 @@ this scope?". Recommended copy:
 5. While verification is pending, the app is **still in Testing
    mode**. You can keep iterating, but refresh tokens still expire
    after 7 days for non-tester users. Run
-   `scripts/verify-google-oauth-mode.sh` (added in this commit)
-   against a sample access token to confirm the current mode before
-   any operator rollout.
+   `scripts/verify-google-oauth-mode.sh` (YouTube grant) and
+   `scripts/verify-drive-oauth-mode.sh` (Drive grant) against
+   sample access tokens to confirm the current mode before any
+   operator rollout.
 
 ## Step 5 — move from "Needs verification" to "Production"
 
@@ -404,11 +428,12 @@ Once Google approves the verification:
 3. The status badge flips to **In production**. This is a
    **one-way switch** — once published, you cannot move back to
    Testing mode without creating a new OAuth client.
-4. Run `scripts/verify-google-oauth-mode.sh` against an access
-   token issued to the published client. The script prints the
+4. Run `scripts/verify-google-oauth-mode.sh` (YouTube grant) and
+   `scripts/verify-drive-oauth-mode.sh` (Drive grant) against access
+   tokens issued to the published client. Each script prints the
    `aud` (= client_id) and `expires_in` (the access-token's
    remaining TTL in seconds, normally ~3,600 for a 1-hour access
-   token). The fact that the token was issued at all by the
+   token). The fact that the tokens were issued at all by the
    published client is a strong signal Production mode is live;
    pairing this with the refresh-token TTL monitor below catches
    the rare "verification approved but not yet published" window.
@@ -468,8 +493,8 @@ Quota increase):
    refresh token is invalidated).
 2. **Reconnect** through the normal OAuth flow as a fresh
    non-tester Google Account. Confirm:
-   * Consent screen shows the InstaEdit app name + logo (not
-     "Unverified app").
+   * Both consent screens (YouTube and Drive) show the InstaEdit
+     app name + logo (not "Unverified app").
    * Scopes list matches Step 3 exactly (no extras, no missing).
    * Refresh token is persisted on the platform_accounts row.
 3. **Wait 7 days**. Re-check the dashboard — the channel must still
@@ -490,10 +515,12 @@ Quota increase):
    # → expect HTTP 200 with the operator's videos, no quotaExceeded error
    ```
 
-6. **Run `scripts/verify-google-oauth-mode.sh`** against the same
-   access token. It will print `aud` (= the production OAuth
-   client_id) and `expires_in` (the access-token TTL). Sanity-check
-   that `aud` matches `YOUTUBE_CLIENT_ID` in `.env.production`.
+6. **Run `scripts/verify-google-oauth-mode.sh`** (YouTube grant)
+   and **`scripts/verify-drive-oauth-mode.sh`** (Drive grant)
+   against the same access tokens. Each script prints `aud` (= the
+   production OAuth client_id) and `expires_in` (the access-token
+   TTL). Sanity-check that `aud` matches `YOUTUBE_CLIENT_ID` or
+   `GOOGLE_DRIVE_CLIENT_ID` respectively in `.env.production`.
 
 ## Step 8 — distribute the 200 channels across manager accounts
 
@@ -734,13 +761,14 @@ gets garbage-collected.
 
 ### How to verify the current mode quickly
 
-The `scripts/verify-google-oauth-mode.sh` helper calls
+The `scripts/verify-google-oauth-mode.sh` (YouTube grant) and
+`scripts/verify-drive-oauth-mode.sh` (Drive grant) helpers call
 `GET https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=...`
-and prints:
+and print:
 
 * `aud` — the OAuth client_id the token was issued to. If this
-  matches `YOUTUBE_CLIENT_ID` in `.env.production`, the token is
-  signed by the production client.
+  matches `YOUTUBE_CLIENT_ID` or `GOOGLE_DRIVE_CLIENT_ID` in
+  `.env.production`, the token is signed by the production client.
 * `expires_in` — the access-token's remaining TTL in seconds.
   Roughly 3,600 (1 hour) at issuance, decreasing. This does **not**
   reflect the refresh token's TTL (which is held server-side by
@@ -752,11 +780,12 @@ and prints:
   token). For web-server-flow InstaEdit tokens, `azp == aud`. A
   mismatch is suspicious and worth investigating.
 
-Use it as a quick "is the published app actually serving tokens?"
-check after every consent-screen republish.
+Use them as quick "is the published app actually serving tokens?"
+checks after every consent-screen republish.
 
 ```bash
-./scripts/verify-google-oauth-mode.sh "$OAUTH_ACCESS_TOKEN"
+./scripts/verify-google-oauth-mode.sh "$YOUTUBE_OAUTH_ACCESS_TOKEN"
+./scripts/verify-drive-oauth-mode.sh "$DRIVE_OAUTH_ACCESS_TOKEN"
 ```
 
 ### AppMode flag + real clock injection for TTL coverage
@@ -872,6 +901,8 @@ order:
    InstaEdit grant from Google's
    [third-party apps page](https://myaccount.google.com/permissions).
 10. ✅ `scripts/verify-google-oauth-mode.sh` exits 0 against a
-    freshly-issued Production access token.
+    freshly-issued Production YouTube access token, and
+    `scripts/verify-drive-oauth-mode.sh` exits 0 against a
+    freshly-issued Production Drive access token.
 
 Any single step failing here blocks the 200-channel rollout.
