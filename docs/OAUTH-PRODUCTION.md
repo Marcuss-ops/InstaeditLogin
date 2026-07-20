@@ -39,8 +39,11 @@ list can use the app for more than 7 days at a time.
    "Monitoring refresh-token TTL" below).
 8. [ ] **7-day reconnect test** passes on a fresh non-tester Google
    Account (refresh token still valid after a week).
-9. [ ] **Quota increase** approved by Google (10M units/day ≈ 6,250
-   videos.insert; default 10K units = 6 videos/day).
+9. [ ] **Quota increase** approved by Google (recommended **300–400
+   videos.insert/day** in the dedicated "Video Uploads" bucket; default
+   today is 100/day at 1 bucket unit per call — bucket units are spent
+   1-to-1 with daily upload capacity, so the legacy `units ÷ 1600` math no
+   longer applies anywhere in this pipeline).
 10. [ ] **Manager Google Accounts** created + OAuth dance complete for
     each (4–5 accounts × ≤ 50 channels each, see "Distribute the 200
     channels").
@@ -56,9 +59,11 @@ In **Testing mode**:
   read the long-lived refresh token.
 * The "Add users" tester list caps at **100 test users**. The 200
   channels the operator wants to roll out exceed this cap.
-* Several sensitive scopes (`youtube.upload`, `youtube.readonly`,
-  `yt-analytics.readonly`) require explicit Google verification
+* Sensitive scopes actually requested by the app — `youtube.upload`
+  and `youtube.readonly` — require explicit Google verification
   before they can be requested by any user outside the test list.
+  (`yt-analytics.readonly` is intentionally NEVER requested by the
+  InstaEdit publish pipeline — see Step 3 below.)
 * The Drive folder-batch crawler uses the **restricted**
   `drive.readonly` scope — the importer walks arbitrary folders, so
   `drive.file` (per-file access only, opened via the Google Picker
@@ -111,12 +116,61 @@ cannot be transferred into the account. For the 200-channel
 deployment, distribute channels across 4–5 manager accounts as
 detailed in Step 8 below.
 
-### YouTube Data API v3 default quota
+### `channels.list?mine=true` pagination + 40–50 channels per manager
 
-`videos.insert` has a **default daily quota of 10,000 units**, and
-each call costs **1,600 units**. That works out to **6 uploads/day
-per project** — well below the 200-channel requirement. The quota
-must be increased before the rollout. Procedure below.
+A single Google Account can be granted access to up to **100 YouTube
+channels**, all managed under the same OAuth grant. The pre-2024
+InstaEdit code path calls `channels.list?mine=true&maxResults=50`
+without following `nextPageToken`, so it can only see the first 50
+channels of any manager. As soon as a manager exceeds 50 channels the
+remaining ones are invisible to the channel-binding check and the
+publisher will silently act on a wrong channel.
+
+**Hard cap per manager: 40–50 channels.** Picking the floor (40 +
+margin) keeps `channels.list` responses to a single page (no
+`nextPageToken` chasing needed for the pre-upload binding check) and
+keeps every manager comfortably under both Google's 100-channels-per-
+Account cap and the 50–100 refresh-tokens-cap-per-`(Google Account,
+OAuth client)` cap. Going above 50 channels per manager is allowed
+ONLY after:
+
+1. The YouTube service has been upgraded to follow `nextPageToken`,
+   loop until the response returns an empty `nextPageToken`, and
+   tolerate up to 200 channels in a single grant (the server-side
+   `mine=true` maximum the API exposes today).
+2. The operator has confirmed the manager's refresh-token count
+   stays below the 50-100 silent-invalidation cap (see the limit
+   above).
+
+For the 200-channel rollout: **4–5 managers, ≤50 channels each,
+single-page `channels.list` today**. Distribute by **rotating secondary
+channels across managers** so no single manager gets all of its
+channels revoked at once if an OAuth grant is later revoked from
+[Google's third-party apps page](https://myaccount.google.com/permissions).
+
+### YouTube Data API v3 — Video Uploads bucket (2026 model)
+
+Since **1° giugno 2026**, YouTube charges `videos.insert` against its
+own dedicated "Video Uploads" bucket instead of the older shared
+"units" budget that mixed read + write calls under one number. The math
+this doc used to print (`10,000 units/day default ÷ 1,600 units per call
+= 6 videos.insert/day`) is **obsolete as of 2026-06-01**.
+
+* **Cost per call**: `1` bucket unit per `videos.insert`.
+* **Default daily cap**: `100` `videos.insert` per Google Cloud project
+  per day (≈ 1 upload every 15 minutes — fine for a single-channel dev
+  app, way too tight for a 200-channel operator fleet).
+* **Multiplier**: bucket units are spent 1-to-1 against `videos.insert`.
+  Adding `N` bucket units to the daily cap buys exactly `N` more daily
+  `videos.insert` calls. The legacy `units × 1600` / `÷ 1600` arithmetic
+  you may see elsewhere in the Google docs does NOT apply to this
+  bucket.
+
+For the 200-channel daily target (200 calls/day steady-state + retries +
+canary private uploads + test traffic + margin) request **at least 300
+bucket units/day**; ideally **400** so the rollout keeps a 50–100% buffer.
+The Google-published, cross-verified quota increase URL is
+[Quota Calculator](https://developers.google.com/youtube/v3/determine_quota_cost).
 
 ## Step 0 — prerequisites
 
@@ -219,9 +273,24 @@ folder contents, which the production batch-import flow requires.
 > for the full taxonomy.
 
 > **Why is `yt-analytics.readonly` NOT in the minimum set?** It's
-> sensitive and only used by the future P2 analytics tab. Declare it
-> later when the tab ships — every scope declared today slows the
-> verification queue.
+> sensitive AND unused: the production publish pipeline relies on
+> `youtube.upload` + `youtube.readonly` only. `videos.insert` accepts
+> `youtube.upload` directly — it does NOT need
+> `yt-analytics.readonly` to publish analytics-rich content. The
+> scope stays out of the consent screen entirely and **must NEVER be
+> requested in production**.
+>
+> **Code-side guard.** `internal/services/youtube_oauth.go` builds
+> the authorization URL; the scope string there MUST NOT include
+> `yt-analytics.readonly`. Adding it back would (a) trigger a new
+> brand-verification round at Google (every added sensitive scope is
+> re-reviewed), and (b) deliver zero functional gain because
+> `videos.insert` already accepts `youtube.upload` per the
+> [YouTube Data API videos.insert reference](https://developers.google.com/youtube/v3/docs/videos/insert).
+> Verify with
+> `grep -n 'yt-analytics\.readonly' internal/services/youtube_oauth.go`
+> before any OAuth-tune commit; any re-introduction is treated by
+> this doc as a **blocking change** that must revert.
 
 ### Scopes justification (paste into the verification form)
 
@@ -309,34 +378,43 @@ Once Google approves the verification:
 
 ## Step 6 — request a YouTube Data API v3 quota increase
 
-The default 10,000 units/day (≈ 6 videos.insert/day) is below the
-200-channel operator requirement. Even at 1 video/channel/day,
-you need 320,000 units/day. Submit a quota increase request:
+The default **100 videos.insert/day** in the dedicated Video Uploads
+bucket is below the 200-channel operator requirement. Even at
+1 video/channel/day you need 200 calls; the operational target — 200
+channels daily + retries + private canary uploads + test traffic +
+margin — calls for **300–400 videos.insert/day** in the bucket.
+Submit a quota-increase request on the **Video Uploads bucket row**
+(not on a generic "units" field — Google now exposes the bucket as
+a labelled row in the Quotas tab):
 
 1. Sidebar → **APIs & Services → Library**.
 2. Search **YouTube Data API v3** → click → **Manage**.
-3. Tab **Quotas** → click **Edit quota** (top-right).
+3. Tab **Quotas** → on the **Video Uploads bucket** row, click
+   **Edit quota** (top-right).
 4. Form asks for:
-   * **New quota value**: `10000000` units/day (10M = ~6,250
-     `videos.insert` calls; leaves headroom for testing + retries +
-     analytics). The hard ceiling Google grants to verified apps
-     varies — start at 10M, escalate if Google pushes back.
+   * **New quota value**: `400` bucket units/day (= 400
+     `videos.insert` calls per day; 2× buffer over the steady-state
+     200-channel, 1-per-day target). If Google pushes back on 400,
+     drop to `300` — that still leaves a 50% buffer above the
+     200-call steady state.
    * **Justification**: paste the same scopes justification from
      Step 3 plus:
        "InstaEdit is a multi-tenant SaaS used by content operators
        to publish to several YouTube channels from one dashboard.
        One operator manages up to 200 channels, each requiring
        at minimum one videos.insert per upload. 200 channels × 1
-       upload/day × 1,600 units = 320,000 units/day. Requesting
-       10,000,000 units/day to leave headroom for the full
-       schedule + retries + analytics calls."
+       upload/day = 200 bucket-unit calls/day. Requesting 400
+       bucket units/day (= 400 videos.insert/day) to leave headroom
+       for the full schedule + retries + private canary uploads +
+       occasional backfills. Bucket units are 1-to-1 with
+       videos.insert under the 2026 quota model."
    * **Link to the verified app** (paste the OAuth consent screen
      URL).
    * **Demo video** (same one as Step 4).
 5. SLA: Google officially states that quota requests can take
    **up to 10 business days** (often faster for verified apps).
-   Until the increase is approved, the daily 6-video ceiling
-   stands.
+   Until the increase is approved, the default 100-videos.insert/day
+   cap stands.
 
 ## Step 7 — verify the rollout works end-to-end
 
@@ -376,9 +454,10 @@ Quota increase):
 
 ## Step 8 — distribute the 200 channels across manager accounts
 
-Per the **50–100 refresh tokens / OAuth client + Google Account** and
+Per the **50–100 refresh tokens / `(Google Account, OAuth client)` pair** and
 **100 channels / Google Account** limits, the 200 channels must be
-distributed across **4–5 manager Google Accounts**:
+distributed across **4–5 manager Google Accounts**, each operating as a
+self-contained OAuth dance with the manager's own identity:
 
 | Manager Google Account | Channel id range         | Channel count |
 | ---                    | ---                      | ---           |
@@ -390,11 +469,33 @@ distributed across **4–5 manager Google Accounts**:
 (Five accounts at 40 channels each is also valid if a fourth manager
 slot is unavailable or a single account needs faster rotation.)
 
-Each manager performs the OAuth flow once; the resulting refresh
-tokens live on separate `platform_accounts.platform_user_id` rows
-(the operator-side channel ID, e.g. `UC…`). The InstaEdit
-**workspace_channels** table (P0#4 migration 044) tracks which
-workspaces each manager's channels are attached to.
+Each manager performs the **full, separate OAuth dance with their own
+Google identity** (their own consent screen click, their own
+`code → refresh_token` exchange, their own token vault entry). Each
+manager's paired `(Google Account, OAuth client)` therefore starts at
+zero refresh tokens — never inheriting tokens from a different
+manager's account — so the **50-token silent-invalidation cap per
+pair is enforced from install time**, not retro-fit later. The
+resulting refresh tokens live on separate
+`platform_accounts.platform_user_id` rows (the operator-side channel
+ID, e.g. `UC…`). The InstaEdit **workspace_channels** table
+(P0#4 migration 044) tracks which workspaces each manager's channels
+are attached to.
+
+Hard counts per manager at install time:
+
+| Manager Google Account | Refresh tokens (start) | Channels bound |
+| ---                    | ---                    | ---            |
+| `mgr-a@instaedit.org`  | 0                      | ≤ 50           |
+| `mgr-b@instaedit.org`  | 0                      | ≤ 50           |
+| `mgr-c@instaedit.org`  | 0                      | ≤ 50           |
+| `mgr-d@instaedit.org`  | 0                      | ≤ 50           |
+| `mgr-e@instaedit.org`  | 0                      | ≤ 50 (reserve) |
+
+Adding a new channel under a manager already at 50 channels is a
+**blocking** action — it forces a new manager rotation, which would
+silently invalidate the next channel on the existing manager's
+refresh-token budget per [Google's OAuth 2.0 Expiration doc](https://developers.google.com/identity/protocols/oauth2#expiration).
 
 Distribute by **putting the operator's primary account in the pool**
 so the operator still has ≤ 50 refresh tokens on their own account
