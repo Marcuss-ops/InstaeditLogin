@@ -194,14 +194,13 @@ function DashboardMockup() {
             <span className="w-3 h-3 rounded-full bg-[#febc2e]" />
             <span className="w-3 h-3 rounded-full bg-[#28c840]" />
           </div>
-          <div className="text-xs text-zinc-400 font-medium tracking-tight">instaedit.app · Calendar</div>
+          <div className="text-xs text-zinc-400 font-medium tracking-tight">instaedit.app · Calendario</div>
           <div className="w-12 h-6 rounded-md surface-card-soft flex items-center justify-center">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse-glow" />
             <span className="text-[10px] text-zinc-300">Live</span>
           </div>
         </div>
-        <div className="grid grid-cols-4 gap-px bg-white/5 border-b border-white/10">
-          {[{ v: "12", l: "Scheduled" }, { v: "4", l: "Platforms" }, { v: "7d", l: "Window" }, { v: "+", l: "New" }].map((s) => (
+        <div className="grid grid-cols-4 gap-px bg-white/5 border-b border-white/10">            {[{ v: "12", l: "Programmati" }, { v: "4", l: "Piattaforme" }, { v: "7d", l: "Finestra" }, { v: "+", l: "Nuovo" }].map((s) => (
             <div key={s.l} className="bg-[#14141c]/70 px-3 py-2.5">
               <div className="text-base font-semibold text-white leading-tight">{s.v}</div>
               <div className="text-[10px] text-zinc-500 uppercase tracking-wider mt-0.5">{s.l}</div>
@@ -209,12 +208,12 @@ function DashboardMockup() {
           ))}
         </div>
         <div className="flex items-center gap-1 px-3 py-2 border-b border-white/10 text-xs overflow-x-auto">
-          <span className="px-2.5 py-1 rounded-md bg-white/10 text-white font-medium whitespace-nowrap">Scheduled</span>
-          <span className="px-2.5 py-1 text-zinc-500 hover:text-zinc-300 transition-colors cursor-default whitespace-nowrap">All</span>
-          <span className="px-2.5 py-1 text-zinc-500 hover:text-zinc-300 transition-colors cursor-default whitespace-nowrap">Drafts</span>
-          <span className="px-2.5 py-1 text-zinc-500 hover:text-zinc-300 transition-colors cursor-default whitespace-nowrap">Published</span>
+          <span className="px-2.5 py-1 rounded-md bg-white/10 text-white font-medium whitespace-nowrap">Programmati</span>
+          <span className="px-2.5 py-1 text-zinc-500 hover:text-zinc-300 transition-colors cursor-default whitespace-nowrap">Tutti</span>
+          <span className="px-2.5 py-1 text-zinc-500 hover:text-zinc-300 transition-colors cursor-default whitespace-nowrap">Bozze</span>
+          <span className="px-2.5 py-1 text-zinc-500 hover:text-zinc-300 transition-colors cursor-default whitespace-nowrap">Pubblicati</span>
           <span className="ml-auto inline-flex items-center gap-1 text-violet-300/90 text-[11px] font-medium whitespace-nowrap">
-            <Plus className="w-3 h-3" /> New post
+            <Plus className="w-3 h-3" /> Nuovo post
           </span>
         </div>
         <ul className="divide-y divide-white/5">
@@ -235,9 +234,9 @@ function DashboardMockup() {
           ))}
         </ul>
         <div className="flex items-center justify-between px-4 py-2.5 border-t border-white/10 bg-[#14141c]/60">
-          <div className="text-[11px] text-zinc-500">12 of 28 posts scheduled this week</div>
+          <div className="text-[11px] text-zinc-500">12 di 28 post programmati questa settimana</div>
           <div className="flex items-center gap-1.5 text-[11px] text-emerald-300/90 font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow" /> Auto-publish on
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow" /> Auto-pubblicazione attiva
           </div>
         </div>
       </div>
@@ -245,9 +244,8 @@ function DashboardMockup() {
         <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center">
           <Plus className="w-4 h-4 text-white" />
         </span>
-        <div className="leading-tight">
-          <div className="text-xs font-semibold text-white">200 → 8 posts</div>
-          <div className="text-[10px] text-zinc-500">in one click</div>
+        <div className="leading-tight">            <div className="text-xs font-semibold text-white">200 → 8 post</div>
+          <div className="text-[10px] text-zinc-500">in un click</div>
         </div>
       </div>
     </div>
@@ -345,7 +343,7 @@ function Nav() {
           </div>
 
           {/* Mobile hamburger */}
-          <button type="button" onClick={() => setOpen(!open)} className="md:hidden p-2 text-zinc-400 hover:text-white transition-colors" aria-label={open ? "Close menu" : "Open menu"}>
+          <button type="button" onClick={() => setOpen(!open)} className="md:hidden p-2 text-zinc-400 hover:text-white transition-colors" aria-label={open ? "Chiudi menu" : "Apri menu"}>
             {open ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>          {/* Mobile drawer — accessible dialog */}
@@ -534,10 +532,10 @@ function PipelineSection() {
 
 function StatsStrip() {
   const stats: Array<{ v: string; l: string }> = [
-    { v: "10,000+", l: "Posts / mo" },
-    { v: "7", l: "Platforms" },
-    { v: "50+", l: "Creator teams" },
-    { v: "99.9%", l: "Publishing uptime" },
+    { v: "10,000+", l: "Post/mese" },
+    { v: "7", l: "Piattaforme" },
+    { v: "50+", l: "Team creator" },
+    { v: "99.9%", l: "Uptime pubblicazione" },
   ];
   return (
     <section className="relative py-10 border-y border-white/10 bg-[#0c0c14]/60">
@@ -669,7 +667,7 @@ function Features() {
                   <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
                   <span className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
                   <span className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
-                  <span className="ml-3 text-[11px] text-zinc-500">Calendar · this week</span>
+                  <span className="ml-3 text-[11px] text-zinc-500">Calendario · questa settimana</span>
                 </div>
                 <div className="grid grid-cols-7 gap-1.5 p-3 text-center text-[10px] text-zinc-500">
                   {["M", "T", "W", "T", "F", "S", "S"].map((d, idx) => (
@@ -723,7 +721,7 @@ function Features() {
                   ))}
                 </div>
                 <div className="flex justify-between text-[10px] text-zinc-500 mt-2">
-                  <span>Jan</span><span>Mar</span><span>May</span><span>Jul</span><span>Sep</span><span>Nov</span>
+                  <span>Gen</span><span>Mar</span><span>Mag</span><span>Lug</span><span>Set</span><span>Nov</span>
                 </div>
               </div>
             </div>

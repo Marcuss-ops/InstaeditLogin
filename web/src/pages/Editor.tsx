@@ -224,13 +224,13 @@ function Nav() {
               to="/login"
               className="hidden sm:inline-flex text-sm font-medium px-4 py-2 text-zinc-300 hover:text-white transition-colors"
             >
-              Sign in
+              Accedi
             </Link>
             <Link
               to="/login"
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-white text-black text-sm font-semibold hover:bg-zinc-100 transition-colors shadow-[0_8px_30px_-10px_rgba(255,255,255,0.4)]"
             >
-              Connect account
+              Collega account
               <ArrowRight className="w-4 h-4" />
             </Link>
           </div>
@@ -282,15 +282,15 @@ function DropzoneMockup() {
             <UploadCloud className="w-7 h-7" />
           </div>
           <div className="text-lg font-semibold text-white">
-            Drop a Raw idea here
+            Trascina qui la tua idea grezza
           </div>
           <div className="text-sm text-zinc-400 mt-1.5 max-w-[42ch] mx-auto">
-            MP4, MOV, WebM, or HEVC up to 4 GB. Vertical, horizontal, square — we
-            take what you have.
+            MP4, MOV, WebM o HEVC fino a 4 GB. Verticale, orizzontale, quadrato — accettiamo
+            quello che hai.
           </div>
           <div className="mt-5 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/[0.06] text-[11px] text-zinc-300 ring-1 ring-white/10">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow" />
-            or paste a YouTube / Drive link
+            oppure incolla un link YouTube / Drive
           </div>
         </div>
 
@@ -298,9 +298,9 @@ function DropzoneMockup() {
             work" claim with three sub-step indicators. */}
         <div className="mt-5 space-y-2.5">
           {[
-            { l: "Encoding · 7 platform variants", on: true },
-            { l: "Captions · auto-transcribed + translated", on: true },
-            { l: "Thumbnails · A/B test generated", on: false },
+            { l: "Codifica · 7 varianti per piattaforma", on: true },
+            { l: "Sottotitoli · auto-trascritti + tradotti", on: true },
+            { l: "Miniature · test A/B generati", on: false },
           ].map((step) => (
             <div
               key={step.l}
@@ -317,7 +317,7 @@ function DropzoneMockup() {
                 <span className="text-xs text-zinc-200">{step.l}</span>
               </div>
               <span className="text-[10px] text-zinc-500 tabular-nums">
-                {step.on ? "ok" : "queued"}
+                {step.on ? "ok" : "in coda"}
               </span>
             </div>
           ))}
@@ -363,10 +363,10 @@ function VideoExamplesSection() {
         <div className="max-w-3xl mb-12 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3 inline-flex items-center gap-2">
             <PlayCircle className="w-4 h-4" />
-            Real examples
+            Esempi reali
           </div>
           <h2 className="text-display-2 text-white">
-            See what the editor <span className="text-gradient">actually ships.</span>
+            Guarda cosa produce l'editor <span className="text-gradient">nel concreto.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[60ch]">
             Our system researches the best stock footage and sound effects,
@@ -379,16 +379,16 @@ function VideoExamplesSection() {
         <div className="grid md:grid-cols-3 gap-4 mb-20">
           {[
             {
-              title: "Best assets, found automatically",
-              copy: "The engine searches for the strongest stock footage and SFX for every beat of your story.",
+              title: "Le migliori risorse, trovate automaticamente",
+              copy: "Il motore cerca le riprese stock e gli SFX più forti per ogni momento della tua storia.",
             },
             {
-              title: "Placed at exactly the right moment",
-              copy: "AI images and supporting clips are timed to the narration, pacing, and emotional arc.",
+              title: "Posizionate nel momento esatto",
+              copy: "Immagini AI e clip di supporto sono sincronizzate con la narrazione, il ritmo e l'arco emotivo.",
             },
             {
-              title: "Human-in-the-loop quality",
-              copy: "Every cut gets a creative review pass for polished, After Effects-like results in minutes.",
+              title: "Qualità con supervisione umana",
+              copy: "Ogni taglio viene sottoposto a una revisione creativa per risultati rifiniti, alla stregua di After Effects, in pochi minuti.",
             },
           ].map((feature) => (
             <div key={feature.title} className="surface-card p-5">
@@ -406,11 +406,11 @@ function VideoExamplesSection() {
               Short-form
             </div>
             <h3 className="text-display-3 text-white mb-3">
-              Vertical videos built for the feed.
+              Video verticali pensati per il feed.
             </h3>
             <p className="text-sm text-zinc-400 max-w-[45ch]">
-              Native 9:16 outputs for YouTube Shorts, Instagram Reels, and
-              TikTok — ready to publish without reformatting.
+              Output nativi 9:16 per YouTube Shorts, Instagram Reels e TikTok —
+              pronti da pubblicare senza riformattare.
             </p>
           </div>
           <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-5">
@@ -427,12 +427,11 @@ function VideoExamplesSection() {
               Long-form
             </div>
             <h3 className="text-display-3 text-white mb-3">
-              Horizontal masters for every channel.
+              Master orizzontali per ogni canale.
             </h3>
             <p className="text-body-lg text-zinc-400 max-w-[60ch]">
-              Long-form exports with the right framing, descriptions,
-              thumbnails, and chapters for YouTube, Facebook, Instagram, and
-              LinkedIn.
+              Export long-form con il giusto framing, descrizioni, miniature e capitoli
+              per YouTube, Facebook, Instagram e LinkedIn.
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -523,16 +522,16 @@ function OutputsSection() {
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-12 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">
-            One render. Seven native posts.
+            Un render. Sette post nativi.
           </div>
           <h2 className="text-display-2 text-white">
-            Every output is shaped for its{" "}
-            <span className="text-gradient">platform.</span>
+            Ogni output è modellato per la sua{" "}
+            <span className="text-gradient">piattaforma.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[60ch]">
-            Our engine reads each platform's quirks — aspect ratio, length
-            caps, thumbnail rules, caption tone — so a single raw render
-            lands natively without you opening another tab.
+            Il nostro motore legge le peculiarità di ogni piattaforma — aspect ratio,
+            limiti di durata, regole delle miniature, tono delle didascalie — così un singolo
+            render grezzo atterra in modo nativo senza che tu apra un'altra scheda.
           </p>
         </div>
 
@@ -562,20 +561,20 @@ function OutputsSection() {
  * -------------------------------------------------------------------------- */
 function SpeedStats() {
   const stats = [
-    { before: "6 hours", after: "8 min", label: "Manual editing" },
-    { before: "14 tabs", after: "1 dashboard", label: "Per-platform reuploads" },
-    { before: "7 exports", after: "1 render", label: "Re-encoding per channel" },
+    { before: "6 ore", after: "8 min", label: "Editing manuale" },
+    { before: "14 schede", after: "1 dashboard", label: "Ricarichi per piattaforma" },
+    { before: "7 export", after: "1 render", label: "Ri-codifica per canale" },
   ];
   return (
     <section className="relative py-20 sm:py-24 bg-elevated overflow-hidden">
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-12 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">
-            Why an editor
+            Perché un editor
           </div>
           <h2 className="text-display-2 text-white">
-            From hours of busywork to{" "}
-            <span className="text-gradient">a single click.</span>
+            Da ore di lavoro manuale a{" "}
+            <span className="text-gradient">un solo click.</span>
           </h2>
         </div>
 
@@ -612,24 +611,24 @@ function HowItWorks() {
   const steps = [
     {
       n: "01",
-      title: "Drop your Raw idea",
-      copy: "Vertical, horizontal, or square — upload what you shot. We accept MP4, MOV, WebM, and HEVC up to 4 GB.",
+      title: "Trascina la tua idea grezza",
+      copy: "Verticale, orizzontale o quadrato — carica ciò che hai girato. Accettiamo MP4, MOV, WebM e HEVC fino a 4 GB.",
       Icon: UploadCloud,
       ring: "ring-violet-400/40",
       iconColor: "text-violet-300",
     },
     {
       n: "02",
-      title: "Engine rewrites for each platform",
-      copy: "Captions, thumbnails, hashtags, and chapters are auto-generated per platform in one pass.",
+      title: "Il motore riscrive per ogni piattaforma",
+      copy: "Sottotitoli, miniature, hashtag e capitoli sono generati automaticamente per piattaforma in un passaggio.",
       Icon: Sparkles,
       ring: "ring-cyan-400/40",
       iconColor: "text-cyan-300",
     },
     {
       n: "03",
-      title: "Schedule once. Ship everywhere.",
-      copy: "Pick a time. InstaEdit fans out per-platform slots so each audience sees it at peak engagement.",
+      title: "Programma una volta. Pubblica ovunque.",
+      copy: "Scegli un orario. InstaEdit distribuisce slot per piattaforma così che ogni pubblico lo veda al picco di coinvolgimento.",
       Icon: Clock,
       ring: "ring-pink-400/40",
       iconColor: "text-pink-300",
@@ -644,10 +643,10 @@ function HowItWorks() {
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">
-            How it works
+            Come funziona
           </div>
           <h2 className="text-display-2 text-white">
-            From Raw idea to <span className="text-gradient">shipped.</span>
+            Dall'idea grezza alla <span className="text-gradient">pubblicazione.</span>
           </h2>
         </div>
 
@@ -742,31 +741,31 @@ function TranslateSection() {
         <div className="lg:col-span-5 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3 inline-flex items-center gap-2">
             <Globe className="w-4 h-4" />
-            Translate
+            Traduci
           </div>
           <h2 className="text-display-2 text-white">
-            Reach 50+ markets.{" "}
-            <span className="text-gradient">In their language.</span>
+            Raggiungi 50+ mercati.{" "}
+            <span className="text-gradient">Nella loro lingua.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            Captions, titles, and chapters auto-localized in a single pass —
-            with culturally tuned phrasing, not a literal word swap. Optional
-            AI voice dubbing matches the original cadence.
+            Sottotitoli, titoli e capitoli auto-localizzati in un unico passaggio —
+            con formulazioni culturalmente adattate, non una semplice traduzione letterale.
+            Il doppiaggio AI opzionale mantiene la cadenza originale.
           </p>
 
           <ul className="mt-7 space-y-3">
             {[
               {
-                t: "Cultural tone, not just translation",
-                d: "Models per market — idioms, formality, and brand voice preserved.",
+                t: "Tono culturale, non solo traduzione",
+                d: "Modelli per mercato — modi di dire, formalità e voce del brand preservati.",
               },
               {
-                t: "Captions and chapters timed precisely",
-                d: "Subtitle tracks baked into each platform-native render.",
+                t: "Sottotitoli e capitoli sincronizzati con precisione",
+                d: "Tracce di sottotitoli integrate in ogni render nativo per piattaforma.",
               },
               {
-                t: "Optional AI dubbing",
-                d: "Voice-cloned or picked from a library — sync to the edit.",
+                t: "Doppiaggio AI opzionale",
+                d: "Voce clonata o scelta da una libreria — sincronizzata con il montaggio.",
               },
             ].map((it) => (
               <li key={it.t} className="flex items-start gap-3">
@@ -813,15 +812,15 @@ function TranslateSection() {
               {/* Original */}
               <div className="surface-card-soft rounded-xl p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-eyebrow text-zinc-500">Original</div>
+                  <div className="text-eyebrow text-zinc-500">Originale</div>
                   <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400">
                     <span className="text-base leading-none">🇬🇧</span>
                     EN
                   </span>
                 </div>
                 <div className="text-sm text-zinc-200 leading-relaxed">
-                  “Shipping content to seven platforms used to take a team of
-                  five. Now it takes me an afternoon.”
+                  “Pubblicare contenuti su sette piattaforme richiedeva un team di
+                  cinque persone. Ora mi basta un pomeriggio.”
                 </div>
               </div>
               {/* Translated stack */}
@@ -855,11 +854,11 @@ function TranslateSection() {
           <div className="surface-card p-4 sm:p-5">
             <div className="flex items-center justify-between mb-3.5">
               <div className="text-eyebrow text-violet-300/90">
-                Supported locales
+                Lingue supportate
               </div>
               <div className="text-xs text-zinc-400">
                 <span className="text-white font-bold tabular-nums">50+</span>
-                <span className="ml-1.5">markets covered</span>
+                <span className="ml-1.5">mercati coperti</span>
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -879,7 +878,7 @@ function TranslateSection() {
                 </span>
               ))}
               <span className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-violet-500/10 border border-violet-400/20 text-[11px] text-violet-200/90 font-medium">
-                + 20 more
+                + 20 altre
               </span>
             </div>
           </div>
@@ -933,31 +932,31 @@ function ShortsCutSection() {
         <div className="lg:col-span-5 lg:order-2 animate-fade-up">
           <div className="text-eyebrow text-cyan-300/90 mb-3 inline-flex items-center gap-2">
             <Scissors className="w-4 h-4" />
-            Cut for shorts
+            Taglia per shorts
           </div>
           <h2 className="text-display-2 text-white">
-            One long-form.{" "}
-            <span className="text-gradient">Six shorts.</span> Auto-cut.
+            Un long-form.{" "}
+            <span className="text-gradient">Sei shorts.</span> Taglio automatico.
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            The cut engine finds the highest-tension moments — hooks, stats,
-            reveals, CTAs — and pulls each one out as a vertical 9:16 clip,
-            ready for Shorts, Reels, and TikTok. Reframe, recaption, ship.
+            Il motore di taglio trova i momenti di maggiore tensione — hook, statistiche,
+            rivelazioni, CTA — ed estrae ciascuno come clip verticale 9:16, pronta per
+            Shorts, Reels e TikTok. Riquadra, sottotitola, pubblica.
           </p>
 
           <ul className="mt-7 space-y-3">
             {[
               {
-                t: "Tension-aware extraction",
-                d: "Score each segment by hook and payout — keep only the bangers.",
+                t: "Estrazione consapevole della tensione",
+                d: "Valuta ogni segmento per hook e payoff — tieni solo i migliori.",
               },
               {
-                t: "AI reframing 16:9 → 9:16",
-                d: "Face-tracking + rule-of-thirds crops that feel designed.",
+                t: "Riquadratura AI 16:9 → 9:16",
+                d: "Riquadrature con face-tracking e regola dei terzi che sembrano studiate.",
               },
               {
-                t: "Captions burned in",
-                d: "Per-locale captions baked into each cut, b-roll optional.",
+                t: "Sottotitoli integrati",
+                d: "Sottotitoli per località integrati in ogni taglio, b-roll opzionale.",
               },
             ].map((it) => (
               <li key={it.t} className="flex items-start gap-3">
@@ -1005,7 +1004,7 @@ function ShortsCutSection() {
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-eyebrow text-zinc-500">Timeline</div>
                   <div className="text-[10px] text-zinc-500 tabular-nums">
-                    Source · 24:13
+                    Sorgente · 24:13
                   </div>
                 </div>
                 <div className="relative h-14 rounded-lg bg-gradient-to-r from-zinc-800/80 via-zinc-700/60 to-zinc-800/80 ring-1 ring-white/10 overflow-hidden">
@@ -1048,14 +1047,14 @@ function ShortsCutSection() {
               <div>
                 <div className="flex items-center justify-between mb-2.5">
                   <div className="text-eyebrow text-zinc-500">
-                    Cuts queued
+                    Tagli in coda
                     <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] text-zinc-300 tabular-nums">
                       6
                     </span>
                   </div>
                   <div className="text-[10px] text-emerald-300/90 font-medium inline-flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-glow" />
-                    Ready · 9:16 each
+                    Pronti · 9:16 ciascuno
                   </div>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
@@ -1157,31 +1156,28 @@ function StreamSection() {
         <div className="lg:col-span-5 animate-fade-up">
           <div className="text-eyebrow text-rose-300/90 mb-3 inline-flex items-center gap-2">
             <Radio className="w-4 h-4" />
-            Stream 24/7
+            Streaming 24/7
           </div>
           <h2 className="text-display-2 text-white">
-            One source.{" "}
-            <span className="text-gradient">Seven live destinations.</span>
+            Una sorgente.{" "}
+            <span className="text-gradient">Sette destinazioni live.</span>
           </h2>
-          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            A single control room fans out to every channel — auto-loop your
-            library, drop in scheduled programs, and keep broadcasting 24/7,
-            even while you sleep.
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">            Un'unica regia si dirama su ogni canale — loop automatico della tua libreria, programmi pianificati e trasmissione 24/7, anche mentre dormi.
           </p>
 
           <ul className="mt-7 space-y-3">
             {[
               {
-                t: "Multistream to 7 channels",
-                d: "Simultaneous push to YouTube, Facebook, Instagram, TikTok, X, LinkedIn, and Threads.",
+                t: "Multistream su 7 canali",
+                d: "Push simultaneo su YouTube, Facebook, Instagram, TikTok, X, LinkedIn e Threads.",
               },
               {
-                t: "Loop + scheduled programming",
-                d: "Built-in scheduler for show blocks, replays, and live drops.",
+                t: "Loop + programmazione pianificata",
+                d: "Scheduler integrato per blocchi di programmi, replay e interventi live.",
               },
               {
-                t: "Always-on with fallback",
-                d: "If a source disconnects, the loop keeps airing until the next slot.",
+                t: "Sempre attivo con fallback",
+                d: "Se una sorgente si disconnette, il loop continua fino allo slot successivo.",
               },
             ].map((it) => (
               <li key={it.t} className="flex items-start gap-3">
@@ -1381,7 +1377,7 @@ function ContactSection() {
               aria-hidden="true"
               focusable="false"
             />
-            <span>Talk to the team</span>
+            <span>            Parla con il team</span>
           </div>
 
           <h2 className="text-display-2 text-white max-w-[24ch] mx-auto">
@@ -1407,10 +1403,7 @@ function ContactSection() {
             </span>
           </div>
 
-          <p className="text-body-lg text-zinc-300/90 mt-6 max-w-[52ch] mx-auto">
-            For tailored demos, custom workflows, or anything that doesn’t fit
-            the self-serve flow — give us a call. We’ll walk you through what
-            is possible for your team in under ten minutes.
+          <p className="text-body-lg text-zinc-300/90 mt-6 max-w-[52ch] mx-auto">            Per demo personalizzate, workflow su misura o qualsiasi esigenza che non rientra nel flusso self-service — chiamaci. Ti mostreremo cosa è possibile per il tuo team in meno di dieci minuti.
           </p>
 
           {/* Primary CTA — phone stays the dominant action (white pill).
@@ -1437,7 +1430,7 @@ function ContactSection() {
               to="/login"
               className="inline-flex items-center gap-2 px-6 py-3.5 rounded-full surface-glass text-zinc-200 font-medium hover:text-white hover:border-white/25 transition-colors"
             >
-              Or open an account
+              Oppure apri un account
               <ArrowRight className="w-5 h-5" />
             </Link>
           </div>
@@ -1480,9 +1473,9 @@ function ContactSection() {
           </div>
 
           <div className="mt-7 text-xs text-zinc-500 flex items-center justify-center gap-2 flex-wrap">
-            <span>Mon–Fri · 09:00–18:00 CET</span>
+            <span>Lun–Ven · 09:00–18:00 CET</span>
             <span aria-hidden="true">·</span>
-            <span>WhatsApp also OK</span>
+            <span>Anche su WhatsApp</span>
           </div>
         </div>
       </div>

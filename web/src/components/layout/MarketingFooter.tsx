@@ -17,8 +17,7 @@ const COLS: Array<{ heading: string; links: Array<{ l: string; to?: string; href
     heading: "Legale",
     links: [
       { l: "Privacy", to: "/privacy" },
-      { l: "Termini", to: "/terms" },
-      { l: "Data deletion", href: "/data-deletion.html" },
+      { l: "Termini", to: "/terms" },        { l: "Cancellazione dati", href: "/data-deletion.html" },
     ],
   },
 ];

@@ -33,13 +33,13 @@ export function Login() {
 
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}));
-        throw new Error(data.error || "Invalid credentials");
+        throw new Error(data.error || "Credenziali non valide");
       }
 
       await fetchSession();
       navigate("/app/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      setError(err instanceof Error ? err.message : "Qualcosa è andato storto");
     } finally {
       setLoading(false);
     }
@@ -70,10 +70,10 @@ export function Login() {
         {/* Card */}
         <div className="rounded-2xl border border-white/[0.20] bg-[#1f1f2e] p-10 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.18)]">
           <h1 className="text-xl font-semibold tracking-tight mb-1">
-            Welcome back
+            Bentornato
           </h1>
           <p className="text-sm text-[#9aa0aa] mb-10">
-            Sign in to manage your content
+            Accedi per gestire i tuoi contenuti
           </p>
 
           <form onSubmit={submit} className="space-y-5">
@@ -93,7 +93,7 @@ export function Login() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@company.com"
+                  placeholder="tuonome@azienda.it"
                   className="w-full h-11 pl-10 pr-4 rounded-xl bg-white/[0.04] border border-white/[0.10] text-sm placeholder:text-[#9aa0aa]/40 focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20 transition-all"
                 />
               </div>
@@ -115,7 +115,7 @@ export function Login() {
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password"
+                  placeholder="Inserisci la tua password"
                   className="w-full h-11 pl-10 pr-4 rounded-xl bg-white/[0.04] border border-white/[0.10] text-sm placeholder:text-[#9aa0aa]/40 focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20 transition-all"
                 />
               </div>
@@ -136,7 +136,7 @@ export function Login() {
                 <div className="w-4 h-4 border-2 border-[#030308]/20 border-t-[#030308] rounded-full animate-spin" />
               ) : (
                 <>
-                  Sign in
+                  Accedi
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
@@ -146,8 +146,8 @@ export function Login() {
 
         {/* Footer */}
         <p className="text-center text-xs text-[#9aa0aa]/60 mt-6">
-          OAuth 2.0 &middot; AES-256-GCM encryption &middot; No passwords
-          stored
+          OAuth 2.0 &middot; Cifratura AES-256-GCM &middot; Nessuna password
+          memorizzata
         </p>
       </div>
     </div>

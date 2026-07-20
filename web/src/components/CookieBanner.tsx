@@ -60,7 +60,7 @@ export function CookieBanner() {
     <div
       role="dialog"
       aria-live="polite"
-      aria-label="Cookie notice"
+      aria-label="Avviso cookie"
       data-testid="cookie-banner"
       className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:max-w-[460px] z-40 bg-white border border-neutral-200 rounded-2xl shadow-lg p-4 animate-[fadeUp_0.3s_ease-out]"
     >
@@ -69,10 +69,10 @@ export function CookieBanner() {
           <Cookie size={16} />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-[13px] font-semibold text-black mb-1">We use cookies</p>
+          <p className="text-[13px] font-semibold text-black mb-1">Utilizziamo i cookie</p>
           <p className="text-[12px] text-neutral-600 leading-relaxed">
-            We set a single essential cookie to keep you signed in. We don't use tracking or
-            analytics cookies. See the{" "}
+            Impostiamo un solo cookie essenziale per mantenerti autenticato. Non usiamo cookie
+            di tracciamento o analytics. Consulta la{" "}
             <a href="/privacy" className="underline hover:no-underline text-black">
               privacy policy
             </a>
@@ -85,7 +85,7 @@ export function CookieBanner() {
               className="inline-flex items-center px-3 py-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-[12px] font-semibold text-neutral-800 transition-colors"
               data-testid="cookie-essential"
             >
-              Essential only
+              Solo essenziali
             </button>
             <button
               type="button"
@@ -93,7 +93,7 @@ export function CookieBanner() {
               className="inline-flex items-center px-3 py-1.5 rounded-lg bg-black hover:bg-neutral-800 text-[12px] font-semibold text-white transition-colors"
               data-testid="cookie-accept"
             >
-              Accept all
+              Accetta tutti
             </button>
           </div>
         </div>
