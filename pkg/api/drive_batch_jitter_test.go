@@ -11,8 +11,8 @@ import (
 )
 
 func TestRandomDurationInRange_InclusivelyWithinBounds(t *testing.T) {
-	const min = 60        // 60s
-	const max = 1800      // 30 minutes
+	const min = 60   // 60s
+	const max = 1800 // 30 minutes
 	const iterations = 500
 	minDur := time.Duration(min) * time.Second
 	maxDur := time.Duration(max) * time.Second
@@ -61,7 +61,7 @@ func TestDriveBatchImport_InvalidFolderID_RejectedByLister(t *testing.T) {
 	r := newBatchImportTestRouter(lister, store)
 
 	// JSON body with a single quote injected:
-	body := `{"folder_id":"abc' or '1'='1","workspace_id":1,"facebook_account_id":50}`
+	body := `{"folder_id":"abc' or '1'='1","workspace_id":1,"facebook_account_id":50,"drive_account_id":1}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)

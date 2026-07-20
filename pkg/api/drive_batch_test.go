@@ -24,14 +24,14 @@ import (
 // mock also implements Provider (Name) so it can be registered in
 // the CapabilityRouter.
 type mockDriveFolderLister struct {
-	files          []services.GoogleDriveFile
-	listErr        error
-	nextPageToken  string
-	gotFolderID    string
-	gotToken       string
-	gotPageToken   string
-	gotDriveID     string
-	listCallCount  int
+	files         []services.GoogleDriveFile
+	listErr       error
+	nextPageToken string
+	gotFolderID   string
+	gotToken      string
+	gotPageToken  string
+	gotDriveID    string
+	listCallCount int
 	// pagesFn enables multi-page simulation. When set, the mock
 	// routes ListFolder through this callback so test cases can
 	// return different files per pageToken across sequential
@@ -80,13 +80,48 @@ func (m *mockDriveFolderLister) GetFileMetadata(_ context.Context, _, fileID str
 	return nil, fmt.Errorf("%w: test mock defaults to no-metadata (set folderMetadataFn for Shared-Drive routing tests)", services.ErrDriveFolderMetadataFetchFailed)
 }
 
+// RefreshOAuthToken + DownloadFile satisfy services.DriveImporter so
+// the handler's `lister.(services.DriveImporter)` type assertion
+// succeeds — WITHOUT these the handler returns 503 "google-drive
+// provider does not implement drive import" before reaching any
+// branch the 5 (now 4) failing tests actually exercise.
+//
+// The mock values are intentionally minimal: the batch-import flow
+// only type-asserts (no live Drive call), so these methods don't
+// need realistic Drive responses. RefreshOAuthToken returns a
+// canned bearer so any future test that exercises the
+// driveAccessToken(vault, importer, accountID) path through this
+// mock has a non-nil access token to forward; DownloadFile returns
+// nil so any future call would force the caller to short-circuit
+// (less surprising than returning a fake response.Body the caller
+// has to close).
+func (m *mockDriveFolderLister) RefreshOAuthToken(_ context.Context, _ string) (*models.TokenData, error) {
+	return &models.TokenData{
+		AccessToken: "fake-mock-refreshed-bearer",
+		TokenType:   "Bearer",
+		ExpiresIn:   3600,
+	}, nil
+}
+
+func (m *mockDriveFolderLister) DownloadFile(_ context.Context, _, _ string) (*http.Response, error) {
+	return nil, nil
+}
+
 // Compose-time conformance to the three narrow interfaces the
 // handler + Task 6/10 resolver cast to. Compile errors here mean
 // the resolver would also fail to type-assert at runtime, so the
 // test fails BEFORE runtime.
 var (
-	_ services.DriveFolderLister   = (*mockDriveFolderLister)(nil)
+	_ services.DriveFolderLister    = (*mockDriveFolderLister)(nil)
 	_ services.DriveFolderInspector = (*mockDriveFolderLister)(nil)
+	// DriveImporter assertion (Task P2 — drive import path). The
+	// handler in pkg/api/drive_batch.go + pkg/api/uploads_batch.go
+	// type-asserts `lister.(services.DriveImporter)` and returns
+	// 503 "google-drive provider does not implement drive import"
+	// when missing. The 5 (previously-)failing tests below all
+	// exercise this path; the compile-time assertion here catches
+	// future interface drift at `go vet` time, not at test time.
+	_ services.DriveImporter = (*mockDriveFolderLister)(nil)
 )
 
 // mockUploadJobStore appends every Create'd job for inspection. We use
@@ -357,10 +392,10 @@ func TestUploadsBatchByFolder_HappyPath_ThreePages_FlattenedEntryList(t *testing
 		t.Errorf("server should serve 3 pages, got %d", lister.listCallCount)
 	}
 	var resp struct {
-		FolderID         string `json:"folder_id"`
-		ScheduledCount   int    `json:"scheduled_count"`
-		PageCount        int    `json:"page_count"`
-		Entries          []struct {
+		FolderID       string `json:"folder_id"`
+		ScheduledCount int    `json:"scheduled_count"`
+		PageCount      int    `json:"page_count"`
+		Entries        []struct {
 			Index       int    `json:"index"`
 			JobID       int64  `json:"job_id"`
 			Name        string `json:"name"`
@@ -844,6 +879,18 @@ func newBatchImportTestRouterWithIdem(
 	if idemStore != nil {
 		opts = append(opts, WithIdempotencyStore(idemStore))
 	}
+
+	// Vault mock for batch-import handlers. Without this, 5 tests
+	// (TestUploadsBatchByFolder_HappyPath_ThreePages_FlattenedEntryList,
+	// TestUploadsBatchByFolder_ConfigGap_Returns200WithGuidance,
+	// TestDriveBatchImport_Happy_CreatesJobsWithStaggeredSchedule,
+	// TestDriveBatchImport_NoAPIKey_Returns200WithGuidance,
+	// TestDriveBatchImport_InvalidFolderID_RejectedByLister) hit
+	// `if r.vault == nil` and return 501. The fakeVault in
+	// pkg/api/fakevault_test.go satisfies credentials.VaultAPI; the
+	// 38+ other tests in this file never reach the vault check (they
+	// short-circuit elsewhere) so wiring this in by default is safe.
+	opts = append(opts, WithCredentialVault(&fakeVault{}))
 
 	return NewRouter(
 		capRouter,
