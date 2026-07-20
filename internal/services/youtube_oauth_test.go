@@ -1075,11 +1075,21 @@ func TestYouTubeValidateChannelBinding_SafetyCapReachedAt200_ReturnsMismatch(t *
 	if !errors.Is(err, ErrYouTubeChannelMismatch) {
 		t.Errorf("want ErrYouTubeChannelMismatch wrapped; got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "safety cap reached") {
-		t.Errorf("error must mention 'safety cap reached'; got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "first 200 unique channel ids") {
-		t.Errorf("error must mention 'first 200 unique channel ids' cap value; got: %v", err)
+	// Typed-struct assertion (replaces the old strings.Contains
+	// brittleness on "safety cap reached" + "first 200 unique
+	// channel ids"). The struct's Cap field now carries the value
+	// the operator-facing substring used to embed, so the test
+	// pin moves from "the message string contains 200" to "the
+	// typed Cap field is 200". A regression that flips the cap
+	// off (infinite loop) or below 200 (premature rejection) is
+	// detectable at the struct level rather than by message grep.
+	var safetyCap *ErrChannelListSafetyCap
+	if !errors.As(err, &safetyCap) {
+		t.Errorf("want *ErrChannelListSafetyCap on the cap path; got %T: %v", err, err)
+	} else if safetyCap.Cap != 200 {
+		t.Errorf("want Cap=200 in typed safety cap error; got %d", safetyCap.Cap)
+	} else if safetyCap.Expected != "UC-expected-but-never-present" {
+		t.Errorf("want Expected=\"UC-expected-but-never-present\"; got %q", safetyCap.Expected)
 	}
 	// The loop MUST short-circuit BEFORE page 5; with 4 pages of 50
 	// each, we expect exactly 4 HTTP calls, NOT 5+.
@@ -1152,9 +1162,15 @@ func TestYouTubeValidateChannelBinding_ExhaustedMismatch_ReturnsMismatch(t *test
 		t.Errorf("want ErrYouTubeChannelMismatch wrapped; got: %v", err)
 	}
 	// Explicitly NOT the cap path: we got here by walking pages to
-	// exhaustion, NOT by hitting the safety cap.
-	if strings.Contains(err.Error(), "safety cap reached") {
-		t.Errorf("error must NOT mention 'safety cap reached' on exhaustion path (110 < 200); got: %v", err)
+	// exhaustion, NOT by hitting the safety cap. The typed struct
+	// is the source-of-truth distinction; if ValidateChannelBinding
+	// accidentally routes the exhaustion path through the safety-
+	// cap return, errors.As(err, &safetyCap) will succeed here and
+	// this assertion surfaces the regression as a typed mismatch
+	// rather than brittle message-substring coupling.
+	var safetyCap *ErrChannelListSafetyCap
+	if errors.As(err, &safetyCap) {
+		t.Errorf("want EXHAUSTION path (110 < 200), got *ErrChannelListSafetyCap (cap path); err=%v", err)
 	}
 	// The full id list lives in the message so the operator can
 	// diagnose channel drift in one log line.

@@ -418,6 +418,79 @@ func (s *YouTubeOAuthService) PreferredTokenTypes() []string {
 //     treats it as transient. The transient contract is unchanged
 //     from the pre-pagination single-GET path.
 //
+// ErrChannelListSafetyCap is the typed error returned by
+// ValidateChannelBinding when the loop hit the maxChannelsPerGrant
+// (200) safety cap BEFORE nextPageToken exhaustion. The struct fields
+// are extracted by tests + cross-package callers via errors.As:
+//
+//	var cap *ErrChannelListSafetyCap
+//	if errors.As(err, &cap) { ... cap.Expected, cap.Cap ... }
+//
+// Error() returns a string that preserves the original
+// ErrYouTubeChannelMismatch prefix so existing log-spelunking on the
+// message substring keeps working. Unwrap() returns
+// ErrYouTubeChannelMismatch so errors.Is(err, ErrYouTubeChannelMismatch)
+// is still green WITHOUT callers needing to know the typed-struct
+// shape — the sentinel stays the canonical "channel binding failed"
+// signal, and the typed-struct is a refinement that carries the
+// "how" (cap-hit) diagnostic.
+//
+// Distinct from the exhaustion-path mismatch (which still wraps the
+// plain ErrYouTubeChannelMismatch sentinel — distinguishable via a
+// negative errors.As) and from the BindGrantToChannel mismatch
+// (separate production path, OUT OF SCOPE for this refactor).
+type ErrChannelListSafetyCap struct {
+	// Expected is the channel id the caller asked the loop to find.
+	Expected string
+	// Cap is the maxChannelsPerGrant value AT THE TIME OF THE HIT.
+	// Surfaced as a structured field so tests can assert against
+	// it without grepping for the literal "200" in error.Error().
+	Cap int
+}
+
+// Compile-time assertion (matches the YouTubeChannelBinder /
+// YouTubeCanaryUploader guard pattern below). Caught by `go vet`,
+// not at runtime.
+var _ error = (*ErrChannelListSafetyCap)(nil)
+
+// Error returns the canonical human-readable form. The redundant
+// "%v: ..." prefix re-emits ErrYouTubeChannelMismatch's text so the
+// resulting message reads identically to the pre-refactor
+// fmt.Errorf("%w: ...", ErrYouTubeChannelMismatch, ...). This keeps
+// any operator-side log-grep recipe (the "must mention safety cap
+// reached" diagnostic the old strings.Contains was enforcing)
+// intact while letting go-side consumers switch on the typed
+// struct. Pinning the format here means a future message-shape
+// change is one-line and the test assertions don't need to update
+// in lockstep.
+func (e *ErrChannelListSafetyCap) Error() string {
+	return fmt.Sprintf("%v: expected %q not found in first %d unique channel ids (safety cap reached)",
+		ErrYouTubeChannelMismatch, e.Expected, e.Cap)
+}
+
+// Unwrap exposes ErrYouTubeChannelMismatch for both errors.Is and
+// errors.As chains. Callers that DON'T care about the typed-struct
+// refinement keep working with errors.Is(err, ErrYouTubeChannelMismatch);
+// callers that DO care can do errors.As(err, &safetyCap) to recover
+// the structured fields.
+func (e *ErrChannelListSafetyCap) Unwrap() error {
+	return ErrYouTubeChannelMismatch
+}
+
+// ErrChannelMismatchMsg formats the canonical operator-facing
+// diagnostic for the ValidateChannelBinding EXHAUSTION path (and
+// any future non-cap mismatch path). Centralising here means a
+// future message-shape change is one-line and tests can pin ONE
+// canonical rendering via the helper call rather than reaching
+// into the wrapped error string. Currently returned only on the
+// exhaustion path (lines below); the 0-channels / safety-cap paths
+// use either the typed struct above or the existing inline format,
+// and stay that way intentionally (each carries distinct semantics
+// the operator needs to tell apart).
+func ErrChannelMismatchMsg(expected string, bound []string) string {
+	return fmt.Sprintf("expected %q, grant-bound channels=%v", expected, bound)
+}
+
 // The method is a paginated GET loop; it does NOT re-refresh the
 // access token to avoid double-quota usage (the publish worker
 // already refreshed in step 5 of publishTarget). The token MUST
@@ -507,8 +580,17 @@ func (s *YouTubeOAuthService) ValidateChannelBinding(ctx context.Context, access
 			// escape valve; operators with >200 channels per grant
 			// will be flagged to re-distribute or to raise the cap
 			// via docs/OAUTH-PRODUCTION.md.
-			return fmt.Errorf("%w: expected %q not found in first %d unique channel ids (safety cap reached)",
-				ErrYouTubeChannelMismatch, expectedChannelID, maxChannelsPerGrant)
+			//
+			// Returns the typed struct (NOT a fmt.Errorf wrap) so
+			// errors.As(err, &safetyCap) succeeds AND
+			// errors.Is(err, ErrYouTubeChannelMismatch) still works
+			// via Unwrap(). The error message is preserved 1:1
+			// against the pre-refactor shape (same prefix, same
+			// substrings the operator log-grep recipe cared about).
+			return &ErrChannelListSafetyCap{
+				Expected: expectedChannelID,
+				Cap:      maxChannelsPerGrant,
+			}
 		}
 
 		if result.NextPageToken == "" {
@@ -521,14 +603,39 @@ func (s *YouTubeOAuthService) ValidateChannelBinding(ctx context.Context, access
 		return fmt.Errorf("%w: expected %q, grant has 0 channels",
 			ErrYouTubeChannelMismatch, expectedChannelID)
 	}
-	return fmt.Errorf("%w: expected %q, grant-bound channels=%v",
-		ErrYouTubeChannelMismatch, expectedChannelID, totalIDs)
+	// Exhaustion path: pages walked to completion, expectedChannelID
+	// not found in any. Wraps the canonical ErrYouTubeChannelMismatch
+	// sentinel AND formats the operator-facing diagnostic via the
+	// ErrChannelMismatchMsg helper so tests pin ONE canonical
+	// rendering. Distinguishable from the safety-cap path (which
+	// returns the *ErrChannelListSafetyCap typed struct above): an
+	// errors.As(err, &safetyCap) check on this error returns false,
+	// which ExhaustedMismatch_ReturnsMismatch asserts explicitly.
+	return fmt.Errorf("%w: %s", ErrYouTubeChannelMismatch,
+		ErrChannelMismatchMsg(expectedChannelID, totalIDs))
 }
 
 // Compile-time assertion: YouTubeOAuthService satisfies the
 // services.YouTubeChannelBinder capability interface. Caught by
 // `go vet`, not at runtime.
 var _ YouTubeChannelBinder = (*YouTubeOAuthService)(nil)
+
+// YouTubeCanaryUploader is the YouTube pre-flight canary capability
+// interface invoked by publish_worker BEFORE the real publish when
+// post.Metadata.canary_upload=true (Task 7/10). The implementation
+// uploads a 5-10s/<5MB/privacy=private test video titled
+// INSTAEDIT-OAUTH-CANARY-{channel_id}-{timestamp}, then verifies the
+// uploaded channel id matches the platform_account.platform_user_id.
+//
+// Returns (\*CanaryUploadResult, error). nil result + non-nil error
+// means the canary itself failed (caller flags PostStatusBlockedAuth
+// and platform_account.status='reauth_required'). Non-nil result with
+// UploadedChannelID == expectedChannelID means success; the worker
+// proceeds to the real publish. Mismatch == blocker.
+type YouTubeCanaryUploader interface {
+	CanaryUpload(ctx context.Context, accessToken, expectedChannelID string) (*CanaryUploadResult, error)
+}
+var _ YouTubeCanaryUploader = (*YouTubeOAuthService)(nil)
 
 // VerifyChannelIdentity (Task 2/10) is the REUSABLE pre-action
 // channel-bound guard. It is the public alias for
