@@ -8,43 +8,43 @@ export function PrivacyPolicy() {
         </h1>
 
         <p className="text-[#9aa0aa] leading-relaxed mb-7">
-          La presente Privacy Policy descrive come <strong className="text-white">InstaEdit</strong> ("noi", "ci" o "nostro")
-          raccoglie, utilizza e condivide le informazioni personali degli utenti che utilizzano il nostro sito web e i nostri servizi
-          (collettivamente, i "Servizi"). Utilizzando InstaEdit, l'utente acconsente alla raccolta e all'uso delle informazioni
-          secondo quanto descritto in questa informativa.
+          This Privacy Policy describes how <strong className="text-white">InstaEdit</strong> ("we", "us" or "our")
+          collects, uses and shares the personal information of users of our website and services
+          (collectively, the "Services"). By using InstaEdit, you consent to the collection and use of information
+          as described in this policy.
         </p>
 
         <LegalSection title="1. Information We Collect">
-          <p>Quando l'utente si registra e utilizza <strong className="text-white">InstaEdit</strong>, possiamo raccogliere i seguenti tipi di informazioni:</p>
+          <p>When you register and use <strong className="text-white">InstaEdit</strong>, we may collect the following types of information:</p>
           <ul>
-            <li><strong>Informazioni sull'account:</strong> nome, indirizzo email e informazioni del profilo quando si crea un account InstaEdit o si accede tramite una piattaforma di terze parti.</li>
-            <li><strong>Dati dei contenuti:</strong> video, didascalie, miniature e altri contenuti caricati o creati con InstaEdit.</li>
-            <li><strong>Dati dei social media:</strong> quando si collegano gli account social, accediamo alle informazioni del profilo pubblico, ai contenuti e ai dati di analytics consentiti dalle API di ciascuna piattaforma.</li>
+            <li><strong>Account information:</strong> name, email address and profile information when you create an InstaEdit account or sign in through a third-party platform.</li>
+            <li><strong>Content data:</strong> videos, captions, thumbnails and other content uploaded or created with InstaEdit.</li>
+            <li><strong>Social media data:</strong> when you connect social accounts, we access the public profile information, content and analytics data allowed by each platform's APIs.</li>
             <li><strong>Usage data:</strong> information about how you interact with InstaEdit, including features used and performance metrics.</li>
-            <li><strong>Informazioni sul dispositivo:</strong> tipo di browser, indirizzo IP, tipo di dispositivo e sistema operativo per scopi di sicurezza e analytics.</li>
+            <li><strong>Device information:</strong> browser type, IP address, device type and operating system for security and analytics purposes.</li>
           </ul>
         </LegalSection>
 
         <LegalSection title="2. How We Use Information">
-          <p>InstaEdit utilizza le informazioni raccolte per i seguenti scopi:</p>
+          <p>InstaEdit uses the information collected for the following purposes:</p>
           <ul>
-            <li>Fornire, mantenere e migliorare il Servizio InstaEdit.</li>
+            <li>Provide, maintain and improve the InstaEdit Service.</li>
             <li>Enable the publication and scheduling of content through the linked social accounts.</li>
-            <li>Generare modifiche video AI, sottotitoli e miniature in base ai contenuti dell'utente.</li>
-            <li>Analizzare l'utilizzo del Servizio e ottimizzare le performance.</li>
-            <li>Comunicare con l'utente in merito all'account, agli aggiornamenti e alle richieste di supporto.</li>
+            <li>Generate AI video edits, captions and thumbnails based on your content.</li>
+            <li>Analyze use of the Service and optimize performance.</li>
+            <li>Communicate with you about your account, updates and support requests.</li>
             <li>Ensure the security and integrity of our Service.</li>
-            <li>Rispettare obblighi legali e far rispettare i Termini di Servizio.</li>
+            <li>Comply with legal obligations and enforce the Terms of Service.</li>
           </ul>
         </LegalSection>
 
-        <LegalSection title="3. Come condividiamo le informazioni">
-          <p>InstaEdit <strong>non</strong> vende le informazioni personali degli utenti. Possiamo condividere le informazioni nelle seguenti circostanze limitate:</p>
+        <LegalSection title="3. How We Share Information">
+          <p>InstaEdit <strong>does not</strong> sell your personal information. We may share information in the following limited circumstances:</p>
           <ul>
-            <li><strong>Fornitori di servizi:</strong> lavoriamo con fornitori di terze parti fidati che elaborano dati per nostro conto in base a rigorosi accordi di riservatezza.</li>
-            <li><strong>Piattaforme di social media:</strong> quando l'utente pubblica contenuti tramite InstaEdit, tali contenuti vengono trasmessi alle piattaforme che ha collegato.</li>
+            <li><strong>Service providers:</strong> we work with trusted third-party providers that process data on our behalf under strict confidentiality agreements.</li>
+            <li><strong>Social media platforms:</strong> when you publish content through InstaEdit, that content is transmitted to the platforms you have connected.</li>
             <li><strong>Legal compliance:</strong> we may disclose information if required by law, by a court order, or by a government regulation.</li>
-            <li><strong>Trasferimenti aziendali:</strong> in connessione con fusioni, acquisizioni o vendite di asset, le informazioni dell'utente possono essere trasferite come parte di tale transazione.</li>
+            <li><strong>Business transfers:</strong> in connection with mergers, acquisitions or asset sales, your information may be transferred as part of that transaction.</li>
           </ul>
         </LegalSection>
 
@@ -52,45 +52,45 @@ export function PrivacyPolicy() {
           <p>InstaEdit retains your personal information for the life of your account or as long as necessary to provide the Service. You may request deletion of your account and associated data at any time by contacting us.</p>
         </LegalSection>
 
-        <LegalSection title="5. Diritti dell'utente">
+        <LegalSection title="5. Your Rights">
           <p>Depending on your jurisdiction, you may have the following rights regarding your data:</p>
           <ul>
-            <li>Accedere, correggere o cancellare le proprie informazioni personali.</li>
+            <li>Access, correct or delete your personal information.</li>
             <li>Object to or restrict certain processing activities.</li>
             <li>Data portability: receive your data in a structured, commonly used format.</li>
             <li>Withdraw consent at any time when processing is based on consent.</li>
             <li>File a complaint with your local data protection authority.</li>
           </ul>
           <p className="mt-2.5">
-            Per esercitare uno di questi diritti, contattaci all'indirizzo{" "}
+            To exercise any of these rights, contact us at{" "}
             <a href="mailto:hello@instaedit.org" className="text-[#0A84FF] hover:underline">
               hello@instaedit.org
             </a>.
           </p>
         </LegalSection>
 
-        <LegalSection title="6. Cookie e tracciamento">
+        <LegalSection title="6. Cookies and Tracking">
           <p>InstaEdit uses cookies and similar technologies to authenticate users, remember preferences and analyze use of the Service. You can control cookies through your browser settings.</p>
         </LegalSection>
 
-        <LegalSection title="7. Sicurezza dei dati">
-          <p>InstaEdit implementa misure di sicurezza standard del settore per proteggere le informazioni dell'utente, inclusa la crittografia in transito (TLS) e a riposo.</p>
+        <LegalSection title="7. Data Security">
+          <p>InstaEdit implements industry-standard security measures to protect your information, including encryption in transit (TLS) and at rest.</p>
         </LegalSection>
 
-        <LegalSection title="8. Privacy dei minori">
+        <LegalSection title="8. Children's Privacy">
           <p>InstaEdit is not intended for individuals under 13 years of age. We do not knowingly collect personal information from children.</p>
         </LegalSection>
 
-        <LegalSection title="9. Piattaforme di terze parti">
-          <p>InstaEdit si integra con piattaforme di terze parti tra cui TikTok, YouTube, Instagram, Facebook e X/Twitter. Quando si collegano questi account, si applicano anche le politiche sulla privacy di tali piattaforme.</p>
+        <LegalSection title="9. Third-Party Platforms">
+          <p>InstaEdit integrates with third-party platforms including TikTok, YouTube, Instagram, Facebook and X/Twitter. When you connect these accounts, the privacy policies of those platforms also apply.</p>
         </LegalSection>
 
-        <LegalSection title="10. Modifiche a questa informativa">
+        <LegalSection title="10. Changes to This Policy">
           <p>InstaEdit may update this Privacy Policy from time to time. You will be informed of any material changes by posting the updated policy on this page.</p>
         </LegalSection>
 
-        <LegalSection title="11. Contattaci">
-          <p>Per domande su questa Privacy Policy, contattaci:</p>
+        <LegalSection title="11. Contact Us">
+          <p>For questions about this Privacy Policy, contact us:</p>
           <p className="mt-3">
             Email:{" "}
             <a href="mailto:hello@instaedit.org" className="text-[#0A84FF] hover:underline">
