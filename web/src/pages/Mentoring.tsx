@@ -106,6 +106,74 @@ const TESTIMONIALS = [
   },
 ];
 
+const FAQS = [
+  {
+    q: "Who is mentoring for?",
+    a: "Our mentoring is built for creators producing 2-30 posts per month, agencies handling multiple clients, and in-house content teams hitting a scaling plateau. Whether you are starting from zero or already shipping daily, there is a tier sized for your stage."
+  },
+  {
+    q: "What is the difference between Mentoring and Programs?",
+    a: "Programs are self-serve tracks: templates, onboarding sprints, dedicated channels. Mentoring is one-on-one with a content strategist who reviews your work weekly and unblocks you in real time. Many members pair them — the Program as the workflow, Mentoring as the strategic backbone."
+  },
+  {
+    q: "How are the sessions conducted?",
+    a: "Live video calls over Google Meet or Zoom. Sessions are recorded so you can revisit decisions, and you receive a written action summary within 24 hours of each session."
+  },
+  {
+    q: "Do I need an active InstaEdit subscription?",
+    a: "Starter includes a 6-month Creator Program seat so you can practice what we cover in session. Growth and Team members get the seat bundled for the duration of the program."
+  },
+  {
+    q: "Can I switch packages mid-program?",
+    a: "Yes — upgrade from Starter to Growth at any time and we will credit the remaining sessions. Pro-rated refunds are not offered for downgrades, but you can pause and resume once within the program window."
+  },
+  {
+    q: "What happens after the program ends?",
+    a: "You walk away with a documented editorial playbook: posting cadence, templates, KPI dashboard and a 30-day action plan. Alumni get lifetime access to the mentoring community and quarterly content audits."
+  },
+];
+
+function FAQSection() {
+  return (
+    <section id="faq" className="relative py-24 sm:py-32 overflow-hidden">
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="glow-orb bg-cyan-400 w-[360px] h-[360px] -top-20 -right-32 animate-drift-slow opacity-40" />
+        <div className="glow-orb bg-violet-500 w-[320px] h-[320px] -bottom-32 -left-24 animate-drift-rev opacity-30" />
+      </div>
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="max-w-3xl mb-16 animate-fade-up">
+          <div className="text-eyebrow text-cyan-300/90 mb-3">Frequently asked</div>
+          <h2 className="text-display-2 text-white">
+            Questions answered.
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
+            Everything you want to know about the mentoring program, the discovery call,
+            and what to expect after onboarding.
+          </p>
+        </div>
+        <div className="grid md:grid-cols-2 gap-5">
+          {FAQS.map((item, i) => (
+            <div
+              key={item.q}
+              className={`surface-card p-6 animate-fade-up ${["", "animation-delay-100", "animation-delay-200", "animation-delay-300"][i % 4]}`}
+            >
+              <h3 className="text-base font-semibold text-white mb-3 flex items-start gap-3">
+                <span className="mt-0.5 inline-flex w-6 h-6 items-center justify-center rounded-md bg-violet-500/15 ring-1 ring-violet-400/30 flex-shrink-0 text-[10px] font-bold text-violet-300">
+                  Q
+                </span>
+                <span>{item.q}</span>
+              </h3>
+              <p className="text-sm text-zinc-400 leading-relaxed pl-9">
+                {item.a}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Hero() {
   return (
     <section className="relative pt-32 pb-20 overflow-hidden">
@@ -302,6 +370,12 @@ function CTASection() {
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </a>
               <Link
+                to="/login"
+                className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
+              >
+                Try InstaEdit free
+              </Link>
+              <Link
                 to="/programs"
                 className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
               >
@@ -324,6 +398,7 @@ export function Mentoring() {
         <HowItWorks />
         <PackagesSection />
         <TestimonialsSection />
+        <FAQSection />
         <CTASection />
       </main>
       <MarketingFooter />
