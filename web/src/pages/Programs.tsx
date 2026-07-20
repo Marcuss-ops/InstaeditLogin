@@ -22,8 +22,15 @@ const NAV_LINKS = [
   { label: "About us", href: "/#who-are-we" },
 ];
 
+/**
+ * Programs data: single source of truth.
+ * Used both by the ProgramsList cards and the ComparisonSection table.
+ * Adding or editing a field here propagates to both views automatically —
+ * the table no longer carries its own duplicated rows.
+ */
 const PROGRAMS = [
   {
+    shortName: "Creator",
     icon: Users,
     title: "Creator Program",
     tagline: "From creator to content machine",
@@ -38,10 +45,16 @@ const PROGRAMS = [
     ],
     prerequisites: "An active InstaEdit account",
     pricing: "Included with InstaEdit Pro",
+    workspaces: "Single workspace",
+    templates: "Library access (50+ formats)",
+    supportSla: "Community + weekly office hours",
+    auditLog: "Per-account activity log",
+    bestFor: "Independent creators scaling up",
     color: "from-violet-500 to-purple-500",
     cta: "Join the waitlist",
   },
   {
+    shortName: "Agency",
     icon: Building2,
     title: "Agency Program",
     tagline: "Scale your clients without hiring",
@@ -56,10 +69,16 @@ const PROGRAMS = [
     ],
     prerequisites: "Verified agency with at least 3 active client accounts",
     pricing: "Per-seat · starts at $99/month",
+    workspaces: "Multi-workspace + per-client billing",
+    templates: "Custom team training",
+    supportSla: "Priority 4-hour response SLA",
+    auditLog: "Per-account activity log",
+    bestFor: "Agencies and content studios",
     color: "from-emerald-500 to-teal-500",
     cta: "Become a partner",
   },
   {
+    shortName: "Enterprise",
     icon: Briefcase,
     title: "Enterprise Program",
     tagline: "InstaEdit in your company",
@@ -74,101 +93,78 @@ const PROGRAMS = [
     ],
     prerequisites: "Procurement review and SOC2 scope agreement",
     pricing: "Custom enterprise pricing",
+    workspaces: "SSO + user provisioning",
+    templates: "Custom enterprise integrations",
+    supportSla: "Dedicated account manager",
+    auditLog: "Full SOC2 audit trail",
+    bestFor: "Brands and large teams",
     color: "from-cyan-500 to-blue-500",
     cta: "Contact sales",
   },
+];
+
+type Program = (typeof PROGRAMS)[number];
+
+/**
+ * Comparison table rows: each row declares which PROGRAMS field to display.
+ * The header columns are derived from PROGRAMS.map(p => p.shortName).
+ * Adding a new program or updating a feature is a one-line edit to PROGRAMS.
+ */
+const COMPARISON_ROWS: Array<{ label: string; key: keyof Program }> = [
+  { label: "Duration", key: "duration" },
+  { label: "Pricing", key: "pricing" },
+  { label: "Workspaces", key: "workspaces" },
+  { label: "Templates", key: "templates" },
+  { label: "Support SLA", key: "supportSla" },
+  { label: "Audit log", key: "auditLog" },
+  { label: "Best for", key: "bestFor" },
 ];
 
 const MENTORING = [
   {
     icon: GraduationCap,
     title: "One-on-one mentoring",
-    description: "Weekly sessions with content strategy experts to define your editorial plan and optimize metrics."
+    description:
+      "Weekly sessions with content strategy experts to define your editorial plan and optimize metrics.",
   },
   {
     icon: CalendarClock,
     title: "Content Calendar Audit",
-    description: "Complete review of your editorial calendar with practical suggestions on frequency, formats and platforms."
+    description:
+      "Complete review of your editorial calendar with practical suggestions on frequency, formats and platforms.",
   },
   {
     icon: Globe,
     title: "Multi-platform Setup",
-    description: "Guided setup of all channels and automations to publish on every platform without wasting time."
+    description:
+      "Guided setup of all channels and automations to publish on every platform without wasting time.",
   },
 ];
-
-const COMPARISON = {
-  headers: ["Feature", "Creator", "Agency", "Enterprise"],
-  rows: [
-    {
-      feature: "Duration",
-      creator: "Self-paced (6-8 wks)",
-      agency: "12-week engagement",
-      enterprise: "12-month agreement",
-    },
-    {
-      feature: "Pricing",
-      creator: "Included with Pro",
-      agency: "Per-seat from $99/mo",
-      enterprise: "Custom enterprise",
-    },
-    {
-      feature: "Workspaces",
-      creator: "Single",
-      agency: "Multi-workspace",
-      enterprise: "SSO + provisioning",
-    },
-    {
-      feature: "Templates",
-      creator: "Library access",
-      agency: "Custom team training",
-      enterprise: "Custom integrations",
-    },
-    {
-      feature: "Support SLA",
-      creator: "Community",
-      agency: "4h priority response",
-      enterprise: "Dedicated AM",
-    },
-    {
-      feature: "Audit log",
-      creator: "Activity log",
-      agency: "Activity log",
-      enterprise: "Full SOC2 trail",
-    },
-    {
-      feature: "Best for",
-      creator: "Independent creators",
-      agency: "Agencies & studios",
-      enterprise: "Brands & large teams",
-    },
-  ],
-};
 
 const FAQS = [
   {
     q: "What is the difference between Programs and Mentoring?",
-    a: "Mentoring is 1:1 weekly sessions with a content strategist. Programs are cohort-based tracks with shared deliverables and templated workflows. Many teams combine them — Mentoring for strategic direction, Programs as the production backbone."
+    a: "Mentoring is 1:1 weekly sessions with a content strategist. Programs are cohort-based tracks with shared deliverables and templated workflows. Many teams combine them — Mentoring for strategic direction, Programs as the production backbone.",
   },
   {
     q: "How long does each program last?",
-    a: "Creator Program is self-paced — most members reach a production-ready workflow in 6-8 weeks. Agency Program is a 12-week engagement, with team training and the option to renew. Enterprise Program runs 12 months with quarter-by-quarter business reviews."
+    a: "Creator Program is self-paced — most members reach a production-ready workflow in 6-8 weeks. Agency Program is a 12-week engagement, with team training and the option to renew. Enterprise Program runs 12 months with quarter-by-quarter business reviews.",
   },
   {
     q: "What deliverables do I get at the end?",
-    a: "Creator Program graduates with a documented template library + community access. Agency Program teams leave with a configured multi-workspace setup + a trained editorial team. Enterprise Program customers ship with SSO-integrated publishing pipelines + a SOC2 audit trail."
+    a: "Creator Program graduates with a documented template library + community access. Agency Program teams leave with a configured multi-workspace setup + a trained editorial team. Enterprise Program customers ship with SSO-integrated publishing pipelines + a SOC2 audit trail.",
   },
   {
     q: "Is InstaEdit subscription included in the program fee?",
-    a: "Creator Program is bundled with the InstaEdit Pro tier at no extra fee. Agency Program requires Pro; seats are billed per workspace. Enterprise Program includes Pro plus Business-tier licensing as part of the custom agreement."
+    a: "Creator Program is bundled with the InstaEdit Pro tier at no extra fee. Agency Program requires Pro; seats are billed per workspace. Enterprise Program includes Pro plus Business-tier licensing as part of the custom agreement.",
   },
   {
     q: "Why is Creator Program on a waitlist?",
-    a: "We are scaling cohort onboarding to keep template quality high as we expand to 50+ markets. Join the waitlist and we will notify you when seats open — typically a 2-4 week queue, occasionally longer in peak months."
+    a: "We are scaling cohort onboarding to keep template quality high as we expand to 50+ markets. Join the waitlist and we will notify you when seats open — typically a 2-4 week queue, occasionally longer in peak months.",
   },
   {
     q: "Can I switch programs if I outgrow my tier?",
-    a: "Yes — creators graduating into an agency use case can apply for Agency Program at any time. Agencies adding enterprise clients move to Enterprise Program with a SOC2 onboarding sprint. Your program manager coordinates the transition with no re-purchase of seats."
+    a: "Yes — creators graduating into an agency use case can apply for Agency Program at any time. Agencies adding enterprise clients move to Enterprise Program with a SOC2 onboarding sprint. Your program manager coordinates the transition with no re-purchase of seats.",
   },
 ];
 
@@ -312,35 +308,45 @@ function ComparisonSection() {
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
             Side-by-side comparison of duration, pricing, support and best fit for each program tier.
+            Updated automatically as the programs evolve.
           </p>
         </div>
         <div className="surface-glass border border-white/15 rounded-2xl overflow-hidden animate-fade-up">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-px bg-white/5">
+            {/* Header row derived from PROGRAMS.shortName */}
             <div className="bg-[#14141c]/80 px-5 py-4 text-eyebrow text-zinc-500">Feature</div>
-            <div className="bg-[#14141c]/80 px-5 py-4 text-sm font-semibold text-white">Creator</div>
-            <div className="bg-[#14141c]/80 px-5 py-4 text-sm font-semibold text-white">Agency</div>
-            <div className="bg-[#14141c]/80 px-5 py-4 text-sm font-semibold text-white">Enterprise</div>
-            {COMPARISON.rows.map((row) => (
-              <div key={row.feature} className="contents">
+            {PROGRAMS.map((p) => (
+              <div
+                key={`hdr-${p.shortName}`}
+                className="bg-[#14141c]/80 px-5 py-4 text-sm font-semibold text-white"
+              >
+                {p.shortName}
+              </div>
+            ))}
+            {/* Data rows derived from COMPARISON_ROWS + PROGRAMS field lookup */}
+            {COMPARISON_ROWS.map((row) => (
+              <div key={row.key} className="contents">
                 <div className="bg-[#14141c]/70 px-5 py-4 text-sm text-zinc-300">
-                  {row.feature}
+                  {row.label}
                 </div>
-                <div className="bg-[#14141c]/70 px-5 py-4 text-sm text-zinc-300">
-                  {row.creator}
-                </div>
-                <div className="bg-[#14141c]/70 px-5 py-4 text-sm text-zinc-300">
-                  {row.agency}
-                </div>
-                <div className="bg-[#14141c]/70 px-5 py-4 text-sm text-zinc-300">
-                  {row.enterprise}
-                </div>
+                {PROGRAMS.map((p) => (
+                  <div
+                    key={`${p.shortName}-${row.key}`}
+                    className="bg-[#14141c]/70 px-5 py-4 text-sm text-zinc-300"
+                  >
+                    {String(p[row.key])}
+                  </div>
+                ))}
               </div>
             ))}
           </div>
         </div>
         <p className="text-xs text-zinc-500 mt-4 max-w-[58ch]">
           All programs require an active InstaEdit workspace. Need help choosing?{" "}
-          <a href="mailto:hello@instaedit.org?subject=Programs%20Question" className="text-violet-300/90 hover:text-white transition-colors underline-offset-2 hover:underline">
+          <a
+            href="mailto:hello@instaedit.org?subject=Programs%20Question"
+            className="text-violet-300/90 hover:text-white transition-colors underline-offset-2 hover:underline"
+          >
             Talk to the team.
           </a>
         </p>
@@ -370,7 +376,10 @@ function MentoringSection() {
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {MENTORING.map((m, i) => (
-            <div key={m.title} className={`surface-card p-6 animate-fade-up ${["", "animation-delay-100", "animation-delay-200"][i]}`}>
+            <div
+              key={m.title}
+              className={`surface-card p-6 animate-fade-up ${["", "animation-delay-100", "animation-delay-200"][i]}`}
+            >
               <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-pink-500/20 to-violet-500/20 flex items-center justify-center text-pink-300 mb-4 ring-1 ring-pink-400/20">
                 <m.icon className="w-5 h-5" />
               </div>
@@ -403,9 +412,7 @@ function FAQSection() {
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-cyan-300/90 mb-3">Frequently asked</div>
-          <h2 className="text-display-2 text-white">
-            Questions answered.
-          </h2>
+          <h2 className="text-display-2 text-white">Questions answered.</h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
             Everything you want to know about how the programs work, who they support,
             and what to expect after you join.
