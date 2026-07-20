@@ -32,8 +32,14 @@ func newTestYouTubeService(srv *httptest.Server) *YouTubeOAuthService {
 }
 
 // TestYouTubeLoginURL_IncludesRequiredScopes verifies that GetLoginURL
-// requests all required YouTube scopes (upload, readonly, analytics) along
-// with openid, email, and profile.
+// requests the YouTube scopes required by the publish pipeline (upload,
+// readonly) along with the operator-identity scopes (openid, email,
+// profile). `yt-analytics.readonly` is intentionally absent from the
+// requested scope set (least-privilege; docs/OAUTH-PRODUCTION.md Step 3
+// "Code-side guard"): `videos.insert` accepts `youtube.upload` alone,
+// and re-introducing the analytics scope would re-open Google's brand
+// verification queue with zero functional gain. A negative assertion
+// in the test body confirms the analytics scope is NOT requested.
 func TestYouTubeLoginURL_IncludesRequiredScopes(t *testing.T) {
 	srv := httptest.NewServer(http.NewServeMux())
 	defer srv.Close()
@@ -52,7 +58,6 @@ func TestYouTubeLoginURL_IncludesRequiredScopes(t *testing.T) {
 	for _, want := range []string{
 		"https://www.googleapis.com/auth/youtube.upload",
 		"https://www.googleapis.com/auth/youtube.readonly",
-		"https://www.googleapis.com/auth/yt-analytics.readonly",
 		"openid",
 		"email",
 		"profile",
@@ -60,6 +65,18 @@ func TestYouTubeLoginURL_IncludesRequiredScopes(t *testing.T) {
 		if !containsScope(scopes, want) {
 			t.Errorf("scope missing %q, got: %s", want, scopes)
 		}
+	}
+
+	// Negative assertion on the analytics scope: least-privilege
+	// policy (docs/OAUTH-PRODUCTION.md Step 3 "Code-side guard").
+	// Re-introducing the analytics scope would re-open Google's
+	// brand verification queue without delivering any functional
+	// gain to the publish pipeline (`videos.insert` accepts
+	// `youtube.upload` alone).
+	const forbiddenAnalyticsScope = "https://www.googleapis.com/auth/yt-analytics.readonly"
+	if containsScope(scopes, forbiddenAnalyticsScope) {
+		t.Errorf("scope list MUST NOT contain %q (least-privilege + brand-verification cost); got: %s",
+			forbiddenAnalyticsScope, scopes)
 	}
 
 	if params.Get("access_type") != "offline" {

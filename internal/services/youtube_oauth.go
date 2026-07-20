@@ -698,7 +698,23 @@ func (s *YouTubeOAuthService) GetLoginURLWithOptions(state string, options OAuth
 	params.Set("client_id", s.cfg.YouTubeClientID)
 	params.Set("redirect_uri", s.cfg.YouTubeRedirectURI)
 	params.Set("state", state)
-	params.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly openid email profile")
+	// P6 hardening: the consent-screen scope list follows the
+	// least-privilege principle. `youtube.upload` is the only scope
+	// strictly required by `videos.insert`; `youtube.readonly` is
+	// used by the pre-upload channel-binding check (channels.list
+	// in ValidateChannelBinding). `openid`, `email`, `profile`
+	// identify the operator. We deliberately DO NOT request
+	// `yt-analytics.readonly`: per the YouTube Data API videos.insert
+	// reference, `youtube.upload` alone is sufficient for the
+	// publish pipeline, and adding a sensitive scope would trigger
+	// a re-review by Google's brand-verification queue without
+	// delivering any functional gain. See
+	// docs/OAUTH-PRODUCTION.md "Step 3 -- declare the scopes
+	// (minimum set)" + "Code-side guard" for the canonical policy
+	// and the cross-PR grep recipe. Re-introduction is treated as a
+	// blocking change (the OAuth brand-verification round on the
+	// OAuth consent screen would re-open).
+	params.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly openid email profile")
 	params.Set("response_type", "code")
 	params.Set("access_type", "offline")
 	params.Set("include_granted_scopes", "true")
