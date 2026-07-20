@@ -52,14 +52,19 @@ const MENTORING_PATH = [
 /**
  * PACKAGES are listed with an explicit `pricing` field that describes the
  * billing model — NOT a dollar amount. Per marketing policy we do not publish
- * precise integers on the marketing site; final figures are shared on the
- * discovery call. See docs/MARKETING-FUNNEL.md > Claims & Pricing Policy.
+ * precise integers on the marketing site; final figures are confirmed during
+ * onboarding. See docs/MARKETING-FUNNEL.md > Claims & Pricing Policy.
+ *
+ * Pricing copy MUST match the destination of the package CTA. The package CTA
+ * buttons route to `/login` (low-friction self-serve signup), so the pricing
+ * lines describe what happens AFTER signup. Discovery calls are reserved for
+ * the bottom-of-page CTASection (mailto with Mentoring%20Request subject).
  */
 const PACKAGES = [
   {
     title: "Starter Mentoring",
     tagline: "For creators starting from zero",
-    pricing: "Billed per session · quote on discovery call",
+    pricing: "Free trial · then billed per session",
     features: [
       "4 one-on-one 45-minute sessions",
       "Channel and editorial calendar audit",
@@ -72,7 +77,7 @@ const PACKAGES = [
   {
     title: "Growth Mentoring",
     tagline: "For those who want to move to the next level",
-    pricing: "Billed per package · quarterly engagement",
+    pricing: "Billed per package · monthly subscription",
     features: [
       "8 one-on-one 60-minute sessions",
       "Content strategy and monthly editorial plan",
@@ -85,7 +90,7 @@ const PACKAGES = [
   {
     title: "Team Mentoring",
     tagline: "For teams and agencies scaling up",
-    pricing: "Custom team contract · annual SLA against milestones",
+    pricing: "Annual team contract · custom milestones",
     features: [
       "12 team sessions",
       "Multi-account workflow and automations",
