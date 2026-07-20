@@ -169,7 +169,16 @@ func (r *YouTubeDailyQuotaRepository) RecordError(ctx context.Context) error {
 // last_reset_at) as an externally-readable snapshot. Used by the
 // /admin/health endpoint and by the existing YouTubeQuotaApproximation
 // rebuild — both are read-only and do NOT touch the row.
-func (r *YouTubeDailyQuotaRepository) GetSnapshot(ctx context.Context) (calls, errors, limit int, lastResetAt time.Time, err error) {
+//
+// Naming: the second return is `errCount` (NOT `errors`) because a
+// named return value of type `int` named `errors` would SHADOW the
+// imported `errors` package inside this function's scope — every
+// `errors.New(...)` / `errors.Is(...)` call would fail to compile
+// (the int return has no New/Is method). Renaming to `errCount`
+// keeps the package accessible. The DB column name on the
+// SELECT remains the literal `errors` — Scan binds via address so
+// `&errCount` is what postgres populates with the column value.
+func (r *YouTubeDailyQuotaRepository) GetSnapshot(ctx context.Context) (calls, errCount, limit int, lastResetAt time.Time, err error) {
 	if r == nil || r.db == nil {
 		return 0, 0, 0, time.Time{}, errors.New("youtube quota: nil repo or db")
 	}
@@ -178,11 +187,11 @@ func (r *YouTubeDailyQuotaRepository) GetSnapshot(ctx context.Context) (calls, e
 		SELECT calls, errors, "limit", last_reset_at
 		FROM youtube_quota_daily
 		WHERE date = $1
-	`, today).Scan(&calls, &errors, &limit, &lastResetAt); err != nil {
+	`, today).Scan(&calls, &errCount, &limit, &lastResetAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, 0, 0, time.Time{}, nil // no row yet today — zero snapshot is honest
 		}
 		return 0, 0, 0, time.Time{}, fmt.Errorf("youtube quota: get snapshot: %w", err)
 	}
-	return calls, errors, limit, lastResetAt, nil
+	return calls, errCount, limit, lastResetAt, nil
 }
