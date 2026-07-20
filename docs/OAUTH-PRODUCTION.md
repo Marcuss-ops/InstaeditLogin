@@ -131,8 +131,9 @@ margin) keeps `channels.list` responses to a single page (no
 `nextPageToken` chasing needed for the pre-upload binding check) and
 keeps every manager comfortably under both Google's 100-channels-per-
 Account cap and the 50–100 refresh-tokens-cap-per-`(Google Account,
-OAuth client)` cap. Going above 50 channels per manager is allowed
-ONLY after:
+OAuth client)` cap. Going above 50 channels per manager is **blocked** today
+operations may proceed only after operators verify both
+preconditions below live on a test account:
 
 1. The YouTube service has been upgraded to follow `nextPageToken`,
    loop until the response returns an empty `nextPageToken`, and
@@ -165,6 +166,13 @@ this doc used to print (`10,000 units/day default ÷ 1,600 units per call
   `videos.insert` calls. The legacy `units × 1600` / `÷ 1600` arithmetic
   you may see elsewhere in the Google docs does NOT apply to this
   bucket.
+* **Scope (very important)**: this bucket is **per Google Cloud project**,
+  NOT per manager and NOT per Google Account. InstaEdit uses ONE Google
+  Cloud project, so all 4–5 manager accounts draw from the SAME daily
+  budget. The 300–400 /day request below is the **total fleet budget**
+  — not per-manager. An operator who interprets it as per-manager will
+  plan around 1,200–2,000 /day instead of 300–400 /day and submit a
+  quota request that Google will reject out of hand.
 
 For the 200-channel daily target (200 calls/day steady-state + retries +
 canary private uploads + test traffic + margin) request **at least 300
@@ -390,7 +398,13 @@ a labelled row in the Quotas tab):
 1. Sidebar → **APIs & Services → Library**.
 2. Search **YouTube Data API v3** → click → **Manage**.
 3. Tab **Quotas** → on the **Video Uploads bucket** row, click
-   **Edit quota** (top-right).
+   **Edit quota** (top-right). The bucket may appear as a labelled
+   row named "Video Uploads" or under whatever row Google currently
+   uses for the dedicated `videos.insert` quota — pick the row whose
+   unit of measure is "videos.insert per day", NEVER the project's
+   overall unit-based quota (the old shape still exists in the Quotas
+   tab for OTHER read endpoints but does NOT control `videos.insert`
+   any more).
 4. Form asks for:
    * **New quota value**: `400` bucket units/day (= 400
      `videos.insert` calls per day; 2× buffer over the steady-state
@@ -490,12 +504,24 @@ Hard counts per manager at install time:
 | `mgr-b@instaedit.org`  | 0                      | ≤ 50           |
 | `mgr-c@instaedit.org`  | 0                      | ≤ 50           |
 | `mgr-d@instaedit.org`  | 0                      | ≤ 50           |
-| `mgr-e@instaedit.org`  | 0                      | ≤ 50 (reserve) |
+| `mgr-e@instaedit.org`  | 0                      | ≤ 50 (rotation reserve — see footnote) |
 
-Adding a new channel under a manager already at 50 channels is a
-**blocking** action — it forces a new manager rotation, which would
-silently invalidate the next channel on the existing manager's
-refresh-token budget per [Google's OAuth 2.0 Expiration doc](https://developers.google.com/identity/protocols/oauth2#expiration).
+> **Footnote — 5th manager.** The 5th manager is a **rotation
+> reserve**, NOT a 5th productive slot. Total active channel fleet
+> stays **≤ 200 channels** at all times (the operator's 200-channel
+> scope). The 5th slot exists so that if any single manager's grant
+> is revoked from Google's
+> [third-party apps page](https://myaccount.google.com/permissions),
+> the affected channels can be re-bound under the 5th manager's
+> identity without planning around 50+ channels per manager on a
+> single account. Operators MUST NOT add a 201st productive channel
+> just because the 5th slot is empty.
+
+Adding a new channel under a manager already at 50 active channels
+is a **blocking** action — it forces a new manager rotation, which
+would silently invalidate the next channel on the existing manager's
+refresh-token budget per
+[Google's OAuth 2.0 Expiration doc](https://developers.google.com/identity/protocols/oauth2#expiration).
 
 Distribute by **putting the operator's primary account in the pool**
 so the operator still has ≤ 50 refresh tokens on their own account
