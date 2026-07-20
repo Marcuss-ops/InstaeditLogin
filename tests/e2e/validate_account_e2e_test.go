@@ -39,8 +39,6 @@ package e2e
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -48,7 +46,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -276,6 +273,11 @@ func seedRefreshTokenRowForValidateE2E(t *testing.T, db *sql.DB, accountID int64
 	t.Helper()
 	// Use a large-but-not-ridiculous expires_at so vault's freshness
 	// probe takes the fast path (no slow-path lock acquisition).
+	// Insert must HARD-FAIL at suite-start: a schema drift between
+	// migration waves would quietly route the /validate happy path
+	// through the slow-path lock acquisition, producing misleading
+	// 5xx failures inside the test body. Hard failing here means
+	// the operator sees the actual SQL/schema error directly.
 	_, err := db.Exec(`INSERT INTO oauth_tokens (platform_account_id, access_token, refresh_token, token_type, expires_at, scopes, created_at, updated_at)
 		SELECT $1, encode(gen_random_bytes(8), 'hex'), encode(gen_random_bytes(32), 'hex'), 'bearer', NOW() + INTERVAL '5 minutes',
 		       ARRAY['https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.readonly'],
@@ -283,11 +285,7 @@ func seedRefreshTokenRowForValidateE2E(t *testing.T, db *sql.DB, accountID int64
 		WHERE NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE platform_account_id = $1)`,
 		accountID)
 	if err != nil {
-		// Fallback path: the integration schema might name the table
-		// differently across migration waves. The negative-path tests
-		// intentionally don't seed a token so this isn't fatal — but
-		// log loudly so a real regression surfaces.
-		t.Logf("seedRefreshTokenRowForValidateE2E: soft-fail (will only impact happy-path tests): %v", err)
+		t.Fatalf("seedRefreshTokenRowForValidateE2E: schema mismatch — /validate happy path requires an oauth_tokens row for the seeded platform_account (fix the SQL above against the current migration state): %v", err)
 	}
 }
 
@@ -509,8 +507,14 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 	// Override ValidateChannelBinding to NEVER be reached — the step-1
 	// renew failure must short-circuit.
 	vhYT.bindFn = func(_ context.Context, _, _ string) error {
+		// Step-3 is NEVER reached on the marquee path: vault.Renew
+		// returns the no-token error at step 1, and the handler's
+		// step-3 call site would surface this t.Errorf as the
+		// regression signal. Return nil so the handler routes the
+		// (already-errored at step 1) request through its existing
+		// vault-Renew-error mapper (flagReauthAndRespond → 422).
 		t.Errorf("Step 3 ValidateChannelBinding MUST NOT be reached when vault.Renew fails on the marquee path")
-		return errors.New("unreachable")
+		return nil
 	}
 	vhVault := &stubCredentialVault{}
 	vhVault.renewFn = func(_ context.Context, _ int64, _ string, _ credentials.TokenRefresher) (*models.OAuthToken, error) {
@@ -592,13 +596,3 @@ func validateE2EHarnessBoot(t *testing.T) {
 	// error mid-test.
 }
 
-// ========================================================================
-// Unused-symbol sentinels — silence go-vet on the unused imports we
-// MAY pull in as future test funcs add helpers.
-// ========================================================================
-
-var _ = fmt.Sprintf
-var _ = rand.Reader // crypto/rand (kept available for future per-test RSA seed use)
-var _ = rsa.GenerateKey
-var _ = strconv.Itoa
-var _ atomic.Int64
