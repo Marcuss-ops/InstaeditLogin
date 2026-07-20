@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1039,21 +1038,21 @@ func TestYouTubeValidateChannelBinding_PaginationAcrossThreePages(t *testing.T) 
 // regression that "trusts the empty token only" would still call page
 // 5; the requestCount assertion catches that.
 func TestYouTubeValidateChannelBinding_SafetyCapReachedAt200_ReturnsMismatch(t *testing.T) {
-	var reqCount atomic.Int32
+	var handlerCalls int
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		handlerCalls++
 		_ = r
-		count := int(reqCount.Add(1))
 		items := make([]map[string]string, 0, 50)
 		for i := 0; i < 50; i++ {
-			items = append(items, map[string]string{"id": fmt.Sprintf("UC-cap-%d-%d", count, i)})
+			items = append(items, map[string]string{"id": fmt.Sprintf("UC-cap-%d-%d", handlerCalls, i)})
 		}
 		// Always return a non-empty nextPageToken to prove the loop
 		// short-circuits BEFORE the 5th call, NOT on natural-empty-token.
 		payload := map[string]any{
 			"items":         items,
-			"nextPageToken": fmt.Sprintf("tok-%d", count+1),
+			"nextPageToken": fmt.Sprintf("tok-%d", handlerCalls+1),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		data, _ := json.Marshal(payload)
@@ -1079,8 +1078,8 @@ func TestYouTubeValidateChannelBinding_SafetyCapReachedAt200_ReturnsMismatch(t *
 	}
 	// The loop MUST short-circuit BEFORE page 5; with 4 pages of 50
 	// each, we expect exactly 4 HTTP calls, NOT 5+.
-	if got := reqCount.Load(); got != 4 {
-		t.Errorf("loop must short-circuit before page 5; want 4 page(s) requested, got %d", got)
+	if handlerCalls != 4 {
+		t.Errorf("loop must short-circuit before page 5; want 4 page(s) requested, got %d", handlerCalls)
 	}
 }
 
