@@ -800,6 +800,132 @@ func (s *YouTubeOAuthService) Validate(ctx context.Context, accessToken, platfor
 	return nil
 }
 
+// youtubeTokenInfoResponse mirrors the JSON shape Google returns from
+// https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=... .
+// Field names match Google's lowercase contract verbatim (Aud→aud,
+// Azp→azp, etc.); json.Unmarshal would otherwise need case-insensitive
+// matching for every field. Only the operator-visible subset is captured;
+// `error`, `error_description` etc. surface in the wrapped error
+// message returned by GetTokenInfo on a 400 reply.
+type youtubeTokenInfoResponse struct {
+	Aud        string `json:"aud"`
+	Azp        string `json:"azp"`
+	Scope      string `json:"scope"`
+	ExpiresIn  int64  `json:"expires_in"`
+	AccessType string `json:"access_type"`
+	Email      string `json:"email"`
+}
+
+// YouTubeTokenInfo is the structured introspection reply returned by
+// YouTubeOAuthService.GetTokenInfo. Mirrors the four fields
+// scripts/verify-google-oauth-mode.sh prints (aud, azp, scope,
+// expires_in) plus an `email` field the script doesn't expose today
+// (openid scope returns it; useful for the operator-side audit log).
+//
+// HasUpload / HasReadonly are derived flags computed at construction
+// time so callers can write `if !info.HasUpload { ... }` without
+// re-parsing `Scope` themselves. The canonical scope strings are
+// the full https://www.googleapis.com/auth/<scope> form (NOT the
+// shortened alias) — matches what GetLoginURLWithOptions sets in
+// the consent URL and what Google returns from tokeninfo.
+type YouTubeTokenInfo struct {
+	Aud       string
+	Azp       string
+	Scope     string
+	ExpiresIn time.Duration
+	Email     string
+
+	HasUpload   bool
+	HasReadonly bool
+}
+
+// GetTokenInfo calls Google's oauth2/v3/tokeninfo public introspection
+// endpoint with the supplied access token and returns the structured
+// introspection reply.
+//
+// This is the CODE-SIDE equivalent of scripts/verify-google-oauth-mode.sh
+// (the bash operator quick-check). Keeping a single canonical
+// implementation in Go means the operator script and the handler-level
+// validator never drift. Per Google's contract, this endpoint returns:
+//
+//	200 OK + JSON for any access token in good standing
+//	400 Bad Request + {"error":"invalid_token",...} for expired,
+//	    revoked, malformed, or otherwise un-introspectable tokens
+//
+// Error contract:
+//   - non-200 (HTTP 400 typically) → wrapped error containing Google's
+//     {"error":"invalid_token","error_description":"..."} body. Callers
+//     distinguish hard-rejection (Google said the token is bad) from
+//     transient (network / decode) by inspecting resp.StatusCode
+//     before calling GetTokenInfo, OR by classifying the wrapped
+//     error string itself in the handler. The HTTP layer in
+//     handleValidateAccount maps a non-200 to 422 +
+//     status='reauth_required' — same runbook as an invalid_grant
+//     refresh-result.
+//   - decode error or network error → plain wrapped error (NOT a
+//     sentinel). The handler treats this as transient (next tick
+//     retries). Mirrors the existing pre-step-2 channel-binding
+//     convention: only ErrYouTubeChannelMismatch-shaped failures
+//     flip the platform_account to reauth_required; everything else
+//     is operator-deferred.
+//
+// The endpoint takes the access token AS A QUERY PARAMETER. This is
+// documented and supported by Google; their modern docs recommend
+// the Authorization header for NEW integrations, but the query-param
+// path stays canonical for verification scripts and operator tooling
+// (Google's docs link to it explicitly). Confirmed against
+// scripts/verify-google-oauth-mode.sh which this method mirrors.
+//
+// Cross-references:
+//   - pkg/api/handlers.go::handleValidateAccount (step 2 of the
+//     4-step YouTube OAuth readiness pipeline introduced in
+//     conventions/200-channel YouTube OAuth plan)
+//   - scripts/verify-google-oauth-mode.sh (operator-shell analogue)
+func (s *YouTubeOAuthService) GetTokenInfo(ctx context.Context, accessToken string) (*YouTubeTokenInfo, error) {
+	if accessToken == "" {
+		return nil, fmt.Errorf("youtube tokeninfo: empty access token")
+	}
+
+	reqURL := "https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=" + url.QueryEscape(accessToken)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("youtube tokeninfo: create request: %w", err)
+	}
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("youtube tokeninfo: request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("youtube tokeninfo returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var r youtubeTokenInfoResponse
+	if jerr := json.Unmarshal(body, &r); jerr != nil {
+		return nil, fmt.Errorf("youtube tokeninfo: decode: %w", jerr)
+	}
+
+	out := &YouTubeTokenInfo{
+		Aud:       r.Aud,
+		Azp:       r.Azp,
+		Scope:     r.Scope,
+		ExpiresIn: time.Duration(r.ExpiresIn) * time.Second,
+		Email:     r.Email,
+	}
+	for _, sc := range strings.Fields(r.Scope) {
+		switch sc {
+		case "https://www.googleapis.com/auth/youtube.upload":
+			out.HasUpload = true
+		case "https://www.googleapis.com/auth/youtube.readonly":
+			out.HasReadonly = true
+		}
+	}
+	return out, nil
+}
+
 // Revoke calls Google's OAuth 2.0 token revocation endpoint.
 func (s *YouTubeOAuthService) Revoke(ctx context.Context, accessToken string) error {
 	body := url.Values{}

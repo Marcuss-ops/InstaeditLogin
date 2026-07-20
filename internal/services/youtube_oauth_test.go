@@ -1780,3 +1780,155 @@ func TestComputeYouTubeBackoff_Bounds(t *testing.T) {
 		}
 	}
 }
+
+// TestYouTubeGetTokenInfo_HappyPath exercises the canonical path:
+// mock Google's /oauth2/v3/tokeninfo to reply 200 with a fully-shaped
+// JSON body, then assert every field on YouTubeTokenInfo is hydrated
+// correctly AND the HasUpload / HasReadonly derived flags flip to true.
+// This is the contract pkg/api/handlers.go::handleValidateAccount
+// (step 2 of the 4-step YouTube OAuth readiness pipeline) relies on.
+func TestYouTubeGetTokenInfo_HappyPath(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth2/v3/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("access_token"); got != "fresh-access-token" {
+			t.Errorf("tokeninfo endpoint got access_token=%q, want fresh-access-token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"aud":"%s","azp":"%s","scope":"%s %s openid email profile","expires_in":3599,"access_type":"offline","email":"operator@example.com"}`,
+			"test-youtube-client-id",
+			"test-youtube-client-id",
+			"https://www.googleapis.com/auth/youtube.upload",
+			"https://www.googleapis.com/auth/youtube.readonly",
+		)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	info, err := svc.GetTokenInfo(context.Background(), "fresh-access-token")
+	if err != nil {
+		t.Fatalf("GetTokenInfo happy-path: unexpected error: %v", err)
+	}
+	if info.Aud != "test-youtube-client-id" {
+		t.Errorf("Aud: got %q, want test-youtube-client-id", info.Aud)
+	}
+	if info.Azp != "test-youtube-client-id" {
+		t.Errorf("Azp: got %q, want test-youtube-client-id", info.Azp)
+	}
+	if !info.HasUpload {
+		t.Errorf("HasUpload: want true, got false (Scope=%q)", info.Scope)
+	}
+	if !info.HasReadonly {
+		t.Errorf("HasReadonly: want true, got false (Scope=%q)", info.Scope)
+	}
+	if info.ExpiresIn != 3599*time.Second {
+		t.Errorf("ExpiresIn: got %s, want 3599s", info.ExpiresIn)
+	}
+	if info.Email != "operator@example.com" {
+		t.Errorf("Email: got %q, want operator@example.com", info.Email)
+	}
+}
+
+// TestYouTubeGetTokenInfo_MissingUploadScope asserts the SHAPE of the
+// error the handler maps to 422 + reauth_required. The Hard-fail
+// contract is: a token that scopes youtube.readonly but NOT
+// youtube.upload MUST surface as a google-returned 400 (the endpoint
+// does run; the scope-shape check is the handler's job). Both shapes
+// are exercised here as separate subtests so a regression on the
+// Google-response path doesn't accidentally over-trigger the
+// HasUpload-false code path.
+//
+// This is the step-2 failure matrix handleValidateAccount depends on.
+func TestYouTubeGetTokenInfo_SurfaceAllContractShapes(t *testing.T) {
+	t.Run("empty_access_token_rejected", func(t *testing.T) {
+		srv := httptest.NewServer(http.NewServeMux())
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+		if _, err := svc.GetTokenInfo(context.Background(), ""); err == nil {
+			t.Fatal("expected error on empty access token, got nil")
+		}
+	})
+
+	t.Run("google_400_invalid_token_surfaces_wrapped_error", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/oauth2/v3/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, `{"error":"invalid_token","error_description":"Token expired or revoked"}`)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		_, err := svc.GetTokenInfo(context.Background(), "stale-token")
+		if err == nil {
+			t.Fatal("expected error on Google 400 response, got nil")
+		}
+		if !strings.Contains(err.Error(), "400") {
+			t.Errorf("error message must contain the literal status code 400 (handler reads it for 422 mapping); got %v", err)
+		}
+		if !strings.Contains(err.Error(), "invalid_token") {
+			t.Errorf("error message must contain Google's invalid_token payload for the audit log; got %v", err)
+		}
+	})
+
+	t.Run("garbage_body_decode_error_is_plain_wrapped", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/oauth2/v3/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `[this is definitely not valid json`)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		_, err := svc.GetTokenInfo(context.Background(), "good-shape-bad-body")
+		if err == nil {
+			t.Fatal("expected decode error on garbage body, got nil")
+		}
+		if !strings.Contains(err.Error(), "decode") {
+			t.Errorf("non-token error must mention decode so handler classifies it transient (NOT reauth); got %v", err)
+		}
+	})
+
+	t.Run("missing_upload_scope_keeps_HasUpload_false", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/oauth2/v3/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, `{"aud":"test-youtube-client-id","azp":"test-youtube-client-id","scope":"https://www.googleapis.com/auth/youtube.readonly openid email profile","expires_in":300}`)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		info, err := svc.GetTokenInfo(context.Background(), "readonly-only-token")
+		if err != nil {
+			t.Fatalf("scope-missing: unexpected error: %v", err)
+		}
+		if info.HasUpload {
+			t.Errorf("HasUpload on readonly-only token: want false, got true (handler would let it through step 2 incorrectly)")
+		}
+		if !info.HasReadonly {
+			t.Errorf("HasReadonly on readonly-only token: want true, got false (would force-fail step 2 incorrectly)")
+		}
+	})
+
+	t.Run("missing_readonly_scope_keeps_HasReadonly_false", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/oauth2/v3/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, `{"aud":"test-youtube-client-id","scope":"https://www.googleapis.com/auth/youtube.upload openid email profile","expires_in":300}`)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		info, err := svc.GetTokenInfo(context.Background(), "upload-only-token")
+		if err != nil {
+			t.Fatalf("scope-missing: unexpected error: %v", err)
+		}
+		if !info.HasUpload {
+			t.Errorf("HasUpload on upload-only token: want true, got false")
+		}
+		if info.HasReadonly {
+			t.Errorf("HasReadonly on upload-only token: want false, got true (the worker needs readonly for channels.list)")
+		}
+	})
+}
