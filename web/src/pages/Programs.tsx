@@ -16,46 +16,46 @@ const PROGRAMS = [
   {
     icon: Users,
     title: "Creator Program",
-    tagline: "Da creator a content machine",
+    tagline: "From creator to content machine",
     description:
-      "Un percorso guidato per creator che vogliono passare da pochi post al mese a una macchina da contenuti strutturata: workflow, template, automazioni e accesso prioritario alle nuove funzioni di InstaEdit.",
+      "A guided program for creators who want to go from a few posts per month to a structured content machine: workflow, templates, automations and early access to new InstaEdit features.",
     features: [
-      "Onboarding 1-to-1 con il team di prodotto",
-      "Template di contenuti ottimizzati per ogni piattaforma",
-      "Accesso anticipato a nuove integrazioni",
-      "Community esclusiva di creator",
+      "One-on-one onboarding with the product team",
+      "Content templates optimized for every platform",
+      "Early access to new integrations",
+      "Exclusive creator community",
     ],
-    cta: "Unisciti alla lista d'attesa",
+    cta: "Join the waitlist",
     color: "from-violet-500 to-purple-500",
   },
   {
     icon: Building2,
     title: "Agency Program",
-    tagline: "Scala i tuoi clienti senza assumere",
+    tagline: "Scale your clients without hiring",
     description:
-      "Pensato per agenzie e content studio che gestiscono decine di clienti. Formazione dedicata, SLA, supporto prioritario e margini crescenti in base al volume.",
+      "Designed for agencies and content studios managing dozens of clients. Dedicated training, SLAs, priority support and increasing margins based on volume.",
     features: [
-      "Multi-workspace con billing separato",
-      "Onboarding assistito per il tuo team",
-      "Supporto prioritario con SLA",
-      "Programma partner con vantaggi su volume",
+      "Multi-workspace with separate billing",
+      "Assisted onboarding for your team",
+      "Priority support with SLA",
+      "Partner program with volume benefits",
     ],
-    cta: "Diventa partner",
+    cta: "Become a partner",
     color: "from-emerald-500 to-teal-500",
   },
   {
     icon: Briefcase,
     title: "Enterprise Program",
-    tagline: "InstaEdit nella tua azienda",
+    tagline: "InstaEdit in your company",
     description:
-      "Soluzione tailor-made per brand e aziende che vogliono integrare InstaEdit nei loro sistemi di content operations, con single sign-on, audit log e account manager dedicato.",
+      "Tailor-made solution for brands and companies that want to integrate InstaEdit into their content operations systems, with single sign-on, audit log and dedicated account manager.",
     features: [
-      "SSO e provisioning utenti",
-      "Audit log e compliance",
-      "Account manager dedicato",
-      "Training e workshop per il team",
+      "SSO and user provisioning",
+      "Audit log and compliance",
+      "Dedicated account manager",
+      "Team training and workshops",
     ],
-    cta: "Contatta vendite",
+    cta: "Contact sales",
     color: "from-cyan-500 to-blue-500",
   },
 ];
@@ -63,18 +63,18 @@ const PROGRAMS = [
 const MENTORING = [
   {
     icon: GraduationCap,
-    title: "Mentoring 1-to-1",
-    description: "Sessioni settimanali con esperti di content strategy per definire il tuo piano editoriale e ottimizzare le metriche."
+    title: "One-on-one mentoring",
+    description: "Weekly sessions with content strategy experts to define your editorial plan and optimize metrics."
   },
   {
     icon: CalendarClock,
     title: "Content Calendar Audit",
-    description: "Revisione completa del tuo calendario editoriale con suggerimenti pratici su frequenza, formati e piattaforme."
+    description: "Complete review of your editorial calendar with practical suggestions on frequency, formats and platforms."
   },
   {
     icon: Globe,
     title: "Multi-platform Setup",
-    description: "Configurazione guidata di tutti i canali e automazioni per pubblicare su ogni piattaforma senza perdite di tempo."
+    description: "Guided setup of all channels and automations to publish on every platform without wasting time."
   },
 ];
 
@@ -93,29 +93,29 @@ function Hero() {
             <span className="animate-pulse-glow absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
           </span>
-          <span>Programmi pensati per chi vuole scalare</span>
+          <span>Programs designed for those who want to scale</span>
         </div>
         <h1 className="text-display-1 text-white max-w-[18ch] mx-auto">
-          Programmi per{" "}
-          <span className="text-gradient-animated">creator, agenzie</span> e brand.
+          Programs for{" "}
+          <span className="text-gradient-animated">creators, agencies</span> and brands.
         </h1>
         <p className="text-body-lg text-zinc-300/90 mt-7 max-w-[60ch] mx-auto">
-          Scegli il percorso più adatto alle tue ambizioni. Dalla prima pubblicazione
-          alla content operations enterprise, ti guidiamo in ogni fase.
+          Choose the path that best fits your ambitions. From your first publication
+          to enterprise content operations, we guide you through every phase.
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-8">
           <a
             href="#programs"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group"
           >
-            Esplora i programmi
+            Explore programs
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </a>
           <Link
             to="/login"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
           >
-            Inizia gratis
+            Start for free
           </Link>
         </div>
       </div>
@@ -129,13 +129,13 @@ function ProgramsList() {
       <div aria-hidden="true" className="absolute inset-0 hero-aurora opacity-20 pointer-events-none" />
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
-          <div className="text-eyebrow text-violet-300/90 mb-3">I nostri programmi</div>
+          <div className="text-eyebrow text-violet-300/90 mb-3">Our programs</div>
           <h2 className="text-display-2 text-white">
-            Un percorso per ogni livello di crescita.
+            A path for every growth level.
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            Che tu sia un creator in crescita, un'agenzia con tanti clienti o un brand
-            strutturato, abbiamo creato un programma su misura per te.
+            Whether you are a growing creator, an agency with many clients or a brand
+            with structured needs, we have created a program tailored for you.
           </p>
         </div>
         <div className="grid gap-8">
@@ -197,12 +197,12 @@ function MentoringSection() {
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-pink-300/90 mb-3">Mentoring</div>
           <h2 className="text-display-2 text-white">
-            Non lasciarti indietro.{" "}
-            <span className="text-gradient-animated">Impara da chi ha già scalato.</span>
+            Don't get left behind.{" "}
+            <span className="text-gradient-animated">Learn from those who have already scaled.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            I nostri programmi di mentoring ti mettono nelle condizioni di sfruttare InstaEdit
-            al massimo, con esperti che ti aiutano a costruire un sistema di contenuti sostenibile.
+            Our programs di mentoring ti mettono nelle condizioni di sfruttare InstaEdit
+            to the fullest, with experts who help you build a sustainable content system.
           </p>
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -229,31 +229,31 @@ function CTASection() {
           <div aria-hidden="true" className="absolute inset-0 cta-glow opacity-30 pointer-events-none" />
           <div className="relative">
             <h2 className="text-display-2 text-white mb-4">
-              Pronto a scegliere il tuo programma?
+              Ready to choose your program?
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[55ch] mx-auto mb-8">
-              Inizia gratis e scopri quale percorso si adatta meglio ai tuoi obiettivi.
-              Puoi sempre passare a un programma superiore quando sei pronto.
+              Start for free and discover which path best fits your goals.
+              You can always upgrade to a higher program when ready.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
                 to="/login"
                 className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group"
               >
-                Inizia gratis
+                Start for free
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </Link>
               <Link
                 to="/mentoring"
                 className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
               >
-                Vuoi un accompagnamento?
+                Want guidance?
               </Link>
               <a
                 href="mailto:hello@instaedit.org"
                 className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
               >
-                Parla con il team
+                Talk to the team
               </a>
             </div>
           </div>
@@ -264,13 +264,13 @@ function CTASection() {
 }
 
 const NAV_LINKS = [
-  { label: "Come funziona", href: "/#pipeline" },
+  { label: "How it works", href: "/#pipeline" },
   { label: "Workflow", href: "/#workflow" },
   { label: "Features", href: "/#features" },
-  { label: "Agenzie", href: "/#agency" },
-  { label: "Programmi", to: "/programs" },
+  { label: "Agencies", href: "/#agency" },
+  { label: "Programs", to: "/programs" },
   { label: "Mentoring", to: "/mentoring" },
-  { label: "Chi siamo", href: "/#who-are-we" },
+  { label: "About us", href: "/#who-are-we" },
 ];
 
 export function Programs() {
