@@ -6,8 +6,9 @@
 # scope / azp fields so an operator can confirm at a glance:
 #
 #   * `aud`  — which OAuth client_id the token was issued to
-#              (compare against YOUTUBE_CLIENT_ID in .env.production
-#              to confirm Production vs Testing credentials).
+#              (compare against YOUTUBE_CLIENT_ID or GOOGLE_DRIVE_CLIENT_ID
+#              in .env.production to confirm Production vs Testing
+#              credentials).
 #   * `expires_in` — the access token's remaining TTL in seconds.
 #                    Access tokens are short-lived (~1 hour); this
 #                    value DECREASES over time. A negative or zero
@@ -23,18 +24,17 @@
 # docs/OAUTH-PRODUCTION.md "Monitoring refresh-token TTL" for the
 # server-side monitoring contract.
 #
-# Endpoint:
-#   GET https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=...
-# (the v3 path is the canonical public introspection URL;
-# oauth2.googleapis.com/tokeninfo is the newer alias and returns the
-# same shape — both are accepted.)
-#
 # ─── USAGE ──────────────────────────────────────────────────────────────
-#   ./scripts/verify-google-oauth-mode.sh "$OAUTH_ACCESS_TOKEN"
+#   ./scripts/verify-google-oauth-mode.sh youtube "$YOUTUBE_ACCESS_TOKEN"
+#   ./scripts/verify-google-oauth-mode.sh google-drive "$DRIVE_ACCESS_TOKEN"
 #   # or pipe from a file:
-#   ./scripts/verify-google-oauth-mode.sh < token.txt
+#   ./scripts/verify-google-oauth-mode.sh youtube < token.txt
 #   # or export:
-#   GOOGLE_OAUTH_ACCESS_TOKEN=ya29.... ./scripts/verify-google-oauth-mode.sh
+#   GOOGLE_OAUTH_ACCESS_TOKEN=ya29.... ./scripts/verify-google-oauth-mode.sh youtube
+#
+# The first positional argument is the verification mode:
+#   youtube       — verify a YouTube OAuth access token
+#   google-drive  — verify a Google Drive OAuth access token
 #
 # Exit codes:
 #   0  token validated; fields printed
@@ -56,15 +56,43 @@ TOKENINFO_URL="https://www.googleapis.com/oauth2/v3/tokeninfo"
 if [[ $# -ge 1 ]]; then
   case "$1" in
     -h|--help)
-      sed -n '2,40p' "$0"
+      sed -n '2,65p' "$0"
       exit 0
       ;;
   esac
 fi
 
+# ─── Resolve the verification mode ─────────────────────────────────────
+# The mode tells us which set of scopes and client_id to validate
+# against. YouTube and Google Drive use separate OAuth clients in
+# InstaEdit, so their tokens must be checked independently.
+MODE=""
+if [[ $# -ge 1 ]]; then
+  case "$1" in
+    youtube|google-drive)
+      MODE="$1"
+      shift
+      ;;
+    *)
+      # Backwards compatibility: the old script signature was
+      #   ./verify-google-oauth-mode.sh <access_token>
+      # Treat a non-mode first arg as a YouTube token and keep going.
+      MODE="youtube"
+      echo "⚠️  Deprecated usage: treating first argument as a YouTube access token." >&2
+      echo "   New usage: $0 youtube <access_token>" >&2
+      ;;
+  esac
+fi
+
+if [[ -z "$MODE" ]]; then
+  echo "❌ No verification mode supplied." >&2
+  echo "   Usage: $0 <youtube|google-drive> [access_token]" >&2
+  exit 2
+fi
+
 # ─── Resolve the access token from one of three sources ────────────────
 # Priority: 1st positional arg > stdin > GOOGLE_OAUTH_ACCESS_TOKEN env.
-# The operator usually has the token in an env var from a previous
+# The operator usually has the token in a env var from a previous
 # command, so reading from env is the most ergonomic path. Stdin
 # support lets the script slot into a curl pipeline.
 TOKEN=""
@@ -91,10 +119,25 @@ command -v jq >/dev/null 2>&1 || {
 
 if [[ -z "${TOKEN:-}" ]]; then
   echo "❌ No access token supplied." >&2
-  echo "   Usage: $0 <access_token>" >&2
-  echo "      or: GOOGLE_OAUTH_ACCESS_TOKEN=<token> $0" >&2
-  echo "      or: $0 < token.txt" >&2
+  echo "   Usage: $0 <youtube|google-drive> <access_token>" >&2
+  echo "      or: GOOGLE_OAUTH_ACCESS_TOKEN=<token> $0 <youtube|google-drive>" >&2
+  echo "      or: $0 <youtube|google-drive> < token.txt" >&2
   exit 1
+fi
+
+# ─── Mode-specific expected scopes and client_id env var ───────────────
+# These match the scopes requested by the Go services:
+#   - YouTube:  youtube_oauth.go GetLoginURLWithOptions
+#   - Drive:    google_drive_oauth.go GetLoginURLWithOptions
+CLIENT_ID_VAR=""
+CLIENT_ID_NAME=""
+
+if [[ "$MODE" == "youtube" ]]; then
+  CLIENT_ID_VAR="YOUTUBE_CLIENT_ID"
+  CLIENT_ID_NAME="YOUTUBE_CLIENT_ID"
+elif [[ "$MODE" == "google-drive" ]]; then
+  CLIENT_ID_VAR="GOOGLE_DRIVE_CLIENT_ID"
+  CLIENT_ID_NAME="GOOGLE_DRIVE_CLIENT_ID"
 fi
 
 # ─── Call the tokeninfo endpoint ────────────────────────────────────────
@@ -111,7 +154,7 @@ fi
 BODY_FILE="$(mktemp -t verify-google-oauth-mode.XXXXXX)"
 trap 'rm -f "$BODY_FILE"' EXIT
 
-echo "── Calling $TOKENINFO_URL ──────────────────────────────────────────"
+echo "── Calling $TOKENINFO_URL (mode: $MODE) ──────────────────────────────────────────"
 set +e  # We handle curl's exit code explicitly below.
 http_code=$(
   curl --silent --show-error --fail-with-body \
@@ -196,19 +239,19 @@ cat <<EOF
 
 EOF
 
-# ─── Env-var cross-check: aud ↔ YOUTUBE_CLIENT_ID ─────────────────────
+# ─── Env-var cross-check: aud ↔ configured client_id ─────────────────────
 # The doc (docs/OAUTH-PRODUCTION.md Step 7) tells operators to sanity-
-# check that aud matches YOUTUBE_CLIENT_ID in .env.production. Do the
-# check inline so the script catches a Testing-vs-Production mismatch
-# instead of relying on the operator to eyeball-compare two long
-# strings. Skipped if YOUTUBE_CLIENT_ID is not in the env (the script
-# is also useful for ad-hoc token introspection).
-if [[ -n "${YOUTUBE_CLIENT_ID:-}" ]]; then
-  if [[ "$aud" == "$YOUTUBE_CLIENT_ID" ]]; then
-    echo "✓ aud matches YOUTUBE_CLIENT_ID from the environment." 
+# check that aud matches the appropriate *_CLIENT_ID in .env.production.
+# Do the check inline so the script catches a Testing-vs-Production
+# mismatch instead of relying on the operator to eyeball-compare two long
+# strings. Skipped if the relevant *_CLIENT_ID is not in the env.
+configured_client_id="${!CLIENT_ID_VAR:-}"
+if [[ -n "$configured_client_id" ]]; then
+  if [[ "$aud" == "$configured_client_id" ]]; then
+    echo "✓ aud matches $CLIENT_ID_NAME from the environment."
   else
     echo "❌ aud mismatch! Token was issued by $aud," >&2
-    echo "   but YOUTUBE_CLIENT_ID in the env is $YOUTUBE_CLIENT_ID." >&2
+    echo "   but $CLIENT_ID_NAME in the env is $configured_client_id." >&2
     echo "   This usually means the token was issued by the Testing-mode" >&2
     echo "   client (or a different OAuth client entirely)." >&2
     # Don't exit non-zero — this is advisory. The operator may be
@@ -216,7 +259,7 @@ if [[ -n "${YOUTUBE_CLIENT_ID:-}" ]]; then
     # parallel pre-prod client). Just make the mismatch loud.
   fi
 else
-  echo "ℹ️  YOUTUBE_CLIENT_ID not set in env; skipping aud cross-check." 
+  echo "ℹ️  $CLIENT_ID_NAME not set in env; skipping aud cross-check." >&2
   echo "   Export it from .env.production for an automated mismatch alert." >&2
 fi
 
@@ -233,19 +276,25 @@ if [[ "$expires_in" =~ ^[0-9]+$ ]] && [[ "$expires_in" -le 0 ]]; then
   echo "   Use the refresh token (vault.Renew on the server) to get a fresh one." >&2
 fi
 
-# 3. expected scopes — soft cross-check against docs/OAUTH-PRODUCTION.md.
-#    The InstaEdit YouTube grant must carry youtube.upload to call
-#    videos.insert and youtube.readonly to read channel metadata
-#    (e.g. channels.list(mine=true)). Missing either scope is a
-#    misconfiguration worth flagging, but the check is advisory so
-#    single-purpose debugging tokens are not blocked.
-if ! grep -q "youtube.upload" <<<"$scope"; then
-  echo "⚠️  Scope set does NOT contain youtube.upload." >&2
-  echo "   The token can authenticate but cannot call videos.insert." >&2
-fi
-if ! grep -q "youtube.readonly" <<<"$scope"; then
-  echo "⚠️  Scope set does NOT contain youtube.readonly." >&2
-  echo "   The token can authenticate but cannot call channels.list for binding validation." >&2
+# 3. expected scopes — soft cross-check against the mode-specific contract.
+if [[ "$MODE" == "youtube" ]]; then
+  if ! grep -q "youtube.upload" <<<"$scope"; then
+    echo "⚠️  Scope set does NOT contain youtube.upload." >&2
+    echo "   The token can authenticate but cannot call videos.insert." >&2
+  fi
+  if ! grep -q "youtube.readonly" <<<"$scope"; then
+    echo "⚠️  Scope set does NOT contain youtube.readonly." >&2
+    echo "   The token can authenticate but cannot call channels.list for binding validation." >&2
+  fi
+elif [[ "$MODE" == "google-drive" ]]; then
+  if ! grep -q "drive.readonly" <<<"$scope"; then
+    echo "⚠️  Scope set does NOT contain drive.readonly." >&2
+    echo "   The token cannot enumerate Drive folders/files." >&2
+  fi
+  if ! grep -q "userinfo.profile" <<<"$scope"; then
+    echo "⚠️  Scope set does NOT contain userinfo.profile." >&2
+    echo "   The token cannot fetch the operator's profile for display." >&2
+  fi
 fi
 
 echo "✓ Verification complete."
