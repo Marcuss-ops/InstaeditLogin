@@ -303,11 +303,12 @@ function Nav() {
     return () => { document.body.style.overflow = ""; };
   }, [open]);
 
-  const links = [
+  const links: Array<{ label: string; to?: string; href?: string }> = [
     { label: "Come funziona", href: "#pipeline" },
     { label: "Workflow", href: "#workflow" },
     { label: "Features", href: "#features" },
     { label: "Agenzie", href: "#agency" },
+    { label: "Programmi", to: "/programs" },
     { label: "Chi siamo", href: "#who-are-we" },
   ];
 
@@ -326,11 +327,21 @@ function Nav() {
 
           {/* Desktop nav */}
           <div className="hidden md:flex items-center gap-7 text-sm font-medium text-zinc-400">
-            {links.map((l) => (
-              <a key={l.href} href={l.href} className="hover:text-white transition-colors relative after:absolute after:bottom-[-2px] after:left-0 after:h-[2px] after:w-0 after:bg-gradient-to-r after:from-violet-400 after:to-cyan-400 after:transition-all after:duration-300 hover:after:w-full">
-                {l.label}
-              </a>
-            ))}
+            {links.map((l) =>
+              l.to ? (
+                <Link
+                  key={l.label}
+                  to={l.to}
+                  className="hover:text-white transition-colors relative after:absolute after:bottom-[-2px] after:left-0 after:h-[2px] after:w-0 after:bg-gradient-to-r after:from-violet-400 after:to-cyan-400 after:transition-all after:duration-300 hover:after:w-full"
+                >
+                  {l.label}
+                </Link>
+              ) : (
+                <a key={l.label} href={l.href} className="hover:text-white transition-colors relative after:absolute after:bottom-[-2px] after:left-0 after:h-[2px] after:w-0 after:bg-gradient-to-r after:from-violet-400 after:to-cyan-400 after:transition-all after:duration-300 hover:after:w-full">
+                  {l.label}
+                </a>
+              ),
+            )}
           </div>
 
           {/* Mobile hamburger */}
@@ -341,11 +352,17 @@ function Nav() {
         {open && (
           <div className="md:hidden border-t border-white/10 bg-[#14141c]/98 backdrop-blur-xl" role="dialog" aria-modal="true" aria-label="Navigation menu">
             <div className="px-6 py-4 space-y-1">
-              {links.map((l) => (
-                <a key={l.href} href={l.href} onClick={close} className="block py-3 text-sm font-medium text-zinc-300 hover:text-white hover:bg-white/[0.04] rounded-lg px-3 -mx-3 transition-colors">
-                  {l.label}
-                </a>
-              ))}
+              {links.map((l) =>
+                l.to ? (
+                  <Link key={l.label} to={l.to} onClick={close} className="block py-3 text-sm font-medium text-zinc-300 hover:text-white hover:bg-white/[0.04] rounded-lg px-3 -mx-3 transition-colors">
+                    {l.label}
+                  </Link>
+                ) : (
+                  <a key={l.label} href={l.href} onClick={close} className="block py-3 text-sm font-medium text-zinc-300 hover:text-white hover:bg-white/[0.04] rounded-lg px-3 -mx-3 transition-colors">
+                    {l.label}
+                  </a>
+                ),
+              )}
               <hr className="border-white/10 my-3" />
               <Link to="/login" onClick={close} className="block py-3 text-sm font-semibold text-center text-white bg-gradient-to-r from-violet-500 to-cyan-500 rounded-xl hover:opacity-90 transition-opacity">
                 Accedi
@@ -904,6 +921,7 @@ function Footer() {
         { l: "Workflow", href: "#workflow" },
         { l: "Features", href: "#features" },
         { l: "Per agenzie", href: "#agency" },
+        { l: "Programmi", to: "/programs" },
       ],
     },
     {
