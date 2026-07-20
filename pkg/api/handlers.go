@@ -1516,6 +1516,22 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
+// HandleOAuthCallbackRouteForTest returns the OAuth /callback
+// handler without the production oauthSessionRedirect middleware
+// (handlers.go:1034). Use only in tests that want to exercise the
+// bind-check + 422-mapping flow without booting the full session
+// middleware chain. Caller MUST inject identity via
+// auth.WithIdentity(ctx, identity) before calling ServeHTTP —
+// the production middleware does this automatically; the test
+// seam expects callers to do it explicitly.
+//
+// This is a test seam — NOT part of the production public API.
+// Production auth gating goes through r.oauthSessionRedirect
+// (handlers.go:1034)
+func (r *Router) HandleOAuthCallbackRouteForTest() http.Handler {
+	return http.HandlerFunc(r.handleCallback)
+}
+
 // attachDiscoveredAccounts is used by handleCallback for providers that
 // expose AccountDiscoverer (Facebook Pages, YouTube Channels). It creates
 // one PlatformAccount per discovered account and persists tokens.
