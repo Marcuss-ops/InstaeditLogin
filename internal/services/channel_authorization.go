@@ -131,9 +131,18 @@ type ChannelAuthorizer interface {
 // Compile-time guard.
 var _ ChannelAuthorizer = (*ChannelAuthorizationService)(nil)
 
-// Compile-time reference guard — fails the build if this file ever
-// stops referencing IsEligibleForActivePromotion (drift vs the
-// helper unit test + sqlmock integration tests).
+// Compile-time reference guard — SCOPE-LIMITED. Catches only
+// WHOLESALE-FILE-DELETION regressions: a future refactor that
+// removes every reference to IsEligibleForActivePromotion from
+// this file (e.g., moves the AuthorizeChannel method elsewhere and
+// deletes the orphaned package-level var binding) trips the build.
+// Does NOT catch inline-map rewiring at the production call site —
+// that regression class is caught at runtime by the 5 status-
+// rejection sqlmock integration tests in channel_authorization_test.go
+// (TestAuthorizeChannel_*StatusRejects + ReauthFromExpiredStatusRejected)
+// AND by TestAuthorizeChannel_EligibilityGateActuallyCalled_RejectsInlineMapRegression,
+// which proves the call site routes through the `eligibilityGate`
+// package pointer below rather than an inline-map alternative.
 var _ = IsEligibleForActivePromotion
 
 // eligibilityGate is the package-level function-pointer indirection
