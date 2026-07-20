@@ -73,6 +73,7 @@ func TestObservability_MetricNamesRegistered(t *testing.T) {
 	webhookDeliveryFailures.WithLabelValues("__registration_probe__", "test").Add(0)
 	httpRequestsTotal.WithLabelValues("__registration_probe__", "GET", "200").Add(0)
 	httpRequestLatencySeconds.WithLabelValues("__registration_probe__").Observe(0)
+	YouTubeVideosInsertCalls.WithLabelValues("__registration_probe__").Add(0)
 
 	mfs := gatherMetricFamilies(t)
 	wantNames := []string{
