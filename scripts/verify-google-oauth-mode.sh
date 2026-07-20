@@ -233,33 +233,19 @@ if [[ "$expires_in" =~ ^[0-9]+$ ]] && [[ "$expires_in" -le 0 ]]; then
   echo "   Use the refresh token (vault.Renew on the server) to get a fresh one." >&2
 fi
 
-# 3. expected scopes — soft cross-check against docs/OAUTH-PRODUCTION.md
-#    Step 3. We don't fail on missing scopes (some operators may have
-#    negotiated a smaller set), but we do flag a missing data scope
-#    because without it the corresponding app surface is non-functional.
-#
-#    Per docs/OAUTH-PRODUCTION.md Step 3 (canonical scope set), the
-#    InstaEdit Google client combines YouTube + Drive under ONE consent
-#    screen, so a fresh operator grant issued to the InstaEdit client
-#    MUST carry BOTH youtube.upload AND drive.readonly side-by-side.
-#    Either being absent is a misconfiguration symptom worth flagging.
-#
-#    For single-provider debugging (e.g. a raw Google REST API token
-#    meant for ONE provider only — common in curl-from-the-shell flow),
-#    these warnings are guidance, not blockers: re-authorize the
-#    operator's grant to include the missing scope, OR see
-#    docs/OAUTH-PRODUCTION.md for the rationale on why drive.write is
-#    intentionally absent (Task 9/10 Exporter surface only).
+# 3. expected scopes — soft cross-check against docs/OAUTH-PRODUCTION.md.
+#    The InstaEdit YouTube grant must carry youtube.upload to call
+#    videos.insert and youtube.readonly to read channel metadata
+#    (e.g. channels.list(mine=true)). Missing either scope is a
+#    misconfiguration worth flagging, but the check is advisory so
+#    single-purpose debugging tokens are not blocked.
 if ! grep -q "youtube.upload" <<<"$scope"; then
   echo "⚠️  Scope set does NOT contain youtube.upload." >&2
   echo "   The token can authenticate but cannot call videos.insert." >&2
 fi
-if ! grep -q "drive.readonly" <<<"$scope"; then
-  echo "⚠️  Scope set does NOT contain drive.readonly." >&2
-  echo "   The token can authenticate but cannot call Drive folder listings or files.get." >&2
-  echo "   See docs/OAUTH-PRODUCTION.md Step 3 for the canonical scope set." >&2
-  echo "   Note: drive.file (Picker-only) and the unrestricted drive write scope" >&2
-  echo "   are NOT acceptable substitutes — see Task 3/10 scope alignment." >&2
+if ! grep -q "youtube.readonly" <<<"$scope"; then
+  echo "⚠️  Scope set does NOT contain youtube.readonly." >&2
+  echo "   The token can authenticate but cannot call channels.list for binding validation." >&2
 fi
 
 echo "✓ Verification complete."
