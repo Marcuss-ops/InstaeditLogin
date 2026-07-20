@@ -117,7 +117,7 @@ func (s *RateLimitService) Check(ctx context.Context, tier Tier, limit int) (all
 		ok, rem, ra := s.mem.Allow(tier.Scope, limit, time.Minute)
 		return ok, rem, ra, nil
 	default:
-		return true, limit, s.clock().Add(time.Minute), fmt.Errorf("rate-limit: unknown storage %q", tier.Storage)
+		return true, limit, s.clock().Add(time.Minute), fmt.Errorf("rate-limit: unknown storage %v", tier.Storage)
 	}
 }
 
