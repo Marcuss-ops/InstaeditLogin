@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { Seo } from "../components/seo/Seo";
 import {
   ArrowRight,
   Zap,
@@ -1586,6 +1587,7 @@ function Footer() {
 export function Editor() {
   return (
     <div className="min-h-screen bg-[#030308] text-[#e8e8ef] font-sans antialiased overflow-x-hidden selection:bg-violet-500/40 selection:text-white">
+      <Seo {...SEO} />
       <Nav />
       <main className="relative">
         <section className="relative pt-32 pb-20 overflow-hidden">
