@@ -24,17 +24,17 @@ describe("Landing", () => {
 
     // --- Hero -------------------------------------------------------------
     const h1 = screen.getByRole("heading", { level: 1 });
-    expect(h1).toHaveTextContent(/Dall'idea/);
-    expect(h1).toHaveTextContent(/pubblicazione/);
+    expect(h1).toHaveTextContent(/From idea/);
+    expect(h1).toHaveTextContent(/publication/);
 
     // --- Workflow ---------------------------------------------------------
     const WORKFLOW_TITLES = [
-      "Ideazione assistita AI",
-      "Crea una volta",
-      "AI processa tutto",
-      "Programmazione smart",
-      "Pubblica ovunque",
-      "Analisi unificata",
+      "AI-assisted ideation",
+      "Create once",
+      "AI processes everything",
+      "Smart scheduling",
+      "Publish everywhere",
+      "Unified analytics",
     ];
     for (const title of WORKFLOW_TITLES) {
       expect(
@@ -45,7 +45,7 @@ describe("Landing", () => {
 
     // --- Dashboard mockup -------------------------------------------------
     expect(
-      screen.getByText(/instaedit\.app · Calendario/),
+      screen.getByText(/instaedit\.app · Calendar/),
       "expected the dashboard mockup window-chrome title to be rendered",
     ).toBeInTheDocument();
 
