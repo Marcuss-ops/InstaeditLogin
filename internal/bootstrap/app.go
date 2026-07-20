@@ -92,6 +92,14 @@ type App struct {
 	// upload worker (background Drive → S3 streaming).
 	StorageProvider services.StorageProvider
 
+	// Encryptor (Task 8/10) exposes *crypto.Encryptor to RunWorkers
+	// so the DeliveryRegistry can wire services.SessionEncryptor
+	// for the Drive destination's session-URI ciphertext. Same
+	// instance constructed at the top of Wire(); we expose it as
+	// a field rather than a setter so RunWorkers reads a
+	// single canonical reference.
+	Encryptor *crypto.Encryptor
+
 	// SessionsSvc is the wired *SessionsService, populated by
 	// Wire(). cmd/worker reads it to drive the retention-policy
 	// goroutine (SessionsCleanupWorker); cmd/api reads it through
@@ -109,7 +117,8 @@ type App struct {
 	// wiring, SIGTERM would let the sweeper become a zombie until
 	// the process is killed — the user's E8 fix ships this
 	// drop-in alignment with the other 7 workers.
-	OneTimeCodes *api.OneTimeCodeStore
+	OneTimeCodes      *api.OneTimeCodeStore
+	VeloxDownloadJobs chan worker.VeloxDownloadJob
 }
 
 // Wire connects to the database, builds every shared dependency, and
@@ -192,6 +201,8 @@ func Wire(ctx context.Context) (*App, error) {
 	importBatchRepo := repository.NewImportBatchRepository(db)
 	connectionStateRepo := repository.NewConnectionStateRepository(db)
 	auditLogRepo := repository.NewAuditLogRepository(db)
+	externalDestinationRepo := repository.NewExternalDestinationRepository(db)
+	externalDeliveryRepo := repository.NewExternalDeliveryRepository(db)
 
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
 
@@ -222,6 +233,7 @@ func Wire(ctx context.Context) (*App, error) {
 
 	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours).WithEnv(cfg.AppEnv)
 	oneTimeCodes := api.NewOneTimeCodeStore(60 * time.Second)
+	veloxDownloadJobs := make(chan worker.VeloxDownloadJob, 64)
 	// oneTimeCodes sweeper is gracefully stopped by RunWorkers (E8
 	// fix — the cmd/worker shutdown handler now calls
 	// OneTimeCodes.Stop() as the 8th goroutine drain step). cmd/api
@@ -294,6 +306,10 @@ func Wire(ctx context.Context) (*App, error) {
 		// the methods it actually calls.
 		api.WithConnectionStateStore(&connectionStateStoreWrapper{connectionStateRepo}),
 		api.WithAuditLogStore(&auditLogStoreWrapper{auditLogRepo}),
+		api.WithExternalDestinationStore(externalDestinationRepo),
+		api.WithExternalDeliveryStore(externalDeliveryRepo),
+		api.WithVeloxAPIToken(os.Getenv("VELOX_API_TOKEN")),
+		api.WithVeloxDownloadJobChannel(veloxDownloadJobs),
 		api.WithCookieSecure(true),
 		// csrf_token cookie Domain (Blocco #2.4): threaded from
 		// cfg.CookieDomain (COOKIE_DOMAIN env var). Empty stays
@@ -381,24 +397,24 @@ func Wire(ctx context.Context) (*App, error) {
 		"ready_endpoint", "/ready")
 
 	return &App{
-		Cfg:             cfg,
-		DB:              db,
-		Vault:           vault,
-		CapRouter:       capRouter,
-		WebhookRepo:     webhookRepo,
-		HTTPHandler:     router.Setup(),
-		Logger:          logger,
-		WorkerStatus:    workerStatus,
-		SentryHub:       hub,
-		WorkerID:        workerID,
-		MemoryLimiter:   memoryLimiter,
-		StorageProvider: storageProvider,
-		SessionsSvc:     sessionsSvc,
-		OneTimeCodes:    oneTimeCodes,
+		Cfg:               cfg,
+		DB:                db,
+		Vault:             vault,
+		CapRouter:         capRouter,
+		WebhookRepo:       webhookRepo,
+		HTTPHandler:       router.Setup(),
+		Logger:            logger,
+		WorkerStatus:      workerStatus,
+		SentryHub:         hub,
+		WorkerID:          workerID,
+		MemoryLimiter:     memoryLimiter,
+		StorageProvider:   storageProvider,
+		SessionsSvc:       sessionsSvc,
+		OneTimeCodes:      oneTimeCodes,
+		Encryptor:         enc,
+		VeloxDownloadJobs: veloxDownloadJobs,
 	}, nil
 }
-
-
 
 // RunWorkers starts the 7 background goroutines (publish worker, reconcile
 // worker, outbox dispatcher, webhook worker, metrics collector,
@@ -442,6 +458,66 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				time.Duration(a.Cfg.PublishWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 			)
+			// Delivery registry (Task 7/10 + 8/10) — post-completion
+			// dispatch to YouTube / Google Drive / Velox callback. The
+			// publish_worker itself only knows the registry shape;
+			// constructing the 3 adapters here binds the canonical
+			// post-publish fan-out to the
+			// internal/worker/publish_worker_delivery.go dispatch hook.
+			//
+			// Camera-ready wiring choice: the Drive adapter is enabled
+			// when GoogleDriveClientID is configured (the operator
+			// opted into Drive import via OAuth), disabled-by-omission
+			// otherwise. The YouTube + Velox adapters mirror the same
+			// gate (YouTube via CapabilityRouter presence; Velox via
+			// the existing VELOX_API_TOKEN env).
+			deliveryRegistry := services.NewDeliveryRegistry()
+			if ytPub, ok := a.CapRouter.Publisher(models.PlatformYouTube); ok {
+				_ = deliveryRegistry.Register(services.NewYouTubeDeliveryAdapter(ytPub))
+			}
+			if a.Cfg.GoogleDriveClientID != "" && a.Cfg.GoogleDriveClientSecret != "" {
+				driveSessionRepo := repository.NewDeliverySessionRepository(a.DB)
+				var googleDriveOAuth *services.GoogleDriveOAuthService
+				if gd, ok := a.CapRouter.Get(models.PlatformGoogleDrive); ok {
+					if gdOAuth, typeOK := gd.(*services.GoogleDriveOAuthService); typeOK {
+						googleDriveOAuth = gdOAuth
+					}
+				}
+				if googleDriveOAuth != nil {
+					driveVault, vaultOK := a.Vault.(services.DriveTokenVault)
+					if !vaultOK {
+						slog.Error("publish worker: credential vault lacks Drive refresh-token capability")
+						return
+					}
+					driveTokenProvider := services.NewDriveVaultTokenProvider(driveVault, googleDriveOAuth)
+					driveDest, destErr := services.NewGoogleDriveDestination(
+						driveSessionRepo,
+						driveTokenProvider,
+						a.Encryptor,
+						&http.Client{Timeout: 30 * time.Second},
+						16*1024*1024, // 16 MiB Drive chunk
+					)
+					if destErr == nil {
+						if driveAdapter, adapterErr := services.NewGoogleDriveDeliveryAdapter(driveDest); adapterErr == nil {
+							if regErr := deliveryRegistry.Register(driveAdapter); regErr != nil {
+								slog.Error("publish worker: register google drive delivery adapter", "error", regErr)
+							}
+						} else {
+							slog.Error("publish worker: build google drive delivery adapter", "error", adapterErr)
+						}
+					} else {
+						slog.Error("publish worker: build google drive destination", "error", destErr)
+					}
+				}
+			}
+			// Velox callback delivery stays disabled by default — the
+			// callback dispatcher (pkg/api/internal_velox.go) already
+			// fires callbacks synchronously; the registry-driven
+			// dispatch is a redundant path that future Task 9/10
+			// hardening turns on for retry visibility.
+			_ = deliveryRegistry.Register(services.NewVeloxCallbackDeliveryAdapter(false))
+			pw = pw.WithDeliveryRegistry(deliveryRegistry)
+			slog.Info("publish worker: delivery registry wired", "providers", deliveryRegistry.Names())
 			if err := pw.Run(c); err != nil && err != context.Canceled {
 				slog.Error("publish worker exited with error", "error", err)
 			}
@@ -551,6 +627,27 @@ func (a *App) RunWorkers(ctx context.Context) error {
 	// P1 step 2 — split into ingest + upload pools via UploadWorkerOptions
 	// built from the cfg-driven env vars (UPLOAD_INGEST_CONCURRENCY,
 	// YOUTUBE_UPLOAD_CONCURRENCY, UPLOAD_LEASE_TTL_SECONDS,
+	// Velox handoff consumer — API enqueue → upload_jobs registration.
+	{
+		c, cancel := context.WithCancel(ctx)
+		d := make(chan struct{})
+		go func() {
+			defer close(d)
+			deliveryRepo := repository.NewExternalDeliveryRepository(a.DB)
+			downloader := worker.NewVeloxArtifactDownloader(
+				deliveryRepo,
+				repository.NewUploadJobRepository(a.DB),
+				deliveryRepo,
+				worker.NewIngestFSM(deliveryRepo, slog.Default()),
+				slog.Default(),
+			)
+			if err := downloader.Run(c, a.VeloxDownloadJobs); err != nil && err != context.Canceled {
+				slog.Error("velox artifact downloader exited with error", "error", err)
+			}
+		}()
+		children = append(children, &goroutineCtx{"velox_downloader", cancel, d})
+	}
+
 	// UPLOAD_HEARTBEAT_INTERVAL_SECONDS, UPLOAD_RECLAIM_INTERVAL_SECONDS,
 	// UPLOAD_RECLAIM_ON_START). The upload_worker internally spawns 3
 	// goroutines (reclaimer + ingest pool + upload pool) coordinated
@@ -562,56 +659,56 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			defer close(d)
 			a.WorkerStatus.Mark("upload")
 			uploadOpts := worker.UploadWorkerOptions{
-				IngestConcurrency:  a.Cfg.UploadIngestConcurrency,
-				UploadConcurrency:  a.Cfg.YouTubeUploadConcurrency,
-				LeaseTTL:           time.Duration(a.Cfg.UploadLeaseTTLSeconds) * time.Second,
-				HeartbeatInterval:  time.Duration(a.Cfg.UploadHeartbeatIntervalSeconds) * time.Second,
-				ReclaimInterval:    time.Duration(a.Cfg.UploadReclaimIntervalSeconds) * time.Second,
-				ReclaimOnStart:     a.Cfg.UploadReclaimOnStart,
+				IngestConcurrency: a.Cfg.UploadIngestConcurrency,
+				UploadConcurrency: a.Cfg.YouTubeUploadConcurrency,
+				LeaseTTL:          time.Duration(a.Cfg.UploadLeaseTTLSeconds) * time.Second,
+				HeartbeatInterval: time.Duration(a.Cfg.UploadHeartbeatIntervalSeconds) * time.Second,
+				ReclaimInterval:   time.Duration(a.Cfg.UploadReclaimIntervalSeconds) * time.Second,
+				ReclaimOnStart:    a.Cfg.UploadReclaimOnStart,
 			}
-	// Build the artifact-source registry before constructing the
-	// upload worker — the worker needs the wired registry as a
-	// constructor argument. Each per-source concern (OAuth refresh
-	// for Drive, signed URL GET for Velox, deprecation for
-	// PublicDrive) lives in its own ArtifactSource implementation;
-	// processIngestJob resolves via sourceRegistry.Resolve(...).
-	sourceRegistry := worker.NewArtifactSourceRegistry()
-	if provider, ok := a.CapRouter.Get("google-drive"); ok {
-		if driveImporter, typeOK := provider.(services.DriveImporter); typeOK {
-			if authDriveSrc, buildErr := worker.NewAuthenticatedDriveSource(driveImporter, a.Vault); buildErr == nil {
-				if regErr := sourceRegistry.Register(authDriveSrc); regErr != nil {
-					a.Logger.Error("upload worker: register authenticated drive source", "error", regErr)
+			// Build the artifact-source registry before constructing the
+			// upload worker — the worker needs the wired registry as a
+			// constructor argument. Each per-source concern (OAuth refresh
+			// for Drive, signed URL GET for Velox, deprecation for
+			// PublicDrive) lives in its own ArtifactSource implementation;
+			// processIngestJob resolves via sourceRegistry.Resolve(...).
+			sourceRegistry := worker.NewArtifactSourceRegistry()
+			if provider, ok := a.CapRouter.Get("google-drive"); ok {
+				if driveImporter, typeOK := provider.(services.DriveImporter); typeOK {
+					if authDriveSrc, buildErr := worker.NewAuthenticatedDriveSource(driveImporter, a.Vault); buildErr == nil {
+						if regErr := sourceRegistry.Register(authDriveSrc); regErr != nil {
+							a.Logger.Error("upload worker: register authenticated drive source", "error", regErr)
+						}
+					} else {
+						a.Logger.Error("upload worker: build authenticated drive source", "error", buildErr)
+					}
 				}
-			} else {
-				a.Logger.Error("upload worker: build authenticated drive source", "error", buildErr)
 			}
-		}
-	}
-	if regErr := sourceRegistry.Register(worker.NewVeloxSource(a.Logger)); regErr != nil {
-		a.Logger.Error("upload worker: register velox source", "error", regErr)
-	}
-	a.Logger.Info("upload worker: source registry built",
-		"sources_registered", sourceRegistry.Names())
+			if regErr := sourceRegistry.Register(worker.NewVeloxSource(a.Logger)); regErr != nil {
+				a.Logger.Error("upload worker: register velox source", "error", regErr)
+			}
+			a.Logger.Info("upload worker: source registry built",
+				"sources_registered", sourceRegistry.Names())
 
-	uw := worker.NewUploadWorker(
-		repository.NewUploadJobRepository(a.DB),
-		repository.NewMediaAssetRepository(a.DB),
-		repository.NewPostRepository(a.DB),
-		repository.NewUserRepository(a.DB),
-		a.StorageProvider,
-		a.CapRouter,
-		a.Vault,
-		sourceRegistry,
-		// ExternalDeliveryRepository satisfies worker.ExternalDeliveryVerifier
-		// structurally via GetExpectedTripleByUploadJobID; passing
-		// directly avoids an adapter while keeping the worker layer
-		// decoupled from the repository package (test fakes are just
-		// structs with the matching method).
-		repository.NewExternalDeliveryRepository(a.DB),
-		time.Duration(a.Cfg.UploadWorkerIntervalSeconds)*time.Second,
-		slog.Default(),
-		uploadOpts,
-	)
+			uw := worker.NewUploadWorker(
+				repository.NewUploadJobRepository(a.DB),
+				repository.NewMediaAssetRepository(a.DB),
+				repository.NewPostRepository(a.DB),
+				repository.NewUserRepository(a.DB),
+				a.StorageProvider,
+				a.CapRouter,
+				a.Vault,
+				sourceRegistry,
+				// ExternalDeliveryRepository satisfies worker.ExternalDeliveryVerifier
+				// structurally via GetExpectedTripleByUploadJobID; passing
+				// directly avoids an adapter while keeping the worker layer
+				// decoupled from the repository package (test fakes are just
+				// structs with the matching method).
+				repository.NewExternalDeliveryRepository(a.DB),
+				time.Duration(a.Cfg.UploadWorkerIntervalSeconds)*time.Second,
+				slog.Default(),
+				uploadOpts,
+			)
 			if err := uw.Run(c); err != nil && err != context.Canceled {
 				slog.Error("upload worker exited with error", "error", err)
 			}

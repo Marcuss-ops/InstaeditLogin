@@ -4,8 +4,13 @@ import "time"
 
 // Platform constants identify supported social platforms.
 const (
-	PlatformInstagram = "instagram"
-	PlatformFacebook  = "facebook"
+	PlatformInstagram   = "instagram"
+	PlatformFacebook    = "facebook"
+	PlatformGoogleDrive = "google-drive"
+	// PlatformYouTube is defined below; the order above keeps
+	// gofmt-stable whitespace while placing PlatformGoogleDrive
+	// adjacent to the other platform-keyed constants so future
+	// additions slot in without re-alignment churn.
 	PlatformThreads   = "threads"
 	PlatformTikTok    = "tiktok"
 	PlatformTwitter   = "twitter"
