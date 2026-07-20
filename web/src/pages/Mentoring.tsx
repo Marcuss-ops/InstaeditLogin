@@ -121,7 +121,7 @@ const FAQS = [
   },
   {
     q: "Do I need an active InstaEdit subscription?",
-    a: "Starter includes free InstaEdit access for the program duration so you can practice what we cover in session. Growth and Team members get platform priority support and dedicated onboarding bundled for the same period."
+    a: "Starter includes free InstaEdit access for the program duration so you can practice what we cover in session. Higher tiers add 1:1 priority support and faster onboarding windows."
   },
   {
     q: "Can I switch packages mid-program?",
