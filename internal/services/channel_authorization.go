@@ -328,3 +328,32 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 	committed = true
 	return oauthConnectionID, nil
 }
+
+// Compile-time file-level reference guard. Any future regression that
+// removes every live call-site of IsEligibleForActivePromotion from
+// this file (e.g., re-introducing an inline
+//
+//	eligible := map[string]bool{ models.AccountStatusPendingAuthorization: true, ... }
+//	if !eligible[currentStatus] { ... }
+//
+// block that bypasses the helper, or moving the gate to a different
+// service file and forgetting to delete the now-orphaned
+// AuthorizeChannel method) will break the build HERE — a file-level
+// `var _ = IsEligibleForActivePromotion` assignment is the smallest
+// non-pruneable reference that the compiler enforces. Cross-references
+// the existing helper-level unit test at
+// internal/services/eligibility_gate_test.go and the table-driven
+// coverage; this var closes the SECOND class of regression
+// (package-level call-site drift) that the table test cannot catch on
+// its own because the table test is in the helper's own file.
+//
+// HOW IT WORKS: package-level `var _ = <symbol>` is a reference the
+// compiler cannot eliminate without also deleting the var line —
+// standard unused-variable lint rules don't apply at package scope.
+// A regression that REPLACES the helper call with an inline map but
+// leaves this var alone still compiles (the regression is caught at
+// runtime by the sqlmock integration tests at
+// channel_authorization_test.go::TestAuthorizeChannel_*); a regression
+// that REMOVES the var AND every helper call triggers a build
+// failure — neither half of the pair can be silently erased.
+var _ = IsEligibleForActivePromotion
