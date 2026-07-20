@@ -501,9 +501,10 @@ func (r *AdminRepository) ErrorRatePerChannel(ctx context.Context, windowInterva
 
 // AdminYouTubeQuota is the /admin/health "quota used / remaining"
 // estimate (D2.b — derived approximation, not the live YouTube
-// quota API). CostPerUploadUnits defaults to 1600 (YouTube Data API
-// v3 docs); an operator may lower it if their traffic is dominantly
-// cheaper endpoints. DailyBudgetUnits defaults to 10000.
+// quota API). CostPerUploadUnits defaults to 1 (1 unit per videos.insert — YouTube 2026 bucket model).
+// (YouTube Data API v3 — pre-2026-06-01 was 1600 units per call.)
+// An operator may lower it if their traffic is dominantly cheaper
+// endpoints. DailyBudgetUnits defaults to 10000.
 type AdminYouTubeQuota struct {
 	WindowHours        int
 	EstimatedUnits     int64
@@ -521,7 +522,7 @@ type AdminYouTubeQuota struct {
 // Single SQL query; no Prometheus scrape needed.
 //
 // NOTE: this is a proxy for actual YouTube quota usage. Real
-// per-endpoint costs vary (videos.insert ~1600, channels.list ~1,
+// per-endpoint costs vary (videos.insert = 1 unit under 2026 bucket model, channels.list ~1,
 // search.list ~100). Operators can override CostPerUploadUnits via
 // cfg.YoutubeQuotaCostPerUpload if their traffic profile diverges
 // significantly from the assumed all-uploads shape.
@@ -533,7 +534,8 @@ func (r *AdminRepository) YouTubeQuotaApproximation(ctx context.Context, window 
 		dailyBudgetUnits = 10000
 	}
 	if costPerUploadUnits <= 0 {
-		costPerUploadUnits = 1600
+		// 2026 bucket model: 1 videos.insert = 1 unit. (Was 1600 pre-2026-06-01).
+		costPerUploadUnits = 1
 	}
 
 	var q AdminYouTubeQuota
@@ -720,7 +722,66 @@ type FleetReadinessSnapshotResponse struct {
 	TakenAt        time.Time            `json:"taken_at"`
 }
 
-// CreateFleetReadinessSnapshot is the single round-trip service
+// CountFleetReadiness is the read-only aggregate query behind the
+// platform_accounts side of the Definition-of-Done readiness
+// readout (the 12-count breakdown per docs/OAUTH-PRODUCTION.md Step
+// 10). It returns the current counts WITHOUT writing a snapshot row
+// -- ideal for ad-hoc dashboards / monitoring scrapes that want
+// the latest numbers but should not consume a snapshot_id.
+//
+// NOT USED inside the tx in CreateFleetReadinessSnapshot: the
+// snapshot legitimately needs tx-pinned REPEATABLE READ so the
+// aggregate counts and the per-channel INSERT...SELECT match.
+// This function is the canonical single-roundtrip FILTER aggregate
+// for any caller that does not need snapshot-time consistency.
+//
+// Single round-trip: 12 COUNT(*) FILTER clauses on platform_accounts
+// WHERE platform='youtube'. The 6 status counters come from the
+// status column directly; the 6 DoD-OK counters derive from the
+// state columns (last_refresh_at, last_validated_at) and the
+// metadata JSONB keys (granted_scopes, canary_result,
+// canary_channel_match). JSON field names are byte-equal to
+// docs/OAUTH-PRODUCTION.md Step 10.
+func (r *AdminRepository) CountFleetReadiness(ctx context.Context) (FleetReadinessCounts, error) {
+	var c FleetReadinessCounts
+	err := r.db.QueryRowContext(ctx, `
+		SELECT
+		    COUNT(*)                                              AS total,
+		    COUNT(*) FILTER (WHERE status = 'active')             AS active,
+		    COUNT(*) FILTER (WHERE status = 'pending_authorization') AS pending_authorization,
+		    COUNT(*) FILTER (WHERE status = 'reauth_required')    AS reauth_required,
+		    COUNT(*) FILTER (WHERE status = 'revoked')             AS revoked,
+		    COUNT(*) FILTER (WHERE status = 'error')               AS error,
+		    COUNT(*) FILTER (WHERE last_refresh_at  IS NOT NULL
+		                       AND status = 'active')               AS refresh_test_ok,
+		    COUNT(*) FILTER (WHERE COALESCE(metadata->>'granted_scopes', '') LIKE '%youtube.upload%')    AS scope_youtube_upload_ok,
+		    COUNT(*) FILTER (WHERE COALESCE(metadata->>'granted_scopes', '') LIKE '%youtube.readonly%') AS scope_youtube_readonly_ok,
+		    COUNT(*) FILTER (WHERE last_validated_at IS NOT NULL)  AS channel_binding_ok,
+		    COUNT(*) FILTER (WHERE COALESCE(metadata->>'canary_result', '') = 'ok') AS private_canary_ok,
+		    COUNT(*) FILTER (WHERE COALESCE(metadata->>'canary_channel_match', 'false') = 'true')  AS canary_channel_match_ok
+		FROM platform_accounts
+		WHERE platform = 'youtube'`,
+	).Scan(
+		&c.Total,
+		&c.Active,
+		&c.PendingAuthorization,
+		&c.ReauthRequired,
+		&c.Revoked,
+		&c.Error,
+		&c.RefreshTestOK,
+		&c.ScopeYoutubeUploadOK,
+		&c.ScopeYoutubeReadonlyOK,
+		&c.ChannelBindingOK,
+		&c.PrivateCanaryOK,
+		&c.CanaryChannelMatchOK,
+	)
+	if err != nil {
+		return c, fmt.Errorf("admin: count fleet readiness: %w", err)
+	}
+	return c, nil
+}
+
+// // CreateFleetReadinessSnapshot is the single round-trip service
 // behind GET /admin/youtube/fleet_readiness. In ONE transaction
 // (RepeatableRead isolation) it:
 //
