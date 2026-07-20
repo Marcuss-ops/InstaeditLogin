@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { Seo } from "../components/seo/Seo";
 import {
   ArrowRight,
   Users,
@@ -11,6 +12,13 @@ import {
 } from "lucide-react";
 import { MarketingNav } from "../components/layout/MarketingNav";
 import { MarketingFooter } from "../components/layout/MarketingFooter";
+
+const SEO = {
+  title: "InstaEdit Mentoring — Grow with a mentor",
+  description:
+    "One-on-one content strategy mentoring for creators, agencies, and teams. Define your goal, build your workflow, get weekly feedback, scale independently.",
+  canonical: "https://app.instaedit.org/mentoring",
+} as const;
 
 const NAV_LINKS = [
   { label: "How it works", href: "/#pipeline" },
@@ -409,6 +417,7 @@ function CTASection() {
 export function Mentoring() {
   return (
     <div className="min-h-screen bg-[#030308]">
+      <Seo {...SEO} />
       <MarketingNav links={NAV_LINKS} />
       <main>
         <Hero />
