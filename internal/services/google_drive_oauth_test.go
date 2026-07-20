@@ -156,6 +156,36 @@ func TestVerifyDriveTokenIsReadonly_RejectsDriveFile(t *testing.T) {
 	}
 }
 
+// TestVerifyDriveTokenIsReadonly_RejectsDriveWrite covers Task 3/10's
+// verifier tightening: the canonical scope claim must be EXACTLY
+// drive.readonly. A token whose scope claim is `drive` (write = full
+// Drive access) is REJECTED by the Importer surface, because granting
+// write here would (a) expose every file in the operator's Drive (vs
+// drive.readonly which is enumeration-only), (b) trigger a deeper
+// restricted-scope audit at Google, (c) be useless for the folder
+// crawler (the importer never writes back). If a future regression
+// re-broadens the verifier to accept drive.write (e.g. by accident
+// when the Task 9/10 Exporter surface introduces the cross-package
+// const), this test fails. The Exporter surface (GoogleDriveDestination)
+// keeps its own OAuth client + its own verifier that DOES accept
+// drive.write — layering is intentional so the two surfaces cannot
+// poison each other's token claims.
+func TestVerifyDriveTokenIsReadonly_RejectsDriveWrite(t *testing.T) {
+	srv := fakeTokenInfoServer(t, http.StatusOK, "https://www.googleapis.com/auth/drive", "")
+	defer srv.Close()
+	svc := newDriveServiceForTokenInfo(t, srv.URL)
+	err := svc.VerifyDriveTokenIsReadonly(t.Context(), "fake-bearer-with-full-drive-scope")
+	if err == nil {
+		t.Fatal("VerifyDriveTokenIsReadonly must REJECT a token whose scope claim is drive (write) — the Importer surface is enumeration-only")
+	}
+	if !errors.Is(err, ErrDriveTokenScopeMismatch) {
+		t.Errorf("error must wrap ErrDriveTokenScopeMismatch for caller triage; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "https://www.googleapis.com/auth/drive.readonly") {
+		t.Errorf("error must name the canonical required scope (drive.readonly) so the operator knows what to re-grant; got: %v", err)
+	}
+}
+
 // TestVerifyDriveTokenIsReadonly_ConstFallbackToProductionURL covers
 // the production code path that EVERY other test in this file
 // bypasses: when s.tokenInfoURL is empty (its zero value, i.e. the
@@ -168,7 +198,18 @@ func TestVerifyDriveTokenIsReadonly_RejectsDriveFile(t *testing.T) {
 // post-tripper-rewriting.
 func TestVerifyDriveTokenIsReadonly_ConstFallbackToProductionURL(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v3/tokeninfo", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/v3/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
+		// Locks the verifier's HTTP wire contract:
+		//   (1) GET method (Google's tokeninfo endpoint is documented as GET)
+		//   (2) ?access_token=… query (NOT Authorization header)
+		// mux.HandleFunc accepts all methods by default, so a regression
+		// that swaps to POST would not be caught without the GET check.
+		if r.Method != http.MethodGet {
+			t.Errorf("tokeninfo verifier must use GET (Google documents tokeninfo as GET); got: %s", r.Method)
+		}
+		if got := r.URL.Query().Get("access_token"); got != "fake-bearer" {
+			t.Errorf("tokeninfo verifier must send access_token as ?access_token=... query (not Authorization header); got: %q", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{"aud":"client-abc","scope":%q,"expires_in":3599}`,

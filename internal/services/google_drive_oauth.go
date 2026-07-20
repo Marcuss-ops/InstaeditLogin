@@ -461,6 +461,28 @@ type Capabilities struct {
 // drive.readonly2 / drive.readonly.alt future scope.
 const canonicalDriveReadonlyScope = "https://www.googleapis.com/auth/drive.readonly"
 
+// canonicalDriveWriteScope is reserved for the InstaEdit EXPORTER
+// (GoogleDriveDeliveryAdapter / GoogleDriveDestination) which must
+// upload files into the operator's Drive. The IMPORT path (this
+// file's OAuth flow) deliberately does NOT request this scope:
+// `drive` is **restricted** per Google's OAuth taxonomy (deeper
+// audit than `drive.readonly`, exposes every file in the
+// operator's Drive) and is unnecessary for folder readout, which
+// is the only Importer-surface requirement. The exporter requests
+// `drive` on its own (separate) OAuth client so its login URL is
+// independent of this Importer's.
+//
+// The downstream verifier (VerifyDriveTokenIsReadonly) is the strict
+// gate: it accepts ONLY the canonical `drive.readonly` token claim.
+// Acceptance of `drive` (write) is intentionally disabled so a
+// future regression that flips the GetLoginURLWithOptions scope
+// literal would be caught at the tokeninfo runtime check rather
+// than leaving a token with wrong-scope entitlements in the vault.
+// This constant stays defined because the exporter flow references
+// the SAME URL string at its own scope declaration; keeping the
+// spelling in one place stops the two surfaces from drifting.
+const canonicalDriveWriteScope = "https://www.googleapis.com/auth/drive"
+
 // userinfoProfileScope is the companion scope InstaEdit always
 // requests alongside drive.readonly so the dashboard can show the
 // operator's Google display name + avatar. Declared as its own const
@@ -541,17 +563,21 @@ func (s *GoogleDriveOAuthService) VerifyDriveTokenIsReadonly(ctx context.Context
 	}
 	// Exact-token match is more conservative than substring: the
 	// canonical scope claim is space-delimited; we split + compare
-	// element-by-element against canonicalDriveReadonlyScope. This
-	// rejects drive.file alone, the unrestricted `auth/drive`
-	// (write access), and hypothetical future scopes like
-	// `drive.readonly2` / `drive.readonly.alt` that would otherwise
-	// match a naive "drive.readonly" substring check.
+	// element-by-element against canonicalDriveReadonlyScope ONLY.
+	// This rejects drive.file alone, the unrestricted `auth/drive`
+	// (write access — reserved for the exporter), and hypothetical
+	// future scopes like `drive.readonly2` / `drive.readonly.alt`
+	// that would otherwise match a naive "drive.readonly" substring
+	// check. The strict accept-list keeps the consent-screen
+	// declaration consistent with the runtime guard: every scope
+	// that gets through this check is audibly documented as
+	// drive.readonly in `docs/OAUTH-PRODUCTION.md` Step 3.
 	for _, scope := range strings.Fields(parsed.Scope) {
 		if scope == canonicalDriveReadonlyScope {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: drive token scope does not include %q (got %q); refusing to use this token for folder-level Drive reads",
+	return fmt.Errorf("%w: drive token scope does not include %q (got %q); refusing to use this token for folder-level Drive reads (the importer consumes only drive.readonly; drive.file and the unrestricted drive write scope are not sufficient)",
 		ErrDriveTokenScopeMismatch, canonicalDriveReadonlyScope, parsed.Scope)
 }
 
@@ -629,6 +655,7 @@ var ErrDriveListRequiresAPIKey = errors.New("ERR_DRIVE_LIST_REQUIRES_API_KEY")
 //   - The principal has permission to list children but NOT to read
 //     folder metadata (a known Drive quirk on Workspace DLP rules)
 //   - A transient network blip during GetFileMetadata
+//
 // All three are recoverable: ListFolder still progresses with
 // driveID="".
 var ErrDriveFolderMetadataFetchFailed = errors.New("ERR_DRIVE_FOLDER_METADATA_FETCH_FAILED")
@@ -671,9 +698,9 @@ func ResolveFolderDriveID(ctx context.Context, svc DriveFolderInspector, folderI
 
 // Compile-time conformance to the central Platform Registry contract.
 var (
-	_ OAuthProvider       = (*GoogleDriveOAuthService)(nil)
-	_ DriveImporter       = (*GoogleDriveOAuthService)(nil)
-	_ DriveFolderLister   = (*GoogleDriveOAuthService)(nil)
+	_ OAuthProvider        = (*GoogleDriveOAuthService)(nil)
+	_ DriveImporter        = (*GoogleDriveOAuthService)(nil)
+	_ DriveFolderLister    = (*GoogleDriveOAuthService)(nil)
 	_ DriveFolderInspector = (*GoogleDriveOAuthService)(nil)
 )
 
