@@ -5,13 +5,18 @@ import { Menu, X, Zap } from "lucide-react";
 type NavLink = { label: string; to?: string; href?: string };
 
 const DEFAULT_LINKS: NavLink[] = [
-  { label: "Come funziona", href: "#pipeline" },
-  { label: "Workflow", href: "#workflow" },
-  { label: "Features", href: "#features" },
-  { label: "Agenzie", href: "#agency" },
+  // Anchors use prefix-absolute `to="/#anchor"` (not bare `href="#anchor"`)
+  // because MarketingNav is mounted on pages other than / (Programs,
+  // Mentoring). A bare hash from /programs only mutates the URL hash —
+  // it never navigates to Landing — so `/#anchor` is required for the
+  // browser to resolve the anchor on the Landing page.
+  { label: "Come funziona", to: "/#pipeline" },
+  { label: "Workflow", to: "/#workflow" },
+  { label: "Features", to: "/#features" },
+  { label: "Agenzie", to: "/#agency" },
   { label: "Programmi", to: "/programs" },
   { label: "Mentoring", to: "/mentoring" },
-  { label: "Chi siamo", href: "#who-are-we" },
+  { label: "Chi siamo", to: "/#who-are-we" },
 ];
 
 export function MarketingNav({ links = DEFAULT_LINKS }: { links?: NavLink[] }) {
