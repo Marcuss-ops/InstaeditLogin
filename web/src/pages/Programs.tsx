@@ -201,7 +201,7 @@ function MentoringSection() {
             <span className="text-gradient-animated">Learn from those who have already scaled.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            Our mentoring programs put you in the conditions to get the most out of InstaEdit,
+            Our mentoring programs set you up to get the most out of InstaEdit,
             with experts who help you build a sustainable content system.
           </p>
         </div>
