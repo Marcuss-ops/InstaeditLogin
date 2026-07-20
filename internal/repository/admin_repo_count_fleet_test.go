@@ -3,8 +3,10 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -59,19 +61,33 @@ func TestAdminRepository_CountFleetReadiness_Happy200(t *testing.T) {
 
 	// Spot-check the JSON tags match docs/OAUTH-PRODUCTION.md Step
 	// 10 verbatim. A regression that renames a field surfaces here
-	// BEFORE the operator dashboard re-skin ships.
-	require.Equal(t, "youtube_channels_total", jsonTagForFleetReadinessField(t, "Total"))
-	require.Equal(t, "active", jsonTagForFleetReadinessField(t, "Active"))
-	require.Equal(t, "pending_authorization", jsonTagForFleetReadinessField(t, "PendingAuthorization"))
-	require.Equal(t, "reauth_required", jsonTagForFleetReadinessField(t, "ReauthRequired"))
-	require.Equal(t, "revoked", jsonTagForFleetReadinessField(t, "Revoked"))
-	require.Equal(t, "error", jsonTagForFleetReadinessField(t, "Error"))
-	require.Equal(t, "refresh_test_ok", jsonTagForFleetReadinessField(t, "RefreshTestOK"))
-	require.Equal(t, "scope_youtube_upload_ok", jsonTagForFleetReadinessField(t, "ScopeYoutubeUploadOK"))
-	require.Equal(t, "scope_youtube_readonly_ok", jsonTagForFleetReadinessField(t, "ScopeYoutubeReadonlyOK"))
-	require.Equal(t, "channel_binding_ok", jsonTagForFleetReadinessField(t, "ChannelBindingOK"))
-	require.Equal(t, "private_canary_ok", jsonTagForFleetReadinessField(t, "PrivateCanaryOK"))
-	require.Equal(t, "canary_channel_match_ok", jsonTagForFleetReadinessField(t, "CanaryChannelMatchOK"))
+	// BEFORE the operator dashboard re-skin ships. Table-driven so
+	// the per-field t.Errorf prefix stays uniform across all 12
+	// fields (a future 13th field is a 1-line append to the slice).
+	fieldJSONTags := []struct {
+		field string
+		want  string
+	}{
+		{"Total", "youtube_channels_total"},
+		{"Active", "active"},
+		{"PendingAuthorization", "pending_authorization"},
+		{"ReauthRequired", "reauth_required"},
+		{"Revoked", "revoked"},
+		{"Error", "error"},
+		{"RefreshTestOK", "refresh_test_ok"},
+		{"ScopeYoutubeUploadOK", "scope_youtube_upload_ok"},
+		{"ScopeYoutubeReadonlyOK", "scope_youtube_readonly_ok"},
+		{"ChannelBindingOK", "channel_binding_ok"},
+		{"PrivateCanaryOK", "private_canary_ok"},
+		{"CanaryChannelMatchOK", "canary_channel_match_ok"},
+	}
+	for _, tc := range fieldJSONTags {
+		got := jsonTagForFleetReadinessField(t, tc.field)
+		if got != tc.want {
+			t.Errorf("FleetReadinessCounts.%s JSON tag mismatch: want %q, got %q",
+				tc.field, tc.want, got)
+		}
+	}
 }
 
 // TestAdminRepository_CountFleetReadiness_QueryError ensures the
@@ -105,13 +121,17 @@ func TestAdminRepository_CountFleetReadiness_QueryError(t *testing.T) {
 // contract that docs/OAUTH-PRODUCTION.md Step 10 + the SPA dashboard
 // rely on across package upgrades.
 //
-// The first param is the test fixture (*testing.T) so a missing-field
-// regression t.Fatal()s with line attribution pointing at the CALLER
-// (the require.Equal), not at this helper. The silent "<missing>"
-// return-shape from the prior version was acceptable for green but
-// produced misleading "X == <missing>" failures when a rename
-// happened.
-func jsonTagForFleetReadinessField(t *testing.T, name string) string {
+// The first param is testing.TB (the union of *testing.T and
+// *testing.B methods) rather than *testing.T so a missing-field
+// regression can be exercised by tests that pass a fakeT that
+// captures Fatalf calls — see TestJsonTagForFleetReadinessField_
+// MissingField_Fatals below. Production-style callers pass *testing.T
+// which satisfies testing.TB. Line attribution still points at the
+// CALLER (the t.Errorf or require.Equal in Happy200), not at this
+// helper. The silent "<missing>" return-shape from the pre-polish
+// version was acceptable for green but produced misleading
+// "X == <missing>" failures when a rename happened.
+func jsonTagForFleetReadinessField(t testing.TB, name string) string {
 	t.Helper()
 	rt := reflect.TypeOf(FleetReadinessCounts{})
 	f, ok := rt.FieldByName(name)
@@ -127,3 +147,62 @@ func jsonTagForFleetReadinessField(t *testing.T, name string) string {
 // surface to one line + one field; the earlier custom struct was
 // over-engineered for a single-error use case.
 var errBoom = errors.New("simulated sql scan failure")
+
+// fakeT implements testing.TB by embedding the interface (compile-time
+// satisfaction) + overriding only the 2 methods
+// jsonTagForFleetReadinessField uses (Helper + Fatalf). Any other
+// testing.TB method called on fakeT would panic via nil-interface
+// dispatch — that's intentional, it's a sentinel "should never be
+// called by code under test". Used by
+// TestJsonTagForFleetReadinessField_MissingField_Fatals to capture
+// the formatted Fatalf message without actually halting the parent
+// test goroutine.
+type fakeT struct {
+	testing.TB
+	fatalMsg string
+}
+
+func (f *fakeT) Helper() {}
+
+// FakeT.Fatalf mirrors what testing.TB.Fatalf would have formatted
+// before invoking runtime.Goexit: Sprintf the format string + args
+// into fatalMsg so the test harness can assert the message content.
+// The override does NOT halt (the production t.Fatalf halts via
+// runtime.Goexit which is goroutine-local and not recoverable as a
+// panic — the canonical "code should have called FailNow" test
+// pattern is exactly this fakeT recording).
+func (f *fakeT) Fatalf(format string, args ...any) {
+	f.fatalMsg = fmt.Sprintf(format, args...)
+}
+
+// TestJsonTagForFleetReadinessField_MissingField_Fatals pins the
+// "missing field → t.Fatalf" contract documented above. Asking the
+// helper for a field that does not exist on FleetReadinessCounts
+// MUST halt the test (via the fakeT capture) rather than silently
+// return "" which would mask rename regressions as a misleading
+// "want X got <empty string>" comparison.
+//
+// Using a fakeT rather than a sub-testing.T: testing.TB's FailNow /
+// Fatalf is implemented via runtime.Goexit which is goroutine-local
+// and cannot be recovered as a panic. The canonical pattern for
+// asserting "code under test SHOULD have called FailNow" is to
+// inject a fakeT that records the invocation so the parent test
+// continues running and reads out what was about to halt. See
+// https://pkg.go.dev/testing#T.Fatalf for the canonical Go testing
+// source on the FailNow / Goexit relationship.
+func TestJsonTagForFleetReadinessField_MissingField_Fatals(t *testing.T) {
+	fake := &fakeT{}
+	_ = jsonTagForFleetReadinessField(fake, "NonExistentField_xyz")
+	if fake.fatalMsg == "" {
+		t.Fatalf("jsonTagForFleetReadinessField did not call Fatalf on missing field %q; expected the production t.Fatalf message, got empty",
+			"NonExistentField_xyz")
+	}
+	if !strings.Contains(fake.fatalMsg, "NonExistentField_xyz") {
+		t.Errorf("Fatalf message must name the missing field %q; got %q",
+			"NonExistentField_xyz", fake.fatalMsg)
+	}
+	if !strings.Contains(fake.fatalMsg, "FleetReadinessCounts") {
+		t.Errorf("Fatalf message must mention the FleetReadinessCounts struct; got %q",
+			fake.fatalMsg)
+	}
+}
