@@ -13,96 +13,96 @@ import { MarketingNav } from "../components/layout/MarketingNav";
 import { MarketingFooter } from "../components/layout/MarketingFooter";
 
 const NAV_LINKS = [
-  { label: "Come funziona", href: "/#pipeline" },
+  { label: "How it works", href: "/#pipeline" },
   { label: "Workflow", href: "/#workflow" },
   { label: "Features", href: "/#features" },
-  { label: "Agenzie", href: "/#agency" },
-  { label: "Programmi", to: "/programs" },
+  { label: "Agencies", href: "/#agency" },
+  { label: "Programs", to: "/programs" },
   { label: "Mentoring", to: "/mentoring" },
-  { label: "Chi siamo", href: "/#who-are-we" },
+  { label: "About us", href: "/#who-are-we" },
 ];
 
 const MENTORING_PATH = [
   {
     step: "01",
     icon: Target,
-    title: "Definisci il tuo obiettivo",
-    description: "Iniziamo con una call di scoperta per capire dove sei, dove vuoi arrivare e qual è il tuo collo di bottiglia nella produzione di contenuti."
+    title: "Define your goal",
+    description: "We start with a discovery call to understand where you are, where you want to go, and what your content production bottleneck is."
   },
   {
     step: "02",
     icon: Video,
-    title: "Costruisci il tuo workflow",
-    description: "Ti aiutiamo a configurare InstaEdit sul tuo account, importare i canali e impostare i template che userai ogni giorno."
+    title: "Build your workflow",
+    description: "We help you set up InstaEdit on your account, import channels, and set up the templates you will use every day."
   },
   {
     step: "03",
     icon: Sparkles,
-    title: "Ricevi feedback settimanale",
-    description: "Ogni settimana rivediamo i tuoi contenuti, analizziamo le metriche e affiniamo la strategia per migliorare reach e engagement."
+    title: "Get weekly feedback",
+    description: "Every week we review your content, analyze metrics and refine strategy to improve reach and engagement."
   },
   {
     step: "04",
     icon: Award,
-    title: "Scala in autonomia",
-    description: "Dopo il percorso avrai un sistema ripetibile per produrre e pubblicare contenuti a volume, senza dipendere da un team esterno."
+    title: "Scale independently",
+    description: "After the program you will have a repeatable system to produce and publish content at scale, without relying on an external team."
   },
 ];
 
 const PACKAGES = [
   {
     title: "Starter Mentoring",
-    tagline: "Per creator che partono da zero",
+    tagline: "For creators starting from zero",
     features: [
-      "4 sessioni 1-to-1 da 45 minuti",
-      "Audit del canale e del calendario editoriale",
-      "Setup di InstaEdit e onboarding",
-      "Accesso alla community dei creator",
+      "4 one-on-one 45-minute sessions",
+      "Channel and editorial calendar audit",
+      "InstaEdit setup and onboarding",
+      "Access to the creator community",
     ],
     color: "from-violet-500 to-purple-500",
-    cta: "Inizia con Starter",
+    cta: "Start with Starter",
   },
   {
     title: "Growth Mentoring",
-    tagline: "Per chi vuole passare al livello successiva",
+    tagline: "For those who want to move to the next level",
     features: [
-      "8 sessioni 1-to-1 da 60 minuti",
-      "Content strategy e piano editoriale mensile",
-      "Analisi metriche e ottimizzazione post",
-      "Supporto WhatsApp per domande rapide",
+      "8 one-on-one 60-minute sessions",
+      "Content strategy and monthly editorial plan",
+      "Metrics analysis and post optimization",
+      "WhatsApp support for quick questions",
     ],
     color: "from-cyan-500 to-blue-500",
-    cta: "Scegli Growth",
+    cta: "Choose Growth",
   },
   {
     title: "Team Mentoring",
-    tagline: "Per team e agenzie che scalano",
+    tagline: "For teams and agencies scaling up",
     features: [
-      "12 sessioni per il team",
-      "Workflow multi-account e automazioni",
-      "Formazione del team editoriale",
+      "12 team sessions",
+      "Multi-account workflow and automations",
+      "Editorial team training",
       "Quarterly business review",
     ],
     color: "from-emerald-500 to-teal-500",
-    cta: "Contatta vendite",
+    cta: "Contact sales",
   },
 ];
 
 const TESTIMONIALS = [
   {
-    quote: "In tre mesi ho passato da 2 a 12 post a settimana senza assumere nessuno. Il mentoring mi ha dato il workflow giusto.",
+    quote: "In three months I went from 2 to 12 posts per week without hiring anyone. Mentoring gave me the right workflow.",
     author: "Sara M.",
-    role: "Creator tech",
+    role: "Tech creator",
   },
   {
-    quote: "Finalmente il mio team non perde più ore tra upload e riformattazioni. Il percorso ci ha fatto risparmiare decine di ore al mese.",
+    quote: "My team no longer loses hours to uploads and reformatting. The path saved us dozens of hours per month.",
     author: "Marco B.",
     role: "Content Strategist",
   },
   {
-    quote: "Ho capito come usare l'AI non per sostituirmi, ma per amplificare il mio stile. I risultati sulle view sono cresciuti costantemente.",
+    quote: "I learned how to use AI not to replace me, but to amplify my style. View results grew steadily.",
     author: "Giulia T.",
-    role: "Creator lifestyle",
+    role: "Lifestyle creator",
   },
 ];
 
@@ -121,29 +121,29 @@ function Hero() {
             <span className="animate-pulse-glow absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
           </span>
-          <span>Mentoring per creator e team ambiziosi</span>
+          <span>Mentoring for ambitious creators and teams</span>
         </div>
         <h1 className="text-display-1 text-white max-w-[18ch] mx-auto">
-          Non usare InstaEdit da solo.{" "}
-          <span className="text-gradient-animated">Cresci con un mentore.</span>
+          Don't use InstaEdit alone.{" "}
+          <span className="text-gradient-animated">Grow with a mentor.</span>
         </h1>
         <p className="text-body-lg text-zinc-300/90 mt-7 max-w-[60ch] mx-auto">
-          Un percorso guidato per padroneggiare la produzione di contenuti con l'AI,
-          costruire un workflow scalabile e raggiungere i tuoi obiettivi editoriali.
+          A guided path to master AI-powered content production,
+          build a scalable workflow and reach your editorial goals.
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-8">
           <a
             href="#packages"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group"
           >
-            Scegli il tuo percorso
+            Choose your path
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </a>
           <Link
             to="/programs"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
           >
-            Vedi i programmi
+            See programs
           </Link>
         </div>
       </div>
@@ -157,13 +157,13 @@ function HowItWorks() {
       <div aria-hidden="true" className="absolute inset-0 hero-aurora opacity-20 pointer-events-none" />
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
-          <div className="text-eyebrow text-violet-300/90 mb-3">Il percorso</div>
+          <div className="text-eyebrow text-violet-300/90 mb-3">The path</div>
           <h2 className="text-display-2 text-white">
-            Da obiettivo a workflow, in 4 passi.
+            From goal to workflow, in 4 steps.
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            Un percorso pratico e personalizzato per imparare a usare InstaEdit al massimo
-            e costruire una macchina da contenuti sostenibile.
+            A practical, personalized path to learn how to use InstaEdit to the fullest
+            and build a sustainable content machine.
           </p>
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -176,7 +176,7 @@ function HowItWorks() {
                 <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${i === 0 ? "from-violet-500 to-purple-500" : i === 1 ? "from-cyan-500 to-blue-500" : i === 2 ? "from-pink-500 to-rose-500" : "from-emerald-500 to-teal-500"} flex items-center justify-center text-white shadow-lg`}>
                   <item.icon className="w-5 h-5" />
                 </div>
-                <span className="text-eyebrow text-zinc-500 tabular-nums">Passo {item.step}</span>
+                <span className="text-eyebrow text-zinc-500 tabular-nums">Step {item.step}</span>
               </div>
               <h3 className="text-display-3 text-white mb-2">{item.title}</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">{item.description}</p>
@@ -197,13 +197,13 @@ function PackagesSection() {
       </div>
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
-          <div className="text-eyebrow text-pink-300/90 mb-3">Pacchetti</div>
+          <div className="text-eyebrow text-pink-300/90 mb-3">Packages</div>
           <h2 className="text-display-2 text-white">
-            Scegli il mentoring che fa per te.
+            Choose the mentoring that fits you.
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            Tutti i pacchetti includono accesso alla piattaforma e supporto via email.
-            Puoi passare a un pacchetto superiore in qualsiasi momento.
+            All packages include platform access and email support.
+            You can upgrade to a higher package at any time.
           </p>
         </div>
         <div className="grid lg:grid-cols-3 gap-5">
@@ -249,9 +249,9 @@ function TestimonialsSection() {
       <div aria-hidden="true" className="absolute inset-0 hero-aurora opacity-20 pointer-events-none" />
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
-          <div className="text-eyebrow text-violet-300/90 mb-3">Testimonianze</div>
+          <div className="text-eyebrow text-violet-300/90 mb-3">Testimonials</div>
           <h2 className="text-display-2 text-white">
-            Cosa dicono chi ha già iniziato.
+            What those who have already started say.
           </h2>
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -287,25 +287,25 @@ function CTASection() {
           <div aria-hidden="true" className="absolute inset-0 cta-glow opacity-30 pointer-events-none" />
           <div className="relative">
             <h2 className="text-display-2 text-white mb-4">
-              Pronto a crescere con un mentore?
+              Ready to grow with a mentor?
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[55ch] mx-auto mb-8">
-              Prenota una call scoperta gratuita e raccontaci i tuoi obiettivi.
-              Ti proporremo il percorso più adatto a te.
+              Book a free discovery call and tell us your goals.
+              We will propose the most suitable path for you.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <a
-                href="mailto:hello@instaedit.org?subject=Richiesta%20Mentoring"
+                href="mailto:hello@instaedit.org?subject=Mentoring%20Request"
                 className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group"
               >
-                Prenota una call
+                Book a call
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </a>
               <Link
                 to="/programs"
                 className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
               >
-                Esplora i programmi
+                See programs
               </Link>
             </div>
           </div>
