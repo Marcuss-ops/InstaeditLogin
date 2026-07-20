@@ -159,7 +159,7 @@ describe("CalendarPage filter", () => {
     renderPage("/app/calendar?status=published&workspace_id=99");
 
     await waitFor(() => {
-      expect(screen.getByText(/No posts match the filters/i)).toBeInTheDocument();
+      expect(screen.getByText(/Nessun post corrisponde ai filtri/i)).toBeInTheDocument();
     });
     expect(screen.queryByTestId("calendar-grid-stub")).not.toBeInTheDocument();
     expect(screen.getByTestId("calendar-empty-clear")).toBeInTheDocument();
@@ -182,7 +182,7 @@ describe("CalendarPage filter", () => {
     renderPage("/app/calendar");
 
     await waitFor(() => {
-      expect(screen.getByText(/No posts scheduled yet/i)).toBeInTheDocument();
+      expect(screen.getByText(/Nessun post ancora programmato/i)).toBeInTheDocument();
     });
     expect(screen.queryByTestId("calendar-grid-stub")).not.toBeInTheDocument();
     expect(screen.getByTestId("calendar-empty-compose")).toBeInTheDocument();
@@ -210,7 +210,7 @@ describe("CalendarPage filter", () => {
     renderPage("/app/calendar?status=queued");
 
     await waitFor(() => {
-      expect(screen.getByText(/No posts scheduled yet/i)).toBeInTheDocument();
+      expect(screen.getByText(/Nessun post ancora programmato/i)).toBeInTheDocument();
     });
     expect(screen.queryByTestId("calendar-grid-stub")).not.toBeInTheDocument();
     expect(screen.getByTestId("calendar-empty-compose")).toBeInTheDocument();
@@ -299,7 +299,7 @@ describe("CalendarPage filter", () => {
       expect(status.value).toBe("queued");
       expect(ws.value).toBe("47");
     });
-    expect(screen.queryByText(/No posts match the filters/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nessun post corrisponde ai filtri/i)).not.toBeInTheDocument();
   });
 
   it("Clear-filters button resets both selects back to 'all' and restores the unfiltered grid", async () => {

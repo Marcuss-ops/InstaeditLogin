@@ -34,9 +34,9 @@ type FetchState =
   | { kind: "error"; message: string };
 
 const viewTabs: { id: CalendarViewMode; label: string; icon: React.ElementType }[] = [
-  { id: "month", label: "Month", icon: CalendarIcon },
-  { id: "week", label: "Week", icon: LayoutGrid },
-  { id: "day", label: "Day", icon: Clock },
+  { id: "month", label: "Mese", icon: CalendarIcon },
+  { id: "week", label: "Settimana", icon: LayoutGrid },
+  { id: "day", label: "Giorno", icon: Clock },
 ];
 
 export function CalendarPage() {
@@ -150,12 +150,12 @@ export function CalendarPage() {
   };
 
   const statusOptions = [
-    { value: "all", label: "All statuses" },
-    { value: "draft", label: "Draft" },
-    { value: "queued", label: "Scheduled" },
-    { value: "publishing", label: "Publishing" },
-    { value: "published", label: "Published" },
-    { value: "failed", label: "Failed" },
+    { value: "all", label: "Tutti gli stati" },
+    { value: "draft", label: "Bozza" },
+    { value: "queued", label: "Programmato" },
+    { value: "publishing", label: "In pubblicazione" },
+    { value: "published", label: "Pubblicato" },
+    { value: "failed", label: "Fallito" },
   ];
 
   return (
@@ -178,7 +178,7 @@ export function CalendarPage() {
               to="/app/compose"
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
             >
-              <Plus size={16} /> New post
+              <Plus size={16} /> Nuovo post
             </Link>
           </div>
         </div>
@@ -190,7 +190,7 @@ export function CalendarPage() {
               type="button"
               onClick={() => shiftDate(-1)}
               className="p-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white hover:bg-white/[0.08] transition-colors"
-              aria-label="Previous"
+              aria-label="Precedente"
             >
               <ChevronLeft size={18} />
             </button>
@@ -199,13 +199,13 @@ export function CalendarPage() {
               onClick={() => setCurrentDate(new Date())}
               className="px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
             >
-              Today
+              Oggi
             </button>
             <button
               type="button"
               onClick={() => shiftDate(1)}
               className="p-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white hover:bg-white/[0.08] transition-colors"
-              aria-label="Next"
+              aria-label="Successivo"
             >
               <ChevronRight size={18} />
             </button>
@@ -244,7 +244,7 @@ export function CalendarPage() {
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-white focus:outline-none focus:border-white/[0.20]"
-                aria-label="Filter by status"
+                aria-label="Filtra per stato"
               >
                 {statusOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
@@ -258,9 +258,9 @@ export function CalendarPage() {
                   value={workspaceFilter}
                   onChange={(e) => setWorkspaceFilter(e.target.value)}
                   className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-white focus:outline-none focus:border-white/[0.20]"
-                  aria-label="Filter by workspace"
+                  aria-label="Filtra per workspace"
                 >
-                  <option value="all">All workspaces</option>
+                  <option value="all">Tutti i workspace</option>
                   {state.workspaces.map((w) => (
                     <option key={w.id} value={w.id}>
                       {w.name}
@@ -274,9 +274,9 @@ export function CalendarPage() {
                   data-testid="calendar-filter-clear"
                   onClick={clearFilters}
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-[#9aa0aa] hover:text-white hover:bg-white/[0.08] transition-colors"
-                  aria-label="Clear filters"
+                  aria-label="Cancella filtri"
                 >
-                  <X size={14} /> Clear
+                  <X size={14} /> Cancella
                 </button>
               )}
             </div>
@@ -303,8 +303,8 @@ export function CalendarPage() {
 
           {state.kind === "ready" && state.posts.length === 0 && (
             <EmptyState
-              title="No posts scheduled yet"
-              description="Create your first post to see it on the calendar."
+              title="Nessun post ancora programmato"
+              description="Crea il tuo primo post per vederlo nel calendario."
               icon={<Plus size={32} />}
               cta={
                 <Link
@@ -312,7 +312,7 @@ export function CalendarPage() {
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
                   data-testid="calendar-empty-compose"
                 >
-                  <Plus size={16} /> New post
+                  <Plus size={16} /> Nuovo post
                 </Link>
               }
               className="bg-[#1f1f2e] border-white/[0.12]"
@@ -323,8 +323,8 @@ export function CalendarPage() {
             state.posts.length > 0 &&
             (hasActiveFilters && filteredPosts.length === 0 ? (
               <EmptyState
-                title="No posts match the filters"
-                description="Try clearing the filters or create a new post."
+                title="Nessun post corrisponde ai filtri"
+                description="Prova a cancellare i filtri o crea un nuovo post."
                 icon={<Filter size={32} />}
                 cta={
                   <button
@@ -333,7 +333,7 @@ export function CalendarPage() {
                     onClick={clearFilters}
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors"
                   >
-                    <X size={16} /> Clear filters
+                    <X size={16} /> Cancella filtri
                   </button>
                 }
                 className="bg-[#1f1f2e] border-white/[0.12]"
