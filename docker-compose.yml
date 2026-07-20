@@ -24,7 +24,7 @@ services:
       POSTGRES_PASSWORD: dev_password
       POSTGRES_DB: instaedit_login
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - instaedit_pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -75,7 +75,7 @@ services:
       - VELOX_DOWNLOAD_TIMEOUT_SECONDS=1800
       - VELOX_MAX_ARTIFACT_BYTES=2147483648
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     # Sit on the default bridge for db/minio/s3 DNS AND on the internal
     # media-backend network for Velox handoff. Listing both keeps the
     # api reachable on `:8080` from the host while restricting Velox
@@ -138,7 +138,7 @@ services:
       - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
       - PORT=8080
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       db:
         condition: service_healthy
@@ -146,7 +146,7 @@ services:
 # MinIO — local S3-compatible object store. The credentials below
   # MUST match S3_ACCESS_KEY / S3_SECRET_KEY in `.env.dev` (referenced
   # via env_file). `minio-init` is a one-shot sidecar that creates the
-  # `instaedit-local` bucket on first boot so the api's first S3 PUT
+  # `instaedit-dev` bucket on first boot so the api's first S3 PUT
   # does not race against bucket creation. Pinned to a stable tag
   # (`RELEASE.2024-09-13T16-55-53Z`) — the `latest` tag is not safe
   # because MinIO's release cadence occasionally breaks the mc↔server
@@ -180,7 +180,7 @@ services:
     # 127.0.0.1:9000 → host port forward → minio container on default
     # bridge), media-backend for any future internal-only bucket that
     # the Velox handoff might use as a staging area before promotion
-    # into `instaedit-local`.
+    # into `instaedit-dev`.
     networks:
       - default
       - media-backend
@@ -208,8 +208,8 @@ services:
         echo 'minio alias set failed, retrying in 2s';
         sleep 2;
       done;
-      mc mb --ignore-existing local/instaedit-local;
-      echo 'minio bucket instaedit-local ready';
+      mc mb --ignore-existing local/instaedit-dev;
+      echo 'minio bucket instaedit-dev ready';
       exit 0;
       "
 
@@ -230,7 +230,7 @@ volumes:
 # The InstaEdit-side /internal/v1/* endpoints (destinations/validate,
 # deliveries POST + GET) are guarded by the VELOX_API_TOKEN
 # constant-time Bearer check (pkg/api/internal_auth.go). The public
-# Caddyfile (ops/vps/Caddyfile + ops/local/Caddyfile) explicitly
+# Caddyfile (ops/legacy/Caddyfile + ops/local/Caddyfile) explicitly
 # aborts requests for /internal/* before any reverse-proxy pass.
 #
 # velox-master placeholder — when the Velox image lands in a
