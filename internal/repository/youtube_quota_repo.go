@@ -187,6 +187,11 @@ func (r *YouTubeDailyQuotaRepository) GetSnapshot(ctx context.Context) (calls, e
 		FROM youtube_quota_daily
 		WHERE date = $1
 	`, today).Scan(&calls, &errCount, &limit, &lastResetAt); err != nil {
+		// DO NOT rename `errCount` back to `errors` — the int named
+		// return above would shadow the `errors` package, the call
+		// below would fail to compile (type int has no method Is),
+		// and the same shadowing propagates to any other errors.New /
+		// errors.Is / errors.As call in this function's scope.
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, 0, 0, time.Time{}, nil // no row yet today — zero snapshot is honest
 		}
