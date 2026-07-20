@@ -1043,10 +1043,12 @@ func TestYouTubeValidateChannelBinding_SafetyCapReachedAt200_ReturnsMismatch(t *
 	// WITHOUT locking. Same pattern is used by the sibling
 	// TestYouTubeValidateChannelBinding_PaginationAcrossThreePages test.
 	var handlerCalls int
+	var lastPageToken string // closure-captured; asserted against the would-have-been-next token
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, q *http.Request) {
 		handlerCalls++
+		lastPageToken = q.URL.Query().Get("pageToken")
 		items := make([]map[string]string, 0, 50)
 		for i := 0; i < 50; i++ {
 			items = append(items, map[string]string{"id": fmt.Sprintf("UC-cap-%d-%d", handlerCalls, i)})
@@ -1083,6 +1085,12 @@ func TestYouTubeValidateChannelBinding_SafetyCapReachedAt200_ReturnsMismatch(t *
 	// each, we expect exactly 4 HTTP calls, NOT 5+.
 	if handlerCalls != 4 {
 		t.Errorf("loop must short-circuit before page 5; want 4 page(s) requested, got %d", handlerCalls)
+	}
+	// Guard against the loop overshooting into a 5th page. The 4th
+	// request MUST carry pageToken=tok-5 (would-have-been-next if the
+	// cap had not short-circuited); the test asserts we never read it.
+	if lastPageToken != "tok-5" {
+		t.Errorf("4th request pageToken: want tok-5 (cap short-circuit), got %q", lastPageToken)
 	}
 }
 
