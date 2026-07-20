@@ -10,13 +10,13 @@ const DEFAULT_LINKS: NavLink[] = [
   // Mentoring). A bare hash from /programs only mutates the URL hash —
   // it never navigates to Landing — so `/#anchor` is required for the
   // browser to resolve the anchor on the Landing page.
-  { label: "Come funziona", to: "/#pipeline" },
+  { label: "How it works", to: "/#pipeline" },
   { label: "Workflow", to: "/#workflow" },
   { label: "Features", to: "/#features" },
-  { label: "Agenzie", to: "/#agency" },
-  { label: "Programmi", to: "/programs" },
+  { label: "Agencies", to: "/#agency" },
+  { label: "Programs", to: "/programs" },
   { label: "Mentoring", to: "/mentoring" },
-  { label: "Chi siamo", to: "/#who-are-we" },
+  { label: "About us", to: "/#who-are-we" },
 ];
 
 export function MarketingNav({ links = DEFAULT_LINKS }: { links?: NavLink[] }) {
@@ -119,7 +119,7 @@ export function MarketingNav({ links = DEFAULT_LINKS }: { links?: NavLink[] }) {
                 onClick={close}
                 className="block py-3 text-sm font-semibold text-center text-white bg-gradient-to-r from-violet-500 to-cyan-500 rounded-xl hover:opacity-90 transition-opacity"
               >
-                Accedi
+                Log in
               </Link>
             </div>
           </div>
