@@ -166,6 +166,17 @@ jobs:
       - name: Verify Fly secrets parser
         run: make fly-secrets-test
 
+      # ─── 8.6. OAuth scope canary unit tests (PR-lane only) ────────
+      # The canary binary's *pure-function* test suite runs here so
+      # structural drift (docs/OAUTH-PRODUCTION.md missing a canonical
+      # scope, fly secrets lists incoherent, provider-triple missing)
+      # fails PRs immediately. The LIVE tokeninfo leg is deferred to
+      # the separate .github/workflows/oauth-canary.yml workflow
+      # because it requires a repository secret (DRIVE_OAUTH_CANARY_TOKEN)
+      # that forked PRs cannot bring.
+      - name: OAuth scope canary + secrets coherence smoke
+        run: go test -count=1 ./cmd/oauth-scope-canary/...
+
       # ─── 9. Integration tests (Postgres via testcontainers-go) ────
       # Delegates to the Makefile — single source of truth for the
       # test command. Edit `make test-integration`, not this step.

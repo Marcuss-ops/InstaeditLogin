@@ -1,0 +1,117 @@
+# .github/workflows/oauth-canary.yml — InstaEdit OAuth scope drift canary
+#
+# Two responsibilities, run together as a single job:
+#
+#   1. SEcrets coherence (always-on): parses
+#      scripts/required-fly-secrets.txt + scripts/disabled-fly-secrets-prefixes.txt
+#      and asserts the three invariants documented in cmd/oauth-scope-canary/main.go
+#      (disjoint + complete OAuth triples + non-empty enable/disable symmetry).
+#      This leg does NOT need any secrets and runs on every schedule + on-demand.
+#
+#   2. Live tokeninfo drift check (credential-gated): when the
+#      DRIVE_OAUTH_CANARY_TOKEN repository secret is present, the canary
+#      binary hits Google's oauth2/v3/tokeninfo endpoint with a real
+#      access token and diffs the granted scopes against the canonical
+#      hardcoded list. Drift in EITHER direction fails the run.
+#
+# Why a SEPARATE workflow vs. integration.yml?
+#   - integration.yml is the PR-lane gate (forked PRs cannot bring
+#     repository secrets; a *required* step would block them out).
+#   - This workflow is operator-controlled: schedule + workflow_dispatch
+#     never run on pull_request. The canary lives entirely in trusted
+#     context.
+#   - Mixing live-Google network calls into the PR lane would either (a)
+#     fail PRs on transient Gooble-API flakiness (network, regional
+#     outage), or (b) introduce a long-running step outside the
+#     integration.yml timeout-minutes: 20 budget.
+#
+# Trigger scope:
+#   - schedule: weekly Monday 08:00 UTC. Drift detection budget is
+#     fine at this cadence — Google doesn't republish the consent
+#     screen mid-week.
+#   - workflow_dispatch: manual trigger for one-off spot-checks after
+#     any consent-screen republish.
+#
+# Authz: GitHub repository secrets (DRIVE_OAUTH_CANARY_TOKEN) are
+# injected into env: only when present. The secrets-coherence leg is
+# ALWAYS-on so an absent token still produces a useful result.
+
+name: oauth-canary
+
+# Least privilege: no checkout-time secrets needed; only the
+# go-version-file lookup and the workflow_dispatch trigger. The
+# default token's permissions suffice for the build, but we explicitly
+# gate contents: read to make the intent obvious to reviewers.
+permissions:
+  contents: read
+
+# Same YAML-portability comment as integration.yml — quote the `on:`
+# key so older yaml.safe_load parsers don't barf.
+"on":
+  schedule:
+    # Monday 08:00 UTC. Each operator day's first deploy-up review
+    # opens ~09:00 UTC; findings land in their inbox before lunch.
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+    inputs:
+      skip_tokeninfo:
+        description: 'Skip live tokeninfo (run secrets-coherence only)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  canary:
+    # ubuntu-latest — no Docker / no network-required gcloud CLI
+    # (the binary uses Google REST directly via net/http).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    concurrency:
+      group: oauth-canary-${{ github.workflow }}
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ─── 1. Unit tests for the canary (always-on, no external dep)
+      # Run the binary's tests on the build host. This exercise the
+      # diffScopes + verifySecretCoherence pure-function paths AND
+      # the TestVerifySecretCoherence_RealProjectLists test against
+      # the actual scripts/ folder — failures here block the run.
+      - name: Run canary unit tests
+        run: go test -count=1 ./cmd/oauth-scope-canary/...
+
+      # ─── 2. Live canary (token-gated) ─────────────────────────────
+      # The binary itself handles the missing-token path with a clear
+      # "secrets coherence only" log line, so we always invoke it.
+      # DRIVE_OAUTH_CANARY_TOKEN is an operator-controlled repo secret;
+      # if it's absent the binary exits 0 (skip is not a failure).
+      - name: Run OAuth scope canary
+        env:
+          DRIVE_OAUTH_CANARY_TOKEN: ${{ secrets.DRIVE_OAUTH_CANARY_TOKEN }}
+        run: |
+          if [ "${{ github.event.inputs.skip_tokeninfo }}" = "true" ]; then
+            unset DRIVE_OAUTH_CANARY_TOKEN
+          fi
+          go run ./cmd/oauth-scope-canary
+
+      # ─── 3. Failure summary (operator-friendly) ────────────────────
+      - name: Canary failure summary
+        if: failure()
+        run: |
+          echo "=== Likely causes ==="
+          echo "  - docs/OAUTH-PRODUCTION.md missing one of the canonical scopes (the TestOAuthScopes_DocsMatchCanonical unit test catches this)"
+          echo "  - REAL Google's oauth2/v3/tokeninfo returns a scope not in cmd/oauth-scope-canary/main.go::canonicalScopes"
+          echo "  - scripts/required-fly-secrets.txt has an incomplete OAuth triple (TestVerifySecretCoherence_IncompleteTriple catches this)"
+          echo "  - scripts/required-fly-secrets.txt + disabled-fly-secrets-prefixes.txt overlap (TestVerifySecretCoherence_Disjoint catches this)"
+          echo
+          echo "Run locally:"
+          echo "  go test -count=1 ./cmd/oauth-scope-canary/..."
+          echo "  DRIVE_OAUTH_CANARY_TOKEN=ya29... go run ./cmd/oauth-scope-canary"
