@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1021,6 +1023,132 @@ func TestYouTubeValidateChannelBinding_PaginationAcrossThreePages(t *testing.T) 
 		t.Errorf("expected last request to carry pageToken=page3t, got %q", lastPageToken)
 	}
 }
+
+// TestYouTubeValidateChannelBinding_SafetyCapReachedAt200_ReturnsMismatch
+// exercises the maxChannelsPerGrant (200) safety cap path. The
+// production ValidateChannelBinding loop has a hard upper bound of
+// 200 unique channel ids; exceeding it returns ErrYouTubeChannelMismatch
+// wrapped with "safety cap reached" without making a 5th page request.
+// Pre-2026 InstaEdit would silently act on the wrong channel past
+// position 200; with pagination in place, the test pins the exact
+// short-circuit behaviour so a regression that flips the cap off
+// (infinite loop) or below 200 (premature rejection) is detectable.
+//
+// 4 pages x 50 channels = 200 unique ids. Expected ID NOT in any of
+// them. Page 4 returns a non-empty nextPageToken (`tok-5`) so a
+// regression that "trusts the empty token only" would still call page
+// 5; the requestCount assertion catches that.
+func TestYouTubeValidateChannelBinding_SafetyCapReachedAt200_ReturnsMismatch(t *testing.T) {
+	var reqCount atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		_ = r
+		count := int(reqCount.Add(1))
+		items := make([]map[string]string, 0, 50)
+		for i := 0; i < 50; i++ {
+			items = append(items, map[string]string{"id": fmt.Sprintf("UC-cap-%d-%d", count, i)})
+		}
+		// Always return a non-empty nextPageToken to prove the loop
+		// short-circuits BEFORE the 5th call, NOT on natural-empty-token.
+		payload := map[string]any{
+			"items":         items,
+			"nextPageToken": fmt.Sprintf("tok-%d", count+1),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		data, _ := json.Marshal(payload)
+		w.Write(data)
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	s := newTestYouTubeService(ts)
+	err := s.ValidateChannelBinding(context.Background(), "fake-access-token", "UC-expected-but-never-present")
+	if err == nil {
+		t.Fatal("want ErrYouTubeChannelMismatch, got nil")
+	}
+	if !errors.Is(err, ErrYouTubeChannelMismatch) {
+		t.Errorf("want ErrYouTubeChannelMismatch wrapped; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "safety cap reached") {
+		t.Errorf("error must mention 'safety cap reached'; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "first 200 unique channel ids") {
+		t.Errorf("error must mention 'first 200 unique channel ids' cap value; got: %v", err)
+	}
+	// The loop MUST short-circuit BEFORE page 5; with 4 pages of 50
+	// each, we expect exactly 4 HTTP calls, NOT 5+.
+	if got := reqCount.Load(); got != 4 {
+		t.Errorf("loop must short-circuit before page 5; want 4 page(s) requested, got %d", got)
+	}
+}
+
+// TestYouTubeValidateChannelBinding_ExhaustedMismatch_ReturnsMismatch
+// exercises the "ALREADY exhausted pages, expected ID missing" branch
+// with the page count UNDER the safety cap (110 < 200). Same shape
+// as the existing 3-page happy-path test, but with the expected ID
+// deliberately absent, so the loop walks all 3 pages then returns
+// ErrYouTubeChannelMismatch wrapping the full id list WITHOUT the
+// "safety cap reached" mention (which would indicate the loop
+// short-circuited prematurely).
+func TestYouTubeValidateChannelBinding_ExhaustedMismatch_ReturnsMismatch(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		tok := r.URL.Query().Get("pageToken")
+		var items []map[string]string
+		var next string
+		switch tok {
+		case "":
+			for i := 0; i < 50; i++ {
+				items = append(items, map[string]string{"id": fmt.Sprintf("UC-exh-p1-%d", i)})
+			}
+			next = "tok-2"
+		case "tok-2":
+			for i := 0; i < 50; i++ {
+				items = append(items, map[string]string{"id": fmt.Sprintf("UC-exh-p2-%d", i)})
+			}
+			next = "tok-3"
+		case "tok-3":
+			for i := 0; i < 10; i++ {
+				items = append(items, map[string]string{"id": fmt.Sprintf("UC-exh-p3-%d", i)})
+			}
+			next = "" // FINAL page (no more tokens)
+		default:
+			http.Error(w, `{"error":"unexpected pageToken"}`, http.StatusBadRequest)
+			return
+		}
+		payload := map[string]any{"items": items, "nextPageToken": next}
+		w.Header().Set("Content-Type", "application/json")
+		data, _ := json.Marshal(payload)
+		w.Write(data)
+	})
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	s := newTestYouTubeService(ts)
+	err := s.ValidateChannelBinding(context.Background(), "fake-access-token", "UC-expected-but-never-present")
+	if err == nil {
+		t.Fatal("want ErrYouTubeChannelMismatch on exhausted mismatch, got nil")
+	}
+	if !errors.Is(err, ErrYouTubeChannelMismatch) {
+		t.Errorf("want ErrYouTubeChannelMismatch wrapped; got: %v", err)
+	}
+	// Explicitly NOT the cap path: we got here by walking pages to
+	// exhaustion, NOT by hitting the safety cap.
+	if strings.Contains(err.Error(), "safety cap reached") {
+		t.Errorf("error must NOT mention 'safety cap reached' on exhaustion path (110 < 200); got: %v", err)
+	}
+	// The full id list lives in the message so the operator can
+	// diagnose channel drift in one log line.
+	for _, prefix := range []string{"UC-exh-p1-0", "UC-exh-p2-0", "UC-exh-p3-0"} {
+		if !strings.Contains(err.Error(), prefix) {
+			t.Errorf("error must contain at least one id from each page (e.g. %q) for operator diagnostics; got: %v", prefix, err)
+		}
+	}
+}
+
 
 // TestYouTubeValidateChannelBinding_FailureMidPagination verifies the
 // transient contract is preserved across pagination boundaries: page 1
@@ -2135,6 +2263,50 @@ func TestYouTubeCanaryUpload_AllContractShapes(t *testing.T) {
 		}
 	})
 
+	// post_upload_videos_list_5xx_transient: the videos.list call
+	// CanaryUpload issues AFTER the PUT chunk succeeds can return 5xx
+	// (typically because the freshly-uploaded video row has not yet
+	// been indexed by Google). This must stay on the transient branch
+	// — next-sync retry handles it; flagging reauth for a 503 here
+	// would lock out the operator for an indexing blip, not a grant
+	// drift. Closes the test gap that the canary's happy/bind/put-
+	// rejection coverage doesn't capture (those cover the upload
+	// legs, not the post-upload reconcile leg).
+	t.Run("post_upload_videos_list_5xx_transient", func(t *testing.T) {
+		const (
+			expectedChannel = "UCexpectedChannelID"
+			canaryVideoID   = "vipostupload503"
+		)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "/canary-session")
+		})
+		mux.HandleFunc("/canary-session", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":"%s"}`, canaryVideoID)
+		})
+		mux.HandleFunc("/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "transient indexing lag", http.StatusServiceUnavailable)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		_, err := svc.CanaryUpload(context.Background(), "fresh-access-token", expectedChannel)
+		if err == nil {
+			t.Fatal("videos.list 5xx post-upload: expected error, got nil")
+		}
+		if errors.Is(err, ErrYouTubeCanaryRejected) {
+			t.Errorf("post-upload videos.list 5xx MUST NOT escalate to ErrYouTubeCanaryRejected (videos are indexed async; next-sync retry is correct); got %v", err)
+		}
+		if errors.Is(err, ErrYouTubeChannelMismatch) {
+			t.Errorf("post-upload videos.list 5xx MUST NOT escalate to ErrYouTubeChannelMismatch (channel drift is unrelated); got %v", err)
+		}
+		if !strings.Contains(err.Error(), "videos.list") {
+			t.Errorf("post-upload videos.list 5xx error must mention the videos.list call site for the handler log; got %v", err)
+		}
+	})
+
 	t.Run("empty_inputs_fast_fail_without_network", func(t *testing.T) {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
@@ -2151,4 +2323,89 @@ func TestYouTubeCanaryUpload_AllContractShapes(t *testing.T) {
 			t.Errorf("empty accessToken: expected error, got nil")
 		}
 	})
+}
+
+// TestIsHardRejection4xxStatus_UpstreamFormatLocked documents AND
+// locks the two upstream methods' error-message format that
+// isHardRejection4xxStatus parses. The classifier is regex-based on
+// err.Error() (a deliberate scope trade-off documented in
+// isHardRejection4xxStatus's godoc); a future refactor of
+// initiateResumableSession or putChunk's format string would
+// silently break the classifier without a compile error. This test
+// pins the upstream shape for every status code the canary cares
+// about — 400, 401, 403, 404, 408, 409, 410, 422 (reauth-bound),
+// 429 + 423 + 5xx (transient, stay on next-sync retry), and 451
+// (reauth). Adding a new enum value to the helper requires adding a
+// matching case here AND a code-site change; the production logic
+// is derived from this test via the matching table.
+//
+// The test exercises BOTH upstream message shapes the classifier
+// could encounter:
+//
+//   - initiateResumableSession: "init session failed (status N): %s"
+//   - putChunk: "unexpected PUT response (status N): %s" /
+//     "rate limited (status N, retry_after=%s)" /
+//     "server error (status N, retry_after=%s)" or
+//     "server error (status N)" /
+//     "failed to parse upload completion response: %w"
+//
+// If Google adds new shapes (or upstream flips the format verb),
+// the closure to ADD cases is here, not in the helper's doc —
+// production code stays ignorant of the testbed.
+func TestIsHardRejection4xxStatus_UpstreamFormatLocked(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		// reauth-bound — explicit enumerated table
+		{"initiate_400_bad_metadata", fmt.Errorf("init session failed (status 400): bad metadata"), true},
+		{"initiate_401_token", fmt.Errorf("init session failed (status 401): bad token"), true},
+		{"initiate_403_forbidden", fmt.Errorf("init session failed (status 403): forbidden"), true},
+		{"initiate_404_gone", fmt.Errorf("init session failed (status 404): resource not found"), true},
+		{"initiate_408_timeout", fmt.Errorf("init session failed (status 408): request timeout"), true},
+		{"initiate_409_conflict", fmt.Errorf("init session failed (status 409): channel state conflict"), true},
+		{"initiate_410_permanent_gone", fmt.Errorf("init session failed (status 410): channel deleted"), true},
+		{"initiate_422_unprocessable", fmt.Errorf("init session failed (status 422): metadata refused"), true},
+		{"initiate_451_legal_block", fmt.Errorf("init session failed (status 451): jurisdictional unavailable"), true},
+
+		// putChunk 4xx matched against the SAME table
+		{"put_400_unexpected", fmt.Errorf("unexpected PUT response (status 400): bad request body"), true},
+		{"put_401_unexpected", fmt.Errorf("unexpected PUT response (status 401): token revoked mid-upload"), true},
+		{"put_403_unexpected", fmt.Errorf("unexpected PUT response (status 403): forbidden"), true},
+		{"put_404_unexpected", fmt.Errorf("unexpected PUT response (status 404): session uri dead"), true},
+		{"put_422_unexpected", fmt.Errorf("unexpected PUT response (status 422): metadata refused"), true},
+
+		// transient — explicitly NOT in the table, must stay on next-sync retry
+		{"initiate_429_rate_limit", fmt.Errorf("init session failed (status 429): quota exceeded"), false},
+		{"initiate_423_locked", fmt.Errorf("init session failed (status 423): channel locked"), false},
+		{"initiate_500_internal", fmt.Errorf("init session failed (status 500): google internal"), false},
+		{"initiate_502_bad_gateway", fmt.Errorf("init session failed (status 502): upstream bad"), false},
+		{"initiate_503_unavailable", fmt.Errorf("init session failed (status 503): unavailable"), false},
+		{"initiate_504_gateway_timeout", fmt.Errorf("init session failed (status 504): upstream timeout"), false},
+
+		{"put_429_rate_limit", fmt.Errorf("rate limited (status 429, retry_after=2s)"), false},
+		{"put_503_server_error_with_retry_after", fmt.Errorf("server error (status 503, retry_after=5s)"), false},
+		{"put_500_server_error_bare", fmt.Errorf("server error (status 500)"), false},
+		{"put_429_unexpected_put_response", fmt.Errorf("unexpected PUT response (status 429): malformed"), false},
+
+		// no (status N) substring — decode / network / ctx-cancellation
+		{"put_200_decode_body", fmt.Errorf("failed to parse upload completion response: %w", fmt.Errorf("bad json")), false},
+		{"network_dial_failure", fmt.Errorf("dial tcp: lookup google: no such host"), false},
+		{"ctx_canceled", fmt.Errorf("context canceled"), false},
+		{"nil_error_safety", nil, false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isHardRejection4xxStatus(tc.err); got != tc.want {
+				if tc.err != nil {
+					t.Errorf("isHardRejection4xxStatus(%q) = %v, want %v", tc.err.Error(), got, tc.want)
+				} else {
+					t.Errorf("isHardRejection4xxStatus(nil) = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
 }
