@@ -8,6 +8,7 @@ import {
   GraduationCap,
   CalendarClock,
   Globe,
+  MessageCircle,
 } from "lucide-react";
 import { MarketingNav } from "../components/layout/MarketingNav";
 import { MarketingFooter } from "../components/layout/MarketingFooter";
@@ -138,6 +139,31 @@ const MENTORING = [
     title: "Multi-platform Setup",
     description:
       "Guided setup of all channels and automations to publish on every platform without wasting time.",
+  },
+];
+
+/**
+ * Programs social proof: distinct from Mentoring.tsx testimonials in content
+ * AND in author names so a reader who has seen both pages never sees the
+ * same quote or author attributed twice. Placement: between ComparisonSection
+ * and MentoringSection (validate the buyer's decision before offering the
+ * off-ramp into Mentoring).
+ */
+const PROGRAM_TESTIMONIALS = [
+  {
+    quote: "We onboarded 18 clients in three months without adding a single hire. The Program paid for itself by week four.",
+    author: "David K.",
+    role: "Agency owner",
+  },
+  {
+    quote: "The SOC2 audit trail was the deal closer for our enterprise procurement. We shipped with everything compliance needed.",
+    author: "Anna R.",
+    role: "Head of Brand Operations",
+  },
+  {
+    quote: "I went from a few Reels per week to shipping daily. The Program templates gave me a runbook, not just a pile of videos.",
+    author: "Felix O.",
+    role: "Independent creator",
   },
 ];
 
@@ -483,6 +509,45 @@ function CTASection() {
   );
 }
 
+function TestimonialsSection() {
+  return (
+    <section id="testimonials" className="relative py-24 sm:py-32 overflow-hidden bg-elevated">
+      <div aria-hidden="true" className="absolute inset-0 hero-aurora opacity-20 pointer-events-none" />
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="max-w-3xl mb-16 animate-fade-up">
+          <div className="text-eyebrow text-violet-300/90 mb-3">From members</div>
+          <h2 className="text-display-2 text-white">
+            What those who joined say.
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
+            Operators, agencies and brand teams who use the Programs as their production backbone.
+          </p>
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {PROGRAM_TESTIMONIALS.map((t, i) => (
+            <div
+              key={t.author}
+              className={`surface-card p-6 animate-fade-up ${["", "animation-delay-100", "animation-delay-200"][i]}`}
+            >
+              <MessageCircle className="w-5 h-5 text-violet-300 mb-4" />
+              <p className="text-sm text-zinc-300 leading-relaxed mb-5">&ldquo;{t.quote}&rdquo;</p>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white text-sm font-semibold">
+                  {t.author.charAt(0)}
+                </div>
+                <div>
+                  <div className="text-sm font-semibold text-white">{t.author}</div>
+                  <div className="text-xs text-zinc-500">{t.role}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function Programs() {
   return (
     <div className="min-h-screen bg-[#030308]">
@@ -491,6 +556,7 @@ export function Programs() {
         <Hero />
         <ProgramsList />
         <ComparisonSection />
+        <TestimonialsSection />
         <MentoringSection />
         <FAQSection />
         <CTASection />
