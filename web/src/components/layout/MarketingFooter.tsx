@@ -4,20 +4,22 @@ import { PLATFORM_REGISTRY } from "../marketing/PlatformLogos";
 
 const COLS: Array<{ heading: string; links: Array<{ l: string; to?: string; href?: string }> }> = [
   {
-    heading: "Prodotto",
-    links: [        { l: "Pipeline AI", href: "/#pipeline" },
-        { l: "Workflow", href: "/#workflow" },
-        { l: "Features", href: "/#features" },
-        { l: "Per agenzie", href: "/#agency" },
-        { l: "Programmi", to: "/programs" },
-        { l: "Mentoring", to: "/mentoring" },
+    heading: "Product",
+    links: [
+      { l: "Pipeline AI", href: "/#pipeline" },
+      { l: "Workflow", href: "/#workflow" },
+      { l: "Features", href: "/#features" },
+      { l: "For agencies", href: "/#agency" },
+      { l: "Programs", to: "/programs" },
+      { l: "Mentoring", to: "/mentoring" },
     ],
   },
   {
-    heading: "Legale",
+    heading: "Legal",
     links: [
       { l: "Privacy", to: "/privacy" },
-      { l: "Termini", to: "/terms" },        { l: "Cancellazione dati", href: "/data-deletion.html" },
+      { l: "Terms", to: "/terms" },
+      { l: "Data deletion", href: "/data-deletion.html" },
     ],
   },
 ];
@@ -34,8 +36,8 @@ export function MarketingFooter() {
             <span className="font-bold tracking-tight text-white text-base">InstaEdit</span>
           </Link>
           <p className="text-sm text-zinc-400 mt-4 max-w-[42ch] leading-relaxed">
-            Infrastruttura di pubblicazione multi-piattaforma per team che producono contenuti ogni giorno.
-            Un render, ogni canale, ogni volta.
+            Multi-platform publishing infrastructure for teams producing content every day.
+            One render, every channel, every time.
           </p>
           <div className="flex items-center gap-2 mt-5">
             {PLATFORM_REGISTRY.map(({ key, name, Logo }) => (
@@ -65,7 +67,7 @@ export function MarketingFooter() {
       <div className="border-t border-white/5">
         <div className="mx-auto max-w-7xl px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
           <div>© {new Date().getFullYear()} InstaEdit, Inc.</div>
-          <div>Costruito per creator e team di content operations.</div>
+          <div>Built for creators and content operations teams.</div>
         </div>
       </div>
     </footer>
