@@ -95,12 +95,21 @@ type staffIdentity struct {
 	isAdmin bool
 }
 
-func (s staffIdentity) UserID() int64              { return s.uid }
-func (s staffIdentity) WorkspaceID() int64         { return 0 }
-func (s staffIdentity) IsAPIKey() bool             { return false }
-func (s staffIdentity) IsAdmin() bool              { return s.isAdmin }
-func (s staffIdentity) HasPermission(string) bool  { return s.isAdmin }
-func (s staffIdentity) SessionID() string          { return "" }
+func (s staffIdentity) UserID() int64               { return s.uid }
+func (s staffIdentity) WorkspaceID() int64          { return 0 }
+func (s staffIdentity) IsAPIKey() bool              { return false }
+func (s staffIdentity) IsAdmin() bool               { return s.isAdmin }
+func (s staffIdentity) HasPermission(string) bool   { return s.isAdmin }
+func (s staffIdentity) SessionID() int64            { return 0 }
+func (s staffIdentity) Permissions() []string       { return nil }
+// KeyID is the API-key fingerprint surface. Production's
+// ApiKeyIdentity returns the key ID; UserIdentity (and all JWT
+// identities) returns 0 because JWT sessions don't carry a key ID.
+// Tests don't probe it, but the Identity interface requires it
+// AND the type must be int64 (not string) to satisfy the
+// interface — this is the fix that unbreaks admin_channels_test.go
+// after the Identity contract grew SessionID/Permissions.
+func (s staffIdentity) KeyID() int64                { return 0 }
 
 func TestHandleAdminYouTubeFleetReadiness_NonAdmin_Forbidden(t *testing.T) {
 	store := &stubAdminStore{}
