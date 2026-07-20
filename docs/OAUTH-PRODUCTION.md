@@ -630,6 +630,60 @@ check after every consent-screen republish.
 ./scripts/verify-google-oauth-mode.sh "$OAUTH_ACCESS_TOKEN"
 ```
 
+### AppMode flag + automated TTL coverage
+
+The InstaEdit backend plumbs through an `APP_MODE` env var that
+pins the deployment to Google's OAuth-consent-screen publishing
+status:
+
+```bash
+APP_MODE=production   # default; durable refresh tokens
+APP_MODE=testing      # mirrors Google's 7-day Testing-mode TTL
+```
+
+The flag lives in `internal/config/config.go` as
+`Config.AppMode string` and is read by the `TokenRefresher`
+closure built in `cmd/server/main.go`. In production, the closure
+forwards calls to Google's real `oauth2/v3/token` endpoint and
+returns the response verbatim; in CI, `internal/credentials/vault_ttl_test.go`
+injects a fake clock that "advances" 7-8 days and pins the
+production-vs-testing distinction at the vault-layer without pinging
+real Google:
+
+* `TestVault_Renew_AppModeProduction_RefreshSurvives8Days` --
+  the refresher closure returns a fresh token pair at simulated
+  T+8d; `vault.Renew` must succeed and persist the new ciphertext.
+  A regression that broke the AppMode wiring (someone hardcoded
+  "testing" in the production closure) would fail this test LOUD
+  before any of the 200 production channels get caught at T+7d.
+* `TestVault_Renew_AppModeTesting_RefreshFailsAfter7Days` -- the
+  refresher closure returns Google's documented `invalid_grant`
+  response at simulated T+7d; `vault.Renew` must propagate the
+  error AND the new tokens must NOT be saved. The asserted error
+  envelope contains both `"invalid_grant"` AND `"(status 400)"`
+  so `internal/services/youtube_oauth.go::isHardRejection4xxStatus`
+  correctly routes to the reauth branch (not the transient-retry
+  branch). A regression in the classifier here would flip an
+  invalid_grant into a transient retry and burn the retry budget.
+* `config.Load()` defaults `AppMode` to `"production"` -- operators
+  who forget to set the env var inherit the durable refresh-token
+  bucket by default. The first assertion of the Production test
+  (`config.Load()` must return AppMode="production") pins this
+  safer-default invariant. If you intentionally flip an env to
+  "testing", `os.Setenv("APP_MODE", "testing")` must run BEFORE
+  the test instantiates the closure -- the test reads `cfg.AppMode`
+  at closure-build time, not at runtime.
+
+The "fake clock that advances 7-8 days" is not a real `time.Now()`
+override: the mock closure is hardcoded to emit the production vs
+testing response based on `cfg.AppMode`. This keeps the test
+deterministic AND means CI does not need to wait 8 real-world
+days. The trade-off: the test pins OUR policy intent (AppMode
+behaviour) but does NOT validate Google's actual
+`oauth2/v3/token` response shape at T+7d. Operators verify the
+latter on a per-channel cadence via `private_canary_ok` /
+`canary_channel_match_ok` from `/admin/health.csv` (Step 10).
+
 ## Operational checklist
 
 The operator's deployment runbook should include these steps in
