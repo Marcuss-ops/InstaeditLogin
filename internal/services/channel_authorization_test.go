@@ -640,3 +640,99 @@ func TestAuthorizeChannel_ReauthKeepsSameOAuthConnection(t *testing.T) {
 		t.Fatalf("sqlmock expectations: %v (the second flow MUST reuse the same UPSERT SQL (same ocr ID) AND fire the pruner DELETE)", err)
 	}
 }
+
+// TestAuthorizeChannel_EligibilityGateActuallyCalled_RejectsInlineMapRegression
+// closes the SECOND class of regression that the file-level var _
+// compile-time guard + the 4 status-rejection integration tests
+// cannot catch at their respective layers:
+//
+//     "A future refactor replaces the production `eligibilityGate(...)`
+//      call site with an inline `eligible := map[string]bool{...}` +
+//      `if !eligible[currentStatus]` block, while leaving the
+//      `var _ = IsEligibleForActivePromotion` package-level
+//      reference AND the production initial value of `eligibilityGate
+//      = IsEligibleForActivePromotion` untouched."
+//
+// Why a NEW test:
+//   - var _ guard catches wholesale reference deletion (compile-time).
+//   - 5 status-rejection integration tests assert REJECTION behaviour
+//     but not WHICH gate produced it; an inline map would re-reject
+//     the same statuses and they pass transparently.
+//   - This test swaps `eligibilityGate` for a spy at test time and
+//     asserts the spy was invoked with the loaded status. If
+//     AuthorizeChannel ever routes around the pointer indirection,
+//     the spy is NEVER called and this test fails (TEST LAYER
+//     CATCHES THE REWIRE-AT-CALL-SITE REGRESSION CLASS).
+//
+// Mechanic: the spy stores `called=true` + the status argument, then
+// returns false to short-circuit AuthorizeChannel through its
+// eligibility-rejection branch (no UPSERT/INSERT/UPDATE/COMMIT fires;
+// sqlmock catches a regression that accidentally proceeds anyway).
+//
+// We deliberately load a status the REAL allow-list ACCEPTS
+// (pending_authorization) so the test asserts positive routing — if
+// production routed through the spy, we'd see called=true; if it
+// doesn't, called=false regardless of which status the load
+// returned. Loading 'pending_authorization' as an input that should
+// pass makes the spy the SOLE red signal: a regression that returns
+// true from the inline map AND also bypasses the spy would still
+// fail because called=false.
+//
+// defer-restore pattern is mandatory: `eligibilityGate` is package-
+// level mutable state; a panic deep inside AuthorizeChannel must not
+// leak the spy to subsequent tests. The other tests in this file do
+// not touch `eligibilityGate`, so even without defer-restore the
+// test would not corrupt them, but the defer makes the contract
+// explicit.
+func TestAuthorizeChannel_EligibilityGateActuallyCalled_RejectsInlineMapRegression(t *testing.T) {
+	svc, mock, _, cleanup := newSvcHarness(t)
+	defer cleanup()
+
+	const accountID, userID int64 = 41, 800
+
+	// Spy: records invocation + the status argument the gate saw.
+	// Returns false unconditionally — the status we load is one the
+	// REAL allow-list accepts (pending_authorization), so the spy is
+	// the SOLE reason AuthorizeChannel rejects via this code path.
+	var (
+		spyCalled atomic.Int32
+		spyArg    atomic.Value
+	)
+	origGate := eligibilityGate
+	eligibilityGate = func(status string) bool {
+		spyCalled.Add(1)
+		spyArg.Store(status)
+		return false
+	}
+	defer func() { eligibilityGate = origGate }()
+
+	mock.ExpectBegin()
+	expectLoadAccount(mock, accountID, userID, "youtube", "UCabcdefghijklmnopqrstuv", models.AccountStatusPendingAuthorization)
+	mock.ExpectRollback()
+
+	_, err := svc.AuthorizeChannel(context.Background(),
+		accountID,
+		"", // no expectedChannelID — binder path skipped
+		nil,
+		&models.TokenData{AccessToken: "x", TokenType: models.TokenTypeBearer, ExpiresIn: 60},
+	)
+	if err == nil {
+		t.Fatal("AuthorizeChannel must reject (spy returns false regardless of status)")
+	}
+	if !strings.Contains(err.Error(), "not eligible for active promotion") {
+		t.Errorf("error must mention eligibility gate; got %v", err)
+	}
+	if !strings.Contains(err.Error(), models.AccountStatusPendingAuthorization) {
+		t.Errorf("error must surface the loaded status %q — proves AuthorizeChannel routed the loaded row through the gate; got %v",
+			models.AccountStatusPendingAuthorization, err)
+	}
+	if calls := spyCalled.Load(); calls != 1 {
+		t.Fatalf("eligibilityGate spy invocation count: want 1, got %d — production code did NOT route through the eligibilityGate package variable (inline-map regression?)", calls)
+	}
+	if got, want := spyArg.Load().(string), models.AccountStatusPendingAuthorization; got != want {
+		t.Errorf("eligibilityGate spy received status: want %q, got %q (status passed through AuthorizeChannel into the gate mismatch)", want, got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v (load then ROLLBACK — NO upsert / INSERT / UPDATE / COMMIT after the spy rejection)", err)
+	}
+}

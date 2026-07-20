@@ -136,6 +136,20 @@ var _ ChannelAuthorizer = (*ChannelAuthorizationService)(nil)
 // helper unit test + sqlmock integration tests).
 var _ = IsEligibleForActivePromotion
 
+// eligibilityGate is the package-level function-pointer indirection
+// AuthorizeChannel routes through. Defaults to
+// IsEligibleForActivePromotion (production behaviour unchanged).
+// Tests swap it for a spy to prove AuthorizeChannel actually
+// consults the gate — see
+// TestAuthorizeChannel_EligibilityGateActuallyCalled_RejectsInlineMapRegression.
+// Without the indirection the "inline-map while leaving var _ intact"
+// regression class slips past every status-rejection test because
+// those tests assert the REJECTION outcome, not WHICH gate produced it.
+// Two complementary guards — the var _ above catches wholesale
+// reference deletion at compile time; this pointer indirection
+// catches rewire-at-call-site at runtime.
+var eligibilityGate = IsEligibleForActivePromotion
+
 // AuthorizeChannel is the one and only entry point that flips
 // platform_accounts.status to 'active'.
 func (s *ChannelAuthorizationService) AuthorizeChannel(
@@ -252,19 +266,26 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 	if userID <= 0 {
 		return 0, fmt.Errorf("channel authorization: platform_accounts.user_id is zero for account %d", accountID)
 	}
-	// Eligibility gate. Single source of truth:
-	// services.IsEligibleForActivePromotion (see
+	// Eligibility gate. Routes through the package-level
+	// `eligibilityGate` function-pointer indirection (default =
+	// services.IsEligibleForActivePromotion — see
 	// internal/services/eligibility_gate.go for the allow-list
 	// policy + the explicit-exclusion rationale per status).
 	// AuthorizeChannel is the SOLE current caller; any future
 	// caller (worker reconnect handler, admin re-auth tool,
-	// etc.) MUST route through the same helper so the gate cannot
+	// etc.) MUST route through the same pointer so the gate cannot
 	// drift between consumers. The error message format below
 	// is consumed by sqlmock-bound integration tests in
 	// channel_authorization_test.go (asserting "not eligible for
 	// active promotion" + the offending status literal) —
 	// changing the format without updating those tests will fail CI.
-	if !IsEligibleForActivePromotion(currentStatus) {
+	// The indirection (vs calling IsEligibleForActivePromotion
+	// directly here) lets
+	// TestAuthorizeChannel_EligibilityGateActuallyCalled_RejectsInlineMapRegression
+	// swap the gate for a spy and assert AuthorizeChannel actually
+	// consulted it — closing a regression class the var _ compile-
+	// time guard cannot catch in isolation.
+	if !eligibilityGate(currentStatus) {
 		return 0, fmt.Errorf("channel authorization: account %d is in status %q which is not eligible for active promotion (allowed: pending_authorization, active, reauth_required)",
 			accountID, currentStatus)
 	}
