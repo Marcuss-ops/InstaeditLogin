@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { Seo } from "../components/seo/Seo";
 import {
   Zap,
   Shield,
@@ -912,6 +913,13 @@ function LongFormSection() {
  * Footer
  * -------------------------------------------------------------------------- */
 
+const SEO = {
+  title: "InstaEdit — AI platform to create and publish videos",
+  description:
+    "InstaEdit turns one render into 7 native posts per platform — scheduled, captioned and published from a single calendar. Built for content teams producing at scale.",
+  canonical: "https://app.instaedit.org/",
+} as const;
+
 function Footer() {
   const cols: Array<{ heading: string; links: Array<{ l: string; to?: string; href?: string }> }> = [
     {
@@ -1128,6 +1136,7 @@ function FinalCTA() {
 export function Landing() {
   return (
     <div className="min-h-screen bg-[#030308] text-[#e8e8ef] font-sans antialiased overflow-x-hidden selection:bg-violet-500/40 selection:text-white">
+      <Seo {...SEO} />
       <Nav />
       <main className="relative">
         <Hero />
