@@ -347,7 +347,7 @@ function YouTubeEmbed({
           src={`https://www.youtube.com/embed/${id}?playsinline=1`}
           title={title}
           loading="lazy"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen
           referrerPolicy="strict-origin-when-cross-origin"
         />
