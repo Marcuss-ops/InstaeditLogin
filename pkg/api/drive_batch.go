@@ -440,9 +440,32 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 		needsDriveAccount = true
 	}
 
+	// Task 6/10 — Shared Drive auto-resolve. Resolve the folder's
+	// driveId for ListFolder's driveID parameter so Shared Drive
+	// folders get `corpora=drive&driveId=…` while My Drive folders
+	// stay on the default corpus. Best-effort by design: a failure
+	// here (network, 404, parse, type-assertion miss) just logs a
+	// warn-level remediation hint and falls back to "" (= pre-T6/10
+	// behaviour, full back-compat). The folder's driveId is stable
+	// for the lifetime of a folder, so this resolution is once per
+	// import — NOT per page — to halve Drive API quota usage.
+	inspector, canInspect := lister.(services.DriveFolderInspector)
+	resolvedDriveID, resolveErr := services.ResolveFolderDriveID(req.Context(), inspector, body.FolderID, listingAccessToken)
+	if resolveErr != nil {
+		slog.Warn("drive batch import: folder metadata fetch failed; falling back to My Drive corpus",
+			"folder_id", body.FolderID,
+			"user_id", userID,
+			"inspector_available", canInspect,
+			"error", resolveErr,
+		)
+		resolvedDriveID = ""
+	}
+
 	// List folder contents — page_token (when present) makes Drive
 	// continue from the previous page instead of returning page 1.
-	files, nextPageToken, err := folderLister.ListFolder(req.Context(), body.FolderID, "" /*driveID — My Drive corpus*/, listingAccessToken, body.PageToken)
+	// resolvedDriveID is "" for My Drive folders (no driveId scoping)
+	// and a Shared Drive's id for Shared Drive folders (corpora=drive).
+	files, nextPageToken, err := folderLister.ListFolder(req.Context(), body.FolderID, resolvedDriveID, listingAccessToken, body.PageToken)
 	if err != nil {
 		// Typed sentinel: missing API key on the server is a deploy
 		// configuration gap (operator-fixable), NOT a transient

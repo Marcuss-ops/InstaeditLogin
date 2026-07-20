@@ -334,10 +334,25 @@ func fetchGoogleUserInfo(ctx context.Context, accessToken string) (*models.Platf
 }
 
 func listAllFolderFiles(ctx context.Context, svc *services.GoogleDriveOAuthService, folderID, accessToken string) ([]services.GoogleDriveFile, error) {
+	// Task 6/10 — Shared Drive auto-resolve. Resolve the folder's
+	// driveId ONCE before the pagination loop so the Shared Drive
+	// scope is preserved across pages (a folder's driveId is stable
+	// for its lifetime; per-page resolve would burn quota). On any
+	// failure, log a warn-level remediation hint and fall back to
+	// the empty driveId (pre-T6/10 My Drive corpus behaviour, full
+	// back-compat for the operator CLI).
+	driveID, err := services.ResolveFolderDriveID(ctx, svc, folderID, accessToken)
+	if err != nil {
+		slog.Warn("link-drive-and-import: folder metadata fetch failed; falling back to My Drive corpus",
+			"folder_id", folderID,
+			"error", err,
+		)
+		driveID = ""
+	}
 	var all []services.GoogleDriveFile
 	pageToken := ""
 	for {
-		files, nextPageToken, err := svc.ListFolder(ctx, folderID, "" /*driveID — My Drive corpus*/, accessToken, pageToken)
+		files, nextPageToken, err := svc.ListFolder(ctx, folderID, driveID, accessToken, pageToken)
 		if err != nil {
 			return nil, err
 		}

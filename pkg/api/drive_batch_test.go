@@ -30,6 +30,7 @@ type mockDriveFolderLister struct {
 	gotFolderID    string
 	gotToken       string
 	gotPageToken   string
+	gotDriveID     string
 	listCallCount  int
 	// pagesFn enables multi-page simulation. When set, the mock
 	// routes ListFolder through this callback so test cases can
@@ -37,11 +38,22 @@ type mockDriveFolderLister struct {
 	// calls. Nil → mock falls back to static files + static
 	// nextPageToken (preserves every pre-existing test).
 	pagesFn func(pageToken string) (files []services.GoogleDriveFile, next string, err error)
+	// folderMetadataFn lets Task 6/10 acceptance tests drive the
+	// Shared-Drive auto-resolve path without an httptest server.
+	// GetFileMetadata call routes through this callback so tests
+	// can return either a Shared-Drive bucket (driveId="shared-…")
+	// or a My-Drive bucket (driveId=""). When nil, GetFileMetadata
+	// returns ErrDriveFolderMetadataFetchFailed wrapped so the
+	// resolver falls back to "" (matches pre-T6/10 behaviour for
+	// every existing test that doesn't override this field).
+	folderMetadataFn func(fileID string) (*services.GoogleDriveFile, error)
+	metadataCalls    int // captured for the Shared Drive propagation test
 }
 
 func (m *mockDriveFolderLister) Name() string { return "google-drive" }
 func (m *mockDriveFolderLister) ListFolder(_ context.Context, folderID, driveID, accessToken, pageToken string) ([]services.GoogleDriveFile, string, error) {
 	m.gotFolderID = folderID
+	m.gotDriveID = driveID
 	m.gotToken = accessToken
 	m.gotPageToken = pageToken
 	m.listCallCount++
@@ -54,11 +66,27 @@ func (m *mockDriveFolderLister) ListFolder(_ context.Context, folderID, driveID,
 	return m.files, m.nextPageToken, nil
 }
 
-// Compose-time conformance to the two narrow interfaces handler.go
-// actually casts to. Compile errors here mean the handler would also
-// fail to type-assert, so the test fails BEFORE runtime.
+// GetFileMetadata satisfies the Task 6/10 DriveFolderInspector
+// narrowing so the resolver can run against this mock. When
+// folderMetadataFn is set, routes through it (acceptance tests);
+// otherwise returns a typed ErrDriveFolderMetadataFetchFailed so
+// the resolver falls back to "" — preserves every pre-existing
+// test that doesn't override the field.
+func (m *mockDriveFolderLister) GetFileMetadata(_ context.Context, _, fileID string) (*services.GoogleDriveFile, error) {
+	m.metadataCalls++
+	if m.folderMetadataFn != nil {
+		return m.folderMetadataFn(fileID)
+	}
+	return nil, fmt.Errorf("%w: test mock defaults to no-metadata (set folderMetadataFn for Shared-Drive routing tests)", services.ErrDriveFolderMetadataFetchFailed)
+}
+
+// Compose-time conformance to the three narrow interfaces the
+// handler + Task 6/10 resolver cast to. Compile errors here mean
+// the resolver would also fail to type-assert at runtime, so the
+// test fails BEFORE runtime.
 var (
-	_ services.DriveFolderLister = (*mockDriveFolderLister)(nil)
+	_ services.DriveFolderLister   = (*mockDriveFolderLister)(nil)
+	_ services.DriveFolderInspector = (*mockDriveFolderLister)(nil)
 )
 
 // mockUploadJobStore appends every Create'd job for inspection. We use
@@ -1318,6 +1346,180 @@ func TestDriveBatchImport_CursorInFuture_FlagNotSet(t *testing.T) {
 }
 
 // DriveBatchStatus tests -----------------------------------------------------------------
+
+// =====================================================================
+// Shared Drive auto-resolve tests (Task 6/10)
+// =====================================================================
+
+// TestDriveBatchImport_SharedDrive_ResolvesAndPropagatesDriveID verifies
+// acceptance: when a folder's GetFileMetadata returns a non-empty
+// driveId (Shared Drive), the handler threads that driveId into the
+// ListFolder call so Drive's v3 API gets `corpora=drive&driveId=…`.
+// The mock bridge: folderMetadataFn returns a Shared-Drive-style
+// resource; the handler then calls ListFolder with that driveId.
+func TestDriveBatchImport_SharedDrive_ResolvesAndPropagatesDriveID(t *testing.T) {
+	const sharedDriveID = "0ABC-shared-drive-folder-x"
+	lister := &mockDriveFolderLister{
+		folderMetadataFn: func(fileID string) (*services.GoogleDriveFile, error) {
+			if fileID != "shared-folder" {
+				t.Errorf("resolver called with wrong fileID: want %q, got %q", "shared-folder", fileID)
+			}
+			return &services.GoogleDriveFile{
+				ID:      fileID,
+				Name:    "shared/",
+				DriveID: sharedDriveID,
+			}, nil
+		},
+	}
+	store := &mockUploadJobStore{}
+	r := newBatchImportTestRouter(lister, store)
+
+	body := `{"folder_id":"shared-folder","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
+	}
+	if lister.metadataCalls != 1 {
+		t.Errorf("resolver should be called exactly once per import (not per page); got %d calls", lister.metadataCalls)
+	}
+	if lister.gotDriveID != sharedDriveID {
+		t.Errorf("ListFolder driveID: want %q (the Shared Drive id from metadata), got %q", sharedDriveID, lister.gotDriveID)
+	}
+	if lister.gotFolderID != "shared-folder" {
+		t.Errorf("ListFolder folderID: want shared-folder, got %q", lister.gotFolderID)
+	}
+}
+
+// TestDriveBatchImport_PrivateFolder_DriveIDRemainsEmpty verifies the
+// My-Drive corpus path: when a folder's GetFileMetadata returns
+// driveId="" (the default for personal-Drive folders), the resolver
+// returns "" and the handler threads "" into ListFolder, which uses
+// the default My-Drive corpus. This is the back-compat case — every
+// operator using personal Drive still works unchanged.
+func TestDriveBatchImport_PrivateFolder_DriveIDRemainsEmpty(t *testing.T) {
+	lister := &mockDriveFolderLister{
+		folderMetadataFn: func(fileID string) (*services.GoogleDriveFile, error) {
+			return &services.GoogleDriveFile{
+				ID:      fileID,
+				Name:    "personal/",
+				DriveID: "", // explicit empty = My Drive
+			}, nil
+		},
+	}
+	store := &mockUploadJobStore{}
+	r := newBatchImportTestRouter(lister, store)
+
+	body := `{"folder_id":"personal-folder","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202 (My Drive is the back-compat path), got %d: %s", w.Code, w.Body.String())
+	}
+	if lister.metadataCalls != 1 {
+		t.Errorf("resolver call count: want 1, got %d", lister.metadataCalls)
+	}
+	if lister.gotDriveID != "" {
+		t.Errorf("ListFolder driveID: want empty (My Drive corpus), got %q", lister.gotDriveID)
+	}
+}
+
+// TestDriveBatchImport_FolderMetadataFetchFails_DriveIDEmpty verifies
+// the best-effort swallow path: when GetFileMetadata fails (transient
+// network blip, 404, parse), the resolver returns ErrDriveFolder-
+// MetadataFetchFailed which the handler logs at warn level and
+// converts to driveID="" (= pre-T6/10 behaviour, full back-compat).
+// This is the contract that protects against the Shared-Drive resolver
+// regressing into a hard import failure.
+func TestDriveBatchImport_FolderMetadataFetchFails_DriveIDEmpty(t *testing.T) {
+	lister := &mockDriveFolderLister{
+		folderMetadataFn: func(fileID string) (*services.GoogleDriveFile, error) {
+			return nil, fmt.Errorf("%w: 404 not found", services.ErrDriveFolderMetadataFetchFailed)
+		},
+	}
+	store := &mockUploadJobStore{}
+	r := newBatchImportTestRouter(lister, store)
+
+	body := `{"folder_id":"unreachable-folder","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	// Handler must NOT surface the resolver error to the client.
+	// With a resolver failure + no static files, ListFolder returns
+	// 0 files → 200 OK with empty entries + a note (the existing
+	// empty-folder path; preserves the user's existing UX).
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 (resolver failure must NOT 5xx), got %d: %s", w.Code, w.Body.String())
+	}
+	if lister.metadataCalls != 1 {
+		t.Errorf("resolver call count: want 1, got %d", lister.metadataCalls)
+	}
+	if lister.gotDriveID != "" {
+		t.Errorf("ListFolder driveID: want empty after resolver failure, got %q", lister.gotDriveID)
+	}
+}
+
+// TestUploadsBatchByFolder_SharedDrive_ResolvesOnce_NotPerPage verifies
+// the per-folder (NOT per-page) caching contract: across a multi-page
+// crawl, GetFileMetadata is called EXACTLY ONCE — the folder's driveId
+// is stable for its lifetime. A regression that resolves per-page
+// would double Drive quota for no benefit; this test catches it.
+func TestUploadsBatchByFolder_SharedDrive_ResolvesOnce_NotPerPage(t *testing.T) {
+	const sharedDriveID = "0ABC-multi-page-shared"
+	lister := &mockDriveFolderLister{
+		folderMetadataFn: func(fileID string) (*services.GoogleDriveFile, error) {
+			return &services.GoogleDriveFile{
+				ID:      fileID,
+				Name:    "multi/",
+				DriveID: sharedDriveID,
+			}, nil
+		},
+		pagesFn: func(pageToken string) ([]services.GoogleDriveFile, string, error) {
+			switch pageToken {
+			case "":
+				return []services.GoogleDriveFile{
+					{ID: "p1-a", Name: "p1-a.mp4", MimeType: "video/mp4"},
+				}, "tok-2", nil
+			case "tok-2":
+				return []services.GoogleDriveFile{
+					{ID: "p2-a", Name: "p2-a.mp4", MimeType: "video/mp4"},
+					{ID: "p2-b", Name: "p2-b.mp4", MimeType: "video/mp4"},
+				}, "", nil
+			default:
+				return nil, "", fmt.Errorf("unexpected token %q", pageToken)
+			}
+		},
+	}
+	store := &mockUploadJobStore{}
+	r := newBatchImportTestRouter(lister, store)
+
+	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"multi","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`, "")
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", w.Code, w.Body.String())
+	}
+	if lister.listCallCount != 2 {
+		t.Fatalf("want 2 ListFolder pages in this test, got %d", lister.listCallCount)
+	}
+	// THE contract: even with 2 pages, resolver fires ONCE.
+	if lister.metadataCalls != 1 {
+		t.Errorf("resolver must be called ONCE per import (NOT per page); a regression that resolves per page shows here. got %d calls across %d pages", lister.metadataCalls, lister.listCallCount)
+	}
+	if lister.gotDriveID != sharedDriveID {
+		t.Errorf("ListFolder driveID: want %q on every page, got %q", sharedDriveID, lister.gotDriveID)
+	}
+}
 
 // DriveBatchImport idempotency tests ----------------------------------------------------
 

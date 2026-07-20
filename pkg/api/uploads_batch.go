@@ -294,6 +294,24 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 		return
 	}
 
+	// Task 6/10 — Shared Drive auto-resolve. Resolve the folder's
+	// driveId ONCE before the pagination loop (a folder's driveId
+	// is stable for its lifetime, so per-page resolution would
+	// double the Drive API quota for nothing). Best-effort: on
+	// failure, fall back to the empty driveId (= pre-T6/10 My Drive
+	// corpus behaviour) and log a warn-level remediation hint.
+	inspector, canInspect := lister.(services.DriveFolderInspector)
+	resolvedDriveID, resolveErr := services.ResolveFolderDriveID(req.Context(), inspector, body.FolderID, listingAccessToken)
+	if resolveErr != nil {
+		slog.Warn("uploads batch by-folder: folder metadata fetch failed; falling back to My Drive corpus",
+			"folder_id", body.FolderID,
+			"user_id", userID,
+			"inspector_available", canInspect,
+			"error", resolveErr,
+		)
+		resolvedDriveID = ""
+	}
+
 	// Multi-page loop. The cursor advances monotonically across
 	// pages via the LAST entry's scheduled_at on every iteration so
 	// the cumulative stagger is uninterrupted (matching what
@@ -320,7 +338,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 				fmt.Sprintf("folder has more than driveBatchMaxPages=%d pages; split the import into smaller chunks or use the CLI", driveBatchMaxPages))
 			return
 		}
-		files, nextPageToken, err := folderLister.ListFolder(req.Context(), body.FolderID, "" /*driveID — My Drive corpus*/, listingAccessToken, pageToken)
+		files, nextPageToken, err := folderLister.ListFolder(req.Context(), body.FolderID, resolvedDriveID, listingAccessToken, pageToken)
 		if err != nil {
 			// Config gap (server-side GOOGLE_DRIVE_API_KEY missing
 			// AND no per-user Drive grant provided) is detected on

@@ -329,6 +329,28 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 		return
 	}
 
+	// Task 6/10 — Shared Drive auto-resolve. Resolve the folder's
+	// driveId ONCE before the pagination loop (the folder's driveId
+	// is stable; per-page resolve would burn quota for no gain).
+	// Best-effort: a failure here just falls back to the My Drive
+	// corpus and logs a warn-level remediation hint so a future
+	// operator dashboard can group these. The resolveFolderLister
+	// helper returns `(lister, token, err)` where `lister` is the
+	// narrowed DriveFolderLister interface — re-type-assert to
+	// DriveFolderInspector for the resolver call (Inspector is a
+	// narrow subset of DriveImporter, satisfied by the same provider).
+	provider, _ := c.capRouter.Get(batch.SourceProvider)
+	inspector, _ := provider.(services.DriveFolderInspector)
+	resolvedDriveID, resolveErr := services.ResolveFolderDriveID(ctx, inspector, batch.SourceFolderID, accessToken)
+	if resolveErr != nil {
+		c.logger.Warn("drive batch crawler: folder metadata fetch failed; falling back to My Drive corpus",
+			"batch_id", batch.ID,
+			"folder_id", batch.SourceFolderID,
+			"error", resolveErr,
+		)
+		resolvedDriveID = ""
+	}
+
 	// Per-page pagination. After every page write we checkpoint
 	// the cursor so a crash resumes here.
 	cursorToken := ""
@@ -365,7 +387,7 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 			return
 		}
 
-		files, nextPageToken, listErr := lister.ListFolder(ctx, batch.SourceFolderID, "" /*driveID — see ListFolder godoc*/, accessToken, cursorToken)
+		files, nextPageToken, listErr := lister.ListFolder(ctx, batch.SourceFolderID, resolvedDriveID, accessToken, cursorToken)
 		if listErr != nil {
 			terminalErr = fmt.Errorf("ListFolder page %d: %w", pageCount, listErr)
 			c.logger.Error("drive batch crawler: ListFolder failed",
