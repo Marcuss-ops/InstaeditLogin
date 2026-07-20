@@ -267,10 +267,7 @@ function YouTubeEmbed({ id, title, aspect }: { id: string; title: string; aspect
           src={`https://www.youtube.com/embed/${id}?playsinline=1`}
           title={title}
           loading="lazy"
-          {/* `web-share` was removed from Chromium's Permissions-Policy
-              allow-list (it triggers `[warn] Unrecognized feature: 'web-share'`
-              in DevTools and the network tab on Chrome 120+). Modern YouTube
-              embeds don't require it. Keep the rest of the policy tokens. */}
+          {/* see commit 2902c76 — `web-share` removed (Chromium 120+ deprecation). */}
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen
           referrerPolicy="strict-origin-when-cross-origin"
