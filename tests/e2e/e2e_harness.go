@@ -781,6 +781,54 @@ func updateTargetStatus(h *E2EHarness, targetID int64, fromStatus, toStatus, err
 	return nil
 }
 
+// attemptHeartbeatReclaim mirrors the production reclaimer-tick
+// seen in internal/worker/reconcile_worker.go: a query observes
+// post_targets WHERE heartbeat_at < NOW() - lease_timeout and
+// re-stamps the row's lease columns to its own identity. Returns
+// (acquired, err) where acquired is true iff the WHERE-clause
+// matched (i.e. the original worker is observed as crashed).
+//
+// Production uses real `NOW()` — but Postgres tests cannot easily
+// advance system clocks without docker-fu. The E2E surfaces the
+// same shape via two phases: (1) worker A acquires + we backdate
+// heartbeat_at to NOW() - 15m via raw SQL (simulating a 15-minute
+// heart attack); (2) worker B runs this helper with maxAge=5m and
+// observes a successful reclaim.
+func attemptHeartbeatReclaim(ctx context.Context, h *E2EHarness, targetID int64, maxAge time.Duration, newOwner string) (bool, error) {
+	res, err := h.pgDB.ExecContext(ctx,
+		`UPDATE post_targets
+		    SET locked_by = $1,
+		        locked_at = NOW(),
+		        heartbeat_at = NOW(),
+		        updated_at = NOW()
+		  WHERE id = $2
+		    AND (
+		        heartbeat_at IS NULL
+		        OR heartbeat_at < NOW() - make_interval(secs => $3)
+		    )`,
+		newOwner, targetID, int64(maxAge.Seconds()),
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, _ := res.RowsAffected()
+	return rows > 0, nil
+}
+
+// backdateHeartbeat simulates a crashed-worker scenario by moving
+// heartbeat_at into the deep past while keeping the row's locked_by
+// identity unchanged. Used by scenario_12 to inspect reclaim
+// behaviour without requiring Docker time-warping.
+func backdateHeartbeat(ctx context.Context, h *E2EHarness, targetID int64, age time.Duration) error {
+	_, err := h.pgDB.ExecContext(ctx,
+		`UPDATE post_targets
+		    SET heartbeat_at = NOW() - make_interval(secs => $1)
+		  WHERE id = $2`,
+		int64(age.Seconds()), targetID,
+	)
+	return err
+}
+
 // applyE2ESchema bootstraps the minimal Postgres schema the e2e
 // suite needs. We don't apply the production migration list
 // because (a) the test only queries a handful of tables and (b)

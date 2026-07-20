@@ -94,6 +94,10 @@ func TestPipelineE2E(t *testing.T) {
 		h.ResetFakes()
 		scenario11_VeloxCallbackHMAC(t, h)
 	})
+	t.Run("scenario_12_heartbeat_staleness_reclaim", func(t *testing.T) {
+		h.ResetFakes()
+		scenario12_HeartbeatReclaim(t, h)
+	})
 }
 
 // ---- Scenario 1: Drive ingest 201 videos across two pages, no dupes.
@@ -585,6 +589,103 @@ func scenario11_VeloxCallbackHMAC(t *testing.T, h *E2EHarness) {
 	}
 
 	t.Logf("scenario_11 PASS: HMAC accepts matched body; rejects tampered body + wrong secret; e2e callback roundtrip OK")
+}
+
+// ─── Scenario 12: heartbeat-driven reclaim ──────────────────────────────
+//
+// Once a worker holds a lease (locked_by + heartbeat_at stamps),
+// the reclaimer-tick observes `heartbeat_at < NOW() - lease_timeout`
+// and re-stamps the lease to a peer worker. Production: the
+// `internal/worker/reconcile_worker.go::runReclaimerTick` loop runs
+// every N seconds. E2E exercises the SAME shape via two phases:
+//
+//   - Phase 1: worker A acquires lease → heartbeat_at = NOW().
+//     Worker B observes FRESH heartbeat → reclaim REFUSED (rows
+//     affected = 0; the active worker is alive).
+//   - Phase 2: Test simulates worker-A crash by backdating
+//     heartbeat_at to NOW() - 15m via raw SQL (faster than Docker
+//     time-warp). Worker B re-observes STALE heartbeat → reclaim
+//     SUCCEEDS; row's locked_by flips to "worker-B" with fresh
+//     heartbeat_at.
+//
+// Anchors the production contract: a peer worker can ONLY take over
+// a lease when the holder's heartbeat is older than lease_timeout.
+func scenario12_HeartbeatReclaim(t *testing.T, h *E2EHarness) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const leaseTimeout = 5 * time.Minute
+	const crashAge = 15 * time.Minute
+
+	targetID, err := insertPublishTarget(h, "queued")
+	if err != nil {
+		t.Fatalf("insertPublishTarget: %v", err)
+	}
+
+	// Worker A acquires lease inside a TX (heartbeat_at = NOW() on commit).
+	txA, err := h.pgDB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("worker-A begin: %v", err)
+	}
+	if err := acquireLeaseInTx(ctx, txA, targetID); err != nil {
+		t.Fatalf("worker-A acquireLease: %v", err)
+	}
+	if err := txA.Commit(); err != nil {
+		t.Fatalf("worker-A commit: %v", err)
+	}
+
+	// Phase 1: worker B observes FRESH heartbeat → reclaim REFUSED.
+	acquired, err := attemptHeartbeatReclaim(ctx, h, targetID, leaseTimeout, "worker-B")
+	if err != nil {
+		t.Fatalf("worker-B phase-1 reclaim: %v", err)
+	}
+	if acquired {
+		t.Errorf("scenario_12: worker-B reclaimed a fresh lease (heartbeat ≤ lease_timeout ago); the reclaimer must NOT take over an active worker")
+	}
+
+	// Validate locked_by is still worker-A (no spurious takeover).
+	var lockedBy string
+	if err := h.pgDB.QueryRowContext(ctx,
+		`SELECT locked_by FROM post_targets WHERE id=$1`, targetID,
+	).Scan(&lockedBy); err != nil {
+		t.Fatalf("phase-1 anchor read: %v", err)
+	}
+	if lockedBy != "worker-A" {
+		t.Errorf("scenario_12: phase-1 locked_by: want worker-A, got %q", lockedBy)
+	}
+
+	// Phase 2: simulate worker-A crash by backdating heartbeat_at.
+	if err := backdateHeartbeat(ctx, h, targetID, crashAge); err != nil {
+		t.Fatalf("backdateHeartbeat: %v", err)
+	}
+
+	// Phase 3: worker B re-observes STALE heartbeat → reclaim SUCCEEDS.
+	acquired2, err := attemptHeartbeatReclaim(ctx, h, targetID, leaseTimeout, "worker-B")
+	if err != nil {
+		t.Fatalf("worker-B phase-3 reclaim: %v", err)
+	}
+	if !acquired2 {
+		t.Errorf("scenario_12: worker-B should have reclaimed the stale lease (heartbeat ~%v ago > %v timeout); reclaim returned FALSE", crashAge, leaseTimeout)
+	}
+
+	// Final anchor: locked_by is now worker-B + heartbeat_at is recent.
+	var (
+		gotLockedBy  string
+		gotHeartbeat time.Time
+	)
+	if err := h.pgDB.QueryRowContext(ctx,
+		`SELECT locked_by, heartbeat_at FROM post_targets WHERE id=$1`, targetID,
+	).Scan(&gotLockedBy, &gotHeartbeat); err != nil {
+		t.Fatalf("final anchor read: %v", err)
+	}
+	if gotLockedBy != "worker-B" {
+		t.Errorf("scenario_12: final locked_by: want worker-B, got %q", gotLockedBy)
+	}
+	if time.Since(gotHeartbeat) > 5*time.Second {
+		t.Errorf("scenario_12: heartbeat_at should be ≤5s old after reclaim; got Δ=%v", time.Since(gotHeartbeat))
+	}
+
+	t.Logf("scenario_12 PASS: heartbeat staleness %v > timeout %v → worker-B reclaimed; phase-1 active worker protected", crashAge, leaseTimeout)
 }
 
 // ---- helpers ----
