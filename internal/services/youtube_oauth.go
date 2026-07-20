@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -343,6 +344,21 @@ func NewYouTubeOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*
 		uploadOpts: opts,
 		uploadDeps: loadYouTubeUploadDeps(opts),
 	}, nil
+}
+
+// ClientID returns the YouTube OAuth client_id this service was
+// configured with (cfg.YouTubeClientID). Used by pkg/api/handlers.go
+// handleValidateAccount to compare Google's tokeninfo `aud` against
+// the configured client — a Production-but-issued-for-Testing token
+// carries a mismatched aud and is a hard reauth signal (the 4-step
+// pipeline's STEP 2 guard). Returns "" if the service hasn't been
+// fully constructed (defensive — the production wiring wires
+// cfg.YouTubeClientID at NewYouTubeOAuthService time).
+func (s *YouTubeOAuthService) ClientID() string {
+	if s == nil || s.cfg == nil {
+		return ""
+	}
+	return s.cfg.YouTubeClientID
 }
 
 // now returns the current time via the injected clock, or time.Now as default.
@@ -926,7 +942,17 @@ func (s *YouTubeOAuthService) GetTokenInfo(ctx context.Context, accessToken stri
 	return out, nil
 }
 
-// canaryUploadBytes is a 22-byte synthetic payload used for the
+// canaryUploadLiteral is the SINGLE source-of-truth for the canary
+// body. Both the byte slice (canaryUploadBytes) and the size constant
+// (canaryUploadSize) derive from this — a future maintainer edits
+// THIS line, the two derived values follow without cross-reference
+// mistakes. The previous shape (a duplicated literal in two places)
+// burst silently: a delete in canaryUploadBytes without the matching
+// edit in canaryUploadSize surfaced as a content-range mismatch
+// rather than a compile error.
+const canaryUploadLiteral = "INSTAEDIT-CANARY-PAYLOAD\n"
+
+// canaryUploadBytes is a small synthetic payload used for the
 // optional INSTAEDIT-OAUTH-CANARY test upload. Intentionally small
 // (a single PUT chunk) so:
 //
@@ -942,15 +968,11 @@ func (s *YouTubeOAuthService) GetTokenInfo(ctx context.Context, accessToken stri
 // the resulting video (or the videos.list absence on rejection) is
 // the source of truth. The canary upload body's content is NOT what
 // step-4 measures — channel binding is.
-var canaryUploadBytes = []byte("INSTAEDIT-CANARY-PAYLOAD\n")
+var canaryUploadBytes = []byte(canaryUploadLiteral)
 
-// canaryUploadSize is the byte count stamped in X-Upload-Content-Length
-// during initiateResumableSession + the Content-Range header of the
-// single PUT. Synced with len(canaryUploadBytes) — the const value
-// is a literal compile-time assertion: a future edit that drops a
-// byte from canaryUploadBytes will silently disagree if the
-// const is not also updated.
-const canaryUploadSize = int64(len("INSTAEDIT-CANARY-PAYLOAD\n"))
+// canaryUploadSize derives from canaryUploadLiteral — guarantees
+// compile-time sync with canaryUploadBytes.
+const canaryUploadSize = int64(len(canaryUploadLiteral))
 
 // canaryUploadContentType is intentionally NOT video/* — the canary
 // upload is a probe, not a real publish. Stamping a non-video MIME
@@ -968,7 +990,84 @@ const canaryUploadContentType = "application/octet-stream"
 // runbook is identical (status='reauth_required'). Transient 5xx
 // errors are NOT wrapped in this sentinel — they remain plain
 // wrapped so the handler treats them as transient (next-sync retry).
+//
+// IMPORTANT: only 4xx codes SUPPRESSED in isHardRejection4xxStatus
+// escalate to this sentinel. Rate-limit 429, Locked 423, every 5xx,
+// plus decode / network / ctx-cancelled errors all stay on the
+// transient branch — that's the deliberate choice the user's
+// 200-channel YouTube OAuth plan asks for (transient blip ≠ grant
+// drift ≠ reauth).
 var ErrYouTubeCanaryRejected = errors.New("youtube canary upload was rejected by videos.insert (4xx)")
+
+// statusCodeRegexp captures the (status N) triplet embedded in the
+// upstream wrapped errors emitted by initiateResumableSession and
+// putChunk. The two methods format their errors in known shapes:
+//
+//   - initiateResumableSession: "init session failed (status N): ..."
+//   - putChunk: "unexpected PUT response (status N): ..." /
+//     "rate limited (status 429, ...)" /
+//     "server error (status N, ...)" or "server error (status N)"
+//
+// The regex matches just the parenthesized (status N) pair so
+// downstream logic stays decoupled from the leading message verb.
+// Compile-time build (var not const, regexp.MustCompile panics on
+// bad pattern).
+var statusCodeRegexp = regexp.MustCompile(`\(status (\d+)\)`)
+
+// isHardRejection4xxStatus inspects the wrapped error returned by
+// initiateResumableSession or putChunk (the two upstream callers
+// CanaryUpload delegates to) and returns true iff it represents a
+// HARD 4xx rejection that should be flagged ErrYouTubeCanaryRejected
+// (handler → 422 + reauth) versus a TRANSIENT response that should
+// remain plain wrapped (handler → next-sync-retry).
+//
+// Why regex on err.Error() rather than typed sentinels from the
+// upstream methods: initiateResumableSession / putChunk are
+// pre-existing call sites used by the publish path (not just the
+// canary) and a sentinel refactor would have a much wider blast
+// radius. The string-format shape they emit is documented AND
+// stable across each method's revisions. The 4xx codes that get
+// the reauth treatment are explicitly enumerated; any status
+// outside the table falls through to the transient branch by
+// default.
+//
+// Enumerated reauth statuses (4xx-not-429-or-423):
+//
+//	400 — bad request / malformed metadata
+//	401 — YouTube-side token rejection mid-upload (operator must re-consent)
+//	403 — forbidden / Brand Account re-bound silently
+//	404 — session URI lost or grant revoked by Google
+//	408 — rare; request timeout sent by YouTube
+//	409 — channel / quota state conflict
+//	410 — gone; channel may have been deleted
+//	422 — unprocessable; metadata valid but refused
+//	451 — legal / jurisdictional unavailability
+//
+// Transient-by-default (NOT in table):
+//
+//	429 — rate limit (Retry-After header is honored upstream)
+//	423 — Locked; transient alignment-of-resources retry signal
+//	5xx — server error; retried on next-sync tick
+//	decode / network / ctx-cancelled — pass-through plainly
+//
+// Long-term: a future refactor should add typed sentinels to
+// initiateResumableSession and putChunk so CanaryUpload can switch
+// on errors.Is instead of regex. Tracked as a follow-up; the
+// regex shape is correct for the 4-step pipeline today.
+func isHardRejection4xxStatus(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := statusCodeRegexp.FindStringSubmatch(err.Error())
+	if len(m) != 2 {
+		return false
+	}
+	switch m[1] {
+	case "400", "401", "403", "404", "408", "409", "410", "422", "451":
+		return true
+	}
+	return false
+}
 
 // CanaryUploadResult captures the canary's outcome for the handler
 // (step 4 of /accounts/{id}/validate). The handler renders this into
@@ -1052,13 +1151,13 @@ func (s *YouTubeOAuthService) CanaryUpload(ctx context.Context, accessToken, exp
 	uploadURL, err := s.initiateResumableSession(ctx, accessToken, metadata, canaryUploadSize, canaryUploadContentType)
 	if err != nil {
 		// initiateResumableSession returns plain wrapped errors today;
-		// we re-promote hard 4xx rejections to ErrYouTubeCanaryRejected
-		// so the handler can route them. The substring match here is
-		// deliberate — the upstream already includes the status code
-		// in the wrapped message (initiateResumableSession's body
-		// line writes 'init session failed (status %d): ...').
+		// re-promote HARSH rejections (4xx-not-429/codes) to
+		// ErrYouTubeCanaryRejected so the handler routes them. The
+		// classifier is regex-based (see isHardRejection4xxStatus)
+		// so 429 / Locked / decode / network / 5xx stay transient
+		// and don't accidentally escalate to reauth.
 		wrapped := fmt.Errorf("youtube canary: initiate session: %w", err)
-		if strings.Contains(err.Error(), "status 4") {
+		if isHardRejection4xxStatus(err) {
 			wrapped = fmt.Errorf("%w: %w", ErrYouTubeCanaryRejected, err)
 		}
 		return nil, wrapped
@@ -1067,21 +1166,13 @@ func (s *YouTubeOAuthService) CanaryUpload(ctx context.Context, accessToken, exp
 	contentRange := fmt.Sprintf("bytes 0-%d/%d", canaryUploadSize-1, canaryUploadSize)
 	videoID, _, _, putErr := s.putChunk(ctx, uploadURL, canaryUploadBytes, contentRange, canaryUploadSize)
 	if putErr != nil {
-		// putChunk returns retryable=true for 5xx (transient — pass through
-		// plainly), retryable=false for 4xx (hard — promote to
-		// ErrYouTubeCanaryRejected). The chunk-PUT path uses its own
-		// retry budget internally; the worker doesn't loop a 4xx.
-		//
-		// We don't have direct access to retryable here because putChunk
-		// already exhausted its retry budget inside its caller
-		// (uploadVideoChunks); the canary path calls putChunk ONCE
-		// without that loop, so we infer from the status code in the
-		// error message (putChunk formats 'unexpected PUT response
-		// (status %d): ...' for non-retryable, 'server error (status
-		// %d)' or 'rate limited' for retryable).
+		// Same classifier as the initiate path — applies to
+		// 200-with-bad-body decode errors, which carry NO (status N)
+		// substring and fall through to the transient branch (NOT
+		// escalated to ErrYouTubeCanaryRejected). 5xx, 429, 423,
+		// and any 4xx-suppressed reauth list per isHardRejection4xxStatus.
 		wrapped := fmt.Errorf("youtube canary: upload chunk put: %w", putErr)
-		if !strings.Contains(putErr.Error(), "rate limited") &&
-			!strings.Contains(putErr.Error(), "server error") {
+		if isHardRejection4xxStatus(putErr) {
 			wrapped = fmt.Errorf("%w: %w", ErrYouTubeCanaryRejected, putErr)
 		}
 		return nil, wrapped

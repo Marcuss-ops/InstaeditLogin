@@ -288,6 +288,17 @@ type Router struct {
 	// retries per the channel-import cutover). Bidirectional (not chan<-) so
 	// the test harness can drain it without needing a separate handle to the
 	// underlying OS pipe.
+	// youTubeSvc (P7 — 4-step /accounts/{id}/validate pipeline) is the
+	// narrow capability-subset of *services.YouTubeOAuthService that
+	// handleValidateAccount's pipeline (refresh-grant → tokeninfo →
+	// channel-binding → optional canary-upload) depends on. When nil
+	// the handler falls back to the legacy token-freshness probe
+	// (preserves the pre-C1 cross-platform behaviour for any test or
+	// deployment that hasn't yet wired the option). Wired in
+	// cmd/server/main.go via WithYouTubeService(svc); the handler
+	// owns the routing decision.
+	youTubeSvc YouTubeOAuthService
+
 	downloadJobCh chan VeloxDownloadJob
 }
 
@@ -649,6 +660,42 @@ func WithApiKeyAuthenticator(a *auth.Authenticator) RouterOption {
 // fake without dragging the repository import into pkg/api tests.
 func WithApiKeyStore(s ApiKeyStore) RouterOption {
 	return func(r *Router) { r.apiKeyStore = s }
+}
+
+// YouTubeOAuthService is the narrow capability-subset of
+// *services.YouTubeOAuthService that the 4-step
+// /accounts/{id}/validate pipeline (introduced in Commit C2) needs.
+// Defined inline in pkg/api to keep tests mockable and avoid pkg/api
+// directly importing internal/services for the interface ONLY (the
+// service struct itself is injected via WithYouTubeService at
+// production wiring time and its exported method-results are
+// referenced via the interface below).
+//
+// The 4 steps map 1:1 onto the four interface methods:
+//   - RefreshOAuthToken      → STEP 1 (refresh-grant via vault.Renew)
+//   - GetTokenInfo          → STEP 2 (introspect access token + scope)
+//   - ValidateChannelBinding → STEP 3 (paginated channels.list bind)
+//   - CanaryUpload          → STEP 4 (optional private video + bind-reconcile)
+//   - ClientID              → STEP 2 aud check (aud must equal the OAuth client
+//                              that issued the grant — guards against
+//                              Production-vs-Testing token drift)
+type YouTubeOAuthService interface {
+	RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error)
+	GetTokenInfo(ctx context.Context, accessToken string) (*services.YouTubeTokenInfo, error)
+	ValidateChannelBinding(ctx context.Context, accessToken, expectedChannelID string) error
+	CanaryUpload(ctx context.Context, accessToken, expectedChannelID string) (*services.CanaryUploadResult, error)
+	ClientID() string
+}
+
+// WithYouTubeService wires the production YouTubeOAuthService into
+// the Router. Without this option handleValidateAccount falls back
+// to the legacy token-freshness probe for YouTube platforms AND for
+// every other platform — preserving the pre-C1 cross-platform
+// scaffolding for tests / environments that haven't wired the
+// option. Required for the 4-step pipeline on YouTube; optional for
+// any other platform (no change in behaviour).
+func WithYouTubeService(svc YouTubeOAuthService) RouterOption {
+	return func(r *Router) { r.youTubeSvc = svc }
 }
 
 // WithCredentialVault injects the central credential vault. The Router
