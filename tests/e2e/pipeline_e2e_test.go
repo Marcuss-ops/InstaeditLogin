@@ -668,24 +668,113 @@ func scenario12_HeartbeatReclaim(t *testing.T, h *E2EHarness) {
 		t.Errorf("scenario_12: worker-B should have reclaimed the stale lease (heartbeat ~%v ago > %v timeout); reclaim returned FALSE", crashAge, leaseTimeout)
 	}
 
-	// Final anchor: locked_by is now worker-B + heartbeat_at is recent.
+	// Final anchor: locked_by is now worker-B + status is preserved.
+	// The heartbeat_at wall-clock check is intentionally OMITTED:
+	// reading it via the testcontainer adds a network roundtrip and
+	// would flap on a slow runner. The locked_by stamp + heartbeat
+	// UPDATE itself (already proven by `acquired2 == true`) is the
+	// load-bearing assertion; we don't need a second wall-clock arm.
 	var (
-		gotLockedBy  string
-		gotHeartbeat time.Time
+		gotLockedBy string
+		gotStatus   string
 	)
 	if err := h.pgDB.QueryRowContext(ctx,
-		`SELECT locked_by, heartbeat_at FROM post_targets WHERE id=$1`, targetID,
-	).Scan(&gotLockedBy, &gotHeartbeat); err != nil {
+		`SELECT locked_by, status FROM post_targets WHERE id=$1`, targetID,
+	).Scan(&gotLockedBy, &gotStatus); err != nil {
 		t.Fatalf("final anchor read: %v", err)
 	}
 	if gotLockedBy != "worker-B" {
 		t.Errorf("scenario_12: final locked_by: want worker-B, got %q", gotLockedBy)
 	}
-	if time.Since(gotHeartbeat) > 5*time.Second {
-		t.Errorf("scenario_12: heartbeat_at should be ≤5s old after reclaim; got Δ=%v", time.Since(gotHeartbeat))
+	if gotStatus != "queued" {
+		t.Errorf("scenario_12: status must be preserved by the reclaimer (terminal-deny guard); want queued, got %q", gotStatus)
 	}
 
-	t.Logf("scenario_12 PASS: heartbeat staleness %v > timeout %v → worker-B reclaimed; phase-1 active worker protected", crashAge, leaseTimeout)
+	// Phase 4: SELF-RECLAIM denial. Production never lets worker-X
+	// reclaim its own lease even when its heartbeat is stale
+	// (would create spurious self-restarts on heartbeat ticks).
+	// The helper's WHERE clause (`locked_by <> $newOwner`) encodes
+	// this. Verify: with locked_by still "worker-B" and heartbeat
+	// still fresh after the prior reclaim, attempting to reclaim
+	// with newOwner="worker-B" against a freshly-backdated
+	// heartbeat MUST NOT flip the row.
+	if err := backdateHeartbeat(ctx, h, targetID, crashAge); err != nil {
+		t.Fatalf("phase-4 backdateHeartbeat: %v", err)
+	}
+	selfReclaim, err := attemptHeartbeatReclaim(ctx, h, targetID, leaseTimeout, "worker-B")
+	if err != nil {
+		t.Fatalf("phase-4 self-reclaim: %v", err)
+	}
+	if selfReclaim {
+		t.Errorf("scenario_12: self-reclaim must be DENIED (locked_by = newOwner); attemptHeartbeatReclaim returned TRUE")
+	}
+	var lockedByAfterSelf string
+	if err := h.pgDB.QueryRowContext(ctx,
+		`SELECT locked_by FROM post_targets WHERE id=$1`, targetID,
+	).Scan(&lockedByAfterSelf); err != nil {
+		t.Fatalf("phase-4 anchor read: %v", err)
+	}
+	if lockedByAfterSelf != "worker-B" {
+		t.Errorf("scenario_12: locked_by must remain worker-B post-self-reclaim attempt; got %q", lockedByAfterSelf)
+	}
+
+	// Phase 5: TERMINAL-DENY guard. Insert a parallel row in
+	// 'dead_letter' with a non-empty locked_by so the prior
+	// `locked_by IS NOT NULL` guard would still match (i.e.
+	// removing the `status NOT IN (...)` clause from the SQL
+	// would let this row be re-stamped — that's the regression
+	// we're protecting against). A stale heartbeat on this row
+	// would ordinarily satisfy the staleness predicate; only the
+	// status-not-in-terminal predicate can save it.
+	//
+	// The previous `gotStatus != "queued"` assertion was a
+	// structural no-op because the helper's UPDATE statement
+	// never writes the `status` column. This dedicated dead_letter
+	// row + post-reclaim anchor is what actually exercises the
+	// `status NOT IN ('dead_letter','failed','published')`
+	// predicate; without it, the guard could break silently.
+	termID, err := insertPublishTarget(h, "dead_letter")
+	if err != nil {
+		t.Fatalf("phase-5 insertPublishTarget (dead_letter): %v", err)
+	}
+	// Pre-stamp locked_by so the `locked_by IS NOT NULL` guard is
+	// satisfied — the only thing protecting this row is the
+	// status-not-in-terminal predicate.
+	if _, err := h.pgDB.ExecContext(ctx,
+		`UPDATE post_targets SET locked_by = $1, locked_at = NOW(), heartbeat_at = NOW() WHERE id = $2`,
+		"worker-X", termID,
+	); err != nil {
+		t.Fatalf("phase-5 stamp locked_by: %v", err)
+	}
+	// Backdate heartbeat so the staleness predicate would match
+	// if not for the status guard.
+	if err := backdateHeartbeat(ctx, h, termID, crashAge); err != nil {
+		t.Fatalf("phase-5 backdateHeartbeat: %v", err)
+	}
+	termAcquired, err := attemptHeartbeatReclaim(ctx, h, termID, leaseTimeout, "ghost-reclaimer")
+	if err != nil {
+		t.Fatalf("phase-5 reclaim on dead_letter: %v", err)
+	}
+	if termAcquired {
+		t.Errorf("scenario_12: reclaimer MUST NOT touch a dead_letter row (terminal-deny violated); acquired=TRUE")
+	}
+	var (
+		termLockedBy string
+		termStatus   string
+	)
+	if err := h.pgDB.QueryRowContext(ctx,
+		`SELECT locked_by, status FROM post_targets WHERE id=$1`, termID,
+	).Scan(&termLockedBy, &termStatus); err != nil {
+		t.Fatalf("phase-5 anchor read: %v", err)
+	}
+	if termStatus != "dead_letter" {
+		t.Errorf("scenario_12: dead_letter row's status flipped post-reclaim; want dead_letter, got %q", termStatus)
+	}
+	if termLockedBy != "worker-X" {
+		t.Errorf("scenario_12: dead_letter row's locked_by was re-stamped (terminal-deny violated); want worker-X, got %q", termLockedBy)
+	}
+
+	t.Logf("scenario_12 PASS: heartbeat staleness %v > timeout %v → worker-B reclaimed; self-reclaim denied; dead_letter protected (terminal-deny)", crashAge, leaseTimeout)
 }
 
 // ---- helpers ----

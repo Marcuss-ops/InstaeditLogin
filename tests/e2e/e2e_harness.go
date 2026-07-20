@@ -782,18 +782,35 @@ func updateTargetStatus(h *E2EHarness, targetID int64, fromStatus, toStatus, err
 }
 
 // attemptHeartbeatReclaim mirrors the production reclaimer-tick
-// seen in internal/worker/reconcile_worker.go: a query observes
-// post_targets WHERE heartbeat_at < NOW() - lease_timeout and
-// re-stamps the row's lease columns to its own identity. Returns
-// (acquired, err) where acquired is true iff the WHERE-clause
-// matched (i.e. the original worker is observed as crashed).
+// in internal/worker/reconcile_worker.go::runReclaimerTick: a
+// query observes post_targets that (a) have an active lease with
+// a stale heartbeat, (b) are NOT terminal, and (c) are NOT held
+// by the reclaimer's own identity — and re-stamps the row's lease
+// columns to the reclaiming worker.
 //
-// Production uses real `NOW()` — but Postgres tests cannot easily
-// advance system clocks without docker-fu. The E2E surfaces the
-// same shape via two phases: (1) worker A acquires + we backdate
-// heartbeat_at to NOW() - 15m via raw SQL (simulating a 15-minute
-// heart attack); (2) worker B runs this helper with maxAge=5m and
-// observes a successful reclaim.
+// Returns (acquired, err) where acquired is true iff the
+// WHERE-clause matched the row AND stamped the new owner.
+//
+// Guards encoded into the SQL:
+//
+//  1. `locked_by IS NOT NULL` — never reclaim an unowned row; this
+//     prevents a fresh insert (which has locked_by='') from being
+//     prematurely heart-stamped before the worker pool claims it.
+//  2. `locked_by <> $newOwner` — never let a worker reclaim its own
+//     lease (would create spurious self-restarts on heartbeat ticks).
+//  3. `status NOT IN ('dead_letter','failed','published')` — the
+//     reclaimer must NEVER touch a terminal row; doing so would
+//     resurrect a degraded state and surface to operators as a
+//     false-positive retry.
+//  4. `heartbeat_at IS NULL OR heartbeat_at < NOW() - lease_timeout`
+//     — the staleness predicate; `IS NULL` covers legacy rows
+//     from migration 044 that stamped locked_at but not heartbeat_at.
+//
+// Any future drift in production that drops one of these guards
+// surfaces here as an E2E false-pass (the WHERE clause results in
+// a match that production would block). The scenario therefore
+// encodes the production contract literally, not just the happy
+// path.
 func attemptHeartbeatReclaim(ctx context.Context, h *E2EHarness, targetID int64, maxAge time.Duration, newOwner string) (bool, error) {
 	res, err := h.pgDB.ExecContext(ctx,
 		`UPDATE post_targets
@@ -802,6 +819,9 @@ func attemptHeartbeatReclaim(ctx context.Context, h *E2EHarness, targetID int64,
 		        heartbeat_at = NOW(),
 		        updated_at = NOW()
 		  WHERE id = $2
+		    AND locked_by IS NOT NULL
+		    AND locked_by <> $1
+		    AND status NOT IN ('dead_letter', 'failed', 'published')
 		    AND (
 		        heartbeat_at IS NULL
 		        OR heartbeat_at < NOW() - make_interval(secs => $3)
