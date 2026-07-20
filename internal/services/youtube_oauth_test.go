@@ -1038,12 +1038,15 @@ func TestYouTubeValidateChannelBinding_PaginationAcrossThreePages(t *testing.T) 
 // regression that "trusts the empty token only" would still call page
 // 5; the requestCount assertion catches that.
 func TestYouTubeValidateChannelBinding_SafetyCapReachedAt200_ReturnsMismatch(t *testing.T) {
+	// single-goroutine invariant: httptest.NewServer dispatches each request
+	// on the call goroutine serially, so a plain int counter is race-free
+	// WITHOUT locking. Same pattern is used by the sibling
+	// TestYouTubeValidateChannelBinding_PaginationAcrossThreePages test.
 	var handlerCalls int
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, _ *http.Request) {
 		handlerCalls++
-		_ = r
 		items := make([]map[string]string, 0, 50)
 		for i := 0; i < 50; i++ {
 			items = append(items, map[string]string{"id": fmt.Sprintf("UC-cap-%d-%d", handlerCalls, i)})
