@@ -129,13 +129,31 @@ type CredentialVault struct {
 	encryptor *crypto.Encryptor
 	db        *sql.DB
 	store     TokenStore
+	// clock is the "now" dependency. Production wires time.Now; tests
+	// inject a fakeClock via SetClock so the TTL math (8-day refresh
+	// rule, 60-second staleness grace) is deterministic. The field is
+	// package-private on purpose: callers in cmd/server should never
+	// need to swap it.
+	clock func() time.Time
 }
 
 // NewCredentialVault constructs a vault. All three dependencies are
 // required; a nil in any slot will surface as a panic on the first
 // method call (fail-fast for misconfigured main.go).
 func NewCredentialVault(encryptor *crypto.Encryptor, db *sql.DB, store TokenStore) *CredentialVault {
-	return &CredentialVault{encryptor: encryptor, db: db, store: store}
+	return &CredentialVault{encryptor: encryptor, db: db, store: store, clock: time.Now}
+}
+
+// SetClock overrides the vault's "now" source. Intended for tests that
+// need to drive the TTL math deterministically (e.g. fakeClock that
+// "advances" 8 days for the refresh-token Production-vs-Testing tests).
+// Production callers should leave the default time.Now alone.
+func (v *CredentialVault) SetClock(clock func() time.Time) {
+	if clock == nil {
+		v.clock = time.Now
+		return
+	}
+	v.clock = clock
 }
 
 // oauthConnectionIDForAccount resolves the canonical storage key for
@@ -213,7 +231,7 @@ func (v *CredentialVault) saveForOAuthConnection(ctx context.Context, oauthConne
 			return fmt.Errorf("vault: failed to encrypt refresh token: %w", err)
 		}
 	}
-	expiresAt := time.Now().Add(time.Duration(tokenData.ExpiresIn) * time.Second)
+	expiresAt := v.clock().Add(time.Duration(tokenData.ExpiresIn) * time.Second)
 	token := &models.Token{
 		PlatformAccountID:     platformAccountID,
 		OAuthConnectionID:     oauthConnectionID,
@@ -281,7 +299,7 @@ func (v *CredentialVault) Get(ctx context.Context, platformAccountID int64, toke
 	if stored == nil {
 		return nil, fmt.Errorf("vault: no token for account %d (type: %s)", platformAccountID, tokenType)
 	}
-	if stored.ExpiresAt != nil && time.Now().After(*stored.ExpiresAt) {
+	if stored.ExpiresAt != nil && v.clock().After(*stored.ExpiresAt) {
 		return nil, fmt.Errorf("vault: token expired at %s", stored.ExpiresAt.Format(time.RFC3339))
 	}
 	decrypted, err := v.encryptor.Decrypt(stored.EncryptedToken)
@@ -384,7 +402,7 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 	// Fast path: token is already fresh, no DB lock needed. Get handles
 	// the oauth_connection_id lookup internally.
 	if tok, err := v.Get(ctx, platformAccountID, tokenType); err == nil {
-		if tok.ExpiresAt == nil || time.Until(*tok.ExpiresAt) > 60*time.Second {
+		if tok.ExpiresAt == nil || tok.ExpiresAt.Sub(v.clock()) > 60*time.Second {
 			return tok, nil
 		}
 		// Within grace window: fall through to refresh.
@@ -425,7 +443,7 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 	if err != nil {
 		return nil, fmt.Errorf("vault: find inside lock: %w", err)
 	}
-	if stored != nil && (stored.ExpiresAt == nil || time.Until(*stored.ExpiresAt) > 60*time.Second) {
+	if stored != nil && (stored.ExpiresAt == nil || stored.ExpiresAt.Sub(v.clock()) > 60*time.Second) {
 		if err := lockTx.Commit(); err != nil {
 			return nil, fmt.Errorf("vault: commit lock tx: %w", err)
 		}

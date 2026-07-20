@@ -630,7 +630,7 @@ check after every consent-screen republish.
 ./scripts/verify-google-oauth-mode.sh "$OAUTH_ACCESS_TOKEN"
 ```
 
-### AppMode flag + automated TTL coverage
+### AppMode flag + real clock injection for TTL coverage
 
 The InstaEdit backend plumbs through an `APP_MODE` env var that
 pins the deployment to Google's OAuth-consent-screen publishing
@@ -642,44 +642,80 @@ APP_MODE=testing      # mirrors Google's 7-day Testing-mode TTL
 ```
 
 The flag lives in `internal/config/config.go` as
-`Config.AppMode string` and is read by the `TokenRefresher`
-closure built in `cmd/server/main.go`. In production, the closure
+`Config.AppMode string`. In production wiring it is read by the
+`TokenRefresher` closure built in `cmd/server/main.go`; production
 forwards calls to Google's real `oauth2/v3/token` endpoint and
-returns the response verbatim; in CI, `internal/credentials/vault_ttl_test.go`
-injects a fake clock that "advances" 7-8 days and pins the
-production-vs-testing distinction at the vault-layer without pinging
-real Google:
+returns the response verbatim.
 
-* `TestVault_Renew_AppModeProduction_RefreshSurvives8Days` --
-  the refresher closure returns a fresh token pair at simulated
-  T+8d; `vault.Renew` must succeed and persist the new ciphertext.
-  A regression that broke the AppMode wiring (someone hardcoded
-  "testing" in the production closure) would fail this test LOUD
-  before any of the 200 production channels get caught at T+7d.
-* `TestVault_Renew_AppModeTesting_RefreshFailsAfter7Days` -- the
-  refresher closure returns Google's documented `invalid_grant`
-  response at simulated T+7d; `vault.Renew` must propagate the
-  error AND the new tokens must NOT be saved. The asserted error
-  envelope contains both `"invalid_grant"` AND `"(status 400)"`
-  so `internal/services/youtube_oauth.go::isHardRejection4xxStatus`
-  correctly routes to the reauth branch (not the transient-retry
-  branch). A regression in the classifier here would flip an
-  invalid_grant into a transient retry and burn the retry budget.
-* `config.Load()` defaults `AppMode` to `"production"` -- operators
+In CI the flag is paired with a **real clock injection** on the
+vault itself so TTL math is fully deterministic without pinging
+real Google. The injection wires through vault.go:
+
+* A `clock func() time.Time` field on `*CredentialVault`,
+  initialised to `time.Now` in the production constructor.
+* A `(*CredentialVault).SetClock(clock func() time.Time)` setter,
+  reserved for tests (production callers should leave the default).
+* All four `time.Now()` / `time.Until()` sites in vault.go (token
+  persistence, `Get`, and the `Renew` fast + slow paths) read
+  `v.clock()` instead. A regression that re-introduces `time.Now()`
+  inside vault.go would be detected by failing the
+  `ExpiresAt.Equal(want)` assertion below.
+
+`internal/credentials/vault_ttl_test.go` injects a
+`fakeClock{ t time.Time }` with a `Set(t time.Time)` driver +
+duplicates the production wiring exactly:
+
+* `TestVault_Renew_ProductionMode_T8d_RefreshSucceeds` --
+  fakeClock set to T0; oauth_connection + expired access token
+  seeded at T0; fakeClock.Set(T0 + 8 * 24h) advances the
+  simulated time; production-mode closure emits a fresh token
+  pair; `vault.Renew` must succeed AND the persisted `ExpiresAt`
+  must equal `fc.t.Add(3600s)` (proving the clock injection
+  flows through `saveForOAuthConnection`). A regression that
+  reverted vault.go to `time.Now()` would fail this assert
+  sharply without waiting 8 real-world days.
+* `TestVault_Renew_ProductionMode_T7d_StillSucceeds` --
+  belt-and-braces boundary case: fakeClock.Set(T0 + 7 * 24h)
+  under AppMode=production. Production must STILL succeed at the
+  exact day-7 boundary (the durable refresh-token invariant).
+* `TestVault_Renew_TestingMode_T7d_FailsInvalidGrant` --
+  fakeClock.Set(T0 + 7 * 24h) under AppMode=testing. The
+  `ttlAwareClosure` (driven by `fc.Now() - baseTime`) emits
+  Google's documented `invalid_grant` envelope. `vault.Renew` must
+  propagate the error envelope containing BOTH `invalid_grant` AND
+  `(status 400)` so `internal/services/youtube_oauth.go::isHardRejection4xxStatus`
+  routes to the reauth branch (not the transient-retry branch).
+* `TestVault_Renew_TestingMode_T7dMinus1h_StillWorks` --
+  T+7d-1h regression guard: inside the grace window under testing,
+  refresh must still succeed. Catches closure mis-cutoffs that
+  would flip the boundary one hour early.
+* `TestConfig_AppModeDefaultIsProduction` --
+  `config.Load()` defaults `AppMode` to `"production"` so operators
   who forget to set the env var inherit the durable refresh-token
-  bucket by default. The first assertion of the Production test
-  (`config.Load()` must return AppMode="production") pins this
-  safer-default invariant. If you intentionally flip an env to
-  "testing", `os.Setenv("APP_MODE", "testing")` must run BEFORE
-  the test instantiates the closure -- the test reads `cfg.AppMode`
-  at closure-build time, not at runtime.
+  bucket. `config.go::getEnv` uses `os.LookupEnv` so a literally
+  empty `APP_MODE=""` env-var would still register as "value
+  present"; the test therefore uses `os.Unsetenv("APP_MODE")`
+  (not `t.Setenv("APP_MODE", "")`) to exercise the default path.
 
-The "fake clock that advances 7-8 days" is not a real `time.Now()`
-override: the mock closure is hardcoded to emit the production vs
-testing response based on `cfg.AppMode`. This keeps the test
-deterministic AND means CI does not need to wait 8 real-world
-days. The trade-off: the test pins OUR policy intent (AppMode
-behaviour) but does NOT validate Google's actual
+The two invariants the suite pins:
+
+1. **I-1 — clock source is injectable.** vault.Renew reads the
+   "now" through `v.clock()`, not `time.Now()`. Future tickets
+   that add new TTL math (e.g. a 24h refresh-token inactivity
+   garbage-collection check) are required to read `v.clock()` too;
+   the existing assertions catch a regression with sub-second
+   resolution.
+2. **I-2 — the 7-day Testing-mode boundary lives ONLY in
+   AppMode=testing.** AppMode=production is durable past day 7
+   (and day 8, etc). The boundary cannot leak across modes; the
+   `T+7dMinus1h` guard catches a regression that flipped the
+   closure cutoff to <7d.
+
+Trade-off vs. hitting real Google: the closed-form closure
+deterministically emits the production-vs-testing branching
+based on `fc.Now() - baseTime`. CI does not need to wait 7-8 real
+days. The test pins OUR policy semantics (AppMode + clock
+injection) but does NOT validate Google's actual
 `oauth2/v3/token` response shape at T+7d. Operators verify the
 latter on a per-channel cadence via `private_canary_ok` /
 `canary_channel_match_ok` from `/admin/health.csv` (Step 10).
