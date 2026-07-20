@@ -11,6 +11,103 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
+const (
+	// Task 10.10.x polish #2 — const-export production SQL. Each SQL
+	// statement referenced by the test file (internal/worker/task_10_10_recovery_test.go)
+	// is declared here as an EXPORTED Go constant so the test's sqlmock
+	// expectations are pinned to the production SQL byte-for-byte via
+	// import. A change to any constant fires a compile error in the test
+	// (the variable name moves + the regex match fails simultaneously)
+	// so the drift is caught at PR review, not in production.
+	//
+	// Naming convention: SQL<Method> matches the user's spec example
+	// (const SQLReclaimExpiredLeases = "..."). Layout follows the
+	// method order in this file so the block reads top-to-bottom in
+	// approximate source order. Inline SQL literals elsewhere in this
+	// file are still inline; extracting EXPORTED constants for the
+	// five methods whose SQL is duplicated in the test file (5/19)
+	// is the minimum-viable scope. A future commit can sweep the
+	// remaining 14 methods if drift detection is desired for them
+	// too.
+	SQLReclaimExpiredLeases = `WITH expired AS (
+            SELECT id
+            FROM upload_jobs
+            WHERE status          = 'leased'
+              AND lease_expires_at < NOW()
+              AND heartbeat_at    IS NOT NULL
+              AND heartbeat_at    < NOW() - INTERVAL '5 minutes'
+            ORDER BY lease_expires_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT $1
+        )
+        UPDATE upload_jobs j
+        SET status                    = 'pending',
+            lease_owner               = NULL,
+            lease_expires_at          = NULL,
+            heartbeat_at              = NULL,
+            error_code                = COALESCE(error_code, 'lease_expired'),
+            youtube_session_uri       = NULL,
+            youtube_session_offset    = NULL,
+            youtube_session_expires_at = NULL,
+            youtube_chunk_size        = NULL,
+            youtube_last_chunk_at     = NULL,
+            updated_at                = NOW()
+        FROM expired
+        WHERE j.id = expired.id`
+
+	SQLMarkDeadLetter = `UPDATE upload_jobs
+         SET status           = 'dead_letter',
+             error_message    = $2,
+             error_code       = $3,
+             lease_owner      = NULL,
+             lease_expires_at = NULL,
+             completed_at     = NOW(),
+             updated_at       = NOW()
+         WHERE id = $1
+           AND lease_owner   = $4
+           AND status        = 'leased'`
+
+	SQLSaveYouTubeSession = `UPDATE upload_jobs
+         SET youtube_session_uri       = $2,
+             youtube_session_offset    = $3,
+             youtube_session_expires_at = $4,
+             youtube_chunk_size        = $5,
+             youtube_last_chunk_at     = NOW(),
+             progress_bytes            = $3,
+             updated_at                = NOW()
+         WHERE id = $1
+           AND lease_owner            = $6
+           AND status                 = 'leased'`
+
+	SQLClaimBatchForPublish = `WITH candidates AS (
+            SELECT id
+            FROM upload_jobs
+            WHERE status = 'ingest_completed'
+              AND (publish_at IS NULL OR publish_at <= NOW())
+              AND COALESCE(next_attempt_at, NOW()) <= NOW()
+              AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+            ORDER BY priority ASC, created_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT $1
+        )
+        UPDATE upload_jobs j
+        SET status           = 'leased',
+            lease_owner      = $2,
+            lease_expires_at = $3,
+            heartbeat_at     = NOW(),
+            attempt_count    = attempt_count + 1,
+            started_at       = COALESCE(started_at, NOW()),
+            updated_at       = NOW()
+        FROM candidates
+        WHERE j.id = candidates.id
+        RETURNING j.id, j.user_id, j.workspace_id, j.source_type, j.source_id, j.drive_account_id, j.folder_id, j.title, j.caption,
+                  j.targets, j.status, j.error_message, j.post_id, j.asset_id, j.ingest_after, j.publish_at, j.created_at, j.updated_at,
+                  j.attempt_count, j.max_attempts, j.next_attempt_at, j.lease_owner, j.lease_expires_at, j.heartbeat_at,
+                  j.progress_bytes, j.total_bytes, j.error_code, j.priority, j.started_at, j.completed_at,
+                  j.youtube_session_uri, j.youtube_session_offset, j.youtube_session_expires_at, j.youtube_chunk_size, j.youtube_last_chunk_at,
+                  j.default_privacy_level`
+)
+
 // UploadJobRepository handles persistence for upload_jobs — the background
 // queue that downloads videos from Google Drive and publishes them.
 type UploadJobRepository struct {
@@ -222,28 +319,7 @@ func (r *UploadJobRepository) ClaimBatchForPublish(ctx context.Context, workerID
 	leaseUntil := time.Now().Add(lease)
 
 	rows, err := r.db.QueryContext(ctx,
-		`WITH candidates AS (
-            SELECT id
-            FROM upload_jobs
-            WHERE status = 'ingest_completed'
-              AND (publish_at IS NULL OR publish_at <= NOW())
-              AND COALESCE(next_attempt_at, NOW()) <= NOW()
-              AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
-            ORDER BY priority ASC, created_at ASC
-            FOR UPDATE SKIP LOCKED
-            LIMIT $1
-        )
-        UPDATE upload_jobs j
-        SET status           = 'leased',
-            lease_owner      = $2,
-            lease_expires_at = $3,
-            heartbeat_at     = NOW(),
-            attempt_count    = attempt_count + 1,
-            started_at       = COALESCE(started_at, NOW()),
-            updated_at       = NOW()
-        FROM candidates
-        WHERE j.id = candidates.id
-        RETURNING j.*`,
+		SQLClaimBatchForPublish,
 		limit, workerID, leaseUntil,
 	)
 	if err != nil {
@@ -333,7 +409,12 @@ func (r *UploadJobRepository) ClaimBatch(ctx context.Context, workerID string, l
             updated_at       = NOW()
         FROM candidates
         WHERE j.id = candidates.id
-        RETURNING j.*`,
+        RETURNING j.id, j.user_id, j.workspace_id, j.source_type, j.source_id, j.drive_account_id, j.folder_id, j.title, j.caption,
+                  j.targets, j.status, j.error_message, j.post_id, j.asset_id, j.ingest_after, j.publish_at, j.created_at, j.updated_at,
+                  j.attempt_count, j.max_attempts, j.next_attempt_at, j.lease_owner, j.lease_expires_at, j.heartbeat_at,
+                  j.progress_bytes, j.total_bytes, j.error_code, j.priority, j.started_at, j.completed_at,
+                  j.youtube_session_uri, j.youtube_session_offset, j.youtube_session_expires_at, j.youtube_chunk_size, j.youtube_last_chunk_at,
+                  j.default_privacy_level`,
 		limit, workerID, leaseUntil,
 	)
 	if err != nil {
@@ -484,17 +565,7 @@ func (r *UploadJobRepository) MarkRetry(ctx context.Context, id int64, workerID,
 // terminal write.
 func (r *UploadJobRepository) MarkDeadLetter(ctx context.Context, id int64, workerID, errorCode, errMessage string) error {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE upload_jobs
-         SET status           = 'dead_letter',
-             error_message    = $2,
-             error_code       = $3,
-             lease_owner      = NULL,
-             lease_expires_at = NULL,
-             completed_at     = NOW(),
-             updated_at       = NOW()
-         WHERE id = $1
-           AND lease_owner   = $4
-           AND status        = 'leased'`,
+		SQLMarkDeadLetter,
 		id, errMessage, errorCode, workerID,
 	)
 	if err != nil {
@@ -623,31 +694,7 @@ func (r *UploadJobRepository) ReclaimExpiredLeases(ctx context.Context, maxRows 
 		maxRows = 100
 	}
 	res, err := r.db.ExecContext(ctx,
-		`WITH expired AS (
-            SELECT id
-            FROM upload_jobs
-            WHERE status          = 'leased'
-              AND lease_expires_at < NOW()
-              AND heartbeat_at    IS NOT NULL
-              AND heartbeat_at    < NOW() - INTERVAL '5 minutes'
-            ORDER BY lease_expires_at ASC
-            FOR UPDATE SKIP LOCKED
-            LIMIT $1
-        )
-        UPDATE upload_jobs j
-        SET status                    = 'pending',
-            lease_owner               = NULL,
-            lease_expires_at          = NULL,
-            heartbeat_at              = NULL,
-            error_code                = COALESCE(error_code, 'lease_expired'),
-            youtube_session_uri       = NULL,
-            youtube_session_offset    = NULL,
-            youtube_session_expires_at = NULL,
-            youtube_chunk_size        = NULL,
-            youtube_last_chunk_at     = NULL,
-            updated_at                = NOW()
-        FROM expired
-        WHERE j.id = expired.id`,
+		SQLReclaimExpiredLeases,
 		maxRows,
 	)
 	if err != nil {
@@ -1045,17 +1092,7 @@ func (r *UploadJobRepository) SaveYouTubeSession(ctx context.Context, id int64, 
 		return fmt.Errorf("upload job SaveYouTubeSession: negative offset (%d)", offset)
 	}
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE upload_jobs
-         SET youtube_session_uri       = $2,
-             youtube_session_offset    = $3,
-             youtube_session_expires_at = $4,
-             youtube_chunk_size        = $5,
-             youtube_last_chunk_at     = NOW(),
-             progress_bytes            = $3,
-             updated_at                = NOW()
-         WHERE id = $1
-           AND lease_owner            = $6
-           AND status                 = 'leased'`,
+		SQLSaveYouTubeSession,
 		id, sessionURI, offset, expiresAt, chunkSize, workerID,
 	)
 	if err != nil {

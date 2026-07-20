@@ -50,51 +50,18 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
-// canonicalReclaimExpiredLeasesSQL is the verbatim production SQL
-// fragment from internal/repository/upload_job_repo.go (line 636).
-// If a future commit changes the production SQL, this constant
-// changes AND the test breaks — preventing silent drift.
-const canonicalReclaimExpiredLeasesSQL = `WITH expired AS (
-            SELECT id
-            FROM upload_jobs
-            WHERE status          = 'leased'
-              AND lease_expires_at < NOW()
-              AND heartbeat_at    IS NOT NULL
-              AND heartbeat_at    < NOW() - INTERVAL '5 minutes'
-            ORDER BY lease_expires_at ASC
-            FOR UPDATE SKIP LOCKED
-            LIMIT $1
-        )
-        UPDATE upload_jobs j
-        SET status                    = 'pending',
-            lease_owner               = NULL,
-            lease_expires_at          = NULL,
-            heartbeat_at              = NULL,
-            error_code                = COALESCE(error_code, 'lease_expired'),
-            youtube_session_uri       = NULL,
-            youtube_session_offset    = NULL,
-            youtube_session_expires_at = NULL,
-            youtube_chunk_size        = NULL,
-            youtube_last_chunk_at     = NULL,
-            updated_at                = NOW()
-        FROM expired
-        WHERE j.id = expired.id`
-
-// canonicalClaimBatchForPublishCTE is the verbatim production CTE
-// fragment from internal/repository/upload_job_repo.go (line 225)
-// re ClaimBatchForPublish. The publish_at filter and SKIP LOCKED
-// primitive MUST both appear; if either regresses, test 4 fails.
-const canonicalClaimBatchForPublishCTE = `WITH candidates AS (
-            SELECT id
-            FROM upload_jobs
-            WHERE status = 'ingest_completed'
-              AND (publish_at IS NULL OR publish_at <= NOW())
-              AND COALESCE(next_attempt_at, NOW()) <= NOW()
-              AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
-            ORDER BY priority ASC, created_at ASC
-            FOR UPDATE SKIP LOCKED
-            LIMIT $1
-        )`
+// canonicalReclaimExpiredLeasesSQL and canonicalClaimBatchForPublishCTE
+// REMOVED in Task 10.10.x polish #2. The pre-polish versions were
+// in-test copy-pastes of production SQL strings (a known
+// anti-pattern: deleting the production line went undetected because
+// the test's mirror didn't change). Polish #2 pins the test to the
+// production SQL via direct import — the test now references
+// repository.SQLReclaimExpiredLeases + repository.SQLClaimBatchForPublish
+// (single source of truth, exported). A change to either production
+// constant fires a compile error HERE (the variable name moves) + a
+// sqlmock expectation mismatch on the regex match (the byte content
+// moves), so both the package-level symbol change and the SQL
+// fragment change are caught at PR review.
 
 // stubReclaimUploadJobStore satisfies UploadJobStore (13 methods) with
 // only ReclaimExpiredLeases returning real data; all 12 other methods
@@ -312,18 +279,7 @@ func TestRetryExhausted_MarkDeadLetterAndAdminEndpointVisible(t *testing.T) {
 	}
 	defer db1.Close()
 
-	markDeadLetterSQL := `UPDATE upload_jobs
-         SET status           = 'dead_letter',
-             error_message    = $2,
-             error_code       = $3,
-             lease_owner      = NULL,
-             lease_expires_at = NULL,
-             completed_at     = NOW(),
-             updated_at       = NOW()
-         WHERE id = $1
-           AND lease_owner   = $4
-           AND status        = 'leased'`
-	mock1.ExpectExec(regexp.QuoteMeta(markDeadLetterSQL)).
+	mock1.ExpectExec(regexp.QuoteMeta(repository.SQLMarkDeadLetter)).
 		WithArgs(int64(99), "exceeded retry budget", "youtube_error", "worker-z").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -343,17 +299,7 @@ func TestRetryExhausted_MarkDeadLetterAndAdminEndpointVisible(t *testing.T) {
 	}
 	defer db2.Close()
 
-	listSQL := `SELECT id, user_id, workspace_id, source_type, source_id,
-		        COALESCE(title, '') AS title,
-		        status, attempt_count,
-		        COALESCE(error_code, '') AS error_code,
-		        COALESCE(error_message, '') AS error_message,
-		        completed_at
-		 FROM upload_jobs
-		 WHERE status = 'dead_letter'
-		 ORDER BY completed_at DESC NULLS LAST
-		 LIMIT $1`
-	mock2.ExpectQuery(regexp.QuoteMeta(listSQL)).
+	mock2.ExpectQuery(regexp.QuoteMeta(repository.SQLListDeadLetterJobs)).
 		WithArgs(500).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "user_id", "workspace_id", "source_type", "source_id",

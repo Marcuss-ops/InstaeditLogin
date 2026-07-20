@@ -9,6 +9,32 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/channelimport"
 )
 
+// Task 10.10.x polish #2 — const-export production SQL. The
+// ListDeadLetterJobs SQL is duplicated as an inline literal in
+// internal/worker/task_10_10_recovery_test.go (TEST 6 ListDeadLetterJobs
+// block). Moving it to an exported constant here pins the test's
+// sqlmock expectation to the production SQL byte-for-byte — a
+// production-side change fires a compile error in the test (the
+// constant name moves + the regex match fails simultaneously) so
+// the drift is caught at PR review, not by a silent sqlmock
+// mismatch in CI.
+//
+// Inline SQL literals elsewhere in this file are still inline;
+// extracting EXPORTED constants for the one method whose SQL is
+// duplicated in the test file (1/9) is the minimum-viable scope.
+// A future commit can sweep the remaining 8 methods if drift
+// detection is desired for them too.
+const SQLListDeadLetterJobs = `SELECT id, user_id, workspace_id, source_type, source_id,
+		        COALESCE(title, '') AS title,
+		        status, attempt_count,
+		        COALESCE(error_code, '') AS error_code,
+		        COALESCE(error_message, '') AS error_message,
+		        completed_at
+		 FROM upload_jobs
+		 WHERE status = 'dead_letter'
+		 ORDER BY completed_at DESC NULLS LAST
+		 LIMIT $1`
+
 // AdminRepository is the read-side aggregate store backing the P2
 // ops dashboard (/admin/channels, /admin/queue, /admin/health). All
 // queries are bounded (LIMIT 500 default), index-friendly, and
@@ -373,16 +399,7 @@ func (r *AdminRepository) ListDeadLetterJobs(ctx context.Context, limit int) ([]
 		limit = 500
 	}
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, user_id, workspace_id, source_type, source_id,
-		        COALESCE(title, '') AS title,
-		        status, attempt_count,
-		        COALESCE(error_code, '') AS error_code,
-		        COALESCE(error_message, '') AS error_message,
-		        completed_at
-		 FROM upload_jobs
-		 WHERE status = 'dead_letter'
-		 ORDER BY completed_at DESC NULLS LAST
-		 LIMIT $1`,
+		SQLListDeadLetterJobs,
 		limit,
 	)
 	if err != nil {
