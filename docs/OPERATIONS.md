@@ -149,6 +149,80 @@ Per-drill record-keeping paths:
 - `ops/vercel-deploys-<YYYY-MM>.log` — manual smoke captures
 - Sentry issue `INFRA-FLY-CERT-*` / `INFRA-VERCEL-CERT-*` — automated captures
 
+### 3.2 Google Drive import — `capabilities.canDownload=false` runbook
+
+**Symptoms:** A Drive import rejects the file with HTTP 422 (or the
+worker pull-path marks the upload_job `failed` with
+`ErrDriveNotDownloadable` wrapped in the error).
+
+**Root cause:** Google Drive reports `capabilities.canDownload=false`
+when the file is non-downloadable. The InstaEdit import layer fails
+fast at this point (Task 5/10 — see `internal/worker/authenticated_drive_source.go::Inspect`
+plus `pkg/api/drive_import.go`) and surfaces a 422 to the operator
+instead of letting the row burn the publish-pool quota and 403
+mid-download.
+
+The most common operational causes (in order of frequency):
+
+1. **Google Workspace DLP rule** stamping the file as
+   "download-blocked". Check the org's DLP policy
+   (`admin.google.com/ac/security/rules`) — the file is in a
+   "restrict download" rule category. Fix: re-apply the file to
+   an exclusion rule, OR ask the operator to share a copy of
+   the file under a folder NOT covered by the DLP rule.
+2. **Information Rights Management (IRM)** on the file. The user
+   who owns the file has IRM enabled ("Viewers can't download,
+   print, or copy"; the default for some "Confidential" templates).
+   Fix: file owner opens Drive → right-click → Manage access →
+   toggle IRM off. If the org forbids this, share an unprotected
+   copy.
+3. **"Viewers and commenters can download" unchecked** in the
+   file's share dialog. This is the most common cause on
+   consumer Google accounts. Fix: file owner opens Drive →
+   Share → "Change to anyone with the link" OR
+   "Anyone at <org> with the link" + tick
+   "Viewers and commenters can see the option to download".
+4. **Drive shortcut pointing at a non-Drive target** (e.g. a
+   `application/vnd.google-apps.shortcut` whose target is a
+   third-party Box/OneDrive file that Drive can't materialize).
+   Drive reports `canDownload=false` for these. Fix: the operator
+   pastes the actual native file ID, NOT the shortcut ID; or
+   re-imports the file natively into Drive.
+5. **File owned by an external account** with a "company-only"
+   share restriction that surfaces during a Brand Account grant.
+   Fix: file owner re-shares with the operator's account, OR the
+   operator provides their own copy of the file.
+
+**Diagnostic flow for the on-call operator:**
+
+```bash
+# 1. Confirm the import's HTTP error body / worker error chain
+#    mentions capabilities.canDownload=false (NOT a generic 403):
+flyctl logs --app instaedit-login --since 15m | grep -i "canDownload\|NotDownloadable"
+# If absent, this is NOT Task 5/10 — diagnose via the import endpoint's
+# raw error path instead.
+
+# 2. Check the importJobs dashboard in the SPA. The asset row
+#    status will be 'failed' with `capabilities.canDownload=false`
+#    in the error message. The user_id + drive_file_id on the
+#    failed row tell the operator which file to inspect in Drive.
+
+# 3. Have the file owner open the share dialog on the Drive file
+#    ID and check the boxes above. Re-attempt the import.
+```
+
+**Task 5/10 acceptance bar (verified in CI):** every Drive import
+
+that hits `capabilities.canDownload=false` rejects BEFORE any S3
+upload starts, with HTTP 422 (HTTP layer) or upload_job
+status='failed' + `ErrDriveNotDownloadable` wrapped in the worker
+error chain (worker pull-path). Operators see the failure in
+`<30s` (HTTP layer is synchronous; worker tick interval is the
+floor). The spec rule "nessun fallback" is enforced — there is
+no retry-the-download path that would 403 mid-stream.
+
+---
+
 ### 3.1 Postgres PITR drill — canonical step-by-step procedure
 
 This subsection expands the one-line row from §3 (`production-restore-drill.sh`) into the full operator-side choreography. The script itself encodes the assertions (schema fingerprint, fork latency, row counts, sslmode, same-host rejection); this section is the HUMAN-side choreography around it.

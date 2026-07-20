@@ -238,9 +238,17 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// downloadable, etc.). ABSENT capabilities field is NOT a
 	// rejection — legacy Drive files omit the field entirely
 	// and we don't want to break those imports.
+	//
+	// Task 5/10: errors.Is(ErrDriveNotDownloadable) dispatch keeps
+	// the HTTP-layer mapping consistent with the worker pull-path
+	// guard added in AuthenticatedDriveSource.Inspect. Today the
+	// inline check below can never fire the sentinel (the field
+	// access + comparison is the same path), but a future refactor
+	// that turns GetFileMetadata's error wrapping into something
+	// that surfaces the sentinel via errors.Is is now wired-up.
 	if fileMeta.Capabilities != nil && !fileMeta.Capabilities.CanDownload {
 		writeError(w, http.StatusUnprocessableEntity,
-			"drive file is not downloadable (capabilities.canDownload=false); check the file's sharing settings")
+			"drive file is not downloadable (capabilities.canDownload=false); check the file's sharing settings / DLP / IRM")
 		return
 	}
 

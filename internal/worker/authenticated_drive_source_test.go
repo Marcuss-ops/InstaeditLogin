@@ -206,11 +206,15 @@ func TestAuthenticatedDriveSource_Inspect_Happy(t *testing.T) {
 	if imp.metadataCalls != 1 {
 		t.Errorf("metadataCalls = %d; want 1", imp.metadataCalls)
 	}
-	// Defense-in-depth: Drive-declared SHA is never trusted. The
-	// worker hashes during Open + verifies against the post-Read
-	// triple, so SourceMetadata.SHA256Hex must remain empty.
-	if md.SHA256Hex != "" {
-		t.Errorf("SHA256Hex = %q; want empty (defense-in-depth)", md.SHA256Hex)
+	// Drive-declared SHA is surfaced so the consumer's
+	// ArtifactVerificationPolicy (Task 4/10) can set RequireSHA=true
+	// when Drive declared sha256Checksum vs RequireSHA=false (local
+	// compute-and-persist) when Drive DIDN'T. Defense-in-depth is
+	// preserved: the artifactVerifyReader STILL hashes the streamed
+	// bytes during Open and persists ActualSHA256Hex() to
+	// media_assets.sha256 (migration 056 NOT NULL after Task 5/10).
+	if md.SHA256Hex != "fake-sha256-hex-padded-to-64-chars-aaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Errorf("SHA256Hex on Drive-declared-SHA happy path: want lowercase SHA-256 (verified vs the fake metadata Resp), got %q", md.SHA256Hex)
 	}
 }
 
@@ -300,5 +304,103 @@ func TestAuthenticatedDriveSource_Open_DownloadFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "download") {
 		t.Fatalf("expected 'download' in error; got %v", err)
+	}
+}
+
+// TestAuthenticatedDriveSource_Inspect_CanDownloadFalse (Task 5/10)
+// covers the canDownload=false rejection at the worker pull-path
+// (in addition to the HTTP-layer guard in pkg/api/drive_import.go).
+// The worker might be invoked outside the HTTP layer (folder crawler,
+// future ops tooling) and would otherwise leak a non-downloadable
+// row into the publish pool that 403s mid-download.
+//
+// The cases live side-by-side because the symmetric "ABSENT" path
+// (Capabilities=nil) is the SAME decision rule the HTTP layer
+// applies: legacy files where the API cannot determine the boolean
+// are NOT rejected. One table-driven test keeps the rejection +
+// the absent + the CanDownload=true paths in lockstep so a future
+// regression that flips the empty-vs-true-vs-false decision
+// matrix surfaces loudly here.
+func TestAuthenticatedDriveSource_Inspect_CanDownloadFalse(t *testing.T) {
+	cases := []struct {
+		name           string
+		capabilities   *services.Capabilities
+		driveChecksum  string
+		wantErrMatch   bool              // true → errors.Is(ErrDriveNotDownloadable)
+		wantErrSubstr  string            // expected substring for the unexpected error case
+		wantSHAInMeta  string            // expected md.SHA256Hex (defense-in-depth: empty when Drive didn't surface)
+	}{
+		{
+			name:          "candownload_false_rejects_with_sentinel",
+			capabilities:  &services.Capabilities{CanDownload: false},
+			driveChecksum: "fake-sha256-hex-padded-to-64-chars-aaaaaaaaaaaaaaaaaaaaaaaaaa",
+			wantErrMatch:  true,
+		},
+		{
+			name:          "capabilities_absent_legacy_file_passes",
+			capabilities:  nil,
+			driveChecksum: "fake-sha256-hex-padded-to-64-chars-aaaaaaaaaaaaaaaaaaaaaaaaaa",
+			wantErrMatch:  false,
+			wantSHAInMeta: "fake-sha256-hex-padded-to-64-chars-aaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		{
+			name:          "capabilities_true_with_sha_passes",
+			capabilities:  &services.Capabilities{CanDownload: true},
+			driveChecksum: "fake-sha256-hex-padded-to-64-chars-aaaaaaaaaaaaaaaaaaaaaaaaaa",
+			wantErrMatch:  false,
+			wantSHAInMeta: "fake-sha256-hex-padded-to-64-chars-aaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		{
+			name:          "capabilities_absent_no_sha_passes_then_consumer_computes_local",
+			capabilities:  nil,
+			driveChecksum: "",
+			wantErrMatch:  false,
+			// Defense-in-depth: Inspect surfaces empty SHA when Drive
+			// didn't declare one. The downstream
+			// artifactVerifyReader (Task 4/10) computes the local
+			// SHA via ActualSHA256Hex() and persists it to
+			// media_assets.sha256 (migration 056 NOT NULL).
+			wantSHAInMeta: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			imp := &fakeImporter{
+				metadataResp: &services.GoogleDriveFile{
+					ID:             "drive-file-id",
+					Name:           "test.mp4",
+					Size:           "4096",
+					MimeType:       "video/mp4",
+					SHA256Checksum: tc.driveChecksum,
+					Capabilities:   tc.capabilities,
+				},
+			}
+			vault := &fakeVault{}
+			src, err := NewAuthenticatedDriveSource(imp, vault)
+			if err != nil {
+				t.Fatalf("NewAuthenticatedDriveSource: %v", err)
+			}
+			driveID := int64(42)
+			md, err := src.Inspect(context.Background(), &models.UploadJob{ID: 7, DriveAccountID: &driveID, SourceID: "drive-file-id"})
+			if tc.wantErrMatch {
+				if err == nil {
+					t.Fatalf("want ErrDriveNotDownloadable, got nil (capabilities.CanDownload=false must reject)")
+				}
+				if !errors.Is(err, services.ErrDriveNotDownloadable) {
+					t.Errorf("err MUST wrap ErrDriveNotDownloadable (errors.Is contract for operator dashboard grouping), got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Inspect should pass for %q; got %v", tc.name, err)
+			}
+			if md == nil {
+				t.Fatal("Inspect returned nil metadata on the happy path")
+			}
+			if md.SHA256Hex != tc.wantSHAInMeta {
+				t.Errorf("SHA256Hex on happy-path %q: want %q (defense-in-depth; consumer computes local via artifactVerifyReader), got %q",
+					tc.name, tc.wantSHAInMeta, md.SHA256Hex)
+			}
+		})
 	}
 }

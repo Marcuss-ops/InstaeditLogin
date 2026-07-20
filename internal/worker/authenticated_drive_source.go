@@ -81,6 +81,18 @@ func (s *AuthenticatedDriveSource) Inspect(ctx context.Context, job *models.Uplo
 	if md == nil {
 		return nil, fmt.Errorf("authenticated drive inspect: file %s 返回ed nil metadata", job.SourceID)
 	}
+	// Task 5/10 — defense-in-depth: reject canDownload=false at the
+	// source layer too, not just at the HTTP handler. Symmetric
+	// with pkg/api/drive_import.go's check; the worker pull-path
+	// (folder crawler + future ops tools) goes through Inspect and
+	// would otherwise leak a non-downloadable row into the publish
+	// pool that 403s mid-download. An ABSENT Capabilities field
+	// mirrors the HTTP-layer policy: legacy files where the API
+	// cannot determine the boolean are NOT rejected (matches the
+	// godoc on google_drive_oauth.go::Capabilities).
+	if md.Capabilities != nil && !md.Capabilities.CanDownload {
+		return nil, fmt.Errorf("%w: file %s (Drive reported capabilities.canDownload=false; check DLP rules / IRM / share-settings)", services.ErrDriveNotDownloadable, job.SourceID)
+	}
 	size, err := strconv.ParseInt(md.Size, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("authenticated drive inspect: parse Drive Size %q: %w", md.Size, err)

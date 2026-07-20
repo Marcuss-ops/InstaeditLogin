@@ -106,6 +106,22 @@ const driveListFields = "files(" + driveFileFields + "),nextPageToken"
 // error.
 var ErrDriveDownloadTooLarge = errors.New("ERR_DRIVE_DOWNLOAD_TOO_LARGE")
 
+// ErrDriveNotDownloadable (Task 5/10) is the typed sentinel
+// AuthenticatedDriveSource.Inspect + pkg/api/drive_import return
+// when the Drive file's capabilities.canDownload is explicitly
+// false. NO fallback — the import is permanently rejected so the
+// operator-triage dashboard surfaces a clear remediation message
+// (DLP rule on the Workspace, IRM stamped on the file, the
+// "viewers and commenters can download" share-setting unchecked)
+// rather than letting the row leak into 'pending' and burn the
+// operator's quota when a future publish tick would 403 mid-download
+// anyway. Handlers use errors.Is to map this to HTTP 422.
+//
+// ABSENT Capabilities field is NOT a rejection — the field is
+// omitted for legacy Drive files where the API cannot determine
+// the boolean — see godoc on Capabilities.
+var ErrDriveNotDownloadable = errors.New("ERR_DRIVE_NOT_DOWNLOADABLE")
+
 // limitReadCloser wraps an io.ReadCloser and rejects any read that
 // would push the cumulative byte count past `cap`. Returns the typed
 // ErrDriveDownloadTooLarge (wrapped with the actual cap) so callers
