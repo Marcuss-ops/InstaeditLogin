@@ -267,7 +267,6 @@ function YouTubeEmbed({ id, title, aspect }: { id: string; title: string; aspect
           src={`https://www.youtube.com/embed/${id}?playsinline=1`}
           title={title}
           loading="lazy"
-          {/* see commit 2902c76 — `web-share` removed (Chromium 120+ deprecation). */}
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen
           referrerPolicy="strict-origin-when-cross-origin"
