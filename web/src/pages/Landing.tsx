@@ -262,6 +262,12 @@ function YouTubeEmbed({ id, title, aspect }: { id: string; title: string; aspect
   return (
     <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-[#0a0a12] shadow-[0_25px_80px_-25px_rgba(0,0,0,0.85)] transition-all duration-500 hover:shadow-[0_30px_100px_-20px_rgba(139,92,246,0.3)] hover:border-violet-400/30">
       <div className={aspectClass}>
+        {/* `web-share` Permissions-Policy token removed from the YouTube
+            embed's `allow` attribute below — Chromium 120+ deprecated it
+            (was emitting `[warn] Unrecognized feature: 'web-share'` in
+            DevTools). YouTube's third-party embed never calls
+            navigator.share() from inside the iframe, so the token was a
+            no-op for our usage. See commit 2902c76. */}
         <iframe
           className="w-full h-full"
           src={`https://www.youtube.com/embed/${id}?playsinline=1`}
