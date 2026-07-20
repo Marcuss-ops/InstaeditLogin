@@ -12,51 +12,70 @@ import {
 import { MarketingNav } from "../components/layout/MarketingNav";
 import { MarketingFooter } from "../components/layout/MarketingFooter";
 
+const NAV_LINKS = [
+  { label: "How it works", href: "/#pipeline" },
+  { label: "Workflow", href: "/#workflow" },
+  { label: "Features", href: "/#features" },
+  { label: "Agencies", href: "/#agency" },
+  { label: "Programs", to: "/programs" },
+  { label: "Mentoring", to: "/mentoring" },
+  { label: "About us", href: "/#who-are-we" },
+];
+
 const PROGRAMS = [
   {
     icon: Users,
     title: "Creator Program",
     tagline: "From creator to content machine",
+    duration: "Self-paced · typically 6-8 weeks",
     description:
       "A guided program for creators who want to go from a few posts per month to a structured content machine: workflow, templates, automations and early access to new InstaEdit features.",
-    features: [
-      "One-on-one onboarding with the product team",
-      "Content templates optimized for every platform",
-      "Early access to new integrations",
-      "Exclusive creator community",
+    deliverables: [
+      "Production-ready template library (50+ formats)",
+      "Onboarding cohort with weekly office hours",
+      "Priority access to new platform features",
+      "Member-only creator community",
     ],
-    cta: "Join the waitlist",
+    prerequisites: "An active InstaEdit account",
+    pricing: "Included with InstaEdit Pro",
     color: "from-violet-500 to-purple-500",
+    cta: "Join the waitlist",
   },
   {
     icon: Building2,
     title: "Agency Program",
     tagline: "Scale your clients without hiring",
+    duration: "12-week engagement · renewable",
     description:
       "Designed for agencies and content studios managing dozens of clients. Dedicated training, SLAs, priority support and increasing margins based on volume.",
-    features: [
-      "Multi-workspace with separate billing",
+    deliverables: [
+      "Multi-workspace setup with separate billing",
       "Assisted onboarding for your team",
-      "Priority support with SLA",
+      "Priority support with 4-hour response SLA",
       "Partner program with volume benefits",
     ],
-    cta: "Become a partner",
+    prerequisites: "Verified agency with at least 3 active client accounts",
+    pricing: "Per-seat · starts at $99/month",
     color: "from-emerald-500 to-teal-500",
+    cta: "Become a partner",
   },
   {
     icon: Briefcase,
     title: "Enterprise Program",
     tagline: "InstaEdit in your company",
+    duration: "12-month agreement · quarterly reviews",
     description:
       "Tailor-made solution for brands and companies that want to integrate InstaEdit into their content operations systems, with single sign-on, audit log and dedicated account manager.",
-    features: [
+    deliverables: [
       "SSO and user provisioning",
-      "Audit log and compliance",
+      "Audit log and SOC2 compliance",
       "Dedicated account manager",
       "Team training and workshops",
     ],
-    cta: "Contact sales",
+    prerequisites: "Procurement review and SOC2 scope agreement",
+    pricing: "Custom enterprise pricing",
     color: "from-cyan-500 to-blue-500",
+    cta: "Contact sales",
   },
 ];
 
@@ -75,6 +94,81 @@ const MENTORING = [
     icon: Globe,
     title: "Multi-platform Setup",
     description: "Guided setup of all channels and automations to publish on every platform without wasting time."
+  },
+];
+
+const COMPARISON = {
+  headers: ["Feature", "Creator", "Agency", "Enterprise"],
+  rows: [
+    {
+      feature: "Duration",
+      creator: "Self-paced (6-8 wks)",
+      agency: "12-week engagement",
+      enterprise: "12-month agreement",
+    },
+    {
+      feature: "Pricing",
+      creator: "Included with Pro",
+      agency: "Per-seat from $99/mo",
+      enterprise: "Custom enterprise",
+    },
+    {
+      feature: "Workspaces",
+      creator: "Single",
+      agency: "Multi-workspace",
+      enterprise: "SSO + provisioning",
+    },
+    {
+      feature: "Templates",
+      creator: "Library access",
+      agency: "Custom team training",
+      enterprise: "Custom integrations",
+    },
+    {
+      feature: "Support SLA",
+      creator: "Community",
+      agency: "4h priority response",
+      enterprise: "Dedicated AM",
+    },
+    {
+      feature: "Audit log",
+      creator: "Activity log",
+      agency: "Activity log",
+      enterprise: "Full SOC2 trail",
+    },
+    {
+      feature: "Best for",
+      creator: "Independent creators",
+      agency: "Agencies & studios",
+      enterprise: "Brands & large teams",
+    },
+  ],
+};
+
+const FAQS = [
+  {
+    q: "What is the difference between Programs and Mentoring?",
+    a: "Mentoring is 1:1 weekly sessions with a content strategist. Programs are cohort-based tracks with shared deliverables and templated workflows. Many teams combine them — Mentoring for strategic direction, Programs as the production backbone."
+  },
+  {
+    q: "How long does each program last?",
+    a: "Creator Program is self-paced — most members reach a production-ready workflow in 6-8 weeks. Agency Program is a 12-week engagement, with team training and the option to renew. Enterprise Program runs 12 months with quarter-by-quarter business reviews."
+  },
+  {
+    q: "What deliverables do I get at the end?",
+    a: "Creator Program graduates with a documented template library + community access. Agency Program teams leave with a configured multi-workspace setup + a trained editorial team. Enterprise Program customers ship with SSO-integrated publishing pipelines + a SOC2 audit trail."
+  },
+  {
+    q: "Is InstaEdit subscription included in the program fee?",
+    a: "Creator Program is bundled with the InstaEdit Pro tier at no extra fee. Agency Program requires Pro; seats are billed per workspace. Enterprise Program includes Pro plus Business-tier licensing as part of the custom agreement."
+  },
+  {
+    q: "Why is Creator Program on a waitlist?",
+    a: "We are scaling cohort onboarding to keep template quality high as we expand to 50+ markets. Join the waitlist and we will notify you when seats open — typically a 2-4 week queue, occasionally longer in peak months."
+  },
+  {
+    q: "Can I switch programs if I outgrow my tier?",
+    a: "Yes — creators graduating into an agency use case can apply for Agency Program at any time. Agencies adding enterprise clients move to Enterprise Program with a SOC2 onboarding sprint. Your program manager coordinates the transition with no re-purchase of seats."
   },
 ];
 
@@ -136,6 +230,7 @@ function ProgramsList() {
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
             Whether you are a growing creator, an agency with many clients or a brand
             with structured needs, we have created a program tailored for you.
+            Each program has a defined duration, deliverables and pricing — choose one and start.
           </p>
         </div>
         <div className="grid gap-8">
@@ -145,30 +240,39 @@ function ProgramsList() {
               className={`surface-card p-8 lg:p-10 relative overflow-hidden animate-fade-up hover:border-violet-400/30 transition-all duration-300 ${["", "animation-delay-100", "animation-delay-200"][i]}`}
             >
               <div aria-hidden="true" className={`absolute -top-20 -right-20 w-56 h-56 rounded-full bg-gradient-to-br ${p.color} opacity-20 blur-3xl pointer-events-none`} />
-              <div className="relative grid lg:grid-cols-[1fr_auto] gap-8 items-center">
+              <div className="relative grid lg:grid-cols-[1fr_auto] gap-8 items-start">
                 <div>
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${p.color} flex items-center justify-center text-white shadow-lg`}>
+                  <div className="flex items-start gap-3 mb-5">
+                    <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${p.color} flex items-center justify-center text-white shadow-lg shrink-0`}>
                       <p.icon className="w-6 h-6" />
                     </div>
                     <div>
                       <h3 className="text-display-3 text-white">{p.title}</h3>
                       <p className="text-sm text-violet-300/90 font-medium">{p.tagline}</p>
+                      <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-[11px] text-zinc-300">
+                        <CalendarClock className="w-3 h-3 text-violet-300" />
+                        <span>{p.duration}</span>
+                      </div>
                     </div>
                   </div>
                   <p className="text-sm text-zinc-400 leading-relaxed max-w-[60ch] mb-6">
                     {p.description}
                   </p>
+                  <h4 className="text-eyebrow text-violet-300/90 mb-3">What you'll get</h4>
                   <ul className="grid sm:grid-cols-2 gap-3 mb-6">
-                    {p.features.map((f) => (
-                      <li key={f} className="flex items-start gap-2 text-sm text-zinc-300">
+                    {p.deliverables.map((d) => (
+                      <li key={d} className="flex items-start gap-2 text-sm text-zinc-300">
                         <CheckCircle2 className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
-                        <span>{f}</span>
+                        <span>{d}</span>
                       </li>
                     ))}
                   </ul>
+                  <h4 className="text-eyebrow text-zinc-500 mb-1.5">Requirements</h4>
+                  <p className="text-sm text-zinc-400 leading-relaxed max-w-[60ch]">
+                    {p.prerequisites}
+                  </p>
                 </div>
-                <div className="flex flex-col items-start lg:items-end gap-4">
+                <div className="flex flex-col items-start lg:items-end gap-3">
                   <Link
                     to="/login"
                     className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 transition-all group whitespace-nowrap"
@@ -176,11 +280,70 @@ function ProgramsList() {
                     {p.cta}
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                   </Link>
+                  <div className="text-right">
+                    <div className="text-eyebrow text-zinc-500 mb-1">Pricing</div>
+                    <div className="text-sm font-semibold text-white">{p.pricing}</div>
+                  </div>
                 </div>
               </div>
             </div>
           ))}
         </div>
+      </div>
+    </section>
+  );
+}
+
+function ComparisonSection() {
+  return (
+    <section id="compare" className="relative py-24 sm:py-32 overflow-hidden">
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="glow-orb bg-emerald-500 w-[380px] h-[380px] -top-20 -right-32 animate-drift-slow opacity-30" />
+        <div className="glow-orb bg-cyan-500 w-[340px] h-[340px] -bottom-32 -left-24 animate-drift-rev opacity-25" />
+      </div>
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="max-w-3xl mb-16 animate-fade-up">
+          <div className="text-eyebrow text-emerald-300/90 mb-3 inline-flex items-center gap-2">
+            <Building2 className="w-4 h-4" />
+            Compare
+          </div>
+          <h2 className="text-display-2 text-white">
+            Which program fits your team?
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
+            Side-by-side comparison of duration, pricing, support and best fit for each program tier.
+          </p>
+        </div>
+        <div className="surface-glass border border-white/15 rounded-2xl overflow-hidden animate-fade-up">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-px bg-white/5">
+            <div className="bg-[#14141c]/80 px-5 py-4 text-eyebrow text-zinc-500">Feature</div>
+            <div className="bg-[#14141c]/80 px-5 py-4 text-sm font-semibold text-white">Creator</div>
+            <div className="bg-[#14141c]/80 px-5 py-4 text-sm font-semibold text-white">Agency</div>
+            <div className="bg-[#14141c]/80 px-5 py-4 text-sm font-semibold text-white">Enterprise</div>
+            {COMPARISON.rows.map((row) => (
+              <div key={row.feature} className="contents">
+                <div className="bg-[#14141c]/70 px-5 py-4 text-sm text-zinc-300">
+                  {row.feature}
+                </div>
+                <div className="bg-[#14141c]/70 px-5 py-4 text-sm text-zinc-300">
+                  {row.creator}
+                </div>
+                <div className="bg-[#14141c]/70 px-5 py-4 text-sm text-zinc-300">
+                  {row.agency}
+                </div>
+                <div className="bg-[#14141c]/70 px-5 py-4 text-sm text-zinc-300">
+                  {row.enterprise}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <p className="text-xs text-zinc-500 mt-4 max-w-[58ch]">
+          All programs require an active InstaEdit workspace. Need help choosing?{" "}
+          <a href="mailto:hello@instaedit.org?subject=Programs%20Question" className="text-violet-300/90 hover:text-white transition-colors underline-offset-2 hover:underline">
+            Talk to the team.
+          </a>
+        </p>
       </div>
     </section>
   );
@@ -213,6 +376,56 @@ function MentoringSection() {
               </div>
               <h3 className="text-display-3 text-white mb-2">{m.title}</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">{m.description}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-10 text-center">
+          <Link
+            to="/mentoring"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group"
+          >
+            Explore mentoring
+            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FAQSection() {
+  return (
+    <section id="faq" className="relative py-24 sm:py-32 overflow-hidden bg-elevated">
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="glow-orb bg-cyan-400 w-[360px] h-[360px] -top-20 -right-32 animate-drift-slow opacity-40" />
+        <div className="glow-orb bg-violet-500 w-[320px] h-[320px] -bottom-32 -left-24 animate-drift-rev opacity-30" />
+      </div>
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="max-w-3xl mb-16 animate-fade-up">
+          <div className="text-eyebrow text-cyan-300/90 mb-3">Frequently asked</div>
+          <h2 className="text-display-2 text-white">
+            Questions answered.
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
+            Everything you want to know about how the programs work, who they support,
+            and what to expect after you join.
+          </p>
+        </div>
+        <div className="grid md:grid-cols-2 gap-5">
+          {FAQS.map((item, i) => (
+            <div
+              key={item.q}
+              className={`surface-card p-6 animate-fade-up ${["", "animation-delay-100", "animation-delay-200", "animation-delay-300"][i % 4]}`}
+            >
+              <h3 className="text-base font-semibold text-white mb-3 flex items-start gap-3">
+                <span className="mt-0.5 inline-flex w-6 h-6 items-center justify-center rounded-md bg-violet-500/15 ring-1 ring-violet-400/30 flex-shrink-0 text-[10px] font-bold text-violet-300">
+                  Q
+                </span>
+                <span>{item.q}</span>
+              </h3>
+              <p className="text-sm text-zinc-400 leading-relaxed pl-9">
+                {item.a}
+              </p>
             </div>
           ))}
         </div>
@@ -250,7 +463,7 @@ function CTASection() {
                 Want guidance?
               </Link>
               <a
-                href="mailto:hello@instaedit.org"
+                href="mailto:hello@instaedit.org?subject=Programs%20Question"
                 className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
               >
                 Talk to the team
@@ -263,16 +476,6 @@ function CTASection() {
   );
 }
 
-const NAV_LINKS = [
-  { label: "How it works", href: "/#pipeline" },
-  { label: "Workflow", href: "/#workflow" },
-  { label: "Features", href: "/#features" },
-  { label: "Agencies", href: "/#agency" },
-  { label: "Programs", to: "/programs" },
-  { label: "Mentoring", to: "/mentoring" },
-  { label: "About us", href: "/#who-are-we" },
-];
-
 export function Programs() {
   return (
     <div className="min-h-screen bg-[#030308]">
@@ -280,7 +483,9 @@ export function Programs() {
       <main>
         <Hero />
         <ProgramsList />
+        <ComparisonSection />
         <MentoringSection />
+        <FAQSection />
         <CTASection />
       </main>
       <MarketingFooter />
