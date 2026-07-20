@@ -49,10 +49,17 @@ const MENTORING_PATH = [
   },
 ];
 
+/**
+ * PACKAGES are listed with an explicit `pricing` field that describes the
+ * billing model — NOT a dollar amount. Per marketing policy we do not publish
+ * precise integers on the marketing site; final figures are shared on the
+ * discovery call. See docs/MARKETING-FUNNEL.md > Claims & Pricing Policy.
+ */
 const PACKAGES = [
   {
     title: "Starter Mentoring",
     tagline: "For creators starting from zero",
+    pricing: "Billed per session · quote on discovery call",
     features: [
       "4 one-on-one 45-minute sessions",
       "Channel and editorial calendar audit",
@@ -65,6 +72,7 @@ const PACKAGES = [
   {
     title: "Growth Mentoring",
     tagline: "For those who want to move to the next level",
+    pricing: "Billed per package · quarterly engagement",
     features: [
       "8 one-on-one 60-minute sessions",
       "Content strategy and monthly editorial plan",
@@ -77,6 +85,7 @@ const PACKAGES = [
   {
     title: "Team Mentoring",
     tagline: "For teams and agencies scaling up",
+    pricing: "Custom team contract · annual SLA against milestones",
     features: [
       "12 team sessions",
       "Multi-account workflow and automations",
@@ -286,7 +295,10 @@ function PackagesSection() {
                   <Users className="w-6 h-6" />
                 </div>
                 <h3 className="text-display-3 text-white mb-1">{p.title}</h3>
-                <p className="text-sm text-violet-300/90 font-medium mb-5">{p.tagline}</p>
+                <p className="text-sm text-violet-300/90 font-medium mb-3">{p.tagline}</p>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] border border-white/10 text-[11px] text-zinc-300 mb-5">
+                  <span>{p.pricing}</span>
+                </div>
                 <ul className="space-y-3 mb-7">
                   {p.features.map((f) => (
                     <li key={f} className="flex items-start gap-2 text-sm text-zinc-300">
