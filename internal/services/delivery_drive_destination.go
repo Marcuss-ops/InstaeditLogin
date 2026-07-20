@@ -589,7 +589,19 @@ func (d *GoogleDriveDestination) streamChunks(
 			return finalID, finalURL, nil
 		case http.StatusNotFound:
 			resp.Body.Close()
-			return "", "", fmt.Errorf("%w: chunk %d", ErrDriveSessionExpired, offset)
+			return "", "", fmt.Errorf("%w: chunk %d (HTTP 404)", ErrDriveSessionExpired, offset)
+		case http.StatusGone: // 410
+			// Drive's resumable session URI is treated as GONE (not
+			// NOT FOUND) by some Drive versions + intermediaries when
+			// the 7-day TTL elapses server-side. Same recovery
+			// semantics as 404: surface ErrDriveSessionExpired so the
+			// caller returns Status="retrying" + the existing
+			// TTL/expired-state branch in Deliver (above) deletes
+			// + re-creates the row with a fresh POST initiate on
+			// next worker tick. The HTTP 410 code is preserved in
+			// the message for the operator-dashboard drill-down.
+			resp.Body.Close()
+			return "", "", fmt.Errorf("%w: chunk %d (HTTP 410)", ErrDriveSessionExpired, offset)
 		default:
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			resp.Body.Close()
