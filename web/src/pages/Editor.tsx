@@ -342,6 +342,9 @@ function YouTubeEmbed({
   return (
     <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-[#0a0a12] shadow-[0_25px_80px_-25px_rgba(0,0,0,0.85)]">
       <div className={aspectClass}>
+        {/* `web-share` removed from Chromium 120+ Permissions-Policy
+            allow-list (triggers `[warn] Unrecognized feature: 'web-share']` in
+            DevTools). See commit 2902c76. */}
         <iframe
           className="w-full h-full"
           src={`https://www.youtube.com/embed/${id}?playsinline=1`}
