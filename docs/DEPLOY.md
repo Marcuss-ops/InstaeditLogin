@@ -823,7 +823,8 @@ fails, check:
   Flycast, so this should be automatic if you used `flyctl postgres
   attach`).
 - The migrations in `internal/database/migrations/` are valid SQL
-  (the file count should match the latest `db/migrations/` mirror).
+  (canonical set; embedded via `go:embed` into the Go binary and applied
+  at boot by `db.Migrate` — see `internal/database/migrations.go`).
 
 ### `min_machines_running = 1` and you see two healthy instances
 That's normal during a rolling deploy. The new VM comes up healthy

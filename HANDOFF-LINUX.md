@@ -105,9 +105,13 @@ echo "ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
 ## 6. Avvia il backend
 
 ```bash
-# Verifica migrations (se il db è appena creato, le migrations devono girare)
-psql "$DATABASE_URL" -f db/migrations/001_init.sql
-psql "$DATABASE_URL" -f db/migrations/002_add_refresh_token.sql
+# Le migrations sono embedded nel binary Go (go:embed di internal/database/migrations/*.sql)
+# e applicate automaticamente al boot dal server tramite db.Migrate (vedi cmd/server/main.go).
+# I file canonici vivono in internal/database/migrations/ — NON eseguire psql -f direttamente:
+# il runner tiene traccia dell'ordine + degli errori idempotenti (CREATE TABLE IF NOT EXISTS,
+# ADD COLUMN IF NOT EXISTS, ecc.) e un replay manuale può sfasare lo stato atteso.
+# Se devi applicare migrations SENZA avviare il server, lancialo lo stesso — anche solo un boot
+# breve è sufficiente perché la fase migrate è idratata prima del listener HTTP.
 
 # Avvia
 go run cmd/server/main.go

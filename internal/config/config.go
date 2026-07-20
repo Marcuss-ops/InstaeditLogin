@@ -25,6 +25,8 @@ const (
 // PORT env var only (Vercel / Railway / Render standard). TWITTER_* env vars
 // renamed to X_*; TIKTOK_CLIENT_KEY renamed to TIKTOK_CLIENT_ID.
 type Config struct {
+	// VeloxAPIToken authenticates artifact HEAD/GET requests back to Velox.
+	VeloxAPIToken string
 	// FrontendURL is where the OAuth callback should redirect.
 	FrontendURL string
 	// AllowedCORSOrigins is the comma-separated list of origins.
@@ -82,15 +84,16 @@ type Config struct {
 	// retries recover a transient network blip during the PUT, while
 	// job-level retries recover a budget-exhausted publish that the
 	// inner chunk loop couldn't escape.
-	YouTubeUploadChunkBytes       int64 // YOUTUBE_UPLOAD_CHUNK_BYTES; default 16777216 (16 MB), MUST be multiple of 262144 (256 KB)
-	YouTubeUploadMaxRetries       int   // YOUTUBE_UPLOAD_MAX_RETRIES; default 5 (per-chunk PUT budget, distinct from upload-job retries)
-	YouTubeUploadBackoffBaseMs    int   // YOUTUBE_UPLOAD_BACKOFF_BASE_MS; default 1000 (1 s)
-	YouTubeUploadBackoffCapMs     int   // YOUTUBE_UPLOAD_BACKOFF_CAP_MS; default 300000 (5 min); applies to CALCULATED backoff only, NOT server Retry-After
+	YouTubeUploadChunkBytes    int64 // YOUTUBE_UPLOAD_CHUNK_BYTES; default 16777216 (16 MB), MUST be multiple of 262144 (256 KB)
+	YouTubeUploadMaxRetries    int   // YOUTUBE_UPLOAD_MAX_RETRIES; default 5 (per-chunk PUT budget, distinct from upload-job retries)
+	YouTubeUploadBackoffBaseMs int   // YOUTUBE_UPLOAD_BACKOFF_BASE_MS; default 1000 (1 s)
+	YouTubeUploadBackoffCapMs  int   // YOUTUBE_UPLOAD_BACKOFF_CAP_MS; default 300000 (5 min); applies to CALCULATED backoff only, NOT server Retry-After
 
 	// Google Drive OAuth (read-only import of video clips)
-	GoogleDriveClientID     string
-	GoogleDriveClientSecret string
-	GoogleDriveRedirectURI  string
+	GoogleDriveClientID       string
+	GoogleDriveClientSecret   string
+	GoogleDriveRedirectURI    string
+	GoogleDriveUploadFolderID string
 
 	// LinkedIn OAuth
 	LinkedInClientID     string
@@ -189,12 +192,12 @@ type Config struct {
 	// 'ready_to_publish' and runs videos.insert. Both pools use the
 	// same lease + heartbeat machinery, with distinct workerID
 	// prefixes so a Mark* CAS can never collide.
-	UploadIngestConcurrency        int           // UPLOAD_INGEST_CONCURRENCY; default 3
-	YouTubeUploadConcurrency       int           // YOUTUBE_UPLOAD_CONCURRENCY; default 4
-	UploadLeaseTTLSeconds          int           // UPLOAD_LEASE_TTL_SECONDS; default 60
-	UploadHeartbeatIntervalSeconds int           // UPLOAD_HEARTBEAT_INTERVAL_SECONDS; default 20
-	UploadReclaimIntervalSeconds   int           // UPLOAD_RECLAIM_INTERVAL_SECONDS; default 30
-	UploadReclaimOnStart           bool          // UPLOAD_RECLAIM_ON_START; default true
+	UploadIngestConcurrency        int  // UPLOAD_INGEST_CONCURRENCY; default 3
+	YouTubeUploadConcurrency       int  // YOUTUBE_UPLOAD_CONCURRENCY; default 4
+	UploadLeaseTTLSeconds          int  // UPLOAD_LEASE_TTL_SECONDS; default 60
+	UploadHeartbeatIntervalSeconds int  // UPLOAD_HEARTBEAT_INTERVAL_SECONDS; default 20
+	UploadReclaimIntervalSeconds   int  // UPLOAD_RECLAIM_INTERVAL_SECONDS; default 30
+	UploadReclaimOnStart           bool // UPLOAD_RECLAIM_ON_START; default true
 
 	// GoogleDriveAPIKey is a Google Cloud API key used to list CONTENTS
 	// of a public Drive folder when the user has not linked their Drive
@@ -280,30 +283,30 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		FrontendURL:             getEnv("FRONTEND_URL", ""),
-		AllowedCORSOrigins:      splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
-		DatabaseURL:             getEnv("DATABASE_URL", ""),
-		DBHost:                  getEnv("DB_HOST", "localhost"),
-		DBPort:                  getEnv("DB_PORT", "5432"),
-		DBUser:                  getEnv("DB_USER", "instaedit"),
-		DBPassword:              getEnv("DB_PASSWORD", ""),
-		DBName:                  getEnv("DB_NAME", "instaedit_login"),
-		DBSSLMode:               getEnv("DB_SSLMODE", "disable"),
-		MetaAppID:               getEnv("META_APP_ID", ""),
-		MetaAppSecret:           getEnv("META_APP_SECRET", ""),
-		MetaRedirectURI:         getEnv("META_REDIRECT_URI", ""),
-		InstagramRedirectURI:    getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
-		FacebookRedirectURI:     getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
-		ThreadsRedirectURI:      getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
-		TikTokClientID:          getEnv("TIKTOK_CLIENT_ID", ""),
-		TikTokClientSecret:      getEnv("TIKTOK_CLIENT_SECRET", ""),
-		TikTokRedirectURI:       getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
-		XClientID:               getEnv("X_CLIENT_ID", ""),
-		XClientSecret:           getEnv("X_CLIENT_SECRET", ""),
-		XRedirectURI:            getEnv("X_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
-		YouTubeClientID:         getEnv("YOUTUBE_CLIENT_ID", ""),
-		YouTubeClientSecret:     getEnv("YOUTUBE_CLIENT_SECRET", ""),
-		YouTubeRedirectURI:      getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
+		FrontendURL:          getEnv("FRONTEND_URL", ""),
+		AllowedCORSOrigins:   splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
+		DatabaseURL:          getEnv("DATABASE_URL", ""),
+		DBHost:               getEnv("DB_HOST", "localhost"),
+		DBPort:               getEnv("DB_PORT", "5432"),
+		DBUser:               getEnv("DB_USER", "instaedit"),
+		DBPassword:           getEnv("DB_PASSWORD", ""),
+		DBName:               getEnv("DB_NAME", "instaedit_login"),
+		DBSSLMode:            getEnv("DB_SSLMODE", "disable"),
+		MetaAppID:            getEnv("META_APP_ID", ""),
+		MetaAppSecret:        getEnv("META_APP_SECRET", ""),
+		MetaRedirectURI:      getEnv("META_REDIRECT_URI", ""),
+		InstagramRedirectURI: getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
+		FacebookRedirectURI:  getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
+		ThreadsRedirectURI:   getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
+		TikTokClientID:       getEnv("TIKTOK_CLIENT_ID", ""),
+		TikTokClientSecret:   getEnv("TIKTOK_CLIENT_SECRET", ""),
+		TikTokRedirectURI:    getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
+		XClientID:            getEnv("X_CLIENT_ID", ""),
+		XClientSecret:        getEnv("X_CLIENT_SECRET", ""),
+		XRedirectURI:         getEnv("X_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
+		YouTubeClientID:      getEnv("YOUTUBE_CLIENT_ID", ""),
+		YouTubeClientSecret:  getEnv("YOUTUBE_CLIENT_SECRET", ""),
+		YouTubeRedirectURI:   getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
 		// P1#6 — YouTube resumable upload tuning. Defaults mirror the
 		// valutazione doc spec (16 MB chunks, 5 per-chunk retries, 1 s/5 min
 		// backoff). Validation runs unconditionally (so an operator typo
@@ -312,13 +315,15 @@ func Load() (*Config, error) {
 		YouTubeUploadMaxRetries:    getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
 		YouTubeUploadBackoffBaseMs: getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
 		YouTubeUploadBackoffCapMs:  getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
-		GoogleDriveClientID:     getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
-		GoogleDriveClientSecret: getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
-		GoogleDriveRedirectURI:  getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),
-		LinkedInClientID:        getEnv("LINKEDIN_CLIENT_ID", ""),
-		LinkedInClientSecret:    getEnv("LINKEDIN_CLIENT_SECRET", ""),
-		LinkedInRedirectURI:     getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
-		EncryptionKey:           getEnv("ENCRYPTION_KEY", ""),
+		GoogleDriveClientID:        getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
+		GoogleDriveClientSecret:    getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
+		GoogleDriveRedirectURI:     getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),
+		GoogleDriveUploadFolderID:  getEnv("GOOGLE_DRIVE_UPLOAD_FOLDER_ID", ""),
+		VeloxAPIToken:              getEnv("VELOX_API_TOKEN", ""),
+		LinkedInClientID:           getEnv("LINKEDIN_CLIENT_ID", ""),
+		LinkedInClientSecret:       getEnv("LINKEDIN_CLIENT_SECRET", ""),
+		LinkedInRedirectURI:        getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
+		EncryptionKey:              getEnv("ENCRYPTION_KEY", ""),
 		// Blocco #2.2: read the multi-key env vars. The actual
 		// parsing + validation happens in validate(); Load() only
 		// captures the raw strings so validate() can surface

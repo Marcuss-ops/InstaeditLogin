@@ -178,29 +178,29 @@ CREATE TABLE IF NOT EXISTS external_deliveries (
     -- SHA-256 of the raw POST body. Lets the handler detect a
     -- same-key-but-different-payload replay and return 409
     -- (per the Velox <-> InstaEdit idempotency spec). NOT indexed
-    — looked up via UNIQUE(source_system, idempotency_key) once.
+    -- looked up via UNIQUE(source_system, idempotency_key) once.
     request_sha256           TEXT        NOT NULL,
 
     -- Link to the canonical upload_job created by the worker's
     -- ingest step. SET NULL on delete preserves the delivery
-    — journal across manual cleanups.
+    -- journal across manual cleanups.
     upload_job_id            BIGINT
         REFERENCES upload_jobs(id) ON DELETE SET NULL,
 
     -- Link to the published post. BIGINT (no FK by spec —
-    — mirrors 036 upload_jobs.post_id precedent; lets the delivery
-    — outlive post deletion for cross-system audit).
+    -- mirrors 036 upload_jobs.post_id precedent; lets the delivery
+    -- outlive post deletion for cross-system audit).
     post_id                  BIGINT,
 
     -- Populated when status transitions to `published`. platform_url
-    — is the canonical user-facing "share this" link (YouTube watch?v=
-    — or analogous).
+    -- is the canonical user-facing "share this" link (YouTube watch?v=
+    -- or analogous).
     platform_media_id        TEXT,
     platform_url             TEXT,
 
-    — Stable code for the most recent failure (e.g. youtube_quotaExceeded,
-    — drive_404, artifact_sha256_mismatch). Mirrors
-    — upload_jobs.error_code for consistent dashboard filtering.
+    -- Stable code for the most recent failure (e.g. youtube_quotaExceeded,
+    -- drive_404, artifact_sha256_mismatch). Mirrors
+    -- upload_jobs.error_code for consistent dashboard filtering.
     last_error_code          TEXT,
     last_error_message       TEXT,
 
@@ -208,15 +208,15 @@ CREATE TABLE IF NOT EXISTS external_deliveries (
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at             TIMESTAMPTZ,
 
-    — Two idempotency lookup paths:
-    — 1. by upstream's delivery id (cross-system trace lookup)
-    — 2. by upstream's idempotency key (replay/retry same row)
+    -- Two idempotency lookup paths:
+    -- 1. by upstream's delivery id (cross-system trace lookup)
+    -- 2. by upstream's idempotency key (replay/retry same row)
     UNIQUE (source_system, external_delivery_id),
     UNIQUE (source_system, idempotency_key)
 );
 
-— Enforced via named CHECK constraint for readable failures.
-— Matches 051's CHECK pattern + the spec's enumerated state list.
+-- Enforced via named CHECK constraint for readable failures.
+-- Matches 051's CHECK pattern + the spec's enumerated state list.
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -241,14 +241,14 @@ BEGIN
     END IF;
 END $$;
 
-— Worker pool's "claim next batch" partial index. Mirrors the
-— ClaimBatchForPublish CTE pattern from migration 046:
-—   SELECT id FROM external_deliveries
-—    WHERE status IN (active set)
-—      AND created_at <= NOW()
-—      [AND next_attempt_at IS NULL OR next_attempt_at <= NOW()]
-—    ORDER BY created_at ASC
-—    LIMIT $1 FOR UPDATE SKIP LOCKED
+-- Worker pool's "claim next batch" partial index. Mirrors the
+-- ClaimBatchForPublish CTE pattern from migration 046:
+--   SELECT id FROM external_deliveries
+--    WHERE status IN (active set)
+--      AND created_at <= NOW()
+--      [AND next_attempt_at IS NULL OR next_attempt_at <= NOW()]
+--    ORDER BY created_at ASC
+--    LIMIT $1 FOR UPDATE SKIP LOCKED
 CREATE INDEX IF NOT EXISTS idx_external_deliveries_worker_pool
     ON external_deliveries (status, created_at)
     WHERE status IN (
@@ -261,33 +261,33 @@ CREATE INDEX IF NOT EXISTS idx_external_deliveries_worker_pool
         'retry_wait'
     );
 
-— By-upload-job lookup. The publish_worker, when it creates
-— upload_job, stamps the delivery's upload_job_id. The
-— dashboard queries "show me the delivery that produced this
-— upload_job" — partial index excludes the historical
-— pre-link rows where upload_job_id is NULL.
+-- By-upload-job lookup. The publish_worker, when it creates
+-- upload_job, stamps the delivery's upload_job_id. The
+-- dashboard queries "show me the delivery that produced this
+-- upload_job" — partial index excludes the historical
+-- pre-link rows where upload_job_id is NULL.
 CREATE INDEX IF NOT EXISTS idx_external_deliveries_upload_job_id
     ON external_deliveries (upload_job_id)
     WHERE upload_job_id IS NOT NULL;
 
-— Reconciliation: GET /internal/v1/deliveries/{id} + admin
-— dashboard "list deliveries for destination X". Drives the
-— callback dispatcher's lookup too (which delivery triggered
-— this callback?).
+-- Reconciliation: GET /internal/v1/deliveries/{id} + admin
+-- dashboard "list deliveries for destination X". Drives the
+-- callback dispatcher's lookup too (which delivery triggered
+-- this callback?).
 CREATE INDEX IF NOT EXISTS idx_external_deliveries_destination_status
     ON external_deliveries (external_destination_id, status, created_at DESC);
 
-— Cross-system trace lookup by upstream delivery id. Velox
-— support flow: operator reports a Velox delivery id, we
-— look up here to find the InstaEdit acceptance + final
-— status in one index range scan.
+-- Cross-system trace lookup by upstream delivery id. Velox
+-- support flow: operator reports a Velox delivery id, we
+-- look up here to find the InstaEdit acceptance + final
+-- status in one index range scan.
 CREATE INDEX IF NOT EXISTS idx_external_deliveries_source_external_id
     ON external_deliveries (source_system, external_delivery_id);
 
 COMMENT ON TABLE  external_deliveries IS
     'Velox → InstaEdit delivery journal. One row per accepted POST /internal/v1/deliveries. 11-state lifecycle (TEXT+CHECK). Survives retries via (source_system, idempotency_key) UNIQUE guard; 409 on same-key-different-body via request_sha256.';
 COMMENT ON COLUMN external_deliveries.id IS
-    'Opaque ULID with `sdel_` prefix generated application-side at POST /deliveries. Distinct from external_delivery_id (Velox's own id) for log scannability.';
+    'Opaque ULID with `sdel_` prefix generated application-side at POST /deliveries. Distinct from external_delivery_id (Velox''s own id) for log scannability.';
 COMMENT ON COLUMN external_deliveries.external_delivery_id IS
     'Upstream''s own delivery id (Velox: "delivery_8cc0f..."). For cross-system audit; second UNIQUE collision surface with source_system.';
 COMMENT ON COLUMN external_deliveries.idempotency_key IS

@@ -48,5 +48,5 @@ ALTER TABLE upload_jobs
 -- only covers the non-private values (the "operator opted-in" set)
 -- so the index stays small even at 100k+ upload_jobs.
 CREATE INDEX idx_upload_jobs_default_privacy_public
-    ON upload_jobs (status, scheduled_at)
+    ON upload_jobs (status, publish_at)
     WHERE default_privacy_level = 'public';

@@ -325,6 +325,28 @@ func (v *CredentialVault) Get(ctx context.Context, platformAccountID int64, toke
 	}, nil
 }
 
+// GetRefreshToken returns the encrypted refresh grant for integrations that
+// must refresh an upstream OAuth access token without exposing the grant to
+// callers. It is intentionally narrower than VaultAPI and is used by the
+// InstaEdit-owned Google Drive delivery adapter.
+func (v *CredentialVault) GetRefreshToken(ctx context.Context, platformAccountID int64) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	oauthConnectionID, err := v.oauthConnectionIDForAccount(ctx, platformAccountID)
+	if err != nil {
+		return "", err
+	}
+	stored, err := v.store.FindLatestToken(oauthConnectionID, models.TokenTypeBearer)
+	if err != nil || stored == nil {
+		return "", fmt.Errorf("vault: refresh token not found for account %d: %w", platformAccountID, err)
+	}
+	if len(stored.EncryptedRefreshToken) == 0 {
+		return "", fmt.Errorf("vault: refresh token empty for account %d", platformAccountID)
+	}
+	return v.encryptor.Decrypt(stored.EncryptedRefreshToken)
+}
+
 // Renew returns a valid (non-expired) decrypted token. If the stored
 // token is within the 60s grace window of expiry, it calls refresher,
 // persists the result, and returns the freshly-decrypted value.
