@@ -3447,12 +3447,10 @@ func TestHandleAccountContent_CrossTenant_404(t *testing.T) {
 
 // TestOAuthCallback_YoutubeChannelAttachesChannelID proves that the
 // generalized attachDiscoveredAccounts creates PlatformAccounts with
-// the real YouTube channel ID (not the Google user ID) and saves the
-// root bearer token.
+// the real YouTube channel ID (not the Google user ID) and persists
+// the root bearer token via the atomic channel authorizer.
 func TestOAuthCallback_YoutubeChannelAttachesChannelID(t *testing.T) {
 	var attachedProfile *models.PlatformProfile
-	var savedToken *models.TokenData
-	var savedAccountID int64
 
 	svc := &mockDiscoverableProvider{
 		mockProvider: mockProvider{
@@ -3491,14 +3489,8 @@ func TestOAuthCallback_YoutubeChannelAttachesChannelID(t *testing.T) {
 			}, nil
 		},
 	}
-	vault := &mockCredentialVault{
-		saveFn: func(ctx context.Context, id int64, td *models.TokenData) error {
-			savedAccountID = id
-			savedToken = td
-			return nil
-		},
-	}
-	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	authorizer := &fakeChannelAuthorizer{}
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
 
 	state := "test-state"
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=test-code&state="+state, nil)
@@ -3522,18 +3514,25 @@ func TestOAuthCallback_YoutubeChannelAttachesChannelID(t *testing.T) {
 		t.Errorf("Username: want My YouTube Channel, got %q", attachedProfile.Username)
 	}
 
-	// The root bearer token must be saved.
-	if savedToken == nil {
-		t.Fatal("vault.Save was not called")
+	// The atomic authorizer must receive exactly one call for the
+	// attached account with the root bearer token. No
+	// expected_channel_id was supplied, so the binder sees an empty
+	// hint and falls through to the channels.list(mine=true) lookup.
+	if authorizer.authorizeCalls.Load() != 1 {
+		t.Fatalf("AuthorizeChannel calls: want 1, got %d", authorizer.authorizeCalls.Load())
 	}
-	if savedToken.AccessToken != "bearer-token-abc" {
-		t.Errorf("saved token: want bearer-token-abc, got %q", savedToken.AccessToken)
+	if authorizer.lastAccountID != 42 {
+		t.Errorf("authorizer accountID: want 42, got %d", authorizer.lastAccountID)
 	}
-	if savedToken.TokenType != models.TokenTypeBearer {
-		t.Errorf("token type: want bearer, got %q", savedToken.TokenType)
+	if authorizer.lastExpectedCh != "" {
+		t.Errorf("lastExpectedCh: want empty (no expected_channel_id hint), got %q", authorizer.lastExpectedCh)
 	}
-	if savedAccountID != 42 {
-		t.Errorf("saved account ID: want 42, got %d", savedAccountID)
+	if authorizer.tokenWriteCount() != 1 {
+		t.Fatalf("token writes: want 1, got %d: %+v", authorizer.tokenWriteCount(), authorizer.tokenWrites)
+	}
+	written := authorizer.tokenWrites[0]
+	if written.AccountID != 42 || written.TokenType != models.TokenTypeBearer || written.AccessToken != "bearer-token-abc" || written.RefreshToken != "refresh-xyz" {
+		t.Errorf("token write: want (accountID=42, tokenType=bearer, access=bearer-token-abc, refresh=refresh-xyz), got %+v", written)
 	}
 }
 
@@ -3630,13 +3629,9 @@ func TestHandleValidateAccount_BearerTokenRecognized(t *testing.T) {
 
 // TestOAuthCallback_FacebookPageToken_SupplementalSaved proves that
 // the generalized attachDiscoveredAccounts still correctly saves
-// Facebook Page Access Tokens as supplemental tokens.
+// Facebook Page Access Tokens as supplemental tokens via the atomic
+// channel authorizer.
 func TestOAuthCallback_FacebookPageToken_SupplementalSaved(t *testing.T) {
-	var savedTokens []struct {
-		accountID int64
-		tokenType string
-	}
-
 	svc := &mockDiscoverableProvider{
 		mockProvider: mockProvider{
 			platform: "facebook",
@@ -3674,16 +3669,8 @@ func TestOAuthCallback_FacebookPageToken_SupplementalSaved(t *testing.T) {
 			}, nil
 		},
 	}
-	vault := &mockCredentialVault{
-		saveFn: func(ctx context.Context, id int64, td *models.TokenData) error {
-			savedTokens = append(savedTokens, struct {
-				accountID int64
-				tokenType string
-			}{id, td.TokenType})
-			return nil
-		},
-	}
-	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	authorizer := &fakeChannelAuthorizer{}
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
 
 	state := "fb-state"
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/facebook/callback?code=fb-code&state="+state, nil)
@@ -3696,25 +3683,34 @@ func TestOAuthCallback_FacebookPageToken_SupplementalSaved(t *testing.T) {
 		t.Fatalf("callback: want 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Should have saved 2 tokens: the root long-lived + the page access token.
-	if len(savedTokens) != 2 {
-		t.Fatalf("expected 2 saved tokens (root + page), got %d", len(savedTokens))
+	// The atomic authorizer should receive the single discovered
+	// account and persist both the root long-lived token and the page
+	// access token in the same call.
+	if authorizer.authorizeCalls.Load() != 1 {
+		t.Fatalf("AuthorizeChannel calls: want 1, got %d", authorizer.authorizeCalls.Load())
+	}
+	if authorizer.lastAccountID != 10 {
+		t.Errorf("authorizer accountID: want 10, got %d", authorizer.lastAccountID)
 	}
 
-	hasLongLived := false
-	hasPageAccess := false
-	for _, st := range savedTokens {
-		if st.tokenType == models.TokenTypeLongLived {
-			hasLongLived = true
-		}
-		if st.tokenType == models.TokenTypePageAccess {
-			hasPageAccess = true
-		}
+	// Build a map keyed by token type for stable assertions.
+	writtenByType := make(map[string]fakeAuthTokenWrite)
+	authorizer.mu.Lock()
+	for _, tw := range authorizer.tokenWrites {
+		writtenByType[tw.TokenType] = tw
 	}
-	if !hasLongLived {
-		t.Error("root long-lived token not saved")
+	authorizer.mu.Unlock()
+
+	if len(writtenByType) != 2 {
+		t.Fatalf("expected 2 saved tokens (root + page), got %d: %+v", len(writtenByType), authorizer.tokenWrites)
 	}
-	if !hasPageAccess {
-		t.Error("page access token not saved as supplemental")
+
+	longLived := writtenByType[models.TokenTypeLongLived]
+	if longLived.AccountID != 10 || longLived.AccessToken != "long-lived-token" {
+		t.Errorf("root long-lived token not written as expected: %+v", longLived)
+	}
+	pageAccess := writtenByType[models.TokenTypePageAccess]
+	if pageAccess.AccountID != 10 || pageAccess.AccessToken != "page-token-789" {
+		t.Errorf("page access token not written as supplemental: %+v", pageAccess)
 	}
 }
