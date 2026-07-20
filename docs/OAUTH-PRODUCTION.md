@@ -130,10 +130,9 @@ publisher will silently act on a wrong channel.
 margin) keeps `channels.list` responses to a single page (no
 `nextPageToken` chasing needed for the pre-upload binding check) and
 keeps every manager comfortably under both Google's 100-channels-per-
-Account cap and the 50–100 refresh-tokens-cap-per-`(Google Account,
-OAuth client)` cap. Going above 50 channels per manager is **blocked** today
-operations may proceed only after operators verify both
-preconditions below live on a test account:
+Account cap and the 50–100 refresh-tokens-cap-per-`(Google Account,OAuth client)` cap. **Operators MUST NOT exceed 50 channels per
+manager.** To exceed this hard cap, BOTH preconditions below MUST
+be verified live on a test account first:
 
 1. The YouTube service has been upgraded to follow `nextPageToken`,
    loop until the response returns an empty `nextPageToken`, and
@@ -142,6 +141,34 @@ preconditions below live on a test account:
 2. The operator has confirmed the manager's refresh-token count
    stays below the 50-100 silent-invalidation cap (see the limit
    above).
+
+**The failure mode the cap prevents.** Going past 50 channels per
+manager HARD-BLOCKS every channel beyond the 50th in that manager's
+set. `channels.list?mine=true&maxResults=50` returns only the first
+50, so any expected `UC…` past position 50 is INVISIBLE to
+`ValidateChannelBinding` in `internal/services/youtube_oauth.go`. The
+function returns the typed `ErrYouTubeChannelMismatch` sentinel; the
+publish worker (around `internal/worker/publish_worker.go:434`) treats
+that sentinel as terminal and calls `MarkReauthRequired` on the
+platform_account — flipping `status='reauth_required'` and stamping
+`reauth_required_at=NOW()`. The channel is then BRICKED: the
+post_target is marked `'failed'`, the publish queue stops retrying,
+and the operator must complete a full new OAuth dance against Google
+(consent click → new refresh_token grant) to recover the channel.
+There is no in-app bypass — no admin "flips the flag back" route,
+no auto-retry that escapes the cap, no 6th-manager overflow lane.
+
+Per the actual code path, the failure is therefore STRICTLY WORSE
+than a wrong-target upload: a wrong-target upload would still show
+up in the Step 7 `snippet.channelId` reconciliation check and the
+PostGreSQL row would survive with the correct status. A
+maxResults=50 truncation flips the platform_account to a state
+where every publish for the affected channel is permanently
+rejected until full re-consent. Operators MUST honor the 50-channel
+cap exactly because every channel past it becomes unactionable
+from the publisher. Until the `nextPageToken` pagination ships
+(see Step 8 follow-up), the cap is a single-page response
+guarantee — no exceptions, no over-the-cap routing on a 5th manager.
 
 For the 200-channel rollout: **4–5 managers, ≤50 channels each,
 single-page `channels.list` today**. Distribute by **rotating secondary
@@ -480,8 +507,9 @@ self-contained OAuth dance with the manager's own identity:
 | `mgr-c@instaedit.org`  | `UCcccccc…` – `UCccccco` | ~50           |
 | `mgr-d@instaedit.org`  | `UCdddddd…` – `UCdddddo` | ~50           |
 
-(Five accounts at 40 channels each is also valid if a fourth manager
-slot is unavailable or a single account needs faster rotation.)
+(See the rotation-reserve footnote below for how the 5th manager slot
+is used; the team's productive total stays at ≤ 200 channels regardless
+of how the 4–5 lanes are populated.)
 
 Each manager performs the **full, separate OAuth dance with their own
 Google identity** (their own consent screen click, their own
