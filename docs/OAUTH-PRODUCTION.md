@@ -176,6 +176,8 @@ channels across managers** so no single manager gets all of its
 channels revoked at once if an OAuth grant is later revoked from
 [Google's third-party apps page](https://myaccount.google.com/permissions).
 
+> **Aggiornamento 2026**: il sistema ora gestisce fino a **200 canali per grant** con paginazione attiva (vedi Step 3.3). La regola "max 40-50 canali per manager" indicata in Step 8 resta valida come **budget operativo consigliato** (UI saturation threshold), NON come hard limit tecnico. Operatori con >50 canali per manager devono: (a) verificare che il refresh-token count resti sotto il cap 50-100 per la coppia `(Google Account, OAuth client)`, e (b) confermare che il loro `channels.list?mine=true` con paginazione copra l`intero channel set del manager.
+
 ### YouTube Data API v3 — Video Uploads bucket (2026 model)
 
 Since **1° giugno 2026**, YouTube charges `videos.insert` against its
