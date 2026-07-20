@@ -239,9 +239,15 @@ func TestMedia_Presign_NoJWT_401(t *testing.T) {
 
 func TestMedia_Complete_Happy_TransitionsToReady(t *testing.T) {
 	store := newMockMediaStore()
+	// Task 6/10 — happy path now requires a non-empty SHA on the asset
+	// (the presign client commits it locally). Use a fixed 64-hex SHA
+	// so the assertion below (verify SHA propagated to mediaStore)
+	// fires deterministically.
+	const happyPathSHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	store.assets["abc"] = &models.MediaAsset{
 		ID: "abc", UserID: 1, UploadKey: "uploads/1/x.jpg",
 		ContentType: "image/jpeg", SizeBytes: 1024,
+		SHA256:    happyPathSHA,
 		Status:    models.MediaAssetStatusPending,
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
@@ -259,6 +265,60 @@ func TestMedia_Complete_Happy_TransitionsToReady(t *testing.T) {
 	}
 	if store.assets["abc"].Status != models.MediaAssetStatusReady {
 		t.Errorf("status: want ready, got %s", store.assets["abc"].Status)
+	}
+	// Task 6/10 contract: the SHA committed at presign must be the
+	// same SHA written to media_assets.sha256 by MarkReady. Without
+	// this assertion a future refactor of mockMediaStore.MarkReady
+	// that dropped the SHA on the way through could pass silently.
+	if store.assets["abc"].SHA256 != happyPathSHA {
+		t.Errorf("sha256 propagation: want %q, got %q", happyPathSHA, store.assets["abc"].SHA256)
+	}
+}
+
+// TestMedia_Complete_EmptySHA_400 — Task 6/10 enforcement. The presign
+// body omitted sha256 (SHA="" on the Create call), so /complete must
+// reject with 400 BEFORE touching S3 + BEFORE writing to mediaStore.
+// The asset row is transitioned to MarkFailed so a follow-up retry
+// surfaces the failure class in the operator dashboard (unlike the
+// pre-Task-6/10 behaviour where empty SHA slipped through silently
+// via the SQL COALESCE(NULLIF($2,''), sha256)).
+func TestMedia_Complete_EmptySHA_400(t *testing.T) {
+	store := newMockMediaStore()
+	store.assets["abc"] = &models.MediaAsset{
+		ID: "abc", UserID: 1, UploadKey: "uploads/1/x.jpg",
+		ContentType: "image/jpeg", SizeBytes: 1024,
+		SHA256:    "", // empty on purpose — Task 6/10 reject path
+		Status:    models.MediaAssetStatusPending,
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	}
+	storage := newMockStorageProvider()
+	// Track whether storage was consulted — Task 6/10 must short-circuit
+	// BEFORE the HEAD to avoid wasted S3 round-trip + bandwidth on a
+	// request that's already known-failing.
+	headCalls := 0
+	storage.verifyFn = func(key string) (string, int64, error) {
+		headCalls++
+		return "image/jpeg", 1024, nil
+	}
+	r := newMediaTestRouter(store, storage)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/abc/complete", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if headCalls != 0 {
+		t.Errorf("storageProvider.VerifyUpload was called %d times; want 0 (Task 6/10 short-circuit before S3 HEAD for known-failing requests)", headCalls)
+	}
+	if !strings.Contains(w.Body.String(), "sha256 required") {
+		t.Errorf("error message should mention the sha256 requirement; got %q", w.Body.String())
+	}
+	// MarkFailed is acceptable as a diagnostic trail (so the operator
+	// dashboard surfaces the failure class); we don't assert success
+	// to keep the test focused on the 400 + early-reject contract.
+	if store.assets["abc"].Status == models.MediaAssetStatusReady {
+		t.Errorf("status must NOT be ready when SHA is empty (would imply the empty-SHA slipped through MarkReady); got %s", store.assets["abc"].Status)
 	}
 }
 
@@ -293,9 +353,13 @@ func TestMedia_Complete_CrossOwner_404(t *testing.T) {
 
 func TestMedia_Complete_SizeMismatch_422_AndFailed(t *testing.T) {
 	store := newMockMediaStore()
+	// Task 6/10 — set a non-empty SHA on the asset so the upfront
+	// empty-SHA reject does not fire; this test exercises the
+	// size-mismatch path which runs LATER in the handler.
 	store.assets["abc"] = &models.MediaAsset{
 		ID: "abc", UserID: 1, UploadKey: "uploads/1/x.jpg",
 		ContentType: "image/jpeg", SizeBytes: 1024,
+		SHA256:    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 		Status:    models.MediaAssetStatusPending,
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
@@ -318,9 +382,12 @@ func TestMedia_Complete_SizeMismatch_422_AndFailed(t *testing.T) {
 
 func TestMedia_Complete_ContentTypeMismatch_422(t *testing.T) {
 	store := newMockMediaStore()
+	// See TestMedia_Complete_SizeMismatch_422_AndFailed rationale:
+	// pre-set SHA so the empty-SHA short-circuit doesn't fire first.
 	store.assets["abc"] = &models.MediaAsset{
 		ID: "abc", UserID: 1, UploadKey: "uploads/1/x.jpg",
 		ContentType: "image/jpeg", SizeBytes: 1024,
+		SHA256:    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 		Status:    models.MediaAssetStatusPending,
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}

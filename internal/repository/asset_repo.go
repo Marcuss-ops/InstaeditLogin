@@ -2,12 +2,26 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
+
+// ErrMediaAssetSHARequired is the typed sentinel returned by
+// MarkReady when the caller passes an empty SHA. Task 6/10 raises
+// this from a runtime guard (the schema NOT NULL constraint added by
+// migration 056 was insufficient because '' is NULL-free and passes
+// the schema check — the repo contract MUST refuse empty as a
+// defence-in-depth). errors.Is(err, ErrMediaAssetSHARequired) lets
+// callers (HTTP handlers, worker tick) distinguish the empty-SHA
+// failure from generic repo errors so the operator-facing error
+// message guides the fix (re-upload with explicit hash at presign,
+// or rely on the streaming-compute path that always stamps a 64-hex
+// string from the artifactVerifyReader).
+var ErrMediaAssetSHARequired = errors.New("media asset sha256 is required (Task 6/10 enforcement; empty SHA was the legacy 'no SHA recorded' sentinel and is no longer accepted on fresh MarkReady calls)")
 
 // MediaAssetRepository persists Taglio 3.2 media_assets rows. The
 // repository is the single owner of the table — handlers, workers, and
@@ -76,15 +90,52 @@ func (r *MediaAssetRepository) FindByID(id string) (*models.MediaAsset, error) {
 }
 
 // MarkReady transitions an asset to `ready` after the /complete
-// handler HEAD-verified the S3 object. sha256 may be empty (the
-// presign request did not require the client to commit to a hash);
-// sizeBytes + contentType are the server-measured values from the
-// HEAD response.
+// handler HEAD-verified the S3 object (or after the worker's
+// streaming-compute path stamped a non-empty local SHA via the
+// artifactVerifyReader). Task 6/10 contract:
+//   - sha256 MUST be a 64-char lowercase hex string. Empty string is
+//     REJECTED at the repo level via ErrMediaAssetSHARequired —
+//     defence-in-depth on top of migration 056's NOT NULL constraint
+//     (which only blocks SQL NULL, not the empty-string legacy
+//     sentinel).
+//   - sizeBytes + contentType are the server-measured values from
+//     the upstream verification path (HEAD on the /complete handler;
+//     streaming-tee-then-upload on the worker + drive import paths).
+//     Both are required for the schema invariant, the /complete
+//     handler must assert equality with the presign-declared values
+//     BEFORE invoking MarkReady, and the worker streaming verify
+//     must assert equality with the ArtifactVerificationPolicy
+//     BEFORE invoking MarkReady. MarkReady itself does NOT
+//     re-verify (the value was already verified at the call site;
+//     re-verifying here would be redundant + would double the bytes
+//     read on large uploads).
 func (r *MediaAssetRepository) MarkReady(id, sha256 string, sizeBytes int64, contentType string) error {
+	// Task 6/10 — runtime guard against the legacy empty-SHA
+	// sentinel. Cheap O(1) reject in the hot path; the same value
+	// would have been silently preserved by the prior
+	// COALESCE(NULLIF($2, ''), sha256) SQL — a behaviour that
+	// contradicts the user's spec ('MAI più stringa SHA vuota')
+	// and the migration 056 NOT NULL intent. Today every production
+	// caller wrapping the byte stream in an artifactVerifyReader
+	// (Drive import, worker pull-path) passes
+	// verifyReader.ActualSHA256Hex() which is always a non-empty
+	// 64-hex; the /complete handler is the only path that could
+	// historically have passed empty — handleCompleteMedia is
+	// updated (Task 6/10) to reject empty SHA upfront with a 400
+	// instead of letting the value reach MarkReady.
+	if sha256 == "" {
+		return fmt.Errorf("%w: media asset id=%s", ErrMediaAssetSHARequired, id)
+	}
 	now := time.Now()
+	// SQL simplified: removed `COALESCE(NULLIF($2, ''), sha256)`
+	// because the runtime guard above guarantees $2 is non-empty —
+	// the COALESCE would be unreachable dead-code-by-condition.
+	// Direct assignment makes the contract obvious in the diff
+	// future readers will see (status='ready' implies a real SHA
+	// was written, not a 'preserve legacy empty' gotcha).
 	res, err := r.db.Exec(
 		`UPDATE media_assets
-		    SET status = $1, sha256 = COALESCE(NULLIF($2, ''), sha256),
+		    SET status = $1, sha256 = $2,
 		        size_bytes = $3, content_type = $4, error_message = '', updated_at = $5
 		  WHERE id = $6`,
 		string(models.MediaAssetStatusReady), sha256, sizeBytes, contentType, now, id,

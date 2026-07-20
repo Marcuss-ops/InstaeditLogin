@@ -213,6 +213,25 @@ func (r *Router) handleCompleteMedia(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusGone, "media asset expired; please re-upload")
 		return
 	}
+	// Task 6/10 contract enforcement — reject empty SHA upfront
+	// so the asset never reaches MarkReady with the legacy "no SHA
+	// recorded" sentinel. The repo's MarkReady now also refuses
+	// empty (ErrMediaAssetSHARequired), but rejecting here avoids
+	// the S3 HEAD round-trip + content-type / size verification
+	// work for a request that's guaranteed to fail at the persist
+	// step. Clients MUST commit to the SHA at /presign time (the
+	// PresignMediaRequest.sha256 field) so this branch is the
+	// exception, not the rule. Future enhancement: support a
+	// /complete body carrying a sha256 override for clients that
+	// skipped the presign SHA but want to commit now (would also
+	// need to handle the case where the SHA differs from the
+	// presign-declared value — locked as followup).
+	if asset.SHA256 == "" {
+		_ = r.mediaStore.MarkFailed(id, "sha256 required: client must compute SHA-256 locally and pass it in the /presign body before /complete (Task 6/10 enforcement)")
+		writeError(w, http.StatusBadRequest,
+			"sha256 required: client must compute SHA-256 locally and pass it in the /presign body before /complete")
+		return
+	}
 
 	// HEAD the S3 object to confirm the upload actually landed.
 	contentType, sizeBytes, err := r.storageProvider.VerifyUpload(req.Context(), asset.UploadKey)
