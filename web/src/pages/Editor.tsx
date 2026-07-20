@@ -1584,6 +1584,13 @@ function Footer() {
  * /app/*-style ProtectedRoute. The page IS the marketing surface for the
  * editor feature; the actual editing happens at /app/compose (authed).
  * -------------------------------------------------------------------------- */
+const SEO = {
+  title: "InstaEdit Editor — One render, every channel",
+  description:
+    "Render one video and adapt it natively to TikTok, YouTube, Instagram, Facebook, X, LinkedIn, and Threads — subtitles, thumbnails, hashtags, and chapters included.",
+  canonical: "https://app.instaedit.org/editor",
+} as const;
+
 export function Editor() {
   return (
     <div className="min-h-screen bg-[#030308] text-[#e8e8ef] font-sans antialiased overflow-x-hidden selection:bg-violet-500/40 selection:text-white">
