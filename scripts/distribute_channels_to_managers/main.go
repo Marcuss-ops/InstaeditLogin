@@ -216,10 +216,18 @@ func readInventoryCSV(path string) ([]inputRow, error) {
 }
 
 // distributeRows assigns every input row to exactly one bucketFile
-// and returns the slice in deterministic order
-// (bucketIndex ASC → managerEmail ASC → fileIndex ASC). Bucket
-// assignment is round-robin over SORTED unique manager emails so the
-// output is stable across runs regardless of input ordering.
+// and returns the slice in deterministic order: SORTED manager
+// email ASC, with fileIndex ASC as a stable tiebreak. This is the
+// order the operator-facing summary and output file listing use
+// so all of one manager's overflow files appear together.
+//
+// Bucket assignment is round-robin over SORTED unique manager
+// emails (manager i is assigned to bucket i % buckets) so the
+// bucket annotation is stable across runs regardless of input
+// ordering. bucketIndex is preserved on each bucketFile as an
+// informational annotation -- the sorter below intentionally does
+// NOT use bucketIndex as a comparator (operator reads the summary
+// by manager, not by bucket).
 //
 // For a single manager whose row count exceeds cap, rows are
 // chunked sequentially into (manager_<slug>.csv,
@@ -239,12 +247,6 @@ func distributeRows(rows []inputRow, buckets, cap int) ([]bucketFile, error) {
 		return nil, nil
 	}
 	managers, byManager := groupByManager(rows)
-	if len(managers) > buckets {
-		// Informational only — multiple managers may share a bucket
-		// when the input has more managers than `-buckets`. We
-		// round-robin over SORTED manager emails so the assignment
-		// is deterministic.
-	}
 	managerToBucket := make(map[string]int, len(managers))
 	for i, mgr := range managers {
 		managerToBucket[mgr] = i % buckets
