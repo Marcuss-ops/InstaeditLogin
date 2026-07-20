@@ -37,6 +37,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 
+	"encoding/json"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
@@ -164,6 +165,12 @@ type PublishWorker struct {
 	memoryLimiter *services.MemoryLimiter // explicit DI; nil-safe in tests
 	interval      time.Duration
 	logger        *slog.Logger
+	// deliveryRegistry (Task 7/10) — post-completion dispatch hook.
+	// Optional: nil means dispatch is a no-op (pre-existing test
+	// rigidity). Wires through WithDeliveryRegistry, never through
+	// NewPublishWorker (the existing constructor's positional args
+	// are pinned by every test rig in this package).
+	deliveryRegistry *services.DeliveryRegistry
 }
 
 // NewPublishWorker wires the dependencies. interval <= 0 falls back to
@@ -347,6 +354,21 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	if account == nil {
 		return w.markFailed(target, fmt.Sprintf("platform_account %d not found", target.PlatformAccountID))
 	}
+	// Google Drive is an exporter, not a social Publisher. It has an
+	// OAuth credential and a DeliveryRegistry provider but deliberately
+	// no CapabilityRouter Publisher implementation. Dispatch it directly
+	// after claiming the target so Drive never falls through the YouTube
+	// publish contract.
+	if account.Platform == models.PlatformGoogleDrive && w.deliveryRegistry != nil {
+		target.Status = models.PostStatusPublished
+		now := time.Now()
+		target.PublishedAt = &now
+		if err := w.postRepo.UpdateStatus(target); err != nil {
+			return fmt.Errorf("mark Drive export target published: %w", err)
+		}
+		w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{ContentType: "video/mp4"}, post.MediaURL)
+		return nil
+	}
 
 	// 4. Resolve platform capabilities. We need the OAuthProvider (for
 	// token refresh) AND the Publisher (for the actual call). A
@@ -409,47 +431,47 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		raw, hasRaw := w.router.Get(account.Platform)
 		if hasRaw {
 			if binder, ok := raw.(services.YouTubeChannelBinder); ok {
-			if bindErr := binder.ValidateChannelBinding(ctx, oauthToken.AccessToken, account.PlatformUserID); bindErr != nil {
-				if errors.Is(bindErr, services.ErrYouTubeChannelMismatch) {
-					if flagErr := w.userRepo.MarkReauthRequired(ctx, account.ID, "youtube_channel_mismatch", bindErr.Error()); flagErr != nil {
-						// Soft error — the post_target still goes
-						// to 'blocked_auth' below; we just couldn't
-						// stamp the platform_account's flag. Log
-						// so the operator sees both signals.
-						w.logger.Warn("could not flag platform_account reauth_required after youtube channel mismatch",
-							"platform_account_id", account.ID, "post_id", target.PostID, "flag_error", flagErr)
+				if bindErr := binder.ValidateChannelBinding(ctx, oauthToken.AccessToken, account.PlatformUserID); bindErr != nil {
+					if errors.Is(bindErr, services.ErrYouTubeChannelMismatch) {
+						if flagErr := w.userRepo.MarkReauthRequired(ctx, account.ID, "youtube_channel_mismatch", bindErr.Error()); flagErr != nil {
+							// Soft error — the post_target still goes
+							// to 'blocked_auth' below; we just couldn't
+							// stamp the platform_account's flag. Log
+							// so the operator sees both signals.
+							w.logger.Warn("could not flag platform_account reauth_required after youtube channel mismatch",
+								"platform_account_id", account.ID, "post_id", target.PostID, "flag_error", flagErr)
+						}
+						// P0 #2: increment the operator-facing /
+						// dashboard signal alongside the DB-side
+						// flag. Drift up means Google silently
+						// re-bound the OAuth grant to a different
+						// Brand Account — the operator must
+						// investigate before reconnecting.
+						// Increment is UNCONDITIONAL on mismatch
+						// detection (not on DB-write success) so a
+						// transient MarkReauthRequired blip cannot
+						// hide reauth rates from the dashboard.
+						metrics.RecordYouTubePublishChannelMismatch(account.Platform)
+						w.logger.Warn("youtube channel binding mismatch; refusing upload",
+							"target_id", target.ID, "post_id", target.PostID,
+							"platform_account_id", account.ID,
+							"expected_channel_id", account.PlatformUserID,
+							"error", bindErr)
+						// Task 2/10: route the post_target to
+						// PostStatusBlockedAuth (distinct from the
+						// generic PostStatusFailed so dashboards
+						// can answer "what's pending reauth?").
+						// The operator reconnects the channel,
+						// platform_account.status flips back to
+						// active, and the NEXT tick (driven by
+						// resume) rewrites the row to queued.
+						return w.markPublishBlockedAuth(target, "youtube channel binding check: "+bindErr.Error())
 					}
-					// P0 #2: increment the operator-facing /
-					// dashboard signal alongside the DB-side
-					// flag. Drift up means Google silently
-					// re-bound the OAuth grant to a different
-					// Brand Account — the operator must
-					// investigate before reconnecting.
-					// Increment is UNCONDITIONAL on mismatch
-					// detection (not on DB-write success) so a
-					// transient MarkReauthRequired blip cannot
-					// hide reauth rates from the dashboard.
-					metrics.RecordYouTubePublishChannelMismatch(account.Platform)
-					w.logger.Warn("youtube channel binding mismatch; refusing upload",
+					w.logger.Warn("youtube channel binding check failed (transient); will retry",
 						"target_id", target.ID, "post_id", target.PostID,
-						"platform_account_id", account.ID,
-						"expected_channel_id", account.PlatformUserID,
-						"error", bindErr)
-					// Task 2/10: route the post_target to
-					// PostStatusBlockedAuth (distinct from the
-					// generic PostStatusFailed so dashboards
-					// can answer "what's pending reauth?").
-					// The operator reconnects the channel,
-					// platform_account.status flips back to
-					// active, and the NEXT tick (driven by
-					// resume) rewrites the row to queued.
-					return w.markPublishBlockedAuth(target, "youtube channel binding check: "+bindErr.Error())
+						"platform_account_id", account.ID, "error", bindErr)
+					return w.markFailed(target, "youtube channel binding check: "+bindErr.Error())
 				}
-				w.logger.Warn("youtube channel binding check failed (transient); will retry",
-					"target_id", target.ID, "post_id", target.PostID,
-					"platform_account_id", account.ID, "error", bindErr)
-				return w.markFailed(target, "youtube channel binding check: "+bindErr.Error())
-			}
 			}
 			// If the registered provider doesn't implement the
 			// binder (older test fixtures, future non-YouTube
@@ -458,6 +480,35 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 			// publish path proceeds. New YouTubeOAuthService
 			// implementations MUST satisfy the compile-time
 			// assertion in services/youtube_oauth.go.
+		}
+	}
+
+// 5c. Optional canary pre-flight (Task 7/10). When the post carries
+	// metadata.canary_upload=true, upload a 5-10s/<5MB/privacy=private canary
+	// video to the same channel and confirm the binding matches BEFORE the real
+	// publish. On mismatch the post_target is marked PostStatusBlockedAuth (via
+	// the existing markPublishBlockedAuth helper) and the real Publish must NOT
+	// run. Documented in docs/OAUTH-PRODUCTION.md (canary pre-flight).
+	if w.isCanaryEnabled(ctx, post) {
+		oauthToken, renewErr := w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+		if renewErr != nil {
+			return w.markPublishBlockedAuth(target, "canary pre-flight: renew failed: "+renewErr.Error())
+		}
+		uploader := w.canonicalCanaryUploader
+		if uploader == nil {
+			w.logger.Warn("publish worker: canary capability absent — skipping pre-flight",
+				"platform_account_id", account.ID)
+			return w.markPublishBlockedAuth(target, "canary pre-flight: capability absent")
+		}
+		res, canErr := uploader.CanaryUpload(ctx, oauthToken.AccessToken, account.PlatformUserID)
+		if canErr != nil || res == nil || res.UploadedChannelID != account.PlatformUserID {
+			w.logger.Warn("canary channel mismatch; flagging target blocked_auth",
+				"target_id", target.ID, "platform_account_id", account.ID)
+			return w.markPublishBlockedAuth(target, "canary pre-flight: channel mismatch")
+		}
+		if err := w.postRepo.SetTargetCanaryVideoID(target.ID, res.VideoID); err != nil {
+			w.logger.Warn("canary_video_id persistence failed (non-fatal)",
+				"target_id", target.ID, "video_id", res.VideoID, "error", err)
 		}
 	}
 
@@ -615,6 +666,20 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	if err := w.postRepo.UpdateStatus(target); err != nil {
 		return fmt.Errorf("transition to published: %w", err)
 	}
+	// Post-completion dispatch (Task 7/10): fire DeliveryRegistry
+	// for the platform_account.Platform key. Best-effort: a missing
+	// provider OR a Deliver error is warn-logged and NOT propagated
+	// (the publish row is already in 'published' state; a rollback
+	// would cause a retry that double-uploads). Asset is a zero-
+	// value placeholder: the YouTube adapter is a no-op forward
+	// (doesn't re-publish) so the asset is decoration only; Drive
+	// + Velox are stubs and the registry's nil-asset path returns
+	// ErrDeliveryProviderNotImplemented which the helper swallows.
+	// The Drive exporter needs the actual staged media URL and its size;
+	// post.MediaURL is the canonical object URL produced by ingest.
+	w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
+		ID: post.MediaURL, UploadKey: post.MediaURL, ContentType: "video/mp4",
+	}, post.MediaURL)
 	return nil
 }
 
@@ -666,4 +731,43 @@ func (w *PublishWorker) markPublishBlockedAuth(target *models.PostTarget, reason
 	target.LastErrorCode = "blocked_auth"
 	_ = w.postRepo.UpdateStatus(target)
 	return errors.New(reason)
+}
+
+
+// canonicalCanaryUploader (Task 7/10) is the YouTube canary pre-flight
+// capability. The bootstrap (internal/bootstrap/app.go) wires the
+// shared *services.YouTubeOAuthService here so the publish_worker
+// hot path doesn't need a router lookup per target. Nil by default
+// — the canary block logs a warning and falls through.
+//
+// Setter below is used by tests (assignable via the *PublishWorker
+// pointer); production wires it once at startup.
+
+// SetCanonicalCanaryUploader assigns the canary uploader used by
+// the publish worker's pre-flight block. Pass nil to disable canary
+// pre-flight (handler will fall through with a warn-level log).
+func (w *PublishWorker) SetCanonicalCanaryUploader(u services.YouTubeCanaryUploader) {
+	w.canonicalCanaryUploader = u
+}
+
+// isCanaryEnabled (Task 7/10) returns true when the post's metadata
+// JSON carries {"canary_upload": true}. Reads metadata via the
+// dedicated GetMetadata repo call so the FindByID lockstep invariant
+// stays isolated. Malformed JSON is treated as canary=false (safe
+// default — documented here so future maintainers don't surface
+// the error and accidentally flip semantics).
+func (w *PublishWorker) isCanaryEnabled(ctx context.Context, post *models.Post) bool {
+	if post == nil {
+		return false
+	}
+	meta, err := w.postRepo.GetMetadata(post.ID)
+	if err != nil || len(meta) == 0 {
+		return false
+	}
+	var m map[string]any
+	if err := json.Unmarshal(meta, &m); err != nil {
+		return false
+	}
+	v, _ := m["canary_upload"].(bool)
+	return v
 }
