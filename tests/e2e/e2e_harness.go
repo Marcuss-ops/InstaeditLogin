@@ -14,7 +14,9 @@ package e2e
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -43,7 +45,7 @@ const statusResumeIncomplete = 308
 
 // E2EHarness is the shared fixture for TestPipelineE2E. It spins up
 // Postgres via testcontainers-go (already in go.mod) and exposes
-// in-process httptest fakes for Drive, YouTube, and Velox. The 7
+// in-process httptest fakes for Drive, YouTube, and Velox. The 11
 // t.Run subtests under TestPipelineE2E reuse this harness.
 //
 // Spec divergence note: the Task 9/10 source document asks for
@@ -575,6 +577,56 @@ func (v *fakeVeloxServer) simulateCallback(deliveryID string, payload []byte) er
 	return nil
 }
 
+// signHMAC computes the SHA-256 HMAC of the body using
+// sharedSecret, hex-encoded, prefixed with the canonical
+// GitHub-webhook-style `sha256=` tag. Mirrors the production
+// callback-verifier contract (internal/services/velox_callback_dispatcher.go
+// + callback verifier); the E2E scenario 11 exercises the same
+// shape so a future drift in production flips this test.
+func (v *fakeVeloxServer) signHMAC(body []byte, sharedSecret string) string {
+	h := hmac.New(sha256.New, []byte(sharedSecret))
+	h.Write(body)
+	return "sha256=" + hex.EncodeToString(h.Sum(nil))
+}
+
+// callVerifyHMAC is the canonical InstaEdit-side verifier. It
+// recomputes the HMAC over body with the supplied secret and
+// compares against the supplied signature via subtle.ConstantTimeCompare
+// to avoid timing attacks. Returns nil on match, error on mismatch.
+// Mirrors the production `handleCallback` body where the wrapper
+// computes + compares.
+func (v *fakeVeloxServer) callVerifyHMAC(body []byte, signature, sharedSecret string) error {
+	expected := v.signHMAC(body, sharedSecret)
+	if subtle.ConstantTimeCompare([]byte(expected), []byte(signature)) != 1 {
+		return fmt.Errorf("hmac mismatch: expected %q, got %q", expected, signature)
+	}
+	return nil
+}
+
+// simulateSignedCallback combines sign + post in a single helper.
+// Used by scenario 11's end-to-end check: a real InstaEdit handler
+// receiving a real signed callback from Velox would compute +
+// verify before acting on the body. The fake just records the
+// callback; the assertion lives in scenario_11.
+func (v *fakeVeloxServer) simulateSignedCallback(deliveryID string, payload []byte, sharedSecret string) error {
+	req, err := http.NewRequest(http.MethodPost, v.URL+"/v1/callback?delivery_id="+deliveryID, strings.NewReader(string(payload)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hub-Signature-256", v.signHMAC(payload, sharedSecret))
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("signed callback status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // ----- route-rewriting RoundTripper ------------------------------------
 //
 // Production Go clients (services/auth, services/youtube_resumable)
@@ -642,6 +694,93 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
+// insertPublishTarget inserts a row in post_targets with the supplied
+// status. Returns the inserted id. Used by scenarios 8 (lease), 9
+// (retry budget), and 10 (dead_letter terminal).
+func insertPublishTarget(h *E2EHarness, status string) (int64, error) {
+	var id int64
+	err := h.pgDB.QueryRow(
+		`INSERT INTO post_targets (post_id, platform_account_id, status, created_at, updated_at)
+		 VALUES ($1, $2, $3, NOW(), NOW())
+		 RETURNING id`,
+		1, 1, status,
+	).Scan(&id)
+	return id, err
+}
+
+// acquireLeaseInTx models the production lease-claim step. Inside
+// its caller-supplied TX, it acquires a row-level lock on the
+// target via SELECT...FOR UPDATE and stamps the lease columns
+// (locked_by + locked_at + heartbeat_at). The TX must commit for
+// the lease to be visible to other workers; rollback releases.
+func acquireLeaseInTx(ctx context.Context, tx *sql.Tx, targetID int64) error {
+	var currentStatus string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT status FROM post_targets WHERE id=$1 FOR UPDATE`, targetID,
+	).Scan(&currentStatus); err != nil {
+		return fmt.Errorf("lock+select: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE post_targets
+		    SET locked_by=$1, locked_at=NOW(), heartbeat_at=NOW(), updated_at=NOW()
+		  WHERE id=$2`,
+		"worker-A", targetID,
+	); err != nil {
+		return fmt.Errorf("stamp lease: %w", err)
+	}
+	return nil
+}
+
+// attemptAcquireWithNowait mirrors the production SKIP-LOCKED
+// behaviour at the test layer. Uses NOWAIT so a held lock surfaces
+// as an observable error (Postgres 55P03 / 40P01) rather than a
+// silent 0-row read. The boolean reports whether the lock was
+// observed as acquirable (false under contention).
+//
+// Production: SELECT FOR UPDATE SKIP LOCKED returns 0 rows silently
+// when a peer holds the row. We use NOWAIT here so a future drift in
+// the production lease contract (e.g. silently returning 0 instead
+// of erroring on a missing lock) SURFACES in the test log.
+func attemptAcquireWithNowait(ctx context.Context, tx *sql.Tx, targetID int64) (bool, error) {
+	var status string
+	err := tx.QueryRowContext(ctx,
+		`SELECT status FROM post_targets WHERE id=$1 FOR UPDATE NOWAIT`, targetID,
+	).Scan(&status)
+	if err == nil {
+		return true, nil
+	}
+	// 55P03 lock_not_available / 40P01 deadlock_detected both
+	// mean the lock is held elsewhere.
+	return false, err
+}
+
+// updateTargetStatus transitions a post_targets row, gated on the
+// from-status. The production FSM contract writes a fresh row only
+// when the current status matches the expected from-state; a
+// terminal row (dead_letter / published / failed) makes the
+// UPDATE match zero rows, so the WHERE-clause guard refuses. This
+// method returns nil on success, an error on row-mismatch or DB
+// failure. The scenario tests assert the refusal contract via the
+// (err == nil) vs (err != nil) shape.
+func updateTargetStatus(h *E2EHarness, targetID int64, fromStatus, toStatus, errMsg string) error {
+	res, err := h.pgDB.Exec(
+		`UPDATE post_targets
+		    SET status=$1,
+		        last_error_message=CASE WHEN $2 = '' THEN last_error_message ELSE $2 END,
+		        updated_at=NOW()
+		  WHERE id=$3 AND status=$4`,
+		toStatus, errMsg, targetID, fromStatus,
+	)
+	if err != nil {
+		return err
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("UPDATE matched 0 rows (terminal=%s→%s refused or stale state)", fromStatus, toStatus)
+	}
+	return nil
+}
+
 // applyE2ESchema bootstraps the minimal Postgres schema the e2e
 // suite needs. We don't apply the production migration list
 // because (a) the test only queries a handful of tables and (b)
@@ -687,13 +826,24 @@ func applyE2ESchema(db *sql.DB) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
-		// post_targets: scenario_5 only exercises INSERT (no
-		// SELECT) — minimal column set.
+		// post_targets: scenario_5 exercises INSERT + the publish-batch
+		// claim-gate SELECT; scenarios 8-11 add lease / retry / dead_letter
+		// paths. Columns aligned (loosely) with the production migration
+		// 033_post_targets.sql: last_error_message for the retry/died
+		// transitions, attempt_count + heartbeat_at for lease semantics.
+		// The E2E doesn't strictly require every column to be populated —
+		// it only requires the SELECT-side columns to exist.
 		`CREATE TABLE IF NOT EXISTS post_targets (
 			id BIGSERIAL PRIMARY KEY,
 			post_id BIGINT NOT NULL,
 			platform_account_id BIGINT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'pending',
+			locked_by TEXT NOT NULL DEFAULT '',
+			locked_at TIMESTAMPTZ NULL,
+			heartbeat_at TIMESTAMPTZ NULL,
+			attempt_count INT NOT NULL DEFAULT 0,
+			next_attempt_at TIMESTAMPTZ NULL,
+			last_error_message TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
