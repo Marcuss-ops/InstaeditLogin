@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"reflect"
 	"testing"
@@ -59,18 +60,18 @@ func TestAdminRepository_CountFleetReadiness_Happy200(t *testing.T) {
 	// Spot-check the JSON tags match docs/OAUTH-PRODUCTION.md Step
 	// 10 verbatim. A regression that renames a field surfaces here
 	// BEFORE the operator dashboard re-skin ships.
-	require.Equal(t, "youtube_channels_total", jsonTagForFleetReadinessField("Total"))
-	require.Equal(t, "active", jsonTagForFleetReadinessField("Active"))
-	require.Equal(t, "pending_authorization", jsonTagForFleetReadinessField("PendingAuthorization"))
-	require.Equal(t, "reauth_required", jsonTagForFleetReadinessField("ReauthRequired"))
-	require.Equal(t, "revoked", jsonTagForFleetReadinessField("Revoked"))
-	require.Equal(t, "error", jsonTagForFleetReadinessField("Error"))
-	require.Equal(t, "refresh_test_ok", jsonTagForFleetReadinessField("RefreshTestOK"))
-	require.Equal(t, "scope_youtube_upload_ok", jsonTagForFleetReadinessField("ScopeYoutubeUploadOK"))
-	require.Equal(t, "scope_youtube_readonly_ok", jsonTagForFleetReadinessField("ScopeYoutubeReadonlyOK"))
-	require.Equal(t, "channel_binding_ok", jsonTagForFleetReadinessField("ChannelBindingOK"))
-	require.Equal(t, "private_canary_ok", jsonTagForFleetReadinessField("PrivateCanaryOK"))
-	require.Equal(t, "canary_channel_match_ok", jsonTagForFleetReadinessField("CanaryChannelMatchOK"))
+	require.Equal(t, "youtube_channels_total", jsonTagForFleetReadinessField(t, "Total"))
+	require.Equal(t, "active", jsonTagForFleetReadinessField(t, "Active"))
+	require.Equal(t, "pending_authorization", jsonTagForFleetReadinessField(t, "PendingAuthorization"))
+	require.Equal(t, "reauth_required", jsonTagForFleetReadinessField(t, "ReauthRequired"))
+	require.Equal(t, "revoked", jsonTagForFleetReadinessField(t, "Revoked"))
+	require.Equal(t, "error", jsonTagForFleetReadinessField(t, "Error"))
+	require.Equal(t, "refresh_test_ok", jsonTagForFleetReadinessField(t, "RefreshTestOK"))
+	require.Equal(t, "scope_youtube_upload_ok", jsonTagForFleetReadinessField(t, "ScopeYoutubeUploadOK"))
+	require.Equal(t, "scope_youtube_readonly_ok", jsonTagForFleetReadinessField(t, "ScopeYoutubeReadonlyOK"))
+	require.Equal(t, "channel_binding_ok", jsonTagForFleetReadinessField(t, "ChannelBindingOK"))
+	require.Equal(t, "private_canary_ok", jsonTagForFleetReadinessField(t, "PrivateCanaryOK"))
+	require.Equal(t, "canary_channel_match_ok", jsonTagForFleetReadinessField(t, "CanaryChannelMatchOK"))
 }
 
 // TestAdminRepository_CountFleetReadiness_QueryError ensures the
@@ -103,20 +104,26 @@ func TestAdminRepository_CountFleetReadiness_QueryError(t *testing.T) {
 // FleetReadinessCounts struct field by reflection. Used to PIN the
 // contract that docs/OAUTH-PRODUCTION.md Step 10 + the SPA dashboard
 // rely on across package upgrades.
-func jsonTagForFleetReadinessField(name string) string {
-	t := reflect.TypeOf(FleetReadinessCounts{})
-	f, ok := t.FieldByName(name)
+//
+// The first param is the test fixture (*testing.T) so a missing-field
+// regression t.Fatal()s with line attribution pointing at the CALLER
+// (the require.Equal), not at this helper. The silent "<missing>"
+// return-shape from the prior version was acceptable for green but
+// produced misleading "X == <missing>" failures when a rename
+// happened.
+func jsonTagForFleetReadinessField(t *testing.T, name string) string {
+	t.Helper()
+	rt := reflect.TypeOf(FleetReadinessCounts{})
+	f, ok := rt.FieldByName(name)
 	if !ok {
-		return "<missing>"
+		t.Fatalf("FleetReadinessCounts is missing the field %q that jsonTagForFleetReadinessField is asserting; double-check the struct definition matches the dashboard contract", name)
+		return "" // unreachable; t.Fatalf stops the test
 	}
 	return f.Tag.Get("json")
 }
 
-// errBoom is a sentinel used only inside admin_repo_count_fleet_test.go
-// so the failure-path test is hermetic (no need for statik error
-// generation logic; the type is enough).
-type errBoomType struct{ msg string }
-
-func (e errBoomType) Error() string { return e.msg }
-
-var errBoom = errBoomType{msg: "simulated sql scan failure"}
+// errBoom is a sentinel used only by the failure-path test so the
+// sqlmock interaction is hermetic. stdlib errors.New keeps the
+// surface to one line + one field; the earlier custom struct was
+// over-engineered for a single-error use case.
+var errBoom = errors.New("simulated sql scan failure")
