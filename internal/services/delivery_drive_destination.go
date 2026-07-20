@@ -365,11 +365,38 @@ func (d *GoogleDriveDestination) Deliver(
 	)
 	if uploadErr != nil {
 		// Persist the failure (CAS-guarded against version drift).
-		markErr := d.sessionStore.MarkFailed(ctx, row.ID, row.Version, "drive_chunk_put_failed", uploadErr.Error(), row.WorkerID)
-		if markErr != nil && !errors.Is(markErr, repository.ErrDeliverySessionVersionMismatch) {
-			slog.Warn("google drive destination: MarkFailed after chunk-loop failure did not persist",
-				"idempotency_key", idempotencyKey,
-				"error", markErr)
+		//
+		// TWO STATES for expired-session errors: when uploadErr wraps
+		// ErrDriveSessionExpired (404 NOT FOUND or 410 GONE — the Drive
+		// variants of "session is dead"), we MUST call MarkExpired
+		// (NOT MarkFailed) so the next-tick Deliver sees
+		// row.State == "expired" and triggers the recovery branch
+		// (DeleteByID + re-POST fresh initiate).
+		//
+		// MarkFailed sets state="failed"; the recovery branch only
+		// fires on state="expired" (or expires_at < now()). If we
+		// stamped "failed" on an expired-session error, the next
+		// tick would skip the recovery branch, fall through to the
+		// chunk loop with the SAME encrypted session URI, and loop
+		// forever on the SAME 410/404 (a retry storm). The split
+		// below closes the loop for both 404 and 410.
+		if errors.Is(uploadErr, ErrDriveSessionExpired) {
+			// Expired-session path: stamp state="expired" + version-
+			// CAS so next-tick Deliver's needsFreshInitiate branch
+			// fires. Concurrent worker that re-claimed the row races
+			// us to MarkExpired; the CAS loss surfaces upstream.
+			if markErr := d.sessionStore.MarkExpired(ctx, row.ID, row.Version); markErr != nil && !errors.Is(markErr, repository.ErrDeliverySessionVersionMismatch) {
+				slog.Warn("google drive destination: MarkExpired after chunk-loop 410/404 did not persist",
+					"idempotency_key", idempotencyKey,
+					"error", markErr)
+			}
+		} else {
+			markErr := d.sessionStore.MarkFailed(ctx, row.ID, row.Version, "drive_chunk_put_failed", uploadErr.Error(), row.WorkerID)
+			if markErr != nil && !errors.Is(markErr, repository.ErrDeliverySessionVersionMismatch) {
+				slog.Warn("google drive destination: MarkFailed after chunk-loop failure did not persist",
+					"idempotency_key", idempotencyKey,
+					"error", markErr)
+			}
 		}
 		return &models.DeliveryResult{
 			ProviderName: d.Name(),
