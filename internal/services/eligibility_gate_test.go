@@ -40,6 +40,14 @@ func TestIsEligibleForActivePromotion(t *testing.T) {
 		{"ineligible/revoked", models.AccountStatusRevoked, false},
 		{"ineligible/disconnected", models.AccountStatusDisconnected, false},
 		{"ineligible/error", models.AccountStatusError, false},
+		// AccountStatusSuspended (added by migration 060 alongside
+		// the new models.AccountStatusSuspended constant): pinned
+		// here so a future regression that widens the allow-list to
+		// include 'suspended' (e.g., treating a YouTube-side TOS
+		// suspension as a recoverable-from-OAuth state) fails this
+		// subtest immediately, BEFORE the schema-layer CHECK
+		// constraint 060 is even consulted.
+		{"ineligible/suspended", models.AccountStatusSuspended, false},
 
 		// ---- defensive: unknown / empty literal ----
 		// An unrecognised status MUST NOT silently widen the gate. The

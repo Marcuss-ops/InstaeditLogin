@@ -11,11 +11,11 @@ const (
 	// gofmt-stable whitespace while placing PlatformGoogleDrive
 	// adjacent to the other platform-keyed constants so future
 	// additions slot in without re-alignment churn.
-	PlatformThreads   = "threads"
-	PlatformTikTok    = "tiktok"
-	PlatformTwitter   = "twitter"
-	PlatformYouTube   = "youtube"
-	PlatformLinkedIn  = "linkedin"
+	PlatformThreads  = "threads"
+	PlatformTikTok   = "tiktok"
+	PlatformTwitter  = "twitter"
+	PlatformYouTube  = "youtube"
+	PlatformLinkedIn = "linkedin"
 )
 
 // UserID uniquely identifies an application User.
@@ -58,6 +58,18 @@ const (
 	// ChannelAuthorizationService.AuthorizeChannel (Task 1/10)
 	// expects to flip to 'active' on a successful authorize.
 	AccountStatusPendingAuthorization = "pending_authorization"
+	// AccountStatusSuspended marks a platform-side revocation for
+	// TOS violation (YouTube may unilaterally suspend a channel that
+	// breaches community guidelines; the OAuth grant survives but
+	// videos.insert / channels.list return 403 suspended). The
+	// operator-side reversal path is a deliberate admin operation —
+	// must NOT be reachable through the OAuth callback flow. The Go
+	// model is intentionally additive alongside the rev/connect/
+	// error constants so the eligibility gate
+	// (internal/services/eligibility_gate.go::IsEligibleForActivePromotion)
+	// has an explicit case to reject, AND migration 060's CHECK
+	// constraint lists it as a valid literal at the schema layer.
+	AccountStatusSuspended = "suspended"
 )
 
 // PlatformAccount links a User to a social platform profile.
@@ -93,8 +105,8 @@ type Metadata map[string]interface{}
 
 // Token represents an encrypted OAuth token stored in the database.
 type Token struct {
-	ID                    int64      `json:"id"`
-	PlatformAccountID     int64      `json:"platform_account_id,omitempty"`
+	ID                int64 `json:"id"`
+	PlatformAccountID int64 `json:"platform_account_id,omitempty"`
 	// OAuthConnectionID (P0#3 — migration 053) is the vault's PRIMARY
 	// storage key. The vault resolves it from platform_account_id via
 	// platform_accounts.oauth_connection_id on every Save/Get/Renew/Revoke

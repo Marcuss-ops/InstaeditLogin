@@ -28,6 +28,14 @@ import (
 //     requires a fresh connect-link, not a token-exchange callback.
 //   - AccountStatusError: transient-stamp sentinel; the row needs
 //     operator visibility before any promotion to active.
+//   - AccountStatusSuspended: platform-side revocation for TOS
+//     violation (YouTube unilaterally suspends the channel — the
+//     OAuth grant survives but videos.insert / channels.list
+//     return 403). Reversal is a deliberate admin operation, NOT
+//     an OAuth callback. Mirrors AccountStatusRevoked's
+//     reversal-path rationale. Schema-layer lock: see migration
+//     060_account_status_suspended.sql which pins the literal via
+//     a CHECK constraint.
 //
 // Empty/unknown status is treated as INELIGIBLE (returns false) so
 // the AuthorizeChannel caller rejects unrecognised values rather
