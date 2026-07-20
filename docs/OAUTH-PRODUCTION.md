@@ -26,7 +26,7 @@ list can use the app for more than 7 days at a time.
    - `youtube.upload` (videos.insert)
    - `youtube.readonly` (channels.list for P0#3 binding check +
      processing-status poll)
-   - `drive.file` (Drive folder import; per-file access, non-sensitive)
+   - `drive.readonly` (Drive folder import; restricted scope — folder-level listing required for the production batch-crawler)
    - `userinfo.email` + `userinfo.profile` + `openid` (operator identity)
 4. [ ] **Sensitive scope justification** filled in the verification
    form (see "Scopes justification" below).
@@ -59,9 +59,13 @@ In **Testing mode**:
 * Several sensitive scopes (`youtube.upload`, `youtube.readonly`,
   `yt-analytics.readonly`) require explicit Google verification
   before they can be requested by any user outside the test list.
-* Restricted scopes (`drive`, `drive.readonly`) require a deeper
-  security review — we deliberately avoid these and use `drive.file`
-  instead (see "Scopes" below).
+* The Drive folder-batch crawler uses the **restricted**
+  `drive.readonly` scope — the importer walks arbitrary folders, so
+  `drive.file` (per-file access only, opened via the Google Picker
+  API) cannot satisfy the flow. `drive.readonly` requires a Google
+  security review before the app can publish it externally; that
+  review is precisely what this document drives you through (see
+  "Step 4 — submit for verification").
 
 Production mode fixes all of the above: refresh tokens last indefinitely
 (until revoked by the user, by us, or by 6 months of inactivity —
@@ -182,26 +186,35 @@ visits them during verification.
 
 Under **Scopes for Google APIs**, add only what the app exercises
 in production. The principle of least privilege matters here:
-**restricted** scopes (`drive`, `drive.readonly`) require a deeper,
-more expensive Google security audit, so we deliberately use
-`drive.file` instead, which is non-sensitive.
+**restricted** scopes (`drive.readonly`) require a deeper, more
+expensive Google security audit. The cost is justified because the
+Drive batch-crawler walks arbitrary folders at install time and
+needs `drive.readonly` — `drive.file` would let the user open
+individual files via the Google Picker API but cannot enumerate
+folder contents, which the production batch-import flow requires.
 
 | Scope                                                            | Sensitivity    | Why we need it                                                                                            |
 | ---                                                              | ---            | ---                                                                                                       |
 | `https://www.googleapis.com/auth/youtube.upload`                 | Sensitive      | `videos.insert` (upload a video) — required for the entire publish path                                   |
 | `https://www.googleapis.com/auth/youtube.readonly`              | Sensitive      | `channels.list?mine=true` (P0#3 channel binding check), `videos.list` (processing-status poll)             |
-| `https://www.googleapis.com/auth/drive.file`                     | Non-sensitive  | Drive folder import — per-file access only, requires the user to explicitly pick the folder via the Picker |
+| `https://www.googleapis.com/auth/drive.readonly`                | Restricted     | Drive folder import — folder-level listing for the batch crawler (the production batch-import flow walks arbitrary folder contents at install time) |
 | `https://www.googleapis.com/auth/userinfo.email`                 | Non-sensitive  | Identify the operator's Google Account during OAuth                                                       |
 | `https://www.googleapis.com/auth/userinfo.profile`               | Non-sensitive  | Display name + avatar for the dashboard                                                                   |
 | `openid`                                                         | Non-sensitive  | Standard OIDC identifier                                                                                  |
 
-> **Why `drive.file` and not `drive`?** The full `drive` scope is
-> **restricted**: it triggers a deeper Google security audit (often
-> 3+ months, with mandatory third-party penetration testing) and
-> exposes every file in the operator's Drive. `drive.file` grants
-> access **only** to files the operator explicitly picks through the
-> app — sufficient for the folder-batch import feature and
-> dramatically easier to get approved. See
+> **Why `drive.readonly` and not `drive` or `drive.file`?** The
+> full `drive` scope is **restricted**: it triggers a deeper Google
+> security audit (often 3+ months, with mandatory third-party
+> penetration testing) and exposes every file in the operator's
+> Drive. `drive.file` grants access **only** to files the operator
+> explicitly picks through the Google Picker API, which is the right
+> tool for "user picks 3 videos" flows but cannot enumerate folder
+> contents — so it cannot satisfy the InstaEdit batch-crawler, which
+> walks every video in a chosen folder. `drive.readonly` is the
+> smallest scope that lets the crawler list folder contents and
+> download the files inside; approval is harder than `drive.file` but
+> easier than `drive`, and the read-only nature of the access keeps
+> the audit scope narrow. See
 > [Google Drive API auth scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
 > for the full taxonomy.
 
@@ -227,12 +240,15 @@ this scope?". Recommended copy:
   failure mode Google explicitly warns about — and (b) poll
   processing status after upload so the dashboard can show
   'published' once YouTube finishes processing the video."
-* **drive.file**: "Used to list + download the contents of a
-  Google Drive folder that the operator explicitly picks via the
-  Google Picker. Per-file access only — we never enumerate the
-  operator's full Drive. The downloaded bytes are then uploaded to
-  the operator's connected YouTube channel(s) per the publish
-  schedule they configured."
+* **drive.readonly**: "Used solely to list the contents of, and
+  download video files from, the operator-chosen Google Drive
+  folder that boots the batch-crawler. Read-only — InstaEdit never
+  creates, modifies, or deletes files in the operator's Drive. The
+  downloaded bytes are then uploaded to the operator's connected
+  YouTube channel(s) per the publish schedule they configured. The
+  choice of `drive.readonly` over `drive.file` is because the
+  crawler needs to enumerate folder contents, which `drive.file`
+  does not allow."
 * **userinfo.email / userinfo.profile / openid**: "Standard
   operator identity — display name + avatar in the dashboard,
   email for security notifications."
