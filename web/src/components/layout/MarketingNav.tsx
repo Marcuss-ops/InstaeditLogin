@@ -10,6 +10,7 @@ const DEFAULT_LINKS: NavLink[] = [
   { label: "Features", href: "#features" },
   { label: "Agenzie", href: "#agency" },
   { label: "Programmi", to: "/programs" },
+  { label: "Mentoring", to: "/mentoring" },
   { label: "Chi siamo", href: "#who-are-we" },
 ];
 

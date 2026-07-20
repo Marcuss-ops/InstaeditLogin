@@ -243,6 +243,12 @@ function CTASection() {
                 Inizia gratis
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </Link>
+              <Link
+                to="/mentoring"
+                className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
+              >
+                Vuoi un accompagnamento?
+              </Link>
               <a
                 href="mailto:hello@instaedit.org"
                 className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"

@@ -35,11 +35,11 @@
 --   without DEFAULT in a future commit (would require UPDATE-then-ALTER).
 
 ALTER TABLE import_batches
-    ADD COLUMN default_privacy_level TEXT NOT NULL DEFAULT 'private'
+    ADD COLUMN IF NOT EXISTS default_privacy_level TEXT NOT NULL DEFAULT 'private'
     CHECK (default_privacy_level IN ('public', 'unlisted', 'private'));
 
 ALTER TABLE upload_jobs
-    ADD COLUMN default_privacy_level TEXT NOT NULL DEFAULT 'private'
+    ADD COLUMN IF NOT EXISTS default_privacy_level TEXT NOT NULL DEFAULT 'private'
     CHECK (default_privacy_level IN ('public', 'unlisted', 'private'));
 
 -- Backfill index: the publish_worker integration follow-up will query
@@ -47,6 +47,6 @@ ALTER TABLE upload_jobs
 -- scheduled with public privacy" on the dashboard. The partial index
 -- only covers the non-private values (the "operator opted-in" set)
 -- so the index stays small even at 100k+ upload_jobs.
-CREATE INDEX idx_upload_jobs_default_privacy_public
+CREATE INDEX IF NOT EXISTS idx_upload_jobs_default_privacy_public
     ON upload_jobs (status, publish_at)
     WHERE default_privacy_level = 'public';
