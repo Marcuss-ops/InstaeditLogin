@@ -270,14 +270,15 @@ func (w *UploadWorker) Run(ctx context.Context) error {
 }
 
 // runReclaimerLoop ticks on opts.ReclaimInterval, calling
-// ReclaimExpiredLeases with a 100-row per-tick cap so a backlog
-// can't tie up the DB. Task 10/10: each successful reclaim
-// increments metrics.lease_expiry_total{upload} by the row-count so
-// the metric preserves per-row fidelity (a tick that recovers 7
-// rows shows +7, not +1). The recovery test
-// (TestReclaimExpiredLeases_FailsIfReclaimRemoved) asserts this
-// wire-up is in place; removing the line below causes the metric
-// to stay flat against the asserted value and the test to fail.
+// runReclaimerTick on each tick. The ticker-driven wrapper is
+// the production hot path; the per-tick body is extracted into
+// runReclaimerTick so tests (Task 10.10.x polish #1) can drive
+// the recovery wire-up directly without spinning a real
+// time.NewTicker. The metric increment lives inside runReclaimerTick
+// itself — removing the metrics.RecordLeaseExpiry call from
+// runReclaimerTick causes the assembly-line tick to silently
+// flatten the counter while still "reclaiming" rows, and the
+// polish #1 test asserts the wire-up is in place.
 func (w *UploadWorker) runReclaimerLoop(ctx context.Context) {
 	ticker := time.NewTicker(w.opts.ReclaimInterval)
 	defer ticker.Stop()
@@ -286,14 +287,42 @@ func (w *UploadWorker) runReclaimerLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, err := w.jobRepo.ReclaimExpiredLeases(ctx, 100)
-			if err != nil {
-				w.logger.Error("upload worker: reclaimer tick failed", "error", err)
-			} else if n > 0 {
-				w.logger.Info("upload worker: reclaimer recovered rows", "count", n)
-				metrics.RecordLeaseExpiry("upload", n)
-			}
+			w.runReclaimerTick(ctx)
 		}
+	}
+}
+
+// runReclaimerTick performs ONE reclaimer tick: outsourced from
+// runReclaimerLoop so tests can call it directly. Recovers expired
+// leases (status='leased' AND lease_expires_at<NOW() AND
+// heartbeat_at<NOW()-5m) back to status='pending' with a 100-row
+// per-tick cap so a backlog can't tie up the DB. Each successful
+// reclaim increments metrics.lease_expiry_total{upload} by the
+// row-count so the metric preserves per-row fidelity (a tick that
+// recovers 7 rows shows +7, not +1).
+//
+// Failure modes:
+//   - err from jobRepo.ReclaimExpiredLeases → log + return (the
+//     next tick retries)
+//   - n == 0 → no metric increment, no log (zero rows is the
+//     steady-state and we don't want a metric spam during normal
+//     operation)
+//   - n > 0 → metrics.RecordLeaseExpiry("upload", n) + log
+//
+// Test 1 of Task 10.10.x polish #1
+// (internal/worker/task_10_10_recovery_test.go) asserts
+// construction + runReclaimerTick invocation + LeaseExpiryCount
+// delta = the configured reclaim count, so a regression that
+// deletes the RecordLeaseExpiry call line below trips the test.
+func (w *UploadWorker) runReclaimerTick(ctx context.Context) {
+	n, err := w.jobRepo.ReclaimExpiredLeases(ctx, 100)
+	if err != nil {
+		w.logger.Error("upload worker: reclaimer tick failed", "error", err)
+		return
+	}
+	if n > 0 {
+		w.logger.Info("upload worker: reclaimer recovered rows", "count", n)
+		metrics.RecordLeaseExpiry("upload", n)
 	}
 }
 

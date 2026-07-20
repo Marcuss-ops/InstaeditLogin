@@ -18,6 +18,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // YouTubeOAuthService implements the YouTube provider. Taglio 2.1:
@@ -376,8 +377,8 @@ func (s *YouTubeOAuthService) PreferredTokenTypes() []string {
 //     (a single Grant can manage up to 100 channels; the upload is
 //     bound to the one the operator selected)
 //   - 200 OK with 0 channels or NO match →
-//        fmt.Errorf("...%w...: expected %q, channels=[...]",
-//            ErrYouTubeChannelMismatch, expectedChannelID, ...)
+//     fmt.Errorf("...%w...: expected %q, channels=[...]",
+//     ErrYouTubeChannelMismatch, expectedChannelID, ...)
 //   - 200 OK with 0 channels (grant lost all bindings) → same sentinel
 //   - Non-200 / network / decode error → plain wrapped error,
 //     DO NOT use the sentinel so the worker treats it as transient.
@@ -554,7 +555,7 @@ type SessionEncryptor interface {
 // Cross-references:
 //   - pkg/api/routes_test.go::TestHandleCallback_YouTube_MultipleChannels_NoExpected_Conflict
 //   - pkg/api/handlers.go::attachDiscoveredAccounts (YouTube branch
-//     + 409 mapping)
+//   - 409 mapping)
 var ErrYouTubeAmbiguousAuthorization = errors.New("youtube authorization is ambiguous: re-authorize with expected_channel_id")
 
 // BindGrantToChannel consolidates the 1-OAuth-grant-per-1-channel
@@ -930,10 +931,10 @@ func (s *YouTubeOAuthService) ContinuePublish(ctx context.Context, accessToken, 
 // It verifies the video belongs to the expected channel (snippet.channelId)
 // and maps processingDetails.processingStatus to terminal or in-flight.
 //
-//   processing  → (nil, nil)   // still in flight
-//   succeeded   → (*PublishResult, nil)
-//   failed      → (nil, error)  // terminal failure
-//   terminated  → (nil, error)  // terminal failure
+//	processing  → (nil, nil)   // still in flight
+//	succeeded   → (*PublishResult, nil)
+//	failed      → (nil, error)  // terminal failure
+//	terminated  → (nil, error)  // terminal failure
 func (s *YouTubeOAuthService) Reconcile(ctx context.Context, accessToken, publishID string) (*models.PublishResult, error) {
 	platformUserID, videoID, err := decodeYouTubePublishID(publishID)
 	if err != nil {
@@ -1375,6 +1376,24 @@ func (s *YouTubeOAuthService) queryUploadStatus(ctx context.Context, uploadURL s
 		return 0, fmt.Errorf("unexpected status query response: %d", resp.StatusCode)
 	}
 
+	// Task 10.10.x polish #1: a successful 308 resume probe is BY
+	// DEFINITION a chunk-loss recovery event (otherwise we'd be
+	// doing the FIRST chunk PUT, not resuming from a partial
+	// state). Increment metrics.resumable_recovery_total{chunk_lost}
+	// so the operator dashboard can distinguish "worker crashed
+	// mid-upload and the next worker is resuming" from a normal
+	// first-time upload (which never reaches this probe).
+	//
+	// Pre-polish, this line was missing; the production metric went
+	// flat after every database migration / cfg-rollout because the
+	// only consumer was a manual test helper that masked the
+	// real wire-up. The Polish #1 test
+	// (internal/services/task_10_10_resumable_recovery_test.go)
+	// drives queryUploadStatus via httptest and asserts the
+	// counter delta == 1 on a 308 reply. Removing the line below
+	// trips that assertion.
+	metrics.RecordResumableRecovery(metrics.ResumableRecoveryReasonChunkLost)
+
 	rangeHeader := resp.Header.Get("Range")
 	if rangeHeader == "" {
 		return 0, nil
@@ -1538,15 +1557,15 @@ func (s *YouTubeOAuthService) DiscoverAccounts(ctx context.Context, accessToken,
 					Username:       ch.Snippet.Title,
 				},
 				Metadata: models.Metadata{
-					"description":               ch.Snippet.Description,
-					"handle":                    ch.Snippet.CustomURL,
-					"avatar_url":                youtubeBestThumbnail(ch.Snippet.Thumbnails),
-					"uploads_playlist_id":       ch.ContentDetails.RelatedPlaylists.Uploads,
-					"country":                   ch.Snippet.Country,
-					"subscriber_count":          ch.Statistics.SubscriberCount,
-					"hidden_subscriber_count":   ch.Statistics.HiddenSubscriberCount,
-					"video_count":               ch.Statistics.VideoCount,
-					"view_count":                ch.Statistics.ViewCount,
+					"description":             ch.Snippet.Description,
+					"handle":                  ch.Snippet.CustomURL,
+					"avatar_url":              youtubeBestThumbnail(ch.Snippet.Thumbnails),
+					"uploads_playlist_id":     ch.ContentDetails.RelatedPlaylists.Uploads,
+					"country":                 ch.Snippet.Country,
+					"subscriber_count":        ch.Statistics.SubscriberCount,
+					"hidden_subscriber_count": ch.Statistics.HiddenSubscriberCount,
+					"video_count":             ch.Statistics.VideoCount,
+					"view_count":              ch.Statistics.ViewCount,
 				},
 			})
 		}
@@ -1667,9 +1686,9 @@ func (s *YouTubeOAuthService) GetAccountDetails(ctx context.Context, accessToken
 
 	// Platform-specific properties.
 	details.Properties = map[string]any{
-		"country":                  ch.Snippet.Country,
-		"uploads_playlist_id":      ch.ContentDetails.RelatedPlaylists.Uploads,
-		"hidden_subscriber_count":  ch.Statistics.HiddenSubscriberCount,
+		"country":                 ch.Snippet.Country,
+		"uploads_playlist_id":     ch.ContentDetails.RelatedPlaylists.Uploads,
+		"hidden_subscriber_count": ch.Statistics.HiddenSubscriberCount,
 	}
 
 	return details, nil
@@ -1891,26 +1910,26 @@ type youtubePageInfo struct {
 }
 
 type youtubeChannel struct {
-	ID              string                `json:"id"`
-	Snippet         youtubeChannelSnippet `json:"snippet"`
-	Statistics      youtubeStatistics     `json:"statistics"`
-	ContentDetails  youtubeContentDetails `json:"contentDetails"`
-	BrandingSettings youtubeBranding      `json:"brandingSettings"`
+	ID               string                `json:"id"`
+	Snippet          youtubeChannelSnippet `json:"snippet"`
+	Statistics       youtubeStatistics     `json:"statistics"`
+	ContentDetails   youtubeContentDetails `json:"contentDetails"`
+	BrandingSettings youtubeBranding       `json:"brandingSettings"`
 }
 
 type youtubeChannelSnippet struct {
-	Title       string            `json:"title"`
-	Description string            `json:"description"`
-	CustomURL   string            `json:"customUrl"`
-	Country     string            `json:"country"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	CustomURL   string             `json:"customUrl"`
+	Country     string             `json:"country"`
 	Thumbnails  *youtubeThumbnails `json:"thumbnails"`
 }
 
 type youtubeStatistics struct {
-	SubscriberCount      int64 `json:"subscriberCount"`
+	SubscriberCount       int64 `json:"subscriberCount"`
 	HiddenSubscriberCount bool  `json:"hiddenSubscriberCount"`
-	ViewCount            int64 `json:"viewCount"`
-	VideoCount           int64 `json:"videoCount"`
+	ViewCount             int64 `json:"viewCount"`
+	VideoCount            int64 `json:"videoCount"`
 }
 
 type youtubeContentDetails struct {
@@ -1928,7 +1947,7 @@ type youtubeBranding struct {
 type youtubeBrandingImage struct {
 	BannerExternalURL string `json:"bannerExternalUrl"`
 	BannerImageUrl    string `json:"bannerImageUrl"`
-	BannerMobileExtra  string `json:"bannerMobileExtraDevicesImageUrl"`
+	BannerMobileExtra string `json:"bannerMobileExtraDevicesImageUrl"`
 }
 
 type youtubeThumbnails struct {
@@ -1946,8 +1965,8 @@ type youtubeThumbnail struct {
 }
 
 type youtubePlaylistItemsResponse struct {
-	Items          []youtubePlaylistItem `json:"items"`
-	NextPageToken  string                `json:"nextPageToken"`
+	Items         []youtubePlaylistItem `json:"items"`
+	NextPageToken string                `json:"nextPageToken"`
 }
 
 type youtubePlaylistItem struct {
@@ -1972,10 +1991,10 @@ type youtubeVideo struct {
 }
 
 type youtubeVideoSnippet struct {
-	Title       string            `json:"title"`
-	Description string            `json:"description"`
-	PublishedAt string            `json:"publishedAt"`
-	ChannelID   string            `json:"channelId"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	PublishedAt string             `json:"publishedAt"`
+	ChannelID   string             `json:"channelId"`
 	Thumbnails  *youtubeThumbnails `json:"thumbnails"`
 }
 
@@ -2083,11 +2102,11 @@ func (s *YouTubeOAuthService) getUserInfo(ctx context.Context, accessToken strin
 // Taglio 4.3.
 // -----------------------------------------------------------------------------
 var (
-	_ OAuthProvider         = (*YouTubeOAuthService)(nil)
-	_ ContentValidator      = (*YouTubeOAuthService)(nil)
-	_ Publisher             = (*YouTubeOAuthService)(nil)
-	_ AsyncPublisher        = (*YouTubeOAuthService)(nil)
-	_ AccountDiscoverer     = (*YouTubeOAuthService)(nil)
+	_ OAuthProvider          = (*YouTubeOAuthService)(nil)
+	_ ContentValidator       = (*YouTubeOAuthService)(nil)
+	_ Publisher              = (*YouTubeOAuthService)(nil)
+	_ AsyncPublisher         = (*YouTubeOAuthService)(nil)
+	_ AccountDiscoverer      = (*YouTubeOAuthService)(nil)
 	_ AccountDetailsProvider = (*YouTubeOAuthService)(nil)
 	_ AccountContentProvider = (*YouTubeOAuthService)(nil)
 )
