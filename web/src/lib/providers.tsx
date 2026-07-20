@@ -11,7 +11,33 @@ export type ProviderMeta = {
   glowColor: string; // CSS color for icon glow
   nameGradient: string; // CSS gradient for hover name text effect
   icon: ReactNode;
+  /** Solid `rgb(R,G,B)` derived from `glowColor` by stripping the alpha.
+   *  Use this when the brand color must be OPAQUE (e.g. as `currentColor`
+   *  for an icon stroke/fill). Falls back to `undefined` for non-`rgba(...)`
+   *  sources. */
+  solidColor?: string;
 };
+
+/**
+ * Convert `rgba(R,G,B,A)` -> `rgb(R,G,B)` for use as `currentColor`.
+ *
+ * `glowColor` values in this registry were tuned for use as ambient glow
+ * shadows (low alpha). When the same colour is reused as the icon stroke
+ * or fill via `currentColor`, the alpha must be dropped or the icon renders
+ * practically invisible against a dark background (Threads 0.25 alpha,
+ * X / Twitter 0.2 alpha).
+ *
+ * Accepts both `rgba(R,G,B,A)` and `rgb(R,G,B)` (no alpha). Returns
+ * `undefined` for any other shape; callers should fall back to inherited
+ * text colour in that case.
+ */
+export function getProviderSolidColor(g: { glowColor?: string }): string | undefined {
+  const m = g.glowColor?.match(/^rgba?\(([^)]+)\)/);
+  if (!m) return undefined;
+  const parts = m[1].split(",").map((s) => s.trim());
+  if (parts.length < 3) return undefined;
+  return `rgb(${parts.slice(0, 3).join(", ")})`;
+}
 
 const INSTAGRAM_SVG = (
   <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
@@ -55,7 +81,7 @@ const LINKEDIN_SVG = (
   </svg>
 );
 
-export const PROVIDERS: ProviderMeta[] = [
+export const PROVIDERS: ProviderMeta[] = ([
   {
     id: "instagram",
     name: "Instagram",
@@ -126,7 +152,10 @@ export const PROVIDERS: ProviderMeta[] = [
     nameGradient: "linear-gradient(135deg, #0A66C2, #6aa8e0)",
     icon: LINKEDIN_SVG,
   },
-];
+] satisfies ProviderMeta[]).map((p) => ({
+  ...p,
+  solidColor: getProviderSolidColor(p),
+}));
 
 export function getProvider(id: string): ProviderMeta | undefined {
   return PROVIDERS.find((p) => p.id === id);

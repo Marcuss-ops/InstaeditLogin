@@ -164,34 +164,23 @@ export function Login() {
               Or continue with
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {PROVIDERS.map((p) => {
-                // PROVIDERS glowColor is "rgba(R,G,B,A)" — include the alpha
-                // for ambient glow contexts, but as the icon `currentColor`
-                // we want a fully opaque solid RGB so the icon is visible on
-                // the dark Login card. (Threads' `rgba(0,0,0,0.25)` and X's
-                // `rgba(200,200,210,0.2)` would otherwise render practically
-                // invisible.) Parse the 4-tuple and emit a 3-tuple `rgb()`.
-                const rgbaMatch = p.glowColor?.match(/^rgba?\(([^)]+)\)/);
-                const parts = rgbaMatch ? rgbaMatch[1].split(",").map((s) => s.trim()) : [];
-                const solidColor =
-                  parts.length >= 3 ? `rgb(${parts.slice(0, 3).join(", ")})` : undefined;
-                return (
-                  <a
-                    key={p.id}
-                    href={`${API_BASE_URL}/api/v1/auth/${p.id}/login`}
-                    className="group flex items-center justify-center gap-2 h-11 px-3 rounded-xl bg-white/[0.04] border border-white/[0.10] text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:border-white/[0.20] hover:text-white transition-all focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20"
-                    aria-label={`Continue with ${p.name}`}
+              {PROVIDERS.map((p) => (
+                <a
+                  key={p.id}
+                  href={`${API_BASE_URL}/api/v1/auth/${p.id}/login`}
+                  className="group flex items-center justify-center gap-2 h-11 px-3 rounded-xl bg-white/[0.04] border border-white/[0.10] text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:border-white/[0.20] hover:text-white transition-all focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20"
+                  aria-label={`Continue with ${p.name}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="w-5 h-5 flex shrink-0"
+                    style={p.solidColor ? { color: p.solidColor } : undefined}
                   >
-                    <span
-                      className="w-5 h-5 flex shrink-0"
-                      style={solidColor ? { color: solidColor } : undefined}
-                    >
-                      {p.icon}
-                    </span>
-                    <span className="truncate">{p.name}</span>
-                  </a>
-                );
-              })}
+                    {p.icon}
+                  </span>
+                  <span className="truncate">{p.name}</span>
+                </a>
+              ))}
             </div>
           </div>
         </div>
