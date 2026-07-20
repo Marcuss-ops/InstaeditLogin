@@ -894,6 +894,15 @@ type AdminStore interface {
 	// partial-success visibility is preserved when an operator
 	// uploads 500-channel sheets.
 	UpsertPendingChannel(ctx context.Context, ownerUserID int64, rows []channelimport.ImportRow) (channelimport.Result, error)
+	// CreateFleetReadinessSnapshot (Definition-of-Done rollout) takes
+	// an append-only snapshot of the YouTube platform_account fleet --
+	// the 12 readiness counters (active / pending / reauth / etc) +
+	// the per-channel "is this channel OK?" detail rows. The JSON
+	// envelope is what /admin/youtube/fleet_readiness returns; the
+	// per-channel rows persist to fleet_readiness_snapshot_channels
+	// so successive calls produce an audit trail an operator can
+	// diff to spot channels that flipped recently.
+	CreateFleetReadinessSnapshot(ctx context.Context, adminUserID int64) (repository.FleetReadinessSnapshotResponse, error)
 }
 
 // SnapshotStore is the persistence contract for
@@ -970,6 +979,13 @@ func (r *Router) Setup() http.Handler {
 		// the existing flag).
 		r.mux.Method(http.MethodPost, "/admin/channels/import-csv", adminAuthMiddleware(http.HandlerFunc(r.handleAdminImportChannelsCSV)))
 		r.mux.Method(http.MethodGet, "/admin/channels/pending", adminAuthMiddleware(http.HandlerFunc(r.handleAdminPendingChannels)))
+		// Definition-of-Done rollout snapshot endpoint. One roundtrip
+		// aggregates the 12 DoD counters in platform_accounts (FILTER
+		// clauses); a second roundtrip dump-INSERTs the per-channel
+		// detail into fleet_readiness_snapshot_channels. The handler
+		// returns the JSON envelope -- operator diffs successive
+		// snapshots via the persisted child rows.
+		r.mux.Method(http.MethodGet, "/admin/youtube/fleet_readiness", adminAuthMiddleware(http.HandlerFunc(r.handleAdminYouTubeFleetReadiness)))
 		// P2 — admin connect-link. POST /admin/channels/{channel_id}/connect-link
 		// returns a signed OAuth URL with prompt=consent + select_account
 		// + login_hint=manager_email_hint. The callback (handlers.go

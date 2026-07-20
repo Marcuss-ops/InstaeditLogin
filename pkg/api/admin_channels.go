@@ -21,9 +21,9 @@ import (
 // Per-row + headline counts so the dashboard renders "active 187 /
 // reauth_required 13" alongside the table without a second roundtrip.
 type AdminChannelsResponse struct {
-	Counts    repository.AdminChannelCounts     `json:"counts"`
-	Channels  []repository.AdminChannelRow      `json:"channels"`
-	Generated int64                             `json:"generated_at_unix"`
+	Counts    repository.AdminChannelCounts `json:"counts"`
+	Channels  []repository.AdminChannelRow  `json:"channels"`
+	Generated int64                         `json:"generated_at_unix"`
 }
 
 // handleAdminChannels (GET /admin/channels) returns the per-platform
@@ -152,10 +152,10 @@ type AdminImportChannelsRequest struct {
 // for parse-level failures (missing column, unresolvable workspace)
 // and per-row DB write failures.
 type AdminImportChannelsResponse struct {
-	Imported int                           `json:"imported"`
-	Skipped  int                           `json:"skipped"`
-	Errors   []channelimport.RowError      `json:"errors,omitempty"`
-	OwnerID  int64                         `json:"owner_id"`
+	Imported int                      `json:"imported"`
+	Skipped  int                      `json:"skipped"`
+	Errors   []channelimport.RowError `json:"errors,omitempty"`
+	OwnerID  int64                    `json:"owner_id"`
 }
 
 // handleAdminImportChannelsCSV (POST /admin/channels/import-csv)
@@ -379,7 +379,7 @@ type AdminConnectLinkResponse struct {
 // channel row.
 //
 // The URL carries:
-//   * state=<JWT> signed HS256 with the same secret as the auth
+//   - state=<JWT> signed HS256 with the same secret as the auth
 //     tokens. The /api/v1/auth/youtube/callback handler detects
 //     the JWT shape (2 dots), calls auth.Manager.VerifyConnectLinkState,
 //     extracts the expected_channel_id, and validates the actual
@@ -387,11 +387,11 @@ type AdminConnectLinkResponse struct {
 //     returns a DIFFERENT channel ID is rejected with 422 rather
 //     than silently re-attaching the token to whatever channel the
 //     grant happens to target.
-//   * prompt=select_account consent (both flags via OAuthLoginOptions).
+//   - prompt=select_account consent (both flags via OAuthLoginOptions).
 //     Forces the operator to re-pick the manager's Google account
 //     AND re-consent so a previously-cached grant cannot bind to a
 //     different Brand Account silently.
-//   * login_hint=<manager_email_hint> — Google pre-fills the
+//   - login_hint=<manager_email_hint> — Google pre-fills the
 //     account-picker; the OAuth server still verifies identity
 //     cryptographically (login_hint is NOT authentication per
 //     Google's OAuth docs).
@@ -528,4 +528,51 @@ func (r *Router) handleAdminChannelConnectLink(w http.ResponseWriter, req *http.
 		Platform:           account.Platform,
 		ManagerEmailHint:   managerHint,
 	})
+}
+
+// handleAdminYouTubeFleetReadiness (GET /admin/youtube/fleet_readiness)
+// is the Definition-of-Done rollout snapshot endpoint. On each
+// call the AdminRepository aggregates the 12 DoD counters in one
+// COUNT(*) FILTER roundtrip and persists one row per YouTube
+// platform_account into fleet_readiness_snapshot_channels so a
+// later diff against the prior snapshot highlights which channels
+// transitioned between states. The 12 fields + snapshot_id flow
+// back to the operator dashboard as JSON.
+//
+// Authz:
+//   - non-admin callers -> 403 (adminAuthMiddleware short-circuits
+//     upstream of this handler; the defensive IsAdmin re-check here
+//     catches any future wiring that drops the middleware on a per-
+//     route basis).
+//   - adminStore nil -> 501 (mounting the admin repo is a deliberate
+//     subset-setup; tests can omit it without 500-ing the endpoint).
+//
+// The handler is intentionally read-only + idempotent: a hostile
+// retry of the same call yields a NEW snapshot row + the same JSON
+// counts (calls converge on idempotency at the counts layer; the
+// audit history diverges by taken_at).
+func (r *Router) handleAdminYouTubeFleetReadiness(w http.ResponseWriter, req *http.Request) {
+	if r.adminStore == nil {
+		writeError(w, http.StatusNotImplemented, "admin store not configured")
+		return
+	}
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || !identity.IsAdmin() {
+		writeError(w, http.StatusForbidden, "requires admin privileges")
+		return
+	}
+	adminID := identity.UserID()
+	if adminID == 0 {
+		writeError(w, http.StatusForbidden, "requires authenticated admin identity")
+		return
+	}
+
+	snap, err := r.adminStore.CreateFleetReadinessSnapshot(req.Context(), adminID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError,
+			"could not take fleet readiness snapshot: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, snap)
 }
