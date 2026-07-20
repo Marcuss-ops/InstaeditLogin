@@ -368,79 +368,145 @@ func (s *YouTubeOAuthService) PreferredTokenTypes() []string {
 
 // ValidateChannelBinding implements services.YouTubeChannelBinder.
 // It calls channels.list?part=id&mine=true with a fresh access token
-// (the worker has already refreshed via the vault before calling)
-// and verifies the returned channel id set includes expectedChannelID.
+// (the worker has already refreshed via the vault before calling) and
+// verifies the returned channel id set includes expectedChannelID.
+//
+// A single Google Account OAuth grant can manage up to ~100 YouTube
+// channels (server-side max today); channels.list?maxResults=50
+// silently truncates at 50. We therefore follow nextPageToken until
+// empty, with a hard upper bound (see maxChannelsPerGrant below) as a
+// safety net against (a) a hostile / misconfigured grant reporting
+// unbounded channel sets, (b) a future YouTube increase of the
+// per-grant cap leaving the operator with N>cap channels visible.
 //
 // Behaviour matrix:
-//   - 200 OK with single matching channel → nil
-//   - 200 OK with multi-channel set INCLUDING expected → nil
-//     (a single Grant can manage up to 100 channels; the upload is
-//     bound to the one the operator selected)
-//   - 200 OK with 0 channels or NO match →
-//     fmt.Errorf("...%w...: expected %q, channels=[...]",
-//     ErrYouTubeChannelMismatch, expectedChannelID, ...)
-//   - 200 OK with 0 channels (grant lost all bindings) → same sentinel
-//   - Non-200 / network / decode error → plain wrapped error,
-//     DO NOT use the sentinel so the worker treats it as transient.
+//   - 200 OK across N pages (1 <= N) with the expected channel id in
+//     ANY page → nil. N is bounded by maxChannelsPerGrant (200 today).
+//   - 200 OK across all pages, NO match →
+//     fmt.Errorf("%w: expected %q, grant-bound channels=%v ...)",
+//     ErrYouTubeChannelMismatch, expectedChannelID, <full list>)
+//     — a SINGLE call site visibility problem where any channel-list
+//     page contains the expected id materially helps the operator
+//     diagnose the drift.
+//   - 200 OK across all pages, 0 unique channels collected → same
+//     sentinel as 'NO match' but with 'grant has 0 channels' diagnostic
+//     (the grant lost all bindings — recoverable only via a fresh
+//     OAuth dance).
+//   - maxChannelsPerGrant safety cap hit BEFORE exhausting nextPageTokens
+//     → ErrYouTubeChannelMismatch with 'safety cap reached' diagnostic.
+//     Triggered when a manager is bound to >200 channels — today this
+//     is impossible (server max ~100 per grant) but the cap guards
+//     against future API surface changes.
+//   - Non-200 / network / decode error at any page → plain wrapped
+//     error (NOT wrapped in ErrYouTubeChannelMismatch) so the worker
+//     treats it as transient. The transient contract is unchanged
+//     from the pre-pagination single-GET path.
 //
-// The method is a single GET; it does NOT re-refresh the access token
-// to avoid double-quota usage (the publish worker already refreshed
-// in step 5 of publishTarget). The token MUST therefore be a fresh
-// bearer token; OAuth-only access tokens (no refresh) are not
-// supported on this path — they're an immediate 401 and the worker
-// should treat them as reauth-required via the existing token-refresh
-// error path.
+// The method is a paginated GET loop; it does NOT re-refresh the
+// access token to avoid double-quota usage (the publish worker
+// already refreshed in step 5 of publishTarget). The token MUST
+// therefore be a fresh bearer token; OAuth-only access tokens (no
+// refresh) are not supported on this path — they're an immediate 401
+// and the worker should treat them as reauth-required via the
+// existing token-refresh error path.
 func (s *YouTubeOAuthService) ValidateChannelBinding(ctx context.Context, accessToken, expectedChannelID string) error {
 	if expectedChannelID == "" {
 		return fmt.Errorf("youtube channel binding check: empty expected channel id")
 	}
 
-	params := url.Values{}
-	params.Set("part", "id")
-	params.Set("mine", "true")
-	params.Set("maxResults", "50")
+	// Safety cap. Server-side per-grant max is ~100 today; 200
+	// leaves headroom for a future API change + a buffer before any
+	// runaway loop would hit the underlying quota. Hitting the cap
+	// also tells the operator their distribution planning needs to
+	// change (see docs/OAUTH-PRODUCTION.md 'channels.list pagination
+	// + 40-50 channels per manager').
+	const maxChannelsPerGrant = 200
 
-	reqURL := "https://www.googleapis.com/youtube/v3/channels?" + params.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return fmt.Errorf("youtube channel binding: create request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("youtube channel binding: channels.list request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return fmt.Errorf("youtube channel binding: channels.list returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result youtubeChannelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("youtube channel binding: decode channels.list: %w", err)
-	}
-
-	if len(result.Items) == 0 {
-		// Grant has zero channels: structurally invalid. Flag as
-		// mismatch (operators should see reauth_required immediately
-		// — there is no acceptable network-retry semantics here).
-		return fmt.Errorf("%w: expected %q, grant has 0 channels", ErrYouTubeChannelMismatch, expectedChannelID)
-	}
-
-	for _, ch := range result.Items {
-		if ch.ID == expectedChannelID {
-			return nil // bound to expected channel — proceed with upload
+	var (
+		pageToken string
+		totalIDs  []string
+		seen      = make(map[string]struct{}, 64)
+	)
+	for page := 1; ; page++ {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("youtube channel binding: cancelled by %w at page %d", err, page)
 		}
+
+		params := url.Values{}
+		params.Set("part", "id")
+		params.Set("mine", "true")
+		params.Set("maxResults", "50")
+		if pageToken != "" {
+			params.Set("pageToken", pageToken)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+			"https://www.googleapis.com/youtube/v3/channels?"+params.Encode(), nil)
+		if err != nil {
+			return fmt.Errorf("youtube channel binding: create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("youtube channel binding: channels.list request: %w", err)
+		}
+
+		var result youtubeChannelsResponse
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+			resp.Body.Close()
+			return fmt.Errorf("youtube channel binding: channels.list returned %d: %s", resp.StatusCode, string(body))
+		}
+		if jerr := json.NewDecoder(resp.Body).Decode(&result); jerr != nil {
+			resp.Body.Close()
+			return fmt.Errorf("youtube channel binding: decode channels.list: %w", jerr)
+		}
+		resp.Body.Close()
+
+		// Accumulate unique IDs in arrival order. Google does NOT
+		// guarantee distinct channels across page boundaries, so
+		// dedupe here: (a) the final mismatch count matches what
+		// the operator will see in the dashboard, and (b) the
+		// safety cap below counts UNIQUE channels rather than
+		// request rows.
+		for _, ch := range result.Items {
+			if ch.ID == "" {
+				continue
+			}
+			if _, dup := seen[ch.ID]; dup {
+				continue
+			}
+			seen[ch.ID] = struct{}{}
+			totalIDs = append(totalIDs, ch.ID)
+			if ch.ID == expectedChannelID {
+				return nil // bound to expected channel — proceed with upload
+			}
+		}
+
+		if len(totalIDs) >= maxChannelsPerGrant {
+			// Safety cap reached BEFORE nextPageToken exhausted.
+			// Treat as mismatch because we cannot prove the expected
+			// is NOT in the truncated set. This is a structural
+			// escape valve; operators with >200 channels per grant
+			// will be flagged to re-distribute or to raise the cap
+			// via docs/OAUTH-PRODUCTION.md.
+			return fmt.Errorf("%w: expected %q not found in first %d unique channel ids (safety cap reached)",
+				ErrYouTubeChannelMismatch, expectedChannelID, maxChannelsPerGrant)
+		}
+
+		if result.NextPageToken == "" {
+			break // API returned the final page; pagination complete
+		}
+		pageToken = result.NextPageToken
 	}
 
-	ids := make([]string, 0, len(result.Items))
-	for _, ch := range result.Items {
-		ids = append(ids, ch.ID)
+	if len(totalIDs) == 0 {
+		return fmt.Errorf("%w: expected %q, grant has 0 channels",
+			ErrYouTubeChannelMismatch, expectedChannelID)
 	}
-	return fmt.Errorf("%w: expected %q, grant-bound channels=%v", ErrYouTubeChannelMismatch, expectedChannelID, ids)
+	return fmt.Errorf("%w: expected %q, grant-bound channels=%v",
+		ErrYouTubeChannelMismatch, expectedChannelID, totalIDs)
 }
 
 // Compile-time assertion: YouTubeOAuthService satisfies the

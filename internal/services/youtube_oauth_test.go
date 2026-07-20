@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -504,8 +505,8 @@ func TestYouTubeAsyncPublish_Reconcile_Processing_ReturnsNil(t *testing.T) {
 		json.NewEncoder(w).Encode(youtubeVideosResponse{
 			Items: []youtubeVideo{
 				{
-					ID: "yt-async-video-id",
-					Snippet: youtubeVideoSnippet{ChannelID: "UCexpected"},
+					ID:                "yt-async-video-id",
+					Snippet:           youtubeVideoSnippet{ChannelID: "UCexpected"},
 					ProcessingDetails: &youtubeVideoProcessingDetails{ProcessingStatus: "processing"},
 				},
 			},
@@ -533,8 +534,8 @@ func TestYouTubeAsyncPublish_Reconcile_Succeeded_ReturnsResult(t *testing.T) {
 		json.NewEncoder(w).Encode(youtubeVideosResponse{
 			Items: []youtubeVideo{
 				{
-					ID: "yt-async-video-id",
-					Snippet: youtubeVideoSnippet{ChannelID: "UCexpected"},
+					ID:                "yt-async-video-id",
+					Snippet:           youtubeVideoSnippet{ChannelID: "UCexpected"},
 					ProcessingDetails: &youtubeVideoProcessingDetails{ProcessingStatus: "succeeded"},
 				},
 			},
@@ -569,8 +570,8 @@ func TestYouTubeAsyncPublish_Reconcile_Failed_ReturnsError(t *testing.T) {
 		json.NewEncoder(w).Encode(youtubeVideosResponse{
 			Items: []youtubeVideo{
 				{
-					ID: "yt-async-video-id",
-					Snippet: youtubeVideoSnippet{ChannelID: "UCexpected"},
+					ID:                "yt-async-video-id",
+					Snippet:           youtubeVideoSnippet{ChannelID: "UCexpected"},
 					ProcessingDetails: &youtubeVideoProcessingDetails{ProcessingStatus: "failed"},
 				},
 			},
@@ -598,8 +599,8 @@ func TestYouTubeAsyncPublish_Reconcile_ChannelMismatch_ReturnsError(t *testing.T
 		json.NewEncoder(w).Encode(youtubeVideosResponse{
 			Items: []youtubeVideo{
 				{
-					ID: "yt-async-video-id",
-					Snippet: youtubeVideoSnippet{ChannelID: "UCother"},
+					ID:                "yt-async-video-id",
+					Snippet:           youtubeVideoSnippet{ChannelID: "UCother"},
 					ProcessingDetails: &youtubeVideoProcessingDetails{ProcessingStatus: "succeeded"},
 				},
 			},
@@ -627,8 +628,8 @@ func TestYouTubeAsyncPublish_Reconcile_Terminated_ReturnsError(t *testing.T) {
 		json.NewEncoder(w).Encode(youtubeVideosResponse{
 			Items: []youtubeVideo{
 				{
-					ID: "yt-async-video-id",
-					Snippet: youtubeVideoSnippet{ChannelID: "UCexpected"},
+					ID:                "yt-async-video-id",
+					Snippet:           youtubeVideoSnippet{ChannelID: "UCexpected"},
 					ProcessingDetails: &youtubeVideoProcessingDetails{ProcessingStatus: "terminated"},
 				},
 			},
@@ -697,7 +698,7 @@ func TestYouTubeAsyncPublish_CheckPublishStatus_ReturnsStatus(t *testing.T) {
 		json.NewEncoder(w).Encode(youtubeVideosResponse{
 			Items: []youtubeVideo{
 				{
-					ID: "yt-async-video-id",
+					ID:                "yt-async-video-id",
 					ProcessingDetails: &youtubeVideoProcessingDetails{ProcessingStatus: "succeeded"},
 				},
 			},
@@ -923,6 +924,84 @@ func TestYouTubeValidateChannelBinding_Transient5xx(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "503") {
 		t.Errorf("expected message to include status code 503, got %q", err.Error())
+	}
+}
+
+// TestYouTubeValidateChannelBinding_PaginationAcrossThreePages
+// verifies the pagination behaviour introduced by the rewrite of
+// ValidateChannelBinding: a grant whose expected channel id lives
+// ONLY on the third page of channels.list?mine=true (i.e. position
+// >50 in the manager's channel set) is correctly recognized. The
+// stateful httptest handler returns three pages:
+//   page 1 (no pageToken)        : 50 channels (no expected)
+//   page 2 (pageToken=page2t)    : 50 channels (no expected)
+//   page 3 (pageToken=page3t)    : 10 channels, expected at index 5
+// Without pagination the old single-GET path would have invisibly
+// truncated at page 1 → ErrYouTubeChannelMismatch. With pagination,
+// the loop follows nextPageToken through all three, finds the
+// expected, and returns nil.
+//
+// Side-checks:
+//   - handler.calls == 3 confirms the loop actually paged (and not
+//     a single-shot GET that happened to find the expected by luck).
+//   - The handler's last query string must carry pageToken=page3t —
+//     guards against an off-by-one where pagination stops at page 2.
+func TestYouTubeValidateChannelBinding_PaginationAcrossThreePages(t *testing.T) {
+	const expected = "UCexpectedChanIDp3" // unique to page 3, index 5
+
+	var handlerCalls int
+	var lastPageToken string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		handlerCalls++
+		lastPageToken = r.URL.Query().Get("pageToken")
+
+		var (
+			items         []youtubeChannel
+			nextPageToken string
+		)
+		switch lastPageToken {
+		case "":
+			items = make([]youtubeChannel, 50)
+			for i := range items {
+				items[i] = youtubeChannel{ID: fmt.Sprintf("UCp1-%03d", i)}
+			}
+			nextPageToken = "page2t"
+		case "page2t":
+			items = make([]youtubeChannel, 50)
+			for i := range items {
+				items[i] = youtubeChannel{ID: fmt.Sprintf("UCp2-%03d", i)}
+			}
+			nextPageToken = "page3t"
+		default: // page3t — final page
+			items = make([]youtubeChannel, 10)
+			for i := range items {
+				if i == 5 {
+					items[i] = youtubeChannel{ID: expected}
+				} else {
+					items[i] = youtubeChannel{ID: fmt.Sprintf("UCp3-%03d", i)}
+				}
+			}
+			// nextPageToken deliberately empty — final page
+		}
+
+		_ = json.NewEncoder(w).Encode(youtubeChannelsResponse{
+			Items:         items,
+			NextPageToken: nextPageToken,
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	if err := svc.ValidateChannelBinding(context.Background(), "fresh-access-token", expected); err != nil {
+		t.Fatalf("expected nil (expected channel is on page 3), got: %v", err)
+	}
+	if handlerCalls != 3 {
+		t.Errorf("expected 3 server hits (page1 + page2 + page3), got %d", handlerCalls)
+	}
+	if lastPageToken != "page3t" {
+		t.Errorf("expected last request to carry pageToken=page3t, got %q", lastPageToken)
 	}
 }
 
@@ -1279,7 +1358,6 @@ func TestYouTubeBindGrantToChannel_Transient5xx_NoSentinelMisclassification(t *t
 		t.Errorf("error should surface the upstream status for the worker's logged breadcrumb, got %q", err.Error())
 	}
 }
-
 
 // TestYouTubeDiscoverAccounts_Pagination verifies that DiscoverAccounts
 // follows nextPageToken to collect all channels across multiple pages.
