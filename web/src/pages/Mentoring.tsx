@@ -64,7 +64,7 @@ const PACKAGES = [
   {
     title: "Starter Mentoring",
     tagline: "For creators starting from zero",
-    pricing: "Free trial · then billed per session",
+    pricing: "InstaEdit Pro included · billed per session",
     features: [
       "4 one-on-one 45-minute sessions",
       "Channel and editorial calendar audit",
@@ -77,7 +77,7 @@ const PACKAGES = [
   {
     title: "Growth Mentoring",
     tagline: "For those who want to move to the next level",
-    pricing: "Billed per package · monthly subscription",
+    pricing: "Billed per package · quarterly engagement",
     features: [
       "8 one-on-one 60-minute sessions",
       "Content strategy and monthly editorial plan",
