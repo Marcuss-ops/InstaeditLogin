@@ -1005,6 +1005,58 @@ func TestYouTubeValidateChannelBinding_PaginationAcrossThreePages(t *testing.T) 
 	}
 }
 
+// TestYouTubeValidateChannelBinding_FailureMidPagination verifies the
+// transient contract is preserved across pagination boundaries: page 1
+// succeeds with a non-matching set + nextPageToken, page 2 returns a
+// transient 5xx. The function MUST return a plain wrapped error NOT
+// wrapping ErrYouTubeChannelMismatch so the worker treats it as
+// transient and does NOT flip the platform_account to reauth_required.
+// The page-1 5xx case is already covered by
+// TestYouTubeValidateChannelBinding_Transient5xx; this test covers the
+// post-pagination failure path that did not exist before the
+// pagination rewrite — a regression there would silently expand the
+// failure surface into reauth territory.
+//
+// Also asserts handler.calls == 2 so a future off-by-one that issues
+// a page-3 GET after page-2's 503 would be caught.
+func TestYouTubeValidateChannelBinding_FailureMidPagination(t *testing.T) {
+	var handlerCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/youtube/v3/channels", func(w http.ResponseWriter, r *http.Request) {
+		handlerCalls++
+		switch r.URL.Query().Get("pageToken") {
+		case "": // page 1 — succeeds with 50 non-matching channels
+			items := make([]youtubeChannel, 50)
+			for i := range items {
+				items[i] = youtubeChannel{ID: fmt.Sprintf("UCnomatch-%03d", i)}
+			}
+			_ = json.NewEncoder(w).Encode(youtubeChannelsResponse{
+				Items:         items,
+				NextPageToken: "page2t",
+			})
+		default: // page 2 — transient 5xx
+			http.Error(w, "google internal error", http.StatusServiceUnavailable)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	err := svc.ValidateChannelBinding(context.Background(), "fresh-access-token", "UCexpectedChanID")
+	if err == nil {
+		t.Fatalf("expected error on mid-loop 5xx, got nil")
+	}
+	if errors.Is(err, ErrYouTubeChannelMismatch) {
+		t.Errorf("mid-loop 5xx MUST NOT wrap ErrYouTubeChannelMismatch (worker would flag reauth on transient); got %v", err)
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("expected error message to include status code 503, got %q", err.Error())
+	}
+	if handlerCalls != 2 {
+		t.Errorf("expected exactly 2 server hits (page1 + aborted page2), got %d", handlerCalls)
+	}
+}
+
 // TestYouTubeValidateChannelBinding_EmptyExpectedChannelID verifies
 // the empty-input guard: an empty expectedChannelID returns an error
 // without any HTTP round-trip.
