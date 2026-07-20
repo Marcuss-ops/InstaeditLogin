@@ -182,7 +182,7 @@ Since **1° giugno 2026**, YouTube charges `videos.insert` against its
 own dedicated "Video Uploads" bucket instead of the older shared
 "units" budget that mixed read + write calls under one number. The math
 this doc used to print (`10,000 units/day default ÷ 1,600 units per call
-= 6 videos.insert/day`) is **obsolete as of 2026-06-01**.
+= ~6 videos.insert/day (LEGACY pre-2026 / 1600 math; current 2026 model: 1 video = 1 bucket unit, default 100/day)`) is **obsolete as of 2026-06-01**.
 
 * **Cost per call**: `1` bucket unit per `videos.insert`.
 * **Default daily cap**: `100` `videos.insert` per Google Cloud project
@@ -190,7 +190,7 @@ this doc used to print (`10,000 units/day default ÷ 1,600 units per call
   app, way too tight for a 200-channel operator fleet).
 * **Multiplier**: bucket units are spent 1-to-1 against `videos.insert`.
   Adding `N` bucket units to the daily cap buys exactly `N` more daily
-  `videos.insert` calls. The legacy `units × 1600` / `÷ 1600` arithmetic
+  `videos.insert` calls. The legacy `units [×*] 1600` / `[/÷] 1600` arithmetic (pre-2026-06-01); current 2026 model: 1 video = 1 bucket unit
   you may see elsewhere in the Google docs does NOT apply to this
   bucket.
 * **Scope (very important)**: this bucket is **per Google Cloud project**,
