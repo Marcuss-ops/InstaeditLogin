@@ -156,7 +156,7 @@ post_target is marked `'failed'`, the publish queue stops retrying,
 and the operator must complete a full new OAuth dance against Google
 (consent click → new refresh_token grant) to recover the channel.
 There is no in-app bypass — no admin "flips the flag back" route,
-no auto-retry that escapes the cap, no 6th-manager overflow lane.
+no auto-retry that escapes the cap, no 5th-manager overflow lane.
 
 Per the actual code path, the failure is therefore STRICTLY WORSE
 than a wrong-target upload: a wrong-target upload would still show
