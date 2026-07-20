@@ -564,9 +564,15 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	// worker treats Inspect as best-effort: tolerate ErrInspectNotImplemented
 	// as a soft no-op (no metadata means Open is the only source of
 	// truth for ingest invariants).
+	//
+	// `md` is lifted to outer scope (Task 4/10) so the build-policy
+	// block below can use SHA256Hex (Drive's sha256Checksum) when
+	// RequireSHA is gated on the surface-declared value.
 	var sizeBytes int64
 	var contentType string
-	if md, inspectErr := src.Inspect(ctx, job); inspectErr == nil && md != nil {
+	var md *SourceMetadata
+	if inspectMd, inspectErr := src.Inspect(ctx, job); inspectErr == nil && inspectMd != nil {
+		md = inspectMd
 		sizeBytes = md.SizeBytes
 		contentType = md.MimeType
 	} else if inspectErr != nil && !errors.Is(inspectErr, ErrInspectNotImplemented) {
@@ -590,32 +596,54 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 		return fmt.Errorf("source returned unknown or zero size for job %d; cannot import", job.ID)
 	}
 
-	// (3.5) Velox-scope SHA + size verification AT THE WORKER LAYER.
-	// The simpler Open(io.ReadCloser) signature moved the streaming
-	// hasher + size-guard OUT of the source per the registry refactor;
-	// we restore them here for Velox rows so the integrity invariants
-	// aren't regressed. Other SourceType paths use Inspect's size
-	// alone — Drive surfaces SHA-256 too but defense-in-depth says
-	// hash during Open; that follow-up isn't blocking this commit.
-	var verifyReader *veloxVerifyReader
-	var verifyExpectedSize int64
-	var verifyExpectedSHA string
-	if job.SourceType == models.UploadJobSourceVeloxArtifact && w.deliveryVerifier != nil {
-		expSize, expSHA, vErr := w.deliveryVerifier.GetExpectedTripleByUploadJobID(ctx, job.ID)
-		switch {
-		case vErr == nil && expSize > 0:
-			verifyReader = NewVeloxVerifyReader(srcBody, expSize)
-			verifyExpectedSize = expSize
-			verifyExpectedSHA = expSHA
-			srcBody = verifyReader // S3 PUT now reads via the verify wrapper
-		case IsDeliveryVerificationSkipErr(vErr):
-			// linked row missing OR empty triple (peek-ordering race
-			// or legacy row without a triple) — best-effort no-op
-		default:
-			// asset row not yet created at this code path (build-key + Create runs after Open)
-			return fmt.Errorf("velox: load expected triple: %w", vErr)
-		}
+	// (3.5) GENERIC ArtifactVerificationPolicy AT THE WORKER LAYER
+	// (Task 4/10). The prior Velox-only VeloxVerifyReader is replaced
+	// by the unified artifactVerifyReader used by BOTH Velox and
+	// Drive source paths. The policy is built per-source:
+	//   * Velox: canonical ExpectedSize + ExpectedSHA256 from the
+	//     external_deliveries row (via deliveryVerifier); RequireSHA=true
+	//     unless the row is missing/legacy (skip-or-best-effort path).
+	//   * Drive: ExpectedSize + ExpectedMIME from Inspect; ExpectedSHA256
+	//     from sha256Checksum when present, RequireSHA accordingly.
+	// "Drive verification is a follow-up" is no longer true as of
+	// Task 4/10 — Drive with declared sha256Checksum now feeds the
+	// policy and a mismatch causes MarkFailed + the post never
+	// publishes.
+	policy := models.ArtifactVerificationPolicy{
+		ExpectedSize: sizeBytes,
+		ExpectedMIME: contentType,
 	}
+	switch job.SourceType {
+	case models.UploadJobSourceVeloxArtifact:
+		if w.deliveryVerifier != nil {
+			expSize, expSHA, vErr := w.deliveryVerifier.GetExpectedTripleByUploadJobID(ctx, job.ID)
+			switch {
+			case vErr == nil && expSize > 0:
+				// Prefer the canonical external_deliveries row over
+				// Inspect's HEAD — they're the producer's authoritative
+				// triple; Inspect is the network probe (best-effort).
+				policy.ExpectedSize = expSize
+				policy.ExpectedSHA256 = expSHA
+				policy.RequireSHA = true
+			case IsDeliveryVerificationSkipErr(vErr):
+				// peek-ordering race / legacy row — best-effort no-op
+			default:
+				return fmt.Errorf("velox: load expected triple: %w", vErr)
+			}
+		}
+	case models.UploadJobSourceAuthenticatedDrive:
+		if md != nil {
+			policy.ExpectedSHA256 = md.SHA256Hex
+			policy.RequireSHA = md.SHA256Hex != ""
+		}
+	default:
+		// best-effort no-op for unmapped / future sources
+	}
+	verifyReader, err := NewArtifactVerifyReader(srcBody, policy)
+	if err != nil {
+		return fmt.Errorf("wrap body for verification: %w", err)
+	}
+	srcBody = verifyReader // S3 PUT now reads via the verify wrapper
 
 	// Build S3 key and create pending media asset.
 	key := services.BuildUploadKey(job.UserID, job.SourceID)
@@ -654,16 +682,15 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	}
 	uploadResp.Body.Close()
 
-	// Velox post-Read SHA + size verification. MUST run AFTER
+	// POST-stream artifact verification (Task 4/10). MUST run AFTER
 	// s3Client.Do has fully drained srcBody + BEFORE MarkReady /
-	// MarkIngested so a SHA or size mismatch fails loud before
-	// the row transitions to ready_to_publish (artifacts must
-	// remain trustworthy at ingest).
-	if verifyReader != nil {
-		if vErr := verifyReader.Verify(verifyExpectedSize, verifyExpectedSHA); vErr != nil {
-			_ = w.mediaStore.MarkFailedWithReason(asset.ID, vErr.Error(), vErr)
-			return fmt.Errorf("velox post-ingest verification: %w", vErr)
-		}
+	// MarkIngested so a SHA or size mismatch fails loud before the
+	// row transitions to ready_to_publish. Both Velox and Drive
+	// paths share this single gate. The defer srcBody.Close() above
+	// covers verifyReader.Close() since `srcBody = verifyReader`.
+	if vErr := verifyReader.Verify(); vErr != nil {
+		_ = w.mediaStore.MarkFailedWithReason(asset.ID, vErr.Error(), vErr)
+		return fmt.Errorf("artifact verification: %w", vErr)
 	}
 	if uploadResp.StatusCode >= 300 {
 		reason := fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode)
@@ -677,7 +704,23 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 		_ = w.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		return fmt.Errorf("verify s3 upload: %w", err)
 	}
-	if err := w.mediaStore.MarkReady(asset.ID, "", verifiedSize, verifiedContentType); err != nil {
+	// Boundary MIME check: S3-reported content_type must match the
+	// policy's ExpectedMIME (typically the upstream-declared mime).
+	// A mismatch means the upstream lied about the bytes — fail loud
+	// instead of marking the asset ready so the operator-triage
+	// dashboard can surface the upstream-side regression.
+	if policy.ExpectedMIME != "" && verifiedContentType != policy.ExpectedMIME {
+		reason := fmt.Sprintf("mime mismatch (expected %q, S3 returned %q)", policy.ExpectedMIME, verifiedContentType)
+		_ = w.mediaStore.MarkFailedWithReason(asset.ID, reason, errors.New(reason))
+		return fmt.Errorf("%s", reason)
+	}
+	// MarkReady now receives the LOCALLY-COMPUTED SHA — always,
+	// even when RequireSHA=false — so media_assets.sha256 stores the
+	// authoritative hash for downstream re-verification. The repo
+	// already handles "COALESCE(NULLIF($2, ''), sha256)" so a
+	// non-empty local SHA always overwrites the existing row's
+	// empty sha256 with the truth source.
+	if err := w.mediaStore.MarkReady(asset.ID, verifyReader.ActualSHA256Hex(), verifiedSize, verifiedContentType); err != nil {
 		return fmt.Errorf("mark media asset ready: %w", err)
 	}
 

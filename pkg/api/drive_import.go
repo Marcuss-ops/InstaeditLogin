@@ -13,6 +13,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 )
 
 // driveImportS3UploadTimeout is the HTTP client timeout for streaming
@@ -306,7 +307,25 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	}
 	defer downloadResp.Body.Close()
 
-	uploadReq, err := http.NewRequestWithContext(req.Context(), http.MethodPut, grant.UploadURL, downloadResp.Body)
+	// Task 4/10: wrap the Drive download body in the GENERIC
+	// ArtifactVerificationPolicy reader so the API path enforces
+	// the same size + SHA + MIME invariants as the worker pull-path.
+	// Drive files with sha256Checksum in metadata → RequireSHA=true;
+	// without → RequireSHA=false (compute-and-persist local SHA).
+	policy := models.ArtifactVerificationPolicy{
+		ExpectedSize:   sizeBytes,
+		ExpectedSHA256: fileMeta.SHA256Checksum,
+		ExpectedMIME:   fileMeta.MimeType,
+		RequireSHA:     fileMeta.SHA256Checksum != "",
+	}
+	verifyReader, err := worker.NewArtifactVerifyReader(downloadResp.Body, policy)
+	if err != nil {
+		_ = r.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
+		writeError(w, http.StatusInternalServerError, "failed to wrap drive body for verification: "+err.Error())
+		return
+	}
+
+	uploadReq, err := http.NewRequestWithContext(req.Context(), http.MethodPut, grant.UploadURL, verifyReader)
 	if err != nil {
 		_ = r.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
 		writeError(w, http.StatusInternalServerError, "failed to build s3 upload request: "+err.Error())
@@ -325,10 +344,24 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	uploadResp.Body.Close()
+	// verifyReader.Close() is covered by `defer downloadResp.Body.Close()`
+	// (the wrapped readcloser's Close chains through to the underlying).
+	// We dropped the redundant explicit Close call to keep the defer as
+	// the single source of truth.
 	if uploadResp.StatusCode >= 300 {
 		reason := fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode)
 		_ = r.mediaStore.MarkFailedWithReason(asset.ID, reason, errors.New(reason))
 		writeError(w, http.StatusBadGateway, reason)
+		return
+	}
+
+	// POST-stream artifact verification (Task 4/10). Same gate
+	// as the worker pull-path enforces; surfacing a PermanentError
+	// 422 lets the operator-triage dashboard catch Drive-side
+	// SHA drift / corruption instead of marking a broken asset ready.
+	if vErr := verifyReader.Verify(); vErr != nil {
+		_ = r.mediaStore.MarkFailedWithReason(asset.ID, vErr.Error(), vErr)
+		writeError(w, http.StatusUnprocessableEntity, "drive file verification failed: "+vErr.Error())
 		return
 	}
 
@@ -339,7 +372,24 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadGateway, "failed to verify s3 upload: "+err.Error())
 		return
 	}
-	if err := r.mediaStore.MarkReady(asset.ID, "", verifiedSize, verifiedContentType); err != nil {
+	// Boundary MIME check: S3-reported content_type must match the
+	// policy's ExpectedMIME (the Drive-declared mime). A mismatch
+	// means the upstream lied about the bytes — fail loud instead of
+	// marking the asset ready so the operator-triage dashboard can
+	// surface the upstream-side regression.
+	if policy.ExpectedMIME != "" && verifiedContentType != policy.ExpectedMIME {
+		reason := fmt.Sprintf("mime mismatch (expected %q, S3 returned %q)", policy.ExpectedMIME, verifiedContentType)
+		_ = r.mediaStore.MarkFailedWithReason(asset.ID, reason, errors.New(reason))
+		writeError(w, http.StatusUnprocessableEntity, reason)
+		return
+	}
+	// MarkReady now receives the LOCALLY-COMPUTED SHA — always,
+	// even when RequireSHA=false — so media_assets.sha256 stores the
+	// authoritative hash for downstream re-verification. The repo
+	// already handles "COALESCE(NULLIF($2, ''), sha256)" so a
+	// non-empty local SHA always overwrites the prior row's empty
+	// sha256 with the truth source.
+	if err := r.mediaStore.MarkReady(asset.ID, verifyReader.ActualSHA256Hex(), verifiedSize, verifiedContentType); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mark media asset ready: "+err.Error())
 		return
 	}

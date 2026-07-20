@@ -88,3 +88,47 @@ type MediaAsset struct {
 	CreatedAt    time.Time        `json:"created_at"`
 	UpdatedAt    time.Time        `json:"updated_at"`
 }
+
+// ArtifactVerificationPolicy is the worker / API path integrity
+// gate for Velox + Drive-sourced ingest flows (Task 4/10). Each
+// source contributes the values it can declare authoritatively;
+// the artifactVerifyReader (internal/worker/artifact_verify.go)
+// enforces size + SHA DURING the streaming pass, and the caller
+// enforces the boundary MIME comparison (S3-reported
+// content_type vs ExpectedMIME) before MarkReady.
+//
+// Field semantics:
+//
+//   - ExpectedSize   source-declared byte count of the artifact.
+//     Set to 0 to disable the size-cap gate entirely (the stream
+//     drains to EOF unconstrained; size verification is a no-op
+//     downstream). Required > 0 for the worker's hard size-cap
+//     guard against runaway upstreams.
+//
+//   - ExpectedSHA256 source-declared SHA-256 of the artifact,
+//     lowercase hex, 64 chars (per the canonical validation in
+//     worker/verification_helpers.go). Empty string is allowed
+//     only when RequireSHA=false; the verifier computes a local
+//     SHA in all cases (always passed to MarkReady so the
+//     media_assets row carries the truth source for downstream
+//     re-verification).
+//
+//   - ExpectedMIME   source-declared content type. Empty string
+//     disables the boundary MIME comparison (callers should NOT
+//     do the boundary check when empty). MIME is enforced at
+//     the boundary, not during streaming — the verifier can't
+//     detect content-type from raw bytes without http.DetectContentType
+//     overhead per chunk.
+//
+//   - RequireSHA     when true, ExpectedSHA256 MUST be a non-empty
+//     64-char lowercase hex AND the streamed bytes must hash to
+//     it. When false, the SHA comparison is skipped entirely
+//     (allowed for sources whose SHA isn't end-to-end
+//     authoritative — e.g. Drive files older than the
+//     sha256Checksum release).
+type ArtifactVerificationPolicy struct {
+	ExpectedSize   int64
+	ExpectedSHA256 string
+	ExpectedMIME   string
+	RequireSHA     bool
+}

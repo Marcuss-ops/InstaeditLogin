@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -88,7 +89,14 @@ func (s *AuthenticatedDriveSource) Inspect(ctx context.Context, job *models.Uplo
 		SizeBytes: size,
 		MimeType:  md.MimeType,
 		ETag:      md.SHA256Checksum, // Drive API surfaces SHA-256; we use it as cache validator
-		SHA256Hex: "",                 // Defense-in-depth: worker re-derives during Open
+		// Task 4/10: surface Drive-declared SHA so the worker's
+		// ArtifactVerificationPolicy includes RequireSHA=true when
+		// Drive returned a sha256Checksum. Absent → RequireSHA=false
+		// (compute-and-persist local SHA only, no upstream comparison).
+		// Defense-in-depth is preserved: artifactVerifyReader STILL
+		// hashes the streamed bytes for ActualSHA256Hex even when
+		// upstream-declared SHA is absent or mismatches.
+		SHA256Hex: strings.ToLower(md.SHA256Checksum),
 	}, nil
 }
 
