@@ -37,8 +37,8 @@ type fakeBinder struct {
 	validateErr     error
 }
 
-func (b *fakeBinder) Name() string         { return b.name }
-func (b *fakeBinder) provideName() string  { return b.name } // satisfies any near-interface typo guard
+func (b *fakeBinder) Name() string        { return b.name }
+func (b *fakeBinder) provideName() string { return b.name } // satisfies any near-interface typo guard
 
 func (b *fakeBinder) ValidateChannelBinding(_ context.Context, accessToken, expectedChannelID string) error {
 	b.validateCalls.Add(1)
@@ -435,5 +435,86 @@ func TestAuthorizeChannel_SecondTokenFailureRollsBackFirstAndOCR(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sqlmock expectations: %v", err)
+	}
+}
+
+// TestAuthorizeChannel_ReauthKeepsSameOAuthConnection exercises the
+// "doppia autorizzazione stesso canale" hardening requirement: when
+// the operator re-runs the OAuth dance for a channel that is already
+// 'active' (refresh-token rotation), the atomic flow MUST:
+//
+//  1. Reuse the SAME oauth_connections row (UPSERT keyed on the
+//     (user_id, provider, provider_resource_id) tuple returns the
+//     existing id, not a brand-new one).
+//  2. Fire the token pruner DELETE on the older tokens so the new
+//     grant does not silently accumulate.
+// 3. Re-promote the platform_account (status='active' is a stable
+//     re-write — same status, refreshed connected_at + last_validated_at).
+//
+// If the UPSERT returned a NEW id, refresh-token rotation would
+// silently orphan the previous oauth_connection and leave two rows
+// for the same platform_user_id — a 'refresh-tokened channel now has
+// credentials stored against TWO oauth_connection rows' bug class.
+// The test asserts both that the function returns the same id from
+// both calls AND that the second call's transition is from
+// 'active' (per the eligibility gate), not 'pending_authorization'.
+func TestAuthorizeChannel_ReauthKeepsSameOAuthConnection(t *testing.T) {
+	svc, mock, _, cleanup := newSvcHarness(t)
+	defer cleanup()
+
+	const accountID, userID, oauthConnID int64 = 7, 99, 555
+	scopes := []string{"https://www.googleapis.com/auth/youtube.upload"}
+	token := &models.TokenData{
+		AccessToken:  "rotated-access",
+		RefreshToken: "rotated-refresh",
+		TokenType:    models.TokenTypeBearer,
+		ExpiresIn:    3600,
+		Scopes:       scopes,
+	}
+
+	// First pass: from pending_authorization → active.
+	mock.ExpectBegin()
+	expectLoadAccount(mock, accountID, userID, "youtube", "UCabcdefghijklmnopqrstuv", models.AccountStatusPendingAuthorization)
+	expectUpsertOCR(mock, userID, "youtube", "UCabcdefghijklmnopqrstuv", scopes, oauthConnID)
+	expectInsertTokenTx(mock)
+	expectPromoteAccount(mock, oauthConnID, accountID)
+	mock.ExpectCommit()
+
+	// Second pass: from active → active (refresh-token rotation).
+	// ExpectUpsertOCR returns the SAME oauthConnID (555) to signal
+	// the UPSERT keyed on the natural composite key recognised
+	// the existing row.
+	mock.ExpectBegin()
+	expectLoadAccount(mock, accountID, userID, "youtube", "UCabcdefghijklmnopqrstuv", models.AccountStatusActive)
+	expectUpsertOCR(mock, userID, "youtube", "UCabcdefghijklmnopqrstuv", scopes, oauthConnID)
+	expectInsertTokenTx(mock) // includes pruner DELETE
+	expectPromoteAccount(mock, oauthConnID, accountID)
+	mock.ExpectCommit()
+
+	got1, err1 := svc.AuthorizeChannel(context.Background(),
+		accountID, "", scopes, token,
+	)
+	if err1 != nil {
+		t.Fatalf("first AuthorizeChannel: %v", err1)
+	}
+	if got1 != oauthConnID {
+		t.Fatalf("first AuthorizeChannel returned oauth_connection_id: want %d, got %d", oauthConnID, got1)
+	}
+
+	got2, err2 := svc.AuthorizeChannel(context.Background(),
+		accountID, "", scopes, token,
+	)
+	if err2 != nil {
+		t.Fatalf("second AuthorizeChannel (re-auth): %v", err2)
+	}
+	if got2 != oauthConnID {
+		t.Fatalf("second AuthorizeChannel returned oauth_connection_id: want %d (SAME as first — refresh-token rotation MUST reuse the row), got %d", oauthConnID, got2)
+	}
+	if got1 != got2 {
+		t.Errorf("re-auth drifted away from first oauth_connection_id: first=%d, second=%d", got1, got2)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v (the second flow MUST reuse the same UPSERT SQL (same ocr ID) AND fire the pruner DELETE)", err)
 	}
 }

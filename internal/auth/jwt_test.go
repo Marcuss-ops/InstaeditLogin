@@ -359,3 +359,69 @@ func TestCrossEnv_IssuerNoEnv_VerifierWithEnv_StillEnforced(t *testing.T) {
 		t.Fatalf("Verify(issuer-no-env -> verifier-prod): want errCrossEnvMismatch, got %v", verr)
 	}
 }
+
+// TestVerifyConnectLinkState_ExpiredReturnsErrMalformed pins the
+// HARDENING requirement from the connect-link spec: a state JWT whose
+// ExpiresAt has passed MUST be rejected with ErrMalformedConnectLinkState
+// so the OAuth callback can map it to a 4xx (vs. a 5xx for unrelated
+// parse failures). The Manager's IssueConnectLinkState hardcodes a
+// 30-minute TTL so a real-time sleep would be slow + flaky — instead
+// we hand-craft the JWT via the same jwt-go SignedString the
+// production code uses, with ExpiresAt = now-1h, and confirm the
+// rejection path.
+//
+// Why hand-craft vs. IssueConnectLinkState with TTL trick:
+//   - IssueConnectLinkState does not expose a ttl parameter; the 30
+//     minutes is hardcoded to keep the production call-site narrow.
+//   - Reaching inside Manager to forge an expired token at the same
+//     SecretString boundary a real attacker would need to bypass
+//     proves the rejection is a PARSER-level check, not a Manager
+//     convenience.
+func TestVerifyConnectLinkState_ExpiredReturnsErrMalformed(t *testing.T) {
+	m := NewManager(testSecret, 24)
+	claims := ConnectLinkStateClaims{
+		StateType:         "connect_link",
+		ExpectedChannelID: "UC1234567890abcdefghij",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "instaeditlogin",
+			Audience:  jwt.ClaimStrings{"api"},
+			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-2 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-1 * time.Hour)), // expired 1h ago
+		},
+	}
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("forge expired state JWT: %v", err)
+	}
+	_, verr := m.VerifyConnectLinkState(signed)
+	if verr == nil {
+		t.Fatal("VerifyConnectLinkState on expired state: want error, got nil")
+	}
+	if !errors.Is(verr, ErrMalformedConnectLinkState) {
+		t.Errorf("VerifyConnectLinkState on expired state: want errors.Is(ErrMalformedConnectLinkState), got %v", verr)
+	}
+}
+
+// TestVerifyConnectLinkState_FreshStateRoundTrips is the positive
+// control that pairs with TestVerifyConnectLinkState_ExpiredReturnsErrMalformed:
+// if a regression DROPS the ExpiresAt check (so the parser stops
+// flagging expired states), the rejected test still passes because
+// errors.Is is satisfied by ANY parse error. This test asserts
+// the manager happily accepts a freshly minted state AND returns
+// the original expected_channel_id, so the rejection case above
+// has a working positive baseline in the same file.
+func TestVerifyConnectLinkState_FreshStateRoundTrips(t *testing.T) {
+	m := NewManager(testSecret, 24)
+	const wantChannel = "UC1234567890abcdefghij"
+	signed, err := m.IssueConnectLinkState(wantChannel)
+	if err != nil {
+		t.Fatalf("IssueConnectLinkState: %v", err)
+	}
+	gotChannel, verr := m.VerifyConnectLinkState(signed)
+	if verr != nil {
+		t.Fatalf("VerifyConnectLinkState on fresh state: want nil err, got %v", verr)
+	}
+	if gotChannel != wantChannel {
+		t.Errorf("ExpectedChannelID: want %q, got %q", wantChannel, gotChannel)
+	}
+}
