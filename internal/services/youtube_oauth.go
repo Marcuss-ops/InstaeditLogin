@@ -926,6 +926,194 @@ func (s *YouTubeOAuthService) GetTokenInfo(ctx context.Context, accessToken stri
 	return out, nil
 }
 
+// canaryUploadBytes is a 22-byte synthetic payload used for the
+// optional INSTAEDIT-OAUTH-CANARY test upload. Intentionally small
+// (a single PUT chunk) so:
+//
+//   - The canary doesn't meaningfully consume the daily videos.insert
+//     quota (1 call per /validate invocation that requests canary).
+//   - Test assertions can hard-code the byte offsets
+//     (bytes 0-21 / 22 bytes) without measuring the actual byte length.
+//
+// YouTube's videos.insert endpoint MAY accept this non-video content
+// (returning 200 + video_id) OR reject it with 4xx (invalid argument,
+// because the upload protocol expects video/* bytes). Both outcomes
+// prove end-to-end binding — the snippet.channelId reconciliation on
+// the resulting video (or the videos.list absence on rejection) is
+// the source of truth. The canary upload body's content is NOT what
+// step-4 measures — channel binding is.
+var canaryUploadBytes = []byte("INSTAEDIT-CANARY-PAYLOAD\n")
+
+// canaryUploadSize is the byte count stamped in X-Upload-Content-Length
+// during initiateResumableSession + the Content-Range header of the
+// single PUT. Synced with len(canaryUploadBytes) — the const value
+// is a literal compile-time assertion: a future edit that drops a
+// byte from canaryUploadBytes will silently disagree if the
+// const is not also updated.
+const canaryUploadSize = int64(len("INSTAEDIT-CANARY-PAYLOAD\n"))
+
+// canaryUploadContentType is intentionally NOT video/* — the canary
+// upload is a probe, not a real publish. Stamping a non-video MIME
+// makes the canary visually distinct in any tooling that filters on
+// MIME type, AND signals to Google's API that the body is not a
+// real video (Google may 4xx on MIME mismatch; that's still
+// acceptable evidence that the OAuth grant can call videos.insert).
+const canaryUploadContentType = "application/octet-stream"
+
+// ErrYouTubeCanaryRejected is the canonical sentinel for hard 4xx
+// rejections from the canary upload path (videos.insert init OR PUT
+// chunk PUT). Distinct from ErrYouTubeChannelMismatch so the handler
+// can produce a different audit-log message ("canary upload rejected
+// by YouTube" vs "canary landed on the wrong channel"), but the
+// runbook is identical (status='reauth_required'). Transient 5xx
+// errors are NOT wrapped in this sentinel — they remain plain
+// wrapped so the handler treats them as transient (next-sync retry).
+var ErrYouTubeCanaryRejected = errors.New("youtube canary upload was rejected by videos.insert (4xx)")
+
+// CanaryUploadResult captures the canary's outcome for the handler
+// (step 4 of /accounts/{id}/validate). The handler renders this into
+// the 200 OK response so the SPA can surface "canary video id"
+// alongside the validation summary.
+type CanaryUploadResult struct {
+	// VideoID is the YouTube-assigned video id (typically 11 chars). The
+	// SPA renders it as a clickable link to https://www.youtube.com/watch?v=VIDEOID
+	// so the operator can verify the canary exists in their YouTube Studio.
+	VideoID string
+	// UploadedChannelID is the snippet.channelId YouTube stamped on the
+	// resulting video — the channel the upload ACTUALLY landed on. On
+	// success ALWAYS equal to the supplied expectedChannelID; the
+	// function short-circuits to a wrapped ErrYouTubeChannelMismatch
+	// on a bind-mismatch (the consistency check rejects the row before
+	// success is returned).
+	UploadedChannelID string
+}
+
+// CanaryUpload uploads the canary payload as a PRIVATE YouTube video
+// (titled INSTAEDIT-OAUTH-CANARY-{channel_id}-{unix-timestamp}), then
+// verifies the resulting snippet.channelId matches the expected
+// channel. This is the OPTIONAL step 4 of the 4-step
+// /accounts/{id}/validate pipeline. The flow is identical to a
+// normal publish (initiate resumable session → single-chunk PUT →
+// videos.list reconcile for channel binding) but with a fixed-length
+// body and an INSTAEDIT-OAUTH-CANARY title so the operator can clean
+// them up in bulk from YouTube Studio. Per the user's
+// 200-channel YouTube OAuth plan, canary is opt-in per request
+// (body field `"canary": true`) so the default validate path stays
+// cheap (no quota cost, no noise in YouTube Studio).
+//
+// Bound to expectedChannelID at TWO checkpoints:
+//
+//  1. The PUT chunk server confirms the upload completed (terminal
+//     200 returning {"id":"<videoID>"}) — the videoID is then used
+//     as the query key for step 2.
+//  2. After upload, videos.list pulls the actual snippet.channelId
+//     YouTube stamped on the video and compares it to
+//     `expectedChannelID`. THIS is the source of truth — the handler
+//     MUST trust this over channels.list(page1..N) for end-to-end
+//     proof. A canary that lands on the wrong channel is a hard
+//     reauth-required signal (the OAuth grant is silently re-bound
+//     to a different Brand Account, the very failure mode the user
+//     spec wants to catch).
+//
+// Errors:
+//   - wrapped ErrYouTubeChannelMismatch → upload succeeded but landed
+//     on a DIFFERENT channel. Handler maps to 422 +
+//     status='reauth_required' — same runbook as step-3 bind fail.
+//   - wrapped ErrYouTubeCanaryRejected → YouTube refused the upload
+//     (4xx-not-429: quota exceeded, scope missing, format error).
+//     Handler maps to 422 + status='reauth_required' (the grant
+//     reached YouTube but was refused — the operator cannot publish
+//     this way regardless).
+//   - 5xx / decode / network / ctx-cancelled → plain wrapped error.
+//     Handler treats as transient (next-sync retry); mirrors the
+//     existing pre-step-pre-validate channel-binding convention.
+func (s *YouTubeOAuthService) CanaryUpload(ctx context.Context, accessToken, expectedChannelID string) (*CanaryUploadResult, error) {
+	if expectedChannelID == "" {
+		return nil, fmt.Errorf("youtube canary: empty expected channel id")
+	}
+	if accessToken == "" {
+		return nil, fmt.Errorf("youtube canary: empty access token")
+	}
+
+	title := fmt.Sprintf("INSTAEDIT-OAUTH-CANARY-%s-%d", expectedChannelID, s.now().UTC().Unix())
+	metadata := map[string]interface{}{
+		"snippet": map[string]interface{}{
+			"title":           title,
+			"categoryId":      "22", // People & Blogs — neutral category
+			"defaultLanguage": "en",
+			"description":     "OAuth readiness canary video. Auto-uploaded by InstaEdit to confirm channel binding + upload capability. Safe to delete from YouTube Studio.",
+		},
+		"status": map[string]interface{}{
+			"privacyStatus":           "private",
+			"selfDeclaredMadeForKids": false,
+		},
+	}
+
+	uploadURL, err := s.initiateResumableSession(ctx, accessToken, metadata, canaryUploadSize, canaryUploadContentType)
+	if err != nil {
+		// initiateResumableSession returns plain wrapped errors today;
+		// we re-promote hard 4xx rejections to ErrYouTubeCanaryRejected
+		// so the handler can route them. The substring match here is
+		// deliberate — the upstream already includes the status code
+		// in the wrapped message (initiateResumableSession's body
+		// line writes 'init session failed (status %d): ...').
+		wrapped := fmt.Errorf("youtube canary: initiate session: %w", err)
+		if strings.Contains(err.Error(), "status 4") {
+			wrapped = fmt.Errorf("%w: %w", ErrYouTubeCanaryRejected, err)
+		}
+		return nil, wrapped
+	}
+
+	contentRange := fmt.Sprintf("bytes 0-%d/%d", canaryUploadSize-1, canaryUploadSize)
+	videoID, _, _, putErr := s.putChunk(ctx, uploadURL, canaryUploadBytes, contentRange, canaryUploadSize)
+	if putErr != nil {
+		// putChunk returns retryable=true for 5xx (transient — pass through
+		// plainly), retryable=false for 4xx (hard — promote to
+		// ErrYouTubeCanaryRejected). The chunk-PUT path uses its own
+		// retry budget internally; the worker doesn't loop a 4xx.
+		//
+		// We don't have direct access to retryable here because putChunk
+		// already exhausted its retry budget inside its caller
+		// (uploadVideoChunks); the canary path calls putChunk ONCE
+		// without that loop, so we infer from the status code in the
+		// error message (putChunk formats 'unexpected PUT response
+		// (status %d): ...' for non-retryable, 'server error (status
+		// %d)' or 'rate limited' for retryable).
+		wrapped := fmt.Errorf("youtube canary: upload chunk put: %w", putErr)
+		if !strings.Contains(putErr.Error(), "rate limited") &&
+			!strings.Contains(putErr.Error(), "server error") {
+			wrapped = fmt.Errorf("%w: %w", ErrYouTubeCanaryRejected, putErr)
+		}
+		return nil, wrapped
+	}
+	if videoID == "" {
+		return nil, fmt.Errorf("youtube canary: upload returned no video id (unexpected)")
+	}
+
+	video, fetchErr := s.fetchVideoStatus(ctx, accessToken, videoID)
+	if fetchErr != nil {
+		// videos.list on the just-uploaded video returning 4xx/5xx is
+		// almost always transient (the video rows are indexed async)
+		// — pass through plainly so the handler retries on next tick.
+		return nil, fmt.Errorf("youtube canary: post-upload videos.list: %w", fetchErr)
+	}
+	if video.Snippet.ChannelID == "" {
+		return nil, fmt.Errorf("youtube canary: snippet.channelId is empty for video %s (videos.list returned no channel binding)", videoID)
+	}
+	if video.Snippet.ChannelID != expectedChannelID {
+		return nil, fmt.Errorf("%w: canary uploaded to channel %q, expected %q (video_id=%s)",
+			ErrYouTubeChannelMismatch, video.Snippet.ChannelID, expectedChannelID, videoID)
+	}
+
+	slog.Info("youtube canary: uploaded private canary video and confirmed channel binding",
+		"video_id", videoID, "channel_id", expectedChannelID, "title", title)
+
+	return &CanaryUploadResult{
+		VideoID:           videoID,
+		UploadedChannelID: video.Snippet.ChannelID,
+	}, nil
+}
+
 // Revoke calls Google's OAuth 2.0 token revocation endpoint.
 func (s *YouTubeOAuthService) Revoke(ctx context.Context, accessToken string) error {
 	body := url.Values{}

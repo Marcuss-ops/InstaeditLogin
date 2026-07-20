@@ -1928,7 +1928,227 @@ func TestYouTubeGetTokenInfo_SurfaceAllContractShapes(t *testing.T) {
 			t.Errorf("HasUpload on upload-only token: want true, got false")
 		}
 		if info.HasReadonly {
-			t.Errorf("HasReadonly on upload-only token: want false, got true (the worker needs readonly for channels.list)")
+			t.Errorf("HasReadonly on upload-only token: want false, got true (the handler needs readonly for channels.list)")
+		}
+	})
+}
+
+// TestYouTubeCanaryUpload_HappyPath mocks the full canary pipeline on
+// a single httptest server (testClient re-routes every Google URL
+// through the same mux):
+//
+//   1. POST /upload/youtube/v3/videos?uploadType=resumable returns a
+//      Location: /canary-session header. The mock also asserts the
+//      metadata body contains the INSTAEDIT-OAUTH-CANARY-{channel}-{ts}
+//      title prefix, the expected channel id embedded, and the
+//      status.privacyStatus="private" guard.
+//   2. PUT /canary-session returns 200 + a synthesized
+//      {"id":"<videoID>"} terminal body so putChunk reports the
+//      video id.
+//   3. GET /youtube/v3/videos?id=<videoID>&part=snippet,status,processingDetails
+//      returns the same video id with snippet.channelId equal to
+//      the expected channel — the post-upload reconcile that
+//      step-4 uses as the source of truth.
+//
+// Asserts: err == nil, result.VideoID == <videoID>,
+// result.UploadedChannelID == "UCexpectedChannelID".
+func TestYouTubeCanaryUpload_HappyPath(t *testing.T) {
+	const (
+		expectedChannel = "UCexpectedChannelID"
+		canaryVideoID   = "viabc123def4"
+	)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("uploadType") != "resumable" {
+			t.Errorf("canary init: uploadType got %q, want resumable", r.URL.Query().Get("uploadType"))
+		}
+		body, _ := io.ReadAll(r.Body)
+		var meta map[string]interface{}
+		if jerr := json.Unmarshal(body, &meta); jerr != nil {
+			t.Errorf("canary init: metadata is not JSON: %v / body=%s", jerr, string(body))
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		snippet, _ := meta["snippet"].(map[string]interface{})
+		if snippet == nil {
+			t.Errorf("canary init: missing snippet block in metadata; got %+v", meta)
+		} else {
+			title, _ := snippet["title"].(string)
+			if !strings.HasPrefix(title, "INSTAEDIT-OAUTH-CANARY-") {
+				t.Errorf("canary init: title %q does not start with INSTAEDIT-OAUTH-CANARY-", title)
+			}
+			if !strings.Contains(title, expectedChannel) {
+				t.Errorf("canary init: title %q must embed the expected channel id %s", title, expectedChannel)
+			}
+		}
+		status, _ := meta["status"].(map[string]interface{})
+		if status == nil {
+			t.Errorf("canary init: missing status block in metadata")
+		} else if ps, _ := status["privacyStatus"].(string); ps != "private" {
+			t.Errorf("canary init: privacyStatus got %q, want private (the canary must NOT land on the operator's public tab)", ps)
+		}
+		w.Header().Set("Location", "/canary-session")
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/canary-session", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("canary session: expected PUT, got %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if r.Header.Get("Content-Range") == "" {
+			t.Errorf("canary session: missing Content-Range header on final PUT")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"%s"}`, canaryVideoID)
+	})
+	mux.HandleFunc("/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("id") != canaryVideoID {
+			t.Errorf("videos.list: id got %q, want %s", r.URL.Query().Get("id"), canaryVideoID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"items":[{"id":"%s","snippet":{"channelId":"%s","title":"canary"}}]}`, canaryVideoID, expectedChannel)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	res, err := svc.CanaryUpload(context.Background(), "fresh-access-token", expectedChannel)
+	if err != nil {
+		t.Fatalf("canary happy-path: unexpected error: %v", err)
+	}
+	if res == nil {
+		t.Fatal("canary happy-path: result is nil")
+		return
+	}
+	if res.VideoID != canaryVideoID {
+		t.Errorf("canary VideoID: got %q, want %s", res.VideoID, canaryVideoID)
+	}
+	if res.UploadedChannelID != expectedChannel {
+		t.Errorf("canary UploadedChannelID: got %q, want %q", res.UploadedChannelID, expectedChannel)
+	}
+}
+
+// TestYouTubeCanaryUpload_AllContractShapes exercises the four
+// failure surfaces the handler maps to its 422 / transient
+// classification:
+//
+//   - bind-mismatch (snippet.channelId != expected) → wrap
+//     ErrYouTubeChannelMismatch → handler → 422 + reauth_required.
+//   - initiate 4xx (POST /upload returns 400) → wrap
+//     ErrYouTubeCanaryRejected (the "canary upload rejected by
+//     videos.insert" sentinel) → handler → 422 + reauth_required.
+//   - PUT 5xx transient → plain wrapped (NOT a sentinel) → handler
+//     treats as transient, next-sync retry.
+//   - empty input fields → fast-fail with no network round trip.
+//
+// The bind-mismatch case is the canonical P2 hardening scenario:
+// the OAuth grant produced a video on the WRONG channel (you can
+// reach videos.insert successfully but the grant was silently
+// re-bound to a Brand Account the operator didn't intend). The
+// worker MUST escalate to reauth_required so the operator picks up
+// the drift before the next upload-attempt lands their content
+// somewhere unauthorised.
+func TestYouTubeCanaryUpload_AllContractShapes(t *testing.T) {
+	t.Run("bind_mismatch_returns_typed_sentinel", func(t *testing.T) {
+		const (
+			expectedChannel = "UCexpectedChannelID"
+			canaryVideoID   = "vibindmismatch01"
+			actualChannel   = "UCdifferentChannelID"
+		)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "/canary-session")
+		})
+		mux.HandleFunc("/canary-session", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":"%s"}`, canaryVideoID)
+		})
+		mux.HandleFunc("/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+			// snippet.channelId intentionally ≠ expected — bind-mismatch.
+			fmt.Fprintf(w, `{"items":[{"id":"%s","snippet":{"channelId":"%s","title":"canary"}}]}`, canaryVideoID, actualChannel)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		_, err := svc.CanaryUpload(context.Background(), "fresh-access-token", expectedChannel)
+		if err == nil {
+			t.Fatal("canary bind-mismatch: expected error, got nil")
+		}
+		if !errors.Is(err, ErrYouTubeChannelMismatch) {
+			t.Errorf("bind-mismatch MUST wrap services.ErrYouTubeChannelMismatch so the handler routes it to 422 + reauth; got %v", err)
+		}
+		if !strings.Contains(err.Error(), actualChannel) {
+			t.Errorf("bind-mismatch error must surface the actually-uploaded channel for the operator log; got %v", err)
+		}
+	})
+
+	t.Run("initiate_4xx_returns_canary_rejected_sentinel", func(t *testing.T) {
+		const expectedChannel = "UCexpectedChannelID"
+		mux := http.NewServeMux()
+		mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"message":"invalid video metadata"}}`)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		_, err := svc.CanaryUpload(context.Background(), "fresh-access-token", expectedChannel)
+		if err == nil {
+			t.Fatal("canary init 4xx: expected error, got nil")
+		}
+		if !errors.Is(err, ErrYouTubeCanaryRejected) {
+			t.Errorf("init 4xx MUST wrap ErrYouTubeCanaryRejected so handler routes to 422; got %v", err)
+		}
+	})
+
+	t.Run("put_5xx_returns_plain_wrapped_transient", func(t *testing.T) {
+		const expectedChannel = "UCexpectedChannelID"
+		mux := http.NewServeMux()
+		mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "/canary-session")
+		})
+		mux.HandleFunc("/canary-session", func(w http.ResponseWriter, r *http.Request) {
+			// 503 — transient. putChunk formats this as
+			// 'server error (status 503)' which the canary
+			// helper explicitly treats as transient.
+			http.Error(w, "google internal error", http.StatusServiceUnavailable)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		_, err := svc.CanaryUpload(context.Background(), "fresh-access-token", expectedChannel)
+		if err == nil {
+			t.Fatal("canary PUT 5xx: expected error, got nil")
+		}
+		if errors.Is(err, ErrYouTubeCanaryRejected) {
+			t.Errorf("put 5xx MUST NOT wrap ErrYouTubeCanaryRejected (next-sync retry should handle it); got %v", err)
+		}
+		if errors.Is(err, ErrYouTubeChannelMismatch) {
+			t.Errorf("put 5xx MUST NOT wrap ErrYouTubeChannelMismatch (channel drift is unrelated to a 503); got %v", err)
+		}
+		if !strings.Contains(err.Error(), "503") && !strings.Contains(err.Error(), "server error") {
+			t.Errorf("put 5xx error must preserve the underlying transient signal for the handler log; got %v", err)
+		}
+	})
+
+	t.Run("empty_inputs_fast_fail_without_network", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+			t.Error("empty-input canary MUST NOT issue any outbound request")
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		if _, err := svc.CanaryUpload(context.Background(), "valid-token", ""); err == nil {
+			t.Errorf("empty expectedChannelID: expected error, got nil")
+		}
+		if _, err := svc.CanaryUpload(context.Background(), "", "UCexpected"); err == nil {
+			t.Errorf("empty accessToken: expected error, got nil")
 		}
 	})
 }
