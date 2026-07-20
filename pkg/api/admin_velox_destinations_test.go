@@ -140,6 +140,19 @@ func (f *fakeUserStore) FinalizeAttach(ctx context.Context, accountID int64, sco
 	return 0, errors.New("not implemented in fakeUserStore")
 }
 
+// MarkReauthRequired (Task 2/10) satisfies the UserStore interface
+// after the channel-binding best-effort flag was added to the OAuth
+// callback path. The handler only invokes this when
+// attachDiscoveredAccounts returns ErrYouTubeChannelMismatch — a
+// branch this test file does not exercise. Surrounding stub methods
+// fail loudly if reached; this one is intentionally soft (returns
+// nil) because a future test that DOES exercise the 422 mismatch
+// path shouldn't have to re-stub the method — only the assertions
+// need to inspect the call.
+func (f *fakeUserStore) MarkReauthRequired(ctx context.Context, accountID int64, code, message string) error {
+	return nil
+}
+
 // fakeAuditLogStore satisfies AuditLogStore.
 type fakeAuditLogStore struct {
 	LogCalls     int

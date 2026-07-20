@@ -1423,6 +1423,107 @@ func TestPublishTarget_YouTube_ChannelMatch_PublishesNormally(t *testing.T) {
 	}
 }
 
+// TestPublishTarget_YouTube_ChannelMismatch_CallOrderMarksAccountBeforeTarget
+// is the MED-1 sequencing guard: when the YouTube channel binding
+// check fails with ErrYouTubeChannelMismatch, the worker MUST
+// flip platform_account.status to 'reauth_required' (via
+// MarkReauthRequired) BEFORE it flips post_target.status to
+// 'blocked_auth' (via markPublishBlockedAuth → UpdateStatus).
+// A regression that swaps the order would leave the operator
+// dashboard with a half-finished reauth signal: the post_target
+// drops out of the publish filter set (so the upload does abort),
+// but the platform_account's reauth_required flag never lands in
+// the DB (so the operator is never prompted to reconnect). The
+// call-order tracker mirrors the existing
+// TestPublishTarget_ClaimFiresBeforeFindByID pattern.
+func TestPublishTarget_YouTube_ChannelMismatch_CallOrderMarksAccountBeforeTarget(t *testing.T) {
+	var order []string
+	posts := &mockPostStore{
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) {
+			order = append(order, "findByID")
+			return &models.Post{ID: 100, Caption: "x", MediaURL: "https://cdn.example.com/v.mp4"}, nil
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			order = append(order, "findAccount")
+			return &models.PlatformAccount{
+				ID:             11,
+				Platform:       models.PlatformYouTube,
+				PlatformUserID: "UCexpectedChanID",
+			}, nil
+		},
+		markReauthRequiredFn: func(ctx context.Context, id int64, code, message string) error {
+			order = append(order, "markReauth")
+			return nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: "youtube"},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			t.Error("Publish MUST NOT be reached on channel mismatch (guard short-circuits before idempotency stamp)")
+			return nil, nil
+		},
+		validateChannelBindingFn: func(ctx context.Context, accessToken, expectedChannelID string) error {
+			return fmt.Errorf("%w: %q is not in channels.list(mine=true) result",
+				services.ErrYouTubeChannelMismatch, "UCactualChan")
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			order = append(order, "renew")
+			return &models.OAuthToken{AccessToken: "t"}, nil
+		},
+	}
+	// Capture UpdateStatus call ordering without conflicting with
+	// the other tests' use of updateStatusFn.
+	origUpdate := posts.updateStatusFn
+	posts.updateStatusFn = func(t *models.PostTarget) error {
+		order = append(order, "updateStatus")
+		if origUpdate != nil {
+			return origUpdate(t)
+		}
+		return nil
+	}
+	w := newTestWorker(posts, users, "youtube", svc, vault)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err == nil {
+		t.Fatal("publishTarget must return an error on channel binding mismatch")
+	}
+
+	// Sequence to assert: findByID → findAccount → renew →
+	// markReauth → updateStatus (markPublishBlockedAuth). A
+	// regression that fires updateStatus BEFORE markReauth would
+	// fail this assertion; that ordering drift would leave the
+	// operator's "needs reconnect" signal missing from the DB.
+	want := []string{"findByID", "findAccount", "renew", "markReauth", "updateStatus"}
+	if len(order) != len(want) {
+		t.Fatalf("call order: want %v, got %v", want, order)
+	}
+	for i, step := range want {
+		if order[i] != step {
+			t.Errorf("step[%d]: want %q, got %q (full order: %v)", i, step, order[i], order)
+		}
+	}
+	if posts.updateCalls != 1 {
+		t.Errorf("UpdateStatus calls: want 1, got %d", posts.updateCalls)
+	}
+	if posts.updateTargets[0].Status != models.PostStatusBlockedAuth {
+		t.Errorf("final status: want blocked_auth, got %q", posts.updateTargets[0].Status)
+	}
+	// MED-1.2 explicit count assertion: also locks the
+	// markReauthRequiredCalls counter so a future regression
+	// that calls MarkReauthRequired TWICE on the mismatch
+	// branch (each appends "markReauth", so the sequence list
+	// grows but the first occurrence is still before
+	// updateStatus) trips this assertion independently of
+	// the sequence check.
+	if users.markReauthRequiredCalls != 1 {
+		t.Errorf("MarkReauthRequired calls: want 1 (one per mismatch), got %d", users.markReauthRequiredCalls)
+	}
+}
+
 // TestPublishTarget_YouTube_ChannelMismatch_FlagsReauthAndFailsTarget
 // verifies the mismatch path: the binding check returns
 // ErrYouTubeChannelMismatch (wrapped). The worker must:
@@ -1512,12 +1613,22 @@ func TestPublishTarget_YouTube_ChannelMismatch_FlagsReauthAndFailsTarget(t *test
 	if !strings.Contains(markMsg, "UCwrongChan") {
 		t.Errorf("MarkReauthRequired message should include actual channel id (operator visibility), got %q", markMsg)
 	}
-	// 4. Post_target transitioned to failed with a descriptive message.
+	// 4. Post_target transitioned to blocked_auth with a descriptive
+	//    message AND a stable LastErrorCode so dashboards can index
+	//    on the code without parsing ErrorMessage prose. Task 2/10:
+	//    blocked_auth is the dedicated post_target status for
+	//    channel-drift refusals, distinct from 'failed' (a generic
+	//    per-attempt failure). The worker does NOT auto-retry
+	//    blocked_auth rows; the dashboard "reconnect channel" CTA
+	//    drives the recovery.
 	if posts.updateCalls != 1 {
 		t.Fatalf("UpdateStatus calls: want 1, got %d", posts.updateCalls)
 	}
-	if posts.updateTargets[0].Status != models.PostStatusFailed {
-		t.Errorf("final status: want failed, got %q", posts.updateTargets[0].Status)
+	if posts.updateTargets[0].Status != models.PostStatusBlockedAuth {
+		t.Errorf("final status: want blocked_auth (Task 2/10 channel-drift terminal), got %q", posts.updateTargets[0].Status)
+	}
+	if posts.updateTargets[0].LastErrorCode != "blocked_auth" {
+		t.Errorf("LastErrorCode: want \"blocked_auth\" (operator-dashboard filter), got %q", posts.updateTargets[0].LastErrorCode)
 	}
 	if !strings.Contains(posts.updateTargets[0].ErrorMessage, "youtube channel binding") {
 		t.Errorf("ErrorMessage should mention the binding check, got %q", posts.updateTargets[0].ErrorMessage)
@@ -1527,7 +1638,7 @@ func TestPublishTarget_YouTube_ChannelMismatch_FlagsReauthAndFailsTarget(t *test
 	//    AFTER the binding check in our placement. So on mismatch we
 	//    expect setKeyCalls==0 (no key stamped on a failed publish).
 	if posts.setKeyCalls != 0 {
-		t.Errorf("SetProviderIdempotencyKey calls on mismatch: want 0 (no key stamped for failed publishes), got %d", posts.setKeyCalls)
+		t.Errorf("SetProviderIdempotencyKey calls on mismatch: want 0 (no key stamped for blocked-auth refused publishes), got %d", posts.setKeyCalls)
 	}
 	_ = err
 }

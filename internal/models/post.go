@@ -64,6 +64,21 @@ const (
 	// owner gets notified via their endpoint subscription.
 	PostStatusDLQ PostStatus = "dlq"
 
+	// PostStatusBlockedAuth (Task 2/10) — the post_target was blocked
+	// because YouTube's channels.list(mine=true) returned a channel
+	// id OTHER than the platform_account.platform_user_id. Set by
+	// the publish_worker pre-upload guard (see publish_worker.go::
+	// markPublishBlockedAuth); ALSO settable by the HTTP 422 path's
+	// best-effort batch-flag for immediate dashboard visibility.
+	// Visually distinct from PostStatusFailed (which is a per-attempt
+	// generic failure, often transient) so dashboards can answer
+	// "what's pending reauth?" directly. terminal PER ACCOUNT: the
+	// worker skips blocked_auth rows until (a) the operator
+	// reconnects, (b) the platform_account row flips back to
+	// 'active' or 'pending_authorization', then (c) the next tick
+	// rewrites the row to 'queued'.
+	PostStatusBlockedAuth PostStatus = "blocked_auth"
+
 	// Deprecated: use PostStatusQueued instead.
 	PostStatusScheduled = PostStatusQueued
 )
@@ -79,7 +94,8 @@ func (s PostStatus) IsValid() bool {
 		PostStatusFailed,
 		PostStatusWaitingProvider,
 		PostStatusRetrying,
-		PostStatusDLQ:
+		PostStatusDLQ,
+		PostStatusBlockedAuth:
 		return true
 	default:
 		return false

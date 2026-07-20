@@ -132,6 +132,19 @@ func (m *stubUserStoreV2) FinalizeAttach(context.Context, int64, []string) (int6
 	return 0, nil // not exercised by handleDriveBatchImportV2; satisfies UserStore contract
 }
 
+// MarkReauthRequired (Task 2/10) satisfies the UserStore interface
+// after the channel-binding best-effort flag was added to the OAuth
+// callback path. handleDriveBatchImportV2 doesn't invoke the OAuth
+// path so this stub is intentionally a quiet nil-returner — matching
+// the surrounding "silently-no-op" pattern on this struct. A future
+// test that exercises the 422 mismatch path can override the
+// field via the implicit-fields pattern (the shared mockUserStore
+// in routes_test.go uses a markReauthRequiredFn function field; this
+// stub can stay simple because no test in this file wires it).
+func (m *stubUserStoreV2) MarkReauthRequired(context.Context, int64, string, string) error {
+	return nil
+}
+
 // stubWorkspaceStoreV2 lets the handler resolve body.WorkspaceID
 // against an in-memory ownership map. ownedWorkspaces[wid]=true means
 // the caller is the workspace owner; FindByID returns a Workspace

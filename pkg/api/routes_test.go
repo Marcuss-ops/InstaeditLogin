@@ -158,6 +158,12 @@ type mockUserStore struct {
 	deletePlatformAccountFn      func(id int64) error
 	findUserIDByEmailFn          func(ctx context.Context, email string) (int64, error)
 	finalizeAttachFn             func(ctx context.Context, accountID int64, scopes []string) (int64, error)
+	// markReauthRequiredFn (Task 2/10) covers the channel-binding
+	// best-effort flag the OAuth callback path fires when
+	// attachDiscoveredAccounts returns ErrYouTubeChannelMismatch.
+	// Tests that exercise the 422/409 path override this; the others
+	// get the default (no-op) below.
+	markReauthRequiredFn func(ctx context.Context, accountID int64, code, message string) error
 }
 
 func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
@@ -217,6 +223,19 @@ func (m *mockUserStore) FinalizeAttach(ctx context.Context, accountID int64, sco
 		return m.finalizeAttachFn(ctx, accountID, scopes)
 	}
 	return 0, nil
+}
+
+// MarkReauthRequired (Task 2/10) implements the channel-binding
+// best-effort flag the OAuth callback path fires when
+// attachDiscoveredAccounts returns ErrYouTubeChannelMismatch. Default
+// returns nil so the 422 writeError still completes (a hypothetical
+// nil-returning repo would still satisfy the contract — the flag
+// is best-effort by design).
+func (m *mockUserStore) MarkReauthRequired(ctx context.Context, accountID int64, code, message string) error {
+	if m.markReauthRequiredFn != nil {
+		return m.markReauthRequiredFn(ctx, accountID, code, message)
+	}
+	return nil
 }
 
 // mockWorkspaceStore implements WorkspaceStore with configurable function fields.

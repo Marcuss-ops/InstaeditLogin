@@ -171,8 +171,14 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 	//     generic /auth/login flow, without a connect-link hint);
 	//   - binder is nil (every non-YouTube provider today);
 	//   - the principal token's AccessToken is empty (mis-config).
-	if expectedChannelID != "" && s.binder != nil && tokens[0].AccessToken != "" {
-		if bindErr := s.binder.ValidateChannelBinding(ctx, tokens[0].AccessToken, expectedChannelID); bindErr != nil {
+	//
+	// Task 2/10: routed through the package-level VerifyChannelIdentity
+	// helper so this gate and the publish_worker's pre-upload check
+	// share a single source of truth. Either a future Provider
+	// (re-)introduction on this layer OR an unrelated pre-publish
+	// refactor cannot drift the two into different behaviours.
+	if expectedChannelID != "" && tokens[0].AccessToken != "" {
+		if bindErr := VerifyChannelIdentity(ctx, s.binder, tokens[0].AccessToken, expectedChannelID); bindErr != nil {
 			return 0, fmt.Errorf("channel authorization: channel binding guard failed: %w", bindErr)
 		}
 	}

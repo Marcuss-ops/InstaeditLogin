@@ -447,6 +447,44 @@ func (s *YouTubeOAuthService) ValidateChannelBinding(ctx context.Context, access
 // `go vet`, not at runtime.
 var _ YouTubeChannelBinder = (*YouTubeOAuthService)(nil)
 
+// VerifyChannelIdentity (Task 2/10) is the REUSABLE pre-action
+// channel-bound guard. It is the public alias for
+// YouTubeChannelBinder.ValidateChannelBinding — the canonical
+// pre-tx (services.ChannelAuthorizationService.AuthorizeChannel) +
+// pre-upload (internal/worker.PublishWorker.publishTarget)
+// pre-flight check. Both call sites need exactly the same logic
+// (channels.list(mine=true) on the just-refreshed access token,
+// compare against the platform_account.platform_user_id) so the
+// canonical implementation lives here, behind a typed helper, and
+// every consumer delegates. The user's spec asked for a guard named
+// verifyChannelIdentity(token, expectedChannelID); the binder
+// argument is the narrow YouTube provider interface so tests can
+// pass an in-memory fake (no real HTTP round-trip).
+//
+// Return contract mirrors YouTubeOAuthService.ValidateChannelBinding:
+//   - nil → grant is bound to expectedChannelID, proceed.
+//   - error wrapping ErrYouTubeChannelMismatch → grant is NOT bound
+//     to expectedChannelID. The HTTP layer maps this to 422 +
+//     status='reauth_required'; the publish worker maps this to
+//     post_target.status='blocked_auth' + platform_account.status=
+//     'reauth_required'; neither path crosses the publish boundary.
+//   - any other error → transient (network, 5xx, decode). Caller
+//     MUST treat as transient (retry on next tick) and MUST NOT
+//     flag reauth_required — would lock out the operator for a
+//     transient blip.
+//
+// Pass binder=nil as a no-op (returns nil immediately). Useful in
+// tests that don't want to wire a real YouTube provider and for any
+// future non-YouTube provider that shouldn't run the YouTube-specific
+// channels.list check (the existing provider path already filters
+// `account.Platform == models.PlatformYouTube` upstream).
+func VerifyChannelIdentity(ctx context.Context, binder YouTubeChannelBinder, accessToken, expectedChannelID string) error {
+	if binder == nil {
+		return nil
+	}
+	return binder.ValidateChannelBinding(ctx, accessToken, expectedChannelID)
+}
+
 // ErrYouTubeSessionLost is the canonical sentinel returned by
 // queryUploadStatus when YouTube's resumable-upload endpoint replies
 // HTTP 404 to the `Content-Range: bytes */TOTAL` probe. 404 means the

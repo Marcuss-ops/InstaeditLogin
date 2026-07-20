@@ -392,6 +392,18 @@ type UserStore interface {
 	// party / future caller that wants the tx-isolated half
 	// without the token write.
 	FinalizeAttach(ctx context.Context, accountID int64, scopes []string) (int64, error)
+	// MarkReauthRequired (Task 2/10 — channel-binding guard) flips
+	// a platform_account's status to 'reauth_required' with a
+	// code + message pair. Called by the OAuth callback path when
+	// attachDiscoveredAccounts returns ErrYouTubeChannelMismatch
+	// (the channels.list?mine=true result did not contain the
+	// channel id the operator expected). Best-effort: a failure
+	// here logs a warning but does NOT prevent the HTTP 422
+	// response from returning — the publish_worker's next tick
+	// will sweep any post_targets whose account drifted and stamp
+	// blocked_auth on them independently. Idempotent on the DB
+	// side (re-flips with a fresh reauth_required_at on each call).
+	MarkReauthRequired(ctx context.Context, accountID int64, code, message string) error
 }
 
 type WorkspaceStore interface {
@@ -1327,6 +1339,24 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 				return
 			}
 			if errors.Is(err, ErrYouTubeChannelMismatch) {
+				// Task 2/10: best-effort flip
+				// platform_account.status to 'reauth_required'
+				// so the operator dashboard surfaces the
+				// failure immediately. The publish_worker's
+				// next tick will also flip the per-target
+				// rows to PostStatusBlockedAuth via
+				// markPublishBlockedAuth, but we want UI
+				// visibility before the next tick fires.
+				// Soft error: a MarkReauthRequired failure
+				// does NOT prevent the 422/409 writeError
+				// from returning (publish_worker is the
+				// authoritative sweep on a longer horizon).
+				if account != nil && r.userRepo != nil {
+					if flagErr := r.userRepo.MarkReauthRequired(req.Context(), account.ID, "youtube_channel_mismatch", err.Error()); flagErr != nil {
+						slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after youtube channel mismatch",
+							"platform_account_id", account.ID, "error", flagErr)
+					}
+				}
 				// P2 — connect-link refinement: 422 when the state
 				// was a JWT issued by /admin/channels/{id}/connect-link
 				// (the operator bound a specific channel_id via
