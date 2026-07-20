@@ -201,6 +201,25 @@ func Wire(ctx context.Context) (*App, error) {
 	}
 	capRouter := registry
 
+	// channelAuthorizer (Task 1/10) — atomic OAuth finalize gate.
+	// Pulls the YouTubeChannelBinder off the capability router so
+	// AuthorizeChannel can run the channels.list(mine=true)
+	// pre-tx guard. YouTube MUST satisfy YouTubeChannelBinder in
+	// production — if the assertion fails, fail Wire() fast rather
+	// than silently no-op'ing the most important safety net from
+	// Task 1/10 (a misconfigured refactor would otherwise let a
+	// publish target the wrong channel and only surface the bug
+	// at the first upload time).
+	var ytBinder services.YouTubeChannelBinder
+	if ytp, ok := capRouter.Get(models.PlatformYouTube); ok {
+		b, typeOK := ytp.(services.YouTubeChannelBinder)
+		if !typeOK {
+			return nil, fmt.Errorf("youtube provider registered but does not implement YouTubeChannelBinder; channels.list(mine=true) guard would be a silent no-op (Task 1/10 invariant violated)")
+		}
+		ytBinder = b
+	}
+	channelAuthorizer := services.NewChannelAuthorizationService(db, enc, tokenRepo, ytBinder)
+
 	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours).WithEnv(cfg.AppEnv)
 	oneTimeCodes := api.NewOneTimeCodeStore(60 * time.Second)
 	// oneTimeCodes sweeper is gracefully stopped by RunWorkers (E8
@@ -240,6 +259,10 @@ func Wire(ctx context.Context) (*App, error) {
 
 	opts := []api.RouterOption{
 		api.WithCredentialVault(vault),
+		// Task 1/10 atomic OAuth finalize gate. Wired
+		// unconditionally before the storage provider so the
+		// field on Router is non-nil by the time Setup() runs.
+		api.WithChannelAuthorizer(channelAuthorizer),
 		api.WithStorageProvider(storageProvider),
 		api.WithMaxUploadBytes(cfg.MaxUploadBytes),
 		api.WithApiKeyStore(apiKeyRepo),

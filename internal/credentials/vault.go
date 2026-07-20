@@ -71,6 +71,16 @@ type TokenStore interface {
 	FindLatestToken(oauthConnectionID int64, tokenType string) (*models.Token, error)
 	UpdateCiphertexts(tokenID int64, oldEncrypted, newEncrypted []byte) error
 	DeleteAllTokensForOAuthConnection(oauthConnectionID int64) error
+	// SaveTokenTx writes the supplied token row inside the caller's
+	// open *sql.Tx. Credentials.TokenStore implementations run the
+	// INSERT + DELETE pruner against the supplied tx so a caller
+	// rollback drops both the new row AND the pruned older rows
+	// together — preserving the original SaveToken contract under
+	// atomic ownership. Callers MUST commit or roll back the tx
+	// themselves; the store does not open or close it. Task 1/10
+	// uses this primitive to roll the encrypted-token write inside
+	// ChannelAuthorizationService.AuthorizeChannel's atomic flow.
+	SaveTokenTx(ctx context.Context, tx *sql.Tx, token *models.Token) error
 }
 
 // VaultAPI is the narrow contract the HTTP router and publish worker use

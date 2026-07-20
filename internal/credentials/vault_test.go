@@ -3,6 +3,7 @@ package credentials
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -138,6 +139,17 @@ func (m *mockTokenStore) SaveToken(t *models.Token) error {
 	t.CreatedAt = time.Now()
 	m.seedToken(t)
 	return nil
+}
+
+// SaveTokenTx (Task 1/10 atomic-flip extension) is the tx-aware
+// sibling of SaveToken. The mock forwards to SaveToken unconditionally
+// for the happy-path test branch; tests that exercise the
+// vault-failure acceptance path inject an error through a dedicated
+// mock elsewhere (services/channel_authorization_test.go wires a
+// directly-injected store). The stub exists so the mock satisfies the
+// expanded credentials.TokenStore interface without behavioural drift.
+func (m *mockTokenStore) SaveTokenTx(_ context.Context, _ *sql.Tx, t *models.Token) error {
+	return m.SaveToken(t)
 }
 
 func (m *mockTokenStore) FindLatestToken(oauthConnectionID int64, tokenType string) (*models.Token, error) {

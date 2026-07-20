@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -60,6 +61,45 @@ func (r *TokenRepository) SaveToken(token *models.Token) error {
 
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit save tx: %w", err)
+	}
+	return nil
+}
+
+// SaveTokenTx is the tx-aware sibling of SaveToken. ChannelAuthorizationService
+// uses this primitive to keep the OAuth finalize flow atomic — when the
+// caller's tx rolls back (e.g. platform_accounts.status='active' promotion
+// fails after the token row INSERTed), the token write AND its internal
+// pruner rows are dropped together. ctx is honoured for
+// cancellation/deadline propagation so a cancelled tx surfaces the
+// documented sql.ErrTxDone rather than hanging.
+//
+// Behaviour is identical to SaveToken for SQL ordering and lock semantics
+// — only the outer tx is owned by the caller. The pruner runs INSIDE
+// the supplied tx so a parent ROLLBACK drops the new + older rows
+// atomically. The function does NOT call Commit / Rollback.
+func (r *TokenRepository) SaveTokenTx(ctx context.Context, tx *sql.Tx, token *models.Token) error {
+	if tx == nil {
+		return fmt.Errorf("save token (tx): nil tx")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	scanErr := tx.QueryRowContext(ctx,
+		`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`,
+		token.PlatformAccountID, token.OAuthConnectionID, token.TokenType, token.EncryptedToken,
+		token.EncryptedRefreshToken, token.ExpiresAt, pq.Array(token.Scopes),
+	).Scan(&token.ID, &token.CreatedAt)
+	if scanErr != nil {
+		return fmt.Errorf("failed to save token (tx): %w", scanErr)
+	}
+
+	if _, execErr := tx.ExecContext(ctx,
+		`DELETE FROM tokens WHERE oauth_connection_id = $1 AND token_type = $2 AND id <> $3`,
+		token.OAuthConnectionID, token.TokenType, token.ID,
+	); execErr != nil {
+		return fmt.Errorf("failed to prune older tokens (tx): %w", execErr)
 	}
 	return nil
 }

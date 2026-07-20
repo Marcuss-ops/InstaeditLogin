@@ -47,6 +47,12 @@ const (
 	AccountStatusRevoked        = "revoked"
 	AccountStatusDisconnected   = "disconnected"
 	AccountStatusError          = "error"
+	// AccountStatusPendingAuthorization is the reset state stamped
+	// on rows imported via the CSV operator path (P2 — admin
+	// connect-link). It is the canonical pre-OAuth state that
+	// ChannelAuthorizationService.AuthorizeChannel (Task 1/10)
+	// expects to flip to 'active' on a successful authorize.
+	AccountStatusPendingAuthorization = "pending_authorization"
 )
 
 // PlatformAccount links a User to a social platform profile.

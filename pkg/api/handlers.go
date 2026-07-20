@@ -102,6 +102,13 @@ type Router struct {
 	apiKeyStore      ApiKeyStore
 	idempotencyStore IdempotencyStore
 	vault            credentials.VaultAPI
+	// authorizer (Task 1/10) is the SINGLE gate that flips a
+	// platform_account to status='active' AND writes the encrypted
+	// token row, atomically. Replaces the pre-atomic FinalizeAttach +
+	// vault.Save sequence (kept on UserStore / VaultAPI for back-compat
+	// and unit-test seams). Nil is a startup wiring mistake — every
+	// router serving /api/v1/auth/... callbacks must supply one.
+	authorizer       services.ChannelAuthorizer
 	oneTimeCodes     *OneTimeCodeStore
 	frontendURL      string
 	allowedOrigin    []string
@@ -376,6 +383,14 @@ type UserStore interface {
 	// Idempotent on re-auth for the same channel — refreshes
 	// connected_at + scopes without losing the oauth_connections
 	// row. Returns the oauth_connection_id used.
+	//
+	// As of Task 1/10 the production HTTP callback path goes
+	// through services.ChannelAuthorizer.AuthorizeChannel (see
+	// r.authorizer in Router) — one atomic transaction replaces
+	// FinalizeAttach + vault.Save with a SINGLE roll-back-able
+	// call. The method is kept on the interface for any third
+	// party / future caller that wants the tx-isolated half
+	// without the token write.
 	FinalizeAttach(ctx context.Context, accountID int64, scopes []string) (int64, error)
 }
 
@@ -631,6 +646,20 @@ func WithApiKeyStore(s ApiKeyStore) RouterOption {
 // tokens are stored.
 func WithCredentialVault(v credentials.VaultAPI) RouterOption {
 	return func(r *Router) { r.vault = v }
+}
+
+// WithChannelAuthorizer (Task 1/10) wires the atomic OAuth finalize
+// flow. The router calls this in attachDiscoveredAccounts — the
+// difference vs the previous two-call (FinalizeAttach + vault.Save)
+// sequence is atomicity: a partial failure inside the authz flow
+// rolls back BOTH the oauth_connections write AND the tokens write
+// AND the platform_accounts status flip, so the API can never reach
+// a "status='active' but no credentials" state. Bindings that go
+// through disabled providers (e.g. ad-hoc test routers) may pass
+// a stub that returns nil; real routers must pass a real
+// *services.ChannelAuthorizationService from internal/bootstrap.
+func WithChannelAuthorizer(c services.ChannelAuthorizer) RouterOption {
+	return func(r *Router) { r.authorizer = c }
 }
 
 // WithAuthEmailService injects the email/password auth service for SaaS
@@ -1489,32 +1518,31 @@ func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, pro
 			}
 		}
 
-		// P2 — admin connect-link: promote the row from
-		// 'pending_authorization' to 'active' and link the FK to
-		// the oauth_connections row that the vault depends on.
-		// FinalizeAttach is idempotent on (user_id, provider,
-		// provider_resource_id) so a re-auth (same channel,
-		// new consent) refreshes connected_at + scopes without
-		// rewriting the row. Called BEFORE vault.Save so the FK
-		// from tokens → oauth_connections resolves.
-		if _, err := r.userRepo.FinalizeAttach(ctx, created.ID, tokenData.Scopes); err != nil {
-			return nil, fmt.Errorf("finalize oauth connection for account %d: %w", created.ID, err)
-		}
-
-		// Save the root OAuth token for this account. For YouTube this
-		// is the bearer token; for Facebook this is the long-lived user
-		// token. The vault prunes older rows per (account_id, token_type).
-		if err := r.vault.Save(ctx, created.ID, tokenData); err != nil {
-			return nil, fmt.Errorf("save root token for account %d: %w", created.ID, err)
-		}
-
-		// Save every supplemental token the provider declared.
-		// Facebook Pages carry a Page Access Token here; YouTube
-		// channels carry none (the root bearer token is shared).
-		for _, supplemental := range acc.SupplementalTokens {
-			if err := r.vault.Save(ctx, created.ID, supplemental); err != nil {
-				return nil, fmt.Errorf("save supplemental token (%s) for account %d: %w", supplemental.TokenType, created.ID, err)
-			}
+		// P2 — admin connect-link: Task 1/10 atomic flip. The
+		// previous two-call sequence (FinalizeAttach + vault.Save
+		// + supplemental vault.Save) could leave the platform_account
+		// row in status='active' WITHOUT a tokens row if the vault
+		// save failed AFTER FinalizeAttach committed. The new
+		// services.ChannelAuthorizer.AuthorizeChannel merges those
+		// writes into ONE transaction inside services/
+		// channel_authorization.go: any failure rolls every write
+		// back, keeping the platform_account row in its pre-call
+		// state (typically 'pending_authorization').
+		// Equivalent codes behaviour preserved:
+		//   - ErrYouTubeChannelMismatch → 422 (via the binder
+		//     guard inside AuthorizeChannel)
+		//   - Eligibility-gate reject → 422 (status not in
+		//     pending_authorization / active / reauth_required)
+		//   - DB write failure → 5xx (wrapped, retryable)
+		// The principal token + every supplemental token are
+		// persisted inside the SAME tx so a Page Access Token
+		// (Facebook) failure rolls back its principal user token
+		// write AND the oauth_connections row too.
+		channelTokens := make([]*models.TokenData, 0, 1+len(acc.SupplementalTokens))
+		channelTokens = append(channelTokens, tokenData)
+		channelTokens = append(channelTokens, acc.SupplementalTokens...)
+		if _, err := r.authorizer.AuthorizeChannel(ctx, created.ID, expectedChannelID, tokenData.Scopes, channelTokens...); err != nil {
+			return nil, fmt.Errorf("authorize channel for account %d: %w", created.ID, err)
 		}
 	}
 
