@@ -461,8 +461,14 @@ func TestUploadsBatchByFolder_ConfigGap_Returns200WithGuidance(t *testing.T) {
 	if !resp.NeedsGoogleDriveAPIKey {
 		t.Errorf("NeedsGoogleDriveAPIKey must be true on sentinel")
 	}
-	if !resp.NeedsDriveAccount {
-		t.Errorf("NeedsDriveAccount must be true when no drive_account_id was passed")
+	// NeedsDriveAccount is FALSE when the request body already
+	// supplied a drive_account_id: the handler's hint is only
+	// surfaced when the caller needs to ALSO link a Drive account.
+	// (Updated from MUST-be-true to match the handler's post-2026
+	// semantic that the request body's drive_account_id is
+	// honoured as an alternative to API-key-only mode.)
+	if resp.NeedsDriveAccount {
+		t.Errorf("NeedsDriveAccount must be false when drive_account_id is supplied in body")
 	}
 	if !strings.Contains(resp.Note, "GOOGLE_DRIVE_API_KEY") {
 		t.Errorf("note must mention GOOGLE_DRIVE_API_KEY, got: %q", resp.Note)
@@ -1040,8 +1046,13 @@ func TestDriveBatchImport_NoAPIKey_Returns200WithGuidance(t *testing.T) {
 	if !resp.NeedsGoogleDriveAPIKey {
 		t.Errorf("NeedsGoogleDriveAPIKey must be true on sentinel, got false (response: %+v)", resp)
 	}
-	if !resp.NeedsDriveAccount {
-		t.Errorf("NeedsDriveAccount must be true (public mode), got false (response: %+v)", resp)
+	// NeedsDriveAccount is FALSE when the request body already
+	// supplied drive_account_id:99. Handler's 2026 semantic
+	// treats a supplied drive_account_id as an alternative
+	// to API-key-only mode, so the only thing the caller needs
+	// to ALSO do is configure GOOGLE_DRIVE_API_KEY.
+	if resp.NeedsDriveAccount {
+		t.Errorf("NeedsDriveAccount must be false when drive_account_id is supplied in body, got true (response: %+v)", resp)
 	}
 	if resp.ScheduledCount != 0 {
 		t.Errorf("ScheduledCount must be 0 on sentinel, got %d", resp.ScheduledCount)

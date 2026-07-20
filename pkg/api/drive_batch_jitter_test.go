@@ -61,7 +61,7 @@ func TestDriveBatchImport_InvalidFolderID_RejectedByLister(t *testing.T) {
 	r := newBatchImportTestRouter(lister, store)
 
 	// JSON body with a single quote injected:
-	body := `{"folder_id":"abc' or '1'='1","workspace_id":1,"facebook_account_id":50,"drive_account_id":1}`
+	body := `{"folder_id":"abc' or '1'='1","workspace_id":1,"facebook_account_id":50,"drive_account_id":99}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	withBearerJWT(t, req, 1)
