@@ -5,11 +5,11 @@
 // Before this commit, the OAuth callback handler called two services
 // sequentially:
 //
-//	1. repository.FinalizeAttach (an internal tx that UPSERTed
-//	   oauth_connections and promoted platform_accounts.status to
-//	   'active'),
-//	2. credentials.VaultAPI.Save (a separate, NON-transactional write
-//	   that encrypted and persisted the token row).
+//  1. repository.FinalizeAttach (an internal tx that UPSERTed
+//     oauth_connections and promoted platform_accounts.status to
+//     'active'),
+//  2. credentials.VaultAPI.Save (a separate, NON-transactional write
+//     that encrypted and persisted the token row).
 //
 // If step 2 failed AFTER step 1 succeeded, the platform_account row
 // was already marked 'active' while the tokens table held ZERO rows
@@ -247,27 +247,19 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 	if userID <= 0 {
 		return 0, fmt.Errorf("channel authorization: platform_accounts.user_id is zero for account %d", accountID)
 	}
-	// Eligibility gate. Active transition is allowed ONLY from
-	// states that the OAuth callback re-write makes meaningful:
-	//   - pending_authorization: CSV-import reset (P2 — admin
-	//     connect-link happy path).
-	//   - active: refresh-on-the-same-grant via re-consent (P1).
-	//   - reauth_required: previous refresh failed, operator
-	//     clicked "reconnect" and the new code-exchange succeeded.
-	// 'expired' is intentionally excluded: today the worker is
-	// the only code path that mints an 'expired' status (via
-	// vault.Renew) and reconnect-from-expired through the OAuth
-	// callback first flips the row to reauth_required by the
-	// disconnect → reconnect flow. Adding 'expired' here would
-	// risk resurrecting an account whose grant has been lost;
-	// widen this allow-list if a follow-up doesn't reintroduce
-	// that risk.
-	eligible := map[string]bool{
-		models.AccountStatusPendingAuthorization: true,
-		models.AccountStatusActive:               true,
-		models.AccountStatusReauthRequired:       true,
-	}
-	if !eligible[currentStatus] {
+	// Eligibility gate. Single source of truth:
+	// services.IsEligibleForActivePromotion (see
+	// internal/services/eligibility_gate.go for the allow-list
+	// policy + the explicit-exclusion rationale per status).
+	// AuthorizeChannel is the SOLE current caller; any future
+	// caller (worker reconnect handler, admin re-auth tool,
+	// etc.) MUST route through the same helper so the gate cannot
+	// drift between consumers. The error message format below
+	// is consumed by sqlmock-bound integration tests in
+	// channel_authorization_test.go (asserting "not eligible for
+	// active promotion" + the offending status literal) —
+	// changing the format without updating those tests will fail CI.
+	if !IsEligibleForActivePromotion(currentStatus) {
 		return 0, fmt.Errorf("channel authorization: account %d is in status %q which is not eligible for active promotion (allowed: pending_authorization, active, reauth_required)",
 			accountID, currentStatus)
 	}
