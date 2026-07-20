@@ -348,6 +348,46 @@ func TestAuthorizeChannel_IneligibleStatusRejects(t *testing.T) {
 	}
 }
 
+// TestAuthorizeChannel_ReauthFromExpiredStatusRejected is the
+// negative sym-pair to TestAuthorizeChannel_ReauthKeepsSameOAuthConnection.
+// It anchors the production-code rationale documented at
+// AuthorizeChannel: 'expired' is intentionally NOT in the eligibility
+// allow-list (pending_authorization, active, reauth_required), so the
+// reauth path that passes a fresh token MUST still be rejected — a
+// regression that widened the allow-list would silently resurrect a
+// stale grant whose refresh-token stream has been lost in the worker.
+// Surface error must mention both the eligibility gate AND the
+// 'expired' status. No upsert / insert / promote / commit fires.
+func TestAuthorizeChannel_ReauthFromExpiredStatusRejected(t *testing.T) {
+	svc, mock, _, cleanup := newSvcHarness(t)
+	defer cleanup()
+
+	const accountID, userID int64 = 23, 400
+
+	mock.ExpectBegin()
+	expectLoadAccount(mock, accountID, userID, "youtube", "UCabcdefghijklmnopqrstuv", models.AccountStatusExpired)
+	mock.ExpectRollback()
+
+	_, err := svc.AuthorizeChannel(context.Background(),
+		accountID,
+		"",
+		[]string{"https://www.googleapis.com/auth/youtube.upload"},
+		&models.TokenData{AccessToken: "rotated-access", RefreshToken: "rotated-refresh", TokenType: models.TokenTypeBearer, ExpiresIn: 3600},
+	)
+	if err == nil {
+		t.Fatal("AuthorizeChannel must reject reauth from 'expired' status — only reauth_required/active/pending_authorization are allowed")
+	}
+	if !strings.Contains(err.Error(), "not eligible for active promotion") {
+		t.Errorf("error must mention eligibility gate; got %v", err)
+	}
+	if !strings.Contains(err.Error(), models.AccountStatusExpired) {
+		t.Errorf("error must surface the 'expired' status; got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v (BEGIN then load('expired') then ROLLBACK — NO upsert / INSERT / UPDATE / COMMIT after the load)", err)
+	}
+}
+
 // TestAuthorizeChannel_MultiTokenAtomicallyPersisted exercises the
 // variadic-token path: principal (user long-lived) + supplemental
 // (Page access). Both must be saved in the SAME tx; a failure on
