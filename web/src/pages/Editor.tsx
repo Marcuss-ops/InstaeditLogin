@@ -1159,7 +1159,7 @@ function StreamSection() {
             Streaming 24/7
           </div>
           <h2 className="text-display-2 text-white">
-            Una sorgente.{" "}
+            One source.{" "}
             <span className="text-gradient">Seven live destinations.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">            A single control room fans out to every channel — automatic loop of your library, scheduled programming, and 24/7 streaming, even while you sleep.
@@ -1169,15 +1169,15 @@ function StreamSection() {
             {[
               {
                 t: "Multistream to 7 channels",
-                d: "Push simultaneo su YouTube, Facebook, Instagram, TikTok, X, LinkedIn e Threads.",
+                d: "Simultaneous push to YouTube, Facebook, Instagram, TikTok, X, LinkedIn and Threads.",
               },
               {
-                t: "Loop + programmazione pianificata",
-                d: "Scheduler integrato per blocchi di programmi, replay e interventi live.",
+                t: "Loop + scheduled programming",
+                d: "Built-in scheduler for program blocks, replays and live sessions.",
               },
               {
-                t: "Sempre attivo con fallback",
-                d: "Se una sorgente si disconnette, il loop continua fino allo slot successivo.",
+                t: "Always-on with fallback",
+                d: "If a source drops, the loop continues until the next slot.",
               },
             ].map((it) => (
               <li key={it.t} className="flex items-start gap-3">
