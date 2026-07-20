@@ -60,6 +60,14 @@
 5. **Catch-all `/:slug`.** Ordine corretto in `App.tsx` (`/editor` precede `/:slug`) → nessun bug. Da mantenere se in futuro si aggiungono route figlie con letterali che potrebbero collidere.
 6. **Static HTML duplicati.** `privacy.html` e `tos.html` esistono accanto alle controparti React. Non generano 404 ma sono una fonte di divergenza potenziale (canonica = React route). Valutare se rimuoverli o marcarli esplicitamente come legacy.
 
-## Verdetto
+## Reviewer findings (post self-review)
 
-**Reachability: ✅ tutte le pagine pubbliche attese sono raggiungibili** via routing React o via file statico. Le issues rilevate sono di **consistenza contenuto / SEO**, non di broken link. Sono tracciate come follow-up separati.
+Affinamenti ricevuti dopo il primo commit (commit `b02d05a`):
+
+1. **`sitemap.xml` aveva un commento stantio:** il vecchio header diceva che `/` "302-redirects to /accounts which is auth-only". Drift evidente: ora `/` è il `Landing` pubblico. Sistematico in `web/public/sitemap.xml` + aggiunte tutte le pagine pubbliche mancanti (`/`, `/editor`, `/programs`, `/mentoring`, `/data-deletion.html`) con priorità corrette.
+2. **Anchor targets non verificati:** `MarketingNav` espone `#pipeline`, `#workflow`, `#features`, `#agency`, `#who-are-we`. L'audit li dichiara reachable lato routing ma non ha confermato che i corrispondenti `id` siano presenti in `Landing.tsx`. Verifica da fare come follow-up — un semplice `grep` sugli `id` della Landing chiude il punto.
+3. **`/app` ordering reliance:** `/:slug` è registrato *prima* di `/app` in `App.tsx`. In React Router v6 funziona perché `/app` (segmento statico) outrank-a `/:slug` (segmento dinamico) per specificity — ma nessun commento lo dichiara esplicito, mentre il commento su `/editor` documenta proprio questa stessa dipendenza. Da allineare.
+
+## Verdetto finale (post review)
+
+**Reachability: ✅ tutte le pagine pubbliche attese sono raggiungibili** via routing React o via file statico. Drift SEO (`sitemap.xml`) sistemato nello stesso blocco di audit. Gap residui: (a) verifica `id` Landing per gli anchor nav, (b) allineamento commento in `App.tsx` per `/app` specificity.
