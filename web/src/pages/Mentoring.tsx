@@ -121,7 +121,7 @@ const FAQS = [
   },
   {
     q: "Do I need an active InstaEdit subscription?",
-    a: "Starter includes a 6-month Creator Program seat so you can practice what we cover in session. Growth and Team members get the seat bundled for the duration of the program."
+    a: "Starter includes free InstaEdit access for the program duration so you can practice what we cover in session. Growth and Team members get platform priority support and dedicated onboarding bundled for the same period."
   },
   {
     q: "Can I switch packages mid-program?",
