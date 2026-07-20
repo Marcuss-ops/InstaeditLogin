@@ -33,6 +33,18 @@ package worker
 // where it can call queryUploadStatus (a package-private method in
 // services) directly via httptest, driving the production 308 success
 // branch where RecordResumableRecovery is wired in Polish #1.
+//
+// Task 10.10.x polish #2 — Tests 1, 3, 4, 6 now import production
+// SQL directly (repository.SQLReclaimExpiredLeases,
+// repository.SQLClaimBatchForPublish, repository.SQLMarkDeadLetter,
+// repository.SQLListDeadLetterJobs). The pre-polish in-test copy-pastes
+// (canonicalReclaimExpiredLeasesSQL + canonicalClaimBatchForPublishCTE
+// consts + inline markDeadLetterSQL/listSQL literals) are removed: a
+// deletion of the production line went undetected under the old pattern
+// because the test's mirror didn't change. Pinned to const import, a
+// production-side move fires a compile error HERE (variable name moves)
+// + a sqlmock expectation mismatch (byte content moves), caught at PR
+// review.
 
 import (
 	"context"
@@ -49,19 +61,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
-
-// canonicalReclaimExpiredLeasesSQL and canonicalClaimBatchForPublishCTE
-// REMOVED in Task 10.10.x polish #2. The pre-polish versions were
-// in-test copy-pastes of production SQL strings (a known
-// anti-pattern: deleting the production line went undetected because
-// the test's mirror didn't change). Polish #2 pins the test to the
-// production SQL via direct import — the test now references
-// repository.SQLReclaimExpiredLeases + repository.SQLClaimBatchForPublish
-// (single source of truth, exported). A change to either production
-// constant fires a compile error HERE (the variable name moves) + a
-// sqlmock expectation mismatch on the regex match (the byte content
-// moves), so both the package-level symbol change and the SQL
-// fragment change are caught at PR review.
 
 // stubReclaimUploadJobStore satisfies UploadJobStore (13 methods) with
 // only ReclaimExpiredLeases returning real data; all 12 other methods
@@ -182,6 +181,12 @@ func TestReclaimExpiredLeases_RecoversOrphanedJob(t *testing.T) {
 // the SKIP LOCKED primitive AND a row-claim path. If a future
 // commit drops either, the test fails.
 //
+// Polish #2 — strings.Contains calls now reference the EXPORTED
+// production const (repository.SQLClaimBatchForPublish) instead of
+// a local copy. A production-side structural regression (SKIP LOCKED
+// removed, LIMIT removed) changes the const value, so this test
+// ALWAYS sees the latest production shape.
+//
 // Failure modes:
 //   - PROTECTION REMOVED: SKIP LOCKED string missing → t.Errorf.
 //   - PROTECTION REMOVED: production ingest_completed WHERE missing
@@ -194,10 +199,10 @@ func TestReclaimExpiredLeases_RecoversOrphanedJob(t *testing.T) {
 // by TestPublishTarget_OneClaimWinner_OnlyWinnerPublishes in
 // package worker's existing test corpus.
 func TestConcurrentClaim_OnlyOneOwner_FailsIfNoAdvisoryLock(t *testing.T) {
-	if !strings.Contains(canonicalClaimBatchForPublishCTE, "FOR UPDATE SKIP LOCKED") {
+	if !strings.Contains(repository.SQLClaimBatchForPublish, "FOR UPDATE SKIP LOCKED") {
 		t.Errorf("production CTE regressed: SKIP LOCKED missing (two workers could co-own the same row)")
 	}
-	if !strings.Contains(canonicalClaimBatchForPublishCTE, "LIMIT $1") {
+	if !strings.Contains(repository.SQLClaimBatchForPublish, "LIMIT $1") {
 		t.Errorf("production CTE regressed: LIMIT $1 missing (caller-controlled batch size lost)")
 	}
 }
@@ -207,18 +212,21 @@ func TestConcurrentClaim_OnlyOneOwner_FailsIfNoAdvisoryLock(t *testing.T) {
 // claim set. The canonical fragment MUST contain both halves of the
 // predicate: NULL-allow + non-NULL gate.
 //
+// Polish #2 — same shape as TestConcurrentClaim: pinned to
+// repository.SQLClaimBatchForPublish.
+//
 // Failure modes:
 //   - PROTECTION REMOVED: `publish_at <= NOW()` missing → fail.
 //   - PROTECTION REMOVED: `status = 'ingest_completed'` missing →
 //     fail.
 func TestPublishAtFuture_ClaimGateFiltersBeforePublish(t *testing.T) {
-	if !strings.Contains(canonicalClaimBatchForPublishCTE, "publish_at IS NULL") {
+	if !strings.Contains(repository.SQLClaimBatchForPublish, "publish_at IS NULL") {
 		t.Errorf("production CTE regressed: NULL-allow branch missing")
 	}
-	if !strings.Contains(canonicalClaimBatchForPublishCTE, "publish_at <= NOW()") {
+	if !strings.Contains(repository.SQLClaimBatchForPublish, "publish_at <= NOW()") {
 		t.Errorf("production CTE regressed: future publish_at gate missing (claim runs early)")
 	}
-	if !strings.Contains(canonicalClaimBatchForPublishCTE, "status = 'ingest_completed'") {
+	if !strings.Contains(repository.SQLClaimBatchForPublish, "status = 'ingest_completed'") {
 		t.Errorf("production CTE regressed: ingest_completed filter missing")
 	}
 }
@@ -264,6 +272,9 @@ func TestWorkerRetry_Idempotency_StableKey(t *testing.T) {
 // Asserts BOTH MarkDeadLetter AND ListDeadLetterJobs run against
 // the production SQL chain. Each test holds its own sql.DB to
 // avoid sqlmock serialization concerns.
+//
+// Polish #2 — sqlmock expectations reference repository.SQLMarkDeadLetter
+// + repository.SQLListDeadLetterJobs (no inline copy).
 //
 // Failure modes:
 //   - PROTECTION REMOVED (MarkDeadLetter dropped): SQL pattern
