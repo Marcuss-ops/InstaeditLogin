@@ -503,6 +503,36 @@ func TestVerifyConnectLinkState_ExpiredReturnsErrMalformed(t *testing.T) {
 	}
 }
 
+// TestVerifyConnectLinkState_RejectsMissingJTI pins that a connect-link
+// state JWT without a RegisteredClaims.ID (jti) is rejected. The jti is
+// the single-use identifier consumed by the callback, so a missing jti
+// makes replay protection impossible.
+func TestVerifyConnectLinkState_RejectsMissingJTI(t *testing.T) {
+	m := NewManager(testSecret, 24)
+	claims := ConnectLinkStateClaims{
+		StateType:         "connect_link",
+		ExpectedChannelID: "UC1234567890abcdefghij",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "instaeditlogin",
+			Audience:  jwt.ClaimStrings{"api"},
+			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-1 * time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(29 * time.Minute)),
+			// Deliberately no ID set.
+		},
+	}
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("forge state JWT without jti: %v", err)
+	}
+	_, verr := m.VerifyConnectLinkState(signed)
+	if verr == nil {
+		t.Fatal("VerifyConnectLinkState on state without jti: want error, got nil")
+	}
+	if !errors.Is(verr, ErrMalformedConnectLinkState) {
+		t.Errorf("VerifyConnectLinkState on state without jti: want ErrMalformedConnectLinkState, got %v", verr)
+	}
+}
+
 // TestVerifyConnectLinkState_FreshStateRoundTrips is the positive
 // control that pairs with TestVerifyConnectLinkState_ExpiredReturnsErrMalformed:
 // if a regression DROPS the ExpiresAt check (so the parser stops
@@ -534,8 +564,8 @@ func TestVerifyConnectLinkState_FreshStateRoundTrips(t *testing.T) {
 	if claims.ExpectedChannelID != wantChannel {
 		t.Errorf("ExpectedChannelID: want %q, got %q", wantChannel, claims.ExpectedChannelID)
 	}
-	if claims.Nonce != nonce {
-		t.Errorf("Nonce: want %q, got %q", nonce, claims.Nonce)
+	if claims.ID != nonce {
+		t.Errorf("JTI: want %q, got %q", nonce, claims.ID)
 	}
 }
 

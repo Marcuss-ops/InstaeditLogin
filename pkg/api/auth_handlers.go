@@ -108,11 +108,11 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid connect-link state: "+sErr.Error())
 			return
 		}
-		// Atomically consume the connect-link nonce so the same
+		// Atomically consume the connect-link jti so the same
 		// signed URL cannot be replayed. Missing/expired/already-
-		// consumed nonces are treated as a replay attempt.
+		// consumed jti are treated as a replay attempt.
 		if r.connectLinkNonceStore != nil {
-			consumeErr := r.connectLinkNonceStore.Consume(claims.Nonce)
+			consumeErr := r.connectLinkNonceStore.Consume(claims.ID)
 			if consumeErr != nil {
 				reason := connectLinkConsumeReason(consumeErr)
 				if reason != "" {

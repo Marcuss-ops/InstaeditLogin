@@ -241,10 +241,10 @@ type Router struct {
 	// Optional-wiring pattern used for the other feature flags).
 	externalDeliveries ExternalDeliveryStore
 
-	// connectLinkNonceStore persists the nonce embedded in each admin
-	// connect-link state JWT. The nonce is consumed atomically on
-	// first callback so a link can only be used once within its
-	// 30-minute validity window.
+	// connectLinkNonceStore persists the jti (RegisteredClaims.ID)
+	// embedded in each admin connect-link state JWT. The jti is
+	// consumed atomically on first callback so a link can only be
+	// used once within its 30-minute validity window.
 	connectLinkNonceStore ConnectLinkNonceStore
 
 	// veloxValidateRateLimiter (P2 Velox integration — Phase 2
@@ -605,15 +605,17 @@ func WithConnectLinkNonceStore(store ConnectLinkNonceStore) RouterOption {
 }
 
 // ConnectLinkNonceStore is the persistence contract for connect-link
-// nonces. Production wiring passes *repository.ConnectLinkNonceRepository.
+// jti values. Production wiring passes *repository.ConnectLinkNonceRepository.
+// The stored value is the JWT's RegisteredClaims.ID (jti), which
+// replaces the legacy custom "nonce" claim.
 //
 // Consume returns nil on success. On a known rejection it returns one
 // of repository.ErrNonceMissing, repository.ErrNonceExpired, or
 // repository.ErrNonceConsumed so the caller can log/metric the exact
 // reason. Any other error indicates a database or transaction failure.
 type ConnectLinkNonceStore interface {
-	Create(nonce, expectedChannelID string, expiresAt time.Time) error
-	Consume(nonce string) error
+	Create(jti, expectedChannelID string, expiresAt time.Time) error
+	Consume(jti string) error
 }
 
 // WithTrustedProxies configures the list of networks (IP or CIDR)

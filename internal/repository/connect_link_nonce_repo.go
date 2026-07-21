@@ -38,34 +38,36 @@ var (
 	ErrNonceConsumed = errors.New("connect-link nonce already consumed")
 )
 
-// Create persists a fresh nonce with its expected channel id and expiry.
-func (r *ConnectLinkNonceRepository) Create(nonce, expectedChannelID string, expiresAt time.Time) error {
-	if nonce == "" {
-		return errors.New("connect-link nonce: nonce is required")
+// Create persists a fresh jti with its expected channel id and expiry.
+// The jti is the JWT's RegisteredClaims.ID (formerly exposed as a
+// custom "nonce" claim).
+func (r *ConnectLinkNonceRepository) Create(jti, expectedChannelID string, expiresAt time.Time) error {
+	if jti == "" {
+		return errors.New("connect-link jti: jti is required")
 	}
 	if expectedChannelID == "" {
-		return errors.New("connect-link nonce: expected_channel_id is required")
+		return errors.New("connect-link jti: expected_channel_id is required")
 	}
 	_, err := r.db.Exec(
 		`INSERT INTO connect_link_nonces (nonce, expected_channel_id, expires_at, created_at)
 		 VALUES ($1, $2, $3, NOW())
 		 ON CONFLICT (nonce) DO NOTHING`,
-		nonce, expectedChannelID, expiresAt,
+		jti, expectedChannelID, expiresAt,
 	)
 	if err != nil {
-		return fmt.Errorf("create connect-link nonce: %w", err)
+		return fmt.Errorf("create connect-link jti: %w", err)
 	}
 	return nil
 }
 
-// Consume atomically marks a nonce as consumed. It returns nil on
+// Consume atomically marks a jti as consumed. It returns nil on
 // success. For known rejection cases it returns one of the sentinel
 // errors ErrNonceMissing, ErrNonceExpired, or ErrNonceConsumed so the
 // caller can log/metric the exact reason. Any other error indicates
 // a database or transaction failure.
-func (r *ConnectLinkNonceRepository) Consume(nonce string) error {
-	if nonce == "" {
-		return errors.New("connect-link nonce: nonce is required")
+func (r *ConnectLinkNonceRepository) Consume(jti string) error {
+	if jti == "" {
+		return errors.New("connect-link jti: jti is required")
 	}
 
 	tx, err := r.db.Begin()
@@ -89,7 +91,7 @@ func (r *ConnectLinkNonceRepository) Consume(nonce string) error {
 		 FROM connect_link_nonces
 		 WHERE nonce = $1
 		 FOR UPDATE`,
-		nonce,
+		jti,
 	).Scan(&expiresAt, &consumedAt)
 	if err == sql.ErrNoRows {
 		return ErrNonceMissing
@@ -108,7 +110,7 @@ func (r *ConnectLinkNonceRepository) Consume(nonce string) error {
 		`UPDATE connect_link_nonces
 		 SET consumed_at = NOW()
 		 WHERE nonce = $1 AND consumed_at IS NULL`,
-		nonce,
+		jti,
 	)
 	if err != nil {
 		return fmt.Errorf("consume connect-link nonce: update: %w", err)

@@ -506,7 +506,6 @@ func RandomHex(n int) (string, error) { return randomHex(n) }
 type ConnectLinkStateClaims struct {
 	StateType         string `json:"stp"`
 	ExpectedChannelID string `json:"ech"`
-	Nonce             string `json:"nonce"`
 	jwt.RegisteredClaims
 }
 
@@ -515,8 +514,8 @@ type ConnectLinkStateClaims struct {
 // manager to complete the OAuth flow on their browser, short enough
 // that an intercepted URL has a tight replay window.
 //
-// Returns the signed JWT, the nonce embedded inside it, and the exact
-// JWT expiry time. The caller must persist the nonce in a store that
+// Returns the signed JWT, the jti embedded inside it, and the exact
+// JWT expiry time. The caller must persist the jti in a store that
 // supports atomic single-use consumption so the link cannot be
 // replayed, and it should use the returned expiry for that record so
 // the database expiry cannot drift from the JWT expiry.
@@ -524,21 +523,21 @@ func (m *Manager) IssueConnectLinkState(expectedChannelID string) (string, strin
 	if expectedChannelID == "" {
 		return "", "", time.Time{}, errors.New("connect-link state: expected_channel_id is required")
 	}
-	nonce, err := randomHex(16)
+	jti, err := randomHex(16)
 	if err != nil {
-		return "", "", time.Time{}, fmt.Errorf("connect-link state: nonce generation: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("connect-link state: jti generation: %w", err)
 	}
 	now := time.Now()
 	expiresAt := now.Add(30 * time.Minute)
 	claims := ConnectLinkStateClaims{
 		StateType:         "connect_link",
 		ExpectedChannelID: expectedChannelID,
-		Nonce:             nonce,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    m.issuer,
 			Audience:  jwt.ClaimStrings{m.audience},
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			ID:        jti,
 		},
 	}
 
@@ -547,7 +546,7 @@ func (m *Manager) IssueConnectLinkState(expectedChannelID string) (string, strin
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("connect-link state: sign: %w", err)
 	}
-	return signed, nonce, expiresAt, nil
+	return signed, jti, expiresAt, nil
 }
 
 // VerifyConnectLinkState validates a state JWT and returns the
@@ -556,11 +555,12 @@ func (m *Manager) IssueConnectLinkState(expectedChannelID string) (string, strin
 // is expired, or has a signature mismatch.
 //
 // The returned claims contain the authoritative expected_channel_id
-// and the nonce. The callback MUST use the expected_channel_id for
-// the expected_channel_id argument to attachDiscoveredAccounts so
-// the channels.list(mine=true) result is filtered against the
-// operator's intent. The caller must also consume the nonce in its
-// persistence store so the link can only be used once.
+// and the jti (RegisteredClaims.ID). The callback MUST use the
+// expected_channel_id for the expected_channel_id argument to
+// attachDiscoveredAccounts so the channels.list(mine=true) result is
+// filtered against the operator's intent. The caller must also
+// consume the jti in its persistence store so the link can only be
+// used once.
 func (m *Manager) VerifyConnectLinkState(raw string) (*ConnectLinkStateClaims, error) {
 	if raw == "" {
 		return nil, ErrMalformedConnectLinkState
@@ -590,6 +590,9 @@ func (m *Manager) VerifyConnectLinkState(raw string) (*ConnectLinkStateClaims, e
 	}
 	if claims.ExpectedChannelID == "" {
 		return nil, fmt.Errorf("%w: missing expected_channel_id", ErrMalformedConnectLinkState)
+	}
+	if claims.ID == "" {
+		return nil, fmt.Errorf("%w: missing jti", ErrMalformedConnectLinkState)
 	}
 	return claims, nil
 }

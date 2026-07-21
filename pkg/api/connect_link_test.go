@@ -36,26 +36,26 @@ func newFakeConnectLinkNonceStore() *fakeConnectLinkNonceStore {
 	}
 }
 
-func (f *fakeConnectLinkNonceStore) Create(nonce, expectedChannelID string, expiresAt time.Time) error {
-	f.created[nonce] = fakeConnectLinkNonceRecord{
+func (f *fakeConnectLinkNonceStore) Create(jti, expectedChannelID string, expiresAt time.Time) error {
+	f.created[jti] = fakeConnectLinkNonceRecord{
 		expectedChannelID: expectedChannelID,
 		expiresAt:         expiresAt,
 	}
 	return nil
 }
 
-func (f *fakeConnectLinkNonceStore) Consume(nonce string) error {
-	rec, ok := f.created[nonce]
+func (f *fakeConnectLinkNonceStore) Consume(jti string) error {
+	rec, ok := f.created[jti]
 	if !ok {
 		return repository.ErrNonceMissing
 	}
 	if time.Now().After(rec.expiresAt) {
 		return repository.ErrNonceExpired
 	}
-	if f.consumed[nonce] {
+	if f.consumed[jti] {
 		return repository.ErrNonceConsumed
 	}
-	f.consumed[nonce] = true
+	f.consumed[jti] = true
 	return nil
 }
 
