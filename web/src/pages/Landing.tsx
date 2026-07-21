@@ -310,13 +310,10 @@ function Nav() {
 
   const links: Array<{ label: string; to?: string; href?: string }> = [
     { label: "How it works", href: "#pipeline" },
-    { label: "Workflow", href: "#workflow" },
-    { label: "Features", href: "#features" },
     { label: "Programs", href: "#programs" },
-    { label: "Agencies", href: "#agency" },
+    { label: "Results", href: "#results" },
     { label: "FAQ", href: "#faq" },
-    { label: "Mentoring", to: "/mentoring" },
-    { label: "About us", href: "#who-are-we" },
+    { label: "Contact", href: "#contact" },
   ];
 
   const close = useCallback(() => setOpen(false), []);
@@ -732,6 +729,98 @@ function Features() {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * Results — Numbers + Testimonials
+ * -------------------------------------------------------------------------- */
+
+function ResultsSection() {
+  const stats = [
+    { v: "500+", l: "Videos created", desc: "for students and creators" },
+    { v: "50+", l: "Channels grown", desc: "from zero to monetization" },
+    { v: "20+", l: "Languages", desc: "automatic translation" },
+    { v: "7", l: "Platforms", desc: "publish everywhere at once" },
+  ];
+
+  const testimonials = [
+    {
+      quote: "I started with zero subscribers and no editing skills. In 3 months I hit 1,000 subscribers and my first monetization check.",
+      author: "Alex M.",
+      role: "YouTube Creator",
+      result: "0 → 1K subscribers in 3 months",
+    },
+    {
+      quote: "The aged channel they gave me was a game-changer. My videos started getting recommended by the algorithm within the first week.",
+      author: "Sara K.",
+      role: "Education Channel",
+      result: "First video: 12K views",
+    },
+    {
+      quote: "I was spending 10 hours a week on editing and uploading. Now I record one video and it goes everywhere automatically.",
+      author: "Marco L.",
+      role: "Tech Creator",
+      result: "10h → 2h per week",
+    },
+  ];
+
+  return (
+    <section id="results" className="relative py-24 sm:py-32 overflow-hidden bg-elevated">
+      <div aria-hidden="true" className="absolute inset-0 hero-aurora opacity-15 pointer-events-none" />
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="max-w-3xl mb-16 text-center mx-auto animate-fade-up">
+          <div className="text-eyebrow text-violet-300/90 mb-3">Results</div>
+          <h2 className="text-display-2 text-white">
+            Real creators.{" "}
+            <span className="text-gradient-animated">Real results.</span>
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch] mx-auto">
+            Our students don't just learn — they grow. Here's what happens
+            when strategy meets automation.
+          </p>
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 mb-16">
+          {stats.map((s, i) => (
+            <div
+              key={s.l}
+              className={`surface-card p-6 text-center animate-fade-up hover:border-violet-400/30 transition-all duration-300 ${["", "animation-delay-100", "animation-delay-200", "animation-delay-300"][i]}`}
+            >
+              <div className="text-3xl sm:text-4xl font-extrabold text-white tabular-nums tracking-tight">{s.v}</div>
+              <div className="text-sm font-medium text-zinc-300 mt-2">{s.l}</div>
+              <div className="text-xs text-zinc-500 mt-1">{s.desc}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Testimonials */}
+        <div className="grid md:grid-cols-3 gap-5">
+          {testimonials.map((t, i) => (
+            <div
+              key={t.author}
+              className={`surface-card p-6 relative overflow-hidden animate-fade-up hover:border-violet-400/30 transition-all duration-300 ${["", "animation-delay-100", "animation-delay-200"][i]}`}
+            >
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 ring-1 ring-emerald-400/25 text-[11px] font-medium text-emerald-300 mb-4">
+                <CheckCircle2 className="w-3 h-3" />
+                {t.result}
+              </div>
+              <p className="text-sm text-zinc-300 leading-relaxed mb-5">"{t.quote}"</p>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white text-sm font-semibold">
+                  {t.author.charAt(0)}
+                </div>
+                <div>
+                  <div className="text-sm font-semibold text-white">{t.author}</div>
+                  <div className="text-xs text-zinc-500">{t.role}</div>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </section>
@@ -1384,7 +1473,7 @@ function FAQ() {
 
 function FinalCTA() {
   return (
-    <section className="relative py-24 sm:py-32 overflow-hidden">
+    <section id="contact" className="relative py-24 sm:py-32 overflow-hidden">
       <div aria-hidden="true" className="absolute inset-0 cta-glow opacity-40 pointer-events-none" />
       <div className="relative mx-auto max-w-7xl px-6 text-center">
         <div className="max-w-3xl mx-auto animate-fade-up">
@@ -1438,6 +1527,7 @@ export function Landing() {
         <PipelineSection />
         <WorkflowSection />
         <Features />
+        <ResultsSection />
         <AgencySection />
         <ShortsSection />
         <LongFormSection />
