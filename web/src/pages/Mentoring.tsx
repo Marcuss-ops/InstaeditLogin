@@ -146,28 +146,36 @@ const TESTIMONIALS = [
 
 const FAQS = [
   {
-    q: "Who is mentoring for?",
-    a: "Our mentoring is built for creators producing 2-30 posts per month, agencies handling multiple clients, and in-house content teams hitting a scaling plateau. Whether you are starting from zero or already shipping daily, there is a tier sized for your stage."
+    q: "Do I need any previous experience with YouTube or editing?",
+    a: "Not at all. Whether you're starting completely from scratch or already have a channel, we adapt the mentorship to your current level. We guide you step-by-step through channel creation, content strategy, and using tools to handle the heavy lifting."
   },
   {
-    q: "What is the difference between Mentoring and Programs?",
-    a: "Programs are self-serve tracks: templates, onboarding sprints, dedicated channels. Mentoring is one-on-one with a content strategist who reviews your work weekly and unblocks you in real time. Many members pair them — the Program as the workflow, Mentoring as the strategic backbone."
+    q: "How long does it take to monetize my channel?",
+    a: "Monetization timelines depend on your niche and consistency, but our mentorship is built to accelerate the process as fast as possible. Plus, we provide a free aged YouTube channel to skip the initial trust-building sandbox and hit monetization milestones much faster."
+  },
+  {
+    q: "How much time do I need to commit every week?",
+    a: "Thanks to our automated workflows and content frameworks, you only need about 3 to 5 hours a week. We teach you how to focus solely on high-impact tasks (like recording or approving scripts) while automation and strategy handle the rest."
+  },
+  {
+    q: "What is the free aged YouTube channel included in the program?",
+    a: "An aged channel is an established account created months or years ago. YouTube's algorithm trusts older channels more than brand-new ones, allowing your content to get indexed faster, avoid anti-spam filters, and gain initial traction much quicker."
+  },
+  {
+    q: "What is the difference between the Mentorship and the Content Automation System?",
+    a: "In the Mentorship Program, we teach you how to run and grow YouTube channels correctly with 1-on-1 guidance and weekly feedback. In the Content Automation System, we handle everything — content creation, editing, and publishing are completely done-for-you hands-free."
+  },
+  {
+    q: "What happens if I want to scale to multiple channels or languages later?",
+    a: "Once your primary channel is structured and profitable, you can seamlessly upgrade to our Enterprise Scaling Plan. This allows you to expand into multiple channels and translate/repurpose your content across 20+ languages automatically."
   },
   {
     q: "How are the sessions conducted?",
     a: "Live video calls over Google Meet or Zoom. Sessions are recorded so you can revisit decisions, and you receive a written action summary within 24 hours of each session."
   },
   {
-    q: "Do I need an active InstaEdit subscription?",
-    a: "Starter includes free InstaEdit access for the program duration so you can practice what we cover in session. Higher tiers add 1:1 priority support and faster onboarding windows."
-  },
-  {
     q: "Can I switch packages mid-program?",
     a: "Yes — upgrade from Starter to Growth at any time and we will credit the remaining sessions. Pro-rated refunds are not offered for downgrades, but you can pause and resume once within the program window."
-  },
-  {
-    q: "What happens after the program ends?",
-    a: "You walk away with a documented editorial playbook: posting cadence, templates, KPI dashboard and a 30-day action plan. Alumni get lifetime access to the mentoring community and quarterly content audits."
   },
 ];
 
@@ -440,12 +448,6 @@ function CTASection() {
                 Chat on Discord
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </a>
-              <Link
-                to="/login"
-                className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
-              >
-                Try InstaEdit free
-              </Link>
             </div>
           </div>
         </div>
