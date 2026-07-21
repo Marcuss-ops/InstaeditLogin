@@ -515,16 +515,16 @@ type ConnectLinkStateClaims struct {
 // manager to complete the OAuth flow on their browser, short enough
 // that an intercepted URL has a tight replay window.
 //
-// nonce is a 16-byte random hex value so two URLs issued for the
-// same channel in quick succession differ (defence against an
-// operator pasting a stale manage-Email link).
-func (m *Manager) IssueConnectLinkState(expectedChannelID string) (string, error) {
+// Returns the signed JWT and the nonce embedded inside it. The
+// caller must persist the nonce in a store that supports atomic
+// single-use consumption so the link cannot be replayed.
+func (m *Manager) IssueConnectLinkState(expectedChannelID string) (string, string, error) {
 	if expectedChannelID == "" {
-		return "", errors.New("connect-link state: expected_channel_id is required")
+		return "", "", errors.New("connect-link state: expected_channel_id is required")
 	}
 	nonce, err := randomHex(16)
 	if err != nil {
-		return "", fmt.Errorf("connect-link state: nonce generation: %w", err)
+		return "", "", fmt.Errorf("connect-link state: nonce generation: %w", err)
 	}
 	now := time.Now()
 	claims := ConnectLinkStateClaims{
@@ -538,35 +538,36 @@ func (m *Manager) IssueConnectLinkState(expectedChannelID string) (string, error
 			ExpiresAt: jwt.NewNumericDate(now.Add(30 * time.Minute)),
 		},
 	}
+
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := tok.SignedString(m.secret)
 	if err != nil {
-		return "", fmt.Errorf("connect-link state: sign: %w", err)
+		return "", "", fmt.Errorf("connect-link state: sign: %w", err)
 	}
-	return signed, nil
+	return signed, nonce, nil
 }
 
 // VerifyConnectLinkState validates a state JWT and returns the
-// expected channel id. Returns ErrMalformedConnectLinkState when
-// the token isn't a JWT, doesn't carry the connect-link state_type,
+// parsed claims. Returns ErrMalformedConnectLinkState when the
+// token isn't a JWT, doesn't carry the connect-link state_type,
 // is expired, or has a signature mismatch.
 //
-// The returned channel id is the only authoritative source — the
-// callback MUST use it for the expected_channel_id argument to
-// attachDiscoveredAccounts so the channels.list(mine=true) result
-// is filtered against the operator's intent. A discovery that
-// returns a different channel id (ErrYouTubeChannelMismatch) is
-// the user-facing 422.
-func (m *Manager) VerifyConnectLinkState(raw string) (string, error) {
+// The returned claims contain the authoritative expected_channel_id
+// and the nonce. The callback MUST use the expected_channel_id for
+// the expected_channel_id argument to attachDiscoveredAccounts so
+// the channels.list(mine=true) result is filtered against the
+// operator's intent. The caller must also consume the nonce in its
+// persistence store so the link can only be used once.
+func (m *Manager) VerifyConnectLinkState(raw string) (*ConnectLinkStateClaims, error) {
 	if raw == "" {
-		return "", ErrMalformedConnectLinkState
+		return nil, ErrMalformedConnectLinkState
 	}
 	// Cheap shape check: a JWT has exactly 2 dots (header.payload.sig).
 	// The cookie-backed state nonce has none. Skip the parse path
 	// when the shape is wrong so callers don't get a JWT parse error
 	// for a non-JWT state nonce.
 	if strings.Count(raw, ".") != 2 {
-		return "", ErrMalformedConnectLinkState
+		return nil, ErrMalformedConnectLinkState
 	}
 	claims := &ConnectLinkStateClaims{}
 	tok, err := jwt.ParseWithClaims(raw, claims, func(t *jwt.Token) (interface{}, error) {
@@ -576,18 +577,18 @@ func (m *Manager) VerifyConnectLinkState(raw string) (string, error) {
 		return m.secret, nil
 	}, jwt.WithIssuer(m.issuer), jwt.WithAudience(m.audience), jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrMalformedConnectLinkState, err)
+		return nil, fmt.Errorf("%w: %v", ErrMalformedConnectLinkState, err)
 	}
 	if !tok.Valid {
-		return "", ErrMalformedConnectLinkState
+		return nil, ErrMalformedConnectLinkState
 	}
 	if claims.StateType != "connect_link" {
-		return "", fmt.Errorf("%w: state_type=%q", ErrMalformedConnectLinkState, claims.StateType)
+		return nil, fmt.Errorf("%w: state_type=%q", ErrMalformedConnectLinkState, claims.StateType)
 	}
 	if claims.ExpectedChannelID == "" {
-		return "", fmt.Errorf("%w: missing expected_channel_id", ErrMalformedConnectLinkState)
+		return nil, fmt.Errorf("%w: missing expected_channel_id", ErrMalformedConnectLinkState)
 	}
-	return claims.ExpectedChannelID, nil
+	return claims, nil
 }
 
 // ErrMalformedConnectLinkState is the canonical sentinel returned

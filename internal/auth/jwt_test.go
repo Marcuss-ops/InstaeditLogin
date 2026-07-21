@@ -514,16 +514,22 @@ func TestVerifyConnectLinkState_ExpiredReturnsErrMalformed(t *testing.T) {
 func TestVerifyConnectLinkState_FreshStateRoundTrips(t *testing.T) {
 	m := NewManager(testSecret, 24)
 	const wantChannel = "UC1234567890abcdefghij"
-	signed, err := m.IssueConnectLinkState(wantChannel)
+	signed, nonce, err := m.IssueConnectLinkState(wantChannel)
 	if err != nil {
 		t.Fatalf("IssueConnectLinkState: %v", err)
 	}
-	gotChannel, verr := m.VerifyConnectLinkState(signed)
+	if nonce == "" {
+		t.Fatal("IssueConnectLinkState: expected non-empty nonce")
+	}
+	claims, verr := m.VerifyConnectLinkState(signed)
 	if verr != nil {
 		t.Fatalf("VerifyConnectLinkState on fresh state: want nil err, got %v", verr)
 	}
-	if gotChannel != wantChannel {
-		t.Errorf("ExpectedChannelID: want %q, got %q", wantChannel, gotChannel)
+	if claims.ExpectedChannelID != wantChannel {
+		t.Errorf("ExpectedChannelID: want %q, got %q", wantChannel, claims.ExpectedChannelID)
+	}
+	if claims.Nonce != nonce {
+		t.Errorf("Nonce: want %q, got %q", nonce, claims.Nonce)
 	}
 }
 

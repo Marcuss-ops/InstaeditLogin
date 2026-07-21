@@ -103,11 +103,26 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	fromConnectLinkState := false
 	var stateErr error
 	if strings.Count(state, ".") == 2 {
-		expectedChannelID, stateErr = r.auth.VerifyConnectLinkState(state)
-		if stateErr != nil {
-			writeError(w, http.StatusBadRequest, "invalid connect-link state: "+stateErr.Error())
+		claims, sErr := r.auth.VerifyConnectLinkState(state)
+		if sErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid connect-link state: "+sErr.Error())
 			return
 		}
+		// Atomically consume the connect-link nonce so the same
+		// signed URL cannot be replayed. Missing/expired/already-
+		// consumed nonces are treated as a replay attempt.
+		if r.connectLinkNonceStore != nil {
+			consumed, consumeErr := r.connectLinkNonceStore.Consume(claims.Nonce)
+			if consumeErr != nil {
+				writeError(w, http.StatusInternalServerError, "could not verify connect-link state: "+consumeErr.Error())
+				return
+			}
+			if !consumed {
+				writeError(w, http.StatusGone, "connect-link already consumed or expired")
+				return
+			}
+		}
+		expectedChannelID = claims.ExpectedChannelID
 		fromConnectLinkState = true
 	} else {
 		expectedChannelID, stateErr = verifyOAuthState(w, req, provider, state)

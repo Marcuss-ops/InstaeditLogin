@@ -241,6 +241,12 @@ type Router struct {
 	// Optional-wiring pattern used for the other feature flags).
 	externalDeliveries ExternalDeliveryStore
 
+	// connectLinkNonceStore persists the nonce embedded in each admin
+	// connect-link state JWT. The nonce is consumed atomically on
+	// first callback so a link can only be used once within its
+	// 30-minute validity window.
+	connectLinkNonceStore ConnectLinkNonceStore
+
 	// veloxValidateRateLimiter (P2 Velox integration — Phase 2
 	// rate-limit on the /internal/v1/destinations/{id}/validate
 	// endpoint). nil → no rate limit (the closest production
@@ -582,6 +588,22 @@ type UploadJobStore interface {
 }
 
 type RouterOption func(*Router)
+
+// WithConnectLinkNonceStore wires the store used to persist and
+// atomically consume connect-link nonces. When nil, replay
+// protection is disabled (tests and legacy deployments).
+func WithConnectLinkNonceStore(store ConnectLinkNonceStore) RouterOption {
+	return func(r *Router) {
+		r.connectLinkNonceStore = store
+	}
+}
+
+// ConnectLinkNonceStore is the persistence contract for connect-link
+// nonces. Production wiring passes *repository.ConnectLinkNonceRepository.
+type ConnectLinkNonceStore interface {
+	Create(nonce, expectedChannelID string, expiresAt time.Time) error
+	Consume(nonce string) (bool, error)
+}
 
 // WithTrustedProxies configures the list of networks (IP or CIDR)
 // that are allowed to supply X-Forwarded-For / X-Real-IP headers.

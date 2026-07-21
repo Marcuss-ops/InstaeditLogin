@@ -204,6 +204,7 @@ func Wire(ctx context.Context) (*App, error) {
 	auditLogRepo := repository.NewAuditLogRepository(db)
 	externalDestinationRepo := repository.NewExternalDestinationRepository(db)
 	externalDeliveryRepo := repository.NewExternalDeliveryRepository(db)
+	connectLinkNonceRepo := repository.NewConnectLinkNonceRepository(db)
 
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
 
@@ -321,6 +322,7 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithAuditLogStore(&auditLogStoreWrapper{auditLogRepo}),
 		api.WithExternalDestinationStore(externalDestinationRepo),
 		api.WithExternalDeliveryStore(externalDeliveryRepo),
+		api.WithConnectLinkNonceStore(connectLinkNonceRepo),
 		api.WithVeloxAPIToken(os.Getenv("VELOX_API_TOKEN")),
 		api.WithVeloxDownloadJobChannel(veloxDownloadJobs),
 		api.WithCookieSecure(true),
@@ -654,7 +656,6 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			deliveryRepo := repository.NewExternalDeliveryRepository(a.DB)
 			downloader := worker.NewVeloxArtifactDownloader(
 				deliveryRepo,
-				repository.NewUploadJobRepository(a.DB),
 				deliveryRepo,
 				worker.NewIngestFSM(deliveryRepo, slog.Default()),
 				slog.Default(),
