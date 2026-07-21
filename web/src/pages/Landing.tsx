@@ -14,7 +14,7 @@ import { LongForm } from "../components/landing/LongForm";
 import { Footer } from "./landing/Footer";
 import { WhoAreWe } from "../components/landing/WhoAreWe";
 import { FAQ } from "./landing/FAQ";
-import { FinalCTA } from "../components/landing/FinalCTA";
+import { FinalCTA } from "./landing/FinalCTA";
 
 export function Landing() {
   return (
