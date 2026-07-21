@@ -93,24 +93,11 @@ type externalDeliveryByExternalID interface {
 	GetByExternalDeliveryID(ctx context.Context, sourceSystem, id string) (*models.ExternalDelivery, error)
 }
 
-// UploadJobCreator is the minimal Insert surface for the
-// downloader's "register the work" responsibility. Production
-// matches *repository.UploadJobRepository.Create exactly: the new
-// upload_job ID is stamped back into j.ID via the INSERT's
-// RETURNING clause (see internal/repository/upload_job_repo.go::Create
-// migration 049a's RETURNING id, created_at, updated_at + the
-// .Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt) pair). The
-// downloader reads j.ID after the call returns nil — NOT via a
-// composite return value — to keep the surface identical to the
-// production repo (test fakes just call into a sqlmock).
-type UploadJobCreator interface {
-	Create(j *models.UploadJob) error
-}
-
-// ExternalDeliveryLinker is the minimal LinkUploadJob surface.
-// Production: *repository.ExternalDeliveryRepository.LinkUploadJob.
-type ExternalDeliveryLinker interface {
-	LinkUploadJob(ctx context.Context, externalDeliveryID string, uploadJobID int64) error
+// ExternalDeliveryUploadCreator is the atomic "create upload_job +
+// link external_delivery + advance status" surface used by the
+// downloader. Production: *repository.ExternalDeliveryRepository.
+type ExternalDeliveryUploadCreator interface {
+	CreateUploadJobAndLink(ctx context.Context, job *models.UploadJob, deliveryID string) (int64, error)
 }
 
 // VeloxArtifactDownloader is the single-goroutine consumer that
@@ -120,8 +107,7 @@ type ExternalDeliveryLinker interface {
 // happens in the existing UploadWorker ClaimBatchForPublish pool.
 type VeloxArtifactDownloader struct {
 	extDeliveryLookup ExternalDeliveryLookup
-	uploadJobs        UploadJobCreator
-	extDeliveryLinker ExternalDeliveryLinker
+	uploader          ExternalDeliveryUploadCreator
 	fsm               *IngestFSM
 	logger            *slog.Logger
 }
@@ -132,8 +118,7 @@ type VeloxArtifactDownloader struct {
 // a silent nil-pointer during operator triage.
 func NewVeloxArtifactDownloader(
 	lookup ExternalDeliveryLookup,
-	jobs UploadJobCreator,
-	linker ExternalDeliveryLinker,
+	uploader ExternalDeliveryUploadCreator,
 	fsm *IngestFSM,
 	logger *slog.Logger,
 ) *VeloxArtifactDownloader {
@@ -142,8 +127,7 @@ func NewVeloxArtifactDownloader(
 	}
 	return &VeloxArtifactDownloader{
 		extDeliveryLookup: lookup,
-		uploadJobs:        jobs,
-		extDeliveryLinker: linker,
+		uploader:          uploader,
 		fsm:               fsm,
 		logger:            logger,
 	}
@@ -248,6 +232,17 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 		deliveryKey = j.ExternalDeliveryID
 	}
 
+	// (1b) Only accepted deliveries are eligible for the atomic
+	// create+link. Rows already claimed by a peer (or advanced by
+	// the durable poll from another replica) must be skipped without
+	// churning the database. The atomic repository method also
+	// enforces this, but an early skip keeps logs quiet.
+	if delivery.Status != models.ExternalDeliveryStatusAccepted {
+		d.logger.Debug("velox downloader: delivery not accepted; skipping",
+			"external_delivery_id", j.ExternalDeliveryID, "status", delivery.Status)
+		return
+	}
+
 	// (1a) Metadata-only delivery — the producer's payload omits
 	// DownloadURL. The Velox peer never published bytes, so
 	// there's nothing to download+stream. We mark the row as
@@ -310,43 +305,26 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 		DriveAccountID:      extractMetadataInt64Ptr(delivery.Metadata, "drive_account_id"),
 		FolderID:            extractMetadataStringPtr(delivery.Metadata, "folder_id"),
 	}
-	if createErr := d.uploadJobs.Create(uploadJob); createErr != nil {
-		d.logger.Warn("velox downloader: UploadJobRepository.Create failed; skipping",
+
+	// (2-4) Atomically create the upload_job, stamp the FK on
+	// external_deliveries, and move the delivery to 'downloading' in
+	// one transaction. The UPDATE in CreateUploadJobAndLink only
+	// succeeds for rows still in 'accepted' with no linked job,
+	// so concurrent worker replicas cannot create duplicate jobs.
+	newJobID, createErr := d.uploader.CreateUploadJobAndLink(ctx, uploadJob, deliveryKey)
+	if createErr != nil {
+		d.logger.Warn("velox downloader: CreateUploadJobAndLink failed; skipping",
 			"external_delivery_id", j.ExternalDeliveryID, "error", createErr)
 		return
 	}
-	newJobID := uploadJob.ID
+
+	// Defensive: if a fake or future repo variant swallows the
+	// RETURNING, surface loudly. The repository already rejects
+	// non-positive IDs before committing, so this is a last-resort
+	// guard for in-memory test fakes.
 	if newJobID <= 0 {
-		// Defensive: if a fake or a future repo variant swallows the
-		// RETURNING, surface loudly so LinkUploadJob rejects with its
-		// own "uploadJobID must be positive" guard rather than blind-
-		// writing a 0 or negative FK.
-		d.logger.Warn("velox downloader: UploadJobRepository.Create returned id<=0; skipping link",
+		d.logger.Warn("velox downloader: CreateUploadJobAndLink returned id<=0; skipping",
 			"external_delivery_id", j.ExternalDeliveryID, "id", newJobID)
-		return
-	}
-
-	// (3) Link upload_job → external_delivery. The pool reads
-	// the row via this link to fetch the expected sha256+size
-	// triple for verification. Without the link the row's
-	// deliveryVerifier returns nothing and the pool silently
-	// no-ops the integrity check.
-	if linkErr := d.extDeliveryLinker.LinkUploadJob(ctx, deliveryKey, newJobID); linkErr != nil {
-		d.logger.Warn("velox downloader: LinkUploadJob failed; upload_job orphan, reaper will recover",
-			"external_delivery_id", j.ExternalDeliveryID,
-			"upload_job_id", newJobID, "error", linkErr)
-		return
-	}
-
-	// (4) Advance external_delivery status: accepted → downloading.
-	// Non-fatal: the upload_job is linked so the pool will process
-	// it anyway. A FSM skew usually means a peer already-stamped
-	// the row, in which case ErrIllegalTransition is the expected
-	// outcome (drop silently, log WARN).
-	if fsmErr := d.fsm.ToDownloading(ctx, deliveryKey, delivery.Status); fsmErr != nil {
-		d.logger.Warn("velox downloader: ToDownloading failed; upload_job still linked",
-			"external_delivery_id", j.ExternalDeliveryID,
-			"from_status", delivery.Status, "error", fsmErr)
 		return
 	}
 
