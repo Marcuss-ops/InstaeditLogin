@@ -13,11 +13,11 @@
 //  2. Fly secrets coherence (always-on, runs in PR lane too). Reads
 //     scripts/required-fly-secrets.txt + scripts/disabled-fly-secrets-prefixes.txt
 //     and asserts three invariants:
-//       a. The required key set is DISJOINT from the disabled-prefix set.
-//       b. Each OAuth provider whose key prefix appears in the required set
-//          has a COMPLETE triple {CLIENT_ID, CLIENT_SECRET, REDIRECT_URI}.
-//       c. A separate unit test (SecretCoherenceScript level) checks the
-//          docs/OAUTH-PRODUCTION.md canonical-scope table.
+//     a. The required key set is DISJOINT from the disabled-prefix set.
+//     b. Each OAuth provider whose key prefix appears in the required set
+//     has a COMPLETE triple {CLIENT_ID, CLIENT_SECRET, REDIRECT_URI}.
+//     c. A separate unit test (SecretCoherenceScript level) checks the
+//     docs/OAUTH-PRODUCTION.md canonical-scope table.
 //
 // The hardcoded scope list here is the SINGLE SOURCE OF TRUTH. docs/
 // OAUTH-PRODUCTION.md mirrors the list and is locked by
@@ -52,6 +52,7 @@ import (
 var canonicalScopes = []string{
 	"https://www.googleapis.com/auth/youtube.upload",
 	"https://www.googleapis.com/auth/youtube.readonly",
+	"https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
 	"https://www.googleapis.com/auth/drive.readonly",
 	"https://www.googleapis.com/auth/userinfo.email",
 	"https://www.googleapis.com/auth/userinfo.profile",
@@ -129,9 +130,9 @@ func main() {
 }
 
 var (
-	errScopeDrift       = errors.New("oauth scope drift detected")
-	errSecretCoherence  = errors.New("fly secrets list coherence failure")
-	errBoth             = errors.New("oauth scope drift + secrets coherence failure")
+	errScopeDrift      = errors.New("oauth scope drift detected")
+	errSecretCoherence = errors.New("fly secrets list coherence failure")
+	errBoth            = errors.New("oauth scope drift + secrets coherence failure")
 )
 
 // run is the orchestration entry point; returns nil on success or a

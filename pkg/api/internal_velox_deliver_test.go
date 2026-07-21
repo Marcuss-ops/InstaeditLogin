@@ -368,7 +368,7 @@ func TestDeliver_InvalidSHA(t *testing.T) {
 		name string
 		sha  string
 	}{
-		{"short length", strings.Repeat("a", 63) + "b"},
+		{"short length", strings.Repeat("a", 63)},
 		{"uppercase hex", strings.ToUpper(validSHA)},
 		{"non-hex has z", strings.Repeat("z", 64)},
 		{"contains spaces", strings.Repeat("a", 60) + "    "},
@@ -485,11 +485,11 @@ func TestDeliver_UnknownDestination(t *testing.T) {
 	del := &mockExternalDeliveries{}
 	w := runDeliver(t, dst, del, testDeliverAPIToken, fixtureValidBody(),
 		"Bearer "+testDeliverAPIToken)
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("unknown destination: want 422, got %d (body=%q)", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown destination: want 404, got %d (body=%q)", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "extdst_01JABC") {
-		t.Errorf("422 body should mention the bad destination id; got %q",
+	if !strings.Contains(w.Body.String(), "destination not found") {
+		t.Errorf("404 body should mention 'destination not found'; got %q",
 			w.Body.String())
 	}
 	if del.InsertCalls != 0 {

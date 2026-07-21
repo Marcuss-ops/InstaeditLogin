@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -94,7 +96,6 @@ func (r *Router) loadOwnAccountByID(w http.ResponseWriter, req *http.Request, id
 	}
 	return account, identity, true
 }
-
 
 // handleGetAccount returns a single platform account owned by the
 // authenticated user. When the provider implements AccountDetailsProvider
@@ -211,6 +212,7 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 					// effort: a failure here should not break the request.
 					if r.metricHistoryStore != nil {
 						_ = r.metricHistoryStore.UpsertDaily(account.ID, details.FetchedAt, metricsToPoint(details.Metrics))
+						r.storeYouTubeEarnings(req.Context(), account, token.AccessToken)
 					}
 
 					// Build resource from the fresh details.
@@ -305,6 +307,13 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 // maps them to a repository point. Unknown keys are ignored, so the
 // helper is safe for any platform that returns a subset of the keys.
 func metricsToPoint(metrics []models.AccountMetric) repository.AccountMetricPoint {
+	return mergeEarningsIntoPoint(metrics, nil)
+}
+
+// mergeEarningsIntoPoint builds a repository point from public metrics
+// and optionally copies over monetary fields from an separate earnings
+// point (used when analytics data is fetched separately).
+func mergeEarningsIntoPoint(metrics []models.AccountMetric, earnings *repository.AccountMetricPoint) repository.AccountMetricPoint {
 	p := repository.AccountMetricPoint{}
 	for _, m := range metrics {
 		switch m.Key {
@@ -316,7 +325,42 @@ func metricsToPoint(metrics []models.AccountMetric) repository.AccountMetricPoin
 			p.Videos = m.Value
 		}
 	}
+	if earnings != nil {
+		p.RevenueCents = earnings.RevenueCents
+		p.RPMCents = earnings.RPMCents
+		p.CPMCents = earnings.CPMCents
+	}
 	return p
+}
+
+// storeYouTubeEarnings fetches the last 30 days of YouTube Analytics
+// earnings for a monetized channel and stores the monetary metrics.
+// It is best-effort: non-monetized channels, missing scopes, or API
+// errors are logged and skipped so they never break the sync flow.
+func (r *Router) storeYouTubeEarnings(ctx context.Context, account *models.PlatformAccount, accessToken string) {
+	if r.youTubeSvc == nil || r.metricHistoryStore == nil {
+		return
+	}
+	if account.Platform != models.PlatformYouTube {
+		return
+	}
+
+	info, err := r.youTubeSvc.GetTokenInfo(ctx, accessToken)
+	if err != nil || !info.HasMonetary {
+		return
+	}
+
+	points, err := r.youTubeSvc.FetchEarnings(ctx, accessToken, account.PlatformUserID, 30)
+	if err != nil {
+		slog.Debug("youtube earnings fetch skipped", "account_id", account.ID, "reason", err.Error())
+		return
+	}
+
+	for _, p := range points {
+		if err := r.metricHistoryStore.UpsertMonetary(account.ID, p.Date, p); err != nil {
+			slog.Warn("failed to upsert monetary metrics", "account_id", account.ID, "date", p.Date, "error", err)
+		}
+	}
 }
 
 // handleAccountContent returns a paginated list of content items

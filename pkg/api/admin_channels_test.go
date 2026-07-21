@@ -95,13 +95,14 @@ type staffIdentity struct {
 	isAdmin bool
 }
 
-func (s staffIdentity) UserID() int64               { return s.uid }
-func (s staffIdentity) WorkspaceID() int64          { return 0 }
-func (s staffIdentity) IsAPIKey() bool              { return false }
-func (s staffIdentity) IsAdmin() bool               { return s.isAdmin }
-func (s staffIdentity) HasPermission(string) bool   { return s.isAdmin }
-func (s staffIdentity) SessionID() int64            { return 0 }
-func (s staffIdentity) Permissions() []string       { return nil }
+func (s staffIdentity) UserID() int64             { return s.uid }
+func (s staffIdentity) WorkspaceID() int64        { return 0 }
+func (s staffIdentity) IsAPIKey() bool            { return false }
+func (s staffIdentity) IsAdmin() bool             { return s.isAdmin }
+func (s staffIdentity) HasPermission(string) bool { return s.isAdmin }
+func (s staffIdentity) SessionID() int64          { return 0 }
+func (s staffIdentity) Permissions() []string     { return nil }
+
 // KeyID is the API-key fingerprint surface. Production's
 // ApiKeyIdentity returns the key ID; UserIdentity (and all JWT
 // identities) returns 0 because JWT sessions don't carry a key ID.
@@ -109,7 +110,7 @@ func (s staffIdentity) Permissions() []string       { return nil }
 // AND the type must be int64 (not string) to satisfy the
 // interface — this is the fix that unbreaks admin_channels_test.go
 // after the Identity contract grew SessionID/Permissions.
-func (s staffIdentity) KeyID() int64                { return 0 }
+func (s staffIdentity) KeyID() int64 { return 0 }
 
 func TestHandleAdminYouTubeFleetReadiness_NonAdmin_Forbidden(t *testing.T) {
 	store := &stubAdminStore{}
@@ -146,18 +147,18 @@ func TestHandleAdminYouTubeFleetReadiness_NilAdminStore_NotImplemented(t *testin
 
 func TestHandleAdminYouTubeFleetReadiness_Admin_OK_JSON(t *testing.T) {
 	canonical := repository.FleetReadinessCounts{
-		Total:                200,
-		Active:               187,
-		PendingAuthorization: 0,
-		ReauthRequired:       13,
-		Revoked:              0,
-		Error:                0,
-		RefreshTestOK:        200,
-		ScopeYoutubeUploadOK: 200,
+		Total:                  200,
+		Active:                 187,
+		PendingAuthorization:   0,
+		ReauthRequired:         13,
+		Revoked:                0,
+		Error:                  0,
+		RefreshTestOK:          200,
+		ScopeYoutubeUploadOK:   200,
 		ScopeYoutubeReadonlyOK: 200,
-		ChannelBindingOK:     200,
-		PrivateCanaryOK:      200,
-		CanaryChannelMatchOK: 200,
+		ChannelBindingOK:       200,
+		PrivateCanaryOK:        200,
+		CanaryChannelMatchOK:   200,
 	}
 	takenAt := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	store := &stubAdminStore{
@@ -184,7 +185,7 @@ func TestHandleAdminYouTubeFleetReadiness_Admin_OK_JSON(t *testing.T) {
 	// Decode the JSON envelope; verify the 12 DoD fields landed
 	// with the exact JSON keys the operator dashboard reads.
 	var got struct {
-		FleetReadiness repository.FleetReadinessCounts  `json:"fleet_readiness"`
+		FleetReadiness repository.FleetReadinessCounts `json:"fleet_readiness"`
 		SnapshotID     string                          `json:"snapshot_id"`
 		TakenAt        time.Time                       `json:"taken_at"`
 	}

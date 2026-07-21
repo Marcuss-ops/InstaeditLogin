@@ -70,4 +70,3 @@ func (s *TikTokOAuthService) HandleCallback(ctx context.Context, state, code str
 func (s *TikTokOAuthService) Revoke(ctx context.Context, accessToken string) error {
 	return ErrRevokeUnsupported
 }
-

@@ -281,7 +281,7 @@ func TestMedia_Complete_Happy_TransitionsToReady(t *testing.T) {
 // The asset row is transitioned to MarkFailed so a follow-up retry
 // surfaces the failure class in the operator dashboard (unlike the
 // pre-Task-6/10 behaviour where empty SHA slipped through silently
-// via the SQL COALESCE(NULLIF($2,''), sha256)).
+// via the SQL COALESCE(NULLIF($2,”), sha256)).
 func TestMedia_Complete_EmptySHA_400(t *testing.T) {
 	store := newMockMediaStore()
 	store.assets["abc"] = &models.MediaAsset{

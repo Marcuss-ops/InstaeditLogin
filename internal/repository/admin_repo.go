@@ -677,37 +677,39 @@ func (r *AdminRepository) ConnectionsPerSubject(ctx context.Context, provider st
 // rename without a coordinated dashboard re-skin.
 //
 // Sourcing:
+//
 //   - the 6 status counters (Active / Pending / Reauth / Revoked /
 //     Error / Total) come from COUNT(*) FILTER (WHERE status = ...)
 //     on platform_accounts WHERE platform = 'youtube'.
+//
 //   - the 6 DoD-OK counters (refresh_test_ok / scope_youtube_upload_ok /
 //     scope_youtube_readonly_ok / channel_binding_ok /
 //     private_canary_ok / canary_channel_match_ok) derive from
 //     platform_accounts state columns + the metadata JSONB:
 //
-//        refresh_test_ok         -> last_refresh_at IS NOT NULL AND status='active'
-//        scope_youtube_upload_ok -> metadata->>'granted_scopes' LIKE '%youtube.upload%'
-//        scope_youtube_readonly_ok -> metadata->>'granted_scopes' LIKE '%youtube.readonly%'
-//        channel_binding_ok      -> last_validated_at IS NOT NULL
-//        private_canary_ok       -> metadata->>'canary_result' = 'ok'
-//        canary_channel_match_ok -> metadata->>'canary_channel_match' = 'true'
+//     refresh_test_ok         -> last_refresh_at IS NOT NULL AND status='active'
+//     scope_youtube_upload_ok -> metadata->>'granted_scopes' LIKE '%youtube.upload%'
+//     scope_youtube_readonly_ok -> metadata->>'granted_scopes' LIKE '%youtube.readonly%'
+//     channel_binding_ok      -> last_validated_at IS NOT NULL
+//     private_canary_ok       -> metadata->>'canary_result' = 'ok'
+//     canary_channel_match_ok -> metadata->>'canary_channel_match' = 'true'
 //
 // All 12 counts come from a SINGLE round-trip: one platform_accounts
 // SELECT with 12 FILTER clauses. Mirrors the existing ChannelCounts
 // pattern at the top of this file.
 type FleetReadinessCounts struct {
-	Total                int `json:"youtube_channels_total"`
-	Active               int `json:"active"`
-	PendingAuthorization int `json:"pending_authorization"`
-	ReauthRequired       int `json:"reauth_required"`
-	Revoked              int `json:"revoked"`
-	Error                int `json:"error"`
-	RefreshTestOK        int `json:"refresh_test_ok"`
-	ScopeYoutubeUploadOK int `json:"scope_youtube_upload_ok"`
+	Total                  int `json:"youtube_channels_total"`
+	Active                 int `json:"active"`
+	PendingAuthorization   int `json:"pending_authorization"`
+	ReauthRequired         int `json:"reauth_required"`
+	Revoked                int `json:"revoked"`
+	Error                  int `json:"error"`
+	RefreshTestOK          int `json:"refresh_test_ok"`
+	ScopeYoutubeUploadOK   int `json:"scope_youtube_upload_ok"`
 	ScopeYoutubeReadonlyOK int `json:"scope_youtube_readonly_ok"`
-	ChannelBindingOK     int `json:"channel_binding_ok"`
-	PrivateCanaryOK      int `json:"private_canary_ok"`
-	CanaryChannelMatchOK int `json:"canary_channel_match_ok"`
+	ChannelBindingOK       int `json:"channel_binding_ok"`
+	PrivateCanaryOK        int `json:"private_canary_ok"`
+	CanaryChannelMatchOK   int `json:"canary_channel_match_ok"`
 }
 
 // FleetReadinessSnapshotResponse is the JSON envelope for

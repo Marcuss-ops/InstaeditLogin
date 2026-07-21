@@ -238,14 +238,15 @@ var _ services.ChannelAuthorizer = (*fakeChannelAuthorizer)(nil)
 // Tests that used to return a *models.User pair from a mock callback
 // now return only *models.PlatformAccount (the link side).
 type mockUserStore struct {
-	attachFn                     func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error)
-	listFn                       func(userID int64, platform string) ([]*models.PlatformAccount, error)
-	findPlatformAccountFn        func(id int64) (*models.PlatformAccount, error)
-	findPlatformAccountByTupleFn func(platform, platformUserID string) (*models.PlatformAccount, error)
-	updatePlatformAccountFn      func(account *models.PlatformAccount) error
-	deletePlatformAccountFn      func(id int64) error
-	findUserIDByEmailFn          func(ctx context.Context, email string) (int64, error)
-	finalizeAttachFn             func(ctx context.Context, accountID int64, scopes []string) (int64, error)
+	attachFn                      func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error)
+	listFn                        func(userID int64, platform string) ([]*models.PlatformAccount, error)
+	listFilteredYouTubeAccountsFn func(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error)
+	findPlatformAccountFn         func(id int64) (*models.PlatformAccount, error)
+	findPlatformAccountByTupleFn  func(platform, platformUserID string) (*models.PlatformAccount, error)
+	updatePlatformAccountFn       func(account *models.PlatformAccount) error
+	deletePlatformAccountFn       func(id int64) error
+	findUserIDByEmailFn           func(ctx context.Context, email string) (int64, error)
+	finalizeAttachFn              func(ctx context.Context, accountID int64, scopes []string) (int64, error)
 	// markReauthRequiredFn (Task 2/10) covers the channel-binding
 	// best-effort flag the OAuth callback path fires when
 	// attachDiscoveredAccounts returns ErrYouTubeChannelMismatch.
@@ -262,6 +263,17 @@ func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.Plat
 }
 func (m *mockUserStore) ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error) {
 	return m.listFn(userID, platform)
+}
+func (m *mockUserStore) ListFilteredYouTubeAccounts(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error) {
+	if m.listFilteredYouTubeAccountsFn != nil {
+		return m.listFilteredYouTubeAccountsFn(userID, workspaceID, group, language, manager)
+	}
+	// Fallback to the standard list so tests that already wire listFn
+	// continue to work without a new callback.
+	if m.listFn == nil {
+		return nil, fmt.Errorf("ListFilteredYouTubeAccounts not implemented in this test mock (override via listFn or listFilteredYouTubeAccountsFn)")
+	}
+	return m.listFn(userID, "youtube")
 }
 func (m *mockUserStore) FindPlatformAccountByID(id int64) (*models.PlatformAccount, error) {
 	if m.findPlatformAccountFn != nil {

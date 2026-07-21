@@ -360,4 +360,3 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 	committed = true
 	return oauthConnectionID, nil
 }
-

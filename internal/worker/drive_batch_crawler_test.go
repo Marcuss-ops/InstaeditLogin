@@ -2,30 +2,30 @@
 //
 // What this file locks end-to-end:
 //
-//   1. The crawler resolves a folder's driveId ONCE before the pagination
-//      loop via ResolveFolderDriveID (Task 6/10) — NOT per-page (would
-//      halve Drive quota for no gain).
+//  1. The crawler resolves a folder's driveId ONCE before the pagination
+//     loop via ResolveFolderDriveID (Task 6/10) — NOT per-page (would
+//     halve Drive quota for no gain).
 //
-//   2. The resolved driveId is threaded into EVERY ListFolder call,
-//      including across the nextPageToken checkpoints — Shared Drive
-//      folders must keep `corpora=drive&driveId=…` scoping on every
-//      request or the second page will 404.
+//  2. The resolved driveId is threaded into EVERY ListFolder call,
+//     including across the nextPageToken checkpoints — Shared Drive
+//     folders must keep `corpora=drive&driveId=…` scoping on every
+//     request or the second page will 404.
 //
-//   3. My-Drive folders (driveId absent from GetFileMetadata response)
-//      fall back to driveID="" → default My Drive corpus (no corpora=
-//      param, pre-T6/10 back-compat).
+//  3. My-Drive folders (driveId absent from GetFileMetadata response)
+//     fall back to driveID="" → default My Drive corpus (no corpora=
+//     param, pre-T6/10 back-compat).
 //
-//   4. A metadata-fetch failure does NOT abort the crawl — the crawler
-//      logs a warn-level remediation hint and proceeds with driveID=""
-//      so the operator still gets their files imported (the alternative
-//      — fail-loud on metadata — would brick imports on DLP-blocked
-//      folder metadata reads).
+//  4. A metadata-fetch failure does NOT abort the crawl — the crawler
+//     logs a warn-level remediation hint and proceeds with driveID=""
+//     so the operator still gets their files imported (the alternative
+//     — fail-loud on metadata — would brick imports on DLP-blocked
+//     folder metadata reads).
 //
-//   5. End-to-end: when the real *GoogleDriveOAuthService handles
-//      ListFolder + the crawler threads a resolved driveId, the actual
-//      files.list URL contains BOTH corpora=drive AND driveId=X AND
-//      pageSize=200 AND the Authorization Bearer header — the full
-//      underlying contract the user spec called out.
+//  5. End-to-end: when the real *GoogleDriveOAuthService handles
+//     ListFolder + the crawler threads a resolved driveId, the actual
+//     files.list URL contains BOTH corpora=drive AND driveId=X AND
+//     pageSize=200 AND the Authorization Bearer header — the full
+//     underlying contract the user spec called out.
 //
 // Reference: docs/ARCHITECTURE.md §Shared Drives; internal/services/
 // google_drive_oauth.go::ResolveFolderDriveID + ListFolder.
@@ -346,7 +346,7 @@ func (i *recordingInspector) GetFileMetadata(_ context.Context, _, fileID string
 //   - services.DriveFolderLister    → ListFolder
 //   - services.DriveFolderInspector → GetFileMetadata
 //   - services.DriveImporter         → GetFileMetadata + RefreshOAuthToken
-//                                   + DownloadFile
+//   - DownloadFile
 //
 // DriveImporter is required because resolveFolderLister wraps the
 // importer's RefreshOAuthToken into the closure passed to vault.Renew;
@@ -393,7 +393,7 @@ func (p *fakeProvider) DownloadFile(_ context.Context, _, _ string) (*http.Respo
 var (
 	_ services.DriveFolderLister    = (*fakeProvider)(nil)
 	_ services.DriveFolderInspector = (*fakeProvider)(nil)
-	_ services.DriveImporter         = (*fakeProvider)(nil)
+	_ services.DriveImporter        = (*fakeProvider)(nil)
 )
 
 // ---------------------------------------------------------------------------
@@ -792,15 +792,15 @@ func TestProcessBatch_ResolveMetadataExactlyOnce_NotPerPage(t *testing.T) {
 // After processBatch returns, the captured URLs are the ACTUAL
 // files.list URLs the service sent. We assert:
 //
-//	1. files.get was called once for the folder (Task 6/10 resolve).
-//	2. files.list was called twice (per-page iteration).
-//	3. BOTH files.list URLs contain corpora=drive AND driveId=<resolved>
-//	   AND pageSize=200 (the underlying contracts the user spec is
-//	   locking down).
-//	4. BOTH files.list requests carried the Authorization Bearer header
-//	   with the vault-supplied token.
-//	5. The folder metadata response was honored end-to-end (the
-//	   driveId resolved from that response is what flows into the URL).
+//  1. files.get was called once for the folder (Task 6/10 resolve).
+//  2. files.list was called twice (per-page iteration).
+//  3. BOTH files.list URLs contain corpora=drive AND driveId=<resolved>
+//     AND pageSize=200 (the underlying contracts the user spec is
+//     locking down).
+//  4. BOTH files.list requests carried the Authorization Bearer header
+//     with the vault-supplied token.
+//  5. The folder metadata response was honored end-to-end (the
+//     driveId resolved from that response is what flows into the URL).
 //
 // This is the highest-fidelity test in this file — it doesn't fake
 // the real lister's URL-building path, so a future regression that

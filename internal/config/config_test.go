@@ -237,3 +237,63 @@ func TestLoad_AdminInviteToken_ExactlyMinAllowed(t *testing.T) {
 		t.Errorf("AdminInviteToken round-trip: got %q", cfg.AdminInviteToken)
 	}
 }
+
+// TestLoad_JWT_TTL_ExplicitValues pins the explicit access/refresh
+// TTL knobs. Access defaults to 15 minutes and refresh to 30 days
+// when unset, with legacy JWT_TTL_HOURS converting to minutes.
+func TestLoad_JWT_TTL_ExplicitValues(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("JWT_ACCESS_TTL_MINUTES", "5")
+	t.Setenv("JWT_REFRESH_TTL_DAYS", "7")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with explicit TTLs: want nil, got %v", err)
+	}
+	if cfg.JWTAccessTTLMinutes != 5 {
+		t.Errorf("JWTAccessTTLMinutes: want 5, got %d", cfg.JWTAccessTTLMinutes)
+	}
+	if cfg.JWTRefreshTTLDays != 7 {
+		t.Errorf("JWTRefreshTTLDays: want 7, got %d", cfg.JWTRefreshTTLDays)
+	}
+}
+
+func TestLoad_JWT_TTL_Defaults(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	// Ensure the legacy variable is not set.
+	t.Setenv("JWT_TTL_HOURS", "")
+	t.Setenv("JWT_ACCESS_TTL_MINUTES", "")
+	t.Setenv("JWT_REFRESH_TTL_DAYS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with default TTLs: want nil, got %v", err)
+	}
+	if cfg.JWTAccessTTLMinutes != 15 {
+		t.Errorf("JWTAccessTTLMinutes default: want 15, got %d", cfg.JWTAccessTTLMinutes)
+	}
+	if cfg.JWTRefreshTTLDays != 30 {
+		t.Errorf("JWTRefreshTTLDays default: want 30, got %d", cfg.JWTRefreshTTLDays)
+	}
+}
+
+func TestLoad_JWT_TTL_LegacyFallback(t *testing.T) {
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("JWT_TTL_HOURS", "2")
+	t.Setenv("JWT_ACCESS_TTL_MINUTES", "")
+	t.Setenv("JWT_REFRESH_TTL_DAYS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with legacy TTL: want nil, got %v", err)
+	}
+	if cfg.JWTAccessTTLMinutes != 120 {
+		t.Errorf("JWTAccessTTLMinutes legacy fallback: want 120, got %d", cfg.JWTAccessTTLMinutes)
+	}
+	if cfg.JWTRefreshTTLDays != 30 {
+		t.Errorf("JWTRefreshTTLDays default: want 30, got %d", cfg.JWTRefreshTTLDays)
+	}
+}

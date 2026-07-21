@@ -206,7 +206,6 @@ func (m *mockProvider) CanaryUpload(ctx context.Context, accessToken, expectedCh
 	return m.canaryUploadFn(ctx, accessToken, expectedChannelID)
 }
 
-
 // mockAsyncProvider (Taglio 4.2) satisfies services.AsyncPublisher
 // in addition to Publisher. The router will register it under the
 // AsyncPublisher capability; the reconciler goroutine will pick it

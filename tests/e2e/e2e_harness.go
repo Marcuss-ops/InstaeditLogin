@@ -794,7 +794,7 @@ func updateTargetStatus(h *E2EHarness, targetID int64, fromStatus, toStatus, err
 // Guards encoded into the SQL:
 //
 //  1. `locked_by IS NOT NULL` — never reclaim an unowned row; this
-//     prevents a fresh insert (which has locked_by='') from being
+//     prevents a fresh insert (which has locked_by=”) from being
 //     prematurely heart-stamped before the worker pool claims it.
 //  2. `locked_by <> $newOwner` — never let a worker reclaim its own
 //     lease (would create spurious self-restarts on heartbeat ticks).

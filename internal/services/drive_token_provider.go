@@ -65,12 +65,13 @@ func NewDriveVaultTokenProvider(vault DriveTokenVault, oauth *GoogleDriveOAuthSe
 // scope check so a stolen account_id from a different workspace
 // cannot be used to mint an upload token. Today the upload
 // scope is enforced by GoogleDriveOAuthService.RefreshOAuthToken// (the refresh-token bearer inherits the originally-granted
-//     scopes, which are drive.readonly + userinfo.profile per the
-//     Task 3/10 consent screen alignment documented in
-//     docs/OAUTH-PRODUCTION.md Step 3; the exporter surface
-//     requests the unrestricted `drive` write scope separately,
-//     so this Importer source contract applies drive.readonly
-//     and nothing else).
+//
+//	scopes, which are drive.readonly + userinfo.profile per the
+//	Task 3/10 consent screen alignment documented in
+//	docs/OAUTH-PRODUCTION.md Step 3; the exporter surface
+//	requests the unrestricted `drive` write scope separately,
+//	so this Importer source contract applies drive.readonly
+//	and nothing else).
 type DriveTokenVault interface {
 	GetRefreshToken(ctx context.Context, platformAccountID int64) (string, error)
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import {
   BarChart,
   Bar,
@@ -19,8 +19,10 @@ import {
   Video,
   Trophy,
   TrendingUp,
+  TrendingDown,
   ArrowRight,
   RefreshCw,
+  SlidersHorizontal,
 } from "lucide-react";
 import { authedFetch, AuthError } from "../../lib/auth";
 import { cn } from "../../lib/utils";
@@ -55,12 +57,25 @@ type RankingItem = {
   value: number;
 };
 
+type RankingValueLabel =
+  | "subscribers"
+  | "views"
+  | "videos"
+  | "percent"
+  | "engagement";
+
 type Rankings = {
   by_subscribers: RankingItem[];
   by_views: RankingItem[];
   by_videos: RankingItem[];
   fastest_growing_subscribers: RankingItem[];
   fastest_growing_views: RankingItem[];
+  top_engagement: RankingItem[];
+  bottom_subscribers: RankingItem[];
+  bottom_views: RankingItem[];
+  bottom_engagement: RankingItem[];
+  bottom_growing_subscribers: RankingItem[];
+  bottom_growing_views: RankingItem[];
 };
 
 type Aggregates = {
@@ -84,6 +99,11 @@ type SummaryData = {
   channels: ChannelSummary[];
   rankings: Rankings;
   trends: TrendPoint[];
+};
+
+type WorkspaceOption = {
+  id: number;
+  name: string;
 };
 
 type FetchState =
@@ -237,7 +257,7 @@ function RankingCard({
   title: string;
   icon: React.ElementType;
   items: RankingItem[];
-  valueLabel: string;
+  valueLabel: RankingValueLabel;
 }) {
   return (
     <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5">
@@ -263,9 +283,16 @@ function RankingCard({
               </Link>
             </div>
             <span className="text-[13px] font-semibold text-white tabular-nums">
-              {valueLabel === "percent"
-                ? `${(item.value / 10).toFixed(1)}%`
-                : formatNumber(item.value)}
+              {(() => {
+                switch (valueLabel) {
+                  case "percent":
+                    return `${(item.value / 10).toFixed(1)}%`;
+                  case "engagement":
+                    return `${(item.value / 10).toFixed(1)} /video`;
+                  default:
+                    return formatNumber(item.value);
+                }
+              })()}
             </span>
           </div>
         ))}
@@ -279,14 +306,102 @@ function RankingCard({
 
 export function ChannelsPerformancePage() {
   const navigate = useNavigate();
-  const [period, setPeriod] = useState<number>(30);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [state, setState] = useState<FetchState>({ kind: "loading" });
+
+  const period = Number.parseInt(searchParams.get("days") || "30", 10);
+
+  // Local filter inputs are only committed to the URL (and therefore
+  // to the API call) when the user presses Apply. This avoids a
+  // re-fetch on every keystroke and keeps the form usable.
+  const [localFilters, setLocalFilters] = useState({
+    workspace: searchParams.get("workspace") || "",
+    group: searchParams.get("group") || "",
+    language: searchParams.get("language") || "",
+    manager: searchParams.get("manager") || "",
+  });
+  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
+  const [workspacesLoading, setWorkspacesLoading] = useState(false);
+  const [workspacesError, setWorkspacesError] = useState(false);
+
+  // Keep local inputs in sync with the URL when it changes externally
+  // (initial load, back/forward navigation, clear filters).
+  useEffect(() => {
+    setLocalFilters({
+      workspace: searchParams.get("workspace") || "",
+      group: searchParams.get("group") || "",
+      language: searchParams.get("language") || "",
+      manager: searchParams.get("manager") || "",
+    });
+  }, [searchParams]);
+
+  // Load available workspaces once so the workspace filter can be a
+  // dropdown instead of a free-form text field.
+  useEffect(() => {
+    async function loadWorkspaces() {
+      setWorkspacesLoading(true);
+      setWorkspacesError(false);
+      try {
+        const response = await authedFetch("/api/v1/workspaces");
+        const data = (await response.json()) as { workspaces: WorkspaceOption[] };
+        setWorkspaces(data.workspaces ?? []);
+      } catch (err) {
+        setWorkspacesError(true);
+        console.error("Failed to load workspaces", err);
+      } finally {
+        setWorkspacesLoading(false);
+      }
+    }
+    void loadWorkspaces();
+  }, []);
+
+  const setPeriod = useCallback(
+    (days: number) => {
+      const next = new URLSearchParams(searchParams);
+      next.set("days", String(days));
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
+  const applyFilters = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    if (localFilters.workspace) {
+      next.set("workspace", localFilters.workspace);
+    } else {
+      next.delete("workspace");
+    }
+    if (localFilters.group) {
+      next.set("group", localFilters.group);
+    } else {
+      next.delete("group");
+    }
+    if (localFilters.language) {
+      next.set("language", localFilters.language);
+    } else {
+      next.delete("language");
+    }
+    if (localFilters.manager) {
+      next.set("manager", localFilters.manager);
+    } else {
+      next.delete("manager");
+    }
+    setSearchParams(next, { replace: true });
+  }, [localFilters, searchParams, setSearchParams]);
+
+  const clearFilters = useCallback(() => {
+    setSearchParams({ days: String(period) }, { replace: true });
+  }, [period, setSearchParams]);
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
     try {
+      const params = new URLSearchParams(searchParams);
+      if (!params.has("days")) {
+        params.set("days", "30");
+      }
       const response = await authedFetch(
-        `/api/v1/accounts/performance/summary?days=${period}`,
+        `/api/v1/accounts/performance/summary?${params.toString()}`,
       );
       const data = (await response.json()) as SummaryData;
       setState({ kind: "ready", data });
@@ -299,11 +414,11 @@ export function ChannelsPerformancePage() {
         err instanceof Error ? err.message : "Unable to load channel performance.";
       setState({ kind: "error", message });
     }
-  }, [navigate, period]);
+  }, [navigate, searchParams]);
 
   useEffect(() => {
     void load();
-  }, [load, period]);
+  }, [load]);
 
   const topSubscribers =
     state.kind === "ready"
@@ -349,6 +464,103 @@ export function ChannelsPerformancePage() {
             >
               <RefreshCw size={14} /> Refresh
             </button>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="mb-6 p-4 rounded-2xl bg-[#1f1f2e] border border-white/[0.12]">
+          <div className="flex items-center gap-2 mb-3">
+            <SlidersHorizontal size={16} className="text-[#9aa0aa]" />
+            <span className="text-[13px] font-semibold text-white">Filters</span>
+          </div>
+          <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="flex flex-col gap-1">
+                <label htmlFor="filter-workspace" className="text-[12px] font-medium text-[#9aa0aa]">
+                  Workspace
+                </label>
+                <select
+                  id="filter-workspace"
+                  value={localFilters.workspace}
+                  onChange={(e) =>
+                    setLocalFilters((prev) => ({ ...prev, workspace: e.target.value }))
+                  }
+                  disabled={workspacesLoading}
+                  className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] text-white focus:outline-none focus:ring-2 focus:ring-white/10 disabled:opacity-50"
+                >
+                  <option value="">All workspaces</option>
+                  {workspaces.map((ws) => (
+                    <option key={ws.id} value={ws.id}>
+                      {ws.name}
+                    </option>
+                  ))}
+                </select>
+                {workspacesError && (
+                  <span className="text-[11px] text-red-400">Unable to load workspaces.</span>
+                )}
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="filter-group" className="text-[12px] font-medium text-[#9aa0aa]">
+                  Group
+                </label>
+                <input
+                  id="filter-group"
+                  type="text"
+                  value={localFilters.group}
+                  onChange={(e) =>
+                    setLocalFilters((prev) => ({ ...prev, group: e.target.value }))
+                  }
+                  placeholder="Group name"
+                  className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] text-white placeholder:text-[#9aa0aa]/60 focus:outline-none focus:ring-2 focus:ring-white/10"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="filter-language" className="text-[12px] font-medium text-[#9aa0aa]">
+                  Language
+                </label>
+                <input
+                  id="filter-language"
+                  type="text"
+                  value={localFilters.language}
+                  onChange={(e) =>
+                    setLocalFilters((prev) => ({ ...prev, language: e.target.value }))
+                  }
+                  placeholder="e.g. en"
+                  className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] text-white placeholder:text-[#9aa0aa]/60 focus:outline-none focus:ring-2 focus:ring-white/10"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="filter-manager" className="text-[12px] font-medium text-[#9aa0aa]">
+                  Manager
+                </label>
+                <input
+                  id="filter-manager"
+                  type="text"
+                  value={localFilters.manager}
+                  onChange={(e) =>
+                    setLocalFilters((prev) => ({ ...prev, manager: e.target.value }))
+                  }
+                  placeholder="Manager name"
+                  className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] text-white placeholder:text-[#9aa0aa]/60 focus:outline-none focus:ring-2 focus:ring-white/10"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-[#9aa0aa] hover:text-white hover:bg-white/[0.08] transition-colors"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={applyFilters}
+                className="px-4 py-2 rounded-xl bg-white text-black border border-white text-[13px] font-semibold hover:bg-white/90 transition-colors"
+              >
+                Apply
+              </button>
+            </div>
           </div>
         </div>
 
@@ -514,6 +726,46 @@ export function ChannelsPerformancePage() {
                 title="Fastest growing (views)"
                 icon={TrendingUp}
                 items={state.data.rankings.fastest_growing_views}
+                valueLabel="percent"
+              />
+              <RankingCard
+                title="Top engagement"
+                icon={TrendingUp}
+                items={state.data.rankings.top_engagement}
+                valueLabel="engagement"
+              />
+            </div>
+
+            <h2 className="text-[16px] font-bold text-white mb-4">Bottom performers</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 mb-8">
+              <RankingCard
+                title="Bottom by subscribers"
+                icon={TrendingDown}
+                items={state.data.rankings.bottom_subscribers}
+                valueLabel="subscribers"
+              />
+              <RankingCard
+                title="Bottom by views"
+                icon={TrendingDown}
+                items={state.data.rankings.bottom_views}
+                valueLabel="views"
+              />
+              <RankingCard
+                title="Bottom engagement"
+                icon={TrendingDown}
+                items={state.data.rankings.bottom_engagement}
+                valueLabel="engagement"
+              />
+              <RankingCard
+                title="Slowest growing (subscribers)"
+                icon={TrendingDown}
+                items={state.data.rankings.bottom_growing_subscribers}
+                valueLabel="percent"
+              />
+              <RankingCard
+                title="Slowest growing (views)"
+                icon={TrendingDown}
+                items={state.data.rankings.bottom_growing_views}
                 valueLabel="percent"
               />
             </div>

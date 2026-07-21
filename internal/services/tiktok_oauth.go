@@ -100,7 +100,6 @@ func truncateForLog(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-
 // ValidateContent enforces TikTok's hard requirements: a video,
 // a privacy_level (mandatory — no default), and caption ≤ 4000 runes.
 // Taglio 4b: privacy_level is now required — empty/unrecognized values
@@ -120,9 +119,6 @@ func (s *TikTokOAuthService) ValidateContent(payload models.PublishPayload) erro
 	}
 	return nil
 }
-
-
-
 
 // Publish (Taglio 4.2) is a thin wrapper that calls StartPublish and
 // returns the publish_id. Kept on the Publisher interface for backward
@@ -438,7 +434,6 @@ var (
 
 // --- Private ---
 
-
 // tikTokTitleMaxRunes is TikTok's documented per-post title/caption limit.
 const tikTokTitleMaxRunes = 4000
 
@@ -484,8 +479,6 @@ func modeIsDisabled(mode string) bool {
 		return false
 	}
 }
-
-
 
 // --- PULL_FROM_FILE helpers (Taglio 4.x chunked-upload addendum) ---
 

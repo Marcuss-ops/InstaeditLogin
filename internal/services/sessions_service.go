@@ -243,6 +243,29 @@ func (s *SessionsService) List(userID int64) ([]repository.Session, error) {
 	return s.repo.ListByUser(userID)
 }
 
+// IsActive verifies that a session row exists, has not been revoked,
+// and neither the access-token nor the refresh-token window has
+// expired. A session whose access token expired but whose refresh
+// token is still valid is still considered inactive for the
+// authenticated request path; the caller should use /auth/refresh.
+func (s *SessionsService) IsActive(sessionID int64) (bool, error) {
+	row, err := s.repo.FindByID(sessionID)
+	if err != nil {
+		if errors.Is(err, repository.ErrSessionNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("check session active: %w", err)
+	}
+	if row.RevokedAt != nil {
+		return false, nil
+	}
+	now := s.clock()
+	if now.After(row.ExpiresAt) || now.After(row.RefreshExpiresAt) {
+		return false, nil
+	}
+	return true, nil
+}
+
 // hashIP returns a hex-encoded SHA-256 of the IP. PII minimization:
 // the IP itself is never persisted; the hash is recoverable only by
 // the user who knows the IP. Salt is omitted intentionally — we
@@ -254,26 +277,29 @@ func hashIP(ip string) string {
 	}
 	sum := sha256.Sum256([]byte(ip))
 	return hex.EncodeToString(sum[:])
-}
-
-// WithdrawFromCookie extracts the refresh cookie value. Exposed so
+}// WithdrawFromCookie extracts the refresh cookie value. Exposed so
 // the /auth/logout handler can do a cookie-anchored revoke (deletes
 // the row matching the current refresh hash, so the cookie is
 // invalid even if the user keeps the same cookie string around).
+// Returns ErrSessionNotFound when the cookie does not match any
+// row, so the caller can tell the difference between "already
+// logged out" and a real DB failure.
 func (s *SessionsService) WithdrawFromCookie(refreshPlain string) error {
 	if refreshPlain == "" {
-		return nil
+		return ErrSessionNotFound
 	}
+
 	hash := auth.HashRefreshToken(refreshPlain)
 	row, err := s.repo.FindByRefreshHash(hash)
 	if err != nil {
 		if errors.Is(err, repository.ErrSessionNotFound) {
-			return nil // already gone
+			return ErrSessionNotFound
 		}
 		return err
 	}
 	return s.repo.Revoke(row.ID, "logout")
 }
+
 
 // IsNoSession is exported for handlers that want a 401 vs 404 split.
 func IsNoSession(err error) bool {

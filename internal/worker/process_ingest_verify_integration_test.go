@@ -67,10 +67,10 @@ func sha256HexBytes(data []byte) string {
 // VaultAPI dep pair (the worker's per-source switch only consumes
 // Inspect + Open, not the OAuth plumbing).
 type roundTripSource struct {
-	md    *SourceMetadata
-	body  []byte
-	mime  string
-	size  int64
+	md   *SourceMetadata
+	body []byte
+	mime string
+	size int64
 }
 
 func (s *roundTripSource) Name() models.UploadJobSource {
@@ -90,7 +90,7 @@ func (s *roundTripSource) Open(_ context.Context, _ *models.UploadJob) (io.ReadC
 // processIngestJob asserts; the rest are present to satisfy the
 // interface and recorded for completeness.
 type fakeJobRepo struct {
-	mu sync.Mutex
+	mu                  sync.Mutex
 	markIngestedCalls   []markIngestedCall
 	markFailedCalls     []markFailedCall
 	markDeadLetterCalls []markDeadLetterCall
@@ -102,17 +102,17 @@ type markIngestedCall struct {
 	workerID, assetID string
 }
 type markFailedCall struct {
-	jobID                                  int64
-	workerID, errCode, errMessage           string
+	jobID                         int64
+	workerID, errCode, errMessage string
 }
 type markDeadLetterCall struct {
-	jobID                          int64
-	workerID, errCode, errMessage  string
+	jobID                         int64
+	workerID, errCode, errMessage string
 }
 type markRetryCall struct {
-	jobID                   int64
-	workerID, errCode, msg   string
-	nextAt                  time.Time
+	jobID                  int64
+	workerID, errCode, msg string
+	nextAt                 time.Time
 }
 
 func (f *fakeJobRepo) ClaimBatch(_ context.Context, _ string, _ int, _ time.Duration) ([]*models.UploadJob, error) {
@@ -121,13 +121,17 @@ func (f *fakeJobRepo) ClaimBatch(_ context.Context, _ string, _ int, _ time.Dura
 func (f *fakeJobRepo) ClaimBatchForPublish(_ context.Context, _ string, _ int, _ time.Duration) ([]*models.UploadJob, error) {
 	return nil, nil
 }
-func (f *fakeJobRepo) Heartbeat(_ context.Context, _ int64, _ string, _ time.Duration) error { return nil }
-func (f *fakeJobRepo) MarkCompleted(_ context.Context, _ int64, _ string, _ int64, _ string) error { return nil }
+func (f *fakeJobRepo) Heartbeat(_ context.Context, _ int64, _ string, _ time.Duration) error {
+	return nil
+}
+func (f *fakeJobRepo) MarkCompleted(_ context.Context, _ int64, _ string, _ int64, _ string) error {
+	return nil
+}
 func (f *fakeJobRepo) SaveYouTubeSession(_ context.Context, _ int64, _, _ string, _, _ int64, _ time.Time) error {
 	return nil
 }
 func (f *fakeJobRepo) ClearYouTubeSession(_ context.Context, _ int64, _ string) error { return nil }
-func (f *fakeJobRepo) ReclaimExpiredLeases(_ context.Context, _ int) (int64, error)    { return 0, nil }
+func (f *fakeJobRepo) ReclaimExpiredLeases(_ context.Context, _ int) (int64, error)   { return 0, nil }
 
 func (f *fakeJobRepo) MarkIngested(_ context.Context, id int64, w, assetID string, total int64) error {
 	f.mu.Lock()
@@ -239,8 +243,9 @@ func (s *fakeStorage) SignUpload(_ context.Context, _ int64, _, ct string, size 
 func (s *fakeStorage) VerifyUpload(_ context.Context, _ string) (string, int64, error) {
 	return s.expectedContent, s.expectedSize, nil
 }
-func (s *fakeStorage) AssetURL(string) string   { return "https://fake-cdn.local/" + uuid.NewString() }
-func (s *fakeStorage) Provider() string           { return "fake-s3" }
+func (s *fakeStorage) AssetURL(string) string { return "https://fake-cdn.local/" + uuid.NewString() }
+func (s *fakeStorage) Provider() string       { return "fake-s3" }
+
 // Upload is interface-satisfaction ONLY. The current worker flow
 // routes Upload via SignUpload (which returns an httptest.Server
 // PUT URL wrapped by the artifactVerifyReader). A future regression
@@ -294,7 +299,7 @@ func buildWorkerForDriveTest(t *testing.T, src *roundTripSource, media UploadMed
 		registry,
 		nil, // deliveryVerifier — nil; Drive path doesn't use it
 		time.Minute,
-		nil, // logger — slog.Default() picked up by constructor
+		nil,                   // logger — slog.Default() picked up by constructor
 		UploadWorkerOptions{}, // zero-value → applyDefaults fills in production hardiness
 	)
 }

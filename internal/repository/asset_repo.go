@@ -13,7 +13,7 @@ import (
 // ErrMediaAssetSHARequired is the typed sentinel returned by
 // MarkReady when the caller passes an empty SHA. Task 6/10 raises
 // this from a runtime guard (the schema NOT NULL constraint added by
-// migration 056 was insufficient because '' is NULL-free and passes
+// migration 056 was insufficient because ” is NULL-free and passes
 // the schema check — the repo contract MUST refuse empty as a
 // defence-in-depth). errors.Is(err, ErrMediaAssetSHARequired) lets
 // callers (HTTP handlers, worker tick) distinguish the empty-SHA

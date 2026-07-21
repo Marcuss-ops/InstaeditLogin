@@ -11,9 +11,9 @@
 //  1. THE PIPELINE — 3 tests mount a full Router with a stubbed
 //     credential vault + stubbed YouTubeOAuthService, exercise the
 //     HTTP POST /api/v1/accounts/{id}/validate path end-to-end:
-//       - happy path (steps 1-3 pass, no canary) → 200 + status flips to active
-//       - happy path + canary  → 200 + status flips to active + canary info surfaces
-//       - step 1 invalid_grant → 422 + status flips to reauth_required (negative run)
+//     - happy path (steps 1-3 pass, no canary) → 200 + status flips to active
+//     - happy path + canary  → 200 + status flips to active + canary info surfaces
+//     - step 1 invalid_grant → 422 + status flips to reauth_required (negative run)
 //
 //  2. THE MARQUEE — 1 test (the user-spec headline assertion):
 //     chains OAuthCallback refusal (wrong channel at consent) →
@@ -67,10 +67,10 @@ import (
 // the ClientID accessor. Each method delegates to a per-method func
 // so a test can mock ONE step without influencing the others.
 type stubYouTubeOAuthService struct {
-	refreshFn    func(ctx context.Context, refreshToken string) (*models.TokenData, error)
-	getInfoFn    func(ctx context.Context, accessToken string) (*services.YouTubeTokenInfo, error)
-	bindFn       func(ctx context.Context, accessToken, expectedChannelID string) error
-	canaryFn     func(ctx context.Context, accessToken, expectedChannelID string) (*services.CanaryUploadResult, error)
+	refreshFn     func(ctx context.Context, refreshToken string) (*models.TokenData, error)
+	getInfoFn     func(ctx context.Context, accessToken string) (*services.YouTubeTokenInfo, error)
+	bindFn        func(ctx context.Context, accessToken, expectedChannelID string) error
+	canaryFn      func(ctx context.Context, accessToken, expectedChannelID string) (*services.CanaryUploadResult, error)
 	clientIDValue string
 }
 
@@ -258,7 +258,7 @@ func sendValidateRequest(h *validateRouterHarness, body string) *httptest.Respon
 			fmt.Sprintf("/api/v1/accounts/%d/validate", h.accountID), nil)
 	}
 	req = req.WithContext(auth.WithIdentity(req.Context(),
-		auth.NewUserIdentity(h.userID, /*workspaceID*/ 0, 0)))
+		auth.NewUserIdentity(h.userID /*workspaceID*/, 0, 0)))
 	w := httptest.NewRecorder()
 	h.router.Setup().ServeHTTP(w, req)
 	return w
@@ -428,7 +428,8 @@ func TestValidateAccount_E2E_Step1_RefreshInvalidGrant_422(t *testing.T) {
 		t.Errorf("MarkReauthRequired should fire once on invalid_grant; got %d", got)
 	}
 	// Step 2 (tokeninfo) must NOT have been reached.
-	if vh.ytSvc.getInfoFn != nil && false { /* silent: getInfoFn was not invoked, no further assertion needed beyond Marks */ }
+	if vh.ytSvc.getInfoFn != nil && false { /* silent: getInfoFn was not invoked, no further assertion needed beyond Marks */
+	}
 }
 
 // =============================================================================
@@ -595,4 +596,3 @@ func validateE2EHarnessBoot(t *testing.T) {
 	// surfaces as a clear test failure rather than a confusing FK
 	// error mid-test.
 }
-

@@ -10,7 +10,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
-
 // UploadJobRepository handles persistence for upload_jobs — the background
 // queue that downloads videos from Google Drive and publishes them.
 type UploadJobRepository struct {
@@ -20,6 +19,27 @@ type UploadJobRepository struct {
 // NewUploadJobRepository creates a new UploadJobRepository.
 func NewUploadJobRepository(db *sql.DB) *UploadJobRepository {
 	return &UploadJobRepository{db: db}
+}
+
+// UploadJobListFilter narrows the rows returned by ListByUser and
+// ListByAccount. Zero-value fields are interpreted as "no filter"; the
+// handler applies only the predicates it has non-zero values for.
+type UploadJobListFilter struct {
+	AccountID *int64                  // restrict to jobs whose targets @> jsonb_build_array(AccountID)
+	Status    *models.UploadJobStatus // restrict to one of the enum values
+	From      *time.Time              // publish_at >= From (nil = no lower bound)
+	To        *time.Time              // publish_at <= To   (nil = no upper bound)
+	Limit     int                     // hard cap; 0 = default 200
+}
+
+const uploadJobListDefaultLimit = 200
+
+// UploadJobPendingCount is the per-account rollup returned by
+// PendingCountsByAccount.
+type UploadJobPendingCount struct {
+	AccountID     int64
+	Count         int
+	NextPublishAt *time.Time
 }
 
 // ExternalDeliveryLinker is the narrow persistence contract
@@ -610,20 +630,6 @@ func (r *UploadJobRepository) ReclaimExpiredLeases(ctx context.Context, maxRows 
 	return n, nil
 }
 
-// UploadJobListFilter narrows the rows returned by ListByUser and
-// ListByAccount. Zero-value fields are interpreted as "no filter"; the
-// handler applies only the predicates it has non-zero values for. This
-// keeps the SQL simple (one statement, NULL-or-equal predicates) and
-// lets the caller opt into any combination of filters without us
-// having to maintain N specialised query methods.
-type UploadJobListFilter struct {
-	AccountID *int64                  // restrict to jobs whose targets @> jsonb_build_array(AccountID)
-	Status    *models.UploadJobStatus // restrict to one of the 4 enum values
-	From      *time.Time              // scheduled_at >= From (nil = no lower bound)
-	To        *time.Time              // scheduled_at <= To   (nil = no upper bound)
-	Limit     int                     // hard cap; 0 = default 200
-}
-
 // ErrUploadJobNotFound is the typed sentinel Reschedule/Cancel return
 // to differentiate "job id doesn't exist" from "job id exists but
 // already moved past pending (worker claimed / completed / failed)".
@@ -646,8 +652,6 @@ var ErrUploadJobNotFound = errors.New("upload job not found or no longer pending
 // overwrite a peer's state". Same shape as outbox_repo.go's
 // ErrOutboxGone / ErrOutboxRace for the dispatcher.
 var ErrUploadJobLeaseLost = errors.New("upload job: lease lost (row claimed by peer or recovered by reaper)")
-
-const uploadJobListDefaultLimit = 200
 
 // ListByUser returns upload_jobs scoped to userID, optionally narrowed
 // by filter. Ordered by scheduled_at ASC NULLS LAST so the calendar's
@@ -771,20 +775,6 @@ func (r *UploadJobRepository) Reschedule(jobID, userID int64, newPublishAt time.
 		return models.UploadJob{}, ErrUploadJobNotFound
 	}
 	return *job, nil
-}
-
-// UploadJobPendingCount is the per-account rollup returned by
-// PendingCountsByAccount — the single-query aggregate that backs the
-// dashboard widget's per-account "Programmati" badge. It's exposed
-// at the repository level so the dashboard handler can stream an
-// exact count + earliest-scheduled row for every target the user
-// has, in one SELECT — no client-side bucketing and no limit cap
-// hiding uploads past the 200-row budget that drives the per-account
-// list endpoint.
-type UploadJobPendingCount struct {
-	AccountID     int64
-	Count         int
-	NextPublishAt *time.Time
 }
 
 // PendingCountsByAccount returns the GROUP BY per target for every
@@ -953,3 +943,64 @@ func (r *UploadJobRepository) AggregateByFolder(folderID string, userID int64) (
 	return summary, nil
 }
 
+// SaveYouTubeSession persists the resumable upload session for a leased
+// upload job. The session URI, byte offset, chunk size and token expiry
+// are stamped so a crashed worker can resume the upload. The update is
+// CAS-guarded by lease_owner and status='leased' so a recovered row
+// cannot be overwritten by a stale worker.
+func (r *UploadJobRepository) SaveYouTubeSession(ctx context.Context, id int64, workerID, sessionURI string, offset, chunkSize int64, expiresAt time.Time) error {
+	if workerID == "" {
+		return fmt.Errorf("upload job SaveYouTubeSession: empty workerID")
+	}
+	if sessionURI == "" {
+		return fmt.Errorf("upload job SaveYouTubeSession: empty sessionURI")
+	}
+	res, err := r.db.ExecContext(ctx, SQLSaveYouTubeSession,
+		id, sessionURI, offset, expiresAt, chunkSize, workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("upload job SaveYouTubeSession: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("upload job SaveYouTubeSession rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+	}
+	return nil
+}
+
+// ClearYouTubeSession wipes the resumable upload session for a leased
+// upload job. Called after a successful publish or when the session
+// token expires and must be discarded. Like SaveYouTubeSession, the
+// operation is CAS-guarded by lease_owner and status='leased'.
+func (r *UploadJobRepository) ClearYouTubeSession(ctx context.Context, id int64, workerID string) error {
+	if workerID == "" {
+		return fmt.Errorf("upload job ClearYouTubeSession: empty workerID")
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE upload_jobs
+		 SET youtube_session_uri       = NULL,
+		     youtube_session_offset    = NULL,
+		     youtube_session_expires_at  = NULL,
+		     youtube_chunk_size        = NULL,
+		     youtube_last_chunk_at     = NULL,
+		     updated_at                = NOW()
+		 WHERE id = $1
+		   AND lease_owner = $2
+		   AND status      = 'leased'`,
+		id, workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("upload job ClearYouTubeSession: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("upload job ClearYouTubeSession rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d workerID=%s", ErrUploadJobLeaseLost, id, workerID)
+	}
+	return nil
+}

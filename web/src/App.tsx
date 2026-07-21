@@ -21,7 +21,9 @@ import { CookieBanner } from "./components/CookieBanner";
 import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
 import { ToastProvider } from "./components/toast";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
+import { AdminProtectedRoute } from "./components/auth/AdminProtectedRoute";
 import { InternalLayout } from "./components/layout/InternalLayout";
+import { AdminDashboardPage } from "./pages/internal/AdminDashboard";
 
 const PlatformPage = lazy(() =>
   import("./pages/platforms/PlatformPage").then((m) => ({
@@ -92,12 +94,23 @@ function App() {
                 <Route path="posts" element={<InternalPosts />} />
                 <Route path="compose" element={<InternalCompose />} />
                 <Route path="calendar" element={<CalendarPage />} />
-                <Route path="groups" element={<GroupsPage />} />
-                <Route
-                  path="uploads/calendar"
+                <Route path="groups" element={<GroupsPage />} />                <Route path="uploads/calendar"
                   element={<CalendarPage />}
                 />
             </Route>
+
+            {/* Admin area — gated by AdminProtectedRoute and rendered
+                inside InternalLayout so the sidebar stays visible. */}
+            <Route
+              path="/admin/dashboard"
+              element={
+                <AdminProtectedRoute>
+                  <InternalLayout>
+                    <AdminDashboardPage />
+                  </InternalLayout>
+                </AdminProtectedRoute>
+              }
+            />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

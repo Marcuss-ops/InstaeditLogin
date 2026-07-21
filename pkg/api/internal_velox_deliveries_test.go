@@ -109,9 +109,10 @@ func (f *fakeDeliveryEnv) seed(id string, status models.ExternalDeliveryStatus, 
 func newDeliveriesTestRouter(t *testing.T, deliveries ExternalDeliveryStore, token string) *Router {
 	t.Helper()
 	r := &Router{
-		mux:                chi.NewRouter(),
-		externalDeliveries: deliveries,
-		veloxAPIToken:      token,
+		mux:                  chi.NewRouter(),
+		externalDeliveries:   deliveries,
+		externalDestinations: &fakeDestinationStorage{},
+		veloxAPIToken:        token,
 	}
 	r.registerInternalVeloxRoutes()
 	return r

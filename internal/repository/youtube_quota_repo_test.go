@@ -40,9 +40,6 @@ func TestYouTubeDailyQuota_ReserveQuota_AllowsUnderLimit(t *testing.T) {
 		FOR UPDATE`).
 		WithArgs(todayPattern).
 		WillReturnRows(sqlmock.NewRows([]string{"calls", "limit"}).AddRow(50, 300))
-	mock.ExpectExec(`UPDATE youtube_quota_daily SET "limit" = $1 WHERE date = $2`).
-		WithArgs(300, todayPattern).
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE youtube_quota_daily SET calls = calls + 1 WHERE date = $1`).
 		WithArgs(todayPattern).
 		WillReturnResult(sqlmock.NewResult(0, 1))

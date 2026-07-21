@@ -16,8 +16,8 @@ package repository
 
 import (
 	"context"
-	"errors"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -44,11 +44,11 @@ func todayUTC() time.Time {
 
 // ReserveQuota atomically:
 //
-//   1. Upserts today's row at limit=defaultLimit.
-//   2. Locks the row via SELECT … FOR UPDATE.
-//   3. If calls >= limit, returns (false, retryAfterSeconds, nil) with
-//      retryAfterSeconds == seconds until next UTC midnight.
-//   4. Else, increments calls by 1, commits, returns (true, 0, nil).
+//  1. Upserts today's row at limit=defaultLimit.
+//  2. Locks the row via SELECT … FOR UPDATE.
+//  3. If calls >= limit, returns (false, retryAfterSeconds, nil) with
+//     retryAfterSeconds == seconds until next UTC midnight.
+//  4. Else, increments calls by 1, commits, returns (true, 0, nil).
 //
 // Concurrency: the FOR UPDATE serializes concurrent reservations
 // across pods, so the limit is enforced strictly. defaultLimit is

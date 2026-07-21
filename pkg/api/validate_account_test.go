@@ -9,7 +9,9 @@
 // and a second declaration in the same package would fail to
 // compile. Compile-time interface conformance is verified via the
 // production-side compile-time assertion
-//   var _ YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)
+//
+//	var _ YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)
+//
 // in handlers.go — that catches any drift between the narrow
 // capability interface and the production type WITHOUT us re-
 // declaring anything here.

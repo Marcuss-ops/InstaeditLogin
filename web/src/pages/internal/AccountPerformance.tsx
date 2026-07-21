@@ -8,6 +8,7 @@ import {
   Users,
   Eye,
   Video,
+  Calendar,
   Table,
 } from "lucide-react";
 import {
@@ -35,6 +36,8 @@ type PerformanceSummary = {
   subscribers: number;
   views: number;
   videos: number;
+  engagement_rate: number;
+  publication_frequency: number;
 };
 
 type PerformanceHistoryPoint = {
@@ -72,7 +75,8 @@ function formatNumber(value: number | string): string {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return `${n}`;
+  if (Number.isInteger(n)) return `${n}`;
+  return n.toFixed(2);
 }
 
 function formatDate(value: string | number): string {
@@ -106,11 +110,13 @@ function MetricCard({
   value,
   icon: Icon,
   growth,
+  subtitle,
 }: {
   label: string;
   value: number;
   icon: React.ElementType;
-  growth: PerformanceMetricGrowth;
+  growth?: PerformanceMetricGrowth;
+  subtitle?: string;
 }) {
   return (
     <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5">
@@ -120,12 +126,15 @@ function MetricCard({
           <p className="text-[28px] font-extrabold tracking-tight text-white mt-1">
             {formatNumber(value)}
           </p>
+          {subtitle && (
+            <p className="text-[12px] text-[#9aa0aa] mt-1">{subtitle}</p>
+          )}
         </div>
         <div className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-[#9aa0aa]">
           <Icon size={20} />
         </div>
       </div>
-      <GrowthBadge value={growth} />
+      {growth && <GrowthBadge value={growth} />}
     </div>
   );
 }
@@ -304,7 +313,7 @@ export function AccountPerformancePage() {
             </div>
 
             {/* Summary cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
               <MetricCard
                 label="Subscribers"
                 value={state.data.summary.subscribers}
@@ -322,6 +331,18 @@ export function AccountPerformancePage() {
                 value={state.data.summary.videos}
                 icon={Video}
                 growth={state.data.growth.videos}
+              />
+              <MetricCard
+                label="Engagement"
+                value={state.data.summary.engagement_rate}
+                icon={TrendingUp}
+                subtitle="views / video"
+              />
+              <MetricCard
+                label="Frequency"
+                value={state.data.summary.publication_frequency}
+                icon={Calendar}
+                subtitle="videos / day"
               />
             </div>
 

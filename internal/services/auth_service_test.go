@@ -68,11 +68,11 @@ func TestAuthService_Register_HappyPath(t *testing.T) {
 	now := time.Now()
 
 	// 1) Find existing user (returns no rows).
-	mock.ExpectQuery(
-		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-	       created_at, updated_at FROM users WHERE email = $1`,
+	mock.ExpectQuery(		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
+       is_admin, admin_granted_at, admin_granted_by,
+       created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("test@example.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "created_at", "updated_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "is_admin", "admin_granted_at", "admin_granted_by", "created_at", "updated_at"}))
 
 	// 2) Insert user, returning id=1.
 	mock.ExpectQuery(
@@ -123,12 +123,11 @@ func TestAuthService_Register_DuplicateEmail(t *testing.T) {
 
 	now := time.Now()
 
-	mock.ExpectQuery(
-		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-	       created_at, updated_at FROM users WHERE email = $1`,
+	mock.ExpectQuery(		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
+       is_admin, admin_granted_at, admin_granted_by,
+       created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("dupe@example.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "created_at", "updated_at"}).
-			AddRow(2, "dupe@example.com", "Existing", []byte("hash"), false, now, now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "is_admin", "admin_granted_at", "admin_granted_by", "created_at", "updated_at"}).AddRow(2, "dupe@example.com", "Existing", []byte("hash"), false, false, nil, nil, now, now))
 
 	_, _, err := svc.Register("dupe@example.com", "password1", "Second")
 	if err != services.ErrEmailAlreadyTaken {
@@ -149,12 +148,11 @@ func TestAuthService_Login_HappyPath(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password1"), bcrypt.DefaultCost)
 
 	// 1) Find user by email.
-	mock.ExpectQuery(
-		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-	       created_at, updated_at FROM users WHERE email = $1`,
+	mock.ExpectQuery(		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
+       is_admin, admin_granted_at, admin_granted_by,
+       created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("login@example.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "created_at", "updated_at"}).
-			AddRow(1, "login@example.com", "Login User", hash, true, now, now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "is_admin", "admin_granted_at", "admin_granted_by", "created_at", "updated_at"}).AddRow(1, "login@example.com", "Login User", hash, true, false, nil, nil, now, now))
 
 	// 2) resolveActiveWorkspace: ListByOwner returns one workspace.
 	mock.ExpectQuery(
@@ -188,12 +186,11 @@ func TestAuthService_Login_WrongPassword(t *testing.T) {
 	now := time.Now()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password1"), bcrypt.DefaultCost)
 
-	mock.ExpectQuery(
-		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
-	       created_at, updated_at FROM users WHERE email = $1`,
+	mock.ExpectQuery(		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
+       is_admin, admin_granted_at, admin_granted_by,
+       created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("wrong@example.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "created_at", "updated_at"}).
-			AddRow(1, "wrong@example.com", "User", hash, true, now, now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "name", "password_hash", "email_verified", "is_admin", "admin_granted_at", "admin_granted_by", "created_at", "updated_at"}).AddRow(1, "wrong@example.com", "User", hash, true, false, nil, nil, now, now))
 
 	_, _, err := svc.Login("wrong@example.com", "wrongpassword1")
 	if err != services.ErrInvalidPassword {

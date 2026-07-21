@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useId, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -9,14 +9,15 @@ import {
   Calendar,
   FolderTree,
   BarChart3,
+  Shield,
   LogOut,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { logout } from "../../lib/auth";
+import { fetchSession, logout } from "../../lib/auth";
 
-const navItems = [
+const baseNavItems = [
   { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/app/performance", label: "Performance", icon: BarChart3 },
   { to: "/app/uploads", label: "Imports", icon: FolderInput },
@@ -27,6 +28,8 @@ const navItems = [
   { to: "/app/compose", label: "Editor", icon: PenSquare },
 ];
 
+const adminNavItem = { to: "/admin/dashboard", label: "Admin", icon: Shield };
+
 export type SidebarProps = {
   collapsed: boolean;
   onToggle: () => void;
@@ -35,6 +38,22 @@ export type SidebarProps = {
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const location = useLocation();
   const gradientId = useId();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    void (async () => {
+      const session = await fetchSession();
+      if (mounted) {
+        setIsAdmin(session?.isAdmin ?? false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const navItems = isAdmin ? [...baseNavItems, adminNavItem] : baseNavItems;
 
   return (
     <aside

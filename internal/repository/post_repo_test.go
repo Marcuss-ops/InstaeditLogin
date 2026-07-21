@@ -21,8 +21,10 @@ import (
 func regexMatcher() sqlmock.QueryMatcher {
 	return sqlmock.QueryMatcherFunc(func(expectedSQL, actualSQL string) error {
 		// Trim spaces around the pattern so a multi-line expected query
-		// matches when the runner folds whitespace.
-		expected := regexp.MustCompile(`\s+`).ReplaceAllString(expectedSQL, `\s+`)
+		// matches when the runner folds whitespace. QuoteMeta first so SQL
+		// metacharacters ($1 placeholders, single quotes, parentheses) are
+		// not interpreted as regex syntax.
+		expected := regexp.MustCompile(`\s+`).ReplaceAllString(regexp.QuoteMeta(expectedSQL), `\s+`)
 		re, err := regexp.Compile(expected)
 		if err == nil && re.MatchString(actualSQL) {
 			return nil
@@ -238,9 +240,9 @@ func TestPostRepository_Update_Success(t *testing.T) {
 
 	mock.ExpectExec(
 		`UPDATE posts
-		 SET title = $1, caption = $2, media_url = $3, scheduled_at = $4, status = $5
-		 WHERE id = $6 AND workspace_id = $7`,
-	).WithArgs("new", "cap", "url", &now, models.PostStatusScheduled, int64(100), int64(1)).
+		 SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7
+		 WHERE id = $8 AND workspace_id = $9`,
+	).WithArgs("new", "cap", "url", &now, "", "", models.PostStatusScheduled, int64(100), int64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	post := &models.Post{
@@ -261,9 +263,9 @@ func TestPostRepository_Update_NotFound(t *testing.T) {
 
 	mock.ExpectExec(
 		`UPDATE posts
-	 SET title = $1, caption = $2, media_url = $3, scheduled_at = $4, status = $5
-	 WHERE id = $6 AND workspace_id = $7`,
-	).WithArgs("x", "", "", (*time.Time)(nil), models.PostStatusDraft, int64(999), int64(7)).
+	 SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7
+	 WHERE id = $8 AND workspace_id = $9`,
+	).WithArgs("x", "", "", (*time.Time)(nil), "", "", models.PostStatusDraft, int64(999), int64(7)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err := repo.Update(&models.Post{
@@ -286,9 +288,9 @@ func TestPostUpdate_ExecErrorPropagates(t *testing.T) {
 
 	mock.ExpectExec(
 		`UPDATE posts
-		 SET title = $1, caption = $2, media_url = $3, scheduled_at = $4, status = $5
-		 WHERE id = $6 AND workspace_id = $7`,
-	).WithArgs("x", "", "", (*time.Time)(nil), models.PostStatusDraft, int64(100), int64(7)).
+		 SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7
+		 WHERE id = $8 AND workspace_id = $9`,
+	).WithArgs("x", "", "", (*time.Time)(nil), "", "", models.PostStatusDraft, int64(100), int64(7)).
 		WillReturnError(errors.New("db down"))
 
 	err := repo.Update(&models.Post{
@@ -417,13 +419,13 @@ func TestPostFindByID_FoundWithNullableTime(t *testing.T) {
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
 		 FROM posts
 		 WHERE id = $1`,
 	).WithArgs(int64(100)).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "scheduled_at", "status", "created_at"},
-		).AddRow(100, 1, "scheduled", "cap", "url", now, models.PostStatusScheduled, time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at"},
+		).AddRow(100, 1, "scheduled", "cap", "url", now, now, models.PostStatusScheduled, "", "", time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)))
 
 	p, err := repo.FindByID(100)
 	if err != nil {
@@ -443,15 +445,16 @@ func TestPostFindByID_FoundWithNullableTime(t *testing.T) {
 func TestPostFindByID_NilScheduledAt_RoundTripsClean(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
+	now := time.Now()
 
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
 		 FROM posts
 		 WHERE id = $1`,
 	).WithArgs(int64(1)).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "scheduled_at", "status", "created_at"},
-		).AddRow(1, 1, "draft", "", "", nil, models.PostStatusDraft, time.Now()))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at"},
+		).AddRow(1, 1, "draft", "", "", now, nil, models.PostStatusDraft, "", "", now))
 
 	p, err := repo.FindByID(1)
 	if err != nil {
@@ -470,7 +473,7 @@ func TestPostFindByID_NotFoundReturnsNilNil(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
 		 FROM posts
 		 WHERE id = $1`,
 	).WithArgs(int64(999)).
@@ -491,15 +494,15 @@ func TestPostListByWorkspace_OK(t *testing.T) {
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
 		 FROM posts
 		 WHERE workspace_id = $1
 		 ORDER BY created_at DESC`,
 	).WithArgs(int64(1)).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "scheduled_at", "status", "created_at"},
-		).AddRow(2, 1, "B", "", "", nil, models.PostStatusDraft, now).
-			AddRow(1, 1, "A", "", "", nil, models.PostStatusDraft, now))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at"},
+		).AddRow(2, 1, "B", "", "", now, nil, models.PostStatusDraft, "", "", now).
+			AddRow(1, 1, "A", "", "", now, nil, models.PostStatusDraft, "", "", now))
 
 	got, err := repo.ListByWorkspace(1)
 	if err != nil {
@@ -561,14 +564,14 @@ func TestPostListQueued_BeforeTimeFilterApplied(t *testing.T) {
 	cutoff := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
 
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, scheduled_at, status, created_at
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
 		 FROM posts
-		 WHERE status = 'queued' AND scheduled_at <= $1
-		 ORDER BY scheduled_at ASC`,
+		 WHERE status = 'queued' AND (publish_at IS NULL OR publish_at <= $1)
+		 ORDER BY publish_at ASC NULLS FIRST`,
 	).WithArgs(cutoff).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "scheduled_at", "status", "created_at"},
-		).AddRow(1, 1, "due", "", "", cutoff, models.PostStatusScheduled, cutoff))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at"},
+		).AddRow(1, 1, "due", "", "", cutoff, cutoff, models.PostStatusScheduled, "", "", cutoff))
 
 	posts, err := repo.ListQueued(cutoff)
 	if err != nil {
@@ -595,8 +598,8 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
 		 FROM post_targets pt
 		 JOIN posts p ON p.id = pt.post_id
 		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider')
-		   AND (p.scheduled_at IS NULL OR p.scheduled_at <= $1)
-		 ORDER BY p.scheduled_at ASC NULLS FIRST`,
+		   AND (p.publish_at IS NULL OR p.publish_at <= $1)
+		 ORDER BY p.publish_at ASC NULLS FIRST`,
 	).WithArgs(cutoff).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"id", "post_id", "platform_account_id", "status", "platform_post_id", "error_message", "published_at", "provider_state", "container_id", "provider_idempotency_key", "completed_at"},

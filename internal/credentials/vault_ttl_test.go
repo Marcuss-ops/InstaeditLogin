@@ -4,29 +4,29 @@
 //
 // Two invariants pinned here:
 //
-//   I-1 -- vault.Renew reads the "now" through v.clock(), not
-//          time.Now(). A regression that re-introduced time.Now()
-//          anywhere in vault.go would fail the ExpiresAt.Equal(want)
-//          assertion below.
+//	I-1 -- vault.Renew reads the "now" through v.clock(), not
+//	       time.Now(). A regression that re-introduced time.Now()
+//	       anywhere in vault.go would fail the ExpiresAt.Equal(want)
+//	       assertion below.
 //
-//   I-2 -- the 7-day Testing-mode TTL boundary lives ONLY in
-//          AppMode=testing. Production is durable past day 7.
+//	I-2 -- the 7-day Testing-mode TTL boundary lives ONLY in
+//	       AppMode=testing. Production is durable past day 7.
 //
 // seeding determinism:
 //
-//   newEncryptedToken computes ExpiresAt = time.Now().Add(duration),
-//   using wall-clock time. Vault.Renew's pre-tx FAST-PATH gate
-//   `tok.ExpiresAt.Sub(v.clock()) > 60s` is non-deterministic if
-//   the seeded.ExpiresAt drifts >60s relative to wall-clock time
-//   the test runs. The CI environment can be anywhere on a 24h
-//   wall-clock; without anchoring the seed to fc.t, the test could
-//   silently take the FAST PATH and never call the closure.
+//	newEncryptedToken computes ExpiresAt = time.Now().Add(duration),
+//	using wall-clock time. Vault.Renew's pre-tx FAST-PATH gate
+//	`tok.ExpiresAt.Sub(v.clock()) > 60s` is non-deterministic if
+//	the seeded.ExpiresAt drifts >60s relative to wall-clock time
+//	the test runs. The CI environment can be anywhere on a 24h
+//	wall-clock; without anchoring the seed to fc.t, the test could
+//	silently take the FAST PATH and never call the closure.
 //
-//   seedExpired (defined in this file) wraps newEncryptedToken for
-//   the encryption step but overrides ExpiresAt = fc.t - 1m AFTER
-//   the helper returns. This guarantees the relative gap between
-//   seeded.ExpiresAt and fc.t is exactly 1 minute, deterministic
-//   regardless of wall-clock now.
+//	seedExpired (defined in this file) wraps newEncryptedToken for
+//	the encryption step but overrides ExpiresAt = fc.t - 1m AFTER
+//	the helper returns. This guarantees the relative gap between
+//	seeded.ExpiresAt and fc.t is exactly 1 minute, deterministic
+//	regardless of wall-clock now.
 package credentials
 
 import (
@@ -51,7 +51,7 @@ type fakeClock struct {
 	t time.Time
 }
 
-func (c *fakeClock) Now() time.Time { return c.t }
+func (c *fakeClock) Now() time.Time  { return c.t }
 func (c *fakeClock) Set(t time.Time) { c.t = t }
 
 // ttlAwareClosure models what Google's real oauth2/v3/token endpoint
@@ -110,9 +110,9 @@ func expectSlowPathRefreshChain(mock sqlmock.Sqlmock, accountID int64) {
 // vault.Renew could silently take the wrong branch depending on the
 // wall-clock moment the test runs.
 //
-//   fc.t         -- the FAKE clock value at the time seedExpired was called
-//                   (typically T0; the helper does not advance fc.t).
-//   fc.t - 1m    -- the deterministic ExpiresAt on the seeded Token.
+//	fc.t         -- the FAKE clock value at the time seedExpired was called
+//	                (typically T0; the helper does not advance fc.t).
+//	fc.t - 1m    -- the deterministic ExpiresAt on the seeded Token.
 //
 // The 1-minute offset is far enough below fc.t that the FAST PATH
 // gate `ExpiresAt.Sub(fc.t) > 60s` reliably fails (-1m vs >60s is
@@ -131,15 +131,16 @@ func seedExpired(t *testing.T, v *CredentialVault, store *mockTokenStore, fc *fa
 }
 
 // TestVault_Renew_ProductionMode_T8d_RefreshSucceeds -- spec contract:
-//  (1) fc.Set(T0).
-//  (2) v.SetClock(fc.Now) -- vault now reads from fc.
-//  (3) seedExpired at fc.t (=T0) -- expiresAt pinned to T0-1m.
-//  (4) fc.Set(T0 + 8d) -- advance simulated time.
-//  (5) Hand the vault a production-mode closure.
-//  (6) Call vault.Renew.
-//  (7) Assert: no err, AccessToken populated, AND persisted
-//      ExpiresAt.Equal(fc.t + 3600s) -- proving the injection
-//      flows through v.clock() inside saveForOAuthConnection.
+//
+//	(1) fc.Set(T0).
+//	(2) v.SetClock(fc.Now) -- vault now reads from fc.
+//	(3) seedExpired at fc.t (=T0) -- expiresAt pinned to T0-1m.
+//	(4) fc.Set(T0 + 8d) -- advance simulated time.
+//	(5) Hand the vault a production-mode closure.
+//	(6) Call vault.Renew.
+//	(7) Assert: no err, AccessToken populated, AND persisted
+//	    ExpiresAt.Equal(fc.t + 3600s) -- proving the injection
+//	    flows through v.clock() inside saveForOAuthConnection.
 //
 // A regression in vault.go that re-introduced time.Now() would
 // surface here: got.ExpiresAt would equal wall-clock-now + 3600s,

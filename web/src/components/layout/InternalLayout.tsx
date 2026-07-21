@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { AccountSwitcher } from "./AccountSwitcher";
 
-export function InternalLayout() {
+export function InternalLayout({ children }: { children?: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
@@ -14,7 +14,7 @@ export function InternalLayout() {
           <AccountSwitcher />
         </header>
         <main className="flex-1 min-w-0 overflow-y-auto">
-          <Outlet />
+          {children ?? <Outlet />}
         </main>
       </div>
     </div>

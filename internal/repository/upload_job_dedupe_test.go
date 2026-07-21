@@ -54,7 +54,9 @@ func TestCreateIfSourceAbsentCreatesCanonicalJob(t *testing.T) {
 			job.Caption,
 			[]byte(`[4,8]`),
 			string(job.Status),
+			job.IngestAfter,
 			sql.NullTime{Time: scheduledAt, Valid: true},
+			job.DefaultPrivacyLevel,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).AddRow(55, createdAt, updatedAt))
 	mock.ExpectCommit()

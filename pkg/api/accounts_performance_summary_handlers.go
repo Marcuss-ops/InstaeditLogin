@@ -14,11 +14,11 @@ import (
 // channelPerformanceSummary is the per-account wire shape returned by
 // GET /api/v1/accounts/performance/summary.
 type channelPerformanceSummary struct {
-	ID       int64                       `json:"id"`
-	Platform string                      `json:"platform"`
-	Username string                     `json:"username"`
-	Metrics  accountPerformanceSummary   `json:"metrics"`
-	Growth   accountPerformanceGrowth    `json:"growth"`
+	ID       int64                     `json:"id"`
+	Platform string                    `json:"platform"`
+	Username string                    `json:"username"`
+	Metrics  accountPerformanceSummary `json:"metrics"`
+	Growth   accountPerformanceGrowth  `json:"growth"`
 }
 
 // rankingItem is a single leaderboard entry (channel + metric value).
@@ -31,21 +31,28 @@ type rankingItem struct {
 // rankings aggregates several leaderboards derived from the latest
 // metric history for the user's connected YouTube channels.
 type rankings struct {
-	BySubscribers        []rankingItem `json:"by_subscribers"`
-	ByViews              []rankingItem `json:"by_views"`
-	ByVideos             []rankingItem `json:"by_videos"`
-	FastestGrowingSubs   []rankingItem `json:"fastest_growing_subscribers"`
-	FastestGrowingViews  []rankingItem `json:"fastest_growing_views"`
+	BySubscribers       []rankingItem `json:"by_subscribers"`
+	ByViews             []rankingItem `json:"by_views"`
+	ByVideos            []rankingItem `json:"by_videos"`
+	FastestGrowingSubs  []rankingItem `json:"fastest_growing_subscribers"`
+	FastestGrowingViews []rankingItem `json:"fastest_growing_views"`
+	TopEngagement       []rankingItem `json:"top_engagement"`
+	BottomSubscribers   []rankingItem `json:"bottom_subscribers"`
+	BottomViews         []rankingItem `json:"bottom_views"`
+	BottomEngagement    []rankingItem `json:"bottom_engagement"`
+	BottomGrowingSubs   []rankingItem `json:"bottom_growing_subscribers"`
+	BottomGrowingViews  []rankingItem `json:"bottom_growing_views"`
 }
 
 // enrichedChannel holds the intermediate metrics + growth for one
 // account while building the summary response.
 type enrichedChannel struct {
-	account  *models.PlatformAccount
-	metrics  accountPerformanceSummary
-	growth   accountPerformanceGrowth
-	pctSubs  float64
-	pctViews float64
+	account    *models.PlatformAccount
+	metrics    accountPerformanceSummary
+	growth     accountPerformanceGrowth
+	pctSubs    float64
+	pctViews   float64
+	engagement int64 // views per video * 10 (one decimal fixed point)
 }
 
 // trendPoint is a single daily aggregate across the user's YouTube
@@ -53,10 +60,10 @@ type enrichedChannel struct {
 // per video) — a proxy for content engagement when analytics data
 // (watch time, CTR) is unavailable.
 type trendPoint struct {
-	Date       string  `json:"date"`
-	Subscribers int64  `json:"subscribers"`
-	Views       int64  `json:"views"`
-	Videos      int64  `json:"videos"`
+	Date        string  `json:"date"`
+	Subscribers int64   `json:"subscribers"`
+	Views       int64   `json:"views"`
+	Videos      int64   `json:"videos"`
 	Engagement  float64 `json:"engagement"`
 }
 
@@ -65,10 +72,11 @@ type trendPoint struct {
 type accountsPerformanceSummaryResponse struct {
 	PeriodDays int `json:"period_days"`
 	Aggregates struct {
-		Channels    int   `json:"channels"`
-		Subscribers int64 `json:"subscribers"`
-		Views       int64 `json:"views"`
-		Videos      int64 `json:"videos"`
+		Channels    int    `json:"channels"`
+		Subscribers int64  `json:"subscribers"`
+		Views       int64  `json:"views"`
+		Videos      int64  `json:"videos"`
+		Revenue     *int64 `json:"revenue_cents,omitempty"`
 	} `json:"aggregates"`
 	Channels []channelPerformanceSummary `json:"channels"`
 	Rankings rankings                    `json:"rankings"`
@@ -98,20 +106,16 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 		}
 	}
 
-	accounts, err := r.userRepo.ListPlatformAccountsByUser(identity.UserID(), "")
+	filters := parsePerformanceSummaryFilters(req)
+	accounts, err := r.userRepo.ListFilteredYouTubeAccounts(identity.UserID(), filters.workspaceID, filters.group, filters.language, filters.manager)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list accounts: "+err.Error())
 		return
 	}
 
-	// Scope to YouTube only. Future iterations can accept a
-	// ?platform=... filter; today the dashboard is YouTube-specific.
-	youtubeAccounts := make([]*models.PlatformAccount, 0, len(accounts))
-	for _, a := range accounts {
-		if a.Platform == "youtube" {
-			youtubeAccounts = append(youtubeAccounts, a)
-		}
-	}
+	// The repository already scopes to YouTube and applies the requested
+	// filters, so the list can be used directly.
+	youtubeAccounts := accounts
 
 	to := time.Now().UTC()
 	from := to.AddDate(0, 0, -days+1)
@@ -128,21 +132,32 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 		histories[a.ID] = history
 
 		item := enrichedChannel{account: a}
+		var latest repository.AccountMetricPoint
 		if len(history) > 0 {
-			latest := history[len(history)-1]
+			latest = history[len(history)-1]
 			item.metrics = accountPerformanceSummary{
 				Subscribers: latest.Subscribers,
 				Views:       latest.Views,
 				Videos:      latest.Videos,
+				Revenue:     latest.RevenueCents,
+				RPM:         latest.RPMCents,
+				CPM:         latest.CPMCents,
 			}
-			if len(history) >= 2 {
-				first := history[0]
-				item.growth.Subscribers = growth(first.Subscribers, latest.Subscribers)
-				item.growth.Views = growth(first.Views, latest.Views)
-				item.growth.Videos = growth(first.Videos, latest.Videos)
-				item.pctSubs = item.growth.Subscribers.Percent
-				item.pctViews = item.growth.Views.Percent
+			if latest.Videos > 0 {
+				item.engagement = int64(float64(latest.Views) / float64(latest.Videos) * 10)
 			}
+		}
+		if len(history) >= 2 {
+			first := history[0]
+			item.growth.Subscribers = growth(first.Subscribers, latest.Subscribers)
+			item.growth.Views = growth(first.Views, latest.Views)
+			item.growth.Videos = growth(first.Videos, latest.Videos)
+			if first.RevenueCents != nil && latest.RevenueCents != nil {
+				g := growth(*first.RevenueCents, *latest.RevenueCents)
+				item.growth.Revenue = &g
+			}
+			item.pctSubs = item.growth.Subscribers.Percent
+			item.pctViews = item.growth.Views.Percent
 		}
 		enrichedList = append(enrichedList, item)
 	}
@@ -167,6 +182,21 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 	resp.Rankings = buildRankings(enrichedList)
 	resp.Trends = buildTrends(youtubeAccounts, histories, from, to)
 
+	// Aggregate revenue only from channels that have it. The total is
+	// the latest known revenue for each channel, not a sum across the
+	// entire period (which would over-count daily rows).
+	var totalRevenue int64
+	hasRevenue := false
+	for _, e := range enrichedList {
+		if e.metrics.Revenue != nil {
+			totalRevenue += *e.metrics.Revenue
+			hasRevenue = true
+		}
+	}
+	if hasRevenue {
+		resp.Aggregates.Revenue = &totalRevenue
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -177,6 +207,21 @@ func buildRankings(items []enrichedChannel) rankings {
 	r.BySubscribers = sortedRanking(items, func(e enrichedChannel) int64 { return e.metrics.Subscribers })
 	r.ByViews = sortedRanking(items, func(e enrichedChannel) int64 { return e.metrics.Views })
 	r.ByVideos = sortedRanking(items, func(e enrichedChannel) int64 { return e.metrics.Videos })
+	// Engagement only makes sense for channels that have at least one
+	// video; channels with no videos would otherwise dominate the top
+	// and bottom lists with a value of 0.
+	engagementItems := make([]enrichedChannel, 0, len(items))
+	for _, it := range items {
+		if it.metrics.Videos > 0 {
+			engagementItems = append(engagementItems, it)
+		}
+	}
+	r.TopEngagement = sortedRanking(engagementItems, func(e enrichedChannel) int64 { return e.engagement })
+
+	// Bottom performers (ascending order).
+	r.BottomSubscribers = sortedRankingAsc(items, func(e enrichedChannel) int64 { return e.metrics.Subscribers })
+	r.BottomViews = sortedRankingAsc(items, func(e enrichedChannel) int64 { return e.metrics.Views })
+	r.BottomEngagement = sortedRankingAsc(engagementItems, func(e enrichedChannel) int64 { return e.engagement })
 
 	// Fastest growing by percent change over the period.
 	r.FastestGrowingSubs = sortedRanking(items, func(e enrichedChannel) int64 {
@@ -186,6 +231,12 @@ func buildRankings(items []enrichedChannel) rankings {
 		return int64(e.pctSubs * 10)
 	})
 	r.FastestGrowingViews = sortedRanking(items, func(e enrichedChannel) int64 {
+		return int64(e.pctViews * 10)
+	})
+	r.BottomGrowingSubs = sortedRankingAsc(items, func(e enrichedChannel) int64 {
+		return int64(e.pctSubs * 10)
+	})
+	r.BottomGrowingViews = sortedRankingAsc(items, func(e enrichedChannel) int64 {
 		return int64(e.pctViews * 10)
 	})
 
@@ -249,6 +300,14 @@ func buildTrends(
 }
 
 func sortedRanking(items []enrichedChannel, valueFn func(enrichedChannel) int64) []rankingItem {
+	return sortedRankingDirection(items, valueFn, true)
+}
+
+func sortedRankingAsc(items []enrichedChannel, valueFn func(enrichedChannel) int64) []rankingItem {
+	return sortedRankingDirection(items, valueFn, false)
+}
+
+func sortedRankingDirection(items []enrichedChannel, valueFn func(enrichedChannel) int64, desc bool) []rankingItem {
 	type pair struct {
 		item  enrichedChannel
 		value int64
@@ -261,7 +320,10 @@ func sortedRanking(items []enrichedChannel, valueFn func(enrichedChannel) int64)
 		if pairs[i].value == pairs[j].value {
 			return pairs[i].item.account.Username < pairs[j].item.account.Username
 		}
-		return pairs[i].value > pairs[j].value
+		if desc {
+			return pairs[i].value > pairs[j].value
+		}
+		return pairs[i].value < pairs[j].value
 	})
 
 	out := make([]rankingItem, 0, len(pairs))
@@ -273,4 +335,30 @@ func sortedRanking(items []enrichedChannel, valueFn func(enrichedChannel) int64)
 		})
 	}
 	return out
+}
+
+// performanceSummaryFilters holds the optional filter dimensions
+// supported by GET /api/v1/accounts/performance/summary.
+type performanceSummaryFilters struct {
+	workspaceID *int64
+	group       string
+	language    string
+	manager     string
+}
+
+// parsePerformanceSummaryFilters extracts the supported query parameters
+// from the request. Unknown or malformed values are ignored (treated as no
+// filter) so the dashboard degrades gracefully.
+func parsePerformanceSummaryFilters(req *http.Request) performanceSummaryFilters {
+	var f performanceSummaryFilters
+	q := req.URL.Query()
+	if ws := q.Get("workspace"); ws != "" {
+		if id, err := strconv.ParseInt(ws, 10, 64); err == nil && id > 0 {
+			f.workspaceID = &id
+		}
+	}
+	f.group = q.Get("group")
+	f.language = q.Get("language")
+	f.manager = q.Get("manager")
+	return f
 }

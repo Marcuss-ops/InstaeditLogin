@@ -1084,7 +1084,6 @@ func (r *PostRepository) RetryTarget(id int64) error {
 	return tx.Commit()
 }
 
-
 // GetMetadata (Task 7/10) returns the post's metadata JSON column
 // (or nil if the row has no metadata). Used by the publish_worker
 // canary pre-flight to read post.Metadata.canary_upload without

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getsentry/sentry-go"
 )
@@ -78,21 +79,22 @@ func TestRecovery_NoSentry_PanicWrites500(t *testing.T) {
 // called — that's the SDK's internal contract; here we only test
 // the Router-level behaviour.
 func TestRecovery_WithSentry_PanicWrites500(t *testing.T) {
-	// Init Sentry with a transport that the SDK won't actually post to
-	// (we use the default HTTP transport against a localhost endpoint
-	// AND set a sample rate of 0 so the SDK drops the event entirely).
-	// That keeps the test free of outbound network without coupling to
-	// sentry-go internals.
-	if err := sentry.Init(sentry.ClientOptions{
-		Dsn:         "https://public@127.0.0.1/1",
-		SampleRate:  0,
-		Environment: "test",
-	}); err != nil {
-		t.Fatalf("sentry.Init: %v", err)
+	// Use a local Sentry client+hub instead of sentry.Init to avoid
+	// mutating global SDK state across tests (which starts background
+	// goroutines and can race with other package tests). A local hub
+	// still exercises the Sentry-aware recovery branch without side
+	// effects on the global CurrentHub.
+	client, err := sentry.NewClient(sentry.ClientOptions{
+		Dsn:        "https://public@127.0.0.1/1",
+		SampleRate: 0,
+	})
+	if err != nil {
+		t.Fatalf("sentry.NewClient: %v", err)
 	}
-	hub := sentry.CurrentHub()
+	hub := sentry.NewHub(client, sentry.NewScope())
 
 	r := hs(hub)
+	defer sentry.Flush(2 * time.Second)
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("boom")
 	})

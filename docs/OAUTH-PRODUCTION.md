@@ -23,11 +23,12 @@ list can use the app for more than 7 days at a time.
    `instaedit.org` (TXT or CNAME record).
 2. [ ] **OAuth consent screen** filled (app name, support email, app
    domain, authorized domain, home page, privacy policy, ToS,
-   developer contact).
-3. [ ] **YouTube OAuth grant scopes** declared:
+   developer contact).3. [ ] **YouTube OAuth grant scopes** declared:
    - `youtube.upload` (videos.insert)
    - `youtube.readonly` (channels.list for P0#3 binding check +
-     processing-status poll)
+      processing-status poll)
+   - `yt-analytics-monetary.readonly` (revenue/RPM/CPM for
+      monetized channels)
    - `userinfo.email`, `userinfo.profile`, `openid` (operator identity)
 4. [ ] **Google Drive OAuth grant scopes** declared:
    - `drive.readonly` (Drive folder import; restricted scope —
@@ -296,6 +297,7 @@ requires.
 | --- | ---                                                              | ---            | ---                                                                                                       |
 | YouTube | `https://www.googleapis.com/auth/youtube.upload`                 | Sensitive      | `videos.insert` (upload a video) — required for the entire publish path                                   |
 | YouTube | `https://www.googleapis.com/auth/youtube.readonly`              | Sensitive      | `channels.list?mine=true` (P0#3 channel binding check), `videos.list` (processing-status poll)             |
+| YouTube | `https://www.googleapis.com/auth/yt-analytics-monetary.readonly` | Sensitive      | YouTube Analytics earnings report for revenue, RPM and CPM on monetized channels |
 | Drive | `https://www.googleapis.com/auth/drive.readonly`                | Restricted     | Drive folder import — folder-level listing for the batch crawler (the production batch-import flow walks arbitrary folder contents at install time) |
 | Identity | `https://www.googleapis.com/auth/userinfo.email`                 | Non-sensitive  | Identify the operator's Google Account during OAuth                                                       |
 | Identity | `https://www.googleapis.com/auth/userinfo.profile`               | Non-sensitive  | Display name + avatar for the dashboard                                                                   |

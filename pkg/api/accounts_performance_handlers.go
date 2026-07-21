@@ -18,9 +18,14 @@ type accountPerformanceResponse struct {
 }
 
 type accountPerformanceSummary struct {
-	Subscribers int64 `json:"subscribers"`
-	Views       int64 `json:"views"`
-	Videos      int64 `json:"videos"`
+	Subscribers          int64   `json:"subscribers"`
+	Views                int64   `json:"views"`
+	Videos               int64   `json:"videos"`
+	EngagementRate       float64 `json:"engagement_rate"`
+	PublicationFrequency float64 `json:"publication_frequency"`
+	Revenue              *int64  `json:"revenue_cents,omitempty"`
+	RPM                  *int64  `json:"rpm_cents,omitempty"`
+	CPM                  *int64  `json:"cpm_cents,omitempty"`
 }
 
 type accountPerformanceMetricGrowth struct {
@@ -29,9 +34,10 @@ type accountPerformanceMetricGrowth struct {
 }
 
 type accountPerformanceGrowth struct {
-	Subscribers accountPerformanceMetricGrowth `json:"subscribers"`
-	Views       accountPerformanceMetricGrowth `json:"views"`
-	Videos      accountPerformanceMetricGrowth `json:"videos"`
+	Subscribers accountPerformanceMetricGrowth  `json:"subscribers"`
+	Views       accountPerformanceMetricGrowth  `json:"views"`
+	Videos      accountPerformanceMetricGrowth  `json:"videos"`
+	Revenue     *accountPerformanceMetricGrowth `json:"revenue,omitempty"`
 }
 
 // handleGetAccountPerformance returns a historical performance view
@@ -78,9 +84,17 @@ func (r *Router) handleGetAccountPerformance(w http.ResponseWriter, req *http.Re
 	if len(history) > 0 {
 		latest := history[len(history)-1]
 		resp.Summary = accountPerformanceSummary{
-			Subscribers: latest.Subscribers,
-			Views:       latest.Views,
-			Videos:      latest.Videos,
+			Subscribers:    latest.Subscribers,
+			Views:          latest.Views,
+			Videos:         latest.Videos,
+			Revenue:        latest.RevenueCents,
+			RPM:            latest.RPMCents,
+			CPM:            latest.CPMCents,
+			EngagementRate: engagementRateForSummary(latest.Views, latest.Videos),
+		}
+		if len(history) >= 2 {
+			first := history[0]
+			resp.Summary.PublicationFrequency = publicationFrequency(first.Videos, latest.Videos, days)
 		}
 	}
 
@@ -90,6 +104,10 @@ func (r *Router) handleGetAccountPerformance(w http.ResponseWriter, req *http.Re
 		resp.Growth.Subscribers = growth(first.Subscribers, latest.Subscribers)
 		resp.Growth.Views = growth(first.Views, latest.Views)
 		resp.Growth.Videos = growth(first.Videos, latest.Videos)
+		if first.RevenueCents != nil && latest.RevenueCents != nil {
+			g := growth(*first.RevenueCents, *latest.RevenueCents)
+			resp.Growth.Revenue = &g
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -101,4 +119,27 @@ func growth(previous, current int64) accountPerformanceMetricGrowth {
 		g.Percent = float64(g.Absolute) / float64(previous) * 100
 	}
 	return g
+}
+
+// engagementRateForSummary returns average views per video, which we
+// surface as the channel-level engagement rate. Matches the
+// "engagement" ranking in the comparative dashboard.
+func engagementRateForSummary(views, videos int64) float64 {
+	if videos <= 0 {
+		return 0
+	}
+	return float64(views) / float64(videos)
+}
+
+// publicationFrequency returns the average number of new videos
+// published per day over the requested period.
+func publicationFrequency(firstVideos, latestVideos int64, days int) float64 {
+	if days <= 0 {
+		return 0
+	}
+	newVideos := latestVideos - firstVideos
+	if newVideos < 0 {
+		newVideos = 0
+	}
+	return float64(newVideos) / float64(days)
 }

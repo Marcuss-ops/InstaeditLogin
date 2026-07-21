@@ -152,7 +152,7 @@ func (s *YouTubeOAuthService) GetLoginURLWithOptions(state string, options OAuth
 	// and the cross-PR grep recipe. Re-introduction is treated as a
 	// blocking change (the OAuth brand-verification round on the
 	// OAuth consent screen would re-open).
-	params.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly openid email profile")
+	params.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics-monetary.readonly openid email profile")
 	params.Set("response_type", "code")
 	params.Set("access_type", "offline")
 	params.Set("include_granted_scopes", "true")

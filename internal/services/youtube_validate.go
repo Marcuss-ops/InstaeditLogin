@@ -92,9 +92,9 @@ type youtubeTokenInfoResponse struct {
 // expires_in) plus an `email` field the script doesn't expose today
 // (openid scope returns it; useful for the operator-side audit log).
 //
-// HasUpload / HasReadonly are derived flags computed at construction
-// time so callers can write `if !info.HasUpload { ... }` without
-// re-parsing `Scope` themselves. The canonical scope strings are
+// HasUpload / HasReadonly / HasMonetary are derived flags computed at
+// construction time so callers can write `if !info.HasUpload { ... }`
+// without re-parsing `Scope` themselves. The canonical scope strings are
 // the full https://www.googleapis.com/auth/<scope> form (NOT the
 // shortened alias) — matches what GetLoginURLWithOptions sets in
 // the consent URL and what Google returns from tokeninfo.
@@ -107,6 +107,9 @@ type YouTubeTokenInfo struct {
 
 	HasUpload   bool
 	HasReadonly bool
+	// HasMonetary is true when the token has the YouTube Analytics
+	// monetary-readonly scope required for revenue/RPM/CPM data.
+	HasMonetary bool
 }
 
 // GetTokenInfo calls Google's oauth2/v3/tokeninfo public introspection
@@ -191,6 +194,8 @@ func (s *YouTubeOAuthService) GetTokenInfo(ctx context.Context, accessToken stri
 			out.HasUpload = true
 		case "https://www.googleapis.com/auth/youtube.readonly":
 			out.HasReadonly = true
+		case "https://www.googleapis.com/auth/yt-analytics-monetary.readonly":
+			out.HasMonetary = true
 		}
 	}
 	return out, nil

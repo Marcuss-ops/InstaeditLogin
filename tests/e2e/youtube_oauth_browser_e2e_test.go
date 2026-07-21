@@ -52,48 +52,50 @@
 //     the production provider's HTTP POST hits). Production
 //     handlers talk to this fake instead of accounts.google.com.
 //   - the real Go API under test (api.NewRouter), wired with:
-//       * the real CapabilityRouter (registers our
-//         fake-Google-driven YouTube provider)
-//       * the real auth.Manager (HS256 JWT verification)
-//       * the real vault (SaveEncryptedToken writes to `tokens`)
-//       * the real TokenRepository (real SQL INSERT)
-//       * the real handleCallback production path
+//   - the real CapabilityRouter (registers our
+//     fake-Google-driven YouTube provider)
+//   - the real auth.Manager (HS256 JWT verification)
+//   - the real vault (SaveEncryptedToken writes to `tokens`)
+//   - the real TokenRepository (real SQL INSERT)
+//   - the real handleCallback production path
 //
 // What it drives the browser through
 // ----------------------------------
-//   chromedp navigates the headless Chrome to:
-//       $apiServer/api/v1/auth/youtube/login?expected_channel_id=$ch
-//   The Go handler mints an oauth_state_youtube cookie + state JWT
-//   nonce + 302 to fakeGoogle/o/oauth2/v2/auth. Chrome follows,
-//   waits for #approve-btn, clicks it, the form 302-redirects to
-//   $apiServer/api/v1/auth/youtube/callback?code=&state=$nonce.
-//   The Go callback handler:
-//       1. validates the state cookie vs URL
-//       2. calls provider.HandleCallback (real HTTP POST to
-//          fakeGoogle/oauth2/v4/token → real TokenData)
-//       3. calls our AuthorizeChannel no-op (returns the just-
-//          inserted oauth_connection_id so vault.SaveEncryptedToken
-//          has a FK target)
-//       4. vault.SaveEncryptedToken — real AES-GCM wrap of the
-//          access + refresh tokens → real SQL INSERT into `tokens`
+//
+//	chromedp navigates the headless Chrome to:
+//	    $apiServer/api/v1/auth/youtube/login?expected_channel_id=$ch
+//	The Go handler mints an oauth_state_youtube cookie + state JWT
+//	nonce + 302 to fakeGoogle/o/oauth2/v2/auth. Chrome follows,
+//	waits for #approve-btn, clicks it, the form 302-redirects to
+//	$apiServer/api/v1/auth/youtube/callback?code=&state=$nonce.
+//	The Go callback handler:
+//	    1. validates the state cookie vs URL
+//	    2. calls provider.HandleCallback (real HTTP POST to
+//	       fakeGoogle/oauth2/v4/token → real TokenData)
+//	    3. calls our AuthorizeChannel no-op (returns the just-
+//	       inserted oauth_connection_id so vault.SaveEncryptedToken
+//	       has a FK target)
+//	    4. vault.SaveEncryptedToken — real AES-GCM wrap of the
+//	       access + refresh tokens → real SQL INSERT into `tokens`
 //
 // What it asserts
 // ---------------
-//   (a) fakeGoogle.consentCalls == 1 (the browser reached Google's
-//       authorize URL — proves redirect chain + cookies work)
-//   (b) fakeGoogle.tokenCalls == 1 (the callback handler
-//       dispatched a real token exchange — proves HandleCallback
-//       integration is alive)
-//   (c) chrome ended on $apiServer/api/v1/auth/youtube/callback
-//       (proves the form's redirect_uri round-trip)
-//   (d) SQL:
-//          SELECT t.encrypted_token IS NOT NULL
-//               , t.encrypted_refresh_token IS NOT NULL
-//          FROM tokens t
-//          JOIN oauth_connections oc ON oc.id = t.oauth_connection_id
-//          WHERE oc.provider = 'youtube'
-//       — the canonical user-required SQL assertion, hits at
-//       least one youtube row, both columns NOT NULL.
+//
+//	(a) fakeGoogle.consentCalls == 1 (the browser reached Google's
+//	    authorize URL — proves redirect chain + cookies work)
+//	(b) fakeGoogle.tokenCalls == 1 (the callback handler
+//	    dispatched a real token exchange — proves HandleCallback
+//	    integration is alive)
+//	(c) chrome ended on $apiServer/api/v1/auth/youtube/callback
+//	    (proves the form's redirect_uri round-trip)
+//	(d) SQL:
+//	       SELECT t.encrypted_token IS NOT NULL
+//	            , t.encrypted_refresh_token IS NOT NULL
+//	       FROM tokens t
+//	       JOIN oauth_connections oc ON oc.id = t.oauth_connection_id
+//	       WHERE oc.provider = 'youtube'
+//	    — the canonical user-required SQL assertion, hits at
+//	    least one youtube row, both columns NOT NULL.
 //
 // Caveats
 // -------
@@ -355,10 +357,10 @@ func htmlEscape(s string) string {
 // -----------------------------------------------------------------------------
 
 type browserSmokeYouTubeProvider struct {
-	fake                 *fakeGoogleOauthServer
-	redirectURI          string
-	clientID             string
-	httpClient           *http.Client
+	fake        *fakeGoogleOauthServer
+	redirectURI string
+	clientID    string
+	httpClient  *http.Client
 }
 
 // Name satisfies services.OAuthProvider.
@@ -483,8 +485,8 @@ func (p *browserSmokeYouTubeProvider) DiscoverAccounts(_ context.Context, _, _ s
 // -----------------------------------------------------------------------------
 
 type browserSmokeChannelAuthorizer struct {
-	db         *sql.DB
-	connID     int64
+	db             *sql.DB
+	connID         int64
 	authorizeCalls atomic.Int64
 }
 

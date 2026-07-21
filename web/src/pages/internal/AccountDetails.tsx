@@ -82,7 +82,7 @@ type FetchState =
 type ContentState =
   | { kind: "idle" }
   | { kind: "loading" }
-  | { kind: "ready"; page: ContentPage }
+  | { kind: "ready"; items: ContentItem[]; nextCursor?: string; isLoadingMore?: boolean; loadMoreError?: string }
   | { kind: "error"; message: string };
 
 function MetricCard({ metric }: { metric: AccountMetric }) {
@@ -212,15 +212,38 @@ export function AccountDetailsPage() {
 
   const loadContent = useCallback(
     async (cursor?: string) => {
-      setContentState({ kind: "loading" });
+      const isAppend = !!cursor;
+      if (isAppend) {
+        setContentState((prev) =>
+          prev.kind === "ready"
+            ? { ...prev, isLoadingMore: true, loadMoreError: undefined }
+            : { kind: "loading" }
+        );
+      } else {
+        setContentState({ kind: "loading" });
+      }
       try {
         const url = `/api/v1/accounts/${accountId}/content?limit=20${cursor ? `&cursor=${cursor}` : ""}`;
         const response = await authedFetch(url);
         const data = (await response.json()) as ContentPage;
-        setContentState({ kind: "ready", page: data });
+        setContentState((prev) => ({
+          kind: "ready",
+          items:
+            isAppend && prev.kind === "ready"
+              ? [...prev.items, ...data.items]
+              : data.items,
+          nextCursor: data.next_cursor,
+          isLoadingMore: false,
+          loadMoreError: undefined,
+        }));
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unable to load content.";
-        setContentState({ kind: "error", message });
+        setContentState((prev) => {
+          if (isAppend && prev.kind === "ready") {
+            return { ...prev, isLoadingMore: false, loadMoreError: message };
+          }
+          return { kind: "error", message };
+        });
       }
     },
     [accountId],
@@ -479,25 +502,45 @@ export function AccountDetailsPage() {
             )}
             {contentState.kind === "ready" && (
               <>
-                {contentState.page.items.length === 0 ? (
+                {contentState.items.length === 0 ? (
                   <div className="text-center py-12 text-[13px] text-[#9aa0aa]">
                     No videos found.
                   </div>
                 ) : (
                   <>
-                    {contentState.page.items.map((item) => (
+                    {contentState.items.map((item) => (
                       <ContentVideoCard key={item.external_id} item={item} />
                     ))}
-                    {contentState.page.next_cursor && (
+                    {contentState.nextCursor && !contentState.isLoadingMore && !contentState.loadMoreError && (
                       <button
                         type="button"
                         onClick={() =>
-                          void loadContent(contentState.page.next_cursor)
+                          void loadContent(contentState.nextCursor)
                         }
                         className="w-full py-3 text-[13px] font-semibold text-[#9aa0aa] hover:text-white transition-colors"
                       >
                         Load more
                       </button>
+                    )}
+                    {contentState.isLoadingMore && (
+                      <div className="flex items-center justify-center gap-2 py-3 text-[13px] text-[#9aa0aa]">
+                        <Loader2 size={14} className="animate-spin" />
+                        Loading more…
+                      </div>
+                    )}
+                    {contentState.loadMoreError && contentState.nextCursor && (
+                      <div className="flex flex-col items-center gap-2 py-3">
+                        <p className="text-[13px] text-red-400">
+                          {contentState.loadMoreError}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void loadContent(contentState.nextCursor)}
+                          className="text-[13px] font-semibold text-[#9aa0aa] hover:text-white transition-colors"
+                        >
+                          Try again
+                        </button>
+                      </div>
                     )}
                   </>
                 )}

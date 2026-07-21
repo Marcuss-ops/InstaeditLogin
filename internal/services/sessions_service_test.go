@@ -90,6 +90,103 @@ func TestSessionsService_Start_AccessJTIMatchesJWT(t *testing.T) {
 	}
 }
 
+func TestSessionsService_IsActive(t *testing.T) {
+	svc, mock, cleanup := newTestSessionsService(t)
+	defer cleanup()
+
+	now := time.Now()
+	past := now.Add(-time.Hour)
+	future := now.Add(time.Hour)
+
+	cases := []struct {
+		name     string
+		rows     func() *sqlmock.Rows
+		expected bool
+	}{
+		{
+			name: "active",
+			rows: func() *sqlmock.Rows {
+				return sqlmock.NewRows([]string{
+					"id", "user_id", "workspace_id", "token_family_id", "access_jti",
+					"refresh_token_hash", "user_agent", "ip_hash", "created_at", "expires_at",
+					"refresh_expires_at", "last_used_at", "revoked_at", "revoke_reason",
+				}).AddRow(1, int64(1), int64(7), "family", "jti", []byte("hash"), "", "", now, future, future, now, nil, "")
+			},
+			expected: true,
+		},
+		{
+			name: "revoked",
+			rows: func() *sqlmock.Rows {
+				return sqlmock.NewRows([]string{
+					"id", "user_id", "workspace_id", "token_family_id", "access_jti",
+					"refresh_token_hash", "user_agent", "ip_hash", "created_at", "expires_at",
+					"refresh_expires_at", "last_used_at", "revoked_at", "revoke_reason",
+				}).AddRow(1, int64(1), int64(7), "family", "jti", []byte("hash"), "", "", now, future, future, now, &now, "logout")
+			},
+			expected: false,
+		},
+		{
+			name: "access_expired",
+			rows: func() *sqlmock.Rows {
+				return sqlmock.NewRows([]string{
+					"id", "user_id", "workspace_id", "token_family_id", "access_jti",
+					"refresh_token_hash", "user_agent", "ip_hash", "created_at", "expires_at",
+					"refresh_expires_at", "last_used_at", "revoked_at", "revoke_reason",
+				}).AddRow(1, int64(1), int64(7), "family", "jti", []byte("hash"), "", "", now, past, future, now, nil, "")
+			},
+			expected: false,
+		},
+		{
+			name: "refresh_expired",
+			rows: func() *sqlmock.Rows {
+				return sqlmock.NewRows([]string{
+					"id", "user_id", "workspace_id", "token_family_id", "access_jti",
+					"refresh_token_hash", "user_agent", "ip_hash", "created_at", "expires_at",
+					"refresh_expires_at", "last_used_at", "revoked_at", "revoke_reason",
+				}).AddRow(1, int64(1), int64(7), "family", "jti", []byte("hash"), "", "", now, future, past, now, nil, "")
+			},
+			expected: false,
+		},
+		{
+			name: "missing",
+			rows: func() *sqlmock.Rows {
+				return sqlmock.NewRows([]string{
+					"id", "user_id", "workspace_id", "token_family_id", "access_jti",
+					"refresh_token_hash", "user_agent", "ip_hash", "created_at", "expires_at",
+					"refresh_expires_at", "last_used_at", "revoked_at", "revoke_reason",
+				})
+			},
+			expected: false,
+		},
+	}
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			mock.ExpectQuery(
+				`SELECT id, user_id, workspace_id, token_family_id, access_jti,
+		        refresh_token_hash, user_agent, COALESCE(ip_hash, ''),
+		        created_at, expires_at, refresh_expires_at, last_used_at,
+		        revoked_at, COALESCE(revoke_reason, '')
+		 FROM sessions
+		 WHERE id = $1`,
+			).WithArgs(int64(1)).WillReturnRows(c.rows())
+
+			active, err := svc.IsActive(1)
+			if err != nil {
+				t.Fatalf("IsActive: %v", err)
+			}
+			if active != c.expected {
+				t.Fatalf("IsActive() = %v, want %v", active, c.expected)
+			}
+		})
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 func TestSessionsService_Refresh_AccessJTIMatchesJWT(t *testing.T) {
 	svc, mock, cleanup := newTestSessionsService(t)
 	defer cleanup()

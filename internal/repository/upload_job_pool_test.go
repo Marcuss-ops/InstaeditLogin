@@ -50,23 +50,27 @@ func TestClaimBatch_Happy(t *testing.T) {
 		"id", "user_id", "workspace_id", "source_type", "source_id",
 		"drive_account_id", "folder_id", "title", "caption",
 		"targets", "status", "error_message", "post_id", "asset_id",
-		"scheduled_at", "created_at", "updated_at",
+		"ingest_after", "publish_at", "created_at", "updated_at",
 		"attempt_count", "max_attempts", "next_attempt_at",
 		"lease_owner", "lease_expires_at", "heartbeat_at",
 		"progress_bytes", "total_bytes", "error_code", "priority",
 		"started_at", "completed_at",
+		"youtube_session_uri", "youtube_session_offset", "youtube_session_expires_at", "youtube_chunk_size", "youtube_last_chunk_at",
+		"default_privacy_level",
 	}).
 		AddRow(101, 1, 1, "public_drive", "drive-file-1",
 			nil, nil, "t1", "c1", []byte("[1,2]"), "leased", nil, nil, nil,
-			nil, time.Now(), time.Now(),
+			time.Now(), nil, time.Now(), time.Now(),
 			1, 8, nil, workerID, leaseUntil, time.Now(),
 			0, nil, nil, 100, time.Now(), nil,
+			nil, nil, nil, nil, nil, "",
 		).
 		AddRow(102, 1, 1, "public_drive", "drive-file-2",
 			nil, nil, "t2", "c2", []byte("[3,4]"), "leased", nil, nil, nil,
-			nil, time.Now(), time.Now(),
+			time.Now(), nil, time.Now(), time.Now(),
 			1, 8, nil, workerID, leaseUntil, time.Now(),
 			0, nil, nil, 100, time.Now(), nil,
+			nil, nil, nil, nil, nil, "",
 		)
 
 	// Regex matches the distinguishing 'pending'|'retry_wait' filter so a
@@ -122,11 +126,13 @@ func TestClaimBatch_Empty(t *testing.T) {
 			"id", "user_id", "workspace_id", "source_type", "source_id",
 			"drive_account_id", "folder_id", "title", "caption",
 			"targets", "status", "error_message", "post_id", "asset_id",
-			"scheduled_at", "created_at", "updated_at",
+			"ingest_after", "publish_at", "created_at", "updated_at",
 			"attempt_count", "max_attempts", "next_attempt_at",
 			"lease_owner", "lease_expires_at", "heartbeat_at",
 			"progress_bytes", "total_bytes", "error_code", "priority",
 			"started_at", "completed_at",
+			"youtube_session_uri", "youtube_session_offset", "youtube_session_expires_at", "youtube_chunk_size", "youtube_last_chunk_at",
+			"default_privacy_level",
 		}))
 
 	jobs, err := repo.ClaimBatch(ctx, "test-worker-2", 4, 60*time.Second)
@@ -542,11 +548,11 @@ func TestAggregateByFolder_NewStates(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`COUNT(*) FILTER (WHERE status = 'retry_wait')`)).
 		WithArgs("fid", int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"pending_count", "retry_wait_count", "leased_count",
-			"processing_count", "completed_count", "failed_count",
+		"pending_count", "retry_wait_count", "leased_count",
+		"processing_count", "ready_to_publish_count", "completed_count", "failed_count",
 			"dead_letter_count", "cancelled_count",
 			"first_publish_at", "last_publish_at",
-		}).AddRow(2, 1, 0, 0, 5, 1, 0, 0, nil, nil))
+		}).AddRow(2, 1, 0, 0, 0, 5, 1, 0, 0, nil, nil))
 
 	summary, err := repo.AggregateByFolder("fid", 42)
 	if err != nil {
@@ -591,23 +597,26 @@ func TestClaimBatchForPublish_Happy(t *testing.T) {
 		"id", "user_id", "workspace_id", "source_type", "source_id",
 		"drive_account_id", "folder_id", "title", "caption",
 		"targets", "status", "error_message", "post_id", "asset_id",
-		"scheduled_at", "created_at", "updated_at",
+		"ingest_after", "publish_at", "created_at", "updated_at",
 		"attempt_count", "max_attempts", "next_attempt_at",
 		"lease_owner", "lease_expires_at", "heartbeat_at",
 		"progress_bytes", "total_bytes", "error_code", "priority",
 		"started_at", "completed_at",
+		"youtube_session_uri", "youtube_session_offset", "youtube_session_expires_at", "youtube_chunk_size", "youtube_last_chunk_at",
+		"default_privacy_level",
 	}).
 		AddRow(201, 1, 1, "public_drive", "drive-file-201",
 			nil, nil, "t201", "c201", []byte("[1,2]"), "leased", nil, nil, "asset-201",
-			nil, time.Now(), time.Now(),
+			time.Now(), nil, time.Now(), time.Now(),
 			3, 8, nil, workerID, leaseUntil, time.Now(),
 			100, 100, nil, 100, time.Now(), nil,
+			nil, nil, nil, nil, nil, "",
 		)
 
 	// Regex matches the distinguishing ready_to_publish filter so a
 	// regression that swaps ClaimBatchForPublish's CTE filter to
 	// ClaimBatch's 'pending'|'retry_wait' is caught.
-	mock.ExpectQuery(regexp.QuoteMeta(`status = 'ready_to_publish'`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`status = 'ingest_completed'`)).
 		WithArgs(1, workerID, sqlmock.AnyArg()).
 		WillReturnRows(rows)
 
@@ -646,17 +655,19 @@ func TestClaimBatchForPublish_Empty(t *testing.T) {
 
 	repo := NewUploadJobRepository(db)
 	// Regex matches the distinguishing ready_to_publish filter.
-	mock.ExpectQuery(regexp.QuoteMeta(`status = 'ready_to_publish'`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`status = 'ingest_completed'`)).
 		WithArgs(4, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "user_id", "workspace_id", "source_type", "source_id",
 			"drive_account_id", "folder_id", "title", "caption",
 			"targets", "status", "error_message", "post_id", "asset_id",
-			"scheduled_at", "created_at", "updated_at",
+			"ingest_after", "publish_at", "created_at", "updated_at",
 			"attempt_count", "max_attempts", "next_attempt_at",
 			"lease_owner", "lease_expires_at", "heartbeat_at",
 			"progress_bytes", "total_bytes", "error_code", "priority",
 			"started_at", "completed_at",
+			"youtube_session_uri", "youtube_session_offset", "youtube_session_expires_at", "youtube_chunk_size", "youtube_last_chunk_at",
+			"default_privacy_level",
 		}))
 
 	jobs, err := repo.ClaimBatchForPublish(context.Background(), "upload-test", 4, 60*time.Second)
@@ -701,7 +712,7 @@ func TestMarkIngested_Happy(t *testing.T) {
 
 	repo := NewUploadJobRepository(db)
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE upload_jobs
-         SET status           = 'ready_to_publish'`)).
+         SET status           = 'ingest_completed'`)).
 		WithArgs(int64(101), "asset-abc", int64(12345), "ingest-test-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

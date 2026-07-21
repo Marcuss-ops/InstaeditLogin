@@ -270,6 +270,31 @@ func (r *SessionRepository) ListByUser(userID int64) ([]Session, error) {
 	return out, nil
 }
 
+// FindByID returns the session row by its primary key. Returns
+// ErrSessionNotFound when the row is missing.
+func (r *SessionRepository) FindByID(id int64) (*Session, error) {
+	s := &Session{}
+	err := r.db.QueryRow(
+		`SELECT id, user_id, workspace_id, token_family_id, access_jti,
+		        refresh_token_hash, user_agent, COALESCE(ip_hash, ''),
+		        created_at, expires_at, refresh_expires_at, last_used_at,
+		        revoked_at, COALESCE(revoke_reason, '')
+		 FROM sessions
+		 WHERE id = $1`,
+		id,
+	).Scan(&s.ID, &s.UserID, &s.WorkspaceID, &s.TokenFamilyID, &s.AccessJTI,
+		&s.RefreshTokenHash, &s.UserAgent, &s.IPHash,
+		&s.CreatedAt, &s.ExpiresAt, &s.RefreshExpiresAt, &s.LastUsedAt,
+		&s.RevokedAt, &s.RevokeReason)
+	if err == sql.ErrNoRows {
+		return nil, ErrSessionNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find session by id: %w", err)
+	}
+	return s, nil
+}
+
 // MarkUsed bumps last_used_at to NOW(). Best-effort; an error here
 // does not invalidate the session.
 func (r *SessionRepository) MarkUsed(id int64) error {

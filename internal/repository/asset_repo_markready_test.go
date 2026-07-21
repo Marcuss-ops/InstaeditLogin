@@ -27,7 +27,7 @@ func newAssetRepoMockDB(t *testing.T) (*MediaAssetRepository, sqlmock.Sqlmock, f
 // runtime guard. The empty-SHA path MUST skip the UPDATE entirely
 // (returns ErrMediaAssetSHARequired before any DB roundtrip) so
 // the per-MarkReady SQL doesn't accidentally accept the empty
-// sentinel — the migration 056 NOT NULL constraint accepts ''
+// sentinel — the migration 056 NOT NULL constraint accepts ”
 // as a non-NULL value, so a repo regression that drops the
 // guard would silently preserve the empty sentinel at the SQL
 // layer. Locking the guard via sqlmock at the repo unit-test
@@ -56,7 +56,7 @@ func TestMediaAssetRepository_MarkReady_RejectsEmptySHA(t *testing.T) {
 // the runtime guard guarantees $2 is non-empty so the COALESCE was
 // removed as dead code). This regex matcher locks both the column
 // projection AND the parameter binding — a regression that re-added
-// `COALESCE(NULLIF($2, ''), sha256)` or that read sha256 from a
+// `COALESCE(NULLIF($2, ”), sha256)` or that read sha256 from a
 // different variable would trip the matcher.
 func TestMediaAssetRepository_MarkReady_HappyPath_SHAStamp(t *testing.T) {
 	repo, mock, cleanup := newAssetRepoMockDB(t)
@@ -77,8 +77,8 @@ func TestMediaAssetRepository_MarkReady_HappyPath_SHAStamp(t *testing.T) {
 		        size_bytes = \$3, content_type = \$4, error_message = '', updated_at = \$5
 		  WHERE id = \$6`).
 		WithArgs(
-			"ready",   // MediaAssetStatusReady
-			goodSHA,   // $2 — direct sha256, no COALESCE
+			"ready", // MediaAssetStatusReady
+			goodSHA, // $2 — direct sha256, no COALESCE
 			sizeBytesI,
 			mediaCT,
 			sqlmock.AnyArg(), // updated_at — time.Now() can't be predicted

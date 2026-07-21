@@ -18,6 +18,7 @@ type AccountMetricPoint struct {
 	CTR           *float64  `json:"ctr,omitempty"`
 	RevenueCents  *int64    `json:"revenue_cents,omitempty"`
 	RPMCents      *int64    `json:"rpm_cents,omitempty"`
+	CPMCents      *int64    `json:"cpm_cents,omitempty"`
 }
 
 // AccountMetricsRepository persists daily metric snapshots for
@@ -33,6 +34,38 @@ func NewAccountMetricsRepository(db *sql.DB) *AccountMetricsRepository {
 	return &AccountMetricsRepository{db: db}
 }
 
+// UpsertMonetary updates only the monetary columns for a single daily
+// metric row. It is used when earnings data arrives separately from the
+// public channel statistics (for example, from the YouTube Analytics
+// API) so that existing subscriber/view/video values are preserved.
+func (r *AccountMetricsRepository) UpsertMonetary(
+	platformAccountID int64,
+	date time.Time,
+	point AccountMetricPoint,
+) error {
+	_, err := r.db.Exec(
+		`INSERT INTO account_metric_history
+		    (platform_account_id, metric_date, subscribers, views, videos,
+		     watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents,
+		     cpm_cents, updated_at)
+		 VALUES ($1, $2, 0, 0, 0, NULL, NULL, NULL, $3, $4, $5, NOW())
+		 ON CONFLICT (platform_account_id, metric_date) DO UPDATE SET
+		    revenue_cents = EXCLUDED.revenue_cents,
+		    rpm_cents       = EXCLUDED.rpm_cents,
+		    cpm_cents       = EXCLUDED.cpm_cents,
+		    updated_at      = NOW()`,
+		platformAccountID,
+		date.Truncate(24*time.Hour),
+		point.RevenueCents,
+		point.RPMCents,
+		point.CPMCents,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert monetary metrics: %w", err)
+	}
+	return nil
+}
+
 // UpsertDaily inserts or updates a single daily metric row for an
 // account. The caller typically invokes this immediately after a fresh
 // snapshot is fetched from the provider.
@@ -45,8 +78,8 @@ func (r *AccountMetricsRepository) UpsertDaily(
 		`INSERT INTO account_metric_history
 		    (platform_account_id, metric_date, subscribers, views, videos,
 		     watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents,
-		     updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+		     cpm_cents, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
 		 ON CONFLICT (platform_account_id, metric_date) DO UPDATE SET
 		    subscribers        = EXCLUDED.subscribers,
 		    views              = EXCLUDED.views,
@@ -56,9 +89,10 @@ func (r *AccountMetricsRepository) UpsertDaily(
 		    ctr                = EXCLUDED.ctr,
 		    revenue_cents      = EXCLUDED.revenue_cents,
 		    rpm_cents          = EXCLUDED.rpm_cents,
+		    cpm_cents          = EXCLUDED.cpm_cents,
 		    updated_at         = NOW()`,
 		platformAccountID,
-		date.Truncate(24 * time.Hour),
+		date.Truncate(24*time.Hour),
 		point.Subscribers,
 		point.Views,
 		point.Videos,
@@ -67,6 +101,7 @@ func (r *AccountMetricsRepository) UpsertDaily(
 		point.CTR,
 		point.RevenueCents,
 		point.RPMCents,
+		point.CPMCents,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert daily metrics: %w", err)
@@ -83,7 +118,7 @@ func (r *AccountMetricsRepository) GetHistory(
 ) ([]AccountMetricPoint, error) {
 	rows, err := r.db.Query(
 		`SELECT metric_date, subscribers, views, videos,
-		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents
+		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents, cpm_cents
 		 FROM account_metric_history
 		 WHERE platform_account_id = $1
 		   AND metric_date >= $2
@@ -109,6 +144,7 @@ func (r *AccountMetricsRepository) GetHistory(
 			&p.CTR,
 			&p.RevenueCents,
 			&p.RPMCents,
+			&p.CPMCents,
 		); err != nil {
 			return nil, fmt.Errorf("scan metric history: %w", err)
 		}
@@ -125,7 +161,7 @@ func (r *AccountMetricsRepository) GetHistory(
 func (r *AccountMetricsRepository) LatestForAccount(platformAccountID int64) (*AccountMetricPoint, error) {
 	row := r.db.QueryRow(
 		`SELECT metric_date, subscribers, views, videos,
-		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents
+		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents, cpm_cents
 		 FROM account_metric_history
 		 WHERE platform_account_id = $1
 		 ORDER BY metric_date DESC
@@ -143,6 +179,7 @@ func (r *AccountMetricsRepository) LatestForAccount(platformAccountID int64) (*A
 		&p.CTR,
 		&p.RevenueCents,
 		&p.RPMCents,
+		&p.CPMCents,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -173,7 +210,7 @@ func (r *AccountMetricsRepository) LatestForAccounts(platformAccountIDs []int64)
 		`SELECT DISTINCT ON (platform_account_id)
 		        platform_account_id,
 		        metric_date, subscribers, views, videos,
-		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents
+		        watch_time_minutes, impressions, ctr, revenue_cents, rpm_cents, cpm_cents
 		 FROM account_metric_history
 		 WHERE platform_account_id IN (%s)
 		 ORDER BY platform_account_id, metric_date DESC`,
@@ -201,6 +238,7 @@ func (r *AccountMetricsRepository) LatestForAccounts(platformAccountIDs []int64)
 			&p.CTR,
 			&p.RevenueCents,
 			&p.RPMCents,
+			&p.CPMCents,
 		); err != nil {
 			return nil, fmt.Errorf("scan latest metrics for accounts: %w", err)
 		}

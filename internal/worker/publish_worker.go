@@ -113,7 +113,6 @@ type PublisherPostStore interface {
 	//   * Other: wrapped DB error.
 	SetProviderIdempotencyKey(id int64, key string) error
 
-
 	// GetMetadata (Task 7/10) — post metadata JSON column accessor.
 	GetMetadata(id int64) (json.RawMessage, error)
 	// SetTargetCanaryVideoID (Task 7/10) — stamps canary upload video id.
@@ -177,12 +176,11 @@ type PublishWorker struct {
 	// are pinned by every test rig in this package).
 	deliveryRegistry *services.DeliveryRegistry
 
-
 	// canonicalCanaryUploader (Task 7/10) — the YouTube canary pre-flight
 	// capability wired at startup via SetCanonicalCanaryUploader (test
 	// harness uses that setter). Nil-safe at runtime: a nil uploader
 	// makes the canary block warn + fall through to markPublishBlockedAuth.
-	canonicalCanaryUploader	services.YouTubeCanaryUploader
+	canonicalCanaryUploader services.YouTubeCanaryUploader
 }
 
 // NewPublishWorker wires the dependencies. interval <= 0 falls back to
@@ -480,7 +478,7 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		}
 	}
 
-// 5c. Optional canary pre-flight (Task 7/10). When the post carries
+	// 5c. Optional canary pre-flight (Task 7/10). When the post carries
 	// metadata.canary_upload=true, upload a 5-10s/<5MB/privacy=private canary
 	// video to the same channel and confirm the binding matches BEFORE the real
 	// publish. On mismatch the post_target is marked PostStatusBlockedAuth (via
@@ -571,7 +569,6 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	// Build the publish payload, applying the privacy-level cascade
 	// and platform-specific defaults in the process phase.
 	payload := w.buildPayload(account, post, key)
-
 
 	// FASE 1.3: throttle per-platform API calls to avoid rate-limit
 	// bans. If the throttle is nil (test mode), skip. If the platform's

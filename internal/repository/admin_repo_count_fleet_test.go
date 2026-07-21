@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
