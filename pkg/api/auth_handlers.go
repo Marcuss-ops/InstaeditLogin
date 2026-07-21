@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -506,7 +507,7 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 		UserID:      payload.UserID,
 		WorkspaceID: activeWS,
 		UserAgent:   req.UserAgent(),
-		IP:          clientIP(req),
+		IP:          r.clientIP(req),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
@@ -531,6 +532,7 @@ func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"user_id":      id.UserID(),
 		"workspace_id": id.WorkspaceID(),
+		"is_admin":     id.IsAdmin(),
 	})
 }
 
@@ -614,7 +616,20 @@ func (r *Router) csrfConfig() auth.CSRFConfig {
 func (r *Router) protected(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		csrfHandler := auth.NewCSRF(r.csrfConfig(), http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			r.auth.Middleware(next).ServeHTTP(w, req)
+			r.auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				// P0#3: access tokens must be backed by a live session row.
+				// API-key identities are stateless and bypass this check.
+				if r.sessionsSvc != nil {
+					if id := auth.IdentityFromContext(req.Context()); id != nil && !id.IsAPIKey() && id.SessionID() > 0 {
+						active, err := r.sessionsSvc.IsActive(id.SessionID())
+						if err != nil || !active {
+							writeError(w, http.StatusUnauthorized, "session inactive, revoked or expired")
+							return
+						}
+					}
+				}
+				next.ServeHTTP(w, req)
+			})).ServeHTTP(w, req)
 		}))
 		csrfHandler.ServeHTTP(w, req)
 	}
@@ -697,11 +712,11 @@ func (r *Router) extractSessionIdentity(req *http.Request) auth.Identity {
 // limiter is not wired; otherwise it wraps with OAuthStartLimit.
 // Used by Setup() so the OAuth start route registration stays
 // unconditional (no nil-guard branching in the route table).
-func OAuthStartLimitIfConfigured(svc *services.RateLimitService) func(http.Handler) http.Handler {
+func OAuthStartLimitIfConfigured(svc *services.RateLimitService, trusted []*net.IPNet) func(http.Handler) http.Handler {
 	if svc == nil {
 		return func(next http.Handler) http.Handler { return next }
 	}
-	return OAuthStartLimit(svc)
+	return OAuthStartLimit(svc, trusted)
 }
 
 const (

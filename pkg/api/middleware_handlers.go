@@ -33,13 +33,19 @@ func (r *Router) loggingMiddleware(next http.Handler) http.Handler {
 func (r *Router) handleMetrics(w http.ResponseWriter, req *http.Request) {
 	user := os.Getenv("METRICS_BASIC_AUTH_USER")
 	pass := os.Getenv("METRICS_BASIC_AUTH_PASS")
-	if user != "" && pass != "" {
-		u, p, ok := req.BasicAuth()
-		if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 || subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="metrics", charset="UTF-8"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+	// Fail-closed: the endpoint is public only when NO credentials
+	// are configured. If either env var is missing, require auth so
+	// the metrics surface is never accidentally exposed.
+	if user == "" || pass == "" {
+		w.Header().Set("WWW-Authenticate", `Basic realm="metrics", charset="UTF-8"`)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	u, p, ok := req.BasicAuth()
+	if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 || subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
+		w.Header().Set("WWW-Authenticate", `Basic realm="metrics", charset="UTF-8"`)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 	metrics.Handler().ServeHTTP(w, req)
 }

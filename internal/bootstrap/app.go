@@ -253,6 +253,14 @@ func Wire(ctx context.Context) (*App, error) {
 		corsOrigins = []string{cfg.FrontendURL}
 	}
 
+	// Parse the trusted proxy list once at startup so IP extraction
+	// and the rate limiter agree on which peers may supply
+	// X-Forwarded-For / X-Real-IP headers.
+	trustedProxies, err := api.ParseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("parse TRUSTED_PROXIES: %w", err)
+	}
+
 	storageProvider, err := services.NewS3Provider(
 		cfg.S3Endpoint, cfg.S3Bucket, cfg.S3Region,
 		cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3PathStyle, slog.Default())
@@ -376,8 +384,11 @@ func Wire(ctx context.Context) (*App, error) {
 
 	// Inject the Sentry hub into the router options so the recovery
 	// middleware can read it via the Router field (not via the App
-	// field — pkg/api stays decoupled from internal/bootstrap).
-	opts = append(opts, api.WithSentryHub(hub))
+	// field — pkg/api stays decoupled from internal/bootstrap).		opts = append(opts, api.WithSentryHub(hub))
+
+	// Trusted proxies are applied AFTER all options so both
+	// clientIP() and the rate limiter see the same parsed list.
+	opts = append(opts, api.WithTrustedProxies(trustedProxies))
 
 	// Blocco #5.3 — wire the DB + worker status into /ready's
 	// contract. The DB is consumed via PingContext + SchemaHealthy;

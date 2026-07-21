@@ -306,6 +306,7 @@ func (f *fakeSessionsStore) Revoke(_, _ int64, _ string) error          { return
 func (f *fakeSessionsStore) RevokeAll(_ int64, _ string) (int64, error) { return 0, nil }
 func (f *fakeSessionsStore) List(_ int64) ([]repository.Session, error) { return nil, nil }
 func (f *fakeSessionsStore) WithdrawFromCookie(_ string) error          { return nil }
+func (f *fakeSessionsStore) IsActive(_ int64) (bool, error)             { return true, nil }
 
 // testAdminToken is the shared invite token used by the handler
 // tests to authenticate against the public /register endpoint

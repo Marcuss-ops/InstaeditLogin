@@ -91,7 +91,7 @@ func (r *Router) handleSwitchWorkspace(w http.ResponseWriter, req *http.Request)
 		UserID:      id.UserID(),
 		WorkspaceID: targetWS,
 		UserAgent:   req.UserAgent(),
-		IP:          clientIP(req),
+		IP:          r.clientIP(req),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())

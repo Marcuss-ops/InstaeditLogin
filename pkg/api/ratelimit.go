@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,10 +33,11 @@ const (
 // The auth check is a heuristic (presence of credentials, not
 // validation) so the middleware can run before the auth chain.
 type rateLimiter struct {
-	mu       sync.Mutex
-	entries  map[string]*rateLimiterEntry
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	mu             sync.Mutex
+	entries        map[string]*rateLimiterEntry
+	stopCh         chan struct{}
+	stopOnce       sync.Once
+	trustedProxies []*net.IPNet
 }
 
 type rateLimiterEntry struct {
@@ -46,10 +48,11 @@ type rateLimiterEntry struct {
 // newRateLimiter creates a new rate limiter and starts a background
 // goroutine to evict stale entries. Call Shutdown() to stop the
 // background goroutine.
-func newRateLimiter() *rateLimiter {
+func newRateLimiter(trusted []*net.IPNet) *rateLimiter {
 	rl := &rateLimiter{
-		entries: make(map[string]*rateLimiterEntry),
-		stopCh:  make(chan struct{}),
+		entries:        make(map[string]*rateLimiterEntry),
+		stopCh:         make(chan struct{}),
+		trustedProxies: trusted,
 	}
 	go rl.cleanupLoop()
 	return rl
@@ -66,7 +69,7 @@ func (rl *rateLimiter) Shutdown() {
 // It must be wrapped around the entire mux to protect ALL routes.
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := extractIP(r)
+		ip := extractIP(r, rl.trustedProxies)
 		limit := rl.limit(r)
 
 		lim := rl.getLimiter(ip, limit)
@@ -157,22 +160,9 @@ func (rl *rateLimiter) evictStale() {
 	}
 }
 
-// extractIP returns the client IP address from the request. Checks
-// X-Forwarded-For first (for reverse-proxy deployments), then
-// X-Real-IP, then falls back to RemoteAddr.
-func extractIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the leftmost (original client) IP.
-		parts := strings.SplitN(xff, ",", 2)
-		return strings.TrimSpace(parts[0])
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
-	// Strip port from RemoteAddr (e.g. "192.168.1.1:54321" → "192.168.1.1").
-	addr := r.RemoteAddr
-	if idx := strings.LastIndex(addr, ":"); idx != -1 {
-		addr = addr[:idx]
-	}
-	return addr
+// extractIP returns the client IP address from the request. When the
+// peer is a trusted proxy, X-Forwarded-For / X-Real-IP are honored;
+// otherwise the function falls back to the direct peer address.
+func extractIP(r *http.Request, trusted []*net.IPNet) string {
+	return trustedClientIP(r, trusted)
 }

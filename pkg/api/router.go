@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"net"
 	"net/http"
 	"time"
 
@@ -294,6 +295,12 @@ type Router struct {
 	youTubeSvc YouTubeOAuthService
 
 	downloadJobCh chan VeloxDownloadJob
+
+	// trustedProxies contains the parsed TRUSTED_PROXIES networks.
+	// When non-empty, clientIP() trusts X-Forwarded-For / X-Real-IP
+	// only from these peers. Wired via WithTrustedProxies in
+	// internal/bootstrap/app.go.
+	trustedProxies []*net.IPNet
 }
 
 // ConnectionStateStore is declared in pkg/api/connections.go (SPRINT 1.2);
@@ -336,6 +343,10 @@ type SessionsStore interface {
 	RevokeAll(userID int64, reason string) (int64, error)
 	List(userID int64) ([]repository.Session, error)
 	WithdrawFromCookie(refreshPlain string) error
+	// IsActive verifies that a session row exists and has not been
+	// revoked. Used by the cookie-refresh middleware to reject
+	// invalidated access tokens early.
+	IsActive(sessionID int64) (bool, error)
 }
 
 type UserStore interface {
@@ -572,6 +583,16 @@ type UploadJobStore interface {
 
 type RouterOption func(*Router)
 
+// WithTrustedProxies configures the list of networks (IP or CIDR)
+// that are allowed to supply X-Forwarded-For / X-Real-IP headers.
+// When empty (the default), clientIP extraction falls back to the
+// direct peer address.
+func WithTrustedProxies(proxies []*net.IPNet) RouterOption {
+	return func(r *Router) {
+		r.trustedProxies = proxies
+	}
+}
+
 // Compile-time assertion that *repository.WorkspaceRepository
 // satisfies the extended WorkspaceStore interface (post-P0#4
 // channel surfaces). Caught at go vet time, not at runtime.
@@ -688,10 +709,16 @@ func NewRouter(
 		oneTimeCodes:  NewOneTimeCodeStore(60 * time.Second),
 		frontendURL:   frontendURL,
 		allowedOrigin: allowedOrigins,
-		rateLimiter:   newRateLimiter(), // FASE 1.2: per-IP token bucket
+		rateLimiter:   newRateLimiter(nil), // FASE 1.2: per-IP token bucket (trusted proxies wired via option below)
 	}
 	for _, opt := range opts {
 		opt(r)
+	}
+	// Trusted proxies are applied via WithTrustedProxies above;
+	// propagate them to the per-IP rate limiter so it extracts the
+	// original client IP only from known proxies.
+	if r.rateLimiter != nil {
+		r.rateLimiter.trustedProxies = r.trustedProxies
 	}
 	return r
 }

@@ -145,7 +145,7 @@ func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
 		UserID:      user.ID,
 		WorkspaceID: wsID,
 		UserAgent:   req.UserAgent(),
-		IP:          clientIP(req),
+		IP:          r.clientIP(req),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
@@ -217,7 +217,7 @@ func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 		UserID:      user.ID,
 		WorkspaceID: wsID,
 		UserAgent:   req.UserAgent(),
-		IP:          clientIP(req),
+		IP:          r.clientIP(req),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
@@ -241,8 +241,8 @@ func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 // setSessionCookie / setRefreshCookie helpers. The cookie-write path
 // moved to pkg/api/sessions.go's writeSessionCookies (which honors
 // r.cookieSecure instead of hardcoding Secure=true) and the
-// client-IP extraction moved to clientIP(r) in the same file
-// (which now uses net.SplitHostPort to strip the ephemeral port).
+// client-IP extraction moved to Router.clientIP(req) (which respects
+// the configured trusted proxy list and strips the ephemeral port).
 // Helpers were duplicate and diverged in behaviour: secure-cookie
 // paths now uniformly honour the production cookieSecure toggle.
 //

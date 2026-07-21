@@ -109,7 +109,7 @@ func (r *Router) Setup() http.Handler {
 	// reach the OAuth callback only via the product onboarding
 	// flow (email register / login).
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login",
-		OAuthStartLimitIfConfigured(r.rateLimitSvc)(http.HandlerFunc(r.oauthSessionRedirect(r.handleLogin))))
+		OAuthStartLimitIfConfigured(r.rateLimitSvc, r.trustedProxies)(http.HandlerFunc(r.oauthSessionRedirect(r.handleLogin))))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(r.oauthSessionRedirect(r.handleCallback)))
 	r.mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(r.handleExchangeCode))
 	r.mux.Method(http.MethodGet, "/api/v1/auth/me", r.protected(r.handleMe))

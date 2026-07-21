@@ -33,6 +33,7 @@ package api
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -148,10 +149,10 @@ func MediaPresignLimit(svc *services.RateLimitService) func(http.Handler) http.H
 // OAuthStartLimit enforces 20/min/IP on GET /api/v1/auth/{provider}/login.
 // In-memory coarse backstop. The real per-IP gate is the edge
 // tier (Cloudflare/reverse proxy) — see docs/OPERATIONS.md.
-func OAuthStartLimit(svc *services.RateLimitService) func(http.Handler) http.Handler {
+func OAuthStartLimit(svc *services.RateLimitService, trusted []*net.IPNet) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := extractIP(r)
+			ip := extractIP(r, trusted)
 			tier := services.OAuthStartLimit(ip)
 			allowed, remaining, resetAt, _ := svc.Check(r.Context(), tier, tier.Limit)
 			if !allowed {

@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -124,7 +123,7 @@ func (h *Router) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	res, err := h.sessionsSvc.Refresh(services.RefreshRequest{
 		RefreshPlaintext: plain,
 		UserAgent:        r.UserAgent(),
-		IP:               clientIP(r),
+		IP:               h.clientIP(r),
 	})
 	if err != nil {
 		switch {
@@ -144,14 +143,22 @@ func (h *Router) handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleLogout revokes the session whose refresh-token hash matches
-// the current cookie. Idempotent: returns 204 even when no row is
-// found (already logged out).
+// the current cookie. Returns 204 on success or when the session is
+// already gone (idempotent). Returns 500 on operational errors so
+// the client is not told the session was revoked when it was not.
 func (h *Router) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if h.sessionsSvc == nil {
 		writeError(w, http.StatusInternalServerError, "sessions service not configured")
 		return
 	}
-	_ = h.sessionsSvc.WithdrawFromCookie(readRefreshCookie(r))
+	refreshPlain := readRefreshCookie(r)
+	if refreshPlain != "" {
+		err := h.sessionsSvc.WithdrawFromCookie(refreshPlain)
+		if err != nil && !services.IsNoSession(err) {
+			writeError(w, http.StatusInternalServerError, "logout failed")
+			return
+		}
+	}
 	h.clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -269,27 +276,15 @@ func (h *Router) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// clientIP returns the first X-Forwarded-For hop, falling back to
-// X-Real-IP, and finally to net.SplitHostPort(r.RemoteAddr). Stable
-// IP hashing for rate-limit / SessionsService.IPHash requires
-// stripping the ephemeral port if present (otherwise every reconnect
-// from the same client produces a different hash — defeating the
-// per-IP / per-workspace rate scopes).
-func clientIP(r *http.Request) string {
-	if v := r.Header.Get("X-Forwarded-For"); v != "" {
-		if i := strings.Index(v, ","); i > 0 {
-			return strings.TrimSpace(v[:i])
-		}
-		return strings.TrimSpace(v)
-	}
-	if v := r.Header.Get("X-Real-IP"); v != "" {
-		return v
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+// clientIP returns the original client IP, using trusted proxy
+// headers only when the immediate peer is in the configured trusted
+// proxy list. Falls back to the direct peer address. Stable IP
+// hashing for rate-limit / SessionsService.IPHash requires stripping
+// the ephemeral port if present (otherwise every reconnect from the
+// same client produces a different hash — defeating the per-IP /
+// per-workspace rate scopes).
+func (r *Router) clientIP(req *http.Request) string {
+	return trustedClientIP(req, r.trustedProxies)
 }
 
 // withCtx is exported for tests; keeps the linter happy on packages

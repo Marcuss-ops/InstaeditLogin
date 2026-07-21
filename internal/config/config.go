@@ -142,6 +142,11 @@ type Config struct {
 	JWTSecret           string
 	JWTAccessTTLMinutes int
 	JWTRefreshTTLDays   int
+	// TrustedProxies is a comma-separated list of IP addresses and/or
+	// CIDR ranges that are allowed to supply X-Forwarded-For /
+	// X-Real-IP headers. When empty, the API trusts only the direct
+	// peer address (RemoteAddr). Example: "10.0.0.0/8,127.0.0.1".
+	TrustedProxies string
 	// Deprecated: JWT_TTL_HOURS is the legacy single-knob TTL.
 	// If JWT_ACCESS_TTL_MINUTES is unset, the hours value is
 	// converted to minutes. Prefer the explicit access/refresh
@@ -360,6 +365,7 @@ func Load() (*Config, error) {
 		JWTSecret:                      getEnv("JWT_SECRET", ""),
 		JWTAccessTTLMinutes:            getEnvInt("JWT_ACCESS_TTL_MINUTES", 0),
 		JWTRefreshTTLDays:              getEnvInt("JWT_REFRESH_TTL_DAYS", 0),
+		TrustedProxies:                 getEnv("TRUSTED_PROXIES", ""),
 		JWTTTLHours:                    getEnvInt("JWT_TTL_HOURS", 0),
 		LogLevel:                       getEnv("LOG_LEVEL", "info"),
 		AppEnv:                         getEnv("APP_ENV", "dev"),

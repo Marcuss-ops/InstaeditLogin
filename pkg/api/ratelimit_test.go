@@ -22,7 +22,7 @@ func echoHandler() http.HandlerFunc {
 }
 
 func TestRateLimit_AnonymousUnderLimit_Passes(t *testing.T) {
-	rl := newRateLimiter()
+	rl := newRateLimiter(nil)
 	defer rl.Shutdown()
 	handler := rl.middleware(echoHandler())
 
@@ -40,7 +40,7 @@ func TestRateLimit_AnonymousUnderLimit_Passes(t *testing.T) {
 }
 
 func TestRateLimit_AnonymousExceedsLimit_Returns429(t *testing.T) {
-	rl := newRateLimiter()
+	rl := newRateLimiter(nil)
 	defer rl.Shutdown()
 	handler := rl.middleware(echoHandler())
 
@@ -70,7 +70,7 @@ func TestRateLimit_AnonymousExceedsLimit_Returns429(t *testing.T) {
 }
 
 func TestRateLimit_AuthBearerHeader_UsesHigherLimit(t *testing.T) {
-	rl := newRateLimiter()
+	rl := newRateLimiter(nil)
 	defer rl.Shutdown()
 	handler := rl.middleware(echoHandler())
 
@@ -90,7 +90,7 @@ func TestRateLimit_AuthBearerHeader_UsesHigherLimit(t *testing.T) {
 }
 
 func TestRateLimit_SessionCookie_UsesHigherLimit(t *testing.T) {
-	rl := newRateLimiter()
+	rl := newRateLimiter(nil)
 	defer rl.Shutdown()
 	handler := rl.middleware(echoHandler())
 
@@ -110,7 +110,7 @@ func TestRateLimit_SessionCookie_UsesHigherLimit(t *testing.T) {
 }
 
 func TestRateLimit_DifferentIPs_IndependentBuckets(t *testing.T) {
-	rl := newRateLimiter()
+	rl := newRateLimiter(nil)
 	defer rl.Shutdown()
 	handler := rl.middleware(echoHandler())
 
@@ -143,7 +143,7 @@ func TestRateLimit_DifferentIPs_IndependentBuckets(t *testing.T) {
 }
 
 func TestRateLimit_ResponseHeaders_Present(t *testing.T) {
-	rl := newRateLimiter()
+	rl := newRateLimiter(nil)
 	defer rl.Shutdown()
 	handler := rl.middleware(echoHandler())
 
@@ -167,7 +167,7 @@ func TestRateLimit_ResponseHeaders_Present(t *testing.T) {
 }
 
 func TestRateLimit_XForwardedFor_UsesLeftmostIP(t *testing.T) {
-	rl := newRateLimiter()
+	rl := newRateLimiter(nil)
 	defer rl.Shutdown()
 	handler := rl.middleware(echoHandler())
 
@@ -189,7 +189,7 @@ func TestRateLimit_XForwardedFor_UsesLeftmostIP(t *testing.T) {
 }
 
 func TestRateLimit_XRealIP_TakesPrecedence(t *testing.T) {
-	rl := newRateLimiter()
+	rl := newRateLimiter(nil)
 	defer rl.Shutdown()
 	handler := rl.middleware(echoHandler())
 
@@ -212,7 +212,7 @@ func TestRateLimit_XRealIP_TakesPrecedence(t *testing.T) {
 }
 
 func TestRateLimit_ConcurrentAccess_NoRace(t *testing.T) {
-	rl := newRateLimiter()
+	rl := newRateLimiter(nil)
 	defer rl.Shutdown()
 	handler := rl.middleware(echoHandler())
 
@@ -239,7 +239,7 @@ func TestRateLimit_ConcurrentAccess_NoRace(t *testing.T) {
 }
 
 func TestRateLimit_AuthHeader_UsesHigherLimit_ThenExceeds(t *testing.T) {
-	rl := newRateLimiter()
+	rl := newRateLimiter(nil)
 	defer rl.Shutdown()
 	handler := rl.middleware(echoHandler())
 
@@ -264,27 +264,31 @@ func TestRateLimit_AuthHeader_UsesHigherLimit_ThenExceeds(t *testing.T) {
 func TestExtractIP_RemoteAddr_StripsPort(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.168.1.1:54321"
-	ip := extractIP(req)
+	ip := extractIP(req, nil)
 	if ip != "192.168.1.1" {
 		t.Errorf("extractIP: want 192.168.1.1, got %s", ip)
 	}
 }
 
 func TestExtractIP_XForwardedFor_Leftmost(t *testing.T) {
+	// Default httptest peer is 192.0.2.1; mark it as a trusted proxy
+	// so the X-Forwarded-For header is honored.
+	trusted, _ := ParseTrustedProxies("192.0.2.1")
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-For", "203.0.113.42, 10.0.0.1, 172.16.0.1")
-	ip := extractIP(req)
+	ip := extractIP(req, trusted)
 	if ip != "203.0.113.42" {
 		t.Errorf("extractIP: want 203.0.113.42 (leftmost), got %s", ip)
 	}
 }
 
 func TestExtractIP_XForwardedFor_WinsOverXRealIP(t *testing.T) {
+	trusted, _ := ParseTrustedProxies("10.0.0.0/8")
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Real-IP", "198.51.100.1")
 	req.Header.Set("X-Forwarded-For", "203.0.113.42")
 	req.RemoteAddr = "10.0.0.1:12345"
-	ip := extractIP(req)
+	ip := extractIP(req, trusted)
 	if ip != "203.0.113.42" {
 		t.Errorf("extractIP: want 203.0.113.42 (X-Forwarded-For preferred over X-Real-IP), got %s", ip)
 	}

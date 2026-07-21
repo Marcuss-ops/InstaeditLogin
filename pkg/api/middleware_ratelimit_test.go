@@ -259,7 +259,7 @@ func TestMediaPresignLimit_AllowsFirstN_DeniesNPlusOne(t *testing.T) {
 func TestOAuthStartLimit_AllowsFirstN_DeniesNPlusOne(t *testing.T) {
 	svc := services.NewRateLimitService(newFakeRateLimitRepo())
 	defer svc.Shutdown()
-	mw := OAuthStartLimit(svc)
+	mw := OAuthStartLimit(svc, nil)
 
 	for i := 0; i < 20; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
@@ -282,7 +282,7 @@ func TestOAuthStartLimit_AllowsFirstN_DeniesNPlusOne(t *testing.T) {
 func TestOAuthStartLimit_IndependentIPs(t *testing.T) {
 	svc := services.NewRateLimitService(newFakeRateLimitRepo())
 	defer svc.Shutdown()
-	mw := OAuthStartLimit(svc)
+	mw := OAuthStartLimit(svc, nil)
 
 	// IP A: 21st denied.
 	for i := 0; i < 21; i++ {
@@ -313,7 +313,7 @@ func TestOAuthStartLimit_IndependentIPs(t *testing.T) {
 func TestOAuthStartLimit_XForwardedFor_UsesLeftmostIP(t *testing.T) {
 	svc := services.NewRateLimitService(newFakeRateLimitRepo())
 	defer svc.Shutdown()
-	mw := OAuthStartLimit(svc)
+	mw := OAuthStartLimit(svc, nil)
 
 	// Burn the leftmost IP's budget (21 hits, the 21st is 429).
 	for i := 0; i < 21; i++ {
