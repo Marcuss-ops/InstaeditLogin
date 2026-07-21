@@ -747,25 +747,13 @@ function ResultsSection() {
     { v: "7", l: "Platforms", desc: "publish everywhere at once" },
   ];
 
-  const testimonials = [
-    {
-      quote: "I started with zero subscribers and no editing skills. In 3 months I hit 1,000 subscribers and my first monetization check.",
-      author: "Alex M.",
-      role: "YouTube Creator",
-      result: "0 → 1K subscribers in 3 months",
-    },
-    {
-      quote: "The aged channel they gave me was a game-changer. My videos started getting recommended by the algorithm within the first week.",
-      author: "Sara K.",
-      role: "Education Channel",
-      result: "First video: 12K views",
-    },
-    {
-      quote: "I was spending 10 hours a week on editing and uploading. Now I record one video and it goes everywhere automatically.",
-      author: "Marco L.",
-      role: "Tech Creator",
-      result: "10h → 2h per week",
-    },
+  const channels = [
+    { img: "/results/result-1.jpg", alt: "YouTube channel growth result" },
+    { img: "/results/result-2.jpg", alt: "Content strategy result" },
+    { img: "/results/result-3.jpg", alt: "Channel monetization result" },
+    { img: "/results/result-4.jpg", alt: "Video performance result" },
+    { img: "/results/result-5.jpg", alt: "Creator growth result" },
+    { img: "/results/result-6.jpg", alt: "Multi-platform result" },
   ];
 
   return (
@@ -798,26 +786,20 @@ function ResultsSection() {
           ))}
         </div>
 
-        {/* Testimonials */}
-        <div className="grid md:grid-cols-3 gap-5">
-          {testimonials.map((t, i) => (
+        {/* Channel results gallery */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {channels.map((ch, i) => (
             <div
-              key={t.author}
-              className={`surface-card p-6 relative overflow-hidden animate-fade-up hover:border-violet-400/30 transition-all duration-300 ${["", "animation-delay-100", "animation-delay-200"][i]}`}
+              key={ch.img}
+              className={`surface-card overflow-hidden animate-fade-up hover:border-violet-400/30 hover:shadow-[0_8px_32px_rgba(139,92,246,0.12)] transition-all duration-300 group ${["", "animation-delay-100", "animation-delay-200", "animation-delay-300", "animation-delay-400", "animation-delay-500"][i]}`}
             >
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 ring-1 ring-emerald-400/25 text-[11px] font-medium text-emerald-300 mb-4">
-                <CheckCircle2 className="w-3 h-3" />
-                {t.result}
-              </div>
-              <p className="text-sm text-zinc-300 leading-relaxed mb-5">"{t.quote}"</p>
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white text-sm font-semibold">
-                  {t.author.charAt(0)}
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-white">{t.author}</div>
-                  <div className="text-xs text-zinc-500">{t.role}</div>
-                </div>
+              <div className="relative overflow-hidden">
+                <img
+                  src={ch.img}
+                  alt={ch.alt}
+                  className="w-full h-auto object-cover group-hover:scale-105 transition-transform duration-500"
+                  loading="lazy"
+                />
               </div>
             </div>
           ))}
