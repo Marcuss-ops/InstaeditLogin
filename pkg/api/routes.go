@@ -15,6 +15,7 @@ func (r *Router) Setup() http.Handler {
 
 	NewAdminModule(r).Register(r.mux)
 	NewVeloxModule(r).Register(r.mux)
+	NewVeloxBFFModule(r).Register(r.mux)
 
 	// Public / health probes are mounted before the auth module so the
 	// route table stays easy to scan top-down.

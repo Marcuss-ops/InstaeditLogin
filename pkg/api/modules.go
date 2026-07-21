@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
 
 // RouteModule is the shared contract every bounded-context module
@@ -68,6 +69,51 @@ func NewVeloxModule(r *Router) RouteModule {
 
 func (m *VeloxModule) Register(mux chi.Router) {
 	m.r.registerInternalVeloxRoutes()
+}
+
+// VeloxBFFModule mounts the user-facing /api/v1/velox/* BFF routes
+// that proxy a bounded subset of Velox operations to the browser.
+// Registration is a no-op when the Router has no veloxBFFClient wired
+// (matches the AdminModule / VeloxModule nil-guard pattern).
+type VeloxBFFModule struct {
+	r *Router
+}
+
+func NewVeloxBFFModule(r *Router) RouteModule {
+	return &VeloxBFFModule{r: r}
+}
+
+func (m *VeloxBFFModule) Register(mux chi.Router) {
+	if m.r.veloxBFFClient == nil {
+		return
+	}
+	veloxapi.Register(mux, veloxapi.Deps{
+		Client:         m.r.veloxBFFClient,
+		AuthMiddleware: m.r.veloxBFFAuthMiddleware,
+		CSRFMiddleware: m.r.veloxBFFCSRFMiddleware,
+	})
+}
+
+// WithVeloxBFFClient wires the typed Velox client used by the
+// user-facing /api/v1/velox/* BFF routes. When omitted, the
+// VeloxBFFModule does not mount its routes (nil-guard pattern).
+// Production wiring in cmd/server/main.go passes the
+// internal/veloxclient.Client constructed from VELOX_CONTROL_URL +
+// VELOX_CONTROL_JWT_SECRET.
+func WithVeloxBFFClient(c veloxapi.Client) RouterOption {
+	return func(r *Router) { r.veloxBFFClient = c }
+}
+
+// WithVeloxBFFAuthMiddleware wires the JWT auth middleware for the
+// /api/v1/velox/* routes. Typically r.auth.Middleware.
+func WithVeloxBFFAuthMiddleware(mw func(http.Handler) http.Handler) RouterOption {
+	return func(r *Router) { r.veloxBFFAuthMiddleware = mw }
+}
+
+// WithVeloxBFFCSRFMiddleware wires the CSRF middleware for the
+// /api/v1/velox/* routes. Typically auth.NewCSRF(r.csrfConfig(), _).
+func WithVeloxBFFCSRFMiddleware(mw func(http.Handler) http.Handler) RouterOption {
+	return func(r *Router) { r.veloxBFFCSRFMiddleware = mw }
 }
 
 // BillingModule mounts billing and Stripe webhook routes.  Registration

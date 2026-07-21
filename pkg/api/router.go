@@ -18,6 +18,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/contracts"
+	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
 
 // UserWorkspaceHelper is re-exported from pkg/api/contracts (see
@@ -246,6 +247,26 @@ type Router struct {
 	// consumed atomically on first callback so a link can only be
 	// used once within its 30-minute validity window.
 	connectLinkNonceStore ConnectLinkNonceStore
+
+	// veloxBFFClient (P2 Velox BFF) is the typed client used by
+	// the user-facing /api/v1/velox/* routes (jobs, workers, assets).
+	// Wired via WithVeloxBFFClient. When nil, the VeloxBFFModule
+	// does not mount its routes (nil-guard pattern matching the
+	// other feature flags). The concrete implementation lives in
+	// internal/veloxclient and signs a short-lived JWT with
+	// VELOX_CONTROL_JWT_SECRET before calling the Velox master.
+	veloxBFFClient veloxapi.Client
+
+	// veloxBFFCSRFMiddleware (P2 Velox BFF) wraps the user-facing
+	// /api/v1/velox/* routes with the project's canonical CSRF
+	// check. Mirrors csrfMiddleware used by the destinations route.
+	veloxBFFCSRFMiddleware func(http.Handler) http.Handler
+
+	// veloxBFFAuthMiddleware (P2 Velox BFF) mirrors veloxBFFCSRFMiddleware
+	// for the JWT identity layer on /api/v1/velox/*. nil when not wired;
+	// tests pass passthrough stubs. cmd/server/main.go wires it via
+	// WithVeloxBFFAuthMiddleware(r.auth.Middleware).
+	veloxBFFAuthMiddleware func(http.Handler) http.Handler
 
 	// veloxValidateRateLimiter (P2 Velox integration — Phase 2
 	// rate-limit on the /internal/v1/destinations/{id}/validate
