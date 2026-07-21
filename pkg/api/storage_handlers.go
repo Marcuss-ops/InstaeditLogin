@@ -99,7 +99,7 @@ func (r *Router) handleCreateUploadURL(w http.ResponseWriter, req *http.Request)
 	grant, err := r.storageProvider.SignUpload(req.Context(), userID, key,
 		body.ContentType, body.SizeBytes, uploadURLTTL)
 	if err != nil {
-		logAndError(w, "failed to sign upload", err,
+		logAndError(w, req, "failed to sign upload", err,
 			"user_id", userID, "provider", r.storageProvider.Provider())
 		return
 	}

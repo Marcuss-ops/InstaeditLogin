@@ -137,7 +137,7 @@ func (r *Router) handlePresignMedia(w http.ResponseWriter, req *http.Request) {
 		body.ContentType, body.SizeBytes, mediaPresignTTL,
 	)
 	if err != nil {
-		logAndError(w, "failed to sign media upload", err, "user_id", userID)
+		logAndError(w, req, "failed to sign media upload", err, "user_id", userID)
 		return
 	}
 
@@ -151,7 +151,7 @@ func (r *Router) handlePresignMedia(w http.ResponseWriter, req *http.Request) {
 		ExpiresAt:   time.Now().Add(mediaAssetLifetime),
 	}
 	if err := r.mediaStore.Create(asset); err != nil {
-		logAndError(w, "failed to create media asset", err, "user_id", userID)
+		logAndError(w, req, "failed to create media asset", err, "user_id", userID)
 		return
 	}
 
@@ -192,7 +192,7 @@ func (r *Router) handleCompleteMedia(w http.ResponseWriter, req *http.Request) {
 	id := chi.URLParam(req, "id")
 	asset, err := r.mediaStore.FindByID(id)
 	if err != nil {
-		logAndError(w, "failed to find media asset", err, "asset_id", id)
+		logAndError(w, req, "failed to find media asset", err, "asset_id", id)
 		return
 	}
 	if asset == nil {
@@ -253,7 +253,7 @@ func (r *Router) handleCompleteMedia(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if err := r.mediaStore.MarkReady(id, asset.SHA256, sizeBytes, contentType); err != nil {
-		logAndError(w, "failed to mark media asset ready", err, "asset_id", id)
+		logAndError(w, req, "failed to mark media asset ready", err, "asset_id", id)
 		return
 	}
 	// Re-fetch to return the updated record.

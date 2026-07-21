@@ -42,7 +42,23 @@ func (r *Router) Setup() http.Handler {
 	// It is INSIDE recover so a panic inside its handler still gets
 	// caught + logged + translated to a 500.
 	rateLimitAndBelow := r.securityHeadersMiddleware(
-		r.rateLimiter.middleware(r.corsMiddleware(r.loggingMiddleware(r.mux))),
+		r.rateLimiter.middleware(r.corsMiddleware(r.requestIDMiddleware(r.loggingMiddleware(r.mux)))),
 	)
 	return r.recoverMiddleware(rateLimitAndBelow)
+}
+
+// requestIDMiddleware ensures every request carries a request_id in its
+// context. It reuses an incoming X-Request-ID header when present, or
+// generates a fresh crypto-random id otherwise, and mirrors it back in
+// the X-Request-ID response header so clients can correlate logs with
+// the generic 500 messages they receive.
+func (r *Router) requestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		id := req.Header.Get("X-Request-ID")
+		if !isValidRequestID(id) {
+			id = generateRequestID()
+		}
+		w.Header().Set("X-Request-ID", id)
+		next.ServeHTTP(w, withRequestID(req, id))
+	})
 }

@@ -63,7 +63,7 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 
 	state, err := generateOAuthState(w, provider, expectedChannelID, r.cookieDomain)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start oauth flow")
+		logAndError(w, req, "failed to start oauth flow", err, "provider", provider)
 		return
 	}
 
@@ -129,7 +129,7 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 					writeError(w, http.StatusGone, "connect-link already consumed or expired")
 					return
 				}
-				writeError(w, http.StatusInternalServerError, "could not verify connect-link state: "+consumeErr.Error())
+				logAndError(w, req, "could not verify connect-link state", consumeErr)
 				return
 			}
 			metrics.RecordConnectLinkConsume("ok")
@@ -146,7 +146,7 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	profile, tokenData, err := p.HandleCallback(req.Context(), state, code)
 	if err != nil {
 		metrics.RecordOAuthLoginError(provider, metrics.ErrorKind(err))
-		writeError(w, http.StatusInternalServerError, "authentication failed: "+err.Error())
+		logAndError(w, req, "OAuth authentication failed", err, "provider", provider)
 		return
 	}
 	metrics.RecordOAuthLoginSuccess(provider)
@@ -216,7 +216,7 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 				writeError(w, http.StatusConflict, err.Error())
 				return
 			}
-			writeError(w, http.StatusInternalServerError, "failed to attach discovered accounts: "+err.Error())
+			logAndError(w, req, "failed to attach discovered accounts", err, "provider", provider)
 			return
 		}
 	} else {
@@ -230,7 +230,7 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 				writeError(w, http.StatusConflict, err.Error())
 				return
 			}
-			writeError(w, http.StatusInternalServerError, "failed to attach platform account: "+err.Error())
+			logAndError(w, req, "failed to attach platform account", err, "provider", provider)
 			return
 		}
 
@@ -262,11 +262,11 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 			// on every callback — the operator's dashboard would
 			// show a stuck "needs reconnect" storm. Fail-fast
 			// surfaces the wiring mistake at first-callback time.
-			writeError(w, http.StatusInternalServerError, "channel authorizer not configured")
+			logAndError(w, req, "channel authorizer not configured", errors.New("channel authorizer not configured"))
 			return
 		}
 		if _, err := r.authorizer.AuthorizeChannel(req.Context(), account.ID, "", tokenData.Scopes, tokenData); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to authorize channel: "+err.Error())
+			logAndError(w, req, "failed to authorize channel", err, "provider", provider)
 			return
 		}
 	}
@@ -545,7 +545,7 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 	}
 	activeWS, err := r.resolveActiveWorkspace(req.Context(), payload.UserID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to resolve active workspace: "+err.Error())
+		logAndError(w, req, "failed to resolve active workspace", err)
 		return
 	}
 	result, err := r.sessionsSvc.Start(services.StartSessionRequest{
@@ -555,7 +555,7 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 		IP:          r.clientIP(req),
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
+		logAndError(w, req, "failed to start session", err)
 		return
 	}
 	metrics.IncJWTIssued()
