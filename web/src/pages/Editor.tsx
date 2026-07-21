@@ -566,7 +566,7 @@ function OutputsSection() {
 function SpeedStats() {
   const stats = [
     { before: "6 ore", after: "8 min", label: "Manual editing" },
-    { before: "14 schede", after: "1 dashboard", label: "Re-uploads per platform" },
+    { before: "14 tabs", after: "1 dashboard", label: "Re-uploads per platform" },
     { before: "7 export", after: "1 render", label: "Re-encoding per channel" },
   ];
   return (
@@ -1356,8 +1356,8 @@ function StreamSection() {
  * -------------------------------------------------------------------------- */
 const CONTACT_PHONE_DISPLAY = "+39 327 464 9129";
 const CONTACT_PHONE_TEL = "+393274649129";
-const CONTACT_TELEGRAM_URL = "https://t.me/ytfuri";
-const CONTACT_TELEGRAM_HANDLE = "@ytfuri";
+const CONTACT_DISCORD_URL = "https://discord.com/users/1201477873719050332";
+const CONTACT_DISCORD_HANDLE = "@instaedit";
 const CONTACT_EMAIL = "futurimilionariposta@gmail.com";
 // Visible email handle on the chip, truncated at the @ so the email
 // affordance is on-screen (mobile-safe, no hover required). Full
@@ -1381,7 +1381,7 @@ function ContactSection() {
               aria-hidden="true"
               focusable="false"
             />
-            <span>            Parla con il team</span>
+            <span>            Talk to the team</span>
           </div>
 
           <h2 className="text-display-2 text-white max-w-[24ch] mx-auto">
@@ -1399,11 +1399,11 @@ function ContactSection() {
               focusable="false"
             />
             <span>
-              Scrivi a{" "}
+              Call{" "}
               <span className="tabular-nums font-semibold">
                 {CONTACT_PHONE_DISPLAY}
               </span>{" "}
-              per maggiori informazioni
+              for more info
             </span>
           </div>
 
@@ -1434,18 +1434,18 @@ function ContactSection() {
               to="/login"
               className="inline-flex items-center gap-2 px-6 py-3.5 rounded-full surface-glass text-zinc-200 font-medium hover:text-white hover:border-white/25 transition-colors"
             >
-              Oppure apri un account
+              Or create an account
               <ArrowRight className="w-5 h-5" />
             </Link>
           </div>
 
           <div className="mt-5 flex items-center justify-center gap-3 flex-wrap">
             <a
-              href={CONTACT_TELEGRAM_URL}
+              href={CONTACT_DISCORD_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-5 py-3 rounded-full surface-glass text-sm font-medium text-zinc-200 hover:text-white hover:border-white/25 transition-colors"
-              aria-label={`Open Telegram chat with ${CONTACT_TELEGRAM_HANDLE}`}
+              aria-label={`Open Discord chat with ${CONTACT_DISCORD_HANDLE}`}
             >
               <Send
                 className="w-4 h-4 text-sky-300"
@@ -1453,7 +1453,7 @@ function ContactSection() {
                 focusable="false"
               />
               <span>
-                Telegram <span className="text-zinc-400">{CONTACT_TELEGRAM_HANDLE}</span>
+                Discord <span className="text-zinc-400">{CONTACT_DISCORD_HANDLE}</span>
               </span>
             </a>
             <a

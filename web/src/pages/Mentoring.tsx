@@ -85,7 +85,7 @@ const PACKAGES = [
     color: "from-violet-500 to-purple-500",
     iconBg: "from-violet-500 to-purple-500",
     cta: "Start Now",
-    ctaLink: "https://t.me/ytfuri",
+    ctaLink: "https://discord.com/users/1201477873719050332",
   },
   {
     title: "Growth Mentoring",
@@ -104,7 +104,7 @@ const PACKAGES = [
     iconBg: "from-cyan-500 to-blue-500",
     featured: true,
     cta: "Start Now",
-    ctaLink: "https://t.me/ytfuri",
+    ctaLink: "https://discord.com/users/1201477873719050332",
   },
   {
     title: "Team Mentoring",
@@ -122,7 +122,7 @@ const PACKAGES = [
     color: "from-emerald-500 to-teal-500",
     iconBg: "from-emerald-500 to-teal-500",
     cta: "Contact Sales",
-    ctaLink: "https://t.me/ytfuri",
+    ctaLink: "https://discord.com/users/1201477873719050332",
   },
 ];
 
@@ -356,7 +356,7 @@ function PackagesSection() {
                       className="inline-flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
                     >
                       <MessageCircle className="w-4 h-4" />
-                      Chat on Telegram
+                      Chat on Discord
                     </a>
                   </div>
                 </div>
@@ -426,18 +426,18 @@ function CTASection() {
               Not sure which path is right for you?
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[55ch] mx-auto mb-8">
-              Book a free 15-minute Discovery Call on Telegram. We'll figure out together
+              Book a free 15-minute Discovery Call on Discord. We'll figure out together
               whether Starter, Growth, or Team is the best fit for where you are right now.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <a
-                href="https://t.me/ytfuri"
+                href="https://discord.com/users/1201477873719050332"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group"
               >
                 <MessageCircle className="w-4 h-4" />
-                Chat on Telegram
+                Chat on Discord
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </a>
               <Link
