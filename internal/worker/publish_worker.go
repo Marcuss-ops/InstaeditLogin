@@ -338,33 +338,18 @@ func (w *PublishWorker) tick(ctx context.Context) (processed, succeeded, failed 
 func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTarget) error {
 	// 1. ATOMIC CLAIM: queued → publishing. If another worker
 	// already claimed this target, claim returns false and we skip.
-	claimed, err := w.postRepo.ClaimQueuedTarget(target.ID)
+	claimed, err := w.claimTarget(ctx, target)
 	if err != nil {
-		return fmt.Errorf("claim target %d: %w", target.ID, err)
+		return err
 	}
 	if !claimed {
-		w.logger.Info("target already claimed by another worker, skipping",
-			"target_id", target.ID, "post_id", target.PostID)
 		return nil // not an error — just skip
 	}
 
-	// 2. Load parent Post
-	post, err := w.postRepo.FindByID(target.PostID)
+	// 2. Load parent post and platform account.
+	post, account, err := w.loadPostAndAccount(ctx, target)
 	if err != nil {
-		return w.markFailed(target, fmt.Sprintf("load post %d: %v", target.PostID, err))
-	}
-	if post == nil {
-		// Vanished record — cannot publish. Mark failed so we don't loop forever.
-		return w.markFailed(target, fmt.Sprintf("post %d not found", target.PostID))
-	}
-
-	// 3. Load PlatformAccount
-	account, err := w.userRepo.FindPlatformAccountByID(target.PlatformAccountID)
-	if err != nil {
-		return w.markFailed(target, fmt.Sprintf("load account %d: %v", target.PlatformAccountID, err))
-	}
-	if account == nil {
-		return w.markFailed(target, fmt.Sprintf("platform_account %d not found", target.PlatformAccountID))
+		return w.markFailed(target, err.Error())
 	}
 	// Google Drive is an exporter, not a social Publisher. It has an
 	// OAuth credential and a DeliveryRegistry provider but deliberately
