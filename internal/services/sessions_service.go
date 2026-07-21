@@ -104,8 +104,9 @@ func (s *SessionsService) Start(req StartSessionRequest) (*StartSessionResult, e
 	if err := s.repo.Create(row); err != nil {
 		return nil, fmt.Errorf("persist session: %w", err)
 	}
-	// Sign the real access token with the freshly-allocated session id.
-	access, _, accessExp, err := s.jwt.IssueAccess(req.UserID, req.WorkspaceID, row.ID)
+	// Sign the real access token with the freshly-allocated session id
+	// and the JTI we already persisted so the DB and JWT stay in sync.
+	access, _, accessExp, err := s.jwt.IssueAccessWithJTI(req.UserID, req.WorkspaceID, row.ID, accessJTI)
 	if err != nil {
 		// Best-effort cleanup: revoke the orphan row so the refresh
 		// token doesn't dangle. The helper retries once with backoff
@@ -191,7 +192,7 @@ func (s *SessionsService) Refresh(req RefreshRequest) (*StartSessionResult, erro
 		}
 		return nil, fmt.Errorf("rotate: %w", err)
 	}
-	access, _, accessExp, err := s.jwt.IssueAccess(row.UserID, row.WorkspaceID, newRow.ID)
+	access, _, accessExp, err := s.jwt.IssueAccessWithJTI(row.UserID, row.WorkspaceID, newRow.ID, accessJTI)
 	if err != nil {
 		// Best-effort cleanup: revoke the orphan row so the refresh
 		// token doesn't dangle. C5 hardening: one-retry + bounded

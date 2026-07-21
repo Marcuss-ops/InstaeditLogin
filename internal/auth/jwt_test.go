@@ -84,6 +84,46 @@ func TestIssueAccessRejectsSessionIDZero(t *testing.T) {
 	}
 }
 
+// TestIssueAccessWithJTI_UsesSuppliedJTI pins the contract that the
+// caller-supplied JTI is the one embedded in the JWT's RegisteredClaims.ID.
+// This keeps sessions.access_jti and the access token in sync.
+func TestIssueAccessWithJTI_UsesSuppliedJTI(t *testing.T) {
+	m := NewManager(testSecret, 24)
+	wantJTI := "aabbccdd001aabbccdd001aabbccdd00"
+
+	tok, jti, exp, err := m.IssueAccessWithJTI(42, 1, 1, wantJTI)
+	if err != nil {
+		t.Fatalf("IssueAccessWithJTI: %v", err)
+	}
+	if jti != wantJTI {
+		t.Fatalf("returned jti: want %q, got %q", wantJTI, jti)
+	}
+	if exp.IsZero() {
+		t.Fatal("expected non-zero expiry")
+	}
+
+	claims := &Claims{}
+	if _, err := jwt.ParseWithClaims(tok, claims, func(_ *jwt.Token) (interface{}, error) { return []byte(testSecret), nil }); err != nil {
+		t.Fatalf("parse token: %v", err)
+	}
+	if claims.ID != wantJTI {
+		t.Fatalf("JWT claims.ID: want %q, got %q", wantJTI, claims.ID)
+	}
+	if claims.UserID != 42 || claims.WorkspaceID != 1 || claims.SessionID != 1 {
+		t.Fatalf("unexpected claims: uid=%d ws=%d sid=%d", claims.UserID, claims.WorkspaceID, claims.SessionID)
+	}
+}
+
+// TestIssueAccessWithJTI_RejectsEmptyJTI confirms the helper refuses
+// to sign a token without an explicit JTI, preventing a caller from
+// accidentally creating a token whose ID is empty.
+func TestIssueAccessWithJTI_RejectsEmptyJTI(t *testing.T) {
+	m := NewManager(testSecret, 24)
+	if _, _, _, err := m.IssueAccessWithJTI(42, 1, 1, ""); err == nil {
+		t.Fatal("expected error for empty JTI")
+	}
+}
+
 // Blocco #1.4 — Verify rejects any JWT whose session id is missing
 // or zero, regardless of how it was minted (Manager or hand-crafted).
 // The middleware depends on this to refuse sid=0 tokens forged by an

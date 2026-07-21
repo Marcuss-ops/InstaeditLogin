@@ -193,6 +193,20 @@ func (m *Manager) IssueAccess(userID, wsID, sessionID int64) (string, string, ti
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("jti generation failed: %w", err)
 	}
+	return m.IssueAccessWithJTI(userID, wsID, sessionID, jti)
+}
+
+// IssueAccessWithJTI signs a short-lived JWT using the caller-supplied
+// JTI. This lets SessionsService persist the same access_jti that is
+// embedded in the token, preserving the invariant
+// sessions.access_jti == JWT claims.jti.
+func (m *Manager) IssueAccessWithJTI(userID, wsID, sessionID int64, jti string) (string, string, time.Time, error) {
+	if userID <= 0 || wsID <= 0 || sessionID <= 0 {
+		return "", "", time.Time{}, fmt.Errorf("invalid ids: user=%d ws=%d session=%d", userID, wsID, sessionID)
+	}
+	if jti == "" {
+		return "", "", time.Time{}, errors.New("jti required")
+	}
 	now := time.Now()
 	exp := now.Add(m.accessTTL)
 	claims := Claims{
