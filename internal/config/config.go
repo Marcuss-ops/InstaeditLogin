@@ -26,7 +26,24 @@ const (
 // renamed to X_*; TIKTOK_CLIENT_KEY renamed to TIKTOK_CLIENT_ID.
 type Config struct {
 	// VeloxAPIToken authenticates artifact HEAD/GET requests back to Velox.
+	// This is the REVERSE direction token (Velox → InstaEdit via
+	// /internal/v1/* routes). Loaded from VELOX_API_TOKEN.
 	VeloxAPIToken string
+
+	// VeloxControlURL is the base URL of the Velox master that the
+	// BFF calls when proxying user-facing /api/v1/velox/* requests.
+	// The browser never sees this URL — only InstaEdit calls it.
+	// Loaded from VELOX_CONTROL_URL. Empty = BFF routes not mounted.
+	VeloxControlURL string
+
+	// VeloxControlJWTSecret is the shared HS256 secret for the
+	// short-lived JWT InstaEdit signs when calling the Velox master.
+	// This MUST be the same value as VeloxEditiingg's
+	// INSTAEDIT_CONTROL_JWT_SECRET. It is DISTINCT from
+	// VeloxAPIToken (the reverse-direction Bearer token) — the two
+	// secrets MUST NOT be reused across directions. Loaded from
+	// VELOX_CONTROL_JWT_SECRET. Empty = BFF routes not mounted.
+	VeloxControlJWTSecret string
 	// FrontendURL is where the OAuth callback should redirect.
 	FrontendURL string
 	// AllowedCORSOrigins is the comma-separated list of origins.
@@ -367,6 +384,8 @@ func Load() (*Config, error) {
 		GoogleDriveRedirectURI:     getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),
 		GoogleDriveUploadFolderID:  getEnv("GOOGLE_DRIVE_UPLOAD_FOLDER_ID", ""),
 		VeloxAPIToken:              getEnv("VELOX_API_TOKEN", ""),
+		VeloxControlURL:            getEnv("VELOX_CONTROL_URL", ""),
+		VeloxControlJWTSecret:      getEnv("VELOX_CONTROL_JWT_SECRET", ""),
 		LinkedInClientID:           getEnv("LINKEDIN_CLIENT_ID", ""),
 		LinkedInClientSecret:       getEnv("LINKEDIN_CLIENT_SECRET", ""),
 		LinkedInRedirectURI:        getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),

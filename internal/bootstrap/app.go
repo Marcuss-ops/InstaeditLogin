@@ -40,6 +40,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/providers"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxclient"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
@@ -325,6 +326,32 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithConnectLinkNonceStore(connectLinkNonceRepo),
 		api.WithVeloxAPIToken(os.Getenv("VELOX_API_TOKEN")),
 		api.WithVeloxDownloadJobChannel(veloxDownloadJobs),
+		// P2 Velox BFF — wire the typed client that signs a short-lived
+		// JWT (VELOX_CONTROL_JWT_SECRET) and calls the Velox master
+		// (VELOX_CONTROL_URL). When either env is empty, veloxclient.New
+		// returns nil and the VeloxBFFModule does not mount its routes
+		// (nil-guard pattern matching the other feature flags). The auth
+		// + CSRF middlewares mirror the destinations route wiring so the
+		// /api/v1/velox/* chain is: auth → CSRF → handler.
+		func() api.RouterOption {
+			vc := veloxclient.New(cfg.VeloxControlURL, cfg.VeloxControlJWTSecret)
+			if vc == nil {
+				slog.Info("velox BFF client not configured (VELOX_CONTROL_URL or VELOX_CONTROL_JWT_SECRET empty) — /api/v1/velox/* routes not mounted")
+				return func(*api.Router) {} // no-op option
+			}
+			slog.Info("velox BFF client configured",
+				"control_url", cfg.VeloxControlURL)
+			return api.WithVeloxBFFClient(vc)
+		}(),
+		api.WithVeloxBFFAuthMiddleware(authMgr.Middleware),
+		api.WithVeloxBFFCSRFMiddleware(func(next http.Handler) http.Handler {
+			return auth.NewCSRF(auth.CSRFConfig{
+				Secure:       true,
+				Path:         "/",
+				CookieDomain: cfg.CookieDomain,
+				SameSite:     http.SameSiteNoneMode,
+			}, next)
+		}),
 		api.WithCookieSecure(true),
 		// csrf_token cookie Domain (Blocco #2.4): threaded from
 		// cfg.CookieDomain (COOKIE_DOMAIN env var). Empty stays
