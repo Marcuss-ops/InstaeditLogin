@@ -418,6 +418,12 @@ func (f *fakeE2EDestinations) GetByID(_ context.Context, id string) (*models.Ext
 	return f.rows[id], nil
 }
 
+func (f *fakeE2EDestinations) ListByWorkspace(_ context.Context, _ int64, _ bool) ([]models.ExternalDestination, error) {
+	return nil, nil
+}
+func (f *fakeE2EDestinations) Delete(_ context.Context, _ string) error {
+	return nil
+}
 func (f *fakeE2EDestinations) Create(_ context.Context, d *models.ExternalDestination) error {
 	if f.rows == nil {
 		f.rows = map[string]*models.ExternalDestination{}

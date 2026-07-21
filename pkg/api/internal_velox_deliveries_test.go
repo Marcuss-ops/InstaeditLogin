@@ -468,6 +468,12 @@ func (f *fakeDestinationEnv) GetByID(_ context.Context, id string) (*models.Exte
 	return nil, repository.ErrExternalDestinationNotFound
 }
 
+func (f *fakeDestinationEnv) ListByWorkspace(_ context.Context, _ int64, _ bool) ([]models.ExternalDestination, error) {
+	return nil, nil
+}
+func (f *fakeDestinationEnv) Delete(_ context.Context, _ string) error {
+	return nil
+}
 func (f *fakeDestinationEnv) Create(_ context.Context, _ *models.ExternalDestination) error {
 	f.createCalls++
 	return f.createErr

@@ -70,6 +70,12 @@ func (f *fakeDestinationStorage) GetByID(_ context.Context, _ string) (*models.E
 // richer fakeDestinationEnv in internal_velox_deliveries_test.go);
 // this stub returns nil so the compile-time interface check
 // and chi route-mount guard pass without touching a real DB.
+func (f *fakeDestinationStorage) ListByWorkspace(_ context.Context, _ int64, _ bool) ([]models.ExternalDestination, error) {
+	return nil, nil
+}
+func (f *fakeDestinationStorage) Delete(_ context.Context, _ string) error {
+	return nil
+}
 func (f *fakeDestinationStorage) Create(_ context.Context, _ *models.ExternalDestination) error {
 	return nil
 }

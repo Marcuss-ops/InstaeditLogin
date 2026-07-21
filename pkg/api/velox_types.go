@@ -31,6 +31,8 @@ import (
 type ExternalDestinationStore interface {
 	GetByID(ctx context.Context, id string) (*models.ExternalDestination, error)
 	Create(ctx context.Context, d *models.ExternalDestination) error
+	ListByWorkspace(ctx context.Context, workspaceID int64, enabledOnly bool) ([]models.ExternalDestination, error)
+	Delete(ctx context.Context, id string) error
 }
 
 // ExternalDeliveryStore is the persistence contract for

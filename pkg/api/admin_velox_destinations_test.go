@@ -16,6 +16,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 // -----------------------------------------------------------------------
@@ -37,6 +38,9 @@ type fakeExternalDestinationStore struct {
 	ByIDRow *models.ExternalDestination
 	ByIDErr error
 	ByIDMap map[string]*models.ExternalDestination
+
+	ListErr   error
+	DeleteErr error
 }
 
 func (f *fakeExternalDestinationStore) Create(ctx context.Context, d *models.ExternalDestination) error {
@@ -68,6 +72,47 @@ func (f *fakeExternalDestinationStore) GetByID(ctx context.Context, id string) (
 		return f.ByIDRow, nil
 	}
 	return nil, nil
+}
+
+// ListByWorkspace satisfies ExternalDestinationStore. Returns all
+// rows in ByIDMap whose WorkspaceID matches. When enabledOnly is
+// true, filters out rows with Enabled=false.
+func (f *fakeExternalDestinationStore) ListByWorkspace(ctx context.Context, workspaceID int64, enabledOnly bool) ([]models.ExternalDestination, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ListErr != nil {
+		return nil, f.ListErr
+	}
+	out := make([]models.ExternalDestination, 0)
+	for _, d := range f.ByIDMap {
+		if d.WorkspaceID != workspaceID {
+			continue
+		}
+		if enabledOnly && !d.Enabled {
+			continue
+		}
+		out = append(out, *d)
+	}
+	return out, nil
+}
+
+// Delete satisfies ExternalDestinationStore. Removes the row from
+// ByIDMap. Returns ErrExternalDestinationNotFound when the id is
+// unknown, or DeleteErr when set (e.g. to simulate FK dependents).
+func (f *fakeExternalDestinationStore) Delete(ctx context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.DeleteErr != nil {
+		return f.DeleteErr
+	}
+	if f.ByIDMap == nil {
+		return repository.ErrExternalDestinationNotFound
+	}
+	if _, ok := f.ByIDMap[id]; !ok {
+		return repository.ErrExternalDestinationNotFound
+	}
+	delete(f.ByIDMap, id)
+	return nil
 }
 
 // fakeWorkspaceStore implements WorkspaceStore; only FindByID is
@@ -451,3 +496,295 @@ type typedErr struct{ s string }
 
 func (e *typedErr) Error() string { return e.s }
 func errorsMatch(s string) error  { return &typedErr{s: s} }
+
+// -----------------------------------------------------------------------
+// Test cases — GET list, GET by id, DELETE (Step 6)
+// -----------------------------------------------------------------------
+
+// setupRouterForDestinations wires a fresh chi.Mux with the
+// destination routes mounted (POST + GET + DELETE). Reuses the
+// same fake stores as setupRouterForCreateDestination but also
+// pre-populates ByIDMap so GET/DELETE tests have data.
+func setupRouterForDestinations() (*Router, *fakeExternalDestinationStore, *fakeWorkspaceStore, *fakeUserStore, *fakeAuditLogStore) {
+	r, destStore, wsStore, userStore, auditStore := setupRouterForCreateDestination()
+	return r, destStore, wsStore, userStore, auditStore
+}
+
+// seedDestination adds a destination to the fake store's ByIDMap
+// and returns a pointer to it.
+func seedDestination(destStore *fakeExternalDestinationStore, id string, wsID, paID int64, enabled bool) *models.ExternalDestination {
+	if destStore.ByIDMap == nil {
+		destStore.ByIDMap = map[string]*models.ExternalDestination{}
+	}
+	d := &models.ExternalDestination{
+		ID:                id,
+		SourceSystem:      "velox",
+		WorkspaceID:       wsID,
+		PlatformAccountID: paID,
+		Enabled:           enabled,
+		DefaultMetadata:   json.RawMessage(`{"privacy_status":"private"}`),
+	}
+	destStore.ByIDMap[id] = d
+	return d
+}
+
+// TestListIntegrationVeloxDestinations_Happy — list returns all
+// enabled destinations for the caller's workspace.
+func TestListIntegrationVeloxDestinations_Happy(t *testing.T) {
+	r, destStore, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JAAA", 12, 345, true)
+	seedDestination(destStore, "extdst_01JBBB", 12, 346, true)
+	seedDestination(destStore, "extdst_01JCCC", 12, 347, false) // disabled
+	seedDestination(destStore, "extdst_01JDDD", 99, 348, true)  // different workspace
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/velox/destinations?workspace_id=12", nil)
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Destinations []VeloxDestinationResponse `json:"destinations"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Should return 2 (enabled only, same workspace; disabled +
+	// cross-workspace rows excluded).
+	if len(resp.Destinations) != 2 {
+		t.Errorf("len(destinations) = %d; want 2 (enabled only, ws=12)", len(resp.Destinations))
+	}
+}
+
+// TestListIntegrationVeloxDestinations_IncludeDisabled —
+// ?include_disabled=true returns disabled rows too.
+func TestListIntegrationVeloxDestinations_IncludeDisabled(t *testing.T) {
+	r, destStore, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JAAA", 12, 345, true)
+	seedDestination(destStore, "extdst_01JBBB", 12, 346, false)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/velox/destinations?workspace_id=12&include_disabled=true", nil)
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", w.Code)
+	}
+	var resp struct {
+		Destinations []VeloxDestinationResponse `json:"destinations"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Destinations) != 2 {
+		t.Errorf("len = %d; want 2 (include_disabled)", len(resp.Destinations))
+	}
+}
+
+// TestListIntegrationVeloxDestinations_403_NotOwned —
+// workspace exists but caller is not owner → 403.
+func TestListIntegrationVeloxDestinations_403_NotOwned(t *testing.T) {
+	r, _, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 999}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/velox/destinations?workspace_id=12", nil)
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d; want 403", w.Code)
+	}
+}
+
+// TestListIntegrationVeloxDestinations_Empty — workspace with
+// no destinations returns 200 + empty array.
+func TestListIntegrationVeloxDestinations_Empty(t *testing.T) {
+	r, _, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/velox/destinations?workspace_id=12", nil)
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", w.Code)
+	}
+	var resp struct {
+		Destinations []VeloxDestinationResponse `json:"destinations"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Destinations) != 0 {
+		t.Errorf("len = %d; want 0", len(resp.Destinations))
+	}
+}
+
+// TestListIntegrationVeloxDestinations_400_NoWorkspaceID —
+// missing workspace_id query param → 400.
+func TestListIntegrationVeloxDestinations_400_NoWorkspaceID(t *testing.T) {
+	r, _, _, _, _ := setupRouterForDestinations()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/velox/destinations", nil)
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400", w.Code)
+	}
+}
+
+// TestGetIntegrationVeloxDestination_Happy — fetch a single
+// destination by id, workspace owned by caller.
+func TestGetIntegrationVeloxDestination_Happy(t *testing.T) {
+	r, destStore, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JABC", 12, 345, true)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/velox/destinations/extdst_01JABC", nil)
+	req = reqWithUser(req, 123)
+	// chi needs the route to be registered with {id} for URLParam to
+	// work — registerUserVeloxDestinations already mounted it.
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp VeloxDestinationResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.ExternalDestinationID != "extdst_01JABC" {
+		t.Errorf("id = %q; want extdst_01JABC", resp.ExternalDestinationID)
+	}
+	if resp.Status != "active" {
+		t.Errorf("status = %q; want active", resp.Status)
+	}
+	// WorkspaceID must NOT appear in the JSON (json:"-").
+	if strings.Contains(w.Body.String(), "workspace_id") {
+		t.Error("workspace_id should not be serialized to the browser")
+	}
+}
+
+// TestGetIntegrationVeloxDestination_404_NotFound — unknown id → 404.
+func TestGetIntegrationVeloxDestination_404_NotFound(t *testing.T) {
+	r, _, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/velox/destinations/extdst_UNKNOWN", nil)
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404", w.Code)
+	}
+}
+
+// TestGetIntegrationVeloxDestination_404_NotOwned — destination
+// exists but belongs to a different workspace → 404 (not 403, to
+// prevent id enumeration).
+func TestGetIntegrationVeloxDestination_404_NotOwned(t *testing.T) {
+	r, destStore, wsStore, _, _ := setupRouterForDestinations()
+	// The destination belongs to workspace 99, but the caller owns 12.
+	// wsStore returns OwnerID=123 for ANY id (it's a single-result fake),
+	// so we need to make the destination's WorkspaceID not match the
+	// workspace the caller owns. We set wsStore to return ws=99 owned by
+	// 123, and the destination belongs to ws=99 — but the caller (123)
+	// does own ws=99. To test the not-owned path, we need ws.OwnerID !=
+	// userID. Set wsStore to return a workspace owned by a different user.
+	wsStore.FindByIDResult = &models.Workspace{ID: 99, OwnerID: 999}
+	seedDestination(destStore, "extdst_01JXYZ", 99, 345, true)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/velox/destinations/extdst_01JXYZ", nil)
+	req = reqWithUser(req, 123) // caller is 123, workspace owner is 999
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404 (not owned collapses to not found)", w.Code)
+	}
+}
+
+// TestDeleteIntegrationVeloxDestination_Happy — successful delete
+// returns 204 + audit log fires.
+func TestDeleteIntegrationVeloxDestination_Happy(t *testing.T) {
+	r, destStore, wsStore, _, auditStore := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JDEL", 12, 345, true)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/integrations/velox/destinations/extdst_01JDEL", nil)
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d; want 204; body=%s", w.Code, w.Body.String())
+	}
+	if _, ok := destStore.ByIDMap["extdst_01JDEL"]; ok {
+		t.Error("destination should have been deleted from the store")
+	}
+	if auditStore.LastEvent != "external_destination_deleted" {
+		t.Errorf("audit event = %q; want external_destination_deleted", auditStore.LastEvent)
+	}
+}
+
+// TestDeleteIntegrationVeloxDestination_404_NotFound —
+// deleting an unknown id → 404.
+func TestDeleteIntegrationVeloxDestination_404_NotFound(t *testing.T) {
+	r, _, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/integrations/velox/destinations/extdst_UNKNOWN", nil)
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404", w.Code)
+	}
+}
+
+// TestDeleteIntegrationVeloxDestination_404_NotOwned —
+// deleting a destination belonging to another workspace → 404
+// (not 403, to prevent id enumeration).
+func TestDeleteIntegrationVeloxDestination_404_NotOwned(t *testing.T) {
+	r, destStore, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 99, OwnerID: 999}
+	seedDestination(destStore, "extdst_01JXYZ", 99, 345, true)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/integrations/velox/destinations/extdst_01JXYZ", nil)
+	req = reqWithUser(req, 123) // caller 123, owner 999
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404 (not owned)", w.Code)
+	}
+	if _, ok := destStore.ByIDMap["extdst_01JXYZ"]; !ok {
+		t.Error("destination should NOT have been deleted (not owned)")
+	}
+}
+
+// TestDeleteIntegrationVeloxDestination_409_Dependents —
+// repository returns ErrExternalDestinationHasDependents → 409.
+func TestDeleteIntegrationVeloxDestination_409_Dependents(t *testing.T) {
+	r, destStore, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JDEP", 12, 345, true)
+	destStore.DeleteErr = repository.ErrExternalDestinationHasDependents
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/integrations/velox/destinations/extdst_01JDEP", nil)
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d; want 409; body=%s", w.Code, w.Body.String())
+	}
+}

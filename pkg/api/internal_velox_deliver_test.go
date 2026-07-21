@@ -53,6 +53,16 @@ func (m *mockExternalDestinations) GetByID(_ context.Context, _ string) (*models
 	return m.GetByIDResult, m.GetByIDErr
 }
 
+// ListByWorkspace + Delete satisfy the expanded ExternalDestinationStore
+// interface (Step 6). The deliver handler tests do not exercise these
+// methods; stubs return empty/nil so the interface is satisfied.
+func (m *mockExternalDestinations) ListByWorkspace(_ context.Context, _ int64, _ bool) ([]models.ExternalDestination, error) {
+	return nil, nil
+}
+func (m *mockExternalDestinations) Delete(_ context.Context, _ string) error {
+	return nil
+}
+
 // destinationsAdapter mirrors the validate-test single-embed
 // pattern: embeds the production ExternalDestinationStore
 // interface (other methods nil-receiver-safe) + carries the mock

@@ -54,6 +54,16 @@ func (m *mockExternalDestinationStore) Create(_ context.Context, _ *models.Exter
 	return nil
 }
 
+// ListByWorkspace + Delete satisfy the expanded ExternalDestinationStore
+// interface (Step 6). The validate tests do not exercise these methods;
+// stubs return empty/nil so the interface is satisfied.
+func (m *mockExternalDestinationStore) ListByWorkspace(_ context.Context, _ int64, _ bool) ([]models.ExternalDestination, error) {
+	return nil, nil
+}
+func (m *mockExternalDestinationStore) Delete(_ context.Context, _ string) error {
+	return nil
+}
+
 // mockWorkspaceLookup holds the test data + call counter for the
 // ONE WorkspaceStore method the validate handler reaches
 // (FindByID). The adapter wraps it so the lookup-edge failure
