@@ -12,6 +12,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // testVeloxAPIToken is shared with internal_velox_validate_test.go
@@ -655,7 +656,7 @@ func TestDeliver_NilStore(t *testing.T) {
 // an ID starting with sdel_01J and of reasonable length (the
 // 5-char prefix + 3-char legacy + 26-char base32 = 34 chars).
 func TestDeliver_MintIDPrefix(t *testing.T) {
-	id, err := generateVeloxDeliveryID()
+	id, err := services.GenerateVeloxDeliveryID()
 	if err != nil {
 		t.Fatalf("generateVeloxDeliveryID: %v", err)
 	}
@@ -666,7 +667,7 @@ func TestDeliver_MintIDPrefix(t *testing.T) {
 		t.Errorf("id length: want >= 30 chars, got %d (%q)", len(id), id)
 	}
 	// Uniqueness sanity — mint twice, verify distinct.
-	id2, err := generateVeloxDeliveryID()
+	id2, err := services.GenerateVeloxDeliveryID()
 	if err != nil {
 		t.Fatalf("second mint: %v", err)
 	}

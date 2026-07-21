@@ -10,6 +10,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // CreateVeloxDestinationRequest is the body for
@@ -158,7 +159,7 @@ func (r *Router) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, 
 	}
 
 	// Mint opaque ULID-style id "extdst_01J…"
-	destID, err := generateVeloxDestinationID()
+	destID, err := services.GenerateVeloxDestinationID()
 	if err != nil {
 		slog.Error("velox destination: id mint failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "id mint failed")
