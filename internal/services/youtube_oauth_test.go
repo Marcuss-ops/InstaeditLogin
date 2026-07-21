@@ -265,6 +265,21 @@ func TestYouTubeDiscoverAccounts_OneChannel(t *testing.T) {
 	}
 }
 
+func TestYouTubeStatisticsAcceptStringCounts(t *testing.T) {
+	var stats youtubeStatistics
+	if err := json.Unmarshal([]byte(`{
+		"subscriberCount":"125000",
+		"hiddenSubscriberCount":false,
+		"viewCount":"18000000",
+		"videoCount":"942"
+	}`), &stats); err != nil {
+		t.Fatalf("unmarshal YouTube string statistics: %v", err)
+	}
+	if stats.SubscriberCount != 125000 || stats.ViewCount != 18000000 || stats.VideoCount != 942 {
+		t.Fatalf("unexpected statistics: %+v", stats)
+	}
+}
+
 // TestYouTubeDiscoverAccounts_MultipleChannels verifies that DiscoverAccounts
 // returns all channels when the authenticated user manages more than one.
 func TestYouTubeDiscoverAccounts_MultipleChannels(t *testing.T) {
@@ -951,9 +966,11 @@ func TestYouTubeValidateChannelBinding_Transient5xx(t *testing.T) {
 // ONLY on the third page of channels.list?mine=true (i.e. position
 // >50 in the manager's channel set) is correctly recognized. The
 // stateful httptest handler returns three pages:
-//   page 1 (no pageToken)        : 50 channels (no expected)
-//   page 2 (pageToken=page2t)    : 50 channels (no expected)
-//   page 3 (pageToken=page3t)    : 10 channels, expected at index 5
+//
+//	page 1 (no pageToken)        : 50 channels (no expected)
+//	page 2 (pageToken=page2t)    : 50 channels (no expected)
+//	page 3 (pageToken=page3t)    : 10 channels, expected at index 5
+//
 // Without pagination the old single-GET path would have invisibly
 // truncated at page 1 → ErrYouTubeChannelMismatch. With pagination,
 // the loop follows nextPageToken through all three, finds the
@@ -1180,7 +1197,6 @@ func TestYouTubeValidateChannelBinding_ExhaustedMismatch_ReturnsMismatch(t *test
 		}
 	}
 }
-
 
 // TestYouTubeValidateChannelBinding_FailureMidPagination verifies the
 // transient contract is preserved across pagination boundaries: page 1
@@ -2097,18 +2113,18 @@ func TestYouTubeGetTokenInfo_SurfaceAllContractShapes(t *testing.T) {
 // a single httptest server (testClient re-routes every Google URL
 // through the same mux):
 //
-//   1. POST /upload/youtube/v3/videos?uploadType=resumable returns a
-//      Location: /canary-session header. The mock also asserts the
-//      metadata body contains the INSTAEDIT-OAUTH-CANARY-{channel}-{ts}
-//      title prefix, the expected channel id embedded, and the
-//      status.privacyStatus="private" guard.
-//   2. PUT /canary-session returns 200 + a synthesized
-//      {"id":"<videoID>"} terminal body so putChunk reports the
-//      video id.
-//   3. GET /youtube/v3/videos?id=<videoID>&part=snippet,status,processingDetails
-//      returns the same video id with snippet.channelId equal to
-//      the expected channel — the post-upload reconcile that
-//      step-4 uses as the source of truth.
+//  1. POST /upload/youtube/v3/videos?uploadType=resumable returns a
+//     Location: /canary-session header. The mock also asserts the
+//     metadata body contains the INSTAEDIT-OAUTH-CANARY-{channel}-{ts}
+//     title prefix, the expected channel id embedded, and the
+//     status.privacyStatus="private" guard.
+//  2. PUT /canary-session returns 200 + a synthesized
+//     {"id":"<videoID>"} terminal body so putChunk reports the
+//     video id.
+//  3. GET /youtube/v3/videos?id=<videoID>&part=snippet,status,processingDetails
+//     returns the same video id with snippet.channelId equal to
+//     the expected channel — the post-upload reconcile that
+//     step-4 uses as the source of truth.
 //
 // Asserts: err == nil, result.VideoID == <videoID>,
 // result.UploadedChannelID == "UCexpectedChannelID".

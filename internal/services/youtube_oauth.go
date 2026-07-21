@@ -635,6 +635,7 @@ var _ YouTubeChannelBinder = (*YouTubeOAuthService)(nil)
 type YouTubeCanaryUploader interface {
 	CanaryUpload(ctx context.Context, accessToken, expectedChannelID string) (*CanaryUploadResult, error)
 }
+
 var _ YouTubeCanaryUploader = (*YouTubeOAuthService)(nil)
 
 // VerifyChannelIdentity (Task 2/10) is the REUSABLE pre-action
@@ -2526,6 +2527,52 @@ type youtubeStatistics struct {
 	VideoCount            int64 `json:"videoCount"`
 }
 
+// YouTube's Data API encodes statistics counters as JSON strings (for
+// example, "viewCount": "123"), while fixtures and some compatible API
+// implementations may emit JSON numbers. Accept both wire formats so a
+// valid OAuth callback cannot fail while discovering the user's channel.
+func decodeYouTubeCount(raw json.RawMessage) (int64, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, nil
+	}
+	if raw[0] == '"' {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return 0, err
+		}
+		return strconv.ParseInt(value, 10, 64)
+	}
+	var value int64
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
+func (s *youtubeStatistics) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		SubscriberCount       json.RawMessage `json:"subscriberCount"`
+		HiddenSubscriberCount bool            `json:"hiddenSubscriberCount"`
+		ViewCount             json.RawMessage `json:"viewCount"`
+		VideoCount            json.RawMessage `json:"videoCount"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	var err error
+	if s.SubscriberCount, err = decodeYouTubeCount(wire.SubscriberCount); err != nil {
+		return fmt.Errorf("subscriberCount: %w", err)
+	}
+	if s.ViewCount, err = decodeYouTubeCount(wire.ViewCount); err != nil {
+		return fmt.Errorf("viewCount: %w", err)
+	}
+	if s.VideoCount, err = decodeYouTubeCount(wire.VideoCount); err != nil {
+		return fmt.Errorf("videoCount: %w", err)
+	}
+	s.HiddenSubscriberCount = wire.HiddenSubscriberCount
+	return nil
+}
+
 type youtubeContentDetails struct {
 	RelatedPlaylists youtubeRelatedPlaylists `json:"relatedPlaylists"`
 }
@@ -2596,6 +2643,28 @@ type youtubeVideoStats struct {
 	ViewCount    int64 `json:"viewCount"`
 	LikeCount    int64 `json:"likeCount"`
 	CommentCount int64 `json:"commentCount"`
+}
+
+func (s *youtubeVideoStats) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ViewCount    json.RawMessage `json:"viewCount"`
+		LikeCount    json.RawMessage `json:"likeCount"`
+		CommentCount json.RawMessage `json:"commentCount"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	var err error
+	if s.ViewCount, err = decodeYouTubeCount(wire.ViewCount); err != nil {
+		return fmt.Errorf("viewCount: %w", err)
+	}
+	if s.LikeCount, err = decodeYouTubeCount(wire.LikeCount); err != nil {
+		return fmt.Errorf("likeCount: %w", err)
+	}
+	if s.CommentCount, err = decodeYouTubeCount(wire.CommentCount); err != nil {
+		return fmt.Errorf("commentCount: %w", err)
+	}
+	return nil
 }
 
 type youtubeVideoContent struct {
