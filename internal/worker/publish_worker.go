@@ -568,55 +568,10 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 			return fmt.Errorf("ensure provider idempotency key: %w", err)
 		}
 	}
-	// P1 — Payload construction now honours the precedence cascade:
-	//   post.PrivacyLevel (highest, per-post UI override)
-	//   > post.DefaultPrivacyLevel (middle, inherited from upload_job → import_batch)
-	//   > "unlisted" (YouTube fallback, industry-standard safer default)
-	//   > "PUBLIC_TO_EVERYONE" (other platforms that require an explicit value)
-	// The boundary allowlist (public|unlisted|private) is enforced at the
-	// YouTube capability boundary by youtube_oauth.go::ValidateContent →
-	// validateYouTubePrivacyLevel, NOT here — keep the worker's hot path
-	// linear with no per-platform branching we already encode in the
-	// capability router.
-	payload := models.PublishPayload{
-		Text:         post.Caption,
-		Title:        post.Title,
-		PublishAt:    post.PublishAt,
-		PrivacyLevel: post.PrivacyLevel, // highest-precedence term (per-post override)
-	}
-	if post.MediaURL != "" {
-		payload.VideoURL = post.MediaURL
-	}
-	// Fallback to the inherited batch default (middle term of the cascade).
-	if payload.PrivacyLevel == "" {
-		payload.PrivacyLevel = post.DefaultPrivacyLevel
-	}
-	// YouTube platform-specific fallback — "unlisted" replaces the old
-	// hardcoded "private" default. Reasoning: unverified apps' uploads are
-	// already force-private by YouTube's app-review policy, BUT the legacy
-	// hardcoded "private" leaked into older publishes too. "unlisted" is
-	// the user-friendly YouTube-safe default (publishable without public
-	// exposure). The boundary allowlist at youtube_oauth::ValidateContent
-	// rejects any value that is not in {public, unlisted, private}, so a
-	// stray value from a future platform's enum can't reach the API call.
-	if account.Platform == models.PlatformYouTube && payload.PrivacyLevel == "" {
-		payload.PrivacyLevel = "unlisted"
-	}
-	// Generic fallback for platforms that require an explicit privacy value
-	// (TikTok's PUBLIC_TO_EVERYONE / MUTUAL_FOLLOW_FRIENDS / SELF_ONLY
-	// triple preserves the post-Taglio-2.2 default).
-	if payload.PrivacyLevel == "" {
-		payload.PrivacyLevel = "PUBLIC_TO_EVERYONE"
-	}
-	// TikTok's PULL_FROM_URL mode requires the video URL's domain to be
-	// ownership-verified in the TikTok Developer Console — impossible
-	// for a dynamic dev tunnel. Route TikTok through PULL_FROM_FILE
-	// (chunked direct upload) instead, which uploads the bytes straight
-	// to TikTok and skips the URL-ownership check.
-	if account.Platform == models.PlatformTikTok && payload.Source == "" {
-		payload.Source = models.PublishSourcePULLFromFile
-	}
-	payload.IdempotencyKey = key
+	// Build the publish payload, applying the privacy-level cascade
+	// and platform-specific defaults in the process phase.
+	payload := w.buildPayload(account, post, key)
+
 
 	// FASE 1.3: throttle per-platform API calls to avoid rate-limit
 	// bans. If the throttle is nil (test mode), skip. If the platform's

@@ -111,8 +111,7 @@ func (w *PublishWorker) prepareCredentials(ctx context.Context, target *models.P
 // the privacy-level precedence cascade and platform-specific defaults
 // in the process phase. The idempotency key is injected into the payload
 // before the publish call.
-func (w *PublishWorker) buildPayload(target *models.PostTarget, account *models.PlatformAccount, post *models.Post, key string) models.PublishPayload {
-	_ = target // reserved for future per-target payload overrides
+func (w *PublishWorker) buildPayload(account *models.PlatformAccount, post *models.Post, key string) models.PublishPayload {
 	payload := models.PublishPayload{
 		Text:         post.Caption,
 		Title:        post.Title,
