@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -37,12 +38,8 @@ func TestConnectLinkNonceRepository_CreateAndConsume(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	consumed, err := repo.Consume(nonce)
-	if err != nil {
+	if err := repo.Consume(nonce); err != nil {
 		t.Fatalf("Consume: %v", err)
-	}
-	if !consumed {
-		t.Fatal("Consume: expected consumed=true")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -69,12 +66,10 @@ func TestConnectLinkNonceRepository_Consume_AlreadyConsumed(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at", "consumed_at"}).AddRow(expiresAt, consumedAt))
 	mock.ExpectRollback()
 
-	consumed, err := repo.Consume(nonce)
-	if err != nil {
-		t.Fatalf("Consume: %v", err)
-	}
-	if consumed {
-		t.Fatal("Consume: expected consumed=false for already-consumed nonce")
+	if err := repo.Consume(nonce); err == nil {
+		t.Fatal("Consume: expected error for already-consumed nonce")
+	} else if !errors.Is(err, ErrNonceConsumed) {
+		t.Fatalf("Consume: expected ErrNonceConsumed, got %v", err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -99,12 +94,10 @@ func TestConnectLinkNonceRepository_Consume_Expired(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"expires_at", "consumed_at"}).AddRow(expiresAt, nil))
 	mock.ExpectRollback()
 
-	consumed, err := repo.Consume(nonce)
-	if err != nil {
-		t.Fatalf("Consume: %v", err)
-	}
-	if consumed {
-		t.Fatal("Consume: expected consumed=false for expired nonce")
+	if err := repo.Consume(nonce); err == nil {
+		t.Fatal("Consume: expected error for expired nonce")
+	} else if !errors.Is(err, ErrNonceExpired) {
+		t.Fatalf("Consume: expected ErrNonceExpired, got %v", err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -128,12 +121,10 @@ func TestConnectLinkNonceRepository_Consume_Missing(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
 
-	consumed, err := repo.Consume(nonce)
-	if err != nil {
-		t.Fatalf("Consume: %v", err)
-	}
-	if consumed {
-		t.Fatal("Consume: expected consumed=false for missing nonce")
+	if err := repo.Consume(nonce); err == nil {
+		t.Fatal("Consume: expected error for missing nonce")
+	} else if !errors.Is(err, ErrNonceMissing) {
+		t.Fatalf("Consume: expected ErrNonceMissing, got %v", err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

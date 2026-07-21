@@ -112,15 +112,27 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		// signed URL cannot be replayed. Missing/expired/already-
 		// consumed nonces are treated as a replay attempt.
 		if r.connectLinkNonceStore != nil {
-			consumed, consumeErr := r.connectLinkNonceStore.Consume(claims.Nonce)
+			consumeErr := r.connectLinkNonceStore.Consume(claims.Nonce)
 			if consumeErr != nil {
+				reason := connectLinkConsumeReason(consumeErr)
+				if reason != "" {
+					// Known rejection: log structured diagnostics and
+					// emit a metric so operators can distinguish
+					// missing/expired/consumed links from genuine
+					// failures.
+					slog.WarnContext(req.Context(), "connect-link nonce rejected",
+						"reason", reason,
+						"provider", provider,
+						"expected_channel_id", claims.ExpectedChannelID,
+					)
+					metrics.RecordConnectLinkConsume(reason)
+					writeError(w, http.StatusGone, "connect-link already consumed or expired")
+					return
+				}
 				writeError(w, http.StatusInternalServerError, "could not verify connect-link state: "+consumeErr.Error())
 				return
 			}
-			if !consumed {
-				writeError(w, http.StatusGone, "connect-link already consumed or expired")
-				return
-			}
+			metrics.RecordConnectLinkConsume("ok")
 		}
 		expectedChannelID = claims.ExpectedChannelID
 		fromConnectLinkState = true
@@ -341,6 +353,24 @@ var ErrYouTubeAmbiguousAuthorization = errors.New("youtube authorization is ambi
 // different channel would silently misroute uploads. Handler maps
 // this to HTTP 409 Conflict.
 var ErrYouTubeChannelMismatch = errors.New("youtube authorized channel does not match expected channel")
+
+// connectLinkConsumeReason maps the known connect-link nonce
+// repository sentinel errors to a short reason string used in logs
+// and the connect_link_consume_total metric. It returns an empty
+// string for any other error so callers can fall through to a
+// generic 500 response.
+func connectLinkConsumeReason(err error) string {
+	switch {
+	case errors.Is(err, repository.ErrNonceMissing):
+		return "missing"
+	case errors.Is(err, repository.ErrNonceExpired):
+		return "expired"
+	case errors.Is(err, repository.ErrNonceConsumed):
+		return "consumed"
+	default:
+		return ""
+	}
+}
 
 func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, provider string, discoverer services.AccountDiscoverer, tokenData *models.TokenData, expectedChannelID string) (*models.PlatformAccount, error) {
 	accounts, err := discoverer.DiscoverAccounts(ctx, tokenData.AccessToken, "")

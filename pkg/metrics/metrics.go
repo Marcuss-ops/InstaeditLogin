@@ -145,6 +145,18 @@ var (
 		},
 		[]string{"provider", "subject"},
 	)
+	// ConnectLinkConsumeTotal counts connect-link nonce consumption
+	// attempts during the OAuth callback. The `reason` label
+	// distinguishes the success path from replay-prevention
+	// rejections (missing/expired/consumed) so operators can debug
+	// 410 Gone responses without grepping logs.
+	connectLinkConsumeTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "connect_link_consume_total",
+			Help: "Connect-link nonce consumption attempts, by reason (ok, missing, expired, consumed).",
+		},
+		[]string{"reason"},
+	)
 )
 
 func init() {
@@ -160,6 +172,7 @@ func init() {
 		sessionOrphanRevokeFailures,
 		veloxDownloadJobDrops,
 		oauthConnectionsPerSubject,
+		connectLinkConsumeTotal,
 	)
 }
 
@@ -183,6 +196,18 @@ func RecordOAuthLoginSuccess(platform string) {
 
 func RecordOAuthLoginError(platform, kind string) {
 	oauthLoginError.WithLabelValues(platform, kind).Inc()
+}
+
+// RecordConnectLinkConsume increments the connect_link_consume_total
+// counter for the supplied reason. The OAuth callback uses this to
+// expose whether a connect-link nonce was consumed successfully or
+// rejected because it was missing, expired, or already consumed.
+// Callers should pass one of: "ok", "missing", "expired", "consumed".
+func RecordConnectLinkConsume(reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	connectLinkConsumeTotal.WithLabelValues(reason).Inc()
 }
 
 func RecordTokenRefreshSuccess(platform string) {

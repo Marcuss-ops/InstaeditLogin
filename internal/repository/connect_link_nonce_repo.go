@@ -28,6 +28,16 @@ func NewConnectLinkNonceRepository(db *sql.DB) *ConnectLinkNonceRepository {
 	return &ConnectLinkNonceRepository{db: db}
 }
 
+// Sentinel errors returned by Consume so callers can distinguish
+// why a connect-link nonce was rejected. These are intentionally
+// distinct from database/internal errors so the OAuth callback can
+// map them to a 410 Gone with a clear reason for operators.
+var (
+	ErrNonceMissing  = errors.New("connect-link nonce missing")
+	ErrNonceExpired  = errors.New("connect-link nonce expired")
+	ErrNonceConsumed = errors.New("connect-link nonce already consumed")
+)
+
 // Create persists a fresh nonce with its expected channel id and expiry.
 func (r *ConnectLinkNonceRepository) Create(nonce, expectedChannelID string, expiresAt time.Time) error {
 	if nonce == "" {
@@ -48,17 +58,19 @@ func (r *ConnectLinkNonceRepository) Create(nonce, expectedChannelID string, exp
 	return nil
 }
 
-// Consume atomically marks a nonce as consumed. It returns true when
-// the nonce exists, has not expired, and was not already consumed.
-// It returns false for already-consumed, missing, or expired nonces.
-func (r *ConnectLinkNonceRepository) Consume(nonce string) (bool, error) {
+// Consume atomically marks a nonce as consumed. It returns nil on
+// success. For known rejection cases it returns one of the sentinel
+// errors ErrNonceMissing, ErrNonceExpired, or ErrNonceConsumed so the
+// caller can log/metric the exact reason. Any other error indicates
+// a database or transaction failure.
+func (r *ConnectLinkNonceRepository) Consume(nonce string) error {
 	if nonce == "" {
-		return false, errors.New("connect-link nonce: nonce is required")
+		return errors.New("connect-link nonce: nonce is required")
 	}
 
 	tx, err := r.db.Begin()
 	if err != nil {
-		return false, fmt.Errorf("consume connect-link nonce: begin tx: %w", err)
+		return fmt.Errorf("consume connect-link nonce: begin tx: %w", err)
 	}
 	// Always rollback unless we explicitly commit. This keeps the
 	// transaction short and avoids leaving dangling tx state for
@@ -80,16 +92,16 @@ func (r *ConnectLinkNonceRepository) Consume(nonce string) (bool, error) {
 		nonce,
 	).Scan(&expiresAt, &consumedAt)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return ErrNonceMissing
 	}
 	if err != nil {
-		return false, fmt.Errorf("consume connect-link nonce: select: %w", err)
+		return fmt.Errorf("consume connect-link nonce: select: %w", err)
 	}
 	if consumedAt != nil {
-		return false, nil
+		return ErrNonceConsumed
 	}
 	if time.Now().After(expiresAt) {
-		return false, nil
+		return ErrNonceExpired
 	}
 
 	res, err := tx.Exec(
@@ -99,18 +111,19 @@ func (r *ConnectLinkNonceRepository) Consume(nonce string) (bool, error) {
 		nonce,
 	)
 	if err != nil {
-		return false, fmt.Errorf("consume connect-link nonce: update: %w", err)
+		return fmt.Errorf("consume connect-link nonce: update: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("consume connect-link nonce: rows affected: %w", err)
+		return fmt.Errorf("consume connect-link nonce: rows affected: %w", err)
 	}
 	if n == 0 {
-		return false, nil
+		// Another concurrent consumer won the race; treat as consumed.
+		return ErrNonceConsumed
 	}
 	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("consume connect-link nonce: commit: %w", err)
+		return fmt.Errorf("consume connect-link nonce: commit: %w", err)
 	}
 	committed = true
-	return true, nil
+	return nil
 }
