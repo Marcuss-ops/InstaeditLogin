@@ -400,6 +400,67 @@ func TestCrossEnv_IssuerNoEnv_VerifierWithEnv_StillEnforced(t *testing.T) {
 	}
 }
 
+// TestVerifyConnectLinkState_RejectsWrongIssuerAudienceOrAlg pins the
+// same issuer/audience/algorithm validation for connect-link state JWTs.
+func TestVerifyConnectLinkState_RejectsWrongIssuerAudienceOrAlg(t *testing.T) {
+	m := NewManager(testSecret, 24)
+	const channel = "UC1234567890abcdefghij"
+
+	// Wrong issuer.
+	claimsIss := ConnectLinkStateClaims{
+		StateType:         "connect_link",
+		ExpectedChannelID: channel,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "wrong-issuer",
+			Audience:  jwt.ClaimStrings{"api"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+	}
+	tokIss, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claimsIss).SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("sign wrong-issuer state token: %v", err)
+	}
+	if _, err := m.VerifyConnectLinkState(tokIss); err == nil {
+		t.Fatal("VerifyConnectLinkState: want error for wrong issuer, got nil")
+	}
+
+	// Wrong audience.
+	claimsAud := ConnectLinkStateClaims{
+		StateType:         "connect_link",
+		ExpectedChannelID: channel,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "instaeditlogin",
+			Audience:  jwt.ClaimStrings{"wrong-audience"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+	}
+	tokAud, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claimsAud).SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("sign wrong-audience state token: %v", err)
+	}
+	if _, err := m.VerifyConnectLinkState(tokAud); err == nil {
+		t.Fatal("VerifyConnectLinkState: want error for wrong audience, got nil")
+	}
+
+	// Disallowed signing method ("none").
+	claimsAlg := ConnectLinkStateClaims{
+		StateType:         "connect_link",
+		ExpectedChannelID: channel,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "instaeditlogin",
+			Audience:  jwt.ClaimStrings{"api"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+	}
+	tokAlg, err := jwt.NewWithClaims(jwt.SigningMethodNone, claimsAlg).SignedString(jwt.UnsafeAllowNoneSignatureType)
+	if err != nil {
+		t.Fatalf("sign none state token: %v", err)
+	}
+	if _, err := m.VerifyConnectLinkState(tokAlg); err == nil {
+		t.Fatal("VerifyConnectLinkState: want error for 'none' signing method, got nil")
+	}
+}
+
 // TestVerifyConnectLinkState_ExpiredReturnsErrMalformed pins the
 // HARDENING requirement from the connect-link spec: a state JWT whose
 // ExpiresAt has passed MUST be rejected with ErrMalformedConnectLinkState
@@ -509,6 +570,65 @@ func TestAccessTokenExpiresWithinAccessTTL(t *testing.T) {
 	ttl := time.Until(exp)
 	if ttl <= 0 || ttl > 15*time.Minute {
 		t.Fatalf("access token TTL out of range: %s", ttl)
+	}
+}
+
+// TestVerifyRejectsWrongIssuerAudienceOrAlg pins the explicit
+// issuer/audience/algorithm validation added to jwt.ParseWithClaims.
+// Tokens that carry a different issuer, audience, or signing method
+// must be rejected even when the signature is otherwise valid.
+func TestVerifyRejectsWrongIssuerAudienceOrAlg(t *testing.T) {
+	m := NewManager(testSecret, 24)
+
+	// Wrong issuer.
+	claimsIss := Claims{
+		UserID: 1, WorkspaceID: 1, SessionID: 1,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "wrong-issuer",
+			Audience:  jwt.ClaimStrings{"api"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+	}
+	tokIss, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claimsIss).SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("sign wrong-issuer token: %v", err)
+	}
+	if _, _, _, err := m.Verify(tokIss); err == nil {
+		t.Fatal("Verify: want error for wrong issuer, got nil")
+	}
+
+	// Wrong audience.
+	claimsAud := Claims{
+		UserID: 1, WorkspaceID: 1, SessionID: 1,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "instaeditlogin",
+			Audience:  jwt.ClaimStrings{"wrong-audience"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+	}
+	tokAud, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claimsAud).SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("sign wrong-audience token: %v", err)
+	}
+	if _, _, _, err := m.Verify(tokAud); err == nil {
+		t.Fatal("Verify: want error for wrong audience, got nil")
+	}
+
+	// Disallowed signing method ("none").
+	claimsAlg := Claims{
+		UserID: 1, WorkspaceID: 1, SessionID: 1,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "instaeditlogin",
+			Audience:  jwt.ClaimStrings{"api"},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		},
+	}
+	tokAlg, err := jwt.NewWithClaims(jwt.SigningMethodNone, claimsAlg).SignedString(jwt.UnsafeAllowNoneSignatureType)
+	if err != nil {
+		t.Fatalf("sign none token: %v", err)
+	}
+	if _, _, _, err := m.Verify(tokAlg); err == nil {
+		t.Fatal("Verify: want error for 'none' signing method, got nil")
 	}
 }
 

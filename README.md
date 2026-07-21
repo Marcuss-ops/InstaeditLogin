@@ -22,7 +22,7 @@ provider (in questo caso `/api/v1/auth/{anything}` risponde 404).
 
 ## Stack Tecnologico
 
-- **Linguaggio:** Go 1.23+
+- **Linguaggio:** Go 1.26+
 - **Database:** PostgreSQL
 - **Sicurezza:** AES-256-GCM per token a riposo, JWT per sessioni
 - **Pattern:** Small capability interfaces (OAuthProvider, AccountDiscoverer, ContentValidator, Publisher, AsyncPublisher) — Taglio 2a
@@ -31,12 +31,12 @@ provider (in questo caso `/api/v1/auth/{anything}` risponde 404).
 
 ### Prerequisiti
 
-- Go 1.23+
+- Go 1.26+
 - PostgreSQL 15+
 - **Nessuna piattaforma social è obbligatoria** (Taglio 2.4): configura nel
   `.env` solo le credenziali delle piattaforme che vuoi supportare. Le
-  cinque piattaforme (Meta, TikTok, Twitter, YouTube, LinkedIn) sono
-  tutte indipendenti — vedi `## Piattaforme indipendenti` più sotto.
+  sette piattaforme (Meta, TikTok, X/Twitter, YouTube, LinkedIn, Google Drive,
+  Velox) sono tutte indipendenti — vedi `## Piattaforme indipendenti` più sotto.
 
 ### Setup
 
@@ -53,6 +53,15 @@ cp .env.example .env
 # 3. Avvia il server
 go run cmd/server/main.go
 ```
+
+### Worker di background
+
+`cmd/server/main.go` è un wrapper di sviluppo che avvia **otto goroutine di
+background** oltre al server HTTP: publish, reconcile, outbox, webhook,
+metrics, sessions_cleanup, upload e drive_batch_crawler. In produzione si
+usano i binari separati `cmd/api` (HTTP), `cmd/worker` (background) e
+`cmd/migrate` (migrazioni one-shot) per scalare i componenti in modo
+indipendente.
 
 ## Architettura
 
@@ -110,12 +119,12 @@ instaedit-login/
 
 ## Piattaforme indipendenti (Taglio 2.4)
 
-Ogni piattaforma social (Meta, TikTok, Twitter, YouTube, LinkedIn) si
-registra in modo **completamente indipendente** dalle altre. Il server
-parte con un qualsiasi sottoinsieme di piattaforme configurate, anche
-una sola.
+Le piattaforme social principali (Meta, TikTok, X/Twitter, YouTube,
+LinkedIn) e i connettori aggiuntivi (Google Drive, Velox) si registrano
+in modo **completamente indipendente** l'una dall'altra. Il server parte
+con un qualsiasi sottoinsieme configurato, anche una sola.
 
-**Regole** (valide per tutte e cinque le piattaforme):
+**Regole** (valide per tutte le piattaforme supportate):
 
 1. **Piattaforma disabilitata**: nessuna variabile d'ambiente settata
    per quella piattaforma (es. `YOUTUBE_CLIENT_ID` e `YOUTUBE_CLIENT_SECRET`
@@ -175,32 +184,40 @@ piattaforma corrispondente non viene registrata.
 
 ## Autenticazione JWT
 
-L'API emette un JWT HS256 al termine del flusso OAuth (`/api/v1/auth/{provider}/callback`)
-e lo restituisce:
+L'API emette un JWT HS256 breve (15 minuti) al termine del flusso OAuth
+(`/api/v1/auth/{provider}/callback`) e lo scrive in un cookie **HttpOnly**
+(`session`), insieme a un cookie `refresh` opaco per il refresh token. La SPA
+usa `credentials: "include"` su ogni richiesta autenticata; il JWT non viene
+mai salvato in `localStorage`. Il flusso è:
 
-- come **redirect** verso `${FRONTEND_URL}/auth/callback?jwt=...&provider=...&user_id=...&expires_at=...`
-  per i browser (l'app React lo cattura e lo salva in `localStorage`), oppure
-- come **JSON** `{ jwt_token, ... }` se `FRONTEND_URL` non è configurato (curl,
-  Postman, integrazioni server-to-server).
+1. Il browser completa il consenso OAuth sul provider esterno.
+2. Il backend riceve il callback, crea la sessione ed imposta i cookie
+   `session` (JWT, HttpOnly) e `refresh` (token opaco, HttpOnly).
+3. La SPA è reindirizzata a `/app/linking`.
+4. Il browser invia automaticamente il cookie `session` alle API protette.
+5. Il middleware estrae il JWT dal cookie o dall'header `Authorization: Bearer`
+   e verifica firma, issuer (`instaeditlogin`), audience (`api`) e metodo
+   (`HS256`).
 
-Il middleware (`internal/auth.Middleware`) dopo il Taglio 1.1:
-l'identità arriva solo dal JWT di sessione o da una API key (Taglio 1.2). Non esiste
-alcuna modalità legacy o lenient.
+Per integrazioni server-to-server o test con curl si può usare l'header
+`Authorization: Bearer <jwt>`; il cookie HttpOnly è il percorso normale
+per il browser.
 
 ### Auth JWT (Taglio 1.1)
 
-- Authorization mancante → **401** `missing authorization header`
-- Header non in formato `Bearer` → **401** `invalid authorization header`
-- JWT scaduto o firma invalida → **401** `invalid or expired token`
+- Cookie `session` mancante o invalido → **401** `missing or invalid session`
+- Header `Authorization` non in formato `Bearer` → **401** `invalid authorization header`
+- JWT scaduto, firma invalida, issuer/audience errati o metodo diverso da HS256 → **401** `invalid or expired token`
 - JWT valido → `user_id` inserito nel contesto della richiesta e l'handler gira
 
-Il client deve allegare `Authorization: Bearer <jwt>` ad ogni chiamata a
-`/api/v1/posts/publish` e `/api/v1/accounts`. La SPA lo fa automaticamente via
-`authedFetch()` in `web/src/lib/auth.ts`.
+Il browser invia automaticamente il cookie `session`; per le integrazioni
+server-to-server o per i test con curl si può usare
+`Authorization: Bearer <jwt>`. La SPA usa `authedFetch()` in
+`web/src/lib/auth.ts` con `credentials: "include"`.
 
 All'avvio il server logga:
 ```
-msg="Router configured" jwt_ttl_hours=168
+msg="Router configured" jwt_access_ttl_minutes=15 jwt_refresh_ttl_days=30
 ```
 
 > 🚨 **NESSUNA MODALITÀ LEGACY** 🚨

@@ -321,7 +321,7 @@ func (m *Manager) VerifyWithAdmin(raw string) (int64, int64, int64, bool, error)
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return m.secret, nil
-	})
+	}, jwt.WithIssuer(m.issuer), jwt.WithAudience(m.audience), jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil {
 		return 0, 0, 0, false, err
 	}
@@ -574,7 +574,7 @@ func (m *Manager) VerifyConnectLinkState(raw string) (string, error) {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return m.secret, nil
-	})
+	}, jwt.WithIssuer(m.issuer), jwt.WithAudience(m.audience), jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrMalformedConnectLinkState, err)
 	}
