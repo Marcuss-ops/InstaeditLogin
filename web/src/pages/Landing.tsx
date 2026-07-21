@@ -4,7 +4,7 @@ import { Hero } from "./landing/Hero";
 import { Pipeline } from "../components/landing/Pipeline";
 import { StatsStrip } from "../components/landing/StatsStrip";
 import { Workflow } from "../components/landing/Workflow";
-import { Features } from "../components/landing/Features";
+import { Features } from "./landing/Features";
 import { Results } from "../components/landing/Results";
 import { Agency } from "../components/landing/Agency";
 import { ProblemSolution } from "../components/landing/ProblemSolution";
