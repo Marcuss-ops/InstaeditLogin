@@ -13,7 +13,7 @@ import { Shorts } from "../components/landing/Shorts";
 import { LongForm } from "../components/landing/LongForm";
 import { Footer } from "../components/landing/Footer";
 import { WhoAreWe } from "../components/landing/WhoAreWe";
-import { FAQ } from "../components/landing/FAQ";
+import { FAQ } from "./landing/FAQ";
 import { FinalCTA } from "../components/landing/FinalCTA";
 
 export function Landing() {
