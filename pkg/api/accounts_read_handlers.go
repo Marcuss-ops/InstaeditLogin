@@ -207,6 +207,12 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 					// fresh data in memory and can serve it.
 					_ = r.snapshotStore.UpsertSnapshot(snap)
 
+					// Persist the daily metric history row. This is also best-
+					// effort: a failure here should not break the request.
+					if r.metricHistoryStore != nil {
+						_ = r.metricHistoryStore.UpsertDaily(account.ID, details.FetchedAt, metricsToPoint(details.Metrics))
+					}
+
 					// Build resource from the fresh details.
 					res := &accountResource{
 						ResourceType: details.ResourceType,
@@ -293,6 +299,24 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// metricsToPoint extracts numeric metrics from the provider details and
+// maps them to a repository point. Unknown keys are ignored, so the
+// helper is safe for any platform that returns a subset of the keys.
+func metricsToPoint(metrics []models.AccountMetric) repository.AccountMetricPoint {
+	p := repository.AccountMetricPoint{}
+	for _, m := range metrics {
+		switch m.Key {
+		case "subscribers":
+			p.Subscribers = m.Value
+		case "views":
+			p.Views = m.Value
+		case "videos":
+			p.Videos = m.Value
+		}
+	}
+	return p
 }
 
 // handleAccountContent returns a paginated list of content items

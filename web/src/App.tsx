@@ -10,10 +10,13 @@ import { Mentoring } from "./pages/Mentoring";
 import { InternalDashboard } from "./pages/internal/Dashboard";
 import { InternalLinking } from "./pages/internal/Linking";
 import { AccountDetailsPage } from "./pages/internal/AccountDetails";
+import { AccountPerformancePage } from "./pages/internal/AccountPerformance";
+import { ChannelsPerformancePage } from "./pages/internal/ChannelsPerformance";
 import { InternalPosts } from "./pages/internal/Posts";
 import { InternalCompose } from "./pages/internal/Compose";
 import { CalendarPage } from "./pages/internal/Calendar";
 import { InternalUploads } from "./pages/internal/Uploads";
+import { GroupsPage } from "./pages/internal/Groups";
 import { CookieBanner } from "./components/CookieBanner";
 import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
 import { ToastProvider } from "./components/toast";
@@ -84,9 +87,12 @@ function App() {
                 <Route path="uploads" element={<InternalUploads />} />
                 <Route path="linking" element={<InternalLinking />} />
                 <Route path="accounts/:accountId" element={<AccountDetailsPage />} />
+                <Route path="accounts/:accountId/performance" element={<AccountPerformancePage />} />
+                <Route path="performance" element={<ChannelsPerformancePage />} />
                 <Route path="posts" element={<InternalPosts />} />
                 <Route path="compose" element={<InternalCompose />} />
                 <Route path="calendar" element={<CalendarPage />} />
+                <Route path="groups" element={<GroupsPage />} />
                 <Route
                   path="uploads/calendar"
                   element={<CalendarPage />}

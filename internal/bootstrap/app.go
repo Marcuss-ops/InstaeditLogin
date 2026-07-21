@@ -330,6 +330,7 @@ func Wire(ctx context.Context) (*App, error) {
 		// is unset, registration is disabled (handler returns 403).
 		api.WithAdminInviteToken(cfg.AdminInviteToken),
 		api.WithSnapshotStore(repository.NewSnapshotRepository(db)),
+		api.WithMetricHistoryStore(repository.NewAccountMetricsRepository(db)),
 		// P1#7 — export the importBatchRepo on App so the
 		// command-line crawler (cmd/worker) can wire it directly.
 	}

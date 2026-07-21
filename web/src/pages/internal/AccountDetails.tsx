@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft,
   RefreshCw,
@@ -8,6 +8,7 @@ import {
   Settings,
   AlertCircle,
   Loader2,
+  TrendingUp,
 } from "lucide-react";
 import { authedFetch, AuthError } from "../../lib/auth";
 import { PROVIDERS, type ProviderId } from "../../lib/providers";
@@ -353,6 +354,12 @@ export function AccountDetailsPage() {
                   </a>
                 )}
               </div>
+              <Link
+                to={`/app/accounts/${accountId}/performance`}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.06] border border-white/[0.08] text-[12px] font-semibold text-[#9aa0aa] hover:bg-white/[0.10] hover:text-white transition-colors no-underline"
+              >
+                <TrendingUp size={12} /> Performance
+              </Link>
               <button
                 type="button"
                 onClick={() => void handleSync()}

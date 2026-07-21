@@ -7,6 +7,8 @@ import {
   PenSquare,
   FolderInput,
   Calendar,
+  FolderTree,
+  BarChart3,
   LogOut,
   ChevronLeft,
   ChevronRight,
@@ -16,12 +18,10 @@ import { logout } from "../../lib/auth";
 
 const navItems = [
   { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  // "Imports" hosts the inline /app/uploads form — the Drive folder
-  // batch importer (POST /uploads/batch/by-folder). Sits between the
-  // dashboard and Linking because the flow is "import → published",
-  // and the dashboard widget surfaces the resulting queue.
+  { to: "/app/performance", label: "Performance", icon: BarChart3 },
   { to: "/app/uploads", label: "Imports", icon: FolderInput },
   { to: "/app/calendar", label: "Calendar", icon: Calendar },
+  { to: "/app/groups", label: "Groups", icon: FolderTree },
   { to: "/app/linking", label: "Linking", icon: Link2 },
   { to: "/app/posts", label: "Posts", icon: FileText },
   { to: "/app/compose", label: "Editor", icon: PenSquare },

@@ -24,17 +24,17 @@ describe("Landing", () => {
 
     // --- Hero -------------------------------------------------------------
     const h1 = screen.getByRole("heading", { level: 1 });
-    expect(h1).toHaveTextContent(/From idea/);
-    expect(h1).toHaveTextContent(/publication/);
+    expect(h1).toHaveTextContent(/Your creativity/);
+    expect(h1).toHaveTextContent(/Our distribution/);
 
     // --- Workflow ---------------------------------------------------------
     const WORKFLOW_TITLES = [
-      "AI-assisted ideation",
-      "Create once",
-      "AI processes everything",
-      "Smart scheduling",
-      "Publish everywhere",
-      "Unified analytics",
+      "Pick your niche",
+      "Create or generate",
+      "AI optimizes for views",
+      "Post at peak times",
+      "Go live everywhere",
+      "Track your earnings",
     ];
     for (const title of WORKFLOW_TITLES) {
       expect(

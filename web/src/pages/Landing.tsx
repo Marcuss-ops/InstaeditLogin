@@ -1503,12 +1503,14 @@ export function Landing() {
     <div className="min-h-screen bg-[#030308] text-[#e8e8ef] font-sans antialiased overflow-x-hidden selection:bg-violet-500/40 selection:text-white">
       <Seo {...SEO} />
       <Nav />
+      <Hero />
       <main className="relative">
         <StatsStrip />
         <ProblemSolution />
         <FindYourPath />
         <PipelineSection />
         <WorkflowSection />
+        <Features />
         <ResultsSection />
         <AgencySection />
         <ShortsSection />

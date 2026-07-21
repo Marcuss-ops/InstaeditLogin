@@ -506,6 +506,12 @@ func (r *Router) handleSyncAccount(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Persist the daily metric history row. Best-effort: a failure here
+	// should not break the sync response.
+	if r.metricHistoryStore != nil {
+		_ = r.metricHistoryStore.UpsertDaily(account.ID, details.FetchedAt, metricsToPoint(details.Metrics))
+	}
+
 	writeJSON(w, http.StatusOK, details)
 }
 
