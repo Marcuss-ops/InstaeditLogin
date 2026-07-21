@@ -447,12 +447,12 @@ function Hero() {
 
 function PipelineSection() {
   const steps = [
-    { icon: Lightbulb, label: "Idea", desc: "Tell us what you want to create — a YouTube video, a TikTok trend, anything", color: "from-violet-500 to-purple-500" },
-    { icon: Film, label: "Create", desc: "Record your video or let our AI generate it for you with ChronoN", color: "from-blue-500 to-cyan-500" },
-    { icon: Cpu, label: "AI Polishes", desc: "Subtitles, thumbnails, captions — everything made for you automatically", color: "from-emerald-500 to-teal-500" },
-    { icon: CalendarClock, label: "Schedule", desc: "Pick when you want to post — we handle the timing for each platform", color: "from-amber-500 to-orange-500" },
-    { icon: Globe, label: "Publish", desc: "One click and your video goes live on YouTube, TikTok, Instagram and more", color: "from-pink-500 to-rose-500" },
-    { icon: BarChart3, label: "Analyze", desc: "See how your content performs across all platforms in one place", color: "from-indigo-500 to-violet-500" },
+    { icon: Lightbulb, label: "Idea", desc: "Tell us what niche or topic you want to dominate — we plan the strategy", color: "from-violet-500 to-purple-500" },
+    { icon: Film, label: "Create", desc: "Record your video or let ChronoN generate it — no camera needed", color: "from-blue-500 to-cyan-500" },
+    { icon: Cpu, label: "AI Polishes", desc: "Subtitles, thumbnails, captions — everything optimized for maximum views", color: "from-emerald-500 to-teal-500" },
+    { icon: CalendarClock, label: "Schedule", desc: "Post at the exact times your audience is online — more views, more revenue", color: "from-amber-500 to-orange-500" },
+    { icon: Globe, label: "Publish", desc: "One click → YouTube, TikTok, Instagram and more — maximum reach instantly", color: "from-pink-500 to-rose-500" },
+    { icon: BarChart3, label: "Earn", desc: "Track views, subscribers, and revenue — know exactly what's making money", color: "from-indigo-500 to-violet-500" },
   ];
 
   return (
@@ -462,13 +462,12 @@ function PipelineSection() {
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">How it works</div>
           <h2 className="text-display-2 text-white">
-            Less production.{" "}
-            <span className="text-gradient-animated">More publishing.</span>
+            From idea to{" "}
+            <span className="text-gradient-animated">revenue.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            From one idea to videos published everywhere — in minutes, not hours.
-            No editing skills needed. No tabs to juggle. Just create and let InstaEdit
-            handle the rest.
+            Create content once, publish everywhere, and start earning — all in
+            minutes, not months. No editing skills needed. No team required.
           </p>
         </div>
 
@@ -535,20 +534,22 @@ function PipelineSection() {
 
 function StatsStrip() {
   const stats: Array<{ v: string; l: string }> = [
-    { v: "10,000+", l: "Posts/month" },
-    { v: "7", l: "Platforms" },
-    { v: "50+", l: "Creator teams" },
-    { v: "99.9%", l: "Publishing uptime" },
+    { v: "$2K+", l: "Avg. monthly earnings" },
+    { v: "50+", l: "Channels monetized" },
+    { v: "500+", l: "Videos published" },
+    { v: "7", l: "Platforms at once" },
   ];
   return (
     <section className="relative py-10 border-y border-white/10 bg-[#0c0c14]/60">
       <div className="mx-auto max-w-7xl px-6">
-        <ul className="grid grid-cols-2 sm:grid-cols-4 gap-y-6 gap-x-8 text-center sm:text-left">          {stats.map((s, idx) => (
+        <ul className="grid grid-cols-2 sm:grid-cols-4 gap-y-6 gap-x-8 text-center sm:text-left">
+          {stats.map((s, idx) => (
             <li
               key={s.l}
-              className={`flex items-center ${              idx < stats.length - 1 ? "sm:border-r sm:border-white/10 sm:pr-8" : ""} justify-center sm:justify-start gap-4`}>
+              className={`flex items-center ${idx < stats.length - 1 ? "sm:border-r sm:border-white/10 sm:pr-8" : ""} justify-center sm:justify-start gap-4`}
+            >
               <span className="text-3xl sm:text-4xl font-extrabold text-white tabular-nums tracking-tight">{s.v}</span>
-              <span className="text-eyebrow text-zinc-500 max-w-[12ch]">{s.l}</span>
+              <span className="text-eyebrow text-zinc-500 max-w-[14ch]">{s.l}</span>
             </li>
           ))}
         </ul>
@@ -564,38 +565,38 @@ function StatsStrip() {
 function WorkflowSection() {
   const steps = [
     {
-      n: "01", title: "Tell us your idea",
-      copy: "Write a paragraph, paste a script, or just describe what you want. InstaEdit figures out the best format, platforms, and timing for your content.",
+      n: "01", title: "Pick your niche",
+      copy: "Choose a topic that makes money — finance, tech, history, true crime, whatever pays. We help you find what works.",
       Icon: Lightbulb,
       accent: "from-violet-500/30 to-violet-500/0", ring: "ring-violet-400/40", iconColor: "text-violet-300",
     },
     {
-      n: "02", title: "Record or generate",
-      copy: "Upload your own video, or let ChronoN create it for you. No camera? No problem — AI generates professional videos from your brief.",
+      n: "02", title: "Create or generate",
+      copy: "Record yourself or let ChronoN create professional videos from a text brief. No camera? No problem.",
       Icon: Film,
       accent: "from-blue-500/30 to-blue-500/0", ring: "ring-blue-400/40", iconColor: "text-blue-300",
     },
     {
-      n: "03", title: "AI polishes everything",
-      copy: "Subtitles, thumbnails, captions, hashtags — all generated automatically. Each one tailored to the platform it's going on.",
+      n: "03", title: "AI optimizes for views",
+      copy: "Thumbnails, subtitles, hooks, captions — all designed to maximize watch time and clicks. Each one tailored to its platform.",
       Icon: Cpu,
       accent: "from-emerald-500/30 to-emerald-500/0", ring: "ring-emerald-400/40", iconColor: "text-emerald-300",
     },
     {
-      n: "04", title: "Schedule or publish now",
-      copy: "Pick a time or go live instantly. InstaEdit publishes at the best time for each platform and timezone.",
+      n: "04", title: "Post at peak times",
+      copy: "We publish when your audience is most active. More views = more ad revenue = faster monetization.",
       Icon: CalendarClock,
       accent: "from-cyan-500/30 to-cyan-500/0", ring: "ring-cyan-400/40", iconColor: "text-cyan-300",
     },
     {
       n: "05", title: "Go live everywhere",
-      copy: "One click. Your video is on YouTube, TikTok, Instagram, Facebook, LinkedIn, X, and Threads — with the right format for each.",
+      copy: "One video → YouTube, TikTok, Instagram, Facebook, LinkedIn, X, and Threads. Maximum eyeballs, minimum effort.",
       Icon: Globe,
       accent: "from-pink-500/30 to-pink-500/0", ring: "ring-pink-400/40", iconColor: "text-pink-300",
     },
     {
-      n: "06", title: "See what works",
-      copy: "Track views, engagement, and growth across all platforms in one simple dashboard. Know what to do more of.",
+      n: "06", title: "Track your earnings",
+      copy: "See views, subscribers, and revenue in one dashboard. Double down on what's working and cut what's not.",
       Icon: BarChart3,
       accent: "from-amber-500/30 to-amber-500/0", ring: "ring-amber-400/40", iconColor: "text-amber-300",
     },
@@ -608,12 +609,12 @@ function WorkflowSection() {
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">The complete workflow</div>
           <h2 className="text-display-2 text-white">
-            From idea to everywhere in{" "}
-            <span className="text-gradient-animated">6 simple steps.</span>
+            Your path to{" "}
+            <span className="text-gradient-animated">online income.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            Not just publishing. The full journey: from your first idea to a video
-            that reaches millions — all from one place. No editing skills required.
+            From your first video to your first paycheck — we handle the
+            technical work so you can focus on growing your audience and earning.
           </p>
         </div>
         <ol className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5 relative">
@@ -896,20 +897,21 @@ function ProblemSolution() {
           <div className="animate-fade-up">
             <div className="text-eyebrow text-red-300/90 mb-3">The problem</div>
             <h2 className="text-display-2 text-white mb-6">
-              Communities leave you with{" "}
-              <span className="text-gradient-animated">advice you can't apply.</span>
+              You're leaving money{" "}
+              <span className="text-gradient-animated">on the table.</span>
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-6">
-              You watch 100 YouTube tutorials but still don't know what to post, when to
-              post, or how to make it look professional. And automation without strategy
-              just spams mediocrity across 7 channels at once.
+              You watch creators monetize their channels and earn online, but you're
+              stuck spending hours editing, re-formatting, and uploading to every
+              platform manually. Meanwhile, the algorithm rewards those who post
+              consistently — and you can't keep up.
             </p>
             <div className="space-y-4">
               {[
-                "You have ideas but no system to turn them into content",
-                "You spend hours re-uploading the same video to every platform",
-                "You don't know what format works on YouTube vs TikTok vs Instagram",
-                "You see others growing but can't figure out what you're doing wrong",
+                "You know YouTube can make money but don't know where to start",
+                "You spend 10+ hours a week on editing and uploading instead of creating",
+                "You post once a week while successful channels post daily",
+                "You see others earning from their content but can't figure out the system",
               ].map((item) => (
                 <div key={item} className="flex items-start gap-3">
                   <span className="w-5 h-5 rounded-full bg-red-500/20 flex items-center justify-center shrink-0 mt-0.5">
@@ -923,20 +925,20 @@ function ProblemSolution() {
           <div className="animate-fade-up animation-delay-200">
             <div className="text-eyebrow text-emerald-300/90 mb-3">Our solution</div>
             <h2 className="text-display-2 text-white mb-6">
-              Strategy + Automation{" "}
-              <span className="text-gradient-animated">= Market domination.</span>
+              Turn content into{" "}
+              <span className="text-gradient-animated">income.</span>
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-6">
-              We combine Content Strategy (so you create videos people actually want to
-              watch) with Bulletproof Automation (so they reach millions across every
-              platform at zero time cost).
+              We give you the strategy to create videos people actually watch, and
+              the automation to publish everywhere — so you can focus on growing
+              your channel and reaching monetization faster.
             </p>
             <div className="space-y-4">
               {[
-                "AI-powered ideation that suggests what to create based on your niche",
-                "ChronoN generates professional videos from a simple text brief",
-                "One upload → 7 native posts, each optimized for its platform",
-                "Smart scheduling posts at the exact time your audience is online",
+                "Aged YouTube channels to skip the sandbox and monetize sooner",
+                "ChronoN generates professional videos from a text brief — no camera needed",
+                "One video → 7 platforms, each optimized for maximum reach and views",
+                "Post daily across all platforms without spending hours on editing",
               ].map((item) => (
                 <div key={item} className="flex items-start gap-3">
                   <span className="w-5 h-5 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0 mt-0.5">
@@ -961,7 +963,7 @@ function FindYourPath() {
   const tiers = [
     {
       level: "Level 1",
-      tagline: "I want to learn and grow",
+      tagline: "Learn to earn",
       title: "Mentorship Program",
       color: "emerald",
       ringColor: "ring-emerald-400/40",
@@ -969,19 +971,19 @@ function FindYourPath() {
       bgGradient: "from-emerald-500/20 to-teal-500/20",
       hoverBorder: "hover:border-emerald-400/30",
       shadowColor: "rgba(16,185,129,0.12)",
-      desc: "For creators and small teams who want to master YouTube/Shorts strategy, monetize, and build a scalable workflow.",
+      desc: "Learn the exact strategy to grow a YouTube channel from zero to monetization. Get 1-on-1 mentoring and an aged channel to start earning faster.",
       features: [
-        "1-on-1 mentoring (channel audit, content strategy, weekly review)",
-        "Full access to InstaEdit Pro included",
-        "Bonus: Aged YouTube channel to accelerate monetization",
-        "Learn what content converts and why",
+        "1-on-1 mentoring: channel audit, content strategy, weekly review",
+        "Aged YouTube channel to skip the sandbox phase",
+        "Learn what content converts and how the algorithm works",
+        "Full access to our automation platform included",
       ],
-      cta: "Start mentoring",
-      ctaLink: "/mentoring",
+      cta: "Start earning",
+      ctaLink: "https://discord.com/users/1201477873719050332",
     },
     {
       level: "Level 2",
-      tagline: "Do everything for me",
+      tagline: "We earn for you",
       title: "Content Automation",
       color: "blue",
       ringColor: "ring-blue-400/40",
@@ -989,33 +991,33 @@ function FindYourPath() {
       bgGradient: "from-blue-500/20 to-cyan-500/20",
       hoverBorder: "hover:border-blue-400/30",
       shadowColor: "rgba(59,130,246,0.12)",
-      desc: "For brands, entrepreneurs, or creators who have budget but zero time.",
+      desc: "Have budget but no time? We create, edit, and publish content for you — so your channels grow and earn while you focus on other things.",
       features: [
-        "Turnkey content creation + strategy",
-        "Full channel management and automation on InstaEdit",
-        "Zero-effort publishing across all platforms",
-        "Dedicated content team working for you",
+        "Turnkey content creation + monetization strategy",
+        "Full channel management across 7 platforms",
+        "Daily posting without you touching a single button",
+        "5 free channels + 10 AI-generated videos included",
       ],
       cta: "See programs",
-      ctaLink: "/programs",
+      ctaLink: "https://discord.com/users/1201477873719050332",
       featured: true,
     },
     {
       level: "Level 3",
-      tagline: "Enterprise & scaling",
-      title: "Multi-Channel Global",
+      tagline: "Scale your earnings",
+      title: "Enterprise Global",
       color: "violet",
       ringColor: "ring-violet-400/40",
       iconColor: "text-violet-300",
       bgGradient: "from-violet-500/20 to-purple-500/20",
       hoverBorder: "hover:border-violet-400/30",
       shadowColor: "rgba(139,92,246,0.12)",
-      desc: "For large clients, agencies, and structured brands.",
+      desc: "Scale to multiple channels, languages, and markets. Maximize revenue across every platform with unlimited AI-generated content.",
       features: [
         "Multi-channel automation at global scale",
-        "Translation, dubbing, and subtitles in 20+ languages",
-        "Dedicated infrastructure and servers",
-        "Priority support with guaranteed SLAs",
+        "Translation and dubbing in 20+ languages for worldwide reach",
+        "Unlimited videos generated by our software",
+        "Dedicated infrastructure and priority support",
       ],
       cta: "Contact us",
       ctaLink: "https://discord.com/users/1201477873719050332",
@@ -1029,12 +1031,12 @@ function FindYourPath() {
         <div className="max-w-3xl mb-16 text-center mx-auto animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">Find your path</div>
           <h2 className="text-display-2 text-white">
-            Which level are you{" "}
-            <span className="text-gradient-animated">ready for?</span>
+            Choose how you want to{" "}
+            <span className="text-gradient-animated">start earning.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch] mx-auto">
             Whether you want to learn the game, have someone play it for you, or scale
-            to millions — there's a path built for where you are right now.
+            your income globally — pick the path that matches where you are right now.
           </p>
         </div>
         <div className="grid md:grid-cols-3 gap-6">
@@ -1502,13 +1504,11 @@ export function Landing() {
       <Seo {...SEO} />
       <Nav />
       <main className="relative">
-        <Hero />
         <StatsStrip />
         <ProblemSolution />
         <FindYourPath />
         <PipelineSection />
         <WorkflowSection />
-        <Features />
         <ResultsSection />
         <AgencySection />
         <ShortsSection />
