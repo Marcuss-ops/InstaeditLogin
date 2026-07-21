@@ -434,7 +434,7 @@ function CTASection() {
               Not sure which path is right for you?
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[55ch] mx-auto mb-8">
-              Book a free 15-minute Discovery Call on Discord. We'll figure out together
+              Write us on Discord and we'll figure out together
               whether Starter, Growth, or Team is the best fit for where you are right now.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
