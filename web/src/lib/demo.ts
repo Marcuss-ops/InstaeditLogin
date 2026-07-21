@@ -23,6 +23,7 @@ export const demoSession = {
   name: "Demo User",
   username: "demo_user",
   expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  is_admin: false,
 };
 
 export const demoAccounts = [

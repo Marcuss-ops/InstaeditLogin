@@ -8,7 +8,7 @@ import { Features } from "../components/landing/Features";
 import { Results } from "../components/landing/Results";
 import { Agency } from "../components/landing/Agency";
 import { ProblemSolution } from "../components/landing/ProblemSolution";
-import { FindYourPath } from "../components/landing/FindYourPath";
+import { CTASection } from "./landing/CTASection";
 import { Shorts } from "../components/landing/Shorts";
 import { LongForm } from "../components/landing/LongForm";
 import { Footer } from "../components/landing/Footer";
@@ -29,7 +29,7 @@ export function Landing() {
       <Results />
       <Agency />
       <ProblemSolution />
-      <FindYourPath />
+      <CTASection />
       <Shorts />
       <LongForm />
       <WhoAreWe />
