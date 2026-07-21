@@ -4,14 +4,15 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/config/configtest"
 )
 
 func TestMain(m *testing.M) {
 	// Provide dummy metrics basic-auth credentials for tests that load
 	// config with APP_ENV=production. The fail-closed production check
 	// is preserved; tests simply opt-in to a valid configuration.
-	os.Setenv("METRICS_BASIC_AUTH_USER", "dummy-metrics-user")
-	os.Setenv("METRICS_BASIC_AUTH_PASS", "dummy-metrics-pass")
+	configtest.SetDummyMetricsAuth()
 	os.Exit(m.Run())
 }
 
