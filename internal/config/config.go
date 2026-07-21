@@ -139,7 +139,13 @@ type Config struct {
 	ActiveEncryptionKeyIDRaw string
 
 	// JWT
-	JWTSecret   string
+	JWTSecret           string
+	JWTAccessTTLMinutes int
+	JWTRefreshTTLDays   int
+	// Deprecated: JWT_TTL_HOURS is the legacy single-knob TTL.
+	// If JWT_ACCESS_TTL_MINUTES is unset, the hours value is
+	// converted to minutes. Prefer the explicit access/refresh
+	// variables for new deployments.
 	JWTTTLHours int
 
 	// Logging
@@ -352,7 +358,9 @@ func Load() (*Config, error) {
 		EncryptionKeysRaw:              getEnv("ENCRYPTION_KEYS", ""),
 		ActiveEncryptionKeyIDRaw:       getEnv("ACTIVE_ENCRYPTION_KEY_ID", ""),
 		JWTSecret:                      getEnv("JWT_SECRET", ""),
-		JWTTTLHours:                    getEnvInt("JWT_TTL_HOURS", 168),
+		JWTAccessTTLMinutes:            getEnvInt("JWT_ACCESS_TTL_MINUTES", 0),
+		JWTRefreshTTLDays:              getEnvInt("JWT_REFRESH_TTL_DAYS", 0),
+		JWTTTLHours:                    getEnvInt("JWT_TTL_HOURS", 0),
 		LogLevel:                       getEnv("LOG_LEVEL", "info"),
 		AppEnv:                         getEnv("APP_ENV", "dev"),
 		PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
@@ -400,6 +408,21 @@ func Load() (*Config, error) {
 		// admin endpoint or by setting ADMIN_INVITE_TOKEN and calling
 		// /api/v1/auth/register with X-Admin-Token).
 		AdminInviteToken: getEnv("ADMIN_INVITE_TOKEN", ""),
+	}
+
+	// Resolve JWT TTL defaults and legacy fallback. Access TTL defaults
+	// to 15 minutes; refresh TTL defaults to 30 days. The legacy
+	// JWT_TTL_HOURS variable is converted to minutes when the explicit
+	// access-TTL variable is absent, preserving existing deployments.
+	if cfg.JWTAccessTTLMinutes <= 0 {
+		if cfg.JWTTTLHours > 0 {
+			cfg.JWTAccessTTLMinutes = cfg.JWTTTLHours * 60
+		} else {
+			cfg.JWTAccessTTLMinutes = 15
+		}
+	}
+	if cfg.JWTRefreshTTLDays <= 0 {
+		cfg.JWTRefreshTTLDays = 30
 	}
 
 	if err := cfg.validate(); err != nil {

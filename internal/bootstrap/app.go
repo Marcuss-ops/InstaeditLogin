@@ -232,7 +232,11 @@ func Wire(ctx context.Context) (*App, error) {
 	}
 	channelAuthorizer := services.NewChannelAuthorizationService(db, enc, tokenRepo, ytBinder)
 
-	authMgr := auth.NewManager(cfg.JWTSecret, cfg.JWTTTLHours).WithEnv(cfg.AppEnv)
+	authMgr := auth.NewManager(
+		cfg.JWTSecret,
+		time.Duration(cfg.JWTAccessTTLMinutes)*time.Minute,
+		time.Duration(cfg.JWTRefreshTTLDays)*24*time.Hour,
+	).WithEnv(cfg.AppEnv)
 	oneTimeCodes := api.NewOneTimeCodeStore(60 * time.Second)
 	veloxDownloadJobs := make(chan worker.VeloxDownloadJob, 64)
 	// oneTimeCodes sweeper is gracefully stopped by RunWorkers (E8
@@ -390,7 +394,8 @@ func Wire(ctx context.Context) (*App, error) {
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)
 
 	slog.Info("Router configured",
-		"jwt_ttl_hours", cfg.JWTTTLHours,
+		"jwt_access_ttl_minutes", cfg.JWTAccessTTLMinutes,
+		"jwt_refresh_ttl_days", cfg.JWTRefreshTTLDays,
 		"frontend_url", cfg.FrontendURL,
 		"cors_origins", corsOrigins,
 		"platforms", capRouter.Names(),

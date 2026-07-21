@@ -425,3 +425,74 @@ func TestVerifyConnectLinkState_FreshStateRoundTrips(t *testing.T) {
 		t.Errorf("ExpectedChannelID: want %q, got %q", wantChannel, gotChannel)
 	}
 }
+
+// TestTypedTTLDefaults pins the explicit access/refresh constructor:
+// NewManager(secret, accessTTL, refreshTTL) must surface the exact
+// durations through AccessTTL/RefreshTTL. This is the production
+// bootstrap path (15m access / 30d refresh) and must never silently
+// fall back to 24 hours.
+func TestTypedTTLDefaults(t *testing.T) {
+	m := NewManager(testSecret, 15*time.Minute, 30*24*time.Hour)
+	if got := m.AccessTTL(); got != 15*time.Minute {
+		t.Errorf("AccessTTL: want 15m, got %s", got)
+	}
+	if got := m.RefreshTTL(); got != 30*24*time.Hour {
+		t.Errorf("RefreshTTL: want 30d, got %s", got)
+	}
+}
+
+// TestLegacyIntHoursStillWorks ensures the existing 17+ test fixtures
+// and any operator still passing an integer hours value keep working.
+// The integer is interpreted as the access TTL in hours; the refresh
+// TTL falls back to the 30-day default.
+func TestLegacyIntHoursStillWorks(t *testing.T) {
+	m := NewManager(testSecret, 24)
+	if got := m.AccessTTL(); got != 24*time.Hour {
+		t.Errorf("AccessTTL: want 24h, got %s", got)
+	}
+	if got := m.RefreshTTL(); got != 30*24*time.Hour {
+		t.Errorf("RefreshTTL: want 30d default, got %s", got)
+	}
+}
+
+// TestAccessTokenExpiresWithinAccessTTL verifies that the access token
+// issued with the production TTL (15 minutes) expires inside that
+// window. A short-lived access token limits the exposure window when a
+// session is revoked: the refresh token is rejected immediately on
+// revocation, and the access token becomes invalid within 15 minutes.
+func TestAccessTokenExpiresWithinAccessTTL(t *testing.T) {
+	m := NewManager(testSecret, 15*time.Minute, 30*24*time.Hour)
+	_, _, exp, err := m.IssueAccess(42, 1, 1)
+	if err != nil {
+		t.Fatalf("IssueAccess: %v", err)
+	}
+	ttl := time.Until(exp)
+	if ttl <= 0 || ttl > 15*time.Minute {
+		t.Fatalf("access token TTL out of range: %s", ttl)
+	}
+}
+
+// TestVerifyIsStatelessAndIgnoresLogicalRevocation documents the
+// stateless access-token contract: Manager.Verify only checks
+// signature, expiry, and env claim. It does NOT consult the sessions
+// table, so a revoked session's access token remains usable until it
+// expires. The short 15-minute access TTL is the mitigation. This test
+// pins that behavior so a future "real-time revocation" change is
+// explicit and tested.
+func TestVerifyIsStatelessAndIgnoresLogicalRevocation(t *testing.T) {
+	m := NewManager(testSecret, 15*time.Minute, 30*24*time.Hour)
+	tok, _, _, err := m.IssueAccess(42, 1, 1)
+	if err != nil {
+		t.Fatalf("IssueAccess: %v", err)
+	}
+	// Simulate the moment immediately after the session is revoked in
+	// the database. Verify still accepts the token because it is
+	// stateless.
+	uid, wsID, sid, err := m.Verify(tok)
+	if err != nil {
+		t.Fatalf("Verify immediately after logical revoke: %v", err)
+	}
+	if uid != 42 || wsID != 1 || sid != 1 {
+		t.Fatalf("Verify returned unexpected ids: uid=%d ws=%d sid=%d", uid, wsID, sid)
+	}
+}
