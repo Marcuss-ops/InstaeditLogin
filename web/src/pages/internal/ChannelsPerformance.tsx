@@ -9,6 +9,8 @@ import {
   ResponsiveContainer,
   CartesianGrid,
   Cell,
+  AreaChart,
+  Area,
 } from "recharts";
 import {
   BarChart3,
@@ -68,11 +70,20 @@ type Aggregates = {
   videos: number;
 };
 
+type TrendPoint = {
+  date: string;
+  subscribers: number;
+  views: number;
+  videos: number;
+  engagement: number;
+};
+
 type SummaryData = {
   period_days: number;
   aggregates: Aggregates;
   channels: ChannelSummary[];
   rankings: Rankings;
+  trends: TrendPoint[];
 };
 
 type FetchState =
@@ -93,6 +104,87 @@ function formatNumber(value: number | string): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return `${n}`;
+}
+
+function formatTrendDate(value: string) {
+  const d = new Date(value + "T00:00:00Z");
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function TrendChart({
+  title,
+  data,
+  dataKey,
+  color,
+  valueFormatter = formatNumber,
+  axisFormatter = valueFormatter,
+}: {
+  title: string;
+  data: TrendPoint[];
+  dataKey: "subscribers" | "views" | "engagement";
+  color: string;
+  valueFormatter?: (value: number) => string;
+  axisFormatter?: (value: number) => string;
+}) {
+  if (data.length === 0) {
+    return (
+      <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6">
+        <h2 className="text-[16px] font-bold text-white mb-4">{title}</h2>
+        <div className="h-64 flex items-center justify-center rounded-2xl border border-dashed border-white/[0.12]">
+          <p className="text-[13px] text-[#9aa0aa]">No trend data yet.</p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6">
+      <h2 className="text-[16px] font-bold text-white mb-4">{title}</h2>
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} syncId="trend-charts" margin={{ top: 5, right: 5, left: -10, bottom: 0 }}>
+            <defs>
+              <linearGradient id={`${dataKey}Gradient`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={color} stopOpacity={0.4} />
+                <stop offset="100%" stopColor={color} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+            <XAxis
+              dataKey="date"
+              tick={{ fill: "#9aa0aa", fontSize: 12 }}
+              axisLine={{ stroke: "rgba(255,255,255,0.12)" }}
+              tickFormatter={formatTrendDate}
+              tickLine={false}
+              minTickGap={16}
+            />
+            <YAxis
+              tick={{ fill: "#9aa0aa", fontSize: 12 }}
+              axisLine={false}
+              tickLine={false}
+              tickFormatter={axisFormatter}
+            />
+            <Tooltip
+              contentStyle={{
+                background: "#1f1f2e",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: 12,
+                color: "#e8e8ef",
+              }}
+              labelFormatter={(label) => formatTrendDate(String(label))}
+              formatter={(value) => [valueFormatter(Number(value)), title]}
+            />
+            <Area
+              type="monotone"
+              dataKey={dataKey}
+              stroke={color}
+              fill={`url(#${dataKey}Gradient)`}
+              strokeWidth={2}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
 }
 
 function GrowthText({ value }: { value: MetricGrowth }) {
@@ -309,6 +401,30 @@ export function ChannelsPerformancePage() {
                 label="Total videos"
                 value={state.data.aggregates.videos}
                 icon={Video}
+              />
+            </div>
+
+            {/* Trends */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+              <TrendChart
+                title="Subscribers trend"
+                data={state.data.trends}
+                dataKey="subscribers"
+                color="#a78bfa"
+              />
+              <TrendChart
+                title="Views trend"
+                data={state.data.trends}
+                dataKey="views"
+                color="#22d3ee"
+              />
+              <TrendChart
+                title="Engagement (views / video)"
+                data={state.data.trends}
+                dataKey="engagement"
+                color="#f472b6"
+                valueFormatter={(value) => `${formatNumber(value)} /video`}
+                axisFormatter={formatNumber}
               />
             </div>
 

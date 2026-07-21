@@ -8,6 +8,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 // channelPerformanceSummary is the per-account wire shape returned by
@@ -47,6 +48,18 @@ type enrichedChannel struct {
 	pctViews float64
 }
 
+// trendPoint is a single daily aggregate across the user's YouTube
+// channels. Engagement is derived as views / videos (average views
+// per video) — a proxy for content engagement when analytics data
+// (watch time, CTR) is unavailable.
+type trendPoint struct {
+	Date       string  `json:"date"`
+	Subscribers int64  `json:"subscribers"`
+	Views       int64  `json:"views"`
+	Videos      int64  `json:"videos"`
+	Engagement  float64 `json:"engagement"`
+}
+
 // accountsPerformanceSummaryResponse is the wire shape for
 // GET /api/v1/accounts/performance/summary.
 type accountsPerformanceSummaryResponse struct {
@@ -59,6 +72,7 @@ type accountsPerformanceSummaryResponse struct {
 	} `json:"aggregates"`
 	Channels []channelPerformanceSummary `json:"channels"`
 	Rankings rankings                    `json:"rankings"`
+	Trends   []trendPoint                `json:"trends"`
 }
 
 // handleGetAccountsPerformanceSummary returns aggregated KPIs and
@@ -103,6 +117,7 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 	from := to.AddDate(0, 0, -days+1)
 
 	enrichedList := make([]enrichedChannel, 0, len(youtubeAccounts))
+	histories := make(map[int64][]repository.AccountMetricPoint, len(youtubeAccounts))
 
 	for _, a := range youtubeAccounts {
 		history, err := r.metricHistoryStore.GetHistory(a.ID, from, to)
@@ -110,6 +125,7 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 			writeError(w, http.StatusInternalServerError, "failed to load performance history: "+err.Error())
 			return
 		}
+		histories[a.ID] = history
 
 		item := enrichedChannel{account: a}
 		if len(history) > 0 {
@@ -149,6 +165,7 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 	}
 
 	resp.Rankings = buildRankings(enrichedList)
+	resp.Trends = buildTrends(youtubeAccounts, histories, from, to)
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -173,6 +190,62 @@ func buildRankings(items []enrichedChannel) rankings {
 	})
 
 	return r
+}
+
+// buildTrends returns one aggregate point per day in [from, to]. For
+// each channel the last known value up to that day is carried forward,
+// so missing days do not create dips in the aggregate line.
+func buildTrends(
+	accounts []*models.PlatformAccount,
+	histories map[int64][]repository.AccountMetricPoint,
+	from time.Time,
+	to time.Time,
+) []trendPoint {
+	accountIDs := make([]int64, 0, len(accounts))
+	for _, a := range accounts {
+		accountIDs = append(accountIDs, a.ID)
+	}
+
+	type snapshot struct {
+		subs   int64
+		views  int64
+		videos int64
+	}
+
+	current := make(map[int64]snapshot, len(accountIDs))
+	indices := make(map[int64]int, len(accountIDs))
+
+	var out []trendPoint
+	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
+		for _, id := range accountIDs {
+			hist := histories[id]
+			idx := indices[id]
+			for idx < len(hist) && !hist[idx].Date.After(d) {
+				current[id] = snapshot{
+					subs:   hist[idx].Subscribers,
+					views:  hist[idx].Views,
+					videos: hist[idx].Videos,
+				}
+				idx++
+			}
+			indices[id] = idx
+		}
+
+		var p trendPoint
+		for _, id := range accountIDs {
+			if s, ok := current[id]; ok {
+				p.Subscribers += s.subs
+				p.Views += s.views
+				p.Videos += s.videos
+			}
+		}
+		p.Date = d.Format("2006-01-02")
+		if p.Videos > 0 {
+			p.Engagement = float64(p.Views) / float64(p.Videos)
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 func sortedRanking(items []enrichedChannel, valueFn func(enrichedChannel) int64) []rankingItem {
