@@ -1,8 +1,7 @@
 import { Link } from "react-router-dom";
-import {
-  Zap
-} from "lucide-react";
+import { Zap } from "lucide-react";
 import { PLATFORM_REGISTRY } from "./shared";
+
 /* ----------------------------------------------------------------------------
  * Footer
  * -------------------------------------------------------------------------- */
@@ -85,5 +84,3 @@ export function Footer() {
     </footer>
   );
 }
-
-

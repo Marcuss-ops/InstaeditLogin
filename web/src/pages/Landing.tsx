@@ -11,7 +11,7 @@ import { ProblemSolution } from "../components/landing/ProblemSolution";
 import { CTASection } from "./landing/CTASection";
 import { Shorts } from "../components/landing/Shorts";
 import { LongForm } from "../components/landing/LongForm";
-import { Footer } from "../components/landing/Footer";
+import { Footer } from "./landing/Footer";
 import { WhoAreWe } from "../components/landing/WhoAreWe";
 import { FAQ } from "./landing/FAQ";
 import { FinalCTA } from "../components/landing/FinalCTA";
