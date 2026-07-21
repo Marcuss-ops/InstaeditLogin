@@ -348,6 +348,10 @@ type UserStore interface {
 	// already linked to a different user.
 	AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error)
 	ListPlatformAccountsByUser(userID int64, platform string) ([]*models.PlatformAccount, error)
+	// ListFilteredYouTubeAccounts returns the YouTube platform accounts for a user,
+	// optionally filtered by workspace, group_name (from workspace_channels), and
+	// language/manager values stored in the account metadata JSONB.
+	ListFilteredYouTubeAccounts(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error)
 	FindPlatformAccountByID(id int64) (*models.PlatformAccount, error)
 	// FindPlatformAccount loads an existing platform account by its
 	// provider-scoped (platform, platform_user_id) tuple. Used by
@@ -601,6 +605,7 @@ type YouTubeOAuthService interface {
 	GetTokenInfo(ctx context.Context, accessToken string) (*services.YouTubeTokenInfo, error)
 	ValidateChannelBinding(ctx context.Context, accessToken, expectedChannelID string) error
 	CanaryUpload(ctx context.Context, accessToken, expectedChannelID string) (*services.CanaryUploadResult, error)
+	FetchEarnings(ctx context.Context, accessToken, channelID string, days int) ([]repository.AccountMetricPoint, error)
 	ClientID() string
 }
 
@@ -664,6 +669,7 @@ type SnapshotStore interface {
 // imports; main.go injects *repository.AccountMetricsRepository.
 type MetricHistoryStore interface {
 	UpsertDaily(platformAccountID int64, date time.Time, point repository.AccountMetricPoint) error
+	UpsertMonetary(platformAccountID int64, date time.Time, point repository.AccountMetricPoint) error
 	GetHistory(platformAccountID int64, from, to time.Time) ([]repository.AccountMetricPoint, error)
 }
 

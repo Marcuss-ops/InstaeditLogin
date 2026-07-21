@@ -153,6 +153,10 @@ func (f *fakeUserStore) MarkReauthRequired(ctx context.Context, accountID int64,
 	return nil
 }
 
+func (f *fakeUserStore) ListFilteredYouTubeAccounts(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error) {
+	return nil, nil
+}
+
 // fakeAuditLogStore satisfies AuditLogStore.
 type fakeAuditLogStore struct {
 	LogCalls     int

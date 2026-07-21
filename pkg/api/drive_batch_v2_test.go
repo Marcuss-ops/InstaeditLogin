@@ -145,6 +145,10 @@ func (m *stubUserStoreV2) MarkReauthRequired(context.Context, int64, string, str
 	return nil
 }
 
+func (m *stubUserStoreV2) ListFilteredYouTubeAccounts(int64, *int64, string, string, string) ([]*models.PlatformAccount, error) {
+	return nil, nil
+}
+
 // stubWorkspaceStoreV2 lets the handler resolve body.WorkspaceID
 // against an in-memory ownership map. ownedWorkspaces[wid]=true means
 // the caller is the workspace owner; FindByID returns a Workspace
