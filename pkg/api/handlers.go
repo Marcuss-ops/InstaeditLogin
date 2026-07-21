@@ -677,8 +677,8 @@ func WithApiKeyStore(s ApiKeyStore) RouterOption {
 //   - ValidateChannelBinding → STEP 3 (paginated channels.list bind)
 //   - CanaryUpload          → STEP 4 (optional private video + bind-reconcile)
 //   - ClientID              → STEP 2 aud check (aud must equal the OAuth client
-//                              that issued the grant — guards against
-//                              Production-vs-Testing token drift)
+//     that issued the grant — guards against
+//     Production-vs-Testing token drift)
 type YouTubeOAuthService interface {
 	RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error)
 	GetTokenInfo(ctx context.Context, accessToken string) (*services.YouTubeTokenInfo, error)
@@ -1329,7 +1329,7 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	state, err := generateOAuthState(w, provider, expectedChannelID)
+	state, err := generateOAuthState(w, provider, expectedChannelID, r.cookieDomain)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start oauth flow")
 		return
@@ -3042,7 +3042,7 @@ func isValidYouTubeChannelID(s string) bool {
 	return true
 }
 
-func generateOAuthState(w http.ResponseWriter, provider, expectedChannelID string) (string, error) {
+func generateOAuthState(w http.ResponseWriter, provider, expectedChannelID, cookieDomain string) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("oauth state rand failed: %w", err)
@@ -3050,7 +3050,7 @@ func generateOAuthState(w http.ResponseWriter, provider, expectedChannelID strin
 	state := base64.RawURLEncoding.EncodeToString(b)
 	http.SetCookie(w, &http.Cookie{
 		Name: OAuthStateCookieName(provider), Value: state, Path: "/",
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+		Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 		MaxAge: int(oauthStateMaxAge.Seconds()),
 	})
 	if expectedChannelID != "" {
@@ -3068,7 +3068,7 @@ func generateOAuthState(w http.ResponseWriter, provider, expectedChannelID strin
 		// ?expected_channel_id= after a previous abandoned flow).
 		http.SetCookie(w, &http.Cookie{
 			Name: OAuthStateExpectedChannelCookieName(provider), Value: state + ":" + expectedChannelID, Path: "/",
-			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+			Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 			MaxAge: int(oauthStateMaxAge.Seconds()),
 		})
 	}

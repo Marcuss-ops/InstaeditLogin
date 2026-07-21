@@ -26,8 +26,8 @@ the following values aligned:
 
 ```env
 FRONTEND_URL=https://dev.instaedit.org
-CORS_ALLOWED_ORIGINS=https://dev.instaedit.org
-COOKIE_DOMAIN=
+CORS_ALLOWED_ORIGINS=https://dev.instaedit.org,https://app.instaedit.org
+COOKIE_DOMAIN=.instaedit.org
 S3_BUCKET=instaedit-local
 YOUTUBE_REDIRECT_URI=https://dev.instaedit.org/api/v1/auth/youtube/callback
 GOOGLE_DRIVE_REDIRECT_URI=https://dev.instaedit.org/api/v1/auth/google-drive/callback
