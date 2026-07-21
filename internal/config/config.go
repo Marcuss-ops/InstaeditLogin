@@ -322,16 +322,16 @@ func Load() (*Config, error) {
 		// valutazione doc spec (16 MB chunks, 5 per-chunk retries, 1 s/5 min
 		// backoff). Validation runs unconditionally (so an operator typo
 		// surfaces at boot, not first upload).
-		YouTubeUploadChunkBytes:    getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
-	// AppMode lets operators pin the deployment to Google's OAuth-
-	// consent-screen publishing status. "production" means refresh
-	// tokens are durable (no automatic 7-day expiry); "testing"
-	// means Google's Testing-mode 7-day refresh-token TTL applies
-	// and any refresh attempt after day 7 surfaces invalid_grant.
-	// Default "production" so a missing env var falls into the
-	// safer bucket; ops must explicitly opt-in to "testing" when
-	// validating against a staging OAuth-client.
-	AppMode:                   getEnv("APP_MODE", "production"),
+		YouTubeUploadChunkBytes: getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
+		// AppMode lets operators pin the deployment to Google's OAuth-
+		// consent-screen publishing status. "production" means refresh
+		// tokens are durable (no automatic 7-day expiry); "testing"
+		// means Google's Testing-mode 7-day refresh-token TTL applies
+		// and any refresh attempt after day 7 surfaces invalid_grant.
+		// Default "production" so a missing env var falls into the
+		// safer bucket; ops must explicitly opt-in to "testing" when
+		// validating against a staging OAuth-client.
+		AppMode:                    getEnv("APP_MODE", "production"),
 		YouTubeUploadMaxRetries:    getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
 		YouTubeUploadBackoffBaseMs: getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
 		YouTubeUploadBackoffCapMs:  getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),

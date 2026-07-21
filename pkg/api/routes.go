@@ -130,7 +130,7 @@ func (r *Router) Setup() http.Handler {
 	// middleware. Mounted BEFORE /accounts/{id} so chi's pattern
 	// matching prefers the literal path over the parameterised one
 	// (also a readability convention: list first, then by-id).
-			r.mux.Method(http.MethodGet, "/api/v1/accounts", r.protected(r.handleListAccounts))
+	r.mux.Method(http.MethodGet, "/api/v1/accounts", r.protected(r.handleListAccounts))
 	r.mux.Method(http.MethodGet, "/api/v1/accounts/{id}", r.protected(r.handleGetAccount))
 	r.mux.Method(http.MethodGet, "/api/v1/accounts/performance/summary", r.protected(r.handleGetAccountsPerformanceSummary))
 	r.mux.Method(http.MethodGet, "/api/v1/accounts/{id}/performance", r.protected(r.handleGetAccountPerformance))

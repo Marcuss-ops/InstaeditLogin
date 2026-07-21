@@ -148,6 +148,6 @@ func (f *fakeVault) DownloadFile(_ context.Context, _, _ string) (*http.Response
 // surfaces here as a build error (NOT a runtime panic). Pinned at
 // go vet time.
 var (
-	_ credentials.VaultAPI  = (*fakeVault)(nil)
-	_ = errFakeVaultDownloadNotStubbed
+	_ credentials.VaultAPI = (*fakeVault)(nil)
+	_                      = errFakeVaultDownloadNotStubbed
 )

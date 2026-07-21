@@ -198,10 +198,10 @@ type Post struct {
 	//   * canary_upload (bool) — when true, publish_worker.go runs the YouTube
 	//     canary pre-flight BEFORE the real publish (Task 7/10).
 	// Malformed JSON is treated as canary_upload=false (safe default).
-	Metadata       json.RawMessage `json:"metadata,omitempty"`
-	Version        int64           `json:"version"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	Version   int64           `json:"version"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
 }
 
 // PostTarget represents the fan-out of a Post to a specific platform account.

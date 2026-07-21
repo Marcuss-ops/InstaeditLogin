@@ -261,35 +261,35 @@ var (
 	// unexported because their tests live in this same package;
 	// this one needs cross-package access because the detection
 	// site lives one package over.
-YouTubePublishChannelMismatch = prometheus.NewCounterVec(
-	prometheus.CounterOpts{
-		Name: "youtube_publish_channel_mismatch_total",
-		Help: "YouTube OAuth grants that are bound to a different channel than the platform_account row expected. Each increment means a publish attempt was refused AND the platform_account was flagged reauth_required. Drift up here typically means Google silently re-bound the grant to a different Brand Account.",
-	},
-	[]string{"provider"},
-)
+	YouTubePublishChannelMismatch = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "youtube_publish_channel_mismatch_total",
+			Help: "YouTube OAuth grants that are bound to a different channel than the platform_account row expected. Each increment means a publish attempt was refused AND the platform_account was flagged reauth_required. Drift up here typically means Google silently re-bound the grant to a different Brand Account.",
+		},
+		[]string{"provider"},
+	)
 
-// YouTubeVideosInsertCalls counts every YouTube Data API v3 videos.insert
-// HTTP call made by InstaEdit (resumable upload). Label `result` is
-// one of three canonical values:
-//
-//   "ok"             — successful 2xx response from YouTube.
-//   "quota_exceeded" — either the YOUTUBE_DAILY_QUOTA_LIMIT pre-call
-//                      gate in publish_worker refused the call, OR the
-//                      call was made and YouTube returned a quotaExceeded
-//                      error envelope. Both paths roll up here.
-//   "error"          — all other failure modes (5xx, transport, validation).
-//
-// Cardinality: result has 3 labels, so the time-series count is bounded
-// to 3 series regardless of fleet size — operators can safely alert on
-// a sudden spike of the quota_exceeded label across the whole fleet.
-YouTubeVideosInsertCalls = prometheus.NewCounterVec(
-	prometheus.CounterOpts{
-		Name: "youtube_videos_insert_calls_total",
-		Help: "Total videos.insert calls to YouTube Data API v3, labeled by result (ok | quota_exceeded | error).",
-	},
-	[]string{"result"},
-)
+	// YouTubeVideosInsertCalls counts every YouTube Data API v3 videos.insert
+	// HTTP call made by InstaEdit (resumable upload). Label `result` is
+	// one of three canonical values:
+	//
+	//	"ok"             — successful 2xx response from YouTube.
+	//	"quota_exceeded" — either the YOUTUBE_DAILY_QUOTA_LIMIT pre-call
+	//	                   gate in publish_worker refused the call, OR the
+	//	                   call was made and YouTube returned a quotaExceeded
+	//	                   error envelope. Both paths roll up here.
+	//	"error"          — all other failure modes (5xx, transport, validation).
+	//
+	// Cardinality: result has 3 labels, so the time-series count is bounded
+	// to 3 series regardless of fleet size — operators can safely alert on
+	// a sudden spike of the quota_exceeded label across the whole fleet.
+	YouTubeVideosInsertCalls = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "youtube_videos_insert_calls_total",
+			Help: "Total videos.insert calls to YouTube Data API v3, labeled by result (ok | quota_exceeded | error).",
+		},
+		[]string{"result"},
+	)
 
 	// webhookDeliveryFailures counts webhook delivery outcomes that
 	// did NOT succeed (retry or dead). Three series:

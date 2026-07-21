@@ -570,7 +570,7 @@ func TestAuthorizeChannel_SecondTokenFailureRollsBackFirstAndOCR(t *testing.T) {
 //     existing id, not a brand-new one).
 //  2. Fire the token pruner DELETE on the older tokens so the new
 //     grant does not silently accumulate.
-// 3. Re-promote the platform_account (status='active' is a stable
+//  3. Re-promote the platform_account (status='active' is a stable
 //     re-write — same status, refreshed connected_at + last_validated_at).
 //
 // If the UPSERT returned a NEW id, refresh-token rotation would
@@ -646,12 +646,12 @@ func TestAuthorizeChannel_ReauthKeepsSameOAuthConnection(t *testing.T) {
 // compile-time guard + the 4 status-rejection integration tests
 // cannot catch at their respective layers:
 //
-//     "A future refactor replaces the production `eligibilityGate(...)`
-//      call site with an inline `eligible := map[string]bool{...}` +
-//      `if !eligible[currentStatus]` block, while leaving the
-//      `var _ = IsEligibleForActivePromotion` package-level
-//      reference AND the production initial value of `eligibilityGate
-//      = IsEligibleForActivePromotion` untouched."
+//	"A future refactor replaces the production `eligibilityGate(...)`
+//	 call site with an inline `eligible := map[string]bool{...}` +
+//	 `if !eligible[currentStatus]` block, while leaving the
+//	 `var _ = IsEligibleForActivePromotion` package-level
+//	 reference AND the production initial value of `eligibilityGate
+//	 = IsEligibleForActivePromotion` untouched."
 //
 // Why a NEW test:
 //   - var _ guard catches wholesale reference deletion (compile-time).

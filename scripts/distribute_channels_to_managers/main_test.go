@@ -5,38 +5,38 @@
 //
 // Coverage map:
 //
-//   TestDistributeRows_Balanced_4_Buckets_200_Channels
-//     Spec scenario #1: 200 channels balanced across 4 managers ×
-//     50 channels each. Each gets its own bucket; no `_part2`
-//     overflow; every file has exactly 50 rows.
+//	TestDistributeRows_Balanced_4_Buckets_200_Channels
+//	  Spec scenario #1: 200 channels balanced across 4 managers ×
+//	  50 channels each. Each gets its own bucket; no `_part2`
+//	  overflow; every file has exactly 50 rows.
 //
-//   TestDistributeRows_ManagerOverflow_SplitsIntoParts
-//     Spec scenario #2: 1 manager with 75 channels produces
-//     part1 (50 rows) + part2 (25 rows). The cap is not silently
-//     violated.
+//	TestDistributeRows_ManagerOverflow_SplitsIntoParts
+//	  Spec scenario #2: 1 manager with 75 channels produces
+//	  part1 (50 rows) + part2 (25 rows). The cap is not silently
+//	  violated.
 //
-//   TestDistributeRows_DeterministicOrdering
-//     Spec scenario #3: same input rows in different orders
-//     produce the SAME sorted (bucket, manager, partN) output
-//     ordering across runs.
+//	TestDistributeRows_DeterministicOrdering
+//	  Spec scenario #3: same input rows in different orders
+//	  produce the SAME sorted (bucket, manager, partN) output
+//	  ordering across runs.
 //
-//   TestDistributeRows_PartialOverflow75_SplitsAt50Boundary
-//     Belt-and-braces: cap=50 + manager with EXACTLY 50 channels
-//     does NOT trigger part2; cap=50 + manager with 51 channels
-//     triggers part1+part2 with sizes [50,1].
+//	TestDistributeRows_PartialOverflow75_SplitsAt50Boundary
+//	  Belt-and-braces: cap=50 + manager with EXACTLY 50 channels
+//	  does NOT trigger part2; cap=50 + manager with 51 channels
+//	  triggers part1+part2 with sizes [50,1].
 //
-//   TestDistributeRows_BucketAssignment_RoundRobin
-//     5 managers, buckets=2 → buckets used: [0,1,0,1,0]
-//     deterministically (sorted email order).
+//	TestDistributeRows_BucketAssignment_RoundRobin
+//	  5 managers, buckets=2 → buckets used: [0,1,0,1,0]
+//	  deterministically (sorted email order).
 //
-//   TestReadInventoryCSV_HeaderMissing
-//     Missing required column → error mentioning the column name.
+//	TestReadInventoryCSV_HeaderMissing
+//	  Missing required column → error mentioning the column name.
 //
-//   TestReadInventoryCSV_EmptyChannelID
-//     Row with empty channel_id → row-numbered error.
+//	TestReadInventoryCSV_EmptyChannelID
+//	  Row with empty channel_id → row-numbered error.
 //
-//   TestSlugify
-//     Round-trips common email forms to filesystem-safe slugs.
+//	TestSlugify
+//	  Round-trips common email forms to filesystem-safe slugs.
 package main
 
 import (
@@ -58,8 +58,8 @@ func makeRows(specs ...interface{}) []inputRow {
 	rowNum := 2 // header is row 1
 	for _, s := range specs {
 		entry := s.(struct {
-			manager  string
-			n        int
+			manager string
+			n       int
 		})
 		for i := 0; i < entry.n; i++ {
 			out = append(out, inputRow{
@@ -462,7 +462,7 @@ func TestWriteOutputFiles_RedirectPipe(t *testing.T) {
 	files := []bucketFile{
 		{
 			bucketIndex: 0, fileIndex: 1, managerEmail: "c@instaedit.org",
-			rows:         []inputRow{{channelID: "UCccc", managerEmailHint: "c@instaedit.org", rowNum: 2}},
+			rows: []inputRow{{channelID: "UCccc", managerEmailHint: "c@instaedit.org", rowNum: 2}},
 		},
 	}
 	// Capture stdout.

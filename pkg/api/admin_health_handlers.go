@@ -30,7 +30,7 @@ func (r *Router) handleAdminHealth(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	quota, err := r.adminStore.YouTubeQuotaApproximation(req.Context(), 24*time.Hour, 10000, 1)  // 2026 bucket model: 1 unit per videos.insert
+	quota, err := r.adminStore.YouTubeQuotaApproximation(req.Context(), 24*time.Hour, 10000, 1) // 2026 bucket model: 1 unit per videos.insert
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load youtube quota: "+err.Error())
 		return
