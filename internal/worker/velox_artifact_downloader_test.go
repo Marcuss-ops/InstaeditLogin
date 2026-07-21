@@ -138,6 +138,28 @@ func (f *fakeExtDeliveryLinker) LinkUploadJob(_ context.Context, deliveryID stri
 	return nil
 }
 
+// fakeExternalDeliveryUploadCreator wraps the existing fake creator
+// and linker into the atomic ExternalDeliveryUploadCreator interface
+// used by VeloxArtifactDownloader. The wrapper keeps the old fakes
+// visible for assertions while letting the downloader call a single
+// CreateUploadJobAndLink operation. It is deliberately non-atomic
+// (it calls creator then linker) because the in-memory fakes don't
+// model transactions; the real repository guarantees atomicity.
+type fakeExternalDeliveryUploadCreator struct {
+	creator *fakeUploadJobCreator
+	linker  *fakeExtDeliveryLinker
+}
+
+func (f *fakeExternalDeliveryUploadCreator) CreateUploadJobAndLink(_ context.Context, job *models.UploadJob, deliveryID string) (int64, error) {
+	if err := f.creator.Create(job); err != nil {
+		return 0, err
+	}
+	if err := f.linker.LinkUploadJob(context.Background(), deliveryID, job.ID); err != nil {
+		return 0, err
+	}
+	return job.ID, nil
+}
+
 // fakeExternalDeliveryStoreForFSM is the minimal in-memory
 // ExternalDeliveryStore facade for the FSM. The FSM only needs
 // UpdateStatus — we record every (id, newStatus) pair so tests can
@@ -209,14 +231,13 @@ func dummyDelivery(id, downloadURL string) *models.ExternalDelivery {
 // --- Test 1: HappyPath -------------------------------------------
 
 // TestVeloxArtifactDownloader_HappyPath covers the canonical
-// processOne flow: GetByID → Create upload_job → LinkUploadJob →
-// ToDownloading. Every step's callcount + side-effect is asserted.
+// processOne flow: GetByID → metadata-only guard → CreateUploadJobAndLink.
+// Every step's callcount + side-effect is asserted.
 //
 // Why this test exists: locks in the spec's "register the work"
 // responsibility without relying on the http shell. A future
-// refactor that breaks any of the 4 steps (e.g. accidentally
-// skipping LinkUploadJob) will fail here, BEFORE the E2E test
-// discovers it through indirect behavior.
+// refactor that breaks the atomic create+link step will fail here,
+// BEFORE the E2E test discovers it through indirect behavior.
 func TestVeloxArtifactDownloader_HappyPath(t *testing.T) {
 	dl := dummyDelivery("sdel_happy", "https://velox.example/artifact_happy")
 	lookup := newFakeExtDeliveryLookup()
@@ -227,7 +248,7 @@ func TestVeloxArtifactDownloader_HappyPath(t *testing.T) {
 	store := newFakeExternalDeliveryStoreForFSM()
 
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	j := VeloxDownloadJob{
 		ExternalDeliveryID:  dl.ID,
@@ -254,8 +275,8 @@ func TestVeloxArtifactDownloader_HappyPath(t *testing.T) {
 	if got := atomic.LoadInt32(&links.calls); got != 1 {
 		t.Errorf("LinkUploadJob calls = %d; want 1", got)
 	}
-	if got := atomic.LoadInt32(&store.calls); got != 1 {
-		t.Errorf("UpdateStatus calls = %d; want 1", got)
+	if got := atomic.LoadInt32(&store.calls); got != 0 {
+		t.Errorf("UpdateStatus calls = %d; want 0 (status advanced inside atomic create+link)", got)
 	}
 
 	// Upload job contents
@@ -287,9 +308,12 @@ func TestVeloxArtifactDownloader_HappyPath(t *testing.T) {
 		t.Errorf("LinkUploadJob id = %d; want %d", v, uj.ID)
 	}
 
-	// FSM advanced to downloading
-	if got := store.status(dl.ID); got != models.ExternalDeliveryStatusDownloading {
-		t.Errorf("final status = %q; want %q", got, models.ExternalDeliveryStatusDownloading)
+	// The atomic repository operation advances the delivery row to
+	// 'downloading' inside the transaction. The in-memory fake FSM
+	// is not touched on the happy path, so we only assert the
+	// link was recorded by the wrapped linker.
+	if v := links.links[dl.ID]; v != uj.ID {
+		t.Errorf("LinkUploadJob id = %d; want %d", v, uj.ID)
 	}
 }
 
@@ -300,8 +324,8 @@ func TestVeloxArtifactDownloader_HappyPath(t *testing.T) {
 // single goroutine, channel concurrency at the producer side can
 // reorder inputs under -race; this test catches any future
 // refactor that accidentally promotes the goroutine to a worker
-// pool without preserving order (the publish pipeline assumes
-// accepted→downloading happens in producer order).
+// pool without preserving order (the publish pipeline assumes the
+// atomic create+link happens in producer order).
 func TestVeloxArtifactDownloader_ProcessOrderPreserved(t *testing.T) {
 	const N = 50
 	lookup := newFakeExtDeliveryLookup()
@@ -314,7 +338,7 @@ func TestVeloxArtifactDownloader_ProcessOrderPreserved(t *testing.T) {
 	store := newFakeExternalDeliveryStoreForFSM()
 
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	ch := make(chan VeloxDownloadJob, N)
 	for i := 0; i < N; i++ {
@@ -372,7 +396,7 @@ func TestVeloxArtifactDownloader_CtxCancelDrainPromptly(t *testing.T) {
 	links := newFakeExtDeliveryLinker()
 	store := newFakeExternalDeliveryStoreForFSM()
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	ch := make(chan VeloxDownloadJob, 4)
 	ch <- VeloxDownloadJob{
@@ -418,7 +442,7 @@ func TestVeloxArtifactDownloader_NilDownloadURL_MetadataOnly(t *testing.T) {
 	store := newFakeExternalDeliveryStoreForFSM()
 
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	j := VeloxDownloadJob{
 		ExternalDeliveryID: dl.ID,
@@ -454,7 +478,7 @@ func TestVeloxArtifactDownloader_GetByIDError_Skips(t *testing.T) {
 	links := newFakeExtDeliveryLinker()
 	store := newFakeExternalDeliveryStoreForFSM()
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	d.processOne(context.Background(), VeloxDownloadJob{
 		ExternalDeliveryID: "sdel_db_dead",
@@ -491,7 +515,7 @@ func TestVeloxArtifactDownloader_ExternalDeliveryMissing_Skips(t *testing.T) {
 	links := newFakeExtDeliveryLinker()
 	store := newFakeExternalDeliveryStoreForFSM()
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	d.processOne(context.Background(), VeloxDownloadJob{
 		ExternalDeliveryID: "sdel_gone",
@@ -522,7 +546,7 @@ func TestVeloxArtifactDownloader_CreateError_NoLinkNoFsm(t *testing.T) {
 	links := newFakeExtDeliveryLinker()
 	store := newFakeExternalDeliveryStoreForFSM()
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	d.processOne(context.Background(), VeloxDownloadJob{
 		ExternalDeliveryID: dl.ID,
@@ -561,7 +585,7 @@ func TestVeloxArtifactDownloader_LinkUploadJobError_LogsButContinues(t *testing.
 	links.linkErr = errSynthetic("simulated link failure")
 	store := newFakeExternalDeliveryStoreForFSM()
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	d.processOne(context.Background(), VeloxDownloadJob{
 		ExternalDeliveryID: dl.ID,
@@ -587,14 +611,15 @@ func TestVeloxArtifactDownloader_LinkUploadJobError_LogsButContinues(t *testing.
 
 // --- Test 9: FSM skew --------------------------------------------
 
-// TestVeloxArtifactDownloader_ToDownloadingSkew_LogsAndContinues
-// asserts the FSM-advance-on-skew contract: if the FSM rejects
-// ToDownloading (peer raced us and already-stamped the row), the
-// downloader's WARN log is the operator signal AND the upload_job
-// + link survive (the pool will process them via its own path).
-func TestVeloxArtifactDownloader_ToDownloadingSkew_LogsAndContinues(t *testing.T) {
+// TestVeloxArtifactDownloader_NonAcceptedDelivery_Skips asserts that
+// processOne skips deliveries that are no longer in the 'accepted'
+// state. A peer worker that already advanced the row to
+// 'artifact_verified' (or any other state) should not trigger a new
+// upload_job. The atomic repository method also enforces this, but the
+// early skip keeps logs quiet and avoids wasting a transaction.
+func TestVeloxArtifactDownloader_NonAcceptedDelivery_Skips(t *testing.T) {
 	dl := dummyDelivery("sdel_skew", "https://x/")
-	// Pre-stamp the row to a downstream state: downloading → artifact_verified
+	// Pre-stamp the row to a downstream state: artifact_verified
 	// simulates a peer worker that raced ahead of us.
 	dl.Status = models.ExternalDeliveryStatusArtifactVerified
 	lookup := newFakeExtDeliveryLookup()
@@ -605,7 +630,7 @@ func TestVeloxArtifactDownloader_ToDownloadingSkew_LogsAndContinues(t *testing.T
 	uploads := newFakeUploadJobCreator()
 	links := newFakeExtDeliveryLinker()
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	d.processOne(context.Background(), VeloxDownloadJob{
 		ExternalDeliveryID: dl.ID,
@@ -615,21 +640,17 @@ func TestVeloxArtifactDownloader_ToDownloadingSkew_LogsAndContinues(t *testing.T
 		SizeBytes:          1024,
 	})
 
-	if c := atomic.LoadInt32(&uploads.createCalls); c != 1 {
-		t.Errorf("Create calls = %d; want 1 (Create runs even on FSM skew)", c)
+	if c := atomic.LoadInt32(&uploads.createCalls); c != 0 {
+		t.Errorf("Create calls = %d; want 0 (skip non-accepted delivery)", c)
 	}
-	if c := atomic.LoadInt32(&links.calls); c != 1 {
-		t.Errorf("LinkUploadJob calls = %d; want 1 (link runs even on FSM skew)", c)
+	if c := atomic.LoadInt32(&links.calls); c != 0 {
+		t.Errorf("LinkUploadJob calls = %d; want 0 (skip non-accepted delivery)", c)
 	}
-	// The FSM transition accepted → downloading is illegal when the
-	// row has already advanced to artifact_verified. The FSM guard
-	// rejects it BEFORE touching the store, so no UpdateStatus call
-	// is expected and the row stays in artifact_verified.
 	if c := atomic.LoadInt32(&store.calls); c != 0 {
-		t.Errorf("UpdateStatus calls = %d; want 0 (illegal transition not persisted)", c)
+		t.Errorf("UpdateStatus calls = %d; want 0 (skip non-accepted delivery)", c)
 	}
 	if got := store.status(dl.ID); got != models.ExternalDeliveryStatusArtifactVerified {
-		t.Errorf("status = %q; want %q (illegal transition leaves row unchanged)", got, models.ExternalDeliveryStatusArtifactVerified)
+		t.Errorf("status = %q; want %q (row unchanged)", got, models.ExternalDeliveryStatusArtifactVerified)
 	}
 }
 
@@ -652,7 +673,7 @@ func TestVeloxArtifactDownloader_DefaultPrivacyAndPublishAtPropagate(t *testing.
 	links := newFakeExtDeliveryLinker()
 	store := newFakeExternalDeliveryStoreForFSM()
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	pubAt := time.Date(2027, 1, 15, 10, 30, 0, 0, time.UTC)
 	d.processOne(context.Background(), VeloxDownloadJob{
@@ -703,7 +724,7 @@ func TestVeloxArtifactDownloader_StressHundredsOfJobs(t *testing.T) {
 	links := newFakeExtDeliveryLinker()
 	store := newFakeExternalDeliveryStoreForFSM()
 	fsm := NewIngestFSM(store, slog.Default())
-	d := NewVeloxArtifactDownloader(lookup, uploads, links, fsm, slog.Default())
+	d := NewVeloxArtifactDownloader(lookup, &fakeExternalDeliveryUploadCreator{creator: uploads, linker: links}, fsm, slog.Default())
 
 	ch := make(chan VeloxDownloadJob, N)
 	for i := 0; i < N; i++ {
@@ -724,8 +745,8 @@ func TestVeloxArtifactDownloader_StressHundredsOfJobs(t *testing.T) {
 	if c := atomic.LoadInt32(&uploads.createCalls); int(c) != N {
 		t.Errorf("Create calls = %d; want %d", c, N)
 	}
-	if c := atomic.LoadInt32(&store.calls); int(c) != N {
-		t.Errorf("UpdateStatus calls = %d; want %d", c, N)
+	if c := atomic.LoadInt32(&store.calls); int(c) != 0 {
+		t.Errorf("UpdateStatus calls = %d; want 0 (atomic create+link handles status)", c)
 	}
 	if len(links.links) != N {
 		t.Errorf("links len = %d; want %d", len(links.links), N)

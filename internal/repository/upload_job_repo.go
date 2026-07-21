@@ -130,7 +130,15 @@ func (r *UploadJobRepository) LinkToExternalDelivery(
 // perspective). publish_at is nullable so callers that want
 // immediate publish (single-file imports, the historical default)
 // pass nil. folder_id continues to be nullable (migration 038).
-func (r *UploadJobRepository) Create(job *models.UploadJob) error {
+type queryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// createUploadJob performs the INSERT of a new upload_jobs row against any
+// queryer (*sql.DB or *sql.Tx). It is the shared implementation used by
+// UploadJobRepository.Create and by ExternalDeliveryRepository's atomic
+// create-and-link transaction so the SQL stays single-source-of-truth.
+func createUploadJob(ctx context.Context, q queryer, job *models.UploadJob) error {
 	targetsJSON, err := job.TargetsJSON()
 	if err != nil {
 		return fmt.Errorf("failed to marshal upload job targets: %w", err)
@@ -160,7 +168,7 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 	// also writes placeholder "" (DEFAULT '' from migration 053). order
 	// matches the column list verbatim — column-list-vs-bind-list is a manual
 	// invariant here, like every other INSERT in this repo.
-	return r.db.QueryRow(
+	return q.QueryRowContext(ctx,
 		`INSERT INTO upload_jobs
 			(user_id, workspace_id, source_type, source_id, drive_account_id, folder_id,
 			 title, caption, targets, status, ingest_after, publish_at, batch_id, default_privacy_level)
@@ -181,6 +189,10 @@ func (r *UploadJobRepository) Create(job *models.UploadJob) error {
 		batchID,
 		job.DefaultPrivacyLevel,
 	).Scan(&job.ID, &job.CreatedAt, &job.UpdatedAt)
+}
+
+func (r *UploadJobRepository) Create(job *models.UploadJob) error {
+	return createUploadJob(context.Background(), r.db, job)
 }
 
 // FindByID returns the upload job with the given id, or (nil, nil) if not found.

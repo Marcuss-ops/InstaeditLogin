@@ -744,6 +744,11 @@ func (r *ExternalDeliveryRepository) LinkUploadJob(ctx context.Context, delivery
 // external_delivery row is linked to the upload_job yet.
 var ErrExternalDeliveryNotLinked = errors.New("external delivery not linked to upload job")
 
+// ErrExternalDeliveryAlreadyClaimed is returned when a worker tries to
+// atomically create an upload_job for a delivery row that another worker
+// already claimed (status != 'accepted' or upload_job_id already set).
+var ErrExternalDeliveryAlreadyClaimed = errors.New("external delivery already claimed")
+
 // ErrExternalDeliveryNoExpectedTriple is the typed sentinel
 // when the external_delivery row exists but (size, sha) fields
 // are empty/zero.
@@ -752,6 +757,57 @@ var ErrExternalDeliveryNoExpectedTriple = errors.New("external delivery has no e
 // GetExpectedTripleByUploadJobID returns (expected_size_bytes,
 // expected_sha256_hex) for the external_delivery row linked to
 // uploadJobID. Sentinel dispatch is via errors.Is.
+// CreateUploadJobAndLink creates an upload_jobs row and atomically claims the
+// external_deliveries row for it in a single transaction. The claim UPDATE
+// filters on status='accepted' AND upload_job_id IS NULL, so only one worker
+// can win the race. If the claim fails (0 rows affected) the transaction is
+// rolled back and ErrExternalDeliveryAlreadyClaimed is returned, leaving the
+// delivery row untouched for the winner. On success the delivery row is
+// left with status='downloading' and upload_job_id set, and the new upload
+// job ID is returned.
+func (r *ExternalDeliveryRepository) CreateUploadJobAndLink(ctx context.Context, job *models.UploadJob, deliveryID string) (int64, error) {
+	if deliveryID == "" {
+		return 0, errors.New("external delivery CreateUploadJobAndLink: empty deliveryID")
+	}
+
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return 0, fmt.Errorf("external delivery CreateUploadJobAndLink begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := createUploadJob(ctx, tx, job); err != nil {
+		return 0, fmt.Errorf("external delivery CreateUploadJobAndLink: create upload_job: %w", err)
+	}
+	jobID := job.ID
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE external_deliveries
+		 SET status         = 'downloading',
+		     upload_job_id  = $2,
+		     updated_at     = NOW()
+		 WHERE id           = $1
+		   AND status       = 'accepted'
+		   AND upload_job_id IS NULL`,
+		deliveryID, jobID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("external delivery CreateUploadJobAndLink: claim delivery: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("external delivery CreateUploadJobAndLink: rows affected: %w", err)
+	}
+	if n == 0 {
+		return 0, ErrExternalDeliveryAlreadyClaimed
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("external delivery CreateUploadJobAndLink commit: %w", err)
+	}
+	return jobID, nil
+}
+
 func (r *ExternalDeliveryRepository) GetExpectedTripleByUploadJobID(ctx context.Context, uploadJobID int64) (int64, string, error) {
 	if uploadJobID <= 0 {
 		return 0, "", fmt.Errorf("external delivery GetExpectedTripleByUploadJobID: non-positive uploadJobID %d", uploadJobID)
