@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -497,7 +496,7 @@ func (r *Router) handleAdminChannelConnectLink(w http.ResponseWriter, req *http.
 	}
 
 	// Issue the JWT carrying the expected channel_id. 30-minute TTL.
-	jwtState, nonce, err := r.auth.IssueConnectLinkState(account.PlatformUserID)
+	jwtState, nonce, expiresAt, err := r.auth.IssueConnectLinkState(account.PlatformUserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue connect-link state: "+err.Error())
 		return
@@ -506,9 +505,9 @@ func (r *Router) handleAdminChannelConnectLink(w http.ResponseWriter, req *http.
 	// Persist the nonce so the callback can atomically consume it.
 	// The nonce is the single-use handle inside the JWT; persisting
 	// it here lets us reject replays even though the JWT itself is
-	// stateless.
+	// stateless. Use the JWT's own expiry so the DB record cannot
+	// drift from the JWT validity window.
 	if r.connectLinkNonceStore != nil {
-		expiresAt := time.Now().Add(30 * time.Minute)
 		if saveErr := r.connectLinkNonceStore.Create(nonce, account.PlatformUserID, expiresAt); saveErr != nil {
 			writeError(w, http.StatusInternalServerError, "could not persist connect-link nonce: "+saveErr.Error())
 			return

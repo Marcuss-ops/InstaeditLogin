@@ -514,12 +514,18 @@ func TestVerifyConnectLinkState_ExpiredReturnsErrMalformed(t *testing.T) {
 func TestVerifyConnectLinkState_FreshStateRoundTrips(t *testing.T) {
 	m := NewManager(testSecret, 24)
 	const wantChannel = "UC1234567890abcdefghij"
-	signed, nonce, err := m.IssueConnectLinkState(wantChannel)
+	signed, nonce, expiresAt, err := m.IssueConnectLinkState(wantChannel)
 	if err != nil {
 		t.Fatalf("IssueConnectLinkState: %v", err)
 	}
 	if nonce == "" {
 		t.Fatal("IssueConnectLinkState: expected non-empty nonce")
+	}
+	if expiresAt.IsZero() {
+		t.Fatal("IssueConnectLinkState: expected non-zero expiry")
+	}
+	if ttl := time.Until(expiresAt); ttl < 29*time.Minute || ttl > 31*time.Minute {
+		t.Fatalf("IssueConnectLinkState: expiry outside 30-minute window: %s", ttl)
 	}
 	claims, verr := m.VerifyConnectLinkState(signed)
 	if verr != nil {

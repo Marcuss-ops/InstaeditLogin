@@ -515,18 +515,21 @@ type ConnectLinkStateClaims struct {
 // manager to complete the OAuth flow on their browser, short enough
 // that an intercepted URL has a tight replay window.
 //
-// Returns the signed JWT and the nonce embedded inside it. The
-// caller must persist the nonce in a store that supports atomic
-// single-use consumption so the link cannot be replayed.
-func (m *Manager) IssueConnectLinkState(expectedChannelID string) (string, string, error) {
+// Returns the signed JWT, the nonce embedded inside it, and the exact
+// JWT expiry time. The caller must persist the nonce in a store that
+// supports atomic single-use consumption so the link cannot be
+// replayed, and it should use the returned expiry for that record so
+// the database expiry cannot drift from the JWT expiry.
+func (m *Manager) IssueConnectLinkState(expectedChannelID string) (string, string, time.Time, error) {
 	if expectedChannelID == "" {
-		return "", "", errors.New("connect-link state: expected_channel_id is required")
+		return "", "", time.Time{}, errors.New("connect-link state: expected_channel_id is required")
 	}
 	nonce, err := randomHex(16)
 	if err != nil {
-		return "", "", fmt.Errorf("connect-link state: nonce generation: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("connect-link state: nonce generation: %w", err)
 	}
 	now := time.Now()
+	expiresAt := now.Add(30 * time.Minute)
 	claims := ConnectLinkStateClaims{
 		StateType:         "connect_link",
 		ExpectedChannelID: expectedChannelID,
@@ -535,16 +538,16 @@ func (m *Manager) IssueConnectLinkState(expectedChannelID string) (string, strin
 			Issuer:    m.issuer,
 			Audience:  jwt.ClaimStrings{m.audience},
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(30 * time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
 	}
 
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := tok.SignedString(m.secret)
 	if err != nil {
-		return "", "", fmt.Errorf("connect-link state: sign: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("connect-link state: sign: %w", err)
 	}
-	return signed, nonce, nil
+	return signed, nonce, expiresAt, nil
 }
 
 // VerifyConnectLinkState validates a state JWT and returns the
