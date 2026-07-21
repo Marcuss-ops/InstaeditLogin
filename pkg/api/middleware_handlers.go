@@ -58,7 +58,7 @@ func (r *Router) corsMiddleware(next http.Handler) http.Handler {
 				// Taglio 1.2: include Cookie so the browser is allowed to
 				// send the HttpOnly session cookie. Access-Control-Allow-Credentials
 				// is required when the browser uses credentials:'include'.
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Cookie")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Cookie, X-CSRF-Token")
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 				w.Header().Set("Access-Control-Max-Age", "600")
 			}
