@@ -146,7 +146,7 @@ services:
 # MinIO — local S3-compatible object store. The credentials below
   # MUST match S3_ACCESS_KEY / S3_SECRET_KEY in `.env.dev` (referenced
   # via env_file). `minio-init` is a one-shot sidecar that creates the
-  # `instaedit-dev` bucket on first boot so the api's first S3 PUT
+  # `instaedit-local` bucket on first boot so the api's first S3 PUT
   # does not race against bucket creation. Pinned to a stable tag
   # (`RELEASE.2024-09-13T16-55-53Z`) — the `latest` tag is not safe
   # because MinIO's release cadence occasionally breaks the mc↔server
@@ -180,7 +180,7 @@ services:
     # 127.0.0.1:9000 → host port forward → minio container on default
     # bridge), media-backend for any future internal-only bucket that
     # the Velox handoff might use as a staging area before promotion
-    # into `instaedit-dev`.
+    # into `instaedit-local`.
     networks:
       - default
       - media-backend
@@ -208,8 +208,8 @@ services:
         echo 'minio alias set failed, retrying in 2s';
         sleep 2;
       done;
-      mc mb --ignore-existing local/instaedit-dev;
-      echo 'minio bucket instaedit-dev ready';
+      mc mb --ignore-existing local/instaedit-local;
+      echo 'minio bucket instaedit-local ready';
       exit 0;
       "
 
