@@ -307,3 +307,60 @@ func TestLoad_JWT_TTL_LegacyFallback(t *testing.T) {
 		t.Errorf("JWTRefreshTTLDays default: want 30, got %d", cfg.JWTRefreshTTLDays)
 	}
 }
+
+// TestLoad_Production_RequiresMetricsBasicAuth pins the fail-closed
+// production contract: when APP_ENV=production, both metrics basic-auth
+// credentials must be present. Any incomplete configuration (missing user,
+// missing pass, or both) must prevent the process from booting.
+func TestLoad_Production_RequiresMetricsBasicAuth(t *testing.T) {
+	// Provide the minimum required env vars so the only failure path
+	// under test is the production metrics-auth check.
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+	t.Setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/instaedit_login?sslmode=disable")
+	t.Setenv("S3_ENDPOINT", "https://s3.example.com")
+	t.Setenv("S3_BUCKET", "instaedit-bucket")
+	t.Setenv("S3_ACCESS_KEY", "AKIAIOSFODNN7EXAMPLE")
+	t.Setenv("S3_SECRET_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+
+	cases := []struct {
+		name  string
+		user  string
+		pass  string
+		valid bool
+	}{
+		{"both missing", "", "", false},
+		{"only user missing", "", "secret", false},
+		{"only pass missing", "user", "", false},
+		{"both set", "user", "secret", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Override the dummy values set by TestMain so we can test
+			// each incomplete configuration.
+			t.Setenv("METRICS_BASIC_AUTH_USER", tc.user)
+			t.Setenv("METRICS_BASIC_AUTH_PASS", tc.pass)
+
+			cfg, err := Load()
+			if tc.valid {
+				if err != nil {
+					t.Fatalf("Load() with %s: want nil, got %v", tc.name, err)
+				}
+				if cfg.MetricsBasicAuthUser != tc.user || cfg.MetricsBasicAuthPass != tc.pass {
+					t.Errorf("metrics credentials not round-tripped correctly: got (%q, %q)", cfg.MetricsBasicAuthUser, cfg.MetricsBasicAuthPass)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("Load() with %s: want error, got nil", tc.name)
+			}
+			want := "METRICS_BASIC_AUTH_USER and METRICS_BASIC_AUTH_PASS are required in production"
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Load() error should contain %q; got: %v", want, err)
+			}
+		})
+	}
+}
