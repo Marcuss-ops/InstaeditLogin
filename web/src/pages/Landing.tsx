@@ -312,8 +312,9 @@ function Nav() {
     { label: "How it works", href: "#pipeline" },
     { label: "Workflow", href: "#workflow" },
     { label: "Features", href: "#features" },
+    { label: "Programs", href: "#programs" },
     { label: "Agencies", href: "#agency" },
-    { label: "Programs", to: "/programs" },
+    { label: "FAQ", href: "#faq" },
     { label: "Mentoring", to: "/mentoring" },
     { label: "About us", href: "#who-are-we" },
   ];
@@ -404,15 +405,14 @@ function Hero() {
             <span>7 platforms · one workflow · zero re-uploads</span>
           </div>
           <h1 className="text-display-1 text-white">
-            From <span className="text-gradient-animated">idea</span> to{" "}
-            <span className="text-gradient-animated">publication</span>.<br />
-
-            <span className="text-2xl sm:text-3xl lg:text-4xl font-normal text-zinc-400">Zero friction. Every platform.</span>
+            Your creativity.{" "}
+            <span className="text-gradient-animated">Our distribution.</span>
           </h1>
           <p className="text-body-lg text-zinc-300/90 mt-7 max-w-[60ch]">
-            InstaEdit turns one render into 7 native posts per platform — scheduled,
-            captioned and published from a single calendar. Built for teams producing
-            10,000+ contents per month.
+            You bring the great idea and the quality content. InstaEdit makes sure the
+            world sees it everywhere — without you wasting hours uploading files to
+            every platform. Start your YouTube channel, reach millions on TikTok, or
+            grow your brand across all platforms at once.
           </p>
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mt-8">
             <Link
@@ -454,12 +454,12 @@ function Hero() {
 
 function PipelineSection() {
   const steps = [
-    { icon: Lightbulb, label: "Idea", desc: "Plan content with AI — suggest formats, themes and platforms", color: "from-violet-500 to-purple-500" },
-    { icon: Film, label: "Create", desc: "Record once. We handle the rest", color: "from-blue-500 to-cyan-500" },
-    { icon: Cpu, label: "AI Processes", desc: "Subtitles, thumbnails, translations — generated automatically", color: "from-emerald-500 to-teal-500" },
-    { icon: CalendarClock, label: "Schedule", desc: "Optimal slots for each platform, automatic timezone handling", color: "from-amber-500 to-orange-500" },
-    { icon: Globe, label: "Publish", desc: "One click, every platform — video, caption, hashtag", color: "from-pink-500 to-rose-500" },
-    { icon: BarChart3, label: "Analyze", desc: "Unified metrics: reach, engagement, cross-platform performance", color: "from-indigo-500 to-violet-500" },
+    { icon: Lightbulb, label: "Idea", desc: "Tell us what you want to create — a YouTube video, a TikTok trend, anything", color: "from-violet-500 to-purple-500" },
+    { icon: Film, label: "Create", desc: "Record your video or let our AI generate it for you with ChronoN", color: "from-blue-500 to-cyan-500" },
+    { icon: Cpu, label: "AI Polishes", desc: "Subtitles, thumbnails, captions — everything made for you automatically", color: "from-emerald-500 to-teal-500" },
+    { icon: CalendarClock, label: "Schedule", desc: "Pick when you want to post — we handle the timing for each platform", color: "from-amber-500 to-orange-500" },
+    { icon: Globe, label: "Publish", desc: "One click and your video goes live on YouTube, TikTok, Instagram and more", color: "from-pink-500 to-rose-500" },
+    { icon: BarChart3, label: "Analyze", desc: "See how your content performs across all platforms in one place", color: "from-indigo-500 to-violet-500" },
   ];
 
   return (
@@ -467,14 +467,15 @@ function PipelineSection() {
       <div aria-hidden="true" className="absolute inset-0 hero-aurora opacity-20 pointer-events-none" />
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
-          <div className="text-eyebrow text-violet-300/90 mb-3">Your new workflow</div>
+          <div className="text-eyebrow text-violet-300/90 mb-3">How it works</div>
           <h2 className="text-display-2 text-white">
-            From idea to publication,{" "}
-            <span className="text-gradient-animated">automated.</span>
+            Less production.{" "}
+            <span className="text-gradient-animated">More publishing.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            An AI pipeline that turns your idea into content ready for every platform.
-            No manual step. No double encoding. No extra tab to open.
+            From one idea to videos published everywhere — in minutes, not hours.
+            No editing skills needed. No tabs to juggle. Just create and let InstaEdit
+            handle the rest.
           </p>
         </div>
 
@@ -515,9 +516,9 @@ function PipelineSection() {
         {/* AI automation highlights */}
         <div className="mt-16 grid grid-cols-1 sm:grid-cols-3 gap-4 animate-fade-up animation-delay-600">
           {[
-            { icon: Languages, title: "50+ languages", desc: "Automatic subtitle translation into 50+ languages" },
-            { icon: Palette, title: "AI Thumbnails", desc: "Automatic thumbnail generation for every platform" },
-            { icon: RefreshCw, title: "Repurposing", desc: "From long-form to Shorts/Reels/TikTok in one click" },
+            { icon: Languages, title: "50+ languages", desc: "Reach audiences worldwide with automatic subtitle translation" },
+            { icon: Palette, title: "AI Thumbnails", desc: "Eye-catching thumbnails generated for every platform" },
+            { icon: RefreshCw, title: "Auto repurposing", desc: "Turn one long video into Shorts, Reels, and TikToks instantly" },
           ].map((h) => (
             <div key={h.title} className="surface-card-soft p-4 flex items-center gap-3 hover:border-white/20 transition-colors">
               <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-violet-500/20 to-cyan-500/20 flex items-center justify-center text-violet-300 shrink-0">
@@ -570,38 +571,38 @@ function StatsStrip() {
 function WorkflowSection() {
   const steps = [
     {
-      n: "01", title: "AI-assisted ideation",
-      copy: "AI analyzes your brief and suggests formats, platforms, and optimal timings for each content.",
+      n: "01", title: "Tell us your idea",
+      copy: "Write a paragraph, paste a script, or just describe what you want. InstaEdit figures out the best format, platforms, and timing for your content.",
       Icon: Lightbulb,
       accent: "from-violet-500/30 to-violet-500/0", ring: "ring-violet-400/40", iconColor: "text-violet-300",
     },
     {
-      n: "02", title: "Create once",
-      copy: "Upload a vertical or horizontal render. We automatically encode for each destination platform.",
+      n: "02", title: "Record or generate",
+      copy: "Upload your own video, or let ChronoN create it for you. No camera? No problem — AI generates professional videos from your brief.",
       Icon: Film,
       accent: "from-blue-500/30 to-blue-500/0", ring: "ring-blue-400/40", iconColor: "text-blue-300",
     },
     {
-      n: "03", title: "AI processes everything",
-      copy: "Subtitles, thumbnails, translations, hashtags — generated automatically for every platform.",
+      n: "03", title: "AI polishes everything",
+      copy: "Subtitles, thumbnails, captions, hashtags — all generated automatically. Each one tailored to the platform it's going on.",
       Icon: Cpu,
       accent: "from-emerald-500/30 to-emerald-500/0", ring: "ring-emerald-400/40", iconColor: "text-emerald-300",
     },
     {
-      n: "04", title: "Smart scheduling",
-      copy: "Pick a time. We automatically distribute across each platform timezone for maximum engagement.",
+      n: "04", title: "Schedule or publish now",
+      copy: "Pick a time or go live instantly. InstaEdit publishes at the best time for each platform and timezone.",
       Icon: CalendarClock,
       accent: "from-cyan-500/30 to-cyan-500/0", ring: "ring-cyan-400/40", iconColor: "text-cyan-300",
     },
     {
-      n: "05", title: "Publish everywhere",
-      copy: "One click. All platforms. Caption, hashtag, thumbnail, chapters — all generated and published.",
+      n: "05", title: "Go live everywhere",
+      copy: "One click. Your video is on YouTube, TikTok, Instagram, Facebook, LinkedIn, X, and Threads — with the right format for each.",
       Icon: Globe,
       accent: "from-pink-500/30 to-pink-500/0", ring: "ring-pink-400/40", iconColor: "text-pink-300",
     },
     {
-      n: "06", title: "Unified analytics",
-      copy: "Reach, engagement and publishing status across all channels in one dashboard.",
+      n: "06", title: "See what works",
+      copy: "Track views, engagement, and growth across all platforms in one simple dashboard. Know what to do more of.",
       Icon: BarChart3,
       accent: "from-amber-500/30 to-amber-500/0", ring: "ring-amber-400/40", iconColor: "text-amber-300",
     },
@@ -614,12 +615,12 @@ function WorkflowSection() {
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">The complete workflow</div>
           <h2 className="text-display-2 text-white">
-            From idea to analysis in{" "}
-            <span className="text-gradient-animated">6 steps.</span>
+            From idea to everywhere in{" "}
+            <span className="text-gradient-animated">6 simple steps.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            Not just publishing. The full content lifecycle: AI ideation, creation,
-            processing, scheduling, publishing, and analytics — without ever leaving InstaEdit.
+            Not just publishing. The full journey: from your first idea to a video
+            that reaches millions — all from one place. No editing skills required.
           </p>
         </div>
         <ol className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5 relative">
@@ -655,8 +656,8 @@ function Features() {
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">What's included</div>
-          <h2 className="text-display-2 text-white">Everything you need to publish content at scale.</h2>
-          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">Built for production teams. Calm interface, zero tabs per platform.</p>
+          <h2 className="text-display-2 text-white">Everything you need to publish content everywhere.</h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">One place for all your platforms. Simple, clean, and powerful.</p>
         </div>
         <div className="grid lg:grid-cols-3 gap-5">
           <div className="surface-card p-7 lg:p-8 relative overflow-hidden lg:col-span-2 lg:row-span-2 animate-fade-up hover:border-violet-400/30 transition-all duration-300">
@@ -669,7 +670,7 @@ function Features() {
               <h3 className="text-display-3 text-white mb-3 max-w-[22ch]">One dashboard, every platform.</h3>
               <p className="text-sm text-zinc-400 leading-relaxed max-w-[52ch]">
                 Manage Instagram, TikTok, YouTube, X, LinkedIn, Facebook and Threads from a single calendar.
-                Status indicators show what is published, scheduled or needs review.
+                See what's published, what's scheduled, and what needs your attention.
               </p>
               <div className="mt-7 surface-glass rounded-xl border border-white/10 overflow-hidden">
                 <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-white/5">
@@ -697,9 +698,9 @@ function Features() {
             <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-cyan-400/40 surface-glass text-cyan-300 mb-4">
               <IconSchedule className="w-5 h-5" />
             </div>
-            <h3 className="text-display-3 text-white mb-2">Schedulezione intelligente.</h3>
+            <h3 className="text-display-3 text-white mb-2">Smart scheduling.</h3>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              Optimized slots for each platform. Content is published at your audience's peak time.
+              Posts go live when your audience is most active. One click, zero guesswork.
             </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden animate-fade-up animation-delay-200 hover:border-pink-400/30 transition-all duration-300">
@@ -708,7 +709,7 @@ function Features() {
             </div>
             <h3 className="text-display-3 text-white mb-2">Built-in approval flows.</h3>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              Drafts under review, lock final versions, and publish with a full audit trail on each account.
+              Review drafts, lock final versions, and publish with confidence. Full control over what goes live.
             </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden lg:col-span-3 animate-fade-up animation-delay-300 hover:border-amber-400/30 transition-all duration-300">
@@ -718,9 +719,9 @@ function Features() {
                 <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-amber-400/40 surface-glass text-amber-300 mb-4">
                   <IconAnalyze className="w-5 h-5" />
                 </div>
-                <h3 className="text-display-3 text-white mb-2">Post-matched analytics.</h3>
+                <h3 className="text-display-3 text-white mb-2">Analytics that make sense.</h3>
                 <p className="text-sm text-zinc-400 leading-relaxed max-w-[52ch]">
-                  Compare reach, engagement and publishing status across all channels in one unified view — no per-platform export.
+                  See views, engagement, and growth across all your channels in one simple view. Know what's working and what to do next.
                 </p>
               </div>
               <div className="surface-glass rounded-xl border border-white/10 p-5">
@@ -811,6 +812,215 @@ function AgencySection() {
 }
 
 /* ----------------------------------------------------------------------------
+ * Problem & Solution
+ * -------------------------------------------------------------------------- */
+
+function ProblemSolution() {
+  return (
+    <section className="relative py-24 sm:py-32 overflow-hidden">
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
+        <div className="glow-orb bg-red-500 w-[360px] h-[360px] -top-32 -right-32 animate-drift-slow opacity-20" />
+        <div className="glow-orb bg-emerald-500 w-[400px] h-[400px] -bottom-40 -left-24 animate-drift-rev opacity-25" />
+      </div>
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="grid lg:grid-cols-2 gap-16 items-center">
+          <div className="animate-fade-up">
+            <div className="text-eyebrow text-red-300/90 mb-3">The problem</div>
+            <h2 className="text-display-2 text-white mb-6">
+              Communities leave you with{" "}
+              <span className="text-gradient-animated">advice you can't apply.</span>
+            </h2>
+            <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-6">
+              You watch 100 YouTube tutorials but still don't know what to post, when to
+              post, or how to make it look professional. And automation without strategy
+              just spams mediocrity across 7 channels at once.
+            </p>
+            <div className="space-y-4">
+              {[
+                "You have ideas but no system to turn them into content",
+                "You spend hours re-uploading the same video to every platform",
+                "You don't know what format works on YouTube vs TikTok vs Instagram",
+                "You see others growing but can't figure out what you're doing wrong",
+              ].map((item) => (
+                <div key={item} className="flex items-start gap-3">
+                  <span className="w-5 h-5 rounded-full bg-red-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                    <span className="w-2 h-2 rounded-full bg-red-400" />
+                  </span>
+                  <span className="text-sm text-zinc-300">{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="animate-fade-up animation-delay-200">
+            <div className="text-eyebrow text-emerald-300/90 mb-3">Our solution</div>
+            <h2 className="text-display-2 text-white mb-6">
+              Strategy + Automation{" "}
+              <span className="text-gradient-animated">= Market domination.</span>
+            </h2>
+            <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-6">
+              We combine Content Strategy (so you create videos people actually want to
+              watch) with Bulletproof Automation (so they reach millions across every
+              platform at zero time cost).
+            </p>
+            <div className="space-y-4">
+              {[
+                "AI-powered ideation that suggests what to create based on your niche",
+                "ChronoN generates professional videos from a simple text brief",
+                "One upload → 7 native posts, each optimized for its platform",
+                "Smart scheduling posts at the exact time your audience is online",
+              ].map((item) => (
+                <div key={item} className="flex items-start gap-3">
+                  <span className="w-5 h-5 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                  </span>
+                  <span className="text-sm text-zinc-300">{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * Find Your Path — 3 Tiers
+ * -------------------------------------------------------------------------- */
+
+function FindYourPath() {
+  const tiers = [
+    {
+      level: "Level 1",
+      tagline: "I want to learn and grow",
+      title: "Mentorship Program",
+      color: "emerald",
+      ringColor: "ring-emerald-400/40",
+      iconColor: "text-emerald-300",
+      bgGradient: "from-emerald-500/20 to-teal-500/20",
+      hoverBorder: "hover:border-emerald-400/30",
+      shadowColor: "rgba(16,185,129,0.12)",
+      desc: "For creators and small teams who want to master YouTube/Shorts strategy, monetize, and build a scalable workflow.",
+      features: [
+        "1-on-1 mentoring (channel audit, content strategy, weekly review)",
+        "Full access to InstaEdit Pro included",
+        "Bonus: Aged YouTube channel to accelerate monetization",
+        "Learn what content converts and why",
+      ],
+      cta: "Start mentoring",
+      ctaLink: "/mentoring",
+    },
+    {
+      level: "Level 2",
+      tagline: "Do everything for me",
+      title: "Content Automation",
+      color: "blue",
+      ringColor: "ring-blue-400/40",
+      iconColor: "text-blue-300",
+      bgGradient: "from-blue-500/20 to-cyan-500/20",
+      hoverBorder: "hover:border-blue-400/30",
+      shadowColor: "rgba(59,130,246,0.12)",
+      desc: "For brands, entrepreneurs, or creators who have budget but zero time.",
+      features: [
+        "Turnkey content creation + strategy",
+        "Full channel management and automation on InstaEdit",
+        "Zero-effort publishing across all platforms",
+        "Dedicated content team working for you",
+      ],
+      cta: "See programs",
+      ctaLink: "/programs",
+      featured: true,
+    },
+    {
+      level: "Level 3",
+      tagline: "Enterprise & scaling",
+      title: "Multi-Channel Global",
+      color: "violet",
+      ringColor: "ring-violet-400/40",
+      iconColor: "text-violet-300",
+      bgGradient: "from-violet-500/20 to-purple-500/20",
+      hoverBorder: "hover:border-violet-400/30",
+      shadowColor: "rgba(139,92,246,0.12)",
+      desc: "For large clients, agencies, and structured brands.",
+      features: [
+        "Multi-channel automation at global scale",
+        "Translation, dubbing, and subtitles in 20+ languages",
+        "Dedicated infrastructure and servers",
+        "Priority support with guaranteed SLAs",
+      ],
+      cta: "Contact us",
+      ctaLink: "/login",
+    },
+  ];
+
+  return (
+    <section id="programs" className="relative py-24 sm:py-32 bg-elevated overflow-hidden">
+      <div aria-hidden="true" className="absolute inset-0 hero-aurora opacity-15 pointer-events-none" />
+      <div className="relative mx-auto max-w-7xl px-6">
+        <div className="max-w-3xl mb-16 text-center mx-auto animate-fade-up">
+          <div className="text-eyebrow text-violet-300/90 mb-3">Find your path</div>
+          <h2 className="text-display-2 text-white">
+            Which level are you{" "}
+            <span className="text-gradient-animated">ready for?</span>
+          </h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch] mx-auto">
+            Whether you want to learn the game, have someone play it for you, or scale
+            to millions — there's a path built for where you are right now.
+          </p>
+        </div>
+        <div className="grid md:grid-cols-3 gap-6">
+          {tiers.map((t, i) => (
+            <div
+              key={t.level}
+              className={`surface-card p-7 relative overflow-hidden animate-fade-up ${t.hoverBorder} transition-all duration-300 group ${
+                t.featured ? "ring-1 ring-blue-400/30 shadow-[0_8px_40px_rgba(59,130,246,0.15)]" : ""
+              } ${["", "animation-delay-100", "animation-delay-200"][i]}`}
+            >
+              {t.featured && (
+                <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-500 to-cyan-400" />
+              )}
+              <div aria-hidden="true" className={`absolute -top-20 -right-20 w-48 h-48 rounded-full bg-radial ${t.bgGradient} opacity-60 blur-3xl pointer-events-none group-hover:opacity-100 transition-all duration-500`} />
+              <div className="relative">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className={`inline-flex w-10 h-10 rounded-xl items-center justify-center ring-1 ${t.ringColor} surface-glass ${t.iconColor}`}>
+                    {i === 0 ? <Target className="w-5 h-5" /> : i === 1 ? <Zap className="w-5 h-5" /> : <Globe className="w-5 h-5" />}
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">{t.level}</div>
+                    <div className="text-xs text-zinc-400">{t.tagline}</div>
+                  </div>
+                </div>
+                <h3 className="text-display-3 text-white mb-3">{t.title}</h3>
+                <p className="text-sm text-zinc-400 leading-relaxed mb-5">{t.desc}</p>
+                <ul className="space-y-3 mb-6">
+                  {t.features.map((f) => (
+                    <li key={f} className="flex items-start gap-2.5">
+                      <CheckCircle2 className={`w-4 h-4 shrink-0 mt-0.5 ${t.iconColor}`} />
+                      <span className="text-sm text-zinc-300">{f}</span>
+                    </li>
+                  ))}
+                </ul>
+                <Link
+                  to={t.ctaLink}
+                  className={`inline-flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm transition-all group/btn ${
+                    t.featured
+                      ? "bg-white text-black hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)]"
+                      : "surface-glass border border-white/15 text-zinc-200 hover:border-white/30 hover:text-white"
+                  }`}
+                >
+                  {t.cta}
+                  <ArrowRight className="w-4 h-4 group-hover/btn:translate-x-1 transition-transform" />
+                </Link>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
  * Shorts section
  * -------------------------------------------------------------------------- */
 
@@ -828,13 +1038,13 @@ function ShortsSection() {
             <PlayCircle className="w-4 h-4" /> Short-form video
           </div>
           <h2 className="text-display-2 text-white mb-5">
-            One vertical render.{" "}
-            <span className="text-gradient-animated">Three platforms.</span> Zero re-uploads.
+            One video.{" "}
+            <span className="text-gradient-animated">Every short-form platform.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-7">
-            InstaEdit handles each short-form platform's quirks — aspect ratio, duration limits,
-            descriptions, thumbnails — so a single vertical render lands correctly on YouTube Shorts,
-            Instagram Reels and TikTok.
+            Record one vertical video and InstaEdit handles the rest — perfect sizing,
+            captions, and formatting for YouTube Shorts, Instagram Reels, and TikTok.
+            No re-editing required.
           </p>
           <ul className="space-y-3 text-sm">
             {[
@@ -879,12 +1089,13 @@ function LongFormSection() {
             <MonitorPlay className="w-4 h-4" /> Long-form video
           </div>
           <h2 className="text-display-2 text-white mb-5">
-            Horizontal masters,{" "}
-            <span className="text-gradient-animated">published everywhere.</span>
+            One long video.{" "}
+            <span className="text-gradient-animated">Published everywhere.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-7 lg:ml-auto">
-            Resumable uploads, descriptions, thumbnails and chapters — so a single horizontal render
-            lands correctly on YouTube, Instagram, Facebook and LinkedIn.
+            Upload your horizontal video once and InstaEdit publishes it to YouTube,
+            Instagram, Facebook, and LinkedIn — with the right title, description,
+            thumbnail, and chapters for each platform.
           </p>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 lg:justify-end">
             {[
@@ -920,9 +1131,9 @@ function LongFormSection() {
  * -------------------------------------------------------------------------- */
 
 const SEO = {
-  title: "InstaEdit — AI platform to create and publish videos",
+  title: "InstaEdit — Create great content. We handle the distribution.",
   description:
-    "InstaEdit turns one render into 7 native posts per platform — scheduled, captioned and published from a single calendar. Built for content teams producing at scale.",
+    "You bring the idea, we make sure the world sees it. AI-powered video creation with ChronoN, multi-platform publishing to YouTube, TikTok, Instagram and more. Built for creators, teams, and agencies.",
   canonical: "https://app.instaedit.org/",
 } as const;
 
@@ -960,8 +1171,8 @@ function Footer() {
             <span className="font-bold tracking-tight text-white text-base">InstaEdit</span>
           </Link>
           <p className="text-sm text-zinc-400 mt-4 max-w-[42ch] leading-relaxed">
-            Multi-platform publishing infrastructure for teams producing content every day.
-            One render, every channel, every time.
+            Your creativity. Our distribution. One place to create, schedule, and
+            publish professional content across every platform.
           </p>
           <div className="flex items-center gap-2 mt-5">
             {PLATFORM_REGISTRY.map(({ key, name, Logo }) => (
@@ -991,7 +1202,7 @@ function Footer() {
       <div className="border-t border-white/5">
         <div className="mx-auto max-w-7xl px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
           <div>© {new Date().getFullYear()} InstaEdit, Inc.</div>
-          <div>Built for creators and content operations teams.</div>
+          <div>Built for creators who want to grow.</div>
         </div>
       </div>
     </footer>
@@ -1012,7 +1223,7 @@ function WhoAreWe() {
         <div className="relative z-10 text-center px-6 max-w-4xl mx-auto animate-fade-up">
           <h2 className="text-display-1 text-white mb-6">
             We make video accessible{" "}
-            <span className="text-gradient-animated">per tutti.</span>
+            <span className="text-gradient-animated">for everyone.</span>
           </h2>
           <p className="text-body-lg text-zinc-300/90 max-w-[55ch] mx-auto">
             Our mission is to remove every barrier between a creator and their audience —
@@ -1027,12 +1238,13 @@ function WhoAreWe() {
             <div className="text-eyebrow text-violet-300/90 mb-3">Our mission</div>
             <h2 className="text-display-2 text-white mb-6">
               Automate video creation{" "}
-              <span className="text-gradient-animated">per tutti.</span>
+              <span className="text-gradient-animated">for everyone.</span>
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[55ch] mb-6">
               We exist to help anyone work for themselves. Creating content shouldn't
               require a whole production team — and publishing on every platform shouldn't
-              take all day.
+              take all day. With ChronoN, our proprietary AI engine, even students with
+              no budget can create professional videos automatically.
             </p>
             <p className="text-body-lg text-zinc-400 max-w-[55ch] mb-8">
               InstaEdit automates the entire pipeline: upload once, and we handle encoding,
@@ -1086,7 +1298,90 @@ function WhoAreWe() {
 }
 
 /* ----------------------------------------------------------------------------
- * CTA finale prima del footer
+ * FAQ
+ * -------------------------------------------------------------------------- */
+
+function FAQ() {
+  const [open, setOpen] = useState<number | null>(null);
+
+  const faqs = [
+    {
+      q: "Do I need a subscription to InstaEdit for the Mentoring program?",
+      a: "No. The Mentoring program includes full access to InstaEdit Pro at no extra cost. You'll learn how to use the platform while building your channel strategy with your mentor.",
+    },
+    {
+      q: "What happens after the program ends?",
+      a: "You keep full access to InstaEdit Pro and everything you've built. Your mentor will help you create a sustainable workflow so you can continue growing independently.",
+    },
+    {
+      q: "How does the aged YouTube channel work?",
+      a: "For Mentoring and Enterprise clients, we provide access to an aged YouTube channel that helps you skip the slow start phase. Aged channels have established watch history, which can accelerate monetization eligibility.",
+    },
+    {
+      q: "Can I start with Mentoring and upgrade to Automation later?",
+      a: "Absolutely. Many creators start with Mentoring to learn the strategy, then move to Content Automation when they're ready to scale without doing the work themselves.",
+    },
+    {
+      q: "How many platforms does InstaEdit publish to?",
+      a: "InstaEdit publishes to 7 platforms: YouTube, TikTok, Instagram, Facebook, LinkedIn, X (Twitter), and Threads. Each post is automatically formatted for its platform.",
+    },
+    {
+      q: "What is ChronoN?",
+      a: "ChronoN is our proprietary AI engine that can generate professional videos from a simple text brief. It handles scriptwriting, voiceover, visuals, and editing — perfect for students, creators without cameras, or anyone who wants to scale content production.",
+    },
+    {
+      q: "Is there a free trial?",
+      a: "Yes. You can start using InstaEdit for free with no credit card required. Set up your first multi-platform post in under 5 minutes.",
+    },
+    {
+      q: "How does the 15-minute Discovery Call work?",
+      a: "It's a free, no-pressure call where we understand your goals, your current situation, and recommend the best path for you — whether that's Mentoring, Automation, or Enterprise. Book it from the Final CTA section above.",
+    },
+  ];
+
+  return (
+    <section id="faq" className="relative py-24 sm:py-32 overflow-hidden">
+      <div className="relative mx-auto max-w-3xl px-6">
+        <div className="text-center mb-16 animate-fade-up">
+          <div className="text-eyebrow text-violet-300/90 mb-3">FAQ</div>
+          <h2 className="text-display-2 text-white">
+            Questions?{" "}
+            <span className="text-gradient-animated">We've got answers.</span>
+          </h2>
+        </div>
+        <div className="space-y-3">
+          {faqs.map((faq, i) => (
+            <div
+              key={i}
+              className={`surface-card overflow-hidden animate-fade-up transition-all duration-300 ${
+                open === i ? "border-violet-400/30" : ""
+              } ${["", "animation-delay-100", "animation-delay-200", "animation-delay-300", "animation-delay-400", "animation-delay-500", "animation-delay-600"][i] || ""}`}
+            >
+              <button
+                type="button"
+                onClick={() => setOpen(open === i ? null : i)}
+                className="w-full flex items-center justify-between gap-4 p-5 text-left"
+              >
+                <span className="text-sm font-semibold text-white">{faq.q}</span>
+                <span className={`w-8 h-8 rounded-lg surface-glass flex items-center justify-center shrink-0 transition-transform duration-300 ${open === i ? "rotate-45" : ""}`}>
+                  <Plus className="w-4 h-4 text-zinc-400" />
+                </span>
+              </button>
+              {open === i && (
+                <div className="px-5 pb-5">
+                  <p className="text-sm text-zinc-400 leading-relaxed">{faq.a}</p>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+ * Final CTA before footer
  * -------------------------------------------------------------------------- */
 
 function FinalCTA() {
@@ -1096,38 +1391,32 @@ function FinalCTA() {
       <div className="relative mx-auto max-w-7xl px-6 text-center">
         <div className="max-w-3xl mx-auto animate-fade-up">
           <h2 className="text-display-1 text-white mb-6">
-            Ready to turn your{" "}
-            <span className="text-gradient-animated">idea into publication?</span>
+            Not sure which path is right for you?{" "}
+            <span className="text-gradient-animated">Let's talk.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mb-8 max-w-[52ch] mx-auto">
-            Start for free. No credit card. Set up your first multi-platform post
-            in under 5 minutes.
+            Book a free 15-minute Discovery Call. We'll figure out together whether
+            you need mentoring, full automation, or an enterprise setup.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link
-              to="/login"
+            <a
+              href="mailto:hello@instaedit.org?subject=Discovery%20Call"
               className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group"
             >
-              Start for free
+              Book a free call
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-            </Link>
-            <Link
-              to="/programs"
-              className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
-            >
-              Explore programs
-            </Link>
-            <a
-              href="#workflow"
-              className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
-            >
-              <PlayCircle className="w-4 h-4" /> See the workflow
             </a>
+            <Link
+              to="/login"
+              className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-violet-400/50 hover:text-white transition-all"
+            >
+              Start for free
+            </Link>
           </div>
           <div className="mt-10 flex items-center justify-center gap-6 text-xs text-zinc-500">
-            <span className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Nessuna carta</span>
-            <span className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Sepup 5 min</span>
-            <span className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Cancella quando vuoi</span>
+            <span className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> No credit card</span>
+            <span className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> 5 min setup</span>
+            <span className="flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Cancel anytime</span>
           </div>
         </div>
       </div>
@@ -1147,6 +1436,8 @@ export function Landing() {
       <main className="relative">
         <Hero />
         <StatsStrip />
+        <ProblemSolution />
+        <FindYourPath />
         <PipelineSection />
         <WorkflowSection />
         <Features />
@@ -1154,6 +1445,7 @@ export function Landing() {
         <ShortsSection />
         <LongFormSection />
         <WhoAreWe />
+        <FAQ />
         <FinalCTA />
       </main>
       <Footer />
