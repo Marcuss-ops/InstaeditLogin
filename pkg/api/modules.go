@@ -29,18 +29,32 @@ func (m *AdminModule) Register(mux chi.Router) {
 	if m.r.adminStore == nil {
 		return
 	}
-	mux.Method(http.MethodGet, "/admin/channels", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminChannels)))
-	mux.Method(http.MethodGet, "/admin/channels.csv", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminChannelsCSV)))
-	mux.Method(http.MethodGet, "/admin/queue", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminQueue)))
-	mux.Method(http.MethodGet, "/admin/queue.csv", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminQueueCSV)))
-	mux.Method(http.MethodGet, "/admin/upload_jobs/dead_letter", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminUploadJobsDeadLetter)))
-	mux.Method(http.MethodGet, "/admin/upload_jobs/dead_letter.csv", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminUploadJobsDeadLetterCSV)))
-	mux.Method(http.MethodGet, "/admin/health", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminHealth)))
-	mux.Method(http.MethodGet, "/admin/health.csv", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminHealthCSV)))
-	mux.Method(http.MethodPost, "/admin/channels/import-csv", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminImportChannelsCSV)))
-	mux.Method(http.MethodGet, "/admin/channels/pending", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminPendingChannels)))
-	mux.Method(http.MethodGet, "/admin/youtube/fleet_readiness", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminYouTubeFleetReadiness)))
-	mux.Method(http.MethodPost, "/admin/channels/{channel_id}/connect-link", adminAuthMiddleware(http.HandlerFunc(m.r.handleAdminChannelConnectLink)))
+	mux.Method(http.MethodGet, "/admin/channels", m.admin(http.HandlerFunc(m.r.handleAdminChannels)))
+	mux.Method(http.MethodGet, "/admin/channels.csv", m.admin(http.HandlerFunc(m.r.handleAdminChannelsCSV)))
+	mux.Method(http.MethodGet, "/admin/queue", m.admin(http.HandlerFunc(m.r.handleAdminQueue)))
+	mux.Method(http.MethodGet, "/admin/queue.csv", m.admin(http.HandlerFunc(m.r.handleAdminQueueCSV)))
+	mux.Method(http.MethodGet, "/admin/upload_jobs/dead_letter", m.admin(http.HandlerFunc(m.r.handleAdminUploadJobsDeadLetter)))
+	mux.Method(http.MethodGet, "/admin/upload_jobs/dead_letter.csv", m.admin(http.HandlerFunc(m.r.handleAdminUploadJobsDeadLetterCSV)))
+	mux.Method(http.MethodGet, "/admin/health", m.admin(http.HandlerFunc(m.r.handleAdminHealth)))
+	mux.Method(http.MethodGet, "/admin/health.csv", m.admin(http.HandlerFunc(m.r.handleAdminHealthCSV)))
+	mux.Method(http.MethodPost, "/admin/channels/import-csv", m.admin(http.HandlerFunc(m.r.handleAdminImportChannelsCSV)))
+	mux.Method(http.MethodGet, "/admin/channels/pending", m.admin(http.HandlerFunc(m.r.handleAdminPendingChannels)))
+	mux.Method(http.MethodGet, "/admin/youtube/fleet_readiness", m.admin(http.HandlerFunc(m.r.handleAdminYouTubeFleetReadiness)))
+	mux.Method(http.MethodPost, "/admin/channels/{channel_id}/connect-link", m.admin(http.HandlerFunc(m.r.handleAdminChannelConnectLink)))
+}
+
+// admin composes the JWT/cookie auth middleware with the admin-only
+// authorization check. The /admin/* routes were previously wrapped only
+// with adminAuthMiddleware, which expects an Identity in context; this
+// helper ensures the auth manager extracts and validates the identity
+// first. A missing auth manager returns 401.
+func (m *AdminModule) admin(next http.HandlerFunc) http.Handler {
+	if m.r.auth == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		})
+	}
+	return m.r.auth.Middleware(adminAuthMiddleware(next))
 }
 
 // VeloxModule mounts the service-to-service /internal/v1 routes.
