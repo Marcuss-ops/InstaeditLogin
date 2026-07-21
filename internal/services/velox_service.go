@@ -95,9 +95,9 @@ func MergeVeloxDestinationMetadata(dest *models.ExternalDestination, raw json.Ra
 		}
 	}
 	// The destination row, not Velox, chooses the actual InstaEdit target.
-	if _, exists := meta["target_account_ids"]; !exists {
-		meta["target_account_ids"] = []int64{dest.PlatformAccountID}
-	}
+	// Always overwrite so a malicious or stale Velox payload cannot redirect
+	// the upload to a different account.
+	meta["target_account_ids"] = []int64{dest.PlatformAccountID}
 	merged, err := json.Marshal(meta)
 	if err != nil {
 		return raw
