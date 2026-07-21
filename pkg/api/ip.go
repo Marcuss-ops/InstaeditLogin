@@ -7,6 +7,16 @@ import (
 	"strings"
 )
 
+// peerHost returns the IP portion of a "host:port" address. If the
+// address cannot be split, it is returned as-is so callers can attempt
+// to parse it as a bare IP.
+func peerHost(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
+}
+
 // ParseTrustedProxies parses a comma-separated list of IP addresses
 // and/or CIDR ranges (e.g. "10.0.0.0/8,127.0.0.1"). It returns the
 // parsed networks so callers can decide whether an X-Forwarded-For or
@@ -46,10 +56,7 @@ func ParseTrustedProxies(s string) ([]*net.IPNet, error) {
 // function returns the peer address. This prevents clients from
 // spoofing their IP when the API is reachable directly.
 func trustedClientIP(r *http.Request, trusted []*net.IPNet) string {
-	peer := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(peer); err == nil {
-		peer = host
-	}
+	peer := peerHost(r.RemoteAddr)
 	if !isTrustedProxy(peer, trusted) {
 		return peer
 	}

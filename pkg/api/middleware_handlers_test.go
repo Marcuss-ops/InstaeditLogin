@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -168,5 +169,176 @@ func TestParseTrustedProxies_InvalidInput_ReturnsError(t *testing.T) {
 	_, err := ParseTrustedProxies("not-an-ip")
 	if err == nil {
 		t.Fatal("expected error for invalid trusted proxy")
+	}
+}
+
+// TestIsTLSRequest_DirectTLS_AlwaysTrue proves that a request arriving
+// over a real TLS connection is reported as TLS even if forwarded
+// headers or the absence of trusted proxies would suggest otherwise.
+func TestIsTLSRequest_DirectTLS_AlwaysTrue(t *testing.T) {
+	r := NewRouter(nil, nil, nil, "", nil)
+	defer r.rateLimiter.Shutdown()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.TLS = &tls.ConnectionState{}
+
+	if !r.isTLSRequest(req) {
+		t.Fatal("want true for direct TLS connection")
+	}
+}
+
+// TestIsTLSRequest_UntrustedProxy_IgnoresForwardedProto proves a
+// direct client cannot force HSTS by sending X-Forwarded-Proto.
+func TestIsTLSRequest_UntrustedProxy_IgnoresForwardedProto(t *testing.T) {
+	r := NewRouter(nil, nil, nil, "", nil)
+	defer r.rateLimiter.Shutdown()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	if r.isTLSRequest(req) {
+		t.Fatal("want false when untrusted peer sends X-Forwarded-Proto=https")
+	}
+}
+
+// TestIsTLSRequest_TrustedProxy_HonorsForwardedProto proves that an
+// upstream proxy in the trusted list can report HTTPS via the
+// X-Forwarded-Proto header.
+func TestIsTLSRequest_TrustedProxy_HonorsForwardedProto(t *testing.T) {
+	trusted, err := ParseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("parse trusted proxies: %v", err)
+	}
+	r := NewRouter(nil, nil, nil, "", nil, WithTrustedProxies(trusted))
+	defer r.rateLimiter.Shutdown()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	if !r.isTLSRequest(req) {
+		t.Fatal("want true when trusted proxy sends X-Forwarded-Proto=https")
+	}
+}
+
+// TestIsTLSRequest_TrustedProxy_HonorsForwardedSsl proves the legacy
+// X-Forwarded-Ssl header is honored from a trusted proxy.
+func TestIsTLSRequest_TrustedProxy_HonorsForwardedSsl(t *testing.T) {
+	trusted, err := ParseTrustedProxies("192.168.0.0/16")
+	if err != nil {
+		t.Fatalf("parse trusted proxies: %v", err)
+	}
+	r := NewRouter(nil, nil, nil, "", nil, WithTrustedProxies(trusted))
+	defer r.rateLimiter.Shutdown()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
+	req.Header.Set("X-Forwarded-Ssl", "on")
+
+	if !r.isTLSRequest(req) {
+		t.Fatal("want true when trusted proxy sends X-Forwarded-Ssl=on")
+	}
+}
+
+// TestIsTLSRequest_TrustedProxy_ForwardedHttp_ReturnsFalse proves the
+// header is interpreted literally: an explicit http value from a
+// trusted proxy keeps the request non-TLS.
+func TestIsTLSRequest_TrustedProxy_ForwardedHttp_ReturnsFalse(t *testing.T) {
+	trusted, err := ParseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("parse trusted proxies: %v", err)
+	}
+	r := NewRouter(nil, nil, nil, "", nil, WithTrustedProxies(trusted))
+	defer r.rateLimiter.Shutdown()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-Proto", "http")
+
+	if r.isTLSRequest(req) {
+		t.Fatal("want false when trusted proxy sends X-Forwarded-Proto=http")
+	}
+}
+
+// TestIsTLSRequest_TrustedProxy_MultipleValues proves that when the
+// header contains a comma-separated list, the first (leftmost) value is
+// used, matching common proxy behavior.
+func TestIsTLSRequest_TrustedProxy_MultipleValues(t *testing.T) {
+	trusted, err := ParseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("parse trusted proxies: %v", err)
+	}
+	r := NewRouter(nil, nil, nil, "", nil, WithTrustedProxies(trusted))
+	defer r.rateLimiter.Shutdown()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-Proto", "https, http")
+
+	if !r.isTLSRequest(req) {
+		t.Fatal("want true for leftmost https value in X-Forwarded-Proto")
+	}
+}
+
+// TestIsTLSRequest_UntrustedProxy_ForwardedSslIgnored proves a direct
+// client cannot force HSTS via X-Forwarded-Ssl either.
+func TestIsTLSRequest_UntrustedProxy_ForwardedSslIgnored(t *testing.T) {
+	r := NewRouter(nil, nil, nil, "", nil)
+	defer r.rateLimiter.Shutdown()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.Header.Set("X-Forwarded-Ssl", "on")
+
+	if r.isTLSRequest(req) {
+		t.Fatal("want false when untrusted peer sends X-Forwarded-Ssl=on")
+	}
+}
+
+// TestSecurityHeadersMiddleware_HSTS_TrustedProxyHTTPS proves the full
+// middleware chain emits Strict-Transport-Security when a trusted proxy
+// reports HTTPS via X-Forwarded-Proto.
+func TestSecurityHeadersMiddleware_HSTS_TrustedProxyHTTPS(t *testing.T) {
+	trusted, err := ParseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("parse trusted proxies: %v", err)
+	}
+	r := NewRouter(nil, nil, nil, "", nil, WithTrustedProxies(trusted))
+	defer r.rateLimiter.Shutdown()
+
+	handler := r.securityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want status 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "max-age=63072000; includeSubDomains" {
+		t.Fatalf("want HSTS header for trusted HTTPS request, got %q", got)
+	}
+}
+
+// TestSecurityHeadersMiddleware_NoHSTS_UntrustedProxyHTTPS proves the
+// middleware does NOT emit Strict-Transport-Security when an untrusted
+// peer tries to spoof HTTPS via X-Forwarded-Proto.
+func TestSecurityHeadersMiddleware_NoHSTS_UntrustedProxyHTTPS(t *testing.T) {
+	r := NewRouter(nil, nil, nil, "", nil)
+	defer r.rateLimiter.Shutdown()
+
+	handler := r.securityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want status 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Fatalf("did not expect Strict-Transport-Security header from untrusted peer, got %s", got)
 	}
 }

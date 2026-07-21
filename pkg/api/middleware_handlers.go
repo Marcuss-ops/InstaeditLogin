@@ -133,7 +133,7 @@ func (r *Router) securityHeadersMiddleware(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		if isTLSRequest(req) {
+		if r.isTLSRequest(req) {
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		}
 		next.ServeHTTP(w, req)
@@ -141,14 +141,19 @@ func (r *Router) securityHeadersMiddleware(next http.Handler) http.Handler {
 }
 
 // isTLSRequest reports whether the request reached the server over an
-// encrypted transport. Falls back to X-Forwarded-Proto when TLS is
-// terminated upstream (every managed deploy we ship uses one). This
-// is the gate for the HSTS header so a plain-HTTP sandbox doesn't
-// advertise a permanent HTTPS-only contract to browsers.
-func isTLSRequest(req *http.Request) bool {
+// encrypted transport. Falls back to X-Forwarded-Proto/X-Forwarded-Ssl
+// only when the immediate peer is a configured trusted proxy. Direct
+// clients can therefore not spoof HTTPS by sending forwarded headers.
+func (r *Router) isTLSRequest(req *http.Request) bool {
 	if req.TLS != nil {
 		return true
 	}
+
+	peer := peerHost(req.RemoteAddr)
+	if !isTrustedProxy(peer, r.trustedProxies) {
+		return false
+	}
+
 	if p := req.Header.Get("X-Forwarded-Proto"); p != "" {
 		pp := strings.ToLower(strings.TrimSpace(p))
 		if i := strings.Index(pp, ","); i > 0 {
