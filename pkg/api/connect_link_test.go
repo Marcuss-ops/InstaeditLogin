@@ -12,6 +12,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 // fakeConnectLinkNonceStore is an in-memory replay-protecting
@@ -43,19 +44,19 @@ func (f *fakeConnectLinkNonceStore) Create(nonce, expectedChannelID string, expi
 	return nil
 }
 
-func (f *fakeConnectLinkNonceStore) Consume(nonce string) (bool, error) {
+func (f *fakeConnectLinkNonceStore) Consume(nonce string) error {
 	rec, ok := f.created[nonce]
 	if !ok {
-		return false, nil
+		return repository.ErrNonceMissing
 	}
 	if time.Now().After(rec.expiresAt) {
-		return false, nil
+		return repository.ErrNonceExpired
 	}
 	if f.consumed[nonce] {
-		return false, nil
+		return repository.ErrNonceConsumed
 	}
 	f.consumed[nonce] = true
-	return true, nil
+	return nil
 }
 
 // issueTestAdminJWT mints a JWT with the admin claim set. The admin

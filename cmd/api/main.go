@@ -66,15 +66,22 @@ func main() {
 		}
 	}()
 
+	metricsShutdown := bootstrap.StartMetricsServer(app.Cfg, app.Logger)
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	slog.Info("api: graceful shutdown initiated (30s HTTP drain budget)")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	ctxHTTP, cancelHTTP := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelHTTP()
+	if err := srv.Shutdown(ctxHTTP); err != nil {
 		slog.Error("api: server forced to shutdown", "error", err)
+	}
+	ctxMetrics, cancelMetrics := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelMetrics()
+	if err := metricsShutdown(ctxMetrics); err != nil {
+		slog.Error("api: metrics server forced to shutdown", "error", err)
 	}
 	slog.Info("api: server stopped")
 }

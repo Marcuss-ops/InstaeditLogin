@@ -4,7 +4,6 @@ import (
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
@@ -30,24 +29,35 @@ func (r *Router) loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// MetricsHandler returns the /metrics HTTP handler gated by the
+// supplied basic-auth credentials. If either credential is empty the
+// handler is fail-closed and returns 503 Service Unavailable, so a
+// misconfigured process never exposes metrics publicly. Invalid
+// credentials return 401 as usual. Exported so the optional internal
+// metrics listener can reuse the same handler.
+func MetricsHandler(user, pass string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// Fail-closed: missing or incomplete credentials mean the
+		// operator has not configured metrics auth. Serving metrics
+		// publicly would leak operational data; return 503 so the
+		// scraper alerts and the endpoint cannot be accidentally probed.
+		if user == "" || pass == "" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="metrics", charset="UTF-8"`)
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		u, p, ok := req.BasicAuth()
+		if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 || subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="metrics", charset="UTF-8"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		metrics.Handler().ServeHTTP(w, req)
+	})
+}
+
 func (r *Router) handleMetrics(w http.ResponseWriter, req *http.Request) {
-	user := os.Getenv("METRICS_BASIC_AUTH_USER")
-	pass := os.Getenv("METRICS_BASIC_AUTH_PASS")
-	// Fail-closed: the endpoint is public only when NO credentials
-	// are configured. If either env var is missing, require auth so
-	// the metrics surface is never accidentally exposed.
-	if user == "" || pass == "" {
-		w.Header().Set("WWW-Authenticate", `Basic realm="metrics", charset="UTF-8"`)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	u, p, ok := req.BasicAuth()
-	if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 || subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
-		w.Header().Set("WWW-Authenticate", `Basic realm="metrics", charset="UTF-8"`)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-	metrics.Handler().ServeHTTP(w, req)
+	MetricsHandler(r.metricsUser, r.metricsPass).ServeHTTP(w, req)
 }
 
 func (r *Router) corsMiddleware(next http.Handler) http.Handler {

@@ -147,6 +147,21 @@ type Config struct {
 	// X-Real-IP headers. When empty, the API trusts only the direct
 	// peer address (RemoteAddr). Example: "10.0.0.0/8,127.0.0.1".
 	TrustedProxies string
+
+	// Metrics basic-auth credentials. In production both must be set;
+	// validate() fail-closes the boot if either is empty.
+	MetricsBasicAuthUser string
+	MetricsBasicAuthPass string
+	// MetricsHost/MetricsPort optionally start a separate internal
+	// listener for the /metrics endpoint. When MetricsPort is 0, the
+	// endpoint is served only on the main HTTP server at
+	// /api/v1/metrics. When MetricsPort > 0, an additional listener
+	// is started on MetricsHost:MetricsPort (default MetricsHost
+	// 127.0.0.1 if empty) so scrapers on a private network can reach
+	// metrics without exposing the main API.
+	MetricsHost string
+	MetricsPort int
+
 	// Deprecated: JWT_TTL_HOURS is the legacy single-knob TTL.
 	// If JWT_ACCESS_TTL_MINUTES is unset, the hours value is
 	// converted to minutes. Prefer the explicit access/refresh
@@ -366,6 +381,10 @@ func Load() (*Config, error) {
 		JWTAccessTTLMinutes:            getEnvInt("JWT_ACCESS_TTL_MINUTES", 0),
 		JWTRefreshTTLDays:              getEnvInt("JWT_REFRESH_TTL_DAYS", 0),
 		TrustedProxies:                 getEnv("TRUSTED_PROXIES", ""),
+		MetricsBasicAuthUser:           getEnv("METRICS_BASIC_AUTH_USER", ""),
+		MetricsBasicAuthPass:           getEnv("METRICS_BASIC_AUTH_PASS", ""),
+		MetricsHost:                    getEnv("METRICS_HOST", ""),
+		MetricsPort:                    getEnvInt("METRICS_PORT", 0),
 		JWTTTLHours:                    getEnvInt("JWT_TTL_HOURS", 0),
 		LogLevel:                       getEnv("LOG_LEVEL", "info"),
 		AppEnv:                         getEnv("APP_ENV", "dev"),
@@ -437,7 +456,21 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// metricsConfigured returns true only when both metrics basic-auth
+// credentials are non-empty. It is used for both runtime fail-closed
+// decisions and boot-time validation in production.
+func (c *Config) metricsConfigured() bool {
+	return c.MetricsBasicAuthUser != "" && c.MetricsBasicAuthPass != ""
+}
+
 func (c *Config) validate() error {
+	// Metrics are fail-closed in production: missing or incomplete
+	// basic-auth credentials prevent the process from booting. This
+	// keeps /api/v1/metrics from ever being served publicly in prod.
+	if c.AppEnv == "production" && !c.metricsConfigured() {
+		return fmt.Errorf("METRICS_BASIC_AUTH_USER and METRICS_BASIC_AUTH_PASS are required in production")
+	}
+
 	switch c.AppEnv {
 	case "dev", "staging", "production":
 	default:

@@ -10,48 +10,52 @@ import (
 // regression fix: /api/v1/metrics must reject requests when the auth
 // credentials are not configured, instead of serving metrics publicly.
 func TestHandleMetrics_FailClosed_RequiresAuthWhenEnvMissing(t *testing.T) {
-	// Ensure no metrics auth env vars leak from the environment.
-	t.Setenv("METRICS_BASIC_AUTH_USER", "")
-	t.Setenv("METRICS_BASIC_AUTH_PASS", "")
-
 	r := NewRouter(nil, nil, nil, "", nil)
 	defer r.rateLimiter.Shutdown()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
 	r.handleMetrics(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401 when metrics auth is unconfigured, got %d", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503 when metrics auth is unconfigured, got %d", rec.Code)
 	}
 	if got := rec.Header().Get("WWW-Authenticate"); got == "" {
-		t.Error("expected WWW-Authenticate header on 401 response")
+		t.Error("expected WWW-Authenticate header on 503 response")
 	}
 }
 
 // TestHandleMetrics_FailClosed_RequiresAuthWhenOnlyUserSet proves the
 // endpoint stays closed if only one of the two auth variables is set.
 func TestHandleMetrics_FailClosed_RequiresAuthWhenOnlyUserSet(t *testing.T) {
-	t.Setenv("METRICS_BASIC_AUTH_USER", "admin")
-	t.Setenv("METRICS_BASIC_AUTH_PASS", "")
-
-	r := NewRouter(nil, nil, nil, "", nil)
+	r := NewRouter(nil, nil, nil, "", nil, WithMetricsAuth("admin", ""))
 	defer r.rateLimiter.Shutdown()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
 	r.handleMetrics(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("want 401 when only user is set, got %d", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503 when only user is set, got %d", rec.Code)
+	}
+}
+
+// TestHandleMetrics_FailClosed_RequiresAuthWhenOnlyPassSet proves the
+// endpoint stays closed if only the password variable is set.
+func TestHandleMetrics_FailClosed_RequiresAuthWhenOnlyPassSet(t *testing.T) {
+	r := NewRouter(nil, nil, nil, "", nil, WithMetricsAuth("", "secret"))
+	defer r.rateLimiter.Shutdown()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
+	r.handleMetrics(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("want 503 when only pass is set, got %d", rec.Code)
 	}
 }
 
 // TestHandleMetrics_RespectsConfiguredBasicAuth proves metrics are
 // served when valid credentials are supplied.
 func TestHandleMetrics_RespectsConfiguredBasicAuth(t *testing.T) {
-	t.Setenv("METRICS_BASIC_AUTH_USER", "admin")
-	t.Setenv("METRICS_BASIC_AUTH_PASS", "secret")
-
-	r := NewRouter(nil, nil, nil, "", nil)
+	r := NewRouter(nil, nil, nil, "", nil, WithMetricsAuth("admin", "secret"))
 	defer r.rateLimiter.Shutdown()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
@@ -67,10 +71,7 @@ func TestHandleMetrics_RespectsConfiguredBasicAuth(t *testing.T) {
 // TestHandleMetrics_RejectsInvalidBasicAuth proves that supplying the
 // wrong password when credentials are configured returns 401.
 func TestHandleMetrics_RejectsInvalidBasicAuth(t *testing.T) {
-	t.Setenv("METRICS_BASIC_AUTH_USER", "admin")
-	t.Setenv("METRICS_BASIC_AUTH_PASS", "secret")
-
-	r := NewRouter(nil, nil, nil, "", nil)
+	r := NewRouter(nil, nil, nil, "", nil, WithMetricsAuth("admin", "secret"))
 	defer r.rateLimiter.Shutdown()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)

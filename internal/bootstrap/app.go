@@ -392,6 +392,13 @@ func Wire(ctx context.Context) (*App, error) {
 	// clientIP() and the rate limiter see the same parsed list.
 	opts = append(opts, api.WithTrustedProxies(trustedProxies))
 
+	// Metrics basic-auth credentials are wired explicitly so the
+	// /api/v1/metrics handler does not read env vars at request
+	// time. Incomplete credentials trigger fail-closed 503 in the
+	// handler; production boot already rejects them in
+	// cfg.validate().
+	opts = append(opts, api.WithMetricsAuth(cfg.MetricsBasicAuthUser, cfg.MetricsBasicAuthPass))
+
 	// Blocco #5.3 — wire the DB + worker status into /ready's
 	// contract. The DB is consumed via PingContext + SchemaHealthy;
 	// the WorkerStatus is consumed via AllStarted. The worker
@@ -878,6 +885,45 @@ func (w *connectionStateStoreWrapper) Consume(id string, expectedNonce string, j
 
 type auditLogStoreWrapper struct {
 	repo *repository.AuditLogRepository
+}
+
+// StartMetricsServer starts an optional internal HTTP server for the
+// /metrics endpoint when cfg.MetricsPort > 0. It binds to
+// cfg.MetricsHost (default 127.0.0.1) and serves the same
+// basic-auth-gated handler used by /api/v1/metrics. Returns a shutdown
+// function that callers MUST invoke during graceful shutdown. When
+// MetricsPort is 0 the returned shutdown is a no-op.
+func StartMetricsServer(cfg *config.Config, logger *slog.Logger) (shutdown func(context.Context) error) {
+	if cfg.MetricsPort == 0 {
+		return func(context.Context) error { return nil }
+	}
+
+	host := cfg.MetricsHost
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	addr := fmt.Sprintf("%s:%d", host, cfg.MetricsPort)
+
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      api.MetricsHandler(cfg.MetricsBasicAuthUser, cfg.MetricsBasicAuthPass),
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	go func() {
+		logger.Info("metrics server listening", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("metrics server failed", "error", err)
+		}
+	}()
+
+	return srv.Shutdown
 }
 
 func (w *auditLogStoreWrapper) Log(ctx context.Context, eventType, actorID string, resourceType, resourceID string, metadata map[string]interface{}) error {

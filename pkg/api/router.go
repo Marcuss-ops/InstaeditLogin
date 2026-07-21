@@ -307,6 +307,12 @@ type Router struct {
 	// only from these peers. Wired via WithTrustedProxies in
 	// internal/bootstrap/app.go.
 	trustedProxies []*net.IPNet
+
+	// metricsUser and metricsPass gate /api/v1/metrics via basic
+	// auth. Empty/incomplete values make the endpoint fail-closed
+	// (503). Wired via WithMetricsAuth.
+	metricsUser string
+	metricsPass string
 }
 
 // ConnectionStateStore is declared in pkg/api/connections.go (SPRINT 1.2);
@@ -600,9 +606,14 @@ func WithConnectLinkNonceStore(store ConnectLinkNonceStore) RouterOption {
 
 // ConnectLinkNonceStore is the persistence contract for connect-link
 // nonces. Production wiring passes *repository.ConnectLinkNonceRepository.
+//
+// Consume returns nil on success. On a known rejection it returns one
+// of repository.ErrNonceMissing, repository.ErrNonceExpired, or
+// repository.ErrNonceConsumed so the caller can log/metric the exact
+// reason. Any other error indicates a database or transaction failure.
 type ConnectLinkNonceStore interface {
 	Create(nonce, expectedChannelID string, expiresAt time.Time) error
-	Consume(nonce string) (bool, error)
+	Consume(nonce string) error
 }
 
 // WithTrustedProxies configures the list of networks (IP or CIDR)
@@ -612,6 +623,16 @@ type ConnectLinkNonceStore interface {
 func WithTrustedProxies(proxies []*net.IPNet) RouterOption {
 	return func(r *Router) {
 		r.trustedProxies = proxies
+	}
+}
+
+// WithMetricsAuth wires the basic-auth credentials used by
+// /api/v1/metrics. If either value is empty the endpoint is
+// fail-closed (503 Service Unavailable).
+func WithMetricsAuth(user, pass string) RouterOption {
+	return func(r *Router) {
+		r.metricsUser = user
+		r.metricsPass = pass
 	}
 }
 

@@ -105,6 +105,8 @@ func main() {
 		}
 	}()
 
+	metricsShutdown := bootstrap.StartMetricsServer(app.Cfg, app.Logger)
+
 	// Single-channel signal handling drives BOTH drain paths
 	// concurrently. The cancel/Wait pair matches the pre-Blocco #2.1
 	// shape: stop-signal → parallel cancel + srv.Shutdown → wg.Wait
@@ -124,6 +126,12 @@ func main() {
 		slog.Error("server: http forced to shutdown", "error", err)
 	} else {
 		slog.Info("server: http stopped cleanly")
+	}
+
+	ctxMetrics, cancelMetrics := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelMetrics()
+	if err := metricsShutdown(ctxMetrics); err != nil {
+		slog.Error("server: metrics server forced to shutdown", "error", err)
 	}
 
 	wg.Wait()
