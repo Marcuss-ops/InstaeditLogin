@@ -5,7 +5,7 @@ import { Pipeline } from "../components/landing/Pipeline";
 import { StatsStrip } from "../components/landing/StatsStrip";
 import { Workflow } from "../components/landing/Workflow";
 import { Features } from "./landing/Features";
-import { Results } from "../components/landing/Results";
+import { ResultsSection } from "./landing/ResultsSection";
 import { Agency } from "../components/landing/Agency";
 import { ProblemSolution } from "../components/landing/ProblemSolution";
 import { CTASection } from "./landing/CTASection";
@@ -26,7 +26,7 @@ export function Landing() {
       <StatsStrip />
       <Workflow />
       <Features />
-      <Results />
+      <ResultsSection />
       <Agency />
       <ProblemSolution />
       <CTASection />
