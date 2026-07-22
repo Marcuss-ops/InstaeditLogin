@@ -115,9 +115,13 @@ type listDeliveriesResponse struct {
 }
 
 // createJobRequest is the body sent TO Velox. workspace_id and
-// user_id are NOT in this body — they are signed into the JWT.
+// user_id are added by InstaEdit from the session identity, both as
+// JWT claims and as explicit body fields so Velox can log/audit the
+// request without needing to parse the JWT.
 type createJobRequest struct {
 	ProjectID    string          `json:"project_id"`
+	WorkspaceID  int64           `json:"workspace_id"`
+	UserID       int64           `json:"user_id"`
 	RenderSpec   json.RawMessage `json:"render_spec"`
 	DeliveryPlan deliveryPlanReq `json:"delivery_plan"`
 }

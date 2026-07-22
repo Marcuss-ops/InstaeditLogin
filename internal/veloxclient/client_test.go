@@ -166,9 +166,9 @@ func TestListJobsFilterQuery(t *testing.T) {
 	}
 }
 
-// TestCreateJob verifies the client POSTs the body (without
-// workspace_id/user_id in the body — they're in the JWT) and
-// converts the response.
+// TestCreateJob verifies the client POSTs the body with
+// workspace_id and user_id added from the session identity (in
+// addition to the JWT claims) and converts the response.
 func TestCreateJob(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -198,15 +198,21 @@ func TestCreateJob(t *testing.T) {
 		if body.ProjectID != "project_123" {
 			t.Errorf("project_id = %q; want project_123", body.ProjectID)
 		}
+		if body.WorkspaceID != 42 {
+			t.Errorf("workspace_id = %d; want 42", body.WorkspaceID)
+		}
+		if body.UserID != 99 {
+			t.Errorf("user_id = %d; want 99", body.UserID)
+		}
 		var rawMap map[string]json.RawMessage
 		if err := json.Unmarshal(rawBody, &rawMap); err != nil {
 			t.Fatalf("decode body as map: %v", err)
 		}
-		if _, ok := rawMap["workspace_id"]; ok {
-			t.Error("workspace_id MUST NOT appear in the request body (it's in the JWT)")
+		if _, ok := rawMap["workspace_id"]; !ok {
+			t.Error("workspace_id MUST appear in the request body (added from session)")
 		}
-		if _, ok := rawMap["user_id"]; ok {
-			t.Error("user_id MUST NOT appear in the request body (it's in the JWT)")
+		if _, ok := rawMap["user_id"]; !ok {
+			t.Error("user_id MUST appear in the request body (added from session)")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)

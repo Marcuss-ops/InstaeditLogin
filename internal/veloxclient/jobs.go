@@ -53,8 +53,10 @@ func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter
 // user_id are signed into the JWT, never in the body.
 func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req veloxapi.CreateJobRequest) (*veloxapi.Job, error) {
 	body := createJobRequest{
-		ProjectID:  req.ProjectID,
-		RenderSpec: json.RawMessage(req.RenderSpec),
+		ProjectID:   req.ProjectID,
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+		RenderSpec:  json.RawMessage(req.RenderSpec),
 		DeliveryPlan: deliveryPlanReq{
 			Destinations: make([]deliveryDestinationReq, 0, len(req.DeliveryPlan.Destinations)),
 		},
