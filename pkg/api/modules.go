@@ -116,6 +116,24 @@ func WithVeloxBFFCSRFMiddleware(mw func(http.Handler) http.Handler) RouterOption
 	return func(r *Router) { r.veloxBFFCSRFMiddleware = mw }
 }
 
+// IntegrationsModule mounts user-facing integration routes
+// (currently the Velox destination endpoints under
+// /api/v1/integrations/velox/destinations). It is separate from
+// VeloxBFFModule because these routes are part of the workspace
+// integration surface, not the Velox BFF proxy.
+type IntegrationsModule struct {
+	r *Router
+}
+
+// NewIntegrationsModule creates the integrations module.
+func NewIntegrationsModule(r *Router) RouteModule {
+	return &IntegrationsModule{r: r}
+}
+
+func (m *IntegrationsModule) Register(mux chi.Router) {
+	m.r.registerUserVeloxDestinations(mux)
+}
+
 // BillingModule mounts billing and Stripe webhook routes.  Registration
 // is a no-op when the Router has no billing service wired.
 type BillingModule struct {

@@ -243,7 +243,7 @@ func setupRouterForCreateDestination() (*Router, *fakeExternalDestinationStore, 
 		csrfMiddleware:       passthroughCSRF, // bypass CSRF for test
 		authMiddleware:       passthroughAuth, // bypass JWT for test
 	}
-	r.registerUserVeloxDestinations()
+	r.registerUserVeloxDestinations(r.mux)
 	return r, destStore, wsStore, userStore, auditStore
 }
 

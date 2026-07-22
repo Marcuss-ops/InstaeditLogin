@@ -503,24 +503,24 @@ func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, 
 }
 
 // registerUserVeloxDestinations mounts the user-facing Velox
-// integration routes on r.mux. Called from Router.Setup() (or
-// equivalent per-feature registration loop). Refuses to register
-// when the required dependencies are unwired so a partial
-// production deployment surfaces 404 (route not mounted) rather
-// than 500.
+// integration routes on the provided mux. Called from
+// IntegrationsModule.Register (and directly by tests). Refuses to
+// register when the core dependencies are unwired so a partial
+// production deployment surfaces 404 (route not mounted) rather than
+// 500.
 //
-// The handler is wrapped in the standard user JWT + CSRF chain
-// (authMiddleware → csrfMiddleware). Note that r.auth /
-// r.csrfMiddleware / r.authMiddleware field names depend on the
-// Router struct definition; this file expects the helper-mnemonic
-// naming already established by the team. If the field naming
-// differs in handlers.go, adjust here.
-func (r *Router) registerUserVeloxDestinations() {
-	if r.mux == nil {
+// The POST /destinations endpoint additionally requires the user
+// repository and audit log store; when either is missing it is
+// mounted as 501 Not Implemented while the read/delete endpoints
+// remain available.
+//
+// The handlers are wrapped in the standard user JWT + CSRF chain
+// (authMiddleware → csrfMiddleware).
+func (r *Router) registerUserVeloxDestinations(mux chi.Router) {
+	if mux == nil {
 		return
 	}
-	if r.externalDestinations == nil || r.workspaceStore == nil ||
-		r.userRepo == nil || r.auditLogStore == nil {
+	if r.externalDestinations == nil || r.workspaceStore == nil {
 		// Missing dep = unmounted route. Operator sees 404 chi,
 		// not 500 server-error. Matches the nil-guard pattern
 		// used by the rest of pkg/api/.
@@ -541,12 +541,21 @@ func (r *Router) registerUserVeloxDestinations() {
 		return handler
 	}
 
-	r.mux.Method(http.MethodPost, "/api/v1/integrations/velox/destinations",
-		wrap(r.handleCreateIntegrationVeloxDestination))
-	r.mux.Method(http.MethodGet, "/api/v1/integrations/velox/destinations",
+	// POST requires the platform-account lookup and audit log store.
+	if r.userRepo != nil && r.auditLogStore != nil {
+		mux.Method(http.MethodPost, "/api/v1/integrations/velox/destinations",
+			wrap(r.handleCreateIntegrationVeloxDestination))
+	} else {
+		mux.Method(http.MethodPost, "/api/v1/integrations/velox/destinations",
+			wrap(func(w http.ResponseWriter, req *http.Request) {
+				writeError(w, http.StatusNotImplemented, "destination creation not configured")
+			}))
+	}
+
+	mux.Method(http.MethodGet, "/api/v1/integrations/velox/destinations",
 		wrap(r.handleListIntegrationVeloxDestinations))
-	r.mux.Method(http.MethodGet, "/api/v1/integrations/velox/destinations/{id}",
+	mux.Method(http.MethodGet, "/api/v1/integrations/velox/destinations/{id}",
 		wrap(r.handleGetIntegrationVeloxDestination))
-	r.mux.Method(http.MethodDelete, "/api/v1/integrations/velox/destinations/{id}",
+	mux.Method(http.MethodDelete, "/api/v1/integrations/velox/destinations/{id}",
 		wrap(r.handleDeleteIntegrationVeloxDestination))
 }
