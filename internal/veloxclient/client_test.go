@@ -103,7 +103,7 @@ func TestListJobs(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("method = %s; want GET", r.Method)
 		}
-		if r.URL.Path != "/api/v1/jobs" {
+		if r.URL.Path != veloxAPIPrefix+"/jobs" {
 			t.Errorf("path = %s; want /api/v1/jobs", r.URL.Path)
 		}
 		claims := parseBearer(t, r.Header.Get("Authorization"))
@@ -171,7 +171,7 @@ func TestCreateJob(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s; want POST", r.Method)
 		}
-		if r.URL.Path != "/api/v1/jobs" {
+		if r.URL.Path != veloxAPIPrefix+"/jobs" {
 			t.Errorf("path = %s; want /api/v1/jobs", r.URL.Path)
 		}
 		claims := parseBearer(t, r.Header.Get("Authorization"))
@@ -232,7 +232,7 @@ func TestCreateJob(t *testing.T) {
 // TestGetJob verifies the aggregated JobDetail response is decoded.
 func TestGetJob(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/jobs/job_123" {
+		if r.URL.Path != veloxAPIPrefix+"/jobs/job_123" {
 			t.Errorf("path = %s; want /api/v1/jobs/job_123", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -284,7 +284,7 @@ func TestCancelJob(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s; want POST", r.Method)
 		}
-		if r.URL.Path != "/api/v1/jobs/job_123/cancel" {
+		if r.URL.Path != veloxAPIPrefix+"/jobs/job_123/cancel" {
 			t.Errorf("path = %s; want /api/v1/jobs/job_123/cancel", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -300,7 +300,7 @@ func TestCancelJob(t *testing.T) {
 // TestListJobDeliveries verifies the deliveries endpoint.
 func TestListJobDeliveries(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/jobs/job_123/deliveries" {
+		if r.URL.Path != veloxAPIPrefix+"/jobs/job_123/deliveries" {
 			t.Errorf("path = %s; want /api/v1/jobs/job_123/deliveries", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(listDeliveriesResponse{
@@ -324,7 +324,7 @@ func TestListJobDeliveries(t *testing.T) {
 // TestListWorkers verifies the workers list endpoint.
 func TestListWorkers(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/workers" {
+		if r.URL.Path != veloxAPIPrefix+"/workers" {
 			t.Errorf("path = %s; want /api/v1/workers", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(listWorkersResponse{
@@ -348,7 +348,7 @@ func TestListWorkers(t *testing.T) {
 // TestGetWorker verifies the single-worker endpoint.
 func TestGetWorker(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/workers/worker_1" {
+		if r.URL.Path != veloxAPIPrefix+"/workers/worker_1" {
 			t.Errorf("path = %s; want /api/v1/workers/worker_1", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(workerResponse{ID: "worker_1", WorkspaceID: 42, Status: "busy"})
@@ -368,7 +368,7 @@ func TestGetWorker(t *testing.T) {
 // TestGetAsset verifies the asset endpoint.
 func TestGetAsset(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/assets/asset_1" {
+		if r.URL.Path != veloxAPIPrefix+"/assets/asset_1" {
 			t.Errorf("path = %s; want /api/v1/assets/asset_1", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(assetResponse{

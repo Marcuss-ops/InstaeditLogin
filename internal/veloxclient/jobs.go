@@ -23,7 +23,7 @@ func (c *Client) ListJobs(ctx context.Context, workspaceID int64, filter veloxap
 	if filter.Limit > 0 {
 		q.Set("limit", strconv.Itoa(filter.Limit))
 	}
-	path := "/api/v1/jobs"
+	path := "/api/v1/instaedit/jobs"
 	if encoded := q.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
@@ -70,7 +70,7 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 		return nil, fmt.Errorf("veloxclient: marshal create job: %w", err)
 	}
 	var resp jobResponse
-	if err := c.do(ctx, "POST", "/api/v1/jobs", userID, workspaceID, bytes.NewReader(payload), &resp); err != nil {
+	if err := c.do(ctx, "POST", "/api/v1/instaedit/jobs", userID, workspaceID, bytes.NewReader(payload), &resp); err != nil {
 		return nil, err
 	}
 	return &veloxapi.Job{
@@ -88,7 +88,7 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 // publishing status as a single view.
 func (c *Client) GetJob(ctx context.Context, workspaceID int64, jobID string) (*veloxapi.JobDetail, error) {
 	var resp jobDetailResponse
-	path := fmt.Sprintf("/api/v1/jobs/%s", url.PathEscape(jobID))
+	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s", url.PathEscape(jobID))
 	if err := c.do(ctx, "GET", path, workspaceID, workspaceID, nil, &resp); err != nil {
 		return nil, err
 	}
@@ -118,14 +118,14 @@ func (c *Client) GetJob(ctx context.Context, workspaceID int64, jobID string) (*
 // CancelJob implements veloxapi.Client.CancelJob. Returns nil on
 // success (Velox responds 204 No Content).
 func (c *Client) CancelJob(ctx context.Context, workspaceID int64, jobID string) error {
-	path := fmt.Sprintf("/api/v1/jobs/%s/cancel", url.PathEscape(jobID))
+	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s/cancel", url.PathEscape(jobID))
 	return c.doNoBody(ctx, "POST", path, workspaceID, workspaceID)
 }
 
 // ListJobDeliveries implements veloxapi.Client.ListJobDeliveries.
 func (c *Client) ListJobDeliveries(ctx context.Context, workspaceID int64, jobID string) ([]veloxapi.Delivery, error) {
 	var resp listDeliveriesResponse
-	path := fmt.Sprintf("/api/v1/jobs/%s/deliveries", url.PathEscape(jobID))
+	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s/deliveries", url.PathEscape(jobID))
 	if err := c.do(ctx, "GET", path, workspaceID, workspaceID, nil, &resp); err != nil {
 		return nil, err
 	}

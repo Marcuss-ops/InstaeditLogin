@@ -19,6 +19,11 @@ import (
 // BFF request.
 var _ veloxapi.Client = (*Client)(nil)
 
+// veloxAPIPrefix is the protected route prefix on the Velox master.
+// The InstaEdit BFF group is mounted under /api/v1/instaedit and
+// requires a valid InstaEdit control JWT.
+const veloxAPIPrefix = "/api/v1/instaedit"
+
 // Client calls the Velox master with a per-request signed JWT. It
 // implements veloxapi.Client (pkg/api/velox/routes.go). Construct
 // once at bootstrap via New() and inject via api.WithVeloxBFFClient.
