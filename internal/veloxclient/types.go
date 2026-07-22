@@ -18,16 +18,18 @@
 //     They are signed into the JWT so Velox trusts the signature,
 //     not caller-supplied headers.
 //
-// Velox endpoint contract (expected by this client):
+// Velox endpoint contract (expected by this client). All routes are
+// mounted under /api/v1/instaedit and require a valid InstaEdit
+// control JWT.
 //
-//	GET    /api/v1/jobs?status=&limit=
-//	POST   /api/v1/jobs
-//	GET    /api/v1/jobs/{id}
-//	POST   /api/v1/jobs/{id}/cancel
-//	GET    /api/v1/jobs/{id}/deliveries
-//	GET    /api/v1/workers
-//	GET    /api/v1/workers/{id}
-//	GET    /api/v1/assets/{id}
+//	GET    /api/v1/instaedit/jobs?status=&limit=
+//	POST   /api/v1/instaedit/jobs
+//	GET    /api/v1/instaedit/jobs/{id}
+//	POST   /api/v1/instaedit/jobs/{id}/cancel
+//	GET    /api/v1/instaedit/jobs/{id}/deliveries
+//	GET    /api/v1/instaedit/workers
+//	GET    /api/v1/instaedit/workers/{id}
+//	GET    /api/v1/instaedit/assets/{id}
 //
 // The client maps Velox's JSON responses into the veloxapi wire types.
 // WorkspaceID is parsed from the Velox response and tagged json:"-"
