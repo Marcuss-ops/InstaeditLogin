@@ -376,6 +376,74 @@ func (r *ExternalDestinationRepository) UpdateDefaultMetadata(ctx context.Contex
 	return nil
 }
 
+// UpdateEnabledAndDefaults applies a partial update to enabled
+// and/or default_metadata in a SINGLE atomic postgres UPDATE. This
+// closes the partial-write window that existed when the handler
+// called UpdateEnabled + UpdateDefaultMetadata as two independent
+// operations: a concurrent DELETE between calls could leave the row
+// half-updated. COALESCE lets each column be opt-in:
+//
+//	SET enabled          = COALESCE($2, enabled),
+//	    default_metadata = COALESCE($3, default_metadata),
+//	    updated_at       = NOW()
+//	WHERE id = $1
+//
+// NULL semantics:
+//   - enabled == nil                          → $2 IS NULL → enabled column preserved
+//   - defaults == json.RawMessage("") (zero)  → $3 IS NULL (dbDefaults stays nil) → default_metadata preserved
+//   - defaults == json.RawMessage("null")     → $3 = 'null' literal → default_metadata becomes JSONB null
+//   - defaults == json.RawMessage("{}") or any valid JSON → $3 = bytes → default_metadata replaced with the new bytes
+//
+// Both arguments are independently optional (caller may set either
+// OR both); at least-one-of is enforced upstream in the handler (a
+// no-op PATCH is rejected with 400 to avoid re-stamping updated_at).
+//
+// JSON-validity of `defaults` is re-validated here as
+// defense-in-depth (mirrors UpdateDefaultMetadata / Create). The
+// handler validates first; this is the last-line guard so a
+// corrupted payload surfaces as a typed sentinel rather than a
+// Postgres jsonb_in type error from ExecContext.
+//
+// Returns ErrExternalDestinationNotFound wrapped with id context
+// when zero rows match (concurrent DELETE between GetByID+UPDATE is
+// the realistic caller path; handler maps to 404).
+func (r *ExternalDestinationRepository) UpdateEnabledAndDefaults(ctx context.Context, id string, enabled *bool, defaults json.RawMessage) error {
+	if id == "" {
+		return errors.New("external destination UpdateEnabledAndDefaults: empty id")
+	}
+
+	// dbDefaults is nil for the omitted-defaults case so the pq
+	// driver binds $3 as SQL NULL — which COALESCE then converts
+	// to "preserve existing default_metadata".
+	var dbDefaults []byte
+	if len(defaults) > 0 {
+		if !json.Valid(defaults) {
+			return fmt.Errorf("external destination UpdateEnabledAndDefaults: default_metadata is not valid JSON: %s", string(defaults))
+		}
+		dbDefaults = []byte(defaults)
+	}
+
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE external_destinations
+		 SET enabled          = COALESCE($2, enabled),
+		     default_metadata = COALESCE($3, default_metadata),
+		     updated_at       = NOW()
+		 WHERE id = $1`,
+		id, enabled, dbDefaults,
+	)
+	if err != nil {
+		return fmt.Errorf("external destination UpdateEnabledAndDefaults: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("external destination UpdateEnabledAndDefaults rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%s", ErrExternalDestinationNotFound, id)
+	}
+	return nil
+}
+
 // Delete hard-removes the row. Used by the admin "unlink this
 // channel" flow. CASCADE on workspace_id + platform_account_id from
 // migration 054 ensures dependent external_deliveries rows are NOT

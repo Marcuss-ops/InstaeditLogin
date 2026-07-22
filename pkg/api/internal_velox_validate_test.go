@@ -76,6 +76,13 @@ func (m *mockExternalDestinationStore) UpdateDefaultMetadata(_ context.Context, 
 	return nil
 }
 
+// UpdateEnabledAndDefaults is the combined-verb stub. The validate
+// handler does NOT exercise this verb; stub returns nil so vet
+// succeeds without forcing unrelated fixture refactors.
+func (m *mockExternalDestinationStore) UpdateEnabledAndDefaults(_ context.Context, _ string, _ *bool, _ json.RawMessage) error {
+	return nil
+}
+
 // mockWorkspaceLookup holds the test data + call counter for the
 // ONE WorkspaceStore method the validate handler reaches
 // (FindByID). The adapter wraps it so the lookup-edge failure

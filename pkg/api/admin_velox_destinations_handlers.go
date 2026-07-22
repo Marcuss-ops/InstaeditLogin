@@ -604,36 +604,39 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 		return
 	}
 
-	// Apply mutations conditionally; each maps
-	// ErrExternalDestinationNotFound → 404 to handle a concurrent
-	// DELETE between authz and update (handler did GetByID earlier,
-	// the UPDATE may now find zero rows).
-	auditDeltas := VeloxDestinationUpdateAuditDeltas{}
-	if payload.Enabled != nil {
-		if err := r.externalDestinations.UpdateEnabled(req.Context(), destID, *payload.Enabled); err != nil {
-			if errors.Is(err, repository.ErrExternalDestinationNotFound) {
-				writeError(w, http.StatusNotFound, "destination not found")
-				return
-			}
-			slog.Error("velox destination update: UpdateEnabled failed",
-				"id", destID, "user_id", userID, "err", err)
-			writeError(w, http.StatusInternalServerError, "destination update failed")
-			return
-		}
-		auditDeltas.Enabled = payload.Enabled
+	// Apply mutations in a SINGLE atomic postgres UPDATE via
+	// COALESCE — this closes the partial-write window that the
+	// previous two-call (UpdateEnabled + UpdateDefaultMetadata)
+	// sequence left open: a concurrent DELETE between the two
+	// calls could leave the row half-updated. The combined
+	// verb returns ErrExternalDestinationNotFound on zero rows
+	// (concurrent DELETE finished after our authz GetByID) which
+	// maps to 404. The audit-log shape stays exactly the same:
+	// {enabled, defaults_changed} keyed by the PATCH body, not
+	// by the post-UPDATE row state.
+	//
+	// `defaultsToUpdate` collapses the body-supplied defaults to
+	// either the raw bytes (when the body contained any non-empty
+	// payload, including the literal `"null"`) or a zero-length
+	// json.RawMessage (which the repo binds as SQL NULL so
+	// COALESCE preserves the existing default_metadata column).
+	auditDeltas := VeloxDestinationUpdateAuditDeltas{
+		Enabled:         payload.Enabled,
+		DefaultsChanged: len(defaultsTrimmed) > 0,
 	}
+	defaultsToUpdate := json.RawMessage("")
 	if len(defaultsTrimmed) > 0 {
-		if err := r.externalDestinations.UpdateDefaultMetadata(req.Context(), destID, payload.Defaults); err != nil {
-			if errors.Is(err, repository.ErrExternalDestinationNotFound) {
-				writeError(w, http.StatusNotFound, "destination not found")
-				return
-			}
-			slog.Error("velox destination update: UpdateDefaultMetadata failed",
-				"id", destID, "user_id", userID, "err", err)
-			writeError(w, http.StatusInternalServerError, "destination update failed")
+		defaultsToUpdate = payload.Defaults
+	}
+	if err := r.externalDestinations.UpdateEnabledAndDefaults(req.Context(), destID, payload.Enabled, defaultsToUpdate); err != nil {
+		if errors.Is(err, repository.ErrExternalDestinationNotFound) {
+			writeError(w, http.StatusNotFound, "destination not found")
 			return
 		}
-		auditDeltas.DefaultsChanged = true
+		slog.Error("velox destination update: failed",
+			"id", destID, "user_id", userID, "err", err)
+		writeError(w, http.StatusInternalServerError, "destination update failed")
+		return
 	}
 
 	// Refresh for the response — picks up the new updated_at. A

@@ -491,6 +491,14 @@ func (f *fakeDestinationEnv) UpdateDefaultMetadata(_ context.Context, _ string, 
 	return nil
 }
 
+// UpdateEnabledAndDefaults is the combined-verb stub. The POST
+// /deliveries handler under test does NOT exercise this verb; the
+// stub returns nil so go vet ./... succeeds without forcing
+// unrelated fixture refactors.
+func (f *fakeDestinationEnv) UpdateEnabledAndDefaults(_ context.Context, _ string, _ *bool, _ json.RawMessage) error {
+	return nil
+}
+
 // newPostVeloxTestRouter wires BOTH stores + the bearer + registers routes.
 // Distinct from newDeliveriesTestRouter (used by GET tests) because the POST
 // handler depends on externalDestinations for step 9.

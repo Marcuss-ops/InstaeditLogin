@@ -76,6 +76,13 @@ func (m *mockExternalDestinations) UpdateDefaultMetadata(_ context.Context, _ st
 	return nil
 }
 
+// UpdateEnabledAndDefaults is the combined-verb stub. The deliver
+// handler does NOT exercise this verb; stub returns nil so vet
+// succeeds without forcing unrelated fixture refactors.
+func (m *mockExternalDestinations) UpdateEnabledAndDefaults(_ context.Context, _ string, _ *bool, _ json.RawMessage) error {
+	return nil
+}
+
 // destinationsAdapter mirrors the validate-test single-embed
 // pattern: embeds the production ExternalDestinationStore
 // interface (other methods nil-receiver-safe) + carries the mock

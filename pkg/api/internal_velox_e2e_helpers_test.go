@@ -447,6 +447,14 @@ func (f *fakeE2EDestinations) UpdateDefaultMetadata(_ context.Context, _ string,
 	return nil
 }
 
+// UpdateEnabledAndDefaults is the combined-verb stub. The e2e
+// harness never exercises this verb; the stub returns nil so vet
+// succeeds without forcing fixture refactors across the e2e
+// pipeline.
+func (f *fakeE2EDestinations) UpdateEnabledAndDefaults(_ context.Context, _ string, _ *bool, _ json.RawMessage) error {
+	return nil
+}
+
 // fakeE2EDeliveries satisfies BOTH:
 //   - api.ExternalDeliveryStore (Insert + GetByID)
 //   - worker.ExternalDeliveryStore (UpdateStatus only)

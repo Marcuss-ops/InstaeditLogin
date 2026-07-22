@@ -92,6 +92,13 @@ func (f *fakeDestinationStorage) UpdateDefaultMetadata(_ context.Context, _ stri
 	return nil
 }
 
+// UpdateEnabledAndDefaults is the combined-verb stub. The
+// GET-delivery handler does NOT exercise this verb; stub returns
+// nil so vet succeeds without forcing unrelated fixture refactors.
+func (f *fakeDestinationStorage) UpdateEnabledAndDefaults(_ context.Context, _ string, _ *bool, _ json.RawMessage) error {
+	return nil
+}
+
 // compile-time assertion the fake satisfies the production
 // interfaces. If the GET handler expands the interface I'll
 // catch the drift here.

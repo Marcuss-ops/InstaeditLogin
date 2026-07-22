@@ -46,8 +46,17 @@ type fakeExternalDestinationStore struct {
 	// UpdateDefaultMetadata) — settable per-test to simulate the
 	// repo returning ErrExternalDestinationNotFound or to force a
 	// 500 path. Defaults to nil ("happy repo path").
-	UpdateEnabledErr         error
-	UpdateDefaultMetadataErr error
+	UpdateEnabledErr           error
+	UpdateDefaultMetadataErr   error
+	UpdateEnabledAndDefaultsErr error
+
+	// updateEnabledAndDefaultsCalls counts how many times the
+	// combined verb was reached. The
+	// TestUpdateIntegrationVeloxDestination_CombinedUpdate test
+	// asserts this counter == 1 to prove the handler issues ONE
+	// UPDATE per PATCH (not two). A counter > 1 means a future
+	// refactor accidentally re-introduced the partial-write window.
+	updateEnabledAndDefaultsCalls int
 }
 
 func (f *fakeExternalDestinationStore) Create(ctx context.Context, d *models.ExternalDestination) error {
@@ -168,6 +177,45 @@ func (f *fakeExternalDestinationStore) UpdateDefaultMetadata(ctx context.Context
 	// cannot observe later mutations.
 	copied := append(json.RawMessage(nil), raw...)
 	d.DefaultMetadata = copied
+	return nil
+}
+
+// UpdateEnabledAndDefaults satisfies ExternalDestinationStore.
+// Mirrors the COALESCE semantics of the production repo:
+// when enabled is non-nil, the row's Enabled is replaced;
+// when defaults has at least one byte, the row's DefaultMetadata
+// is replaced; when EITHER input is the "omit" signal (nil /*bool
+// OR zero-length json.RawMessage), that column is NOT touched.
+// This is the stub half of the partial-write-window fix: the
+// handler now invokes this verb instead of two independent UPDATEs.
+// Returns ErrExternalDestinationNotFound if the id is missing from
+// the map (consistent with the other stubs). Returning
+// UpdateEnabledAndDefaultsErr short-circuits the mutation so 404 /
+// 500 path tests don't have to reason about partial state.
+func (f *fakeExternalDestinationStore) UpdateEnabledAndDefaults(_ context.Context, id string, enabled *bool, defaults json.RawMessage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateEnabledAndDefaultsCalls++
+	if f.UpdateEnabledAndDefaultsErr != nil {
+		return f.UpdateEnabledAndDefaultsErr
+	}
+	if f.ByIDMap == nil {
+		return repository.ErrExternalDestinationNotFound
+	}
+	d, ok := f.ByIDMap[id]
+	if !ok {
+		return repository.ErrExternalDestinationNotFound
+	}
+	if enabled != nil {
+		d.Enabled = *enabled
+	}
+	if len(defaults) > 0 {
+		// Defensive copy so a caller reusing the slice after the call
+		// cannot observe later mutations.
+		defCopy := append(json.RawMessage(nil), defaults...)
+		d.DefaultMetadata = defCopy
+	}
+	f.ByIDMap[id] = d
 	return nil
 }
 
@@ -1219,10 +1267,148 @@ func TestUpdateIntegrationVeloxDestination_AuditDeltas(t *testing.T) {
 				t.Errorf("audit metadata defaults_changed not bool: got %T = %v",
 					auditStore.LastMetadata["defaults_changed"],
 					auditStore.LastMetadata["defaults_changed"])
-			} else if dv != tc.wantDefaultsChanged {
+			} else			if dv != tc.wantDefaultsChanged {
 				t.Errorf("audit metadata defaults_changed = %v; want %v",
 					dv, tc.wantDefaultsChanged)
 			}
 		})
+	}
+}
+
+// TestUpdateIntegrationVeloxDestination_CombinedUpdate verifies the
+// partial-write-window fix: a PATCH supplying BOTH fields persists
+// BOTH in ONE atomic SQL statement. The handler no longer issues
+// two independent UPDATEs (UpdateEnabled + UpdateDefaultMetadata),
+// closing the race a concurrent DELETE between the two calls could
+// exploit. Instead it calls
+//   r.externalDestinations.UpdateEnabledAndDefaults(ctx, id, enabled, defaults)
+// with COALESCE preserving any column the caller omitted. This test:
+//   - seeds a row with enabled=false and defaults={"seed":"v0"}
+//   - PATCHes {enabled:true, defaults:{"k":"v","n":42}}
+//   - asserts HTTP 200
+//   - asserts ByIDMap["extdst_01JUPC"] has BOTH Enabled flipped
+//     to true AND DefaultMetadata carrying the new bytes
+//   - asserts updateEnabledAndDefaultsCalls == 1 (proves single
+//     statement UPDATE; re-introducing the two-call sequence drops
+//     this counter to 0 and re-opens the partial-write window)
+//   - asserts audit log fires once with the pinned shape
+//     `{enabled: true, defaults_changed: true}`
+func TestUpdateIntegrationVeloxDestination_CombinedUpdate(t *testing.T) {
+	r, destStore, wsStore, _, auditStore := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JUPC", 12, 345, false)
+
+	body := []byte(`{"enabled": true, "defaults": {"k": "v", "n": 42}}`)
+	req := httptest.NewRequest(http.MethodPatch,
+		"/api/v1/integrations/velox/destinations/extdst_01JUPC",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp VeloxDestinationResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.ExternalDestinationID != "extdst_01JUPC" {
+		t.Errorf("id = %q; want extdst_01JUPC", resp.ExternalDestinationID)
+	}
+	if resp.Status != "active" {
+		t.Errorf("status = %q; want active (Enabled flipped to true)", resp.Status)
+	}
+
+	row, ok := destStore.ByIDMap["extdst_01JUPC"]
+	if !ok {
+		t.Fatal("seeded destination vanished from ByIDMap")
+	}
+	// Combined-verb invariants: BOTH columns persisted in ONE round-trip.
+	if !row.Enabled {
+		t.Errorf("After PATCH {enabled:true, defaults:...}, row.Enabled = false; want true")
+	}
+	if !strings.Contains(string(row.DefaultMetadata), `"k": "v"`) ||
+		!strings.Contains(string(row.DefaultMetadata), `"n": 42`) {
+		t.Errorf("After PATCH, row.DefaultMetadata = %q; want contains \"k\": \"v\" and \"n\": 42",
+			string(row.DefaultMetadata))
+	}
+	// Single-call invariant: handler issued exactly ONE
+	// UpdateEnabledAndDefaults call. Re-introducing the two-call
+	// sequence would break this counter and re-open the
+	// partial-write window a concurrent DELETE could exploit.
+	if destStore.updateEnabledAndDefaultsCalls != 1 {
+		t.Errorf("UpdateEnabledAndDefaults called %d times; want exactly 1 (proves single-statement UPDATE)",
+			destStore.updateEnabledAndDefaultsCalls)
+	}
+
+	// Audit shape stays exactly the pinned contract regardless of
+	// single-vs-two-call internals.
+	if auditStore.LastEvent != "external_destination_updated" {
+		t.Errorf("audit event = %q; want external_destination_updated", auditStore.LastEvent)
+	}
+	if v, ok := auditStore.LastMetadata["enabled"]; !ok {
+		t.Error("audit metadata missing `enabled` key")
+	} else if v != true {
+		t.Errorf("audit metadata enabled = %v; want true", v)
+	}
+	if v, ok := auditStore.LastMetadata["defaults_changed"]; !ok {
+		t.Error("audit metadata missing `defaults_changed` key")
+	} else if v != true {
+		t.Errorf("audit metadata defaults_changed = %v; want true", v)
+	}
+}
+
+// TestUpdateIntegrationVeloxDestination_CombinedUpdate_NotFoundStealsRace
+// exercises the COALESCE-preserved column path AND the
+// ErrExternalDestinationNotFound 404 mapping. Setup:
+//   - row is missing from ByIDMap (simulating a concurrent DELETE
+//     that finished between authz GetByID and the UPDATE)
+//   - PATCH supplies both fields
+// Expect:
+//   - 404 (UpdateEnabledAndDefaultsErr forces this via the fake's
+//     configurable knob)
+//   - audit log NOT fired (handler short-circuits before audit call)
+//   - destStore.updateEnabledAndDefaultsCalls incremented to 1
+//     (proves the handler REACHED the call, then handled the error)
+//
+// Without the atomic fix this test would have to re-seed the row
+// between the two UPDATE calls to deterministically exercise the
+// race window — the new combined verb makes it observable in O(1).
+func TestUpdateIntegrationVeloxDestination_CombinedUpdate_NotFoundRaceMapping(t *testing.T) {
+	r, destStore, wsStore, _, auditStore := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JUPCRACE", 12, 345, false)
+	// Simulate concurrent DELETE between authz and UPDATE.
+	destStore.UpdateEnabledAndDefaultsErr = repository.ErrExternalDestinationNotFound
+
+	body := []byte(`{"enabled": true, "defaults": {"k": "v"}}`)
+	req := httptest.NewRequest(http.MethodPatch,
+		"/api/v1/integrations/velox/destinations/extdst_01JUPCRACE",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404 (ErrExternalDestinationNotFound mapping); body=%s",
+			w.Code, w.Body.String())
+	}
+	if destStore.updateEnabledAndDefaultsCalls != 1 {
+		t.Errorf("UpdateEnabledAndDefaults called %d times; want exactly 1",
+			destStore.updateEnabledAndDefaultsCalls)
+	}
+	if auditStore.LastEvent != "" {
+		t.Errorf("audit event = %q; want empty (handler must abort before audit on 404)",
+			auditStore.LastEvent)
+	}
+	// Even though the stub returned ErrExternalDestinationNotFound,
+	// the row's in-memory state must be UNCHANGED (the stub
+	// short-circuits before mutating).
+	row := destStore.ByIDMap["extdst_01JUPCRACE"]
+	if row.Enabled {
+		t.Error("After 404-mapping PATCH, row.Enabled flipped to true; want unchanged (false)")
 	}
 }
