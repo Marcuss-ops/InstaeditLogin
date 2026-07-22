@@ -886,8 +886,19 @@ func TestUpdateIntegrationVeloxDestination_Happy_Defaults(t *testing.T) {
 	if auditStore.LastEvent != "external_destination_updated" {
 		t.Errorf("audit event = %q; want external_destination_updated", auditStore.LastEvent)
 	}
-	if _, ok := auditStore.LastMetadata["defaults"]; !ok {
-		t.Error("audit metadata missing `defaults` delta")
+	// Schema pin: keys are exactly {enabled, defaults_changed} per the
+	// VeloxDestinationUpdateAuditDeltas struct. enabled surfaces as
+	// nil here (the body omitted it); defaults_changed = true
+	// (the body supplied defaults).
+	if v, ok := auditStore.LastMetadata["defaults_changed"]; !ok {
+		t.Error("audit metadata missing `defaults_changed` delta")
+	} else if v != true {
+		t.Errorf("audit metadata defaults_changed = %v; want true", v)
+	}
+	if v, ok := auditStore.LastMetadata["enabled"]; !ok {
+		t.Error("audit metadata missing `enabled` key (should be JSON null when PATCH body omitted it)")
+	} else if v != nil {
+		t.Errorf("audit metadata enabled = %v; want nil", v)
 	}
 }
 
@@ -959,11 +970,15 @@ func TestUpdateIntegrationVeloxDestination_Happy_Both(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d; want 200; body=%s", w.Code, w.Body.String())
 	}
-	if _, ok := auditStore.LastMetadata["enabled"]; !ok {
+	if v, ok := auditStore.LastMetadata["enabled"]; !ok {
 		t.Error("audit metadata missing `enabled` delta")
+	} else if v != false {
+		t.Errorf("audit metadata enabled = %v; want false", v)
 	}
-	if _, ok := auditStore.LastMetadata["defaults"]; !ok {
-		t.Error("audit metadata missing `defaults` delta")
+	if v, ok := auditStore.LastMetadata["defaults_changed"]; !ok {
+		t.Error("audit metadata missing `defaults_changed` delta")
+	} else if v != true {
+		t.Errorf("audit metadata defaults_changed = %v; want true", v)
 	}
 }
 
@@ -1097,8 +1112,117 @@ func TestUpdateIntegrationVeloxDestination_Happy_DefaultsNull(t *testing.T) {
 		if got != seededBytes {
 			t.Errorf("defaults changed despite absent field; got %q, want %q", got, seededBytes)
 		}
-		if destStore.ByIDMap["extdst_01JABS"].Enabled {
-			t.Error("enabled should be false after PATCH with enabled=false")
-		}
+	if destStore.ByIDMap["extdst_01JABS"].Enabled {
+		t.Error("enabled should be false after PATCH with enabled=false")
+	}
 	})
+}
+
+// TestUpdateIntegrationVeloxDestination_AuditDeltas pins the
+// structured audit-log metadata schema for the PATCH endpoint.
+// It iterates a table covering the four body shapes (enabled-only
+// true, enabled-only false, defaults-only, both) and after each
+// PATCH it asserts the metadata emitted by the AuditLogStore
+// matches VeloxDestinationUpdateAuditDeltas:
+//
+//   - Keys are EXACTLY {enabled, defaults_changed}. No workspace_id,
+//     no defaults sentinel string, no other keys leak through.
+//   - `enabled` JSON field is bool(true|false) when the body
+//     supplied it, and nil (JSON null) when the body omitted it.
+//   - `defaults_changed` is always a bool, true iff the body
+//     supplied a `defaults` field.
+//
+// This test structurally defends the audit shape: any future
+// re-introduction of a `defaults` string sentinel, a type drift
+// to int, or an extra key will fail this test loudly. TestWriteRead
+// boundary: the fake store is the unit-of-work consumer; no
+// integration / external-store requirements.
+func TestUpdateIntegrationVeloxDestination_AuditDeltas(t *testing.T) {
+	cases := []struct {
+		name                string
+		body                string
+		wantEnabled         interface{} // bool OR nil
+		wantDefaultsChanged bool
+	}{
+		{
+			name:                "enabled only (true)",
+			body:                `{"enabled": true}`,
+			wantEnabled:         true,
+			wantDefaultsChanged: false,
+		},
+		{
+			name:                "enabled only (false)",
+			body:                `{"enabled": false}`,
+			wantEnabled:         false,
+			wantDefaultsChanged: false,
+		},
+		{
+			name:                "defaults only",
+			body:                `{"defaults": {"privacy_status": "private"}}`,
+			wantEnabled:         nil,
+			wantDefaultsChanged: true,
+		},
+		{
+			name:                "both fields",
+			body:                `{"enabled": true, "defaults": {"language": "it"}}`,
+			wantEnabled:         true,
+			wantDefaultsChanged: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "extdst_audit_" + strings.ReplaceAll(tc.name, " ", "_")
+			r, destStore, wsStore, _, auditStore := setupRouterForDestinations()
+			wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+			seedDestination(destStore, id, 12, 345, true)
+
+			req := httptest.NewRequest(http.MethodPatch,
+				"/api/v1/integrations/velox/destinations/"+id,
+				bytes.NewReader([]byte(tc.body)))
+			req.Header.Set("Content-Type", "application/json")
+			req = reqWithUser(req, 123)
+			w := httptest.NewRecorder()
+			r.mux.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d; want 200; body=%s", w.Code, w.Body.String())
+			}
+			if auditStore.LastEvent != "external_destination_updated" {
+				t.Fatalf("audit event = %q; want external_destination_updated", auditStore.LastEvent)
+			}
+
+			// Schema: keys are EXACTLY {enabled, defaults_changed}.
+			gotKeys := make(map[string]struct{})
+			for k := range auditStore.LastMetadata {
+				gotKeys[k] = struct{}{}
+			}
+			if _, ok := gotKeys["enabled"]; !ok {
+				t.Errorf("audit metadata missing `enabled` key; got keys = %v", gotKeys)
+			}
+			if _, ok := gotKeys["defaults_changed"]; !ok {
+				t.Errorf("audit metadata missing `defaults_changed` key; got keys = %v", gotKeys)
+			}
+			if len(gotKeys) != 2 {
+				t.Errorf("audit metadata has %d keys; want exactly 2; got = %v",
+					len(gotKeys), gotKeys)
+			}
+
+			// Values: `enabled` is bool(true|false) when supplied, nil when JSON null.
+			got := auditStore.LastMetadata["enabled"]
+			if got != tc.wantEnabled {
+				t.Errorf("audit metadata enabled = %v (%T); want %v (%T)",
+					got, got, tc.wantEnabled, tc.wantEnabled)
+			}
+			// `defaults_changed` is always bool.
+			dv, ok := auditStore.LastMetadata["defaults_changed"].(bool)
+			if !ok {
+				t.Errorf("audit metadata defaults_changed not bool: got %T = %v",
+					auditStore.LastMetadata["defaults_changed"],
+					auditStore.LastMetadata["defaults_changed"])
+			} else if dv != tc.wantDefaultsChanged {
+				t.Errorf("audit metadata defaults_changed = %v; want %v",
+					dv, tc.wantDefaultsChanged)
+			}
+		})
+	}
 }

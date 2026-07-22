@@ -399,4 +399,22 @@ const veloxSourceSystemTag = "velox"
 // "dropbox" / "dropbox_post" etc. — keep the constant co-located with
 // the production call sites that use it so future producers copy the
 // pattern (one declaration, two intent-distinct uses).
+
+// VeloxDestinationUpdateAuditDeltas pins the structured metadata
+// schema emitted by the audit log on PATCH
+// /api/v1/integrations/velox/destinations/{id}.
+//
+// The JSON tags are stable contract: dashboards / ELK / Snowflake
+// ingest can index on the emitted keys exactly. omitempty is
+// deliberately OFF on Enabled so the key is always present -- it
+// surfaces as JSON null when the PATCH body omitted the field, as
+// JSON true/false when the body supplied it. The contract is
+// "keys are exactly {enabled, defaults_changed}", not "keys when
+// fired"; this pins the dashboard schema and removes the
+// mixed-bool+sentinel-string risk flagged in the previous code
+// review.
+type VeloxDestinationUpdateAuditDeltas struct {
+	Enabled         *bool `json:"enabled"`
+	DefaultsChanged bool  `json:"defaults_changed"`
+}
 const veloxProducerSourcePostDeliveries = "post_deliveries"

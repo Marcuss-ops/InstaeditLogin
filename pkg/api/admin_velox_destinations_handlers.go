@@ -608,7 +608,7 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 	// ErrExternalDestinationNotFound → 404 to handle a concurrent
 	// DELETE between authz and update (handler did GetByID earlier,
 	// the UPDATE may now find zero rows).
-	deltas := map[string]interface{}{}
+	auditDeltas := VeloxDestinationUpdateAuditDeltas{}
 	if payload.Enabled != nil {
 		if err := r.externalDestinations.UpdateEnabled(req.Context(), destID, *payload.Enabled); err != nil {
 			if errors.Is(err, repository.ErrExternalDestinationNotFound) {
@@ -620,7 +620,7 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 			writeError(w, http.StatusInternalServerError, "destination update failed")
 			return
 		}
-		deltas["enabled"] = *payload.Enabled
+		auditDeltas.Enabled = payload.Enabled
 	}
 	if len(defaultsTrimmed) > 0 {
 		if err := r.externalDestinations.UpdateDefaultMetadata(req.Context(), destID, payload.Defaults); err != nil {
@@ -633,7 +633,7 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 			writeError(w, http.StatusInternalServerError, "destination update failed")
 			return
 		}
-		deltas["defaults"] = "updated"
+		auditDeltas.DefaultsChanged = true
 	}
 
 	// Refresh for the response — picks up the new updated_at. A
@@ -657,7 +657,7 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 			strconv.FormatInt(userID, 10),
 			"external_destination",
 			destID,
-			deltas,
+			auditMetadataFromDeltas(auditDeltas),
 		); err != nil {
 			slog.Warn("velox destination update: audit log failed",
 				"external_destination_id", destID, "err", err)
@@ -668,10 +668,23 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 		"external_destination_id", destID,
 		"user_id", userID,
 		"workspace_id", dest.WorkspaceID,
-		"deltas", deltas,
+		"audit_deltas", auditDeltas,
 	)
 
 	writeJSON(w, http.StatusOK, toVeloxDestinationResponse(dest))
+}
+
+// auditMetadataFromDeltas converts a typed VeloxDestinationUpdateAuditDeltas
+// into the map[string]interface{} shape that AuditLogStore.Log expects,
+// pinning the emitted JSON keys exactly via Marshal/Unmarshal. The
+// round-trip is deterministic for the simple-primitive struct we
+// expose; the swallowed errors are safe because none of the fields
+// can produce unserialisable data or a non-encodable value.
+func auditMetadataFromDeltas(d VeloxDestinationUpdateAuditDeltas) map[string]interface{} {
+	b, _ := json.Marshal(d)
+	var m map[string]interface{}
+	_ = json.Unmarshal(b, &m)
+	return m
 }
 
 // registerUserVeloxDestinations mounts the user-facing Velox
