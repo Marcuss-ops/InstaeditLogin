@@ -113,6 +113,9 @@ func TestListJobs(t *testing.T) {
 		if aud, _ := claims["aud"].(string); aud != "velox" {
 			t.Errorf("aud = %v; want velox (string, not array)", claims["aud"])
 		}
+		if sub, _ := claims["sub"].(string); sub != "99" {
+			t.Errorf("sub = %q; want 99", sub)
+		}
 		if wsID, _ := claims["workspace_id"].(float64); int64(wsID) != 42 {
 			t.Errorf("workspace_id = %v; want 42", claims["workspace_id"])
 		}
@@ -131,7 +134,7 @@ func TestListJobs(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	jobs, err := c.ListJobs(context.Background(), 42, veloxapi.ListJobsFilter{Limit: 50})
+	jobs, err := c.ListJobs(context.Background(), 42, 99, veloxapi.ListJobsFilter{Limit: 50})
 	if err != nil {
 		t.Fatalf("ListJobs: %v", err)
 	}
@@ -158,7 +161,7 @@ func TestListJobsFilterQuery(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	if _, err := c.ListJobs(context.Background(), 42, veloxapi.ListJobsFilter{Status: "RUNNING", Limit: 10}); err != nil {
+	if _, err := c.ListJobs(context.Background(), 42, 99, veloxapi.ListJobsFilter{Status: "RUNNING", Limit: 10}); err != nil {
 		t.Fatalf("ListJobs: %v", err)
 	}
 }
@@ -246,7 +249,7 @@ func TestGetJob(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	detail, err := c.GetJob(context.Background(), 42, "job_123")
+	detail, err := c.GetJob(context.Background(), 42, 99, "job_123")
 	if err != nil {
 		t.Fatalf("GetJob: %v", err)
 	}
@@ -259,7 +262,7 @@ func TestGetJob(t *testing.T) {
 }
 
 // TestGetJobNotFound confirms a 404 from Velox maps to
-// veloxapi.ErrJobNotFound.
+// veloxapi.ErrNotFound.
 func TestGetJobNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -267,12 +270,12 @@ func TestGetJobNotFound(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	_, err := c.GetJob(context.Background(), 42, "missing")
+	_, err := c.GetJob(context.Background(), 42, 99, "missing")
 	if err == nil {
 		t.Fatal("expected error for 404")
 	}
 	// Use errors.Is via the sentinel exported from veloxapi.
-	if !isErrSentinel(err, veloxapi.ErrJobNotFound) {
+	if !isErrSentinel(err, veloxapi.ErrNotFound) {
 		t.Errorf("err = %v; want ErrJobNotFound", err)
 	}
 }
@@ -292,7 +295,7 @@ func TestCancelJob(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	if err := c.CancelJob(context.Background(), 42, "job_123"); err != nil {
+	if err := c.CancelJob(context.Background(), 42, 99, "job_123"); err != nil {
 		t.Fatalf("CancelJob: %v", err)
 	}
 }
@@ -312,7 +315,7 @@ func TestListJobDeliveries(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	deliveries, err := c.ListJobDeliveries(context.Background(), 42, "job_123")
+	deliveries, err := c.ListJobDeliveries(context.Background(), 42, 99, "job_123")
 	if err != nil {
 		t.Fatalf("ListJobDeliveries: %v", err)
 	}
@@ -336,7 +339,7 @@ func TestListWorkers(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	workers, err := c.ListWorkers(context.Background(), 42)
+	workers, err := c.ListWorkers(context.Background(), 42, 99)
 	if err != nil {
 		t.Fatalf("ListWorkers: %v", err)
 	}
@@ -356,7 +359,7 @@ func TestGetWorker(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	w, err := c.GetWorker(context.Background(), 42, "worker_1")
+	w, err := c.GetWorker(context.Background(), 42, 99, "worker_1")
 	if err != nil {
 		t.Fatalf("GetWorker: %v", err)
 	}
@@ -379,7 +382,7 @@ func TestGetAsset(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	a, err := c.GetAsset(context.Background(), 42, "asset_1")
+	a, err := c.GetAsset(context.Background(), 42, 99, "asset_1")
 	if err != nil {
 		t.Fatalf("GetAsset: %v", err)
 	}
@@ -398,12 +401,12 @@ func TestServer5xx(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	_, err := c.ListJobs(context.Background(), 42, veloxapi.ListJobsFilter{})
+	_, err := c.ListJobs(context.Background(), 42, 99, veloxapi.ListJobsFilter{})
 	if err == nil {
 		t.Fatal("expected error for 500")
 	}
-	if isErrSentinel(err, veloxapi.ErrJobNotFound) {
-		t.Error("5xx should NOT map to ErrJobNotFound")
+	if isErrSentinel(err, veloxapi.ErrNotFound) {
+		t.Error("5xx should NOT map to ErrNotFound")
 	}
 }
 
@@ -425,7 +428,7 @@ func TestJWTExpiry(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	if _, err := c.ListJobs(context.Background(), 42, veloxapi.ListJobsFilter{}); err != nil {
+	if _, err := c.ListJobs(context.Background(), 42, 99, veloxapi.ListJobsFilter{}); err != nil {
 		t.Fatalf("ListJobs: %v", err)
 	}
 }

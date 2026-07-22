@@ -13,11 +13,11 @@ import (
 // workspace scope is signed into the outbound JWT so Velox only
 // returns workers the caller is authorised to see.
 func (b *bff) listWorkers(w http.ResponseWriter, req *http.Request) {
-	wsID, ok := b.requireWorkspace(w, req)
+	wsID, userID, ok := b.requireIdentity(w, req)
 	if !ok {
 		return
 	}
-	workers, err := b.deps.Client.ListWorkers(req.Context(), wsID)
+	workers, err := b.deps.Client.ListWorkers(req.Context(), wsID, userID)
 	if err != nil {
 		slog.Error("velox bff: list workers failed", "workspace_id", wsID, "err", err)
 		writeError(w, http.StatusInternalServerError, "upstream call failed")
@@ -43,7 +43,7 @@ func (b *bff) listWorkers(w http.ResponseWriter, req *http.Request) {
 // Verifies the returned worker belongs to the session's workspace
 // before returning. Mismatch → 404 (no existence leak).
 func (b *bff) getWorker(w http.ResponseWriter, req *http.Request) {
-	wsID, ok := b.requireWorkspace(w, req)
+	wsID, userID, ok := b.requireIdentity(w, req)
 	if !ok {
 		return
 	}
@@ -52,10 +52,10 @@ func (b *bff) getWorker(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "worker id required")
 		return
 	}
-	wkr, err := b.deps.Client.GetWorker(req.Context(), wsID, workerID)
+	wkr, err := b.deps.Client.GetWorker(req.Context(), wsID, userID, workerID)
 	if err != nil {
 		slog.Error("velox bff: get worker failed", "worker_id", workerID, "err", err)
-		mapClientError(w, err, ErrWorkerNotFound)
+		mapClientError(w, err)
 		return
 	}
 	if !verifyOwnership(w, wkr.WorkspaceID, wsID) {

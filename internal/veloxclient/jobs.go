@@ -15,7 +15,7 @@ import (
 // is signed into the JWT; Velox scopes the query. The BFF handler
 // additionally filters the returned rows by WorkspaceID as
 // defense-in-depth.
-func (c *Client) ListJobs(ctx context.Context, workspaceID int64, filter veloxapi.ListJobsFilter) ([]veloxapi.Job, error) {
+func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter veloxapi.ListJobsFilter) ([]veloxapi.Job, error) {
 	q := url.Values{}
 	if filter.Status != "" {
 		q.Set("status", filter.Status)
@@ -31,7 +31,7 @@ func (c *Client) ListJobs(ctx context.Context, workspaceID int64, filter veloxap
 	// (Velox scopes by workspace_id); we pass workspaceID as both
 	// sub and workspace_id so the verifier has a non-zero subject.
 	var resp listJobsResponse
-	if err := c.do(ctx, "GET", path, workspaceID, workspaceID, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, nil, &resp); err != nil {
 		return nil, err
 	}
 	jobs := make([]veloxapi.Job, 0, len(resp.Jobs))
@@ -86,10 +86,10 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 // GetJob implements veloxapi.Client.GetJob. Returns the aggregated
 // JobDetail (job + deliveries) so the BFF renders rendering +
 // publishing status as a single view.
-func (c *Client) GetJob(ctx context.Context, workspaceID int64, jobID string) (*veloxapi.JobDetail, error) {
+func (c *Client) GetJob(ctx context.Context, workspaceID, userID int64, jobID string) (*veloxapi.JobDetail, error) {
 	var resp jobDetailResponse
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s", url.PathEscape(jobID))
-	if err := c.do(ctx, "GET", path, workspaceID, workspaceID, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, nil, &resp); err != nil {
 		return nil, err
 	}
 	detail := &veloxapi.JobDetail{
@@ -117,16 +117,16 @@ func (c *Client) GetJob(ctx context.Context, workspaceID int64, jobID string) (*
 
 // CancelJob implements veloxapi.Client.CancelJob. Returns nil on
 // success (Velox responds 204 No Content).
-func (c *Client) CancelJob(ctx context.Context, workspaceID int64, jobID string) error {
+func (c *Client) CancelJob(ctx context.Context, workspaceID, userID int64, jobID string) error {
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s/cancel", url.PathEscape(jobID))
-	return c.doNoBody(ctx, "POST", path, workspaceID, workspaceID)
+	return c.doNoBody(ctx, "POST", path, userID, workspaceID)
 }
 
 // ListJobDeliveries implements veloxapi.Client.ListJobDeliveries.
-func (c *Client) ListJobDeliveries(ctx context.Context, workspaceID int64, jobID string) ([]veloxapi.Delivery, error) {
+func (c *Client) ListJobDeliveries(ctx context.Context, workspaceID, userID int64, jobID string) ([]veloxapi.Delivery, error) {
 	var resp listDeliveriesResponse
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s/deliveries", url.PathEscape(jobID))
-	if err := c.do(ctx, "GET", path, workspaceID, workspaceID, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, nil, &resp); err != nil {
 		return nil, err
 	}
 	deliveries := make([]veloxapi.Delivery, 0, len(resp.Deliveries))

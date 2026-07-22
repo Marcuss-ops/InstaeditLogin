@@ -93,7 +93,7 @@ func (c *Client) do(ctx context.Context, method, path string, userID, workspaceI
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return veloxapi.ErrJobNotFound
+		return veloxapi.ErrNotFound
 	}
 	if resp.StatusCode == http.StatusForbidden {
 		return veloxapi.ErrWorkspaceMismatch

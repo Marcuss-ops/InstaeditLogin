@@ -17,7 +17,7 @@ import (
 // Verifies the asset belongs to the session's workspace before
 // returning. Mismatch → 404 (no existence leak).
 func (b *bff) getAsset(w http.ResponseWriter, req *http.Request) {
-	wsID, ok := b.requireWorkspace(w, req)
+	wsID, userID, ok := b.requireIdentity(w, req)
 	if !ok {
 		return
 	}
@@ -26,10 +26,10 @@ func (b *bff) getAsset(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "asset id required")
 		return
 	}
-	asset, err := b.deps.Client.GetAsset(req.Context(), wsID, assetID)
+	asset, err := b.deps.Client.GetAsset(req.Context(), wsID, userID, assetID)
 	if err != nil {
 		slog.Error("velox bff: get asset failed", "asset_id", assetID, "err", err)
-		mapClientError(w, err, ErrAssetNotFound)
+		mapClientError(w, err)
 		return
 	}
 	if !verifyOwnership(w, asset.WorkspaceID, wsID) {

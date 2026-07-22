@@ -19,7 +19,7 @@ import (
 // The workspace scope comes from the session identity; the Client
 // signs it into the outbound JWT so Velox scopes the query.
 func (b *bff) listJobs(w http.ResponseWriter, req *http.Request) {
-	wsID, ok := b.requireWorkspace(w, req)
+	wsID, userID, ok := b.requireIdentity(w, req)
 	if !ok {
 		return
 	}
@@ -38,7 +38,7 @@ func (b *bff) listJobs(w http.ResponseWriter, req *http.Request) {
 		}
 		filter.Limit = n
 	}
-	jobs, err := b.deps.Client.ListJobs(req.Context(), wsID, filter)
+	jobs, err := b.deps.Client.ListJobs(req.Context(), wsID, userID, filter)
 	if err != nil {
 		slog.Error("velox bff: list jobs failed", "workspace_id", wsID, "err", err)
 		writeError(w, http.StatusInternalServerError, "upstream call failed")
@@ -120,7 +120,7 @@ func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
 // single unified view. Verifies the job belongs to the session's
 // workspace before returning.
 func (b *bff) getJob(w http.ResponseWriter, req *http.Request) {
-	wsID, ok := b.requireWorkspace(w, req)
+	wsID, userID, ok := b.requireIdentity(w, req)
 	if !ok {
 		return
 	}
@@ -129,10 +129,10 @@ func (b *bff) getJob(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "job id required")
 		return
 	}
-	detail, err := b.deps.Client.GetJob(req.Context(), wsID, jobID)
+	detail, err := b.deps.Client.GetJob(req.Context(), wsID, userID, jobID)
 	if err != nil {
 		slog.Error("velox bff: get job failed", "job_id", jobID, "err", err)
-		mapClientError(w, err, ErrJobNotFound)
+		mapClientError(w, err)
 		return
 	}
 	if !verifyOwnership(w, detail.Job.WorkspaceID, wsID) {
@@ -147,7 +147,7 @@ func (b *bff) getJob(w http.ResponseWriter, req *http.Request) {
 // into the outbound JWT; Velox rejects a cancel for a job outside
 // the caller's workspace.
 func (b *bff) cancelJob(w http.ResponseWriter, req *http.Request) {
-	wsID, ok := b.requireWorkspace(w, req)
+	wsID, userID, ok := b.requireIdentity(w, req)
 	if !ok {
 		return
 	}
@@ -156,9 +156,9 @@ func (b *bff) cancelJob(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "job id required")
 		return
 	}
-	if err := b.deps.Client.CancelJob(req.Context(), wsID, jobID); err != nil {
+	if err := b.deps.Client.CancelJob(req.Context(), wsID, userID, jobID); err != nil {
 		slog.Error("velox bff: cancel job failed", "job_id", jobID, "err", err)
-		mapClientError(w, err, ErrJobNotFound)
+		mapClientError(w, err)
 		return
 	}
 	slog.Info("velox bff: job cancelled", "job_id", jobID, "workspace_id", wsID)
@@ -171,7 +171,7 @@ func (b *bff) cancelJob(w http.ResponseWriter, req *http.Request) {
 // show per-destination publishing status. Verifies the job belongs
 // to the session's workspace via the Client's signed JWT.
 func (b *bff) listJobDeliveries(w http.ResponseWriter, req *http.Request) {
-	wsID, ok := b.requireWorkspace(w, req)
+	wsID, userID, ok := b.requireIdentity(w, req)
 	if !ok {
 		return
 	}
@@ -180,10 +180,10 @@ func (b *bff) listJobDeliveries(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "job id required")
 		return
 	}
-	deliveries, err := b.deps.Client.ListJobDeliveries(req.Context(), wsID, jobID)
+	deliveries, err := b.deps.Client.ListJobDeliveries(req.Context(), wsID, userID, jobID)
 	if err != nil {
 		slog.Error("velox bff: list job deliveries failed", "job_id", jobID, "err", err)
-		mapClientError(w, err, ErrJobNotFound)
+		mapClientError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{

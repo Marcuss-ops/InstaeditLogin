@@ -9,10 +9,10 @@ import (
 )
 
 // GetAsset implements veloxapi.Client.GetAsset.
-func (c *Client) GetAsset(ctx context.Context, workspaceID int64, assetID string) (*veloxapi.Asset, error) {
+func (c *Client) GetAsset(ctx context.Context, workspaceID, userID int64, assetID string) (*veloxapi.Asset, error) {
 	var resp assetResponse
 	path := fmt.Sprintf("/api/v1/instaedit/assets/%s", url.PathEscape(assetID))
-	if err := c.do(ctx, "GET", path, workspaceID, workspaceID, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, nil, &resp); err != nil {
 		return nil, err
 	}
 	return &veloxapi.Asset{

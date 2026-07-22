@@ -18,39 +18,39 @@ import (
 
 type mockClient struct {
 	// Configurable return values per method.
-	listJobsFn func(ctx context.Context, wsID int64, f ListJobsFilter) ([]Job, error)
+	listJobsFn func(ctx context.Context, wsID, uid int64, f ListJobsFilter) ([]Job, error)
 	createJobFn func(ctx context.Context, wsID, uid int64, r CreateJobRequest) (*Job, error)
-	getJobFn func(ctx context.Context, wsID int64, id string) (*JobDetail, error)
-	cancelJobFn func(ctx context.Context, wsID int64, id string) error
-	listDeliveriesFn func(ctx context.Context, wsID int64, id string) ([]Delivery, error)
-	listWorkersFn func(ctx context.Context, wsID int64) ([]Worker, error)
-	getWorkerFn func(ctx context.Context, wsID int64, id string) (*Worker, error)
-	getAssetFn func(ctx context.Context, wsID int64, id string) (*Asset, error)
+	getJobFn func(ctx context.Context, wsID, uid int64, id string) (*JobDetail, error)
+	cancelJobFn func(ctx context.Context, wsID, uid int64, id string) error
+	listDeliveriesFn func(ctx context.Context, wsID, uid int64, id string) ([]Delivery, error)
+	listWorkersFn func(ctx context.Context, wsID, uid int64) ([]Worker, error)
+	getWorkerFn func(ctx context.Context, wsID, uid int64, id string) (*Worker, error)
+	getAssetFn func(ctx context.Context, wsID, uid int64, id string) (*Asset, error)
 }
 
-func (m *mockClient) ListJobs(ctx context.Context, wsID int64, f ListJobsFilter) ([]Job, error) {
-	return m.listJobsFn(ctx, wsID, f)
+func (m *mockClient) ListJobs(ctx context.Context, wsID, uid int64, f ListJobsFilter) ([]Job, error) {
+	return m.listJobsFn(ctx, wsID, uid, f)
 }
 func (m *mockClient) CreateJob(ctx context.Context, wsID, uid int64, r CreateJobRequest) (*Job, error) {
 	return m.createJobFn(ctx, wsID, uid, r)
 }
-func (m *mockClient) GetJob(ctx context.Context, wsID int64, id string) (*JobDetail, error) {
-	return m.getJobFn(ctx, wsID, id)
+func (m *mockClient) GetJob(ctx context.Context, wsID, uid int64, id string) (*JobDetail, error) {
+	return m.getJobFn(ctx, wsID, uid, id)
 }
-func (m *mockClient) CancelJob(ctx context.Context, wsID int64, id string) error {
-	return m.cancelJobFn(ctx, wsID, id)
+func (m *mockClient) CancelJob(ctx context.Context, wsID, uid int64, id string) error {
+	return m.cancelJobFn(ctx, wsID, uid, id)
 }
-func (m *mockClient) ListJobDeliveries(ctx context.Context, wsID int64, id string) ([]Delivery, error) {
-	return m.listDeliveriesFn(ctx, wsID, id)
+func (m *mockClient) ListJobDeliveries(ctx context.Context, wsID, uid int64, id string) ([]Delivery, error) {
+	return m.listDeliveriesFn(ctx, wsID, uid, id)
 }
-func (m *mockClient) ListWorkers(ctx context.Context, wsID int64) ([]Worker, error) {
-	return m.listWorkersFn(ctx, wsID)
+func (m *mockClient) ListWorkers(ctx context.Context, wsID, uid int64) ([]Worker, error) {
+	return m.listWorkersFn(ctx, wsID, uid)
 }
-func (m *mockClient) GetWorker(ctx context.Context, wsID int64, id string) (*Worker, error) {
-	return m.getWorkerFn(ctx, wsID, id)
+func (m *mockClient) GetWorker(ctx context.Context, wsID, uid int64, id string) (*Worker, error) {
+	return m.getWorkerFn(ctx, wsID, uid, id)
 }
-func (m *mockClient) GetAsset(ctx context.Context, wsID int64, id string) (*Asset, error) {
-	return m.getAssetFn(ctx, wsID, id)
+func (m *mockClient) GetAsset(ctx context.Context, wsID, uid int64, id string) (*Asset, error) {
+	return m.getAssetFn(ctx, wsID, uid, id)
 }
 
 // --- Test harness ---------------------------------------------------------
@@ -126,7 +126,7 @@ func TestRegister_NilClient_NoRoutes(t *testing.T) {
 }
 
 func TestListJobs_HappyPath(t *testing.T) {
-	mc := &mockClient{listJobsFn: func(_ context.Context, wsID int64, _ ListJobsFilter) ([]Job, error) {
+	mc := &mockClient{listJobsFn: func(_ context.Context, wsID, uid int64, _ ListJobsFilter) ([]Job, error) {
 		if wsID != testWSID {
 			t.Fatalf("workspace_id mismatch: got %d", wsID)
 		}
@@ -145,7 +145,7 @@ func TestListJobs_HappyPath(t *testing.T) {
 }
 
 func TestListJobs_NoWorkspace_403(t *testing.T) {
-	mc := &mockClient{listJobsFn: func(context.Context, int64, ListJobsFilter) ([]Job, error) {
+	mc := &mockClient{listJobsFn: func(context.Context, int64, int64, ListJobsFilter) ([]Job, error) {
 		t.Fatal("client should not be called without workspace")
 		return nil, nil
 	}}
@@ -157,7 +157,7 @@ func TestListJobs_NoWorkspace_403(t *testing.T) {
 }
 
 func TestListJobs_FiltersCrossTenant(t *testing.T) {
-	mc := &mockClient{listJobsFn: func(_ context.Context, wsID int64, _ ListJobsFilter) ([]Job, error) {
+	mc := &mockClient{listJobsFn: func(_ context.Context, wsID, uid int64, _ ListJobsFilter) ([]Job, error) {
 		return []Job{
 			{ID: "job_ours", WorkspaceID: wsID, RenderStatus: "RUNNING"},
 			{ID: "job_theirs", WorkspaceID: 999, RenderStatus: "RUNNING"},
@@ -176,7 +176,7 @@ func TestListJobs_FiltersCrossTenant(t *testing.T) {
 }
 
 func TestListJobs_ClientError_500(t *testing.T) {
-	mc := &mockClient{listJobsFn: func(context.Context, int64, ListJobsFilter) ([]Job, error) {
+	mc := &mockClient{listJobsFn: func(context.Context, int64, int64, ListJobsFilter) ([]Job, error) {
 		return nil, errors.New("upstream down")
 	}}
 	mux := newMux(t, mc, stubAuth)
@@ -250,7 +250,7 @@ func TestCreateJob_InvalidJSON_400(t *testing.T) {
 }
 
 func TestGetJob_HappyPath(t *testing.T) {
-	mc := &mockClient{getJobFn: func(_ context.Context, wsID int64, id string) (*JobDetail, error) {
+	mc := &mockClient{getJobFn: func(_ context.Context, wsID, uid int64, id string) (*JobDetail, error) {
 		if id != "job_1" {
 			t.Fatalf("job id mismatch: %s", id)
 		}
@@ -267,8 +267,8 @@ func TestGetJob_HappyPath(t *testing.T) {
 }
 
 func TestGetJob_NotFound_404(t *testing.T) {
-	mc := &mockClient{getJobFn: func(context.Context, int64, string) (*JobDetail, error) {
-		return nil, ErrJobNotFound
+	mc := &mockClient{getJobFn: func(context.Context, int64, int64, string) (*JobDetail, error) {
+		return nil, ErrNotFound
 	}}
 	mux := newMux(t, mc, stubAuth)
 	w := do(t, mux, http.MethodGet, "/api/v1/velox/jobs/missing", "")
@@ -278,7 +278,7 @@ func TestGetJob_NotFound_404(t *testing.T) {
 }
 
 func TestGetJob_WorkspaceMismatch_404(t *testing.T) {
-	mc := &mockClient{getJobFn: func(context.Context, int64, string) (*JobDetail, error) {
+	mc := &mockClient{getJobFn: func(context.Context, int64, int64, string) (*JobDetail, error) {
 		return &JobDetail{Job: Job{ID: "job_x", WorkspaceID: 999}}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
@@ -289,7 +289,7 @@ func TestGetJob_WorkspaceMismatch_404(t *testing.T) {
 }
 
 func TestCancelJob_HappyPath(t *testing.T) {
-	mc := &mockClient{cancelJobFn: func(_ context.Context, wsID int64, id string) error {
+	mc := &mockClient{cancelJobFn: func(_ context.Context, wsID, uid int64, id string) error {
 		if id != "job_1" || wsID != testWSID {
 			t.Fatalf("unexpected args: ws=%d id=%s", wsID, id)
 		}
@@ -303,8 +303,8 @@ func TestCancelJob_HappyPath(t *testing.T) {
 }
 
 func TestCancelJob_NotFound_404(t *testing.T) {
-	mc := &mockClient{cancelJobFn: func(context.Context, int64, string) error {
-		return ErrJobNotFound
+	mc := &mockClient{cancelJobFn: func(context.Context, int64, int64, string) error {
+		return ErrNotFound
 	}}
 	mux := newMux(t, mc, stubAuth)
 	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs/missing/cancel", "")
@@ -314,7 +314,7 @@ func TestCancelJob_NotFound_404(t *testing.T) {
 }
 
 func TestListJobDeliveries_HappyPath(t *testing.T) {
-	mc := &mockClient{listDeliveriesFn: func(_ context.Context, wsID int64, id string) ([]Delivery, error) {
+	mc := &mockClient{listDeliveriesFn: func(_ context.Context, wsID, uid int64, id string) ([]Delivery, error) {
 		return []Delivery{{ExternalDestinationID: "extdst_1", SocialDeliveryID: "sdel_1", Status: "published"}}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
@@ -325,7 +325,7 @@ func TestListJobDeliveries_HappyPath(t *testing.T) {
 }
 
 func TestListWorkers_HappyPath(t *testing.T) {
-	mc := &mockClient{listWorkersFn: func(_ context.Context, wsID int64) ([]Worker, error) {
+	mc := &mockClient{listWorkersFn: func(_ context.Context, wsID, uid int64) ([]Worker, error) {
 		return []Worker{{ID: "w1", WorkspaceID: wsID, Status: "idle"}}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
@@ -336,7 +336,7 @@ func TestListWorkers_HappyPath(t *testing.T) {
 }
 
 func TestListWorkers_FiltersCrossTenant(t *testing.T) {
-	mc := &mockClient{listWorkersFn: func(_ context.Context, wsID int64) ([]Worker, error) {
+	mc := &mockClient{listWorkersFn: func(_ context.Context, wsID, uid int64) ([]Worker, error) {
 		return []Worker{
 			{ID: "w_ours", WorkspaceID: wsID, Status: "idle"},
 			{ID: "w_theirs", WorkspaceID: 999, Status: "idle"},
@@ -355,7 +355,7 @@ func TestListWorkers_FiltersCrossTenant(t *testing.T) {
 }
 
 func TestGetWorker_HappyPath(t *testing.T) {
-	mc := &mockClient{getWorkerFn: func(_ context.Context, wsID int64, id string) (*Worker, error) {
+	mc := &mockClient{getWorkerFn: func(_ context.Context, wsID, uid int64, id string) (*Worker, error) {
 		return &Worker{ID: id, WorkspaceID: wsID, Status: "busy"}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
@@ -366,8 +366,8 @@ func TestGetWorker_HappyPath(t *testing.T) {
 }
 
 func TestGetWorker_NotFound_404(t *testing.T) {
-	mc := &mockClient{getWorkerFn: func(context.Context, int64, string) (*Worker, error) {
-		return nil, ErrWorkerNotFound
+	mc := &mockClient{getWorkerFn: func(context.Context, int64, int64, string) (*Worker, error) {
+		return nil, ErrNotFound
 	}}
 	mux := newMux(t, mc, stubAuth)
 	w := do(t, mux, http.MethodGet, "/api/v1/velox/workers/missing", "")
@@ -377,7 +377,7 @@ func TestGetWorker_NotFound_404(t *testing.T) {
 }
 
 func TestGetWorker_WorkspaceMismatch_404(t *testing.T) {
-	mc := &mockClient{getWorkerFn: func(context.Context, int64, string) (*Worker, error) {
+	mc := &mockClient{getWorkerFn: func(context.Context, int64, int64, string) (*Worker, error) {
 		return &Worker{ID: "w_x", WorkspaceID: 999}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
@@ -388,7 +388,7 @@ func TestGetWorker_WorkspaceMismatch_404(t *testing.T) {
 }
 
 func TestGetAsset_HappyPath(t *testing.T) {
-	mc := &mockClient{getAssetFn: func(_ context.Context, wsID int64, id string) (*Asset, error) {
+	mc := &mockClient{getAssetFn: func(_ context.Context, wsID, uid int64, id string) (*Asset, error) {
 		return &Asset{ID: id, WorkspaceID: wsID, SHA256: "abc", SizeBytes: 123, MimeType: "video/mp4"}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
@@ -399,8 +399,8 @@ func TestGetAsset_HappyPath(t *testing.T) {
 }
 
 func TestGetAsset_NotFound_404(t *testing.T) {
-	mc := &mockClient{getAssetFn: func(context.Context, int64, string) (*Asset, error) {
-		return nil, ErrAssetNotFound
+	mc := &mockClient{getAssetFn: func(context.Context, int64, int64, string) (*Asset, error) {
+		return nil, ErrNotFound
 	}}
 	mux := newMux(t, mc, stubAuth)
 	w := do(t, mux, http.MethodGet, "/api/v1/velox/assets/missing", "")
@@ -410,7 +410,7 @@ func TestGetAsset_NotFound_404(t *testing.T) {
 }
 
 func TestGetAsset_WorkspaceMismatch_404(t *testing.T) {
-	mc := &mockClient{getAssetFn: func(context.Context, int64, string) (*Asset, error) {
+	mc := &mockClient{getAssetFn: func(context.Context, int64, int64, string) (*Asset, error) {
 		return &Asset{ID: "a_x", WorkspaceID: 999}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)

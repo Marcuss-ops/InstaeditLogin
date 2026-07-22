@@ -129,14 +129,14 @@ type ListJobsFilter struct {
 // outbound JWT; the returned rows carry WorkspaceID so the handler
 // can double-check ownership (defense-in-depth).
 type Client interface {
-	ListJobs(ctx context.Context, workspaceID int64, filter ListJobsFilter) ([]Job, error)
+	ListJobs(ctx context.Context, workspaceID, userID int64, filter ListJobsFilter) ([]Job, error)
 	CreateJob(ctx context.Context, workspaceID, userID int64, req CreateJobRequest) (*Job, error)
-	GetJob(ctx context.Context, workspaceID int64, jobID string) (*JobDetail, error)
-	CancelJob(ctx context.Context, workspaceID int64, jobID string) error
-	ListJobDeliveries(ctx context.Context, workspaceID int64, jobID string) ([]Delivery, error)
-	ListWorkers(ctx context.Context, workspaceID int64) ([]Worker, error)
-	GetWorker(ctx context.Context, workspaceID int64, workerID string) (*Worker, error)
-	GetAsset(ctx context.Context, workspaceID int64, assetID string) (*Asset, error)
+	GetJob(ctx context.Context, workspaceID, userID int64, jobID string) (*JobDetail, error)
+	CancelJob(ctx context.Context, workspaceID, userID int64, jobID string) error
+	ListJobDeliveries(ctx context.Context, workspaceID, userID int64, jobID string) ([]Delivery, error)
+	ListWorkers(ctx context.Context, workspaceID, userID int64) ([]Worker, error)
+	GetWorker(ctx context.Context, workspaceID, userID int64, workerID string) (*Worker, error)
+	GetAsset(ctx context.Context, workspaceID, userID int64, assetID string) (*Asset, error)
 }
 
 // --- Sentinel errors ------------------------------------------------------
@@ -145,9 +145,14 @@ type Client interface {
 // Client should wrap these via %w so errors.Is works.
 
 var (
-	ErrJobNotFound     = errors.New("velox: job not found")
-	ErrWorkerNotFound  = errors.New("velox: worker not found")
-	ErrAssetNotFound   = errors.New("velox: asset not found")
+	// ErrNotFound is returned by the Client when the upstream Velox
+	// resource does not exist. It is used for jobs, workers, and
+	// assets so the BFF maps every 404 to the same 404 response
+	// without leaking which resource type was requested.
+	ErrNotFound = errors.New("velox: not found")
+	// ErrWorkspaceMismatch is returned when the upstream Velox
+	// response belongs to a different workspace than the one signed
+	// into the control JWT.
 	ErrWorkspaceMismatch = errors.New("velox: workspace mismatch")
 )
 
@@ -235,26 +240,9 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
-// requireWorkspace extracts the session workspace_id. Returns
-// (workspaceID, true) on success; writes 401/403 and returns
-// (0, false) on failure.
-func (b *bff) requireWorkspace(w http.ResponseWriter, req *http.Request) (int64, bool) {
-	id := auth.IdentityFromContext(req.Context())
-	if id == nil {
-		writeError(w, http.StatusUnauthorized, "missing identity")
-		return 0, false
-	}
-	wsID := id.WorkspaceID()
-	if wsID <= 0 {
-		writeError(w, http.StatusForbidden, "session has no workspace scope")
-		return 0, false
-	}
-	return wsID, true
-}
-
 // requireIdentity extracts both workspace_id and user_id from the
-// session. Used by POST handlers that need to forward user_id to
-// Velox (e.g. CreateJob).
+// session. Used by all BFF handlers so the real user id is signed
+// into the outbound control JWT.
 func (b *bff) requireIdentity(w http.ResponseWriter, req *http.Request) (wsID, userID int64, ok bool) {
 	id := auth.IdentityFromContext(req.Context())
 	if id == nil {
@@ -284,9 +272,9 @@ func verifyOwnership(w http.ResponseWriter, resourceWorkspaceID, sessionWorkspac
 }
 
 // mapClientError translates a Client error into an HTTP status + body.
-// Sentinels (ErrJobNotFound etc.) → 404; anything else → 500.
-func mapClientError(w http.ResponseWriter, err error, notFoundSentinel error) {
-	if errors.Is(err, notFoundSentinel) || errors.Is(err, ErrWorkspaceMismatch) {
+// ErrNotFound and ErrWorkspaceMismatch → 404; anything else → 500.
+func mapClientError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrWorkspaceMismatch) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
