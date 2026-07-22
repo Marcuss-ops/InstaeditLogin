@@ -44,6 +44,12 @@ type Config struct {
 	// secrets MUST NOT be reused across directions. Loaded from
 	// VELOX_CONTROL_JWT_SECRET. Empty = BFF routes not mounted.
 	VeloxControlJWTSecret string
+
+	// VeloxWebhookSecret is the shared HMAC-SHA256 secret used to
+	// sign callbacks sent from InstaEdit to Velox. It is distinct
+	// from VeloxAPIToken and VeloxControlJWTSecret. Loaded from
+	// VELOX_WEBHOOK_SECRET.
+	VeloxWebhookSecret string
 	// FrontendURL is where the OAuth callback should redirect.
 	FrontendURL string
 	// AllowedCORSOrigins is the comma-separated list of origins.
@@ -386,6 +392,7 @@ func Load() (*Config, error) {
 		VeloxAPIToken:              getEnv("VELOX_API_TOKEN", ""),
 		VeloxControlURL:            getEnv("VELOX_CONTROL_URL", ""),
 		VeloxControlJWTSecret:      getEnv("VELOX_CONTROL_JWT_SECRET", ""),
+		VeloxWebhookSecret:         getEnv("VELOX_WEBHOOK_SECRET", ""),
 		LinkedInClientID:           getEnv("LINKEDIN_CLIENT_ID", ""),
 		LinkedInClientSecret:       getEnv("LINKEDIN_CLIENT_SECRET", ""),
 		LinkedInRedirectURI:        getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
@@ -619,6 +626,31 @@ func (c *Config) validate() error {
 		return err
 	}
 
+	if err := c.validateVelox(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateVelox enforces that the InstaEdit→Velox control pair is
+// configured consistently when either side is present. The two
+// secrets are checked only when their related feature is enabled,
+// so dev setups can wire the internal Velox routes (which need
+// VELOX_API_TOKEN) without also exposing the BFF control routes.
+func (c *Config) validateVelox() error {
+	hasControl := c.VeloxControlURL != "" || c.VeloxControlJWTSecret != ""
+	if hasControl {
+		if c.VeloxControlURL == "" {
+			return fmt.Errorf("VELOX_CONTROL_URL is required when VELOX_CONTROL_JWT_SECRET is set")
+		}
+		if c.VeloxControlJWTSecret == "" {
+			return fmt.Errorf("VELOX_CONTROL_JWT_SECRET is required when VELOX_CONTROL_URL is set")
+		}
+		if len(c.VeloxControlJWTSecret) < 32 {
+			return fmt.Errorf("VELOX_CONTROL_JWT_SECRET must be at least 32 bytes (got %d)", len(c.VeloxControlJWTSecret))
+		}
+	}
 	return nil
 }
 
