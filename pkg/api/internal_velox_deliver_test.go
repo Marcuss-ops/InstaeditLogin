@@ -63,6 +63,19 @@ func (m *mockExternalDestinations) Delete(_ context.Context, _ string) error {
 	return nil
 }
 
+// UpdateEnabled + UpdateDefaultMetadata stubs satisfy the
+// ExternalDestinationStore interface after the PATCH endpoint
+// expansion. The deliver handler does NOT exercise either verb
+// (only the user-facing PATCH route does); the stubs return nil
+// never-the-less so go vet ./... succeeds without forcing
+// refactor of unrelated deliver fixtures.
+func (m *mockExternalDestinations) UpdateEnabled(_ context.Context, _ string, _ bool) error {
+	return nil
+}
+func (m *mockExternalDestinations) UpdateDefaultMetadata(_ context.Context, _ string, _ json.RawMessage) error {
+	return nil
+}
+
 // destinationsAdapter mirrors the validate-test single-embed
 // pattern: embeds the production ExternalDestinationStore
 // interface (other methods nil-receiver-safe) + carries the mock

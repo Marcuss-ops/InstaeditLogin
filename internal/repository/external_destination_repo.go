@@ -335,6 +335,47 @@ func (r *ExternalDestinationRepository) UpdateEnabled(ctx context.Context, id st
 	return nil
 }
 
+// UpdateDefaultMetadata replaces the default_metadata JSON blob for an
+// existing destination. Mirrors UpdateEnabled's semantics: returns
+// ErrExternalDestinationNotFound wrapped with id context when zero rows
+// match. The JSON-validity check mirrors Create's defense so a corrupted
+// payload surfaces as a typed validation error instead of breaking the
+// UPDATE with a Postgres jsonb_typeof mismatch.
+//
+// Used by the user-facing PATCH /api/v1/integrations/velox/destinations/{id}
+// endpoint when the frontend submits a `defaults` body field. Empty
+// input is normalised to "{}" so a frontend-supplied empty body always
+// produces a parseable JSON column.
+func (r *ExternalDestinationRepository) UpdateDefaultMetadata(ctx context.Context, id string, metadata json.RawMessage) error {
+	if id == "" {
+		return errors.New("external destination UpdateDefaultMetadata: empty id")
+	}
+	if len(metadata) == 0 {
+		metadata = json.RawMessage("{}")
+	}
+	if !json.Valid(metadata) {
+		return fmt.Errorf("external destination UpdateDefaultMetadata: default_metadata is not valid JSON: %s", string(metadata))
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE external_destinations
+		 SET default_metadata = $2,
+		     updated_at = NOW()
+		 WHERE id = $1`,
+		id, []byte(metadata),
+	)
+	if err != nil {
+		return fmt.Errorf("external destination UpdateDefaultMetadata: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("external destination UpdateDefaultMetadata rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%s", ErrExternalDestinationNotFound, id)
+	}
+	return nil
+}
+
 // Delete hard-removes the row. Used by the admin "unlink this
 // channel" flow. CASCADE on workspace_id + platform_account_id from
 // migration 054 ensures dependent external_deliveries rows are NOT

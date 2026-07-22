@@ -33,6 +33,8 @@ type ExternalDestinationStore interface {
 	Create(ctx context.Context, d *models.ExternalDestination) error
 	ListByWorkspace(ctx context.Context, workspaceID int64, enabledOnly bool) ([]models.ExternalDestination, error)
 	Delete(ctx context.Context, id string) error
+	UpdateEnabled(ctx context.Context, id string, enabled bool) error
+	UpdateDefaultMetadata(ctx context.Context, id string, raw json.RawMessage) error
 }
 
 // ExternalDeliveryStore is the persistence contract for

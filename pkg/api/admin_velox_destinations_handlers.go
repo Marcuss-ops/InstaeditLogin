@@ -41,11 +41,26 @@ type CreateVeloxDestinationRequest struct {
 // always present when 201; status always "active" at creation).
 //
 // Status="active" reflects enabled=true (the create-row default);
-// the row can later be flipped to disabled via PUT/DELETE that
-// this endpoint does not expose yet.
+// the row can later be flipped to disabled via PATCH/DELETE that
+// this endpoint does not expose yet — see PATCH for the toggling
+// path.
 type CreateVeloxDestinationResponse struct {
 	ExternalDestinationID string `json:"external_destination_id"`
 	Status                string `json:"status"`
+}
+
+// UpdateVeloxDestinationRequest is the body for
+// PATCH /api/v1/integrations/velox/destinations/{id}.
+//
+// Both fields are optional but at least one MUST be present; the
+// handler rejects an empty body with 400 to prevent a no-op
+// mutation that still re-stamps updated_at. JSON tags use lowercase
+// snake_case to mirror the VeloxFrontend client
+// (VeloxFrontend/web/src/lib/api/socialDestinationsApi.ts:
+// updateSocialDestination(id, { defaults?: Record<string, unknown> })).
+type UpdateVeloxDestinationRequest struct {
+	Enabled  *bool           `json:"enabled,omitempty"`
+	Defaults json.RawMessage `json:"defaults,omitempty"`
 }
 
 // veloxIntegrationSourceSystem is the source_system column value
@@ -502,6 +517,163 @@ func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleUpdateIntegrationVeloxDestination implements
+// PATCH /api/v1/integrations/velox/destinations/{id}.
+//
+// AUTH/AUTHZ — same as GET-by-id and DELETE: 401 if no user identity,
+// 404 if the row does not exist OR the destination's workspace is
+// not owned by the caller (collapses "not yours" with "does not
+// exist" to prevent id enumeration).
+//
+// BODY — JSON object containing any subset of { enabled: bool,
+// defaults: object }. At least one field MUST be present (a no-op
+// PATCH is rejected with 400 to avoid re-stamping updated_at for no
+// observable change). Defaults must be valid JSON if present.
+//
+// RESPONSE — 200 with the refreshed VeloxDestinationResponse so the
+// frontend can pick up the new updated_at + defaults without a
+// follow-up GET roundtrip.
+//
+// IDEMPOTENT — same body applied twice yields the same final state
+// (only updated_at bumps on each call). The repo calls
+// UpdateEnabled + UpdateDefaultMetadata as independent ops; both
+// surface ErrExternalDestinationNotFound → 404 so a concurrent
+// DELETE between authz and update degrades safely without a 500.
+func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	if r.externalDestinations == nil {
+		writeError(w, http.StatusNotImplemented, "external destinations store not configured")
+		return
+	}
+	if r.workspaceStore == nil {
+		writeError(w, http.StatusInternalServerError, "workspace store not configured")
+		return
+	}
+
+	userID := adminIdentityUserID(req)
+	if userID == 0 {
+		writeError(w, http.StatusUnauthorized, "user identity required")
+		return
+	}
+
+	destID := chi.URLParam(req, "id")
+	if destID == "" {
+		writeError(w, http.StatusBadRequest, "destination id required")
+		return
+	}
+
+	// Fetch first so we can check ownership before any mutation.
+	dest, err := r.externalDestinations.GetByID(req.Context(), destID)
+	if err != nil {
+		slog.Error("velox destination update: lookup failed", "id", destID, "err", err)
+		writeError(w, http.StatusInternalServerError, "destination lookup failed")
+		return
+	}
+	if dest == nil {
+		writeError(w, http.StatusNotFound, "destination not found")
+		return
+	}
+
+	ws, err := r.workspaceStore.FindByID(dest.WorkspaceID)
+	if err != nil {
+		slog.Error("velox destination update: workspace lookup failed",
+			"id", destID, "workspace_id", dest.WorkspaceID, "err", err)
+		writeError(w, http.StatusInternalServerError, "workspace lookup failed")
+		return
+	}
+	if ws == nil || ws.OwnerID != userID {
+		writeError(w, http.StatusNotFound, "destination not found")
+		return
+	}
+
+	var payload UpdateVeloxDestinationRequest
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		slog.Warn("velox destination update: invalid JSON", "id", destID, "err", err)
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	// Validation: at least one field must be present and defaults
+	// must be valid JSON if non-empty.
+	defaultsTrimmed := strings.TrimSpace(string(payload.Defaults))
+	if payload.Enabled == nil && len(defaultsTrimmed) == 0 {
+		writeError(w, http.StatusBadRequest, "validation: at least one of enabled, defaults is required")
+		return
+	}
+	if len(defaultsTrimmed) > 0 && !json.Valid(payload.Defaults) {
+		writeError(w, http.StatusBadRequest, "validation: defaults is not valid JSON")
+		return
+	}
+
+	// Apply mutations conditionally; each maps
+	// ErrExternalDestinationNotFound → 404 to handle a concurrent
+	// DELETE between authz and update (handler did GetByID earlier,
+	// the UPDATE may now find zero rows).
+	deltas := map[string]interface{}{}
+	if payload.Enabled != nil {
+		if err := r.externalDestinations.UpdateEnabled(req.Context(), destID, *payload.Enabled); err != nil {
+			if errors.Is(err, repository.ErrExternalDestinationNotFound) {
+				writeError(w, http.StatusNotFound, "destination not found")
+				return
+			}
+			slog.Error("velox destination update: UpdateEnabled failed",
+				"id", destID, "user_id", userID, "err", err)
+			writeError(w, http.StatusInternalServerError, "destination update failed")
+			return
+		}
+		deltas["enabled"] = *payload.Enabled
+	}
+	if len(defaultsTrimmed) > 0 {
+		if err := r.externalDestinations.UpdateDefaultMetadata(req.Context(), destID, payload.Defaults); err != nil {
+			if errors.Is(err, repository.ErrExternalDestinationNotFound) {
+				writeError(w, http.StatusNotFound, "destination not found")
+				return
+			}
+			slog.Error("velox destination update: UpdateDefaultMetadata failed",
+				"id", destID, "user_id", userID, "err", err)
+			writeError(w, http.StatusInternalServerError, "destination update failed")
+			return
+		}
+		deltas["defaults"] = "updated"
+	}
+
+	// Refresh for the response — picks up the new updated_at. A
+	// nil row here means concurrent DELETE finished after our last
+	// update; map to 404 to keep the contract consistent.
+	dest, err = r.externalDestinations.GetByID(req.Context(), destID)
+	if err != nil {
+		slog.Error("velox destination update: refresh failed", "id", destID, "err", err)
+		writeError(w, http.StatusInternalServerError, "destination refresh failed")
+		return
+	}
+	if dest == nil {
+		writeError(w, http.StatusNotFound, "destination not found")
+		return
+	}
+
+	// Audit log: best-effort — never fails the user-visible write.
+	if r.auditLogStore != nil {
+		if err := r.auditLogStore.Log(req.Context(),
+			"external_destination_updated",
+			strconv.FormatInt(userID, 10),
+			"external_destination",
+			destID,
+			deltas,
+		); err != nil {
+			slog.Warn("velox destination update: audit log failed",
+				"external_destination_id", destID, "err", err)
+		}
+	}
+
+	slog.Info("velox destination: updated",
+		"external_destination_id", destID,
+		"user_id", userID,
+		"workspace_id", dest.WorkspaceID,
+		"deltas", deltas,
+	)
+
+	writeJSON(w, http.StatusOK, toVeloxDestinationResponse(dest))
+}
+
 // registerUserVeloxDestinations mounts the user-facing Velox
 // integration routes on the provided mux. Called from
 // IntegrationsModule.Register (and directly by tests). Refuses to
@@ -558,4 +730,6 @@ func (r *Router) registerUserVeloxDestinations(mux chi.Router) {
 		wrap(r.handleGetIntegrationVeloxDestination))
 	mux.Method(http.MethodDelete, "/api/v1/integrations/velox/destinations/{id}",
 		wrap(r.handleDeleteIntegrationVeloxDestination))
+	mux.Method(http.MethodPatch, "/api/v1/integrations/velox/destinations/{id}",
+		wrap(r.handleUpdateIntegrationVeloxDestination))
 }

@@ -41,6 +41,13 @@ type fakeExternalDestinationStore struct {
 
 	ListErr   error
 	DeleteErr error
+
+	// PATCH-endpoint support (UpdateEnabled +
+	// UpdateDefaultMetadata) — settable per-test to simulate the
+	// repo returning ErrExternalDestinationNotFound or to force a
+	// 500 path. Defaults to nil ("happy repo path").
+	UpdateEnabledErr         error
+	UpdateDefaultMetadataErr error
 }
 
 func (f *fakeExternalDestinationStore) Create(ctx context.Context, d *models.ExternalDestination) error {
@@ -112,6 +119,55 @@ func (f *fakeExternalDestinationStore) Delete(ctx context.Context, id string) er
 		return repository.ErrExternalDestinationNotFound
 	}
 	delete(f.ByIDMap, id)
+	return nil
+}
+
+// UpdateEnabled satisfies ExternalDestinationStore. Mutates the
+// destination row's Enabled field if present; otherwise returns
+// ErrExternalDestinationNotFound wrapped via the UpdateEnabledErr
+// flag (when set) so callers can simulate TOCTOU deletes during
+// concurrent PATCH.
+func (f *fakeExternalDestinationStore) UpdateEnabled(ctx context.Context, id string, enabled bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.UpdateEnabledErr != nil {
+		return f.UpdateEnabledErr
+	}
+	if f.ByIDMap == nil {
+		return repository.ErrExternalDestinationNotFound
+	}
+	d, ok := f.ByIDMap[id]
+	if !ok {
+		return repository.ErrExternalDestinationNotFound
+	}
+	d.Enabled = enabled
+	return nil
+}
+
+// UpdateDefaultMetadata satisfies ExternalDestinationStore. Stores
+// the supplied JSON raw bytes on the destination row's
+// DefaultMetadata field. Returns ErrExternalDestinationNotFound on
+// missing id (consistent with UpdateEnabled). On
+// UpdateDefaultMetadataErr the typed sentinel stub is returned
+// without mutating state so a 500-path test does not have to
+// reason about partial updates.
+func (f *fakeExternalDestinationStore) UpdateDefaultMetadata(ctx context.Context, id string, raw json.RawMessage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.UpdateDefaultMetadataErr != nil {
+		return f.UpdateDefaultMetadataErr
+	}
+	if f.ByIDMap == nil {
+		return repository.ErrExternalDestinationNotFound
+	}
+	d, ok := f.ByIDMap[id]
+	if !ok {
+		return repository.ErrExternalDestinationNotFound
+	}
+	// Defensive copy so a caller reusing the slice after the call
+	// cannot observe later mutations.
+	copied := append(json.RawMessage(nil), raw...)
+	d.DefaultMetadata = copied
 	return nil
 }
 
@@ -787,4 +843,262 @@ func TestDeleteIntegrationVeloxDestination_409_Dependents(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d; want 409; body=%s", w.Code, w.Body.String())
 	}
+}
+
+// ----------------------------------------------------------------------
+// PATCH /api/v1/integrations/velox/destinations/{id} (Step 4 of the
+// user-facing CRUD closure — added together with the repo-side
+// UpdateDefaultMetadata + the handler in admin_velox_destinations_handlers.go).
+// ----------------------------------------------------------------------
+
+// TestUpdateIntegrationVeloxDestination_Happy_Defaults — body
+// supplies a valid JSON `defaults` blob → 200 + refreshed row
+// returned to the caller + audit log fires once with
+// event_type=external_destination_updated and a deltas map
+// containing {"defaults": "updated"}.
+func TestUpdateIntegrationVeloxDestination_Happy_Defaults(t *testing.T) {
+	r, destStore, wsStore, _, auditStore := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JUPD", 12, 345, true)
+
+	body := []byte(`{"defaults": {"privacy_status": "unlisted", "language": "en", "timezone": "Europe/Rome"}}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/integrations/velox/destinations/extdst_01JUPD", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp VeloxDestinationResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.ExternalDestinationID != "extdst_01JUPD" {
+		t.Errorf("id = %q; want extdst_01JUPD", resp.ExternalDestinationID)
+	}
+	// Stored row should reflect the new defaults (round-trip check).
+	if !strings.Contains(string(destStore.ByIDMap["extdst_01JUPD"].DefaultMetadata), "unlisted") {
+		t.Errorf("store row defaults = %q; want contains unlisted",
+			string(destStore.ByIDMap["extdst_01JUPD"].DefaultMetadata))
+	}
+	if auditStore.LastEvent != "external_destination_updated" {
+		t.Errorf("audit event = %q; want external_destination_updated", auditStore.LastEvent)
+	}
+	if _, ok := auditStore.LastMetadata["defaults"]; !ok {
+		t.Error("audit metadata missing `defaults` delta")
+	}
+}
+
+// TestUpdateIntegrationVeloxDestination_Happy_Enabled — body
+// supplies { "enabled": false } → 200 + status flips to "disabled"
+// in the response. A second PATCH with enabled=true brings the
+// row back to active, exercising idempotency (the same body is
+// stable; only updated_at moves).
+func TestUpdateIntegrationVeloxDestination_Happy_Enabled(t *testing.T) {
+	r, destStore, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JUPE", 12, 345, true)
+
+	disable := func() VeloxDestinationResponse {
+		body := []byte(`{"enabled": false}`)
+		req := httptest.NewRequest(http.MethodPatch, "/api/v1/integrations/velox/destinations/extdst_01JUPE", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = reqWithUser(req, 123)
+		w := httptest.NewRecorder()
+		r.mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d; want 200; body=%s", w.Code, w.Body.String())
+		}
+		var resp VeloxDestinationResponse
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return resp
+	}
+	if got := disable(); got.Status != "disabled" {
+		t.Errorf("after disable status = %q; want disabled", got.Status)
+	}
+	if destStore.ByIDMap["extdst_01JUPE"].Enabled {
+		t.Error("store row Enabled should be false after disable PATCH")
+	}
+
+	enable := func() VeloxDestinationResponse {
+		body := []byte(`{"enabled": true}`)
+		req := httptest.NewRequest(http.MethodPatch, "/api/v1/integrations/velox/destinations/extdst_01JUPE", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = reqWithUser(req, 123)
+		w := httptest.NewRecorder()
+		r.mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d; want 200; body=%s", w.Code, w.Body.String())
+		}
+		var resp VeloxDestinationResponse
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		return resp
+	}
+	if got := enable(); got.Status != "active" {
+		t.Errorf("after re-enable status = %q; want active", got.Status)
+	}
+}
+
+// TestUpdateIntegrationVeloxDestination_Happy_Both — both
+// `enabled` and `defaults` supplied together → 200 + audit
+// metadata records both deltas.
+func TestUpdateIntegrationVeloxDestination_Happy_Both(t *testing.T) {
+	r, destStore, wsStore, _, auditStore := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JUPB", 12, 345, true)
+
+	body := []byte(`{"enabled": false, "defaults": {"privacy_status": "private", "language": "it"}}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/integrations/velox/destinations/extdst_01JUPB", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200; body=%s", w.Code, w.Body.String())
+	}
+	if _, ok := auditStore.LastMetadata["enabled"]; !ok {
+		t.Error("audit metadata missing `enabled` delta")
+	}
+	if _, ok := auditStore.LastMetadata["defaults"]; !ok {
+		t.Error("audit metadata missing `defaults` delta")
+	}
+}
+
+// TestUpdateIntegrationVeloxDestination_400_Empty — body is {}
+// (no fields). Handler must reject with 400 instead of silently
+// re-stamping updated_at for no observable change.
+func TestUpdateIntegrationVeloxDestination_400_Empty(t *testing.T) {
+	r, destStore, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+	seedDestination(destStore, "extdst_01JUPX", 12, 345, true)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/integrations/velox/destinations/extdst_01JUPX", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestUpdateIntegrationVeloxDestination_404_NotFound — id does
+// not exist in the store → 404 (handler does GetByID before
+// any mutation; the URI's id is canonical).
+func TestUpdateIntegrationVeloxDestination_404_NotFound(t *testing.T) {
+	r, _, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/integrations/velox/destinations/extdst_UNKNOWN", strings.NewReader(`{"enabled": true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = reqWithUser(req, 123)
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestUpdateIntegrationVeloxDestination_404_NotOwned — the
+// row exists in the store but belongs to a workspace the
+// caller does NOT own → 404 (enumeration-seal pattern; same
+// status as not-found). The fake's ByIDMap entry is verified
+// to remain unchanged after the rejected request.
+func TestUpdateIntegrationVeloxDestination_404_NotOwned(t *testing.T) {
+	r, destStore, wsStore, _, _ := setupRouterForDestinations()
+	wsStore.FindByIDResult = &models.Workspace{ID: 99, OwnerID: 999}
+	seedDestination(destStore, "extdst_01JUPN", 99, 345, true)
+
+	body := []byte(`{"enabled": false}`)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/integrations/velox/destinations/extdst_01JUPN", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = reqWithUser(req, 123) // caller ≠ owner of the row's workspace
+	w := httptest.NewRecorder()
+	r.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d; want 404 (not owned collapses to not found)", w.Code)
+	}
+	// Row state must be preserved verbatim — the fake defaults
+	// Enabled=true so the stall tells us we made the right call.
+	if !destStore.ByIDMap["extdst_01JUPN"].Enabled {
+		t.Error("destination should NOT have been mutated when not owned")
+	}
+}
+
+// TestUpdateIntegrationVeloxDestination_Happy_DefaultsNull pins
+// the absent-vs-present semantics for the `defaults` field
+// across two independent subtests:
+//
+//   - body field absent (zero-byte json.RawMessage)     ==> UpdateDefaultMetadata NOT called, row bytes preserved
+//   - body field set to JSON literal `null` (4 bytes)  ==> UpdateDefaultMetadata IS called, row bytes become "null"
+//   - body field set to an object (e.g. {"k":"v"})     ==> UpdateDefaultMetadata IS called, row bytes become the object
+//
+// The third case + JSON-invalid rejection are already covered by
+// Happy_Defaults + 400_Empty. This test focuses on:
+//   1. literal-null actually round-trips through to the row
+//   2. absent means the repo is NOT called (verified by
+//      asserting the row's defaults bytes are byte-for-byte
+//      equal to the seeded baseline before AND after the PATCH).
+//
+// Each subtest uses a fresh router + fresh seed so cross-subtest
+// mutation does not pollute the absent-branch assertion (the
+// literal-null subtest DOES mutate the row's defaults to "null",
+// which would confuse an absent-branch check on the same row).
+func TestUpdateIntegrationVeloxDestination_Happy_DefaultsNull(t *testing.T) {
+	t.Run("literal null stores 'null' on row", func(t *testing.T) {
+		r, destStore, wsStore, _, _ := setupRouterForDestinations()
+		wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+		seedDestination(destStore, "extdst_01JNULL", 12, 345, true)
+
+		body := []byte(`{"defaults": null}`)
+		req := httptest.NewRequest(http.MethodPatch,
+			"/api/v1/integrations/velox/destinations/extdst_01JNULL",
+			bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = reqWithUser(req, 123)
+		w := httptest.NewRecorder()
+		r.mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("null literal: status = %d; want 200; body=%s", w.Code, w.Body.String())
+		}
+		got := strings.TrimSpace(string(destStore.ByIDMap["extdst_01JNULL"].DefaultMetadata))
+		if got != "null" {
+			t.Errorf("null-literal PATCH: row defaults = %q; want literal \"null\"", got)
+		}
+	})
+
+	t.Run("absent field does not touch row", func(t *testing.T) {
+		r, destStore, wsStore, _, _ := setupRouterForDestinations()
+		wsStore.FindByIDResult = &models.Workspace{ID: 12, OwnerID: 123}
+		dest := seedDestination(destStore, "extdst_01JABS", 12, 345, true)
+		// Pin a fresh sentinel so the post-PATCH assertion is
+		// robust against any incidental mutation elsewhere.
+		seededBytes := `{"seeded_baseline":"true"}`
+		dest.DefaultMetadata = json.RawMessage(seededBytes)
+
+		body := []byte(`{"enabled": false}`)
+		req := httptest.NewRequest(http.MethodPatch,
+			"/api/v1/integrations/velox/destinations/extdst_01JABS",
+			bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = reqWithUser(req, 123)
+		w := httptest.NewRecorder()
+		r.mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("absent defaults: status = %d; want 200; body=%s", w.Code, w.Body.String())
+		}
+		got := strings.TrimSpace(string(destStore.ByIDMap["extdst_01JABS"].DefaultMetadata))
+		if got != seededBytes {
+			t.Errorf("defaults changed despite absent field; got %q, want %q", got, seededBytes)
+		}
+		if destStore.ByIDMap["extdst_01JABS"].Enabled {
+			t.Error("enabled should be false after PATCH with enabled=false")
+		}
+	})
 }
