@@ -713,17 +713,6 @@ func (a *App) RunWorkers(ctx context.Context) error {
 
 	slog.Info("9 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler")
 
-	// Register the registry as a Prometheus collector so worker
-	// lifecycle states are exported as metrics. Duplicate registration
-	// is ignored because this method may be invoked more than once
-	// in wrapper/test scenarios.
-	if err := prometheus.Register(a.WorkerRegistry); err != nil {
-		var already prometheus.AlreadyRegisteredError
-		if !errors.As(err, &already) {
-			slog.Warn("worker registry metric registration failed", "error", err)
-		}
-	}
-
 	criticalErrCh := a.WorkerRegistry.StartAll(ctx)
 
 	select {
@@ -806,6 +795,24 @@ func (w *connectionStateStoreWrapper) Consume(id string, expectedNonce string, j
 
 type auditLogStoreWrapper struct {
 	repo *repository.AuditLogRepository
+}
+
+// RegisterWorkerMetrics registers the worker registry as a Prometheus
+// collector. It is safe to call multiple times; subsequent calls are
+// no-ops. Callers that expose /metrics (cmd/worker and cmd/server)
+// should invoke this before bootstrap.StartMetricsServer so the
+// worker_state metric is available from the first scrape.
+func (a *App) RegisterWorkerMetrics() error {
+	if a.WorkerRegistry == nil {
+		return nil
+	}
+	if err := prometheus.Register(a.WorkerRegistry); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if !errors.As(err, &already) {
+			return err
+		}
+	}
+	return nil
 }
 
 // StartMetricsServer starts an optional internal HTTP server for the

@@ -105,6 +105,16 @@ func main() {
 		}
 	}()
 
+	// Register the worker registry as a Prometheus collector only when
+	// this wrapper actually runs workers, so /metrics exposes
+	// worker_state{} in worker-enabled mode and stays clean otherwise.
+	if runWorkers {
+		if err := app.RegisterWorkerMetrics(); err != nil {
+			slog.Error("server: worker registry metric registration failed", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	metricsShutdown := bootstrap.StartMetricsServer(app.Cfg, app.Logger)
 
 	// Single-channel signal handling drives BOTH drain paths

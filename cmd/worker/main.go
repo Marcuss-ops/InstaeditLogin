@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/bootstrap"
 )
@@ -59,6 +60,17 @@ func main() {
 	// window the worker is alive.
 	startWorkerHealthListener(ctx, app.WorkerRegistry, slog.Default())
 
+	// Register the worker registry as a Prometheus collector so the
+	// /metrics endpoint exposes per-worker lifecycle state via
+	// worker_state{}. Must happen before StartMetricsServer.
+	if err := app.RegisterWorkerMetrics(); err != nil {
+		slog.Error("worker: worker registry metric registration failed", "error", err)
+		os.Exit(1)
+	}
+
+	// Optional internal /metrics endpoint.
+	metricsShutdown := bootstrap.StartMetricsServer(app.Cfg, app.Logger)
+
 	// Signal handler drives ctx cancel. MUST be installed before
 	// RunWorkers blocks on <-ctx.Done(), otherwise SIGARM is lost.
 	quit := make(chan os.Signal, 1)
@@ -73,8 +85,18 @@ func main() {
 	// exits unexpectedly, then drains the goroutines. A non-nil error
 	// means a critical worker failed and the process must exit
 	// non-zero so the orchestrator can restart it.
-	if err := app.RunWorkers(ctx); err != nil {
-		slog.Error("worker: RunWorkers exited with error", "error", err)
+	runErr := app.RunWorkers(ctx)
+
+	// Drain the internal metrics listener before exiting so in-flight
+	// scrapes complete and the port is released cleanly.
+	ctxMetrics, cancelMetrics := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelMetrics()
+	if err := metricsShutdown(ctxMetrics); err != nil {
+		slog.Error("worker: metrics server forced to shutdown", "error", err)
+	}
+
+	if runErr != nil {
+		slog.Error("worker: RunWorkers exited with error", "error", runErr)
 		os.Exit(1)
 	}
 
