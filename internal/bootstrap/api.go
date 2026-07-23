@@ -96,26 +96,26 @@ func WireAPI(core *Core) (http.Handler, error) {
 
 	// Sentry init (lazy). Empty DSN means no SDK.
 	var hub *sentry.Hub
-	if cfg.SentryDSN != "" {
+	if cfg.Monitoring.SentryDSN != "" {
 		clientOpts := sentry.ClientOptions{
-			Dsn:         cfg.SentryDSN,
-			Environment: cfg.SentryEnvironment,
-			Release:     cfg.SentryRelease,
+			Dsn:         cfg.Monitoring.SentryDSN,
+			Environment: cfg.Monitoring.SentryEnvironment,
+			Release:     cfg.Monitoring.SentryRelease,
 		}
 		if err := sentry.Init(clientOpts); err != nil {
 			core.Logger.Warn("sentry init failed; recovery middleware will run without Sentry capture", "error", err)
 		} else {
 			hub = sentry.CurrentHub()
 			core.Logger.Info("sentry configured",
-				"environment", cfg.SentryEnvironment,
-				"release", cfg.SentryRelease)
+				"environment", cfg.Monitoring.SentryEnvironment,
+				"release", cfg.Monitoring.SentryRelease)
 		}
 	} else {
 		core.Logger.Info("sentry disabled (SENTRY_DSN empty)")
 	}
 	opts = append(opts, api.WithSentryHub(hub))
 	opts = append(opts, api.WithTrustedProxies(trustedProxies))
-	opts = append(opts, api.WithMetricsAuth(cfg.MetricsBasicAuthUser, cfg.MetricsBasicAuthPass))
+	opts = append(opts, api.WithMetricsAuth(cfg.Monitoring.MetricsBasicAuthUser, cfg.Monitoring.MetricsBasicAuthPass))
 	opts = append(opts, api.WithDB(core.DB))
 
 	router, err := api.NewRouter(core.CapRouter, core.userRepo, core.authMgr, cfg.FrontendURL, corsOrigins,
@@ -138,7 +138,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 }
 
 func veloxClient(cfg *config.Config) *veloxclient.Client {
-	vc := veloxclient.New(cfg.VeloxControlURL, cfg.VeloxControlJWTSecret)
+	vc := veloxclient.New(cfg.Velox.VeloxControlURL, cfg.Velox.VeloxControlJWTSecret)
 	if vc == nil {
 		return nil
 	}

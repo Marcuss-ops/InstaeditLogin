@@ -136,12 +136,8 @@ type AuthConfig struct {
 	AdminInviteToken string
 }
 
-// Config holds all configuration for the application.
-//
-// Taglio 5b: SERVER_PORT + SERVER_HOST removed — the server listens on the
-// PORT env var only (Vercel / Railway / Render standard). TWITTER_* env vars
-// renamed to X_*; TIKTOK_CLIENT_KEY renamed to TIKTOK_CLIENT_ID.
-type Config struct {
+// VeloxConfig holds the Velox integration secrets.
+type VeloxConfig struct {
 	// VeloxAPIToken authenticates artifact HEAD/GET requests back to Velox.
 	// This is the REVERSE direction token (Velox → InstaEdit via
 	// /internal/v1/* routes). Loaded from VELOX_API_TOKEN.
@@ -167,6 +163,69 @@ type Config struct {
 	// from VeloxAPIToken and VeloxControlJWTSecret. Loaded from
 	// VELOX_WEBHOOK_SECRET.
 	VeloxWebhookSecret string
+}
+
+// MonitoringConfig holds observability and metrics configuration.
+type MonitoringConfig struct {
+	// Sentry (optional, Blocco #5.3).
+	//
+	// SENTRY_DSN is the SDK DSN string (`https://key@sentry.io/projid`).
+	// Empty (the default) disables the entire observability surface:
+	//   - sentry.Init is NOT called at startup.
+	//   - the panic-catching middleware falls back to a plain
+	//     `recover(http.Handler)` that writes 500 with NO outbound
+	//     network traffic.
+	// - Non-empty: sentry.Init runs at startup; the panic-catching
+	//   middleware wraps with sentryhttp.New so CaptureException is
+	//   called for every recovered panic and the SDK buffers out-of-band.
+	SentryDSN string
+	// SENTRY_ENVIRONMENT defaults to AppEnv ("dev"/"staging"/"production")
+	// when empty; SENTRY_RELEASE is passed straight through to the SDK.
+	SentryEnvironment string
+	SentryRelease     string
+
+	// Metrics basic-auth credentials. In production both must be set;
+	// validate() fail-closes the boot if either is empty.
+	MetricsBasicAuthUser string
+	MetricsBasicAuthPass string
+	// MetricsHost/MetricsPort optionally start a separate internal
+	// listener for the /metrics endpoint. When MetricsPort is 0, the
+	// endpoint is served only on the main HTTP server at
+	// /api/v1/metrics. When MetricsPort > 0, an additional listener
+	// is started on MetricsHost:MetricsPort (default MetricsHost
+	// 127.0.0.1 if empty) so scrapers on a private network can reach
+	// metrics without exposing the main API.
+	MetricsHost string
+	MetricsPort int
+}
+
+// Config holds all configuration for the application.
+//
+// Taglio 5b: SERVER_PORT + SERVER_HOST removed — the server listens on the
+// PORT env var only (Vercel / Railway / Render standard). TWITTER_* env vars
+// renamed to X_*; TIKTOK_CLIENT_KEY renamed to TIKTOK_CLIENT_ID.
+type Config struct {
+	// VeloxAPIToken authenticates artifact HEAD/GET requests back to Velox.
+	// This is the REVERSE direction token (Velox → InstaEdit via
+	// /internal/v1/* routes). Loaded from VELOX_API_TOKEN.
+
+	// VeloxControlURL is the base URL of the Velox master that the
+	// BFF calls when proxying user-facing /api/v1/velox/* requests.
+	// The browser never sees this URL — only InstaEdit calls it.
+	// Loaded from VELOX_CONTROL_URL. Empty = BFF routes not mounted.
+
+	// VeloxControlJWTSecret is the shared HS256 secret for the
+	// short-lived JWT InstaEdit signs when calling the Velox master.
+	// This MUST be the same value as VeloxEditiingg's
+	// INSTAEDIT_CONTROL_JWT_SECRET. It is DISTINCT from
+	// VeloxAPIToken (the reverse-direction Bearer token) — the two
+	// secrets MUST NOT be reused across directions. Loaded from
+	// VELOX_CONTROL_JWT_SECRET. Empty = BFF routes not mounted.
+
+	// VeloxWebhookSecret is the shared HMAC-SHA256 secret used to
+	// sign callbacks sent from InstaEdit to Velox. It is distinct
+	// from VeloxAPIToken and VeloxControlJWTSecret. Loaded from
+	// VELOX_WEBHOOK_SECRET.
 	// FrontendURL is where the OAuth callback should redirect.
 	FrontendURL string
 	// AllowedCORSOrigins is the comma-separated list of origins.
@@ -180,6 +239,12 @@ type Config struct {
 
 	// Auth (OAuth + JWT + security tokens).
 	Auth AuthConfig
+
+	// Velox integration secrets.
+	Velox VeloxConfig
+
+	// Monitoring (Sentry + metrics).
+	Monitoring MonitoringConfig
 
 	// P1#6 — YouTube resumable-upload tuning. The resumable upload
 	// protocol streams the binary in N chunks; Google requires each
@@ -248,8 +313,6 @@ type Config struct {
 
 	// Metrics basic-auth credentials. In production both must be set;
 	// validate() fail-closes the boot if either is empty.
-	MetricsBasicAuthUser string
-	MetricsBasicAuthPass string
 	// MetricsHost/MetricsPort optionally start a separate internal
 	// listener for the /metrics endpoint. When MetricsPort is 0, the
 	// endpoint is served only on the main HTTP server at
@@ -257,8 +320,6 @@ type Config struct {
 	// is started on MetricsHost:MetricsPort (default MetricsHost
 	// 127.0.0.1 if empty) so scrapers on a private network can reach
 	// metrics without exposing the main API.
-	MetricsHost string
-	MetricsPort int
 
 	// Deprecated: JWT_TTL_HOURS is the legacy single-knob TTL.
 	// If JWT_ACCESS_TTL_MINUTES is unset, the hours value is
@@ -346,9 +407,6 @@ type Config struct {
 	// (the operator typically wires this to the deploy SHA via the CI
 	// pipeline). Both are passed via env so the production deploy can
 	// set them without re-baking the binary.
-	SentryDSN         string
-	SentryEnvironment string
-	SentryRelease     string
 
 	// CookieDomain is the optional `Domain` attribute applied to the
 	// csrf_token cookie ONLY (session + refresh cookies stay host-only).
@@ -389,6 +447,23 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
+		Velox: VeloxConfig{
+			VeloxAPIToken:         getEnv("VELOX_API_TOKEN", ""),
+			VeloxControlURL:       getEnv("VELOX_CONTROL_URL", ""),
+			VeloxControlJWTSecret: getEnv("VELOX_CONTROL_JWT_SECRET", ""),
+			VeloxWebhookSecret:    getEnv("VELOX_WEBHOOK_SECRET", ""),
+		},
+		Monitoring: MonitoringConfig{
+			MetricsBasicAuthUser: getEnv("METRICS_BASIC_AUTH_USER", ""),
+			MetricsBasicAuthPass: getEnv("METRICS_BASIC_AUTH_PASS", ""),
+			MetricsHost:          getEnv("METRICS_HOST", ""),
+			MetricsPort:          getEnvInt("METRICS_PORT", 0),
+			// Sentry (Blocco #5.3). SENTRY_DSN empty == SDK never
+			// initialised + recovery middleware uses plain recover.
+			SentryDSN:         getEnv("SENTRY_DSN", ""),
+			SentryEnvironment: getEnv("SENTRY_ENVIRONMENT", ""),
+			SentryRelease:     getEnv("SENTRY_RELEASE", ""),
+		},
 		Auth: AuthConfig{
 			MetaAppID:               getEnv("META_APP_ID", ""),
 			MetaAppSecret:           getEnv("META_APP_SECRET", ""),
@@ -462,21 +537,13 @@ func Load() (*Config, error) {
 			GoogleDriveAPIKey:         getEnv("GOOGLE_DRIVE_API_KEY", ""),
 			GoogleDriveUploadFolderID: getEnv("GOOGLE_DRIVE_UPLOAD_FOLDER_ID", ""),
 		},
-		VeloxAPIToken:         getEnv("VELOX_API_TOKEN", ""),
-		VeloxControlURL:       getEnv("VELOX_CONTROL_URL", ""),
-		VeloxControlJWTSecret: getEnv("VELOX_CONTROL_JWT_SECRET", ""),
-		VeloxWebhookSecret:    getEnv("VELOX_WEBHOOK_SECRET", ""),
-		EncryptionKey:         getEnv("ENCRYPTION_KEY", ""),
+		EncryptionKey: getEnv("ENCRYPTION_KEY", ""),
 		// Blocco #2.2: read the multi-key env vars. The actual
 		// parsing + validation happens in validate(); Load() only
 		// captures the raw strings so validate() can surface
 		// high-quality error messages with the original input.
 		EncryptionKeysRaw:              getEnv("ENCRYPTION_KEYS", ""),
 		ActiveEncryptionKeyIDRaw:       getEnv("ACTIVE_ENCRYPTION_KEY_ID", ""),
-		MetricsBasicAuthUser:           getEnv("METRICS_BASIC_AUTH_USER", ""),
-		MetricsBasicAuthPass:           getEnv("METRICS_BASIC_AUTH_PASS", ""),
-		MetricsHost:                    getEnv("METRICS_HOST", ""),
-		MetricsPort:                    getEnvInt("METRICS_PORT", 0),
 		LogLevel:                       getEnv("LOG_LEVEL", "info"),
 		AppEnv:                         getEnv("APP_ENV", "dev"),
 		PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
@@ -495,11 +562,6 @@ func Load() (*Config, error) {
 		StripeWebhookSecret:            getEnv("STRIPE_WEBHOOK_SECRET", ""),
 		StripeSuccessURL:               getEnv("STRIPE_SUCCESS_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?success=1"),
 		StripeCancelURL:                getEnv("STRIPE_CANCEL_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?canceled=1"),
-		// Sentry (Blocco #5.3). SENTRY_DSN empty == SDK never
-		// initialised + recovery middleware uses plain recover.
-		SentryDSN:         getEnv("SENTRY_DSN", ""),
-		SentryEnvironment: getEnv("SENTRY_ENVIRONMENT", ""),
-		SentryRelease:     getEnv("SENTRY_RELEASE", ""),
 		// COOKIE_DOMAIN: optional cross-subdomain scope for the
 		// csrf_token cookie ONLY (session + refresh stay host-only).
 		// Defaults to empty so dev (localhost:5173 + localhost:8080)
@@ -538,7 +600,7 @@ func Load() (*Config, error) {
 // credentials are non-empty. It is used for both runtime fail-closed
 // decisions and boot-time validation in production.
 func (c *Config) metricsConfigured() bool {
-	return c.MetricsBasicAuthUser != "" && c.MetricsBasicAuthPass != ""
+	return c.Monitoring.MetricsBasicAuthUser != "" && c.Monitoring.MetricsBasicAuthPass != ""
 }
 
 func (c *Config) validate() error {
@@ -612,16 +674,16 @@ func (c *Config) validate() error {
 	// a silent no-op at the first panic render. When UNSET, no
 	// validation; the absence is the signal the operator gave us to
 	// disable the observability surface.
-	if c.SentryDSN != "" {
-		if err := validateSentryDSN(c.SentryDSN, c.AppEnv); err != nil {
+	if c.Monitoring.SentryDSN != "" {
+		if err := validateSentryDSN(c.Monitoring.SentryDSN, c.AppEnv); err != nil {
 			return fmt.Errorf("SENTRY_DSN: %w", err)
 		}
 		// Defaults: if the operator set SENTRY_DSN but didn't supply
 		// an environment label, derive it from AppEnv so the SDK
 		// dashboard tags events correctly. Empty Release is fine —
 		// the SDK emits events with no release tag (still useful).
-		if c.SentryEnvironment == "" {
-			c.SentryEnvironment = c.AppEnv
+		if c.Monitoring.SentryEnvironment == "" {
+			c.Monitoring.SentryEnvironment = c.AppEnv
 		}
 	}
 
@@ -691,16 +753,16 @@ func (c *Config) validate() error {
 // so dev setups can wire the internal Velox routes (which need
 // VELOX_API_TOKEN) without also exposing the BFF control routes.
 func (c *Config) validateVelox() error {
-	hasControl := c.VeloxControlURL != "" || c.VeloxControlJWTSecret != ""
+	hasControl := c.Velox.VeloxControlURL != "" || c.Velox.VeloxControlJWTSecret != ""
 	if hasControl {
-		if c.VeloxControlURL == "" {
+		if c.Velox.VeloxControlURL == "" {
 			return fmt.Errorf("VELOX_CONTROL_URL is required when VELOX_CONTROL_JWT_SECRET is set")
 		}
-		if c.VeloxControlJWTSecret == "" {
+		if c.Velox.VeloxControlJWTSecret == "" {
 			return fmt.Errorf("VELOX_CONTROL_JWT_SECRET is required when VELOX_CONTROL_URL is set")
 		}
-		if len(c.VeloxControlJWTSecret) < 32 {
-			return fmt.Errorf("VELOX_CONTROL_JWT_SECRET must be at least 32 bytes (got %d)", len(c.VeloxControlJWTSecret))
+		if len(c.Velox.VeloxControlJWTSecret) < 32 {
+			return fmt.Errorf("VELOX_CONTROL_JWT_SECRET must be at least 32 bytes (got %d)", len(c.Velox.VeloxControlJWTSecret))
 		}
 	}
 	return nil

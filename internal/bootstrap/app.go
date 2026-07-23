@@ -327,13 +327,13 @@ func Wire(ctx context.Context) (*App, error) {
 		// + CSRF middlewares mirror the destinations route wiring so the
 		// /api/v1/velox/* chain is: auth → CSRF → handler.
 		func() api.RouterOption {
-			vc := veloxclient.New(cfg.VeloxControlURL, cfg.VeloxControlJWTSecret)
+			vc := veloxclient.New(cfg.Velox.VeloxControlURL, cfg.Velox.VeloxControlJWTSecret)
 			if vc == nil {
 				slog.Info("velox BFF client not configured (VELOX_CONTROL_URL or VELOX_CONTROL_JWT_SECRET empty) — /api/v1/velox/* routes not mounted")
 				return func(*api.Router) {} // no-op option
 			}
 			slog.Info("velox BFF client configured",
-				"control_url", cfg.VeloxControlURL)
+				"control_url", cfg.Velox.VeloxControlURL)
 			return api.WithVeloxBFFClient(vc)
 		}(),
 		api.WithVeloxBFFAuthMiddleware(authMgr.Middleware),
@@ -377,11 +377,11 @@ func Wire(ctx context.Context) (*App, error) {
 	// against repeat Init in a single process so this is idempotent
 	// across Wire() calls within the same binary.
 	var hub *sentry.Hub
-	if cfg.SentryDSN != "" {
+	if cfg.Monitoring.SentryDSN != "" {
 		clientOpts := sentry.ClientOptions{
-			Dsn:         cfg.SentryDSN,
-			Environment: cfg.SentryEnvironment,
-			Release:     cfg.SentryRelease,
+			Dsn:         cfg.Monitoring.SentryDSN,
+			Environment: cfg.Monitoring.SentryEnvironment,
+			Release:     cfg.Monitoring.SentryRelease,
 			// ServerName is intentionally LET-default (the
 			// SDK reads it from the OS). Overriding with
 			// cfg.AppEnv would double-up the env label.
@@ -397,8 +397,8 @@ func Wire(ctx context.Context) (*App, error) {
 		} else {
 			hub = sentry.CurrentHub()
 			slog.Info("sentry configured",
-				"environment", cfg.SentryEnvironment,
-				"release", cfg.SentryRelease)
+				"environment", cfg.Monitoring.SentryEnvironment,
+				"release", cfg.Monitoring.SentryRelease)
 		}
 	} else {
 		slog.Info("sentry disabled (SENTRY_DSN empty)")
@@ -418,7 +418,7 @@ func Wire(ctx context.Context) (*App, error) {
 	// time. Incomplete credentials trigger fail-closed 503 in the
 	// handler; production boot already rejects them in
 	// cfg.validate().
-	opts = append(opts, api.WithMetricsAuth(cfg.MetricsBasicAuthUser, cfg.MetricsBasicAuthPass))
+	opts = append(opts, api.WithMetricsAuth(cfg.Monitoring.MetricsBasicAuthUser, cfg.Monitoring.MetricsBasicAuthPass))
 
 	// Blocco #5.3 — wire the DB into /ready's contract. API readiness
 	// now only checks DB ping + schema migrations; worker readiness is
@@ -663,7 +663,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 					}
 				}
 			}
-			if regErr := sourceRegistry.Register(worker.NewVeloxSource(a.Logger, a.Cfg.VeloxAPIToken)); regErr != nil {
+			if regErr := sourceRegistry.Register(worker.NewVeloxSource(a.Logger, a.Cfg.Velox.VeloxAPIToken)); regErr != nil {
 				a.Logger.Error("upload worker: register velox source", "error", regErr)
 			}
 			a.Logger.Info("upload worker: source registry built", "sources_registered", sourceRegistry.Names())
@@ -816,25 +816,25 @@ func (a *App) RegisterWorkerMetrics() error {
 }
 
 // StartMetricsServer starts an optional internal HTTP server for the
-// /metrics endpoint when cfg.MetricsPort > 0. It binds to
-// cfg.MetricsHost (default 127.0.0.1) and serves the same
+// /metrics endpoint when cfg.Monitoring.MetricsPort > 0. It binds to
+// cfg.Monitoring.MetricsHost (default 127.0.0.1) and serves the same
 // basic-auth-gated handler used by /api/v1/metrics. Returns a shutdown
 // function that callers MUST invoke during graceful shutdown. When
 // MetricsPort is 0 the returned shutdown is a no-op.
 func StartMetricsServer(cfg *config.Config, logger *slog.Logger) (shutdown func(context.Context) error) {
-	if cfg.MetricsPort == 0 {
+	if cfg.Monitoring.MetricsPort == 0 {
 		return func(context.Context) error { return nil }
 	}
 
-	host := cfg.MetricsHost
+	host := cfg.Monitoring.MetricsHost
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	addr := fmt.Sprintf("%s:%d", host, cfg.MetricsPort)
+	addr := fmt.Sprintf("%s:%d", host, cfg.Monitoring.MetricsPort)
 
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      api.MetricsHandler(cfg.MetricsBasicAuthUser, cfg.MetricsBasicAuthPass),
+		Handler:      api.MetricsHandler(cfg.Monitoring.MetricsBasicAuthUser, cfg.Monitoring.MetricsBasicAuthPass),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

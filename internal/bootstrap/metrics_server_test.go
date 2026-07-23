@@ -15,7 +15,7 @@ import (
 // MetricsPort is 0 the returned shutdown function is a no-op and does
 // not start any listener.
 func TestStartMetricsServer_Disabled_ReturnsNoOpShutdown(t *testing.T) {
-	cfg := &config.Config{MetricsPort: 0}
+	cfg := &config.Config{Monitoring: config.MonitoringConfig{MetricsPort: 0}}
 	shutdown := StartMetricsServer(cfg, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -33,9 +33,11 @@ func TestStartMetricsServer_Listener_ServesFailClosedMetrics(t *testing.T) {
 	// lightweight and fails fast if the port is unavailable.
 	port := 19090
 	cfg := &config.Config{
-		MetricsPort:          port,
-		MetricsBasicAuthUser: "admin",
-		MetricsBasicAuthPass: "secret",
+		Monitoring: config.MonitoringConfig{
+			MetricsPort:          port,
+			MetricsBasicAuthUser: "admin",
+			MetricsBasicAuthPass: "secret",
+		},
 	}
 
 	shutdown := StartMetricsServer(cfg, nil)

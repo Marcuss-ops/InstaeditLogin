@@ -143,7 +143,7 @@ const authHeaderAuthorization = "Authorization"
 
 // WithVeloxAPIToken wires the static shared secret for the
 // Velox service-to-service routes. The token is loaded from
-// env at boot (cmd/server/main.go reads cfg.VeloxAPIToken via
+// env at boot (cmd/server/main.go reads cfg.Velox.VeloxAPIToken via
 // internal/config) and passed via this option — main.go should
 // NOT read the env directly in main; it should pipe through
 // internal/config then this Router option so tests can inject

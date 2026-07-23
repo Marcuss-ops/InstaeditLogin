@@ -48,11 +48,11 @@ func TestValidate_SentryDSN_ValidHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() with valid DSN: want nil, got %v", err)
 	}
-	if cfg.SentryDSN != "https://key123@sentry.example.com/4" {
-		t.Errorf("SentryDSN: got %q", cfg.SentryDSN)
+	if cfg.Monitoring.SentryDSN != "https://key123@sentry.example.com/4" {
+		t.Errorf("SentryDSN: got %q", cfg.Monitoring.SentryDSN)
 	}
-	if cfg.SentryEnvironment != "production" {
-		t.Errorf("SentryEnvironment default from AppEnv: want production, got %q", cfg.SentryEnvironment)
+	if cfg.Monitoring.SentryEnvironment != "production" {
+		t.Errorf("SentryEnvironment default from AppEnv: want production, got %q", cfg.Monitoring.SentryEnvironment)
 	}
 }
 
@@ -69,8 +69,8 @@ func TestValidate_SentryDSN_ExplicitEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() with explicit SENTRY_ENVIRONMENT: want nil, got %v", err)
 	}
-	if cfg.SentryEnvironment != "staging-canary" {
-		t.Errorf("SentryEnvironment override: want staging-canary, got %q", cfg.SentryEnvironment)
+	if cfg.Monitoring.SentryEnvironment != "staging-canary" {
+		t.Errorf("SentryEnvironment override: want staging-canary, got %q", cfg.Monitoring.SentryEnvironment)
 	}
 }
 
@@ -392,8 +392,8 @@ func TestLoad_Production_RequiresMetricsBasicAuth(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Load() with %s: want nil, got %v", tc.name, err)
 				}
-				if cfg.MetricsBasicAuthUser != tc.user || cfg.MetricsBasicAuthPass != tc.pass {
-					t.Errorf("metrics credentials not round-tripped correctly: got (%q, %q)", cfg.MetricsBasicAuthUser, cfg.MetricsBasicAuthPass)
+				if cfg.Monitoring.MetricsBasicAuthUser != tc.user || cfg.Monitoring.MetricsBasicAuthPass != tc.pass {
+					t.Errorf("metrics credentials not round-tripped correctly: got (%q, %q)", cfg.Monitoring.MetricsBasicAuthUser, cfg.Monitoring.MetricsBasicAuthPass)
 				}
 				return
 			}
