@@ -77,10 +77,10 @@ func containsPrompt(prompt, target string) bool {
 // is identical to production; only the values differ.
 func youtubeTestSvcUpload(srv *httptest.Server) *YouTubeOAuthService {
 	cfg := youtubeTestCfg()
-	cfg.YouTubeUploadChunkBytes = 64
-	cfg.YouTubeUploadMaxRetries = 3
-	cfg.YouTubeUploadBackoffBaseMs = 1
-	cfg.YouTubeUploadBackoffCapMs = 5
+	cfg.Worker.YouTubeUploadChunkBytes = 64
+	cfg.Worker.YouTubeUploadMaxRetries = 3
+	cfg.Worker.YouTubeUploadBackoffBaseMs = 1
+	cfg.Worker.YouTubeUploadBackoffCapMs = 5
 	svc, _ := NewYouTubeOAuthService(cfg, ProviderDependencies{HTTPClient: testClient(srv)})
 	return svc
 }

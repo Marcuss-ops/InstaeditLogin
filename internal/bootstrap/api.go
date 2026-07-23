@@ -22,9 +22,9 @@ import (
 func WireAPI(core *Core) (http.Handler, error) {
 	cfg := core.Cfg
 
-	corsOrigins := cfg.AllowedCORSOrigins
-	if len(corsOrigins) == 0 && cfg.FrontendURL != "" {
-		corsOrigins = []string{cfg.FrontendURL}
+	corsOrigins := cfg.HTTP.AllowedCORSOrigins
+	if len(corsOrigins) == 0 && cfg.HTTP.FrontendURL != "" {
+		corsOrigins = []string{cfg.HTTP.FrontendURL}
 	}
 
 	trustedProxies, err := api.ParseTrustedProxies(cfg.Auth.TrustedProxies)
@@ -81,12 +81,12 @@ func WireAPI(core *Core) (http.Handler, error) {
 			return auth.NewCSRF(auth.CSRFConfig{
 				Secure:       true,
 				Path:         "/",
-				CookieDomain: cfg.CookieDomain,
+				CookieDomain: cfg.HTTP.CookieDomain,
 				SameSite:     http.SameSiteNoneMode,
 			}, next)
 		}),
 		api.WithCookieSecure(true),
-		api.WithCookieDomain(cfg.CookieDomain),
+		api.WithCookieDomain(cfg.HTTP.CookieDomain),
 		api.WithRateLimitService(rateLimitSvc),
 		api.WithWebhookStore(core.WebhookRepo),
 		api.WithAdminInviteToken(cfg.Auth.AdminInviteToken),
@@ -118,7 +118,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 	opts = append(opts, api.WithMetricsAuth(cfg.Monitoring.MetricsBasicAuthUser, cfg.Monitoring.MetricsBasicAuthPass))
 	opts = append(opts, api.WithDB(core.DB))
 
-	router, err := api.NewRouter(core.CapRouter, core.userRepo, core.authMgr, cfg.FrontendURL, corsOrigins,
+	router, err := api.NewRouter(core.CapRouter, core.userRepo, core.authMgr, cfg.HTTP.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(core.OneTimeCodes)}, opts...)...)
 	if err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 	core.Logger.Info("Router configured",
 		"jwt_access_ttl_minutes", cfg.Auth.JWTAccessTTLMinutes,
 		"jwt_refresh_ttl_days", cfg.Auth.JWTRefreshTTLDays,
-		"frontend_url", cfg.FrontendURL,
+		"frontend_url", cfg.HTTP.FrontendURL,
 		"cors_origins", corsOrigins,
 		"platforms", core.CapRouter.Names(),
 		"api_keys_enabled", core.apiKeyRepo != nil,

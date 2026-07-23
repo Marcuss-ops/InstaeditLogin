@@ -19,7 +19,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if cfg.AppEnv == "production" {
+	if cfg.HTTP.AppEnv == "production" {
 		slog.Error("seed command refused: APP_ENV=production")
 		os.Exit(1)
 	}

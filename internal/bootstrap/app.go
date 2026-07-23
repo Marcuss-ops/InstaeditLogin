@@ -142,13 +142,13 @@ func Wire(ctx context.Context) (*App, error) {
 	}
 
 	logLevel := slog.LevelInfo
-	if cfg.LogLevel == "debug" {
+	if cfg.HTTP.LogLevel == "debug" {
 		logLevel = slog.LevelDebug
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)
 
-	slog.Info("Environment", "app_env", cfg.AppEnv)
+	slog.Info("Environment", "app_env", cfg.HTTP.AppEnv)
 
 	db, err := database.Connect(&cfg.Database)
 	if err != nil {
@@ -235,7 +235,7 @@ func Wire(ctx context.Context) (*App, error) {
 		cfg.Auth.JWTSecret,
 		time.Duration(cfg.Auth.JWTAccessTTLMinutes)*time.Minute,
 		time.Duration(cfg.Auth.JWTRefreshTTLDays)*24*time.Hour,
-	).WithEnv(cfg.AppEnv)
+	).WithEnv(cfg.HTTP.AppEnv)
 	oneTimeCodes := api.NewOneTimeCodePostgresStore(db, 60*time.Second)
 	// oneTimeCodes sweeper is gracefully stopped by RunWorkers. cmd/api
 	// (HTTP-only binary) does not run RunWorkers, so the sweeper is
@@ -244,9 +244,9 @@ func Wire(ctx context.Context) (*App, error) {
 	// the same instance is shared across api + worker processes
 	// when cmd/server bundles both.
 
-	corsOrigins := cfg.AllowedCORSOrigins
-	if len(corsOrigins) == 0 && cfg.FrontendURL != "" {
-		corsOrigins = []string{cfg.FrontendURL}
+	corsOrigins := cfg.HTTP.AllowedCORSOrigins
+	if len(corsOrigins) == 0 && cfg.HTTP.FrontendURL != "" {
+		corsOrigins = []string{cfg.HTTP.FrontendURL}
 	}
 
 	// Parse the trusted proxy list once at startup so IP extraction
@@ -341,13 +341,13 @@ func Wire(ctx context.Context) (*App, error) {
 			return auth.NewCSRF(auth.CSRFConfig{
 				Secure:       true,
 				Path:         "/",
-				CookieDomain: cfg.CookieDomain,
+				CookieDomain: cfg.HTTP.CookieDomain,
 				SameSite:     http.SameSiteNoneMode,
 			}, next)
 		}),
 		api.WithCookieSecure(true),
 		// csrf_token cookie Domain (Blocco #2.4): threaded from
-		// cfg.CookieDomain (COOKIE_DOMAIN env var). Empty stays
+		// cfg.HTTP.CookieDomain (COOKIE_DOMAIN env var). Empty stays
 		// host-only, which is correct for dev (localhost crosses
 		// different ports and a parent-domain match wouldn't help).
 		// Production sets e.g. ".instaedit.org" so the SPA on
@@ -357,7 +357,7 @@ func Wire(ctx context.Context) (*App, error) {
 		// they are HttpOnly on the API origin, JS cannot read them
 		// anyway, and giving them a Domain would only widen the
 		// CSRF attack surface for zero security upside.
-		api.WithCookieDomain(cfg.CookieDomain),
+		api.WithCookieDomain(cfg.HTTP.CookieDomain),
 		api.WithRateLimitService(rateLimitSvc),
 		api.WithWebhookStore(webhookRepo),
 		// ADMIN_INVITE_TOKEN gates public registration. If the env
@@ -384,7 +384,7 @@ func Wire(ctx context.Context) (*App, error) {
 			Release:     cfg.Monitoring.SentryRelease,
 			// ServerName is intentionally LET-default (the
 			// SDK reads it from the OS). Overriding with
-			// cfg.AppEnv would double-up the env label.
+			// cfg.HTTP.AppEnv would double-up the env label.
 		}
 		if err := sentry.Init(clientOpts); err != nil {
 			// Sentry init failure is SOFT: log + continue without
@@ -425,7 +425,7 @@ func Wire(ctx context.Context) (*App, error) {
 	// exposed separately by the worker process via the WorkerRegistry.
 	opts = append(opts, api.WithDB(db))
 
-	router, err := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
+	router, err := api.NewRouter(capRouter, userRepo, authMgr, cfg.HTTP.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)
 	if err != nil {
 		return nil, fmt.Errorf("build router: %w", err)
@@ -434,7 +434,7 @@ func Wire(ctx context.Context) (*App, error) {
 	slog.Info("Router configured",
 		"jwt_access_ttl_minutes", cfg.Auth.JWTAccessTTLMinutes,
 		"jwt_refresh_ttl_days", cfg.Auth.JWTRefreshTTLDays,
-		"frontend_url", cfg.FrontendURL,
+		"frontend_url", cfg.HTTP.FrontendURL,
 		"cors_origins", corsOrigins,
 		"platforms", capRouter.Names(),
 		"api_keys_enabled", apiKeyRepo != nil,
@@ -502,7 +502,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				a.Vault,
 				a.WorkerID,
 				a.MemoryLimiter,
-				time.Duration(a.Cfg.PublishWorkerIntervalSeconds)*time.Second,
+				time.Duration(a.Cfg.Worker.PublishWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 			)
 			deliveryRegistry := services.NewDeliveryRegistry()
@@ -562,7 +562,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				a.Vault,
 				a.WorkerID,
 				a.MemoryLimiter,
-				time.Duration(a.Cfg.ReconcileWorkerIntervalSeconds)*time.Second,
+				time.Duration(a.Cfg.Worker.ReconcileWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 			)
 			return rw.Run(ctx)
@@ -589,7 +589,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		Name:     "webhook",
 		Critical: true,
 		Run: func(ctx context.Context) error {
-			ww := worker.NewWebhookWorker(a.WebhookRepo, time.Duration(a.Cfg.WebhookWorkerIntervalSeconds)*time.Second)
+			ww := worker.NewWebhookWorker(a.WebhookRepo, time.Duration(a.Cfg.Worker.WebhookWorkerIntervalSeconds)*time.Second)
 			return ww.Run(ctx)
 		},
 	})
@@ -610,7 +610,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		Run: func(ctx context.Context) error {
 			scw := worker.NewSessionsCleanupWorker(
 				a.SessionsSvc,
-				time.Duration(a.Cfg.SessionCleanupIntervalSeconds)*time.Second,
+				time.Duration(a.Cfg.Worker.SessionCleanupIntervalSeconds)*time.Second,
 				slog.Default(),
 			)
 			return scw.Run(ctx)
@@ -644,12 +644,12 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		Critical: true,
 		Run: func(ctx context.Context) error {
 			uploadOpts := worker.UploadWorkerOptions{
-				IngestConcurrency: a.Cfg.UploadIngestConcurrency,
-				UploadConcurrency: a.Cfg.YouTubeUploadConcurrency,
-				LeaseTTL:          time.Duration(a.Cfg.UploadLeaseTTLSeconds) * time.Second,
-				HeartbeatInterval: time.Duration(a.Cfg.UploadHeartbeatIntervalSeconds) * time.Second,
-				ReclaimInterval:   time.Duration(a.Cfg.UploadReclaimIntervalSeconds) * time.Second,
-				ReclaimOnStart:    a.Cfg.UploadReclaimOnStart,
+				IngestConcurrency: a.Cfg.Worker.UploadIngestConcurrency,
+				UploadConcurrency: a.Cfg.Worker.YouTubeUploadConcurrency,
+				LeaseTTL:          time.Duration(a.Cfg.Worker.UploadLeaseTTLSeconds) * time.Second,
+				HeartbeatInterval: time.Duration(a.Cfg.Worker.UploadHeartbeatIntervalSeconds) * time.Second,
+				ReclaimInterval:   time.Duration(a.Cfg.Worker.UploadReclaimIntervalSeconds) * time.Second,
+				ReclaimOnStart:    a.Cfg.Worker.UploadReclaimOnStart,
 			}
 			sourceRegistry := worker.NewArtifactSourceRegistry()
 			if provider, ok := a.CapRouter.Get("google-drive"); ok {
@@ -678,7 +678,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				a.Vault,
 				sourceRegistry,
 				repository.NewExternalDeliveryRepository(a.DB),
-				time.Duration(a.Cfg.UploadWorkerIntervalSeconds)*time.Second,
+				time.Duration(a.Cfg.Worker.UploadWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 				uploadOpts,
 			)

@@ -15,7 +15,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
-// P1#6 — chunk size is now configurable via cfg.YouTubeUploadChunkBytes
+// P1#6 — chunk size is now configurable via cfg.Worker.YouTubeUploadChunkBytes
 // (env YOUTUBE_UPLOAD_CHUNK_BYTES, default 16 MB / 16777216, must be a
 // multiple of 262144 = 256 KB per Google's resumable upload protocol).
 

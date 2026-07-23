@@ -72,13 +72,13 @@ func WireCore(ctx context.Context) (*Core, error) {
 	}
 
 	logLevel := slog.LevelInfo
-	if cfg.LogLevel == "debug" {
+	if cfg.HTTP.LogLevel == "debug" {
 		logLevel = slog.LevelDebug
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)
 
-	slog.Info("Environment", "app_env", cfg.AppEnv)
+	slog.Info("Environment", "app_env", cfg.HTTP.AppEnv)
 
 	db, err := database.Connect(&cfg.Database)
 	if err != nil {
@@ -127,7 +127,7 @@ func WireCore(ctx context.Context) (*Core, error) {
 		cfg.Auth.JWTSecret,
 		time.Duration(cfg.Auth.JWTAccessTTLMinutes)*time.Minute,
 		time.Duration(cfg.Auth.JWTRefreshTTLDays)*24*time.Hour,
-	).WithEnv(cfg.AppEnv)
+	).WithEnv(cfg.HTTP.AppEnv)
 
 	oneTimeCodes := api.NewOneTimeCodePostgresStore(db, 60*time.Second)
 

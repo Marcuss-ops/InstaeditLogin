@@ -36,7 +36,7 @@ import (
 // webhook worker. Faster than the publish driver (30s) so an
 // end-to-end delivery latency is bounded by a 1-2s ceiling under
 // typical load. Operators can override via env in the future
-// (Taglio-style cfg.WebhookWorkerIntervalSeconds).
+// (Taglio-style cfg.Worker.WebhookWorkerIntervalSeconds).
 const DefaultWebhookInterval = 5 * time.Second
 
 // DefaultWebhookHTTPTimeout caps any single POST attempt. Past

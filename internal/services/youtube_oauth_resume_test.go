@@ -138,10 +138,12 @@ func newResumeReadyService(t *testing.T, store YouTubeSessionStore, enc SessionE
 		Auth: config.AuthConfig{
 			YouTubeClientID: "test-client",
 		},
-		YouTubeUploadChunkBytes:    256 * 1024,
-		YouTubeUploadMaxRetries:    2,
-		YouTubeUploadBackoffBaseMs: 1000,
-		YouTubeUploadBackoffCapMs:  300000,
+		Worker: config.WorkerConfig{
+			YouTubeUploadChunkBytes:    256 * 1024,
+			YouTubeUploadMaxRetries:    2,
+			YouTubeUploadBackoffBaseMs: 1000,
+			YouTubeUploadBackoffCapMs:  300000,
+		},
 	}
 	opts := loadYouTubeUploadOptions(cfg)
 	svc := &YouTubeOAuthService{
@@ -390,8 +392,8 @@ func TestValidate_YouTubeUploadChunkBytes_DefaultsTo16MiB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
-	if cfg.YouTubeUploadChunkBytes != 16*1024*1024 {
-		t.Errorf("default chunk size: got %d, want 16777216 (16 MB)", cfg.YouTubeUploadChunkBytes)
+	if cfg.Worker.YouTubeUploadChunkBytes != 16*1024*1024 {
+		t.Errorf("default chunk size: got %d, want 16777216 (16 MB)", cfg.Worker.YouTubeUploadChunkBytes)
 	}
 }
 
@@ -417,8 +419,8 @@ func TestValidate_YouTubeUploadChunkBytes_MultiplesOf256KBOK(t *testing.T) {
 				t.Errorf("Load() with size=%d: %v", sz, err)
 				return
 			}
-			if cfg.YouTubeUploadChunkBytes != sz {
-				t.Errorf("round-trip: got %d, want %d", cfg.YouTubeUploadChunkBytes, sz)
+			if cfg.Worker.YouTubeUploadChunkBytes != sz {
+				t.Errorf("round-trip: got %d, want %d", cfg.Worker.YouTubeUploadChunkBytes, sz)
 			}
 		})
 	}

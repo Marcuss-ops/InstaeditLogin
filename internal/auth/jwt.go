@@ -68,7 +68,7 @@ const (
 // env claim; their Verify call falls under the same skip path
 // (manager.env == ""), so the rollout is silent — but skipping
 // is the wrong long-term posture for production. Callers wiring
-// the real binary MUST chain WithEnv(cfg.AppEnv) at construction
+// the real binary MUST chain WithEnv(cfg.HTTP.AppEnv) at construction
 // time (see internal/bootstrap.Wire).
 type Claims struct {
 	UserID      int64  `json:"uid"`
@@ -154,7 +154,7 @@ func NewManager(secret string, ttls ...interface{}) *Manager {
 // issued token with `env` and to reject every verified token whose
 // env claim differs. Builder form so existing callers (and the 17+
 // test fixtures using NewManager directly) remain untouched;
-// production bootstrap.Wire chains WithEnv(cfg.AppEnv) once at
+// production bootstrap.Wire chains WithEnv(cfg.HTTP.AppEnv) once at
 // startup. Passing an empty env disables the check (equivalent to
 // not calling WithEnv at all) — useful for tests that mint and
 // verify tokens in the same env (or no env at all).

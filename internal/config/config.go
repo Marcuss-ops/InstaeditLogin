@@ -199,6 +199,57 @@ type MonitoringConfig struct {
 	MetricsPort int
 }
 
+// HTTPConfig holds HTTP/server surface configuration.
+type HTTPConfig struct {
+	// FrontendURL is where the OAuth callback should redirect.
+	FrontendURL string
+	// AllowedCORSOrigins is the comma-separated list of origins.
+	AllowedCORSOrigins []string
+	// CookieDomain is the optional `Domain` attribute applied to the
+	// csrf_token cookie ONLY (session + refresh cookies stay host-only).
+	CookieDomain string
+	// LogLevel is one of "debug" or "info" (default "info").
+	LogLevel string
+	// AppEnv is the deployment environment: dev|staging|production.
+	AppEnv string
+}
+
+// WorkerConfig holds background-worker tuning parameters.
+type WorkerConfig struct {
+	// PublishWorkerIntervalSeconds is the cadence of the publish worker.
+	PublishWorkerIntervalSeconds int
+	// ReconcileWorkerIntervalSeconds is the cadence of the reconcile worker.
+	ReconcileWorkerIntervalSeconds int
+	// WebhookWorkerIntervalSeconds is the cadence of the webhook worker.
+	WebhookWorkerIntervalSeconds int
+	// SessionCleanupIntervalSeconds is the cadence of the sessions cleanup worker.
+	SessionCleanupIntervalSeconds int
+	// UploadWorkerIntervalSeconds is the cadence of the upload worker.
+	UploadWorkerIntervalSeconds int
+	// UploadIngestConcurrency is the number of ingest goroutines.
+	UploadIngestConcurrency int
+	// YouTubeUploadConcurrency is the number of YouTube upload goroutines.
+	YouTubeUploadConcurrency int
+	// UploadLeaseTTLSeconds is the lease TTL for upload jobs.
+	UploadLeaseTTLSeconds int
+	// UploadHeartbeatIntervalSeconds is the heartbeat interval for upload jobs.
+	UploadHeartbeatIntervalSeconds int
+	// UploadReclaimIntervalSeconds is the reclaim interval for stale uploads.
+	UploadReclaimIntervalSeconds int
+	// UploadReclaimOnStart controls whether stale uploads are reclaimed at startup.
+	UploadReclaimOnStart bool
+	// YouTubeUploadChunkBytes is the resumable upload chunk size.
+	YouTubeUploadChunkBytes int64
+	// YouTubeUploadMaxRetries is the per-chunk PUT retry budget.
+	YouTubeUploadMaxRetries int
+	// YouTubeUploadBackoffBaseMs is the base backoff in milliseconds.
+	YouTubeUploadBackoffBaseMs int
+	// YouTubeUploadBackoffCapMs is the backoff cap in milliseconds.
+	YouTubeUploadBackoffCapMs int
+	// YouTubeDailyQuotaLimit is the daily videos.insert quota cap.
+	YouTubeDailyQuotaLimit int
+}
+
 // Config holds all configuration for the application.
 //
 // Taglio 5b: SERVER_PORT + SERVER_HOST removed — the server listens on the
@@ -227,9 +278,7 @@ type Config struct {
 	// from VeloxAPIToken and VeloxControlJWTSecret. Loaded from
 	// VELOX_WEBHOOK_SECRET.
 	// FrontendURL is where the OAuth callback should redirect.
-	FrontendURL string
 	// AllowedCORSOrigins is the comma-separated list of origins.
-	AllowedCORSOrigins []string
 
 	// Database (PostgreSQL).
 	Database DatabaseConfig
@@ -262,11 +311,6 @@ type Config struct {
 	// retries recover a transient network blip during the PUT, while
 	// job-level retries recover a budget-exhausted publish that the
 	// inner chunk loop couldn't escape.
-	YouTubeUploadChunkBytes    int64 // YOUTUBE_UPLOAD_CHUNK_BYTES; default 16777216 (16 MB), MUST be multiple of 262144 (256 KB)
-	YouTubeUploadMaxRetries    int   // YOUTUBE_UPLOAD_MAX_RETRIES; default 5 (per-chunk PUT budget, distinct from upload-job retries)
-	YouTubeUploadBackoffBaseMs int   // YOUTUBE_UPLOAD_BACKOFF_BASE_MS; default 1000 (1 s)
-	YouTubeUploadBackoffCapMs  int   // YOUTUBE_UPLOAD_BACKOFF_CAP_MS; default 300000 (5 min); applies to CALCULATED backoff only, NOT server Retry-After
-	YouTubeDailyQuotaLimit     int   // YOUTUBE_DAILY_QUOTA_LIMIT; default 300; daily pre-call videos.insert gate. 1 videos.insert = 1 bucket unit under the 2026 quota model (default 100/day from Google, 300/day for the 200-channel rollout with 50% buffer). When calls >= limit, publish_worker stamps retry_wait + metadata.retry_after_seconds until next UTC midnight.
 
 	// Encryption (Blocco #2.2 — multi-key support).
 	//
@@ -327,13 +371,10 @@ type Config struct {
 	// variables for new deployments.
 
 	// Logging
-	LogLevel string
 
 	// AppEnv is the deployment environment.
-	AppEnv string
 
 	// Background worker tuning.
-	PublishWorkerIntervalSeconds int
 	// Taglio 5.x — independent tick interval for the new
 	// ReconcileWorker goroutine. The driver (PublishWorker) ticks
 	// at PublishWorkerIntervalSeconds (default 30s); the reconciler
@@ -341,7 +382,6 @@ type Config struct {
 	// publishing→published transition is observed promptly without
 	// coupling to the driver's cadence. Both run as separate
 	// goroutines on independent contexts with parallel shutdown.
-	ReconcileWorkerIntervalSeconds int
 	// SPRINT 4.2 — independent tick interval for the WebhookWorker
 	// goroutine. Drains the webhook_deliveries table every
 	// WEBHOOK_WORKER_INTERVAL_SECONDS (default 5s). Faster than
@@ -349,7 +389,6 @@ type Config struct {
 	// bounded by a 1-2s ceiling under typical load. Same
 	// lifecycle shape: independent goroutine, ctx-cancellable,
 	// drained in parallel on shutdown.
-	WebhookWorkerIntervalSeconds int
 
 	// SessionCleanupIntervalSeconds — cadence of the retention
 	// policy goroutine (commit: cleanup-policy). Drives the
@@ -359,12 +398,10 @@ type Config struct {
 	// (5 min) is coarse enough to not thrash the DB under traffic
 	// spikes but fine-grained enough to keep the sessions table
 	// bounded under normal load.
-	SessionCleanupIntervalSeconds int
 
 	// UploadWorkerIntervalSeconds — cadence of the background upload
 	// worker that drains upload_jobs (public or authenticated Google
 	// Drive imports). Default 30s.
-	UploadWorkerIntervalSeconds int
 
 	// P1 step 2 — ingest pool / upload pool split. The upload_worker
 	// package now spawns two parallel pools against the upload_jobs
@@ -377,12 +414,6 @@ type Config struct {
 	// 'ready_to_publish' and runs videos.insert. Both pools use the
 	// same lease + heartbeat machinery, with distinct workerID
 	// prefixes so a Mark* CAS can never collide.
-	UploadIngestConcurrency        int  // UPLOAD_INGEST_CONCURRENCY; default 3
-	YouTubeUploadConcurrency       int  // YOUTUBE_UPLOAD_CONCURRENCY; default 4
-	UploadLeaseTTLSeconds          int  // UPLOAD_LEASE_TTL_SECONDS; default 60
-	UploadHeartbeatIntervalSeconds int  // UPLOAD_HEARTBEAT_INTERVAL_SECONDS; default 20
-	UploadReclaimIntervalSeconds   int  // UPLOAD_RECLAIM_INTERVAL_SECONDS; default 30
-	UploadReclaimOnStart           bool // UPLOAD_RECLAIM_ON_START; default true
 
 	// Stripe billing (optional — billing endpoints are 501 when not configured).
 	StripeSecretKey     string
@@ -420,7 +451,6 @@ type Config struct {
 	// RFC 6265). Validation is intentionally NOT applied — the
 	// HTTPS / SameSite=None / leading-dot trade-off is the
 	// operator's call.
-	CookieDomain string
 
 	// AdminInviteToken gates the public registration endpoint
 	// (POST /api/v1/auth/register). The handler requires the request
@@ -440,6 +470,10 @@ type Config struct {
 	// bucket; ops must explicitly opt-in to "testing" when validating
 	// against a staging OAuth-client. Loaded from env APP_MODE.
 	AppMode string
+	// HTTP/server surface configuration.
+	HTTP HTTPConfig
+	// Background worker tuning.
+	Worker WorkerConfig
 }
 
 // Load reads configuration from environment variables.
@@ -497,8 +531,13 @@ func Load() (*Config, error) {
 			// /api/v1/auth/register with X-Admin-Token).
 			AdminInviteToken: getEnv("ADMIN_INVITE_TOKEN", ""),
 		},
-		FrontendURL:        getEnv("FRONTEND_URL", ""),
-		AllowedCORSOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
+		HTTP: HTTPConfig{
+			FrontendURL:        getEnv("FRONTEND_URL", ""),
+			AllowedCORSOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
+			CookieDomain:       getEnv("COOKIE_DOMAIN", ""),
+			LogLevel:           getEnv("LOG_LEVEL", "info"),
+			AppEnv:             getEnv("APP_ENV", "dev"),
+		},
 		Database: DatabaseConfig{
 			DatabaseURL: getEnv("DATABASE_URL", ""),
 			DBHost:      getEnv("DB_HOST", "localhost"),
@@ -508,11 +547,29 @@ func Load() (*Config, error) {
 			DBName:      getEnv("DB_NAME", "instaedit_login"),
 			DBSSLMode:   getEnv("DB_SSLMODE", "disable"),
 		},
-		// P1#6 — YouTube resumable upload tuning. Defaults mirror the
-		// valutazione doc spec (16 MB chunks, 5 per-chunk retries, 1 s/5 min
-		// backoff). Validation runs unconditionally (so an operator typo
-		// surfaces at boot, not first upload).
-		YouTubeUploadChunkBytes: getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
+		Worker: WorkerConfig{
+			// P1#6 — YouTube resumable upload tuning. Defaults mirror the
+			// valutazione doc spec (16 MB chunks, 5 per-chunk retries, 1 s/5 min
+			// backoff). Validation runs unconditionally (so an operator typo
+			// surfaces at boot, not first upload).
+			YouTubeUploadChunkBytes:        getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
+			YouTubeUploadMaxRetries:        getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
+			YouTubeUploadBackoffBaseMs:     getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
+			YouTubeUploadBackoffCapMs:      getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
+			YouTubeDailyQuotaLimit:         getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
+			PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
+			ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
+			WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
+			SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
+			UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+			// P1 step 2 — worker pool config (see struct comment above).
+			UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
+			YouTubeUploadConcurrency:       getEnvInt("YOUTUBE_UPLOAD_CONCURRENCY", 4),
+			UploadLeaseTTLSeconds:          getEnvInt("UPLOAD_LEASE_TTL_SECONDS", 60),
+			UploadHeartbeatIntervalSeconds: getEnvInt("UPLOAD_HEARTBEAT_INTERVAL_SECONDS", 20),
+			UploadReclaimIntervalSeconds:   getEnvInt("UPLOAD_RECLAIM_INTERVAL_SECONDS", 30),
+			UploadReclaimOnStart:           getEnvBool("UPLOAD_RECLAIM_ON_START", true),
+		},
 		// AppMode lets operators pin the deployment to Google's OAuth-
 		// consent-screen publishing status. "production" means refresh
 		// tokens are durable (no automatic 7-day expiry); "testing"
@@ -521,11 +578,7 @@ func Load() (*Config, error) {
 		// Default "production" so a missing env var falls into the
 		// safer bucket; ops must explicitly opt-in to "testing" when
 		// validating against a staging OAuth-client.
-		AppMode:                    getEnv("APP_MODE", "production"),
-		YouTubeUploadMaxRetries:    getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
-		YouTubeUploadBackoffBaseMs: getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
-		YouTubeUploadBackoffCapMs:  getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
-		YouTubeDailyQuotaLimit:     getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
+		AppMode: getEnv("APP_MODE", "production"),
 		Storage: StorageConfig{
 			S3Endpoint:                getEnv("S3_ENDPOINT", ""),
 			S3Bucket:                  getEnv("S3_BUCKET", ""),
@@ -542,26 +595,13 @@ func Load() (*Config, error) {
 		// parsing + validation happens in validate(); Load() only
 		// captures the raw strings so validate() can surface
 		// high-quality error messages with the original input.
-		EncryptionKeysRaw:              getEnv("ENCRYPTION_KEYS", ""),
-		ActiveEncryptionKeyIDRaw:       getEnv("ACTIVE_ENCRYPTION_KEY_ID", ""),
-		LogLevel:                       getEnv("LOG_LEVEL", "info"),
-		AppEnv:                         getEnv("APP_ENV", "dev"),
-		PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
-		ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
-		WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
-		SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
-		UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+		EncryptionKeysRaw:        getEnv("ENCRYPTION_KEYS", ""),
+		ActiveEncryptionKeyIDRaw: getEnv("ACTIVE_ENCRYPTION_KEY_ID", ""),
 		// P1 step 2 — worker pool config (see struct comment above).
-		UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
-		YouTubeUploadConcurrency:       getEnvInt("YOUTUBE_UPLOAD_CONCURRENCY", 4),
-		UploadLeaseTTLSeconds:          getEnvInt("UPLOAD_LEASE_TTL_SECONDS", 60),
-		UploadHeartbeatIntervalSeconds: getEnvInt("UPLOAD_HEARTBEAT_INTERVAL_SECONDS", 20),
-		UploadReclaimIntervalSeconds:   getEnvInt("UPLOAD_RECLAIM_INTERVAL_SECONDS", 30),
-		UploadReclaimOnStart:           getEnvBool("UPLOAD_RECLAIM_ON_START", true),
-		StripeSecretKey:                getEnv("STRIPE_SECRET_KEY", ""),
-		StripeWebhookSecret:            getEnv("STRIPE_WEBHOOK_SECRET", ""),
-		StripeSuccessURL:               getEnv("STRIPE_SUCCESS_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?success=1"),
-		StripeCancelURL:                getEnv("STRIPE_CANCEL_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?canceled=1"),
+		StripeSecretKey:     getEnv("STRIPE_SECRET_KEY", ""),
+		StripeWebhookSecret: getEnv("STRIPE_WEBHOOK_SECRET", ""),
+		StripeSuccessURL:    getEnv("STRIPE_SUCCESS_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?success=1"),
+		StripeCancelURL:     getEnv("STRIPE_CANCEL_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?canceled=1"),
 		// COOKIE_DOMAIN: optional cross-subdomain scope for the
 		// csrf_token cookie ONLY (session + refresh stay host-only).
 		// Defaults to empty so dev (localhost:5173 + localhost:8080)
@@ -572,7 +612,6 @@ func Load() (*Config, error) {
 		// Domain shape (leading dot for cross-subdomain, exact host
 		// to pin, etc.) and Go's http.Cookie Domain field will
 		// pass it straight through to the browser unchanged.
-		CookieDomain: getEnv("COOKIE_DOMAIN", ""),
 	}
 
 	// Resolve JWT TTL defaults and legacy fallback. Access TTL defaults
@@ -607,14 +646,14 @@ func (c *Config) validate() error {
 	// Metrics are fail-closed in production: missing or incomplete
 	// basic-auth credentials prevent the process from booting. This
 	// keeps /api/v1/metrics from ever being served publicly in prod.
-	if c.AppEnv == "production" && !c.metricsConfigured() {
+	if c.HTTP.AppEnv == "production" && !c.metricsConfigured() {
 		return fmt.Errorf("METRICS_BASIC_AUTH_USER and METRICS_BASIC_AUTH_PASS are required in production")
 	}
 
-	switch c.AppEnv {
+	switch c.HTTP.AppEnv {
 	case "dev", "staging", "production":
 	default:
-		return fmt.Errorf("APP_ENV must be one of dev|staging|production (got %q)", c.AppEnv)
+		return fmt.Errorf("APP_ENV must be one of dev|staging|production (got %q)", c.HTTP.AppEnv)
 	}
 
 	// Database: DATABASE_URL takes precedence; individual params fallback.
@@ -675,7 +714,7 @@ func (c *Config) validate() error {
 	// validation; the absence is the signal the operator gave us to
 	// disable the observability surface.
 	if c.Monitoring.SentryDSN != "" {
-		if err := validateSentryDSN(c.Monitoring.SentryDSN, c.AppEnv); err != nil {
+		if err := validateSentryDSN(c.Monitoring.SentryDSN, c.HTTP.AppEnv); err != nil {
 			return fmt.Errorf("SENTRY_DSN: %w", err)
 		}
 		// Defaults: if the operator set SENTRY_DSN but didn't supply
@@ -683,7 +722,7 @@ func (c *Config) validate() error {
 		// dashboard tags events correctly. Empty Release is fine —
 		// the SDK emits events with no release tag (still useful).
 		if c.Monitoring.SentryEnvironment == "" {
-			c.Monitoring.SentryEnvironment = c.AppEnv
+			c.Monitoring.SentryEnvironment = c.HTTP.AppEnv
 		}
 	}
 
@@ -720,17 +759,17 @@ func (c *Config) validate() error {
 	// immediately and the chunk-loop would poll as fast as the worker can
 	// count.
 	if c.Auth.YouTubeClientID != "" {
-		if c.YouTubeUploadChunkBytes <= 0 || c.YouTubeUploadChunkBytes%262144 != 0 {
-			return fmt.Errorf("YOUTUBE_UPLOAD_CHUNK_BYTES must be a positive multiple of 256 KB (262144 bytes); got %d (default 16777216 = 16 MB)", c.YouTubeUploadChunkBytes)
+		if c.Worker.YouTubeUploadChunkBytes <= 0 || c.Worker.YouTubeUploadChunkBytes%262144 != 0 {
+			return fmt.Errorf("YOUTUBE_UPLOAD_CHUNK_BYTES must be a positive multiple of 256 KB (262144 bytes); got %d (default 16777216 = 16 MB)", c.Worker.YouTubeUploadChunkBytes)
 		}
-		if c.YouTubeUploadMaxRetries < 1 {
-			return fmt.Errorf("YOUTUBE_UPLOAD_MAX_RETRIES must be at least 1 (got %d)", c.YouTubeUploadMaxRetries)
+		if c.Worker.YouTubeUploadMaxRetries < 1 {
+			return fmt.Errorf("YOUTUBE_UPLOAD_MAX_RETRIES must be at least 1 (got %d)", c.Worker.YouTubeUploadMaxRetries)
 		}
-		if c.YouTubeUploadBackoffBaseMs <= 0 {
-			return fmt.Errorf("YOUTUBE_UPLOAD_BACKOFF_BASE_MS must be positive (got %d)", c.YouTubeUploadBackoffBaseMs)
+		if c.Worker.YouTubeUploadBackoffBaseMs <= 0 {
+			return fmt.Errorf("YOUTUBE_UPLOAD_BACKOFF_BASE_MS must be positive (got %d)", c.Worker.YouTubeUploadBackoffBaseMs)
 		}
-		if c.YouTubeUploadBackoffCapMs < c.YouTubeUploadBackoffBaseMs {
-			return fmt.Errorf("YOUTUBE_UPLOAD_BACKOFF_CAP_MS (%d) must be >= YOUTUBE_UPLOAD_BACKOFF_BASE_MS (%d)", c.YouTubeUploadBackoffCapMs, c.YouTubeUploadBackoffBaseMs)
+		if c.Worker.YouTubeUploadBackoffCapMs < c.Worker.YouTubeUploadBackoffBaseMs {
+			return fmt.Errorf("YOUTUBE_UPLOAD_BACKOFF_CAP_MS (%d) must be >= YOUTUBE_UPLOAD_BACKOFF_BASE_MS (%d)", c.Worker.YouTubeUploadBackoffCapMs, c.Worker.YouTubeUploadBackoffBaseMs)
 		}
 	}
 	if err := c.validateOptionalPlatform("GOOGLE_DRIVE", c.Auth.GoogleDriveClientID, c.Auth.GoogleDriveClientSecret); err != nil {

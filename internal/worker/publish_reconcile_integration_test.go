@@ -236,9 +236,9 @@ func (p *workerPair) Shutdown() {
 
 // runWorkerPair spawns PublishWorker + ReconcileWorker on parallel
 // goroutines, wired to the rig's dependencies. The workers' tick
-// intervals come from rig.CFG.PublishWorkerIntervalSeconds (default
+// intervals come from rig.CFG.Worker.PublishWorkerIntervalSeconds (default
 // 30s, but not material here since ListPending is empty) and
-// rig.CFG.ReconcileWorkerIntervalSeconds (default 5s — drives both
+// rig.CFG.Worker.ReconcileWorkerIntervalSeconds (default 5s — drives both
 // tests' wall-clock bounds).
 //
 // Each worker gets its own cancellable ctx with the production
@@ -261,14 +261,14 @@ func runWorkerPair(rig *rig) *workerPair {
 		rig.PostRepo, rig.UserRepo, rig.Router, rig.Vault,
 		"test-worker-id",
 		nil, // no MemoryLimiter needed in integration tests
-		time.Duration(rig.CFG.PublishWorkerIntervalSeconds)*time.Second,
+		time.Duration(rig.CFG.Worker.PublishWorkerIntervalSeconds)*time.Second,
 		nil, // inherit slog.Default() (matches cmd/server/main.go wiring)
 	)
 	recWorker := NewReconcileWorker(
 		rig.PostRepo, rig.UserRepo, rig.Router, rig.Vault,
 		"test-worker-id",
 		nil, // no MemoryLimiter needed in integration tests
-		time.Duration(rig.CFG.ReconcileWorkerIntervalSeconds)*time.Second,
+		time.Duration(rig.CFG.Worker.ReconcileWorkerIntervalSeconds)*time.Second,
 		nil,
 	)
 
@@ -414,7 +414,7 @@ func makeTestConfig(publishInterval, reconcileInterval int) *config.Config {
 //
 // What it asserts:
 //  1. The pre-seeded post_target row (status='publishing') transitions
-//     to status='published' within cfg.ReconcileWorkerIntervalSeconds
+//     to status='published' within cfg.Worker.ReconcileWorkerIntervalSeconds
 //     + 1s epsilon. The bound is the canonical Taglio 5.x wall-clock
 //     guarantee: an async publish's terminal transition is observed
 //     within ONE reconciler tick (5s default + epsilon).
@@ -451,11 +451,11 @@ func TestPublishAndReconcileWorkers_AsyncRowTransitionsToPublished(t *testing.T)
 	defer pair.Shutdown()
 
 	// Poll the row's status until 'published' OR the budget is
-	// exhausted. cfg.ReconcileWorkerIntervalSeconds + epsilon = the
+	// exhausted. cfg.Worker.ReconcileWorkerIntervalSeconds + epsilon = the
 	// canonical Taglio 5.x wall-clock bound. Uses
 	// runtime.WaitReadyMatch for the same DRY reasons as
 	// InFlightRetriesAcrossTicks (below).
-	tickInterval := time.Duration(rig.CFG.ReconcileWorkerIntervalSeconds) * time.Second
+	tickInterval := time.Duration(rig.CFG.Worker.ReconcileWorkerIntervalSeconds) * time.Second
 	budget := tickInterval + 1*time.Second
 
 	var finalStatus, finalProviderState string
@@ -575,7 +575,7 @@ func TestPublishAndReconcileWorkers_InFlightRetriesAcrossTicks(t *testing.T) {
 	// write latency + httptest.Server roundtrip on a slow CI host.
 	// Tighten the epsilon if you want stricter bounds; the 2s slack
 	// just protects against flakes on shared CI runners.
-	tickInterval := time.Duration(rig.CFG.ReconcileWorkerIntervalSeconds) * time.Second
+	tickInterval := time.Duration(rig.CFG.Worker.ReconcileWorkerIntervalSeconds) * time.Second
 	epsilon := 2 * time.Second
 	budget := 3*tickInterval + epsilon
 	startTime := time.Now()

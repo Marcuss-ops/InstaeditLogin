@@ -22,7 +22,7 @@ import (
 )
 
 // DefaultSessionsCleanupInterval is the fallback tick interval.
-// Production cadence comes from cfg.SessionCleanupIntervalSeconds
+// Production cadence comes from cfg.Worker.SessionCleanupIntervalSeconds
 // (env: SESSION_CLEANUP_INTERVAL_SECONDS, default 300s = 5 min).
 const DefaultSessionsCleanupInterval = 5 * time.Minute
 
@@ -39,7 +39,7 @@ type SessionCleaner interface {
 
 // SessionsCleanupWorker periodically hard-deletes stale sessions.
 // One struct, one Run loop, ctx-cancellable. Tick interval comes
-// from cfg.SessionCleanupIntervalSeconds; the constructor enforces
+// from cfg.Worker.SessionCleanupIntervalSeconds; the constructor enforces
 // a sane default if the configured value is <= 0 (we do NOT want
 // a tight loop from a typo).
 type SessionsCleanupWorker struct {

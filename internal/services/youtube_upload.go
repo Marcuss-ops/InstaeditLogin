@@ -47,10 +47,10 @@ type youTubeUploadDeps struct {
 // cfg manually might skip Validate()).
 func loadYouTubeUploadOptions(cfg *config.Config) youTubeUploadOptions {
 	o := youTubeUploadOptions{
-		ChunkSize:   cfg.YouTubeUploadChunkBytes,
-		MaxRetries:  cfg.YouTubeUploadMaxRetries,
-		BackoffBase: time.Duration(cfg.YouTubeUploadBackoffBaseMs) * time.Millisecond,
-		BackoffCap:  time.Duration(cfg.YouTubeUploadBackoffCapMs) * time.Millisecond,
+		ChunkSize:   cfg.Worker.YouTubeUploadChunkBytes,
+		MaxRetries:  cfg.Worker.YouTubeUploadMaxRetries,
+		BackoffBase: time.Duration(cfg.Worker.YouTubeUploadBackoffBaseMs) * time.Millisecond,
+		BackoffCap:  time.Duration(cfg.Worker.YouTubeUploadBackoffCapMs) * time.Millisecond,
 	}
 	if o.ChunkSize <= 0 {
 		o.ChunkSize = 16 * 1024 * 1024

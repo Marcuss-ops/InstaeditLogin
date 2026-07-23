@@ -192,7 +192,7 @@ func WithCookieSecure(secure bool) RouterOption {
 //     upside — the SPA cannot read them anyway.
 //
 // Pass an empty string to disable (dev / localhost default).
-// Production wiring passes cfg.CookieDomain directly so COOKIE_DOMAIN
+// Production wiring passes cfg.HTTP.CookieDomain directly so COOKIE_DOMAIN
 // env controls the scope at deploy time.
 func WithCookieDomain(domain string) RouterOption {
 	return func(r *Router) { r.cookieDomain = domain }
