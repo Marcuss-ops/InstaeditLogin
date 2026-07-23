@@ -39,13 +39,36 @@ func insertPlatformAccount(t *testing.T, db *sql.DB, platform, platformUserID, u
 }
 
 // insertToken inserts an encrypted token for a platform_account.
+// After the P0#3 vault retarget (migration 053), every token row must
+// carry an oauth_connection_id. This helper creates the connection
+// record for the account when one does not already exist.
 func insertToken(t *testing.T, db *sql.DB, accountID int64, tokenType, tokenValue string) int64 {
 	t.Helper()
+	var oauthConnID int64
+	if err := db.QueryRow(
+		`WITH pa AS (SELECT user_id, platform, platform_user_id FROM platform_accounts WHERE id = $1)
+		 INSERT INTO oauth_connections (user_id, provider, provider_resource_id)
+		 SELECT user_id, platform, platform_user_id FROM pa
+		 ON CONFLICT (user_id, provider, provider_resource_id) DO UPDATE SET provider = EXCLUDED.provider
+		 RETURNING id`,
+		accountID,
+	).Scan(&oauthConnID); err != nil {
+		t.Fatalf("insert oauth_connection for token: %v", err)
+	}
+	if _, err := db.Exec(
+		`UPDATE platform_accounts SET oauth_connection_id = $1 WHERE id = $2 AND oauth_connection_id IS DISTINCT FROM $1`,
+		oauthConnID, accountID,
+	); err != nil {
+		t.Fatalf("link platform_account to oauth_connection: %v", err)
+	}
+
 	var tokID int64
 	if err := db.QueryRow(
-		`INSERT INTO tokens (platform_account_id, token_type, encrypted_token, scopes)
-		 VALUES ($1, $2, decode($3, 'hex'), ARRAY['test'])
-		 RETURNING id`, accountID, tokenType, tokenValue).Scan(&tokID); err != nil {
+		`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, scopes)
+		 VALUES ($1, $2, $3, decode($4, 'hex'), ARRAY['test'])
+		 RETURNING id`,
+		accountID, oauthConnID, tokenType, tokenValue,
+	).Scan(&tokID); err != nil {
 		t.Fatalf("insert token: %v", err)
 	}
 	return tokID

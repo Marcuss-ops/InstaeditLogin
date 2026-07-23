@@ -321,15 +321,36 @@ func seedTestFixtures(t *testing.T, db *sql.DB, enc *crypto.Encryptor) (workspac
 
 	// 4. tokens — pre-insert an UNEXPIRED encrypted access token so
 	// the reconciler's vault.Renew takes the fast path.
+	// Migration 053 requires every token row to carry an
+	// oauth_connection_id, so first create the connection for the seed
+	// platform account.
+	var oauthConnID int64
+	if err := db.QueryRow(
+		`WITH pa AS (SELECT user_id, platform, platform_user_id FROM platform_accounts WHERE id = $1)
+		 INSERT INTO oauth_connections (user_id, provider, provider_resource_id)
+		 SELECT user_id, platform, platform_user_id FROM pa
+		 ON CONFLICT (user_id, provider, provider_resource_id) DO UPDATE SET provider = EXCLUDED.provider
+		 RETURNING id`,
+		platformAccountID,
+	).Scan(&oauthConnID); err != nil {
+		t.Fatalf("seed oauth_connection: %v", err)
+	}
+	if _, err := db.Exec(
+		`UPDATE platform_accounts SET oauth_connection_id = $1 WHERE id = $2`,
+		oauthConnID, platformAccountID,
+	); err != nil {
+		t.Fatalf("seed platform_account oauth link: %v", err)
+	}
+
 	encryptedAccess, err := enc.Encrypt("dummy-access-token-integration-test")
 	if err != nil {
 		t.Fatalf("encrypt access token: %v", err)
 	}
 	expiresAt := time.Now().Add(1 * time.Hour)
 	if _, err := db.Exec(
-		`INSERT INTO tokens (platform_account_id, token_type, encrypted_token, expires_at, scopes)
-		 VALUES ($1, 'bearer', $2, $3, ARRAY['video.publish'])`,
-		platformAccountID, encryptedAccess, expiresAt,
+		`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, expires_at, scopes)
+		 VALUES ($1, $2, 'bearer', $3, $4, ARRAY['video.publish'])`,
+		platformAccountID, oauthConnID, encryptedAccess, expiresAt,
 	); err != nil {
 		t.Fatalf("seed tokens: %v", err)
 	}
@@ -397,9 +418,11 @@ func makeTestConfig(publishInterval, reconcileInterval int) *config.Config {
 			TikTokClientSecret: "integration-test-client-secret-must-be-32-chars-or-more",
 			TikTokRedirectURI:  "https://example.com/callback",
 		},
-		EncryptionKey:                  encKey,
-		PublishWorkerIntervalSeconds:   publishInterval,
-		ReconcileWorkerIntervalSeconds: reconcileInterval,
+		EncryptionKey: encKey,
+		Worker: config.WorkerConfig{
+			PublishWorkerIntervalSeconds:   publishInterval,
+			ReconcileWorkerIntervalSeconds: reconcileInterval,
+		},
 	}
 }
 

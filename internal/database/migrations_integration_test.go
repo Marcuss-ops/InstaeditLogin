@@ -33,7 +33,13 @@ import (
 var migrationsToTest = []string{
 	"001_init.sql",
 	"002_add_refresh_token.sql",
-	"003_posts_workspaces.sql",
+	// 003 is intentionally excluded from the reverse-order re-run
+	// subset: it originally created posts.scheduled_at, which was later
+	// dropped by 049b. Because RunMigrations (applied above) already
+	// brings the DB to the final schema, re-running 003 in reverse
+	// would re-add the dropped column/index and falsely report drift.
+	// 003 is still exercised by the full RunMigrations flow and by
+	// TestMigrations_001To012_AppliesCleanly.
 	"004_composite_token_index.sql",
 	"005_account_lifecycle.sql",
 	"006_media_assets.sql",
@@ -89,7 +95,7 @@ var requiredColumns = []struct{ Table, Column string }{
 	{"workspaces", "id"}, {"workspaces", "name"}, {"workspaces", "owner_id"}, {"workspaces", "created_at"},
 	{"platform_accounts", "workspace_id"},
 	{"posts", "id"}, {"posts", "workspace_id"}, {"posts", "title"}, {"posts", "caption"},
-	{"posts", "media_url"}, {"posts", "scheduled_at"}, {"posts", "status"}, {"posts", "created_at"},
+	{"posts", "media_url"}, {"posts", "status"}, {"posts", "created_at"},
 	{"post_targets", "id"}, {"post_targets", "post_id"}, {"post_targets", "platform_account_id"},
 	{"post_targets", "status"}, {"post_targets", "platform_post_id"}, {"post_targets", "error_message"}, {"post_targets", "published_at"},
 	// 005_account_lifecycle
