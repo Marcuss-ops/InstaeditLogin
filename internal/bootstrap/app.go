@@ -26,8 +26,10 @@ import (
 	"os"
 	"time"
 
+	"errors"
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
@@ -728,6 +730,17 @@ func (a *App) RunWorkers(ctx context.Context) error {
 	})
 
 	slog.Info("9 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler")
+
+	// Register the registry as a Prometheus collector so worker
+	// lifecycle states are exported as metrics. Duplicate registration
+	// is ignored because this method may be invoked more than once
+	// in wrapper/test scenarios.
+	if err := prometheus.Register(a.WorkerRegistry); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if !errors.As(err, &already) {
+			slog.Warn("worker registry metric registration failed", "error", err)
+		}
+	}
 
 	criticalErrCh := a.WorkerRegistry.StartAll(ctx)
 

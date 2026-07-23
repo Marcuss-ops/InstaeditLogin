@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func TestRegistry_StartAllHealthy(t *testing.T) {
@@ -176,6 +178,134 @@ func TestRegistry_RecordSuccess(t *testing.T) {
 	}
 	if statuses[0].LastSuccessAt.IsZero() {
 		t.Errorf("expected last success to be recorded")
+	}
+
+	cancel()
+	<-ch
+}
+
+func TestRegistry_Ready_NoWorkers(t *testing.T) {
+	r := NewRegistry()
+	ready, _ := r.Ready()
+	if ready {
+		t.Fatal("expected empty registry to be not ready")
+	}
+}
+
+func TestRegistry_Ready_CriticalFailure(t *testing.T) {
+	r := NewRegistry()
+	r.Register(WorkerSpec{
+		Name:     "failing",
+		Critical: true,
+		Run: func(ctx context.Context) error {
+			return errors.New("boom")
+		},
+	})
+
+	ch := r.StartAll(context.Background())
+	select {
+	case err := <-ch:
+		if err == nil {
+			t.Fatal("expected critical error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("critical error was not reported")
+	}
+
+	ready, statuses := r.Ready()
+	if ready {
+		t.Fatal("expected readiness to fail after critical worker failure")
+	}
+	if len(statuses) != 1 || statuses[0].State != StateFailed {
+		t.Fatalf("expected failed state, got %+v", statuses)
+	}
+}
+
+func TestRegistry_Ready_NonCriticalFailureDoesNotAffectReadiness(t *testing.T) {
+	r := NewRegistry()
+	r.Register(WorkerSpec{
+		Name:     "failing",
+		Critical: false,
+		Run: func(ctx context.Context) error {
+			return errors.New("boom")
+		},
+	})
+	r.Register(WorkerSpec{
+		Name:     "blocker",
+		Critical: true,
+		Run: func(ctx context.Context) error {
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-ticker.C:
+					r.Heartbeat("blocker")
+				}
+			}
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := r.StartAll(ctx)
+
+	// Wait until the non-critical worker has failed and the critical
+	// worker is healthy.
+	time.Sleep(200 * time.Millisecond)
+
+	ready, statuses := r.Ready()
+	if !ready {
+		t.Fatalf("expected readiness to stay ok when only non-critical worker failed: %+v", statuses)
+	}
+
+	cancel()
+	<-ch
+}
+
+func TestRegistry_Collect(t *testing.T) {
+	r := NewRegistry()
+	r.Register(WorkerSpec{
+		Name:     "healthy",
+		Critical: true,
+		Run: func(ctx context.Context) error {
+			r.Heartbeat("healthy")
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := r.StartAll(ctx)
+
+	time.Sleep(100 * time.Millisecond)
+
+	gatherer := prometheus.NewRegistry()
+	gatherer.MustRegister(r)
+	mfs, err := gatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather failed: %v", err)
+	}
+
+	found := false
+outerLoop:
+	for _, mf := range mfs {
+		if mf.GetName() != "worker_state" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			if labels["worker"] == "healthy" && labels["state"] == string(StateHealthy) {
+				found = true
+				break outerLoop
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected worker_state metric for healthy worker, got %v", mfs)
 	}
 
 	cancel()

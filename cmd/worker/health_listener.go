@@ -46,17 +46,12 @@ func startWorkerHealthListener(ctx context.Context, registry *worker.Registry, l
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) {
-		statuses := registry.GetStatus()
+		// Ready() evaluates only critical workers: a non-critical
+		// worker failure must not pull traffic away from the process,
+		// while a critical worker failure or an empty registry must.
+		isReady, statuses := registry.Ready()
 		code := http.StatusOK
-		for _, s := range statuses {
-			if s.State == worker.StateFailed {
-				code = http.StatusServiceUnavailable
-				break
-			}
-		}
-		// A worker process with no registered workers should report
-		// not-ready until it has been properly initialised.
-		if len(statuses) == 0 {
+		if !isReady {
 			code = http.StatusServiceUnavailable
 		}
 		w.Header().Set("Content-Type", "application/json")

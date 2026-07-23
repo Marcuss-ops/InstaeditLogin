@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // DefaultShutdownTimeout is the global timeout the registry uses when
@@ -21,6 +23,17 @@ const DefaultShutdownTimeout = 15 * time.Second
 // and had to be force-failed when the global shutdown deadline
 // expired. It is not treated as a runtime critical failure.
 var errShutdownTimeout = errors.New("worker did not stop within shutdown deadline")
+
+// workerStateDesc is the Prometheus descriptor for the per-worker
+// lifecycle state metric exposed by Registry.Collect. The registry
+// itself acts as a Collector so the same status map is reused for
+// readiness, logging and metrics.
+var workerStateDesc = prometheus.NewDesc(
+	"worker_state",
+	"Current lifecycle state of a supervised worker (1 for the active state).",
+	[]string{"worker", "state"},
+	nil,
+)
 
 // WorkerState is the lifecycle state of a registered worker.
 type WorkerState string
@@ -159,6 +172,12 @@ func (r *Registry) supervise(parent context.Context, spec WorkerSpec, criticalEr
 	defer cancel()
 
 	r.setState(spec.Name, StateStarting)
+	// Mark the worker healthy immediately. The worker stays healthy as
+	// long as its heartbeat keeps being refreshed; a transition to
+	// failed/stopped happens only on exit. This avoids a 5-second
+	// readiness blackout at startup while still distinguishing the
+	// initial starting state.
+	r.setState(spec.Name, StateHealthy)
 
 	done := make(chan error, 1)
 	go func() {
@@ -289,6 +308,47 @@ func (r *Registry) AllHealthy() bool {
 		}
 	}
 	return len(r.status) > 0
+}
+
+// Ready reports whether the registry is ready for traffic. It returns
+// false when no workers are registered or when any critical worker is
+// not healthy. Non-critical worker failures do not affect readiness,
+// but they are still included in the returned snapshot for
+// observability.
+func (r *Registry) Ready() (bool, []WorkerStatus) {
+	statuses := r.GetStatus()
+	if len(statuses) == 0 {
+		return false, statuses
+	}
+	for _, s := range statuses {
+		if !s.Critical {
+			continue
+		}
+		if s.State != StateHealthy {
+			return false, statuses
+		}
+	}
+	return true, statuses
+}
+
+// Describe implements prometheus.Collector.
+func (r *Registry) Describe(ch chan<- *prometheus.Desc) {
+	ch <- workerStateDesc
+}
+
+// Collect implements prometheus.Collector. It emits one gauge sample
+// (value 1) for each worker's current state, labelled with the worker
+// name and the state string.
+func (r *Registry) Collect(ch chan<- prometheus.Metric) {
+	statuses := r.GetStatus()
+	for _, s := range statuses {
+		ch <- prometheus.MustNewConstMetric(
+			workerStateDesc,
+			prometheus.GaugeValue,
+			1,
+			s.Name, string(s.State),
+		)
+	}
 }
 
 // Heartbeat marks a specific worker as alive. Workers that have access

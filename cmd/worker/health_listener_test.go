@@ -6,9 +6,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"testing"
@@ -144,4 +146,155 @@ func TestWorkerHealthListener_AcceptsTCPConnection(t *testing.T) {
 		t.Fatalf("tcp dial to worker health port failed: %v", err)
 	}
 	_ = c.Close() // accept-and-close path completed; testPass.
+}
+
+// TestWorkerHealthListener_Ready_HealthyCritical verifies that /ready
+// returns 200 when all critical workers are healthy.
+func TestWorkerHealthListener_Ready_HealthyCritical(t *testing.T) {
+	port, cleanup := pickWorkerHealthPort(t)
+	defer cleanup()
+
+	reg := worker.NewRegistry()
+	reg.Register(worker.WorkerSpec{
+		Name:     "healthy",
+		Critical: true,
+		Run: func(ctx context.Context) error {
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-ticker.C:
+					reg.Heartbeat("healthy")
+				}
+			}
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_ = reg.StartAll(ctx)
+
+	// Wait for the worker to become healthy before querying /ready.
+	time.Sleep(100 * time.Millisecond)
+
+	startWorkerHealthListener(ctx, reg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	body, code := getReady(t, port)
+	if code != http.StatusOK {
+		t.Fatalf("expected /ready 200, got %d: %s", code, body)
+	}
+	if body == "" {
+		t.Fatal("expected /ready body to be non-empty")
+	}
+}
+
+// TestWorkerHealthListener_Ready_CriticalFailed verifies that /ready
+// returns 503 when a critical worker has failed, even if non-critical
+// workers are still running.
+func TestWorkerHealthListener_Ready_CriticalFailed(t *testing.T) {
+	port, cleanup := pickWorkerHealthPort(t)
+	defer cleanup()
+
+	reg := worker.NewRegistry()
+	reg.Register(worker.WorkerSpec{
+		Name:     "failing",
+		Critical: true,
+		Run: func(ctx context.Context) error {
+			return fmt.Errorf("critical boom")
+		},
+	})
+	reg.Register(worker.WorkerSpec{
+		Name:     "healthy",
+		Critical: false,
+		Run: func(ctx context.Context) error {
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-ticker.C:
+					reg.Heartbeat("healthy")
+				}
+			}
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := reg.StartAll(ctx)
+
+	// Wait for the critical worker to fail and be recorded.
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("critical worker did not report failure")
+	}
+
+	startWorkerHealthListener(ctx, reg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	body, code := getReady(t, port)
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("expected /ready 503, got %d: %s", code, body)
+	}
+}
+
+// TestWorkerHealthListener_Ready_NoWorkers verifies that /ready
+// returns 503 when the registry has no workers at all.
+func TestWorkerHealthListener_Ready_NoWorkers(t *testing.T) {
+	port, cleanup := pickWorkerHealthPort(t)
+	defer cleanup()
+
+	reg := worker.NewRegistry()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	startWorkerHealthListener(ctx, reg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	body, code := getReady(t, port)
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("expected /ready 503 with no workers, got %d: %s", code, body)
+	}
+}
+
+func pickWorkerHealthPort(t *testing.T) (int, func()) {
+	prev, had := os.LookupEnv("WORKER_HEALTH_PORT")
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not probe free port: %v", err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	_ = probe.Close()
+	_ = os.Setenv("WORKER_HEALTH_PORT", strconv.Itoa(port))
+
+	return port, func() {
+		if had {
+			_ = os.Setenv("WORKER_HEALTH_PORT", prev)
+		} else {
+			_ = os.Unsetenv("WORKER_HEALTH_PORT")
+		}
+	}
+}
+
+func getReady(t *testing.T, port int) (string, int) {
+	t.Helper()
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	deadline := time.Now().Add(time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		resp, err := http.Get("http://" + addr + "/ready")
+		if err != nil {
+			lastErr = err
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return string(body), resp.StatusCode
+	}
+	t.Fatalf("failed to query /ready: %v", lastErr)
+	return "", 0
 }
