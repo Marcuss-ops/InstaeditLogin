@@ -44,6 +44,34 @@ func (c *DatabaseConfig) DSN() string {
 	)
 }
 
+// StorageConfig holds S3-compatible storage and upload-related settings.
+type StorageConfig struct {
+	// S3-compatible storage (mandatory).
+	S3Endpoint  string
+	S3Bucket    string
+	S3AccessKey string
+	S3SecretKey string
+	S3Region    string
+	// S3PathStyle selects path-style addressing ({host}/{bucket}/{key})
+	// instead of the default virtual-hosted ({bucket}.{host}/{key}).
+	// Required when S3_ENDPOINT is a single fixed origin (e.g. a
+	// Cloudflare quick tunnel) that cannot serve per-bucket subdomains.
+	S3PathStyle bool
+
+	// MaxUploadBytes caps the size of any single file upload.
+	MaxUploadBytes int64
+
+	// GoogleDriveAPIKey is a Google Cloud API key used to list CONTENTS
+	// of a public Drive folder when the user has not linked their Drive
+	// account. Without it, batch folder imports only work for folders
+	// the linked Drive account can access.
+	GoogleDriveAPIKey string
+
+	// GoogleDriveUploadFolderID is the optional default Drive folder ID
+	// for uploads created via the Google Drive delivery adapter.
+	GoogleDriveUploadFolderID string
+}
+
 // Config holds all configuration for the application.
 //
 // Taglio 5b: SERVER_PORT + SERVER_HOST removed — the server listens on the
@@ -82,6 +110,9 @@ type Config struct {
 
 	// Database (PostgreSQL).
 	Database DatabaseConfig
+
+	// Storage (S3-compatible + Google Drive upload folder).
+	Storage StorageConfig
 
 	// Meta OAuth — shared App ID and Secret.
 	MetaAppID       string
@@ -131,10 +162,9 @@ type Config struct {
 	YouTubeDailyQuotaLimit     int   // YOUTUBE_DAILY_QUOTA_LIMIT; default 300; daily pre-call videos.insert gate. 1 videos.insert = 1 bucket unit under the 2026 quota model (default 100/day from Google, 300/day for the 200-channel rollout with 50% buffer). When calls >= limit, publish_worker stamps retry_wait + metadata.retry_after_seconds until next UTC midnight.
 
 	// Google Drive OAuth (read-only import of video clips)
-	GoogleDriveClientID       string
-	GoogleDriveClientSecret   string
-	GoogleDriveRedirectURI    string
-	GoogleDriveUploadFolderID string
+	GoogleDriveClientID     string
+	GoogleDriveClientSecret string
+	GoogleDriveRedirectURI  string
 
 	// LinkedIn OAuth
 	LinkedInClientID     string
@@ -266,33 +296,6 @@ type Config struct {
 	UploadReclaimIntervalSeconds   int  // UPLOAD_RECLAIM_INTERVAL_SECONDS; default 30
 	UploadReclaimOnStart           bool // UPLOAD_RECLAIM_ON_START; default true
 
-	// GoogleDriveAPIKey is a Google Cloud API key used to list CONTENTS
-	// of a public Drive folder when the user has not linked their Drive
-	// account. Without it, batch folder imports only work for folders
-	// the linked Drive account can access (typically: nothing, since the
-	// linked account isn't the folder's owner).
-	//
-	// Create one at https://console.cloud.google.com → APIs & Services →
-	// Credentials → API key, scoped to the Google Drive API. Empty
-	// default means the batch folder endpoint can only target folders
-	// the user's Drive OAuth grant can see.
-	GoogleDriveAPIKey string
-
-	// S3-compatible storage (mandatory).
-	S3Endpoint  string
-	S3Bucket    string
-	S3AccessKey string
-	S3SecretKey string
-	S3Region    string
-	// S3PathStyle selects path-style addressing ({host}/{bucket}/{key})
-	// instead of the default virtual-hosted ({bucket}.{host}/{key}).
-	// Required when S3_ENDPOINT is a single fixed origin (e.g. a
-	// Cloudflare quick tunnel) that cannot serve per-bucket subdomains.
-	S3PathStyle bool
-
-	// MaxUploadBytes caps the size of any single file upload.
-	MaxUploadBytes int64
-
 	// Stripe billing (optional — billing endpoints are 501 when not configured).
 	StripeSecretKey     string
 	StripeWebhookSecret string
@@ -404,10 +407,20 @@ func Load() (*Config, error) {
 		YouTubeUploadBackoffBaseMs: getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
 		YouTubeUploadBackoffCapMs:  getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
 		YouTubeDailyQuotaLimit:     getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
-		GoogleDriveClientID:        getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
-		GoogleDriveClientSecret:    getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
-		GoogleDriveRedirectURI:     getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),
-		GoogleDriveUploadFolderID:  getEnv("GOOGLE_DRIVE_UPLOAD_FOLDER_ID", ""),
+		GoogleDriveClientID:       getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
+		GoogleDriveClientSecret:   getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
+		GoogleDriveRedirectURI:    getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),
+		Storage: StorageConfig{
+			S3Endpoint:                  getEnv("S3_ENDPOINT", ""),
+			S3Bucket:                    getEnv("S3_BUCKET", ""),
+			S3PathStyle:                 getEnvBool("S3_PATH_STYLE", false),
+			S3AccessKey:                 getEnv("S3_ACCESS_KEY", ""),
+			S3SecretKey:                 getEnv("S3_SECRET_KEY", ""),
+			S3Region:                    getEnv("S3_REGION", ""),
+			MaxUploadBytes:              getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
+			GoogleDriveAPIKey:           getEnv("GOOGLE_DRIVE_API_KEY", ""),
+			GoogleDriveUploadFolderID:   getEnv("GOOGLE_DRIVE_UPLOAD_FOLDER_ID", ""),
+		},
 		VeloxAPIToken:              getEnv("VELOX_API_TOKEN", ""),
 		VeloxControlURL:            getEnv("VELOX_CONTROL_URL", ""),
 		VeloxControlJWTSecret:      getEnv("VELOX_CONTROL_JWT_SECRET", ""),
@@ -445,14 +458,6 @@ func Load() (*Config, error) {
 		UploadHeartbeatIntervalSeconds: getEnvInt("UPLOAD_HEARTBEAT_INTERVAL_SECONDS", 20),
 		UploadReclaimIntervalSeconds:   getEnvInt("UPLOAD_RECLAIM_INTERVAL_SECONDS", 30),
 		UploadReclaimOnStart:           getEnvBool("UPLOAD_RECLAIM_ON_START", true),
-		GoogleDriveAPIKey:              getEnv("GOOGLE_DRIVE_API_KEY", ""),
-		S3Endpoint:                     getEnv("S3_ENDPOINT", ""),
-		S3Bucket:                       getEnv("S3_BUCKET", ""),
-		S3PathStyle:                    getEnvBool("S3_PATH_STYLE", false),
-		S3AccessKey:                    getEnv("S3_ACCESS_KEY", ""),
-		S3SecretKey:                    getEnv("S3_SECRET_KEY", ""),
-		S3Region:                       getEnv("S3_REGION", ""),
-		MaxUploadBytes:                 getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
 		StripeSecretKey:                getEnv("STRIPE_SECRET_KEY", ""),
 		StripeWebhookSecret:            getEnv("STRIPE_WEBHOOK_SECRET", ""),
 		StripeSuccessURL:               getEnv("STRIPE_SUCCESS_URL", getEnv("FRONTEND_URL", "http://localhost:5173")+"/dashboard/billing?success=1"),
@@ -530,16 +535,16 @@ func (c *Config) validate() error {
 	}
 
 	// S3-compatible storage (mandatory).
-	if c.S3Endpoint == "" {
+	if c.Storage.S3Endpoint == "" {
 		return fmt.Errorf("S3_ENDPOINT is required")
 	}
-	if c.S3Bucket == "" {
+	if c.Storage.S3Bucket == "" {
 		return fmt.Errorf("S3_BUCKET is required")
 	}
-	if c.S3AccessKey == "" {
+	if c.Storage.S3AccessKey == "" {
 		return fmt.Errorf("S3_ACCESS_KEY is required")
 	}
-	if c.S3SecretKey == "" {
+	if c.Storage.S3SecretKey == "" {
 		return fmt.Errorf("S3_SECRET_KEY is required")
 	}
 

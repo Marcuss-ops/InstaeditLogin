@@ -30,10 +30,12 @@ func minimalValidConfig(jwtSecret string) *Config {
 		Database: DatabaseConfig{
 			DatabaseURL: "postgresql://user:pass@localhost:5432/instaedit_login?sslmode=disable",
 		},
-		S3Endpoint:    "https://s3.example.com",
-		S3Bucket:      "instaedit-bucket",
-		S3AccessKey:   "AKIAIOSFODNN7EXAMPLE",
-		S3SecretKey:   "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		Storage: StorageConfig{
+			S3Endpoint:  "https://s3.example.com",
+			S3Bucket:    "instaedit-bucket",
+			S3AccessKey: "AKIAIOSFODNN7EXAMPLE",
+			S3SecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		},
 		EncryptionKey: validEncryptionKey(),
 		JWTSecret:     jwtSecret,
 	}

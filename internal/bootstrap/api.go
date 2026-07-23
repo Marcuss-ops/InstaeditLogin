@@ -55,7 +55,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 		api.WithCredentialVault(core.Vault),
 		api.WithChannelAuthorizer(channelAuthorizer),
 		api.WithStorageProvider(core.Storage),
-		api.WithMaxUploadBytes(cfg.MaxUploadBytes),
+		api.WithMaxUploadBytes(cfg.Storage.MaxUploadBytes),
 		api.WithApiKeyStore(core.apiKeyRepo),
 		api.WithApiKeyAuthenticator(apiKeyAuth),
 		api.WithIdempotencyStore(core.idempotencyRepo),

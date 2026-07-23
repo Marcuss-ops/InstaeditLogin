@@ -619,7 +619,7 @@ type DriveFolderInspector interface {
 // The folder must be accessible to *some* principal: either the user's
 // own Drive OAuth grant (accessToken non-empty) or as a public folder
 // via the Drive v3 API key configured at the deployment level
-// (cfg.GoogleDriveAPIKey). Pass empty accessToken for the public flow.
+// (cfg.Storage.GoogleDriveAPIKey). Pass empty accessToken for the public flow.
 //
 // driveID is optional: when empty, the lister uses the default My
 // Drive corpus; when non-empty, the lister scopes the listing to the
@@ -638,7 +638,7 @@ type DriveFolderLister interface {
 
 // ErrDriveListRequiresAPIKey is the typed sentinel ListFolder returns
 // when the caller asks to list a public folder WITHOUT both a Drive
-// OAuth accessToken AND cfg.GoogleDriveAPIKey. The handler uses
+// OAuth accessToken AND cfg.Storage.GoogleDriveAPIKey. The handler uses
 // errors.Is to map this to HTTP 503 Service Unavailable instead of the
 // generic 502 the handler would otherwise return.
 var ErrDriveListRequiresAPIKey = errors.New("ERR_DRIVE_LIST_REQUIRES_API_KEY")
@@ -718,7 +718,7 @@ var driveFolderIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
 //   - accessToken != "" → authenticated mode. Uses the user's Drive
 //     OAuth grant to call /drive/v3/files. Works for ANY folder the
 //     user has access to (private, shared, public).
-//   - accessToken == ""  → public mode. Requires cfg.GoogleDriveAPIKey
+//   - accessToken == ""  → public mode. Requires cfg.Storage.GoogleDriveAPIKey
 //     (a Google Cloud API key configured at the deployment level) to
 //     hit /drive/v3/files anonymously on a publicly-shared folder.
 //     Returns ErrDriveListRequiresAPIKey (wrapped) when the key is
@@ -750,7 +750,7 @@ func (s *GoogleDriveOAuthService) ListFolder(ctx context.Context, folderID, driv
 		// before concatenating into the q= query (see the regex comment).
 		return nil, "", fmt.Errorf("google drive ListFolder: invalid folder id (only A-Za-z0-9_- allowed, max 100 chars)")
 	}
-	if s.cfg.GoogleDriveAPIKey == "" && accessToken == "" {
+	if s.cfg.Storage.GoogleDriveAPIKey == "" && accessToken == "" {
 		return nil, "", fmt.Errorf("%w: GOOGLE_DRIVE_API_KEY not configured and no user-specific drive access token supplied", ErrDriveListRequiresAPIKey)
 	}
 
@@ -781,7 +781,7 @@ func (s *GoogleDriveOAuthService) ListFolder(ctx context.Context, folderID, driv
 	if accessToken != "" {
 		params.Set("access_token", accessToken)
 	} else {
-		params.Set("key", s.cfg.GoogleDriveAPIKey)
+		params.Set("key", s.cfg.Storage.GoogleDriveAPIKey)
 	}
 
 	reqURL := "https://www.googleapis.com/drive/v3/files?" + params.Encode()

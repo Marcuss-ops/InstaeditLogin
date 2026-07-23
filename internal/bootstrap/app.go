@@ -137,7 +137,7 @@ func Wire(ctx context.Context) (*App, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	if cfg.S3Endpoint == "" || cfg.S3Bucket == "" || cfg.S3AccessKey == "" || cfg.S3SecretKey == "" {
+	if cfg.Storage.S3Endpoint == "" || cfg.Storage.S3Bucket == "" || cfg.Storage.S3AccessKey == "" || cfg.Storage.S3SecretKey == "" {
 		return nil, fmt.Errorf("S3 storage is required: set S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY")
 	}
 
@@ -258,13 +258,13 @@ func Wire(ctx context.Context) (*App, error) {
 	}
 
 	storageProvider, err := services.NewS3Provider(
-		cfg.S3Endpoint, cfg.S3Bucket, cfg.S3Region,
-		cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3PathStyle, slog.Default())
+		cfg.Storage.S3Endpoint, cfg.Storage.S3Bucket, cfg.Storage.S3Region,
+		cfg.Storage.S3AccessKey, cfg.Storage.S3SecretKey, cfg.Storage.S3PathStyle, slog.Default())
 	if err != nil {
 		return nil, fmt.Errorf("construct S3 provider: %w", err)
 	}
 	slog.Info("storage provider: S3-compatible configured",
-		"endpoint", cfg.S3Endpoint, "bucket", cfg.S3Bucket, "region", cfg.S3Region)
+		"endpoint", cfg.Storage.S3Endpoint, "bucket", cfg.Storage.S3Bucket, "region", cfg.Storage.S3Region)
 
 	userWorkspaceHelper := api.RepoUserWorkspaceHelper(workspaceRepo, teamRepo)
 	authEmailBackend := services.NewAuthService(userRepo, workspaceRepo, teamRepo)
@@ -285,7 +285,7 @@ func Wire(ctx context.Context) (*App, error) {
 		// field on Router is non-nil by the time Setup() runs.
 		api.WithChannelAuthorizer(channelAuthorizer),
 		api.WithStorageProvider(storageProvider),
-		api.WithMaxUploadBytes(cfg.MaxUploadBytes),
+		api.WithMaxUploadBytes(cfg.Storage.MaxUploadBytes),
 		api.WithApiKeyStore(apiKeyRepo),
 		api.WithApiKeyAuthenticator(apiKeyAuth),
 		api.WithIdempotencyStore(idempotencyRepo),
