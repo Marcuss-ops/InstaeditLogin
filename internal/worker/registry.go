@@ -126,7 +126,7 @@ func (r *Registry) StartAll(ctx context.Context) <-chan error {
 	r.mu.Unlock()
 
 	return criticalErr
-}// supervise runs a single worker and keeps its state/heartbeat up to date.
+} // supervise runs a single worker and keeps its state/heartbeat up to date.
 func (r *Registry) supervise(parent context.Context, spec WorkerSpec, criticalErr chan<- error) {
 	defer r.wg.Done() // balance the Add(1) in StartAll when this supervisor exits.
 	defer func() {

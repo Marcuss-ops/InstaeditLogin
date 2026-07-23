@@ -35,9 +35,9 @@ type readinessCheck interface {
 // on them. The numeric overall HTTP status follows the "any failure
 // = 503, all green = 200" canonical readiness contract.
 type readinessResponse struct {
-	Status     string `json:"status"`      // "ok" | "not_ready"
-	DB         string `json:"db"`          // "ok" | <error string>
-	Migrations string `json:"migrations"`  // "ok" | <error string>
+	Status     string `json:"status"`     // "ok" | "not_ready"
+	DB         string `json:"db"`         // "ok" | <error string>
+	Migrations string `json:"migrations"` // "ok" | <error string>
 }
 
 // handleReady is the production /ready implementation. It runs the
