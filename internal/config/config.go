@@ -216,7 +216,7 @@ type Config struct {
 	// drained in parallel on shutdown.
 	WebhookWorkerIntervalSeconds int
 
-	// SessionsCleanupIntervalSeconds — cadence of the retention
+	// SessionCleanupIntervalSeconds — cadence of the retention
 	// policy goroutine (commit: cleanup-policy). Drives the
 	// periodic SessionsCleanupWorker that DELETEs rows from the
 	// `sessions` table whose revoked_at is older than 30 days OR
@@ -224,7 +224,7 @@ type Config struct {
 	// (5 min) is coarse enough to not thrash the DB under traffic
 	// spikes but fine-grained enough to keep the sessions table
 	// bounded under normal load.
-	SessionsCleanupIntervalSeconds int
+	SessionCleanupIntervalSeconds int
 
 	// UploadWorkerIntervalSeconds — cadence of the background upload
 	// worker that drains upload_jobs (public or authenticated Google
@@ -417,7 +417,7 @@ func Load() (*Config, error) {
 		PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
 		ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
 		WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
-		SessionsCleanupIntervalSeconds: getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
+		SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
 		UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
 		// P1 step 2 — worker pool config (see struct comment above).
 		UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),

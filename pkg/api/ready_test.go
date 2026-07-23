@@ -17,11 +17,10 @@ import (
 // readyTestRouter constructs a Router with just the /ready wiring
 // populated and the rest left nil. The recovery middleware is NOT
 // mounted here so per-test assertions stay focused on /ready itself.
-func readyTestRouter(t *testing.T, db *sql.DB, ws *WorkerStatus) *Router {
+func readyTestRouter(t *testing.T, db *sql.DB) *Router {
 	t.Helper()
 	return &Router{
-		dbForReady:   db,
-		workerStatus: ws,
+		dbForReady: db,
 		// capabilities is required by handleHealth even though /ready
 		// doesn't read it; leave nil so any /ready constraint would
 		// surface here.
@@ -29,9 +28,9 @@ func readyTestRouter(t *testing.T, db *sql.DB, ws *WorkerStatus) *Router {
 }
 
 // TestReady_AllGreen_200 confirms the canonical 200 path: DB pings
-// OK + every canary table present + every worker has marked
-// "started". The response body is the readinessResponse envelope
-// with status="ok" and the per-check slots all "ok"/true.
+// OK + every canary table present. The response body is the
+// readinessResponse envelope with status="ok" and the per-check
+// slots all "ok".
 func TestReady_AllGreen_200(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	if err != nil {
@@ -46,11 +45,7 @@ func TestReady_AllGreen_200(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	}
 
-	ws := NewWorkerStatus([]string{"publish", "reconcile", "outbox", "webhook", "metrics"})
-	for _, name := range []string{"publish", "reconcile", "outbox", "webhook", "metrics"} {
-		ws.Mark(name)
-	}
-	r := readyTestRouter(t, db, ws)
+	r := readyTestRouter(t, db)
 
 	srv := httptest.NewServer(http.HandlerFunc(r.handleReady))
 	defer srv.Close()
@@ -77,12 +72,6 @@ func TestReady_AllGreen_200(t *testing.T) {
 	if body.Migrations != "ok" {
 		t.Errorf("Migrations: want \"ok\", got %q", body.Migrations)
 	}
-	if !body.WorkersReady {
-		t.Errorf("WorkersReady: want true, got false")
-	}
-	if len(body.WorkersPending) != 0 {
-		t.Errorf("WorkersPending: want empty, got %v", body.WorkersPending)
-	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("mock expectations: %v", err)
 	}
@@ -98,9 +87,7 @@ func TestReady_DBPingDown_503(t *testing.T) {
 	defer db.Close()
 	mock.ExpectPing().WillReturnError(errors.New("simulated ping drop"))
 
-	ws := NewWorkerStatus([]string{"publish"})
-	ws.Mark("publish")
-	r := readyTestRouter(t, db, ws)
+	r := readyTestRouter(t, db)
 
 	srv := httptest.NewServer(http.HandlerFunc(r.handleReady))
 	defer srv.Close()
@@ -151,9 +138,7 @@ func TestReady_MigrationMissing_503(t *testing.T) {
 		}
 	}
 
-	ws := NewWorkerStatus([]string{"publish"})
-	ws.Mark("publish")
-	r := readyTestRouter(t, db, ws)
+	r := readyTestRouter(t, db)
 
 	srv := httptest.NewServer(http.HandlerFunc(r.handleReady))
 	defer srv.Close()
@@ -179,66 +164,12 @@ func TestReady_MigrationMissing_503(t *testing.T) {
 	}
 }
 
-// TestReady_WorkerNotStarted_503: db+schema green but WorkerStatus
-// reports pending workers → 503 + the pending list in the response.
-func TestReady_WorkerNotStarted_503(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("sqlmock: %v", err)
-	}
-	defer db.Close()
-	for _, table := range database.CanaryTables {
-		mock.ExpectQuery(`SELECT to_regclass\('public\.' \|\| \$1\) IS NOT NULL`).
-			WithArgs(table).
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	}
-
-	ws := NewWorkerStatus([]string{"publish", "reconcile", "metrics"})
-	// Only publish marks itself as started; reconcile + metrics are
-	// intentionally not flipped (simulating a deadlock-on-startup).
-	ws.Mark("publish")
-
-	r := readyTestRouter(t, db, ws)
-	srv := httptest.NewServer(http.HandlerFunc(r.handleReady))
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL)
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status: want 503, got %d", resp.StatusCode)
-	}
-	var body readinessResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.WorkersReady {
-		t.Errorf("WorkersReady: want false (2 workers pending), got true")
-	}
-	// Pending should list reconcile + metrics but NOT publish.
-	pendingSet := map[string]bool{}
-	for _, p := range body.WorkersPending {
-		pendingSet[p] = true
-	}
-	if !pendingSet["reconcile"] || !pendingSet["metrics"] {
-		t.Errorf("WorkersPending: want [reconcile, metrics], got %v", body.WorkersPending)
-	}
-	if pendingSet["publish"] {
-		t.Errorf("publish should NOT be in WorkersPending: %v", body.WorkersPending)
-	}
-}
-
 // TestReady_NoDBWired_503 confirms: with no DB wired the handler
 // surfaces "db not configured" so the operator notices the missing
 // option. The endpoint still returns 503 because DB ping can't be
 // confirmed.
 func TestReady_NoDBWired_503(t *testing.T) {
-	ws := NewWorkerStatus([]string{"publish"})
-	ws.Mark("publish")
-	r := readyTestRouter(t, nil, ws)
+	r := readyTestRouter(t, nil)
 
 	srv := httptest.NewServer(http.HandlerFunc(r.handleReady))
 	defer srv.Close()

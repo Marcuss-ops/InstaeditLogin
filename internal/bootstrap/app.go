@@ -60,12 +60,10 @@ type App struct {
 	HTTPHandler http.Handler
 	Logger      *slog.Logger
 
-	// WorkerStatus (Blocco #5.3) tracks per-goroutine startup
-	// signals; consumed by /ready. Always non-nil after Wire().
-	// The type lives in pkg/api (not bootstrap) because pkg/api
-	// owns the /ready handler that reads it; bootstrap only
-	// constructs + stores a reference.
-	WorkerStatus *api.WorkerStatus
+	// WorkerRegistry (Blocco #5.3 refactor) supervises the lifecycle
+	// of every background goroutine. It is constructed in Wire() and
+	// consumed by RunWorkers() + the worker health listener.
+	WorkerRegistry *worker.Registry
 
 	// SentryHub (Blocco #5.3). Nil when SENTRY_DSN is empty
 	// (operator-disables-by-omission contract). When non-nil, the
@@ -422,16 +420,10 @@ func Wire(ctx context.Context) (*App, error) {
 	// cfg.validate().
 	opts = append(opts, api.WithMetricsAuth(cfg.MetricsBasicAuthUser, cfg.MetricsBasicAuthPass))
 
-	// Blocco #5.3 — wire the DB + worker status into /ready's
-	// contract. The DB is consumed via PingContext + SchemaHealthy;
-	// the WorkerStatus is consumed via AllStarted. The worker
-	// status instance is constructed HERE (not inside the App)
-	// so the router reference AND the App.WorkerStatus reference
-	// point at the SAME *api.WorkerStatus — flip a goroutine's
-	// flag in RunWorkers and the /ready handler observes the
-	// change in the same atomic map.
-	workerStatus := api.NewWorkerStatus(api.WorkerNames)
-	opts = append(opts, api.WithDB(db), api.WithWorkerStatus(workerStatus))
+	// Blocco #5.3 — wire the DB into /ready's contract. API readiness
+	// now only checks DB ping + schema migrations; worker readiness is
+	// exposed separately by the worker process via the WorkerRegistry.
+	opts = append(opts, api.WithDB(db))
 
 	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)
@@ -454,7 +446,7 @@ func Wire(ctx context.Context) (*App, error) {
 		WebhookRepo:       webhookRepo,
 		HTTPHandler:       router.Setup(),
 		Logger:            logger,
-		WorkerStatus:      workerStatus,
+		WorkerRegistry:    worker.NewRegistry(),
 		SentryHub:         hub,
 		WorkerID:          workerID,
 		MemoryLimiter:     memoryLimiter,
@@ -466,38 +458,25 @@ func Wire(ctx context.Context) (*App, error) {
 	}, nil
 }
 
-// RunWorkers starts the 7 background goroutines (publish worker, reconcile
-// worker, outbox dispatcher, webhook worker, metrics collector,
-// sessions cleanup worker, upload worker) and
-// blocks until ctx is cancelled. On cancellation it cancels every
-// goroutine concurrently and waits up to 15s per goroutine for their
-// Run loops to drain gracefully.
+// RunWorkers starts the 9 background goroutines (publish, reconcile,
+// outbox, webhook, metrics, sessions_cleanup, velox_downloader,
+// upload, drive_batch_crawler) under a shared WorkerRegistry. The
+// registry handles startup, heartbeat tracking, supervision, logging,
+// and shutdown. A critical worker that exits with a non-context error
+// aborts the whole process by returning the error from RunWorkers.
 //
-// Insertion order (publish → reconcile → outbox → webhook → metrics)
-// mirrors the pre-split cmd/server/main.go shape so the runtime ordering
-// of the first log-line per goroutine is unchanged.
+// On cancellation it cancels every goroutine concurrently and waits
+// up to 15s total for their Run loops to drain gracefully.
 func (a *App) RunWorkers(ctx context.Context) error {
-	type goroutineCtx struct {
-		name   string
-		cancel context.CancelFunc
-		done   chan struct{}
+	if a.WorkerRegistry == nil {
+		return fmt.Errorf("RunWorkers called with nil App.WorkerRegistry")
 	}
 
-	children := []*goroutineCtx{}
-
 	// 1. Publish worker driver — queued → publishing transition
-	{
-		c, cancel := context.WithCancel(ctx)
-		d := make(chan struct{})
-		go func() {
-			defer close(d)
-			// Blocco #5.3: flip the "started" flag as the FIRST
-			// executable line in the goroutine. /ready uses this
-			// for the no-deadlock assertion. The Mark call MUST
-			// happen inside the goroutine (not before go) so the
-			// published "started" state actually proves the
-			// goroutine reached its first executable line.
-			a.WorkerStatus.Mark("publish")
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "publish",
+		Critical: true,
+		Run: func(ctx context.Context) error {
 			pw := worker.NewPublishWorker(
 				repository.NewPostRepository(a.DB),
 				repository.NewUserRepository(a.DB),
@@ -508,19 +487,6 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				time.Duration(a.Cfg.PublishWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 			)
-			// Delivery registry (Task 7/10 + 8/10) — post-completion
-			// dispatch to YouTube / Google Drive / Velox callback. The
-			// publish_worker itself only knows the registry shape;
-			// constructing the 3 adapters here binds the canonical
-			// post-publish fan-out to the
-			// internal/worker/publish_worker_delivery.go dispatch hook.
-			//
-			// Camera-ready wiring choice: the Drive adapter is enabled
-			// when GoogleDriveClientID is configured (the operator
-			// opted into Drive import via OAuth), disabled-by-omission
-			// otherwise. The YouTube + Velox adapters mirror the same
-			// gate (YouTube via CapabilityRouter presence; Velox via
-			// the existing VELOX_API_TOKEN env).
 			deliveryRegistry := services.NewDeliveryRegistry()
 			if ytPub, ok := a.CapRouter.Publisher(models.PlatformYouTube); ok {
 				_ = deliveryRegistry.Register(services.NewYouTubeDeliveryAdapter(ytPub))
@@ -536,8 +502,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				if googleDriveOAuth != nil {
 					driveVault, vaultOK := a.Vault.(services.DriveTokenVault)
 					if !vaultOK {
-						slog.Error("publish worker: credential vault lacks Drive refresh-token capability")
-						return
+						return fmt.Errorf("publish worker: credential vault lacks Drive refresh-token capability")
 					}
 					driveTokenProvider := services.NewDriveVaultTokenProvider(driveVault, googleDriveOAuth)
 					driveDest, destErr := services.NewGoogleDriveDestination(
@@ -545,7 +510,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 						driveTokenProvider,
 						a.Encryptor,
 						&http.Client{Timeout: 30 * time.Second},
-						16*1024*1024, // 16 MiB Drive chunk
+						16*1024*1024,
 					)
 					if destErr == nil {
 						if driveAdapter, adapterErr := services.NewGoogleDriveDeliveryAdapter(driveDest); adapterErr == nil {
@@ -560,28 +525,18 @@ func (a *App) RunWorkers(ctx context.Context) error {
 					}
 				}
 			}
-			// Velox callback delivery stays disabled by default — the
-			// callback dispatcher (pkg/api/internal_velox.go) already
-			// fires callbacks synchronously; the registry-driven
-			// dispatch is a redundant path that future Task 9/10
-			// hardening turns on for retry visibility.
 			_ = deliveryRegistry.Register(services.NewVeloxCallbackDeliveryAdapter(false))
 			pw = pw.WithDeliveryRegistry(deliveryRegistry)
 			slog.Info("publish worker: delivery registry wired", "providers", deliveryRegistry.Names())
-			if err := pw.Run(c); err != nil && err != context.Canceled {
-				slog.Error("publish worker exited with error", "error", err)
-			}
-		}()
-		children = append(children, &goroutineCtx{"publish", cancel, d})
-	}
+			return pw.Run(ctx)
+		},
+	})
 
 	// 2. Reconcile worker — publishing → published | failed transition
-	{
-		c, cancel := context.WithCancel(ctx)
-		d := make(chan struct{})
-		go func() {
-			defer close(d)
-			a.WorkerStatus.Mark("reconcile")
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "reconcile",
+		Critical: true,
+		Run: func(ctx context.Context) error {
 			rw := worker.NewReconcileWorker(
 				repository.NewPostRepository(a.DB),
 				repository.NewUserRepository(a.DB),
@@ -592,97 +547,63 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				time.Duration(a.Cfg.ReconcileWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 			)
-			if err := rw.Run(c); err != nil && err != context.Canceled {
-				slog.Error("reconcile worker exited with error", "error", err)
-			}
-		}()
-		children = append(children, &goroutineCtx{"reconcile", cancel, d})
-	}
+			return rw.Run(ctx)
+		},
+	})
 
 	// 3. Outbox dispatcher — materialises publish_jobs audit rows
-	{
-		c, cancel := context.WithCancel(ctx)
-		d := make(chan struct{})
-		go func() {
-			defer close(d)
-			a.WorkerStatus.Mark("outbox")
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "outbox",
+		Critical: true,
+		Run: func(ctx context.Context) error {
 			ds := outbox.NewDispatcher(outbox.DispatcherConfig{
 				OutboxStore:  repository.NewOutboxRepository(a.DB),
 				Process:      processors.NewPublishJobsMaterialiser(a.DB),
 				Logger:       slog.Default(),
 				TickInterval: outbox.DefaultTickInterval,
 			})
-			if err := ds.Run(c); err != nil && err != context.Canceled {
-				slog.Error("outbox dispatcher exited with error", "error", err)
-			}
-		}()
-		children = append(children, &goroutineCtx{"outbox", cancel, d})
-	}
+			return ds.Run(ctx)
+		},
+	})
 
 	// 4. Webhook worker — drains webhook_deliveries
-	{
-		c, cancel := context.WithCancel(ctx)
-		d := make(chan struct{})
-		go func() {
-			defer close(d)
-			a.WorkerStatus.Mark("webhook")
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "webhook",
+		Critical: true,
+		Run: func(ctx context.Context) error {
 			ww := worker.NewWebhookWorker(a.WebhookRepo, time.Duration(a.Cfg.WebhookWorkerIntervalSeconds)*time.Second)
-			if err := ww.Run(c); err != nil && err != context.Canceled {
-				slog.Error("webhook worker exited with error", "error", err)
-			}
-		}()
-		children = append(children, &goroutineCtx{"webhook", cancel, d})
-	}
+			return ww.Run(ctx)
+		},
+	})
 
 	// 5. Metrics collector — periodic gauges
-	{
-		c, cancel := context.WithCancel(ctx)
-		d := make(chan struct{})
-		go func() {
-			defer close(d)
-			a.WorkerStatus.Mark("metrics")
-			if err := metrics.RunPeriodicCollector(c, a.DB, metrics.DefaultCollectorInterval, slog.Default()); err != nil && err != context.Canceled {
-				slog.Error("metrics collector exited with error", "error", err)
-			}
-		}()
-		children = append(children, &goroutineCtx{"metrics", cancel, d})
-	}
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "metrics",
+		Critical: true,
+		Run: func(ctx context.Context) error {
+			return metrics.RunPeriodicCollector(ctx, a.DB, metrics.DefaultCollectorInterval, slog.Default())
+		},
+	})
 
-	// 6. Sessions cleanup worker — retention policy (commit:
-	// cleanup-policy). Hard-deletes stale rows from `sessions` per
-	// services.SessionsService.Cleanup (30 days post revoke OR 7
-	// days post refresh expiry). Driven by
-	// cfg.SessionCleanupIntervalSeconds (env
-	// SESSION_CLEANUP_INTERVAL_SECONDS, default 300s).
-	{
-		c, cancel := context.WithCancel(ctx)
-		d := make(chan struct{})
-		go func() {
-			defer close(d)
-			a.WorkerStatus.Mark("sessions_cleanup")
+	// 6. Sessions cleanup worker — retention policy
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "sessions_cleanup",
+		Critical: true,
+		Run: func(ctx context.Context) error {
 			scw := worker.NewSessionsCleanupWorker(
 				a.SessionsSvc,
-				time.Duration(a.Cfg.SessionsCleanupIntervalSeconds)*time.Second,
+				time.Duration(a.Cfg.SessionCleanupIntervalSeconds)*time.Second,
 				slog.Default(),
 			)
-			if err := scw.Run(c); err != nil && err != context.Canceled {
-				slog.Error("sessions cleanup worker exited with error", "error", err)
-			}
-		}()
-		children = append(children, &goroutineCtx{"sessions_cleanup", cancel, d})
-	}
+			return scw.Run(ctx)
+		},
+	})
 
-	// 7. Upload worker — background import of public or authenticated
-	// Google Drive videos into S3 + posts + publish queue.
-	// P1 step 2 — split into ingest + upload pools via UploadWorkerOptions
-	// built from the cfg-driven env vars (UPLOAD_INGEST_CONCURRENCY,
-	// YOUTUBE_UPLOAD_CONCURRENCY, UPLOAD_LEASE_TTL_SECONDS,
-	// Velox handoff consumer — API enqueue → upload_jobs registration.
-	{
-		c, cancel := context.WithCancel(ctx)
-		d := make(chan struct{})
-		go func() {
-			defer close(d)
+	// 7. Velox handoff consumer — API enqueue → upload_jobs registration
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "velox_downloader",
+		Critical: true,
+		Run: func(ctx context.Context) error {
 			deliveryRepo := repository.NewExternalDeliveryRepository(a.DB)
 			downloader := worker.NewVeloxArtifactDownloader(
 				deliveryRepo,
@@ -709,23 +630,16 @@ func (a *App) RunWorkers(ctx context.Context) error {
 					Targets: valueIntsMap(meta, "target_account_ids"), DriveAccountID: valueIntPtrMap(meta, "drive_account_id"), FolderID: valueStringPtrMap(meta, "folder_id"), PublishAt: delivery.PublishAt}
 				return j, j.DownloadURL != ""
 			}
-			if err := downloader.RunPersistent(c, a.VeloxDownloadJobs, resolve); err != nil && err != context.Canceled {
-				slog.Error("velox artifact downloader exited with error", "error", err)
-			}
-		}()
-		children = append(children, &goroutineCtx{"velox_downloader", cancel, d})
-	}
+			return downloader.RunPersistent(ctx, a.VeloxDownloadJobs, resolve)
+		},
+	})
 
-	// UPLOAD_HEARTBEAT_INTERVAL_SECONDS, UPLOAD_RECLAIM_INTERVAL_SECONDS,
-	// UPLOAD_RECLAIM_ON_START). The upload_worker internally spawns 3
-	// goroutines (reclaimer + ingest pool + upload pool) coordinated
-	// via sync.WaitGroup for graceful shutdown.
-	{
-		c, cancel := context.WithCancel(ctx)
-		d := make(chan struct{})
-		go func() {
-			defer close(d)
-			a.WorkerStatus.Mark("upload")
+	// 8. Upload worker — background import of public or authenticated
+	// Google Drive videos into S3 + posts + publish queue.
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "upload",
+		Critical: true,
+		Run: func(ctx context.Context) error {
 			uploadOpts := worker.UploadWorkerOptions{
 				IngestConcurrency: a.Cfg.UploadIngestConcurrency,
 				UploadConcurrency: a.Cfg.YouTubeUploadConcurrency,
@@ -734,12 +648,6 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				ReclaimInterval:   time.Duration(a.Cfg.UploadReclaimIntervalSeconds) * time.Second,
 				ReclaimOnStart:    a.Cfg.UploadReclaimOnStart,
 			}
-			// Build the artifact-source registry before constructing the
-			// upload worker — the worker needs the wired registry as a
-			// constructor argument. Each per-source concern (OAuth refresh
-			// for Drive, signed URL GET for Velox, deprecation for
-			// PublicDrive) lives in its own ArtifactSource implementation;
-			// processIngestJob resolves via sourceRegistry.Resolve(...).
 			sourceRegistry := worker.NewArtifactSourceRegistry()
 			if provider, ok := a.CapRouter.Get("google-drive"); ok {
 				if driveImporter, typeOK := provider.(services.DriveImporter); typeOK {
@@ -755,8 +663,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			if regErr := sourceRegistry.Register(worker.NewVeloxSource(a.Logger, a.Cfg.VeloxAPIToken)); regErr != nil {
 				a.Logger.Error("upload worker: register velox source", "error", regErr)
 			}
-			a.Logger.Info("upload worker: source registry built",
-				"sources_registered", sourceRegistry.Names())
+			a.Logger.Info("upload worker: source registry built", "sources_registered", sourceRegistry.Names())
 
 			uw := worker.NewUploadWorker(
 				repository.NewUploadJobRepository(a.DB),
@@ -767,42 +674,24 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				a.CapRouter,
 				a.Vault,
 				sourceRegistry,
-				// ExternalDeliveryRepository satisfies worker.ExternalDeliveryVerifier
-				// structurally via GetExpectedTripleByUploadJobID; passing
-				// directly avoids an adapter while keeping the worker layer
-				// decoupled from the repository package (test fakes are just
-				// structs with the matching method).
 				repository.NewExternalDeliveryRepository(a.DB),
 				time.Duration(a.Cfg.UploadWorkerIntervalSeconds)*time.Second,
 				slog.Default(),
 				uploadOpts,
 			)
-			if err := uw.Run(c); err != nil && err != context.Canceled {
-				slog.Error("upload worker exited with error", "error", err)
-			}
-		}()
-		children = append(children, &goroutineCtx{"upload", cancel, d})
-	}
+			return uw.Run(ctx)
+		},
+	})
 
-	// 8. Drive batch crawler — drains import_batches rows the
-	// producer-side handler (POST /api/v1/media/import/drive/
-	// folder/async) inserts. Single-row contract (one batch per
-	// claim) because cross-page Drive pagination is the long
-	// running work. The crawler fan-outs upload_jobs; the existing
-	// UploadWorker (worker #7) INGESTS/UPLOADS them on its own
-	// pool. Heartbeat goroutine per claimed batch keeps the lease
-	// alive during cross-page work; reclaimer ticker recovers
-	// leases from crashed crawlers.
-	{
-		c, cancel := context.WithCancel(ctx)
-		d := make(chan struct{})
-		go func() {
-			defer close(d)
-			a.WorkerStatus.Mark("drive_batch_crawler")
+	// 9. Drive batch crawler — drains import_batches rows
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "drive_batch_crawler",
+		Critical: true,
+		Run: func(ctx context.Context) error {
 			crawlerOpts := worker.DriveBatchCrawlerOptions{
 				ClaimInterval:     5 * time.Second,
 				LeaseTTL:          5 * time.Minute,
-				HeartbeatInterval: 100 * time.Second, // = LeaseTTL/3
+				HeartbeatInterval: 100 * time.Second,
 				ReclaimInterval:   30 * time.Second,
 				ReclaimOnStart:    true,
 			}
@@ -815,46 +704,41 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				crawlerOpts,
 				slog.Default(),
 			)
-			if err := dbcc.Run(c); err != nil && err != context.Canceled {
-				slog.Error("drive batch crawler exited with error", "error", err)
+			return dbcc.Run(ctx)
+		},
+	})
+
+	slog.Info("9 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler")
+
+	criticalErrCh := a.WorkerRegistry.StartAll(ctx)
+
+	select {
+	case err := <-criticalErrCh:
+		if err != nil {
+			slog.Error("critical worker exited unexpectedly", "error", err)
+			a.WorkerRegistry.StopAll(15 * time.Second)
+			if a.OneTimeCodes != nil {
+				a.OneTimeCodes.Stop()
 			}
-		}()
-		children = append(children, &goroutineCtx{"drive_batch_crawler", cancel, d})
-	}
-
-	slog.Info("8 background goroutines started: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / upload / drive_batch_crawler")
-
-	// Block until ctx is cancelled.
-	<-ctx.Done()
-	slog.Info("context cancelled, broadcasting shutdown to all 7 goroutines")
-	for _, child := range children {
-		child.cancel()
-	}
-	// Drain concurrently — 15s per goroutine, parallel execution.
-	for _, child := range children {
-		select {
-		case <-child.done:
-			slog.Info("worker drained cleanly", "name", child.name)
-		case <-time.After(15 * time.Second):
-			slog.Warn("worker drain timeout, continuing shutdown", "name", child.name)
+			return err
 		}
+	case <-ctx.Done():
+		slog.Info("context cancelled, broadcasting shutdown to all workers")
 	}
-	slog.Info("all background goroutines drained")
 
-	// E8 — graceful-shutdown wiring for the OneTimeCodeStore sweeper.
-	// Stop() is idempotent (sync.Once inside) and closes the stop
-	// channel that sweepLoop selects on; the goroutine returns on
-	// its next tick boundary (≤1s by the sweeper's cadence). No 15s
-	// timeout is needed because Stop() is a synchronous signal.
-	// When cmd/api runs WITHOUT RunWorkers (HTTP-only binary),
-	// this path is skipped — process termination collects the
-	// sweeper.
+	shutdownErr := a.WorkerRegistry.StopAll(15 * time.Second)
+	if shutdownErr != nil {
+		slog.Warn("worker shutdown did not complete cleanly", "error", shutdownErr)
+	} else {
+		slog.Info("all background workers drained")
+	}
+
 	if a.OneTimeCodes != nil {
 		a.OneTimeCodes.Stop()
 		slog.Info("OneTimeCodeStore sweeper stopped")
 	}
 
-	return nil
+	return shutdownErr
 }
 
 func valueString(p *string) string {

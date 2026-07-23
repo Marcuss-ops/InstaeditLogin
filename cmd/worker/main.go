@@ -57,7 +57,7 @@ func main() {
 	// fly.worker.toml + startWorkerHealthListener godoc). Bound BEFORE
 	// RunWorkers blocks so the listener is reachable for the whole
 	// window the worker is alive.
-	startWorkerHealthListener(ctx, slog.Default())
+	startWorkerHealthListener(ctx, app.WorkerRegistry, slog.Default())
 
 	// Signal handler drives ctx cancel. MUST be installed before
 	// RunWorkers blocks on <-ctx.Done(), otherwise SIGARM is lost.
@@ -69,14 +69,13 @@ func main() {
 		cancel()
 	}()
 
-	// RunWorkers blocks until ctx is cancelled, then drains the 5
-	// goroutines with a 15s budget per leaf. Returns a wrapped error
-	// if any goroutine exited non-cleanly before the cancel (rare).
-	//
-	// The signal goroutine above drives ctx cancellation; this call
-	// blocks on <-ctx.Done() inside app.RunWorkers.
+	// RunWorkers blocks until ctx is cancelled or a critical worker
+	// exits unexpectedly, then drains the goroutines. A non-nil error
+	// means a critical worker failed and the process must exit
+	// non-zero so the orchestrator can restart it.
 	if err := app.RunWorkers(ctx); err != nil {
 		slog.Error("worker: RunWorkers exited with error", "error", err)
+		os.Exit(1)
 	}
 
 	slog.Info("worker: stopped")

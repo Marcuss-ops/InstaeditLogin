@@ -17,41 +17,31 @@ import (
 const readyTimeout = 2 * time.Second
 
 // readinessCheck is the contract the /ready handler depends on for
-// its 3 green-path dots. Tests inject stubs that satisfy this
-// shape (DB pinger, migrations checker, worker-status query).
-// Kept narrow: an in-memory fake satisfies it without dragging
-// the real *sql.DB or production WorkerStatus into unit tests.
+// its 2 green-path dots. Tests inject stubs that satisfy this
+// shape (DB pinger, migrations checker). Kept narrow: an in-memory
+// fake satisfies it without dragging the real *sql.DB into unit
+// tests.
 //
 // The implementation bound to the production wiring is
-// router.handleReady (the same Receiver owns DB + WorkerStatus);
-// the per-check methods below are the call sites.
+// router.handleReady (the same Receiver owns DB + readiness checks).
 type readinessCheck interface {
 	PingDB(ctx context.Context) error
 	MigrationsApplied(ctx context.Context) error
-	AllWorkersStarted(ctx context.Context) (allOK bool, pending []string)
 }
 
 // readinessResponse is the canonical JSON envelope /ready returns.
-// Per-check status substrings ("ok"/"db_down"/"migrations_missing"/"workers_not_ready")
+// Per-check status substrings ("ok"/"db_down"/"migrations_missing")
 // are stable across releases so an alert monitor can pattern-match
 // on them. The numeric overall HTTP status follows the "any failure
 // = 503, all green = 200" canonical readiness contract.
 type readinessResponse struct {
-	Status         string   `json:"status"`                    // "ok" | "not_ready"
-	DB             string   `json:"db"`                        // "ok" | <error string>
-	Migrations     string   `json:"migrations"`                // "ok" | <error string>
-	WorkersReady   bool     `json:"workers_ready"`             // allOK from AllWorkersStarted
-	WorkersPending []string `json:"workers_pending,omitempty"` // non-empty when not all started
+	Status     string `json:"status"`      // "ok" | "not_ready"
+	DB         string `json:"db"`          // "ok" | <error string>
+	Migrations string `json:"migrations"`  // "ok" | <error string>
 }
 
-// WithWorkerStatus wires the per-goroutine "started" monitor into
-// the Router. Production wiring in internal/bootstrap.Wire passes
-// app.WorkerStatus (*api.WorkerStatus). Tests pass nil + use the
-// in-memory WorkerStatus stub via a separate test-only helper.
-func WithWorkerStatus(ws *WorkerStatus) RouterOption {
-	return func(r *Router) { r.workerStatus = ws }
-} // handleReady is the production /ready implementation. It runs the
-// 3 readiness checks with a single shared context bounded by
+// handleReady is the production /ready implementation. It runs the
+// 2 readiness checks with a single shared context bounded by
 // readyTimeout; any sub-check that exceeds the budget produces an
 // error string in its slot, the overall response is 503, and the
 // caller (Fly readinessProbe or K8s readinessProbe) drops the pod
@@ -90,24 +80,6 @@ func (r *Router) handleReady(w http.ResponseWriter, req *http.Request) {
 		resp.Status = "not_ready"
 	} else {
 		resp.Migrations = "ok"
-	}
-
-	// Check 3 — workers started. Atomic.Bool flipped on
-	// goroutine-entry; missing workers = something deadlocked
-	// during RunWorkers setup (DB connection, registry build,
-	// etc.).
-	if r.workerStatus != nil {
-		allOK, pending := r.workerStatus.AllStarted()
-		resp.WorkersReady = allOK
-		resp.WorkersPending = pending
-		if !allOK {
-			resp.Status = "not_ready"
-		}
-	} else {
-		// No WorkerStatus wired (test fixture or pre-bloco
-		// bootstrap call) → assume the worker side is OK; the
-		// proxy's responsibility is to wire it in production.
-		resp.WorkersReady = true
 	}
 
 	status := http.StatusOK

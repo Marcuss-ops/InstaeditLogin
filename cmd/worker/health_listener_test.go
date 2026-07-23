@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 )
 
 // TestWorkerHealthListener_Default_Off confirms WORKER_HEALTH_PORT
@@ -33,7 +35,7 @@ func TestWorkerHealthListener_Default_Off(t *testing.T) {
 	defer cancel()
 
 	// Should be a no-op (no bind).
-	startWorkerHealthListener(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	startWorkerHealthListener(ctx, worker.NewRegistry(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	// Give the listener a beat to bind IF it were going to.
 	time.Sleep(50 * time.Millisecond)
@@ -63,7 +65,7 @@ func TestWorkerHealthListener_ExplicitOff(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			startWorkerHealthListener(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			startWorkerHealthListener(ctx, worker.NewRegistry(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			time.Sleep(20 * time.Millisecond)
 			// TestPass: no panic on any of the disable shorthands.
 			_ = ctx
@@ -91,7 +93,7 @@ func TestWorkerHealthListener_InvalidFallsBackToOff(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			startWorkerHealthListener(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			startWorkerHealthListener(ctx, worker.NewRegistry(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			time.Sleep(20 * time.Millisecond)
 			// TestPass: no panic, no bind attempt on bogus values.
 			_ = ctx
@@ -126,7 +128,7 @@ func TestWorkerHealthListener_AcceptsTCPConnection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	startWorkerHealthListener(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	startWorkerHealthListener(ctx, worker.NewRegistry(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	// Poll for the listener to bind (deterministic address lookup).
 	deadline := time.Now().Add(time.Second)

@@ -66,7 +66,7 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// 5 background goroutines: only if RUN_WORKERS=true.
+	// 9 background workers: only if RUN_WORKERS=true.
 	var workersCancel context.CancelFunc = func() {} // no-op default
 	if runWorkers {
 		ctxWorkers, cancel := context.WithCancel(context.Background())
@@ -74,7 +74,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slog.Info("server: launching 5 background workers (RUN_WORKERS=true)")
+			slog.Info("server: launching 9 background workers (RUN_WORKERS=true)")
 			if err := app.RunWorkers(ctxWorkers); err != nil && err != context.Canceled {
 				slog.Error("server: RunWorkers exited with error", "error", err)
 			}

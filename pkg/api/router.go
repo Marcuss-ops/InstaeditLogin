@@ -206,9 +206,6 @@ type Router struct {
 	// by-omission). When set, the recovery middleware uses
 	// sentryhttp.New() against this hub; when nil, plain recover.
 	sentryHub *sentry.Hub
-	// workerStatus tracks per-goroutine startup flags for the
-	// /ready "5 worker loops started (no deadlock)" check.
-	workerStatus *WorkerStatus
 	// dbForReady is the *sql.DB used by /ready for PingContext +
 	// SchemaHealthy. Nil disables both (test fixture path); the
 	// production wiring in cmd/server/main.go passes app.DB.
