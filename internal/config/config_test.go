@@ -347,6 +347,9 @@ func TestValidateOptionalPlatform_AllPlatforms(t *testing.T) {
 				if !tc.wantErr && err != nil {
 					t.Fatalf("validateOptionalPlatform(%q, %q, %q): want nil, got %v", platform, tc.id, tc.secret, err)
 				}
+				if tc.wantErr && !strings.Contains(err.Error(), platform) {
+					t.Fatalf("validateOptionalPlatform(%q, %q, %q): error should name the platform, got %v", platform, tc.id, tc.secret, err)
+				}
 			})
 		}
 	}

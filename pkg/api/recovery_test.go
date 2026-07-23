@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -164,7 +165,7 @@ func TestRecovery_WithSentry_FakeTransportCapturesPanic(t *testing.T) {
 
 	r := hs(hub)
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		panic("controlled boom")
+		panic(errors.New("controlled boom"))
 	})
 	srv := httptest.NewServer(r.recoverMiddleware(inner))
 	defer srv.Close()
@@ -182,9 +183,11 @@ func TestRecovery_WithSentry_FakeTransportCapturesPanic(t *testing.T) {
 	if event == nil {
 		t.Fatal("expected a Sentry event to be sent, got none (wiring may be broken)")
 	}
-	// hub.Recover stores the panic string in the event Message rather
-	// than in the Exception slice for non-error panic values.
-	if !strings.Contains(event.Message, "controlled boom") {
-		t.Errorf("event message should contain panic message; got %q", event.Message)
+	if event.Exception == nil || len(event.Exception) == 0 {
+		t.Fatal("expected exception in Sentry event")
+	}
+	exc := event.Exception[0]
+	if !strings.Contains(exc.Value, "controlled boom") {
+		t.Errorf("exception value should contain panic message; got %q", exc.Value)
 	}
 }
