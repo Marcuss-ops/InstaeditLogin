@@ -148,8 +148,7 @@ func newMediaTestRouter(media MediaStore, storage StorageProvider) *Router {
 		nil,
 		WithMediaStore(media),
 		WithStorageProvider(storage),
-		WithMaxUploadBytes(200*1024*1024),
-	)
+		WithMaxUploadBytes(200*1024*1024), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
 }
 
 // --- /presign ----------------------------------------------------------------

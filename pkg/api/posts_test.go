@@ -39,8 +39,7 @@ func newPostsTestRouter(
 		nil,
 		WithWorkspaceStore(ws),
 		WithPostStore(postStore),
-		WithCredentialVault(&mockCredentialVault{}),
-	)
+		WithCredentialVault(&mockCredentialVault{}), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
 }
 
 func postsIssueJWT(t *testing.T, userID int64) string {

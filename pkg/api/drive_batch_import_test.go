@@ -948,6 +948,7 @@ func TestDriveBatchImport_IdempotencyKey_CrossTenant_DoesNotReplay(t *testing.T)
 		WithUploadJobStore(store),
 		WithIdempotencyStore(idemStore),
 		WithCredentialVault(&fakeVault{}),
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)),
 	)
 
 	const idemKey = "cross-tenant-key"

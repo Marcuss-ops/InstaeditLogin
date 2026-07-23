@@ -1,6 +1,7 @@
 package api
 
 import (
+	"time"
 	"bytes"
 	"database/sql"
 	"encoding/json"
@@ -33,8 +34,7 @@ func newWorkspaceTestRouter(
 		nil,
 		WithWorkspaceStore(workspaceStore),
 		WithPostStore(&mockPostStore{}),
-		WithCredentialVault(&mockCredentialVault{}),
-	)
+		WithCredentialVault(&mockCredentialVault{}), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
 }
 
 func workspacesIssueJWT(t *testing.T, userID int64) string {

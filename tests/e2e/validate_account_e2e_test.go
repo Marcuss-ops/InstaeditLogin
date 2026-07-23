@@ -54,6 +54,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 )
@@ -104,6 +105,10 @@ func (s *stubYouTubeOAuthService) CanaryUpload(ctx context.Context, at, exp stri
 		return &services.CanaryUploadResult{VideoID: "stub-canary-video-id", UploadedChannelID: exp}, nil
 	}
 	return s.canaryFn(ctx, at, exp)
+}
+
+func (s *stubYouTubeOAuthService) FetchEarnings(ctx context.Context, accessToken, channelID string, days int) ([]repository.AccountMetricPoint, error) {
+	return nil, nil
 }
 
 func (s *stubYouTubeOAuthService) ClientID() string { return s.clientIDValue }
@@ -223,8 +228,7 @@ func buildValidateRouterHarness(t *testing.T, h *E2EHarness) *validateRouterHarn
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
 		api.WithYouTubeService(ytSvc),
 		api.WithCredentialVault(vault),
-		api.WithChannelAuthorizer(authzr),
-	)
+		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60 * time.Second)))
 	return &validateRouterHarness{
 		router:    router,
 		pgDB:      h.pgDB,
@@ -479,8 +483,7 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 
 	router := api.NewRouter(
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
-		api.WithChannelAuthorizer(authzr),
-	)
+		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60 * time.Second)))
 
 	// Step A — Fire OAuthCallback with connect-link state JWT naming channel A
 	// but mockYouTubeDisco returns ONLY channel B.
@@ -527,8 +530,7 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
 		api.WithYouTubeService(vhYT),
 		api.WithCredentialVault(vhVault),
-		api.WithChannelAuthorizer(authzr),
-	)
+		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60 * time.Second)))
 
 	validateReq := httptest.NewRequest(http.MethodPost,
 		fmt.Sprintf("/api/v1/accounts/%d/validate", accountAID), nil)

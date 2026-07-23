@@ -238,6 +238,7 @@ func newDriveImportTestRouter() *Router {
 		WithPostStore(&mockPostStore{}),
 		WithCredentialVault(&mockCredentialVault{}),
 		WithIdempotencyStore(newMockIdempotencyStore()),
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)),
 	)
 }
 
@@ -273,6 +274,7 @@ func TestDriveImport_NotConfigured_501(t *testing.T) {
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		nil,
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)),
 	)
 	body := `{"drive_file_id":"x","drive_account_id":1,"workspace_id":1,"title":"t","caption":"c","targets":[{"platform_account_id":2}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive", bytes.NewReader([]byte(body)))
@@ -315,6 +317,7 @@ func TestDriveImport_IdempotencyReplay(t *testing.T) {
 		WithPostStore(postStore),
 		WithCredentialVault(&mockCredentialVault{}),
 		WithIdempotencyStore(idemStore),
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)),
 	)
 
 	body := `{"drive_file_id":"x","drive_account_id":1,"workspace_id":1,"title":"t","caption":"c","targets":[{"platform_account_id":2}]}`
@@ -367,6 +370,7 @@ func TestDriveImport_IdempotencyConflict(t *testing.T) {
 		WithPostStore(&mockPostStore{}),
 		WithCredentialVault(&mockCredentialVault{}),
 		WithIdempotencyStore(idemStore),
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)),
 	)
 
 	body := `{"drive_file_id":"x","drive_account_id":1,"workspace_id":1,"title":"t","caption":"c","targets":[{"platform_account_id":2}]}`

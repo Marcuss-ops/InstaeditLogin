@@ -1,6 +1,7 @@
 package api
 
 import (
+	"time"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -45,8 +46,7 @@ func workspaceChannelsRouter(store *mockWorkspaceStore) *Router {
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		nil,
-		WithWorkspaceStore(store),
-	)
+		WithWorkspaceStore(store), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
 }
 
 // TestHandleAttachWorkspaceChannel_HappyPath verifies the basic POST

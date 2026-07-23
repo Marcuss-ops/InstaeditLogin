@@ -429,6 +429,9 @@ func newBatchImportTestRouterWithIdem(
 	// 38+ other tests in this file never reach the vault check (they
 	// short-circuit elsewhere) so wiring this in by default is safe.
 	opts = append(opts, WithCredentialVault(&fakeVault{}))
+	opts = append(opts, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+
+	opts = append(opts, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 
 	return NewRouter(
 		capRouter,
@@ -436,7 +439,8 @@ func newBatchImportTestRouterWithIdem(
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		nil,
-		opts..., WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		opts...,
+	)
 }
 
 // DriveBatchImport idempotency tests ----------------------------------------------------
