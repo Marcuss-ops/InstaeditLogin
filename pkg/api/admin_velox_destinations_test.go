@@ -844,7 +844,7 @@ func TestDeleteIntegrationVeloxDestination_409_Dependents(t *testing.T) {
 // ----------------------------------------------------------------------
 // PATCH /api/v1/integrations/velox/destinations/{id} (Step 4 of the
 // user-facing CRUD closure — added together with the repo-side
-// UpdateDefaultMetadata + the handler in admin_velox_destinations_handlers.go).
+// UpdateEnabledAndDefaults + the handler in admin_velox_destinations_handlers.go).
 // ----------------------------------------------------------------------
 
 // TestUpdateIntegrationVeloxDestination_Happy_Defaults — body
@@ -1046,9 +1046,9 @@ func TestUpdateIntegrationVeloxDestination_404_NotOwned(t *testing.T) {
 // the absent-vs-present semantics for the `defaults` field
 // across two independent subtests:
 //
-//   - body field absent (zero-byte json.RawMessage)     ==> UpdateDefaultMetadata NOT called, row bytes preserved
-//   - body field set to JSON literal `null` (4 bytes)  ==> UpdateDefaultMetadata IS called, row bytes become "null"
-//   - body field set to an object (e.g. {"k":"v"})     ==> UpdateDefaultMetadata IS called, row bytes become the object
+//   - body field absent (zero-byte json.RawMessage)     ==> default_metadata NOT updated, row bytes preserved
+//   - body field set to JSON literal `null` (4 bytes)  ==> default_metadata IS updated, row bytes become "null"
+//   - body field set to an object (e.g. {"k":"v"})     ==> default_metadata IS updated, row bytes become the object
 //
 // The third case + JSON-invalid rejection are already covered by
 // Happy_Defaults + 400_Empty. This test focuses on:
@@ -1226,8 +1226,8 @@ func TestUpdateIntegrationVeloxDestination_AuditDeltas(t *testing.T) {
 // TestUpdateIntegrationVeloxDestination_CombinedUpdate verifies the
 // partial-write-window fix: a PATCH supplying BOTH fields persists
 // BOTH in ONE atomic SQL statement. The handler no longer issues
-// two independent UPDATEs (UpdateEnabled + UpdateDefaultMetadata),
-// closing the race a concurrent DELETE between the two calls could
+// two independent UPDATEs,
+// closing the race a concurrent DELETE between them could
 // exploit. Instead it calls
 //
 //	r.externalDestinations.UpdateEnabledAndDefaults(ctx, id, enabled, defaults)
