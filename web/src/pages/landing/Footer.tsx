@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";
 import { Zap } from "lucide-react";
-import { PLATFORM_REGISTRY } from "./shared";
 
 /* ----------------------------------------------------------------------------
  * Footer
@@ -18,12 +17,10 @@ export function Footer() {
     {
       heading: "Product",
       links: [
-        { l: "Pipeline AI", href: "#pipeline" },
-        { l: "Workflow", href: "#workflow" },
-        { l: "Features", href: "#features" },
-        { l: "For agencies", href: "#agency" },
-        { l: "Programs", to: "/programs" },
-        { l: "Mentoring", to: "/mentoring" },
+        { l: "How it works", href: "#features" },
+        { l: "Programs", href: "#programs" },
+        { l: "Results", href: "#results" },
+        { l: "FAQ", href: "#faq" },
       ],
     },
     {
@@ -50,12 +47,9 @@ export function Footer() {
             Channel automation built for YouTube monetization. Go from zero to a
             revenue-generating channel in under 3 weeks.
           </p>
-          <div className="flex items-center gap-2 mt-5">
-            {PLATFORM_REGISTRY.map(({ key, name, Logo }) => (
-              <span key={key} className="inline-flex w-7 h-7 rounded-md overflow-hidden ring-1 ring-white/10 surface-glass" title={name} aria-label={name}>
-                <Logo className="w-full h-full" />
-              </span>
-            ))}
+          <div className="inline-flex items-center gap-2 mt-5 surface-glass border border-white/10 px-3 py-1.5 rounded-full">
+            <span className="w-2 h-2 rounded-full bg-red-500" />
+            <span className="text-xs text-zinc-300 font-medium">Built for YouTube monetization</span>
           </div>
         </div>
         <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-8">

@@ -6,8 +6,8 @@ export function ResultsSection() {
   const stats = [
     { v: "<3 wk", l: "Avg. monetization time", desc: "from channel start to Partner Program" },
     { v: "50+", l: "Channels monetized", desc: "across every major niche" },
-    { v: "500+", l: "Videos published", desc: "across YouTube, TikTok, Insta & more" },
-    { v: "7", l: "Platforms", desc: "one automated workflow" },
+    { v: "$2K+", l: "Avg. monthly earnings", desc: "per monetized channel" },
+    { v: "500+", l: "Videos published", desc: "optimized for views and revenue" },
   ];
 
   const channels = [
@@ -27,11 +27,11 @@ export function ResultsSection() {
           <div className="text-eyebrow text-violet-300/90 mb-3">Results</div>
           <h2 className="text-display-2 text-white">
             Real channels.{" "}
-            <span className="text-gradient-animated">Real monetization.</span>
+            <span className="text-gradient">Real monetization.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch] mx-auto">
-            Most creators take months to even think about revenue. Our automated
-            system is built to hit the YouTube Partner Program and start earning
+            Most creators take months to see their first dollar. Our system is built
+            to hit the YouTube Partner Program and start generating online income
             in under 3 weeks.
           </p>
         </div>

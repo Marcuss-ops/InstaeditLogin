@@ -74,7 +74,7 @@ export function Login() {
             Welcome back
           </h1>
           <p className="text-sm text-[#9aa0aa] mb-10">
-            Log in to manage your content
+            Log in to manage your channel
           </p>
 
           <form onSubmit={submit} className="space-y-5">
@@ -95,7 +95,7 @@ export function Login() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="yourname@company.com"
-                  className="w-full h-11 pl-10 pr-4 rounded-xl bg-white/[0.04] border border-white/[0.10] text-sm placeholder:text-[#9aa0aa]/40 focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20 transition-all"
+                  className="w-full h-11 pl-10 pr-4 rounded-xl bg-white/[0.04] border border-white/[0.10] text-sm placeholder:text-[#9aa0aa]/40 focus:outline-none focus:border-[#0A84FF]/50 focus:ring-2 focus:ring-[#0A84FF]/20 transition-all"
                 />
               </div>
             </div>
@@ -117,7 +117,7 @@ export function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
-                  className="w-full h-11 pl-10 pr-4 rounded-xl bg-white/[0.04] border border-white/[0.10] text-sm placeholder:text-[#9aa0aa]/40 focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20 transition-all"
+                  className="w-full h-11 pl-10 pr-4 rounded-xl bg-white/[0.04] border border-white/[0.10] text-sm placeholder:text-[#9aa0aa]/40 focus:outline-none focus:border-[#0A84FF]/50 focus:ring-2 focus:ring-[#0A84FF]/20 transition-all"
                 />
               </div>
             </div>
@@ -161,14 +161,14 @@ export function Login() {
            */}
           <div className="mt-6 pt-6 border-t border-white/[0.08]">
             <p className="text-xs text-center text-[#9aa0aa] mb-4">
-              Or continue with
+              New to InstaEdit? Connect an account to start
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {PROVIDERS.map((p) => (
                 <a
                   key={p.id}
                   href={`${API_BASE_URL}/api/v1/auth/${p.id}/login`}
-                  className="group flex items-center justify-center gap-2 h-11 px-3 rounded-xl bg-white/[0.04] border border-white/[0.10] text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:border-white/[0.20] hover:text-white transition-all focus:outline-none focus:border-[#0A84FF]/50 focus:ring-1 focus:ring-[#0A84FF]/20"
+                  className="group flex items-center justify-center gap-2 h-11 px-3 rounded-xl bg-white/[0.04] border border-white/[0.10] text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:border-white/[0.20] hover:text-white transition-all focus:outline-none focus:border-[#0A84FF]/50 focus:ring-2 focus:ring-[#0A84FF]/20"
                   aria-label={`Continue with ${p.name}`}
                 >
                   <span
@@ -182,6 +182,17 @@ export function Login() {
                 </a>
               ))}
             </div>
+            <p className="text-xs text-center text-[#9aa0aa]/70 mt-4">
+              No account yet?{" "}
+              <a
+                href="https://discord.com/users/1201477873719050332"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-white hover:underline"
+              >
+                Get started here
+              </a>
+            </p>
           </div>
         </div>
 

@@ -12,10 +12,11 @@ export function Features() {
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">Built for automation</div>
-          <h2 className="text-display-2 text-white">A channel engine that runs while you sleep.</h2>
+          <h2 className="text-display-2 text-white">A channel engine built for revenue.</h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            From content strategy to multi-platform publishing, every moving part is
-            designed to turn a new channel into a monetized channel — fast.
+            From content strategy to publishing cadence, every moving part is designed
+            to turn a new English-language YouTube channel into a monetized income
+            stream — fast.
           </p>
         </div>
         <div className="grid lg:grid-cols-3 gap-5">
@@ -26,11 +27,11 @@ export function Features() {
               <div className="inline-flex w-12 h-12 rounded-xl items-center justify-center ring-1 ring-violet-400/40 surface-glass text-violet-300 mb-5">
                 <Sparkles className="w-6 h-6" />
               </div>
-              <h3 className="text-display-3 text-white mb-3 max-w-[22ch]">YouTube-first, then everywhere.</h3>
+              <h3 className="text-display-3 text-white mb-3 max-w-[22ch]">YouTube-first monetization.</h3>
               <p className="text-sm text-zinc-400 leading-relaxed max-w-[52ch]">
-                We optimize for the platform that pays: YouTube. Then we repurpose every
-                video to TikTok, Instagram, X, LinkedIn, Facebook and Threads — all from a
-                single automated workflow.
+                We optimize for the platform that pays: English-language YouTube. Every
+                workflow is tuned to hit the Partner Program and maximize ad revenue
+                before scaling to short-form and social clips.
               </p>
               <div className="mt-7 surface-glass rounded-xl border border-white/10 overflow-hidden">
                 <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-white/5">
@@ -57,12 +58,11 @@ export function Features() {
           <div className="surface-card p-6 relative overflow-hidden animate-fade-up animation-delay-100 hover:border-cyan-400/30 transition-all duration-300">
             <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-cyan-400/40 surface-glass text-cyan-300 mb-4">
               <IconSchedule className="w-5 h-5" />
-            </div>
-            <h3 className="text-display-3 text-white mb-2">Auto-publishing engine.</h3>
-            <p className="text-sm text-zinc-400 leading-relaxed">
-              Videos go live at the best times for views and monetization. No manual
-              uploads, no timezone math — just a channel that grows 24/7.
-            </p>
+            </div>              <h3 className="text-display-3 text-white mb-2">Automated publishing cadence.</h3>
+              <p className="text-sm text-zinc-400 leading-relaxed">
+                Videos go live at the best times for views and revenue. No manual uploads,
+                no timezone math — just a channel that grows while you sleep.
+              </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden animate-fade-up animation-delay-200 hover:border-pink-400/30 transition-all duration-300">
             <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-pink-400/40 surface-glass text-pink-300 mb-4">

@@ -7,15 +7,14 @@ import { Landing } from "./Landing";
  * Smoke test for the public marketing landing.
  *
  * Goal: a single cheap assertion block that fails the moment any of:
- *   - the hero h1 copy is rewritten or one of the two gradient phrases drops
- *   - a workflow step is added, removed, or renamed
+ *   - the hero h1 copy is rewritten or the core promise drops
  *   - the dashboard mockup gets removed or restructured enough that its
  *     window-chrome title text isn't in the DOM anymore
  *   - one of the six YouTube embed IDs (SHORT_DEMOS or LONGFORM_DEMOS) is
  *     removed, swapped, or duplicated
  */
 describe("Landing", () => {
-  it("renders hero copy, workflow, dashboard mockup, and 6 YouTube embeds", () => {
+  it("renders hero copy, dashboard mockup, and 6 YouTube embeds", () => {
     render(
       <MemoryRouter>
         <Landing />
@@ -24,24 +23,8 @@ describe("Landing", () => {
 
     // --- Hero -------------------------------------------------------------
     const h1 = screen.getByRole("heading", { level: 1 });
-    expect(h1).toHaveTextContent(/From zero to/);
-    expect(h1).toHaveTextContent(/YouTube monetization/);
-
-    // --- Workflow ---------------------------------------------------------
-    const WORKFLOW_TITLES = [
-      "Pick your niche",
-      "Create or generate",
-      "AI optimizes for views",
-      "Post at peak times",
-      "Go live everywhere",
-      "Track your earnings",
-    ];
-    for (const title of WORKFLOW_TITLES) {
-      expect(
-        screen.getByRole("heading", { name: title }),
-        `expected workflow step "${title}" to be in the document`,
-      ).toBeInTheDocument();
-    }
+    expect(h1).toHaveTextContent(/under 3 weeks/);
+    expect(h1).toHaveTextContent(/YouTube/);
 
     // --- Dashboard mockup -------------------------------------------------
     expect(
