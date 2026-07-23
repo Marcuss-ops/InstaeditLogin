@@ -26,7 +26,11 @@ func (r *Router) Setup() http.Handler {
 		ConnectLinkNonceStore: r.connectLinkNonceStore,
 	}))
 	reg.Register(NewVeloxModule(r))
-	reg.Register(NewVeloxBFFModule(r))
+	reg.Register(NewVeloxBFFModule(VeloxBFFModuleDeps{
+		Client:         r.veloxBFFClient,
+		AuthMiddleware: r.veloxBFFAuthMiddleware,
+		CSRFMiddleware: r.veloxBFFCSRFMiddleware,
+	}))
 	reg.Register(NewIntegrationsModule(r))
 
 	// Public / health probes are mounted before the auth module so the

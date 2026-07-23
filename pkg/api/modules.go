@@ -114,26 +114,37 @@ func (m *VeloxModule) Register(mux chi.Router) {
 	m.r.registerInternalVeloxRoutes()
 }
 
+// VeloxBFFModuleDeps is the narrow set of dependencies the Velox
+// BFF module needs to mount its routes.
+type VeloxBFFModuleDeps struct {
+	Client         veloxapi.Client
+	AuthMiddleware func(http.Handler) http.Handler
+	CSRFMiddleware func(http.Handler) http.Handler
+}
+
 // VeloxBFFModule mounts the user-facing /api/v1/velox/* BFF routes
 // that proxy a bounded subset of Velox operations to the browser.
 // Registration is a no-op when the Router has no veloxBFFClient wired
 // (matches the AdminModule / VeloxModule nil-guard pattern).
 type VeloxBFFModule struct {
-	r *Router
+	deps VeloxBFFModuleDeps
 }
 
-func NewVeloxBFFModule(r *Router) RouteModule {
-	return &VeloxBFFModule{r: r}
+func NewVeloxBFFModule(deps VeloxBFFModuleDeps) RouteModule {
+	return &VeloxBFFModule{deps: deps}
 }
+
+// Compile-time assertion: VeloxBFFModule implements RouteModule.
+var _ RouteModule = (*VeloxBFFModule)(nil)
 
 func (m *VeloxBFFModule) Register(mux chi.Router) {
-	if m.r.veloxBFFClient == nil {
+	if m.deps.Client == nil {
 		return
 	}
 	veloxapi.Register(mux, veloxapi.Deps{
-		Client:         m.r.veloxBFFClient,
-		AuthMiddleware: m.r.veloxBFFAuthMiddleware,
-		CSRFMiddleware: m.r.veloxBFFCSRFMiddleware,
+		Client:         m.deps.Client,
+		AuthMiddleware: m.deps.AuthMiddleware,
+		CSRFMiddleware: m.deps.CSRFMiddleware,
 	})
 }
 
