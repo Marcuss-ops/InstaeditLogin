@@ -66,7 +66,53 @@ jobs:
       # ─── 1. Checkout ──────────────────────────────────────────────
       - uses: actions/checkout@v4
 
-      # ─── 2. Go toolchain ──────────────────────────────────────────
+      # ─── 2. Validate GitHub Actions workflow YAML syntax ────────
+      # Loads every workflow file with PyYAML so a malformed YAML
+      # check-in fails the build before any expensive job runs.
+      - name: Validate workflow YAML syntax
+        run: |
+          python3 -c 'import yaml'
+          python3 - <<'PY'
+          import glob
+          import subprocess
+          import sys
+          import os
+
+          try:
+              import yaml
+          except ImportError:
+              subprocess.check_call(
+                  [sys.executable, "-m", "pip", "install", "--quiet", "pyyaml==6.0.1"]
+              )
+              import yaml
+
+          workflows_dir = os.path.join(".github", "workflows")
+          files = sorted(
+              glob.glob(os.path.join(workflows_dir, "*.yml")) +
+              glob.glob(os.path.join(workflows_dir, "*.yaml"))
+          )
+
+          if not files:
+              print("No workflow YAML files found")
+              sys.exit(0)
+
+          failed = False
+          for path in files:
+              try:
+                  with open(path, "r", encoding="utf-8") as f:
+                      yaml.safe_load(f)
+                  print(f" {path}")
+              except yaml.YAMLError as e:
+                  print(f"✗ YAML syntax error in {path}: {e}", file=sys.stderr)
+                  failed = True
+              except OSError as e:
+                  print(f" Failed to read {path}: {e}", file=sys.stderr)
+                  failed = True
+
+          sys.exit(1 if failed else 0)
+          PY
+
+      # ─── 3. Go toolchain ──────────────────────────────────────────
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -77,7 +123,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # ─── 3. Go formatting check (Blocco #3.1 hard requirement) ────
+      # ─── 4. Go formatting check (Blocco #3.1 hard requirement) ────
       # Use `gofmt -l .` to LIST files that would be reformatted
       # (empty == clean). Respects .gitignore via filename matches.
       # Output piped to `cat` so the actual offending filenames show

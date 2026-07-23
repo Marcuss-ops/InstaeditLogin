@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -468,6 +469,80 @@ func (m *VeloxDeliveryMetadata) Validate() error {
 	}
 	if m.FolderID != nil && strings.TrimSpace(*m.FolderID) == "" {
 		return fmt.Errorf("metadata.folder_id must be non-empty when set")
+	}
+	if m.Language != nil {
+		if err := validateVeloxLanguage(*m.Language); err != nil {
+			return fmt.Errorf("metadata.language: %w", err)
+		}
+	}
+	if m.Timezone != nil {
+		if err := validateVeloxTimezone(*m.Timezone); err != nil {
+			return fmt.Errorf("metadata.timezone: %w", err)
+		}
+	}
+	if err := validateVeloxTags(m.Tags); err != nil {
+		return fmt.Errorf("metadata.tags: %w", err)
+	}
+	return nil
+}
+
+// veloxLanguageRegex loosely matches BCP 47 language tags (e.g.
+// "en", "en-US", "zh-Hant"). We intentionally do not import a full
+// locale library; the regex is permissive enough for standard tags
+// but rejects obvious garbage. Primary subtags must be lowercase.
+var veloxLanguageRegex = regexp.MustCompile(`^[a-z]{2,8}(-[a-zA-Z0-9-]+)*$`)
+
+func validateVeloxLanguage(lang string) error {
+	if strings.TrimSpace(lang) == "" {
+		return fmt.Errorf("must be non-empty when set")
+	}
+	if !veloxLanguageRegex.MatchString(lang) {
+		return fmt.Errorf("%q is not a valid BCP 47 language tag", lang)
+	}
+	return nil
+}
+
+// veloxTimezoneRegex matches IANA timezone names such as
+// "Europe/Rome", "America/New_York", "Etc/UTC", etc. It is
+// intentionally format-based so validation does not depend on tzdata
+// being installed at runtime.
+var veloxTimezoneRegex = regexp.MustCompile(`^(UTC|[A-Z][a-zA-Z0-9_-]*/[A-Z][a-zA-Z0-9_-]+)$`)
+
+func validateVeloxTimezone(tz string) error {
+	if strings.TrimSpace(tz) == "" {
+		return fmt.Errorf("must be non-empty when set")
+	}
+	if tz == "Local" || !veloxTimezoneRegex.MatchString(tz) {
+		return fmt.Errorf("%q is not a valid IANA timezone", tz)
+	}
+	return nil
+}
+
+const (
+	maxVeloxTags     = 50
+	maxVeloxTagLen   = 100
+)
+
+func validateVeloxTags(tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	if len(tags) > maxVeloxTags {
+		return fmt.Errorf("too many tags: %d (max %d)", len(tags), maxVeloxTags)
+	}
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		trimmed := strings.TrimSpace(tag)
+		if trimmed == "" {
+			return fmt.Errorf("tags must be non-empty strings")
+		}
+		if len(trimmed) > maxVeloxTagLen {
+			return fmt.Errorf("tag %q exceeds %d characters", trimmed, maxVeloxTagLen)
+		}
+		if _, ok := seen[trimmed]; ok {
+			return fmt.Errorf("duplicate tag %q", trimmed)
+		}
+		seen[trimmed] = struct{}{}
 	}
 	return nil
 }

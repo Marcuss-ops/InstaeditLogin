@@ -3,6 +3,7 @@ package models
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -406,5 +407,163 @@ func TestExternalDeliveryStatus_CanonicalResume_AlwaysLegal(t *testing.T) {
 		if !ExternalDeliveryStatusRetryWait.CanTransitionTo(target) {
 			t.Errorf("CanonicalResume(retry_wait, valid=%v) returned illegal target %s", valid, target)
 		}
+	}
+}
+
+// ptrTo returns a pointer to v. Helper for metadata tests.
+func ptrTo[T any](v T) *T { return &v }
+
+// TestParseVeloxDeliveryMetadata_Valid parses a representative
+// metadata blob and asserts every typed field is decoded.
+func TestParseVeloxDeliveryMetadata_Valid(t *testing.T) {
+	raw := []byte(`{
+		"title":"a title",
+		"description":"a description",
+		"privacy_status":"private",
+		"language":"en-US",
+		"timezone":"Europe/Rome",
+		"tags":["short","clip"],
+		"target_account_ids":[123,456],
+		"drive_account_id":42,
+		"folder_id":"fid"
+	}`)
+	m, err := ParseVeloxDeliveryMetadata(raw)
+	if err != nil {
+		t.Fatalf("ParseVeloxDeliveryMetadata: %v", err)
+	}
+	if m.Title != "a title" {
+		t.Errorf("Title: want %q, got %q", "a title", m.Title)
+	}
+	if m.Description != "a description" {
+		t.Errorf("Description: want %q, got %q", "a description", m.Description)
+	}
+	if m.PrivacyStatus != "private" {
+		t.Errorf("PrivacyStatus: want private, got %q", m.PrivacyStatus)
+	}
+	if m.Language == nil || *m.Language != "en-US" {
+		t.Errorf("Language: want en-US, got %v", m.Language)
+	}
+	if m.Timezone == nil || *m.Timezone != "Europe/Rome" {
+		t.Errorf("Timezone: want Europe/Rome, got %v", m.Timezone)
+	}
+	if len(m.Tags) != 2 || m.Tags[0] != "short" || m.Tags[1] != "clip" {
+		t.Errorf("Tags: want [short clip], got %v", m.Tags)
+	}
+	if len(m.TargetAccountIDs) != 2 || m.TargetAccountIDs[0] != 123 || m.TargetAccountIDs[1] != 456 {
+		t.Errorf("TargetAccountIDs: want [123 456], got %v", m.TargetAccountIDs)
+	}
+	if m.DriveAccountID == nil || *m.DriveAccountID != 42 {
+		t.Errorf("DriveAccountID: want 42, got %v", m.DriveAccountID)
+	}
+	if m.FolderID == nil || *m.FolderID != "fid" {
+		t.Errorf("FolderID: want fid, got %v", m.FolderID)
+	}
+}
+
+// TestParseVeloxDeliveryMetadata_Errors covers empty and malformed input.
+func TestParseVeloxDeliveryMetadata_Errors(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  []byte
+	}{
+		{"empty", []byte{}},
+		{"not json", []byte("not-json")},
+		{"not object", []byte("123")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseVeloxDeliveryMetadata(tc.raw); err == nil {
+				t.Errorf("expected error for %s", tc.name)
+			}
+		})
+	}
+}
+
+// TestVeloxDeliveryMetadata_Validate covers the centralised
+// validation rules for the typed metadata struct.
+func TestVeloxDeliveryMetadata_Validate(t *testing.T) {
+	valid := func() *VeloxDeliveryMetadata {
+		return &VeloxDeliveryMetadata{
+			Title:            "title",
+			Description:      "description",
+			PrivacyStatus:    "private",
+			Language:         ptrTo("en-US"),
+			Timezone:         ptrTo("Europe/Rome"),
+			Tags:             []string{"tag1", "tag2"},
+			TargetAccountIDs: []int64{1, 2},
+			DriveAccountID:   ptrTo[int64](1),
+			FolderID:         ptrTo("folder"),
+		}
+	}
+
+	cases := []struct {
+		name    string
+		mutate  func(*VeloxDeliveryMetadata)
+		wantErr string
+	}{
+		{"valid", func(m *VeloxDeliveryMetadata) {}, ""},
+		{"title only", func(m *VeloxDeliveryMetadata) { m.Description = "" }, ""},
+		{"description only", func(m *VeloxDeliveryMetadata) { m.Title = "" }, ""},
+		{"empty title and description", func(m *VeloxDeliveryMetadata) {
+			m.Title = ""
+			m.Description = "   "
+		}, "title or description"},
+		{"invalid privacy_status", func(m *VeloxDeliveryMetadata) {
+			m.PrivacyStatus = "secret"
+		}, "privacy_status"},
+		{"non-positive target_account_id", func(m *VeloxDeliveryMetadata) {
+			m.TargetAccountIDs = []int64{0}
+		}, "target_account_ids"},
+		{"non-positive drive_account_id", func(m *VeloxDeliveryMetadata) {
+			m.DriveAccountID = ptrTo[int64](0)
+		}, "drive_account_id"},
+		{"empty folder_id", func(m *VeloxDeliveryMetadata) {
+			m.FolderID = ptrTo("   ")
+		}, "folder_id"},
+		{"invalid language", func(m *VeloxDeliveryMetadata) {
+			m.Language = ptrTo("123")
+		}, "language"},
+		{"uppercase language", func(m *VeloxDeliveryMetadata) {
+			m.Language = ptrTo("EN-US")
+		}, "language"},
+		{"invalid timezone", func(m *VeloxDeliveryMetadata) {
+			m.Timezone = ptrTo("Mars/Station")
+		}, "timezone"},
+		{"local timezone", func(m *VeloxDeliveryMetadata) {
+			m.Timezone = ptrTo("Local")
+		}, "timezone"},
+		{"empty tag", func(m *VeloxDeliveryMetadata) {
+			m.Tags = []string{"ok", ""}
+		}, "tags"},
+		{"duplicate tag", func(m *VeloxDeliveryMetadata) {
+			m.Tags = []string{"dup", "dup"}
+		}, "tags"},
+		{"too many tags", func(m *VeloxDeliveryMetadata) {
+			m.Tags = make([]string, maxVeloxTags+1)
+		}, "too many tags"},
+		{"tag too long", func(m *VeloxDeliveryMetadata) {
+			m.Tags = []string{strings.Repeat("x", maxVeloxTagLen+1)}
+		}, "exceeds"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := valid()
+			tc.mutate(m)
+			err := m.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Errorf("expected error containing %q, got nil", tc.wantErr)
+				return
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+		})
 	}
 }
