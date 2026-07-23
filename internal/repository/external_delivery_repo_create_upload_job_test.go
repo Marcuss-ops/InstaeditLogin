@@ -45,12 +45,12 @@ func TestExternalDeliveryRepository_CreateUploadJobAndLink_HappyPath(t *testing.
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).
 			AddRow(123, now, now))
 	mock.ExpectExec(`UPDATE external_deliveries`).
-		WithArgs("sdel_01JDEF", int64(123)).
+		WithArgs("sdel_01JDEF", int64(123), "worker-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	repo := NewExternalDeliveryRepository(db)
-	jobID, err := repo.CreateUploadJobAndLink(context.Background(), fixtureUploadJob(), "sdel_01JDEF")
+	jobID, err := repo.CreateUploadJobAndLink(context.Background(), fixtureUploadJob(), "sdel_01JDEF", "worker-1")
 	if err != nil {
 		t.Fatalf("CreateUploadJobAndLink: want nil, got %v", err)
 	}
@@ -79,12 +79,12 @@ func TestExternalDeliveryRepository_CreateUploadJobAndLink_AlreadyClaimed(t *tes
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "updated_at"}).
 			AddRow(124, now, now))
 	mock.ExpectExec(`UPDATE external_deliveries`).
-		WithArgs("sdel_01JCLAIMED", int64(124)).
+		WithArgs("sdel_01JCLAIMED", int64(124), "worker-2").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
 	repo := NewExternalDeliveryRepository(db)
-	jobID, err := repo.CreateUploadJobAndLink(context.Background(), fixtureUploadJob(), "sdel_01JCLAIMED")
+	jobID, err := repo.CreateUploadJobAndLink(context.Background(), fixtureUploadJob(), "sdel_01JCLAIMED", "worker-2")
 	if err == nil {
 		t.Fatalf("CreateUploadJobAndLink: want ErrExternalDeliveryAlreadyClaimed, got nil (jobID=%d)", jobID)
 	}
@@ -113,7 +113,7 @@ func TestExternalDeliveryRepository_CreateUploadJobAndLink_InsertFails(t *testin
 	mock.ExpectRollback()
 
 	repo := NewExternalDeliveryRepository(db)
-	jobID, err := repo.CreateUploadJobAndLink(context.Background(), fixtureUploadJob(), "sdel_01JINSERTFAIL")
+	jobID, err := repo.CreateUploadJobAndLink(context.Background(), fixtureUploadJob(), "sdel_01JINSERTFAIL", "worker-3")
 	if err == nil {
 		t.Fatalf("CreateUploadJobAndLink: want error, got nil (jobID=%d)", jobID)
 	}

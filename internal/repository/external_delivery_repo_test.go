@@ -40,6 +40,8 @@ func fixtureDeliveryRow(e *models.ExternalDelivery, now time.Time) *sqlmock.Rows
 		"platform_media_id", "platform_url",
 		"last_error_code", "last_error_message",
 		"created_at", "updated_at", "completed_at",
+		"attempt_count", "max_attempts",
+		"lease_expires_at", "next_attempt_at", "leased_by_worker_id",
 	}
 	return sqlmock.NewRows(cols).AddRow(
 		e.ID, e.SourceSystem, e.ExternalDeliveryID, e.IdempotencyKey,
@@ -49,6 +51,8 @@ func fixtureDeliveryRow(e *models.ExternalDelivery, now time.Time) *sqlmock.Rows
 		string(e.Status), e.RequestSHA256,
 		nil, nil, nil, nil, nil, nil,
 		now, now, nil,
+		e.AttemptCount, e.MaxAttempts,
+		nil, nil, nil,
 	)
 }
 
