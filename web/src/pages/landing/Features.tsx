@@ -11,9 +11,12 @@ export function Features() {
       <div aria-hidden="true" className="absolute inset-0 hero-aurora opacity-25 pointer-events-none" />
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
-          <div className="text-eyebrow text-violet-300/90 mb-3">What's included</div>
-          <h2 className="text-display-2 text-white">Everything you need to publish content everywhere.</h2>
-          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">One place for all your platforms. Simple, clean, and powerful.</p>
+          <div className="text-eyebrow text-violet-300/90 mb-3">Built for automation</div>
+          <h2 className="text-display-2 text-white">A channel engine that runs while you sleep.</h2>
+          <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
+            From content strategy to multi-platform publishing, every moving part is
+            designed to turn a new channel into a monetized channel — fast.
+          </p>
         </div>
         <div className="grid lg:grid-cols-3 gap-5">
           <div className="surface-card p-7 lg:p-8 relative overflow-hidden lg:col-span-2 lg:row-span-2 animate-fade-up hover:border-violet-400/30 transition-all duration-300">
@@ -23,10 +26,11 @@ export function Features() {
               <div className="inline-flex w-12 h-12 rounded-xl items-center justify-center ring-1 ring-violet-400/40 surface-glass text-violet-300 mb-5">
                 <Sparkles className="w-6 h-6" />
               </div>
-              <h3 className="text-display-3 text-white mb-3 max-w-[22ch]">One dashboard, every platform.</h3>
+              <h3 className="text-display-3 text-white mb-3 max-w-[22ch]">YouTube-first, then everywhere.</h3>
               <p className="text-sm text-zinc-400 leading-relaxed max-w-[52ch]">
-                Manage Instagram, TikTok, YouTube, X, LinkedIn, Facebook and Threads from a single calendar.
-                See what's published, what's scheduled, and what needs your attention.
+                We optimize for the platform that pays: YouTube. Then we repurpose every
+                video to TikTok, Instagram, X, LinkedIn, Facebook and Threads — all from a
+                single automated workflow.
               </p>
               <div className="mt-7 surface-glass rounded-xl border border-white/10 overflow-hidden">
                 <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-white/5">
@@ -54,18 +58,20 @@ export function Features() {
             <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-cyan-400/40 surface-glass text-cyan-300 mb-4">
               <IconSchedule className="w-5 h-5" />
             </div>
-            <h3 className="text-display-3 text-white mb-2">Smart scheduling.</h3>
+            <h3 className="text-display-3 text-white mb-2">Auto-publishing engine.</h3>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              Posts go live when your audience is most active. One click, zero guesswork.
+              Videos go live at the best times for views and monetization. No manual
+              uploads, no timezone math — just a channel that grows 24/7.
             </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden animate-fade-up animation-delay-200 hover:border-pink-400/30 transition-all duration-300">
             <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-pink-400/40 surface-glass text-pink-300 mb-4">
               <Shield className="w-5 h-5" />
             </div>
-            <h3 className="text-display-3 text-white mb-2">Built-in approval flows.</h3>
+            <h3 className="text-display-3 text-white mb-2">Monetization guardrails.</h3>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              Review drafts, lock final versions, and publish with confidence. Full control over what goes live.
+              We track watch-time, subscriber velocity and revenue metrics so your channel
+              hits the YouTube Partner Program requirements faster and safer.
             </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden lg:col-span-3 animate-fade-up animation-delay-300 hover:border-amber-400/30 transition-all duration-300">
@@ -75,9 +81,10 @@ export function Features() {
                 <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-amber-400/40 surface-glass text-amber-300 mb-4">
                   <IconAnalyze className="w-5 h-5" />
                 </div>
-                <h3 className="text-display-3 text-white mb-2">Analytics that make sense.</h3>
+                <h3 className="text-display-3 text-white mb-2">Revenue-first analytics.</h3>
                 <p className="text-sm text-zinc-400 leading-relaxed max-w-[52ch]">
-                  See views, engagement, and growth across all your channels in one simple view. Know what's working and what to do next.
+                  Track RPM, CPM and ad-revenue growth in one dashboard. We focus on the
+                  metrics that actually pay you — and show you how to push them higher.
                 </p>
               </div>
               <div className="surface-glass rounded-xl border border-white/10 p-5">

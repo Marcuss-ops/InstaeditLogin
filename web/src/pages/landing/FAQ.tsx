@@ -11,35 +11,35 @@ export function FAQ() {
   const faqs = [
     {
       q: "Do I need any previous experience with YouTube or editing?",
-      a: "Not at all. Whether you're starting completely from scratch or already have a channel, we adapt the mentorship to your current level. We guide you step-by-step through channel creation, content strategy, and using tools like InstaEdit to handle the heavy lifting.",
+      a: "Not at all. Whether you're starting from scratch or already have a channel, we adapt the system to your level. We guide you step-by-step through niche selection, content strategy, and the InstaEdit automation engine so the heavy lifting is handled for you.",
     },
     {
-      q: "How long does it take to monetize my channel?",
-      a: "Monetization timelines depend on your niche and consistency, but our mentorship is built to accelerate the process as fast as possible. Plus, we provide a free aged YouTube channel to skip the initial trust-building sandbox and hit monetization milestones much faster.",
+      q: "How do you get a channel monetized in under 3 weeks?",
+      a: "We combine aged channels, optimized content strategy, SEO metadata, and automated publishing cadence. Aged channels bypass the initial trust filter, our workflows hit the YouTube Partner Program thresholds faster, and we optimize every upload for maximum reach.",
+    },
+    {
+      q: "What does 'channel automation' actually mean?",
+      a: "It means strategy, editing, publishing, and optimization run on a repeatable system. You approve the direction, and our engine — plus our team — handles scheduling, formatting for each platform, thumbnails, metadata and performance tracking.",
     },
     {
       q: "How much time do I need to commit every week?",
-      a: "Thanks to our automated workflows and content frameworks, you only need about 3 to 5 hours a week. We teach you how to focus solely on high-impact tasks (like recording or approving scripts) while automation and strategy handle the rest.",
+      a: "With automation, most students spend 3 to 5 hours a week on high-impact tasks like niche review and content approval. The rest — editing, uploads, publishing, optimization — is handled by our system.",
     },
     {
       q: "What is the free aged YouTube channel included in the program?",
-      a: "An aged channel is an established account created months or years ago. YouTube's algorithm trusts older channels more than brand-new ones, allowing your content to get indexed faster, avoid anti-spam filters, and gain initial traction much quicker.",
+      a: "An aged channel is an established account created months or years ago. YouTube's algorithm trusts older channels more than brand-new ones, so your content gets indexed faster, avoids anti-spam filters, and reaches monetization milestones sooner.",
     },
     {
-      q: "What is the difference between the Mentorship and the Content Automation System?",
-      a: "In the Mentorship Program, we teach you how to run and grow YouTube channels correctly with 1-on-1 guidance and weekly feedback. In the Content Automation System, we handle everything — content creation, editing, and publishing are completely done-for-you hands-free.",
+      q: "What is the difference between the Mentorship and Channel Automation?",
+      a: "Mentorship teaches you how to build and run a monetized channel yourself with 1-on-1 guidance. Channel Automation is done-for-you: we build, manage and grow the channel while you own the asset and revenue.",
     },
     {
       q: "What happens if I want to scale to multiple channels or languages later?",
-      a: "Once your primary channel is structured and profitable, you can seamlessly upgrade to our Enterprise Scaling Plan. This allows you to expand into multiple channels and translate/repurpose your content across 20+ languages automatically.",
-    },
-    {
-      q: "What is ChronoN?",
-      a: "ChronoN is our proprietary AI engine that can generate professional videos from a simple text brief. It handles scriptwriting, voiceover, visuals, and editing — perfect for students, creators without cameras, or anyone who wants to scale content production.",
+      a: "Once your first channel is profitable, you can upgrade to the Enterprise plan. We duplicate the system across multiple channels and automatically translate and repurpose content into 20+ languages for global reach.",
     },
     {
       q: "How many platforms does the system publish to?",
-      a: "The system publishes to 7 platforms: YouTube, TikTok, Instagram, Facebook, LinkedIn, X (Twitter), and Threads. Each post is automatically formatted for its platform.",
+      a: "The system publishes to 7 platforms: YouTube, TikTok, Instagram, Facebook, LinkedIn, X (Twitter), and Threads. YouTube is the monetization anchor; everything else amplifies reach and revenue.",
     },
   ];
 

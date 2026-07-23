@@ -47,8 +47,8 @@ export function Footer() {
             <span className="font-bold tracking-tight text-white text-base">InstaEdit</span>
           </Link>
           <p className="text-sm text-zinc-400 mt-4 max-w-[42ch] leading-relaxed">
-            Your creativity. Our distribution. One place to create, schedule, and
-            publish professional content across every platform.
+            Channel automation built for YouTube monetization. Go from zero to a
+            revenue-generating channel in under 3 weeks.
           </p>
           <div className="flex items-center gap-2 mt-5">
             {PLATFORM_REGISTRY.map(({ key, name, Logo }) => (

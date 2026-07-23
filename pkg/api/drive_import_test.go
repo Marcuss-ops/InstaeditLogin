@@ -193,8 +193,7 @@ func TestDriveImport_Happy(t *testing.T) {
 		WithWorkspaceStore(wsStore),
 		WithPostStore(postStore),
 		WithCredentialVault(vault),
-		WithIdempotencyStore(newMockIdempotencyStore()),
-	)
+		WithIdempotencyStore(newMockIdempotencyStore()), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
 
 	body := `{"drive_file_id":"file-1","drive_account_id":1,"workspace_id":1,"title":"t","caption":"c","targets":[{"platform_account_id":2}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive", bytes.NewReader([]byte(body)))

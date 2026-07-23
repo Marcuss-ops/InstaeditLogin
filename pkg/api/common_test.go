@@ -650,6 +650,7 @@ func newCORSTestRouter(allowedOrigins []string) *Router {
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		allowedOrigins,
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)),
 	)
 }
 

@@ -4,10 +4,10 @@
 
 export function ResultsSection() {
   const stats = [
-    { v: "500+", l: "Videos created", desc: "for students and creators" },
-    { v: "50+", l: "Channels grown", desc: "from zero to monetization" },
-    { v: "20+", l: "Languages", desc: "automatic translation" },
-    { v: "7", l: "Platforms", desc: "publish everywhere at once" },
+    { v: "<3 wk", l: "Avg. monetization time", desc: "from channel start to Partner Program" },
+    { v: "50+", l: "Channels monetized", desc: "across every major niche" },
+    { v: "500+", l: "Videos published", desc: "across YouTube, TikTok, Insta & more" },
+    { v: "7", l: "Platforms", desc: "one automated workflow" },
   ];
 
   const channels = [
@@ -26,12 +26,13 @@ export function ResultsSection() {
         <div className="max-w-3xl mb-16 text-center mx-auto animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">Results</div>
           <h2 className="text-display-2 text-white">
-            Real creators.{" "}
-            <span className="text-gradient-animated">Real results.</span>
+            Real channels.{" "}
+            <span className="text-gradient-animated">Real monetization.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch] mx-auto">
-            Our students don't just learn — they grow. Here's what happens
-            when strategy meets automation.
+            Most creators take months to even think about revenue. Our automated
+            system is built to hit the YouTube Partner Program and start earning
+            in under 3 weeks.
           </p>
         </div>
 

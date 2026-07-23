@@ -142,7 +142,7 @@ func (f *fakeDeliveryStorage) seedRow(id string, status models.ExternalDeliveryS
 // but adds mux: chi.NewRouter() — the runtime pkgs register routes
 // ONTO this mux.
 //
-// We DELIBERATELY skip NewRouter() because the GET handler under
+// We DELIBERATELY skip NewRouter(, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second))) because the GET handler under
 // test does not depend on capRouter / auth.Manager / UserStore /
 // frontendURL. Calling registerInternalVeloxRoutes() preserves
 // the production route-guard semantics:

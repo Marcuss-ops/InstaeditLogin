@@ -436,8 +436,7 @@ func newBatchImportTestRouterWithIdem(
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		nil,
-		opts...,
-	)
+		opts..., WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
 }
 
 // DriveBatchImport idempotency tests ----------------------------------------------------

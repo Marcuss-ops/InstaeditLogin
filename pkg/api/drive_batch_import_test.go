@@ -1089,8 +1089,7 @@ func TestDriveBatchImport_EndToEndAuth_VaultRefreshChainDrivesFolderListing(t *t
 		nil,
 		WithWorkspaceStore(wsStore),
 		WithUploadJobStore(store),
-		WithCredentialVault(vault),
-	)
+		WithCredentialVault(vault), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
 
 	body := `{"folder_id":"e2e-folder","workspace_id":1,"facebook_account_id":50,"drive_account_id":99}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/import/drive/folder", bytes.NewReader([]byte(body)))

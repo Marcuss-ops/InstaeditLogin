@@ -19,7 +19,7 @@ import { FinalCTA } from "./landing/FinalCTA";
 export function Landing() {
   return (
     <>
-      <Seo title="InstaEdit — Publish Everywhere" description="Your creativity. Our distribution." canonical="https://app.instaedit.org/" />
+      <Seo title="InstaEdit — YouTube Channel Automation" description="From zero to YouTube monetization in under 3 weeks. We build and automate your channel so you can scale revenue hands-free." canonical="https://app.instaedit.org/" />
       <Nav />
       <Hero />
       <Pipeline />

@@ -21,7 +21,7 @@
 // YouTube publish, Velox HMAC receiver) in the test process. The
 // package-level Router uses inline construction (mirrors
 // internal_velox_get_delivery_test.go::newVeloxTestRouter) so we
-// don't have to instantiate NewRouter(...) with its 6 arguments.
+// don't have to instantiate NewRouter(..., WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second))) with its 6 arguments.
 //
 // We REUSE production primitives whenever possible:
 //   - worker.IngestFSM drives the state-machine transitions
@@ -313,7 +313,7 @@ func newE2EHarness(t *testing.T) *e2eHarness {
 	}
 
 	// 7) Router — inline pattern + register routes. We DO NOT call
-	//    NewRouter() because it requires capRouter + auth.Manager
+	//    NewRouter(, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second))) because it requires capRouter + auth.Manager
 	//    etc. that this test doesn't need.
 	h.router = &Router{
 		mux:                  chi.NewRouter(),
