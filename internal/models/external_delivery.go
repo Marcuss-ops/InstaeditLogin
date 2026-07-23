@@ -400,6 +400,14 @@ type ExternalDelivery struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
+
+	// Durable worker-queue fields. Replaces the in-process channel
+	// between the API producer and the Velox artifact downloader.
+	LeaseExpiresAt   *time.Time `json:"lease_expires_at,omitempty"`
+	AttemptCount     int        `json:"attempt_count"`
+	NextAttemptAt    *time.Time `json:"next_attempt_at,omitempty"`
+	LeasedByWorkerID *string    `json:"leased_by_worker_id,omitempty"`
+	MaxAttempts      int        `json:"max_attempts"`
 }
 
 // VeloxDeliveryMetadata is the single typed representation of the

@@ -1,63 +1,33 @@
 // Package worker — Velox artifact downloader.
 //
-// Drains the POST /internal/v1/deliveries enqueue channel and
-// registers each accepted job as an upload_jobs row. The existing
-// UploadWorker pool (#7 in internal/bootstrap/app.go) ClaimBatch'es
-// the row for the per-source ingest pipeline (HEAD/GET via
-// VeloxArtifactSource + io.TeeReader(io.LimitReader) SHA + size
-// verification + storage.Upload + MarkIngested). The downloader's
-// responsibility is narrow: register the work.
+// Polls external_deliveries for accepted Velox deliveries and
+// registers each claimed row as an upload_jobs row. The existing
+// UploadWorker pool then ClaimBatch'es the row for the per-source
+// ingest pipeline (HEAD/GET via VeloxArtifactSource +
+// io.TeeReader(io.LimitReader) SHA + size verification +
+// storage.Upload + MarkIngested). The downloader's responsibility
+// is narrow: claim the durable row, validate it, and register the
+// work.
 //
-// The VeloxDownloadJob struct was relocated here from
-// pkg/api/internal_velox.go so the worker owns its own input type
-// (clean import direction: pkg/api imports internal/worker, NOT
-// the reverse). The pkg/api handler writes worker.VeloxDownloadJob{
-// ...} to a chan worker.VeloxDownloadJob bound on
-// Router.downloadJobCh (via the WithVeloxDownloadJobChannel
-// RouterOption).
+// The API and worker do NOT share a Go channel. external_deliveries
+// is the single source of truth and the only queue.
 
 package worker
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-// VeloxDownloadJob is the channel-item shape the POST handler
-// enqueues after a successful insert. The downloader pulls one item
-// per iteration, hydrates an upload_jobs row from the carryover
-// fields, links the row to the external_deliveries record, and
-// advances the external_delivery state-machine from
-// accepted → downloading.
-//
-// Fields:
-//   - ExternalDeliveryID: social_delivery_id mapping (sdel_01J…)
-//     stored at Insert time. The FK for both the upload_jobs row
-//     (via LinkUploadJob) and the FSM advance.
-//   - UserID / WorkspaceID: carry-overs from the authed request
-//     scope. Required because the production BuildUploadKey scopes
-//     upload_jobs by user_id (one bucket per user); WorkspaceID is
-//     the post's foreign key on the publish side.
-//   - Title / Caption: forwarded to upload_jobs then to the
-//     publish_worker's post-creation path. Without them the
-//     YouTube videos.insert call has nothing to publish.
-//   - DefaultPrivacyLevel: maps to upload_jobs.default_privacy_level.
-//     The publish_worker's cascade chain reads this column as the
-//     middle term. Empty string means "let cascade pick" (the
-//     publisher's per-platform rule applies).
-//   - ArtifactSHA256 / SizeBytes / MimeType / DownloadURL: the
-//     artifact triple used by the pool's deliveryVerifier
-//     (GetExpectedTripleByUploadJobID) for hash + size guard.
-//     DownloadURL is flat from the producer's *string (nil-safe);
-//     empty string indicates a metadata-only delivery which the
-//     downloader short-circuits (see processOne step 1a).
-//   - PublishAt: optional, stamped into upload_jobs.publish_at.
-//     publish_worker's ClaimBatchForPublish gates on
-//     (publish_at IS NULL OR publish_at <= NOW()), so a future
-//     PublishAt pauses the row in the queue until the cursor.
+// VeloxDownloadJob is kept for backward compatibility with tests and
+// any code that imports the name. It is no longer used as a channel
+// payload; the worker now reads directly from the database queue.
 type VeloxDownloadJob struct {
 	ExternalDeliveryID  string
 	UserID              int64
@@ -75,267 +45,272 @@ type VeloxDownloadJob struct {
 	FolderID            *string
 }
 
-// ExternalDeliveryLookup is the minimal GetByID surface the
-// downloader requires. The real impl is
-// *repository.ExternalDeliveryRepository (production) or an
-// in-process fake (tests). Defined here so the worker package
-// doesn't reach into the repository package for one method.
-type ExternalDeliveryLookup interface {
-	GetByID(ctx context.Context, id string) (*models.ExternalDelivery, error)
+// ExternalDeliveryClaimStore is the repository surface the worker
+// uses to claim rows and record retry / dead-letter outcomes.
+type ExternalDeliveryClaimStore interface {
+	ClaimDelivery(ctx context.Context, workerID string, lease time.Duration, maxAttempts int) (*models.ExternalDelivery, error)
+	MarkRetry(ctx context.Context, id string, nextAttemptAt time.Time, errorCode, errorMessage string) error
+	MarkDeadLetter(ctx context.Context, id string, errorCode, errorMessage string) error
+	MarkFailed(ctx context.Context, id string, errorCode, errorMessage string) error
+	MarkBlockedAuth(ctx context.Context, id string, errorCode, errorMessage string) error
 }
 
-type externalDeliveryLister interface {
-	ListByStatus(ctx context.Context, status models.ExternalDeliveryStatus, limit int) ([]models.ExternalDelivery, error)
+// ExternalDestinationLookup resolves a destination row for a
+// delivery. Production wiring uses *repository.ExternalDestinationRepository.
+type ExternalDestinationLookup interface {
+	GetByID(ctx context.Context, id string) (*models.ExternalDestination, error)
 }
 
-type externalDeliveryByExternalID interface {
-	GetByExternalDeliveryID(ctx context.Context, sourceSystem, id string) (*models.ExternalDelivery, error)
+// ExternalDeliveryWorkspaceLookup resolves the workspace (and owner)
+// for a delivery. Production wiring uses *repository.WorkspaceRepository.
+type ExternalDeliveryWorkspaceLookup interface {
+	FindByID(id int64) (*models.Workspace, error)
 }
 
 // ExternalDeliveryUploadCreator is the atomic "create upload_job +
 // link external_delivery + advance status" surface used by the
 // downloader. Production: *repository.ExternalDeliveryRepository.
 type ExternalDeliveryUploadCreator interface {
-	CreateUploadJobAndLink(ctx context.Context, job *models.UploadJob, deliveryID string) (int64, error)
+	CreateUploadJobAndLink(ctx context.Context, job *models.UploadJob, deliveryID, workerID string) (int64, error)
 }
 
-// VeloxArtifactDownloader is the single-goroutine consumer that
-// drains the channel the POST handler writes to. Optimised for
-// throughput rather than concurrency: a single drain goroutine is
-// enough because the heavy lifting (HEAD / GET / SHA / S3 PUT)
-// happens in the existing UploadWorker ClaimBatchForPublish pool.
+// VeloxArtifactDownloader polls the external_deliveries table for
+// accepted rows and registers each claimed row as an upload_jobs row.
 type VeloxArtifactDownloader struct {
-	extDeliveryLookup ExternalDeliveryLookup
-	uploader          ExternalDeliveryUploadCreator
-	fsm               *IngestFSM
-	logger            *slog.Logger
+	claimStore      ExternalDeliveryClaimStore
+	uploader        ExternalDeliveryUploadCreator
+	destinationStore ExternalDestinationLookup
+	workspaceStore  ExternalDeliveryWorkspaceLookup
+	fsm             *IngestFSM
+	logger          *slog.Logger
+	workerID        string
+	lease           time.Duration
+	pollInterval    time.Duration
+	maxAttempts     int
 }
 
-// NewVeloxArtifactDownloader wires the consumer. logger nil-safe
-// (defaults to slog.Default()). Each dependency is required; nil
-// panics at processOne time, surfaced loudly at boot rather than as
-// a silent nil-pointer during operator triage.
+// VeloxArtifactDownloaderOptions groups optional runtime settings.
+type VeloxArtifactDownloaderOptions struct {
+	Lease        time.Duration
+	PollInterval time.Duration
+	MaxAttempts  int
+}
+
+// NewVeloxArtifactDownloader wires the consumer. logger nil-safe.
 func NewVeloxArtifactDownloader(
-	lookup ExternalDeliveryLookup,
+	claimStore ExternalDeliveryClaimStore,
 	uploader ExternalDeliveryUploadCreator,
 	fsm *IngestFSM,
+	destinationStore ExternalDestinationLookup,
+	workspaceStore ExternalDeliveryWorkspaceLookup,
+	workerID string,
 	logger *slog.Logger,
+	opts ...VeloxArtifactDownloaderOptions,
 ) *VeloxArtifactDownloader {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	options := VeloxArtifactDownloaderOptions{
+		Lease:        5 * time.Minute,
+		PollInterval: 2 * time.Second,
+		MaxAttempts:  5,
+	}
+	if len(opts) > 0 {
+		options = opts[0]
+	}
+	if options.Lease <= 0 {
+		options.Lease = 5 * time.Minute
+	}
+	if options.PollInterval <= 0 {
+		options.PollInterval = 2 * time.Second
+	}
+	if options.MaxAttempts <= 0 {
+		options.MaxAttempts = 5
+	}
 	return &VeloxArtifactDownloader{
-		extDeliveryLookup: lookup,
-		uploader:          uploader,
-		fsm:               fsm,
-		logger:            logger,
+		claimStore:       claimStore,
+		uploader:         uploader,
+		fsm:              fsm,
+		destinationStore: destinationStore,
+		workspaceStore:   workspaceStore,
+		workerID:         workerID,
+		logger:           logger,
+		lease:            options.Lease,
+		pollInterval:     options.PollInterval,
+		maxAttempts:      options.MaxAttempts,
 	}
 }
 
-// Run is the consumer loop. Single goroutine — the channel is
-// buffered (size 64 in bootstrap) so backpressure is bounded and the
-// producer-side POST can return 202 inside the 500ms SLA.
-//
-// On ctx.Done the loop exits promptly. Jobs already buffered in the
-// channel are LOST (Velox retries on its own delivery loop). We
-// deliberately do NOT drain-and-process on shutdown: the shutdown
-// budget is bounded (15s per goroutine per the bootstrap
-// goroutineCtx pattern) and a multi-GiB verify-then-upload cycle
-// inside processOne would exceed the budget under load. Contract:
-// Velox retries on its own supervision, so a graceful shutdown
-// that drops in-flight jobs is safe.
-func (d *VeloxArtifactDownloader) Run(ctx context.Context, ch <-chan VeloxDownloadJob) error {
-	d.logger.Info("velox artifact downloader started")
-	defer d.logger.Info("velox artifact downloader stopped")
+// Run polls the database queue until ctx is cancelled. On each tick
+// it claims the next eligible delivery, processes it, and records the
+// outcome (success, retry, dead-letter, blocked-auth, or failed).
+func (d *VeloxArtifactDownloader) Run(ctx context.Context) error {
+	d.logger.Info("velox artifact downloader started", "worker_id", d.workerID)
+	defer d.logger.Info("velox artifact downloader stopped", "worker_id", d.workerID)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case j, ok := <-ch:
-			if !ok {
-				return nil
-			}
-			d.processOne(ctx, j)
-		}
-	}
-}
-
-// RunPersistent also polls the durable external_deliveries journal. This is
-// required when the API and worker run as separate processes: their Go
-// channels are intentionally not shared across containers.
-func (d *VeloxArtifactDownloader) RunPersistent(ctx context.Context, ch <-chan VeloxDownloadJob, resolve func(context.Context, models.ExternalDelivery) (VeloxDownloadJob, bool)) error {
-	t := time.NewTicker(2 * time.Second)
+	t := time.NewTicker(d.pollInterval)
 	defer t.Stop()
+
+	// Immediate first iteration so the worker is active right after
+	// startup, not after the first tick.
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case j, ok := <-ch:
-			if !ok {
-				ch = nil
-				continue
-			}
-			d.processOne(ctx, j)
+		default:
+		}
+
+		d.claimAndProcess(ctx)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-t.C:
-			lister, ok := d.extDeliveryLookup.(externalDeliveryLister)
-			if !ok || resolve == nil {
-				continue
-			}
-			rows, err := lister.ListByStatus(ctx, models.ExternalDeliveryStatusAccepted, 32)
-			if err != nil {
-				d.logger.Warn("velox downloader: durable poll failed", "error", err)
-				continue
-			}
-			for _, delivery := range rows {
-				if delivery.UploadJobID != nil || delivery.DownloadURL == nil || *delivery.DownloadURL == "" {
-					continue
-				}
-				if j, ok := resolve(ctx, delivery); ok {
-					d.processOne(ctx, j)
-				}
-			}
 		}
 	}
 }
 
-// processOne handles a single incoming download job. Each step has
-// fail-loud semantics: a failure logs WARN and skips the remainder
-// without rolling back earlier successful steps. The pool's claim
-// loop will pick up any orphaned upload_jobs (retry/backoff per
-// MarkRetry/MarkDeadLetter in upload_worker.go).
-func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloadJob) {
-	// (1) Load the canonical external_delivery row for the FK
-	// + workspace_id + status fields. The download_job's
-	// carryovers come from the producer but the row is still the
-	// source of truth for status (a peer may have stamped it
-	// between channel-enqueue and our pull).
-	delivery, err := d.extDeliveryLookup.GetByID(ctx, j.ExternalDeliveryID)
-	if delivery == nil {
-		if byExternal, ok := d.extDeliveryLookup.(externalDeliveryByExternalID); ok {
-			delivery, err = byExternal.GetByExternalDeliveryID(ctx, "velox", j.ExternalDeliveryID)
-		}
-	}
+func (d *VeloxArtifactDownloader) claimAndProcess(ctx context.Context) {
+	delivery, err := d.claimStore.ClaimDelivery(ctx, d.workerID, d.lease, d.maxAttempts)
 	if err != nil {
-		d.logger.Warn("velox downloader: GetByID failed; skipping",
-			"external_delivery_id", j.ExternalDeliveryID, "error", err)
+		// No eligible row is the normal empty-queue case.
+		if !isErrExternalDeliveryNotFound(err) {
+			d.logger.Warn("velox downloader: claim failed", "error", err)
+		}
 		return
 	}
 	if delivery == nil {
-		d.logger.Warn("velox downloader: external_delivery row missing; skipping",
-			"external_delivery_id", j.ExternalDeliveryID)
-		return
-	}
-	deliveryKey := delivery.ID
-	if deliveryKey == "" {
-		deliveryKey = j.ExternalDeliveryID
-	}
-
-	// (1b) Only accepted deliveries are eligible for the atomic
-	// create+link. Rows already claimed by a peer (or advanced by
-	// the durable poll from another replica) must be skipped without
-	// churning the database. The atomic repository method also
-	// enforces this, but an early skip keeps logs quiet.
-	if delivery.Status != models.ExternalDeliveryStatusAccepted {
-		d.logger.Debug("velox downloader: delivery not accepted; skipping",
-			"external_delivery_id", j.ExternalDeliveryID, "status", delivery.Status)
 		return
 	}
 
-	// (1a) Metadata-only delivery — the producer's payload omits
-	// DownloadURL. The Velox peer never published bytes, so
-	// there's nothing to download+stream. We mark the row as
-	// "blocked_auth" with a typed code so the operator dashboard
-	// surfaces it cleanly; the row terminates AT this step and no
-	// upload_job is created. We pick blocked_auth (which can
-	// transition back to queued if the Velox peer re-delivers with
-	// a populated URL) instead of failed (terminal) so the retry
-	// path is recoverable.
-	isMetadataOnly := delivery.DownloadURL == nil || *delivery.DownloadURL == ""
-	if isMetadataOnly {
-		code := "VELOX_METADATA_ONLY"
-		msg := "delivery has no download_url; metadata-only"
-		if tErr := d.fsm.ToBlockedAuth(ctx, deliveryKey, delivery.Status, code, msg); tErr != nil {
-			d.logger.Warn("velox downloader: ToBlockedAuth (metadata-only) failed; ignoring",
-				"external_delivery_id", j.ExternalDeliveryID, "error", tErr)
-		}
-		d.logger.Info("velox downloader: metadata-only delivery; no upload_job created",
-			"external_delivery_id", j.ExternalDeliveryID)
+	log := d.logger.With("external_delivery_id", delivery.ID)
+	log.Debug("velox downloader: claimed delivery", "attempt", delivery.AttemptCount)
+
+	if err := d.processOne(ctx, delivery); err != nil {
+		log.Warn("velox downloader: processing failed", "error", err)
+		d.handleFailure(ctx, delivery, err)
 		return
 	}
 
-	// (2) Build the upload_job. SourceType=VeloxArtifact drives the
-	// sourceRegistry.Resolve path; SourceID is the canonical URL
-	// from the DB row (NOT j.DownloadURL — the channel carryover
-	// is best-effort and may diverge under peer race). Step 1a
-	// guarantees delivery.DownloadURL is non-nil + non-empty before
-	// we reach this line. PublishAt/Default/Title/Caption carry
-	// from the producer verbatim.
-	// Defensive: nil-check before deref (step 1a already handles
-	// the metadata-only early-return, but if a future refactor
-	// skips step 1a or invokes processOne from a separate
-	// path, the deref must not panic). Empty URL re-routes
-	// ToBlockedAuth symmetric with step 1a so a stale-accepted
-	// row never persists.
-	var srcID string
-	if delivery.DownloadURL != nil {
-		srcID = *delivery.DownloadURL
+	log.Info("velox downloader: registered download job", "external_delivery_id", delivery.ID)
+}
+
+// processOne validates and registers a single claimed delivery. On
+// success the delivery row has been advanced to 'downloading' by
+// CreateUploadJobAndLink. On error the caller is responsible for
+// retry/dead-letter bookkeeping.
+func (d *VeloxArtifactDownloader) processOne(ctx context.Context, delivery *models.ExternalDelivery) error {
+	// Metadata-only delivery — the producer's payload omits
+	// DownloadURL. There is nothing to download+stream.
+	if delivery.DownloadURL == nil || *delivery.DownloadURL == "" {
+		return errMetadataOnly{deliveryID: delivery.ID}
 	}
-	if srcID == "" {
-		code := "VELOX_DOWNLOAD_URL_EMPTY"
-		msg := "delivery.DownloadURL is empty at consumer time"
-		if tErr := d.fsm.ToBlockedAuth(ctx, deliveryKey, delivery.Status, code, msg); tErr != nil {
-			d.logger.Warn("velox downloader: empty-url ToBlockedAuth failed",
-				"external_delivery_id", j.ExternalDeliveryID, "error", tErr)
-		}
-		return
+
+	dest, err := d.destinationStore.GetByID(ctx, delivery.ExternalDestinationID)
+	if err != nil {
+		return transientError{err: err}
 	}
+	if dest == nil {
+		return terminalError{err: fmt.Errorf("external destination %s not found", delivery.ExternalDestinationID)}
+	}
+
+	ws, err := d.workspaceStore.FindByID(dest.WorkspaceID)
+	if err != nil {
+		return transientError{err: err}
+	}
+	if ws == nil {
+		return terminalError{err: fmt.Errorf("workspace %d not found", dest.WorkspaceID)}
+	}
+
 	meta, err := models.ParseVeloxDeliveryMetadata(delivery.Metadata)
 	if err != nil {
-		d.logger.Warn("velox downloader: failed to parse delivery metadata; skipping",
-			"external_delivery_id", j.ExternalDeliveryID, "error", err)
-		return
+		return terminalError{err: err}
+	}
+	if err := meta.Validate(); err != nil {
+		return terminalError{err: err}
 	}
 
 	uploadJob := &models.UploadJob{
-		UserID:              j.UserID,
-		WorkspaceID:         j.WorkspaceID,
+		UserID:              ws.OwnerID,
+		WorkspaceID:         ws.ID,
 		SourceType:          models.UploadJobSourceVeloxArtifact,
-		SourceID:            srcID,
+		SourceID:            *delivery.DownloadURL,
 		Status:              models.UploadJobStatusPending,
-		Title:               j.Title,
-		Caption:             j.Caption,
-		DefaultPrivacyLevel: j.DefaultPrivacyLevel,
-		PublishAt:           j.PublishAt,
+		Title:               meta.Title,
+		Caption:             meta.Description,
+		DefaultPrivacyLevel: meta.PrivacyStatus,
+		PublishAt:           delivery.PublishAt,
 		Targets:             meta.TargetAccountIDs,
 		DriveAccountID:      meta.DriveAccountID,
 		FolderID:            meta.FolderID,
 	}
 
-	// (2-4) Atomically create the upload_job, stamp the FK on
-	// external_deliveries, and move the delivery to 'downloading' in
-	// one transaction. The UPDATE in CreateUploadJobAndLink only
-	// succeeds for rows still in 'accepted' with no linked job,
-	// so concurrent worker replicas cannot create duplicate jobs.
-	newJobID, createErr := d.uploader.CreateUploadJobAndLink(ctx, uploadJob, deliveryKey)
-	if createErr != nil {
-		d.logger.Warn("velox downloader: CreateUploadJobAndLink failed; skipping",
-			"external_delivery_id", j.ExternalDeliveryID, "error", createErr)
-		return
+	newJobID, err := d.uploader.CreateUploadJobAndLink(ctx, uploadJob, delivery.ID, d.workerID)
+	if err != nil {
+		return transientError{err: err}
 	}
-
-	// Defensive: if a fake or future repo variant swallows the
-	// RETURNING, surface loudly. The repository already rejects
-	// non-positive IDs before committing, so this is a last-resort
-	// guard for in-memory test fakes.
 	if newJobID <= 0 {
-		d.logger.Warn("velox downloader: CreateUploadJobAndLink returned id<=0; skipping",
-			"external_delivery_id", j.ExternalDeliveryID, "id", newJobID)
+		return terminalError{err: errors.New("CreateUploadJobAndLink returned non-positive id")}
+	}
+	return nil
+}
+
+// handleFailure routes a processing failure to the appropriate
+// terminal or retry state. Transient errors are retried with
+// exponential backoff until maxAttempts is reached, at which point
+// the row is dead-lettered.
+func (d *VeloxArtifactDownloader) handleFailure(ctx context.Context, delivery *models.ExternalDelivery, err error) {
+	var md errMetadataOnly
+	if errors.As(err, &md) {
+		_ = d.claimStore.MarkBlockedAuth(ctx, delivery.ID, "VELOX_METADATA_ONLY", "delivery has no download_url; metadata-only")
 		return
 	}
 
-	d.logger.Info("velox artifact downloader: registered download job",
-		"external_delivery_id", j.ExternalDeliveryID,
-		"upload_job_id", newJobID,
-		"size_bytes", j.SizeBytes)
+	var te transientError
+	if !errors.As(err, &te) {
+		_ = d.claimStore.MarkFailed(ctx, delivery.ID, "VELOX_PROCESSING_ERROR", err.Error())
+		return
+	}
+
+	if delivery.AttemptCount >= d.maxAttempts {
+		_ = d.claimStore.MarkDeadLetter(ctx, delivery.ID, "MAX_ATTEMPTS_EXCEEDED", "retry budget exhausted")
+		return
+	}
+
+	backoff := d.retryBackoff(delivery.AttemptCount)
+	nextAttempt := time.Now().Add(backoff)
+	_ = d.claimStore.MarkRetry(ctx, delivery.ID, nextAttempt, "TRANSIENT_ERROR", te.err.Error())
+}
+
+func (d *VeloxArtifactDownloader) retryBackoff(attemptCount int) time.Duration {
+	base := 5 * time.Second
+	// exponential: 5s, 10s, 20s, 40s, ... capped at 30 minutes
+	backoff := base
+	for i := 1; i < attemptCount; i++ {
+		backoff *= 2
+		if backoff >= 30*time.Minute {
+			backoff = 30 * time.Minute
+			break
+		}
+	}
+	return backoff
+}
+
+type transientError struct{ err error }
+
+func (e transientError) Error() string { return e.err.Error() }
+
+type terminalError struct{ err error }
+
+func (e terminalError) Error() string { return e.err.Error() }
+
+type errMetadataOnly struct{ deliveryID string }
+
+func (e errMetadataOnly) Error() string { return "metadata-only delivery" }
+
+func isErrExternalDeliveryNotFound(err error) bool {
+	// The production repository returns ErrExternalDeliveryNotFound
+	// when the queue is empty. In-memory fakes should return the same
+	// sentinel.
+	return errors.Is(err, repository.ErrExternalDeliveryNotFound)
 }

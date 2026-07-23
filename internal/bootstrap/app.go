@@ -19,7 +19,6 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -118,8 +117,7 @@ type App struct {
 	// graceful shutdown so the background sweep goroutine exits
 	// cleanly. Without this wiring, SIGTERM would let the sweeper
 	// become a zombie until the process is killed.
-	OneTimeCodes      api.OneTimeCodeStore
-	VeloxDownloadJobs chan worker.VeloxDownloadJob
+	OneTimeCodes api.OneTimeCodeStore
 }
 
 // Wire connects to the database, builds every shared dependency, and
@@ -239,7 +237,6 @@ func Wire(ctx context.Context) (*App, error) {
 		time.Duration(cfg.JWTRefreshTTLDays)*24*time.Hour,
 	).WithEnv(cfg.AppEnv)
 	oneTimeCodes := api.NewOneTimeCodePostgresStore(db, 60*time.Second)
-	veloxDownloadJobs := make(chan worker.VeloxDownloadJob, 64)
 	// oneTimeCodes sweeper is gracefully stopped by RunWorkers. cmd/api
 	// (HTTP-only binary) does not run RunWorkers, so the sweeper is
 	// collected at process termination there. Exposing the
@@ -322,7 +319,6 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithExternalDeliveryStore(externalDeliveryRepo),
 		api.WithConnectLinkNonceStore(connectLinkNonceRepo),
 		api.WithVeloxAPIToken(os.Getenv("VELOX_API_TOKEN")),
-		api.WithVeloxDownloadJobChannel(veloxDownloadJobs),
 		// P2 Velox BFF — wire the typed client that signs a short-lived
 		// JWT (VELOX_CONTROL_JWT_SECRET) and calls the Velox master
 		// (VELOX_CONTROL_URL). When either env is empty, veloxclient.New
@@ -444,22 +440,21 @@ func Wire(ctx context.Context) (*App, error) {
 		"ready_endpoint", "/ready")
 
 	return &App{
-		Cfg:               cfg,
-		DB:                db,
-		Vault:             vault,
-		CapRouter:         capRouter,
-		WebhookRepo:       webhookRepo,
-		HTTPHandler:       router.Setup(),
-		Logger:            logger,
-		WorkerRegistry:    worker.NewRegistry(),
-		SentryHub:         hub,
-		WorkerID:          workerID,
-		MemoryLimiter:     memoryLimiter,
-		StorageProvider:   storageProvider,
-		SessionsSvc:       sessionsSvc,
-		OneTimeCodes:      oneTimeCodes,
-		Encryptor:         enc,
-		VeloxDownloadJobs: veloxDownloadJobs,
+		Cfg:             cfg,
+		DB:              db,
+		Vault:           vault,
+		CapRouter:       capRouter,
+		WebhookRepo:     webhookRepo,
+		HTTPHandler:     router.Setup(),
+		Logger:          logger,
+		WorkerRegistry:  worker.NewRegistry(),
+		SentryHub:       hub,
+		WorkerID:        workerID,
+		MemoryLimiter:   memoryLimiter,
+		StorageProvider: storageProvider,
+		SessionsSvc:     sessionsSvc,
+		OneTimeCodes:    oneTimeCodes,
+		Encryptor:       enc,
 	}, nil
 }
 
@@ -620,7 +615,8 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		},
 	})
 
-	// 7. Velox handoff consumer — API enqueue → upload_jobs registration
+	// 7. Velox handoff consumer — polls external_deliveries for accepted
+	// rows and registers each claimed row as an upload_jobs row.
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "velox_downloader",
 		Critical: true,
@@ -630,28 +626,12 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				deliveryRepo,
 				deliveryRepo,
 				worker.NewIngestFSM(deliveryRepo, slog.Default()),
+				repository.NewExternalDestinationRepository(a.DB),
+				repository.NewWorkspaceRepository(a.DB),
+				a.WorkerID,
 				slog.Default(),
 			)
-			destinationRepo := repository.NewExternalDestinationRepository(a.DB)
-			workspaceRepo := repository.NewWorkspaceRepository(a.DB)
-			resolve := func(ctx context.Context, delivery models.ExternalDelivery) (worker.VeloxDownloadJob, bool) {
-				dst, err := destinationRepo.GetByID(ctx, delivery.ExternalDestinationID)
-				if err != nil || dst == nil {
-					return worker.VeloxDownloadJob{}, false
-				}
-				ws, err := workspaceRepo.FindByID(dst.WorkspaceID)
-				if err != nil || ws == nil {
-					return worker.VeloxDownloadJob{}, false
-				}
-				var meta map[string]any
-				_ = json.Unmarshal(delivery.Metadata, &meta)
-				j := worker.VeloxDownloadJob{ExternalDeliveryID: delivery.ExternalDeliveryID, UserID: ws.OwnerID, WorkspaceID: ws.ID,
-					ArtifactSHA256: delivery.ExpectedSHA256, SizeBytes: delivery.ExpectedSizeBytes, MimeType: delivery.ExpectedMimeType,
-					DownloadURL: valueString(delivery.DownloadURL), Title: valueStringMap(meta, "title"), Caption: valueStringMap(meta, "caption"),
-					Targets: valueIntsMap(meta, "target_account_ids"), DriveAccountID: valueIntPtrMap(meta, "drive_account_id"), FolderID: valueStringPtrMap(meta, "folder_id"), PublishAt: delivery.PublishAt}
-				return j, j.DownloadURL != ""
-			}
-			return downloader.RunPersistent(ctx, a.VeloxDownloadJobs, resolve)
+			return downloader.Run(ctx)
 		},
 	})
 

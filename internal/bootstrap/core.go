@@ -16,7 +16,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/providers"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
@@ -24,18 +23,17 @@ import (
 // Core holds the dependencies shared by the API and worker processes.
 // It is constructed by WireCore and consumed by WireAPI and WireWorkers.
 type Core struct {
-	Cfg               *config.Config
-	DB                *sql.DB
-	Logger            *slog.Logger
-	Vault             credentials.VaultAPI
-	CapRouter         *services.CapabilityRouter
-	Storage           services.StorageProvider
-	Encryptor         *crypto.Encryptor
-	MemoryLimiter     *services.MemoryLimiter
-	WorkerID          string
-	WebhookRepo       *repository.WebhookRepository
-	OneTimeCodes      api.OneTimeCodeStore
-	VeloxDownloadJobs chan worker.VeloxDownloadJob
+	Cfg           *config.Config
+	DB            *sql.DB
+	Logger        *slog.Logger
+	Vault         credentials.VaultAPI
+	CapRouter     *services.CapabilityRouter
+	Storage       services.StorageProvider
+	Encryptor     *crypto.Encryptor
+	MemoryLimiter *services.MemoryLimiter
+	WorkerID      string
+	WebhookRepo   *repository.WebhookRepository
+	OneTimeCodes  api.OneTimeCodeStore
 
 	authMgr     *auth.Manager
 	sessionsSvc *services.SessionsService
@@ -132,7 +130,6 @@ func WireCore(ctx context.Context) (*Core, error) {
 	).WithEnv(cfg.AppEnv)
 
 	oneTimeCodes := api.NewOneTimeCodePostgresStore(db, 60*time.Second)
-	veloxDownloadJobs := make(chan worker.VeloxDownloadJob, 64)
 
 	sessionRepo := repository.NewSessionRepository(db)
 	sessionsSvc := services.NewSessionsService(sessionRepo, authMgr)
@@ -158,7 +155,6 @@ func WireCore(ctx context.Context) (*Core, error) {
 		WorkerID:                workerID,
 		WebhookRepo:             repository.NewWebhookRepository(db),
 		OneTimeCodes:            oneTimeCodes,
-		VeloxDownloadJobs:       veloxDownloadJobs,
 		authMgr:                 authMgr,
 		sessionsSvc:             sessionsSvc,
 		userRepo:                userRepo,

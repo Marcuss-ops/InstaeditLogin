@@ -16,8 +16,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
-	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // handleGetInternalDelivery implements
@@ -292,48 +290,6 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 		return
 	}
 
-	// Step 9b — workspace lookup. Produces the WorkspaceID +
-	// OwnerUserID the producer-side carryover binds onto the
-	// worker.VeloxDownloadJob channel item. Uses the SAME
-	// workspaceStore the /validate handler relies on (mirroring
-	// that handler's Step 11 wiring) so a missing-or-renamed
-	// workspace row produces the same map at both entry points.
-	//
-	// Failure modes (VELOX CONTRACT: 5xx == transient == retry):
-	//   - r.workspaceStore == nil: WARN-log + use dest-derived
-	//     workspace ID + UserID=0 placeholder. Production
-	//     always wires this store, so the fallback path
-	//     fires only in tests / lightweight configs.
-	//   - transient lookup failure: 503 Service Unavailable.
-	//   - workspace row genuinely missing: 503 (rare; treat
-	//     as operator-fixable misconfiguration).
-	//
-	// Cost: single indexed PK lookup, ~5ms typical. Insert
-	// dominates the request budget; this adds ~10% to p99.
-	var ws *models.Workspace
-	if r.workspaceStore != nil {
-		looked, wsErr := r.workspaceStore.FindByID(dest.WorkspaceID)
-		if wsErr != nil || looked == nil {
-			slog.Warn("velox deliver: workspace lookup transient failure",
-				"external_destination_id", veloxReq.ExternalDestinationID,
-				"workspace_id", dest.WorkspaceID, "err", wsErr)
-			writeError(w, http.StatusServiceUnavailable, "workspace lookup transient; retry")
-			return
-		}
-		ws = looked
-	} else {
-		slog.Warn("velox deliver: workspaceStore not configured; using dest.WorkspaceID placeholder",
-			"external_destination_id", veloxReq.ExternalDestinationID,
-			"workspace_id", dest.WorkspaceID)
-		// Fallback so the downstream enqueue can still derive
-		// WorkspaceID from the destination row. OwnerID is unknown
-		// when the store is unwired; zero is the only safe value.
-		ws = &models.Workspace{
-			ID:      dest.WorkspaceID,
-			OwnerID: 0,
-		}
-	}
-
 	// Step 10 — mint social_delivery_id (ULID-shaped opaque).
 	mintedID, err := services.GenerateVeloxDeliveryID()
 	if err != nil {
@@ -406,66 +362,10 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 		"elapsed_ms", elapsed.Milliseconds(),
 	)
 
-	// Async download-job enqueue. Non-blocking + nil-safe so the
-	// handler MUST NOT stall on a backed-up worker pool AND test
-	// fake routers (which never wire the channel) don't crash. On
-	// overflow we LOG warn + drop the enqueue: the row is already
-	// accepted in the DB, and a periodic reaper that scans rows in
-	// status='accepted' with download NOT_STARTED older than
-	// downloadStuckAfter picks up abandoned deliveries.
-	//
-	// DownloadURL is flattened *string → string via the nil-check
-	// to avoid a deref panic on metadata-only deliveries where
-	// artifact.download_url is omitempty in the wire contract.
-	//
-	// Producer-side carryovers (UserID, WorkspaceID, Title, Caption,
-	// DefaultPrivacyLevel, PublishAt) are bound from the authed
-	// request scope. The downloader reads the upload_job.targets via
-	// a downstream publish-time query against external_delivery
-	// metadata, so target_account_ids is NOT forwarded through the
-	// channel; the publish side resolves targets from the JSONB
-	// metadata column on the external_deliveries row.
-	if r.downloadJobCh != nil {
-		var downloadURL string
-		if veloxReq.Artifact.DownloadURL != nil {
-			downloadURL = *veloxReq.Artifact.DownloadURL
-		}
-		job := worker.VeloxDownloadJob{
-			ExternalDeliveryID:  inserted.ID,
-			UserID:              ws.OwnerID,
-			WorkspaceID:         ws.ID,
-			Title:               meta.Title,
-			Caption:             meta.Description,
-			DefaultPrivacyLevel: meta.PrivacyStatus,
-			ArtifactSHA256:      veloxReq.Artifact.SHA256,
-			SizeBytes:           veloxReq.Artifact.SizeBytes,
-			MimeType:            veloxReq.Artifact.MimeType,
-			Targets:             meta.TargetAccountIDs,
-			DriveAccountID:      meta.DriveAccountID,
-			FolderID:            meta.FolderID,
-			// SourceID is bound in the consumer (NOT here) because the
-			// consumer must read the CANONICAL row from external_delivery
-			// (step 1 GetByID). The channel-side downloadURL is best-
-			// effort and may diverge under peer race.
-			DownloadURL: downloadURL,
-			PublishAt:   veloxReq.PublishAt,
-		}
-		select {
-		case r.downloadJobCh <- job:
-			// Queued. Worker drains.
-		default:
-			// Fail-loudly per docs/INTEGRATIONS.md cutover spec: paired
-			// metric + Error log so the operator can grep log + match
-			// the counter in Grafana. Warn→Error because dashboard
-			// alerts fire on Error level (sat'd buffer means external
-			// rows stay in status='accepted' without transitioning —
-			// page-able).
-			metrics.RecordVeloxDownloadJobDrop(veloxProducerSourcePostDeliveries)
-			slog.Error("velox deliver: download job queue full; reaper will pick up",
-				"social_delivery_id", inserted.ID,
-				"source", veloxProducerSourcePostDeliveries)
-		}
-	}
+	// The delivery is persisted in external_deliveries. The worker
+	// polls that table and claims rows atomically; no in-process
+	// channel is used. 202 "accepted" therefore means "persisted",
+	// not "delivered to the worker".
 
 	writeJSON(w, http.StatusAccepted, VeloxDeliverArtifactResponse{
 		SocialDeliveryID: inserted.ID,

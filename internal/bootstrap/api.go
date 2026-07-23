@@ -75,7 +75,6 @@ func WireAPI(core *Core) (http.Handler, error) {
 		api.WithExternalDeliveryStore(core.externalDeliveryRepo),
 		api.WithConnectLinkNonceStore(core.connectLinkNonceRepo),
 		api.WithVeloxAPIToken(os.Getenv("VELOX_API_TOKEN")),
-		api.WithVeloxDownloadJobChannel(core.VeloxDownloadJobs),
 		api.WithVeloxBFFClient(veloxClient(cfg)),
 		api.WithVeloxBFFAuthMiddleware(core.authMgr.Middleware),
 		api.WithVeloxBFFCSRFMiddleware(func(next http.Handler) http.Handler {

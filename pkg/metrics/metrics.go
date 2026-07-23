@@ -116,19 +116,6 @@ var (
 			Help: "SessionsService.cleanupOrphanSession: revoke attempts that failed even after the helper's one-retry. Each increment = stale orphan row awaiting periodic Cleanup.",
 		},
 	)
-	// Velox async download-job enqueue drops. Incremented when the
-	// producer (POST /internal/v1/deliveries) cannot write to the
-	// buffered download job channel because it is full. The worker
-	// pool's reaper will eventually pick up the accepted row, so
-	// this counter is an operator signal for channel saturation.
-	veloxDownloadJobDrops = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "velox_download_job_drops_total",
-			Help: "Velox download-job saturation drops, by source. Runbook: docs/OPERATIONS.md#velox-download-job-saturation",
-		},
-		[]string{"source"},
-	)
-
 	// P2 ops — Token rotation alert. GaugeVec labeled by
 	// (provider, subject) so the periodic collector (collector.go)
 	// populates one series per Google manager Account. The naming
@@ -170,7 +157,6 @@ func init() {
 		tokenRefreshError,
 		jwtIssued,
 		sessionOrphanRevokeFailures,
-		veloxDownloadJobDrops,
 		oauthConnectionsPerSubject,
 		connectLinkConsumeTotal,
 	)
@@ -229,23 +215,6 @@ func IncJWTIssued() {
 // it per the C5 contract.
 func RecordSessionOrphanRevokeFailure() {
 	sessionOrphanRevokeFailures.Inc()
-}
-
-// RecordVeloxDownloadJobDrop increments the velox_download_job_drops_total
-// counter for a specific source label. Called from the producer-side
-// enqueue block in pkg/api/internal_velox.go when the select/default
-// fires (r.downloadJobCh is saturated). Pair the Inc() with a sibling
-// slog.Error that carries social_delivery_id so an operator can grep
-// the log + match the value against the counter in a Grafana panel.
-//
-// Currently the only source is "post_deliveries"; future producers
-// (Dropbox upload-batch handoffs, operator-side re-enqueue tools)
-// register their own source label without widening the scrape.
-func RecordVeloxDownloadJobDrop(source string) {
-	if source == "" {
-		source = "unknown"
-	}
-	veloxDownloadJobDrops.WithLabelValues(source).Inc()
 }
 
 // SetOAuthConnectionsPerSubject is called by the periodic

@@ -397,15 +397,6 @@ const maxDeliveryBodyBytes = 8 * 1024 * 1024
 // will lift this into a WithVeloxSourceSystem option.
 const veloxSourceSystemTag = "velox"
 
-// veloxProducerSourcePostDeliveries is the stable label value emitted
-// to velox_download_job_drops_total{source="..."} at the producer-side
-// drop site + the sibling "source" log key, so an operator can grep
-// logs and match the counter on the SAME tag. Forward-compat:
-// Dropbox joins later under a copy of this declaration with
-// "dropbox" / "dropbox_post" etc. — keep the constant co-located with
-// the production call sites that use it so future producers copy the
-// pattern (one declaration, two intent-distinct uses).
-
 // VeloxDestinationUpdateAuditDeltas pins the structured metadata
 // schema emitted by the audit log on PATCH
 // /api/v1/integrations/velox/destinations/{id}.
@@ -423,5 +414,3 @@ type VeloxDestinationUpdateAuditDeltas struct {
 	Enabled         *bool `json:"enabled"`
 	DefaultsChanged bool  `json:"defaults_changed"`
 }
-
-const veloxProducerSourcePostDeliveries = "post_deliveries"

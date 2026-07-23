@@ -23,12 +23,6 @@ func WithConnectionStateStore(s ConnectionStateStore) RouterOption {
 	return func(r *Router) { r.connectionStates = s }
 }
 
-// WithVeloxDownloadJobChannel wires the durable Velox→InstaEdit handoff
-// queue. The API only enqueues; the worker process consumes it.
-func WithVeloxDownloadJobChannel(ch chan VeloxDownloadJob) RouterOption {
-	return func(r *Router) { r.downloadJobCh = ch }
-}
-
 func WithWorkspaceStore(repo WorkspaceStore) RouterOption {
 	return func(r *Router) { r.workspaceStore = repo }
 }

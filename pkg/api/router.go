@@ -17,7 +17,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/worker"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/contracts"
 	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
@@ -69,15 +68,6 @@ func (h repoUserWorkspaceHelper) ListMemberships(_ context.Context, userID int64
 	}
 	return out, nil
 }
-
-// VeloxDownloadJob aliases the worker-package type so handlers and
-// local test files (package api) can refer to it WITHOUT an explicit
-// worker. prefix at the call site. The canonical channel-item shape
-// lives in internal/worker/velox_artifact_downloader.go; pkg/api only
-// re-exports the name. Type aliases (Token `=`, NOT `type X Y`) are
-// structurally identical to their target so channel assignments,
-// field accesses, and test unmarshalling all work identically.
-type VeloxDownloadJob = worker.VeloxDownloadJob
 
 type Router struct {
 	mux              *chi.Mux
@@ -293,21 +283,6 @@ type Router struct {
 	// wires it via WithAuthMiddleware(r.auth.Middleware).
 	authMiddleware func(http.Handler) http.Handler
 
-	// downloadJobCh is the buffered channel into which POST
-	// /internal/v1/deliveries fires accepted-download work. The
-	// download worker pool drains it. Optional: if nil the handler
-	// drops the enqueue (logged at WARN) and accepts the delivery
-	// anyway; a row-level reaper handles abandoned rows later.
-	// Buffer size 64 absorbs typical bursts; on overflow the handler
-	// logs WARN + drops so the 500ms p99 SLA is preserved. See
-	// pkg/api/internal_velox.go::handleCreateInternalDelivery for
-	// the dispatch path + VeloxDownloadJob for the payload shape.
-	// downloadJobCh is the buffered fan-out from /internal/v1/deliveries
-	// (handleCreateInternalDelivery) into the Velox artifact-download worker
-	// pool. Buffer of 64 absorbs the 9-tenant peak burst (6 tenants × 2 jittered
-	// retries per the channel-import cutover). Bidirectional (not chan<-) so
-	// the test harness can drain it without needing a separate handle to the
-	// underlying OS pipe.
 	// youTubeSvc (P7 — 4-step /accounts/{id}/validate pipeline) is the
 	// narrow capability-subset of *services.YouTubeOAuthService that
 	// handleValidateAccount's pipeline (refresh-grant → tokeninfo →
@@ -318,8 +293,6 @@ type Router struct {
 	// cmd/server/main.go via WithYouTubeService(svc); the handler
 	// owns the routing decision.
 	youTubeSvc YouTubeOAuthService
-
-	downloadJobCh chan VeloxDownloadJob
 
 	// trustedProxies contains the parsed TRUSTED_PROXIES networks.
 	// When non-empty, clientIP() trusts X-Forwarded-For / X-Real-IP

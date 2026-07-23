@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/lib/pq"
 
@@ -233,15 +234,16 @@ func (r *ExternalDeliveryRepository) Insert(ctx context.Context, e *models.Exter
 		         $6, $7, $8, $9,
 		         $10, $11, $12, $13,
 		         $14, $15,
-		         NOW(), NOW())
-		 RETURNING id, source_system, external_delivery_id, idempotency_key, external_destination_id,
+		         NOW(), NOW())		RETURNING id, source_system, external_delivery_id, idempotency_key, external_destination_id,
 		           source_artifact_id, expected_sha256, expected_size_bytes, expected_mime_type,
 		           download_url, metadata, publish_at, callback_url,
 		           status, request_sha256,
 		           upload_job_id, post_id,
 		           platform_media_id, platform_url,
 		           last_error_code, last_error_message,
-		           created_at, updated_at, completed_at`,
+		           created_at, updated_at, completed_at,
+		           attempt_count, max_attempts,
+		           lease_expires_at, next_attempt_at, leased_by_worker_id`,
 		e.ID, e.SourceSystem, e.ExternalDeliveryID, e.IdempotencyKey,
 		e.ExternalDestinationID,
 		e.SourceArtifactID, e.ExpectedSHA256, e.ExpectedSizeBytes, e.ExpectedMimeType,
@@ -287,7 +289,9 @@ func scanExternalDeliveryByKey(ctx context.Context, q interface {
 		        upload_job_id, post_id,
 		        platform_media_id, platform_url,
 		        last_error_code, last_error_message,
-		        created_at, updated_at, completed_at
+		        created_at, updated_at, completed_at,
+		        attempt_count, max_attempts,
+		        lease_expires_at, next_attempt_at, leased_by_worker_id
 		 FROM external_deliveries
 		 WHERE source_system = $1 AND idempotency_key = $2
 		 LIMIT 1`,
@@ -324,6 +328,11 @@ func scanExternalDeliveryByRow(row *sql.Row) (*models.ExternalDelivery, error) {
 		rawLastErrorMessage sql.NullString
 		rawMetadata         []byte
 		rawCompletedAt      sql.NullTime
+		rawAttemptCount     sql.NullInt64
+		rawMaxAttempts      sql.NullInt64
+		rawLeaseExpiresAt   sql.NullTime
+		rawNextAttemptAt    sql.NullTime
+		rawLeasedByWorkerID sql.NullString
 	)
 	err := row.Scan(
 		&e.ID, &e.SourceSystem, &e.ExternalDeliveryID, &e.IdempotencyKey, &e.ExternalDestinationID,
@@ -334,6 +343,8 @@ func scanExternalDeliveryByRow(row *sql.Row) (*models.ExternalDelivery, error) {
 		&rawPlatformMediaID, &rawPlatformURL,
 		&rawLastErrorCode, &rawLastErrorMessage,
 		&e.CreatedAt, &e.UpdatedAt, &rawCompletedAt,
+		&rawAttemptCount, &rawMaxAttempts,
+		&rawLeaseExpiresAt, &rawNextAttemptAt, &rawLeasedByWorkerID,
 	)
 	if err != nil {
 		return nil, err
@@ -382,6 +393,24 @@ func scanExternalDeliveryByRow(row *sql.Row) (*models.ExternalDelivery, error) {
 	if len(rawMetadata) > 0 {
 		e.Metadata = json.RawMessage(rawMetadata)
 	}
+	if rawAttemptCount.Valid {
+		e.AttemptCount = int(rawAttemptCount.Int64)
+	}
+	if rawMaxAttempts.Valid {
+		e.MaxAttempts = int(rawMaxAttempts.Int64)
+	}
+	if rawLeaseExpiresAt.Valid {
+		t := rawLeaseExpiresAt.Time
+		e.LeaseExpiresAt = &t
+	}
+	if rawNextAttemptAt.Valid {
+		t := rawNextAttemptAt.Time
+		e.NextAttemptAt = &t
+	}
+	if rawLeasedByWorkerID.Valid {
+		s := rawLeasedByWorkerID.String
+		e.LeasedByWorkerID = &s
+	}
 	return &e, nil
 }
 
@@ -407,7 +436,9 @@ func (r *ExternalDeliveryRepository) GetByID(ctx context.Context, id string) (*m
 		        upload_job_id, post_id,
 		        platform_media_id, platform_url,
 		        last_error_code, last_error_message,
-		        created_at, updated_at, completed_at
+		        created_at, updated_at, completed_at,
+		        attempt_count, max_attempts,
+		        lease_expires_at, next_attempt_at, leased_by_worker_id
 		 FROM external_deliveries
 		 WHERE id = $1`,
 		id,
@@ -464,7 +495,9 @@ func (r *ExternalDeliveryRepository) GetByExternalDeliveryID(ctx context.Context
 		        upload_job_id, post_id,
 		        platform_media_id, platform_url,
 		        last_error_code, last_error_message,
-		        created_at, updated_at, completed_at
+		        created_at, updated_at, completed_at,
+		        attempt_count, max_attempts,
+		        lease_expires_at, next_attempt_at, leased_by_worker_id
 		 FROM external_deliveries
 		 WHERE source_system = $1 AND external_delivery_id = $2`,
 		sourceSystem, externalDeliveryID,
@@ -499,7 +532,9 @@ func (r *ExternalDeliveryRepository) ListByStatus(ctx context.Context, status mo
 		        upload_job_id, post_id,
 		        platform_media_id, platform_url,
 		        last_error_code, last_error_message,
-		        created_at, updated_at, completed_at
+		        created_at, updated_at, completed_at,
+		        attempt_count, max_attempts,
+		        lease_expires_at, next_attempt_at, leased_by_worker_id
 		 FROM external_deliveries
 		 WHERE status = $1
 		 ORDER BY created_at ASC
@@ -548,6 +583,11 @@ func scanExternalDeliveryByRowFromRows(rows *sql.Rows) (*models.ExternalDelivery
 		rawLastErrorMessage sql.NullString
 		rawMetadata         []byte
 		rawCompletedAt      sql.NullTime
+		rawAttemptCount     sql.NullInt64
+		rawMaxAttempts      sql.NullInt64
+		rawLeaseExpiresAt   sql.NullTime
+		rawNextAttemptAt    sql.NullTime
+		rawLeasedByWorkerID sql.NullString
 	)
 	err := rows.Scan(
 		&e.ID, &e.SourceSystem, &e.ExternalDeliveryID, &e.IdempotencyKey, &e.ExternalDestinationID,
@@ -558,6 +598,8 @@ func scanExternalDeliveryByRowFromRows(rows *sql.Rows) (*models.ExternalDelivery
 		&rawPlatformMediaID, &rawPlatformURL,
 		&rawLastErrorCode, &rawLastErrorMessage,
 		&e.CreatedAt, &e.UpdatedAt, &rawCompletedAt,
+		&rawAttemptCount, &rawMaxAttempts,
+		&rawLeaseExpiresAt, &rawNextAttemptAt, &rawLeasedByWorkerID,
 	)
 	if err != nil {
 		return nil, err
@@ -605,6 +647,24 @@ func scanExternalDeliveryByRowFromRows(rows *sql.Rows) (*models.ExternalDelivery
 	}
 	if len(rawMetadata) > 0 {
 		e.Metadata = json.RawMessage(rawMetadata)
+	}
+	if rawAttemptCount.Valid {
+		e.AttemptCount = int(rawAttemptCount.Int64)
+	}
+	if rawMaxAttempts.Valid {
+		e.MaxAttempts = int(rawMaxAttempts.Int64)
+	}
+	if rawLeaseExpiresAt.Valid {
+		t := rawLeaseExpiresAt.Time
+		e.LeaseExpiresAt = &t
+	}
+	if rawNextAttemptAt.Valid {
+		t := rawNextAttemptAt.Time
+		e.NextAttemptAt = &t
+	}
+	if rawLeasedByWorkerID.Valid {
+		s := rawLeasedByWorkerID.String
+		e.LeasedByWorkerID = &s
 	}
 	return &e, nil
 }
@@ -765,7 +825,7 @@ var ErrExternalDeliveryNoExpectedTriple = errors.New("external delivery has no e
 // delivery row untouched for the winner. On success the delivery row is
 // left with status='downloading' and upload_job_id set, and the new upload
 // job ID is returned.
-func (r *ExternalDeliveryRepository) CreateUploadJobAndLink(ctx context.Context, job *models.UploadJob, deliveryID string) (int64, error) {
+func (r *ExternalDeliveryRepository) CreateUploadJobAndLink(ctx context.Context, job *models.UploadJob, deliveryID, workerID string) (int64, error) {
 	if deliveryID == "" {
 		return 0, errors.New("external delivery CreateUploadJobAndLink: empty deliveryID")
 	}
@@ -785,11 +845,14 @@ func (r *ExternalDeliveryRepository) CreateUploadJobAndLink(ctx context.Context,
 		`UPDATE external_deliveries
 		 SET status         = 'downloading',
 		     upload_job_id  = $2,
-		     updated_at     = NOW()
+		     updated_at     = NOW(),
+		     lease_expires_at = NULL,
+		     leased_by_worker_id = NULL
 		 WHERE id           = $1
 		   AND status       = 'accepted'
-		   AND upload_job_id IS NULL`,
-		deliveryID, jobID,
+		   AND upload_job_id IS NULL
+		   AND (leased_by_worker_id = $3 OR leased_by_worker_id IS NULL)`,
+		deliveryID, jobID, workerID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("external delivery CreateUploadJobAndLink: claim delivery: %w", err)
@@ -806,6 +869,199 @@ func (r *ExternalDeliveryRepository) CreateUploadJobAndLink(ctx context.Context,
 		return 0, fmt.Errorf("external delivery CreateUploadJobAndLink commit: %w", err)
 	}
 	return jobID, nil
+}
+
+// ClaimDelivery atomically claims the next eligible external_delivery row for
+// the calling worker. Eligible rows are in status 'accepted' whose lease has
+// expired (or never existed) and whose next_attempt_at window has opened (or
+// is unset). The selected row is locked with FOR UPDATE SKIP LOCKED, then its
+// attempt_count is incremented, lease_expires_at is set to NOW() + lease,
+// leased_by_worker_id is stamped, and next_attempt_at is cleared. The
+// status remains 'accepted' so that CreateUploadJobAndLink can perform the
+// final state transition to 'downloading' while still verifying the lease.
+// Returns ErrExternalDeliveryNotFound when no eligible row exists.
+func (r *ExternalDeliveryRepository) ClaimDelivery(ctx context.Context, workerID string, lease time.Duration, maxAttempts int) (*models.ExternalDelivery, error) {
+	if workerID == "" {
+		return nil, errors.New("external delivery ClaimDelivery: empty workerID")
+	}
+	if lease <= 0 {
+		return nil, fmt.Errorf("external delivery ClaimDelivery: non-positive lease %s", lease)
+	}
+	if maxAttempts <= 0 {
+		maxAttempts = 5
+	}
+
+	row, err := scanExternalDeliveryByRow(r.db.QueryRowContext(ctx,
+		`WITH candidate AS (
+		    SELECT id
+		      FROM external_deliveries
+		     WHERE status = 'accepted'
+		       AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+		       AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+		     ORDER BY created_at ASC
+		     LIMIT 1
+		     FOR UPDATE SKIP LOCKED
+		)
+		UPDATE external_deliveries ed
+		   SET lease_expires_at   = NOW() + ($2 * interval '1 second'),
+		       leased_by_worker_id = $1,
+		       attempt_count      = attempt_count + 1,
+		       next_attempt_at    = NULL,
+		       max_attempts       = GREATEST(max_attempts, $3),
+		       updated_at         = NOW()
+		  FROM candidate c
+		 WHERE ed.id = c.id
+		RETURNING ed.id, ed.source_system, ed.external_delivery_id, ed.idempotency_key, ed.external_destination_id,
+		          ed.source_artifact_id, ed.expected_sha256, ed.expected_size_bytes, ed.expected_mime_type,
+		          ed.download_url, ed.metadata, ed.publish_at, ed.callback_url,
+		          ed.status, ed.request_sha256,
+		          ed.upload_job_id, ed.post_id,
+		          ed.platform_media_id, ed.platform_url,
+		          ed.last_error_code, ed.last_error_message,
+		          ed.created_at, ed.updated_at, ed.completed_at,
+		          ed.attempt_count, ed.max_attempts,
+		          ed.lease_expires_at, ed.next_attempt_at, ed.leased_by_worker_id`,
+		workerID, lease.Seconds(), maxAttempts,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrExternalDeliveryNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("external delivery ClaimDelivery: %w", err)
+	}
+	return row, nil
+}
+
+// MarkRetry releases the lease on a delivery and schedules a retry. The
+// worker calls this when processing fails with a transient error. If the
+// delivery has exhausted its retry budget, the row is instead marked as
+// dead-letter via MarkDeadLetter.
+func (r *ExternalDeliveryRepository) MarkRetry(ctx context.Context, id string, nextAttemptAt time.Time, errorCode, errorMessage string) error {
+	if id == "" {
+		return errors.New("external delivery MarkRetry: empty id")
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE external_deliveries
+		 SET status             = 'retry_wait',
+		     next_attempt_at    = $2,
+		     lease_expires_at   = NULL,
+		     leased_by_worker_id = NULL,
+		     last_error_code    = COALESCE($3, last_error_code),
+		     last_error_message = COALESCE($4, last_error_message),
+		     updated_at         = NOW()
+		 WHERE id = $1`,
+		id, nextAttemptAt, errorCode, errorMessage,
+	)
+	if err != nil {
+		return fmt.Errorf("external delivery MarkRetry: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("external delivery MarkRetry rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%s", ErrExternalDeliveryNotFound, id)
+	}
+	return nil
+}
+
+// MarkFailed moves a delivery to the terminal failed state, clears its
+// lease, and records the failure reason. Used for non-retryable processing
+// errors.
+func (r *ExternalDeliveryRepository) MarkFailed(ctx context.Context, id string, errorCode, errorMessage string) error {
+	if id == "" {
+		return errors.New("external delivery MarkFailed: empty id")
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE external_deliveries
+		 SET status             = 'failed',
+		     lease_expires_at   = NULL,
+		     leased_by_worker_id = NULL,
+		     next_attempt_at    = NULL,
+		     last_error_code    = COALESCE($2, last_error_code),
+		     last_error_message = COALESCE($3, last_error_message),
+		     completed_at       = COALESCE(completed_at, NOW()),
+		     updated_at         = NOW()
+		 WHERE id = $1`,
+		id, errorCode, errorMessage,
+	)
+	if err != nil {
+		return fmt.Errorf("external delivery MarkFailed: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("external delivery MarkFailed rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%s", ErrExternalDeliveryNotFound, id)
+	}
+	return nil
+}
+
+// MarkBlockedAuth moves a delivery to the terminal blocked_auth state,
+// clears its lease, and records the failure reason. Used when the delivery
+// cannot proceed without operator intervention (e.g. metadata-only payload).
+func (r *ExternalDeliveryRepository) MarkBlockedAuth(ctx context.Context, id string, errorCode, errorMessage string) error {
+	if id == "" {
+		return errors.New("external delivery MarkBlockedAuth: empty id")
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE external_deliveries
+		 SET status             = 'blocked_auth',
+		     lease_expires_at   = NULL,
+		     leased_by_worker_id = NULL,
+		     next_attempt_at    = NULL,
+		     last_error_code    = COALESCE($2, last_error_code),
+		     last_error_message = COALESCE($3, last_error_message),
+		     completed_at       = COALESCE(completed_at, NOW()),
+		     updated_at         = NOW()
+		 WHERE id = $1`,
+		id, errorCode, errorMessage,
+	)
+	if err != nil {
+		return fmt.Errorf("external delivery MarkBlockedAuth: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("external delivery MarkBlockedAuth rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%s", ErrExternalDeliveryNotFound, id)
+	}
+	return nil
+}
+
+// MarkDeadLetter moves a delivery to the terminal dead_letter state, clears
+// its lease, and records the failure reason. Called when the retry budget is
+// exhausted.
+func (r *ExternalDeliveryRepository) MarkDeadLetter(ctx context.Context, id string, errorCode, errorMessage string) error {
+	if id == "" {
+		return errors.New("external delivery MarkDeadLetter: empty id")
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE external_deliveries
+		 SET status             = 'dead_letter',
+		     lease_expires_at   = NULL,
+		     leased_by_worker_id = NULL,
+		     next_attempt_at    = NULL,
+		     last_error_code    = COALESCE($2, last_error_code),
+		     last_error_message = COALESCE($3, last_error_message),
+		     completed_at       = COALESCE(completed_at, NOW()),
+		     updated_at         = NOW()
+		 WHERE id = $1`,
+		id, errorCode, errorMessage,
+	)
+	if err != nil {
+		return fmt.Errorf("external delivery MarkDeadLetter: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("external delivery MarkDeadLetter rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%s", ErrExternalDeliveryNotFound, id)
+	}
+	return nil
 }
 
 func (r *ExternalDeliveryRepository) GetExpectedTripleByUploadJobID(ctx context.Context, uploadJobID int64) (int64, string, error) {

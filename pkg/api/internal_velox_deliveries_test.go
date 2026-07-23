@@ -504,30 +504,14 @@ func (f *fakeDestinationEnv) UpdateEnabledAndDefaults(_ context.Context, _ strin
 // handler depends on externalDestinations for step 9.
 func newPostVeloxTestRouter(t *testing.T, deliveries ExternalDeliveryStore, destinations ExternalDestinationStore, token string) *Router {
 	t.Helper()
-	downloadJobs := make(chan VeloxDownloadJob, 64)
 	r := &Router{
 		mux:                  chi.NewRouter(),
 		externalDeliveries:   deliveries,
 		externalDestinations: destinations,
 		veloxAPIToken:        token,
-		downloadJobCh:        downloadJobs,
 	}
 	r.registerInternalVeloxRoutes()
 	return r
-}
-
-// drainDownloadJobs reads up to one job from the router's downloadJobCh.
-// Returns (job, true) if a job was queued, (nil, false) if the channel was
-// empty (default-triggered drop or stale-test). Tests use this via the
-// router.downloadJobCh field for channel-verification per the spec.
-func drainDownloadJobs(t *testing.T, r *Router) (*VeloxDownloadJob, bool) {
-	t.Helper()
-	select {
-	case job := <-r.downloadJobCh:
-		return &job, true
-	default:
-		return nil, false
-	}
 }
 
 // buildValidVeloxDeliveryRequest returns a JSON body that PASSES every handler
@@ -677,53 +661,47 @@ func TestPostInternalDelivery_DestinationNotFound(t *testing.T) {
 	}
 }
 
-// TestPostInternalDelivery_EnqueuesDownloadJob pins the spec's HEADLINE
-// async-pipeline invariant: after a successful POST, the handler MUST
-// enqueue a VeloxDownloadJob into r.downloadJobCh before returning 202.
-// Without this test, the async enqueue path is implemented-but-unverified
-// (the newPostVeloxTestRouter nil-channels the field by default for the
-// other 4 tests). The 5th test wires a buffered channel + verifies the
-// real enqueue payload shape matches the heading contract.
-//
-// Nil-safe DownloadURL flattening is asserted by sending request WITHOUT
-// artifact.download_url (a metadata-only delivery, the wire contract's
-// omitempty case). The flattened string MUST be empty (not panic from
-// *string deref).
-func TestPostInternalDelivery_EnqueuesDownloadJob(t *testing.T) {
+// TestPostInternalDelivery_PersistsDelivery pins the new spec
+// invariant: after a successful POST the handler MUST persist the
+// delivery in external_deliveries and return 202. There is no in-
+// process channel; the worker polls the table. This test verifies
+// 202 means "persisted" (status='accepted', social_delivery_id set)
+// and does not depend on any channel.
+func TestPostInternalDelivery_PersistsDelivery(t *testing.T) {
 	store := &fakeDeliveryEnv{rows: make(map[string]*models.ExternalDelivery)}
 	destStore := &fakeDestinationEnv{rows: map[string]*models.ExternalDestination{}}
 	destStore.rows["extdst_01JABC"] = &models.ExternalDestination{ID: "extdst_01JABC", SourceSystem: "velox", Enabled: true}
 	r := newPostVeloxTestRouter(t, store, destStore, "secret-token")
-	body := buildValidVeloxDeliveryRequest(t, "delivery_enqueue|destination_12", "delivery_enqueue")
-	// Drop artifact.download_url to exercise the *string nil-flatten path.
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	delete(payload["artifact"].(map[string]any), "download_url")
-	body, _ = json.Marshal(payload)
+	body := buildValidVeloxDeliveryRequest(t, "delivery_persist|destination_12", "delivery_persist")
 	w := firePostDeliveryRequest(t, r, body, "Bearer secret-token")
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status=%d; want 202; body=%s", w.Code, w.Body.String())
 	}
-	job, ok := drainDownloadJobs(t, r)
+
+	var resp VeloxDeliverArtifactResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Status != "accepted" {
+		t.Errorf("Status=%q; want accepted", resp.Status)
+	}
+	if resp.AlreadyExists {
+		t.Errorf("AlreadyExists=true; want false (fresh insert)")
+	}
+	if !strings.HasPrefix(resp.SocialDeliveryID, "sdel_01J") {
+		t.Errorf("SocialDeliveryID=%q; want sdel_01J prefix", resp.SocialDeliveryID)
+	}
+
+	// The row MUST exist in the in-memory store with status accepted.
+	row, ok := store.rows[resp.SocialDeliveryID]
 	if !ok {
-		t.Fatal("downloadJobCh empty after 202 — async enqueue DID NOT fire (spec violation)")
+		t.Fatalf("delivery row %s not persisted in store", resp.SocialDeliveryID)
 	}
-	if job.ArtifactSHA256 != "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" {
-		t.Errorf("ArtifactSHA256=%q; want e5f2...345 (must propagate from request)", job.ArtifactSHA256)
+	if row.Status != models.ExternalDeliveryStatusAccepted {
+		t.Errorf("persisted status=%q; want accepted", row.Status)
 	}
-	if job.MimeType != "video/mp4" {
-		t.Errorf("MimeType=%q; want video/mp4", job.MimeType)
-	}
-	if job.SizeBytes <= 0 {
-		t.Errorf("SizeBytes=%d; want > 0", job.SizeBytes)
-	}
-	if !strings.HasPrefix(job.ExternalDeliveryID, "sdel_01J") {
-		t.Errorf("ExternalDeliveryID=%q; want sdel_01J prefix (mint format)", job.ExternalDeliveryID)
-	}
-	if job.DownloadURL != "" {
-		t.Errorf("DownloadURL=%q; want empty (nil-safe flatten: download_url absent in payload)", job.DownloadURL)
+	if row.ExpectedSHA256 != "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" {
+		t.Errorf("ExpectedSHA256=%q; want sha256(test)", row.ExpectedSHA256)
 	}
 	if store.insertCallCount != 1 {
 		t.Errorf("insertCallCount=%d; want 1", store.insertCallCount)
