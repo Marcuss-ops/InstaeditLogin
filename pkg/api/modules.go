@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
 
@@ -44,32 +45,46 @@ func (reg *RouteRegistry) Mount(mux chi.Router) {
 	}
 }
 
+// AdminModuleDeps is the narrow set of dependencies the admin
+// module needs to mount its routes.
+type AdminModuleDeps struct {
+	AdminStore            AdminStore
+	AuthManager           *auth.Manager
+	UserStore             UserStore
+	WorkspaceStore        WorkspaceStore
+	Capabilities          *services.CapabilityRouter
+	ConnectLinkNonceStore ConnectLinkNonceStore
+}
+
 // AdminModule mounts the operator dashboard routes under /admin/*.
 // Registration is a no-op when the Router has no admin store wired.
 type AdminModule struct {
-	r *Router
+	deps AdminModuleDeps
 }
 
-func NewAdminModule(r *Router) RouteModule {
-	return &AdminModule{r: r}
+func NewAdminModule(deps AdminModuleDeps) RouteModule {
+	return &AdminModule{deps: deps}
 }
+
+// Compile-time assertion: AdminModule implements RouteModule.
+var _ RouteModule = (*AdminModule)(nil)
 
 func (m *AdminModule) Register(mux chi.Router) {
-	if m.r.adminStore == nil {
+	if m.deps.AdminStore == nil {
 		return
 	}
-	mux.Method(http.MethodGet, "/admin/channels", m.admin(http.HandlerFunc(m.r.handleAdminChannels)))
-	mux.Method(http.MethodGet, "/admin/channels.csv", m.admin(http.HandlerFunc(m.r.handleAdminChannelsCSV)))
-	mux.Method(http.MethodGet, "/admin/queue", m.admin(http.HandlerFunc(m.r.handleAdminQueue)))
-	mux.Method(http.MethodGet, "/admin/queue.csv", m.admin(http.HandlerFunc(m.r.handleAdminQueueCSV)))
-	mux.Method(http.MethodGet, "/admin/upload_jobs/dead_letter", m.admin(http.HandlerFunc(m.r.handleAdminUploadJobsDeadLetter)))
-	mux.Method(http.MethodGet, "/admin/upload_jobs/dead_letter.csv", m.admin(http.HandlerFunc(m.r.handleAdminUploadJobsDeadLetterCSV)))
-	mux.Method(http.MethodGet, "/admin/health", m.admin(http.HandlerFunc(m.r.handleAdminHealth)))
-	mux.Method(http.MethodGet, "/admin/health.csv", m.admin(http.HandlerFunc(m.r.handleAdminHealthCSV)))
-	mux.Method(http.MethodPost, "/admin/channels/import-csv", m.admin(http.HandlerFunc(m.r.handleAdminImportChannelsCSV)))
-	mux.Method(http.MethodGet, "/admin/channels/pending", m.admin(http.HandlerFunc(m.r.handleAdminPendingChannels)))
-	mux.Method(http.MethodGet, "/admin/youtube/fleet_readiness", m.admin(http.HandlerFunc(m.r.handleAdminYouTubeFleetReadiness)))
-	mux.Method(http.MethodPost, "/admin/channels/{channel_id}/connect-link", m.admin(http.HandlerFunc(m.r.handleAdminChannelConnectLink)))
+	mux.Method(http.MethodGet, "/admin/channels", m.admin(http.HandlerFunc(m.handleAdminChannels)))
+	mux.Method(http.MethodGet, "/admin/channels.csv", m.admin(http.HandlerFunc(m.handleAdminChannelsCSV)))
+	mux.Method(http.MethodGet, "/admin/queue", m.admin(http.HandlerFunc(m.handleAdminQueue)))
+	mux.Method(http.MethodGet, "/admin/queue.csv", m.admin(http.HandlerFunc(m.handleAdminQueueCSV)))
+	mux.Method(http.MethodGet, "/admin/upload_jobs/dead_letter", m.admin(http.HandlerFunc(m.handleAdminUploadJobsDeadLetter)))
+	mux.Method(http.MethodGet, "/admin/upload_jobs/dead_letter.csv", m.admin(http.HandlerFunc(m.handleAdminUploadJobsDeadLetterCSV)))
+	mux.Method(http.MethodGet, "/admin/health", m.admin(http.HandlerFunc(m.handleAdminHealth)))
+	mux.Method(http.MethodGet, "/admin/health.csv", m.admin(http.HandlerFunc(m.handleAdminHealthCSV)))
+	mux.Method(http.MethodPost, "/admin/channels/import-csv", m.admin(http.HandlerFunc(m.handleAdminImportChannelsCSV)))
+	mux.Method(http.MethodGet, "/admin/channels/pending", m.admin(http.HandlerFunc(m.handleAdminPendingChannels)))
+	mux.Method(http.MethodGet, "/admin/youtube/fleet_readiness", m.admin(http.HandlerFunc(m.handleAdminYouTubeFleetReadiness)))
+	mux.Method(http.MethodPost, "/admin/channels/{channel_id}/connect-link", m.admin(http.HandlerFunc(m.handleAdminChannelConnectLink)))
 }
 
 // admin composes the JWT/cookie auth middleware with the admin-only
@@ -78,12 +93,12 @@ func (m *AdminModule) Register(mux chi.Router) {
 // helper ensures the auth manager extracts and validates the identity
 // first. A missing auth manager returns 401.
 func (m *AdminModule) admin(next http.HandlerFunc) http.Handler {
-	if m.r.auth == nil {
+	if m.deps.AuthManager == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		})
 	}
-	return m.r.auth.Middleware(adminAuthMiddleware(next))
+	return m.deps.AuthManager.Middleware(adminAuthMiddleware(next))
 }
 
 // VeloxModule mounts the service-to-service /internal/v1 routes.
@@ -162,21 +177,33 @@ func (m *IntegrationsModule) Register(mux chi.Router) {
 	m.r.registerUserVeloxDestinations(mux)
 }
 
+// BillingModuleDeps is the narrow set of dependencies the billing
+// module needs to mount its routes. All fields are required when the
+// module is registered; the module is a no-op when BillingSvc is nil.
+type BillingModuleDeps struct {
+	BillingSvc     BillingServiceAPI
+	AuthMiddleware func(http.Handler) http.Handler
+	FrontendURL    string
+}
+
 // BillingModule mounts billing and Stripe webhook routes.  Registration
 // is a no-op when the Router has no billing service wired.
 type BillingModule struct {
-	r *Router
+	deps BillingModuleDeps
 }
 
-func NewBillingModule(r *Router) RouteModule {
-	return &BillingModule{r: r}
+func NewBillingModule(deps BillingModuleDeps) RouteModule {
+	return &BillingModule{deps: deps}
 }
+
+// Compile-time assertion: BillingModule implements RouteModule.
+var _ RouteModule = (*BillingModule)(nil)
 
 func (m *BillingModule) Register(mux chi.Router) {
-	if m.r.billingSvc == nil {
+	if m.deps.BillingSvc == nil {
 		return
 	}
-	m.r.registerBillingRoutes()
+	m.registerBillingRoutes(mux)
 }
 
 // MediaModule mounts the presigned-upload and Drive-import routes.

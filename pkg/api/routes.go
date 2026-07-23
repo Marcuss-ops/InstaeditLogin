@@ -17,7 +17,14 @@ func (r *Router) Setup() http.Handler {
 	// This is the single place that decides which modules are wired
 	// into the router; individual modules only declare their routes.
 	reg := NewRouteRegistry()
-	reg.Register(NewAdminModule(r))
+	reg.Register(NewAdminModule(AdminModuleDeps{
+		AdminStore:            r.adminStore,
+		AuthManager:           r.auth,
+		UserStore:             r.userRepo,
+		WorkspaceStore:        r.workspaceStore,
+		Capabilities:          r.capabilities,
+		ConnectLinkNonceStore: r.connectLinkNonceStore,
+	}))
 	reg.Register(NewVeloxModule(r))
 	reg.Register(NewVeloxBFFModule(r))
 	reg.Register(NewIntegrationsModule(r))
@@ -31,7 +38,11 @@ func (r *Router) Setup() http.Handler {
 	reg.Register(NewAuthModule(r))
 	reg.Register(NewMediaModule(r))
 	reg.Register(NewPublishingModule(r))
-	reg.Register(NewBillingModule(r))
+	reg.Register(NewBillingModule(BillingModuleDeps{
+		BillingSvc:     r.billingSvc,
+		AuthMiddleware: r.auth.Middleware,
+		FrontendURL:    r.frontendURL,
+	}))
 
 	r.mux.Method(http.MethodGet, "/api/v1/metrics", http.HandlerFunc(r.handleMetrics))
 

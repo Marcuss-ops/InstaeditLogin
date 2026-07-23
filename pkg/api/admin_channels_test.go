@@ -114,14 +114,14 @@ func (s staffIdentity) KeyID() int64 { return 0 }
 
 func TestHandleAdminYouTubeFleetReadiness_NonAdmin_Forbidden(t *testing.T) {
 	store := &stubAdminStore{}
-	r := &Router{adminStore: store}
+	m := &AdminModule{deps: AdminModuleDeps{AdminStore: store}}
 	// adminStore is non-nil + identity is NOT admin -> handler must
 	// short-circuit with 403 + adminStore MUST NOT be called.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/admin/youtube/fleet_readiness", nil)
 	req = req.WithContext(auth.WithIdentity(req.Context(), staffIdentity{uid: 42, isAdmin: false}))
 
-	r.handleAdminYouTubeFleetReadiness(rec, req)
+	m.handleAdminYouTubeFleetReadiness(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status: want 403, got %d (body=%q)", rec.Code, rec.Body.String())
@@ -132,13 +132,13 @@ func TestHandleAdminYouTubeFleetReadiness_NonAdmin_Forbidden(t *testing.T) {
 }
 
 func TestHandleAdminYouTubeFleetReadiness_NilAdminStore_NotImplemented(t *testing.T) {
-	r := &Router{adminStore: nil}
+	m := &AdminModule{deps: AdminModuleDeps{}}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/admin/youtube/fleet_readiness", nil)
 	// Even with admin identity, nil adminStore must surface as 501.
 	req = req.WithContext(auth.WithIdentity(req.Context(), staffIdentity{uid: 42, isAdmin: true}))
 
-	r.handleAdminYouTubeFleetReadiness(rec, req)
+	m.handleAdminYouTubeFleetReadiness(rec, req)
 
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("status: want 501, got %d (body=%q)", rec.Code, rec.Body.String())
@@ -168,12 +168,13 @@ func TestHandleAdminYouTubeFleetReadiness_Admin_OK_JSON(t *testing.T) {
 			TakenAt:        takenAt,
 		},
 	}
-	r := &Router{adminStore: store}
+	m := &AdminModule{deps: AdminModuleDeps{AdminStore: store}}
 	req := httptest.NewRequest(http.MethodGet, "/admin/youtube/fleet_readiness", nil)
 	req = req.WithContext(auth.WithIdentity(req.Context(), staffIdentity{uid: 9999, isAdmin: true}))
 
 	rec := httptest.NewRecorder()
-	r.handleAdminYouTubeFleetReadiness(rec, req)
+
+	m.handleAdminYouTubeFleetReadiness(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: want 200, got %d (body=%q)", rec.Code, rec.Body.String())

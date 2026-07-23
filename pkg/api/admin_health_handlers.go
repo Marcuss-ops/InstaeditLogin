@@ -24,28 +24,28 @@ type AdminHealthResponse struct {
 // short-window), 24h error rate per channel (D5.a chronic-window).
 // Plus the existing queue counts so the dashboard renders a single
 // roundtrip's worth of gauges.
-func (r *Router) handleAdminHealth(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminHealth(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
 
-	quota, err := r.adminStore.YouTubeQuotaApproximation(req.Context(), 24*time.Hour, 10000, 1) // 2026 bucket model: 1 unit per videos.insert
+	quota, err := m.deps.AdminStore.YouTubeQuotaApproximation(req.Context(), 24*time.Hour, 10000, 1) // 2026 bucket model: 1 unit per videos.insert
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load youtube quota: "+err.Error())
 		return
 	}
-	errRate1h, err := r.adminStore.ErrorRatePerChannel(req.Context(), "1 hours", "1h", 200)
+	errRate1h, err := m.deps.AdminStore.ErrorRatePerChannel(req.Context(), "1 hours", "1h", 200)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load 1h error rate: "+err.Error())
 		return
 	}
-	errRate24h, err := r.adminStore.ErrorRatePerChannel(req.Context(), "24 hours", "24h", 200)
+	errRate24h, err := m.deps.AdminStore.ErrorRatePerChannel(req.Context(), "24 hours", "24h", 200)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load 24h error rate: "+err.Error())
 		return
 	}
-	queueCounts, err := r.adminStore.QueueCounts(req.Context())
+	queueCounts, err := m.deps.AdminStore.QueueCounts(req.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load queue counts: "+err.Error())
 		return
@@ -66,17 +66,17 @@ func (r *Router) handleAdminHealth(w http.ResponseWriter, req *http.Request) {
 // one row per channel × window; the window label is the
 // disambiguator. 400 row cap keeps the file bounded; the dashboard
 // paginates beyond.
-func (r *Router) handleAdminHealthCSV(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminHealthCSV(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
-	errRate1h, err := r.adminStore.ErrorRatePerChannel(req.Context(), "1 hours", "1h", 200)
+	errRate1h, err := m.deps.AdminStore.ErrorRatePerChannel(req.Context(), "1 hours", "1h", 200)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load 1h error rate: "+err.Error())
 		return
 	}
-	errRate24h, err := r.adminStore.ErrorRatePerChannel(req.Context(), "24 hours", "24h", 200)
+	errRate24h, err := m.deps.AdminStore.ErrorRatePerChannel(req.Context(), "24 hours", "24h", 200)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load 24h error rate: "+err.Error())
 		return

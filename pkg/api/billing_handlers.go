@@ -20,26 +20,24 @@ type BillingServiceAPI interface {
 }
 
 // registerBillingRoutes adds billing endpoints to the chi mux.
-func (r *Router) registerBillingRoutes() {
+func (m *BillingModule) registerBillingRoutes(mux chi.Router) {
 	// Public webhook (Stripe calls this, no auth).
-	r.mux.Method(http.MethodPost, "/api/v1/billing/webhook", http.HandlerFunc(r.handleBillingWebhook))
+	mux.Method(http.MethodPost, "/api/v1/billing/webhook", http.HandlerFunc(m.handleBillingWebhook))
 
 	// Authenticated billing routes.
-	r.mux.Route("/api/v1/billing", func(sr chi.Router) {
-		sr.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-				r.auth.Middleware(next).ServeHTTP(w, req)
-			})
-		})
-		sr.Get("/plans", r.handleGetPlans)
-		sr.Post("/checkout", r.handleCreateCheckout)
-		sr.Post("/portal", r.handleCreatePortal)
+	mux.Route("/api/v1/billing", func(sr chi.Router) {
+		if m.deps.AuthMiddleware != nil {
+			sr.Use(m.deps.AuthMiddleware)
+		}
+		sr.Get("/plans", m.handleGetPlans)
+		sr.Post("/checkout", m.handleCreateCheckout)
+		sr.Post("/portal", m.handleCreatePortal)
 	})
 }
 
 // handleGetPlans handles GET /api/v1/billing/plans.
-func (r *Router) handleGetPlans(w http.ResponseWriter, req *http.Request) {
-	plans, err := r.billingSvc.GetPlans()
+func (m *BillingModule) handleGetPlans(w http.ResponseWriter, req *http.Request) {
+	plans, err := m.deps.BillingSvc.GetPlans()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list plans: "+err.Error())
 		return
@@ -51,7 +49,7 @@ func (r *Router) handleGetPlans(w http.ResponseWriter, req *http.Request) {
 }
 
 // handleCreateCheckout handles POST /api/v1/billing/checkout.
-func (r *Router) handleCreateCheckout(w http.ResponseWriter, req *http.Request) {
+func (m *BillingModule) handleCreateCheckout(w http.ResponseWriter, req *http.Request) {
 	id := auth.IdentityFromContext(req.Context())
 	if id == nil {
 		writeError(w, http.StatusUnauthorized, "missing identity")
@@ -76,7 +74,7 @@ func (r *Router) handleCreateCheckout(w http.ResponseWriter, req *http.Request) 
 		body.BillingCycle = "monthly"
 	}
 
-	url, err := r.billingSvc.CreateCheckoutSession(body.WorkspaceID, id.UserID(), body.PlanID, body.BillingCycle, body.Email)
+	url, err := m.deps.BillingSvc.CreateCheckoutSession(body.WorkspaceID, id.UserID(), body.PlanID, body.BillingCycle, body.Email)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create checkout: "+err.Error())
 		return
@@ -86,7 +84,7 @@ func (r *Router) handleCreateCheckout(w http.ResponseWriter, req *http.Request) 
 }
 
 // handleCreatePortal handles POST /api/v1/billing/portal.
-func (r *Router) handleCreatePortal(w http.ResponseWriter, req *http.Request) {
+func (m *BillingModule) handleCreatePortal(w http.ResponseWriter, req *http.Request) {
 	id := auth.IdentityFromContext(req.Context())
 	if id == nil {
 		writeError(w, http.StatusUnauthorized, "missing identity")
@@ -105,12 +103,12 @@ func (r *Router) handleCreatePortal(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	returnURL := r.frontendURL + "/dashboard/billing"
-	if returnURL == "" {
-		returnURL = "http://localhost:5173/dashboard/billing"
+	returnURL := "http://localhost:5173/dashboard/billing"
+	if m.deps.FrontendURL != "" {
+		returnURL = m.deps.FrontendURL + "/dashboard/billing"
 	}
 
-	url, err := r.billingSvc.CreatePortalSession(body.WorkspaceID, returnURL)
+	url, err := m.deps.BillingSvc.CreatePortalSession(body.WorkspaceID, returnURL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create portal: "+err.Error())
 		return
@@ -120,7 +118,7 @@ func (r *Router) handleCreatePortal(w http.ResponseWriter, req *http.Request) {
 }
 
 // handleBillingWebhook handles POST /api/v1/billing/webhook.
-func (r *Router) handleBillingWebhook(w http.ResponseWriter, req *http.Request) {
+func (m *BillingModule) handleBillingWebhook(w http.ResponseWriter, req *http.Request) {
 	payload, err := io.ReadAll(req.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to read body: "+err.Error())
@@ -128,7 +126,7 @@ func (r *Router) handleBillingWebhook(w http.ResponseWriter, req *http.Request) 
 	}
 
 	signature := req.Header.Get("Stripe-Signature")
-	if err := r.billingSvc.HandleWebhook(payload, signature); err != nil {
+	if err := m.deps.BillingSvc.HandleWebhook(payload, signature); err != nil {
 		writeError(w, http.StatusBadRequest, "webhook error: "+err.Error())
 		return
 	}

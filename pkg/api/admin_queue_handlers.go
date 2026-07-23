@@ -34,17 +34,17 @@ type AdminDeadLetterJobsResponse struct {
 // (counts) + one GROUP BY (in-flight) + one COUNT (stuck); no
 // per-row pagination so the dashboard always has the freshest
 // snapshot.
-func (r *Router) handleAdminQueue(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminQueue(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
-	counts, err := r.adminStore.QueueCounts(req.Context())
+	counts, err := m.deps.AdminStore.QueueCounts(req.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load queue counts: "+err.Error())
 		return
 	}
-	inFlight, err := r.adminStore.InFlightPerWorker(req.Context())
+	inFlight, err := m.deps.AdminStore.InFlightPerWorker(req.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load in-flight per worker: "+err.Error())
 		return
@@ -62,12 +62,12 @@ func (r *Router) handleAdminQueue(w http.ResponseWriter, req *http.Request) {
 // file (hundreds of pending rows that aren't actionable); stuck
 // rows are the operator's actual to-do. Combined D3.c + D3.a
 // classification via the `stuck_reason` column.
-func (r *Router) handleAdminQueueCSV(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminQueueCSV(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
-	stuck, err := r.adminStore.ListStuckJobs(req.Context(), 200)
+	stuck, err := m.deps.AdminStore.ListStuckJobs(req.Context(), 200)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list stuck jobs: "+err.Error())
 		return
@@ -113,12 +113,12 @@ func (r *Router) handleAdminQueueCSV(w http.ResponseWriter, req *http.Request) {
 // defined in the Definition of Done: every retry-exhausted row
 // surfaces here so an operator can decide retry / cancel / ignore
 // per row.
-func (r *Router) handleAdminUploadJobsDeadLetter(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminUploadJobsDeadLetter(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
-	jobs, err := r.adminStore.ListDeadLetterJobs(req.Context(), 500)
+	jobs, err := m.deps.AdminStore.ListDeadLetterJobs(req.Context(), 500)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list dead-letter jobs: "+err.Error())
 		return
@@ -138,12 +138,12 @@ func (r *Router) handleAdminUploadJobsDeadLetter(w http.ResponseWriter, req *htt
 // Columns: job_id, user_id, workspace_id, source_type, source_id,
 // title, status, attempt_count, error_code, error_message,
 // dead_lettered_at.
-func (r *Router) handleAdminUploadJobsDeadLetterCSV(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminUploadJobsDeadLetterCSV(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
-	jobs, err := r.adminStore.ListDeadLetterJobs(req.Context(), 500)
+	jobs, err := m.deps.AdminStore.ListDeadLetterJobs(req.Context(), 500)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list dead-letter jobs: "+err.Error())
 		return

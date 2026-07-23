@@ -39,8 +39,8 @@ type AdminChannelsResponse struct {
 // first, then can drill into a specific platform with ?platform=youtube.
 //
 // Authz: requireAdmin (gates all /admin/* routes).
-func (r *Router) handleAdminChannels(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminChannels(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
@@ -58,12 +58,12 @@ func (r *Router) handleAdminChannels(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	counts, err := r.adminStore.ChannelCounts(req.Context())
+	counts, err := m.deps.AdminStore.ChannelCounts(req.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load channel counts: "+err.Error())
 		return
 	}
-	channels, err := r.adminStore.ListChannelsForOps(req.Context(), statusFilter, platformFilter, 500)
+	channels, err := m.deps.AdminStore.ListChannelsForOps(req.Context(), statusFilter, platformFilter, 500)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list channels: "+err.Error())
 		return
@@ -80,14 +80,14 @@ func (r *Router) handleAdminChannels(w http.ResponseWriter, req *http.Request) {
 // rows as a CSV via the D4.a streaming helper. Same query parameters
 // as the JSON handler; the file's header row is the union of
 // AdminChannelRow's wire-friendly fields.
-func (r *Router) handleAdminChannelsCSV(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminChannelsCSV(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
 	statusFilter := req.URL.Query().Get("status")
 	platformFilter := req.URL.Query().Get("platform")
-	channels, err := r.adminStore.ListChannelsForOps(req.Context(), statusFilter, platformFilter, 500)
+	channels, err := m.deps.AdminStore.ListChannelsForOps(req.Context(), statusFilter, platformFilter, 500)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list channels: "+err.Error())
 		return
@@ -170,12 +170,12 @@ type AdminImportChannelsResponse struct {
 //     Defaults to the admin's own session email when absent so the
 //     one-click import doesn't require a second field.
 //
-// Workspace names in the CSV are resolved via r.workspaceStore
+// Workspace names in the CSV are resolved via m.deps.WorkspaceStore
 // (workspace_id is the FK on platform_accounts). Unresolvable
 // names surface as RowErrors with reason "no such workspace: NAME".
 // See internal/channelimport for the parse + upsert contract.
-func (r *Router) handleAdminImportChannelsCSV(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminImportChannelsCSV(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
@@ -199,7 +199,7 @@ func (r *Router) handleAdminImportChannelsCSV(w http.ResponseWriter, req *http.R
 		// workspace-level owner.
 		if id := adminIdentityUserID(req); id != 0 {
 			// We have the user_id already; just use it directly.
-			res, err := r.runImportFromCSV(req, file, id)
+			res, err := m.runImportFromCSV(req, file, id)
 			if err != nil {
 				writeError(w, http.StatusUnprocessableEntity, err.Error())
 				return
@@ -210,12 +210,12 @@ func (r *Router) handleAdminImportChannelsCSV(w http.ResponseWriter, req *http.R
 		writeError(w, http.StatusBadRequest, "owner_email form field is required when admin session is anonymous")
 		return
 	}
-	ownerID, err := r.resolveUserIDByOwnerEmail(req, ownerEmail)
+	ownerID, err := m.resolveUserIDByOwnerEmail(req, ownerEmail)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "could not resolve owner_email: "+err.Error())
 		return
 	}
-	res, err := r.runImportFromCSV(req, file, ownerID)
+	res, err := m.runImportFromCSV(req, file, ownerID)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -231,13 +231,13 @@ func (r *Router) handleAdminImportChannelsCSV(w http.ResponseWriter, req *http.R
 // so a fleet grouped by platform remains filterable here too.
 //
 // Authz: requireAdmin (gated by the adminAuthMiddleware in Setup()).
-func (r *Router) handleAdminPendingChannels(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminPendingChannels(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
 	platformFilter := req.URL.Query().Get("platform")
-	channels, err := r.adminStore.ListChannelsForOps(req.Context(), "pending_authorization", platformFilter, 500)
+	channels, err := m.deps.AdminStore.ListChannelsForOps(req.Context(), "pending_authorization", platformFilter, 500)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not list pending channels: "+err.Error())
 		return
@@ -253,10 +253,10 @@ func (r *Router) handleAdminPendingChannels(w http.ResponseWriter, req *http.Req
 // handler and (via the same package in tests) by the offline CLI
 // later (scripts/import_channels_csv.go). The flow is:
 //
-//  1. Build a workspace-ID lookup from r.workspaceStore.ListByOwner
+//  1. Build a workspace-ID lookup from m.deps.WorkspaceStore.ListByOwner
 //     so the parser can resolve CSV `workspace` names to FK ids.
 //  2. channelimport.Parse the stream with that lookup.
-//  3. channelimport.ImportToDB the rows via r.adminStore.
+//  3. channelimport.ImportToDB the rows via m.deps.AdminStore.
 //  4. Return an AdminImportChannelsResponse with the breakdown.
 //
 // WorkspaceStore.ListByOwner returns only the admin's OWNED
@@ -266,10 +266,10 @@ func (r *Router) handleAdminPendingChannels(w http.ResponseWriter, req *http.Req
 // ListByMember. Today's contract is intentionally narrow so a
 // misconfigured import can't accidentally stamp operator-fleet
 // rows onto another tenant's workspace.
-func (r *Router) runImportFromCSV(req *http.Request, file io.Reader, ownerUserID int64) (AdminImportChannelsResponse, error) {
+func (m *AdminModule) runImportFromCSV(req *http.Request, file io.Reader, ownerUserID int64) (AdminImportChannelsResponse, error) {
 	res := AdminImportChannelsResponse{OwnerID: ownerUserID}
 
-	if r.workspaceStore == nil {
+	if m.deps.WorkspaceStore == nil {
 		return res, fmt.Errorf("workspace store not configured (admin imports require workspace resolution)")
 	}
 	// Build a name -> id lookup for workspaces owned by the admin
@@ -279,7 +279,7 @@ func (r *Router) runImportFromCSV(req *http.Request, file io.Reader, ownerUserID
 	if adminID == 0 {
 		return res, fmt.Errorf("admin identity missing from request context (adminAuthMiddleware must run first)")
 	}
-	owned, err := r.workspaceStore.ListByOwner(adminID)
+	owned, err := m.deps.WorkspaceStore.ListByOwner(adminID)
 	if err != nil {
 		return res, fmt.Errorf("list owned workspaces: %w", err)
 	}
@@ -304,7 +304,7 @@ func (r *Router) runImportFromCSV(req *http.Request, file io.Reader, ownerUserID
 		res.Errors = append(res.Errors, pe)
 	}
 
-	dbRes, err := r.adminStore.UpsertPendingChannel(req.Context(), ownerUserID, rows)
+	dbRes, err := m.deps.AdminStore.UpsertPendingChannel(req.Context(), ownerUserID, rows)
 	if err != nil {
 		return res, fmt.Errorf("upsert pending channels: %w", err)
 	}
@@ -326,18 +326,18 @@ func (r *Router) runImportFromCSV(req *http.Request, file io.Reader, ownerUserID
 // not platform_account) so this helper uses FindUserByEmail via
 // the userStore contract.
 //
-// Implementation note: we call r.userRepo.FindPlatformAccount
+// Implementation note: we call m.deps.UserStore.FindPlatformAccount
 // indirectly via a small wrapper that uses UserStore to look up
 // the user's email. Since UserStore is defined here as a narrow
 // interface, we add a single method to it: FindUserIDByEmail.
 // Production wiring in internal/bootstrap/app.go already provides
 // a *repository.UserRepository; the implementation satisfies the
 // extended interface (see handlers.go compile-time assertion).
-func (r *Router) resolveUserIDByOwnerEmail(req *http.Request, email string) (int64, error) {
-	if r.userRepo == nil {
+func (m *AdminModule) resolveUserIDByOwnerEmail(req *http.Request, email string) (int64, error) {
+	if m.deps.UserStore == nil {
 		return 0, fmt.Errorf("user repository not configured")
 	}
-	return r.userRepo.FindUserIDByEmail(req.Context(), email)
+	return m.deps.UserStore.FindUserIDByEmail(req.Context(), email)
 }
 
 // adminIdentityUserID extracts the user_id from the JWT identity
@@ -417,12 +417,12 @@ type AdminConnectLinkResponse struct {
 // 422 with an explicit reason so the SPA can prompt the operator
 // to clean up the row first (DELETE /api/v1/accounts/{id} +
 // re-import).
-func (r *Router) handleAdminChannelConnectLink(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminChannelConnectLink(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
-	if r.userRepo == nil {
+	if m.deps.UserStore == nil {
 		writeError(w, http.StatusNotImplemented, "user store not configured")
 		return
 	}
@@ -434,7 +434,7 @@ func (r *Router) handleAdminChannelConnectLink(w http.ResponseWriter, req *http.
 	}
 
 	// Look up the platform_account row the operator is linking.
-	account, err := r.userRepo.FindPlatformAccountByID(channelID)
+	account, err := m.deps.UserStore.FindPlatformAccountByID(channelID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "channel not found: "+err.Error())
 		return
@@ -488,7 +488,7 @@ func (r *Router) handleAdminChannelConnectLink(w http.ResponseWriter, req *http.
 	// Resolve the OAuth provider via capabilities. The router
 	// wires the same CapabilityRouter used by /api/v1/auth/{p}
 	// /login, so any provider supported there is supported here.
-	p, ok := r.capabilities.OAuth(account.Platform)
+	p, ok := m.deps.Capabilities.OAuth(account.Platform)
 	if !ok {
 		writeError(w, http.StatusUnprocessableEntity,
 			"no OAuth provider is configured for platform "+account.Platform)
@@ -496,7 +496,7 @@ func (r *Router) handleAdminChannelConnectLink(w http.ResponseWriter, req *http.
 	}
 
 	// Issue the JWT carrying the expected channel_id. 30-minute TTL.
-	jwtState, nonce, expiresAt, err := r.auth.IssueConnectLinkState(account.PlatformUserID)
+	jwtState, nonce, expiresAt, err := m.deps.AuthManager.IssueConnectLinkState(account.PlatformUserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not issue connect-link state: "+err.Error())
 		return
@@ -507,11 +507,13 @@ func (r *Router) handleAdminChannelConnectLink(w http.ResponseWriter, req *http.
 	// it here lets us reject replays even though the JWT itself is
 	// stateless. Use the JWT's own expiry so the DB record cannot
 	// drift from the JWT validity window.
-	if r.connectLinkNonceStore != nil {
-		if saveErr := r.connectLinkNonceStore.Create(nonce, account.PlatformUserID, expiresAt); saveErr != nil {
-			writeError(w, http.StatusInternalServerError, "could not persist connect-link nonce: "+saveErr.Error())
-			return
-		}
+	if m.deps.ConnectLinkNonceStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "connect-link nonce store not configured")
+		return
+	}
+	if saveErr := m.deps.ConnectLinkNonceStore.Create(nonce, account.PlatformUserID, expiresAt); saveErr != nil {
+		writeError(w, http.StatusInternalServerError, "could not persist connect-link nonce: "+saveErr.Error())
+		return
 	}
 
 	// Build the URL: prompt=select_account consent + login_hint
@@ -563,8 +565,8 @@ func (r *Router) handleAdminChannelConnectLink(w http.ResponseWriter, req *http.
 // retry of the same call yields a NEW snapshot row + the same JSON
 // counts (calls converge on idempotency at the counts layer; the
 // audit history diverges by taken_at).
-func (r *Router) handleAdminYouTubeFleetReadiness(w http.ResponseWriter, req *http.Request) {
-	if r.adminStore == nil {
+func (m *AdminModule) handleAdminYouTubeFleetReadiness(w http.ResponseWriter, req *http.Request) {
+	if m.deps.AdminStore == nil {
 		writeError(w, http.StatusNotImplemented, "admin store not configured")
 		return
 	}
@@ -579,7 +581,7 @@ func (r *Router) handleAdminYouTubeFleetReadiness(w http.ResponseWriter, req *ht
 		return
 	}
 
-	snap, err := r.adminStore.CreateFleetReadinessSnapshot(req.Context(), adminID)
+	snap, err := m.deps.AdminStore.CreateFleetReadinessSnapshot(req.Context(), adminID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError,
 			"could not take fleet readiness snapshot: "+err.Error())
