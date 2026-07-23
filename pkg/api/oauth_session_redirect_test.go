@@ -74,7 +74,7 @@ func newOAuthSessionRedirectRouter(t *testing.T, providers []string, frontendURL
 		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)),
 		WithCredentialVault(&mockCredentialVault{}),
 	}
-	return MustNewRouter(
+	return mustNewRouterWithDefaults(
 		capRouter,
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),

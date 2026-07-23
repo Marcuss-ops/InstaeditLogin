@@ -60,7 +60,7 @@ type csrfHarness struct {
 // returns the captured harness.
 func csrfHarnessNew(t *testing.T) *csrfHarness {
 	t.Helper()
-	r := MustNewRouter(
+	r := mustNewRouterWithDefaults(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),

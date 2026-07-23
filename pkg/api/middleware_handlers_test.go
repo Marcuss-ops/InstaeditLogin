@@ -12,7 +12,7 @@ import (
 // regression fix: /api/v1/metrics must reject requests when the auth
 // credentials are not configured, instead of serving metrics publicly.
 func TestHandleMetrics_FailClosed_RequiresAuthWhenEnvMissing(t *testing.T) {
-	r := MustNewRouter(nil, nil, nil, "", nil, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
@@ -29,7 +29,7 @@ func TestHandleMetrics_FailClosed_RequiresAuthWhenEnvMissing(t *testing.T) {
 // TestHandleMetrics_FailClosed_RequiresAuthWhenOnlyUserSet proves the
 // endpoint stays closed if only one of the two auth variables is set.
 func TestHandleMetrics_FailClosed_RequiresAuthWhenOnlyUserSet(t *testing.T) {
-	r := MustNewRouter(nil, nil, nil, "", nil, WithMetricsAuth("admin", ""), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithMetricsAuth("admin", ""), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
@@ -43,7 +43,7 @@ func TestHandleMetrics_FailClosed_RequiresAuthWhenOnlyUserSet(t *testing.T) {
 // TestHandleMetrics_FailClosed_RequiresAuthWhenOnlyPassSet proves the
 // endpoint stays closed if only the password variable is set.
 func TestHandleMetrics_FailClosed_RequiresAuthWhenOnlyPassSet(t *testing.T) {
-	r := MustNewRouter(nil, nil, nil, "", nil, WithMetricsAuth("", "secret"), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithMetricsAuth("", "secret"), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
@@ -57,7 +57,7 @@ func TestHandleMetrics_FailClosed_RequiresAuthWhenOnlyPassSet(t *testing.T) {
 // TestHandleMetrics_RespectsConfiguredBasicAuth proves metrics are
 // served when valid credentials are supplied.
 func TestHandleMetrics_RespectsConfiguredBasicAuth(t *testing.T) {
-	r := MustNewRouter(nil, nil, nil, "", nil, WithMetricsAuth("admin", "secret"), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithMetricsAuth("admin", "secret"), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
@@ -73,7 +73,7 @@ func TestHandleMetrics_RespectsConfiguredBasicAuth(t *testing.T) {
 // TestHandleMetrics_RejectsInvalidBasicAuth proves that supplying the
 // wrong password when credentials are configured returns 401.
 func TestHandleMetrics_RejectsInvalidBasicAuth(t *testing.T) {
-	r := MustNewRouter(nil, nil, nil, "", nil, WithMetricsAuth("admin", "secret"), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithMetricsAuth("admin", "secret"), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
@@ -177,7 +177,7 @@ func TestParseTrustedProxies_InvalidInput_ReturnsError(t *testing.T) {
 // over a real TLS connection is reported as TLS even if forwarded
 // headers or the absence of trusted proxies would suggest otherwise.
 func TestIsTLSRequest_DirectTLS_AlwaysTrue(t *testing.T) {
-	r := MustNewRouter(nil, nil, nil, "", nil, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
@@ -191,7 +191,7 @@ func TestIsTLSRequest_DirectTLS_AlwaysTrue(t *testing.T) {
 // TestIsTLSRequest_UntrustedProxy_IgnoresForwardedProto proves a
 // direct client cannot force HSTS by sending X-Forwarded-Proto.
 func TestIsTLSRequest_UntrustedProxy_IgnoresForwardedProto(t *testing.T) {
-	r := MustNewRouter(nil, nil, nil, "", nil, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
@@ -210,7 +210,7 @@ func TestIsTLSRequest_TrustedProxy_HonorsForwardedProto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse trusted proxies: %v", err)
 	}
-	r := MustNewRouter(nil, nil, nil, "", nil, WithTrustedProxies(trusted), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithTrustedProxies(trusted), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "10.0.0.1:12345"
@@ -228,7 +228,7 @@ func TestIsTLSRequest_TrustedProxy_HonorsForwardedSsl(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse trusted proxies: %v", err)
 	}
-	r := MustNewRouter(nil, nil, nil, "", nil, WithTrustedProxies(trusted), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithTrustedProxies(trusted), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.168.1.1:12345"
@@ -247,7 +247,7 @@ func TestIsTLSRequest_TrustedProxy_ForwardedHttp_ReturnsFalse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse trusted proxies: %v", err)
 	}
-	r := MustNewRouter(nil, nil, nil, "", nil, WithTrustedProxies(trusted), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithTrustedProxies(trusted), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "10.0.0.1:12345"
@@ -266,7 +266,7 @@ func TestIsTLSRequest_TrustedProxy_MultipleValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse trusted proxies: %v", err)
 	}
-	r := MustNewRouter(nil, nil, nil, "", nil, WithTrustedProxies(trusted), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithTrustedProxies(trusted), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "10.0.0.1:12345"
@@ -280,7 +280,7 @@ func TestIsTLSRequest_TrustedProxy_MultipleValues(t *testing.T) {
 // TestIsTLSRequest_UntrustedProxy_ForwardedSslIgnored proves a direct
 // client cannot force HSTS via X-Forwarded-Ssl either.
 func TestIsTLSRequest_UntrustedProxy_ForwardedSslIgnored(t *testing.T) {
-	r := MustNewRouter(nil, nil, nil, "", nil, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
@@ -299,7 +299,7 @@ func TestSecurityHeadersMiddleware_HSTS_TrustedProxyHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse trusted proxies: %v", err)
 	}
-	r := MustNewRouter(nil, nil, nil, "", nil, WithTrustedProxies(trusted), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithTrustedProxies(trusted), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 
 	handler := r.securityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -323,7 +323,7 @@ func TestSecurityHeadersMiddleware_HSTS_TrustedProxyHTTPS(t *testing.T) {
 // middleware does NOT emit Strict-Transport-Security when an untrusted
 // peer tries to spoof HTTPS via X-Forwarded-Proto.
 func TestSecurityHeadersMiddleware_NoHSTS_UntrustedProxyHTTPS(t *testing.T) {
-	r := MustNewRouter(nil, nil, nil, "", nil, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(nil, nil, nil, "", nil, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	defer r.rateLimiter.Shutdown()
 
 	handler := r.securityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

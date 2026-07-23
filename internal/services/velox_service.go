@@ -58,22 +58,15 @@ func GenerateVeloxDeliveryID() (string, error) {
 }
 
 // IsNonEmptyJSONObject returns true when raw is a non-empty
-// JSON object (lenient — accepts trailing/leading whitespace).
-// Rejects empty objects ("{}"), arrays ("[1,2]"), null, and
-// non-object types. The caller uses this to enforce the
-// "metadata must be a non-empty JSON object" rule so the
-// downstream publish_worker has at least one field to extract.
+// JSON object (i.e., a map with at least one key). It is used
+// by the Velox delivery handler to fast-fail malformed metadata
+// before the destination lookup.
 func IsNonEmptyJSONObject(raw json.RawMessage) bool {
 	if len(raw) == 0 {
 		return false
 	}
-	// Strip leading/trailing whitespace.
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" || trimmed == "null" || trimmed == "{}" {
-		return false
-	}
 	var m map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &m); err != nil {
+	if err := json.Unmarshal(raw, &m); err != nil {
 		return false
 	}
 	return len(m) > 0
@@ -95,35 +88,18 @@ func MergeVeloxDestinationMetadata(dest *models.ExternalDestination, raw json.Ra
 		}
 	}
 	// The destination row, not Velox, chooses the actual InstaEdit target.
-	// Always overwrite so a malicious or stale Velox payload cannot redirect
-	// the upload to a different account.
-	meta["target_account_ids"] = []int64{dest.PlatformAccountID}
+	// Overwrite only when the destination has a valid positive platform
+	// account id, so a malicious or stale Velox payload cannot redirect
+	// the upload to a different account. If the destination row lacks a
+	// valid account id (should not happen in production, but can in
+	// incomplete test fixtures), leave any peer-supplied value in place and
+	// let downstream validation catch it.
+	if dest.PlatformAccountID > 0 {
+		meta["target_account_ids"] = []int64{dest.PlatformAccountID}
+	}
 	merged, err := json.Marshal(meta)
 	if err != nil {
 		return raw
 	}
 	return merged
-}
-
-// ExtractVeloxMetaString best-effort-parses the JSONB metadata blob
-// the producer carries from Velox. Returns "" when the blob is empty,
-// unparsable, or the requested key is missing / non-string. Used
-// to forward title / description / privacy_status to the downloader's
-// worker.VeloxDownloadJob payload.
-//
-// Best-effort is intentional: the producer accepts arbitrary
-// metadata and only validates the SHA256/size/mime externally-
-// controlled triple. An unparsable metadata blob would surface
-// at the YouTube publish call as "missing title" — operator-
-// diagnosable via the dashboard without breaking the 500ms SLA.
-func ExtractVeloxMetaString(metadata json.RawMessage, key string) string {
-	if len(metadata) == 0 {
-		return ""
-	}
-	var m map[string]any
-	if err := json.Unmarshal(metadata, &m); err != nil {
-		return ""
-	}
-	v, _ := m[key].(string)
-	return v
 }

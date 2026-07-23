@@ -33,17 +33,13 @@ type ExternalDestinationStore interface {
 	Create(ctx context.Context, d *models.ExternalDestination) error
 	ListByWorkspace(ctx context.Context, workspaceID int64, enabledOnly bool) ([]models.ExternalDestination, error)
 	Delete(ctx context.Context, id string) error
-	UpdateEnabled(ctx context.Context, id string, enabled bool) error
-	UpdateDefaultMetadata(ctx context.Context, id string, raw json.RawMessage) error
 	// UpdateEnabledAndDefaults applies a partial update to enabled AND/OR
 	// default_metadata in a SINGLE atomic UPDATE statement (COALESCE
 	// preserves columns the caller didn't supply; nil/zero bytes bind
-	// as SQL NULL). Closes the partial-write window that the two-call
-	// (UpdateEnabled + UpdateDefaultMetadata) sequence left open: a
-	// concurrent DELETE between the two calls could leave the row
-	// half-updated. The handler now uses this combined verb exclusively;
-	// the per-field verbs above are retained for per-field test rigging
-	// where a test needs to drive exactly one column.
+	// as SQL NULL). Closes the partial-write window that a previous
+	// two-call sequence left open: a concurrent DELETE between the
+	// calls could leave the row half-updated. This is the only update
+	// verb exposed by the store.
 	UpdateEnabledAndDefaults(ctx context.Context, id string, enabled *bool, defaults json.RawMessage) error
 }
 

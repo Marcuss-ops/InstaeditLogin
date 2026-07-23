@@ -315,7 +315,7 @@ func TestWorkspaceIsolation_JWTResign_Rejected(t *testing.T) {
 // test never hits /api/v1/health or any route that touches those
 // dependencies, so the nils are safe.
 func newIsolationRouter(authMgr *auth.Manager, workspaceRepo *repository.WorkspaceRepository) http.Handler {
-	router := MustNewRouter(
+	router := mustNewRouterWithDefaults(
 		nil, // capRouter — unused by handleGetWorkspace
 		nil, // userRepo — unused by handleGetWorkspace
 		authMgr,

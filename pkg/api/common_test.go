@@ -524,6 +524,33 @@ func withBearerJWT(t *testing.T, req *http.Request, userID int64) {
 // CRUD) want. Tests that exercise the publish path or want to force a
 // save/renew error override via WithCredentialVault(&mockCredentialVault{...})
 // in opts.
+// mustNewRouterWithDefaults wraps MustNewRouter and supplies the
+// required dependencies that production wiring always injects.
+// Use it in tests that previously called MustNewRouter directly.
+func mustNewRouterWithDefaults(
+	capabilities *services.CapabilityRouter,
+	userRepo UserStore,
+	authManager *auth.Manager,
+	frontendURL string,
+	allowedOrigins []string,
+	opts ...RouterOption,
+) *Router {
+	return MustNewRouter(
+		capabilities,
+		userRepo,
+		authManager,
+		frontendURL,
+		allowedOrigins,
+		append([]RouterOption{
+			WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)),
+			WithCredentialVault(&mockCredentialVault{}),
+			WithIdempotencyStore(newMockIdempotencyStore()),
+			WithConnectLinkNonceStore(newFakeConnectLinkNonceStore()),
+			WithChannelAuthorizer(&fakeChannelAuthorizer{}),
+		}, opts...)...,
+	)
+}
+
 func newTestRouter(
 	platformSvc services.NameProvider,
 	store *mockUserStore,
@@ -536,6 +563,8 @@ func newTestRouter(
 	capRouter.Register("tiktok", platformSvc)
 	capRouter.Register("twitter", platformSvc)
 	otc := NewInMemoryOneTimeCodeStore(60 * time.Second)
+	idemStore := newMockIdempotencyStore()
+	connectLinkNonceStore := newFakeConnectLinkNonceStore()
 	// Note: the sweeper goroutine leaks until the test binary exits —
 	// acceptable for unit tests; the 1s ticker has no observable effect
 	// on test behaviour and the OS reclaims everything on process exit.
@@ -549,6 +578,8 @@ func newTestRouter(
 		append([]RouterOption{
 			WithOneTimeCodeStore(otc),
 			WithCredentialVault(defaultVault),
+			WithIdempotencyStore(idemStore),
+			WithConnectLinkNonceStore(connectLinkNonceStore),
 			// Task 1/10 — atomic OAuth finalize. newTestRouter
 			// wires a default fakeChannelAuthorizer that
 			// independently records every token write in
@@ -644,13 +675,12 @@ func setOAuthExpectedChannelCookieForTest(req *http.Request, provider, state, ch
 // ---------------------------------------------------------------------------
 
 func newCORSTestRouter(allowedOrigins []string) *Router {
-	return MustNewRouter(
+	return mustNewRouterWithDefaults(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		allowedOrigins,
-		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)),
 	)
 }
 

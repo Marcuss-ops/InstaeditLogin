@@ -6,69 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 
 	"github.com/lib/pq"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
-
-// uniqueViolationDestTripleDetailRegex matches the pq.Error Detail
-// content for the UNIQUE(source_system, workspace_id,
-// platform_account_id) constraint on external_destinations. Anchored
-// on the column-list LHS (not the inner tuple) so the regex is
-// agnostic to row values and matches any Postgres version detail
-// that follows the documented
-//
-//	Key (source_system, workspace_id, platform_account_id)=(...) already exists.
-//
-// shape (Postgres 9.6+ user-visible SQLSTATE 23505 message format
-// — confirmed stable in the Postgres docs as the "Detailed
-// Errors" convention which doesn't change across pg_dump/restore
-// or major version upgrades). The dispatch was previously keyed on
-// pqErr.Constraint name (auto-generated
-// "external_destinations_source_system_workspace_id_platform_account_id_key");
-// switching to Detail eliminates the auto-name drift risk (a
-// Postgres upgrade, schema rename, or pg_restore into a different
-// search_path could rename the auto-NAME without changing the
-// semantics).
-var uniqueViolationDestTripleDetailRegex = regexp.MustCompile(
-	`Key \(source_system, workspace_id, platform_account_id\)=`)
-
-// fkReferencingExternalDestinationsDetailRegex matches the
-// pq.Error Detail content for ANY foreign-key violation against
-// the external_destinations row being acted on (the FK could be
-// referenced from external_deliveries today, from a future
-// external_audit_log table, or from any other present-or-future
-// table holding REFERENCES external_destinations(id)). The
-// Postgres emits the REFERENCING table identifier in EITHER of
-// two Detail shapes for an FK violation on a
-// DELETE FROM external_destinations WHERE id=X, depending on
-// whether the FK identifier was created with double-quotes
-// (mixed-case preservation):
-//
-//	Key (id)=(extdst_01JABC) is still referenced from table "<REF>".   // QUOTED — FK identifier was created with "MixedCase" (preserves case when emitting Detail)
-//	Key (id)=(extdst_01JABC) is still referenced from table <REF>.     // UNQUOTED — FK identifier is bare lowercase / created without quotes (the canonical case for our schema)
-//
-// The capture group accepts BOTH the QUOTED and the UNQUOTED
-// Detail shapes and ALWAYS yields a BARE REFERENCING table
-// name (no surrounding quotes inside group 1) so that:
-//   - QUOTED FKs (DBA created the identifier with double-quotes)
-//     match: `from table "<REF>".`
-//   - UNQUOTED FKs (the canonical case for our lowercase
-//     identifiers-not-created-with-quotes schema)
-//     match: `from table <REF>.`
-//
-// The wrapping fmt.Errorf applies %q so operators see a tidy
-// "external_deliveries" diagnostic in the slog log regardless
-// of input Detail shape. The dispatch sentinel
-// (ErrExternalDestinationHasDependents) is GENERIC across all
-// such FKs so the API handler doesn't need per-table dispatch
-// logic — it always maps to 409 Conflict regardless of which
-// table is the blocker (or which Postgres version / pg_restore
-// variant emitted the Detail).
-var fkReferencingExternalDestinationsDetailRegex = regexp.MustCompile(
-	`Key \(id\)=.+? is still referenced from table "?([^".\s]+)"?`)
 
 // ExternalDestinationRepository handles persistence for the
 // external_destinations table (migration 054_external_destinations.sql).
@@ -146,18 +88,12 @@ func (r *ExternalDestinationRepository) Create(ctx context.Context, d *models.Ex
 		[]byte(d.DefaultMetadata),
 	).Scan(&d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
-		// SQLSTATE 23505 (unique_violation) + Detail content
-		// matches the UNIQUE(source_system, workspace_id,
-		// platform_account_id) triple column-list prefix. Matches
-		// any Postgres 13+ Detail-formatted error for this
-		// constraint (post-extension the dispatch was keyed on
-		// pqErr.Constraint name; switching to Detail-content
-		// match avoids auto-name drift across pg_dump/pg_restore
-		// or future constraint-renaming migrations).
+		// SQLSTATE 23505 (unique_violation) on the
+		// external_destinations(source_system, workspace_id,
+		// platform_account_id) triple.
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" &&
-			pqErr.Detail != "" &&
-			uniqueViolationDestTripleDetailRegex.MatchString(pqErr.Detail) {
+			pqErr.Constraint == "external_destinations_source_system_workspace_id_platform_account_id_key" {
 			return fmt.Errorf("%w: source_system=%s workspace_id=%d platform_account_id=%d",
 				ErrExternalDestinationAlreadyExists, d.SourceSystem, d.WorkspaceID, d.PlatformAccountID)
 		}
@@ -300,82 +236,6 @@ func (r *ExternalDestinationRepository) ListBySourceSystem(ctx context.Context, 
 	return out, nil
 }
 
-// UpdateEnabled sets the operator toggle on an existing destination
-// (true → false means "stop accepting Velox uploads for this channel";
-// false → true re-arms). Returns
-// ErrExternalDestinationNotFound wrapped with id context when zero
-// rows match — handler maps to 404.
-//
-// Limited to the enabled toggle to keep the surface tight; richer
-// updates (default_metadata) are deliberately NOT exposed here. The
-// expectation is that the per-tenant defaults are set ONCE at
-// creation; future-fixing them by editing is uncommon. A future
-// Taglio can add a separate UpdateMetadata with audit-trail support.
-func (r *ExternalDestinationRepository) UpdateEnabled(ctx context.Context, id string, enabled bool) error {
-	if id == "" {
-		return errors.New("external destination UpdateEnabled: empty id")
-	}
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE external_destinations
-		 SET enabled    = $2,
-		     updated_at = NOW()
-		 WHERE id = $1`,
-		id, enabled,
-	)
-	if err != nil {
-		return fmt.Errorf("external destination UpdateEnabled: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("external destination UpdateEnabled rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: id=%s", ErrExternalDestinationNotFound, id)
-	}
-	return nil
-}
-
-// UpdateDefaultMetadata replaces the default_metadata JSON blob for an
-// existing destination. Mirrors UpdateEnabled's semantics: returns
-// ErrExternalDestinationNotFound wrapped with id context when zero rows
-// match. The JSON-validity check mirrors Create's defense so a corrupted
-// payload surfaces as a typed validation error instead of breaking the
-// UPDATE with a Postgres jsonb_typeof mismatch.
-//
-// Used by the user-facing PATCH /api/v1/integrations/velox/destinations/{id}
-// endpoint when the frontend submits a `defaults` body field. Empty
-// input is normalised to "{}" so a frontend-supplied empty body always
-// produces a parseable JSON column.
-func (r *ExternalDestinationRepository) UpdateDefaultMetadata(ctx context.Context, id string, metadata json.RawMessage) error {
-	if id == "" {
-		return errors.New("external destination UpdateDefaultMetadata: empty id")
-	}
-	if len(metadata) == 0 {
-		metadata = json.RawMessage("{}")
-	}
-	if !json.Valid(metadata) {
-		return fmt.Errorf("external destination UpdateDefaultMetadata: default_metadata is not valid JSON: %s", string(metadata))
-	}
-	res, err := r.db.ExecContext(ctx,
-		`UPDATE external_destinations
-		 SET default_metadata = $2,
-		     updated_at = NOW()
-		 WHERE id = $1`,
-		id, []byte(metadata),
-	)
-	if err != nil {
-		return fmt.Errorf("external destination UpdateDefaultMetadata: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("external destination UpdateDefaultMetadata rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: id=%s", ErrExternalDestinationNotFound, id)
-	}
-	return nil
-}
-
 // UpdateEnabledAndDefaults applies a partial update to enabled
 // and/or default_metadata in a SINGLE atomic postgres UPDATE. This
 // closes the partial-write window that existed when the handler
@@ -463,32 +323,18 @@ func (r *ExternalDestinationRepository) Delete(ctx context.Context, id string) e
 		id,
 	)
 	if err != nil {
-		// SQLSTATE 23503 (foreign_key_violation) AND Detail content
-		// matches the canonical
-		//   Key (id)=... is still referenced from table "<REF>"
-		// shape. The regex doesn't hardcode the REFERENCING table
-		// name, so ANY FK that targets external_destinations.id
-		// (external_deliveries today; an external_audit_log table
-		// tomorrow) surfaces as the same typed sentinel. The
-		// capture group extracts the table name verbatim so the
-		// wrapped error gives operators a "blocked by table X"
-		// diagnostic without forcing the handler to maintain a
-		// per-table dispatch map.
-		//
-		// Note: a future FK direction (external_destinations
-		// referencing SOME other table — not the current schema,
-		// but forward-compat thought) would NOT match this regex
-		// because the Detail would surface the REFERENCED table,
-		// not external_destinations. Such a config is impossible
-		// today (external_destinations has no outgoing FKs per
-		// migration 054), so the regex is currently safe.
+		// SQLSTATE 23503 (foreign_key_violation) on delete means
+		// another table still references this external_destinations
+		// row. We classify ANY 23503 as ErrExternalDestinationHasDependents
+		// without parsing the localized Detail text. pqErr.Table carries
+		// the referencing table name when available.
 		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && pqErr.Code == "23503" && pqErr.Detail != "" {
-			if matches := fkReferencingExternalDestinationsDetailRegex.FindStringSubmatch(pqErr.Detail); len(matches) > 1 {
-				referencingTable := matches[1]
+		if errors.As(err, &pqErr) && pqErr.Code == "23503" {
+			if pqErr.Table != "" {
 				return fmt.Errorf("%w: blocked by referencing table %q (id=%s)",
-					ErrExternalDestinationHasDependents, referencingTable, id)
+					ErrExternalDestinationHasDependents, pqErr.Table, id)
 			}
+			return fmt.Errorf("%w: id=%s", ErrExternalDestinationHasDependents, id)
 		}
 		return fmt.Errorf("external destination Delete: %w", err)
 	}

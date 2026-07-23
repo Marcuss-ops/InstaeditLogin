@@ -1182,7 +1182,13 @@ func TestHandleValidateAccount_UsesProviderTokenPolicy(t *testing.T) {
 		preferredTokenTypes: []string{models.TokenTypeBearer},
 	})
 
-	r := MustNewRouter(capRouter, store, auth.NewManager(testJWTSecret, 24), "", nil, WithCredentialVault(vault), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
+	r := mustNewRouterWithDefaults(capRouter, store, auth.NewManager(testJWTSecret, 24), "", nil,
+		WithCredentialVault(vault),
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)),
+		WithIdempotencyStore(newMockIdempotencyStore()),
+		WithConnectLinkNonceStore(newFakeConnectLinkNonceStore()),
+		WithChannelAuthorizer(&fakeChannelAuthorizer{}),
+	)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/21/validate", nil)
 	w := httptest.NewRecorder()

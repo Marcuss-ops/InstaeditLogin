@@ -20,7 +20,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -291,6 +290,13 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 		}
 		return
 	}
+	meta, err := models.ParseVeloxDeliveryMetadata(delivery.Metadata)
+	if err != nil {
+		d.logger.Warn("velox downloader: failed to parse delivery metadata; skipping",
+			"external_delivery_id", j.ExternalDeliveryID, "error", err)
+		return
+	}
+
 	uploadJob := &models.UploadJob{
 		UserID:              j.UserID,
 		WorkspaceID:         j.WorkspaceID,
@@ -301,9 +307,9 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 		Caption:             j.Caption,
 		DefaultPrivacyLevel: j.DefaultPrivacyLevel,
 		PublishAt:           j.PublishAt,
-		Targets:             extractMetadataInt64s(delivery.Metadata, "target_account_ids"),
-		DriveAccountID:      extractMetadataInt64Ptr(delivery.Metadata, "drive_account_id"),
-		FolderID:            extractMetadataStringPtr(delivery.Metadata, "folder_id"),
+		Targets:             meta.TargetAccountIDs,
+		DriveAccountID:      meta.DriveAccountID,
+		FolderID:            meta.FolderID,
 	}
 
 	// (2-4) Atomically create the upload_job, stamp the FK on
@@ -332,43 +338,4 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, j VeloxDownloa
 		"external_delivery_id", j.ExternalDeliveryID,
 		"upload_job_id", newJobID,
 		"size_bytes", j.SizeBytes)
-}
-
-func extractMetadataMap(raw json.RawMessage) map[string]any {
-	var m map[string]any
-	if json.Unmarshal(raw, &m) != nil {
-		return nil
-	}
-	return m
-}
-
-func extractMetadataInt64s(raw json.RawMessage, key string) []int64 {
-	v, ok := extractMetadataMap(raw)[key].([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]int64, 0, len(v))
-	for _, item := range v {
-		if n, ok := item.(float64); ok && n > 0 {
-			out = append(out, int64(n))
-		}
-	}
-	return out
-}
-
-func extractMetadataInt64Ptr(raw json.RawMessage, key string) *int64 {
-	v, ok := extractMetadataMap(raw)[key].(float64)
-	if !ok || v <= 0 {
-		return nil
-	}
-	n := int64(v)
-	return &n
-}
-
-func extractMetadataStringPtr(raw json.RawMessage, key string) *string {
-	v, ok := extractMetadataMap(raw)[key].(string)
-	if !ok || v == "" {
-		return nil
-	}
-	return &v
 }

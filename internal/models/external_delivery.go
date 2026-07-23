@@ -2,7 +2,9 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -398,4 +400,63 @@ type ExternalDelivery struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+// VeloxDeliveryMetadata is the single typed representation of the
+// JSONB publish envelope stored in external_deliveries.metadata.
+// It is parsed once at the HTTP boundary (after destination defaults
+// are merged) and reused by the worker instead of repeatedly decoding
+// the raw JSON blob.
+type VeloxDeliveryMetadata struct {
+	Title            string  `json:"title"`
+	Description      string  `json:"description"`
+	PrivacyStatus    string  `json:"privacy_status"`
+	TargetAccountIDs []int64 `json:"target_account_ids"`
+	DriveAccountID   *int64  `json:"drive_account_id"`
+	FolderID         *string `json:"folder_id"`
+}
+
+// ParseVeloxDeliveryMetadata parses a raw JSONB metadata blob into a
+// VeloxDeliveryMetadata. It returns an error when the blob is not a
+// JSON object or cannot be decoded.
+func ParseVeloxDeliveryMetadata(raw json.RawMessage) (*VeloxDeliveryMetadata, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("metadata is empty")
+	}
+	var m VeloxDeliveryMetadata
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("metadata is not valid JSON: %w", err)
+	}
+	return &m, nil
+}
+
+// Validate checks the metadata after destination defaults have been
+// merged. It ensures the payload carries the minimum fields needed by
+// the publish pipeline and that optional identifiers are well-formed.
+func (m *VeloxDeliveryMetadata) Validate() error {
+	if m == nil {
+		return fmt.Errorf("metadata is nil")
+	}
+	if strings.TrimSpace(m.Title) == "" && strings.TrimSpace(m.Description) == "" {
+		return fmt.Errorf("metadata must contain a non-empty title or description")
+	}
+	if m.PrivacyStatus != "" {
+		switch m.PrivacyStatus {
+		case "private", "public", "unlisted":
+		default:
+			return fmt.Errorf("metadata.privacy_status must be private, public or unlisted, got %q", m.PrivacyStatus)
+		}
+	}
+	for _, id := range m.TargetAccountIDs {
+		if id <= 0 {
+			return fmt.Errorf("metadata.target_account_ids must contain positive IDs, got %d", id)
+		}
+	}
+	if m.DriveAccountID != nil && *m.DriveAccountID <= 0 {
+		return fmt.Errorf("metadata.drive_account_id must be positive when set")
+	}
+	if m.FolderID != nil && strings.TrimSpace(*m.FolderID) == "" {
+		return fmt.Errorf("metadata.folder_id must be non-empty when set")
+	}
+	return nil
 }

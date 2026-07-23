@@ -26,7 +26,7 @@ import (
 func newWorkspaceTestRouter(
 	workspaceStore *mockWorkspaceStore,
 ) *Router {
-	return MustNewRouter(
+	return mustNewRouterWithDefaults(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),

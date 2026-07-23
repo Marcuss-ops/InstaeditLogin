@@ -230,7 +230,10 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 		return
 	}
 
-	// Step 8 — metadata non-empty JSON object.
+	// Step 8 — metadata must be a non-empty JSON object. This
+	// fast-fail happens BEFORE the destination lookup so callers
+	// always see 422 for malformed metadata, even if the
+	// destination id is unknown.
 	if !services.IsNonEmptyJSONObject(veloxReq.Metadata) {
 		writeError(w, http.StatusUnprocessableEntity,
 			"validation: metadata must be a non-empty JSON object")
@@ -274,6 +277,20 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 	// Merge them before persistence so the Velox peer remains opaque while
 	// InstaEdit resolves the Drive account and folder locally.
 	veloxReq.Metadata = services.MergeVeloxDestinationMetadata(dest, veloxReq.Metadata)
+
+	// Step 8 — parse and validate the merged metadata once at the HTTP
+	// boundary. All downstream consumers use the typed result.
+	meta, err := models.ParseVeloxDeliveryMetadata(veloxReq.Metadata)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity,
+			"validation: "+err.Error())
+		return
+	}
+	if err := meta.Validate(); err != nil {
+		writeError(w, http.StatusUnprocessableEntity,
+			"validation: "+err.Error())
+		return
+	}
 
 	// Step 9b — workspace lookup. Produces the WorkspaceID +
 	// OwnerUserID the producer-side carryover binds onto the
@@ -417,12 +434,15 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 			ExternalDeliveryID:  inserted.ID,
 			UserID:              ws.OwnerID,
 			WorkspaceID:         ws.ID,
-			Title:               services.ExtractVeloxMetaString(veloxReq.Metadata, "title"),
-			Caption:             services.ExtractVeloxMetaString(veloxReq.Metadata, "description"),
-			DefaultPrivacyLevel: services.ExtractVeloxMetaString(veloxReq.Metadata, "privacy_status"),
+			Title:               meta.Title,
+			Caption:             meta.Description,
+			DefaultPrivacyLevel: meta.PrivacyStatus,
 			ArtifactSHA256:      veloxReq.Artifact.SHA256,
 			SizeBytes:           veloxReq.Artifact.SizeBytes,
 			MimeType:            veloxReq.Artifact.MimeType,
+			Targets:             meta.TargetAccountIDs,
+			DriveAccountID:      meta.DriveAccountID,
+			FolderID:            meta.FolderID,
 			// SourceID is bound in the consumer (NOT here) because the
 			// consumer must read the CANONICAL row from external_delivery
 			// (step 1 GetByID). The channel-side downloadURL is best-
