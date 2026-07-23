@@ -24,12 +24,12 @@ export function Proof() {
         <div className="max-w-3xl mb-12 text-center mx-auto animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">Proof</div>
           <h2 className="text-display-2 text-white">
-            Real channels.{" "}
-            <span className="text-gradient">Real revenue.</span>
+            See the channels{" "}
+            <span className="text-gradient">that are earning.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch] mx-auto">
-            We build English-language YouTube channels engineered to hit the Partner
-            Program and start earning fast.
+            These are real channels built and automated by our system. Watch the
+            content our students' channels are publishing — and the revenue they generate.
           </p>
         </div>
 

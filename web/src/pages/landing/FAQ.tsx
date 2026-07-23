@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 
 /* ----------------------------------------------------------------------------
- * FAQ
+ * FAQ — gain-focused objections handling
  * -------------------------------------------------------------------------- */
 
 export function FAQ() {
@@ -10,24 +10,28 @@ export function FAQ() {
 
   const faqs = [
     {
-      q: "Do I need experience with YouTube or English content?",
-      a: "Not at all. We guide you through niche selection, content strategy, and the English-language format. Our automation handles editing, metadata, and publishing so you can focus on growing revenue.",
+      q: "Do I need any experience or technical skills?",
+      a: "Absolutely not. The entire system is built for complete beginners. You don't need to edit, film, or understand YouTube's backend — the AI and your mentor handle everything. You just follow the steps.",
     },
     {
-      q: "How do you monetize a channel in under 3 weeks?",
-      a: "We combine aged channels, optimized content strategy, SEO metadata, and automated publishing cadence. Aged channels bypass the initial trust filter and our workflows hit the YouTube Partner Program thresholds faster.",
+      q: "How can I start earning money in just 14 days?",
+      a: "We use aged YouTube channels that already bypass the algorithm's initial trust filter. Combined with optimized content strategy, SEO, and automated publishing, your channel hits the Partner Program thresholds much faster than starting from scratch.",
     },
     {
       q: "What is an aged YouTube channel and why does it matter?",
-      a: "An aged channel is an established account created months or years ago. YouTube's algorithm trusts older channels more, so content gets indexed faster, avoids anti-spam filters, and reaches monetization milestones sooner.",
+      a: "An aged channel is an established account created months or years ago. YouTube's algorithm trusts older channels more, so content gets indexed faster, avoids anti-spam filters, and reaches monetization milestones sooner. It's the shortcut most creators don't know exists.",
     },
     {
-      q: "What is the difference between Mentorship and Done-For-You?",
-      a: "Mentorship teaches you how to build and monetize a channel yourself with 1-on-1 guidance. Done-For-You means we build, manage, and grow the channel while you own the asset and the revenue.",
+      q: "What's the difference between Mentoring and Done-For-You?",
+      a: "Mentoring teaches you step-by-step how to build and monetize a channel with 1-on-1 guidance — you learn the system. Done-For-You means we build, manage, and grow the entire channel while you own the asset and collect all revenue. Zero effort on your end.",
     },
     {
       q: "How much time do I need to commit each week?",
-      a: "With automation, most creators spend 3 to 5 hours a week on high-impact tasks like niche review and content approval. The rest — editing, uploads, publishing, optimization — is handled by our system.",
+      a: "With automation, most students spend 3–5 hours per week on high-impact tasks like niche review and content approval. Everything else — editing, uploads, publishing, optimization — is handled by our AI and team. Some Done-For-You students spend zero hours.",
+    },
+    {
+      q: "How much can I realistically earn per month?",
+      a: "Our students average $2,150/month per channel. Single automated channels typically earn $500–$1,500/mo, multi-channel setups $2,000–$5,000/mo, and full portfolio networks can exceed $10,000/mo. Results depend on niche, volume, and which program you choose.",
     },
   ];
 

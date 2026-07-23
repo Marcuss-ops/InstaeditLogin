@@ -1,7 +1,9 @@
 import { Seo } from "../components/seo/Seo";
 import { Nav } from "../components/landing/Nav";
+import { ProblemSolution } from "../components/landing/ProblemSolution";
 import { Hero } from "./landing/Hero";
 import { Features } from "./landing/Features";
+import { EarningsEstimates } from "./landing/EarningsEstimates";
 import { ResultsSection } from "./landing/ResultsSection";
 import { CTASection } from "./landing/CTASection";
 import { Proof } from "./landing/Proof";
@@ -13,13 +15,15 @@ export function Landing() {
   return (
     <>
       <Seo
-        title="InstaEdit — YouTube Income in Under 3 Weeks"
-        description="Build an profitable English-language YouTube channel from scratch and start earning online in less than 3 weeks. Done-with-you automation and mentoring."
+        title="InstaEdit — Your First $2,000/Mo From YouTube, On Autopilot"
+        description="Earn $2,000+/mo from YouTube on autopilot — zero experience, zero camera, zero editing. AI-powered channel automation and 1-on-1 mentoring."
         canonical="https://app.instaedit.org/"
       />
       <Nav />
       <Hero />
+      <ProblemSolution />
       <Features />
+      <EarningsEstimates />
       <ResultsSection />
       <CTASection />
       <Proof />

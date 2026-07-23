@@ -1,7 +1,7 @@
 import { CheckCircle2 } from "lucide-react";
 
 /* ----------------------------------------------------------------------------
- * Problem & Solution
+ * Problem & Solution — pain vs. easy gain
  * -------------------------------------------------------------------------- */
 
 export function ProblemSolution() {
@@ -16,21 +16,20 @@ export function ProblemSolution() {
           <div className="animate-fade-up">
             <div className="text-eyebrow text-red-300/90 mb-3">The problem</div>
             <h2 className="text-display-2 text-white mb-6">
-              You're leaving money{" "}
-              <span className="text-gradient-animated">on the table.</span>
+              You're losing money{" "}
+              <span className="text-gradient-animated">every single day.</span>
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-6">
-              You watch creators monetize their channels and earn online, but you're
-              stuck spending hours editing, re-formatting, and uploading to every
-              platform manually. Meanwhile, the algorithm rewards those who post
-              consistently — and you can't keep up.
+              You want to earn online but editing steals 15 hours a week. You're
+              scared to show your face or you don't know where to start. You've been
+              creating for months — 50 views and zero dollars.
             </p>
             <div className="space-y-4">
               {[
-                "You know YouTube can make money but don't know where to start",
-                "You spend 10+ hours a week on editing and uploading instead of creating",
-                "You post once a week while successful channels post daily",
-                "You see others earning from their content but can't figure out the system",
+                "Editing eats 15+ hours per week and you see no return",
+                "You're afraid to show your face or don't know the tech side",
+                "You've posted for months — 50 views and $0 earned",
+                "The algorithm rewards daily posting but you can't keep up",
               ].map((item) => (
                 <div key={item} className="flex items-start gap-3">
                   <span className="w-5 h-5 rounded-full bg-red-500/20 flex items-center justify-center shrink-0 mt-0.5">
@@ -42,22 +41,22 @@ export function ProblemSolution() {
             </div>
           </div>
           <div className="animate-fade-up animation-delay-200">
-            <div className="text-eyebrow text-emerald-300/90 mb-3">Our solution</div>
+            <div className="text-eyebrow text-emerald-300/90 mb-3">The InstaEdit shortcut</div>
             <h2 className="text-display-2 text-white mb-6">
-              Turn content into{" "}
-              <span className="text-gradient-animated">income.</span>
+              The easy way to{" "}
+              <span className="text-gradient-animated">real income.</span>
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-6">
-              We give you the strategy to create videos people actually watch, and
-              the automation to publish everywhere — so you can focus on growing
-              your channel and reaching monetization faster.
+              We hand you the keys: a channel already past YouTube's trust filter,
+              AI that produces professional videos from a single line of text, and
+              a mentor who tells you exactly what to post and when.
             </p>
             <div className="space-y-4">
               {[
-                "Aged YouTube channels to skip the sandbox and monetize sooner",
-                "ChronoN generates professional videos from a text brief — no camera needed",
-                "One video → 7 platforms, each optimized for maximum reach and views",
-                "Post daily across all platforms without spending hours on editing",
+                "Channel already positioned — you skip the \"grind\" phase entirely",
+                "ChronoN AI: type one sentence, get a ready-to-publish video",
+                "One video becomes 7 posts across 7 platforms automatically",
+                "Daily content without lifting a finger — 100% hands-free",
               ].map((item) => (
                 <div key={item} className="flex items-start gap-3">
                   <span className="w-5 h-5 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0 mt-0.5">
@@ -73,5 +72,3 @@ export function ProblemSolution() {
     </section>
   );
 }
-
-

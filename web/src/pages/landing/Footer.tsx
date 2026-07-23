@@ -6,9 +6,9 @@ import { Zap } from "lucide-react";
  * -------------------------------------------------------------------------- */
 
 export const SEO = {
-  title: "InstaEdit — Create great content. We handle the distribution.",
+  title: "InstaEdit — Automated YouTube Income on Autopilot",
   description:
-    "You bring the idea, we make sure the world sees it. AI-powered video creation with ChronoN, multi-platform publishing to YouTube, TikTok, Instagram and more. Built for creators, teams, and agencies.",
+    "Build a passive income stream with YouTube — zero experience, zero camera, zero editing. AI-powered channel automation and 1-on-1 mentoring.",
   canonical: "https://app.instaedit.org/",
 } as const;
 
@@ -44,12 +44,12 @@ export function Footer() {
             <span className="font-bold tracking-tight text-white text-base">InstaEdit</span>
           </Link>
           <p className="text-sm text-zinc-400 mt-4 max-w-[42ch] leading-relaxed">
-            Channel automation built for YouTube monetization. Go from zero to a
-            revenue-generating channel in under 3 weeks.
+            Turn YouTube into passive income. We handle the channel, the content
+            and the monetization — you collect the revenue.
           </p>
           <div className="inline-flex items-center gap-2 mt-5 surface-glass border border-white/10 px-3 py-1.5 rounded-full">
-            <span className="w-2 h-2 rounded-full bg-red-500" />
-            <span className="text-xs text-zinc-300 font-medium">Built for YouTube monetization</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <span className="text-xs text-zinc-300 font-medium">Automated income · zero effort</span>
           </div>
         </div>
         <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-8">
@@ -71,8 +71,8 @@ export function Footer() {
       </div>
       <div className="border-t border-white/5">
         <div className="mx-auto max-w-7xl px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
-          <div>© {new Date().getFullYear()} InstaEdit, Inc.</div>
-          <div>Built for creators who want to grow.</div>
+          <div>&copy; {new Date().getFullYear()} InstaEdit, Inc.</div>
+          <div>Built for creators who want passive income.</div>
         </div>
       </div>
     </footer>

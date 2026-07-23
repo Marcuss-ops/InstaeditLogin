@@ -1,13 +1,15 @@
+import { DollarSign, Clock, Users, BarChart3 } from "lucide-react";
+
 /* ----------------------------------------------------------------------------
- * Results — Numbers + Testimonials
+ * Results — income-focused stats + proof gallery
  * -------------------------------------------------------------------------- */
 
 export function ResultsSection() {
   const stats = [
-    { v: "<3 wk", l: "Avg. monetization time", desc: "from channel start to Partner Program" },
-    { v: "50+", l: "Channels monetized", desc: "across every major niche" },
-    { v: "$2K+", l: "Avg. monthly earnings", desc: "per monetized channel" },
-    { v: "500+", l: "Videos published", desc: "optimized for views and revenue" },
+    { v: "$2,150", l: "Avg. student income", desc: "per month, per channel", icon: DollarSign, color: "text-emerald-400" },
+    { v: "14 days", l: "Avg. first payout", desc: "from channel start", icon: Clock, color: "text-blue-400" },
+    { v: "50+", l: "Channels monetized", desc: "and generating revenue", icon: Users, color: "text-violet-400" },
+    { v: "100%", l: "AI-automated", desc: "zero editing required", icon: BarChart3, color: "text-amber-400" },
   ];
 
   const channels = [
@@ -26,13 +28,12 @@ export function ResultsSection() {
         <div className="max-w-3xl mb-16 text-center mx-auto animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">Results</div>
           <h2 className="text-display-2 text-white">
-            Real channels.{" "}
-            <span className="text-gradient">Real monetization.</span>
+            Real people.{" "}
+            <span className="text-gradient">Real income.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch] mx-auto">
-            Most creators take months to see their first dollar. Our system is built
-            to hit the YouTube Partner Program and start generating online income
-            in under 3 weeks.
+            Most creators spend months earning nothing. Our students hit their first
+            payout in under two weeks and build a recurring monthly income on autopilot.
           </p>
         </div>
 
@@ -43,6 +44,7 @@ export function ResultsSection() {
               key={s.l}
               className={`surface-card p-6 text-center animate-fade-up hover:border-violet-400/30 transition-all duration-300 ${["", "animation-delay-100", "animation-delay-200", "animation-delay-300"][i]}`}
             >
+              <s.icon className={`w-6 h-6 mx-auto mb-3 ${s.color}`} />
               <div className="text-3xl sm:text-4xl font-extrabold text-white tabular-nums tracking-tight">{s.v}</div>
               <div className="text-sm font-medium text-zinc-300 mt-2">{s.l}</div>
               <div className="text-xs text-zinc-500 mt-1">{s.desc}</div>

@@ -1,8 +1,8 @@
-import { Sparkles, Shield } from "lucide-react";
-import { IconSchedule, IconAnalyze } from "./shared";
+import { Bot, Globe, DollarSign } from "lucide-react";
+import { IconSchedule } from "./shared";
 
 /* ----------------------------------------------------------------------------
- * Features
+ * Features — zero effort, maximum income
  * -------------------------------------------------------------------------- */
 
 export function Features() {
@@ -11,12 +11,11 @@ export function Features() {
       <div aria-hidden="true" className="absolute inset-0 hero-aurora opacity-25 pointer-events-none" />
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
-          <div className="text-eyebrow text-violet-300/90 mb-3">Built for automation</div>
-          <h2 className="text-display-2 text-white">A channel engine built for revenue.</h2>
+          <div className="text-eyebrow text-violet-300/90 mb-3">How it works</div>
+          <h2 className="text-display-2 text-white">Zero effort. Maximum income.</h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            From content strategy to publishing cadence, every moving part is designed
-            to turn a new English-language YouTube channel into a monetized income
-            stream — fast.
+            No camera. No editing. No experience. Our AI-powered system turns a single
+            idea into daily content across 7 platforms — engineered to generate revenue.
           </p>
         </div>
         <div className="grid lg:grid-cols-3 gap-5">
@@ -25,20 +24,20 @@ export function Features() {
             <div aria-hidden="true" className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-violet-400/50 to-transparent" />
             <div className="relative">
               <div className="inline-flex w-12 h-12 rounded-xl items-center justify-center ring-1 ring-violet-400/40 surface-glass text-violet-300 mb-5">
-                <Sparkles className="w-6 h-6" />
+                <Bot className="w-6 h-6" />
               </div>
-              <h3 className="text-display-3 text-white mb-3 max-w-[22ch]">YouTube-first monetization.</h3>
+              <h3 className="text-display-3 text-white mb-3 max-w-[22ch]">AI creates. You earn.</h3>
               <p className="text-sm text-zinc-400 leading-relaxed max-w-[52ch]">
-                We optimize for the platform that pays: English-language YouTube. Every
-                workflow is tuned to hit the Partner Program and maximize ad revenue
-                before scaling to short-form and social clips.
+                Type one sentence and ChronoN AI generates a professional, monetization-ready
+                video. No camera, no microphone, no editing software. The AI handles
+                everything from script to final render.
               </p>
               <div className="mt-7 surface-glass rounded-xl border border-white/10 overflow-hidden">
                 <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-white/5">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
                   <span className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
                   <span className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
-                  <span className="ml-3 text-[11px] text-zinc-500">Calendar · this week</span>
+                  <span className="ml-3 text-[11px] text-zinc-500">Autopilot · this week</span>
                 </div>
                 <div className="grid grid-cols-7 gap-1.5 p-3 text-center text-[10px] text-zinc-500">
                   {["M", "T", "W", "T", "F", "S", "S"].map((d, idx) => (
@@ -58,20 +57,21 @@ export function Features() {
           <div className="surface-card p-6 relative overflow-hidden animate-fade-up animation-delay-100 hover:border-cyan-400/30 transition-all duration-300">
             <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-cyan-400/40 surface-glass text-cyan-300 mb-4">
               <IconSchedule className="w-5 h-5" />
-            </div>              <h3 className="text-display-3 text-white mb-2">Automated publishing cadence.</h3>
-              <p className="text-sm text-zinc-400 leading-relaxed">
-                Videos go live at the best times for views and revenue. No manual uploads,
-                no timezone math — just a channel that grows while you sleep.
-              </p>
+            </div>
+            <h3 className="text-display-3 text-white mb-2">7 platforms, 1 video.</h3>
+            <p className="text-sm text-zinc-400 leading-relaxed">
+              One AI-generated video is automatically converted and published to YouTube,
+              TikTok, Instagram Reels, Facebook, X and more — multiplying your reach by 7x.
+            </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden animate-fade-up animation-delay-200 hover:border-pink-400/30 transition-all duration-300">
             <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-pink-400/40 surface-glass text-pink-300 mb-4">
-              <Shield className="w-5 h-5" />
+              <DollarSign className="w-5 h-5" />
             </div>
-            <h3 className="text-display-3 text-white mb-2">Monetization guardrails.</h3>
+            <h3 className="text-display-3 text-white mb-2">Revenue from day one.</h3>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              We track watch-time, subscriber velocity and revenue metrics so your channel
-              hits the YouTube Partner Program requirements faster and safer.
+              Aged channels skip YouTube's trust filter. You hit the Partner Program faster
+              and start earning ad revenue, sponsorships and affiliate income sooner.
             </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden lg:col-span-3 animate-fade-up animation-delay-300 hover:border-amber-400/30 transition-all duration-300">
@@ -79,12 +79,13 @@ export function Features() {
             <div className="relative grid lg:grid-cols-2 gap-6 items-center">
               <div>
                 <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-amber-400/40 surface-glass text-amber-300 mb-4">
-                  <IconAnalyze className="w-5 h-5" />
+                  <Globe className="w-5 h-5" />
                 </div>
-                <h3 className="text-display-3 text-white mb-2">Revenue-first analytics.</h3>
+                <h3 className="text-display-3 text-white mb-2">Scale to multiple languages.</h3>
                 <p className="text-sm text-zinc-400 leading-relaxed max-w-[52ch]">
-                  Track RPM, CPM and ad-revenue growth in one dashboard. We focus on the
-                  metrics that actually pay you — and show you how to push them higher.
+                  Expand your channel portfolio to Spanish, Portuguese, French, German
+                  and more — all powered by AI translation and localization. Reach
+                  global audiences without learning a new language.
                 </p>
               </div>
               <div className="surface-glass rounded-xl border border-white/10 p-5">

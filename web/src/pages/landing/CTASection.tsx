@@ -1,64 +1,64 @@
 import { Zap, Globe, ArrowRight, CheckCircle2, Target } from "lucide-react";
 
 /* ----------------------------------------------------------------------------
- * CTA Section — 3 Paths to YouTube income
+ * CTA Section — 3 paths to automated YouTube income
  * -------------------------------------------------------------------------- */
 
 export function CTASection() {
   const tiers = [
     {
       level: "Level 1",
-      tagline: "Learn the system",
-      title: "YouTube Mentorship",
+      tagline: "Guided & fast",
+      title: "Start & Earn",
       ringColor: "ring-emerald-400/40",
       iconColor: "text-emerald-300",
       bgGradient: "from-emerald-500/20 to-teal-500/20",
       hoverBorder: "hover:border-emerald-400/30",
-      desc: "Learn how to build, automate and monetize an English-language YouTube channel from scratch. Get 1-on-1 mentoring and an aged channel so you skip the trust-filter phase.",
+      desc: "Go from zero to your first monthly paycheck in 30 days. You get a mentor, a ready-to-monetize channel, and a proven playbook — no camera, no editing, no tech skills.",
       features: [
-        "1-on-1 mentorship on niche, strategy and monetization",
-        "Aged English-language YouTube channel included",
-        "Automation playbook for content, SEO and publishing",
-        "Roadmap to first online income in under 3 weeks",
+        "Aged YouTube channel included — skip the algorithm's trust filter",
+        "1-on-1 personal mentor on the highest-paying niches",
+        "Zero editing — AI templates do all the work for you",
+        "Step-by-step roadmap to your first $1,000/mo",
       ],
-      cta: "Start learning",
+      cta: "Book Your Mentoring Session",
       ctaLink: "https://discord.com/users/1201477873719050332",
     },
     {
       level: "Level 2",
-      tagline: "We run it for you",
-      title: "Done-For-You Channel",
+      tagline: "100% passive",
+      title: "Done-For-You",
       ringColor: "ring-blue-400/40",
       iconColor: "text-blue-300",
       bgGradient: "from-blue-500/20 to-cyan-500/20",
       hoverBorder: "hover:border-blue-400/30",
-      desc: "You bring the niche and the budget; we build, manage and automate your English-language YouTube channel. Content, publishing and optimization run hands-free while revenue starts coming in.",
+      desc: "No camera, no voice, no time spent. We build, manage, and automate everything. Your channel generates revenue while you sleep.",
       features: [
-        "Done-for-you channel build + monetization strategy",
-        "Automated publishing and content cadence",
-        "Daily posts optimized for views and revenue",
-        "5-channel launch pack to scale fast",
+        "Full-auto management across 7 platforms from day one",
+        "5 channels + 10 AI videos included immediately",
+        "Revenue from YouTube Shorts, TikTok, Reels & sponsorships",
+        "Daily optimized content — you do nothing",
       ],
-      cta: "Get a channel built",
+      cta: "Activate Full Automation",
       ctaLink: "https://discord.com/users/1201477873719050332",
       featured: true,
     },
     {
       level: "Level 3",
-      tagline: "Scale your income",
+      tagline: "Scale & multiply",
       title: "Channel Portfolio",
       ringColor: "ring-violet-400/40",
       iconColor: "text-violet-300",
       bgGradient: "from-violet-500/20 to-purple-500/20",
       hoverBorder: "hover:border-violet-400/30",
-      desc: "Turn one monetized channel into a portfolio. Expand into multiple English-language channels and markets with unlimited AI-generated content and dedicated infrastructure.",
+      desc: "Turn one monetized channel into a full portfolio. Expand into multiple languages and niches with unlimited AI content and dedicated infrastructure.",
       features: [
-        "Portfolio-wide automation and analytics",
-        "Translation and localization for global reach",
-        "Unlimited AI-generated videos through our engine",
+        "Portfolio-wide automation and analytics dashboard",
+        "Multi-language expansion for global reach",
+        "Unlimited AI-generated videos across all channels",
         "Dedicated infrastructure and priority support",
       ],
-      cta: "Scale with us",
+      cta: "Scale Your Income",
       ctaLink: "https://discord.com/users/1201477873719050332",
     },
   ];
@@ -71,11 +71,11 @@ export function CTASection() {
           <div className="text-eyebrow text-violet-300/90 mb-3">Choose your path</div>
           <h2 className="text-display-2 text-white">
             Three ways to{" "}
-            <span className="text-gradient">earn with YouTube.</span>
+            <span className="text-gradient">build passive income.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch] mx-auto">
-            Whether you want to learn, have us run the channel, or scale a portfolio
-            of English-language channels — there is a path for your goal.
+            Whether you want to learn the system, have us run everything, or scale a full
+            portfolio — the income is real and the path is clear.
           </p>
         </div>
         <div className="grid md:grid-cols-3 gap-6">

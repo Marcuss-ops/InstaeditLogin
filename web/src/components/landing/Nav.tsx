@@ -128,7 +128,7 @@ export function Nav() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-white text-black text-sm font-semibold hover:bg-white/90 transition-all"
             >
-              Start now
+              Start Earning
             </a>
           </div>
 
@@ -185,7 +185,7 @@ export function Nav() {
                 onClick={close}
                 className="block py-3 text-sm font-semibold text-center text-white bg-gradient-to-r from-violet-500 to-cyan-500 rounded-xl hover:opacity-90 transition-opacity"
               >
-                Start now
+                Start Earning
               </a>
             </div>
           </div>
