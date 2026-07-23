@@ -536,8 +536,8 @@ func (m *IntegrationsModule) handleDeleteIntegrationVeloxDestination(w http.Resp
 //
 // IDEMPOTENT — same body applied twice yields the same final state
 // (only updated_at bumps on each call). The repo calls
-// UpdateEnabled + UpdateDefaultMetadata as independent ops; both
-// surface ErrExternalDestinationNotFound → 404 so a concurrent
+// UpdateEnabledAndDefaults, which performs a single atomic UPDATE;
+// it surfaces ErrExternalDestinationNotFound → 404 so a concurrent
 // DELETE between authz and update degrades safely without a 500.
 func (m *IntegrationsModule) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
 	if m.deps.ExternalDestinationStore == nil {

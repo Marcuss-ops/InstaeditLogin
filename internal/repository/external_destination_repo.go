@@ -258,7 +258,7 @@ func (r *ExternalDestinationRepository) ListBySourceSystem(ctx context.Context, 
 // no-op PATCH is rejected with 400 to avoid re-stamping updated_at).
 //
 // JSON-validity of `defaults` is re-validated here as
-// defense-in-depth (mirrors UpdateDefaultMetadata / Create). The
+// defense-in-depth (mirrors Create). The
 // handler validates first; this is the last-line guard so a
 // corrupted payload surfaces as a typed sentinel rather than a
 // Postgres jsonb_in type error from ExecContext.
