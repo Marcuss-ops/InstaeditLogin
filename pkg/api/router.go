@@ -205,8 +205,8 @@ type Router struct {
 	// veloxAPIToken (P1 Velox integration) is the static shared
 	// secret used by the service-to-service /internal/v1/* routes.
 	// Loaded from env VELOX_API_TOKEN via internal/config + wired
-	// with api.WithVeloxAPIToken. When empty AND registerInternalVeloxRoutes
-	// is called, the route refuses to register (operator-safe boot
+	// with api.WithVeloxAPIToken. When empty AND VeloxModule.Register
+	// runs, the route refuses to register (operator-safe boot
 	// fail-fast). When empty AT REQUEST TIME (the route was
 	// registered), the middleware returns 503 + an error log.
 	veloxAPIToken string
@@ -223,7 +223,7 @@ type Router struct {
 	externalDestinations ExternalDestinationStore
 	// externalDeliveries (P1 Velox integration, POST /internal/v1/deliveries)
 	// is the persistence contract wired via WithExternalDeliveryStore.
-	// Per-route guarded in registerInternalVeloxRoutes — the validate
+	// Per-route guarded in VeloxModule.Register — the validate
 	// route (destinations/{id}/validate) does NOT require it; the
 	// deliveries route (POST /deliveries) REQUIRES it. When nil, only
 	// the validate route is mounted (matches the per-route
@@ -814,3 +814,75 @@ func (r *Router) validateRequiredDeps() error {
 // on RefreshOAuthToken) silently breaks the wiring at the
 // injection site rather than at compile time.
 var _ YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)
+
+// The following thin wrappers keep existing unit tests (which call the
+// handlers directly on *Router) compiling while the public module
+// constructors receive typed deps. They simply forward to a module
+// instance built from the Router's current fields.
+//
+// TODO: These wrappers exist only for test compatibility. Migrate the
+// affected tests to use the typed VeloxModule / IntegrationsModule
+// constructors and then delete the wrappers. Do NOT add new production
+// code here; new routes should use the typed modules.
+
+func (r *Router) veloxModule() *VeloxModule {
+	return NewVeloxModule(VeloxModuleDeps{
+		ExternalDestinationStore: r.externalDestinations,
+		ExternalDeliveryStore:    r.externalDeliveries,
+		WorkspaceStore:           r.workspaceStore,
+		UserStore:                r.userRepo,
+		VeloxAPIToken:            r.veloxAPIToken,
+		VeloxValidateRateLimiter: r.veloxValidateRateLimiter,
+	}).(*VeloxModule)
+}
+
+func (r *Router) integrationsModule() *IntegrationsModule {
+	return NewIntegrationsModule(IntegrationsModuleDeps{
+		ExternalDestinationStore: r.externalDestinations,
+		WorkspaceStore:           r.workspaceStore,
+		UserStore:                r.userRepo,
+		AuditLogStore:            r.auditLogStore,
+		AuthMiddleware:           r.authMiddleware,
+		CSRFMiddleware:           r.csrfMiddleware,
+	}).(*IntegrationsModule)
+}
+
+func (r *Router) registerInternalVeloxRoutes() {
+	r.veloxModule().Register(r.mux)
+}
+
+func (r *Router) registerUserVeloxDestinations(mux chi.Router) {
+	r.integrationsModule().Register(mux)
+}
+
+func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *http.Request) {
+	r.veloxModule().handleValidateInternalDestination(w, req)
+}
+
+func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.Request) {
+	r.veloxModule().handleCreateInternalDelivery(w, req)
+}
+
+func (r *Router) handleGetInternalDelivery(w http.ResponseWriter, req *http.Request) {
+	r.veloxModule().handleGetInternalDelivery(w, req)
+}
+
+func (r *Router) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	r.integrationsModule().handleCreateIntegrationVeloxDestination(w, req)
+}
+
+func (r *Router) handleListIntegrationVeloxDestinations(w http.ResponseWriter, req *http.Request) {
+	r.integrationsModule().handleListIntegrationVeloxDestinations(w, req)
+}
+
+func (r *Router) handleGetIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	r.integrationsModule().handleGetIntegrationVeloxDestination(w, req)
+}
+
+func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	r.integrationsModule().handleDeleteIntegrationVeloxDestination(w, req)
+}
+
+func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	r.integrationsModule().handleUpdateIntegrationVeloxDestination(w, req)
+}

@@ -101,17 +101,41 @@ func (m *AdminModule) admin(next http.HandlerFunc) http.Handler {
 	return m.deps.AuthManager.Middleware(adminAuthMiddleware(next))
 }
 
+// VeloxModuleDeps is the narrow set of dependencies the Velox
+// (service-to-service /internal/v1) module needs to mount its routes.
+type VeloxModuleDeps struct {
+	ExternalDestinationStore ExternalDestinationStore
+	ExternalDeliveryStore    ExternalDeliveryStore
+	WorkspaceStore           WorkspaceStore
+	UserStore                UserStore
+	VeloxAPIToken            string
+	VeloxValidateRateLimiter *validateRateLimiter
+}
+
 // VeloxModule mounts the service-to-service /internal/v1 routes.
 type VeloxModule struct {
-	r *Router
+	deps VeloxModuleDeps
 }
 
-func NewVeloxModule(r *Router) RouteModule {
-	return &VeloxModule{r: r}
+func NewVeloxModule(deps VeloxModuleDeps) RouteModule {
+	return &VeloxModule{deps: deps}
 }
+
+// Compile-time assertion: VeloxModule implements RouteModule.
+var _ RouteModule = (*VeloxModule)(nil)
 
 func (m *VeloxModule) Register(mux chi.Router) {
-	m.r.registerInternalVeloxRoutes()
+	if m.deps.ExternalDestinationStore == nil || m.deps.VeloxAPIToken == "" {
+		return
+	}
+	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate",
+		internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleValidateInternalDestination)))
+	if m.deps.ExternalDeliveryStore != nil {
+	mux.Method(http.MethodPost, "/internal/v1/deliveries",
+		internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleCreateInternalDelivery)))
+	mux.Method(http.MethodGet, "/internal/v1/deliveries/{id}",
+		internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleGetInternalDelivery)))
+	}
 }
 
 // VeloxBFFModuleDeps is the narrow set of dependencies the Velox
@@ -170,22 +194,71 @@ func WithVeloxBFFCSRFMiddleware(mw func(http.Handler) http.Handler) RouterOption
 	return func(r *Router) { r.veloxBFFCSRFMiddleware = mw }
 }
 
+// IntegrationsModuleDeps is the narrow set of dependencies the
+// user-facing integrations module needs to mount its routes.
+type IntegrationsModuleDeps struct {
+	ExternalDestinationStore ExternalDestinationStore
+	WorkspaceStore           WorkspaceStore
+	UserStore                UserStore
+	AuditLogStore            AuditLogStore
+	AuthMiddleware           func(http.Handler) http.Handler
+	CSRFMiddleware           func(http.Handler) http.Handler
+}
+
 // IntegrationsModule mounts user-facing integration routes
 // (currently the Velox destination endpoints under
 // /api/v1/integrations/velox/destinations). It is separate from
 // VeloxBFFModule because these routes are part of the workspace
 // integration surface, not the Velox BFF proxy.
 type IntegrationsModule struct {
-	r *Router
+	deps IntegrationsModuleDeps
 }
 
 // NewIntegrationsModule creates the integrations module.
-func NewIntegrationsModule(r *Router) RouteModule {
-	return &IntegrationsModule{r: r}
+func NewIntegrationsModule(deps IntegrationsModuleDeps) RouteModule {
+	return &IntegrationsModule{deps: deps}
 }
 
+// Compile-time assertion: IntegrationsModule implements RouteModule.
+var _ RouteModule = (*IntegrationsModule)(nil)
+
 func (m *IntegrationsModule) Register(mux chi.Router) {
-	m.r.registerUserVeloxDestinations(mux)
+	if mux == nil {
+		return
+	}
+	if m.deps.ExternalDestinationStore == nil || m.deps.WorkspaceStore == nil {
+		return
+	}
+
+	wrap := func(h http.HandlerFunc) http.Handler {
+		var handler http.Handler = h
+		if m.deps.CSRFMiddleware != nil {
+			handler = m.deps.CSRFMiddleware(handler)
+		}
+		if m.deps.AuthMiddleware != nil {
+			handler = m.deps.AuthMiddleware(handler)
+		}
+		return handler
+	}
+
+	if m.deps.UserStore != nil && m.deps.AuditLogStore != nil {
+		mux.Method(http.MethodPost, "/api/v1/integrations/velox/destinations",
+			wrap(m.handleCreateIntegrationVeloxDestination))
+	} else {
+		mux.Method(http.MethodPost, "/api/v1/integrations/velox/destinations",
+			wrap(func(w http.ResponseWriter, req *http.Request) {
+				writeError(w, http.StatusNotImplemented, "destination creation not configured")
+			}))
+	}
+
+	mux.Method(http.MethodGet, "/api/v1/integrations/velox/destinations",
+		wrap(m.handleListIntegrationVeloxDestinations))
+	mux.Method(http.MethodGet, "/api/v1/integrations/velox/destinations/{id}",
+		wrap(m.handleGetIntegrationVeloxDestination))
+	mux.Method(http.MethodDelete, "/api/v1/integrations/velox/destinations/{id}",
+		wrap(m.handleDeleteIntegrationVeloxDestination))
+	mux.Method(http.MethodPatch, "/api/v1/integrations/velox/destinations/{id}",
+		wrap(m.handleUpdateIntegrationVeloxDestination))
 }
 
 // BillingModuleDeps is the narrow set of dependencies the billing
@@ -217,68 +290,180 @@ func (m *BillingModule) Register(mux chi.Router) {
 	m.registerBillingRoutes(mux)
 }
 
-// MediaModule mounts the presigned-upload and Drive-import routes.
-type MediaModule struct {
-	r *Router
+// MediaModuleDeps is the narrow set of dependencies the media module
+// needs to mount its routes.
+type MediaModuleDeps struct {
+	RateLimitSvc     *services.RateLimitService
+	Protected        func(http.HandlerFunc) http.HandlerFunc
+	PresignMedia     http.HandlerFunc
+	DriveImport      http.HandlerFunc
+	DriveImportAsync http.HandlerFunc
+	DriveBatchImport http.HandlerFunc
+	DriveBatchImportV2 http.HandlerFunc
+	DriveBatchV2Status http.HandlerFunc
+	DriveBatchStatus http.HandlerFunc
+	CompleteMedia    http.HandlerFunc
 }
 
-func NewMediaModule(r *Router) RouteModule {
-	return &MediaModule{r: r}
+// MediaModule mounts the presigned-upload and Drive-import routes.
+type MediaModule struct {
+	deps MediaModuleDeps
 }
+
+func NewMediaModule(deps MediaModuleDeps) RouteModule {
+	return &MediaModule{deps: deps}
+}
+
+// Compile-time assertion: MediaModule implements RouteModule.
+var _ RouteModule = (*MediaModule)(nil)
 
 func (m *MediaModule) Register(mux chi.Router) {
 	var mediaPresignMw []func(http.Handler) http.Handler
-	if m.r.rateLimitSvc != nil {
-		mediaPresignMw = append(mediaPresignMw, MediaPresignLimit(m.r.rateLimitSvc))
+	if m.deps.RateLimitSvc != nil {
+		mediaPresignMw = append(mediaPresignMw, MediaPresignLimit(m.deps.RateLimitSvc))
 	}
-	mux.Method(http.MethodPost, "/api/v1/media/presign", chain(m.r.protected(m.r.handlePresignMedia), mediaPresignMw...))
-	mux.Method(http.MethodPost, "/api/v1/media/import/drive", m.r.protected(m.r.handleDriveImport))
-	mux.Method(http.MethodPost, "/api/v1/media/import/drive/async", m.r.protected(m.r.handleDriveImportAsync))
-	mux.Method(http.MethodPost, "/api/v1/media/import/drive/folder", m.r.protected(m.r.handleDriveBatchImport))
-	mux.Method(http.MethodPost, "/api/v1/media/import/drive/folder/async", m.r.protected(m.r.handleDriveBatchImportV2))
-	mux.Method(http.MethodGet, "/api/v1/media/import/drive/folder/async/{id}", m.r.protected(m.r.handleDriveBatchV2Status))
-	mux.Method(http.MethodGet, "/api/v1/media/import/drive/batch/status", m.r.protected(m.r.handleDriveBatchStatus))
-	mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", m.r.protected(m.r.handleCompleteMedia))
+	mux.Method(http.MethodPost, "/api/v1/media/presign", chain(m.deps.Protected(m.deps.PresignMedia), mediaPresignMw...))
+	mux.Method(http.MethodPost, "/api/v1/media/import/drive", m.deps.Protected(m.deps.DriveImport))
+	mux.Method(http.MethodPost, "/api/v1/media/import/drive/async", m.deps.Protected(m.deps.DriveImportAsync))
+	mux.Method(http.MethodPost, "/api/v1/media/import/drive/folder", m.deps.Protected(m.deps.DriveBatchImport))
+	mux.Method(http.MethodPost, "/api/v1/media/import/drive/folder/async", m.deps.Protected(m.deps.DriveBatchImportV2))
+	mux.Method(http.MethodGet, "/api/v1/media/import/drive/folder/async/{id}", m.deps.Protected(m.deps.DriveBatchV2Status))
+	mux.Method(http.MethodGet, "/api/v1/media/import/drive/batch/status", m.deps.Protected(m.deps.DriveBatchStatus))
+	mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", m.deps.Protected(m.deps.CompleteMedia))
+}
+
+// PublishingModuleDeps is the narrow set of dependencies the
+// publishing module needs to mount its routes.
+type PublishingModuleDeps struct {
+	RateLimitSvc        *services.RateLimitService
+	Protected           func(http.HandlerFunc) http.HandlerFunc
+	CreatePost          http.HandlerFunc
+	ListPosts           http.HandlerFunc
+	ListPostsByWorkspace http.HandlerFunc
+	GetPost             http.HandlerFunc
+	PatchPost           http.HandlerFunc
+	DeletePost          http.HandlerFunc
+	PublishPost         http.HandlerFunc
+	SchedulePost        http.HandlerFunc
+	CancelPost          http.HandlerFunc
+	RetryPost           http.HandlerFunc
+	GetPostTargets      http.HandlerFunc
+	AddPostTarget       http.HandlerFunc
+	RetryTarget         http.HandlerFunc
+	UploadCounts        http.HandlerFunc
+	ListUploads         http.HandlerFunc
+	ListUploadsByAccount http.HandlerFunc
+	UploadsBatchByFolder http.HandlerFunc
+	RescheduleUpload    http.HandlerFunc
+	CancelUpload        http.HandlerFunc
 }
 
 // PublishingModule mounts post, post-target and upload-job routes.
 type PublishingModule struct {
-	r *Router
+	deps PublishingModuleDeps
 }
 
-func NewPublishingModule(r *Router) RouteModule {
-	return &PublishingModule{r: r}
+func NewPublishingModule(deps PublishingModuleDeps) RouteModule {
+	return &PublishingModule{deps: deps}
 }
+
+// Compile-time assertion: PublishingModule implements RouteModule.
+var _ RouteModule = (*PublishingModule)(nil)
 
 func (m *PublishingModule) Register(mux chi.Router) {
 	mux.Route("/api/v1/posts", func(sr chi.Router) {
-		if m.r.rateLimitSvc != nil {
-			sr.Use(WorkspacePostLimit(m.r.rateLimitSvc))
+		if m.deps.RateLimitSvc != nil {
+			sr.Use(WorkspacePostLimit(m.deps.RateLimitSvc))
 		}
-		sr.Post("/", m.r.protected(m.r.handleCreatePost))
-		sr.Get("/", m.r.protected(m.r.handleListPosts))
-		sr.Get("/workspace/{wid}", m.r.protected(m.r.handleListByWorkspace))
-		sr.Get("/{id}", m.r.protected(m.r.handleGetPost))
-		sr.Patch("/{id}", m.r.protected(m.r.handlePatchPost))
-		sr.Delete("/{id}", m.r.protected(m.r.handleDeletePost))
-		sr.Post("/{id}/publish", m.r.protected(m.r.handlePublishPostID))
-		sr.Post("/{id}/schedule", m.r.protected(m.r.handleSchedulePost))
-		sr.Post("/{id}/cancel", m.r.protected(m.r.handleCancelPost))
-		sr.Post("/{id}/retry", m.r.protected(m.r.handleRetryPost))
-		sr.Get("/{id}/targets", m.r.protected(m.r.handleGetPostTargets))
-		sr.Post("/{id}/targets", m.r.protected(m.r.handleAddTarget))
+		sr.Post("/", m.deps.Protected(m.deps.CreatePost))
+		sr.Get("/", m.deps.Protected(m.deps.ListPosts))
+		sr.Get("/workspace/{wid}", m.deps.Protected(m.deps.ListPostsByWorkspace))
+		sr.Get("/{id}", m.deps.Protected(m.deps.GetPost))
+		sr.Patch("/{id}", m.deps.Protected(m.deps.PatchPost))
+		sr.Delete("/{id}", m.deps.Protected(m.deps.DeletePost))
+		sr.Post("/{id}/publish", m.deps.Protected(m.deps.PublishPost))
+		sr.Post("/{id}/schedule", m.deps.Protected(m.deps.SchedulePost))
+		sr.Post("/{id}/cancel", m.deps.Protected(m.deps.CancelPost))
+		sr.Post("/{id}/retry", m.deps.Protected(m.deps.RetryPost))
+		sr.Get("/{id}/targets", m.deps.Protected(m.deps.GetPostTargets))
+		sr.Post("/{id}/targets", m.deps.Protected(m.deps.AddPostTarget))
 	})
 	mux.Route("/api/v1/post-targets", func(sr chi.Router) {
-		sr.Post("/{id}/retry", m.r.protected(m.r.handleRetryTarget))
+		sr.Post("/{id}/retry", m.deps.Protected(m.deps.RetryTarget))
 	})
 	mux.Route("/api/v1/uploads", func(sr chi.Router) {
-		sr.Get("/counts", m.r.protected(m.r.handleUploadCounts))
-		sr.Get("/", m.r.protected(m.r.handleListUploads))
-		sr.Get("/by-account", m.r.protected(m.r.handleListUploadsByAccount))
-		sr.Post("/batch/by-folder", m.r.protected(m.r.handleUploadsBatchByFolder))
-		sr.Patch("/{id}/reschedule", m.r.protected(m.r.handleRescheduleUpload))
-		sr.Delete("/{id}", m.r.protected(m.r.handleCancelUpload))
+		sr.Get("/counts", m.deps.Protected(m.deps.UploadCounts))
+		sr.Get("/", m.deps.Protected(m.deps.ListUploads))
+		sr.Get("/by-account", m.deps.Protected(m.deps.ListUploadsByAccount))
+		sr.Post("/batch/by-folder", m.deps.Protected(m.deps.UploadsBatchByFolder))
+		sr.Patch("/{id}/reschedule", m.deps.Protected(m.deps.RescheduleUpload))
+		sr.Delete("/{id}", m.deps.Protected(m.deps.CancelUpload))
 	})
+}
+
+// AuthHandlers groups the HTTP handler functions used by the auth
+// module. Keeping them in a nested struct keeps AuthModuleDeps readable.
+type AuthHandlers struct {
+	Login               http.HandlerFunc
+	Callback            http.HandlerFunc
+	ExchangeCode        http.HandlerFunc
+	Me                  http.HandlerFunc
+	Refresh             http.HandlerFunc
+	Logout              http.HandlerFunc
+	LogoutAll           http.HandlerFunc
+	ListSessions        http.HandlerFunc
+	DeleteSession       http.HandlerFunc
+	ListAccounts        http.HandlerFunc
+	GetAccount          http.HandlerFunc
+	GetAccountsPerformanceSummary http.HandlerFunc
+	GetAccountPerformance http.HandlerFunc
+	ValidateAccount     http.HandlerFunc
+	ReconnectAccount    http.HandlerFunc
+	DeleteAccount       http.HandlerFunc
+	SyncAccount         http.HandlerFunc
+	AccountContent      http.HandlerFunc
+	UpdateAccount       http.HandlerFunc
+	CreateWorkspace     http.HandlerFunc
+	ListWorkspaces      http.HandlerFunc
+	GetWorkspace        http.HandlerFunc
+	DeleteWorkspace     http.HandlerFunc
+	SwitchWorkspace     http.HandlerFunc
+	AttachWorkspaceChannel http.HandlerFunc
+	ListWorkspaceChannels http.HandlerFunc
+	UpdateWorkspaceChannel http.HandlerFunc
+	DetachWorkspaceChannel http.HandlerFunc
+	ListGroups          http.HandlerFunc
+	CreateGroup         http.HandlerFunc
+	GetGroup            http.HandlerFunc
+	UpdateGroup         http.HandlerFunc
+	DeleteGroup         http.HandlerFunc
+	ListGroupAccounts   http.HandlerFunc
+	SetGroupAccounts    http.HandlerFunc
+	CreateApiKey        http.HandlerFunc
+	ListApiKeys         http.HandlerFunc
+	GetApiKey           http.HandlerFunc
+	DeleteApiKey        http.HandlerFunc
+	RotateApiKey        http.HandlerFunc
+}
+
+// AuthModuleDeps is the narrow set of dependencies the auth module
+// needs to mount its routes.
+type AuthModuleDeps struct {
+	AuthEmailSvc        AuthEmailStore
+	TeamStore           TeamStore
+	GroupStore          GroupStore
+	WebhookStore        WebhookStore
+	RateLimitSvc        *services.RateLimitService
+	AuthMiddleware      func(http.Handler) http.Handler
+	ApiKeyAuthMiddleware func(http.Handler) http.Handler
+	Protected           func(http.HandlerFunc) http.HandlerFunc
+	CsrfConfig          func() auth.CSRFConfig
+	OAuthStartLimiter   func(http.Handler) http.Handler
+	OAuthSessionRedirect func(http.HandlerFunc) http.HandlerFunc
+	RegisterAuthEmailRoutes func()
+	RegisterTeamRoutes  func()
+	RegisterWebhookRoutes func()
+	Handlers            AuthHandlers
 }
 
 // AuthModule mounts authentication, sessions, accounts, workspaces,
@@ -286,91 +471,88 @@ func (m *PublishingModule) Register(mux chi.Router) {
 // because all of these surfaces are part of the user/workspace identity
 // context.
 type AuthModule struct {
-	r *Router
+	deps AuthModuleDeps
 }
 
-func NewAuthModule(r *Router) RouteModule {
-	return &AuthModule{r: r}
+func NewAuthModule(deps AuthModuleDeps) RouteModule {
+	return &AuthModule{deps: deps}
 }
+
+// Compile-time assertion: AuthModule implements RouteModule.
+var _ RouteModule = (*AuthModule)(nil)
 
 func (m *AuthModule) Register(mux chi.Router) {
-	if m.r.authEmailSvc != nil {
-		m.r.registerAuthEmailRoutes()
+	if m.deps.AuthEmailSvc != nil {
+		m.deps.RegisterAuthEmailRoutes()
 	}
-	if m.r.teamStore != nil {
-		m.r.registerTeamRoutes()
+	if m.deps.TeamStore != nil {
+		m.deps.RegisterTeamRoutes()
 	}
 
-	mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login", OAuthStartLimitIfConfigured(m.r.rateLimitSvc, m.r.trustedProxies)(http.HandlerFunc(m.r.oauthSessionRedirect(m.r.handleLogin))))
-	mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(m.r.oauthSessionRedirect(m.r.handleCallback)))
-	mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(m.r.handleExchangeCode))
-	mux.Method(http.MethodGet, "/api/v1/auth/me", m.r.protected(m.r.handleMe))
-	mux.Method(http.MethodPost, "/api/v1/auth/refresh", http.HandlerFunc(m.r.handleRefresh))
-	mux.Method(http.MethodPost, "/api/v1/auth/logout", http.HandlerFunc(m.r.handleLogout))
-	mux.Method(http.MethodPost, "/api/v1/auth/logout-all", m.r.protected(m.r.handleLogoutAll))
-	mux.Method(http.MethodGet, "/api/v1/auth/sessions", m.r.protected(m.r.handleListSessions))
-	mux.Method(http.MethodDelete, "/api/v1/auth/sessions/{id}", m.r.protected(m.r.handleDeleteSession))
+	mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login", m.deps.OAuthStartLimiter(http.HandlerFunc(m.deps.OAuthSessionRedirect(m.deps.Handlers.Login))))
+	mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(m.deps.OAuthSessionRedirect(m.deps.Handlers.Callback)))
+	mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(m.deps.Handlers.ExchangeCode))
+	mux.Method(http.MethodGet, "/api/v1/auth/me", m.deps.Protected(m.deps.Handlers.Me))
+	mux.Method(http.MethodPost, "/api/v1/auth/refresh", http.HandlerFunc(m.deps.Handlers.Refresh))
+	mux.Method(http.MethodPost, "/api/v1/auth/logout", http.HandlerFunc(m.deps.Handlers.Logout))
+	mux.Method(http.MethodPost, "/api/v1/auth/logout-all", m.deps.Protected(m.deps.Handlers.LogoutAll))
+	mux.Method(http.MethodGet, "/api/v1/auth/sessions", m.deps.Protected(m.deps.Handlers.ListSessions))
+	mux.Method(http.MethodDelete, "/api/v1/auth/sessions/{id}", m.deps.Protected(m.deps.Handlers.DeleteSession))
 
-	mux.Method(http.MethodGet, "/api/v1/accounts", m.r.protected(m.r.handleListAccounts))
-	mux.Method(http.MethodGet, "/api/v1/accounts/{id}", m.r.protected(m.r.handleGetAccount))
-	mux.Method(http.MethodGet, "/api/v1/accounts/performance/summary", m.r.protected(m.r.handleGetAccountsPerformanceSummary))
-	mux.Method(http.MethodGet, "/api/v1/accounts/{id}/performance", m.r.protected(m.r.handleGetAccountPerformance))
-	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/validate", m.r.protected(m.r.handleValidateAccount))
-	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/reconnect", m.r.protected(m.r.handleReconnectAccount))
-	mux.Method(http.MethodDelete, "/api/v1/accounts/{id}", m.r.protected(m.r.handleDeleteAccount))
-	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/sync", m.r.protected(m.r.handleSyncAccount))
-	mux.Method(http.MethodGet, "/api/v1/accounts/{id}/content", m.r.protected(m.r.handleAccountContent))
-	mux.Method(http.MethodPatch, "/api/v1/accounts/{id}", m.r.protected(m.r.handleUpdateAccount))
+	mux.Method(http.MethodGet, "/api/v1/accounts", m.deps.Protected(m.deps.Handlers.ListAccounts))
+	mux.Method(http.MethodGet, "/api/v1/accounts/{id}", m.deps.Protected(m.deps.Handlers.GetAccount))
+	mux.Method(http.MethodGet, "/api/v1/accounts/performance/summary", m.deps.Protected(m.deps.Handlers.GetAccountsPerformanceSummary))
+	mux.Method(http.MethodGet, "/api/v1/accounts/{id}/performance", m.deps.Protected(m.deps.Handlers.GetAccountPerformance))
+	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/validate", m.deps.Protected(m.deps.Handlers.ValidateAccount))
+	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/reconnect", m.deps.Protected(m.deps.Handlers.ReconnectAccount))
+	mux.Method(http.MethodDelete, "/api/v1/accounts/{id}", m.deps.Protected(m.deps.Handlers.DeleteAccount))
+	mux.Method(http.MethodPost, "/api/v1/accounts/{id}/sync", m.deps.Protected(m.deps.Handlers.SyncAccount))
+	mux.Method(http.MethodGet, "/api/v1/accounts/{id}/content", m.deps.Protected(m.deps.Handlers.AccountContent))
+	mux.Method(http.MethodPatch, "/api/v1/accounts/{id}", m.deps.Protected(m.deps.Handlers.UpdateAccount))
 
 	mux.Route("/api/v1/workspaces", func(sr chi.Router) {
-		sr.Post("/", m.r.protected(m.r.handleCreateWorkspace))
-		sr.Get("/", m.r.protected(m.r.handleListWorkspaces))
-		sr.Get("/{id}", m.r.protected(m.r.handleGetWorkspace))
-		sr.Delete("/{id}", m.r.protected(m.r.handleDeleteWorkspace))
-		sr.Post("/{id}/switch", m.r.protected(m.r.handleSwitchWorkspace))
-		sr.Post("/{id}/channels", m.r.protected(m.r.handleAttachWorkspaceChannel))
-		sr.Get("/{id}/channels", m.r.protected(m.r.handleListWorkspaceChannels))
-		sr.Patch("/{id}/channels/{accountId}", m.r.protected(m.r.handleUpdateWorkspaceChannel))
-		sr.Delete("/{id}/channels/{accountId}", m.r.protected(m.r.handleDetachWorkspaceChannel))
+		sr.Post("/", m.deps.Protected(m.deps.Handlers.CreateWorkspace))
+		sr.Get("/", m.deps.Protected(m.deps.Handlers.ListWorkspaces))
+		sr.Get("/{id}", m.deps.Protected(m.deps.Handlers.GetWorkspace))
+		sr.Delete("/{id}", m.deps.Protected(m.deps.Handlers.DeleteWorkspace))
+		sr.Post("/{id}/switch", m.deps.Protected(m.deps.Handlers.SwitchWorkspace))
+		sr.Post("/{id}/channels", m.deps.Protected(m.deps.Handlers.AttachWorkspaceChannel))
+		sr.Get("/{id}/channels", m.deps.Protected(m.deps.Handlers.ListWorkspaceChannels))
+		sr.Patch("/{id}/channels/{accountId}", m.deps.Protected(m.deps.Handlers.UpdateWorkspaceChannel))
+		sr.Delete("/{id}/channels/{accountId}", m.deps.Protected(m.deps.Handlers.DetachWorkspaceChannel))
 	})
 
-	if m.r.groupStore != nil {
+	if m.deps.GroupStore != nil {
 		mux.Route("/api/v1/groups", func(sr chi.Router) {
-			sr.Get("/", m.r.protected(m.r.handleListGroups))
-			sr.Post("/", m.r.protected(m.r.handleCreateGroup))
-			sr.Get("/{id}", m.r.protected(m.r.handleGetGroup))
-			sr.Patch("/{id}", m.r.protected(m.r.handleUpdateGroup))
-			sr.Delete("/{id}", m.r.protected(m.r.handleDeleteGroup))
-			sr.Get("/{id}/accounts", m.r.protected(m.r.handleListGroupAccounts))
-			sr.Put("/{id}/accounts", m.r.protected(m.r.handleSetGroupAccounts))
+			sr.Get("/", m.deps.Protected(m.deps.Handlers.ListGroups))
+			sr.Post("/", m.deps.Protected(m.deps.Handlers.CreateGroup))
+			sr.Get("/{id}", m.deps.Protected(m.deps.Handlers.GetGroup))
+			sr.Patch("/{id}", m.deps.Protected(m.deps.Handlers.UpdateGroup))
+			sr.Delete("/{id}", m.deps.Protected(m.deps.Handlers.DeleteGroup))
+			sr.Get("/{id}/accounts", m.deps.Protected(m.deps.Handlers.ListGroupAccounts))
+			sr.Put("/{id}/accounts", m.deps.Protected(m.deps.Handlers.SetGroupAccounts))
 		})
 	}
 
 	mux.Route("/api/v1/api-keys", func(sr chi.Router) {
 		sr.Use(func(next http.Handler) http.Handler {
-			return auth.NewCSRF(m.r.csrfConfig(), next)
+			return auth.NewCSRF(m.deps.CsrfConfig(), next)
 		})
-		if m.r.apiKeyAuth != nil {
-			sr.Use(func(next http.Handler) http.Handler {
-				return m.r.apiKeyAuth.Middleware(next)
-			})
+		if m.deps.ApiKeyAuthMiddleware != nil {
+			sr.Use(m.deps.ApiKeyAuthMiddleware)
 		}
-		sr.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-				m.r.auth.Middleware(next).ServeHTTP(w, req)
-			})
-		})
-		if m.r.rateLimitSvc != nil {
-			sr.Use(APIKeyReadLimit(m.r.rateLimitSvc))
+		sr.Use(m.deps.AuthMiddleware)
+		if m.deps.RateLimitSvc != nil {
+			sr.Use(APIKeyReadLimit(m.deps.RateLimitSvc))
 		}
-		sr.Post("/", m.r.handleCreateApiKey)
-		sr.Get("/", m.r.handleListApiKeys)
-		sr.Get("/{id}", m.r.handleGetApiKey)
-		sr.Delete("/{id}", m.r.handleDeleteApiKey)
-		sr.Post("/{id}/rotate", m.r.handleRotateApiKey)
+		sr.Post("/", m.deps.Handlers.CreateApiKey)
+		sr.Get("/", m.deps.Handlers.ListApiKeys)
+		sr.Get("/{id}", m.deps.Handlers.GetApiKey)
+		sr.Delete("/{id}", m.deps.Handlers.DeleteApiKey)
+		sr.Post("/{id}/rotate", m.deps.Handlers.RotateApiKey)
 	})
 
-	if m.r.webhookStore != nil {
-		m.r.registerWebhookRoutes()
+	if m.deps.WebhookStore != nil {
+		m.deps.RegisterWebhookRoutes()
 	}
 }

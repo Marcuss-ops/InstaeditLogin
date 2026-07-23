@@ -103,7 +103,7 @@ func (f *fakeDeliveryEnv) seed(id string, status models.ExternalDeliveryStatus, 
 
 // newDeliveriesTestRouter constructs a Router with the GET
 // handler's deps wired AND a chi.NewRouter() initialised so
-// registerInternalVeloxRoutes() mounts the route. Calls the
+// VeloxModule.Register() mounts the route. Calls the
 // testSendRequest helper from internal_velox_get_delivery_test.go
 // to fire requests into mux.
 func newDeliveriesTestRouter(t *testing.T, deliveries ExternalDeliveryStore, token string) *Router {
@@ -114,7 +114,12 @@ func newDeliveriesTestRouter(t *testing.T, deliveries ExternalDeliveryStore, tok
 		externalDestinations: &fakeDestinationStorage{},
 		veloxAPIToken:        token,
 	}
-	r.registerInternalVeloxRoutes()
+	vm := NewVeloxModule(VeloxModuleDeps{
+		ExternalDestinationStore: r.externalDestinations,
+		ExternalDeliveryStore:    deliveries,
+		VeloxAPIToken:            token,
+	}).(*VeloxModule)
+	vm.Register(r.mux)
 	return r
 }
 
@@ -510,7 +515,12 @@ func newPostVeloxTestRouter(t *testing.T, deliveries ExternalDeliveryStore, dest
 		externalDestinations: destinations,
 		veloxAPIToken:        token,
 	}
-	r.registerInternalVeloxRoutes()
+	vm := NewVeloxModule(VeloxModuleDeps{
+		ExternalDestinationStore: destinations,
+		ExternalDeliveryStore:    deliveries,
+		VeloxAPIToken:            token,
+	}).(*VeloxModule)
+	vm.Register(r.mux)
 	return r
 }
 

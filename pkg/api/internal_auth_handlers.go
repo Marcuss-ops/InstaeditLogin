@@ -85,9 +85,14 @@ import (
 // standard HTTP semantics knows to opt back into 401-for-both
 // via a dedicated `WithWrongTokenStatus(http.StatusUnauthorized)`
 // Router option — see TODO-velox-auth-status-config follow-up.
-func (r *Router) internalVeloxAuth(next http.Handler) http.Handler {
+// internalVeloxAuth is the package-level implementation of the
+// service-to-service Bearer-token gate. It is intentionally
+// unexported so callers that already have a *Router can still use
+// the method receiver wrapper below, while module code can pass an
+// explicit token without depending on the whole Router.
+func internalVeloxAuthMiddleware(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if r.veloxAPIToken == "" {
+		if token == "" {
 			slog.Error("velox service auth not configured: VELOX_API_TOKEN empty — refusing request")
 			writeError(w, http.StatusServiceUnavailable, "service auth not configured")
 			return
@@ -103,7 +108,7 @@ func (r *Router) internalVeloxAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "malformed Authorization header")
 			return
 		}
-		token := authHeader[len(prefix):]
+		provided := authHeader[len(prefix):]
 		// subtle.ConstantTimeCompare on byte slices prevents
 		// timing-based recovery. Length-mismatch short-circuits
 		// to 0 (acceptable per file-level doc-comment).
@@ -113,14 +118,20 @@ func (r *Router) internalVeloxAuth(next http.Handler) http.Handler {
 		// well-formed Authorization header, so this maps to
 		// "authenticated attempt rejected" rather than
 		// "authentication required".
-		provided := []byte(token)
-		expected := []byte(r.veloxAPIToken)
-		if subtle.ConstantTimeCompare(provided, expected) != 1 {
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
 			writeError(w, http.StatusForbidden, "token mismatch")
 			return
 		}
 		next.ServeHTTP(w, req)
 	})
+}
+
+// internalVeloxAuth returns the service-to-service Bearer-token gate
+// wired with this Router's VELOX_API_TOKEN. It delegates to the
+// package-level internalVeloxAuth so the same constant-time compare
+// logic can be reused by VeloxModule without holding a *Router.
+func (r *Router) internalVeloxAuth(next http.Handler) http.Handler {
+	return internalVeloxAuthMiddleware(r.veloxAPIToken, next)
 }
 
 // authHeaderAuthorization is the canonical HTTP header name for

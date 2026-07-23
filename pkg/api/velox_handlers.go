@@ -34,14 +34,14 @@ import (
 // not configured) are emitted by the internalVeloxAuth
 // middleware BEFORE this handler runs; the spec is satisfied
 // via the middleware's existing behaviour, no per-handler code.
-func (r *Router) handleGetInternalDelivery(w http.ResponseWriter, req *http.Request) {
+func (m *VeloxModule) handleGetInternalDelivery(w http.ResponseWriter, req *http.Request) {
 	id := chi.URLParam(req, "id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "delivery id required")
 		return
 	}
 
-	delivery, err := r.externalDeliveries.GetByID(req.Context(), id)
+	delivery, err := m.deps.ExternalDeliveryStore.GetByID(req.Context(), id)
 	if err != nil {
 		slog.Error("velox get delivery: lookup failed",
 			"social_delivery_id", id, "err", err)
@@ -145,12 +145,12 @@ func (r *Router) handleGetInternalDelivery(w http.ResponseWriter, req *http.Requ
 // handler — by design, so callers can distinguish
 // "validate-and-fix" (422) from "permanent conflict, don't
 // retry" (409).
-func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.Request) {
-	if r.externalDeliveries == nil {
+func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *http.Request) {
+	if m.deps.ExternalDeliveryStore == nil {
 		writeError(w, http.StatusNotImplemented, "internal velox delivery store not configured")
 		return
 	}
-	if r.externalDestinations == nil {
+	if m.deps.ExternalDestinationStore == nil {
 		writeError(w, http.StatusInternalServerError, "external destination store not configured")
 		return
 	}
@@ -239,7 +239,7 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 	}
 
 	// Step 9 — external_destination_id must exist.
-	dest, err := r.externalDestinations.GetByID(ctx, veloxReq.ExternalDestinationID)
+	dest, err := m.deps.ExternalDestinationStore.GetByID(ctx, veloxReq.ExternalDestinationID)
 	if err != nil {
 		// Sentinel-aware: a not-found sentinel from the
 		// destination repo is the SAME 404 a missing-row
@@ -320,7 +320,7 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 	// Insert with rawBody so repo computes SHA from the EXACT
 	// bytes (no serialization round-trip mismatch possible).
 	t0 := time.Now()
-	inserted, err := r.externalDeliveries.Insert(ctx, delivery, body)
+	inserted, err := m.deps.ExternalDeliveryStore.Insert(ctx, delivery, body)
 	elapsed := time.Since(t0)
 	if elapsed > 300*time.Millisecond {
 		slog.Warn("velox deliver: insert slow",
@@ -390,11 +390,11 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 //     defense-in-depth.
 //
 // All dependent stores (workspaceStore + userRepo) are read
-// from Router fields DIRECTLY (not via a captured config
+// from the module's dependency struct (not via a captured config
 // struct). This avoids an option-order trap: a RouterOption
 // that snapshots r.workspaceStore at option-call time would
-// capture nil if the option order is wrong. The Router fields
-// are always current at handler-time.
+// capture nil if the option order is wrong. The typed deps are
+// always current at handler-time.
 //
 // Inconsistency note: a reauth_required destination returns 404
 // (not 422) because the canonical Velox contract treats
@@ -403,9 +403,8 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 // the URL with a fresh id. Returning a distinct status would
 // leak existence.
 //
-// TOKEN REFRESHABILITY — see the file-level doc-comment at the
-// registerInternalVeloxRoutes helper for the full rationale:
-// /validate is a fast poll that DOES NOT touch the credential
+// TOKEN REFRESHABILITY — see VeloxModule.Register for the full
+// rationale: /validate is a fast poll that DOES NOT touch the credential
 // vault. Trust chain:
 //   - platform_account.status = 'active'
 //   - platform_account.reauth_required_at IS NULL
@@ -426,8 +425,8 @@ func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.R
 // doesn't accidentally trigger the body variant (Velox's
 // request layer forwards all headers by default; the explicit
 // true gate avoids accidental triggering).
-func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *http.Request) {
-	if r.externalDestinations == nil {
+func (m *VeloxModule) handleValidateInternalDestination(w http.ResponseWriter, req *http.Request) {
+	if m.deps.ExternalDestinationStore == nil {
 		writeError(w, http.StatusNotImplemented, "internal velox store not configured")
 		return
 	}
@@ -442,8 +441,8 @@ func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *h
 	// without saturating the destination / workspace /
 	// platform_account downstreams. 429 + Retry-After header
 	// signals the peer to spread its retry load.
-	if r.veloxValidateRateLimiter != nil {
-		allowed, retryAfter := r.veloxValidateRateLimiter.take(id)
+	if m.deps.VeloxValidateRateLimiter != nil {
+		allowed, retryAfter := m.deps.VeloxValidateRateLimiter.take(id)
 		if !allowed {
 			seconds := int(retryAfter.Seconds())
 			if seconds < 1 {
@@ -459,7 +458,7 @@ func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *h
 	}
 
 	// 1. Destination lookup.
-	dest, err := r.externalDestinations.GetByID(req.Context(), id)
+	dest, err := m.deps.ExternalDestinationStore.GetByID(req.Context(), id)
 	if err != nil {
 		// Mirror of handleCreateInternalDelivery's sentinel-aware
 		// 404: production repos wrap the missing-row case as
@@ -486,14 +485,14 @@ func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *h
 		return
 	}
 
-	// 2. Workspace lookup. Read directly from Router field —
+	// 2. Workspace lookup. Read directly from module deps —
 	// avoids the option-order trap of capturing values at
 	// WithExternalDestinationStore call time.
-	if r.workspaceStore == nil {
+	if m.deps.WorkspaceStore == nil {
 		writeError(w, http.StatusInternalServerError, "workspace store not configured")
 		return
 	}
-	ws, err := r.workspaceStore.FindByID(dest.WorkspaceID)
+	ws, err := m.deps.WorkspaceStore.FindByID(dest.WorkspaceID)
 	if err != nil {
 		slog.Error("velox validate: workspace lookup failed",
 			"workspace_id", dest.WorkspaceID, "err", err)
@@ -506,11 +505,11 @@ func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *h
 	}
 
 	// 3. Platform_account lookup. Same direct-from-Router pattern.
-	if r.userRepo == nil {
+	if m.deps.UserStore == nil {
 		writeError(w, http.StatusInternalServerError, "user store not configured")
 		return
 	}
-	pa, err := r.userRepo.FindPlatformAccountByID(dest.PlatformAccountID)
+	pa, err := m.deps.UserStore.FindPlatformAccountByID(dest.PlatformAccountID)
 	if err != nil {
 		slog.Error("velox validate: platform_account lookup failed",
 			"platform_account_id", dest.PlatformAccountID, "err", err)
@@ -578,52 +577,6 @@ func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *h
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// registerInternalVeloxRoutes wires the /internal/v1
-// service-to-service routes. Called from Router.Setup().
-// Refuses to register if the per-route dependencies aren't
-// wired (matches the WorkspaceStore / PostStore nil-guard
-// pattern) — a server without WithExternalDestinationStore +
-// WithVeloxAPIToken returns 404 for /internal/v1/* paths so
-// the operator sees a clear "route not registered" rather
-// than a 500.
-//
-// Per-route dependency requirements:
-//   - destinations/{id}/validate: externalDestinations +
-//     veloxAPIToken (workspaceStore + userRepo required at
-//     handler-time for the full happy path; checked inline).
-//   - deliveries: externalDestinations + externalDeliveries
-//   - veloxAPIToken (all three required AT register-time;
-//     the handler's defensive nil-checks also catch a
-//     misordered wiring).
-//
-// Boot-time guard rationale: if VELOX_API_TOKEN is empty OR
-// the destination store IS unwired, the middleware returns
-// 503 on every request. Better to NOT register the route at
-// all so the operator sees a 404 in the logs and traces back
-// the env config. Subsequent env rotation (process restart
-// re-loads) restores the route.
-func (r *Router) registerInternalVeloxRoutes() {
-	if r.externalDestinations == nil || r.veloxAPIToken == "" {
-		return
-	}
-	r.mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate",
-		r.internalVeloxAuth(http.HandlerFunc(r.handleValidateInternalDestination)))
-	if r.externalDeliveries != nil {
-		r.mux.Method(http.MethodPost, "/internal/v1/deliveries",
-			r.internalVeloxAuth(http.HandlerFunc(r.handleCreateInternalDelivery)))
-		// GET /internal/v1/deliveries/{id} — Velox reconciliation/poll.
-		// The id is the social_delivery_id minted by handleCreateInternalDelivery
-		// (shape: "sdel_01J…"). Velox polls this endpoint when its
-		// outbound callback channel drops a packet (network blip,
-		// peer restarts, 502 storm). Same Bearer auth as the other
-		// /internal/v1 routes — the middleware separately handles
-		// 401 missing-header / 403 token-mismatch before this handler
-		// runs.
-		r.mux.Method(http.MethodGet, "/internal/v1/deliveries/{id}",
-			r.internalVeloxAuth(http.HandlerFunc(r.handleGetInternalDelivery)))
-	}
-}
-
 // WithExternalDestinationStore wires
 // *repository.ExternalDestinationRepository into the Router.
 // Following the WorkspaceStore / PostStore nil-guard pattern:
@@ -646,8 +599,8 @@ func WithExternalDestinationStore(s ExternalDestinationStore) RouterOption {
 // *repository.ExternalDeliveryRepository into the Router for
 // POST /internal/v1/deliveries. Mirrors
 // WithExternalDestinationStore: when omitted, the deliveries
-// route is not registered (the registerInternalVeloxRoutes
-// helper nil-guards). The validate route is unaffected —
+// route is not registered (VeloxModule.Register nil-guards).
+// The validate route is unaffected —
 // only the deliveries route depends on this option.
 //
 // Production wiring in internal/bootstrap.Wire passes the

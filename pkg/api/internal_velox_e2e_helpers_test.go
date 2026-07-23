@@ -186,7 +186,7 @@ type e2eHarness struct {
 	audit      *mockAuditStore
 	dispatcher *VeloxCallbackDispatcher
 
-	// router (constructed via inline pattern; registerInternalVeloxRoutes
+	// router (constructed via inline pattern; VeloxModule.Register
 	// mounts the 3 endpoints on r.mux so we can fire HTTP requests
 	// through it).
 	router *Router
@@ -315,15 +315,15 @@ func newE2EHarness(t *testing.T) *e2eHarness {
 	// 7) Router — inline pattern + register routes. We DO NOT call
 	//    MustNewRouter(, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second))) because it requires capRouter + auth.Manager
 	//    etc. that this test doesn't need.
-	h.router = &Router{
-		mux:                  chi.NewRouter(),
-		workspaceStore:       h.workspaceStore,
-		userRepo:             h.userStore,
-		externalDestinations: h.destinations,
-		externalDeliveries:   h.deliveries,
-		veloxAPIToken:        e2eAPIToken,
-	}
-	h.router.registerInternalVeloxRoutes()
+	h.router = &Router{mux: chi.NewRouter()}
+	vm := NewVeloxModule(VeloxModuleDeps{
+		ExternalDestinationStore: h.destinations,
+		ExternalDeliveryStore:    h.deliveries,
+		WorkspaceStore:           h.workspaceStore,
+		UserStore:                h.userStore,
+		VeloxAPIToken:            e2eAPIToken,
+	}).(*VeloxModule)
+	vm.Register(h.router.mux)
 
 	t.Cleanup(func() {
 		h.veloxArtifactSrv.Close()

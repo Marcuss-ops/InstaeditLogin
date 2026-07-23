@@ -184,7 +184,7 @@ type Deps struct {
 //	GET    /api/v1/velox/assets/{id}
 //
 // Every route is wrapped with the auth + CSRF chain (auth outermost,
-// CSRF inner — matches the registerUserVeloxDestinations ordering).
+// CSRF inner — matches the IntegrationsModule.Register ordering).
 func Register(mux chi.Router, deps Deps) {
 	if deps.Client == nil {
 		return
@@ -205,7 +205,7 @@ func Register(mux chi.Router, deps Deps) {
 // wrap composes the CSRF and auth middlewares around a handler.
 // CSRF is applied first (innermost), auth second (outermost) so the
 // request flows auth → CSRF → handler. Matches the ordering in
-// pkg/api/admin_velox_destinations_handlers.go::registerUserVeloxDestinations.
+// pkg/api/admin_velox_destinations_handlers.go (IntegrationsModule.Register).
 func (d Deps) wrap(h http.HandlerFunc) http.Handler {
 	var handler http.Handler = h
 	if d.CSRFMiddleware != nil {

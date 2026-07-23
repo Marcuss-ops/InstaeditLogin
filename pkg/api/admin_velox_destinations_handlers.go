@@ -103,16 +103,16 @@ const veloxIntegrationSourceSystem = "velox"
 // event_type=external_destination_created and actor_id = user_id.
 // Best-effort: a transient audit-store failure is logged + swallowed
 // so a down audit_log table doesn't fail the user-visible insert.
-func (r *Router) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
-	if r.externalDestinations == nil {
+func (m *IntegrationsModule) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	if m.deps.ExternalDestinationStore == nil {
 		writeError(w, http.StatusNotImplemented, "external destinations store not configured")
 		return
 	}
-	if r.workspaceStore == nil {
+	if m.deps.WorkspaceStore == nil {
 		writeError(w, http.StatusInternalServerError, "workspace store not configured")
 		return
 	}
-	if r.userRepo == nil {
+	if m.deps.UserStore == nil {
 		writeError(w, http.StatusInternalServerError, "user store not configured")
 		return
 	}
@@ -139,7 +139,7 @@ func (r *Router) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, 
 	}
 
 	// Workspace ownership check (403 if not owner).
-	ws, err := r.workspaceStore.FindByID(payload.WorkspaceID)
+	ws, err := m.deps.WorkspaceStore.FindByID(payload.WorkspaceID)
 	if err != nil {
 		slog.Error("velox destination: workspace lookup failed",
 			"user_id", userID, "workspace_id", payload.WorkspaceID, "err", err)
@@ -154,7 +154,7 @@ func (r *Router) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, 
 	}
 
 	// Platform_account enablement check (422 if missing/disabled).
-	pa, err := r.userRepo.FindPlatformAccountByID(payload.PlatformAccountID)
+	pa, err := m.deps.UserStore.FindPlatformAccountByID(payload.PlatformAccountID)
 	if err != nil {
 		slog.Error("velox destination: platform_account lookup failed",
 			"user_id", userID, "platform_account_id", payload.PlatformAccountID, "err", err)
@@ -201,7 +201,7 @@ func (r *Router) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, 
 		Enabled:           true,
 		DefaultMetadata:   defaults,
 	}
-	if err := r.externalDestinations.Create(req.Context(), dest); err != nil {
+	if err := m.deps.ExternalDestinationStore.Create(req.Context(), dest); err != nil {
 		if errors.Is(err, repository.ErrExternalDestinationAlreadyExists) {
 			writeError(w, http.StatusConflict,
 				"destination already linked for this (workspace_id, platform_account_id) triple")
@@ -214,8 +214,8 @@ func (r *Router) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, 
 	}
 
 	// Audit log: best-effort, do not fail the user-visible insert.
-	if r.auditLogStore != nil {
-		if err := r.auditLogStore.Log(req.Context(),
+	if m.deps.AuditLogStore != nil {
+		if err := m.deps.AuditLogStore.Log(req.Context(),
 			"external_destination_created",
 			strconv.FormatInt(userID, 10),
 			"external_destination",
@@ -290,12 +290,12 @@ func toVeloxDestinationResponse(d *models.ExternalDestination) VeloxDestinationR
 // the caller owns it (403 if not). Only enabled destinations are
 // returned by default; pass ?include_disabled=true to include
 // disabled rows.
-func (r *Router) handleListIntegrationVeloxDestinations(w http.ResponseWriter, req *http.Request) {
-	if r.externalDestinations == nil {
+func (m *IntegrationsModule) handleListIntegrationVeloxDestinations(w http.ResponseWriter, req *http.Request) {
+	if m.deps.ExternalDestinationStore == nil {
 		writeError(w, http.StatusNotImplemented, "external destinations store not configured")
 		return
 	}
-	if r.workspaceStore == nil {
+	if m.deps.WorkspaceStore == nil {
 		writeError(w, http.StatusInternalServerError, "workspace store not configured")
 		return
 	}
@@ -318,7 +318,7 @@ func (r *Router) handleListIntegrationVeloxDestinations(w http.ResponseWriter, r
 	}
 
 	// Workspace ownership check (403 if not owner).
-	ws, err := r.workspaceStore.FindByID(workspaceID)
+	ws, err := m.deps.WorkspaceStore.FindByID(workspaceID)
 	if err != nil {
 		slog.Error("velox destination list: workspace lookup failed",
 			"user_id", userID, "workspace_id", workspaceID, "err", err)
@@ -335,7 +335,7 @@ func (r *Router) handleListIntegrationVeloxDestinations(w http.ResponseWriter, r
 		enabledOnly = false
 	}
 
-	dests, err := r.externalDestinations.ListByWorkspace(req.Context(), workspaceID, enabledOnly)
+	dests, err := m.deps.ExternalDestinationStore.ListByWorkspace(req.Context(), workspaceID, enabledOnly)
 	if err != nil {
 		slog.Error("velox destination list: query failed",
 			"workspace_id", workspaceID, "err", err)
@@ -365,12 +365,12 @@ func (r *Router) handleListIntegrationVeloxDestinations(w http.ResponseWriter, r
 // verifies the destination belongs to a workspace the caller owns
 // (404 on mismatch — collapses "not yours" with "does not exist"
 // so the caller cannot enumerate by id).
-func (r *Router) handleGetIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
-	if r.externalDestinations == nil {
+func (m *IntegrationsModule) handleGetIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	if m.deps.ExternalDestinationStore == nil {
 		writeError(w, http.StatusNotImplemented, "external destinations store not configured")
 		return
 	}
-	if r.workspaceStore == nil {
+	if m.deps.WorkspaceStore == nil {
 		writeError(w, http.StatusInternalServerError, "workspace store not configured")
 		return
 	}
@@ -387,7 +387,7 @@ func (r *Router) handleGetIntegrationVeloxDestination(w http.ResponseWriter, req
 		return
 	}
 
-	dest, err := r.externalDestinations.GetByID(req.Context(), destID)
+	dest, err := m.deps.ExternalDestinationStore.GetByID(req.Context(), destID)
 	if err != nil {
 		slog.Error("velox destination get: lookup failed",
 			"id", destID, "err", err)
@@ -402,7 +402,7 @@ func (r *Router) handleGetIntegrationVeloxDestination(w http.ResponseWriter, req
 	// Ownership check: the destination's workspace must be owned by
 	// the caller. 404 (not 403) on mismatch so the caller cannot
 	// enumerate by id.
-	ws, err := r.workspaceStore.FindByID(dest.WorkspaceID)
+	ws, err := m.deps.WorkspaceStore.FindByID(dest.WorkspaceID)
 	if err != nil {
 		slog.Error("velox destination get: workspace lookup failed",
 			"id", destID, "workspace_id", dest.WorkspaceID, "err", err)
@@ -426,12 +426,12 @@ func (r *Router) handleGetIntegrationVeloxDestination(w http.ResponseWriter, req
 // has dependent deliveries (FK RESTRICT), the repository returns
 // ErrExternalDestinationHasDependents which maps to 409 Conflict.
 // An audit log entry is written on success (best-effort).
-func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
-	if r.externalDestinations == nil {
+func (m *IntegrationsModule) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	if m.deps.ExternalDestinationStore == nil {
 		writeError(w, http.StatusNotImplemented, "external destinations store not configured")
 		return
 	}
-	if r.workspaceStore == nil {
+	if m.deps.WorkspaceStore == nil {
 		writeError(w, http.StatusInternalServerError, "workspace store not configured")
 		return
 	}
@@ -449,7 +449,7 @@ func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, 
 	}
 
 	// Fetch the row first so we can check ownership before deleting.
-	dest, err := r.externalDestinations.GetByID(req.Context(), destID)
+	dest, err := m.deps.ExternalDestinationStore.GetByID(req.Context(), destID)
 	if err != nil {
 		slog.Error("velox destination delete: lookup failed",
 			"id", destID, "err", err)
@@ -462,7 +462,7 @@ func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, 
 	}
 
 	// Ownership check: 404 (not 403) on mismatch.
-	ws, err := r.workspaceStore.FindByID(dest.WorkspaceID)
+	ws, err := m.deps.WorkspaceStore.FindByID(dest.WorkspaceID)
 	if err != nil {
 		slog.Error("velox destination delete: workspace lookup failed",
 			"id", destID, "workspace_id", dest.WorkspaceID, "err", err)
@@ -474,7 +474,7 @@ func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, 
 		return
 	}
 
-	if err := r.externalDestinations.Delete(req.Context(), destID); err != nil {
+	if err := m.deps.ExternalDestinationStore.Delete(req.Context(), destID); err != nil {
 		if errors.Is(err, repository.ErrExternalDestinationHasDependents) {
 			writeError(w, http.StatusConflict,
 				"destination has dependent deliveries; disable instead of deleting")
@@ -491,8 +491,8 @@ func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, 
 	}
 
 	// Audit log: best-effort.
-	if r.auditLogStore != nil {
-		if err := r.auditLogStore.Log(req.Context(),
+	if m.deps.AuditLogStore != nil {
+		if err := m.deps.AuditLogStore.Log(req.Context(),
 			"external_destination_deleted",
 			strconv.FormatInt(userID, 10),
 			"external_destination",
@@ -539,12 +539,12 @@ func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, 
 // UpdateEnabled + UpdateDefaultMetadata as independent ops; both
 // surface ErrExternalDestinationNotFound → 404 so a concurrent
 // DELETE between authz and update degrades safely without a 500.
-func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
-	if r.externalDestinations == nil {
+func (m *IntegrationsModule) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	if m.deps.ExternalDestinationStore == nil {
 		writeError(w, http.StatusNotImplemented, "external destinations store not configured")
 		return
 	}
-	if r.workspaceStore == nil {
+	if m.deps.WorkspaceStore == nil {
 		writeError(w, http.StatusInternalServerError, "workspace store not configured")
 		return
 	}
@@ -562,7 +562,7 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 	}
 
 	// Fetch first so we can check ownership before any mutation.
-	dest, err := r.externalDestinations.GetByID(req.Context(), destID)
+	dest, err := m.deps.ExternalDestinationStore.GetByID(req.Context(), destID)
 	if err != nil {
 		slog.Error("velox destination update: lookup failed", "id", destID, "err", err)
 		writeError(w, http.StatusInternalServerError, "destination lookup failed")
@@ -573,7 +573,7 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 		return
 	}
 
-	ws, err := r.workspaceStore.FindByID(dest.WorkspaceID)
+	ws, err := m.deps.WorkspaceStore.FindByID(dest.WorkspaceID)
 	if err != nil {
 		slog.Error("velox destination update: workspace lookup failed",
 			"id", destID, "workspace_id", dest.WorkspaceID, "err", err)
@@ -628,7 +628,7 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 	if len(defaultsTrimmed) > 0 {
 		defaultsToUpdate = payload.Defaults
 	}
-	if err := r.externalDestinations.UpdateEnabledAndDefaults(req.Context(), destID, payload.Enabled, defaultsToUpdate); err != nil {
+	if err := m.deps.ExternalDestinationStore.UpdateEnabledAndDefaults(req.Context(), destID, payload.Enabled, defaultsToUpdate); err != nil {
 		if errors.Is(err, repository.ErrExternalDestinationNotFound) {
 			writeError(w, http.StatusNotFound, "destination not found")
 			return
@@ -642,7 +642,7 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 	// Refresh for the response — picks up the new updated_at. A
 	// nil row here means concurrent DELETE finished after our last
 	// update; map to 404 to keep the contract consistent.
-	dest, err = r.externalDestinations.GetByID(req.Context(), destID)
+	dest, err = m.deps.ExternalDestinationStore.GetByID(req.Context(), destID)
 	if err != nil {
 		slog.Error("velox destination update: refresh failed", "id", destID, "err", err)
 		writeError(w, http.StatusInternalServerError, "destination refresh failed")
@@ -654,8 +654,8 @@ func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, 
 	}
 
 	// Audit log: best-effort — never fails the user-visible write.
-	if r.auditLogStore != nil {
-		if err := r.auditLogStore.Log(req.Context(),
+	if m.deps.AuditLogStore != nil {
+		if err := m.deps.AuditLogStore.Log(req.Context(),
 			"external_destination_updated",
 			strconv.FormatInt(userID, 10),
 			"external_destination",
@@ -690,62 +690,3 @@ func auditMetadataFromDeltas(d VeloxDestinationUpdateAuditDeltas) map[string]int
 	return m
 }
 
-// registerUserVeloxDestinations mounts the user-facing Velox
-// integration routes on the provided mux. Called from
-// IntegrationsModule.Register (and directly by tests). Refuses to
-// register when the core dependencies are unwired so a partial
-// production deployment surfaces 404 (route not mounted) rather than
-// 500.
-//
-// The POST /destinations endpoint additionally requires the user
-// repository and audit log store; when either is missing it is
-// mounted as 501 Not Implemented while the read/delete endpoints
-// remain available.
-//
-// The handlers are wrapped in the standard user JWT + CSRF chain
-// (authMiddleware → csrfMiddleware).
-func (r *Router) registerUserVeloxDestinations(mux chi.Router) {
-	if mux == nil {
-		return
-	}
-	if r.externalDestinations == nil || r.workspaceStore == nil {
-		// Missing dep = unmounted route. Operator sees 404 chi,
-		// not 500 server-error. Matches the nil-guard pattern
-		// used by the rest of pkg/api/.
-		return
-	}
-	// Wrap each handler with the project's canonical user-auth + CSRF
-	// chain. Order: CSRF first (rejects bad-cookie callers BEFORE we do
-	// any DB work), then auth (extracts JWT identity for handlers
-	// downstream).
-	wrap := func(h http.HandlerFunc) http.Handler {
-		var handler http.Handler = h
-		if r.csrfMiddleware != nil {
-			handler = r.csrfMiddleware(handler)
-		}
-		if r.authMiddleware != nil {
-			handler = r.authMiddleware(handler)
-		}
-		return handler
-	}
-
-	// POST requires the platform-account lookup and audit log store.
-	if r.userRepo != nil && r.auditLogStore != nil {
-		mux.Method(http.MethodPost, "/api/v1/integrations/velox/destinations",
-			wrap(r.handleCreateIntegrationVeloxDestination))
-	} else {
-		mux.Method(http.MethodPost, "/api/v1/integrations/velox/destinations",
-			wrap(func(w http.ResponseWriter, req *http.Request) {
-				writeError(w, http.StatusNotImplemented, "destination creation not configured")
-			}))
-	}
-
-	mux.Method(http.MethodGet, "/api/v1/integrations/velox/destinations",
-		wrap(r.handleListIntegrationVeloxDestinations))
-	mux.Method(http.MethodGet, "/api/v1/integrations/velox/destinations/{id}",
-		wrap(r.handleGetIntegrationVeloxDestination))
-	mux.Method(http.MethodDelete, "/api/v1/integrations/velox/destinations/{id}",
-		wrap(r.handleDeleteIntegrationVeloxDestination))
-	mux.Method(http.MethodPatch, "/api/v1/integrations/velox/destinations/{id}",
-		wrap(r.handleUpdateIntegrationVeloxDestination))
-}

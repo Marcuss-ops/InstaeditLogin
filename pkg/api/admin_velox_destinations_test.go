@@ -328,7 +328,7 @@ func (f *fakeAuditLogStore) Log(ctx context.Context, eventType, actorID, resourc
 
 // setupRouterForCreateDestination wires a fresh chi.Mux + the
 // dependencies the POST handler needs, then mounts the route via
-// registerUserVeloxDestinations. The user identity is stamped
+// IntegrationsModule.Register. The user identity is stamped
 // directly into request context by each test (we bypass the real
 // JWT middleware for test isolation; the JWT chain is exercised
 // by the existing authEmail_test.go suite).
@@ -752,7 +752,7 @@ func TestGetIntegrationVeloxDestination_Happy(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/velox/destinations/extdst_01JABC", nil)
 	req = reqWithUser(req, 123)
 	// chi needs the route to be registered with {id} for URLParam to
-	// work — registerUserVeloxDestinations already mounted it.
+	// work — IntegrationsModule.Register already mounted it.
 	w := httptest.NewRecorder()
 	r.mux.ServeHTTP(w, req)
 
