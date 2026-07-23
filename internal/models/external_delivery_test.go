@@ -532,6 +532,15 @@ func TestVeloxDeliveryMetadata_Validate(t *testing.T) {
 		{"local timezone", func(m *VeloxDeliveryMetadata) {
 			m.Timezone = ptrTo("Local")
 		}, "timezone"},
+		{"nested timezone", func(m *VeloxDeliveryMetadata) {
+			m.Timezone = ptrTo("America/New/York")
+		}, "timezone"},
+		{"valid utc", func(m *VeloxDeliveryMetadata) {
+			m.Timezone = ptrTo("UTC")
+		}, ""},
+		{"valid etc/utc", func(m *VeloxDeliveryMetadata) {
+			m.Timezone = ptrTo("Etc/UTC")
+		}, ""},
 		{"empty tag", func(m *VeloxDeliveryMetadata) {
 			m.Tags = []string{"ok", ""}
 		}, "tags"},

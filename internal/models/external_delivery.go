@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	_ "time/tzdata" // embed IANA timezone DB so time.LoadLocation works without host tzdata
 )
 
 // ExternalDeliveryStatus is the 11-value lifecycle enum on the
@@ -502,17 +504,14 @@ func validateVeloxLanguage(lang string) error {
 	return nil
 }
 
-// veloxTimezoneRegex matches IANA timezone names such as
-// "Europe/Rome", "America/New_York", "Etc/UTC", etc. It is
-// intentionally format-based so validation does not depend on tzdata
-// being installed at runtime.
-var veloxTimezoneRegex = regexp.MustCompile(`^(UTC|[A-Z][a-zA-Z0-9_-]*/[A-Z][a-zA-Z0-9_-]+)$`)
-
 func validateVeloxTimezone(tz string) error {
 	if strings.TrimSpace(tz) == "" {
 		return fmt.Errorf("must be non-empty when set")
 	}
-	if tz == "Local" || !veloxTimezoneRegex.MatchString(tz) {
+	// time.LoadLocation uses the embedded IANA database imported
+	// via time/tzdata, so it works even in minimal containers.
+	loc, err := time.LoadLocation(tz)
+	if err != nil || loc == nil || tz == "Local" {
 		return fmt.Errorf("%q is not a valid IANA timezone", tz)
 	}
 	return nil
