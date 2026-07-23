@@ -41,7 +41,7 @@ type GoogleDriveOAuthService struct {
 // NewGoogleDriveOAuthService creates a new GoogleDriveOAuthService.
 // Returns (nil, nil) when the provider is disabled (no client id).
 func NewGoogleDriveOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*GoogleDriveOAuthService, error) {
-	if cfg.GoogleDriveClientID == "" {
+	if cfg.Auth.GoogleDriveClientID == "" {
 		return nil, nil
 	}
 	var dep ProviderDependencies
@@ -179,8 +179,8 @@ func (s *GoogleDriveOAuthService) GetLoginURL(state string) string {
 //   - userinfo.profile — operator display name in the dashboard.
 func (s *GoogleDriveOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
-	params.Set("client_id", s.cfg.GoogleDriveClientID)
-	params.Set("redirect_uri", s.cfg.GoogleDriveRedirectURI)
+	params.Set("client_id", s.cfg.Auth.GoogleDriveClientID)
+	params.Set("redirect_uri", s.cfg.Auth.GoogleDriveRedirectURI)
 	params.Set("state", state)
 	params.Set("scope", canonicalDriveReadonlyScope+" "+userinfoProfileScope)
 	params.Set("response_type", "code")
@@ -239,8 +239,8 @@ func (s *GoogleDriveOAuthService) RefreshOAuthToken(ctx context.Context, refresh
 		return nil, fmt.Errorf("google drive refresh: empty refresh token")
 	}
 	body := url.Values{}
-	body.Set("client_id", s.cfg.GoogleDriveClientID)
-	body.Set("client_secret", s.cfg.GoogleDriveClientSecret)
+	body.Set("client_id", s.cfg.Auth.GoogleDriveClientID)
+	body.Set("client_secret", s.cfg.Auth.GoogleDriveClientSecret)
 	body.Set("refresh_token", refreshToken)
 	body.Set("grant_type", "refresh_token")
 
@@ -347,11 +347,11 @@ func (s *GoogleDriveOAuthService) DownloadFile(ctx context.Context, accessToken,
 
 func (s *GoogleDriveOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*googleDriveTokenResponse, error) {
 	body := url.Values{}
-	body.Set("client_id", s.cfg.GoogleDriveClientID)
-	body.Set("client_secret", s.cfg.GoogleDriveClientSecret)
+	body.Set("client_id", s.cfg.Auth.GoogleDriveClientID)
+	body.Set("client_secret", s.cfg.Auth.GoogleDriveClientSecret)
 	body.Set("code", code)
 	body.Set("grant_type", "authorization_code")
-	body.Set("redirect_uri", s.cfg.GoogleDriveRedirectURI)
+	body.Set("redirect_uri", s.cfg.Auth.GoogleDriveRedirectURI)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://oauth2.googleapis.com/token", strings.NewReader(body.Encode()))
 	if err != nil {

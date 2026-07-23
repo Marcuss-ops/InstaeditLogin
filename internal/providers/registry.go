@@ -136,8 +136,8 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 	// single place that knows "META_APP_ID + META_APP_SECRET are
 	// required for Facebook to work" and warns-and-skips
 	// accordingly.
-	if cfg.FacebookRedirectURI != "" {
-		if cfg.MetaAppID == "" || cfg.MetaAppSecret == "" {
+	if cfg.Auth.FacebookRedirectURI != "" {
+		if cfg.Auth.MetaAppID == "" || cfg.Auth.MetaAppSecret == "" {
 			b.logger.Warn("Skipped Facebook provider: META_APP_ID and META_APP_SECRET are required (or unset FACEBOOK_REDIRECT_URI to disable)")
 			// Do not call the constructor — it would build a service
 			// with an empty client_id, which would fail noisily on
@@ -152,7 +152,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		}
 	}
 
-	if cfg.TikTokClientID != "" {
+	if cfg.Auth.TikTokClientID != "" {
 		tik, err := services.NewTikTokOAuthService(cfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped TikTok provider (constructor failed)", "error", err)
@@ -161,7 +161,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		}
 	}
 
-	if cfg.XClientID != "" {
+	if cfg.Auth.XClientID != "" {
 		tw, err := services.NewTwitterOAuthService(cfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped Twitter/X provider (constructor failed)", "error", err)
@@ -170,7 +170,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		}
 	}
 
-	if cfg.YouTubeClientID != "" {
+	if cfg.Auth.YouTubeClientID != "" {
 		yt, err := services.NewYouTubeOAuthService(cfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped YouTube provider (constructor failed)", "error", err)
@@ -179,7 +179,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		}
 	}
 
-	if cfg.GoogleDriveClientID != "" {
+	if cfg.Auth.GoogleDriveClientID != "" {
 		gd, err := services.NewGoogleDriveOAuthService(cfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped Google Drive provider (constructor failed)", "error", err)
@@ -188,7 +188,7 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 		}
 	}
 
-	if cfg.LinkedInClientID != "" {
+	if cfg.Auth.LinkedInClientID != "" {
 		li, err := services.NewLinkedInOAuthService(oauthCfg, b.deps)
 		if err != nil {
 			b.logger.Warn("Skipped LinkedIn provider (constructor failed)", "error", err)
@@ -198,8 +198,8 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 	}
 
 	// Threads (Zernio 2.1): Meta-family async publishing.
-	if cfg.ThreadsRedirectURI != "" {
-		if cfg.MetaAppID == "" || cfg.MetaAppSecret == "" {
+	if cfg.Auth.ThreadsRedirectURI != "" {
+		if cfg.Auth.MetaAppID == "" || cfg.Auth.MetaAppSecret == "" {
 			b.logger.Warn("Skipped Threads provider: META_APP_ID and META_APP_SECRET are required (or unset THREADS_REDIRECT_URI to disable)")
 		} else {
 			th, err := services.NewThreadsOAuthService(cfg, b.deps)
@@ -214,9 +214,9 @@ func BuildRegistry(cfg *config.Config, deps ...Dependency) (CapabilityRegistry, 
 	// Instagram (Taglio 4.4): Meta-family media-only. Independent
 	// registration — a deployment can enable only Instagram without
 	// the rest of Meta-family. Same shared-credentials check as
-	// Facebook: cfg.MetaAppID + cfg.MetaAppSecret are required.
-	if cfg.InstagramRedirectURI != "" {
-		if cfg.MetaAppID == "" || cfg.MetaAppSecret == "" {
+	// Facebook: cfg.Auth.MetaAppID + cfg.Auth.MetaAppSecret are required.
+	if cfg.Auth.InstagramRedirectURI != "" {
+		if cfg.Auth.MetaAppID == "" || cfg.Auth.MetaAppSecret == "" {
 			b.logger.Warn("Skipped Instagram provider: META_APP_ID and META_APP_SECRET are required (or unset INSTAGRAM_REDIRECT_URI to disable)")
 		} else {
 			ig, err := services.NewInstagramOAuthService(cfg, b.deps)

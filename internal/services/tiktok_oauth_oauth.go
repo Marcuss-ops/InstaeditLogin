@@ -18,8 +18,8 @@ func (s *TikTokOAuthService) GetLoginURL(state string) string {
 // GetLoginURLWithOptions builds the TikTok OAuth authorization URL.
 func (s *TikTokOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
-	params.Set("client_key", s.cfg.TikTokClientID)
-	params.Set("redirect_uri", s.cfg.TikTokRedirectURI)
+	params.Set("client_key", s.cfg.Auth.TikTokClientID)
+	params.Set("redirect_uri", s.cfg.Auth.TikTokRedirectURI)
 	params.Set("state", state)
 	// Mirrors the App Review submission: Login Kit = user.info.basic;
 	// Content Posting API = video.publish (Direct Post) + video.upload
@@ -33,8 +33,8 @@ func (s *TikTokOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOp
 
 	loginURL := "https://www.tiktok.com/v2/auth/authorize/?" + params.Encode()
 	slog.Info("TikTok: built login URL",
-		"redirect_uri", s.cfg.TikTokRedirectURI,
-		"client_key_prefix", maskClientKey(s.cfg.TikTokClientID),
+		"redirect_uri", s.cfg.Auth.TikTokRedirectURI,
+		"client_key_prefix", maskClientKey(s.cfg.Auth.TikTokClientID),
 		"scope", params.Get("scope"))
 	return loginURL
 }

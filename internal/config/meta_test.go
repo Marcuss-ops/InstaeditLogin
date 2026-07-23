@@ -12,11 +12,11 @@ import (
 func TestMetaConfigUsesSharedCredentials(t *testing.T) {
 	cfg := minimalValidConfig(validJWTSecret())
 	// All three Meta-family providers share META_APP_ID + META_APP_SECRET.
-	cfg.MetaAppID = "test-app-id"
-	cfg.MetaAppSecret = validMetaSecret32
-	cfg.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
-	cfg.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
-	cfg.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
+	cfg.Auth.MetaAppID = "test-app-id"
+	cfg.Auth.MetaAppSecret = validMetaSecret32
+	cfg.Auth.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
+	cfg.Auth.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
+	cfg.Auth.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
 
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with all three Meta redirects + shared creds should succeed; got %v", err)
@@ -26,11 +26,11 @@ func TestMetaConfigUsesSharedCredentials(t *testing.T) {
 	// There must be no INSTAGRAM_APP_SECRET or FACEBOOK_APP_SECRET on the
 	// Config struct — the shared Meta creds are the single source of truth
 	// for all Meta-family providers.
-	if cfg.MetaAppID != "test-app-id" {
-		t.Errorf("MetaAppID: want test-app-id, got %q", cfg.MetaAppID)
+	if cfg.Auth.MetaAppID != "test-app-id" {
+		t.Errorf("MetaAppID: want test-app-id, got %q", cfg.Auth.MetaAppID)
 	}
-	if cfg.MetaAppSecret != validMetaSecret32 {
-		t.Errorf("MetaAppSecret: want validMetaSecret32, got %q", cfg.MetaAppSecret)
+	if cfg.Auth.MetaAppSecret != validMetaSecret32 {
+		t.Errorf("MetaAppSecret: want validMetaSecret32, got %q", cfg.Auth.MetaAppSecret)
 	}
 }
 
@@ -40,15 +40,15 @@ func TestMetaConfigUsesSharedCredentials(t *testing.T) {
 // OAuth server knows which app variant to return based on the redirect.
 func TestInstagramUsesInstagramRedirectURI(t *testing.T) {
 	cfg := minimalValidConfig(validJWTSecret())
-	cfg.MetaAppID = "test-app-id"
-	cfg.MetaAppSecret = validMetaSecret32
-	cfg.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
+	cfg.Auth.MetaAppID = "test-app-id"
+	cfg.Auth.MetaAppSecret = validMetaSecret32
+	cfg.Auth.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
 
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with only Instagram redirect should succeed; got %v", err)
 	}
-	if cfg.InstagramRedirectURI != "https://api.test/auth/instagram/callback" {
-		t.Errorf("InstagramRedirectURI: want custom value, got %q", cfg.InstagramRedirectURI)
+	if cfg.Auth.InstagramRedirectURI != "https://api.test/auth/instagram/callback" {
+		t.Errorf("InstagramRedirectURI: want custom value, got %q", cfg.Auth.InstagramRedirectURI)
 	}
 }
 
@@ -56,15 +56,15 @@ func TestInstagramUsesInstagramRedirectURI(t *testing.T) {
 // isolation for Facebook.
 func TestFacebookUsesFacebookRedirectURI(t *testing.T) {
 	cfg := minimalValidConfig(validJWTSecret())
-	cfg.MetaAppID = "test-app-id"
-	cfg.MetaAppSecret = validMetaSecret32
-	cfg.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
+	cfg.Auth.MetaAppID = "test-app-id"
+	cfg.Auth.MetaAppSecret = validMetaSecret32
+	cfg.Auth.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
 
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with only Facebook redirect should succeed; got %v", err)
 	}
-	if cfg.FacebookRedirectURI != "https://api.test/auth/facebook/callback" {
-		t.Errorf("FacebookRedirectURI: want custom value, got %q", cfg.FacebookRedirectURI)
+	if cfg.Auth.FacebookRedirectURI != "https://api.test/auth/facebook/callback" {
+		t.Errorf("FacebookRedirectURI: want custom value, got %q", cfg.Auth.FacebookRedirectURI)
 	}
 }
 
@@ -72,15 +72,15 @@ func TestFacebookUsesFacebookRedirectURI(t *testing.T) {
 // isolation for Threads.
 func TestThreadsUsesThreadsRedirectURI(t *testing.T) {
 	cfg := minimalValidConfig(validJWTSecret())
-	cfg.MetaAppID = "test-app-id"
-	cfg.MetaAppSecret = validMetaSecret32
-	cfg.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
+	cfg.Auth.MetaAppID = "test-app-id"
+	cfg.Auth.MetaAppSecret = validMetaSecret32
+	cfg.Auth.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
 
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with only Threads redirect should succeed; got %v", err)
 	}
-	if cfg.ThreadsRedirectURI != "https://api.test/auth/threads/callback" {
-		t.Errorf("ThreadsRedirectURI: want custom value, got %q", cfg.ThreadsRedirectURI)
+	if cfg.Auth.ThreadsRedirectURI != "https://api.test/auth/threads/callback" {
+		t.Errorf("ThreadsRedirectURI: want custom value, got %q", cfg.Auth.ThreadsRedirectURI)
 	}
 }
 
@@ -91,14 +91,14 @@ func TestThreadsUsesThreadsRedirectURI(t *testing.T) {
 // TestValidate_NoOAuthPlatformsValid.
 func TestMissingMetaCredentialsDisablesAllMetaProviders(t *testing.T) {
 	cfg := minimalValidConfig(validJWTSecret())
-	cfg.MetaAppID = ""
-	cfg.MetaAppSecret = ""
+	cfg.Auth.MetaAppID = ""
+	cfg.Auth.MetaAppSecret = ""
 	// Even with redirect URIs set, missing creds should still pass validation
 	// — the config doesn't validate the redirect against the creds; that's
 	// the registry's job at wiring time.
-	cfg.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
-	cfg.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
-	cfg.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
+	cfg.Auth.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
+	cfg.Auth.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
+	cfg.Auth.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
 
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with empty Meta creds (all platforms disabled) should succeed; got %v", err)
@@ -111,11 +111,11 @@ func TestMissingMetaCredentialsDisablesAllMetaProviders(t *testing.T) {
 // error — it's interpreted as "provider disabled" by the registry.
 func TestMissingInstagramRedirectDisablesOnlyInstagram(t *testing.T) {
 	cfg := minimalValidConfig(validJWTSecret())
-	cfg.MetaAppID = "test-app-id"
-	cfg.MetaAppSecret = validMetaSecret32
-	cfg.InstagramRedirectURI = ""
-	cfg.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
-	cfg.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
+	cfg.Auth.MetaAppID = "test-app-id"
+	cfg.Auth.MetaAppSecret = validMetaSecret32
+	cfg.Auth.InstagramRedirectURI = ""
+	cfg.Auth.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
+	cfg.Auth.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
 
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with only Instagram redirect missing should succeed; got %v", err)
@@ -126,11 +126,11 @@ func TestMissingInstagramRedirectDisablesOnlyInstagram(t *testing.T) {
 // for Facebook redirect.
 func TestMissingFacebookRedirectDisablesOnlyFacebook(t *testing.T) {
 	cfg := minimalValidConfig(validJWTSecret())
-	cfg.MetaAppID = "test-app-id"
-	cfg.MetaAppSecret = validMetaSecret32
-	cfg.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
-	cfg.FacebookRedirectURI = ""
-	cfg.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
+	cfg.Auth.MetaAppID = "test-app-id"
+	cfg.Auth.MetaAppSecret = validMetaSecret32
+	cfg.Auth.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
+	cfg.Auth.FacebookRedirectURI = ""
+	cfg.Auth.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
 
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with only Facebook redirect missing should succeed; got %v", err)
@@ -141,11 +141,11 @@ func TestMissingFacebookRedirectDisablesOnlyFacebook(t *testing.T) {
 // for Threads redirect.
 func TestMissingThreadsRedirectDisablesOnlyThreads(t *testing.T) {
 	cfg := minimalValidConfig(validJWTSecret())
-	cfg.MetaAppID = "test-app-id"
-	cfg.MetaAppSecret = validMetaSecret32
-	cfg.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
-	cfg.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
-	cfg.ThreadsRedirectURI = ""
+	cfg.Auth.MetaAppID = "test-app-id"
+	cfg.Auth.MetaAppSecret = validMetaSecret32
+	cfg.Auth.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
+	cfg.Auth.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
+	cfg.Auth.ThreadsRedirectURI = ""
 
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() with only Threads redirect missing should succeed; got %v", err)
@@ -186,11 +186,11 @@ func TestIncompleteMetaCredentialsFailValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := minimalValidConfig(validJWTSecret())
-			cfg.MetaAppID = tc.id
-			cfg.MetaAppSecret = tc.secret
-			cfg.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
-			cfg.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
-			cfg.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
+			cfg.Auth.MetaAppID = tc.id
+			cfg.Auth.MetaAppSecret = tc.secret
+			cfg.Auth.InstagramRedirectURI = "https://api.test/auth/instagram/callback"
+			cfg.Auth.FacebookRedirectURI = "https://api.test/auth/facebook/callback"
+			cfg.Auth.ThreadsRedirectURI = "https://api.test/auth/threads/callback"
 
 			err := cfg.validate()
 			if err == nil {

@@ -873,8 +873,10 @@ func TestProcessBatch_FilesListIntegration_CorporaAndDriveIdInQuery(t *testing.T
 	// service's internal fields stay unexported on our side).
 	realSvc, err := services.NewGoogleDriveOAuthService(
 		&config.Config{
-			GoogleDriveClientID:     "test-client",
-			GoogleDriveClientSecret: "test-secret",
+			Auth: config.AuthConfig{
+				GoogleDriveClientID:     "test-client",
+				GoogleDriveClientSecret: "test-secret",
+			},
 		},
 		services.ProviderDependencies{
 			HTTPClient: &http.Client{

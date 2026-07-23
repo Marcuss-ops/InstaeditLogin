@@ -16,9 +16,11 @@ import (
 // facebookTestCfg returns a minimal config for Facebook OAuth tests.
 func facebookTestCfg() *config.Config {
 	return &config.Config{
-		MetaAppID:           "test-meta-app-id",
-		MetaAppSecret:       "test-meta-app-secret-must-be-32-chars-min",
-		FacebookRedirectURI: "http://localhost:8080/api/v1/auth/facebook/callback",
+		Auth: config.AuthConfig{
+			MetaAppID:           "test-meta-app-id",
+			MetaAppSecret:       "test-meta-app-secret-must-be-32-chars-min",
+			FacebookRedirectURI: "http://localhost:8080/api/v1/auth/facebook/callback",
+		},
 	}
 }
 
@@ -29,7 +31,7 @@ func newTestFacebookService(srv *httptest.Server) *FacebookOAuthService {
 	base.httpClient = testClient(srv)
 	return &FacebookOAuthService{
 		base:        base,
-		redirectURI: cfg.FacebookRedirectURI,
+		redirectURI: cfg.Auth.FacebookRedirectURI,
 	}
 }
 
@@ -216,9 +218,11 @@ func TestFacebookHandleCallback_TokenDataScopes(t *testing.T) {
 // returns nil when the redirect URI is not configured.
 func TestFacebookDisabledWhenNoRedirectURI(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:           "test-id",
-		MetaAppSecret:       "test-secret-32-chars-minimum-length",
-		FacebookRedirectURI: "", // disabled
+		Auth: config.AuthConfig{
+			MetaAppID:           "test-id",
+			MetaAppSecret:       "test-secret-32-chars-minimum-length",
+			FacebookRedirectURI: "", // disabled
+		},
 	}
 	svc, err := NewFacebookOAuthService(cfg)
 	if err != nil {

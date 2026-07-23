@@ -16,11 +16,13 @@ import (
 // metaAllCfg returns a config with all three Meta-family providers enabled.
 func metaAllCfg() *config.Config {
 	return &config.Config{
-		MetaAppID:            "test-meta-app-id",
-		MetaAppSecret:        "test-meta-app-secret-must-be-32-chars-min",
-		InstagramRedirectURI: "http://localhost:8080/api/v1/auth/instagram/callback",
-		FacebookRedirectURI:  "http://localhost:8080/api/v1/auth/facebook/callback",
-		ThreadsRedirectURI:   "http://localhost:8080/api/v1/auth/threads/callback",
+		Auth: config.AuthConfig{
+			MetaAppID:            "test-meta-app-id",
+			MetaAppSecret:        "test-meta-app-secret-must-be-32-chars-min",
+			InstagramRedirectURI: "http://localhost:8080/api/v1/auth/instagram/callback",
+			FacebookRedirectURI:  "http://localhost:8080/api/v1/auth/facebook/callback",
+			ThreadsRedirectURI:   "http://localhost:8080/api/v1/auth/threads/callback",
+		},
 	}
 }
 
@@ -30,15 +32,15 @@ func newMetaAllServices(srv *httptest.Server) (*InstagramOAuthService, *Facebook
 
 	igBase := NewMetaOAuthBase(cfg)
 	igBase.httpClient = testClient(srv)
-	ig := &InstagramOAuthService{base: igBase, redirectURI: cfg.InstagramRedirectURI}
+	ig := &InstagramOAuthService{base: igBase, redirectURI: cfg.Auth.InstagramRedirectURI}
 
 	fbBase := NewMetaOAuthBase(cfg)
 	fbBase.httpClient = testClient(srv)
-	fb := &FacebookOAuthService{base: fbBase, redirectURI: cfg.FacebookRedirectURI}
+	fb := &FacebookOAuthService{base: fbBase, redirectURI: cfg.Auth.FacebookRedirectURI}
 
 	thBase := NewMetaOAuthBase(cfg)
 	thBase.httpClient = testClient(srv)
-	th := &ThreadsOAuthService{base: thBase, redirectURI: cfg.ThreadsRedirectURI}
+	th := &ThreadsOAuthService{base: thBase, redirectURI: cfg.Auth.ThreadsRedirectURI}
 
 	return ig, fb, th
 }
@@ -327,7 +329,7 @@ func TestOAuthHandleCallback_PreservesProfileFields(t *testing.T) {
 
 			switch p.name {
 			case "instagram":
-				svc := &InstagramOAuthService{base: base, redirectURI: cfg.InstagramRedirectURI}
+				svc := &InstagramOAuthService{base: base, redirectURI: cfg.Auth.InstagramRedirectURI}
 				profile, _, err := svc.HandleCallback(context.Background(), "state", "code")
 				if err != nil {
 					t.Fatalf("HandleCallback: %v", err)
@@ -342,7 +344,7 @@ func TestOAuthHandleCallback_PreservesProfileFields(t *testing.T) {
 					t.Errorf("Username: want Test User, got %s", profile.Username)
 				}
 			case "facebook":
-				svc := &FacebookOAuthService{base: base, redirectURI: cfg.FacebookRedirectURI}
+				svc := &FacebookOAuthService{base: base, redirectURI: cfg.Auth.FacebookRedirectURI}
 				profile, _, err := svc.HandleCallback(context.Background(), "state", "code")
 				if err != nil {
 					t.Fatalf("HandleCallback: %v", err)
@@ -357,7 +359,7 @@ func TestOAuthHandleCallback_PreservesProfileFields(t *testing.T) {
 					t.Errorf("Username: want Test User, got %s", profile.Username)
 				}
 			case "threads":
-				svc := &ThreadsOAuthService{base: base, redirectURI: cfg.ThreadsRedirectURI}
+				svc := &ThreadsOAuthService{base: base, redirectURI: cfg.Auth.ThreadsRedirectURI}
 				profile, _, err := svc.HandleCallback(context.Background(), "state", "code")
 				if err != nil {
 					t.Fatalf("HandleCallback: %v", err)

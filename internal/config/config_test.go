@@ -205,8 +205,8 @@ func TestLoad_AdminInviteToken_EmptyAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() without ADMIN_INVITE_TOKEN: want nil (registration disabled), got %v", err)
 	}
-	if cfg.AdminInviteToken != "" {
-		t.Errorf("AdminInviteToken default: want empty, got %q", cfg.AdminInviteToken)
+	if cfg.Auth.AdminInviteToken != "" {
+		t.Errorf("AdminInviteToken default: want empty, got %q", cfg.Auth.AdminInviteToken)
 	}
 }
 
@@ -245,8 +245,8 @@ func TestLoad_AdminInviteToken_ExactlyMinAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() with 32-char ADMIN_INVITE_TOKEN: want nil, got %v", err)
 	}
-	if cfg.AdminInviteToken != "abcdefghijklmnopqrstuvwxyz123456" {
-		t.Errorf("AdminInviteToken round-trip: got %q", cfg.AdminInviteToken)
+	if cfg.Auth.AdminInviteToken != "abcdefghijklmnopqrstuvwxyz123456" {
+		t.Errorf("AdminInviteToken round-trip: got %q", cfg.Auth.AdminInviteToken)
 	}
 }
 
@@ -263,11 +263,11 @@ func TestLoad_JWT_TTL_ExplicitValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() with explicit TTLs: want nil, got %v", err)
 	}
-	if cfg.JWTAccessTTLMinutes != 5 {
-		t.Errorf("JWTAccessTTLMinutes: want 5, got %d", cfg.JWTAccessTTLMinutes)
+	if cfg.Auth.JWTAccessTTLMinutes != 5 {
+		t.Errorf("JWTAccessTTLMinutes: want 5, got %d", cfg.Auth.JWTAccessTTLMinutes)
 	}
-	if cfg.JWTRefreshTTLDays != 7 {
-		t.Errorf("JWTRefreshTTLDays: want 7, got %d", cfg.JWTRefreshTTLDays)
+	if cfg.Auth.JWTRefreshTTLDays != 7 {
+		t.Errorf("JWTRefreshTTLDays: want 7, got %d", cfg.Auth.JWTRefreshTTLDays)
 	}
 }
 
@@ -283,11 +283,11 @@ func TestLoad_JWT_TTL_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() with default TTLs: want nil, got %v", err)
 	}
-	if cfg.JWTAccessTTLMinutes != 15 {
-		t.Errorf("JWTAccessTTLMinutes default: want 15, got %d", cfg.JWTAccessTTLMinutes)
+	if cfg.Auth.JWTAccessTTLMinutes != 15 {
+		t.Errorf("JWTAccessTTLMinutes default: want 15, got %d", cfg.Auth.JWTAccessTTLMinutes)
 	}
-	if cfg.JWTRefreshTTLDays != 30 {
-		t.Errorf("JWTRefreshTTLDays default: want 30, got %d", cfg.JWTRefreshTTLDays)
+	if cfg.Auth.JWTRefreshTTLDays != 30 {
+		t.Errorf("JWTRefreshTTLDays default: want 30, got %d", cfg.Auth.JWTRefreshTTLDays)
 	}
 }
 
@@ -302,11 +302,11 @@ func TestLoad_JWT_TTL_LegacyFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() with legacy TTL: want nil, got %v", err)
 	}
-	if cfg.JWTAccessTTLMinutes != 120 {
-		t.Errorf("JWTAccessTTLMinutes legacy fallback: want 120, got %d", cfg.JWTAccessTTLMinutes)
+	if cfg.Auth.JWTAccessTTLMinutes != 120 {
+		t.Errorf("JWTAccessTTLMinutes legacy fallback: want 120, got %d", cfg.Auth.JWTAccessTTLMinutes)
 	}
-	if cfg.JWTRefreshTTLDays != 30 {
-		t.Errorf("JWTRefreshTTLDays default: want 30, got %d", cfg.JWTRefreshTTLDays)
+	if cfg.Auth.JWTRefreshTTLDays != 30 {
+		t.Errorf("JWTRefreshTTLDays default: want 30, got %d", cfg.Auth.JWTRefreshTTLDays)
 	}
 }
 

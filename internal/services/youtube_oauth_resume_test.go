@@ -135,7 +135,9 @@ func newResumeReadyService(t *testing.T, store YouTubeSessionStore, enc SessionE
 	// the production constructor (which would refuse our
 	// encryption-less wiring) and build the struct directly.
 	cfg := &config.Config{
-		YouTubeClientID:            "test-client",
+		Auth: config.AuthConfig{
+			YouTubeClientID: "test-client",
+		},
 		YouTubeUploadChunkBytes:    256 * 1024,
 		YouTubeUploadMaxRetries:    2,
 		YouTubeUploadBackoffBaseMs: 1000,
@@ -316,7 +318,7 @@ func TestPersistSessionProgress_EncryptsBeforeSaving(t *testing.T) {
 // work.
 func TestPersistSessionProgress_NoOpWhenNil(t *testing.T) {
 	svc := &YouTubeOAuthService{
-		cfg:        &config.Config{YouTubeClientID: "x"},
+		cfg:        &config.Config{Auth: config.AuthConfig{YouTubeClientID: "x"}},
 		httpClient: http.DefaultClient,
 		uploadOpts: youTubeUploadOptions{ChunkSize: 256 * 1024, MaxRetries: 1, BackoffBase: time.Second, BackoffCap: 5 * time.Minute},
 		uploadDeps: loadYouTubeUploadDeps(youTubeUploadOptions{ChunkSize: 256 * 1024, MaxRetries: 1, BackoffBase: time.Second, BackoffCap: 5 * time.Minute}),

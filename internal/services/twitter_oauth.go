@@ -34,7 +34,7 @@ type TwitterOAuthService struct {
 // NewTwitterOAuthService creates a new TwitterOAuthService. Accepts optional
 // ProviderDependencies for HTTP client injection.
 func NewTwitterOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*TwitterOAuthService, error) {
-	if cfg.XClientID == "" {
+	if cfg.Auth.XClientID == "" {
 		return nil, nil // provider disabled
 	}
 	var dep ProviderDependencies
@@ -76,8 +76,8 @@ func (s *TwitterOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginO
 	challenge := base64.RawURLEncoding.EncodeToString(hash[:])
 
 	params := url.Values{}
-	params.Set("client_id", s.cfg.XClientID)
-	params.Set("redirect_uri", s.cfg.XRedirectURI)
+	params.Set("client_id", s.cfg.Auth.XClientID)
+	params.Set("redirect_uri", s.cfg.Auth.XRedirectURI)
 	params.Set("state", state+"."+verifier)
 	params.Set("scope", "tweet.read tweet.write users.read offline.access")
 	params.Set("response_type", "code")
@@ -157,7 +157,7 @@ func (s *TwitterOAuthService) Validate(ctx context.Context, accessToken, platfor
 func (s *TwitterOAuthService) Revoke(ctx context.Context, accessToken string) error {
 	body := url.Values{}
 	body.Set("token", accessToken)
-	body.Set("client_id", s.cfg.XClientID)
+	body.Set("client_id", s.cfg.Auth.XClientID)
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		"https://api.twitter.com/2/oauth2/revoke",
@@ -188,7 +188,7 @@ func (s *TwitterOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 	}
 	slog.Info("Twitter: refreshing access token")
 	body := url.Values{}
-	body.Set("client_id", s.cfg.XClientID)
+	body.Set("client_id", s.cfg.Auth.XClientID)
 	body.Set("refresh_token", refreshToken)
 	body.Set("grant_type", "refresh_token")
 
@@ -198,7 +198,7 @@ func (s *TwitterOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(s.cfg.XClientID, s.cfg.XClientSecret)
+	req.SetBasicAuth(s.cfg.Auth.XClientID, s.cfg.Auth.XClientSecret)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -291,10 +291,10 @@ type twitterTokenResponse struct {
 
 func (s *TwitterOAuthService) exchangeCodeForToken(ctx context.Context, code, verifier string) (*twitterTokenResponse, error) {
 	body := url.Values{}
-	body.Set("client_id", s.cfg.XClientID)
+	body.Set("client_id", s.cfg.Auth.XClientID)
 	body.Set("code", code)
 	body.Set("grant_type", "authorization_code")
-	body.Set("redirect_uri", s.cfg.XRedirectURI)
+	body.Set("redirect_uri", s.cfg.Auth.XRedirectURI)
 	body.Set("code_verifier", verifier)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.twitter.com/2/oauth2/token",
@@ -303,7 +303,7 @@ func (s *TwitterOAuthService) exchangeCodeForToken(ctx context.Context, code, ve
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(s.cfg.XClientID, s.cfg.XClientSecret)
+	req.SetBasicAuth(s.cfg.Auth.XClientID, s.cfg.Auth.XClientSecret)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {

@@ -8,9 +8,11 @@ import (
 
 func youtubeTestCfg() *config.Config {
 	return &config.Config{
-		YouTubeClientID:     "test-youtube-client-id",
-		YouTubeClientSecret: "test-youtube-client-secret-min32ch",
-		YouTubeRedirectURI:  "http://localhost:8080/api/v1/auth/youtube/callback",
+		Auth: config.AuthConfig{
+			YouTubeClientID:     "test-youtube-client-id",
+			YouTubeClientSecret: "test-youtube-client-secret-min32ch",
+			YouTubeRedirectURI:  "http://localhost:8080/api/v1/auth/youtube/callback",
+		},
 	}
 }
 

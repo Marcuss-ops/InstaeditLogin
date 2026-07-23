@@ -392,9 +392,11 @@ func makeTestConfig(publishInterval, reconcileInterval int) *config.Config {
 	encKeyBytes := []byte("12345678901234567890123456789012") // 32 raw bytes → AES-256
 	encKey := base64.StdEncoding.EncodeToString(encKeyBytes)
 	return &config.Config{
-		TikTokClientID:                 "integration-test-client-id",
-		TikTokClientSecret:             "integration-test-client-secret-must-be-32-chars-or-more",
-		TikTokRedirectURI:              "https://example.com/callback",
+		Auth: config.AuthConfig{
+			TikTokClientID:     "integration-test-client-id",
+			TikTokClientSecret: "integration-test-client-secret-must-be-32-chars-or-more",
+			TikTokRedirectURI:  "https://example.com/callback",
+		},
 		EncryptionKey:                  encKey,
 		PublishWorkerIntervalSeconds:   publishInterval,
 		ReconcileWorkerIntervalSeconds: reconcileInterval,

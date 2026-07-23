@@ -45,7 +45,7 @@ type TikTokOAuthService struct {
 // ProviderDependencies for HTTP client injection (tests inject httptest
 // server clients through deps).
 func NewTikTokOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*TikTokOAuthService, error) {
-	if cfg.TikTokClientID == "" {
+	if cfg.Auth.TikTokClientID == "" {
 		return nil, nil // provider disabled
 	}
 	var dep ProviderDependencies

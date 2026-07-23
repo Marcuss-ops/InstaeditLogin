@@ -40,8 +40,10 @@ func newTestDriveService(t *testing.T, srv *httptest.Server) *GoogleDriveOAuthSe
 	}
 	return &GoogleDriveOAuthService{
 		cfg: &config.Config{
-			GoogleDriveClientID:     "test-client",
-			GoogleDriveClientSecret: "test-secret",
+			Auth: config.AuthConfig{
+				GoogleDriveClientID:     "test-client",
+				GoogleDriveClientSecret: "test-secret",
+			},
 		},
 		httpClient: &http.Client{
 			Transport: &redirectingRoundTripper{target: srvURL},

@@ -27,7 +27,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 		corsOrigins = []string{cfg.FrontendURL}
 	}
 
-	trustedProxies, err := api.ParseTrustedProxies(cfg.TrustedProxies)
+	trustedProxies, err := api.ParseTrustedProxies(cfg.Auth.TrustedProxies)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 		api.WithCookieDomain(cfg.CookieDomain),
 		api.WithRateLimitService(rateLimitSvc),
 		api.WithWebhookStore(core.WebhookRepo),
-		api.WithAdminInviteToken(cfg.AdminInviteToken),
+		api.WithAdminInviteToken(cfg.Auth.AdminInviteToken),
 		api.WithSnapshotStore(repository.NewSnapshotRepository(core.DB)),
 		api.WithMetricHistoryStore(repository.NewAccountMetricsRepository(core.DB)),
 	}
@@ -125,8 +125,8 @@ func WireAPI(core *Core) (http.Handler, error) {
 	}
 
 	core.Logger.Info("Router configured",
-		"jwt_access_ttl_minutes", cfg.JWTAccessTTLMinutes,
-		"jwt_refresh_ttl_days", cfg.JWTRefreshTTLDays,
+		"jwt_access_ttl_minutes", cfg.Auth.JWTAccessTTLMinutes,
+		"jwt_refresh_ttl_days", cfg.Auth.JWTRefreshTTLDays,
 		"frontend_url", cfg.FrontendURL,
 		"cors_origins", corsOrigins,
 		"platforms", core.CapRouter.Names(),

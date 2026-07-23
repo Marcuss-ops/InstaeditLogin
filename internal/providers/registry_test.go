@@ -38,9 +38,11 @@ func TestBuildRegistry_NoPlatforms(t *testing.T) {
 // production config so the constructor sees a realistic input).
 func TestBuildRegistry_FacebookOnly(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:           "1234567890",
-		MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA", // ≥ 32 chars
-		FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+		Auth: config.AuthConfig{
+			MetaAppID:           "1234567890",
+			MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA", // ≥ 32 chars
+			FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -62,17 +64,19 @@ func TestBuildRegistry_FacebookOnly(t *testing.T) {
 // re-introduced).
 func TestBuildRegistry_AllFivePlatforms(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:            "1234567890",
-		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
-		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
-		TikTokClientID:       "tt-key",
-		TikTokClientSecret:   "this-is-a-32-char-test-secret-tttt",
-		XClientID:            "x-id",
-		XClientSecret:        "this-is-a-32-char-test-secret-twww",
-		YouTubeClientID:      "yt-id",
-		YouTubeClientSecret:  "this-is-a-32-char-test-secret-yttt",
-		LinkedInClientID:     "li-id",
-		LinkedInClientSecret: "this-is-a-32-char-test-secret-liii",
+		Auth: config.AuthConfig{
+			MetaAppID:            "1234567890",
+			MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+			FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+			TikTokClientID:       "tt-key",
+			TikTokClientSecret:   "this-is-a-32-char-test-secret-tttt",
+			XClientID:            "x-id",
+			XClientSecret:        "this-is-a-32-char-test-secret-twww",
+			YouTubeClientID:      "yt-id",
+			YouTubeClientSecret:  "this-is-a-32-char-test-secret-yttt",
+			LinkedInClientID:     "li-id",
+			LinkedInClientSecret: "this-is-a-32-char-test-secret-liii",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -100,8 +104,10 @@ func TestBuildRegistry_AllFivePlatforms(t *testing.T) {
 // youtube platform. Meta is entirely empty, no half-config.
 func TestBuildRegistry_OnlyYouTube(t *testing.T) {
 	cfg := &config.Config{
-		YouTubeClientID:     "yt-id",
-		YouTubeClientSecret: "this-is-a-32-char-test-secret-yttt",
+		Auth: config.AuthConfig{
+			YouTubeClientID:     "yt-id",
+			YouTubeClientSecret: "this-is-a-32-char-test-secret-yttt",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -121,8 +127,10 @@ func TestBuildRegistry_OnlyYouTube(t *testing.T) {
 // All Meta fields are empty, no half-config.
 func TestBuildRegistry_OnlyLinkedIn(t *testing.T) {
 	cfg := &config.Config{
-		LinkedInClientID:     "li-id",
-		LinkedInClientSecret: "this-is-a-32-char-test-secret-liii",
+		Auth: config.AuthConfig{
+			LinkedInClientID:     "li-id",
+			LinkedInClientSecret: "this-is-a-32-char-test-secret-liii",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -147,9 +155,11 @@ func TestBuildRegistry_OnlyLinkedIn(t *testing.T) {
 // Instagram without enabling Facebook or Threads.
 func TestBuildRegistry_OnlyInstagram(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:            "1234567890",
-		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
-		InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+		Auth: config.AuthConfig{
+			MetaAppID:            "1234567890",
+			MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+			InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -201,9 +211,11 @@ func TestBuildRegistry_FacebookMissingMetaCreds(t *testing.T) {
 			customLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 			cfg := &config.Config{
-				MetaAppID:           tc.metaAppID,
-				MetaAppSecret:       tc.metaAppSec,
-				FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+				Auth: config.AuthConfig{
+					MetaAppID:           tc.metaAppID,
+					MetaAppSecret:       tc.metaAppSec,
+					FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+				},
 			}
 			registry, err := BuildRegistry(cfg, WithLogger(customLogger))
 			if err != nil {
@@ -228,19 +240,21 @@ func TestBuildRegistry_FacebookMissingMetaCreds(t *testing.T) {
 // that Meta-family has been split into three distinct providers.
 func TestBuildRegistry_AllSevenPlatforms(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:            "1234567890",
-		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
-		InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
-		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
-		ThreadsRedirectURI:   "https://example.com/api/v1/auth/threads/callback",
-		TikTokClientID:       "tt-key",
-		TikTokClientSecret:   "this-is-a-32-char-test-secret-tttt",
-		XClientID:            "x-id",
-		XClientSecret:        "this-is-a-32-char-test-secret-twww",
-		YouTubeClientID:      "yt-id",
-		YouTubeClientSecret:  "this-is-a-32-char-test-secret-yttt",
-		LinkedInClientID:     "li-id",
-		LinkedInClientSecret: "this-is-a-32-char-test-secret-liii",
+		Auth: config.AuthConfig{
+			MetaAppID:            "1234567890",
+			MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+			InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+			FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+			ThreadsRedirectURI:   "https://example.com/api/v1/auth/threads/callback",
+			TikTokClientID:       "tt-key",
+			TikTokClientSecret:   "this-is-a-32-char-test-secret-tttt",
+			XClientID:            "x-id",
+			XClientSecret:        "this-is-a-32-char-test-secret-twww",
+			YouTubeClientID:      "yt-id",
+			YouTubeClientSecret:  "this-is-a-32-char-test-secret-yttt",
+			LinkedInClientID:     "li-id",
+			LinkedInClientSecret: "this-is-a-32-char-test-secret-liii",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -308,9 +322,11 @@ func TestBuildRegistry_InstagramMissingMetaCreds(t *testing.T) {
 			customLogger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 			cfg := &config.Config{
-				MetaAppID:            tc.metaAppID,
-				MetaAppSecret:        tc.metaAppSec,
-				InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+				Auth: config.AuthConfig{
+					MetaAppID:            tc.metaAppID,
+					MetaAppSecret:        tc.metaAppSec,
+					InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+				},
 			}
 			registry, err := BuildRegistry(cfg, WithLogger(customLogger))
 			if err != nil {
@@ -333,11 +349,13 @@ func TestBuildRegistry_InstagramMissingMetaCreds(t *testing.T) {
 // can be registered. The "meta" string must NOT appear in registry.Names().
 func TestRegistryDoesNotRegisterMeta(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:            "1234567890",
-		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
-		InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
-		FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
-		ThreadsRedirectURI:   "https://example.com/api/v1/auth/threads/callback",
+		Auth: config.AuthConfig{
+			MetaAppID:            "1234567890",
+			MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+			InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+			FacebookRedirectURI:  "https://example.com/api/v1/auth/facebook/callback",
+			ThreadsRedirectURI:   "https://example.com/api/v1/auth/threads/callback",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -356,11 +374,13 @@ func TestRegistryDoesNotRegisterMeta(t *testing.T) {
 // provider and Facebook/Threads as the unconfigured ones.
 func TestRegistrySkipsUnconfiguredProvider(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:            "1234567890",
-		MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
-		InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
-		FacebookRedirectURI:  "",
-		ThreadsRedirectURI:   "",
+		Auth: config.AuthConfig{
+			MetaAppID:            "1234567890",
+			MetaAppSecret:        "this-is-a-32-char-test-secret-AAAA",
+			InstagramRedirectURI: "https://example.com/api/v1/auth/instagram/callback",
+			FacebookRedirectURI:  "",
+			ThreadsRedirectURI:   "",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -386,9 +406,11 @@ func TestRegistrySkipsUnconfiguredProvider(t *testing.T) {
 // that want to prevent duplicates can check registry.Names() first.
 func TestRegistryAllowsDuplicateRegistration(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:           "1234567890",
-		MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA",
-		FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+		Auth: config.AuthConfig{
+			MetaAppID:           "1234567890",
+			MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA",
+			FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -423,9 +445,11 @@ func TestRegistryAllowsDuplicateRegistration(t *testing.T) {
 // platform that should have it is a wiring bug.
 func TestRegistryReturnsCapabilities(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:           "1234567890",
-		MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA",
-		FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+		Auth: config.AuthConfig{
+			MetaAppID:           "1234567890",
+			MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA",
+			FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -459,9 +483,11 @@ func TestRegistryReturnsCapabilities(t *testing.T) {
 // the worker uses it to skip platforms it can't publish to.
 func TestRegistryReturnsUnsupportedPlatformError(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:           "1234567890",
-		MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA",
-		FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+		Auth: config.AuthConfig{
+			MetaAppID:           "1234567890",
+			MetaAppSecret:       "this-is-a-32-char-test-secret-AAAA",
+			FacebookRedirectURI: "https://example.com/api/v1/auth/facebook/callback",
+		},
 	}
 	registry, err := BuildRegistry(cfg)
 	if err != nil {
@@ -509,7 +535,9 @@ func TestBuildRegistry_WithLogger(t *testing.T) {
 	// output. A future test can introduce a constructor that errors
 	// and assert on the buffer contents.
 	cfg := &config.Config{
-		LinkedInClientID: "li-id",
+		Auth: config.AuthConfig{
+			LinkedInClientID: "li-id",
+		},
 	}
 	registry, err := BuildRegistry(cfg, WithLogger(customLogger))
 	if err != nil {

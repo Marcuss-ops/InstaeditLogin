@@ -48,7 +48,7 @@ type FacebookOAuthService struct {
 
 // NewFacebookOAuthService creates a new FacebookOAuthService. Returns nil when the redirect URI is not configured (provider disabled). Accepts optional ProviderDependencies for HTTP client injection.
 func NewFacebookOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*FacebookOAuthService, error) {
-	if cfg.FacebookRedirectURI == "" {
+	if cfg.Auth.FacebookRedirectURI == "" {
 		return nil, nil // provider disabled
 	}
 
@@ -56,7 +56,7 @@ func NewFacebookOAuthService(cfg *config.Config, deps ...ProviderDependencies) (
 
 	return &FacebookOAuthService{
 		base:        base,
-		redirectURI: cfg.FacebookRedirectURI,
+		redirectURI: cfg.Auth.FacebookRedirectURI,
 	}, nil
 }
 
@@ -72,7 +72,7 @@ func (s *FacebookOAuthService) GetLoginURL(state string) string {
 // Facebook does not use OAuthLoginOptions; options are ignored.
 func (s *FacebookOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
-	params.Set("client_id", s.base.cfg.MetaAppID)
+	params.Set("client_id", s.base.cfg.Auth.MetaAppID)
 	params.Set("redirect_uri", s.redirectURI)
 	params.Set("state", state)
 	params.Set("scope", "pages_manage_posts,pages_read_engagement,pages_show_list,business_management")

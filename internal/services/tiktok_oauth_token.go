@@ -28,11 +28,11 @@ type tiktokTokenResponse struct {
 // and refresh token pair.
 func (s *TikTokOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*tiktokTokenResponse, error) {
 	body := url.Values{}
-	body.Set("client_key", s.cfg.TikTokClientID)
-	body.Set("client_secret", s.cfg.TikTokClientSecret)
+	body.Set("client_key", s.cfg.Auth.TikTokClientID)
+	body.Set("client_secret", s.cfg.Auth.TikTokClientSecret)
 	body.Set("code", code)
 	body.Set("grant_type", "authorization_code")
-	body.Set("redirect_uri", s.cfg.TikTokRedirectURI)
+	body.Set("redirect_uri", s.cfg.Auth.TikTokRedirectURI)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://open.tiktokapis.com/v2/oauth/token/",
 		strings.NewReader(body.Encode()))
@@ -52,8 +52,8 @@ func (s *TikTokOAuthService) exchangeCodeForToken(ctx context.Context, code stri
 		slog.Error("TikTok: token exchange failed",
 			"status", resp.StatusCode,
 			"response", truncateForLog(string(respBody), 200),
-			"client_key_prefix", maskClientKey(s.cfg.TikTokClientID),
-			"redirect_uri", s.cfg.TikTokRedirectURI)
+			"client_key_prefix", maskClientKey(s.cfg.Auth.TikTokClientID),
+			"redirect_uri", s.cfg.Auth.TikTokRedirectURI)
 		return nil, fmt.Errorf("token exchange failed (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
@@ -72,8 +72,8 @@ func (s *TikTokOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken
 	}
 	slog.Info("TikTok: refreshing access token")
 	body := url.Values{}
-	body.Set("client_key", s.cfg.TikTokClientID)
-	body.Set("client_secret", s.cfg.TikTokClientSecret)
+	body.Set("client_key", s.cfg.Auth.TikTokClientID)
+	body.Set("client_secret", s.cfg.Auth.TikTokClientSecret)
 	body.Set("refresh_token", refreshToken)
 	body.Set("grant_type", "refresh_token")
 

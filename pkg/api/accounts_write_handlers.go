@@ -85,7 +85,7 @@ func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identi
 //  2. tokeninfo      — GetTokenInfo on the fresh access token (Google's
 //     oauth2/v3/tokeninfo public introspection endpoint). Three hard
 //     reauth signals: Google's 400 invalid_token, info.Aud ≠
-//     cfg.YouTubeClientID (Production-vs-Testing drift), info
+//     cfg.Auth.YouTubeClientID (Production-vs-Testing drift), info
 //     missing youtube.upload OR youtube.readonly. Transient (network,
 //     decode) → 500.
 //
@@ -159,7 +159,7 @@ func (r *Router) handleValidateAccount(w http.ResponseWriter, req *http.Request)
 	}
 	if info.Aud != r.youTubeSvc.ClientID() {
 		r.flagReauthAndRespond(w, ctx, account, identity, "tokeninfo_aud_mismatch",
-			fmt.Sprintf("tokeninfo.aud=%q cfg.YouTubeClientID=%q", info.Aud, r.youTubeSvc.ClientID()))
+			fmt.Sprintf("tokeninfo.aud=%q cfg.Auth.YouTubeClientID=%q", info.Aud, r.youTubeSvc.ClientID()))
 		return
 	}
 	if !info.HasUpload || !info.HasReadonly {

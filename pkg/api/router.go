@@ -138,7 +138,7 @@ type Router struct {
 	// adminInviteToken gates POST /api/v1/auth/register. When empty,
 	// the handler returns 403 regardless of the X-Admin-Token header
 	// (registration disabled). Wired in cmd/server via
-	// WithAdminInviteToken(cfg.AdminInviteToken). Production
+	// WithAdminInviteToken(cfg.Auth.AdminInviteToken). Production
 	// deployments must set ADMIN_INVITE_TOKEN via Fly secrets; dev
 	// can omit it (no public registration permitted).
 	adminInviteToken string

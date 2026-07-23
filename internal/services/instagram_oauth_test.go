@@ -17,9 +17,11 @@ import (
 // instagramTestCfg returns a minimal config for Instagram OAuth tests.
 func instagramTestCfg() *config.Config {
 	return &config.Config{
-		MetaAppID:            "test-meta-app-id",
-		MetaAppSecret:        "test-meta-app-secret-must-be-32-chars-min",
-		InstagramRedirectURI: "http://localhost:8080/api/v1/auth/instagram/callback",
+		Auth: config.AuthConfig{
+			MetaAppID:            "test-meta-app-id",
+			MetaAppSecret:        "test-meta-app-secret-must-be-32-chars-min",
+			InstagramRedirectURI: "http://localhost:8080/api/v1/auth/instagram/callback",
+		},
 	}
 }
 
@@ -30,7 +32,7 @@ func newTestInstagramService(srv *httptest.Server) *InstagramOAuthService {
 	base.httpClient = testClient(srv)
 	return &InstagramOAuthService{
 		base:        base,
-		redirectURI: cfg.InstagramRedirectURI,
+		redirectURI: cfg.Auth.InstagramRedirectURI,
 	}
 }
 
@@ -229,9 +231,11 @@ func TestInstagramHandleCallback_TokenDataScopes(t *testing.T) {
 // returns nil when the redirect URI is not configured (provider disabled).
 func TestInstagramDisabledWhenNoRedirectURI(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:            "test-id",
-		MetaAppSecret:        "test-secret-32-chars-minimum-length",
-		InstagramRedirectURI: "", // disabled
+		Auth: config.AuthConfig{
+			MetaAppID:            "test-id",
+			MetaAppSecret:        "test-secret-32-chars-minimum-length",
+			InstagramRedirectURI: "", // disabled
+		},
 	}
 	svc, err := NewInstagramOAuthService(cfg)
 	if err != nil {

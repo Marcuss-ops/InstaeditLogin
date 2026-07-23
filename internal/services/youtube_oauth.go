@@ -62,7 +62,7 @@ type YouTubeOAuthService struct {
 // NewYouTubeOAuthService creates a new YouTubeOAuthService. Accepts optional
 // ProviderDependencies for HTTP client injection.
 func NewYouTubeOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*YouTubeOAuthService, error) {
-	if cfg.YouTubeClientID == "" {
+	if cfg.Auth.YouTubeClientID == "" {
 		return nil, nil // provider disabled
 	}
 	var dep ProviderDependencies
@@ -80,18 +80,18 @@ func NewYouTubeOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*
 }
 
 // ClientID returns the YouTube OAuth client_id this service was
-// configured with (cfg.YouTubeClientID). Used by pkg/api/handlers.go
+// configured with (cfg.Auth.YouTubeClientID). Used by pkg/api/handlers.go
 // handleValidateAccount to compare Google's tokeninfo `aud` against
 // the configured client — a Production-but-issued-for-Testing token
 // carries a mismatched aud and is a hard reauth signal (the 4-step
 // pipeline's STEP 2 guard). Returns "" if the service hasn't been
 // fully constructed (defensive — the production wiring wires
-// cfg.YouTubeClientID at NewYouTubeOAuthService time).
+// cfg.Auth.YouTubeClientID at NewYouTubeOAuthService time).
 func (s *YouTubeOAuthService) ClientID() string {
 	if s == nil || s.cfg == nil {
 		return ""
 	}
-	return s.cfg.YouTubeClientID
+	return s.cfg.Auth.YouTubeClientID
 }
 
 // now returns the current time via the injected clock, or time.Now as default.
@@ -133,8 +133,8 @@ func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 
 func (s *YouTubeOAuthService) GetLoginURLWithOptions(state string, options OAuthLoginOptions) string {
 	params := url.Values{}
-	params.Set("client_id", s.cfg.YouTubeClientID)
-	params.Set("redirect_uri", s.cfg.YouTubeRedirectURI)
+	params.Set("client_id", s.cfg.Auth.YouTubeClientID)
+	params.Set("redirect_uri", s.cfg.Auth.YouTubeRedirectURI)
 	params.Set("state", state)
 	// P6 hardening: the consent-screen scope list follows the
 	// least-privilege principle. `youtube.upload` is the only scope
@@ -234,8 +234,8 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 	}
 	slog.Info("YouTube: refreshing access token")
 	body := url.Values{}
-	body.Set("client_id", s.cfg.YouTubeClientID)
-	body.Set("client_secret", s.cfg.YouTubeClientSecret)
+	body.Set("client_id", s.cfg.Auth.YouTubeClientID)
+	body.Set("client_secret", s.cfg.Auth.YouTubeClientSecret)
 	body.Set("refresh_token", refreshToken)
 	body.Set("grant_type", "refresh_token")
 
@@ -453,11 +453,11 @@ type youtubeTokenResponse struct {
 
 func (s *YouTubeOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*youtubeTokenResponse, error) {
 	body := url.Values{}
-	body.Set("client_id", s.cfg.YouTubeClientID)
-	body.Set("client_secret", s.cfg.YouTubeClientSecret)
+	body.Set("client_id", s.cfg.Auth.YouTubeClientID)
+	body.Set("client_secret", s.cfg.Auth.YouTubeClientSecret)
 	body.Set("code", code)
 	body.Set("grant_type", "authorization_code")
-	body.Set("redirect_uri", s.cfg.YouTubeRedirectURI)
+	body.Set("redirect_uri", s.cfg.Auth.YouTubeRedirectURI)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://oauth2.googleapis.com/token",
 		strings.NewReader(body.Encode()))

@@ -52,9 +52,9 @@ func NewConfigAdapter(cfg *config.Config) *ConfigAdapter {
 	return &ConfigAdapter{cfg: cfg}
 }
 
-func (a *ConfigAdapter) LinkedInClientID() string     { return a.cfg.LinkedInClientID }
-func (a *ConfigAdapter) LinkedInClientSecret() string { return a.cfg.LinkedInClientSecret }
-func (a *ConfigAdapter) LinkedInRedirectURI() string  { return a.cfg.LinkedInRedirectURI }
+func (a *ConfigAdapter) LinkedInClientID() string     { return a.cfg.Auth.LinkedInClientID }
+func (a *ConfigAdapter) LinkedInClientSecret() string { return a.cfg.Auth.LinkedInClientSecret }
+func (a *ConfigAdapter) LinkedInRedirectURI() string  { return a.cfg.Auth.LinkedInRedirectURI }
 
 // Compile-time assertion: any future drift between the interface
 // and the adapter surfaces as a build error here.

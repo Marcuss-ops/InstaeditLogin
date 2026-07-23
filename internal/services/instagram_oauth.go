@@ -41,12 +41,12 @@ type InstagramOAuthService struct {
 // Taglio 4.4: split out from the monolithic meta-OAuth provider. Same
 // constructor posture as Facebook / Threads: nil = disabled, err = failed.
 func NewInstagramOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*InstagramOAuthService, error) {
-	if cfg.InstagramRedirectURI == "" {
+	if cfg.Auth.InstagramRedirectURI == "" {
 		return nil, nil // provider disabled
 	}
 	return &InstagramOAuthService{
 		base:        NewMetaOAuthBase(cfg, deps...),
-		redirectURI: cfg.InstagramRedirectURI,
+		redirectURI: cfg.Auth.InstagramRedirectURI,
 	}, nil
 }
 
@@ -68,7 +68,7 @@ func (s *InstagramOAuthService) GetLoginURL(state string) string {
 // scopes. Instagram does not use OAuthLoginOptions; options are ignored.
 func (s *InstagramOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
-	params.Set("client_id", s.base.cfg.MetaAppID)
+	params.Set("client_id", s.base.cfg.Auth.MetaAppID)
 	params.Set("redirect_uri", s.redirectURI)
 	params.Set("state", state)
 	params.Set("scope", "instagram_basic,instagram_content_publish,pages_show_list")
@@ -178,7 +178,7 @@ func (s *InstagramOAuthService) DiscoverAccounts(ctx context.Context, accessToke
 // auth — we pass the Meta app_id|secret pair as the access_token parameter
 // (this is documented Meta behaviour for app-level diagnostics).
 func (s *InstagramOAuthService) Validate(ctx context.Context, accessToken, platformUserID string) error {
-	appToken := s.base.cfg.MetaAppID + "|" + s.base.cfg.MetaAppSecret
+	appToken := s.base.cfg.Auth.MetaAppID + "|" + s.base.cfg.Auth.MetaAppSecret
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		"https://graph.facebook.com/v19.0/debug_token?input_token="+url.QueryEscape(accessToken)+
 			"&access_token="+url.QueryEscape(appToken), nil)

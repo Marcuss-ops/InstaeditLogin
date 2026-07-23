@@ -232,9 +232,9 @@ func Wire(ctx context.Context) (*App, error) {
 	channelAuthorizer := services.NewChannelAuthorizationService(db, enc, tokenRepo, ytBinder)
 
 	authMgr := auth.NewManager(
-		cfg.JWTSecret,
-		time.Duration(cfg.JWTAccessTTLMinutes)*time.Minute,
-		time.Duration(cfg.JWTRefreshTTLDays)*24*time.Hour,
+		cfg.Auth.JWTSecret,
+		time.Duration(cfg.Auth.JWTAccessTTLMinutes)*time.Minute,
+		time.Duration(cfg.Auth.JWTRefreshTTLDays)*24*time.Hour,
 	).WithEnv(cfg.AppEnv)
 	oneTimeCodes := api.NewOneTimeCodePostgresStore(db, 60*time.Second)
 	// oneTimeCodes sweeper is gracefully stopped by RunWorkers. cmd/api
@@ -252,7 +252,7 @@ func Wire(ctx context.Context) (*App, error) {
 	// Parse the trusted proxy list once at startup so IP extraction
 	// and the rate limiter agree on which peers may supply
 	// X-Forwarded-For / X-Real-IP headers.
-	trustedProxies, err := api.ParseTrustedProxies(cfg.TrustedProxies)
+	trustedProxies, err := api.ParseTrustedProxies(cfg.Auth.TrustedProxies)
 	if err != nil {
 		return nil, fmt.Errorf("parse TRUSTED_PROXIES: %w", err)
 	}
@@ -362,7 +362,7 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithWebhookStore(webhookRepo),
 		// ADMIN_INVITE_TOKEN gates public registration. If the env
 		// is unset, registration is disabled (handler returns 403).
-		api.WithAdminInviteToken(cfg.AdminInviteToken),
+		api.WithAdminInviteToken(cfg.Auth.AdminInviteToken),
 		api.WithSnapshotStore(repository.NewSnapshotRepository(db)),
 		api.WithMetricHistoryStore(repository.NewAccountMetricsRepository(db)),
 		// P1#7 — export the importBatchRepo on App so the
@@ -432,8 +432,8 @@ func Wire(ctx context.Context) (*App, error) {
 	}
 
 	slog.Info("Router configured",
-		"jwt_access_ttl_minutes", cfg.JWTAccessTTLMinutes,
-		"jwt_refresh_ttl_days", cfg.JWTRefreshTTLDays,
+		"jwt_access_ttl_minutes", cfg.Auth.JWTAccessTTLMinutes,
+		"jwt_refresh_ttl_days", cfg.Auth.JWTRefreshTTLDays,
 		"frontend_url", cfg.FrontendURL,
 		"cors_origins", corsOrigins,
 		"platforms", capRouter.Names(),
@@ -509,7 +509,7 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			if ytPub, ok := a.CapRouter.Publisher(models.PlatformYouTube); ok {
 				_ = deliveryRegistry.Register(services.NewYouTubeDeliveryAdapter(ytPub))
 			}
-			if a.Cfg.GoogleDriveClientID != "" && a.Cfg.GoogleDriveClientSecret != "" {
+			if a.Cfg.Auth.GoogleDriveClientID != "" && a.Cfg.Auth.GoogleDriveClientSecret != "" {
 				driveSessionRepo := repository.NewDeliverySessionRepository(a.DB)
 				var googleDriveOAuth *services.GoogleDriveOAuthService
 				if gd, ok := a.CapRouter.Get(models.PlatformGoogleDrive); ok {

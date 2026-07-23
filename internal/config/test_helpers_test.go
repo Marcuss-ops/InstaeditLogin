@@ -37,6 +37,8 @@ func minimalValidConfig(jwtSecret string) *Config {
 			S3SecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 		},
 		EncryptionKey: validEncryptionKey(),
-		JWTSecret:     jwtSecret,
+		Auth: AuthConfig{
+			JWTSecret: jwtSecret,
+		},
 	}
 }

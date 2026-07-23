@@ -19,9 +19,11 @@ import (
 // tiktokTestCfg returns a minimal config for TikTok OAuth tests.
 func tiktokTestCfg() *config.Config {
 	return &config.Config{
-		TikTokClientID:     "test-tiktok-client-key",
-		TikTokClientSecret: "test-tiktok-client-secret-32chars",
-		TikTokRedirectURI:  "http://localhost:8080/tiktok/callback",
+		Auth: config.AuthConfig{
+			TikTokClientID:     "test-tiktok-client-key",
+			TikTokClientSecret: "test-tiktok-client-secret-32chars",
+			TikTokRedirectURI:  "http://localhost:8080/tiktok/callback",
+		},
 	}
 }
 

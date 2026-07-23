@@ -72,6 +72,70 @@ type StorageConfig struct {
 	GoogleDriveUploadFolderID string
 }
 
+// AuthConfig holds OAuth credentials, JWT settings and security tokens.
+type AuthConfig struct {
+	// Meta OAuth — shared App ID and Secret.
+	MetaAppID       string
+	MetaAppSecret   string
+	MetaRedirectURI string // DEPRECATED
+
+	// Per-platform redirect URIs.
+	InstagramRedirectURI string
+	FacebookRedirectURI  string
+	ThreadsRedirectURI   string
+
+	// TikTok OAuth
+	TikTokClientID     string
+	TikTokClientSecret string
+	TikTokRedirectURI  string
+
+	// X (Twitter) OAuth 2.0 PKCE
+	XClientID     string
+	XClientSecret string
+	XRedirectURI  string
+
+	// YouTube OAuth
+	YouTubeClientID     string
+	YouTubeClientSecret string
+	YouTubeRedirectURI  string
+
+	// Google Drive OAuth (read-only import of video clips)
+	GoogleDriveClientID     string
+	GoogleDriveClientSecret string
+	GoogleDriveRedirectURI  string
+
+	// LinkedIn OAuth
+	LinkedInClientID     string
+	LinkedInClientSecret string
+	LinkedInRedirectURI  string
+
+	// JWT
+	JWTSecret           string
+	JWTAccessTTLMinutes int
+	JWTRefreshTTLDays   int
+	// Deprecated: JWT_TTL_HOURS is the legacy single-knob TTL.
+	// If JWT_ACCESS_TTL_MINUTES is unset, the hours value is
+	// converted to minutes. Prefer the explicit access/refresh
+	// variables for new deployments.
+	JWTTTLHours int
+
+	// TrustedProxies is a comma-separated list of IP addresses and/or
+	// CIDR ranges that are allowed to supply X-Forwarded-For /
+	// X-Real-IP headers. When empty, the API trusts only the direct
+	// peer address (RemoteAddr). Example: "10.0.0.0/8,127.0.0.1".
+	TrustedProxies string
+
+	// AdminInviteToken gates the public registration endpoint
+	// (POST /api/v1/auth/register). The handler requires the request
+	// to present the same value via the X-Admin-Token header
+	// (constant-time compare). When empty, registration is fully
+	// disabled (the handler returns 403 "registration is
+	// invite-only"). Generate with `openssl rand -hex 32` and
+	// rotate via `flyctl secrets import`. NOT logged, NOT exposed
+	// in error messages.
+	AdminInviteToken string
+}
+
 // Config holds all configuration for the application.
 //
 // Taglio 5b: SERVER_PORT + SERVER_HOST removed — the server listens on the
@@ -114,30 +178,8 @@ type Config struct {
 	// Storage (S3-compatible + Google Drive upload folder).
 	Storage StorageConfig
 
-	// Meta OAuth — shared App ID and Secret.
-	MetaAppID       string
-	MetaAppSecret   string
-	MetaRedirectURI string // DEPRECATED
-
-	// Per-platform redirect URIs.
-	InstagramRedirectURI string
-	FacebookRedirectURI  string
-	ThreadsRedirectURI   string
-
-	// TikTok OAuth
-	TikTokClientID     string
-	TikTokClientSecret string
-	TikTokRedirectURI  string
-
-	// X (Twitter) OAuth 2.0 PKCE
-	XClientID     string
-	XClientSecret string
-	XRedirectURI  string
-
-	// YouTube OAuth
-	YouTubeClientID     string
-	YouTubeClientSecret string
-	YouTubeRedirectURI  string
+	// Auth (OAuth + JWT + security tokens).
+	Auth AuthConfig
 
 	// P1#6 — YouTube resumable-upload tuning. The resumable upload
 	// protocol streams the binary in N chunks; Google requires each
@@ -160,16 +202,6 @@ type Config struct {
 	YouTubeUploadBackoffBaseMs int   // YOUTUBE_UPLOAD_BACKOFF_BASE_MS; default 1000 (1 s)
 	YouTubeUploadBackoffCapMs  int   // YOUTUBE_UPLOAD_BACKOFF_CAP_MS; default 300000 (5 min); applies to CALCULATED backoff only, NOT server Retry-After
 	YouTubeDailyQuotaLimit     int   // YOUTUBE_DAILY_QUOTA_LIMIT; default 300; daily pre-call videos.insert gate. 1 videos.insert = 1 bucket unit under the 2026 quota model (default 100/day from Google, 300/day for the 200-channel rollout with 50% buffer). When calls >= limit, publish_worker stamps retry_wait + metadata.retry_after_seconds until next UTC midnight.
-
-	// Google Drive OAuth (read-only import of video clips)
-	GoogleDriveClientID     string
-	GoogleDriveClientSecret string
-	GoogleDriveRedirectURI  string
-
-	// LinkedIn OAuth
-	LinkedInClientID     string
-	LinkedInClientSecret string
-	LinkedInRedirectURI  string
 
 	// Encryption (Blocco #2.2 — multi-key support).
 	//
@@ -209,14 +241,10 @@ type Config struct {
 	ActiveEncryptionKeyIDRaw string
 
 	// JWT
-	JWTSecret           string
-	JWTAccessTTLMinutes int
-	JWTRefreshTTLDays   int
 	// TrustedProxies is a comma-separated list of IP addresses and/or
 	// CIDR ranges that are allowed to supply X-Forwarded-For /
 	// X-Real-IP headers. When empty, the API trusts only the direct
 	// peer address (RemoteAddr). Example: "10.0.0.0/8,127.0.0.1".
-	TrustedProxies string
 
 	// Metrics basic-auth credentials. In production both must be set;
 	// validate() fail-closes the boot if either is empty.
@@ -236,7 +264,6 @@ type Config struct {
 	// If JWT_ACCESS_TTL_MINUTES is unset, the hours value is
 	// converted to minutes. Prefer the explicit access/refresh
 	// variables for new deployments.
-	JWTTTLHours int
 
 	// Logging
 	LogLevel string
@@ -345,7 +372,6 @@ type Config struct {
 	// invite-only"). Generate with `openssl rand -hex 32` and
 	// rotate via `flyctl secrets import`. NOT logged, NOT exposed
 	// in error messages.
-	AdminInviteToken string
 
 	// AppMode lets operators pin the deployment to Google's OAuth-
 	// consent-screen publishing status. "production" means refresh
@@ -363,6 +389,39 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
+		Auth: AuthConfig{
+			MetaAppID:               getEnv("META_APP_ID", ""),
+			MetaAppSecret:           getEnv("META_APP_SECRET", ""),
+			MetaRedirectURI:         getEnv("META_REDIRECT_URI", ""),
+			InstagramRedirectURI:    getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
+			FacebookRedirectURI:     getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
+			ThreadsRedirectURI:      getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
+			TikTokClientID:          getEnv("TIKTOK_CLIENT_ID", ""),
+			TikTokClientSecret:      getEnv("TIKTOK_CLIENT_SECRET", ""),
+			TikTokRedirectURI:       getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
+			XClientID:               getEnv("X_CLIENT_ID", ""),
+			XClientSecret:           getEnv("X_CLIENT_SECRET", ""),
+			XRedirectURI:            getEnv("X_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
+			YouTubeClientID:         getEnv("YOUTUBE_CLIENT_ID", ""),
+			YouTubeClientSecret:     getEnv("YOUTUBE_CLIENT_SECRET", ""),
+			YouTubeRedirectURI:      getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
+			GoogleDriveClientID:     getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
+			GoogleDriveClientSecret: getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
+			GoogleDriveRedirectURI:  getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),
+			LinkedInClientID:        getEnv("LINKEDIN_CLIENT_ID", ""),
+			LinkedInClientSecret:    getEnv("LINKEDIN_CLIENT_SECRET", ""),
+			LinkedInRedirectURI:     getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
+			JWTSecret:               getEnv("JWT_SECRET", ""),
+			JWTAccessTTLMinutes:     getEnvInt("JWT_ACCESS_TTL_MINUTES", 0),
+			JWTRefreshTTLDays:       getEnvInt("JWT_REFRESH_TTL_DAYS", 0),
+			TrustedProxies:          getEnv("TRUSTED_PROXIES", ""),
+			JWTTTLHours:             getEnvInt("JWT_TTL_HOURS", 0),
+			// Disable public registration unless an admin invite token
+			// is configured. Operators create users manually (via the
+			// admin endpoint or by setting ADMIN_INVITE_TOKEN and calling
+			// /api/v1/auth/register with X-Admin-Token).
+			AdminInviteToken: getEnv("ADMIN_INVITE_TOKEN", ""),
+		},
 		FrontendURL:        getEnv("FRONTEND_URL", ""),
 		AllowedCORSOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
 		Database: DatabaseConfig{
@@ -374,21 +433,6 @@ func Load() (*Config, error) {
 			DBName:      getEnv("DB_NAME", "instaedit_login"),
 			DBSSLMode:   getEnv("DB_SSLMODE", "disable"),
 		},
-		MetaAppID:   getEnv("META_APP_ID", ""),
-		MetaAppSecret:        getEnv("META_APP_SECRET", ""),
-		MetaRedirectURI:      getEnv("META_REDIRECT_URI", ""),
-		InstagramRedirectURI: getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
-		FacebookRedirectURI:  getEnv("FACEBOOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/facebook/callback"),
-		ThreadsRedirectURI:   getEnv("THREADS_REDIRECT_URI", "http://localhost:8080/api/v1/auth/threads/callback"),
-		TikTokClientID:       getEnv("TIKTOK_CLIENT_ID", ""),
-		TikTokClientSecret:   getEnv("TIKTOK_CLIENT_SECRET", ""),
-		TikTokRedirectURI:    getEnv("TIKTOK_REDIRECT_URI", "http://localhost:8080/api/v1/auth/tiktok/callback"),
-		XClientID:            getEnv("X_CLIENT_ID", ""),
-		XClientSecret:        getEnv("X_CLIENT_SECRET", ""),
-		XRedirectURI:         getEnv("X_REDIRECT_URI", "http://localhost:8080/api/v1/auth/twitter/callback"),
-		YouTubeClientID:      getEnv("YOUTUBE_CLIENT_ID", ""),
-		YouTubeClientSecret:  getEnv("YOUTUBE_CLIENT_SECRET", ""),
-		YouTubeRedirectURI:   getEnv("YOUTUBE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/youtube/callback"),
 		// P1#6 — YouTube resumable upload tuning. Defaults mirror the
 		// valutazione doc spec (16 MB chunks, 5 per-chunk retries, 1 s/5 min
 		// backoff). Validation runs unconditionally (so an operator typo
@@ -407,43 +451,32 @@ func Load() (*Config, error) {
 		YouTubeUploadBackoffBaseMs: getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
 		YouTubeUploadBackoffCapMs:  getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
 		YouTubeDailyQuotaLimit:     getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
-		GoogleDriveClientID:       getEnv("GOOGLE_DRIVE_CLIENT_ID", ""),
-		GoogleDriveClientSecret:   getEnv("GOOGLE_DRIVE_CLIENT_SECRET", ""),
-		GoogleDriveRedirectURI:    getEnv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:8080/api/v1/auth/google-drive/callback"),
 		Storage: StorageConfig{
-			S3Endpoint:                  getEnv("S3_ENDPOINT", ""),
-			S3Bucket:                    getEnv("S3_BUCKET", ""),
-			S3PathStyle:                 getEnvBool("S3_PATH_STYLE", false),
-			S3AccessKey:                 getEnv("S3_ACCESS_KEY", ""),
-			S3SecretKey:                 getEnv("S3_SECRET_KEY", ""),
-			S3Region:                    getEnv("S3_REGION", ""),
-			MaxUploadBytes:              getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
-			GoogleDriveAPIKey:           getEnv("GOOGLE_DRIVE_API_KEY", ""),
-			GoogleDriveUploadFolderID:   getEnv("GOOGLE_DRIVE_UPLOAD_FOLDER_ID", ""),
+			S3Endpoint:                getEnv("S3_ENDPOINT", ""),
+			S3Bucket:                  getEnv("S3_BUCKET", ""),
+			S3PathStyle:               getEnvBool("S3_PATH_STYLE", false),
+			S3AccessKey:               getEnv("S3_ACCESS_KEY", ""),
+			S3SecretKey:               getEnv("S3_SECRET_KEY", ""),
+			S3Region:                  getEnv("S3_REGION", ""),
+			MaxUploadBytes:            getEnvInt64("STORAGE_MAX_UPLOAD_BYTES", 200*1024*1024),
+			GoogleDriveAPIKey:         getEnv("GOOGLE_DRIVE_API_KEY", ""),
+			GoogleDriveUploadFolderID: getEnv("GOOGLE_DRIVE_UPLOAD_FOLDER_ID", ""),
 		},
-		VeloxAPIToken:              getEnv("VELOX_API_TOKEN", ""),
-		VeloxControlURL:            getEnv("VELOX_CONTROL_URL", ""),
-		VeloxControlJWTSecret:      getEnv("VELOX_CONTROL_JWT_SECRET", ""),
-		VeloxWebhookSecret:         getEnv("VELOX_WEBHOOK_SECRET", ""),
-		LinkedInClientID:           getEnv("LINKEDIN_CLIENT_ID", ""),
-		LinkedInClientSecret:       getEnv("LINKEDIN_CLIENT_SECRET", ""),
-		LinkedInRedirectURI:        getEnv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/api/v1/auth/linkedin/callback"),
-		EncryptionKey:              getEnv("ENCRYPTION_KEY", ""),
+		VeloxAPIToken:         getEnv("VELOX_API_TOKEN", ""),
+		VeloxControlURL:       getEnv("VELOX_CONTROL_URL", ""),
+		VeloxControlJWTSecret: getEnv("VELOX_CONTROL_JWT_SECRET", ""),
+		VeloxWebhookSecret:    getEnv("VELOX_WEBHOOK_SECRET", ""),
+		EncryptionKey:         getEnv("ENCRYPTION_KEY", ""),
 		// Blocco #2.2: read the multi-key env vars. The actual
 		// parsing + validation happens in validate(); Load() only
 		// captures the raw strings so validate() can surface
 		// high-quality error messages with the original input.
 		EncryptionKeysRaw:              getEnv("ENCRYPTION_KEYS", ""),
 		ActiveEncryptionKeyIDRaw:       getEnv("ACTIVE_ENCRYPTION_KEY_ID", ""),
-		JWTSecret:                      getEnv("JWT_SECRET", ""),
-		JWTAccessTTLMinutes:            getEnvInt("JWT_ACCESS_TTL_MINUTES", 0),
-		JWTRefreshTTLDays:              getEnvInt("JWT_REFRESH_TTL_DAYS", 0),
-		TrustedProxies:                 getEnv("TRUSTED_PROXIES", ""),
 		MetricsBasicAuthUser:           getEnv("METRICS_BASIC_AUTH_USER", ""),
 		MetricsBasicAuthPass:           getEnv("METRICS_BASIC_AUTH_PASS", ""),
 		MetricsHost:                    getEnv("METRICS_HOST", ""),
 		MetricsPort:                    getEnvInt("METRICS_PORT", 0),
-		JWTTTLHours:                    getEnvInt("JWT_TTL_HOURS", 0),
 		LogLevel:                       getEnv("LOG_LEVEL", "info"),
 		AppEnv:                         getEnv("APP_ENV", "dev"),
 		PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
@@ -478,26 +511,21 @@ func Load() (*Config, error) {
 		// to pin, etc.) and Go's http.Cookie Domain field will
 		// pass it straight through to the browser unchanged.
 		CookieDomain: getEnv("COOKIE_DOMAIN", ""),
-		// Disable public registration unless an admin invite token
-		// is configured. Operators create users manually (via the
-		// admin endpoint or by setting ADMIN_INVITE_TOKEN and calling
-		// /api/v1/auth/register with X-Admin-Token).
-		AdminInviteToken: getEnv("ADMIN_INVITE_TOKEN", ""),
 	}
 
 	// Resolve JWT TTL defaults and legacy fallback. Access TTL defaults
 	// to 15 minutes; refresh TTL defaults to 30 days. The legacy
 	// JWT_TTL_HOURS variable is converted to minutes when the explicit
 	// access-TTL variable is absent, preserving existing deployments.
-	if cfg.JWTAccessTTLMinutes <= 0 {
-		if cfg.JWTTTLHours > 0 {
-			cfg.JWTAccessTTLMinutes = cfg.JWTTTLHours * 60
+	if cfg.Auth.JWTAccessTTLMinutes <= 0 {
+		if cfg.Auth.JWTTTLHours > 0 {
+			cfg.Auth.JWTAccessTTLMinutes = cfg.Auth.JWTTTLHours * 60
 		} else {
-			cfg.JWTAccessTTLMinutes = 15
+			cfg.Auth.JWTAccessTTLMinutes = 15
 		}
 	}
-	if cfg.JWTRefreshTTLDays <= 0 {
-		cfg.JWTRefreshTTLDays = 30
+	if cfg.Auth.JWTRefreshTTLDays <= 0 {
+		cfg.Auth.JWTRefreshTTLDays = 30
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -549,14 +577,14 @@ func (c *Config) validate() error {
 	}
 
 	// Meta OAuth (optional).
-	if c.MetaAppID == "" && c.MetaAppSecret == "" {
+	if c.Auth.MetaAppID == "" && c.Auth.MetaAppSecret == "" {
 		// platform disabled
-	} else if c.MetaAppID == "" {
+	} else if c.Auth.MetaAppID == "" {
 		return fmt.Errorf("META_APP_ID is required when META_APP_SECRET is set (or unset both)")
-	} else if c.MetaAppSecret == "" {
+	} else if c.Auth.MetaAppSecret == "" {
 		return fmt.Errorf("META_APP_SECRET is required when META_APP_ID is set (or unset both)")
-	} else if len(c.MetaAppSecret) < secretMinChars {
-		return fmt.Errorf("META_APP_SECRET must be at least %d characters (got %d)", secretMinChars, len(c.MetaAppSecret))
+	} else if len(c.Auth.MetaAppSecret) < secretMinChars {
+		return fmt.Errorf("META_APP_SECRET must be at least %d characters (got %d)", secretMinChars, len(c.Auth.MetaAppSecret))
 	}
 
 	// Encryption key (Blocco #2.2 — multi-key).
@@ -572,11 +600,11 @@ func (c *Config) validate() error {
 	}
 
 	// JWT signing key.
-	if c.JWTSecret == "" {
+	if c.Auth.JWTSecret == "" {
 		return fmt.Errorf("JWT_SECRET is required (must be at least %d bytes)", jwtSecretMinBytes)
 	}
-	if len(c.JWTSecret) < jwtSecretMinBytes {
-		return fmt.Errorf("JWT_SECRET must be at least %d bytes for HS256 (got %d)", jwtSecretMinBytes, len(c.JWTSecret))
+	if len(c.Auth.JWTSecret) < jwtSecretMinBytes {
+		return fmt.Errorf("JWT_SECRET must be at least %d bytes for HS256 (got %d)", jwtSecretMinBytes, len(c.Auth.JWTSecret))
 	}
 
 	// Sentry (Blocco #5.3 — optional). When SET, validate the DSN
@@ -598,7 +626,7 @@ func (c *Config) validate() error {
 	}
 
 	// Optional OAuth platforms.
-	if err := c.validateOptionalPlatform("TIKTOK", c.TikTokClientID, c.TikTokClientSecret); err != nil {
+	if err := c.validateOptionalPlatform("TIKTOK", c.Auth.TikTokClientID, c.Auth.TikTokClientSecret); err != nil {
 		return err
 	}
 
@@ -607,13 +635,13 @@ func (c *Config) validate() error {
 	// impractical. Mirrors the JWT secret's 32-byte threshold so a
 	// generated `openssl rand -hex 32` (64 hex chars) sails through and
 	// a 4-char typo is rejected at boot rather than exploited at runtime.
-	if c.AdminInviteToken != "" && len(c.AdminInviteToken) < adminInviteTokenMinChars {
-		return fmt.Errorf("ADMIN_INVITE_TOKEN must be at least %d characters when set (got %d); generate with `openssl rand -hex 32` (64 hex chars) or leave it unset to disable registration entirely", adminInviteTokenMinChars, len(c.AdminInviteToken))
+	if c.Auth.AdminInviteToken != "" && len(c.Auth.AdminInviteToken) < adminInviteTokenMinChars {
+		return fmt.Errorf("ADMIN_INVITE_TOKEN must be at least %d characters when set (got %d); generate with `openssl rand -hex 32` (64 hex chars) or leave it unset to disable registration entirely", adminInviteTokenMinChars, len(c.Auth.AdminInviteToken))
 	}
-	if err := c.validateOptionalPlatform("X", c.XClientID, c.XClientSecret); err != nil {
+	if err := c.validateOptionalPlatform("X", c.Auth.XClientID, c.Auth.XClientSecret); err != nil {
 		return err
 	}
-	if err := c.validateOptionalPlatform("YOUTUBE", c.YouTubeClientID, c.YouTubeClientSecret); err != nil {
+	if err := c.validateOptionalPlatform("YOUTUBE", c.Auth.YouTubeClientID, c.Auth.YouTubeClientSecret); err != nil {
 		return err
 	}
 
@@ -629,7 +657,7 @@ func (c *Config) validate() error {
 	// cap >= base; otherwise the calculated fallback would be capped
 	// immediately and the chunk-loop would poll as fast as the worker can
 	// count.
-	if c.YouTubeClientID != "" {
+	if c.Auth.YouTubeClientID != "" {
 		if c.YouTubeUploadChunkBytes <= 0 || c.YouTubeUploadChunkBytes%262144 != 0 {
 			return fmt.Errorf("YOUTUBE_UPLOAD_CHUNK_BYTES must be a positive multiple of 256 KB (262144 bytes); got %d (default 16777216 = 16 MB)", c.YouTubeUploadChunkBytes)
 		}
@@ -643,10 +671,10 @@ func (c *Config) validate() error {
 			return fmt.Errorf("YOUTUBE_UPLOAD_BACKOFF_CAP_MS (%d) must be >= YOUTUBE_UPLOAD_BACKOFF_BASE_MS (%d)", c.YouTubeUploadBackoffCapMs, c.YouTubeUploadBackoffBaseMs)
 		}
 	}
-	if err := c.validateOptionalPlatform("GOOGLE_DRIVE", c.GoogleDriveClientID, c.GoogleDriveClientSecret); err != nil {
+	if err := c.validateOptionalPlatform("GOOGLE_DRIVE", c.Auth.GoogleDriveClientID, c.Auth.GoogleDriveClientSecret); err != nil {
 		return err
 	}
-	if err := c.validateOptionalPlatform("LINKEDIN", c.LinkedInClientID, c.LinkedInClientSecret); err != nil {
+	if err := c.validateOptionalPlatform("LINKEDIN", c.Auth.LinkedInClientID, c.Auth.LinkedInClientSecret); err != nil {
 		return err
 	}
 
@@ -846,8 +874,6 @@ func SortedKeyIDs(m map[uint32]string) []uint32 {
 	}
 	return out
 }
-
-
 
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {

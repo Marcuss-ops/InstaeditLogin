@@ -124,9 +124,9 @@ func WireCore(ctx context.Context) (*Core, error) {
 	capRouter := registry
 
 	authMgr := auth.NewManager(
-		cfg.JWTSecret,
-		time.Duration(cfg.JWTAccessTTLMinutes)*time.Minute,
-		time.Duration(cfg.JWTRefreshTTLDays)*24*time.Hour,
+		cfg.Auth.JWTSecret,
+		time.Duration(cfg.Auth.JWTAccessTTLMinutes)*time.Minute,
+		time.Duration(cfg.Auth.JWTRefreshTTLDays)*24*time.Hour,
 	).WithEnv(cfg.AppEnv)
 
 	oneTimeCodes := api.NewOneTimeCodePostgresStore(db, 60*time.Second)

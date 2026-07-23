@@ -52,12 +52,12 @@ type ThreadsOAuthService struct {
 // like Instagram and Facebook.
 // Accepts optional ProviderDependencies for HTTP client injection.
 func NewThreadsOAuthService(cfg *config.Config, deps ...ProviderDependencies) (*ThreadsOAuthService, error) {
-	if cfg.ThreadsRedirectURI == "" {
+	if cfg.Auth.ThreadsRedirectURI == "" {
 		return nil, nil // provider disabled
 	}
 	return &ThreadsOAuthService{
 		base:        NewMetaOAuthBase(cfg, deps...),
-		redirectURI: cfg.ThreadsRedirectURI,
+		redirectURI: cfg.Auth.ThreadsRedirectURI,
 	}, nil
 }
 
@@ -75,7 +75,7 @@ func (s *ThreadsOAuthService) GetLoginURL(state string) string {
 // Threads does not use OAuthLoginOptions; options are ignored.
 func (s *ThreadsOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
-	params.Set("client_id", s.base.cfg.MetaAppID)
+	params.Set("client_id", s.base.cfg.Auth.MetaAppID)
 	params.Set("redirect_uri", s.redirectURI)
 	params.Set("state", state)
 	params.Set("scope", "threads_basic,threads_content_publish")
@@ -113,8 +113,8 @@ func (s *ThreadsOAuthService) HandleCallback(ctx context.Context, state, code st
 // Threads-specific endpoint graph.threads.net/oauth/access_token.
 func (s *ThreadsOAuthService) exchangeCodeForThreadsToken(ctx context.Context, code, redirectURI string) (*models.MetaTokenResponse, error) {
 	params := url.Values{}
-	params.Set("client_id", s.base.cfg.MetaAppID)
-	params.Set("client_secret", s.base.cfg.MetaAppSecret)
+	params.Set("client_id", s.base.cfg.Auth.MetaAppID)
+	params.Set("client_secret", s.base.cfg.Auth.MetaAppSecret)
 	params.Set("grant_type", "authorization_code")
 	params.Set("redirect_uri", redirectURI)
 	params.Set("code", code)
@@ -155,7 +155,7 @@ func (s *ThreadsOAuthService) exchangeCodeForThreadsToken(ctx context.Context, c
 func (s *ThreadsOAuthService) exchangeForLongLivedThreadsToken(ctx context.Context, shortLivedToken string) (*models.MetaLongLivedTokenResponse, error) {
 	params := url.Values{}
 	params.Set("grant_type", "th_exchange_token")
-	params.Set("client_secret", s.base.cfg.MetaAppSecret)
+	params.Set("client_secret", s.base.cfg.Auth.MetaAppSecret)
 	params.Set("access_token", shortLivedToken)
 
 	req, err := http.NewRequestWithContext(ctx, "GET",

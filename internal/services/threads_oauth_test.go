@@ -15,9 +15,11 @@ import (
 // threadsTestCfg returns a minimal config for Threads OAuth tests.
 func threadsTestCfg() *config.Config {
 	return &config.Config{
-		MetaAppID:          "test-meta-app-id",
-		MetaAppSecret:      "test-meta-app-secret-must-be-32-chars-min",
-		ThreadsRedirectURI: "http://localhost:8080/api/v1/auth/threads/callback",
+		Auth: config.AuthConfig{
+			MetaAppID:          "test-meta-app-id",
+			MetaAppSecret:      "test-meta-app-secret-must-be-32-chars-min",
+			ThreadsRedirectURI: "http://localhost:8080/api/v1/auth/threads/callback",
+		},
 	}
 }
 
@@ -28,7 +30,7 @@ func newTestThreadsService(srv *httptest.Server) *ThreadsOAuthService {
 	base.httpClient = testClient(srv)
 	return &ThreadsOAuthService{
 		base:        base,
-		redirectURI: cfg.ThreadsRedirectURI,
+		redirectURI: cfg.Auth.ThreadsRedirectURI,
 	}
 }
 
@@ -222,9 +224,11 @@ func TestThreadsHandleCallback_TokenDataScopes(t *testing.T) {
 // returns nil when the redirect URI is not configured.
 func TestThreadsDisabledWhenNoRedirectURI(t *testing.T) {
 	cfg := &config.Config{
-		MetaAppID:          "test-id",
-		MetaAppSecret:      "test-secret-32-chars-minimum-length",
-		ThreadsRedirectURI: "", // disabled
+		Auth: config.AuthConfig{
+			MetaAppID:          "test-id",
+			MetaAppSecret:      "test-secret-32-chars-minimum-length",
+			ThreadsRedirectURI: "", // disabled
+		},
 	}
 	svc, err := NewThreadsOAuthService(cfg)
 	if err != nil {

@@ -91,7 +91,7 @@ func (r *Router) registerAuthEmailRoutes() {
 // row through SessionsService.Start and writes the cookies.
 //
 // Invite-only beta gate: the public endpoint requires the
-// X-Admin-Token header to equal cfg.AdminInviteToken (constant-time
+// X-Admin-Token header to equal cfg.Auth.AdminInviteToken (constant-time
 // compare). An empty token or a missing/incorrect header returns
 // 403 "registration is invite-only". Operators create users by
 // supplying the header (curl / admin script) or via an internal

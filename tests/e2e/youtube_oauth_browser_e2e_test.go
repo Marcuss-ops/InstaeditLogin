@@ -783,7 +783,7 @@ func Test_Z_YouTubeOAuth_EndToEnd_RealBrowser_Smoke(t *testing.T) {
 	// cfg is unused for the provider (it builds URLs via the provider
 	// surface, not directly from cfg), but pinning it keeps a future
 	// regression that pulls redirect_uri from cfg visible.
-	_ = config.Config{YouTubeClientID: provider.clientID, YouTubeRedirectURI: provider.redirectURI}
+	_ = config.Config{Auth: config.AuthConfig{YouTubeClientID: provider.clientID, YouTubeRedirectURI: provider.redirectURI}}
 
 	// ── Allocate the headless Chrome ─────────────────────────────
 	allocCtx, allocCancel := chromedp.NewExecAllocator(

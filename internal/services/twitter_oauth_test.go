@@ -55,9 +55,11 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 // construct a real TwitterOAuthService without hitting a real database.
 func twitterTestCfg() *config.Config {
 	return &config.Config{
-		XClientID:     "test-client-id",
-		XClientSecret: "test-client-secret-must-be-at-least-32-chars-long",
-		XRedirectURI:  "http://localhost:8080/callback",
+		Auth: config.AuthConfig{
+			XClientID:     "test-client-id",
+			XClientSecret: "test-client-secret-must-be-at-least-32-chars-long",
+			XRedirectURI:  "http://localhost:8080/callback",
+		},
 	}
 }
 

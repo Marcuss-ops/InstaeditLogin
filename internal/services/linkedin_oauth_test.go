@@ -14,9 +14,11 @@ import (
 // linkedinTestCfg returns a minimal config for LinkedIn OAuth tests.
 func linkedinTestCfg() *config.Config {
 	return &config.Config{
-		LinkedInClientID:     "test-linkedin-client-id",
-		LinkedInClientSecret: "test-linkedin-client-secret-must-be-32-chars",
-		LinkedInRedirectURI:  "http://localhost:8080/api/v1/auth/linkedin/callback",
+		Auth: config.AuthConfig{
+			LinkedInClientID:     "test-linkedin-client-id",
+			LinkedInClientSecret: "test-linkedin-client-secret-must-be-32-chars",
+			LinkedInRedirectURI:  "http://localhost:8080/api/v1/auth/linkedin/callback",
+		},
 	}
 }
 

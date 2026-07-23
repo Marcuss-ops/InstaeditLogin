@@ -14,9 +14,11 @@ import (
 
 func TestGoogleDriveOAuthService_Name(t *testing.T) {
 	svc, err := NewGoogleDriveOAuthService(&config.Config{
-		GoogleDriveClientID:     "client-id",
-		GoogleDriveClientSecret: "client-secret-01234567890123456789012345678901",
-		GoogleDriveRedirectURI:  "http://localhost/callback",
+		Auth: config.AuthConfig{
+			GoogleDriveClientID:     "client-id",
+			GoogleDriveClientSecret: "client-secret-01234567890123456789012345678901",
+			GoogleDriveRedirectURI:  "http://localhost/callback",
+		},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -41,9 +43,11 @@ func TestGoogleDriveOAuthService_DisabledWhenNoClientID(t *testing.T) {
 
 func TestGoogleDriveOAuthService_GetLoginURL(t *testing.T) {
 	svc, _ := NewGoogleDriveOAuthService(&config.Config{
-		GoogleDriveClientID:     "client-id",
-		GoogleDriveClientSecret: "client-secret-01234567890123456789012345678901",
-		GoogleDriveRedirectURI:  "http://localhost/callback",
+		Auth: config.AuthConfig{
+			GoogleDriveClientID:     "client-id",
+			GoogleDriveClientSecret: "client-secret-01234567890123456789012345678901",
+			GoogleDriveRedirectURI:  "http://localhost/callback",
+		},
 	})
 	url := svc.GetLoginURL("my-state")
 	if !strings.Contains(url, "accounts.google.com/o/oauth2/v2/auth") {
@@ -91,9 +95,11 @@ func newDriveServiceForTokenInfo(t *testing.T, tokenInfoURL string) *GoogleDrive
 	t.Helper()
 	return &GoogleDriveOAuthService{
 		cfg: &config.Config{
-			GoogleDriveClientID:     "client-id",
-			GoogleDriveClientSecret: "client-secret-01234567890123456789012345678901",
-			GoogleDriveRedirectURI:  "http://localhost/callback",
+			Auth: config.AuthConfig{
+				GoogleDriveClientID:     "client-id",
+				GoogleDriveClientSecret: "client-secret-01234567890123456789012345678901",
+				GoogleDriveRedirectURI:  "http://localhost/callback",
+			},
 		},
 		httpClient:   &http.Client{},
 		tokenInfoURL: tokenInfoURL,
@@ -220,9 +226,11 @@ func TestVerifyDriveTokenIsReadonly_ConstFallbackToProductionURL(t *testing.T) {
 	base, _ := url.Parse(srv.URL)
 	svc := &GoogleDriveOAuthService{
 		cfg: &config.Config{
-			GoogleDriveClientID:     "client-id",
-			GoogleDriveClientSecret: "secret-01234567890123456789012345678901",
-			GoogleDriveRedirectURI:  "http://localhost/callback",
+			Auth: config.AuthConfig{
+				GoogleDriveClientID:     "client-id",
+				GoogleDriveClientSecret: "secret-01234567890123456789012345678901",
+				GoogleDriveRedirectURI:  "http://localhost/callback",
+			},
 		},
 		httpClient: &http.Client{Transport: &rewriteRoundTripper{inner: http.DefaultTransport, base: base}},
 		// tokenInfoURL INTENTIONALLY zero-valued — this is the
@@ -379,9 +387,11 @@ func newHandleCallbackTest(t *testing.T, scopeOnTokeninfo string, tokeninfoStatu
 	base, _ := url.Parse(srv.URL)
 	return &GoogleDriveOAuthService{
 		cfg: &config.Config{
-			GoogleDriveClientID:     "client-id",
-			GoogleDriveClientSecret: "secret-01234567890123456789012345678901",
-			GoogleDriveRedirectURI:  "http://localhost/callback",
+			Auth: config.AuthConfig{
+				GoogleDriveClientID:     "client-id",
+				GoogleDriveClientSecret: "secret-01234567890123456789012345678901",
+				GoogleDriveRedirectURI:  "http://localhost/callback",
+			},
 		},
 		httpClient:   &http.Client{Transport: &rewriteRoundTripper{inner: http.DefaultTransport, base: base}},
 		tokenInfoURL: srv.URL + "/tokeninfo",

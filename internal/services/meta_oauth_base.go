@@ -56,8 +56,8 @@ func (b *MetaOAuthBase) now() time.Time {
 // access token. This is step 1 of the Meta OAuth flow.
 func (b *MetaOAuthBase) ExchangeCodeForToken(ctx context.Context, code, redirectURI string) (*models.MetaTokenResponse, error) {
 	params := url.Values{}
-	params.Set("client_id", b.cfg.MetaAppID)
-	params.Set("client_secret", b.cfg.MetaAppSecret)
+	params.Set("client_id", b.cfg.Auth.MetaAppID)
+	params.Set("client_secret", b.cfg.Auth.MetaAppSecret)
 	params.Set("redirect_uri", redirectURI)
 	params.Set("code", code)
 
@@ -96,8 +96,8 @@ func (b *MetaOAuthBase) ExchangeCodeForToken(ctx context.Context, code, redirect
 func (b *MetaOAuthBase) ExchangeForLongLivedToken(ctx context.Context, shortLivedToken string) (*models.MetaLongLivedTokenResponse, error) {
 	params := url.Values{}
 	params.Set("grant_type", "fb_exchange_token")
-	params.Set("client_id", b.cfg.MetaAppID)
-	params.Set("client_secret", b.cfg.MetaAppSecret)
+	params.Set("client_id", b.cfg.Auth.MetaAppID)
+	params.Set("client_secret", b.cfg.Auth.MetaAppSecret)
 	params.Set("fb_exchange_token", shortLivedToken)
 
 	req, err := http.NewRequestWithContext(ctx, "GET",

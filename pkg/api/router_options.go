@@ -202,7 +202,7 @@ func WithCookieDomain(domain string) RouterOption {
 // registration endpoint (POST /api/v1/auth/register). The handler
 // performs a constant-time compare between this value and the
 // X-Admin-Token request header; an empty value disables registration
-// entirely. See internal/config.AdminInviteToken for the env surface.
+// entirely. See internal/config.Auth.AdminInviteToken for the env surface.
 func WithAdminInviteToken(token string) RouterOption {
 	return func(r *Router) { r.adminInviteToken = token }
 }
