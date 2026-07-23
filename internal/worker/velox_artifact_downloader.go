@@ -77,16 +77,16 @@ type ExternalDeliveryUploadCreator interface {
 // VeloxArtifactDownloader polls the external_deliveries table for
 // accepted rows and registers each claimed row as an upload_jobs row.
 type VeloxArtifactDownloader struct {
-	claimStore      ExternalDeliveryClaimStore
-	uploader        ExternalDeliveryUploadCreator
+	claimStore       ExternalDeliveryClaimStore
+	uploader         ExternalDeliveryUploadCreator
 	destinationStore ExternalDestinationLookup
-	workspaceStore  ExternalDeliveryWorkspaceLookup
-	fsm             *IngestFSM
-	logger          *slog.Logger
-	workerID        string
-	lease           time.Duration
-	pollInterval    time.Duration
-	maxAttempts     int
+	workspaceStore   ExternalDeliveryWorkspaceLookup
+	fsm              *IngestFSM
+	logger           *slog.Logger
+	workerID         string
+	lease            time.Duration
+	pollInterval     time.Duration
+	maxAttempts      int
 }
 
 // VeloxArtifactDownloaderOptions groups optional runtime settings.

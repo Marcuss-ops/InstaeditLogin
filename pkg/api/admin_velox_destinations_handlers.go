@@ -688,4 +688,3 @@ func auditMetadataFromDeltas(d VeloxDestinationUpdateAuditDeltas) map[string]int
 	_ = json.Unmarshal(b, &m)
 	return m
 }
-

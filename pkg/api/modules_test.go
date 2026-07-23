@@ -175,7 +175,9 @@ func (f *fakeAdminStore) CreateFleetReadinessSnapshot(ctx context.Context, admin
 
 type testConnectLinkNonceStore struct{}
 
-func (f *testConnectLinkNonceStore) Create(jti, expectedChannelID string, expiresAt time.Time) error { return nil }
+func (f *testConnectLinkNonceStore) Create(jti, expectedChannelID string, expiresAt time.Time) error {
+	return nil
+}
 func (f *testConnectLinkNonceStore) Consume(jti string) error { return nil }
 
 func newAdminTestModule(adminStore AdminStore) (*AdminModule, *auth.Manager) {

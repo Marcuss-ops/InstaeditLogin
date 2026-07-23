@@ -36,7 +36,7 @@ type LinkedInOAuthService struct {
 // parameter is the OAuthConfig interface (see oauth_config.go); the
 // concrete *config.Config never reaches provider internals.
 func NewLinkedInOAuthService(cfg OAuthConfig, deps ...ProviderDependencies) (*LinkedInOAuthService, error) {
-	if  cfg.LinkedInClientID() == "" {
+	if cfg.LinkedInClientID() == "" {
 		return nil, nil // provider disabled
 	}
 	var dep ProviderDependencies
@@ -67,8 +67,8 @@ func (s *LinkedInOAuthService) GetLoginURL(state string) string {
 func (s *LinkedInOAuthService) GetLoginURLWithOptions(state string, _ OAuthLoginOptions) string {
 	params := url.Values{}
 	params.Set("response_type", "code")
-	params.Set("client_id", s. cfg.LinkedInClientID())
-	params.Set("redirect_uri", s. cfg.LinkedInRedirectURI())
+	params.Set("client_id", s.cfg.LinkedInClientID())
+	params.Set("redirect_uri", s.cfg.LinkedInRedirectURI())
 	params.Set("state", state)
 	params.Set("scope", "openid profile email w_member_social")
 
@@ -239,9 +239,9 @@ func (s *LinkedInOAuthService) exchangeCodeForToken(ctx context.Context, code st
 	body := url.Values{}
 	body.Set("grant_type", "authorization_code")
 	body.Set("code", code)
-	body.Set("redirect_uri", s. cfg.LinkedInRedirectURI())
-	body.Set("client_id", s. cfg.LinkedInClientID())
-	body.Set("client_secret", s. cfg.LinkedInClientSecret())
+	body.Set("redirect_uri", s.cfg.LinkedInRedirectURI())
+	body.Set("client_id", s.cfg.LinkedInClientID())
+	body.Set("client_secret", s.cfg.LinkedInClientSecret())
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		"https://www.linkedin.com/oauth/v2/accessToken",

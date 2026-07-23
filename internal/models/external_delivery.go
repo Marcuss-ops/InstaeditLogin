@@ -518,8 +518,8 @@ func validateVeloxTimezone(tz string) error {
 }
 
 const (
-	maxVeloxTags     = 50
-	maxVeloxTagLen   = 100
+	maxVeloxTags   = 50
+	maxVeloxTagLen = 100
 )
 
 func validateVeloxTags(tags []string) error {

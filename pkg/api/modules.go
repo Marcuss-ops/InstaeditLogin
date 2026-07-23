@@ -131,10 +131,10 @@ func (m *VeloxModule) Register(mux chi.Router) {
 	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate",
 		internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleValidateInternalDestination)))
 	if m.deps.ExternalDeliveryStore != nil {
-	mux.Method(http.MethodPost, "/internal/v1/deliveries",
-		internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleCreateInternalDelivery)))
-	mux.Method(http.MethodGet, "/internal/v1/deliveries/{id}",
-		internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleGetInternalDelivery)))
+		mux.Method(http.MethodPost, "/internal/v1/deliveries",
+			internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleCreateInternalDelivery)))
+		mux.Method(http.MethodGet, "/internal/v1/deliveries/{id}",
+			internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleGetInternalDelivery)))
 	}
 }
 
@@ -293,16 +293,16 @@ func (m *BillingModule) Register(mux chi.Router) {
 // MediaModuleDeps is the narrow set of dependencies the media module
 // needs to mount its routes.
 type MediaModuleDeps struct {
-	RateLimitSvc     *services.RateLimitService
-	Protected        func(http.HandlerFunc) http.HandlerFunc
-	PresignMedia     http.HandlerFunc
-	DriveImport      http.HandlerFunc
-	DriveImportAsync http.HandlerFunc
-	DriveBatchImport http.HandlerFunc
+	RateLimitSvc       *services.RateLimitService
+	Protected          func(http.HandlerFunc) http.HandlerFunc
+	PresignMedia       http.HandlerFunc
+	DriveImport        http.HandlerFunc
+	DriveImportAsync   http.HandlerFunc
+	DriveBatchImport   http.HandlerFunc
 	DriveBatchImportV2 http.HandlerFunc
 	DriveBatchV2Status http.HandlerFunc
-	DriveBatchStatus http.HandlerFunc
-	CompleteMedia    http.HandlerFunc
+	DriveBatchStatus   http.HandlerFunc
+	CompleteMedia      http.HandlerFunc
 }
 
 // MediaModule mounts the presigned-upload and Drive-import routes.
@@ -335,27 +335,27 @@ func (m *MediaModule) Register(mux chi.Router) {
 // PublishingModuleDeps is the narrow set of dependencies the
 // publishing module needs to mount its routes.
 type PublishingModuleDeps struct {
-	RateLimitSvc        *services.RateLimitService
-	Protected           func(http.HandlerFunc) http.HandlerFunc
-	CreatePost          http.HandlerFunc
-	ListPosts           http.HandlerFunc
+	RateLimitSvc         *services.RateLimitService
+	Protected            func(http.HandlerFunc) http.HandlerFunc
+	CreatePost           http.HandlerFunc
+	ListPosts            http.HandlerFunc
 	ListPostsByWorkspace http.HandlerFunc
-	GetPost             http.HandlerFunc
-	PatchPost           http.HandlerFunc
-	DeletePost          http.HandlerFunc
-	PublishPost         http.HandlerFunc
-	SchedulePost        http.HandlerFunc
-	CancelPost          http.HandlerFunc
-	RetryPost           http.HandlerFunc
-	GetPostTargets      http.HandlerFunc
-	AddPostTarget       http.HandlerFunc
-	RetryTarget         http.HandlerFunc
-	UploadCounts        http.HandlerFunc
-	ListUploads         http.HandlerFunc
+	GetPost              http.HandlerFunc
+	PatchPost            http.HandlerFunc
+	DeletePost           http.HandlerFunc
+	PublishPost          http.HandlerFunc
+	SchedulePost         http.HandlerFunc
+	CancelPost           http.HandlerFunc
+	RetryPost            http.HandlerFunc
+	GetPostTargets       http.HandlerFunc
+	AddPostTarget        http.HandlerFunc
+	RetryTarget          http.HandlerFunc
+	UploadCounts         http.HandlerFunc
+	ListUploads          http.HandlerFunc
 	ListUploadsByAccount http.HandlerFunc
 	UploadsBatchByFolder http.HandlerFunc
-	RescheduleUpload    http.HandlerFunc
-	CancelUpload        http.HandlerFunc
+	RescheduleUpload     http.HandlerFunc
+	CancelUpload         http.HandlerFunc
 }
 
 // PublishingModule mounts post, post-target and upload-job routes.
@@ -403,65 +403,66 @@ func (m *PublishingModule) Register(mux chi.Router) {
 
 // AuthHandlers groups the HTTP handler functions used by the auth
 // module. Keeping them in a nested struct keeps AuthModuleDeps readable.
-type AuthHandlers struct {	Login                       http.HandlerFunc
-	Callback                    http.HandlerFunc
-	ExchangeCode                http.HandlerFunc
-	Refresh                     http.HandlerFunc
-	Logout              http.HandlerFunc
-	LogoutAll           http.HandlerFunc
-	ListSessions        http.HandlerFunc
-	DeleteSession       http.HandlerFunc
-	ListAccounts        http.HandlerFunc
-	GetAccount          http.HandlerFunc
+type AuthHandlers struct {
+	Login                         http.HandlerFunc
+	Callback                      http.HandlerFunc
+	ExchangeCode                  http.HandlerFunc
+	Refresh                       http.HandlerFunc
+	Logout                        http.HandlerFunc
+	LogoutAll                     http.HandlerFunc
+	ListSessions                  http.HandlerFunc
+	DeleteSession                 http.HandlerFunc
+	ListAccounts                  http.HandlerFunc
+	GetAccount                    http.HandlerFunc
 	GetAccountsPerformanceSummary http.HandlerFunc
-	GetAccountPerformance http.HandlerFunc
-	ValidateAccount     http.HandlerFunc
-	ReconnectAccount    http.HandlerFunc
-	DeleteAccount       http.HandlerFunc
-	SyncAccount         http.HandlerFunc
-	AccountContent      http.HandlerFunc
-	UpdateAccount       http.HandlerFunc
-	CreateWorkspace     http.HandlerFunc
-	ListWorkspaces      http.HandlerFunc
-	GetWorkspace        http.HandlerFunc
-	DeleteWorkspace     http.HandlerFunc
-	SwitchWorkspace     http.HandlerFunc
-	AttachWorkspaceChannel http.HandlerFunc
-	ListWorkspaceChannels http.HandlerFunc
-	UpdateWorkspaceChannel http.HandlerFunc
-	DetachWorkspaceChannel http.HandlerFunc
-	ListGroups          http.HandlerFunc
-	CreateGroup         http.HandlerFunc
-	GetGroup            http.HandlerFunc
-	UpdateGroup         http.HandlerFunc
-	DeleteGroup         http.HandlerFunc
-	ListGroupAccounts   http.HandlerFunc
-	SetGroupAccounts    http.HandlerFunc
-	CreateApiKey        http.HandlerFunc
-	ListApiKeys         http.HandlerFunc
-	GetApiKey           http.HandlerFunc
-	DeleteApiKey        http.HandlerFunc
-	RotateApiKey        http.HandlerFunc
+	GetAccountPerformance         http.HandlerFunc
+	ValidateAccount               http.HandlerFunc
+	ReconnectAccount              http.HandlerFunc
+	DeleteAccount                 http.HandlerFunc
+	SyncAccount                   http.HandlerFunc
+	AccountContent                http.HandlerFunc
+	UpdateAccount                 http.HandlerFunc
+	CreateWorkspace               http.HandlerFunc
+	ListWorkspaces                http.HandlerFunc
+	GetWorkspace                  http.HandlerFunc
+	DeleteWorkspace               http.HandlerFunc
+	SwitchWorkspace               http.HandlerFunc
+	AttachWorkspaceChannel        http.HandlerFunc
+	ListWorkspaceChannels         http.HandlerFunc
+	UpdateWorkspaceChannel        http.HandlerFunc
+	DetachWorkspaceChannel        http.HandlerFunc
+	ListGroups                    http.HandlerFunc
+	CreateGroup                   http.HandlerFunc
+	GetGroup                      http.HandlerFunc
+	UpdateGroup                   http.HandlerFunc
+	DeleteGroup                   http.HandlerFunc
+	ListGroupAccounts             http.HandlerFunc
+	SetGroupAccounts              http.HandlerFunc
+	CreateApiKey                  http.HandlerFunc
+	ListApiKeys                   http.HandlerFunc
+	GetApiKey                     http.HandlerFunc
+	DeleteApiKey                  http.HandlerFunc
+	RotateApiKey                  http.HandlerFunc
 }
 
 // AuthModuleDeps is the narrow set of dependencies the auth module
 // needs to mount its routes.
 type AuthModuleDeps struct {
-	AuthEmailSvc        AuthEmailStore
-	TeamStore           TeamStore
-	GroupStore          GroupStore
-	WebhookStore        WebhookStore
-	RateLimitSvc        *services.RateLimitService
-	AuthMiddleware      func(http.Handler) http.Handler
-	ApiKeyAuthMiddleware func(http.Handler) http.Handler
-	Protected           func(http.HandlerFunc) http.HandlerFunc
-	CsrfConfig          func() auth.CSRFConfig
-	OAuthStartLimiter   func(http.Handler) http.Handler
-	OAuthSessionRedirect func(http.HandlerFunc) http.HandlerFunc
+	AuthEmailSvc            AuthEmailStore
+	TeamStore               TeamStore
+	GroupStore              GroupStore
+	WebhookStore            WebhookStore
+	RateLimitSvc            *services.RateLimitService
+	AuthMiddleware          func(http.Handler) http.Handler
+	ApiKeyAuthMiddleware    func(http.Handler) http.Handler
+	Protected               func(http.HandlerFunc) http.HandlerFunc
+	CsrfConfig              func() auth.CSRFConfig
+	OAuthStartLimiter       func(http.Handler) http.Handler
+	OAuthSessionRedirect    func(http.HandlerFunc) http.HandlerFunc
 	RegisterAuthEmailRoutes func()
-	RegisterTeamRoutes  func()
-	RegisterWebhookRoutes func()
-	Handlers            AuthHandlers
+	RegisterTeamRoutes      func()
+	RegisterWebhookRoutes   func()
+	Handlers                AuthHandlers
 }
 
 // AuthModule mounts authentication, sessions, accounts, workspaces,

@@ -55,13 +55,15 @@ func (sentryWiringIdempotencyStore) FindActiveByKey(int64, string, time.Time) (*
 	return nil, nil
 }
 func (sentryWiringIdempotencyStore) Insert(*models.IdempotencyRecord) error { return nil }
-func (sentryWiringIdempotencyStore) FindBatchReplay(int64) (*models.BatchReplay, error) { return nil, nil }
+func (sentryWiringIdempotencyStore) FindBatchReplay(int64) (*models.BatchReplay, error) {
+	return nil, nil
+}
 func (sentryWiringIdempotencyStore) InsertBatchReplay(*models.BatchReplay) error { return nil }
 
 type sentryWiringConnectLinkNonceStore struct{}
 
 func (sentryWiringConnectLinkNonceStore) Create(string, string, time.Time) error { return nil }
-func (sentryWiringConnectLinkNonceStore) Consume(string) error { return nil }
+func (sentryWiringConnectLinkNonceStore) Consume(string) error                   { return nil }
 
 // TestConfigureSentry_WiresRouter proves that the Sentry hub
 // produced by configureSentry is forwarded into api.Router via

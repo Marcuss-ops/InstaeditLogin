@@ -73,7 +73,9 @@ func runMigrationsRange(db *sql.DB, maxSeq int) error {
 	if err := acquireAdvisoryLock(ctx, conn); err != nil {
 		return err
 	}
-	defer func() { _, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", advisoryLockKey) }()
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", advisoryLockKey)
+	}()
 
 	if err := ensureSchemaMigrationsTable(ctx, conn); err != nil {
 		return err
