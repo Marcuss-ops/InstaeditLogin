@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/json"
@@ -60,12 +61,19 @@ func GenerateVeloxDeliveryID() (string, error) {
 // IsNonEmptyJSONObject returns true when raw is a non-empty
 // JSON object (i.e., a map with at least one key). It is used
 // by the Velox delivery handler to fast-fail malformed metadata
-// before the destination lookup.
+// before the destination lookup. This implementation decodes into
+// map[string]json.RawMessage instead of map[string]any to avoid the
+// expensive, lossy conversion of numbers to float64 and the creation
+// of nested generic maps.
 func IsNonEmptyJSONObject(raw json.RawMessage) bool {
-	if len(raw) == 0 {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
 		return false
 	}
-	var m map[string]any
+	if !json.Valid(raw) {
+		return false
+	}
+	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return false
 	}
@@ -75,18 +83,25 @@ func IsNonEmptyJSONObject(raw json.RawMessage) bool {
 // MergeVeloxDestinationMetadata merges destination default
 // metadata into the Velox-provided metadata payload and ensures
 // target_account_ids points to the destination's platform
-// account. Mutates and returns a fresh JSON blob.
+// account. It operates on json.RawMessage at the top level so
+// extra fields that are not part of VeloxDeliveryMetadata are
+// preserved byte-for-byte.
 func MergeVeloxDestinationMetadata(dest *models.ExternalDestination, raw json.RawMessage) json.RawMessage {
-	meta := make(map[string]any)
-	_ = json.Unmarshal(raw, &meta)
-	defaults, err := dest.DefaultMetadataAsMap()
-	if err == nil {
-		for k, v := range defaults {
-			if _, exists := meta[k]; !exists {
-				meta[k] = v
-			}
+	meta := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return raw
+	}
+
+	var defaults map[string]json.RawMessage
+	if len(dest.DefaultMetadata) > 0 {
+		_ = json.Unmarshal(dest.DefaultMetadata, &defaults)
+	}
+	for k, v := range defaults {
+		if _, exists := meta[k]; !exists {
+			meta[k] = v
 		}
 	}
+
 	// The destination row, not Velox, chooses the actual InstaEdit target.
 	// Overwrite only when the destination has a valid positive platform
 	// account id, so a malicious or stale Velox payload cannot redirect
@@ -95,8 +110,13 @@ func MergeVeloxDestinationMetadata(dest *models.ExternalDestination, raw json.Ra
 	// incomplete test fixtures), leave any peer-supplied value in place and
 	// let downstream validation catch it.
 	if dest.PlatformAccountID > 0 {
-		meta["target_account_ids"] = []int64{dest.PlatformAccountID}
+		ids := []int64{dest.PlatformAccountID}
+		idsRaw, err := json.Marshal(ids)
+		if err == nil {
+			meta["target_account_ids"] = idsRaw
+		}
 	}
+
 	merged, err := json.Marshal(meta)
 	if err != nil {
 		return raw

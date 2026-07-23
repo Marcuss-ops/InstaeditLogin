@@ -416,12 +416,15 @@ type ExternalDelivery struct {
 // are merged) and reused by the worker instead of repeatedly decoding
 // the raw JSON blob.
 type VeloxDeliveryMetadata struct {
-	Title            string  `json:"title"`
-	Description      string  `json:"description"`
-	PrivacyStatus    string  `json:"privacy_status"`
-	TargetAccountIDs []int64 `json:"target_account_ids"`
-	DriveAccountID   *int64  `json:"drive_account_id"`
-	FolderID         *string `json:"folder_id"`
+	Title            string   `json:"title"`
+	Description      string   `json:"description"`
+	PrivacyStatus    string   `json:"privacy_status"`
+	Language         *string  `json:"language,omitempty"`
+	Timezone         *string  `json:"timezone,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	TargetAccountIDs []int64  `json:"target_account_ids"`
+	DriveAccountID   *int64   `json:"drive_account_id"`
+	FolderID         *string  `json:"folder_id"`
 }
 
 // ParseVeloxDeliveryMetadata parses a raw JSONB metadata blob into a
