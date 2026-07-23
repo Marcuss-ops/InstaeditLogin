@@ -4,7 +4,7 @@
 //  1. bootstrap.Wire (config + DB + repos + services + Router)
 //  2. database.Migrate (dev wrapper assumes exclusive DB access)
 //  3. HTTP server (same path as cmd/api)
-//  4. Optional 5 background goroutines (gated by RUN_WORKERS env)
+//  4. Optional 9 background goroutines (gated by RUN_WORKERS env)
 //
 // Production topology (cmd/api + cmd/worker + cmd/migrate as separate
 // pods) does NOT use this wrapper. This binary survives for two reasons:
@@ -12,7 +12,7 @@
 //   - Backward compatibility with the pre-Blocco #2.1 deploy shape
 //     (Railway / Render single-process models)
 //
-// RUN_WORKERS=false disables the 5 background goroutines but keeps the
+// RUN_WORKERS=false disables the 9 background goroutines but keeps the
 // HTTP server. Default true. Production-shaped binary deploys should
 // use cmd/api + cmd/worker instead so per-service scaling is correct.
 package main

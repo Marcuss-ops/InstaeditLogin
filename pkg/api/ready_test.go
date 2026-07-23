@@ -191,3 +191,38 @@ func TestReady_NoDBWired_503(t *testing.T) {
 		t.Errorf("Migrations: want error (no DB wired), got ok")
 	}
 }
+
+// TestReady_DoesNotExposeWorkerStatus documents the architectural
+// separation between API readiness and worker readiness. The API
+// /ready endpoint only reports DB + migrations; worker status is
+// exposed by the separate worker health listener on its own port.
+func TestReady_DoesNotExposeWorkerStatus(t *testing.T) {
+	r := readyTestRouter(t, nil)
+
+	srv := httptest.NewServer(http.HandlerFunc(r.handleReady))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	raw := make(map[string]any)
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Only the canonical readiness fields are ever emitted; no worker
+	// registry state can leak into the API readiness response.
+	allowed := map[string]struct{}{
+		"status":     {},
+		"db":         {},
+		"migrations": {},
+	}
+	for key := range raw {
+		if _, ok := allowed[key]; !ok {
+			t.Errorf("unexpected key in /ready response: %q (worker status must not appear here)", key)
+		}
+	}
+}
