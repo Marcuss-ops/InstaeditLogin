@@ -313,6 +313,45 @@ func TestLoad_JWT_TTL_LegacyFallback(t *testing.T) {
 // production contract: when APP_ENV=production, both metrics basic-auth
 // credentials must be present. Any incomplete configuration (missing user,
 // missing pass, or both) must prevent the process from booting.
+// TestValidateOptionalPlatform_AllPlatforms exercises every
+// optional OAuth platform (TikTok, X, YouTube, Google Drive, LinkedIn)
+// through the five input states: both empty, only ID, only secret,
+// both valid, and a too-short secret. The helper is platform-agnostic,
+// but running it once per platform name makes failures self-describing.
+func TestValidateOptionalPlatform_AllPlatforms(t *testing.T) {
+	const validSecret = "a-very-long-secret-that-is-at-least-32-chars-long"
+
+	cases := []struct {
+		name    string
+		id      string
+		secret  string
+		wantErr bool
+	}{
+		{"both empty", "", "", false},
+		{"only id", "client-id", "", true},
+		{"only secret", "", validSecret, true},
+		{"both valid", "client-id", validSecret, false},
+		{"short secret", "client-id", "short", true},
+	}
+
+	platforms := []string{"TIKTOK", "X", "YOUTUBE", "GOOGLE_DRIVE", "LINKEDIN"}
+	cfg := &Config{}
+
+	for _, platform := range platforms {
+		for _, tc := range cases {
+			t.Run(platform+"_"+tc.name, func(t *testing.T) {
+				err := cfg.validateOptionalPlatform(platform, tc.id, tc.secret)
+				if tc.wantErr && err == nil {
+					t.Fatalf("validateOptionalPlatform(%q, %q, %q): want error, got nil", platform, tc.id, tc.secret)
+				}
+				if !tc.wantErr && err != nil {
+					t.Fatalf("validateOptionalPlatform(%q, %q, %q): want nil, got %v", platform, tc.id, tc.secret, err)
+				}
+			})
+		}
+	}
+}
+
 func TestLoad_Production_RequiresMetricsBasicAuth(t *testing.T) {
 	// Provide the minimum required env vars so the only failure path
 	// under test is the production metrics-auth check.
