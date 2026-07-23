@@ -143,6 +143,15 @@ type retryRoundTripper struct {
 	maxBackoff time.Duration // test hook; zero means use the package default
 }
 
+// maxBackoffOrDefault returns the configured maximum backoff. If the
+// test hook is unset, it returns the production default.
+func (rrt *retryRoundTripper) maxBackoffOrDefault() time.Duration {
+	if rrt.maxBackoff == 0 {
+		return maxBackoff
+	}
+	return rrt.maxBackoff
+}
+
 // delayForRetry returns the wait duration before the next retry. It honors
 // Retry-After when present, caps the result at maxBackoff, and adds jitter.
 func (rrt *retryRoundTripper) delayForRetry(base time.Duration, resp *http.Response) time.Duration {
@@ -155,8 +164,8 @@ func (rrt *retryRoundTripper) delayForRetry(base time.Duration, resp *http.Respo
 			// TODO: support RFC 7231 HTTP-date format if a server sends it.
 		}
 	}
-	if delay > maxBackoff {
-		delay = maxBackoff
+	if cap := rrt.maxBackoffOrDefault(); delay > cap {
+		delay = cap
 	}
 	if delay <= 0 {
 		delay = initialBackoff
@@ -168,10 +177,7 @@ func (rrt *retryRoundTripper) delayForRetry(base time.Duration, resp *http.Respo
 }
 
 func (rrt *retryRoundTripper) capBackoff(d time.Duration) time.Duration {
-	cap := rrt.maxBackoff
-	if cap == 0 {
-		cap = maxBackoff
-	}
+	cap := rrt.maxBackoffOrDefault()
 	if d > cap {
 		return cap
 	}
