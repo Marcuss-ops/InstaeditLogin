@@ -117,3 +117,74 @@ func TestRecovery_WithSentry_PanicWrites500(t *testing.T) {
 		t.Errorf("body: want 'internal server error', got %v", body)
 	}
 }
+
+// fakeTransport is a Sentry transport that records every event it
+// receives in-memory. It lets us assert that a panic really travelled
+// through the SDK without calling any real Sentry endpoint.
+type fakeTransport struct {
+	events chan *sentry.Event
+}
+
+func newFakeTransport() *fakeTransport {
+	return &fakeTransport{events: make(chan *sentry.Event, 10)}
+}
+
+func (ft *fakeTransport) Configure(_ sentry.ClientOptions) {}
+func (ft *fakeTransport) Flush(_ time.Duration) bool { return true }
+func (ft *fakeTransport) SendEvent(event *sentry.Event) {
+	ft.events <- event
+}
+
+func (ft *fakeTransport) waitEvent(t *testing.T, timeout time.Duration) *sentry.Event {
+	t.Helper()
+	select {
+	case event := <-ft.events:
+		return event
+	case <-time.After(timeout):
+		t.Fatal("timeout waiting for Sentry event")
+		return nil
+	}
+}
+
+// TestRecovery_WithSentry_FakeTransportCapturesPanic confirms that
+// when the router is wired with a Sentry hub, a panic in the handler
+// is captured by Sentry and sent to the configured transport. This
+// test exercises the complete wiring path that bootstrap enables by
+// passing WithSentryHub(hub) into the router options.
+func TestRecovery_WithSentry_FakeTransportCapturesPanic(t *testing.T) {
+	transport := newFakeTransport()
+	client, err := sentry.NewClient(sentry.ClientOptions{
+		Dsn:       "https://public@example.com/1",
+		Transport: transport,
+	})
+	if err != nil {
+		t.Fatalf("sentry.NewClient: %v", err)
+	}
+	hub := sentry.NewHub(client, sentry.NewScope())
+
+	r := hs(hub)
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		panic("controlled boom")
+	})
+	srv := httptest.NewServer(r.recoverMiddleware(inner))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status: want 500, got %d", resp.StatusCode)
+	}
+
+	event := transport.waitEvent(t, 2*time.Second)
+	if event == nil {
+		t.Fatal("expected a Sentry event to be sent, got none (wiring may be broken)")
+	}
+	// hub.Recover stores the panic string in the event Message rather
+	// than in the Exception slice for non-error panic values.
+	if !strings.Contains(event.Message, "controlled boom") {
+		t.Errorf("event message should contain panic message; got %q", event.Message)
+	}
+}
