@@ -18,13 +18,13 @@ import (
 // executed statements, not the exact bind values.
 func fixtureUploadJob() *models.UploadJob {
 	return &models.UploadJob{
-		UserID:     42,
+		UserID:      42,
 		WorkspaceID: 7,
-		SourceType: models.UploadJobSourceVeloxArtifact,
-		SourceID:   "https://velox.example/artifact",
-		Status:     models.UploadJobStatusPending,
-		Title:      "title",
-		Caption:    "caption",
+		SourceType:  models.UploadJobSourceVeloxArtifact,
+		SourceID:    "https://velox.example/artifact",
+		Status:      models.UploadJobStatusPending,
+		Title:       "title",
+		Caption:     "caption",
 	}
 }
 

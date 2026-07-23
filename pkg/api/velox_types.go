@@ -427,4 +427,5 @@ type VeloxDestinationUpdateAuditDeltas struct {
 	Enabled         *bool `json:"enabled"`
 	DefaultsChanged bool  `json:"defaults_changed"`
 }
+
 const veloxProducerSourcePostDeliveries = "post_deliveries"

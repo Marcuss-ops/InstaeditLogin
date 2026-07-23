@@ -277,7 +277,7 @@ func hashIP(ip string) string {
 	}
 	sum := sha256.Sum256([]byte(ip))
 	return hex.EncodeToString(sum[:])
-}// WithdrawFromCookie extracts the refresh cookie value. Exposed so
+} // WithdrawFromCookie extracts the refresh cookie value. Exposed so
 // the /auth/logout handler can do a cookie-anchored revoke (deletes
 // the row matching the current refresh hash, so the cookie is
 // invalid even if the user keeps the same cookie string around).
@@ -299,7 +299,6 @@ func (s *SessionsService) WithdrawFromCookie(refreshPlain string) error {
 	}
 	return s.repo.Revoke(row.ID, "logout")
 }
-
 
 // IsNoSession is exported for handlers that want a 401 vs 404 split.
 func IsNoSession(err error) bool {

@@ -769,9 +769,9 @@ func NewRouter(
 	opts ...RouterOption,
 ) *Router {
 	r := &Router{
-		capabilities:  capRouter,
-		userRepo:      userRepo,
-		auth:          authMgr,
+		capabilities: capRouter,
+		userRepo:     userRepo,
+		auth:         authMgr,
 
 		frontendURL:   frontendURL,
 		allowedOrigin: allowedOrigins,

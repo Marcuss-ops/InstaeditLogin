@@ -406,7 +406,7 @@ func Wire(ctx context.Context) (*App, error) {
 		}
 	} else {
 		slog.Info("sentry disabled (SENTRY_DSN empty)")
-	}	// Inject the Sentry hub into the router options so the recovery
+	} // Inject the Sentry hub into the router options so the recovery
 	// middleware can read it via the Router field (not via the App
 	// field — pkg/api stays decoupled from internal/bootstrap).
 	opts = append(opts, api.WithSentryHub(hub))

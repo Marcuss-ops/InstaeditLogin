@@ -60,10 +60,10 @@ type OneTimeCodeStore interface {
 // kept for tests and local dev. It is no longer wired automatically by
 // NewRouter — callers must explicitly pass it via WithOneTimeCodeStore.
 type InMemoryOneTimeCodeStore struct {
-	mu      sync.Mutex
-	entries map[string]inMemoryOneTimeCodeEntry
-	ttl     time.Duration
-	stop    chan struct{}
+	mu       sync.Mutex
+	entries  map[string]inMemoryOneTimeCodeEntry
+	ttl      time.Duration
+	stop     chan struct{}
 	stopOnce sync.Once
 }
 

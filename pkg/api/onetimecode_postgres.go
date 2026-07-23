@@ -15,9 +15,9 @@ import (
 // row atomically with DELETE ... RETURNING, so the same code cannot be
 // consumed twice, even across replicas.
 type OneTimeCodePostgresStore struct {
-	db  *sql.DB
-	ttl time.Duration
-	stop chan struct{}
+	db       *sql.DB
+	ttl      time.Duration
+	stop     chan struct{}
 	stopOnce sync.Once
 }
 

@@ -18,14 +18,14 @@ import (
 
 type mockClient struct {
 	// Configurable return values per method.
-	listJobsFn func(ctx context.Context, wsID, uid int64, f ListJobsFilter) ([]Job, error)
-	createJobFn func(ctx context.Context, wsID, uid int64, r CreateJobRequest) (*Job, error)
-	getJobFn func(ctx context.Context, wsID, uid int64, id string) (*JobDetail, error)
-	cancelJobFn func(ctx context.Context, wsID, uid int64, id string) error
+	listJobsFn       func(ctx context.Context, wsID, uid int64, f ListJobsFilter) ([]Job, error)
+	createJobFn      func(ctx context.Context, wsID, uid int64, r CreateJobRequest) (*Job, error)
+	getJobFn         func(ctx context.Context, wsID, uid int64, id string) (*JobDetail, error)
+	cancelJobFn      func(ctx context.Context, wsID, uid int64, id string) error
 	listDeliveriesFn func(ctx context.Context, wsID, uid int64, id string) ([]Delivery, error)
-	listWorkersFn func(ctx context.Context, wsID, uid int64) ([]Worker, error)
-	getWorkerFn func(ctx context.Context, wsID, uid int64, id string) (*Worker, error)
-	getAssetFn func(ctx context.Context, wsID, uid int64, id string) (*Asset, error)
+	listWorkersFn    func(ctx context.Context, wsID, uid int64) ([]Worker, error)
+	getWorkerFn      func(ctx context.Context, wsID, uid int64, id string) (*Worker, error)
+	getAssetFn       func(ctx context.Context, wsID, uid int64, id string) (*Asset, error)
 }
 
 func (m *mockClient) ListJobs(ctx context.Context, wsID, uid int64, f ListJobsFilter) ([]Job, error) {
@@ -56,8 +56,8 @@ func (m *mockClient) GetAsset(ctx context.Context, wsID, uid int64, id string) (
 // --- Test harness ---------------------------------------------------------
 
 const (
-	testWSID  = 42
-	testUID   = 7
+	testWSID = 42
+	testUID  = 7
 )
 
 // stubAuth stamps a test identity into the request context, mirroring

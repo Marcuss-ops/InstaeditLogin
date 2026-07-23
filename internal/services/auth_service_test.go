@@ -68,7 +68,7 @@ func TestAuthService_Register_HappyPath(t *testing.T) {
 	now := time.Now()
 
 	// 1) Find existing user (returns no rows).
-	mock.ExpectQuery(		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
+	mock.ExpectQuery(`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
        is_admin, admin_granted_at, admin_granted_by,
        created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("test@example.com").
@@ -123,7 +123,7 @@ func TestAuthService_Register_DuplicateEmail(t *testing.T) {
 
 	now := time.Now()
 
-	mock.ExpectQuery(		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
+	mock.ExpectQuery(`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
        is_admin, admin_granted_at, admin_granted_by,
        created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("dupe@example.com").
@@ -148,7 +148,7 @@ func TestAuthService_Login_HappyPath(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password1"), bcrypt.DefaultCost)
 
 	// 1) Find user by email.
-	mock.ExpectQuery(		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
+	mock.ExpectQuery(`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
        is_admin, admin_granted_at, admin_granted_by,
        created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("login@example.com").
@@ -186,7 +186,7 @@ func TestAuthService_Login_WrongPassword(t *testing.T) {
 	now := time.Now()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password1"), bcrypt.DefaultCost)
 
-	mock.ExpectQuery(		`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
+	mock.ExpectQuery(`SELECT id, email, name, COALESCE(password_hash, '') AS password_hash, COALESCE(email_verified, false),
        is_admin, admin_granted_at, admin_granted_by,
        created_at, updated_at FROM users WHERE email = $1`,
 	).WithArgs("wrong@example.com").

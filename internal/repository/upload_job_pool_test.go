@@ -548,8 +548,8 @@ func TestAggregateByFolder_NewStates(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`COUNT(*) FILTER (WHERE status = 'retry_wait')`)).
 		WithArgs("fid", int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{
-		"pending_count", "retry_wait_count", "leased_count",
-		"processing_count", "ready_to_publish_count", "completed_count", "failed_count",
+			"pending_count", "retry_wait_count", "leased_count",
+			"processing_count", "ready_to_publish_count", "completed_count", "failed_count",
 			"dead_letter_count", "cancelled_count",
 			"first_publish_at", "last_publish_at",
 		}).AddRow(2, 1, 0, 0, 0, 5, 1, 0, 0, nil, nil))

@@ -190,4 +190,3 @@ func (b *bff) listJobDeliveries(w http.ResponseWriter, req *http.Request) {
 		"deliveries": deliveries,
 	})
 }
-
