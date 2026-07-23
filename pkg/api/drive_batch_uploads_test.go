@@ -394,7 +394,7 @@ func TestUploadsBatchByFolder_NonOwnerWorkspace_Returns403(t *testing.T) {
 		"",
 		nil,
 		WithWorkspaceStore(wsStore),
-		WithUploadJobStore(store), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		WithUploadJobStore(store), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 
 	w := runUploadsBatchByFolderPost(t, r, `{"folder_id":"fid","workspace_id":1,"facebook_account_id":50, "drive_account_id":99}`, "")
 

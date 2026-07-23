@@ -1,7 +1,6 @@
 package api
 
 import (
-	"time"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -46,7 +46,7 @@ func workspaceChannelsRouter(store *mockWorkspaceStore) *Router {
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		nil,
-		WithWorkspaceStore(store), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		WithWorkspaceStore(store), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 }
 
 // TestHandleAttachWorkspaceChannel_HappyPath verifies the basic POST

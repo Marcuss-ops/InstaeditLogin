@@ -131,7 +131,7 @@ func newFakeTransport() *fakeTransport {
 }
 
 func (ft *fakeTransport) Configure(_ sentry.ClientOptions) {}
-func (ft *fakeTransport) Flush(_ time.Duration) bool { return true }
+func (ft *fakeTransport) Flush(_ time.Duration) bool       { return true }
 func (ft *fakeTransport) SendEvent(event *sentry.Event) {
 	ft.events <- event
 }

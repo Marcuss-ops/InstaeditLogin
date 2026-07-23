@@ -321,6 +321,6 @@ func newIsolationRouter(authMgr *auth.Manager, workspaceRepo *repository.Workspa
 		authMgr,
 		"",  // frontendURL
 		nil, // allowedOrigins
-		WithWorkspaceStore(workspaceRepo), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		WithWorkspaceStore(workspaceRepo), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 	return router.Setup()
 }

@@ -771,7 +771,7 @@ func Test_Z_YouTubeOAuth_EndToEnd_RealBrowser_Smoke(t *testing.T) {
 		"https://app.example.com",
 		[]string{"https://app.example.com"},
 		api.WithCredentialVault(vault),
-		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
 	apiServer := httptest.NewServer(router.Setup())
 	t.Cleanup(apiServer.Close)
 	t.Logf("apiServer URL=%s", apiServer.URL)

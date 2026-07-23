@@ -228,7 +228,7 @@ func buildValidateRouterHarness(t *testing.T, h *E2EHarness) *validateRouterHarn
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
 		api.WithYouTubeService(ytSvc),
 		api.WithCredentialVault(vault),
-		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
 	return &validateRouterHarness{
 		router:    router,
 		pgDB:      h.pgDB,
@@ -483,7 +483,7 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 
 	router := api.NewRouter(
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
-		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
 
 	// Step A — Fire OAuthCallback with connect-link state JWT naming channel A
 	// but mockYouTubeDisco returns ONLY channel B.
@@ -530,7 +530,7 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
 		api.WithYouTubeService(vhYT),
 		api.WithCredentialVault(vhVault),
-		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
 
 	validateReq := httptest.NewRequest(http.MethodPost,
 		fmt.Sprintf("/api/v1/accounts/%d/validate", accountAID), nil)

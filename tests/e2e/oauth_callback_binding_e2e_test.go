@@ -438,7 +438,7 @@ func TestOAuthCallback_NegativeChannelBinding_RefusesMismatch(t *testing.T) {
 
 	router := api.NewRouter(
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
-		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
 
 	// Step 3 — Build a real connect-link state JWT (expected_channel_id=A).
 	// Signed with the same HS256 secret authMgr above was constructed with.
@@ -566,7 +566,7 @@ func TestOAuthCallback_HappyPath_ConnectLinkBindsExpectedChannel(t *testing.T) {
 
 	router := api.NewRouter(
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
-		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
 
 	issuer := &jwtIssuer{secret: []byte(testJWTSecret)}
 	state := issuer.issueConnectLinkState(channelA, 30*time.Minute)

@@ -46,8 +46,8 @@ type fakeExternalDestinationStore struct {
 	// UpdateDefaultMetadata) — settable per-test to simulate the
 	// repo returning ErrExternalDestinationNotFound or to force a
 	// 500 path. Defaults to nil ("happy repo path").
-	UpdateEnabledErr           error
-	UpdateDefaultMetadataErr   error
+	UpdateEnabledErr            error
+	UpdateDefaultMetadataErr    error
 	UpdateEnabledAndDefaultsErr error
 
 	// updateEnabledAndDefaultsCalls counts how many times the
@@ -1104,10 +1104,10 @@ func TestUpdateIntegrationVeloxDestination_404_NotOwned(t *testing.T) {
 //
 // The third case + JSON-invalid rejection are already covered by
 // Happy_Defaults + 400_Empty. This test focuses on:
-//   1. literal-null actually round-trips through to the row
-//   2. absent means the repo is NOT called (verified by
-//      asserting the row's defaults bytes are byte-for-byte
-//      equal to the seeded baseline before AND after the PATCH).
+//  1. literal-null actually round-trips through to the row
+//  2. absent means the repo is NOT called (verified by
+//     asserting the row's defaults bytes are byte-for-byte
+//     equal to the seeded baseline before AND after the PATCH).
 //
 // Each subtest uses a fresh router + fresh seed so cross-subtest
 // mutation does not pollute the absent-branch assertion (the
@@ -1160,9 +1160,9 @@ func TestUpdateIntegrationVeloxDestination_Happy_DefaultsNull(t *testing.T) {
 		if got != seededBytes {
 			t.Errorf("defaults changed despite absent field; got %q, want %q", got, seededBytes)
 		}
-	if destStore.ByIDMap["extdst_01JABS"].Enabled {
-		t.Error("enabled should be false after PATCH with enabled=false")
-	}
+		if destStore.ByIDMap["extdst_01JABS"].Enabled {
+			t.Error("enabled should be false after PATCH with enabled=false")
+		}
 	})
 }
 
@@ -1267,7 +1267,7 @@ func TestUpdateIntegrationVeloxDestination_AuditDeltas(t *testing.T) {
 				t.Errorf("audit metadata defaults_changed not bool: got %T = %v",
 					auditStore.LastMetadata["defaults_changed"],
 					auditStore.LastMetadata["defaults_changed"])
-			} else			if dv != tc.wantDefaultsChanged {
+			} else if dv != tc.wantDefaultsChanged {
 				t.Errorf("audit metadata defaults_changed = %v; want %v",
 					dv, tc.wantDefaultsChanged)
 			}
@@ -1281,7 +1281,9 @@ func TestUpdateIntegrationVeloxDestination_AuditDeltas(t *testing.T) {
 // two independent UPDATEs (UpdateEnabled + UpdateDefaultMetadata),
 // closing the race a concurrent DELETE between the two calls could
 // exploit. Instead it calls
-//   r.externalDestinations.UpdateEnabledAndDefaults(ctx, id, enabled, defaults)
+//
+//	r.externalDestinations.UpdateEnabledAndDefaults(ctx, id, enabled, defaults)
+//
 // with COALESCE preserving any column the caller omitted. This test:
 //   - seeds a row with enabled=false and defaults={"seed":"v0"}
 //   - PATCHes {enabled:true, defaults:{"k":"v","n":42}}
@@ -1366,6 +1368,7 @@ func TestUpdateIntegrationVeloxDestination_CombinedUpdate(t *testing.T) {
 //   - row is missing from ByIDMap (simulating a concurrent DELETE
 //     that finished between authz GetByID and the UPDATE)
 //   - PATCH supplies both fields
+//
 // Expect:
 //   - 404 (UpdateEnabledAndDefaultsErr forces this via the fake's
 //     configurable knob)

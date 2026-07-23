@@ -1,13 +1,13 @@
 package api
 
 import (
-	"time"
 	"bytes"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -34,7 +34,7 @@ func newWorkspaceTestRouter(
 		nil,
 		WithWorkspaceStore(workspaceStore),
 		WithPostStore(&mockPostStore{}),
-		WithCredentialVault(&mockCredentialVault{}), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)))
+		WithCredentialVault(&mockCredentialVault{}), WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 }
 
 func workspacesIssueJWT(t *testing.T, userID int64) string {
