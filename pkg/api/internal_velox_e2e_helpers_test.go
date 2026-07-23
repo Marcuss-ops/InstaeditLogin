@@ -435,18 +435,6 @@ func (f *fakeE2EDestinations) Create(_ context.Context, d *models.ExternalDestin
 	return nil
 }
 
-// UpdateEnabled + UpdateDefaultMetadata stubs satisfy the
-// expanded ExternalDestinationStore interface (PATCH endpoint
-// expansion). The e2e harness never exercises either verb; the
-// stubs return nil so vet succeeds without forcing fixture
-// refactors across the e2e pipeline.
-func (f *fakeE2EDestinations) UpdateEnabled(_ context.Context, _ string, _ bool) error {
-	return nil
-}
-func (f *fakeE2EDestinations) UpdateDefaultMetadata(_ context.Context, _ string, _ json.RawMessage) error {
-	return nil
-}
-
 // UpdateEnabledAndDefaults is the combined-verb stub. The e2e
 // harness never exercises this verb; the stub returns nil so vet
 // succeeds without forcing fixture refactors across the e2e

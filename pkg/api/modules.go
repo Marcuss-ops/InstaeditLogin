@@ -403,12 +403,10 @@ func (m *PublishingModule) Register(mux chi.Router) {
 
 // AuthHandlers groups the HTTP handler functions used by the auth
 // module. Keeping them in a nested struct keeps AuthModuleDeps readable.
-type AuthHandlers struct {
-	Login               http.HandlerFunc
-	Callback            http.HandlerFunc
-	ExchangeCode        http.HandlerFunc
-	Me                  http.HandlerFunc
-	Refresh             http.HandlerFunc
+type AuthHandlers struct {	Login                       http.HandlerFunc
+	Callback                    http.HandlerFunc
+	ExchangeCode                http.HandlerFunc
+	Refresh                     http.HandlerFunc
 	Logout              http.HandlerFunc
 	LogoutAll           http.HandlerFunc
 	ListSessions        http.HandlerFunc
@@ -481,6 +479,19 @@ func NewAuthModule(deps AuthModuleDeps) RouteModule {
 // Compile-time assertion: AuthModule implements RouteModule.
 var _ RouteModule = (*AuthModule)(nil)
 
+func (m *AuthModule) handleMe(w http.ResponseWriter, req *http.Request) {
+	id := auth.IdentityFromContext(req.Context())
+	if id == nil {
+		writeError(w, http.StatusUnauthorized, "missing identity")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"user_id":      id.UserID(),
+		"workspace_id": id.WorkspaceID(),
+		"is_admin":     id.IsAdmin(),
+	})
+}
+
 func (m *AuthModule) Register(mux chi.Router) {
 	if m.deps.AuthEmailSvc != nil {
 		m.deps.RegisterAuthEmailRoutes()
@@ -492,7 +503,7 @@ func (m *AuthModule) Register(mux chi.Router) {
 	mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login", m.deps.OAuthStartLimiter(http.HandlerFunc(m.deps.OAuthSessionRedirect(m.deps.Handlers.Login))))
 	mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(m.deps.OAuthSessionRedirect(m.deps.Handlers.Callback)))
 	mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(m.deps.Handlers.ExchangeCode))
-	mux.Method(http.MethodGet, "/api/v1/auth/me", m.deps.Protected(m.deps.Handlers.Me))
+	mux.Method(http.MethodGet, "/api/v1/auth/me", m.deps.Protected(m.handleMe))
 	mux.Method(http.MethodPost, "/api/v1/auth/refresh", http.HandlerFunc(m.deps.Handlers.Refresh))
 	mux.Method(http.MethodPost, "/api/v1/auth/logout", http.HandlerFunc(m.deps.Handlers.Logout))
 	mux.Method(http.MethodPost, "/api/v1/auth/logout-all", m.deps.Protected(m.deps.Handlers.LogoutAll))

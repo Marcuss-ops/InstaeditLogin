@@ -605,13 +605,12 @@ func (m *IntegrationsModule) handleUpdateIntegrationVeloxDestination(w http.Resp
 	}
 
 	// Apply mutations in a SINGLE atomic postgres UPDATE via
-	// COALESCE — this closes the partial-write window that the
-	// previous two-call (UpdateEnabled + UpdateDefaultMetadata)
-	// sequence left open: a concurrent DELETE between the two
-	// calls could leave the row half-updated. The combined
-	// verb returns ErrExternalDestinationNotFound on zero rows
-	// (concurrent DELETE finished after our authz GetByID) which
-	// maps to 404. The audit-log shape stays exactly the same:
+	// COALESCE — this closes the partial-write window that a
+	// previous two-verb sequence left open: a concurrent DELETE
+	// between independent UPDATEs could leave the row half-updated.
+	// The combined verb returns ErrExternalDestinationNotFound on
+	// zero rows (concurrent DELETE finished after our authz GetByID)
+	// which maps to 404. The audit-log shape stays exactly the same:
 	// {enabled, defaults_changed} keyed by the PATCH body, not
 	// by the post-UPDATE row state.
 	//

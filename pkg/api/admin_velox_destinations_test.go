@@ -42,12 +42,9 @@ type fakeExternalDestinationStore struct {
 	ListErr   error
 	DeleteErr error
 
-	// PATCH-endpoint support (UpdateEnabled +
-	// UpdateDefaultMetadata) — settable per-test to simulate the
-	// repo returning ErrExternalDestinationNotFound or to force a
-	// 500 path. Defaults to nil ("happy repo path").
-	UpdateEnabledErr            error
-	UpdateDefaultMetadataErr    error
+	// Settable per-test to simulate the repo returning
+	// ErrExternalDestinationNotFound or to force a 500 path.
+	// Defaults to nil ("happy repo path").
 	UpdateEnabledAndDefaultsErr error
 
 	// updateEnabledAndDefaultsCalls counts how many times the
@@ -128,55 +125,6 @@ func (f *fakeExternalDestinationStore) Delete(ctx context.Context, id string) er
 		return repository.ErrExternalDestinationNotFound
 	}
 	delete(f.ByIDMap, id)
-	return nil
-}
-
-// UpdateEnabled satisfies ExternalDestinationStore. Mutates the
-// destination row's Enabled field if present; otherwise returns
-// ErrExternalDestinationNotFound wrapped via the UpdateEnabledErr
-// flag (when set) so callers can simulate TOCTOU deletes during
-// concurrent PATCH.
-func (f *fakeExternalDestinationStore) UpdateEnabled(ctx context.Context, id string, enabled bool) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.UpdateEnabledErr != nil {
-		return f.UpdateEnabledErr
-	}
-	if f.ByIDMap == nil {
-		return repository.ErrExternalDestinationNotFound
-	}
-	d, ok := f.ByIDMap[id]
-	if !ok {
-		return repository.ErrExternalDestinationNotFound
-	}
-	d.Enabled = enabled
-	return nil
-}
-
-// UpdateDefaultMetadata satisfies ExternalDestinationStore. Stores
-// the supplied JSON raw bytes on the destination row's
-// DefaultMetadata field. Returns ErrExternalDestinationNotFound on
-// missing id (consistent with UpdateEnabled). On
-// UpdateDefaultMetadataErr the typed sentinel stub is returned
-// without mutating state so a 500-path test does not have to
-// reason about partial updates.
-func (f *fakeExternalDestinationStore) UpdateDefaultMetadata(ctx context.Context, id string, raw json.RawMessage) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.UpdateDefaultMetadataErr != nil {
-		return f.UpdateDefaultMetadataErr
-	}
-	if f.ByIDMap == nil {
-		return repository.ErrExternalDestinationNotFound
-	}
-	d, ok := f.ByIDMap[id]
-	if !ok {
-		return repository.ErrExternalDestinationNotFound
-	}
-	// Defensive copy so a caller reusing the slice after the call
-	// cannot observe later mutations.
-	copied := append(json.RawMessage(nil), raw...)
-	d.DefaultMetadata = copied
 	return nil
 }
 

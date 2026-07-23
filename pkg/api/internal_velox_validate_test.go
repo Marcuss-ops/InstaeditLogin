@@ -64,18 +64,6 @@ func (m *mockExternalDestinationStore) Delete(_ context.Context, _ string) error
 	return nil
 }
 
-// UpdateEnabled + UpdateDefaultMetadata stubs satisfy the
-// expanded ExternalDestinationStore interface (PATCH endpoint
-// expansion). The validate handler does NOT exercise either
-// verb; stubs return nil so vet succeeds without forcing
-// unrelated fixture refactors.
-func (m *mockExternalDestinationStore) UpdateEnabled(_ context.Context, _ string, _ bool) error {
-	return nil
-}
-func (m *mockExternalDestinationStore) UpdateDefaultMetadata(_ context.Context, _ string, _ json.RawMessage) error {
-	return nil
-}
-
 // UpdateEnabledAndDefaults is the combined-verb stub. The validate
 // handler does NOT exercise this verb; stub returns nil so vet
 // succeeds without forcing unrelated fixture refactors.

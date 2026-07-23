@@ -80,18 +80,6 @@ func (f *fakeDestinationStorage) Create(_ context.Context, _ *models.ExternalDes
 	return nil
 }
 
-// UpdateEnabled + UpdateDefaultMetadata stubs satisfy the
-// expanded ExternalDestinationStore interface (PATCH endpoint
-// expansion). The GET handler under test does NOT exercise
-// either verb; stubs return nil so vet succeeds without forcing
-// fixture refactors.
-func (f *fakeDestinationStorage) UpdateEnabled(_ context.Context, _ string, _ bool) error {
-	return nil
-}
-func (f *fakeDestinationStorage) UpdateDefaultMetadata(_ context.Context, _ string, _ json.RawMessage) error {
-	return nil
-}
-
 // UpdateEnabledAndDefaults is the combined-verb stub. The
 // GET-delivery handler does NOT exercise this verb; stub returns
 // nil so vet succeeds without forcing unrelated fixture refactors.

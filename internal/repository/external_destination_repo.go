@@ -238,8 +238,7 @@ func (r *ExternalDestinationRepository) ListBySourceSystem(ctx context.Context, 
 
 // UpdateEnabledAndDefaults applies a partial update to enabled
 // and/or default_metadata in a SINGLE atomic postgres UPDATE. This
-// closes the partial-write window that existed when the handler
-// called UpdateEnabled + UpdateDefaultMetadata as two independent
+// closes the partial-write window that a previous two-verb UPDATE
 // operations: a concurrent DELETE between calls could leave the row
 // half-updated. COALESCE lets each column be opt-in:
 //
