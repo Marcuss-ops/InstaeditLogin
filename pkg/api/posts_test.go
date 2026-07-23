@@ -31,7 +31,7 @@ func newPostsTestRouter(
 	if len(wsStore) > 0 && wsStore[0] != nil {
 		ws = wsStore[0]
 	}
-	return NewRouter(
+	return MustNewRouter(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),

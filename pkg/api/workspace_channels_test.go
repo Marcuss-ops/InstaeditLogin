@@ -40,7 +40,7 @@ import (
 // supplied mockWorkspaceStore and the auth manager from routes_test.go.
 // Re-uses the JWT helpers from the existing test files.
 func workspaceChannelsRouter(store *mockWorkspaceStore) *Router {
-	return NewRouter(
+	return MustNewRouter(
 		nil, // capRouter — unused by channel handlers
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),

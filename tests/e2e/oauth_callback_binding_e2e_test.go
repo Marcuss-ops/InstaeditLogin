@@ -436,7 +436,7 @@ func TestOAuthCallback_NegativeChannelBinding_RefusesMismatch(t *testing.T) {
 	store := &mockUserStore{markReauth: markReauth}
 	authzr := &countingChannelAuthorizer{}
 
-	router := api.NewRouter(
+	router := api.MustNewRouter(
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
 		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
 
@@ -564,7 +564,7 @@ func TestOAuthCallback_HappyPath_ConnectLinkBindsExpectedChannel(t *testing.T) {
 	store := &mockUserStore{markReauth: &markReauthCounter{}}
 	authzr := &countingChannelAcceptingAuthorizer{}
 
-	router := api.NewRouter(
+	router := api.MustNewRouter(
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
 		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
 

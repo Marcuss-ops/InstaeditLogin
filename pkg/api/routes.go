@@ -11,9 +11,6 @@ import (
 // top-level cross-cutting concerns (health/readiness, metrics, CORS,
 // rate-limiting, logging, recovery and security headers).
 func (r *Router) Setup() http.Handler {
-	if r.oneTimeCodes == nil {
-		panic("OneTimeCodeStore is required: pass WithOneTimeCodeStore(...) to NewRouter")
-	}
 	r.mux = chi.NewRouter()
 
 	NewAdminModule(r).Register(r.mux)

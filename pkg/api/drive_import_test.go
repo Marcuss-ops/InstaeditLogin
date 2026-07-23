@@ -182,7 +182,7 @@ func TestDriveImport_Happy(t *testing.T) {
 		return s3Server.URL + "/" + key
 	}
 
-	r := NewRouter(
+	r := MustNewRouter(
 		capRouter,
 		userStore,
 		auth.NewManager(testJWTSecret, 24),
@@ -226,7 +226,7 @@ func newDriveImportTestRouter() *Router {
 			return []*models.PlatformAccount{{ID: 2, UserID: 1, Platform: "instagram"}}, nil
 		},
 	}
-	return NewRouter(
+	return MustNewRouter(
 		services.NewCapabilityRouter(),
 		userStore,
 		auth.NewManager(testJWTSecret, 24),
@@ -268,7 +268,7 @@ func TestDriveImport_MissingFields_422(t *testing.T) {
 }
 
 func TestDriveImport_NotConfigured_501(t *testing.T) {
-	r := NewRouter(
+	r := MustNewRouter(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),
@@ -305,7 +305,7 @@ func TestDriveImport_IdempotencyReplay(t *testing.T) {
 			}, nil
 		},
 	}
-	r := NewRouter(
+	r := MustNewRouter(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),
@@ -358,7 +358,7 @@ func TestDriveImport_IdempotencyConflict(t *testing.T) {
 			return &models.Workspace{ID: id, Name: "Mine", OwnerID: 1}, nil
 		},
 	}
-	r := NewRouter(
+	r := MustNewRouter(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),

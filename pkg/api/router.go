@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net"
 	"net/http"
 	"time"
@@ -764,7 +765,7 @@ func NewRouter(
 	frontendURL string,
 	allowedOrigins []string,
 	opts ...RouterOption,
-) *Router {
+) (*Router, error) {
 	r := &Router{
 		capabilities: capRouter,
 		userRepo:     userRepo,
@@ -783,7 +784,51 @@ func NewRouter(
 	if r.rateLimiter != nil {
 		r.rateLimiter.trustedProxies = r.trustedProxies
 	}
+	if err := r.validateRequiredDeps(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// MustNewRouter is a test-only convenience wrapper around NewRouter
+// that panics when the router cannot be constructed (e.g. a required
+// dependency is missing). It exists so that test fixtures can keep
+// the familiar single-return form `r := api.MustNewRouter(...)`.
+func MustNewRouter(
+	capRouter *services.CapabilityRouter,
+	userRepo UserStore,
+	authMgr *auth.Manager,
+	frontendURL string,
+	allowedOrigins []string,
+	opts ...RouterOption,
+) *Router {
+	r, err := NewRouter(capRouter, userRepo, authMgr, frontendURL, allowedOrigins, opts...)
+	if err != nil {
+		panic("api.MustNewRouter: " + err.Error())
+	}
 	return r
+}
+
+// validateRequiredDeps returns an error if a dependency that is
+// considered mandatory for a correct/safe API is missing. Optional
+// stores remain optional and are NOT checked here.
+func (r *Router) validateRequiredDeps() error {
+	if r.vault == nil {
+		return errors.New("CredentialVault is required: pass WithCredentialVault(...)")
+	}
+	if r.authorizer == nil {
+		return errors.New("ChannelAuthorizer is required: pass WithChannelAuthorizer(...)")
+	}
+	if r.oneTimeCodes == nil {
+		return errors.New("OneTimeCodeStore is required: pass WithOneTimeCodeStore(...)")
+	}
+	if r.idempotencyStore == nil {
+		return errors.New("IdempotencyStore is required: pass WithIdempotencyStore(...)")
+	}
+	if r.connectLinkNonceStore == nil {
+		return errors.New("ConnectLinkNonceStore is required: pass WithConnectLinkNonceStore(...)")
+	}
+	return nil
 }
 
 // Compile-time assertion that *services.YouTubeOAuthService

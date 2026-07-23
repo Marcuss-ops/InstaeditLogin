@@ -140,7 +140,7 @@ func (m *mockStorageProvider) AssetURL(key string) string { return m.assetURLFn(
 // --- helpers -----------------------------------------------------------------
 
 func newMediaTestRouter(media MediaStore, storage StorageProvider) *Router {
-	return NewRouter(
+	return MustNewRouter(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),

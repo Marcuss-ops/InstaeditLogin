@@ -433,7 +433,7 @@ func newBatchImportTestRouterWithIdem(
 
 	opts = append(opts, WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60*time.Second)))
 
-	return NewRouter(
+	return MustNewRouter(
 		capRouter,
 		userStore,
 		auth.NewManager(testJWTSecret, 24),

@@ -540,7 +540,7 @@ func newTestRouter(
 	// acceptable for unit tests; the 1s ticker has no observable effect
 	// on test behaviour and the OS reclaims everything on process exit.
 	defaultVault := &mockCredentialVault{}
-	return NewRouter(
+	return MustNewRouter(
 		capRouter,
 		store,
 		auth.NewManager(testJWTSecret, 24),
@@ -644,7 +644,7 @@ func setOAuthExpectedChannelCookieForTest(req *http.Request, provider, state, ch
 // ---------------------------------------------------------------------------
 
 func newCORSTestRouter(allowedOrigins []string) *Router {
-	return NewRouter(
+	return MustNewRouter(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),

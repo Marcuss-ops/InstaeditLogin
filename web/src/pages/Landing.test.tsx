@@ -24,8 +24,8 @@ describe("Landing", () => {
 
     // --- Hero -------------------------------------------------------------
     const h1 = screen.getByRole("heading", { level: 1 });
-    expect(h1).toHaveTextContent(/Your creativity/);
-    expect(h1).toHaveTextContent(/Our distribution/);
+    expect(h1).toHaveTextContent(/From zero to/);
+    expect(h1).toHaveTextContent(/YouTube monetization/);
 
     // --- Workflow ---------------------------------------------------------
     const WORKFLOW_TITLES = [

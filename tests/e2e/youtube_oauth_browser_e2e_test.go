@@ -764,7 +764,7 @@ func Test_Z_YouTubeOAuth_EndToEnd_RealBrowser_Smoke(t *testing.T) {
 	vault := credentials.NewCredentialVault(encryptor, h.pgDB, tokenRepo)
 
 	// ── Production router (Go API under test) ─────────────────────
-	router := api.NewRouter(
+	router := api.MustNewRouter(
 		capRouter,
 		store,
 		authMgr,

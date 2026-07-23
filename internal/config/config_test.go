@@ -13,6 +13,7 @@ func TestMain(m *testing.M) {
 	// config with APP_ENV=production. The fail-closed production check
 	// is preserved; tests simply opt-in to a valid configuration.
 	configtest.SetDummyMetricsAuth()
+	configtest.ClearOptionalOAuthEnv()
 	os.Exit(m.Run())
 }
 

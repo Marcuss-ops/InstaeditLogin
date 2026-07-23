@@ -938,7 +938,7 @@ func TestDriveBatchImport_IdempotencyKey_CrossTenant_DoesNotReplay(t *testing.T)
 	// credentials.VaultAPI without hitting Postgres so the
 	// existing driveAccessToken path returns a canned bearer
 	// for the (idempotent, fully-cached) replay assertion below.
-	r := NewRouter(
+	r := MustNewRouter(
 		capRouter,
 		userStore,
 		auth.NewManager(testJWTSecret, 24),
@@ -1082,7 +1082,7 @@ func TestDriveBatchImport_EndToEndAuth_VaultRefreshChainDrivesFolderListing(t *t
 		},
 	}
 	store := &mockUploadJobStore{}
-	r := NewRouter(
+	r := MustNewRouter(
 		capRouter,
 		userStore,
 		auth.NewManager(testJWTSecret, 24),

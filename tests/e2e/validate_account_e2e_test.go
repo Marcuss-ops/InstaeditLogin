@@ -224,7 +224,7 @@ func buildValidateRouterHarness(t *testing.T, h *E2EHarness) *validateRouterHarn
 	capRouter := services.NewCapabilityRouter()
 	authzr := &countingChannelAcceptingAuthorizer{} // unused on /validate; safe stub
 
-	router := api.NewRouter(
+	router := api.MustNewRouter(
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
 		api.WithYouTubeService(ytSvc),
 		api.WithCredentialVault(vault),
@@ -481,7 +481,7 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 	store := &mockUserStore{markReauth: markReauth}
 	authzr := &countingChannelAuthorizer{} // panic-on-call assertion for OAuthCallback
 
-	router := api.NewRouter(
+	router := api.MustNewRouter(
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
 		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
 
@@ -526,7 +526,7 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 		// Models after the production CredentialVault's no-token error path.
 		return nil, fmt.Errorf("oauth: no token row for platform_account_id")
 	}
-	router2 := api.NewRouter(
+	router2 := api.MustNewRouter(
 		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
 		api.WithYouTubeService(vhYT),
 		api.WithCredentialVault(vhVault),

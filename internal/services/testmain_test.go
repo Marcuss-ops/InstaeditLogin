@@ -13,5 +13,6 @@ import (
 // values here avoids leaking that requirement into every test.
 func TestMain(m *testing.M) {
 	configtest.SetDummyMetricsAuth()
+	configtest.ClearOptionalOAuthEnv()
 	os.Exit(m.Run())
 }

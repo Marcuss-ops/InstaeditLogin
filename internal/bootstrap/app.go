@@ -425,8 +425,11 @@ func Wire(ctx context.Context) (*App, error) {
 	// exposed separately by the worker process via the WorkerRegistry.
 	opts = append(opts, api.WithDB(db))
 
-	router := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
+	router, err := api.NewRouter(capRouter, userRepo, authMgr, cfg.FrontendURL, corsOrigins,
 		append([]api.RouterOption{api.WithOneTimeCodeStore(oneTimeCodes)}, opts...)...)
+	if err != nil {
+		return nil, fmt.Errorf("build router: %w", err)
+	}
 
 	slog.Info("Router configured",
 		"jwt_access_ttl_minutes", cfg.JWTAccessTTLMinutes,

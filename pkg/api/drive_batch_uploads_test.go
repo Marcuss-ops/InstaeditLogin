@@ -387,7 +387,7 @@ func TestUploadsBatchByFolder_NonOwnerWorkspace_Returns403(t *testing.T) {
 			return nil, nil
 		},
 	}
-	r := NewRouter(
+	r := MustNewRouter(
 		capRouter,
 		userStore,
 		auth.NewManager(testJWTSecret, 24),
