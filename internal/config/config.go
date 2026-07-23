@@ -658,6 +658,9 @@ func (c *Config) validateOptionalPlatform(name, id, secret string) error {
 	if id == "" && secret == "" {
 		return nil
 	}
+	if id == "" {
+		return fmt.Errorf("%s_CLIENT_ID is required when %s_CLIENT_SECRET is set (or unset both to disable the platform)", name, name)
+	}
 	if secret == "" {
 		return fmt.Errorf("%s_CLIENT_SECRET is required when %s_CLIENT_ID is set (or unset both to disable the platform)", name, name)
 	}
