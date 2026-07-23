@@ -111,15 +111,14 @@ type App struct {
 	// is shared across the api and worker processes.
 	SessionsSvc *services.SessionsService
 
-	// OneTimeCodes is the in-memory OAuth-callback bridge store (Taglio
-	// 1.2). cmd/api consumes it via the router's WithOneTimeCodeStore
-	// option (redirect/exchange handlers); cmd/worker's RunWorkers
-	// calls OneTimeCodes.Stop() during graceful shutdown so the
-	// background sweep goroutine exits cleanly. Without this
-	// wiring, SIGTERM would let the sweeper become a zombie until
-	// the process is killed — the user's E8 fix ships this
-	// drop-in alignment with the other 7 workers.
-	OneTimeCodes      *api.OneTimeCodeStore
+	// OneTimeCodes is the PostgreSQL-backed OAuth-callback bridge store
+	// (Taglio 1.2). cmd/api consumes it via the router's
+	// WithOneTimeCodeStore option (redirect/exchange handlers).
+	// cmd/worker's RunWorkers calls OneTimeCodes.Stop() during
+	// graceful shutdown so the background sweep goroutine exits
+	// cleanly. Without this wiring, SIGTERM would let the sweeper
+	// become a zombie until the process is killed.
+	OneTimeCodes      api.OneTimeCodeStore
 	VeloxDownloadJobs chan worker.VeloxDownloadJob
 }
 
@@ -239,13 +238,11 @@ func Wire(ctx context.Context) (*App, error) {
 		time.Duration(cfg.JWTAccessTTLMinutes)*time.Minute,
 		time.Duration(cfg.JWTRefreshTTLDays)*24*time.Hour,
 	).WithEnv(cfg.AppEnv)
-	oneTimeCodes := api.NewOneTimeCodeStore(60 * time.Second)
+	oneTimeCodes := api.NewOneTimeCodePostgresStore(db, 60*time.Second)
 	veloxDownloadJobs := make(chan worker.VeloxDownloadJob, 64)
-	// oneTimeCodes sweeper is gracefully stopped by RunWorkers (E8
-	// fix — the cmd/worker shutdown handler now calls
-	// OneTimeCodes.Stop() as the 8th goroutine drain step). cmd/api
-	// (HTTP-only binary) does not run RunWorkers, so the sweeper
-	// is collected at process termination there. Exposing the
+	// oneTimeCodes sweeper is gracefully stopped by RunWorkers. cmd/api
+	// (HTTP-only binary) does not run RunWorkers, so the sweeper is
+	// collected at process termination there. Exposing the
 	// store on App avoids re-constructing it in RunWorkers —
 	// the same instance is shared across api + worker processes
 	// when cmd/server bundles both.

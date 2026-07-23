@@ -99,7 +99,7 @@ type Router struct {
 	// and unit-test seams). Nil is a startup wiring mistake — every
 	// router serving /api/v1/auth/... callbacks must supply one.
 	authorizer     services.ChannelAuthorizer
-	oneTimeCodes   *OneTimeCodeStore
+	oneTimeCodes   OneTimeCodeStore
 	frontendURL    string
 	allowedOrigin  []string
 	maxUploadBytes int64
@@ -772,7 +772,7 @@ func NewRouter(
 		capabilities:  capRouter,
 		userRepo:      userRepo,
 		auth:          authMgr,
-		oneTimeCodes:  NewOneTimeCodeStore(60 * time.Second),
+
 		frontendURL:   frontendURL,
 		allowedOrigin: allowedOrigins,
 		rateLimiter:   newRateLimiter(nil), // FASE 1.2: per-IP token bucket (trusted proxies wired via option below)

@@ -23,11 +23,6 @@
 //     on the second attempt because the entry is already gone.
 //   - TTL is 60s. Combined with single-use, the window for a successful
 //     replay is one request, one second, and one bot.
-//   - This is an in-memory store. It dies on process restart. That's
-//     acceptable for the OAuth-callback transient because the OAuth state
-//     cookie on the browser is also gone after the callback completes
-//     (see verifyOAuthState in handlers.go). A horizontal-scale deployment
-//     would need a Redis-backed equivalent.
 package api
 
 import (
@@ -51,33 +46,40 @@ type ExchangePayload struct {
 // already consumed, or expired. The handler maps this to 401.
 var ErrCodeNotFound = errors.New("one-time code not found or expired")
 
-// OneTimeCodeStore is the in-memory store for OAuth-callback exchange codes.
-//
-// All exported methods are safe for concurrent use. The store relies on a
-// background sweeper goroutine started by NewOneTimeCodeStore to evict
-// expired entries; callers MUST call Stop() during shutdown to avoid
-// goroutine leaks.
-type OneTimeCodeStore struct {
-	mu       sync.Mutex
-	entries  map[string]oneTimeCodeEntry
-	ttl      time.Duration
-	stop     chan struct{}
+// OneTimeCodeStore is the persistence contract for OAuth-callback
+// exchange codes. Production wiring injects a PostgreSQL-backed
+// implementation; tests inject the in-memory implementation below.
+type OneTimeCodeStore interface {
+	Generate(payload ExchangePayload) (string, error)
+	Consume(code string) (ExchangePayload, error)
+	// Stop halts any background goroutine owned by the store.
+	Stop()
+}
+
+// InMemoryOneTimeCodeStore is the previous in-memory implementation,
+// kept for tests and local dev. It is no longer wired automatically by
+// NewRouter — callers must explicitly pass it via WithOneTimeCodeStore.
+type InMemoryOneTimeCodeStore struct {
+	mu      sync.Mutex
+	entries map[string]inMemoryOneTimeCodeEntry
+	ttl     time.Duration
+	stop    chan struct{}
 	stopOnce sync.Once
 }
 
-type oneTimeCodeEntry struct {
+type inMemoryOneTimeCodeEntry struct {
 	payload  ExchangePayload
 	expireAt time.Time
 }
 
-// NewOneTimeCodeStore constructs a store with the given TTL and starts the
-// background sweeper. ttl <= 0 falls back to 60s.
-func NewOneTimeCodeStore(ttl time.Duration) *OneTimeCodeStore {
+// NewInMemoryOneTimeCodeStore constructs an in-memory store with the given
+// TTL and starts the background sweeper. ttl <= 0 falls back to 60s.
+func NewInMemoryOneTimeCodeStore(ttl time.Duration) *InMemoryOneTimeCodeStore {
 	if ttl <= 0 {
 		ttl = 60 * time.Second
 	}
-	s := &OneTimeCodeStore{
-		entries: make(map[string]oneTimeCodeEntry),
+	s := &InMemoryOneTimeCodeStore{
+		entries: make(map[string]inMemoryOneTimeCodeEntry),
 		ttl:     ttl,
 		stop:    make(chan struct{}),
 	}
@@ -86,14 +88,12 @@ func NewOneTimeCodeStore(ttl time.Duration) *OneTimeCodeStore {
 }
 
 // Stop halts the background sweeper. Idempotent.
-func (s *OneTimeCodeStore) Stop() {
+func (s *InMemoryOneTimeCodeStore) Stop() {
 	s.stopOnce.Do(func() { close(s.stop) })
 }
 
 // Generate stores payload under a fresh random code and returns the code.
-// The code is the only handle the caller (typically handleCallback) needs
-// to hand back to the browser via the redirect URL.
-func (s *OneTimeCodeStore) Generate(payload ExchangePayload) (string, error) {
+func (s *InMemoryOneTimeCodeStore) Generate(payload ExchangePayload) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -101,16 +101,15 @@ func (s *OneTimeCodeStore) Generate(payload ExchangePayload) (string, error) {
 	code := base64.RawURLEncoding.EncodeToString(b)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries[code] = oneTimeCodeEntry{
+	s.entries[code] = inMemoryOneTimeCodeEntry{
 		payload:  payload,
 		expireAt: time.Now().Add(s.ttl),
 	}
 	return code, nil
 }
 
-// Consume atomically reads and deletes the entry for code. Returns
-// ErrCodeNotFound if the code is unknown, already consumed, or expired.
-func (s *OneTimeCodeStore) Consume(code string) (ExchangePayload, error) {
+// Consume atomically reads and deletes the entry for code.
+func (s *InMemoryOneTimeCodeStore) Consume(code string) (ExchangePayload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[code]
@@ -124,8 +123,7 @@ func (s *OneTimeCodeStore) Consume(code string) (ExchangePayload, error) {
 	return entry.payload, nil
 }
 
-// sweepLoop evicts expired entries once a second. It exits on Stop().
-func (s *OneTimeCodeStore) sweepLoop() {
+func (s *InMemoryOneTimeCodeStore) sweepLoop() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {

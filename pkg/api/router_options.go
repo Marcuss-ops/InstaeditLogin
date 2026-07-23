@@ -45,7 +45,7 @@ func WithMaxUploadBytes(n int64) RouterOption {
 func WithAuditLogStore(store AuditLogStore) RouterOption {
 	return func(r *Router) { r.auditLogStore = store }
 }
-func WithOneTimeCodeStore(s *OneTimeCodeStore) RouterOption {
+func WithOneTimeCodeStore(s OneTimeCodeStore) RouterOption {
 	return func(r *Router) { r.oneTimeCodes = s }
 }
 
