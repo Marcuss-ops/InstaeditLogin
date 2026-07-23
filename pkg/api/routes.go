@@ -13,22 +13,30 @@ import (
 func (r *Router) Setup() http.Handler {
 	r.mux = chi.NewRouter()
 
-	NewAdminModule(r).Register(r.mux)
-	NewVeloxModule(r).Register(r.mux)
-	NewVeloxBFFModule(r).Register(r.mux)
-	NewIntegrationsModule(r).Register(r.mux)
+	// Build the route registry in the order the modules should mount.
+	// This is the single place that decides which modules are wired
+	// into the router; individual modules only declare their routes.
+	reg := NewRouteRegistry()
+	reg.Register(NewAdminModule(r))
+	reg.Register(NewVeloxModule(r))
+	reg.Register(NewVeloxBFFModule(r))
+	reg.Register(NewIntegrationsModule(r))
 
 	// Public / health probes are mounted before the auth module so the
 	// route table stays easy to scan top-down.
 	r.mux.Method(http.MethodGet, "/api/v1/health", http.HandlerFunc(r.handleHealth))
+
 	r.mux.Method(http.MethodGet, "/ready", http.HandlerFunc(r.handleReady))
 
-	NewAuthModule(r).Register(r.mux)
-	NewMediaModule(r).Register(r.mux)
-	NewPublishingModule(r).Register(r.mux)
-	NewBillingModule(r).Register(r.mux)
+	reg.Register(NewAuthModule(r))
+	reg.Register(NewMediaModule(r))
+	reg.Register(NewPublishingModule(r))
+	reg.Register(NewBillingModule(r))
 
 	r.mux.Method(http.MethodGet, "/api/v1/metrics", http.HandlerFunc(r.handleMetrics))
+
+	// Mount every registered module against the chi mux.
+	reg.Mount(r.mux)
 
 	// FASE 1.2: rate limiter is the outermost middleware so it
 	// protects ALL routes (public + protected) from abuse.
