@@ -26,8 +26,10 @@ func validEncryptionKey() string {
 // returned struct to exercise specific validation paths.
 func minimalValidConfig(jwtSecret string) *Config {
 	return &Config{
-		AppEnv:        "dev",
-		DatabaseURL:   "postgresql://user:pass@localhost:5432/instaedit_login?sslmode=disable",
+		AppEnv: "dev",
+		Database: DatabaseConfig{
+			DatabaseURL: "postgresql://user:pass@localhost:5432/instaedit_login?sslmode=disable",
+		},
 		S3Endpoint:    "https://s3.example.com",
 		S3Bucket:      "instaedit-bucket",
 		S3AccessKey:   "AKIAIOSFODNN7EXAMPLE",

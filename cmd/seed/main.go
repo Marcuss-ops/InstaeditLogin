@@ -24,7 +24,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := database.Connect(cfg)
+	db, err := database.Connect(&cfg.Database)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to connect to database: %v\n", err)
 		os.Exit(1)

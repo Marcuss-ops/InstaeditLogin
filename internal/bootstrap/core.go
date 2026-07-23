@@ -80,7 +80,7 @@ func WireCore(ctx context.Context) (*Core, error) {
 
 	slog.Info("Environment", "app_env", cfg.AppEnv)
 
-	db, err := database.Connect(cfg)
+	db, err := database.Connect(&cfg.Database)
 	if err != nil {
 		return nil, fmt.Errorf("connect db: %w", err)
 	}

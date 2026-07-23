@@ -62,11 +62,11 @@ func run(email string, grantedBy int64) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if cfg.DatabaseURL == "" && cfg.DBHost == "" {
+	if cfg.Database.DatabaseURL == "" && cfg.Database.DBHost == "" {
 		return fmt.Errorf("DATABASE_URL (or DB_HOST) is required")
 	}
 
-	db, err := database.Connect(cfg)
+	db, err := database.Connect(&cfg.Database)
 	if err != nil {
 		return fmt.Errorf("connect db: %w", err)
 	}

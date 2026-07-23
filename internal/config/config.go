@@ -19,6 +19,31 @@ const (
 	adminInviteTokenMinChars = 32 // ADMIN_INVITE_TOKEN: prevent trivial brute-force if the operator accidentally sets a short value
 )
 
+// DatabaseConfig holds PostgreSQL configuration.
+type DatabaseConfig struct {
+	// DatabaseURL for production; individual fields (DB_HOST, DB_PORT,
+	// DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE) are kept for local
+	// tooling. DATABASE_URL takes precedence.
+	DatabaseURL string
+	DBHost      string
+	DBPort      string
+	DBUser      string
+	DBPassword  string
+	DBName      string
+	DBSSLMode   string
+}
+
+// DSN returns the PostgreSQL connection string.
+func (c *DatabaseConfig) DSN() string {
+	if c.DatabaseURL != "" {
+		return c.DatabaseURL
+	}
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		c.DBHost, c.DBPort, c.DBUser, c.DBPassword, c.DBName, c.DBSSLMode,
+	)
+}
+
 // Config holds all configuration for the application.
 //
 // Taglio 5b: SERVER_PORT + SERVER_HOST removed — the server listens on the
@@ -55,16 +80,8 @@ type Config struct {
 	// AllowedCORSOrigins is the comma-separated list of origins.
 	AllowedCORSOrigins []string
 
-	// Database (PostgreSQL). DATABASE_URL for production; individual fields
-	// (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSLMODE) are kept
-	// for local tooling. DATABASE_URL takes precedence.
-	DatabaseURL string
-	DBHost      string
-	DBPort      string
-	DBUser      string
-	DBPassword  string
-	DBName      string
-	DBSSLMode   string
+	// Database (PostgreSQL).
+	Database DatabaseConfig
 
 	// Meta OAuth — shared App ID and Secret.
 	MetaAppID       string
@@ -343,16 +360,18 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		FrontendURL:          getEnv("FRONTEND_URL", ""),
-		AllowedCORSOrigins:   splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
-		DatabaseURL:          getEnv("DATABASE_URL", ""),
-		DBHost:               getEnv("DB_HOST", "localhost"),
-		DBPort:               getEnv("DB_PORT", "5432"),
-		DBUser:               getEnv("DB_USER", "instaedit"),
-		DBPassword:           getEnv("DB_PASSWORD", ""),
-		DBName:               getEnv("DB_NAME", "instaedit_login"),
-		DBSSLMode:            getEnv("DB_SSLMODE", "disable"),
-		MetaAppID:            getEnv("META_APP_ID", ""),
+		FrontendURL:        getEnv("FRONTEND_URL", ""),
+		AllowedCORSOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
+		Database: DatabaseConfig{
+			DatabaseURL: getEnv("DATABASE_URL", ""),
+			DBHost:      getEnv("DB_HOST", "localhost"),
+			DBPort:      getEnv("DB_PORT", "5432"),
+			DBUser:      getEnv("DB_USER", "instaedit"),
+			DBPassword:  getEnv("DB_PASSWORD", ""),
+			DBName:      getEnv("DB_NAME", "instaedit_login"),
+			DBSSLMode:   getEnv("DB_SSLMODE", "disable"),
+		},
+		MetaAppID:   getEnv("META_APP_ID", ""),
 		MetaAppSecret:        getEnv("META_APP_SECRET", ""),
 		MetaRedirectURI:      getEnv("META_REDIRECT_URI", ""),
 		InstagramRedirectURI: getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
@@ -504,8 +523,8 @@ func (c *Config) validate() error {
 	}
 
 	// Database: DATABASE_URL takes precedence; individual params fallback.
-	if c.DatabaseURL == "" {
-		if c.DBPassword == "" {
+	if c.Database.DatabaseURL == "" {
+		if c.Database.DBPassword == "" {
 			return fmt.Errorf("DB_PASSWORD is required (or set DATABASE_URL)")
 		}
 	}
@@ -823,16 +842,7 @@ func SortedKeyIDs(m map[uint32]string) []uint32 {
 	return out
 }
 
-// DSN returns the PostgreSQL connection string.
-func (c *Config) DSN() string {
-	if c.DatabaseURL != "" {
-		return c.DatabaseURL
-	}
-	return fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		c.DBHost, c.DBPort, c.DBUser, c.DBPassword, c.DBName, c.DBSSLMode,
-	)
-}
+
 
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {

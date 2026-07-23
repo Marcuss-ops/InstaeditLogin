@@ -275,7 +275,7 @@ func driveFolderID() string {
 }
 
 func openDB(cfg *config.Config) (*sql.DB, error) {
-	db, err := sql.Open("postgres", cfg.DSN())
+	db, err := sql.Open("postgres", cfg.Database.DSN())
 	if err != nil {
 		return nil, err
 	}
