@@ -43,6 +43,15 @@ export function ResultsSection() {
     },
   ];
 
+  const channels = [
+    { img: "/results/result-1.jpg", alt: "YouTube channel growth result" },
+    { img: "/results/result-2.jpg", alt: "Content strategy result" },
+    { img: "/results/result-3.jpg", alt: "Channel monetization result" },
+    { img: "/results/result-4.jpg", alt: "Video performance result" },
+    { img: "/results/result-5.jpg", alt: "Creator growth result" },
+    { img: "/results/result-6.jpg", alt: "Multi-platform result" },
+  ];
+
   return (
     <section id="results" className="relative py-24 sm:py-32 overflow-hidden bg-elevated">
       <div aria-hidden="true" className="absolute inset-0 hero-aurora opacity-15 pointer-events-none" />
@@ -75,7 +84,7 @@ export function ResultsSection() {
         </div>
 
         {/* Screenshot-style testimonials */}
-        <div className="grid md:grid-cols-2 gap-5">
+        <div className="grid md:grid-cols-2 gap-5 mb-16">
           {testimonials.map((t, i) => (
             <div
               key={t.author}
@@ -96,7 +105,6 @@ export function ResultsSection() {
                   {t.badge}
                 </span>
               </div>
-              {/* Screenshot mockup: earnings dashboard */}
               <div className="surface-glass rounded-xl border border-white/10 p-4 mb-4">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse-glow" />
@@ -113,6 +121,25 @@ export function ResultsSection() {
                 </div>
               </div>
               <p className="text-sm text-zinc-300 leading-relaxed italic">&ldquo;{t.quote}&rdquo;</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Channel results image gallery */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {channels.map((ch, i) => (
+            <div
+              key={ch.img}
+              className={`surface-card overflow-hidden animate-fade-up hover:border-violet-400/30 hover:shadow-[0_8px_32px_rgba(139,92,246,0.12)] transition-all duration-300 group ${["", "animation-delay-100", "animation-delay-200", "animation-delay-300", "animation-delay-400", "animation-delay-500"][i]}`}
+            >
+              <div className="relative overflow-hidden">
+                <img
+                  src={ch.img}
+                  alt={ch.alt}
+                  className="w-full h-auto object-cover group-hover:scale-105 transition-transform duration-500"
+                  loading="lazy"
+                />
+              </div>
             </div>
           ))}
         </div>
