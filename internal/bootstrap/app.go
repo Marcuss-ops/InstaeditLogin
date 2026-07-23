@@ -461,6 +461,22 @@ func Wire(ctx context.Context) (*App, error) {
 	}, nil
 }
 
+// configureSentry initialises the Sentry SDK once and returns the
+// current hub. An empty DSN is treated as "Sentry disabled" and
+// returns a nil hub with no error. Any SDK init failure is surfaced
+// as an error so the caller (Wire) can decide whether to fail closed
+// or continue without Sentry. This helper is extracted to make the
+// bootstrap wiring testable with a fake transport.
+func configureSentry(opts sentry.ClientOptions) (*sentry.Hub, error) {
+	if opts.Dsn == "" {
+		return nil, nil
+	}
+	if err := sentry.Init(opts); err != nil {
+		return nil, err
+	}
+	return sentry.CurrentHub(), nil
+}
+
 // RunWorkers starts the 9 background goroutines (publish, reconcile,
 // outbox, webhook, metrics, sessions_cleanup, velox_downloader,
 // upload, drive_batch_crawler) under a shared WorkerRegistry. The
