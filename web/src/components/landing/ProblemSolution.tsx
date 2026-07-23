@@ -21,8 +21,8 @@ export function ProblemSolution() {
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-6">
               You want to earn online but editing steals 15 hours a week. You're
-              scared to show your face or you don't know where to start. You've been
-              creating for months — 50 views and zero dollars.
+              scared to show your face or don't know where to start. You've been
+              creating for months &mdash; 50 views and zero dollars.
             </p>
             <div className="space-y-4">
               {[
@@ -53,7 +53,7 @@ export function ProblemSolution() {
             </p>
             <div className="space-y-4">
               {[
-                "Channel already positioned — you skip the \"grind\" phase entirely",
+                "Ready-made channel — you skip the \"grind\" phase entirely",
                 "ChronoN AI: type one sentence, get a ready-to-publish video",
                 "One video becomes 7 posts across 7 platforms automatically",
                 "Daily content without lifting a finger — 100% hands-free",

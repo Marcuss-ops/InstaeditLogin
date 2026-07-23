@@ -22,11 +22,11 @@ export function Landing() {
       <Nav />
       <Hero />
       <ProblemSolution />
-      <Features />
       <EarningsEstimates />
+      <Features />
       <ResultsSection />
-      <CTASection />
       <Proof />
+      <CTASection />
       <FAQ />
       <FinalCTA />
       <Footer />

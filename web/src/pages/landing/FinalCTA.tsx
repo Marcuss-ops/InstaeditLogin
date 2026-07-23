@@ -12,7 +12,7 @@ export function FinalCTA() {
         <div className="max-w-3xl mx-auto animate-fade-up">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full surface-glass border border-red-400/30 text-xs font-medium text-red-300 mb-6">
             <Clock className="w-3.5 h-3.5" />
-            <span>Limited spots — we accept only 10 new students this month</span>
+            <span>Limited spots — we accept only 10 new students this month to guarantee 1-on-1 support</span>
           </div>
           <h2 className="text-display-1 text-white mb-6">
             Ready to turn YouTube into your{" "}

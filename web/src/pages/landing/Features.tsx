@@ -2,7 +2,7 @@ import { Bot, Globe, DollarSign } from "lucide-react";
 import { IconSchedule } from "./shared";
 
 /* ----------------------------------------------------------------------------
- * Features — zero effort, maximum income
+ * Features — zero effort, maximum income (gain-focused)
  * -------------------------------------------------------------------------- */
 
 export function Features() {
@@ -15,7 +15,7 @@ export function Features() {
           <h2 className="text-display-2 text-white">Zero effort. Maximum income.</h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
             No camera. No editing. No experience. Our AI-powered system turns a single
-            idea into daily content across 7 platforms — engineered to generate revenue.
+            idea into daily content across 7 platforms &mdash; engineered to generate revenue.
           </p>
         </div>
         <div className="grid lg:grid-cols-3 gap-5">
@@ -28,9 +28,9 @@ export function Features() {
               </div>
               <h3 className="text-display-3 text-white mb-3 max-w-[22ch]">AI creates. You earn.</h3>
               <p className="text-sm text-zinc-400 leading-relaxed max-w-[52ch]">
-                Type one sentence and ChronoN AI generates a professional, monetization-ready
-                video. No camera, no microphone, no editing software. The AI handles
-                everything from script to final render.
+                Type one sentence and ChronoN AI generates a professional,
+                monetization-ready video. No camera, no microphone, no editing software.
+                The AI handles everything from script to final render.
               </p>
               <div className="mt-7 surface-glass rounded-xl border border-white/10 overflow-hidden">
                 <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-white/5">
@@ -60,8 +60,9 @@ export function Features() {
             </div>
             <h3 className="text-display-3 text-white mb-2">7 platforms, 1 video.</h3>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              One AI-generated video is automatically converted and published to YouTube,
-              TikTok, Instagram Reels, Facebook, X and more — multiplying your reach by 7x.
+              One AI-generated video is automatically converted and published to
+              YouTube, TikTok, Instagram Reels, Facebook, X and more &mdash;
+              multiplying your reach by 7x.
             </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden animate-fade-up animation-delay-200 hover:border-pink-400/30 transition-all duration-300">
@@ -70,8 +71,9 @@ export function Features() {
             </div>
             <h3 className="text-display-3 text-white mb-2">Revenue from day one.</h3>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              Aged channels skip YouTube's trust filter. You hit the Partner Program faster
-              and start earning ad revenue, sponsorships and affiliate income sooner.
+              Aged channels skip YouTube's trust filter. You hit the Partner
+              Program faster and start earning ad revenue, sponsorships and
+              affiliate income sooner.
             </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden lg:col-span-3 animate-fade-up animation-delay-300 hover:border-amber-400/30 transition-all duration-300">
@@ -83,9 +85,9 @@ export function Features() {
                 </div>
                 <h3 className="text-display-3 text-white mb-2">Scale to multiple languages.</h3>
                 <p className="text-sm text-zinc-400 leading-relaxed max-w-[52ch]">
-                  Expand your channel portfolio to Spanish, Portuguese, French, German
-                  and more — all powered by AI translation and localization. Reach
-                  global audiences without learning a new language.
+                  Expand your channel portfolio to Spanish, Portuguese, French,
+                  German and more &mdash; all powered by AI translation and
+                  localization. Reach global audiences without learning a new language.
                 </p>
               </div>
               <div className="surface-glass rounded-xl border border-white/10 p-5">

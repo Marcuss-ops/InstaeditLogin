@@ -22,18 +22,18 @@ export function Hero() {
               <span className="animate-pulse-glow absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
             </span>
-            <span>Proven system &mdash; zero experience needed</span>
+            <span>Turnkey system &mdash; zero experience needed</span>
           </div>
 
           <h1 className="text-display-1 text-white">
-            Your First $2,000/Mo With{" "}
-            <span className="text-gradient-animated">YouTube &mdash; On Autopilot.</span>
+            Your First $2,000/Mo From Video{" "}
+            <span className="text-gradient-animated">On Autopilot &mdash; No Experience Needed.</span>
           </h1>
 
           <p className="text-body-lg text-zinc-300/90 mt-7 max-w-[62ch]">
-            Stop wasting months figuring out the algorithm. We give you an already-monetized
-            channel, AI that creates the videos for you, and 1-on-1 coaching to get you to
-            your first payout &mdash; fast.
+            Stop wasting months figuring out the algorithm. We give you an
+            already-monetized YouTube channel, AI that creates the videos for you,
+            and 1-on-1 coaching to get you to your first payout &mdash; fast.
           </p>
 
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mt-8">
@@ -43,7 +43,7 @@ export function Hero() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group"
             >
-              Start Earning Now
+              Get Your Monetized Channel
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </a>
             <a

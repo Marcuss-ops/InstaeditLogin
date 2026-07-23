@@ -1,22 +1,23 @@
 import { Zap, Globe, ArrowRight, CheckCircle2, Target } from "lucide-react";
 
 /* ----------------------------------------------------------------------------
- * CTA Section — 3 paths to automated YouTube income
+ * CTA Section — 3 paths to automated income
  * -------------------------------------------------------------------------- */
 
 export function CTASection() {
   const tiers = [
     {
       level: "Level 1",
-      tagline: "Guided & fast",
+      tagline: "Guided & fast income",
       title: "Start & Earn",
+      subtitle: "From zero to your first monthly paycheck in 30 days.",
       ringColor: "ring-emerald-400/40",
       iconColor: "text-emerald-300",
       bgGradient: "from-emerald-500/20 to-teal-500/20",
       hoverBorder: "hover:border-emerald-400/30",
-      desc: "Go from zero to your first monthly paycheck in 30 days. You get a mentor, a ready-to-monetize channel, and a proven playbook — no camera, no editing, no tech skills.",
+      desc: "The guided path for anyone who wants to start earning right away. You get an already-monetized channel, a personal mentor, and a proven system to reach your first payout in 30 days.",
       features: [
-        "Aged YouTube channel included — skip the algorithm's trust filter",
+        "Aged YouTube channel included — skip the algorithm's \"grind\" phase",
         "1-on-1 personal mentor on the highest-paying niches",
         "Zero editing — AI templates do all the work for you",
         "Step-by-step roadmap to your first $1,000/mo",
@@ -28,11 +29,12 @@ export function CTASection() {
       level: "Level 2",
       tagline: "100% passive",
       title: "Done-For-You",
+      subtitle: "No camera, no voice, no time spent. We do everything.",
       ringColor: "ring-blue-400/40",
       iconColor: "text-blue-300",
       bgGradient: "from-blue-500/20 to-cyan-500/20",
       hoverBorder: "hover:border-blue-400/30",
-      desc: "No camera, no voice, no time spent. We build, manage, and automate everything. Your channel generates revenue while you sleep.",
+      desc: "We create, optimize, and publish daily content for you. Your channel generates revenue while you sleep.",
       features: [
         "Full-auto management across 7 platforms from day one",
         "5 channels + 10 AI videos included immediately",
@@ -47,6 +49,7 @@ export function CTASection() {
       level: "Level 3",
       tagline: "Scale & multiply",
       title: "Channel Portfolio",
+      subtitle: "From one channel to a global content empire.",
       ringColor: "ring-violet-400/40",
       iconColor: "text-violet-300",
       bgGradient: "from-violet-500/20 to-purple-500/20",
@@ -74,8 +77,8 @@ export function CTASection() {
             <span className="text-gradient">build passive income.</span>
           </h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch] mx-auto">
-            Whether you want to learn the system, have us run everything, or scale a full
-            portfolio — the income is real and the path is clear.
+            Whether you want to learn the system, have us run everything, or scale a
+            full portfolio &mdash; the income is real and the path is clear.
           </p>
         </div>
         <div className="grid md:grid-cols-3 gap-6">
@@ -100,7 +103,8 @@ export function CTASection() {
                     <div className="text-xs text-zinc-400">{t.tagline}</div>
                   </div>
                 </div>
-                <h3 className="text-display-3 text-white mb-3">{t.title}</h3>
+                <h3 className="text-display-3 text-white mb-2">{t.title}</h3>
+                <p className="text-xs text-violet-300/80 font-medium mb-3">{t.subtitle}</p>
                 <p className="text-sm text-zinc-400 leading-relaxed mb-5">{t.desc}</p>
                 <ul className="space-y-3 mb-6">
                   {t.features.map((f) => (
