@@ -71,7 +71,7 @@ func newOAuthSessionRedirectRouter(t *testing.T, providers []string, frontendURL
 		})
 	}
 	defaultOpts := []RouterOption{
-		WithOneTimeCodeStore(NewOneTimeCodeStore(60 * time.Second)),
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60 * time.Second)),
 		WithCredentialVault(&mockCredentialVault{}),
 	}
 	return NewRouter(

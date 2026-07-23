@@ -535,7 +535,7 @@ func newTestRouter(
 	capRouter.Register("instagram", platformSvc)
 	capRouter.Register("tiktok", platformSvc)
 	capRouter.Register("twitter", platformSvc)
-	otc := NewOneTimeCodeStore(60 * time.Second)
+	otc := NewInMemoryOneTimeCodeStore(60 * time.Second)
 	// Note: the sweeper goroutine leaks until the test binary exits —
 	// acceptable for unit tests; the 1s ticker has no observable effect
 	// on test behaviour and the OS reclaims everything on process exit.

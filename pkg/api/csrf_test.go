@@ -66,7 +66,7 @@ func csrfHarnessNew(t *testing.T) *csrfHarness {
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		nil,
-		WithOneTimeCodeStore(NewOneTimeCodeStore(60)),
+		WithOneTimeCodeStore(NewInMemoryOneTimeCodeStore(60)),
 		WithWorkspaceStore(&mockWorkspaceStore{
 			findByIDFn: func(id int64) (*models.Workspace, error) {
 				return &models.Workspace{ID: id, Name: "Personal", OwnerID: 1}, nil
