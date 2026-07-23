@@ -13,6 +13,15 @@ import (
 	"time"
 )
 
+// DefaultShutdownTimeout is the global timeout the registry uses when
+// waiting for all workers to stop during graceful shutdown.
+const DefaultShutdownTimeout = 15 * time.Second
+
+// errShutdownTimeout marks a worker that ignored context cancellation
+// and had to be force-failed when the global shutdown deadline
+// expired. It is not treated as a runtime critical failure.
+var errShutdownTimeout = errors.New("worker did not stop within shutdown deadline")
+
 // WorkerState is the lifecycle state of a registered worker.
 type WorkerState string
 
@@ -50,24 +59,27 @@ type WorkerSpec struct {
 
 // Registry supervises a set of workers from start to shutdown.
 type Registry struct {
-	mu           sync.RWMutex
-	workers      []WorkerSpec
-	status       map[string]*WorkerStatus
-	wg           sync.WaitGroup
-	started      bool
-	stopOnce     sync.Once
-	cancel       context.CancelFunc
-	stopped      chan struct{}
-	criticalSent atomic.Bool
+	mu               sync.RWMutex
+	workers          []WorkerSpec
+	status           map[string]*WorkerStatus
+	wg               sync.WaitGroup
+	started          bool
+	stopOnce         sync.Once
+	cancel           context.CancelFunc
+	stopped          chan struct{}
+	criticalSent     atomic.Bool
+	shutdownDeadline atomic.Value // time.Time set by StopAll
 }
 
 // NewRegistry creates an empty worker registry.
 func NewRegistry() *Registry {
-	return &Registry{
+	r := &Registry{
 		workers: []WorkerSpec{},
 		status:  make(map[string]*WorkerStatus),
 		stopped: make(chan struct{}),
 	}
+	r.shutdownDeadline.Store(time.Time{})
+	return r
 }
 
 // Register adds a worker spec to the registry. Register must be called
@@ -165,13 +177,23 @@ func (r *Registry) supervise(parent context.Context, spec WorkerSpec, criticalEr
 	for {
 		select {
 		case <-parent.Done():
-			// Wait for the worker goroutine to finish before declaring stopped.
+			// Wait for the worker goroutine to finish, bounded by the single
+			// global shutdown deadline set by StopAll. All workers share the
+			// same budget in parallel; a worker that ignores context
+			// cancellation is force-failed when the deadline expires so the
+			// supervisor goroutine does not leak.
+			deadline, _ := r.shutdownDeadline.Load().(time.Time)
+			wait := DefaultShutdownTimeout
+			if !deadline.IsZero() {
+				if d := time.Until(deadline); d > 0 {
+					wait = d
+				}
+			}
 			select {
 			case err := <-done:
 				r.handleExit(spec, err, criticalErr)
-			case <-time.After(15 * time.Second):
-				r.setError(spec.Name, "shutdown timeout waiting for worker to stop")
-				r.setState(spec.Name, StateFailed)
+			case <-time.After(wait):
+				r.handleExit(spec, fmt.Errorf("worker %q: %w", spec.Name, errShutdownTimeout), criticalErr)
 			}
 			return
 		case <-heartbeatTicker.C:
@@ -184,13 +206,21 @@ func (r *Registry) supervise(parent context.Context, spec WorkerSpec, criticalEr
 }
 
 // handleExit updates state when a worker goroutine returns. If the
-// worker is critical and the error is not a context cancellation, the
-// error is sent on criticalErr so the process can fail.
+// worker is critical and the error is not a context cancellation or
+// shutdown timeout, the error is sent on criticalErr so the process can
+// fail. Shutdown timeouts are not propagated as runtime failures.
 func (r *Registry) handleExit(spec WorkerSpec, err error, criticalErr chan<- error) {
 	if err == nil || errors.Is(err, context.Canceled) {
 		r.setState(spec.Name, StateStopped)
 		return
 	}
+
+	if errors.Is(err, errShutdownTimeout) {
+		r.setError(spec.Name, err.Error())
+		r.setState(spec.Name, StateFailed)
+		return
+	}
+
 	r.setError(spec.Name, err.Error())
 	r.setState(spec.Name, StateFailed)
 	if spec.Critical {
@@ -205,6 +235,12 @@ func (r *Registry) handleExit(spec WorkerSpec, err error, criticalErr chan<- err
 // StopAll cancels the context shared by all workers and waits up to
 // timeout for every worker to stop. It is safe to call multiple times.
 func (r *Registry) StopAll(timeout time.Duration) error {
+	// Establish a single global shutdown deadline *before* cancelling the
+	// parent context so every supervisor shares the same budget and can
+	// unblock itself if its worker ignores cancellation.
+	deadline := time.Now().Add(timeout)
+	r.shutdownDeadline.Store(deadline)
+
 	r.stopOnce.Do(func() {
 		if r.cancel != nil {
 			r.cancel()
