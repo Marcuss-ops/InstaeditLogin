@@ -495,10 +495,16 @@ docker compose exec minio mc version enable minio/instaedit-local
 
 # Prerequisito alias (NON documentato altrove; tutti i `mc ... <bucket>`
 # richiedono un alias configurato):
-#   Sul primo run operazionale (universalmente corretto in BOTH
-#   inside-container e dalla VPS-host perché docker-compose DNS
-#   risolve `minio` cross-namespace):
-#     docker compose exec minio mc alias set minio http://minio:9000
+#   Sul primo run operazionale:
+#     docker compose exec minio mc alias set minio http://localhost:9000
+#   Universale per due motivi:
+#     - dentro il container minio: `localhost` = self-loopback →
+#       minio stesso in ascolto sulla sua porta 9000.
+#     - dalla VPS-host: port-mapping docker-compose inoltra
+#       `localhost:9000` dell'host sulla porta 9000 del container.
+#   Da EVITARE invece `http://minio:9000`: funziona SOLO dal compose
+#   network namespace (DNS-compose non cross-namespace di default);
+#   dalla VPS-host dà errore DNS resolution.
 #   Senza questo, `minio/instaedit-local` non risolve e ogni comando
 #   mc in §10 ritorna `mc: <bucket> does not exist`.
 
@@ -555,9 +561,12 @@ docker compose restart minio
 #        disponibile; altrimenti audit custom via JSON dump.
 #     3. cut reads/writes: aggiorna S3_BUCKET + S3_ENDPOINT nella
 #        VPS .env a `instaedit-local-encrypted`; restart api+worker.
-#     4a. se versioning abilitato (§9 step 3 ha `mc version enable ...`),
-#         rimuovi TUTTE le versioni prima del `rb` — altrimenti
-#         `mc rb --force` rifiuta per default (safe-delete):
+#     4a. SOLO se §9 step 3 ha abilitato versioning. Altrimenti
+#         SKIP questo step: su bucket senza versioning, `mc rm --versions`
+#         rimuove solo il current marker (semanticamente equivalente
+#         a step 4 successivo — quindi step 4a è ridondante).
+#         Step 4a serve SOLO per evitare il fail di `mc rb --force` su
+#         bucket con multi-version object (safe-delete default):
 #          docker compose exec minio mc rm --recursive --force --versions
 #            minio/instaedit-local
 #     4. delete source: solo DOPO 24-48h di smoke-test positivo,
