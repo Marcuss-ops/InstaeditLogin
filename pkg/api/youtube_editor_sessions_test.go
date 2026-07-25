@@ -560,25 +560,13 @@ func TestPublishYouTubeEditorSession_ScheduledPublishing(t *testing.T) {
 
 func TestPublishYouTubeEditorSession_ScheduledPublishingRequiresPrivate(t *testing.T) {
 	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
-	editStore := &mockYouTubeVideoEditStore{
-		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
-			return &models.YouTubeVideoEdit{
-				ID:               "session-123",
-				WorkspaceID:      workspace.ID,
-				YouTubeVideoID:   "ytvideo123",
-				VeloxProjectID:   "ve-project-123",
-				Status:           "editing",
-				DesiredPrivacy:   "public",
-				ThumbnailMediaID: strPtr("asset-uuid-123"),
-			}, nil
-		},
-	}
-
+	// Validation happens before the session is looked up, so a minimal
+	// router with just workspace/edit stores is sufficient.
 	r := mustNewRouterWithDefaults(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),
-		"https://app.instaedit.org",
+		"",
 		nil,
 		WithWorkspaceStore(&mockWorkspaceStore{
 			findByIDFn: func(id int64) (*models.Workspace, error) {
@@ -588,9 +576,7 @@ func TestPublishYouTubeEditorSession_ScheduledPublishingRequiresPrivate(t *testi
 				return nil, nil
 			},
 		}),
-		WithYouTubeVideoEditStore(editStore),
-		WithMediaStore(newMockMediaStore()),
-		WithStorageProvider(newMockStorageProvider()),
+		WithYouTubeVideoEditStore(&mockYouTubeVideoEditStore{}),
 	)
 
 	payload := map[string]any{
@@ -611,25 +597,13 @@ func TestPublishYouTubeEditorSession_ScheduledPublishingRequiresPrivate(t *testi
 
 func TestPublishYouTubeEditorSession_PastPublishAtRejected(t *testing.T) {
 	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
-	editStore := &mockYouTubeVideoEditStore{
-		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
-			return &models.YouTubeVideoEdit{
-				ID:               "session-123",
-				WorkspaceID:      workspace.ID,
-				YouTubeVideoID:   "ytvideo123",
-				VeloxProjectID:   "ve-project-123",
-				Status:           "editing",
-				DesiredPrivacy:   "public",
-				ThumbnailMediaID: strPtr("asset-uuid-123"),
-			}, nil
-		},
-	}
-
+	// Validation happens before the session is looked up, so a minimal
+	// router with just workspace/edit stores is sufficient.
 	r := mustNewRouterWithDefaults(
 		services.NewCapabilityRouter(),
 		&mockUserStore{},
 		auth.NewManager(testJWTSecret, 24),
-		"https://app.instaedit.org",
+		"",
 		nil,
 		WithWorkspaceStore(&mockWorkspaceStore{
 			findByIDFn: func(id int64) (*models.Workspace, error) {
@@ -639,9 +613,7 @@ func TestPublishYouTubeEditorSession_PastPublishAtRejected(t *testing.T) {
 				return nil, nil
 			},
 		}),
-		WithYouTubeVideoEditStore(editStore),
-		WithMediaStore(newMockMediaStore()),
-		WithStorageProvider(newMockStorageProvider()),
+		WithYouTubeVideoEditStore(&mockYouTubeVideoEditStore{}),
 	)
 
 	payload := map[string]any{
