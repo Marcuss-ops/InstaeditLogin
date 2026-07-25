@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -872,6 +873,154 @@ func (s *YouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken, vid
 // validate a video before creating a thumbnail editor session. It
 // returns an error when the video does not exist or the upstream call
 // fails.
+// UpdateVideoPrivacy updates the privacy status of an existing YouTube
+// video via videos.update. For immediate publication set privacy to
+// "public" or "unlisted" and leave publishAt nil. For scheduled
+// publication set privacy to "private" and provide a future publishAt
+// timestamp; YouTube will make the video public at that time.
+func (s *YouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time) (string, error) {
+	const maxThumbnailBytes = 2 * 1024 * 1024
+	if len(thumbnailData) == 0 {
+		return "", fmt.Errorf("youtube publish thumbnail: empty thumbnail data")
+	}
+	if len(thumbnailData) > maxThumbnailBytes {
+		return "", fmt.Errorf("youtube publish thumbnail: thumbnail exceeds 2 MB limit")
+	}
+	if mimeType != "image/jpeg" && mimeType != "image/png" {
+		return "", fmt.Errorf("youtube publish thumbnail: unsupported content type %q", mimeType)
+	}
+
+	// 1. Upload thumbnail with retry.
+	setErr := doWithRetry(ctx, 3, time.Second, func() error {
+		return s.SetThumbnail(ctx, accessToken, videoID, mimeType, bytes.NewReader(thumbnailData), int64(len(thumbnailData)))
+	})
+	if setErr != nil {
+		return "", fmt.Errorf("youtube publish thumbnail: set thumbnail failed: %w", setErr)
+	}
+
+	// 2. Update video privacy with retry.
+	updateErr := doWithRetry(ctx, 3, time.Second, func() error {
+		return s.UpdateVideoPrivacy(ctx, accessToken, videoID, privacyStatus, publishAt)
+	})
+	if updateErr != nil {
+		return "", fmt.Errorf("youtube publish thumbnail: update video failed: %w", updateErr)
+	}
+
+	return "https://www.youtube.com/watch?v=" + videoID, nil
+}
+
+func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time) error {
+	if videoID == "" {
+		return fmt.Errorf("youtube update video: empty video id")
+	}
+	privacyStatus = strings.ToLower(strings.TrimSpace(privacyStatus))
+	switch privacyStatus {
+	case "public", "unlisted", "private":
+		// ok
+	default:
+		return fmt.Errorf("youtube update video: invalid privacy status %q", privacyStatus)
+	}
+
+	status := map[string]string{
+		"privacyStatus": privacyStatus,
+	}
+	if publishAt != nil && !publishAt.IsZero() {
+		if privacyStatus != "private" {
+			return fmt.Errorf("youtube update video: publishAt requires privacyStatus=private")
+		}
+		status["publishAt"] = publishAt.UTC().Format(time.RFC3339)
+	}
+
+	payload := map[string]interface{}{
+		"id":     videoID,
+		"status": status,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("youtube update video: marshal metadata: %w", err)
+	}
+
+	reqURL := "https://www.googleapis.com/youtube/v3/videos?part=status"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, strings.NewReader(string(body)))
+	if err != nil {
+		return fmt.Errorf("youtube update video: create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("youtube update video: request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+
+	rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("youtube update video: unauthorized (status 401)")
+	case resp.StatusCode == http.StatusForbidden:
+		return fmt.Errorf("youtube update video: forbidden (status 403)")
+	case resp.StatusCode == http.StatusNotFound:
+		return fmt.Errorf("youtube update video: video not found (status 404)")
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return fmt.Errorf("youtube update video: rate limited (status 429)")
+	case resp.StatusCode >= 500:
+		return fmt.Errorf("youtube update video: server error (status %d)", resp.StatusCode)
+	default:
+		return fmt.Errorf("youtube update video: unexpected status %d: %s", resp.StatusCode, string(rbody))
+	}
+}
+
+// retryableError reports whether err is a transient YouTube API error
+// that should be retried (429, 5xx, network failure).
+func retryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "status 429") ||
+		strings.Contains(msg, "server error (status 5") ||
+		strings.Contains(msg, "request:") {
+		return true
+	}
+	return false
+}
+
+// doWithRetry runs fn up to maxAttempts with exponential backoff. It
+// only retries when fn returns a retryable error.
+func doWithRetry(ctx context.Context, maxAttempts int, baseDelay time.Duration, fn func() error) error {
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			delay := baseDelay * time.Duration(1<<uint(attempt-1))
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		if err := fn(); err == nil {
+			return nil
+		} else if !retryableError(err) {
+			return err
+		} else {
+			lastErr = err
+		}
+	}
+	if lastErr == nil {
+		return fmt.Errorf("exceeded retry attempts")
+	}
+	return lastErr
+}
+
 func (s *YouTubeOAuthService) GetYouTubeVideo(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
 	if videoID == "" {
 		return nil, fmt.Errorf("youtube video details: empty video id")

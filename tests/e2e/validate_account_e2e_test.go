@@ -115,6 +115,12 @@ func (s *stubYouTubeOAuthService) ClientID() string { return s.clientIDValue }
 func (s *stubYouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error {
 	return nil
 }
+func (s *stubYouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time) error {
+	return nil
+}
+func (s *stubYouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time) (string, error) {
+	return "", nil
+}
 
 // stubCredentialVault — minimal implementation of credentials.VaultAPI
 // (the interface pkg/api satisfies via WithCredentialVault). Renew

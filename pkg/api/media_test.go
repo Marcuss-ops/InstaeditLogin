@@ -136,6 +136,9 @@ func (m *mockStorageProvider) VerifyUpload(_ context.Context, key string) (strin
 	return m.verifyFn(key)
 }
 func (m *mockStorageProvider) AssetURL(key string) string { return m.assetURLFn(key) }
+func (m *mockStorageProvider) GetObject(_ context.Context, key string, _ time.Duration) (string, error) {
+	return m.assetURLFn(key) + "?X-Amz-Signature=mock", nil
+}
 
 // --- helpers -----------------------------------------------------------------
 

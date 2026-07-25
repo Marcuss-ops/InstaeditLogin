@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -282,4 +284,232 @@ func (r *Router) handleUpdateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		"session_id":         edit.ID,
 		"thumbnail_media_id": edit.ThumbnailMediaID,
 	})
+}
+
+// publishYouTubeEditorSessionRequest is the body accepted by
+// POST /api/v1/youtube/editor-sessions/{id}/publish.
+type publishYouTubeEditorSessionRequest struct {
+	PrivacyStatus string     `json:"privacy_status,omitempty"`
+	PublishAt     *time.Time `json:"publish_at,omitempty"`
+}
+
+// publishYouTubeEditorSessionResponse is returned on a successful publish.
+type publishYouTubeEditorSessionResponse struct {
+	PublicURL    string     `json:"public_url"`
+	VideoID      string     `json:"video_id"`
+	PrivacyStatus string    `json:"privacy_status"`
+	PublishedAt  *time.Time `json:"published_at,omitempty"`
+}
+
+// handlePublishYouTubeEditorSession publishes the edited thumbnail to
+// YouTube. It is idempotent: if the session is already published it
+// returns the stored public URL; if a publish is already in flight it
+// returns 409; on failure it records the error and allows retries.
+func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.UserID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+
+	sessionID := chi.URLParam(req, "id")
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session id is required")
+		return
+	}
+
+	var payload publishYouTubeEditorSessionRequest
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	if r.youtubeVideoEditStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "youtube video edit store not configured")
+		return
+	}
+
+	edit, err := r.youtubeVideoEditStore.FindByID(req.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find editor session: "+err.Error())
+		return
+	}
+	if edit == nil {
+		writeError(w, http.StatusNotFound, "editor session not found")
+		return
+	}
+
+	workspace, err := r.workspaceStore.FindByID(edit.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find workspace: "+err.Error())
+		return
+	}
+	if workspace == nil || !r.userCanAccessWorkspace(identity.UserID(), workspace) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	// Idempotency checks: published sessions can be replayed without
+	// requiring the downstream media/YouTube services.
+	if edit.Status == "published" {
+		writeJSON(w, http.StatusOK, publishYouTubeEditorSessionResponse{
+			PublicURL:     "https://www.youtube.com/watch?v=" + edit.YouTubeVideoID,
+			VideoID:       edit.YouTubeVideoID,
+			PrivacyStatus: edit.DesiredPrivacy,
+			PublishedAt:   edit.PublishAt,
+		})
+		return
+	}
+	if edit.Status == "publishing" && time.Since(edit.UpdatedAt) < 5*time.Minute {
+		writeError(w, http.StatusConflict, "publish already in progress")
+		return
+	}
+
+	if r.mediaStore == nil || r.storageProvider == nil {
+		writeError(w, http.StatusNotImplemented, "media not configured on this server")
+		return
+	}
+	if r.youTubeSvc == nil {
+		writeError(w, http.StatusServiceUnavailable, "YouTube service not configured")
+		return
+	}
+
+	if edit.ThumbnailMediaID == nil || *edit.ThumbnailMediaID == "" {
+		writeError(w, http.StatusBadRequest, "thumbnail media not attached to session")
+		return
+	}
+	asset, err := r.mediaStore.FindByID(*edit.ThumbnailMediaID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find media asset: "+err.Error())
+		return
+	}
+	if asset == nil || asset.UserID != identity.UserID() || asset.Status != models.MediaAssetStatusReady {
+		writeError(w, http.StatusBadRequest, "invalid or unverified media asset")
+		return
+	}
+
+	// Resolve privacy status and publish time.
+	privacyStatus := payload.PrivacyStatus
+	if privacyStatus == "" {
+		privacyStatus = edit.DesiredPrivacy
+	}
+	if privacyStatus == "" {
+		privacyStatus = "public"
+	}
+	privacyStatus = strings.ToLower(strings.TrimSpace(privacyStatus))
+	if privacyStatus != "public" && privacyStatus != "unlisted" && privacyStatus != "private" {
+		writeError(w, http.StatusBadRequest, "privacy_status must be public, unlisted, or private")
+		return
+	}
+	if payload.PublishAt != nil && !payload.PublishAt.IsZero() {
+		if payload.PublishAt.Before(time.Now().UTC()) {
+			writeError(w, http.StatusBadRequest, "publish_at must be in the future")
+			return
+		}
+		if privacyStatus != "private" {
+			writeError(w, http.StatusBadRequest, "scheduled publishing requires privacy_status=private")
+			return
+		}
+	}
+
+	// Fetch a fresh access token.
+	token, err := r.vault.Get(req.Context(), edit.PlatformAccountID, models.TokenTypeBearer)
+	if err != nil {
+		token, err = r.vault.Get(req.Context(), edit.PlatformAccountID, models.TokenTypeLongLived)
+		if err != nil {
+			token, err = r.vault.Get(req.Context(), edit.PlatformAccountID, models.TokenTypeShortLived)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "no valid token found for this account")
+				return
+			}
+		}
+	}
+
+	// Download the thumbnail bytes using a presigned GET URL.
+	downloadURL, err := r.storageProvider.GetObject(req.Context(), asset.UploadKey, 5*time.Minute)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "generate thumbnail download URL: "+err.Error())
+		return
+	}
+	downloadCtx, cancel := context.WithTimeout(req.Context(), 30*time.Second)
+	defer cancel()
+	thumbnailData, err := downloadThumbnailBytes(downloadCtx, downloadURL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "download thumbnail: "+err.Error())
+		return
+	}
+
+	// Mark publishing and attempt the publish.
+	edit.Status = "publishing"
+	edit.DesiredPrivacy = privacyStatus
+	edit.PublishAt = payload.PublishAt
+	edit.UpdatedAt = time.Now().UTC()
+	if err := r.youtubeVideoEditStore.Update(req.Context(), edit); err != nil {
+		writeError(w, http.StatusInternalServerError, "update editor session: "+err.Error())
+		return
+	}
+
+	publicURL, err := r.youTubeSvc.PublishThumbnail(
+		req.Context(),
+		token.AccessToken,
+		edit.YouTubeVideoID,
+		thumbnailData,
+		asset.ContentType,
+		privacyStatus,
+		payload.PublishAt,
+	)
+	if err != nil {
+		edit.Status = "failed"
+		edit.LastError = truncateError(err.Error())
+		edit.UpdatedAt = time.Now().UTC()
+		_ = r.youtubeVideoEditStore.Update(req.Context(), edit)
+		writeError(w, http.StatusBadGateway, "youtube publish failed: "+err.Error())
+		return
+	}
+
+	edit.Status = "published"
+	edit.LastError = ""
+	edit.UpdatedAt = time.Now().UTC()
+	if err := r.youtubeVideoEditStore.Update(req.Context(), edit); err != nil {
+		writeError(w, http.StatusInternalServerError, "update editor session: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, publishYouTubeEditorSessionResponse{
+		PublicURL:     publicURL,
+		VideoID:       edit.YouTubeVideoID,
+		PrivacyStatus: privacyStatus,
+		PublishedAt:   payload.PublishAt,
+	})
+}
+
+// downloadThumbnailBytes fetches the thumbnail bytes from the signed
+// download URL. The asset is capped at 2 MB, so reading into memory is
+// safe.
+func downloadThumbnailBytes(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("thumbnail download returned %d: %s", resp.StatusCode, string(body))
+	}
+	const maxBytes = 2 * 1024 * 1024
+	return io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+}
+
+// truncateError limits an error string to a length suitable for
+// storage in the last_error column.
+func truncateError(s string) string {
+	const max = 1024
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
 }

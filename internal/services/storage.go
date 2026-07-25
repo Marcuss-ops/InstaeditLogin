@@ -79,6 +79,9 @@ type StorageProvider interface {
 	// contributor accidentally exposes a "url" field somewhere, the
 	// only path the platform API ever sees is AssetURL(key).
 	AssetURL(key string) string
+	// GetObject returns a presigned GET URL for the object at key.
+	// Used by server-side flows that need to read back uploaded bytes.
+	GetObject(ctx context.Context, key string, ttl time.Duration) (string, error)
 	// Upload (P1 Velox integration) streams `body` directly into the
 	// bucket at `key`. Used by the worker's server-side ingest paths
 	// — primarily VeloxArtifactStream drain after the size+SHA
@@ -334,6 +337,21 @@ func (p *S3Provider) VerifyUpload(ctx context.Context, key string) (contentType 
 		return "", 0, fmt.Errorf("S3 HEAD returned status %d for key %s", resp.StatusCode, key)
 	}
 	return resp.Header.Get("Content-Type"), resp.ContentLength, nil
+}
+
+// GetObject returns a presigned GET URL for the object at key, valid
+// for the requested TTL. The URL can be fetched by any HTTP client to
+// retrieve the object's bytes without requiring public bucket access.
+func (p *S3Provider) GetObject(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	return signS3V4URL(
+		p.baseHost, p.region, "s3",
+		p.objectKey(key), ttl, http.MethodGet,
+		p.accessKey, p.secretKey,
+		time.Now(),
+	)
 }
 
 // SignUpload generates a SigV4 PUT URL. For presigned PUTs, the canonical

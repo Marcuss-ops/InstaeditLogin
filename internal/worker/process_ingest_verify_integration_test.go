@@ -245,6 +245,9 @@ func (s *fakeStorage) VerifyUpload(_ context.Context, _ string) (string, int64, 
 }
 func (s *fakeStorage) AssetURL(string) string { return "https://fake-cdn.local/" + uuid.NewString() }
 func (s *fakeStorage) Provider() string       { return "fake-s3" }
+func (s *fakeStorage) GetObject(_ context.Context, _ string, _ time.Duration) (string, error) {
+	return "https://fake-cdn.local/download?signed=mock", nil
+}
 
 // Upload is interface-satisfaction ONLY. The current worker flow
 // routes Upload via SignUpload (which returns an httptest.Server
