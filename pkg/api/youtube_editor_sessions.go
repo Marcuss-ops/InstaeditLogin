@@ -14,6 +14,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // createYouTubeEditorSessionRequest is the body accepted by
@@ -288,7 +289,12 @@ func (r *Router) handleUpdateYouTubeEditorSession(w http.ResponseWriter, req *ht
 
 // publishYouTubeEditorSessionRequest is the body accepted by
 // POST /api/v1/youtube/editor-sessions/{id}/publish.
+// Title and Description are optional; when provided they are sent to
+// YouTube's videos.update with part=snippet,status. YouTube enforces a
+// 100-character title limit and a 5000-character description limit.
 type publishYouTubeEditorSessionRequest struct {
+	Title         string     `json:"title,omitempty"`
+	Description   string     `json:"description,omitempty"`
 	PrivacyStatus string     `json:"privacy_status,omitempty"`
 	PublishAt     *time.Time `json:"publish_at,omitempty"`
 }
@@ -321,6 +327,12 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 	var payload publishYouTubeEditorSessionRequest
 	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	payload.Title = strings.TrimSpace(payload.Title)
+	payload.Description = strings.TrimSpace(payload.Description)
+	if err := services.ValidateYouTubeSnippet(payload.Title, payload.Description); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -457,6 +469,8 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		asset.ContentType,
 		privacyStatus,
 		payload.PublishAt,
+		payload.Title,
+		payload.Description,
 	)
 	if err != nil {
 		edit.Status = "failed"

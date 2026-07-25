@@ -701,14 +701,15 @@ type YouTubeOAuthService interface {
 	// as the custom thumbnail for the given video. The caller must
 	// supply a valid access token (retrieved from the vault).
 	SetThumbnail(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error
-	// UpdateVideoPrivacy changes the privacy status of an existing
-	// YouTube video via videos.update. For scheduled publishing pass a
-	// future publishAt and privacyStatus="private".
-	UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time) error
+	// UpdateVideoPrivacy changes the privacy status (and optionally the
+	// snippet title/description) of an existing YouTube video via
+	// videos.update. For scheduled publishing pass a future publishAt and
+	// privacyStatus="private".
+	UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, title, description string) error
 	// PublishThumbnail uploads a thumbnail to YouTube and updates the
-	// video privacy. It retries transient failures internally and returns
-	// the public YouTube URL on success.
-	PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time) (string, error)
+	// video privacy and snippet. It retries transient failures internally
+	// and returns the public YouTube URL on success.
+	PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error)
 }
 
 // YouTubeVideoEditStore is the persistence contract for thumbnail

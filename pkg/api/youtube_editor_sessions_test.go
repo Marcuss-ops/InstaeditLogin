@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,7 +56,7 @@ func (m *mockYouTubeVideoEditStore) Update(ctx context.Context, edit *models.You
 // YouTubeOAuthService needed by the editor session handler.
 type mockYouTubeOAuthServiceForEditor struct {
 	getVideoFn         func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error)
-	publishThumbnailFn func(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time) (string, error)
+	publishThumbnailFn func(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error)
 }
 
 func (m *mockYouTubeOAuthServiceForEditor) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
@@ -90,12 +91,12 @@ func (m *mockYouTubeOAuthServiceForEditor) GetYouTubeVideo(ctx context.Context, 
 func (m *mockYouTubeOAuthServiceForEditor) SetThumbnail(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error {
 	return errors.New("not implemented")
 }
-func (m *mockYouTubeOAuthServiceForEditor) UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time) error {
+func (m *mockYouTubeOAuthServiceForEditor) UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, title, description string) error {
 	return errors.New("not implemented")
 }
-func (m *mockYouTubeOAuthServiceForEditor) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time) (string, error) {
+func (m *mockYouTubeOAuthServiceForEditor) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
 	if m.publishThumbnailFn != nil {
-		return m.publishThumbnailFn(ctx, accessToken, videoID, thumbnailData, mimeType, privacyStatus, publishAt)
+		return m.publishThumbnailFn(ctx, accessToken, videoID, thumbnailData, mimeType, privacyStatus, publishAt, title, description)
 	}
 	return "", errors.New("not implemented")
 }
@@ -171,13 +172,19 @@ func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
 
 	var publishCalled bool
-	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time) (string, error) {
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
 		publishCalled = true
 		if string(data) != string(thumbnailBytes) {
 			t.Errorf("expected thumbnail data %q, got %q", string(thumbnailBytes), string(data))
 		}
 		if privacyStatus != "public" {
 			t.Errorf("expected privacyStatus public, got %s", privacyStatus)
+		}
+		if title != "Updated title" {
+			t.Errorf("expected title \"Updated title\", got %q", title)
+		}
+		if description != "Updated description" {
+			t.Errorf("expected description \"Updated description\", got %q", description)
 		}
 		return "https://www.youtube.com/watch?v=" + videoID, nil
 	}
@@ -203,7 +210,11 @@ func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 		}),
 	)
 
-	payload := map[string]any{"privacy_status": "public"}
+	payload := map[string]any{
+		"privacy_status": "public",
+		"title":          "Updated title",
+		"description":    "Updated description",
+	}
 	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -219,6 +230,157 @@ func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 	}
 	if updated == nil || updated.Status != "published" {
 		t.Fatalf("expected session status published, got %v", updated)
+	}
+}
+
+func TestPublishYouTubeEditorSession_TooLongTitle(t *testing.T) {
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+	editStore := &mockYouTubeVideoEditStore{
+		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:               "session-123",
+				WorkspaceID:      workspace.ID,
+				YouTubeVideoID:   "ytvideo123",
+				VeloxProjectID:   "ve-project-123",
+				Status:           "editing",
+				DesiredPrivacy:   "public",
+				ThumbnailMediaID: strPtr("asset-uuid-123"),
+			}, nil
+		},
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		"https://app.instaedit.org",
+		nil,
+		WithWorkspaceStore(&mockWorkspaceStore{
+			findByIDFn: func(id int64) (*models.Workspace, error) {
+				if id == workspace.ID {
+					return workspace, nil
+				}
+				return nil, nil
+			},
+		}),
+		WithYouTubeVideoEditStore(editStore),
+		WithMediaStore(newMockMediaStore()),
+		WithStorageProvider(newMockStorageProvider()),
+	)
+
+	payload := map[string]any{"title": strings.Repeat("a", 101)}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPublishYouTubeEditorSession_WithoutTitleDescription(t *testing.T) {
+	account := &models.PlatformAccount{
+		ID:             42,
+		UserID:         1,
+		Platform:       models.PlatformYouTube,
+		PlatformUserID: "UC123",
+		Username:       "testchannel",
+		Status:         models.AccountStatusActive,
+	}
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if id == account.ID {
+				return account, nil
+			}
+			return nil, nil
+		},
+	}
+	workspaceStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			if id == workspace.ID {
+				return workspace, nil
+			}
+			return nil, nil
+		},
+	}
+
+	mediaStore := newMockMediaStore()
+	mediaStore.assets["asset-uuid-123"] = &models.MediaAsset{
+		ID:          "asset-uuid-123",
+		UserID:      1,
+		UploadKey:   "uploads/1/thumb.jpg",
+		ContentType: "image/jpeg",
+		SizeBytes:   1024,
+		Status:      models.MediaAssetStatusReady,
+	}
+
+	editStore := &mockYouTubeVideoEditStore{
+		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:                "session-123",
+				WorkspaceID:       workspace.ID,
+				PlatformAccountID: account.ID,
+				YouTubeVideoID:    "ytvideo123",
+				VeloxProjectID:    "ve-project-123",
+				ThumbnailMediaID:  strPtr("asset-uuid-123"),
+				DesiredPrivacy:    "public",
+				Status:            "editing",
+			}, nil
+		},
+	}
+
+	youTubeSvc := &mockYouTubeOAuthServiceForEditor{}
+
+	thumbnailBytes := []byte("fake-thumbnail-bytes")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(thumbnailBytes)
+	}))
+	defer server.Close()
+
+	storage := newMockStorageProvider()
+	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
+
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+		if title != "" || description != "" {
+			t.Errorf("expected empty title and description, got title=%q description=%q", title, description)
+		}
+		return "https://www.youtube.com/watch?v=" + videoID, nil
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		store,
+		auth.NewManager(testJWTSecret, 24),
+		"https://app.instaedit.org",
+		nil,
+		WithWorkspaceStore(workspaceStore),
+		WithYouTubeVideoEditStore(editStore),
+		WithMediaStore(mediaStore),
+		WithStorageProvider(storage),
+		WithYouTubeService(youTubeSvc),
+		WithCredentialVault(&mockCredentialVault{
+			getFn: func(ctx context.Context, id int64, tt string) (*models.OAuthToken, error) {
+				if id == account.ID {
+					return &models.OAuthToken{AccessToken: "valid-token"}, nil
+				}
+				return nil, errors.New("token not found")
+			},
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

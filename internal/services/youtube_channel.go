@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -873,12 +874,14 @@ func (s *YouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken, vid
 // validate a video before creating a thumbnail editor session. It
 // returns an error when the video does not exist or the upstream call
 // fails.
-// UpdateVideoPrivacy updates the privacy status of an existing YouTube
-// video via videos.update. For immediate publication set privacy to
-// "public" or "unlisted" and leave publishAt nil. For scheduled
-// publication set privacy to "private" and provide a future publishAt
-// timestamp; YouTube will make the video public at that time.
-func (s *YouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time) (string, error) {
+// UpdateVideoPrivacy updates the privacy status (and optionally the
+// snippet title and/or description) of an existing YouTube video via
+// videos.update. For immediate publication set privacy to "public" or
+// "unlisted" and leave publishAt nil. For scheduled publication set
+// privacy to "private" and provide a future publishAt timestamp; YouTube
+// will make the video public at that time. Non-empty title/description
+// are included in the snippet part and sent with part=snippet,status.
+func (s *YouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
 	const maxThumbnailBytes = 2 * 1024 * 1024
 	if len(thumbnailData) == 0 {
 		return "", fmt.Errorf("youtube publish thumbnail: empty thumbnail data")
@@ -898,9 +901,9 @@ func (s *YouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken,
 		return "", fmt.Errorf("youtube publish thumbnail: set thumbnail failed: %w", setErr)
 	}
 
-	// 2. Update video privacy with retry.
+	// 2. Update video metadata + privacy with retry.
 	updateErr := doWithRetry(ctx, 3, time.Second, func() error {
-		return s.UpdateVideoPrivacy(ctx, accessToken, videoID, privacyStatus, publishAt)
+		return s.UpdateVideoPrivacy(ctx, accessToken, videoID, privacyStatus, publishAt, title, description)
 	})
 	if updateErr != nil {
 		return "", fmt.Errorf("youtube publish thumbnail: update video failed: %w", updateErr)
@@ -909,7 +912,7 @@ func (s *YouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken,
 	return "https://www.youtube.com/watch?v=" + videoID, nil
 }
 
-func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time) error {
+func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, title, description string) error {
 	if videoID == "" {
 		return fmt.Errorf("youtube update video: empty video id")
 	}
@@ -921,6 +924,13 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 		return fmt.Errorf("youtube update video: invalid privacy status %q", privacyStatus)
 	}
 
+	if err := ValidateYouTubeSnippet(title, description); err != nil {
+		return fmt.Errorf("youtube update video: %w", err)
+	}
+
+	title = strings.TrimSpace(title)
+	description = strings.TrimSpace(description)
+
 	status := map[string]string{
 		"privacyStatus": privacyStatus,
 	}
@@ -931,16 +941,32 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 		status["publishAt"] = publishAt.UTC().Format(time.RFC3339)
 	}
 
+	snippet := make(map[string]string)
+	if title != "" {
+		snippet["title"] = title
+	}
+	if description != "" {
+		snippet["description"] = description
+	}
+
 	payload := map[string]interface{}{
 		"id":     videoID,
 		"status": status,
 	}
+	if len(snippet) > 0 {
+		payload["snippet"] = snippet
+	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("youtube update video: marshal metadata: %w", err)
 	}
 
-	reqURL := "https://www.googleapis.com/youtube/v3/videos?part=status"
+	parts := "status"
+	if len(snippet) > 0 {
+		parts = "snippet,status"
+	}
+	reqURL := "https://www.googleapis.com/youtube/v3/videos?part=" + parts
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, strings.NewReader(string(body)))
 	if err != nil {
 		return fmt.Errorf("youtube update video: create request: %w", err)
@@ -974,6 +1000,22 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 	default:
 		return fmt.Errorf("youtube update video: unexpected status %d: %s", resp.StatusCode, string(rbody))
 	}
+}
+
+// ValidateYouTubeSnippet returns an error if the supplied title or
+// description exceed YouTube's documented snippet limits (title 100
+// characters, description 5000 characters). It counts runes, not
+// bytes, and trims surrounding whitespace before measuring.
+func ValidateYouTubeSnippet(title, description string) error {
+	const maxTitleLen = 100
+	const maxDescriptionLen = 5000
+	if utf8.RuneCountInString(strings.TrimSpace(title)) > maxTitleLen {
+		return fmt.Errorf("title exceeds %d characters", maxTitleLen)
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(description)) > maxDescriptionLen {
+		return fmt.Errorf("description exceeds %d characters", maxDescriptionLen)
+	}
+	return nil
 }
 
 // retryableError reports whether err is a transient YouTube API error
