@@ -233,7 +233,8 @@ func newDiscardLogger() *slog.Logger {
 // repoRootForTest walks upward from the binary's working directory
 // until it finds go.mod (the canonical InstaEdit monorepo root).
 // Test-only helper; previously repoRoot() lived in main.go but was
-// dropped along with the Fly-coherence leg that consumed it. Kept
+// dropped along with the second responsibility (hosted-platform
+// secrets-coherence) that consumed it. Kept
 // here so TestOAuthScopes_DocsMatchCanonical can locate the docs.
 func repoRootForTest() (string, error) {
 	wd, err := os.Getwd()
