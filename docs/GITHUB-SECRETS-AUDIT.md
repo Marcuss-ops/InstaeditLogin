@@ -81,10 +81,15 @@ for S in FLY_API_TOKEN FLY_ACCESS_TOKEN FLY_APP_NAME; do
   gh secret delete "$S" --repo "$SLUG"
 done
 
-# Step B′ — delete each Fly-coupled repository variable (the 2
-# oauth-canary providers that referenced deleted contract files).
+# Step B′ — delete each Fly-coupled repository variable. The 2 vars
+# formerly pointed to scripts/required-fly-secrets.txt and
+# scripts/disabled-fly-secrets-prefixes.txt — both deleted in the
+# post-cutover chain — so we surface "already gone" instead of a
+# silent green (keeps idempotent re-runs debuggable and surfaces auth
+# / network blips as named output).
 for V in INSTAEDIT_REQUIRED_SECRETS_PATH INSTAEDIT_DISABLED_SECRETS_PATH; do
-  gh variable delete "$V" --repo "$SLUG" || true
+  gh variable delete "$V" --repo "$SLUG" \
+    || echo "  (already gone, or auth-flaky: $V)"
 done
 
 # Step C — re-verify AFTER deletion.
@@ -113,7 +118,7 @@ in separate commits after §1/§2.
 | `scripts/destroy-fly-app.sh`                                 | 22 `flyctl` invocations                                           | One-shot orchestration: run after §1/§2 to tear down Fly, then `git rm`.                       |
 | `scripts/db/provision-postgres-runbook.sh`                   | 12 `flyctl postgres` invocations                                  | Fly Postgres provisioning runbook. VPS uses local Postgres; `git rm` or rewrite.              |
 | `scripts/db/production-restore-drill.sh`                     | 3 `flyctl postgres destroy` references                            | Disaster-recovery drill for Fly Postgres. Rewrite for local Postgres.                          |
-| `scripts/clean-gh-fly-secrets.sh`                            | 8 references to the three FLY secrets (this is the helper that automates §2) | **Preferred path for §2**: just `./scripts/clean-gh-fly-secrets.sh --apply` once instead of the manual `gh secret delete + gh variable delete` loops. The script defaults to list-only dry-run; `--apply` enables the actual deletes. It handles both the 3 FLY_* secrets AND the 2 INSTAEDIT_*_PATH variables in a single call. The §2 manual fallback is for when this script isn't reachable. Delete this helper script after running. |
+| `scripts/clean-gh-fly-secrets.sh`                            | 8 references to the three FLY secrets (this is the helper that automates §2's *Secret* half) | **Preferred path for §2's Secret half**: `./scripts/clean-gh-fly-secrets.sh --apply` once instead of the manual `gh secret delete` loop. The script defaults to list-only dry-run; `--apply` enables the actual deletes. **Scope**: it handles ONLY the 3 FLY_* secrets — the 2 INSTAEDIT_*_PATH variables still need the §2 manual `gh variable delete` loop (the helper does not touch Variables). Delete this helper after running. |
 | `scripts/s3/provision-tigris.sh`                             | 2 `flyctl auth login` comments                                    | Tigris bucket provisioning. **OUT OF SCOPE** of this audit per cutover plan.                  |
 | `scripts/_parse_envfile.py`                                  | 5 refs to `disabled-fly-secrets-prefixes.txt` / `required-fly-secrets.txt` | Parser for the deleted Fly .env contract. Zero callers after `integration.yml` step removed. `git rm`. |
 | `scripts/test_parse_envfile.py`                              | Same                                                              | Parser test. `git rm`.                                                                          |
