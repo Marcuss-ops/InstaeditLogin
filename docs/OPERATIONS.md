@@ -127,63 +127,57 @@ modes:
 
 ### 2.1 Reload Caddy (after editing `ops/vps/Caddyfile`)
 
-The Caddyfile source-of-truth is **`ops/vps/Caddyfile`** on the operator
-laptop (mirrored to `/srv/instaedit/Caddyfile` on the VPS via `git pull`),
-and the docker-compose stack bind-mounts it into the running caddy
-container at `/etc/caddy/Caddyfile`. Caddy reads the file once at
-process start — editing the source does NOT auto-reload the running
-container. Use one of the explicit reload paths below.
+**Caddy is NOT part of the docker-compose stack.** Verified: there is no top-level `caddy:` service in `docker-compose.yml`. On the VPS Caddy runs as ONE of the following — the operator must know which deployment was used at first-boot (the recipe lives in the boot section of `ops/legacy/Caddyfile`). The Caddyfile source-of-truth is **`ops/vps/Caddyfile`** on the operator laptop — edit there, sync to the VPS, then reload via the path that matches the live deployment.
 
-**Canonical reload (lightweight, zero downtime)**:
+**Path A — standalone Docker container** (canonical install per `ops/legacy/Caddyfile`'s `docker run --network host` recipe; the container name is `instaedit-caddy`, configured at first-boot):
 
 ```bash
+# 1. Edit the Caddyfile on the operator laptop + commit + push
+$EDITOR ops/vps/Caddyfile
+git add ops/vps/Caddyfile && git commit -m 'caddy: <change>' && git push origin main
+
+# 2. Sync to the VPS via the canonical deploy path (git pull)
 ssh instaedit@$VPS_IP \
-  'cd /opt/instaedit/InstaeditLogin && \
-   docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile'
-# Expected: "reload scheduled in <N>s" (or similar). Caddy hot-reloads
-# without dropping in-flight TLS connections. Exit 0 from `caddy reload`
-# confirms the new config is valid AND loaded.
+  'cd /srv/instaedit/InstaeditLogin && git pull origin main'
+
+# 3. Validate before reload (dry-run; catches syntax errors)
+ssh instaedit@$VPS_IP \
+  'docker exec instaedit-caddy caddy validate --config /etc/caddy/Caddyfile'
+#  expect: "valid configuration" + exit 0. Any error → fix the source,
+#  do NOT reload.
+
+# 4. Hot-reload (no connection drop)
+ssh instaedit@$VPS_IP \
+  'docker exec instaedit-caddy caddy reload --config /etc/caddy/Caddyfile'
+#  expect: "reload scheduled in <N>s" + exit 0.
+
+# 5. Verify the new config is live
+ssh instaedit@$VPS_IP 'curl -sI https://api.instaedit.org/api/v1/health | head -1'
+#  expect: HTTP/2 200
 ```
 
-**Validate before reload** (dry-run a Caddyfile edit; catches syntax
-errors without breaking production):
+**Path B — systemd service** (alternative install via `apt install caddy` or the official Caddy APT repo; managed by `caddy.service` under systemd):
 
 ```bash
-ssh instaedit@$VPS_IP \
-  'cd /opt/instaedit/InstaeditLogin && \
-   docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile'
-# Expected: "valid configuration" + exit 0. Any error means the edit
-# is broken — fix the source first, do NOT reload.
+# 1. Edit + sync (same as Path A)
+
+# 2. Copy the new Caddyfile into /etc/caddy/Caddyfile on the VPS
+ssh instaedit@$VPS_IP 'sudo install -m 0644 /srv/instaedit/Caddyfile /etc/caddy/Caddyfile'
+
+# 3. Validate before reload
+ssh instaedit@$VPS_IP 'sudo caddy validate --config /etc/caddy/Caddyfile'
+
+# 4. Reload via systemd
+ssh instaedit@$VPS_IP 'sudo systemctl reload caddy'
+
+# 5. Verify
+ssh instaedit@$VPS_IP 'sudo systemctl status caddy'
+#  expect: Active: active (running)
 ```
 
-**Full restart (fallback when reload refuses)**:
+**Cross-reference**: `ops/vps/Caddyfile` is the source-of-truth. Do NOT edit `/etc/caddy/Caddyfile` on the VPS directly — the next `git pull` would clobber your edit (Path A) or a future `apt reinstall` (Path B). Always edit the laptop source, commit on `main`, then sync + reload.
 
-```bash
-ssh instaedit@$VPS_IP \
-  'cd /opt/instaedit/InstaeditLogin && docker compose restart caddy'
-# Causes ~5-15s of connection churn. Use only when reload fails (e.g.
-# a new `admin` API listener or `storage` backend change that requires
-# process restart).
-```
-
-**Direct admin API** (advanced — only when `docker compose exec` isn't
-available):
-
-```bash
-ssh instaedit@$VPS_IP \
-  'cd /opt/instaedit/InstaeditLogin && \
-   docker compose exec -T caddy curl -sS -X POST http://localhost:2019/load'
-# Equivalent to `caddy reload` but without the container-side
-# validation pre-pass. Use with caution.
-```
-
-**Cross-reference**: any edit MUST land in `ops/vps/Caddyfile` first
-(the bind-mount handles the container file); then run the reload. Editing
-`/etc/caddy/Caddyfile` inside the container directly WILL be wiped on the
-next `docker compose restart caddy`. The stack's container manager is
-docker compose (NOT containerd); `ctr` is a containerd CLI operation
-that does not apply here, so the canonical invocation always starts
-with `docker compose exec -T caddy …`.
+> **Note on `ctr`:** the original directive said `caddy reload via ctr`, but `ctr` is a containerd CLI binary used for containerd-managed runtimes. The InstaeditLogin VPS uses Docker (daemon under systemd), NOT containerd — `ctr` does not apply here. The canonical invocations are `docker exec instaedit-caddy` (Path A) or `systemctl reload caddy` (Path B).
 
 ---
 
@@ -362,7 +356,7 @@ curl -i https://api.instaedit.org/api/v1/health
 # ─── STEP 1: take a fresh backup on the VPS ────────────────────────────
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 ssh instaedit@$VPS_IP \
-  "docker compose exec -T postgres pg_dump -U instaedit -d instaedit_login \
+  "mkdir -p /srv/instaedit/backups && docker compose exec -T postgres pg_dump -U instaedit -d instaedit_login \
      --format=custom --no-owner --no-acl \
      > /srv/instaedit/backups/instaedit-restore-drill-$TS.dump"
 # Expected: ~10-300 MB file (depends on tenant data volume). Exit 0.
