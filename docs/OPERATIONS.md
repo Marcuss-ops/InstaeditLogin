@@ -125,6 +125,66 @@ modes:
 | Browser shows `NET::ERR_CERT_DATE_INVALID` | Uptime monitor ping fails | Check upstream — REGRESSION-class bug, file incident |
 | Caddy logs show `failed to obtain certificate: acme: error: ... rateLimited` | Sentry capture within an hour of the failure | LE rate-limit hit. See §1.2 storm-recovery hint. |
 
+### 2.1 Reload Caddy (after editing `ops/vps/Caddyfile`)
+
+The Caddyfile source-of-truth is **`ops/vps/Caddyfile`** on the operator
+laptop (mirrored to `/srv/instaedit/Caddyfile` on the VPS via `git pull`),
+and the docker-compose stack bind-mounts it into the running caddy
+container at `/etc/caddy/Caddyfile`. Caddy reads the file once at
+process start — editing the source does NOT auto-reload the running
+container. Use one of the explicit reload paths below.
+
+**Canonical reload (lightweight, zero downtime)**:
+
+```bash
+ssh instaedit@$VPS_IP \
+  'cd /opt/instaedit/InstaeditLogin && \
+   docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile'
+# Expected: "reload scheduled in <N>s" (or similar). Caddy hot-reloads
+# without dropping in-flight TLS connections. Exit 0 from `caddy reload`
+# confirms the new config is valid AND loaded.
+```
+
+**Validate before reload** (dry-run a Caddyfile edit; catches syntax
+errors without breaking production):
+
+```bash
+ssh instaedit@$VPS_IP \
+  'cd /opt/instaedit/InstaeditLogin && \
+   docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile'
+# Expected: "valid configuration" + exit 0. Any error means the edit
+# is broken — fix the source first, do NOT reload.
+```
+
+**Full restart (fallback when reload refuses)**:
+
+```bash
+ssh instaedit@$VPS_IP \
+  'cd /opt/instaedit/InstaeditLogin && docker compose restart caddy'
+# Causes ~5-15s of connection churn. Use only when reload fails (e.g.
+# a new `admin` API listener or `storage` backend change that requires
+# process restart).
+```
+
+**Direct admin API** (advanced — only when `docker compose exec` isn't
+available):
+
+```bash
+ssh instaedit@$VPS_IP \
+  'cd /opt/instaedit/InstaeditLogin && \
+   docker compose exec -T caddy curl -sS -X POST http://localhost:2019/load'
+# Equivalent to `caddy reload` but without the container-side
+# validation pre-pass. Use with caution.
+```
+
+**Cross-reference**: any edit MUST land in `ops/vps/Caddyfile` first
+(the bind-mount handles the container file); then run the reload. Editing
+`/etc/caddy/Caddyfile` inside the container directly WILL be wiped on the
+next `docker compose restart caddy`. The stack's container manager is
+docker compose (NOT containerd); `ctr` is a containerd CLI operation
+that does not apply here, so the canonical invocation always starts
+with `docker compose exec -T caddy …`.
+
 ---
 
 ## 3. Per-provider recovery drills
