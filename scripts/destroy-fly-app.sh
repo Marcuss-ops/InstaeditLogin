@@ -47,6 +47,8 @@
 #   4 = operator cancelled at the master confirm prompt
 #   5 = one or more destructive steps failed — see apply log
 #   6 = --apply invoked without an interactive TTY (refuse + suggest --ui-fallback)
+#   7 = disambiguation failure (jq missing OR ambiguous attached_to) — see audit-log step 0
+#   8 = backup transfer failure (mc cp non-zero OR Tigris unreachable) — see audit-log step 0
 set -euo pipefail
 trap 'rm -f /tmp/fly_apps.json /tmp/fly_machines.json /tmp/fly_certs.json /tmp/fly_secrets.json /tmp/fly_volumes.json /tmp/fly_postgres.json 2>/dev/null || true' EXIT
 
@@ -405,21 +407,25 @@ if [[ "$mode" == "apply" ]]; then
                     /tmp/fly-storage.json 2>/dev/null | head -1 || true)
     if [[ "$ATTACHED" == *"$APP"* ]]; then
       echo "  · Fly-attached detected: ${ATTACHED}"
-      if ! command -v mc >/dev/null 2>&1; then
-        echo "  ⚠️  mc missing — SKIPPING §3 backup (Tigris contents at risk)" >&2
-        echo "     install mc: brew install minio/stable/mc (or apt install mc)" >&2
-      else
-        echo "  · running §3 backup (mc version enable + Path A)"
-        mc version enable tigris/instaedit-prod-media 2>/dev/null || true
-        SNAP_DIR="/tmp/tigris-snapshot-$(date -u +%Y%m%dT%H%M%SZ)"
-        mkdir -p "$SNAP_DIR"
-        if mc cp --recursive tigris/instaedit-prod-media/ "${SNAP_DIR}/" >/dev/null 2>&1; then
-          echo "  ✓ Path A local mirror: ${SNAP_DIR} ($(du -sh "${SNAP_DIR}" | cut -f1))"
+        if ! command -v mc >/dev/null 2>&1; then
+          echo "  ⚠️  mc missing — SKIPPING §3 backup (Tigris contents at risk)" >&2
+          echo "     install mc: brew install minio/stable/mc (or apt install mc)" >&2
+        elif ! mc alias list 2>/dev/null | grep -q '^tigris '; then
+          echo "  ⚠️  tigris alias not configured — SKIPPING §3 backup" >&2
+          echo "     (silent backup loss would be worse; run docs/FLY-DESTROY-RUNBOOK.md §3.1 first)" >&2
         else
-          echo "  ❌ mc cp failed — refusing destroy without backup." >&2
-          failed_steps+=(0); exit 8
+          echo "  · running §3 backup (mc version enable + Path A)"
+          mc version enable tigris/instaedit-prod-media 2>/dev/null || true
+          SNAP_DIR="/tmp/tigris-snapshot-$(date -u +%Y%m%dT%H%M%SZ)"
+          mkdir -p "$SNAP_DIR"
+          if mc_err=$(mc cp --recursive tigris/instaedit-prod-media/ "${SNAP_DIR}/" 2>&1); then
+            echo "  ✓ Path A local mirror: ${SNAP_DIR} ($(du -sh "${SNAP_DIR}" | cut -f1))"
+          else
+            echo "  ❌ mc cp failed: ${mc_err}" >&2
+            echo "     refusing destroy with incomplete backup." >&2
+            failed_steps+=(0); exit 8
+          fi
         fi
-      fi
     elif [[ -z "$ATTACHED" ]]; then
       echo "  · standalone Tigris (or no bucket) — no backup needed"
     else
