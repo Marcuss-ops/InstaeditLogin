@@ -276,7 +276,7 @@ ssh instaedit@$VPS_IP \
 #   TERRIBLE if: postgres is `exited` or `restarting`
 
 ssh instaedit@$VPS_IP \
-  'docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"'
+  'docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"'
 #   expected: instaedit_login
 #   TERRIBLE if: instaedit_login_test, postgres, template1, instaedit_login_dev
 
@@ -291,7 +291,7 @@ ssh instaedit@$VPS_IP \
 #    NOTE: must mirror internal/database/migrate_check.go::CanaryTables —
 #    update BOTH together if the slice grows.
 ssh instaedit@$VPS_IP \
-  'docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c "
+  'docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c "
     SELECT count(*)
       FROM unnest(ARRAY[\"users\",\"tokens\",\"workspaces\",\"posts\",
                         \"post_targets\",\"webhook_deliveries\"]) t(tbl)
@@ -311,7 +311,7 @@ curl -i https://api.instaedit.org/api/v1/health
 # ─── STEP 1: take a fresh backup on the VPS ────────────────────────────
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 ssh instaedit@$VPS_IP \
-  "docker compose exec -T db pg_dump -U instaedit -d instaedit_login \
+  "docker compose exec -T postgres pg_dump -U instaedit -d instaedit_login \
      --format=custom --no-owner --no-acl \
      > /srv/instaedit/backups/instaedit-restore-drill-$TS.dump"
 # Expected: ~10-300 MB file (depends on tenant data volume). Exit 0.
@@ -344,7 +344,7 @@ docker exec -i drill-restore-target-$TS \
 
 # ─── STEP 5: assert schema fingerprint parity ─────────────────────────
 PROD_FP=$(ssh instaedit@$VPS_IP \
-  'docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c "
+  'docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c "
     WITH f AS (
       SELECT enumtypid::regtype AS e FROM pg_type WHERE typtype = '"'"'e'"'"'
       UNION ALL
@@ -375,7 +375,7 @@ docker exec drill-restore-target-$TS \
 # ─── STEP 7: compare row-count spot checks ────────────────────────────
 for tbl in users workspaces posts post_targets; do
   PROD_COUNT=$(ssh instaedit@$VPS_IP \
-    "docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c \
+    "docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c \
      \"SELECT count(*) FROM $tbl;\"")
   DRILL_COUNT=$(docker exec drill-restore-target-$TS \
     psql -U instaedit -d instaedit_login -tA -c "SELECT count(*) FROM $tbl;")
@@ -414,7 +414,7 @@ EOF
 
 | Symptom | Root cause | Fix |
 |---------|------------|-----|
-| `pg_dump` exits with `permission denied for table …` | The `instaedit` role in /srv/instaedit/.env.production's POSTGRES_PASSWORD was rotated but `instaedit_login` ownership was not migrated. | `docker compose exec -T db psql -U instaedit -d instaedit_login -c "ALTER TABLE public.X OWNER TO instaedit;"` per missing table. Or rebuild the role inheritance from `scripts/db/provision-postgres-runbook.sh` step 6. |
+| `pg_dump` exits with `permission denied for table …` | The `instaedit` role in /srv/instaedit/.env.production's POSTGRES_PASSWORD was rotated but `instaedit_login` ownership was not migrated. | `docker compose exec -T postgres psql -U instaedit -d instaedit_login -c "ALTER TABLE public.X OWNER TO instaedit;"` per missing table. Or rebuild the role inheritance from `scripts/db/provision-postgres-runbook.sh` step 6. |
 | `pg_restore` exits with `role "instaedit" does not exist` | The throwaway Postgres container was started without the matching `POSTGRES_USER=instaedit`. | Re-run STEP 3 with `-e POSTGRES_USER=instaedit -e POSTGRES_PASSWORD=instaedit_drill_pw`. The script must mirror prod's role + db name exactly. |
 | Schema fingerprint MISMATCH | (a) throwaway container started on a different `postgres:` image tag than prod (e.g. `postgres:16-alpine` vs `postgres:17-alpine`); (b) migrations are mid-flight on prod — defer until /health=200; (c) dump used `--no-acl` and the role ownership stripped from the dump. | (a) Re-run STEP 3 with the exact `postgres:17-alpine` image. (b) Wait for /health=200 + canary tables PASS, then re-run. (c) Re-dump with `--no-owner --no-acl` (the flags are correct — issue is the throwaway's pg_user differing). |
 | Canary tables post-restore: `> 0 missing` | (a) the dump filtered out non-public schemas; (b) the drill container's `public` schema was dropped on init (default Postgres behaviour, but `POSTGRES_DB=instaedit_login` should NOT drop `public`). | Recreate the drill container with `POSTGRES_DB=instaedit_login` explicitly; rerun STEP 4 with `--clean --if-exists` to drop existing objects first. |
@@ -438,7 +438,7 @@ The canonical production DB name is **`instaedit_login`** — NOT
 enforced at THREE layers:
 
 1. **At provisioning** (`docker-compose.yml`): the `postgres` service's `POSTGRES_DB` env var is hard-coded to `instaedit_login`. The Compose stack creates the DB at first boot AND the `instaedit_login` ownership rolls out to the role.
-2. **At smoke check** (`scripts/db/check-postgres-health.sh`): asserts the canary tables post-migration exist + the db name is exactly `instaedit_login`. Run `docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"` and confirm the output.
+2. **At smoke check** (`scripts/db/check-postgres-health.sh`): asserts the canary tables post-migration exist + the db name is exactly `instaedit_login`. Run `docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"` and confirm the output.
 3. **At restore drill** (this section §3.1.3 STEP 5): the schema fingerprint is `MD5(enum-oids ∪ public-schema-table-oids)` — a misconfigured dev cluster would produce a DIFFERENT fingerprint and the drill would FAIL with SCHEMA MISMATCH before any semantic check.
 
 **Anti-pattern**: pointing at `localhost:5432/instaedit_login_dev` (a
@@ -492,7 +492,7 @@ initialises the bucket via the Compose `init` lifecycle):
 - [ ] **Sentry** with `SENTRY_DSN`, `SENTRY_ENVIRONMENT=production`, `SENTRY_RELEASE=$(git rev-parse HEAD)`. Captured at panic + 5xx emission. Empty == no init (per Blocco #5.3 opt-in).
 - [ ] **Uptime monitor** on `https://api.instaedit.org/api/v1/health` (30s cron, alert via email after 2 consecutive failures).
 - [ ] **Readiness monitor** on `https://api.instaedit.org/ready` (operator shoulder-check on incident — Caddy does not check this; the API's own goroutines do).
-- [ ] **Postgres queue-lag alert** (cron query, run via `docker compose exec -T db psql`):
+- [ ] **Postgres queue-lag alert** (cron query, run via `docker compose exec -T postgres psql`):
   `SELECT count(*) FROM webhook_deliveries WHERE status='queued' AND created_at < NOW() - interval '1 hour'` > 100 → alert.
 - [ ] **Dead-letter-queue alert**:
   `SELECT count(*) FROM publish_jobs WHERE status='dlq'` > 0 → alert.
@@ -548,7 +548,7 @@ Tick all of these before opening the app to real users:
 - [ ] No `<access_token|refresh_token|password>.*` in `docker compose logs --since 1h` output (privacy check)
 - [ ] SPF/DKIM/DMARC all pass `dig +short` for `instaedit.org` ✔
 - [ ] Restore drill completed + signed off (see §3 + full procedure in §3.1)
-- [ ] DB-name discipline assertion: `docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"` returns `instaedit_login` (NOT `instaedit_login_test` test). Confirmed at provisioning ([§3.1.6](#316-db-name-discipline-production-convention) layer 1) AND at smoke check ([§3.1.6](#316-db-name-discipline-production-convention) layer 2). Full 3-layer enforcement story (provisioning + smoke check + restore drill fingerprint) — see [§3.1.6](#316-db-name-discipline-production-convention).
+- [ ] DB-name discipline assertion: `docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"` returns `instaedit_login` (NOT `instaedit_login_test` test). Confirmed at provisioning ([§3.1.6](#316-db-name-discipline-production-convention) layer 1) AND at smoke check ([§3.1.6](#316-db-name-discipline-production-convention) layer 2). Full 3-layer enforcement story (provisioning + smoke check + restore drill fingerprint) — see [§3.1.6](#316-db-name-discipline-production-convention).
 - [ ] Privacy policy + ToS + data-deletion page reachable (`https://app.instaedit.org/privacy`, `/tos`, `/data-deletion`)
 - [ ] Support email `security@instaedit.org` (or whatever was registered) auto-responds in <60s
 
@@ -712,8 +712,8 @@ The provider key has different capture semantics than the rest of the `/srv/inst
 
 | Concern | Reference |
 |---------|-----------|
-| VPS host setup (ssh + Docker + firewall + /srv/instaedit/ tree) | [`docs/DEPLOY.md` §2](./DEPLOY.md#2-one-time-host-setup-operator-laptop--vps) |
-| DNS records (canonical: apex + app + api → 51.91.11.36 + email-deliverability) | [`docs/DEPLOY.md` §1.5](./DEPLOY.md#15-dns-delegation-canonical--instaeditorg) |
+| VPS host setup (ssh + Docker + firewall + /srv/instaedit/ tree) | [`docs/DEPLOY.md` §2](./DEPLOY.md#2-one-time-host-setup) |
+| DNS records (canonical: apex + app + api → 51.91.11.36 + email-deliverability) | [`docs/DEPLOY.md` §1.5](./DEPLOY.md#15-dns-delegation-canonical) |
 | Postgres smoke check | [`scripts/db/check-postgres-health.sh`](../scripts/db/check-postgres-health.sh) |
 | Postgres backup + restore drill (operatorside choreography) | This file §3.1 (VPS pg_dump → throwaway container). **Script rewrite needed** for `scripts/db/production-restore-drill.sh` — tracked in DEPLOY.md §11. |
 | MinIO bucket provisioning (loopback admin console) | VPS MinIO admin console at `https://127.0.0.1:9001`; env block in `docker-compose.yml` |
