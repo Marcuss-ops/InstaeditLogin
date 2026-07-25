@@ -37,6 +37,23 @@ type YouTubeTargetPublicationStore interface {
 	// by the reconcile worker / YouTube webhook when
 	// processingStatus='processed' is observed on the live API.
 	MarkYouTubeProcessed(ctx context.Context, id int64) error
+	// ListPendingEditorSessionTargets (Blocco #4 P0) returns YT pub
+	// rows in 'processed' state that haven't yet been linked to an
+	// editor session (editor_session_id IS NULL). Bounded by `limit`
+	// so a tick that finds thousands of backlog rows doesn't tie up
+	// the DB; the reconciler schedules a follow-up tick to drain.
+	// Ordered by id ASC so older rows (longer wait) get prioritised
+	// over newer ones — preserves FIFO for cross-replica fairness
+	// when multiple reconciler replicas agree on a backlog order.
+	ListPendingEditorSessionTargets(ctx context.Context, limit int) ([]*models.YouTubeTargetPublication, error)
+	// MarkEditorSessionCreated (Blocco #4 P0) is the atomic CAS-link
+	// from a created youtube_video_edits session to a YT pub row.
+	// The predicate `editor_session_id IS NULL` guarantees that two
+	// reconcilers racing the same YT pub row can't both stamp the
+	// session (the SECOND one's UPDATE matches 0 rows). The
+	// migration-068 UNIQUE constraint on editor_session_id adds
+	// defence-in-depth at the DB layer.
+	MarkEditorSessionCreated(ctx context.Context, id int64, editorSessionID, veloxProjectID string) error
 }
 
 // YouTubeTargetPublicationRepository is the concrete *sql.DB-backed
@@ -377,6 +394,70 @@ func (r *YouTubeTargetPublicationRepository) MarkPublished(ctx context.Context, 
 	)
 	if err != nil {
 		return fmt.Errorf("youtube target publication MarkPublished: %w", err)
+	}
+	return r.checkRowsAffected(res, id)
+}
+
+// ListPendingEditorSessionTargets (Blocco #4 P0) returns YT pub rows
+// where youtube_processing_status='processed' AND editor_session_id IS
+// NULL, ordered by id ASC, bounded by limit. Used by
+// youtube_processing_reconciler. (nil, nil) when no rows match —
+// distinct from a real *sql.DB error so callers can branch.
+func (r *YouTubeTargetPublicationRepository) ListPendingEditorSessionTargets(ctx context.Context, limit int) ([]*models.YouTubeTargetPublication, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+ytTargetPubsSelectColumns+`
+		 FROM youtube_target_publications
+		 WHERE youtube_processing_status = 'processed'
+		   AND editor_session_id IS NULL
+		 ORDER BY id ASC
+		 LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("youtube target publication ListPendingEditorSessionTargets: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*models.YouTubeTargetPublication
+	for rows.Next() {
+		pub := &models.YouTubeTargetPublication{}
+		if err := scanYouTubeTargetPublication(rows, pub); err != nil {
+			return nil, fmt.Errorf("youtube target publication ListPendingEditorSessionTargets scan: %w", err)
+		}
+		out = append(out, pub)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("youtube target publication ListPendingEditorSessionTargets rows: %w", err)
+	}
+	return out, nil
+}
+
+// MarkEditorSessionCreated (Blocco #4 P0) is the atomic CAS-link from
+// a created youtube_video_edits session back to the YT pub row.
+// Predicate `editor_session_id IS NULL` (combined with the
+// ytTargetPubsSelectColumns row state read-out from the caller) means
+// the FIRST CAS wins; a second reconciler that races the same YT pub
+// row matches 0 rows and surfaces ErrYouTubeTargetPublicationNotFound
+// — clean branch for the caller (skip + log, no partial write).
+//
+// Migration 068's UNIQUE constraint on editor_session_id is the
+// defence-in-depth layer: if a future refactor accidentally drops the
+// predicate, the UNIQUE index still prevents a duplicate stamp at the
+// cost of an INSERT failure. The composite 1-row UPDATE keeps the
+// reconciler's success path to a single SQL roundtrip.
+func (r *YouTubeTargetPublicationRepository) MarkEditorSessionCreated(ctx context.Context, id int64, editorSessionID, veloxProjectID string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE youtube_target_publications
+		 SET editor_session_id = $2,
+		     velox_project_id = $3,
+		     updated_at = NOW()
+		 WHERE id = $1
+		   AND editor_session_id IS NULL`,
+		id, editorSessionID, veloxProjectID,
+	)
+	if err != nil {
+		return fmt.Errorf("youtube target publication MarkEditorSessionCreated: %w", err)
 	}
 	return r.checkRowsAffected(res, id)
 }

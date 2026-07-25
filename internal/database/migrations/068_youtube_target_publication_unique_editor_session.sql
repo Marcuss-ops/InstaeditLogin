@@ -1,0 +1,43 @@
+-- =============================================================================
+-- Migration 068: youtube_target_publication unique editor_session_id
+-- =============================================================================
+-- P0 — Blocco #4 — integrity on the 1:1 link between
+-- youtube_target_publications and youtube_video_edits.
+--
+-- The reconciler (internal/worker/youtube_processing_reconciler.go) creates
+-- an editor session FOR EACH ROW in youtube_processing_status='processed'
+-- AND editor_session_id IS NULL, then CAS-updates the YT pub row's
+-- editor_session_id + velox_project_id. To prevent two reconciler
+-- instances (multi-replica) from stomp-ing each other:
+--
+--   1. The UNIQUE constraint crystallises the 1:1 link at the DB level.
+--      A second reconciler that races the CAS will FAIL its INSERT into
+--      youtube_video_edits on a duplicate editor_session_id never
+--      previously generated (the table UNIQUE on editor_session_id +
+--      youtube_video_id's natural uniqueness collapses to a single row).
+--
+--   2. The UNIQUE index is partial (sisters the schema's existing
+--      partial-index style on youtube_video_id) so the index storage is
+--      only for non-NULL rows. Pre-existing rows with editor_session_id
+--      NULL keep their pre-existing rows + the index doesn't bloat.
+--
+--   3. The CAS on youtube_target_publications is the cross-claim lock
+--      (claims-by-row), not the UNIQUE index — the constraint exists
+--      as a defence-in-depth guard against application bugs that would
+--      try to stamp the same sessionID twice (e.g. double-write from a
+--      retry loop without re-fetching).
+--
+-- IDEMPOTENT — duplicate CREATE INDEX IF NOT EXISTS is a no-op on PG.
+-- Multi-replica rolling deploys are safe: the deploy order doesn't matter
+-- because the constraint doesn't gate any running query (CREATE INDEX
+-- CONCURRENTLY isn't strictly required here — the YT pub table is
+-- small, and a short ACCESS EXCLUSIVE during the index build is fine).
+--
+-- ROWSHARE choice: the partial index uses NULLS NOT DISTINCT semantics
+-- (the PG 15+ default), which is the intended invariant — empty rows
+-- shouldn't compete for uniqueness.
+-- =============================================================================
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_youtube_target_pubs_editor_session
+    ON youtube_target_publications(editor_session_id)
+    WHERE editor_session_id IS NOT NULL;

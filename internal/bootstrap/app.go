@@ -59,7 +59,16 @@ type App struct {
 	CapRouter   *services.CapabilityRouter
 	WebhookRepo *repository.WebhookRepository
 	HTTPHandler http.Handler
-	Logger      *slog.Logger
+	// Router is the wired *api.Router (NOT the http.Handler setup
+	// result). RunWorkers reads it to build the
+	// youtube_processing_reconciler adapter which depends on
+	// Router.CreateEditorSession (Blocco #4 P0). Exposed as a
+	// separate field rather than relying on HTTPHandler reversal:
+	// keeping the live *Router pointer around is cheap (it owns
+	// routes + stores) and lets worker wiring avoid an unholy
+	// type-assertion chain on http.Handler.
+	Router   *api.Router
+	Logger   *slog.Logger
 
 	// WorkerRegistry (Blocco #5.3 refactor) supervises the lifecycle
 	// of every background goroutine. It is constructed in Wire() and
@@ -461,6 +470,7 @@ func Wire(ctx context.Context) (*App, error) {
 		CapRouter:       capRouter,
 		WebhookRepo:     webhookRepo,
 		HTTPHandler:     router.Setup(),
+		Router:          router,
 		Logger:          logger,
 		WorkerRegistry:  worker.NewRegistry(),
 		SentryHub:       hub,
@@ -471,6 +481,39 @@ func Wire(ctx context.Context) (*App, error) {
 		OneTimeCodes:    oneTimeCodes,
 		Encryptor:       enc,
 	}, nil
+}
+
+// routerEditorSessionAdapter bridges worker.EditorSessionCreatorInput
+// (internal/worker) → api.CreateEditorSessionInput (pkg/api). The two
+// structs are deliberately different so worker (which pkg/api must
+// not import) doesn't cycle back through pkg/api. Adapter pattern
+// keeps the bridge in one place; the reconciler goroutine calls
+// routerEditorSessionAdapter.CreateEditorSession(...) which hands
+// off to Router.CreateEditorSession (the shared per-target 1:1
+// helper that mints fresh uuids and validates workspace + account +
+// channel + token + video-state invariants).
+//
+// Compile-time assertion in pkg/api/youtube_editor_sessions.go
+// confirms *api.Router satisfies the predicate
+// "CreateEditorSession(context.Context, CreateEditorSessionInput)
+// (*models.YouTubeVideoEdit, error)". This adapter enforces field-
+// by-field struct identity at runtime via Go's struct-literal type
+// checking.
+type routerEditorSessionAdapter struct {
+	router *api.Router
+}
+
+// CreateEditorSession forwards to Router.CreateEditorSession. All
+// sentinel errors propagate untouched so the reconciler can branch
+// on errors.Is for retry/skip decisions (see writeEditorSessionError
+// for the HTTP-side mapping).
+func (a *routerEditorSessionAdapter) CreateEditorSession(ctx context.Context, in worker.EditorSessionCreatorInput) (*models.YouTubeVideoEdit, error) {
+	return a.router.CreateEditorSession(ctx, api.CreateEditorSessionInput{
+		WorkspaceID:        in.WorkspaceID,
+		PlatformAccountID:  in.PlatformAccountID,
+		YouTubeVideoID:     in.YouTubeVideoID,
+		SourceThumbnailURL: in.SourceThumbnailURL,
+	})
 }
 
 // configureSentry initialises the Sentry SDK once and returns the
@@ -745,7 +788,33 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		},
 	})
 
-	slog.Info("9 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler")
+	// 10. YouTube processing reconciler — polls
+	// youtube_target_publications rows in 'processed' state that
+	// haven't been linked to an editor session (editor_session_id IS
+	// NULL) and creates the per-target Velox editor session via
+	// Router.CreateEditorSession through the routerEditorSessionAdapter.
+	// 1-per-target contract preserved (every call mints fresh uuids).
+	// MarkEditorSessionCreated's atomic CAS-link guards concurrent
+	// reconciler replicas from double-stamping.
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "youtube_processing_reconciler",
+		Critical: true,
+		Run: func(ctx context.Context) error {
+			ytPubRepo := repository.NewYouTubeTargetPublicationRepository(a.DB)
+			uploadRepo := repository.NewUploadJobRepository(a.DB)
+			adapter := &routerEditorSessionAdapter{router: a.Router}
+			ypr := worker.NewYoutubeProcessingReconciler(
+				ytPubRepo,
+				uploadRepo,
+				adapter,
+				worker.YoutubeProcessingReconcilerOptions{},
+				a.Logger,
+			)
+			return ypr.Run(ctx)
+		},
+	})
+
+	slog.Info("10 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler")
 
 	criticalErrCh := a.WorkerRegistry.StartAll(ctx)
 

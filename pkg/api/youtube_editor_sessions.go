@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,37 @@ import (
 // DefaultPublishingInFlightTimeout is the default guard window used
 // when a YouTube thumbnail publish session is already in-flight.
 const DefaultPublishingInFlightTimeout = 5 * time.Minute
+
+// Sentinel errors for CreateEditorSession. The HTTP handler maps them
+// to status codes via errors.Is below; the reconciler worker reads
+// them for retry vs skip decisions.
+var (
+	ErrEditorSessionWorkspaceNotFound = errors.New("workspace not found")
+	ErrEditorSessionAccountNotFound   = errors.New("youtube account not found")
+	ErrEditorSessionChannelUnlinked   = errors.New("account not linked to workspace")
+	ErrEditorSessionNoValidToken      = errors.New("no valid token found for this account")
+	ErrEditorSessionVideoWrongChannel = errors.New("video does not belong to selected channel")
+	ErrEditorSessionVideoNotReady     = errors.New("video is not ready for thumbnail editing")
+	ErrEditorSessionVideoAlreadyPub   = errors.New("video is already public; thumbnail editing allowed only for private or unlisted videos")
+	ErrEditorSessionYTServiceUnconfigured = errors.New("youtube service not configured")
+	ErrEditorSessionEditStoreUnconfigured = errors.New("youtube video edit store not configured")
+)
+
+// CreateEditorSessionInput is the canonical input for the editor-session
+// helper. Both the HTTP handler and the youtube_processing_reconciler
+// worker construct this struct; the helper's validates-then-creates
+// flow is identical for both call sites (per-target 1:1 contract
+// preserved at the helper level).
+//
+// Blocco #4 P0: the struct is EXPORTED so the worker in
+// internal/worker can import it without breaking pkg/api's unexported-
+// type boundary.
+type CreateEditorSessionInput struct {
+	WorkspaceID        int64
+	PlatformAccountID  int64
+	YouTubeVideoID     string
+	SourceThumbnailURL string
+}
 
 // createYouTubeEditorSessionRequest is the body accepted by
 // POST /api/v1/youtube/editor-sessions.
@@ -44,11 +76,120 @@ type updateYouTubeEditorSessionRequest struct {
 	ThumbnailMediaID string `json:"thumbnail_media_id"`
 }
 
-// handleCreateYouTubeEditorSession creates a YouTube thumbnail editor
-// session. It verifies that the caller owns the workspace and the
-// YouTube account, that the video belongs to the channel, and that the
-// video is editable. On success it persists a youtube_video_edits row
-// and returns the session id, velox project id, and editor URL.
+// CreateEditorSession is the central helper for the per-target YouTube
+// thumbnail editor session creation. Both the HTTP handler (POST
+// /api/v1/youtube/editor-sessions) and the
+// youtube_processing_reconciler worker call this helper so the 1-per-
+// target contract lives in one place.
+//
+// The helper enforces the same invariants in BOTH call sites:
+//   - workspace exists;
+//   - platform account is platform=YouTube;
+//   - (workspace, account) channel linkage exists;
+//   - a valid token is in the vault;
+//   - YouTube API confirms the video is on the channel AND
+//     processingStatus='processed' AND privacy != 'public';
+//   - a fresh uuid is generated for session_id + velox_project_id
+//     (no reuse cross-channel, no reuse cross-target).
+//
+// Returns the persisted YouTubeVideoEdit row + nil error on success.
+// A typed sentinel error (above) is returned on each failure mode so
+// the HTTP handler can map to 4xx via errors.Is.
+func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSessionInput) (*models.YouTubeVideoEdit, error) {
+	if in.WorkspaceID <= 0 {
+		return nil, ErrEditorSessionWorkspaceNotFound
+	}
+	if in.PlatformAccountID <= 0 {
+		return nil, ErrEditorSessionAccountNotFound
+	}
+	if in.YouTubeVideoID == "" {
+		return nil, fmt.Errorf("youtube_video_id is required")
+	}
+	if r.workspaceStore == nil {
+		return nil, ErrEditorSessionWorkspaceNotFound
+	}
+	workspace, err := r.workspaceStore.FindByID(in.WorkspaceID)
+	if err != nil || workspace == nil {
+		return nil, ErrEditorSessionWorkspaceNotFound
+	}
+	if r.userRepo == nil {
+		return nil, ErrEditorSessionAccountNotFound
+	}
+	account, err := r.userRepo.FindPlatformAccountByID(in.PlatformAccountID)
+	if err != nil || account == nil || account.Platform != models.PlatformYouTube {
+		return nil, ErrEditorSessionAccountNotFound
+	}
+	if r.workspaceStore == nil {
+		return nil, ErrEditorSessionChannelUnlinked
+	}
+	channel, err := r.workspaceStore.FindChannel(ctx, in.WorkspaceID, in.PlatformAccountID)
+	if err != nil || channel == nil {
+		return nil, ErrEditorSessionChannelUnlinked
+	}
+	if r.vault == nil {
+		return nil, ErrEditorSessionNoValidToken
+	}
+	token, err := r.vault.Get(ctx, account.ID, models.TokenTypeBearer)
+	if err != nil {
+		token, err = r.vault.Get(ctx, account.ID, models.TokenTypeLongLived)
+		if err != nil {
+			token, err = r.vault.Get(ctx, account.ID, models.TokenTypeShortLived)
+			if err != nil {
+				return nil, ErrEditorSessionNoValidToken
+			}
+		}
+	}
+	if r.youTubeSvc == nil {
+		return nil, ErrEditorSessionYTServiceUnconfigured
+	}
+	video, err := r.youTubeSvc.GetYouTubeVideo(ctx, token.AccessToken, in.YouTubeVideoID)
+	if err != nil {
+		return nil, fmt.Errorf("youtube video: %w", err)
+	}
+	if video.ChannelID != account.PlatformUserID {
+		return nil, ErrEditorSessionVideoWrongChannel
+	}
+	if video.UploadStatus != "processed" {
+		return nil, ErrEditorSessionVideoNotReady
+	}
+	if video.Privacy == "public" {
+		return nil, ErrEditorSessionVideoAlreadyPub
+	}
+	if r.youtubeVideoEditStore == nil {
+		return nil, ErrEditorSessionEditStoreUnconfigured
+	}
+	now := time.Now().UTC()
+	sessionID := uuid.NewString()
+	projectID := "ve_" + uuid.NewString()
+	edit := &models.YouTubeVideoEdit{
+		ID:                 sessionID,
+		WorkspaceID:        in.WorkspaceID,
+		PlatformAccountID:  in.PlatformAccountID,
+		YouTubeVideoID:     in.YouTubeVideoID,
+		VeloxProjectID:     projectID,
+		SourceThumbnailURL: in.SourceThumbnailURL,
+		DesiredPrivacy:     "public",
+		Status:             "editing",
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	if err := r.youtubeVideoEditStore.Create(ctx, edit); err != nil {
+		return nil, fmt.Errorf("create editor session: %w", err)
+	}
+	return edit, nil
+}
+
+// handleCreateYouTubeEditorSession is the HTTP entry point of POST
+// /api/v1/youtube/editor-sessions. After Blocco #4 P0 refactor it is a
+// thin wrapper that does:
+//   - JWT identity extraction;
+//   - JSON payload decoding;
+//   - workspace ownership check (handler-only auth gate);
+//   - delegate to CreateEditorSession (the shared helper);
+//   - HTTP response shaping (session_id, velox_project_id, editor_url).
+//
+// The per-target 1-per-channel contract lives in the helper, NOT in
+// this handler — every call generates fresh UUIDs.
 func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *http.Request) {
 	identity := auth.IdentityFromContext(req.Context())
 	if identity == nil || identity.UserID() <= 0 {
@@ -61,21 +202,14 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-
-	if payload.WorkspaceID <= 0 {
-		writeError(w, http.StatusBadRequest, "workspace_id is required")
-		return
-	}
-	if payload.PlatformAccountID <= 0 {
-		writeError(w, http.StatusBadRequest, "platform_account_id is required")
-		return
-	}
-	if payload.YouTubeVideoID == "" {
-		writeError(w, http.StatusBadRequest, "youtube_video_id is required")
+	if payload.WorkspaceID <= 0 || payload.PlatformAccountID <= 0 || payload.YouTubeVideoID == "" {
+		writeError(w, http.StatusBadRequest, "workspace_id, platform_account_id, youtube_video_id are required")
 		return
 	}
 
-	// 1. Workspace must exist and belong to the caller.
+	// Workspace ownership check (handler-only gate; the helper trusts
+	// the caller to supply a valid workspace_id and doesn't re-verify
+	// ownership — the handler is the HTTP boundary and DOES verify).
 	workspace, err := r.workspaceStore.FindByID(payload.WorkspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "find workspace: "+err.Error())
@@ -90,98 +224,64 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		return
 	}
 
-	// 2. Platform account must belong to the caller and be linked to
-	// the requested workspace.
-	account, err := r.userRepo.FindPlatformAccountByID(payload.PlatformAccountID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "find account: "+err.Error())
-		return
-	}
-	if account == nil || account.UserID != identity.UserID() || account.Platform != models.PlatformYouTube {
-		writeError(w, http.StatusNotFound, "account not found")
-		return
-	}
-	channel, err := r.workspaceStore.FindChannel(req.Context(), payload.WorkspaceID, payload.PlatformAccountID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "find channel binding: "+err.Error())
-		return
-	}
-	if channel == nil {
-		writeError(w, http.StatusNotFound, "account not linked to workspace")
-		return
-	}
-
-	// 3. The caller must have a valid token for the account.
-	token, err := r.vault.Get(req.Context(), account.ID, models.TokenTypeBearer)
-	if err != nil {
-		token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeLongLived)
-		if err != nil {
-			token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
-			if err != nil {
-				writeError(w, http.StatusUnauthorized, "no valid token found for this account")
-				return
-			}
-		}
-	}
-
-	// 4. Verify the video exists, belongs to the channel, and is
-	// editable (private or unlisted videos may be edited; public
-	// videos are also editable, but the typical use case is flipping
-	// a private upload to public).
-	if r.youTubeSvc == nil {
-		writeError(w, http.StatusServiceUnavailable, "YouTube service not configured")
-		return
-	}
-	video, err := r.youTubeSvc.GetYouTubeVideo(req.Context(), token.AccessToken, payload.YouTubeVideoID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "youtube video: "+err.Error())
-		return
-	}
-	if video.ChannelID != account.PlatformUserID {
-		writeError(w, http.StatusBadRequest, "video does not belong to the selected channel")
-		return
-	}
-	if video.UploadStatus != "processed" {
-		writeError(w, http.StatusBadRequest, "video is not ready for thumbnail editing")
-		return
-	}
-	if video.Privacy == "public" {
-		writeError(w, http.StatusBadRequest, "video is already public; thumbnail editing is allowed only for private or unlisted videos")
-		return
-	}
-
-	// 5. Create the session row.
-	now := time.Now().UTC()
-	sessionID := uuid.NewString()
-	projectID := "ve_" + uuid.NewString()
-	edit := &models.YouTubeVideoEdit{
-		ID:                 sessionID,
+	edit, err := r.CreateEditorSession(req.Context(), CreateEditorSessionInput{
 		WorkspaceID:        payload.WorkspaceID,
 		PlatformAccountID:  payload.PlatformAccountID,
 		YouTubeVideoID:     payload.YouTubeVideoID,
-		VeloxProjectID:     projectID,
 		SourceThumbnailURL: payload.SourceThumbnailURL,
-		DesiredPrivacy:     "public",
-		Status:             "editing",
-		CreatedAt:          now,
-		UpdatedAt:          now,
-	}
-	if r.youtubeVideoEditStore == nil {
-		writeError(w, http.StatusServiceUnavailable, "youtube video edit store not configured")
-		return
-	}
-	if err := r.youtubeVideoEditStore.Create(req.Context(), edit); err != nil {
-		writeError(w, http.StatusInternalServerError, "create editor session: "+err.Error())
+	})
+	if err != nil {
+		r.writeEditorSessionError(w, err)
 		return
 	}
 
-	editorURL := r.editorURLForProject(projectID)
+	editorURL := r.editorURLForProject(edit.VeloxProjectID)
 	writeJSON(w, http.StatusCreated, createYouTubeEditorSessionResponse{
-		SessionID:      sessionID,
-		VeloxProjectID: projectID,
+		SessionID:      edit.ID,
+		VeloxProjectID: edit.VeloxProjectID,
 		EditorURL:      editorURL,
 	})
 }
+
+// writeEditorSessionError maps the helper's typed sentinel errors to
+// HTTP status codes via errors.Is. Extracted so the handler body
+// stays readable and the sentinel → status mapping is testable in
+// isolation in a future PR.
+func (r *Router) writeEditorSessionError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrEditorSessionWorkspaceNotFound):
+		writeError(w, http.StatusNotFound, "workspace not found")
+	case errors.Is(err, ErrEditorSessionAccountNotFound):
+		writeError(w, http.StatusNotFound, "account not found")
+	case errors.Is(err, ErrEditorSessionChannelUnlinked):
+		writeError(w, http.StatusNotFound, "account not linked to workspace")
+	case errors.Is(err, ErrEditorSessionNoValidToken):
+		writeError(w, http.StatusUnauthorized, "no valid token found for this account")
+	case errors.Is(err, ErrEditorSessionYTServiceUnconfigured),
+		errors.Is(err, ErrEditorSessionEditStoreUnconfigured):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, ErrEditorSessionVideoWrongChannel):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrEditorSessionVideoNotReady),
+		errors.Is(err, ErrEditorSessionVideoAlreadyPub):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
+// Compile-time assertion that *api.Router satisfies the narrow
+// interface the reconciler worker depends on (internal/worker/youtube_processing_reconciler.go
+// declares this interface; pkg/api must see this assertion signature-
+// compatible).
+//
+// The reconciler passes the *Router pointer as the EditorSessionCreator
+// implementation; duck typing via the interface satisfies the contract.
+// Without this assertion, a future signature drift on Router.CreateEditorSession
+// would surface at runtime in production rather than at go vet time.
+var _ interface {
+	CreateEditorSession(context.Context, CreateEditorSessionInput) (*models.YouTubeVideoEdit, error)
+} = (*Router)(nil)
 
 // userCanAccessWorkspace reports whether the user owns the workspace.
 // For the editor session creation flow, workspace ownership is the
