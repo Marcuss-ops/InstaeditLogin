@@ -303,6 +303,13 @@ type Router struct {
 	// frontendURL is used as a fallback.
 	editorURL string
 
+	// thumbnailDownloadClient is the HTTP client used by the thumbnail
+	// publish flow to download the thumbnail bytes from storage. It
+	// has a bounded timeout to prevent indefinite hangs on slow
+	// storage backends. Wired via WithThumbnailDownloadClient; when
+	// nil, NewRouter installs a default client with a 30s timeout.
+	thumbnailDownloadClient *http.Client
+
 	// trustedProxies contains the parsed TRUSTED_PROXIES networks.
 	// When non-empty, clientIP() trusts X-Forwarded-For / X-Real-IP
 	// only from these peers. Wired via WithTrustedProxies in
@@ -659,6 +666,15 @@ func WithEditorURL(url string) RouterOption {
 	}
 }
 
+// WithThumbnailDownloadClient wires the HTTP client used to download
+// thumbnail bytes from storage before publishing to YouTube. When
+// nil, NewRouter installs a default client with a 30s timeout.
+func WithThumbnailDownloadClient(client *http.Client) RouterOption {
+	return func(r *Router) {
+		r.thumbnailDownloadClient = client
+	}
+}
+
 // Compile-time assertion that *repository.WorkspaceRepository
 // satisfies the extended WorkspaceStore interface (post-P0#4
 // channel surfaces). Caught at go vet time, not at runtime.
@@ -802,6 +818,9 @@ func NewRouter(
 		frontendURL:   frontendURL,
 		allowedOrigin: allowedOrigins,
 		rateLimiter:   newRateLimiter(nil), // FASE 1.2: per-IP token bucket (trusted proxies wired via option below)
+		thumbnailDownloadClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 	}
 	for _, opt := range opts {
 		opt(r)

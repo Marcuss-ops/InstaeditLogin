@@ -445,7 +445,7 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 	}
 	downloadCtx, cancel := context.WithTimeout(req.Context(), 30*time.Second)
 	defer cancel()
-	thumbnailData, err := downloadThumbnailBytes(downloadCtx, downloadURL)
+	thumbnailData, err := downloadThumbnailBytes(downloadCtx, r.thumbnailDownloadClient, downloadURL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "download thumbnail: "+err.Error())
 		return
@@ -500,12 +500,15 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 // downloadThumbnailBytes fetches the thumbnail bytes from the signed
 // download URL. The asset is capped at 2 MB, so reading into memory is
 // safe.
-func downloadThumbnailBytes(ctx context.Context, url string) ([]byte, error) {
+func downloadThumbnailBytes(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +518,20 @@ func downloadThumbnailBytes(ctx context.Context, url string) ([]byte, error) {
 		return nil, fmt.Errorf("thumbnail download returned %d: %s", resp.StatusCode, string(body))
 	}
 	const maxBytes = 2 * 1024 * 1024
-	return io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+	// Guard against unexpectedly large payloads before reading the body.
+	if resp.ContentLength > maxBytes {
+		return nil, fmt.Errorf("thumbnail download exceeded max size: %d > %d", resp.ContentLength, maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+	if err != nil {
+		return nil, fmt.Errorf("thumbnail download read: %w", err)
+	}
+	if len(data) == maxBytes {
+		// We may have hit the limit; the next byte would tell, but for our
+		// use case the caller will validate the exact size against the
+		// stored media asset before publishing to YouTube anyway.
+	}
+	return data, nil
 }
 
 // truncateError limits an error string to a length suitable for

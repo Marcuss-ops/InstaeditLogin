@@ -1,7 +1,9 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -178,6 +180,214 @@ func TestUpdateVideoPrivacy_ScheduledPublishing(t *testing.T) {
 }
 
 // TestUpdateVideoPrivacy_ValidationErrors verifies input validation.
+func TestUpdateVideoPrivacy_ReturnsTypedErrorOn429(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	svc := newTestYouTubeService(srv)
+	err := svc.UpdateVideoPrivacy(t.Context(), "token", "VID123", "public", nil, "", "")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	var apiErr *YouTubeAPIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *YouTubeAPIError in error chain, got %T", err)
+	}
+	if apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status code: want %d, got %d", http.StatusTooManyRequests, apiErr.StatusCode)
+	}
+	if apiErr.Category != "rate_limit" {
+		t.Errorf("category: want rate_limit, got %s", apiErr.Category)
+	}
+	if !apiErr.Transient() {
+		t.Errorf("expected 429 to be transient")
+	}
+}
+
+func TestUpdateVideoPrivacy_ReturnsTypedErrorOn5xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	svc := newTestYouTubeService(srv)
+	err := svc.UpdateVideoPrivacy(t.Context(), "token", "VID123", "public", nil, "", "")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	var apiErr *YouTubeAPIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *YouTubeAPIError in error chain, got %T", err)
+	}
+	if apiErr.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status code: want %d, got %d", http.StatusInternalServerError, apiErr.StatusCode)
+	}
+	if apiErr.Category != "server_error" {
+		t.Errorf("category: want server_error, got %s", apiErr.Category)
+	}
+	if !apiErr.Transient() {
+		t.Errorf("expected 500 to be transient")
+	}
+}
+
+func TestPublishThumbnail_RetriesOn429AndSucceeds(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The first request to videos.update (not thumbnails.set) returns 429.
+		// thumbnails.set returns 200 immediately.
+		if r.URL.Path == "/upload/youtube/v3/thumbnails/set" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	svc := newTestYouTubeService(srv)
+	_, err := svc.PublishThumbnail(t.Context(), "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, "", "")
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestPublishThumbnail_DoesNotRetryOn401(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	svc := newTestYouTubeService(srv)
+	_, err := svc.PublishThumbnail(t.Context(), "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, "", "")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if attempts != 1 {
+		t.Errorf("expected 1 attempt for 401, got %d", attempts)
+	}
+}
+
+func TestSetThumbnail_ReturnsTypedErrorOn429(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	svc := newTestYouTubeService(srv)
+	err := svc.SetThumbnail(t.Context(), "token", "VID123", "image/jpeg", strings.NewReader("thumb"), 5)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	var apiErr *YouTubeAPIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *YouTubeAPIError in error chain, got %T", err)
+	}
+	if apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status code: want %d, got %d", http.StatusTooManyRequests, apiErr.StatusCode)
+	}
+	if apiErr.Category != "rate_limit" {
+		t.Errorf("category: want rate_limit, got %s", apiErr.Category)
+	}
+	if !apiErr.Transient() {
+		t.Errorf("expected 429 to be transient")
+	}
+}
+
+func TestSetThumbnail_ReturnsTypedErrorOn5xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	svc := newTestYouTubeService(srv)
+	err := svc.SetThumbnail(t.Context(), "token", "VID123", "image/jpeg", strings.NewReader("thumb"), 5)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	var apiErr *YouTubeAPIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *YouTubeAPIError in error chain, got %T", err)
+	}
+	if apiErr.StatusCode != http.StatusBadGateway {
+		t.Errorf("status code: want %d, got %d", http.StatusBadGateway, apiErr.StatusCode)
+	}
+	if apiErr.Category != "server_error" {
+		t.Errorf("category: want server_error, got %s", apiErr.Category)
+	}
+	if !apiErr.Transient() {
+		t.Errorf("expected 502 to be transient")
+	}
+}
+
+func TestPublishThumbnail_RetriesOn5xxAndSucceeds(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/upload/youtube/v3/thumbnails/set" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	svc := newTestYouTubeService(srv)
+	_, err := svc.PublishThumbnail(t.Context(), "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, "", "")
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestPublishThumbnail_ContextCancelledStopsRetry(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	svc := newTestYouTubeService(srv)
+	_, err := svc.PublishThumbnail(ctx, "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, "", "")
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+	if attempts != 0 {
+		t.Errorf("expected 0 attempts when context is cancelled, got %d", attempts)
+	}
+}
+
 func TestUpdateVideoPrivacy_ValidationErrors(t *testing.T) {
 	svc, _ := NewYouTubeOAuthService(youtubeTestCfg())
 

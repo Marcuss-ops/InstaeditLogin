@@ -842,7 +842,7 @@ func (s *YouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken, vid
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("youtube set thumbnail: request: %w", err)
+		return &YouTubeAPIError{StatusCode: 0, Category: "network", Message: fmt.Sprintf("youtube set thumbnail: request: %v", err)}
 	}
 	defer resp.Body.Close()
 
@@ -855,17 +855,17 @@ func (s *YouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken, vid
 	rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
-		return fmt.Errorf("youtube set thumbnail: unauthorized (status 401)")
+		return &YouTubeAPIError{StatusCode: http.StatusUnauthorized, Category: "auth", Message: "youtube set thumbnail: unauthorized (status 401)"}
 	case resp.StatusCode == http.StatusForbidden:
-		return fmt.Errorf("youtube set thumbnail: forbidden (status 403)")
+		return &YouTubeAPIError{StatusCode: http.StatusForbidden, Category: "auth", Message: "youtube set thumbnail: forbidden (status 403)"}
 	case resp.StatusCode == http.StatusNotFound:
-		return fmt.Errorf("youtube set thumbnail: video not found (status 404)")
+		return &YouTubeAPIError{StatusCode: http.StatusNotFound, Category: "not_found", Message: "youtube set thumbnail: video not found (status 404)"}
 	case resp.StatusCode == http.StatusTooManyRequests:
-		return fmt.Errorf("youtube set thumbnail: rate limited (status 429)")
+		return &YouTubeAPIError{StatusCode: http.StatusTooManyRequests, Category: "rate_limit", Message: "youtube set thumbnail: rate limited (status 429)"}
 	case resp.StatusCode >= 500:
-		return fmt.Errorf("youtube set thumbnail: server error (status %d)", resp.StatusCode)
+		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube set thumbnail: server error (status %d)", resp.StatusCode)}
 	default:
-		return fmt.Errorf("youtube set thumbnail: unexpected status %d: %s", resp.StatusCode, string(rbody))
+		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube set thumbnail: unexpected status %d: %s", resp.StatusCode, string(rbody))}
 	}
 }
 
@@ -976,7 +976,7 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("youtube update video: request: %w", err)
+		return &YouTubeAPIError{StatusCode: 0, Category: "network", Message: fmt.Sprintf("youtube update video: request: %v", err)}
 	}
 	defer resp.Body.Close()
 
@@ -988,17 +988,17 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 	rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
-		return fmt.Errorf("youtube update video: unauthorized (status 401)")
+		return &YouTubeAPIError{StatusCode: http.StatusUnauthorized, Category: "auth", Message: "youtube update video: unauthorized (status 401)"}
 	case resp.StatusCode == http.StatusForbidden:
-		return fmt.Errorf("youtube update video: forbidden (status 403)")
+		return &YouTubeAPIError{StatusCode: http.StatusForbidden, Category: "auth", Message: "youtube update video: forbidden (status 403)"}
 	case resp.StatusCode == http.StatusNotFound:
-		return fmt.Errorf("youtube update video: video not found (status 404)")
+		return &YouTubeAPIError{StatusCode: http.StatusNotFound, Category: "not_found", Message: "youtube update video: video not found (status 404)"}
 	case resp.StatusCode == http.StatusTooManyRequests:
-		return fmt.Errorf("youtube update video: rate limited (status 429)")
+		return &YouTubeAPIError{StatusCode: http.StatusTooManyRequests, Category: "rate_limit", Message: "youtube update video: rate limited (status 429)"}
 	case resp.StatusCode >= 500:
-		return fmt.Errorf("youtube update video: server error (status %d)", resp.StatusCode)
+		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube update video: server error (status %d)", resp.StatusCode)}
 	default:
-		return fmt.Errorf("youtube update video: unexpected status %d: %s", resp.StatusCode, string(rbody))
+		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube update video: unexpected status %d: %s", resp.StatusCode, string(rbody))}
 	}
 }
 
@@ -1018,28 +1018,90 @@ func ValidateYouTubeSnippet(title, description string) error {
 	return nil
 }
 
-// retryableError reports whether err is a transient YouTube API error
-// that should be retried (429, 5xx, network failure).
-func retryableError(err error) bool {
-	if err == nil {
-		return false
+// YouTubeAPIError carries the HTTP status code and a machine-readable
+// category for a YouTube Data API failure. It is returned by low-level
+// YouTube service methods so callers can decide whether the error is
+// transient and worth retrying.
+type YouTubeAPIError struct {
+	StatusCode int
+	Category   string
+	Message    string
+}
+
+// Error implements the error interface.
+func (e *YouTubeAPIError) Error() string {
+	return e.Message
+}
+
+// Transient reports whether the error is likely to resolve on retry.
+// Network-level failures (category "network") and explicit rate-limit / 5xx
+// HTTP responses are considered transient and safe to retry.
+func (e *YouTubeAPIError) Transient() bool {
+	if e.Category == "network" {
+		return true
 	}
-	msg := err.Error()
-	if strings.Contains(msg, "status 429") ||
-		strings.Contains(msg, "server error (status 5") ||
-		strings.Contains(msg, "request:") {
+	if e.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	if e.StatusCode >= 500 {
 		return true
 	}
 	return false
 }
 
+// IsTransient reports whether err (or any error in its chain) is a
+// transient YouTube API error (429 or 5xx) that should be retried.
+func IsTransientYouTubeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *YouTubeAPIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Transient()
+	}
+	return false
+}
+
+// retryableError reports whether err is a transient error that should be
+// retried. It returns true for YouTubeAPIError marked as transient (429,
+// 5xx, network failures) and false for context cancellation/deadline errors
+// and any other non-transient errors.
+func retryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var apiErr *YouTubeAPIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Transient()
+	}
+	// Unknown errors are not retried by default to avoid masking application
+	// bugs or repeatedly failing deterministic pre-conditions.
+	return false
+}
+
 // doWithRetry runs fn up to maxAttempts with exponential backoff. It
-// only retries when fn returns a retryable error.
+// only retries when fn returns a retryable error and honors context
+// cancellation before each attempt and between attempts.
 func doWithRetry(ctx context.Context, maxAttempts int, baseDelay time.Duration, fn func() error) error {
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if attempt > 0 {
-			delay := baseDelay * time.Duration(1<<uint(attempt-1))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := fn(); err == nil {
+			return nil
+		} else if !retryableError(err) {
+			return err
+		} else {
+			lastErr = err
+		}
+		if attempt < maxAttempts-1 {
+			delay := baseDelay * time.Duration(1<<uint(attempt))
 			if delay > 30*time.Second {
 				delay = 30 * time.Second
 			}
@@ -1048,13 +1110,6 @@ func doWithRetry(ctx context.Context, maxAttempts int, baseDelay time.Duration, 
 				return ctx.Err()
 			case <-time.After(delay):
 			}
-		}
-		if err := fn(); err == nil {
-			return nil
-		} else if !retryableError(err) {
-			return err
-		} else {
-			lastErr = err
 		}
 	}
 	if lastErr == nil {
