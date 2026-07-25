@@ -584,12 +584,35 @@ docker compose restart minio
 #        Rollback path (se smoke-test fallisce):
 #          a. PRE-ROLLBACK AUDIT: durante la finestra di smoke, l'api
 #             può aver scritto al NEW bucket (`instaedit-local-encrypted`).
-#             Se SÌ, quei dati sono orfani dopo rollback:
-#               docker compose exec minio mc ls minio/instaedit-local-encrypted | wc -l
-#             Se 0: rollback puro (step b–d).
-#             Se >0: PRIMA rclone-copy `minio:instaedit-local-encrypted`
-#             verso `minio:instaedit-local/<prefix>/` (o accetta loss),
-#             POI procedi col rollback.
+#             Se SÌ, quei dati sono orfani dopo rollback.
+#             a.1) Conta total oggetti (recursively, incluse nested
+#                  prefixes — `mc ls` da sola è solo top-level = count
+#                  sbagliato su bucket Tigris-style nested):
+#               docker compose exec minio mc ls --recursive --summarize \\
+#                 minio/instaedit-local-encrypted
+#             # Output tipico: `4791 objects, 1234567890 bytes`.
+#             # ATTENZIONE al formato alias: `mc` usa `/` (slash)
+#             # come separator, `rclone` usa `:` (colon). Non
+#             # scambiarli operatore.
+#             Se 0 oggetti: rollback puro (step b–d).
+#             Se >0 oggetti: PRIMA scegli una delle due strategie:
+#               (A) Snapshot forensic-dump (opzione più sicura —
+#                   preserva i dati senza forzare merge dentro OLD):
+#               docker compose exec minio mc cp --recursive \\
+#                 minio/instaedit-local-encrypted \\
+#                 minio/instaedit-local-pre-NEW-failed-cutover-$(date +%F)/
+#               # il prefix `pre-NEW-failed-cutover-<date>/` evita
+#               # collision su re-runs e conserva tutto per audit
+#               # forensic post-cutover.
+#               (B) Merge esplicito dentro OLD bucket (selettivo):
+#               rclone copy minio:instaedit-local-encrypted \\
+#                 minio:instaedit-local/recovered-from-new/$(date +%F)/
+#             # NOTA metadata: `mc cp --recursive` di default NON
+#             # preserva ACL / object-lock / per-object metadata.
+#             # Se Tigris bucket ha object-level policies, parity
+#             # richiede verifica manuale post-copy (fuori scope del
+#             # rollback; tracked come P1 follow-up).
+#             POI procedi col rollback (step b–d).
 #          b. ripristina VPS .env: S3_BUCKET + S3_ENDPOINT al valore
 #             originale (instaedit-local).
 #          c. `docker compose restart api worker`.
