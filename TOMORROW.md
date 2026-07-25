@@ -604,9 +604,11 @@ docker compose restart minio
 #               # il prefix `pre-NEW-failed-cutover-<date>/` evita
 #               # collision su re-runs e conserva tutto per audit
 #               # forensic post-cutover.
-#               # Cleanup post-audit (rimuovi il prefix dopo
-#               # l'analisi forensic per evitare 2x storage
-#               # permanente):
+#               # Cleanup post-audit (RIMUOVI SOLO DOPO che la
+#               # decisione finale — rollback confermato OPPURE commit
+#               # sul NEW bucket — è presa; cleanup prematuro perde
+#               # l'unica copia forensic; un operatore che cambia idea
+#               # dopo cleanup non può più recuperare i dati):
 #               docker compose exec minio mc rm --recursive --force \\
 #                 minio/instaedit-local-pre-NEW-failed-cutover-$(date +%F)/
 #               (B) Merge esplicito dentro OLD bucket (selettivo):
