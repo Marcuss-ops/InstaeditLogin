@@ -72,17 +72,25 @@ SLUG=$(git remote get-url origin \
   | sed -E 's#.*github\.com[:/]([^/]+/[^/]+?)(\.git)?$#\1#')
 
 # Step A — confirm they exist BEFORE deletion (read-only).
-echo "── Existing FLY secrets in repo $SLUG ──"
-gh secret list --repo "$SLUG" | grep -E 'FLY_' || echo "  (none)"
+echo "── Existing FLY secrets + INSTAEDIT_PATH variables in repo $SLUG ──"
+gh secret list   --repo "$SLUG" | grep -E 'FLY_'       || echo "  secrets:   (none)"
+gh variable list --repo "$SLUG" | grep -E '^INSTAEDIT_' || echo "  variables: (none)"
 
-# Step B — delete each one.
+# Step B — delete each Fly secret.
 for S in FLY_API_TOKEN FLY_ACCESS_TOKEN FLY_APP_NAME; do
   gh secret delete "$S" --repo "$SLUG"
 done
 
+# Step B′ — delete each Fly-coupled repository variable (the 2
+# oauth-canary providers that referenced deleted contract files).
+for V in INSTAEDIT_REQUIRED_SECRETS_PATH INSTAEDIT_DISABLED_SECRETS_PATH; do
+  gh variable delete "$V" --repo "$SLUG" || true
+done
+
 # Step C — re-verify AFTER deletion.
-echo "── After: FLY secrets should be EMPTY ──"
-gh secret list --repo "$SLUG" | grep -E 'FLY_' || echo "  ✓ none (clean)"
+echo "── After: FLY secrets AND INSTAEDIT_PATH variables should be EMPTY ──"
+gh secret list   --repo "$SLUG" | grep -E 'FLY_'       || echo "  ✓ secrets:   clean"
+gh variable list --repo "$SLUG" | grep -E '^INSTAEDIT_' || echo "  ✓ variables: clean"
 ```
 
 If `git remote get-url origin` is non-GitHub (e.g., SSH-only local alias),
@@ -105,7 +113,7 @@ in separate commits after §1/§2.
 | `scripts/destroy-fly-app.sh`                                 | 22 `flyctl` invocations                                           | One-shot orchestration: run after §1/§2 to tear down Fly, then `git rm`.                       |
 | `scripts/db/provision-postgres-runbook.sh`                   | 12 `flyctl postgres` invocations                                  | Fly Postgres provisioning runbook. VPS uses local Postgres; `git rm` or rewrite.              |
 | `scripts/db/production-restore-drill.sh`                     | 3 `flyctl postgres destroy` references                            | Disaster-recovery drill for Fly Postgres. Rewrite for local Postgres.                          |
-| `scripts/clean-gh-fly-secrets.sh`                            | 8 references to the three FLY secrets (this is the helper that automates §2) | **Preferred path for §2**: just run `./scripts/clean-gh-fly-secrets.sh --apply` once instead of the manual `gh secret delete` loop. The §2 manual fallback is for when this script isn't reachable. Delete this helper script after running. |
+| `scripts/clean-gh-fly-secrets.sh`                            | 8 references to the three FLY secrets (this is the helper that automates §2) | **Preferred path for §2**: just `./scripts/clean-gh-fly-secrets.sh --apply` once instead of the manual `gh secret delete + gh variable delete` loops. The script defaults to list-only dry-run; `--apply` enables the actual deletes. It handles both the 3 FLY_* secrets AND the 2 INSTAEDIT_*_PATH variables in a single call. The §2 manual fallback is for when this script isn't reachable. Delete this helper script after running. |
 | `scripts/s3/provision-tigris.sh`                             | 2 `flyctl auth login` comments                                    | Tigris bucket provisioning. **OUT OF SCOPE** of this audit per cutover plan.                  |
 | `scripts/_parse_envfile.py`                                  | 5 refs to `disabled-fly-secrets-prefixes.txt` / `required-fly-secrets.txt` | Parser for the deleted Fly .env contract. Zero callers after `integration.yml` step removed. `git rm`. |
 | `scripts/test_parse_envfile.py`                              | Same                                                              | Parser test. `git rm`.                                                                          |
@@ -170,8 +178,13 @@ rotation paths; do NOT delete from Settings:
 
 Verify via:
 ```bash
-gh secret list --repo "$SLUG" | grep -v -E '^(FLY_|FLY)'
-# Anything printed here is a Keep-secret; do NOT touch.
+# Secrets surface (after §2 removed the Fly tokens, anything left is
+# a Keep-secret; do NOT touch):
+gh secret list   --repo "$SLUG" | grep -v -E '^(FLY_|FLY)'
+
+# Variables surface (after §2 removed the 2 oauth-canary INSTAEDIT_*
+# variables, anything left is a Keep-variable; do NOT touch):
+gh variable list --repo "$SLUG" | grep -v -E '^INSTAEDIT_(REQUIRED|DISABLED)_SECRETS_PATH$'
 ```
 
 ---
