@@ -796,6 +796,77 @@ func (s *YouTubeOAuthService) getVideoDetails(ctx context.Context, accessToken s
 	return items, nil
 }
 
+// SetThumbnail uploads a JPEG/PNG image to YouTube and applies it as the
+// custom thumbnail for the given video. The caller must supply a valid
+// access token (retrieved from the vault) and the image must meet the
+// YouTube Data API constraints (JPEG or PNG, max 2 MB).
+//
+// Error handling:
+//   - 200 OK → success, nil error.
+//   - 401 Unauthorized → the access token is invalid or expired.
+//   - 403 Forbidden → the grant lacks permission or the channel is
+//     ineligible for custom thumbnails.
+//   - 404 Not Found → the video does not exist.
+//   - 429 Too Many Requests → rate limited; the caller should retry.
+//   - 5xx → transient server error; the caller should retry.
+//
+// The access token is never included in any returned error.
+func (s *YouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error {
+	if videoID == "" {
+		return fmt.Errorf("youtube set thumbnail: empty video id")
+	}
+	if size <= 0 {
+		return fmt.Errorf("youtube set thumbnail: invalid image size")
+	}
+	const maxThumbnailBytes = 2 * 1024 * 1024
+	if size > maxThumbnailBytes {
+		return fmt.Errorf("youtube set thumbnail: image exceeds 2 MB limit")
+	}
+	if mimeType != "image/jpeg" && mimeType != "image/png" {
+		return fmt.Errorf("youtube set thumbnail: unsupported content type %q (only image/jpeg and image/png allowed)", mimeType)
+	}
+
+	params := url.Values{}
+	params.Set("videoId", videoID)
+	reqURL := "https://www.googleapis.com/upload/youtube/v3/thumbnails/set?" + params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, body)
+	if err != nil {
+		return fmt.Errorf("youtube set thumbnail: create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", mimeType)
+	req.ContentLength = size
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("youtube set thumbnail: request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusNoContent {
+		// Drain the body so the underlying connection can be reused.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+
+	rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("youtube set thumbnail: unauthorized (status 401)")
+	case resp.StatusCode == http.StatusForbidden:
+		return fmt.Errorf("youtube set thumbnail: forbidden (status 403)")
+	case resp.StatusCode == http.StatusNotFound:
+		return fmt.Errorf("youtube set thumbnail: video not found (status 404)")
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return fmt.Errorf("youtube set thumbnail: rate limited (status 429)")
+	case resp.StatusCode >= 500:
+		return fmt.Errorf("youtube set thumbnail: server error (status %d)", resp.StatusCode)
+	default:
+		return fmt.Errorf("youtube set thumbnail: unexpected status %d: %s", resp.StatusCode, string(rbody))
+	}
+}
+
 // GetYouTubeVideo fetches the details for a single YouTube video by id
 // and returns the narrow subset of fields the InstaEdit BFF needs to
 // validate a video before creating a thumbnail editor session. It

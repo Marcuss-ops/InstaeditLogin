@@ -313,7 +313,7 @@ func newFakeGoogleOauthServer(t *testing.T, clientID, channel string) *fakeGoogl
 			"refresh_token": "fake-mock-refresh-token-" + g.channel,
 			"expires_in":    3600,
 			"token_type":    "Bearer",
-			"scope":         "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly openid email profile",
+			"scope":         "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl openid email profile",
 			"id_token":      "fake-mock-id-token." + g.channel,
 		})
 	})
@@ -379,7 +379,7 @@ func (p *browserSmokeYouTubeProvider) GetLoginURLWithOptions(state string, _ ser
 	q.Set("client_id", p.clientID)
 	q.Set("redirect_uri", p.redirectURI)
 	q.Set("response_type", "code")
-	q.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly openid email profile")
+	q.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl openid email profile")
 	q.Set("state", state)
 	q.Set("access_type", "offline")
 	q.Set("prompt", "select_account consent")

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -83,6 +84,9 @@ func (m *mockYouTubeOAuthServiceForEditor) GetYouTubeVideo(ctx context.Context, 
 		Privacy:      "private",
 		UploadStatus: "processed",
 	}, nil
+}
+func (m *mockYouTubeOAuthServiceForEditor) SetThumbnail(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error {
+	return errors.New("not implemented")
 }
 
 func TestCreateYouTubeEditorSession_HappyPath(t *testing.T) {

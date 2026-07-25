@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -693,6 +694,10 @@ type YouTubeOAuthService interface {
 	// GetYouTubeVideo validates that a video exists on the connected
 	// YouTube channel and returns a narrow summary of its metadata.
 	GetYouTubeVideo(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error)
+	// SetThumbnail uploads a JPEG/PNG image to YouTube and applies it
+	// as the custom thumbnail for the given video. The caller must
+	// supply a valid access token (retrieved from the vault).
+	SetThumbnail(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error
 }
 
 // YouTubeVideoEditStore is the persistence contract for thumbnail

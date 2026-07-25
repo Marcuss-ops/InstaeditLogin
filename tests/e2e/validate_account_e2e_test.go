@@ -85,7 +85,7 @@ func (s *stubYouTubeOAuthService) RefreshOAuthToken(ctx context.Context, rt stri
 func (s *stubYouTubeOAuthService) GetTokenInfo(ctx context.Context, at string) (*services.YouTubeTokenInfo, error) {
 	if s.getInfoFn == nil {
 		return &services.YouTubeTokenInfo{
-			Aud: "stub-client-id", Azp: "stub-client-id", Scope: "openid email profile https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly",
+			Aud: "stub-client-id", Azp: "stub-client-id", Scope: "openid email profile https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl",
 			ExpiresIn: 3600, Email: "manager@example.com",
 			HasUpload: true, HasReadonly: true,
 		}, nil
@@ -112,6 +112,9 @@ func (s *stubYouTubeOAuthService) FetchEarnings(ctx context.Context, accessToken
 }
 
 func (s *stubYouTubeOAuthService) ClientID() string { return s.clientIDValue }
+func (s *stubYouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error {
+	return nil
+}
 
 // stubCredentialVault — minimal implementation of credentials.VaultAPI
 // (the interface pkg/api satisfies via WithCredentialVault). Renew
@@ -284,7 +287,7 @@ func seedRefreshTokenRowForValidateE2E(t *testing.T, db *sql.DB, accountID int64
 	// the operator sees the actual SQL/schema error directly.
 	_, err := db.Exec(`INSERT INTO oauth_tokens (platform_account_id, access_token, refresh_token, token_type, expires_at, scopes, created_at, updated_at)
 		SELECT $1, encode(gen_random_bytes(8), 'hex'), encode(gen_random_bytes(32), 'hex'), 'bearer', NOW() + INTERVAL '5 minutes',
-		       ARRAY['https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.readonly'],
+		       ARRAY['https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.readonly','https://www.googleapis.com/auth/youtube.force-ssl'],
 		       NOW(), NOW()
 		WHERE NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE platform_account_id = $1)`,
 		accountID)

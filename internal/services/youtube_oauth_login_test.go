@@ -38,6 +38,7 @@ func TestYouTubeLoginURL_IncludesRequiredScopes(t *testing.T) {
 	for _, want := range []string{
 		"https://www.googleapis.com/auth/youtube.upload",
 		"https://www.googleapis.com/auth/youtube.readonly",
+		"https://www.googleapis.com/auth/youtube.force-ssl",
 		"openid",
 		"email",
 		"profile",
@@ -164,7 +165,7 @@ func TestYouTubeRefresh_PreservesOldRefreshToken(t *testing.T) {
 			"access_token": "new-access-token",
 			"token_type":   "bearer",
 			"expires_in":   3600,
-			"scope":        "youtube.upload youtube.readonly",
+			"scope":        "youtube.upload youtube.readonly youtube.force-ssl",
 		})
 	})
 	srv := httptest.NewServer(mux)
