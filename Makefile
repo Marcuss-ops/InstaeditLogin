@@ -159,23 +159,31 @@ docker-build-local-api:
 docker-build-local-worker:
 	docker build --target worker -t instaedit-worker .
 
-# ──────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────
 # Blocco #5.3: Operator-side observability + log-privacy assurance.
 #
 # `make verify-log-redaction` wraps `./scripts/obs/verify-log-redaction.sh --apply`
-# which streams `flyctl logs --app instaedit-login --since 1h` into a temp
-# file and greps against the 7 canonical privacy-contract patterns
-# documented in docs/OPERATIONS.md §4.3 + docs/DEPLOY.md §7.6. Use this
-# (a) after every deploy (Fly or compose) to confirm a fresh rollout hasn't
-# regressed the redaction discipline, and (b) weekly as a regression
-# tripwire. Exit codes propagate: 0 = clean / 1 = hit / 2 = no flyctl /
-# 3 = no auth / 4 = bad args. The script MUST NEVER print actual matched
-# secrets to stdout — only sanitized 80-char prefixes + ***redacted***.
+# which sshes to the VPS (instaedit@$VPS_IP, default 51.91.11.36 per
+# docs/OPERATIONS.md §1.1) and runs `docker compose logs --since 1h
+# api worker` into a chmod-700 tempdir, then greps against the 7
+# canonical privacy-contract patterns documented in docs/OPERATIONS.md
+# §4.3 + docs/DEPLOY.md §7.6. Use this (a) after every VPS deploy
+# (`git pull && docker compose up -d --build`) to confirm a fresh
+# rollout hasn't regressed the redaction discipline, and (b) weekly
+# as a regression tripwire. Exit codes propagate: 0 = clean /
+# 1 = hit / 2 = missing tool (ssh/docker/grep/awk) / 3 = VPS
+# unreachable via ssh OR compose stack down / 4 = bad args. The
+# script MUST NEVER print actual matched secrets to stdout -- only
+# sanitized 80-char prefixes + ***redacted***.
 #
-# NOTE: post-cutover the script's log source must be re-pointed from
-# `flyctl logs` to `docker compose logs` on the VPS. Tracked as a
-# follow-up; this Makefile still needs Fly tooling available.
-# ──────────────────────────────────────────────────────────────────────────
+# Override env vars: VPS_IP, VERIFY_LOG_SERVICES (default "api worker"),
+# COMPOSE_DIR (default /opt/instaedit/InstaeditLogin). Override args:
+# --since / --timeout (the latter is the background-fetch ceiling;
+# default 60s fits a warm VPS; bump to 120 for cold scans or wider
+# --since windows). The script's --since auto-translates `Nd` -> `Nh`
+# (e.g. `--since 7d` -> `168h`) so existing operator muscle memory
+# still works after the cutover.
+# ───────────────────────────────────────────────────────────────────
 verify-log-redaction:
 	@if [[ ! -x ./scripts/obs/verify-log-redaction.sh ]]; then \
 		echo "❌ scripts/obs/verify-log-redaction.sh not found or not executable"; \

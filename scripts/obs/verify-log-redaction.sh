@@ -2,45 +2,59 @@
 #
 # scripts/obs/verify-log-redaction.sh
 #
-# Operator-side runbook to verify that the live Fly.io deployment's logs
+# Operator-side runbook to verify that the live VPS deployment's logs
 # are free of known secret patterns (log-privacy contract verification).
 #
 # OVERVIEW:
-#   The application logs via slog into stdout, which Fly captures. The
-#   static CI checks (`grep -RnE ...`) prove we don't hardcode secrets.
-#   This script proves we don't accidentally leak them into live logs
-#   (e.g. an operator typo in `slog.Warn("failed", "token", token)` would
-#    not be caught by the static grep).
+#   The application logs via slog into stdout, which the docker-compose
+#   stack captures per service. The static CI checks (`grep -RnE ...`)
+#   prove we don't hardcode secrets. This script proves we don't
+#   accidentally leak them into live logs (e.g. an operator typo in
+#   `slog.Warn("failed", "token", token)` would not be caught by the
+#   static grep).
 #
 # BEHAVIOUR:
 #   - Idempotent and read-only.
-#   - Dry-run by default (no flyctl call): prints the patterns + the
-#     flyctl command it *would* run + the planned log window.
-#   - --apply: runs `flyctl logs`, writes to a temp file, greps against
-#     canonical privacy-contract patterns.
+#   - Dry-run by default (no ssh/compose call): prints the patterns + the
+#     ssh+docker compose command it *would* run + the planned log window.
+#   - --apply: runs `ssh instaedit@$VPS_IP 'docker compose logs --since ...'`
+#     into a temp file, greps against canonical privacy-contract patterns.
 #   - CRITICAL (Privacy Contract): NEVER prints matched secret values to
 #     the operator's terminal. Output ONLY counts + a sanitized 80-char
 #     prefix + `***redacted***`. The actual secret-bearing tail is dropped.
 #
 # USAGE:
-#   ./scripts/obs/verify-log-redaction.sh                  # Dry run (default)
-#   ./scripts/obs/verify-log-redaction.sh --apply          # Scan last 1h
+#   ./scripts/obs/verify-log-redaction.sh                       # Dry run (default)
+#   ./scripts/obs/verify-log-redaction.sh --apply               # Scan last 1h
 #   ./scripts/obs/verify-log-redaction.sh --apply --since 24h
-#   ./scripts/obs/verify-log-redaction.sh --apply --since 7d
+#   ./scripts/obs/verify-log-redaction.sh --apply --since 168h  # 7 days (24h*7)
+#   ./scripts/obs/verify-log-redaction.sh --apply --timeout 120
+#
+# Env overrides:
+#   VPS_IP=<ip>               (default: 51.91.11.36 — canonical VPS, OPERATIONS.md §1.1)
+#   VERIFY_LOG_SERVICES="api worker"   (default; any subset of compose services)
 #
 # EXIT CODES:
 #   0  All clean (no secret patterns in scanned window)
 #   1  One or more secret patterns found (FAIL) — see Summary + Action items
-#   2  Required tool missing (flyctl / grep / awk missing)
-#   3  Not authenticated with Fly.io (run `flyctl auth login`)
-#   4  Bad CLI arguments
+#   2  Required tool missing (ssh / docker / grep / awk missing)
+#   3  Cannot reach VPS via SSH OR compose stack has no running services
+#   4  Bad CLI arguments (e.g. --since value Docker's duration parser rejects)
 #
 # CROSS-REFERENCES:
 #   docs/OPERATIONS.md §4.3 — log discipline contract (what MUST NOT appear)
+#   docs/OPERATIONS.md §5.3 — the migration target this script now satisfies
 #   docs/DEPLOY.md §7.6     — expanded privacy contract (15 secrets + first-party)
 #   pkg/metrics/workerid.go — log-rewriter canonical reference (already in code)
 
 set -euo pipefail
+
+VPS_IP="${VPS_IP:-51.91.11.36}"
+COMPOSE_DIR="${COMPOSE_DIR:-/opt/instaedit/InstaeditLogin}"
+COMPOSE_FILE="$COMPOSE_DIR/docker-compose.yml"
+SERVICES="${VERIFY_LOG_SERVICES:-api worker}"
+SINCE="1h"
+TIMEOUT="60"
 
 # Single canonical argv parser (avoids duplicate-loop ambiguity).
 while [ $# -gt 0 ]; do
@@ -48,6 +62,8 @@ while [ $# -gt 0 ]; do
     --apply) MODE="apply"; shift ;;
     --since) SINCE="${2:-1h}"; shift 2 ;;
     --since=*) SINCE="${1#*=}"; shift ;;
+    --timeout) TIMEOUT="${2:-60}"; shift 2 ;;
+    --timeout=*) TIMEOUT="${1#*=}"; shift ;;
     -h|--help)
       sed -n '2,40p' "$0"
       exit 0
@@ -56,21 +72,53 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# ─── Pre-flight ──────────────────────────────────────────────────────────
-for tool in flyctl grep awk; do
+# ─── --since normalization ─────────────────────────────────────────────
+# Docker compose logs uses Go's time.ParseDuration, which REJECTS the
+# "d" (days) unit. Operator-friendly translate `7d` → `168h` so the
+# post-cutover invocation is the same shape as the historical flyctl
+# form. Anything else falls through to docker's parser, which will
+# error out with a clear duration-parse message if still wrong.
+if [[ "$SINCE" =~ ^([0-9]+)d$ ]]; then
+  DAYS="${BASH_REMATCH[1]}"
+  SINCE="$((DAYS * 24))h"
+fi
+
+# ─── Pre-flight: required tools ─────────────────────────────────────────
+for tool in ssh docker grep awk; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "❌ required tool missing: $tool" >&2
     exit 2
   }
 done
 
-if ! flyctl auth whoami >/dev/null 2>&1; then
-  echo "❌ Not authenticated with Fly.io (run 'flyctl auth login')" >&2
+# ─── Pre-flight: VPS reachability (auth) ──────────────────────────────
+# BatchMode=yes: do NOT prompt for password / passphrase; fail fast.
+# ConnectTimeout=5: bound to <5s so a dead SSH config doesn't stall
+# the Makefile target's caller.
+if ! ssh -q -o BatchMode=yes -o ConnectTimeout=5 "instaedit@${VPS_IP}" exit </dev/null 2>/dev/null; then
+  echo "❌ Cannot reach the VPS via ssh as instaedit@${VPS_IP}." >&2
+  echo "    - Check ~/.ssh/config has a Host entry OR VPS_IP env override is set." >&2
+  echo "    - Run: ssh -v instaedit@${VPS_IP} exit   (verbose to diagnose)." >&2
+  exit 3
+fi
+
+# ─── Pre-flight: compose stack is up with at least one running service ─
+# We probe against the FIRST service in $SERVICES — if it's running the
+# whole stack almost certainly is. We pick --services --filter to keep
+# the stdout zero-bytes when the service IS running (a clean exit code
+# is the signal), so `set -e` carries the check.
+PROBE_SERVICE="${SERVICES%% *}"
+PROBE_OUT="$(ssh -q -o BatchMode=yes "instaedit@${VPS_IP}" \
+  "cd $COMPOSE_DIR && docker compose -f docker-compose.yml ps -q $PROBE_SERVICE" 2>/dev/null || true)"
+if [[ -z "$PROBE_OUT" ]]; then
+  echo "❌ docker compose stack on ${VPS_IP} has no running service matching '${PROBE_SERVICE}'." >&2
+  echo "    Run: ssh instaedit@${VPS_IP} 'cd $COMPOSE_DIR && docker compose ps'   to diagnose." >&2
+  echo "    Set VERIFY_LOG_SERVICES to a different service (e.g. 'worker') if meaning to scan a non-default one." >&2
   exit 3
 fi
 
 # ─── Canonical Privacy-Contract Patterns ─────────────────────────────────
-# Each pattern + its FALSE-POSITIVE calibration notes (from real-Fly-log
+# Each pattern + its FALSE-POSITIVE calibration notes (from real-VPS-log
 # empirical testing) so future operators tuning the patterns know why
 # each constraint exists.
 #
@@ -131,13 +179,18 @@ PATTERN_NAMES=(
 )
 
 # ─── Dry-run / preview (default) ─────────────────────────────────────────
-if [ "$MODE" != "apply" ]; then
+if [ "${MODE:-dry}" != "apply" ]; then
   echo "─── DRY RUN: verify-log-redaction ─────────────────────────────────"
-  echo "App:    $APP_NAME"
-  echo "Since:  $SINCE"
+  echo "VPS:      instaedit@${VPS_IP}"
+  echo "Stack:    ${COMPOSE_FILE}"
+  echo "Services: ${SERVICES}"
+  echo "Since:    ${SINCE}"
+  echo "Timeout:  ${TIMEOUT}s"
   echo ""
-  echo "Planned flyctl command:"
-  echo "  flyctl logs --app $APP_NAME --since $SINCE  >  \$TMP_DIR/logs.txt"
+  echo "Planned ssh + docker compose command:"
+  echo "  ssh -q instaedit@\${VPS_IP} 'cd ${COMPOSE_DIR} && \\"
+  echo "    docker compose logs --no-color --no-log-prefix --since ${SINCE} ${SERVICES}'"
+  echo "  >  \$TMP_DIR/logs.txt  (chmod 700, sweep on EXIT)"
   echo ""
   echo "Patterns targeted (PCRE, in evaluation order):"
   for i in "${!PATTERNS[@]}"; do
@@ -159,33 +212,39 @@ LOG_FILE="$TMP_DIR/logs.txt"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 echo "─── APPLY: verify-log-redaction ────────────────────────────────────"
-echo "App:    $APP_NAME"
-echo "Since:  $SINCE"
-echo "Tmpdir: $TMP_DIR (chmod 700, sweep on EXIT)"
+echo "VPS:      instaedit@${VPS_IP}"
+echo "Services: ${SERVICES}"
+echo "Since:    ${SINCE}"
+echo "Timeout:  ${TIMEOUT}s"
+echo "Tmpdir:   ${TMP_DIR} (chmod 700, sweep on EXIT)"
 echo ""
 
-echo "Fetching logs for $APP_NAME since $SINCE ..."
-# flyctl logs WITHOUT --no-tail exits after dumping the historical buffer,
-# but the windows-binary variant can sit attached; we background it with a
-# 20s ceiling to bound runtime. If the future CLI returns the buffer as a
-# non-streaming JSON dump we'd capture it exactly the same way.
-flyctl logs --app "$APP_NAME" --since "$SINCE" > "$LOG_FILE" 2>/dev/null &
-FLY_PID=$!
-# 30s ceiling — beyond ~20s rarely yields additional lines on a warm
-# machine, but cold logs can take 25-30s on first scan. Future Fly CLI
-# behaviour changes may need to bump this floor; bump + commit.
-sleep 30
-if kill -0 "$FLY_PID" 2>/dev/null; then
-  kill "$FLY_PID" 2>/dev/null || true
-  wait "$FLY_PID" 2>/dev/null || true
+echo "Fetching logs from VPS compose (services=${SERVICES}) since ${SINCE} ..."
+# ssh + docker compose logs is non-streaming when --no-log-prefix + a
+# bounded --since window is passed: it dumps the spool and exits. We
+# background it with a ${TIMEOUT}s ceiling to bound runtime; if the
+# command completes earlier, `wait` is a no-op.
+ssh -q -o BatchMode=yes "instaedit@${VPS_IP}" \
+  "cd $COMPOSE_DIR && docker compose logs --no-color --no-log-prefix --since '${SINCE}' ${SERVICES}" \
+  > "$LOG_FILE" 2>/dev/null &
+FETCH_PID=$!
+# Default ceiling 60s — beyond ~30s rarely yields extra lines on a warm
+# machine, but cold VPS can take 45-60s on first scan. Operators can
+# raise this with `make verify-log-redaction -- --timeout 120` if a
+# one-shot extended window is needed (e.g. --since 168h on a busy stack).
+sleep "$TIMEOUT"
+if kill -0 "$FETCH_PID" 2>/dev/null; then
+  kill "$FETCH_PID" 2>/dev/null || true
+  wait "$FETCH_PID" 2>/dev/null || true
 fi
 
 LINES_FETCHED=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
 if [ "$LINES_FETCHED" -eq 0 ]; then
   echo "⚠ WARN: 0 lines fetched. Causes:"
   echo "    - The --since window has no logs (raise the duration or omit --since)"
-  echo "    - The app has not generated any stdout output (slog disabled? check AppEnv)"
-  echo "    - flyctl bug — retry with `--since 24h` to capture more"
+  echo "    - The services in \$SERVICES haven't logged in that window"
+  echo "    - VPS just rebuilt and the compose log spool is empty (still ramping)"
+  echo "    - SSH key failed mid-stream (check ~/.ssh/instaedit_vps trust on VPS)"
   echo ""
 fi
 echo "Fetched $LINES_FETCHED log lines."
@@ -240,7 +299,7 @@ if [ "$FAIL" -gt 0 ]; then
   echo ""
   echo "  2. Rotate the leaked credential(s) IMMEDIATELY (the leak in logs"
   echo "     is permanent history; the credential is considered compromised even"
-  echo "     if no one has scraped it yet). Use the Fly secrets-rotation"
+  echo "     if no one has scraped it yet). Use the VPS secrets-rotation"
   echo "     runbook in docs/DEPLOY.md §6."
   echo ""
   echo "  3. Re-run this script after the fix to confirm clean:"
