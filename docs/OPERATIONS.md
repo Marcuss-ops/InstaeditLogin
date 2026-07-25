@@ -758,13 +758,13 @@ The provider key has different capture semantics than the rest of the `/srv/inst
 
 | Concern | Reference |
 |---------|-----------|
-| VPS host setup (ssh + Docker + firewall + /srv/instaedit/ tree) | [`docs/DEPLOY.md` §2](./DEPLOY.md#2-one-time-host-setup) |
-| DNS records (canonical: apex + app + api → 51.91.11.36 + email-deliverability) | [`docs/DEPLOY.md` §1.5](./DEPLOY.md#15-dns-delegation-canonical) |
+| VPS host setup (ssh + Docker + firewall + /srv/instaedit/ tree) | [`docs/DEPLOY.md` §2](./DEPLOY.md#2-docker-compose) |
+| DNS records (canonical: apex + app + api → 51.91.11.36 + email-deliverability) | [`docs/DEPLOY.md` §1.5](./DEPLOY.md#7-dns) |
 | Postgres smoke check | [`scripts/db/check-postgres-health.sh`](../scripts/db/check-postgres-health.sh) |
 | Postgres backup + restore drill (operatorside choreography) | This file §3.1 (VPS pg_dump → throwaway container). **Script rewrite needed** for `scripts/db/production-restore-drill.sh` — tracked in DEPLOY.md §11. |
 | MinIO bucket provisioning (loopback admin console) | VPS MinIO admin console at `https://127.0.0.1:9001`; env block in `docker-compose.yml` |
 | MinIO storage recovery drills | This file §4.0 |
-| Tigris (legacy) → MinIO migration path | [`docs/DEPLOY.md` §10](./DEPLOY.md#10-tigris-retirement-one-time-migration) |
+| Tigris (legacy) → MinIO migration path | [`docs/DEPLOY.md` §10](./DEPLOY.md#63-storage-backup-tigris-minio-one-time) |
 | Post-deploy E2E smoke (Phase 9 sub-1-5+7) | [`scripts/ops/post_deploy_smoke.sh`](../scripts/ops/post_deploy_smoke.sh) |
 | Workspace isolation test (Phase 9 sub-6) | [`scripts/ops/workspace_isolation_test.sh`](../scripts/ops/workspace_isolation_test.sh) |
 | Email sender DNS records + Gmail inbox test + tracking verification + provider-key capture | This file §7 |
