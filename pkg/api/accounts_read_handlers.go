@@ -345,6 +345,14 @@ func (r *Router) storeYouTubeEarnings(ctx context.Context, account *models.Platf
 		return
 	}
 
+	// LEGACY PRESERVE (Blocco Bug #3 — YT OAuth scope cleanup): new
+	// OAuth grants no longer request yt-analytics-monetary.readonly,
+	// so HasMonetary is naturally false for new tokens and the
+	// earnings sync correctly no-ops. Tokens issued before the
+	// canonical scope cleanup may still carry the grant; we continue
+	// to honour them. Removing this gate would re-introduce
+	// revenue/RPM/CPM fetches that would fail-permission for every
+	// new user.
 	info, err := r.youTubeSvc.GetTokenInfo(ctx, accessToken)
 	if err != nil || !info.HasMonetary {
 		return

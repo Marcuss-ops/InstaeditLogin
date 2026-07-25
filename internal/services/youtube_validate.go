@@ -109,6 +109,22 @@ type YouTubeTokenInfo struct {
 	HasReadonly bool
 	// HasMonetary is true when the token has the YouTube Analytics
 	// monetary-readonly scope required for revenue/RPM/CPM data.
+	//
+	// LEGACY PRESERVE (Blocco Bug #3 — canonical YT OAuth scope
+	// cleanup). New OAuth grants no longer request the
+	// yt-analytics-monetary.readonly scope (the canonical
+	// youtubeOAuthScopes const in youtube_oauth.go no longer
+	// includes it). However, tokens issued BEFORE the cleanup
+	// may still carry the scope, and YouTube will not retroactively
+	// revoke it unless the user re-consents. So this flag remains a
+	// meaningful predicate for legacy tokens — affordances like
+	// storeYouTubeEarnings continue to operate correctly for users
+	// who already granted the scope, and silently skip for new
+	// grants (which is the intended post-cleanup behavior).
+	//
+	// Do NOT remove this field without also auditing every reader
+	// (currently pkg/api/accounts_read_handlers.go) and the
+	// earnings-sync affinity end-to-end.
 	HasMonetary bool
 }
 
@@ -194,8 +210,6 @@ func (s *YouTubeOAuthService) GetTokenInfo(ctx context.Context, accessToken stri
 			out.HasUpload = true
 		case "https://www.googleapis.com/auth/youtube.readonly":
 			out.HasReadonly = true
-		case "https://www.googleapis.com/auth/yt-analytics-monetary.readonly":
-			out.HasMonetary = true
 		}
 	}
 	return out, nil

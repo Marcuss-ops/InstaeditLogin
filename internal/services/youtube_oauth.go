@@ -131,28 +131,56 @@ func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})
 }
 
+// youtubeOAuthScopes (Bug #3 fix) is the SINGLE SOURCE OF TRUTH for the
+// consent-screen scope list requested by every YouTube OAuth redirect.
+//
+// Least-privilege rationale (each scope earns its keep):
+//
+//   youtube.upload     — videos.insert (chunked-PUT resumable upload).
+//                        The single scope strictly required to push
+//                        bytes to YouTube.
+//   youtube.readonly   — channels.list?mine=true (channel binding guard
+//                        in ValidateChannelBinding) + videos.list
+//                        (processing-status poll). Read-only; no
+//                        quotable writes.
+//   youtube.force-ssl  — thumbnails.set (custom thumbnail upload) +
+//                        videos.update (privacyStatus + publishAt +
+//                        snippet title/description). youtube.upload
+//                        alone does NOT grant write access to video
+//                        metadata, so both thumbnail and publish
+//                        rows REQUIRE this scope.
+//   openid + email + profile — OIDC identity (user id, email, name).
+//
+// We deliberately do NOT request any of the YouTube Analytics scopes
+// (yt-analytics-monetary.readonly, yt-analytics.readonly). The publish
+// pipeline (upload, thumbnail, schedule, publish) does not consume
+// earnings / RPM / CPM / impressions data; requesting them would (a)
+// trigger a Google brand-verification re-review under the OAuth
+// verification policy without delivering any functional gain, and
+// (b) widen the consent screen to a "Sensitive scope" tier that
+// requires justification under Google's 2024 OAuth verification
+// classification. Re-introduction of an Analytics scope to this
+// constant is treated as a blocking change.
+//
+// Mirrors:
+//   - cmd/oauth-scope-canary/main.go::canonicalScopes (operator canary
+//     diffs Google's tokeninfo against this set every scheduled run)
+//   - docs/OAUTH-PRODUCTION.md "Step 3 -- declare the scopes
+//     (minimum set)" + "Code-side guard" (public-facing mirror)
+//
+// A PR that edits this constant without updating either the canary
+// canonicalScopes OR the docs table should be rejected.
+const youtubeOAuthScopes = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl openid email profile"
+
 func (s *YouTubeOAuthService) GetLoginURLWithOptions(state string, options OAuthLoginOptions) string {
 	params := url.Values{}
 	params.Set("client_id", s.cfg.Auth.YouTubeClientID)
 	params.Set("redirect_uri", s.cfg.Auth.YouTubeRedirectURI)
 	params.Set("state", state)
-	// P6 hardening: the consent-screen scope list follows the
-	// least-privilege principle. `youtube.upload` is the only scope
-	// strictly required by `videos.insert`; `youtube.readonly` is
-	// used by the pre-upload channel-binding check (channels.list
-	// in ValidateChannelBinding). `openid`, `email`, `profile`
-	// identify the operator. We deliberately DO NOT request
-	// `yt-analytics.readonly`: per the YouTube Data API videos.insert
-	// reference, `youtube.upload` alone is sufficient for the
-	// publish pipeline, and adding a sensitive scope would trigger
-	// a re-review by Google's brand-verification queue without
-	// delivering any functional gain. See
-	// docs/OAUTH-PRODUCTION.md "Step 3 -- declare the scopes
-	// (minimum set)" + "Code-side guard" for the canonical policy
-	// and the cross-PR grep recipe. Re-introduction is treated as a
-	// blocking change (the OAuth brand-verification round on the
-	// OAuth consent screen would re-open).
-	params.Set("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/yt-analytics-monetary.readonly openid email profile")
+	// Bug #3 fix: pass the canonical scope set (no yt-analytics
+	// scopes) directly. See youtubeOAuthScopes above for the full
+	// per-scope rationale.
+	params.Set("scope", youtubeOAuthScopes)
 	params.Set("response_type", "code")
 	params.Set("access_type", "offline")
 	params.Set("include_granted_scopes", "true")
