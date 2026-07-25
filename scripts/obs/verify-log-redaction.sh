@@ -74,10 +74,11 @@ done
 
 # ─── --since normalization ─────────────────────────────────────────────
 # Docker compose logs uses Go's time.ParseDuration, which REJECTS the
-# "d" (days) unit. Operator-friendly translate `7d` → `168h` so the
-# post-cutover invocation is the same shape as the historical flyctl
-# form. Anything else falls through to docker's parser, which will
-# error out with a clear duration-parse message if still wrong.
+# "d" (days) unit. Operator-friendly translate `7d` → `168h`; anything
+# else falls through to docker's parser, which will error out with a
+# clear duration-parse message if still wrong. (This normalisation
+# was already present in the historical hosted-platform log-fetch
+# form and is preserved verbatim post-cutover for behaviour parity.)
 if [[ "$SINCE" =~ ^([0-9]+)d$ ]]; then
   DAYS="${BASH_REMATCH[1]}"
   SINCE="$((DAYS * 24))h"
