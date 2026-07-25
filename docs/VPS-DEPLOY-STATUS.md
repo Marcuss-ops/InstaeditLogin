@@ -138,15 +138,20 @@ Failure mode to escalate on: any header containing the substring `fly`
   `metrics`, and `drive_batch_crawler` finish initialising.
 - Repo cleanup (Fly artefacts, Makefile targets, secret scripts, docs) is
   the next step — see followups.
-- `scripts/ops/verify-tiktok-oauth-e2e.sh` [6b/8] arithmetic crash:
-  the substitution `SIG_$(grep -ciE … 2>/dev/null || echo 0)` runs in
-  `set -e` and concatenates grep's count with the `|| echo 0` fallback
-  when grep exits 1, producing `SIG="0\n0"`; `[[ $SIG -gt 0 ]]` then fails
-  with `errore di sintassi aritmetica`. Patch: rewrite the substitution as
-  `SIG_X=$(grep -ciE '…' "$TMP_LOG" 2>/dev/null; :)` — the trailing `:`
-  no-op consumes grep's exit-1 so `|| echo 0` is never reached and the
-  substitution captures only the count (or empty on no-match).
+- `scripts/ops/verify-tiktok-oauth-e2e.sh` [6b/8] arithmetic crash — two
+  issues in the SIG extraction. (a) The substitution
+  `SIG=$(grep -ciE '…' 2>/dev/null || echo 0)` concatenates grep's stdout
+  (POSIX grep -c always emits its count) with the `|| echo 0` re-fallback
+  when grep exits 1, yielding `SIG="0\n0"` on no-match. (b) POSIX grep -c
+  always emits a trailing newline, so any single-source substitution
+  still produces a newline-terminated value that breaks
+  `[[ $SIG -gt 0 ]]`. Patch two steps:
+  `SIG=$(grep -ciE '…' "$TMP_LOG" 2>/dev/null; :)` — the trailing `:`
+  no-op consumes grep's exit-1 so the `|| echo 0` re-fallback is never
+  reached; AND `SIG=$(( ${SIG:-0} ))` — the arithmetic-context assignment
+  strips trailing whitespace and widens an empty string to 0.
 - `scripts/ops/verify-tiktok-oauth-e2e.sh` [6d/8] hardcodes `docker compose
-  exec -T postgres …`; the actual VPS compose service is `instaedit-db` per
-  `docker-compose.yml` line `container_name: instaedit-db`. Patch:
-  deterministic replace `postgres` → `instaedit-db` in the psql invocation.
+  exec -T postgres …`; the actual VPS compose service is `instaedit-db`
+  per `docker-compose.yml` (in the `db:` service block: `container_name:
+  instaedit-db`). Patch: deterministic replace `postgres` → `instaedit-db`
+  in the psql invocation.
