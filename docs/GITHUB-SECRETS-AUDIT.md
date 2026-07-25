@@ -83,10 +83,11 @@ done
 
 # Step B′ — delete each Fly-coupled repository variable. The 2 vars
 # formerly pointed to scripts/required-fly-secrets.txt and
-# scripts/disabled-fly-secrets-prefixes.txt — both deleted in the
-# post-cutover chain — so we surface "already gone" instead of a
-# silent green (keeps idempotent re-runs debuggable and surfaces auth
-# / network blips as named output).
+# scripts/disabled-fly-secrets-prefixes.txt — both currently slated
+# for `git rm` in the §3 follow-up commits; until then the vars are
+# runtime-dead-but-still-pinned on disk — so we surface "already
+# gone" instead of a silent green (keeps idempotent re-runs debuggable
+# and surfaces auth / network blips as named output).
 for V in INSTAEDIT_REQUIRED_SECRETS_PATH INSTAEDIT_DISABLED_SECRETS_PATH; do
   gh variable delete "$V" --repo "$SLUG" \
     || echo "  (already gone, or auth-flaky: $V)"
