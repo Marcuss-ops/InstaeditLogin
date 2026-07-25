@@ -31,11 +31,6 @@ typically surface multiple regional A records (e.g. `52.49.x.x`, `18.196.x.x`,
 ## 2. HTTP identity probe
 
 ```bash
-$ curl -sI https://api.instaedit.org/health
-HTTP/2 404
-server: Caddy
-content-type: text/plain; charset=utf-8
-
 $ curl -sI https://api.instaedit.org/
 HTTP/2 404
 server: Caddy
@@ -48,7 +43,11 @@ server: Caddy
 
 **Interpretation.** Every response carries `server: Caddy`. No `fly-request-id`,
 no `fly-region`, no `server: Fly`. The path layer is unambiguously Caddy on
-the VPS. `/health` is not currently exposed (404 is expected — see Open items).
+the VPS. The canonical targets are `/api/v1/health` (mounted in
+`pkg/api/middleware_handlers.go`, see `pkg/api/routes.go:52`) and
+`/ready` (see `pkg/api/ready_handlers.go`). `/health` (top-level) is
+intentionally NOT mounted on the VPS-Caddy path; orchestrator probes
+target `/api/v1/health`.
 
 ## 3. /ready deep dive
 
@@ -107,7 +106,7 @@ dig +short api.instaedit.org AAAA
 
 # Identity – every line must read 'server: Caddy'.
 curl -sI https://api.instaedit.org/      | grep -i '^server:'
-curl -sI https://api.instaedit.org/health | grep -i '^server:'
+curl -sI https://api.instaedit.org/api/v1/health | grep -i '^server:'
 curl -sI https://api.instaedit.org/ready | grep -i '^server:'
 
 # Worker readiness – expect 'OK' once background workers have warmed up.
@@ -130,9 +129,13 @@ Failure mode to escalate on: any header containing the substring `fly`
 
 ## 7. Open items
 
-- `/health` is not currently exposed (404). Either implement it on the Go
-  side as a lightweight liveness probe, or remove the slash from the
-  verification commands above.
+- `/health` (top-level) **resolution: removed from §2 + §5** (2026-07-25
+  ~19:00 UTC). Decision: drop the probe rather than mount a new handler.
+  Canonical VPS-Caddy path is `/api/v1/health` (see
+  `pkg/api/routes.go:52` and `pkg/api/middleware_handlers.go:14`); the
+  legacy worker `/health` listener remains on TCP/9090 for Fly-style
+  readinessProbe (see `cmd/worker/health_listener.go:61`), independent of
+  the public proxy.
 - Workers were mid-warm-up at probe time. Re-probe after a few minutes and
   append a row to §6; expect `workers_ready: true` once `publish`,
   `metrics`, and `drive_batch_crawler` finish initialising.
