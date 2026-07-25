@@ -604,7 +604,17 @@ docker compose restart minio
 #               # il prefix `pre-NEW-failed-cutover-<date>/` evita
 #               # collision su re-runs e conserva tutto per audit
 #               # forensic post-cutover.
+#               # Cleanup post-audit (rimuovi il prefix dopo
+#               # l'analisi forensic per evitare 2x storage
+#               # permanente):
+#               docker compose exec minio mc rm --recursive --force \\
+#                 minio/instaedit-local-pre-NEW-failed-cutover-$(date +%F)/
 #               (B) Merge esplicito dentro OLD bucket (selettivo):
+#                 # NOTA duplicata: `rclone` usa `:` (colon) come
+#                 # alias separator, NON `/` come `mc`. Formato:
+#                 # `minio:bucket`. Stesso warning di sopra, ripetuto
+#                 # qui per evitare che operator copy-paste-skimming
+#                 # del rclone block lo manchi.
 #               rclone copy minio:instaedit-local-encrypted \\
 #                 minio:instaedit-local/recovered-from-new/$(date +%F)/
 #             # NOTA metadata: `mc cp --recursive` di default NON
