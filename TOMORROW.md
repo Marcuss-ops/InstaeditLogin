@@ -399,7 +399,7 @@ dal lato bucket. Aggiunte al gate:
 # Prerequisito alias (NON documentato altrove; tutti i `mc ... <bucket>`
 # richiedono un alias configurato):
 #   Sul primo run operazionale:
-#     docker compose exec minio mc alias set minio http://localhost:9000
+#     docker compose exec minio mc alias set minio http://localhost:9000 $S3_ACCESS_KEY $S3_SECRET_KEY
 #   Universale per due motivi:
 #     - dentro il container minio: `localhost` = self-loopback →
 #       minio stesso in ascolto sulla sua porta 9000.
@@ -432,7 +432,7 @@ docker compose exec -T minio mc admin config import < /tmp/cors-minio.json
 docker compose restart minio
 
 # Verifica post-restart (conferma runtime):
-docker compose exec minio mc admin config get minio | grep -A6 -i 'cors\|api_'
+docker compose exec minio mc admin config get minio | grep -A12 -i 'cors\|api_'
 ```
 
 ### 7. Public-read bucket policy diff
@@ -447,6 +447,7 @@ AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
   --bucket instaedit-prod-media --query 'Contents[?contains(Key, `public/`)]'
 
 # Replica su MinIO (VPS):
+# (richiede §6 Prerequisito alias)
 docker compose exec minio mc anonymous set download minio/instaedit-local
 # (oppure solo prefix-specifici se serve granularità)
 
@@ -505,7 +506,7 @@ python3 -c 'import json,sys; json.load(open("/tmp/lifecycle-tigris.json"))' \
 # Prerequisito alias (NON documentato altrove; tutti i `mc ... <bucket>`
 # richiedono un alias configurato):
 #   Sul primo run operazionale:
-#     docker compose exec minio mc alias set minio http://localhost:9000
+#     docker compose exec minio mc alias set minio http://localhost:9000 $S3_ACCESS_KEY $S3_SECRET_KEY
 #   Universale per due motivi:
 #     - dentro il container minio: `localhost` = self-loopback →
 #       minio stesso in ascolto sulla sua porta 9000.
@@ -539,7 +540,7 @@ docker compose exec minio mc version info minio/instaedit-local
 # Prerequisito alias (NON documentato altrove; tutti i `mc ... <bucket>`
 # richiedono un alias configurato):
 #   Sul primo run operazionale:
-#     docker compose exec minio mc alias set minio http://localhost:9000
+#     docker compose exec minio mc alias set minio http://localhost:9000 $S3_ACCESS_KEY $S3_SECRET_KEY
 #   Universale per due motivi:
 #     - dentro il container minio: `localhost` = self-loopback →
 #       minio stesso in ascolto sulla sua porta 9000.
