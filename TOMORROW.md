@@ -613,8 +613,8 @@ docker compose restart minio
 #                 # Tre path di decisione finale:
 #                 #   1. rollback confermato: esegui b–d completamente,
 #                 #      POI cleanup.
-#                 #   2. commit sul NEW bucket: `mc rb --force` source
-#                 #      (step 4 originale), POI cleanup.
+#                 #   2. commit sul NEW bucket: `mc rb --force` source bucket,
+#                 #      POI cleanup.
 #                 #   3. estendi smoke di ulteriori 24h: NON cleanup,
 #                 #      aspetta fino a decisione 1 o 2.
 #                 # Cleanup PRE-ESECUZIONE (rollback o commit) o DURANTE
