@@ -205,7 +205,7 @@ for emergency/migrations only (NOT a regular app secret).
         DATABASE_URL="\\$DATABASE_URL_POOLED"
 
 For DR purposes, also stage the DIRECT URL under a different env name
-(scripts/required-fly-secrets.txt does NOT list it — it stays out of
+(the hosted-platform secrets manifest does NOT list it — it stays out of
 the standard contracts because migrations run via release_command and
 don't need it as a named secret):
 
