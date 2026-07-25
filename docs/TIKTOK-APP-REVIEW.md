@@ -26,7 +26,7 @@ into the TikTok Developer Portal UI.
 | **Web/Desktop URL**                                | `https://instaedit.org/tiktok`                                                                                  | web/src/pages/platforms/PlatformPage.tsx → landing page for `/tiktok`                                       |
 | **Products**                                       | `Login Kit` + `Content Posting API`                                                                            | web/src/pages/platforms/data/tiktok.tsx + internal/services/tiktok_oauth_oauth.go                            |
 | **Scopes** (must list ALL of them)                 | `user.info.basic`, `video.publish`, `video.upload`                                                              | internal/services/tiktok_oauth_oauth.go::GetLoginURLWithOptions (line 31) — must match verbatim              |
-| **Redirect URI** (under Login Kit + Content Posting API) | `https://api.instaedit.org/api/v1/auth/tiktok/callback`                                                   | `/srv/instaedit/.env.production` on the VPS (entry `TIKTOK_REDIRECT_URI`); dev default falls back to `http://localhost:8080/...` in `internal/config/config.go:510`; catalogued in [docs/DEPLOY.md §3 row 20](./DEPLOY.md#3-secret-collection)                                  |
+| **Redirect URI** (under Login Kit + Content Posting API) | `https://api.instaedit.org/api/v1/auth/tiktok/callback`                                                   | Source-of-truth: configurazione ambiente VPS, TIKTOK_REDIRECT_URI, docs/TIKTOK-APP-REVIEW.md. Lives at `/srv/instaedit/.env.production` on the VPS as entry `TIKTOK_REDIRECT_URI`; dev fallback `http://localhost:8080/...` in `internal/config/config.go:510`.                          |
 | **Web / Desktop URL** (Login Kit config)           | `https://instaedit.org/tiktok`                                                                                  | web/src/pages/platforms/PlatformPage.tsx                                                                      |
 | **Required reviewer explanation** (≤ 1000 chars)   | Paste the block from `Reviewer explanation` below                                                              | solidal block; do not paraphrase                                                                              |
 | **Demo video** (mp4/mov, ≤ 5 files, ≤ 50 MB each)  | See `Demo video recording recipe` below                                                                        | Filename suggestion: `instaedit-tiktok-app-review-demo-YYYY-MM-DD.mp4`                                      |
@@ -47,10 +47,8 @@ into the TikTok Developer Portal UI.
 https://api.instaedit.org/api/v1/auth/tiktok/callback
 ```
 
-* Lives in `/srv/instaedit/.env.production` on the VPS as `TIKTOK_REDIRECT_URI`
-  (also exported as a public, non-sensitive value in `docker-compose.yml`).
-  Pinned at deploy time; cannot drift without a code change.
-* Mirrored in `docs/DEPLOY.md §3` table row 20.
+* Lives in `/srv/instaedit/.env.production` on the VPS as `TIKTOK_REDIRECT_URI`.
+  Source-of-truth: configurazione ambiente VPS, TIKTOK_REDIRECT_URI, docs/TIKTOK-APP-REVIEW.md.
 * `internal/config/config.go:510` reads `TIKTOK_REDIRECT_URI`
   from env (with a `http://localhost:8080/...` default for dev).
   Two call sites consume it:
