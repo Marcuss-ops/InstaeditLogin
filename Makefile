@@ -1,6 +1,6 @@
 .PHONY: dev stop seed test lint lint-check backend-test frontend-test test-integration \
         run-api run-worker run-migrate run-server run-server-api-only \
-        docker-build-production docker-build-migrate-only \
+        docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
         ops-smoke ops-isolation ops-isolation-dry-run \
         verify-log-redaction
@@ -146,12 +146,6 @@ lint-check:
 	@echo "✓ gofmt clean"
 	go vet ./...
 	cd web && npm run lint
-
-# Build the unified Fly image (production stage). Same shape Fly's
-# deploy pipeline uses. Cold cache: one image. Warm cache:
-# incremental.
-docker-build-production:
-	docker build --target production -t instaedit-fly .
 
 # Build the migrate-only stage (one-shot pre-deploy; also baked into
 # the production stage above so release_command resolves ./migrate).
