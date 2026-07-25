@@ -1049,19 +1049,6 @@ func (e *YouTubeAPIError) Transient() bool {
 	return false
 }
 
-// IsTransient reports whether err (or any error in its chain) is a
-// transient YouTube API error (429 or 5xx) that should be retried.
-func IsTransientYouTubeError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var apiErr *YouTubeAPIError
-	if errors.As(err, &apiErr) {
-		return apiErr.Transient()
-	}
-	return false
-}
-
 // retryableError reports whether err is a transient error that should be
 // retried. It returns true for YouTubeAPIError marked as transient (429,
 // 5xx, network failures) and false for context cancellation/deadline errors
