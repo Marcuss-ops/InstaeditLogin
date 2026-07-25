@@ -279,7 +279,7 @@ non c'è nessun run-time che risponde a quei path.
 e ogni probe restituisce 404 — sia `/health` che `/auth/{provider}/login`.
 
 **Fix**: i due URL vivono su host **diversi**. Il frontend è Vercel (asset
-statici, `vercel.json` → `dist/`),il backend è un servizio long-running separato (Go + Postgres, deployato su VPS — singolo host, Caddy + Docker Compose, vedi `docs/DEPLOY.md`). Esempio:
+statici, `vercel.json` → `dist/`), il backend è un servizio long-running separato (Go + Postgres, deployato su VPS — singolo host, Caddy + Docker Compose, vedi `docs/DEPLOY.md`). Esempio:
 frontend su `https://instaedit.vercel.app` (asset statici, ancora su Vercel), backend su
 `https://api.instaedit.org` (VPS — Caddy + Docker Compose). Metti il secondo in `VITE_API_BASE_URL`.
 
