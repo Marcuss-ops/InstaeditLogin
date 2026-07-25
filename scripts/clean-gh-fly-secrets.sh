@@ -121,17 +121,31 @@ EOF
     fi
     rm -f /tmp/list_err
 
+    listed=$(gh secret list --repo "$REPO" 2>/dev/null | awk 'NR>1 {print $1}')
+
     echo
-    echo "─── Fly-side secrets registered on $REPO ───"
+    echo "─── Named target secrets registered on $REPO ───"
     found=0
     for s in "${SECRETS[@]}"; do
-      if gh secret list --repo "$REPO" 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$s"; then
+      if echo "$listed" | grep -qx "$s"; then
         echo "  ✓ registered: $s"
         found=$((found+1))
       else
         echo "  · not registered: $s"
       fi
     done
+
+    echo
+    echo "─── Wildcard: any other Fly-tagged secrets (verify + add to list before --apply) ───"
+    fly_other=$(echo "$listed" | grep -i fly || true)
+    if [[ -z "$fly_other" ]]; then
+      echo "  (none beyond the ${#SECRETS[@]} named targets)"
+    else
+      while IFS= read -r name; do
+        echo "  ⚠ found (not in named targets): $name"
+      done <<<"$fly_other"
+    fi
+
     echo
     echo "─── Result ───"
     echo "  $found of ${#SECRETS[@]} target secrets are still on github.com."
@@ -191,44 +205,56 @@ EOF
 
     echo "─── Pre-delete presence check ───"
     missing=()
+    present=()
     for s in "${SECRETS[@]}"; do
       if awk 'NR>1 {print $1}' /tmp/list_out | grep -qx "$s"; then
         echo "  ✓ registered: $s"
+        present+=("$s")
       else
-        echo "  · not registered (skip): $s"
+        echo "  · not registered (will skip): $s"
         missing+=("$s")
       fi
     done
 
-    if [[ ${#SECRETS[@]} -le ${#missing[@]} ]]; then
+    if [[ ${#present[@]} -eq 0 ]]; then
       echo
-      echo "─── Refusing: all 3 secrets are absent; nothing to delete ───"
+      echo "─── Nothing to delete: all ${#SECRETS[@]} target secrets already absent ───"
       rm -f /tmp/list_out
       exit 0
     fi
 
     if [[ ${#missing[@]} -gt 0 ]]; then
       echo
-      echo "❌ Some secrets are missing on github.com (refusing partial delete): ${missing[*]}" >&2
-      rm -f /tmp/list_out
-      exit 4
+      echo "── Note: ${#missing[@]} of ${#SECRETS[@]} target secrets already absent (likely deleted in a prior partial run). ──"
+      echo "── Proceeding to delete only the present names; no-refusal but logged for transparency. ──"
     fi
 
-    # Step 2: explicit operator confirmation (script is non-interactive
-    # otherwise; the confirmation is the only barrier before deletion).
+    # Step 2: explicit operator confirmation. Script is only safe to
+    # proceed when stdin is a real TTY (otherwise `read -rp` would
+    # deadlock indefinitely in CI / non-interactive SSH). Refuse with
+    # exit 6 (no fallback to default-yes; the operator must rerun from
+    # a real terminal).
+    if [[ ! -t 0 ]]; then
+      echo "❌ --apply requires an interactive terminal (stdin is not a TTY)." >&2
+      echo "   Re-run from a real shell, or use --ui-fallback." >&2
+      rm -f /tmp/list_out
+      exit 6
+    fi
+
     echo
-    read -rp "Confirm: delete ${SECRETS[*]} on $REPO? Type 'yes' to continue: " confirm
+    read -rp "Confirm: delete [${present[*]}] on $REPO? Type 'yes' to continue: " confirm
     if [[ "$confirm" != "yes" ]]; then
       echo "Aborted by operator. No secrets were modified." >&2
       rm -f /tmp/list_out
       exit 5
     fi
 
-    # Step 3: delete each.
+    # Step 3: delete only the names currently present (idempotent on
+    # re-runs after partial-failure).
     echo
     echo "─── Deleting ───"
     failures=()
-    for s in "${SECRETS[@]}"; do
+    for s in "${present[@]}"; do
       echo "  • $s ..."
       if gh secret delete "$s" --repo "$REPO" >/dev/null 2>/tmp/del_err; then
         echo "    ✓ deleted"
