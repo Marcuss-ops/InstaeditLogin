@@ -106,7 +106,7 @@ Doc itself records that as of 2026-07-14 the live `api.instaedit.org` was respon
 - `app = "instaedit-login"`, `primary_region = "iad"`.
 - `[build] dockerfile = "Dockerfile"`, `build_target = "production"` — pinned explicitly.
 - `[deploy]` rolling, `min_machines_running = 1`, `release_command = "./migrate"`.
-- `[env]` shared non-sensitive config: GIN_MODE release, S3 endpoints (Tigris), Email provider (Resend), OAuth callback URIs (public, registered in provider consoles). Note: the OAuth redirect URIs in `[env]` are duplicated in `docs/DEPLOY.md` §3 and in `scripts/required-fly-secrets.txt` — all three are canonical, must agree on values.
+- `[env]` shared non-sensitive config: GIN_MODE release, S3 endpoints (Tigris), Email provider (Resend), OAuth callback URIs (public, registered in provider consoles). Note: the OAuth redirect URIs in `[env]` are duplicated in `docs/DEPLOY.md` §3 and in the hosted-platform secrets manifest — both are canonical, must agree on values.
 - `[processes.api.env] PORT = "8080"` and `[processes.worker.env] WORKER_HEALTH_PORT = "9090"` — Fly ports 80/443 map to api; worker private-network 9090.
 - `[[services]]` api/worker/migrate (migrate commented, doc-only); `[[metrics]]` scrapes api process's `/api/v1/metrics` (worker metrics live in a separate process registry, not exposed here by design).
 - `[[vm]] shape = shared-cpu-1x / 512mb / auto_stop_machines = false` — enforces the no-scale-to-zero contract.
