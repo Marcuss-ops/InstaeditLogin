@@ -6,14 +6,12 @@
 # (missing canonical / extra granted / forbidden scope present) fails the
 # run with a non-zero exit code.
 #
-# The previous Fly-secrets-coherence leg has been removed in this workflow.
-# The two fixture files (scripts/required-fly-secrets.txt +
-# scripts/disabled-fly-secrets-prefixes.txt) were deleted in the cutover
-# chain; the env-var overrides (INSTAEDIT_REQUIRED_SECRETS_PATH +
-# INSTAEDIT_DISABLED_SECRETS_PATH) no longer exist on the binary. The
-# secrets-coherence responsibility now lives in scripts/_parse_envfile.py
-# + scripts/test_parse_envfile.py as a standalone CI job wired in
-# .github/workflows/integration.yml.
+# The previous second responsibility (hosted-platform secrets-coherence)
+# has been removed from this workflow. The two secrets-fixture files
+# were deleted in the cutover chain; the corresponding env-var overrides
+# no longer exist on the binary. The secrets-coherence responsibility
+# now lives in scripts/_parse_envfile.py + scripts/test_parse_envfile.py
+# as a standalone CI job wired in .github/workflows/integration.yml.
 #
 # Why a SEPARATE workflow vs. integration.yml?
 #   - integration.yml is the PR-lane gate (forked PRs cannot bring
