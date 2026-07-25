@@ -907,7 +907,7 @@ func classifyUploadError(err error) string {
 	switch {
 	case containsAny(s, "drive", "googleapis.com/upload/drive"):
 		return "drive_error"
-	case containsAny(s, "s3", "tigris", "minio", "presigned"):
+	case containsAny(s, "s3", "minio", "presigned"):
 		return "s3_error"
 	case containsAny(s, "youtube", "videos.insert"):
 		return "youtube_error"
