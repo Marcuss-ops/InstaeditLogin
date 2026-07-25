@@ -502,6 +502,14 @@ func (m *AuthModule) Register(mux chi.Router) {
 	}
 
 	mux.Method(http.MethodGet, "/api/v1/auth/{provider}/login", m.deps.OAuthStartLimiter(http.HandlerFunc(m.deps.OAuthSessionRedirect(m.deps.Handlers.Login))))
+	// Backwards-compatible alias for /api/v1/auth/{provider}/login. Some external
+	// scripts and older docs reference /start as the OAuth initiation URL; the
+	// canonical URL is /login. Parallel-mount (rather than 308-redirect) keeps
+	// the chain single-hop so the OAuthStartLimiter IP-keyed rate-limit and the
+	// OAuthSessionRedirect no-session → 302 contract fire exactly once per
+	// request, identical to /login. See oauth_session_redirect_start_alias_test.go
+	// for the alias-parity test matrix.
+	mux.Method(http.MethodGet, "/api/v1/auth/{provider}/start", m.deps.OAuthStartLimiter(http.HandlerFunc(m.deps.OAuthSessionRedirect(m.deps.Handlers.Login))))
 	mux.Method(http.MethodGet, "/api/v1/auth/{provider}/callback", http.HandlerFunc(m.deps.OAuthSessionRedirect(m.deps.Handlers.Callback)))
 	mux.Method(http.MethodPost, "/api/v1/auth/exchange", http.HandlerFunc(m.deps.Handlers.ExchangeCode))
 	mux.Method(http.MethodGet, "/api/v1/auth/me", m.deps.Protected(m.handleMe))
