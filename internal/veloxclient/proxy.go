@@ -40,6 +40,11 @@ func (c *Client) Proxy(ctx context.Context, method, path string, userID, workspa
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	// Strip any browser-origin header before forwarding to Velox.
+	// Velox's internal security guard rejects requests carrying an
+	// Origin header (it is an internal API), so the BFF must not
+	// forward the browser's Origin.
+	req.Header.Del("Origin")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
