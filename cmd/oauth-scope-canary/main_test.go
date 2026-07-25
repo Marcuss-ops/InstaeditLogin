@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -246,9 +247,8 @@ func repoRootForTest() (string, error) {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", nil
+			return "", fmt.Errorf("go.mod not found above %s", wd)
 		}
 		dir = parent
 	}
-	return "", nil
 }
