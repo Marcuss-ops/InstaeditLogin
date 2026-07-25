@@ -618,7 +618,7 @@ func TestPublishYouTubeEditorSession_PublishingInFlightReturnsConflict(t *testin
 		},
 	}
 
-	r := newPublishRouter(t, workspace, editStore)
+	r := newPublishRouter(t, workspace, editStore, WithPublishingInFlightTimeout(1*time.Minute))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", bytes.NewReader([]byte("{}")))
 	req.Header.Set("Content-Type", "application/json")
@@ -628,6 +628,93 @@ func TestPublishYouTubeEditorSession_PublishingInFlightReturnsConflict(t *testin
 
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected 409 for in-flight publishing session, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPublishYouTubeEditorSession_InFlightTimeoutExpiredRetries(t *testing.T) {
+	account := &models.PlatformAccount{
+		ID:             42,
+		UserID:         1,
+		Platform:       models.PlatformYouTube,
+		PlatformUserID: "UC123",
+		Username:       "testchannel",
+		Status:         models.AccountStatusActive,
+	}
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+
+	mediaStore := newMockMediaStore()
+	mediaStore.assets["asset-uuid-123"] = &models.MediaAsset{
+		ID:          "asset-uuid-123",
+		UserID:      1,
+		UploadKey:   "uploads/1/thumb.jpg",
+		ContentType: "image/jpeg",
+		SizeBytes:   1024,
+		Status:      models.MediaAssetStatusReady,
+	}
+
+	var updated *models.YouTubeVideoEdit
+	editStore := &mockYouTubeVideoEditStore{
+		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:                "session-123",
+				WorkspaceID:       workspace.ID,
+				PlatformAccountID: account.ID,
+				YouTubeVideoID:    "ytvideo123",
+				VeloxProjectID:    "ve-project-123",
+				ThumbnailMediaID:  strPtr("asset-uuid-123"),
+				DesiredPrivacy:    "public",
+				Status:            "publishing",
+				UpdatedAt:         time.Now().UTC().Add(-2 * time.Minute),
+			}, nil
+		},
+		update: func(ctx context.Context, edit *models.YouTubeVideoEdit) error {
+			updated = edit
+			return nil
+		},
+	}
+
+	youTubeSvc := &mockYouTubeOAuthServiceForEditor{}
+
+	thumbnailBytes := []byte("fake-thumbnail-bytes")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(thumbnailBytes)
+	}))
+	defer server.Close()
+
+	storage := newMockStorageProvider()
+	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
+
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+		return "https://www.youtube.com/watch?v=" + videoID, nil
+	}
+
+	r := newPublishRouter(t, workspace, editStore,
+		WithMediaStore(mediaStore),
+		WithStorageProvider(storage),
+		WithYouTubeService(youTubeSvc),
+		WithCredentialVault(&mockCredentialVault{
+			getFn: func(ctx context.Context, id int64, tt string) (*models.OAuthToken, error) {
+				if id == account.ID {
+					return &models.OAuthToken{AccessToken: "valid-token"}, nil
+				}
+				return nil, errors.New("token not found")
+			},
+		}),
+		WithPublishingInFlightTimeout(1*time.Minute),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 after in-flight timeout expired, got %d: %s", w.Code, w.Body.String())
+	}
+	if updated == nil || updated.Status != "published" {
+		t.Fatalf("expected session status published after retry, got %v", updated)
 	}
 }
 

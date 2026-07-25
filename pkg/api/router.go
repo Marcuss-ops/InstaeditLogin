@@ -303,6 +303,11 @@ type Router struct {
 	// frontendURL is used as a fallback.
 	editorURL string
 
+	// publishingInFlightTimeout bounds how long a session can stay in
+	// status='publishing' before another publish request is allowed to
+	// retry it. Wired via WithPublishingInFlightTimeout; default 5m.
+	publishingInFlightTimeout time.Duration
+
 	// thumbnailDownloadClient is the HTTP client used by the thumbnail
 	// publish flow to download the thumbnail bytes from storage. It
 	// has a bounded timeout to prevent indefinite hangs on slow
@@ -666,6 +671,18 @@ func WithEditorURL(url string) RouterOption {
 	}
 }
 
+// WithPublishingInFlightTimeout configures the guard window used by the
+// YouTube thumbnail publish handler to treat a session with
+// status='publishing' as still in-flight. The default is 5 minutes;
+// non-positive values are ignored and the default is used instead.
+func WithPublishingInFlightTimeout(d time.Duration) RouterOption {
+	return func(r *Router) {
+		if d > 0 {
+			r.publishingInFlightTimeout = d
+		}
+	}
+}
+
 // WithThumbnailDownloadClient wires the HTTP client used to download
 // thumbnail bytes from storage before publishing to YouTube. When
 // nil, NewRouter installs a default client with a 30s timeout.
@@ -818,6 +835,7 @@ func NewRouter(
 		frontendURL:   frontendURL,
 		allowedOrigin: allowedOrigins,
 		rateLimiter:   newRateLimiter(nil), // FASE 1.2: per-IP token bucket (trusted proxies wired via option below)
+		publishingInFlightTimeout: DefaultPublishingInFlightTimeout,
 		thumbnailDownloadClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},

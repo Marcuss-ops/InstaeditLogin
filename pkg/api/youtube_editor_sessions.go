@@ -17,6 +17,10 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
+// DefaultPublishingInFlightTimeout is the default guard window used
+// when a YouTube thumbnail publish session is already in-flight.
+const DefaultPublishingInFlightTimeout = 5 * time.Minute
+
 // createYouTubeEditorSessionRequest is the body accepted by
 // POST /api/v1/youtube/editor-sessions.
 type createYouTubeEditorSessionRequest struct {
@@ -394,7 +398,11 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		})
 		return
 	}
-	if edit.Status == "publishing" && time.Since(edit.UpdatedAt) < 5*time.Minute {
+	inFlightTimeout := r.publishingInFlightTimeout
+	if inFlightTimeout <= 0 {
+		inFlightTimeout = DefaultPublishingInFlightTimeout
+	}
+	if edit.Status == "publishing" && time.Since(edit.UpdatedAt) < inFlightTimeout {
 		writeError(w, http.StatusConflict, "publish already in progress")
 		return
 	}
