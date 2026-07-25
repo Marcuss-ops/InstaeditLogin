@@ -1,260 +1,314 @@
-# Deploy — Fly.io production deploy for `instaedit-login`
+# Deploy — VPS production stack for `instaedit-login`
 
-Canonical reference for first deploy + ongoing secret rotation to the
-Fly.io production target. Mirrors `HANDOFF-LINUX.md` for local dev, but
-for the live `instaedit-login` app on Fly.
+Canonical reference for first deploy and ongoing secret rotation to the
+VPS production target. **This is the single source of truth for production
+deployment as of 2026-07-25.** The historical Fly.io / Vercel
+configurations are removed from the live path; their files (`fly.toml`,
+`scripts/set-fly-secrets.sh`, `scripts/verify-fly-secrets.sh`, the `web/`
+Vercel preview workflow, etc.) were deleted in commits `7e8beec`,
+`615314b`, and `5ac159c`. The remaining references in the repo are
+archaeological only.
 
-> The production deploy is **secrets-first, code-second**:
-> 1. Stage secrets on Fly (no restart).
-> 2. Verify the secrets are clean.
-> 3. Deploy the code (attaches the staged secrets to the new image).
->
-> This ordering matters: `flyctl secrets set` without `--stage` triggers
-> an immediate rolling restart on the *existing* image, which is the
-> wrong ordering for a coordinated rollout. The scripts in
-> `scripts/` use `--stage` for exactly this reason.
+## Topology (one diagram, locking in the cutover)
+
+```text
+        ┌───────────────────────────────────────────────────────┐
+        │                      Public DNS                       │
+        │   apex  →  A  51.91.11.36   (VPS)                     │
+        │   app.  →  A  51.91.11.36   (VPS)                     │
+        │   api.  →  A  51.91.11.36   (VPS)                     │
+        │   email-deliverability (SPF/DKIM/DMARC) → Resend      │
+        └───────────────────────────┬───────────────────────────┘
+                                    │ TCP/80 + TCP/443 (LE via HTTP-01)
+                                    ▼
+        ┌───────────────────────────────────────────────────────┐
+        │ VPS — single host, IP 51.91.11.36                    │
+        │                                                       │
+        │   ┌─────────────┐    Let's Encrypt (auto-renew)      │
+        │   │   Caddy     │◄──────── TLS termination (SNI)      │
+        │   │   :80/:443  │                                     │
+        │   └──┬───────┬──┘                                     │
+        │      │       │                                        │
+        │      │ SNI = apex / app. → SPA (static)               │
+        │      │         serve /srv/instaedit/web/dist/         │
+        │      │                                                │
+        │      │ SNI = api. → reverse_proxy 127.0.0.1:8080      │
+        │      │                                                │
+        │      ▼                                                │
+        │   ┌─────────────────────────────────────────────┐     │
+        │   │ docker compose (one daemon, one project)    │     │
+        │   │                                              │     │
+        │   │   api      :8080   cmd/api                   │     │
+        │   │   worker   —       cmd/worker (5 goroutines) │     │
+        │   │   migrate  —       one-shot pre-deploy      │     │
+        │   │   caddy    :443    tls + reverse-proxy      │     │
+        │   │   minio    :9000   S3-compatible media store │     │
+        │   │   postgres :5432   postgres:17-alpine        │     │
+        │   │   (all on the compose network; pg + minio    │     │
+        │   │    bound to 127.0.0.1 for external safety)   │     │
+        │   └─────────────────────────────────────────────┘     │
+        └───────────────────────────────────────────────────────┘
+```
+
+API and worker share one image (Dockerfile `[production]` target builds
+the unified bundle the way Fly used to). Migration runs as a one-shot
+container before any `api` / `worker` container starts. Postgres and
+MinIO are NOT exposed to the public network — only Caddy listens on
+80/443.
+
+Pre-cutover evidence is preserved in `docs/VPS-DEPLOY-STATUS.md` and
+`docs/DEPLOY-AUDIT.md`.
 
 ---
 
 ## 1. Pre-flight
 
-Tools + accounts required:
+Tools + accounts required on the operator laptop (or CI runner):
 
 | Tool / Account | Where to get it |
 |----------------|-----------------|
-| `flyctl` | `brew install flyctl` or `curl -L https://fly.io/install.sh \| sh` |
-| `jq` | `brew install jq` (optional — for smoke tests) |
-| Fly.io account | https://fly.io/app/sign-up |
-| Meta Developer app | https://developers.facebook.com (Settings → Basic → App ID + App Secret) |
-| Tigris account | https://tigrisdata.com (S3-compatible storage; Access Keys in dashboard) |
-| Resend account | https://resend.com (or your SMTP — magic-link mail) |
-| Managed Postgres | Fly Postgres (`flyctl postgres create`) or Neon/Supabase |
-| DNS for `instaedit.org` | registrar (or Cloudflare) — see **§1.5 below** for the canonical records + see **[docs/OPERATIONS.md §1](./OPERATIONS.md#1-dns-records-instaeditorg)** for the full DNS runbook (CAA, DNSSEC, apex redirect) |
+| `ssh` + `ssh-keygen` | OS-bundled (Linux/macOS); Windows: OpenSSH or WSL |
+| `docker` + `docker compose` | Docker Desktop or `docker-ce` from docker.com |
+| `jq` | `brew install jq` / `apt install jq` (optional — pretty-prints smoke probes) |
+| `dig` | `brew install bind` / `apt install dnsutils` (DNS verification) |
+| VPS shell account either `root` or a sudo-capable user; SSH pubkey authorized | Provisioned once (see §3) |
+| Meta Developer app (Facebook Login for Business) | https://developers.facebook.com (Settings → Basic → App ID + App Secret). Needed even on VPS-only; the OAuth round-trip still runs through Meta. |
+| Resend account | https://resend.com (for `no-reply@instaedit.org` magic links) |
+| Object storage | **MinIO** runs inside the Compose stack (see §4). No external S3 / Tigris account required for the canonical VPS deploy. If migrating from the historical Tigris setup, see §10 (Tigris retirement). |
+| DNS for `instaedit.org` | registrar (or Cloudflare) — see **§1.5 below** for the canonical records. The full DNS runbook (cert renewal, DMARC progression, Gmail inbox test) lives in [docs/OPERATIONS.md §1 + §7](./OPERATIONS.md#1-dns-records-instaeditorg). |
 
 ---
 
 ## 1.5 DNS delegation (canonical) — `instaedit.org`
 
-Records table below is now authoritative for ALL 7 records (Vercel + Fly + email deliverability). The **full DNS runbook (cert renewal, failure recovery, DMARC progression, Gmail inbox test) lives in [docs/OPERATIONS.md §1 + §7](./OPERATIONS.md#1-dns-records-instaeditorg)** — the table here is the quick-reference; the runbook is the playbook.
+After the cutover, **all three names resolve to the same VPS IP**
+(`51.91.11.36`). Caddy distinguishes them by SNI: apex + `app` serve the
+SPA, `api` reverse-proxies to the Go API. The PHP-style `apex → app`
+redirect (previously declared in `web/vercel.json`) is now served by a
+Caddy `redir` block; reproduce the exact behaviour with:
+
+```caddyfile
+@apex host instaedit.org
+redir @apex https://app.instaedit.org{uri} permanent
+```
+
+(That block lives in `ops/vps/Caddyfile`; commit `8271639` in the legacy
+audit pinned the equivalent redirect at the Vercel edge layer.)
 
 | Host | Type | Value | TTL | Purpose |
 |------|------|-------|-----|---------|
-| `instaedit.org` (apex) | `A` | `76.76.21.21` | 60 | Vercel Anycast — 301 redirects to `app.instaedit.org`. Apex cannot use CNAME (DNS spec); use Vercel's A record + dashboard-level redirect (canonical over ALIAS-flattening for portability across registrars). |
-| `app.instaedit.org` | `CNAME` | `cname.vercel-dns.com.` | 60 | Vercel edge route to the SPA. |
-| `api.instaedit.org` | `CNAME` | `instaedit-login.fly.dev.` | 300 | Fly.io ingress for the backend. **Never** hardcode A records from `fly ips list` — Fly re-IPs during migrations and the CNAME keeps failover transparent. |
-| `_vercel.instaedit.org` | `TXT` | `vc-domain-verify=<token-from-Vercel>` | 300 | Vercel domain-ownership challenge. Token is surfaced in Vercel → Project → Settings → Domains; paste as-is. |
-| `instaedit.org` (apex) | `CAA` | `0 issue "letsencrypt.org"` | 3600 | Restrict cert issuance to Let's Encrypt (both Fly and Vercel use LE). |
+| `instaedit.org` (apex) | `A` | `51.91.11.36` | 60 | VPS — Caddy serves 301 → `app.instaedit.org` (apex cannot use CNAME per DNS spec). Single A record; Caddy terminates TLS. |
+| `app.instaedit.org` | `A` | `51.91.11.36` | 60 | VPS — Caddy serves the SPA (`/srv/instaedit/web/dist` + SPA fallback `/* → /index.html`). |
+| `api.instaedit.org` | `A` | `51.91.11.36` | 300 | VPS — Caddy reverse-proxies `/api/*` to `127.0.0.1:8080` (Go API inside the Compose stack). |
+| `instaedit.org` (apex) | `CAA` | `0 issue "letsencrypt.org"` | 3600 | Restrict cert issuance to Let's Encrypt (Caddy uses LE via HTTP-01). |
 | `instaedit.org` (apex) | `CAA` | `0 iodef "mailto:security@instaedit.org"` | 3600 | Incident reporting for unauthorized issuance attempts. |
-| `instaedit.org` (apex) | `TXT` | `v=spf1 include:_spf.resend.com ~all` | 3600 | SPF for Resend (sender domain `no-reply@instaedit.org`). Use `~all` (soft-fail) during the 2-4 weeks warm-up; flip to `-all` (hard-fail) after first month clean. **Note:** include host is `_spf.resend.com` (with `_spf.` prefix), not bare `resend.com` — this is the 2026 Resend canonical. |
-| `<selector>._domainkey.instaedit.org` | `CNAME` | `<selector>.dkim.resend.com.` | 3600 | DKIM rotation. **The `<selector>` is assigned by Resend when you add the domain** — look at the Resend dashboard → Domains → `instaedit.org` → Records BEFORE pasting. Typical values: `resend1`, `resend2`. The format `<selector>.dkim.resend.com.` is canonical in 2026; do NOT switch to a TXT-based DKIM record (some providers have migrated — Resend has NOT). |
-| `_dmarc.instaedit.org` | `TXT` | `v=DMARC1; p=none; rua=mailto:security@instaedit.org; ruf=mailto:security@instaedit.org; pct=100` | 3600 | **DMARC starts at `p=none`** for the 2-4 weeks warm-up window — Gmail requires a soft enforcement ramp for brand-new sender domains. Ramp schedule + reasoning: see [docs/OPERATIONS.md §7.2](./OPERATIONS.md#72-dmarc-progression-schedule). The rua/ruf reports go to `security@instaedit.org` — make sure that mailbox exists before flipping `p=quarantine` (otherwise reports get rejected by your own receiver). |
+| `instaedit.org` (apex) | `TXT` | `v=spf1 include:_spf.resend.com ~all` | 3600 | SPF for Resend (sender domain `no-reply@instaedit.org`). Use `~all` (soft-fail) during the 2-4 weeks warm-up; flip to `-all` after first month clean. **Note:** include host is `_spf.resend.com` (with `_spf.` prefix), not bare `resend.com` — this is the 2026 Resend canonical. |
+| `<selector>._domainkey.instaedit.org` | `CNAME` | `<selector>.dkim.resend.com.` | 3600 | DKIM rotation. **The `<selector>` is assigned by Resend when you add the domain** — look at the Resend dashboard → Domains → `instaedit.org` → Records BEFORE pasting. Typical values: `resend1`, `resend2`. The format `<selector>.dkim.resend.com.` is the 2026 canonical; do NOT switch to TXT-based DKIM (Resend has not). |
+| `_dmarc.instaedit.org` | `TXT` | `v=DMARC1; p=none; rua=mailto:security@instaedit.org; ruf=mailto:security@instaedit.org; pct=100` | 3600 | **DMARC starts at `p=none`** for the 2-4 weeks warm-up window — Gmail requires a soft enforcement ramp for brand-new sender domains. Ramp schedule + reasoning: see [docs/OPERATIONS.md §7.2](./OPERATIONS.md#72-dmarc-progression-schedule). The rua/ruf reports go to `security@instaedit.org` — make sure that mailbox exists before flipping `p=quarantine`. |
 
 Plus:
 - **DNSSEC** at the registrar (Cloudflare: one-click; Namecheap: opt-in via DS records). Required for the CAA records to be honored by resolvers.
-- **Cloudflare users:** set `api.` and `app.` to **DNS-only** ("grey cloud"). The orange-cloud proxy returns fly/vercel's certs before LE validation can complete — HTTP-01 challenges will fail and cert renewal will silently break after 60 days.
-- **TTL rationale:** 60s on the frontend lets near-instant switchover in CDN failure events; 300s on the backend balances low-API-conn-churn vs cheap regional rerouting.
+- **Cloudflare users:** set `instaedit.org`, `app.instaedit.org`, `api.instaedit.org` to **DNS-only** ("grey cloud"). The orange-cloud proxy terminates TLS itself and intercepts LE HTTP-01 challenges — the VPS will fail to renew its cert after 60 days.
+- **TTL rationale:** 60s on the frontend lets near-instant switchover in CDN-failure events; 300s on the backend balances low-API-conn-churn vs cheap regional rerouting. With a single VPS, regional rerouting is moot until a second region is added.
+- **No `_vercel` TXT, no `cname.vercel-dns.com.`, no `instaedit-login.fly.dev.`:**
+  those records are historical and should be **removed** at the registrar
+  as part of the cutover. If they linger, neither resolves, but they are
+  noise in the zone file and confuse future audits.
 
-> **Kicking it off** (after Fly app exists):
-> ```bash
-> flyctl certs add api.instaedit.org --app instaedit-login
-> ```
-> Fly will HTTP-01 validate against `instaedit-login.fly.dev` via the CNAME. Watch the log for `Cert issued` (typically 30-90s once DNS propagates). For Vercel: add `app.instaedit.org` in Project → Settings → Domains, paste the `_vercel` TXT value, wait for "Valid Configuration".
+> **Cert issuance:** Caddy auto-provisions and auto-renews a Let's Encrypt
+> certificate for all three names during the first start. The HTTP-01
+> challenge goes to `http://51.91.11.36/.well-known/acme-challenge/...`
+> from the LE CA vantage points (verify `dig +short instaedit.org` returns
+> `51.91.11.36` BEFORE the first `docker compose up`). No manual cert
+> step is required — `flyctl certs add` is intentionally NOT a step
+> anymore.
+
+Re-run procedure (operator laptop):
+
+```bash
+dig +short instaedit.org       A    # expect: 51.91.11.36
+dig +short app.instaedit.org    A    # expect: 51.91.11.36
+dig +short api.instaedit.org    A    # expect: 51.91.11.36
+
+curl -sI https://api.instaedit.org/health | grep -i '^server:'
+# expect: server: Caddy
+
+curl -sI https://api.instaedit.org/ready | head -1
+# expect: HTTP/2 200 (cold start) or 503 with workers_pending (warming)
+```
+
+Failure mode to escalate on: any of the three names resolving to a
+different IP, or `Server:` header carrying anything other than `Caddy`.
 
 ---
 
-## 2. One-time app setup
+## 2. One-time host setup (operator laptop → VPS)
+
+These steps run once per VPS host. They do NOT change between
+production deploys.
+
+### 2.1 Initial server
 
 ```bash
-# 1. Create the app (no machines yet — release_command runs migrations
-#    before any api/worker VM rolls out, per Blocco #4.1 contract).
-flyctl apps create instaedit-login
+# 1. Provision a Linux VPS at your host of choice (Hetzner, OVH,
+#    DigitalOcean, Scaleway, …). Recommended specs for the beta:
+#
+#       Region             : eu-west-1 or your closest EU zone
+#       Image              : Ubuntu 24.04 LTS (or Debian 12)
+#       Plan               : 4 vCPU / 8 GB RAM / 80 GB NVMe SSD
+#       Firewall (default) : allow TCP 22 (SSH) + TCP 80 + TCP 443 only
+#
+# 2. Take note of the public IPv4 — call it VPS_IP. The live system
+#    runs at 51.91.11.36 (recorded in docs/VPS-DEPLOY-STATUS.md).
+#    Re-pointing to a new VPS only requires an A-record update at
+#    the registrar + re-running Caddy's first-boot ACME flow.
 
-# 2. Provision the production database. The canonical walkthrough is
-#    ./scripts/db/provision-postgres-runbook.sh — print it once at the
-#    start of the session and step through it. Locked-in parameters
-#    (deviating from these means documenting why in a comment next to
-#    the runbook and re-committing):
-#
-#       a) Cluster name       = instaedit-production         (per spec;
-#         do NOT use instaedit-pg, instaedit-prod, or any non-spec name)
-#       b) Region              = iad                          (matches fly.toml
-#         primary_region so api/worker + pg share latency budget)
-#       c) VM                  = shared-cpu-1x / 1gb RAM     (cost-balanced
-#         for beta; upgradeable via dashboard without recreate)
-#       d) HA replicas         = 1                            (one standby
-#         for failover; ZERO = no auto-failover)
-#       e) PITR retention      = 14 days via dashboard         (Fly default
-#         is 7; bumping covers a 2-week incident window)
-#       f) Pooler              = built-in PgBouncer (port 6432)
-#         (app talks to the pooler; migrations go direct to bypass
-#         PgBouncer's DDL-incompatible txn model)
-#       g) Password            = openssl rand -base64 48       (384-bit;
-#         ONE password, NEVER reused from dev/staging, saved ONLY
-#         in the password manager — never in .env.example / git)
-#
-#    The command emits TWO connection strings — save BOTH in the
-#    password manager under separate keys:
-#
-#       DIRECT (admin / migrations):
-#         postgres://<user>:<pw>@instaedit-production.flycast:5432/<db>?sslmode=require
-#       POOLED  (app api + worker):
-#         postgres://<user>:<pw>@instaedit-production-bouncer.flycast:6432/<db>?sslmode=require&pgbouncer=true
-#
-#    The POOLED URL is what `make fly-secrets` will push into
-#    `DATABASE_URL` on the Fly app. The DIRECT URL stays in the
-#    operator's toolbelt only (runbook manual for migrations if
-#    release_command ever needs to connect with statement_timeout
-#    disabled).
+# 3. SSH in and harden:
+ssh root@$VPS_IP
+adduser instaedit
+mkdir -p /home/instaedit/.ssh
+# Paste the operator laptop's pubkey into /home/instaedit/.ssh/authorized_keys
+chmod 700 /home/instaedit/.ssh
+chmod 600 /home/instaedit/.ssh/authorized_keys
+chown -R instaedit:instaedit /home/instaedit/.ssh
+# Disallow root SSH + password auth in /etc/ssh/sshd_config:
+#   PermitRootLogin no
+#   PasswordAuthentication no
+# Then systemctl reload ssh.
 
-# 3. Smoke check the new cluster from your laptop BEFORE pushing secrets
-#    to Fly. This catches sslmode drift + connection issues BEFORE the
-#    first deploy attempts to apply migrations:
-#
-#       DATABASE_URL=<POOL-URL-FROM-PASSWORDMANAGER> \
-#           ./scripts/db/check-postgres-health.sh
-#    # Expected: "✓ sslmode=require" + "✓ server_version=16.x"
-#    #           + "✓ 0 of 9 canary tables present (pre-migration)"
-#
-#    After `make fly-deploy` succeeds, the same script run again will
-#    show "✓ 9 of 9 canary tables present (post-migration)".
+# 4. Install Docker Engine + Compose plugin (Ubuntu 24.04):
+apt update && apt install -y ca-certificates curl gnupg
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) \
+  signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+  > /etc/apt/sources.list.d/docker.list
+apt update && apt install -y docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
+usermod -aG docker instaedit
+# Log out + back in for the docker group to take effect.
 
-# 4. Schedule the FIRST restore drill (mandatory — 24h after first
-#    migration). Fly supports PITR out-of-the-box via `fly postgres
-#    fork`. The drill script lives at ./scripts/db/production-restore-drill.sh:
-#
-#       FLY_TS="$(date -u +%Y%m%dT%H%M%SZ)"
-#       fly postgres fork \
-#           --from instaedit-production \
-#           --to "instaedit-restore-drill-$FLY_TS" \
-#           --region iad
-#       # Wait for fork-ready (~30-180s). Fly prints the new fork's POOLED URI.
-#       DATABASE_URL_PROD=<PROD-POOL-URL> \
-#       DATABASE_URL=<FORK-POOL-URL> \#    ./scripts/db/production-restore-drill.sh
-#    # Expected: schema sha256 MATCH + row counts MATCH + verdict PASS.
-#    # The script prints a copy-pasteable `fly postgres destroy ...` command
-#    # for cleanup; do NOT auto-destroy (operator must type --yes).
-
-# 5. Tigris bucket: sign up at https://tigrisdata.com, generate Access
-#    Key + Secret Key from the dashboard; capture BOTH in the password
-#    manager under `instaedit-login/s3/<key>` BEFORE running the
-#    provisioning script (the script reads them from env, never CLI args).
-#
-#    The full canonical bucket-setup runbook lives at
-#    ./scripts/s3/provision-tigris.sh — print it once and step through it.
-#    Final bucket state (the runbook is idempotent + dry-run-by-default):
-#
-#       a) Name                = instaedit-prod-media   (matches fly.toml
-#         S3_BUCKET = "instaedit-prod-media"; do NOT use instaedit-media
-#         or any non-canonical name — the backend / asset_repo invariants
-#         assume the exact name once GIN_MODE=release)
-#       b) Endpoint            = t3.storage.dev (Tigris Data global; the
-#         default in fly.toml [env] S3_ENDPOINT; not a secret). For
-#         Fly.io's regional Tigris instead, set S3_ENDPOINT=https://fly.storage.tigris.dev
-#         in .env.production AND update fly.toml's [env] S3_ENDPOINT to match.
-#         The SigV4 signer (internal/services/storage.go) is endpoint-agnostic
-#         — both URLs work, only the value changes.
-#       c) CORS                = single-origin https://app.instaedit.org,
-#         methods PUT/GET/HEAD, Expose ETag, MaxAgeSeconds=3600
-#         (the application / CSRF contract REQUIRES no other origins; adding
-#         the Vercel preview URL would leak the prod bucket to PRs)
-#       d) Lifecycle           = AbortIncompleteMultipartUpload after 1 day
-#         (no orphan parts from cancelled uploads; no need for a separate
-#         bucket-cleanup cron)
-#       e) Versioning          = Enabled    (production media + audit
-#         trail; protects against accidental overwrite / delete)
-#       f) TLS-only            = bucket policy Denies s3:* when
-#         aws:SecureTransport=false (defense-in-depth — the SDK already
-#         uses HTTPS only)
-#       g) Max object size     = 200 MB enforced TWICE: (1) Bucket policy
-#         Denies PutObject if s3:content-length > 209715200;
-#         (2) backend presigned URL issuance (pkg/api/storage.go) clamps
-#         Content-Length to STORAGE_MAX_UPLOAD_BYTES = 200 * 1024 * 1024.
-#
-#    Run from your laptop AFTER postgres smoke check (§2 step 3) succeeds:
-#
-#       cd InstaeditLogin
-#       AWS_ACCESS_KEY_ID=<tigris-access-key> \
-#       AWS_SECRET_ACCESS_KEY=<tigris-secret-key> \
-#           ./scripts/s3/provision-tigris.sh          # dry-run; prints intent
-#       # Expected: "DRY-RUN COMPLETE — no mutations."
-#       #            + 6 steps listed, each prefixed with "→ would"
-#
-#       # Verify the dry-run output looks sane, THEN:
-#       AWS_ACCESS_KEY_ID=<tigris-access-key> \
-#       AWS_SECRET_ACCESS_KEY=<tigris-secret-key> \
-#           ./scripts/s3/provision-tigris.sh --apply  # commits state
-#       # Expected: "✓ PROVISIONING COMPLETE" + 6 ✓ GREEN steps + smoke PASS.
-#
-#    The script also runs a write+head+delete round-trip under the
-#    `ops-smoke-test-<UTC>.txt` key. Anything else = FAIL. Capture the
-#    S3_ACCESS_KEY + S3_SECRET_KEY values in the password manager
-#    BEFORE running this — they never appear in script output.
+# 5. Create the stateful directories (bind-mounted into the Compose stack):
+mkdir -p /srv/instaedit/{pgdata,miniostore,caddy_data,caddy_config,web/dist}
+chown -R instaedit:instaedit /srv/instaedit
 ```
 
-> The `*_REDIRECT_URI` values in step 3 below MUST also be registered
-> in the Meta Developer Console (Facebook Login for Business → Settings
-> → Valid OAuth Redirect URIs). Without that, the OAuth round-trip
-> fails with "Invalid Redirect URI".
+### 2.2 Project layout on the VPS
+
+```bash
+# Clone the repo (or rsync from the laptop) into the standard location:
+#   /opt/instaedit/InstaeditLogin
+#
+# In production this is maintained out-of-band (git pull on a deploy
+# hook), but the layout below is canonical.
+
+cd /opt/instaedit/InstaeditLogin
+
+# Copy Caddyfile and Compose overrides into /srv/instaedit:
+sudo install -m 0644 ops/vps/Caddyfile /srv/instaedit/Caddyfile
+sudo install -m 0644 docker-compose.yml /srv/instaedit/docker-compose.yml
+# (Add docker-compose.production.yml on top if you split staging vs prod.)
+
+sudo cp .env.production.example /srv/instaedit/.env.production 2>/dev/null || true
+chmod 600 /srv/instaedit/.env.production
+chown instaedit:instaedit /srv/instaedit/.env.production
+```
+
+### 2.3 First boot of the stack
+
+```bash
+# From the VPS, as `instaedit`:
+cd /opt/instaedit/InstaeditLogin
+docker compose \
+  --env-file /srv/instaedit/.env.production \
+  -f docker-compose.yml \
+  up -d --build
+# What this does:
+#   - Builds the unified Dockerfile [production] image (api + worker +
+#     migrate in one image, same one Fly was shipping).
+#   - Starts postgres, minio, caddy, api, worker.
+#   - Caddy obtains the LE cert on first start for the three names in
+#     §1.5 (HTTP-01 against the public IP).
+#
+# Run the migrate container once explicitly:
+docker compose --env-file /srv/instaedit/.env.production \
+  run --rm migrate
+# Expected: 9 canary tables present (post-migration).
+
+# Verify from the operator laptop:
+curl -fsS https://api.instaedit.org/api/v1/health | jq
+# Expected: {"status":"ok","service":"InstaEditLogin","version":"2.0.0", ... }
+
+curl -fsS https://api.instaedit.org/ready | jq
+# Expected (warm): { "status":"ok", "db":"ok",
+#                    "migrations":"ok", "workers_ready":true }
+# Expected (cold):  503 + workers_pending list. See §5 Gate B.
+```
 
 ---
 
 ## 3. Secret collection
 
-The following **27 secrets** must be set on `instaedit-login`. Where to
-get each:
+The **26 secrets** the application needs at runtime. The shape of the
+catalog is preserved with the previous Fly-era doc so existing
+`docs/OPERATIONS.md` cross-references continue to make sense. **Where
+each lives now:**
 
-| # | Secret | Where to get it |
-|---|--------|-----------------|
-| 1 | `DATABASE_URL` | **Pooled URL** from step 2 above (PgBouncer on Fly port 6432 — saves 1 round trip per worker start under burst load). Direct URL stays on the operator's machine only; migrations go direct via release_command. |
+- The **public, stable** values (`FRONTEND_URL`, `CORS_ALLOWED_ORIGINS`,
+  `COOKIE_DOMAIN`, the 7 `*_REDIRECT_URI`s) are baked into
+  `/srv/instaedit/Caddyfile` and the Compose service env blocks. They
+  are not secrets in the leakable sense; they appear here so the
+  complete env surface is auditable in one place.
+- The **rotatable** values (`JWT_SECRET`, `ENCRYPTION_KEYS`,
+  `ACTIVE_ENCRYPTION_KEY_ID`, the OAuth `*_CLIENT_ID/SECRET`, etc.)
+  live in `/srv/instaedit/.env.production` (mode `0600`, owned by
+  `instaedit`). The Compose stack reads them via
+  `--env-file /srv/instaedit/.env.production`.
+
+| # | Secret | Where to get it (VPS-only) |
+|---|--------|------------------------------|
+| 1 | `DATABASE_URL` | Connection string to the Compose `postgres` service: `postgres://instaedit:<pw>@db:5432/instaedit_login?sslmode=disable`. The host is the compose network DNS name `db`, NOT `127.0.0.1` — `127.0.0.1` would only work from inside a container that shares the network with the postgres bind. Bind pg to `127.0.0.1:5432` on the host; the Compose service connects on the compose-internal alias `db:5432`. Password is one of the values in the secrets block. |
 | 2 | `JWT_SECRET` | `openssl rand -hex 32` — **separate from dev** |
-| 3 | `ENCRYPTION_KEYS` | CSV string: `id:base64key,id:base64key,…` where each `id` is a **uint32** (e.g. `1`, `2`) and each `key` is the base64 of a 32-byte AES-256-GCM key. See "ENCRYPTION_KEYS format" below for the canonical `openssl` one-liner |
-| 4 | `ACTIVE_ENCRYPTION_KEY_ID` | The uint32 id of the key in `ENCRYPTION_KEYS` used for **new** encryption. Must be present in the parsed `ENCRYPTION_KEYS` map (validated by `internal/config/config.go`) |
-| 5 | `S3_ACCESS_KEY` | Tigris dashboard → "Access Keys" — captured as part of step 5 above (the same keys feed the `./scripts/s3/provision-tigris.sh` dry-run / apply run). The bucket name is `instaedit-prod-media` (per step 5/a). NEVER regenerate keys without rotating BOTH Fly secrets + the Tigris dashboard key — a half-rotated setup will silently fail presigned uploads. |
-| 6 | `S3_SECRET_KEY` | Tigris dashboard → "Access Keys" — see row 5 above. After Tigris revokes an old key, run `./scripts/s3/provision-tigris.sh --apply` again with the new creds (the script is idempotent — a regeneration does not require re-creating the bucket). |
-| 7 | `META_APP_ID` | Meta Developer Console → your app → Settings → Basic |
+| 3 | `ENCRYPTION_KEYS` | CSV `id:base64key,id:base64key,…` where each `id` is `uint32` and each `key` is the base64 of a 32-byte AES-256-GCM key. Format recipe below the table. |
+| 4 | `ACTIVE_ENCRYPTION_KEY_ID` | The `uint32` id of the key used for **new** encryption. Must be present in the parsed `ENCRYPTION_KEYS` map. |
+| 5 | `S3_ACCESS_KEY` | Static credential pair baked into the Compose `minio` service env block (rows 5 + 6); also used by the Go API as `MINIO_ROOT_USER`. Generate once via `openssl rand -base64 24`. |
+| 6 | `S3_SECRET_KEY` | Paired with row 5. Used as `MINIO_ROOT_PASSWORD` for the MinIO container AND as `S3_SECRET_KEY` for the Go API (the backend SigV4 signer is endpoint-agnostic, so a local MinIO talks to it just like Tigris). |
+| 7 | `META_APP_ID` | Meta Developer Console → your prod-app → Settings → Basic |
 | 8 | `META_APP_SECRET` | Meta Developer Console → Settings → Basic → "Show" |
-| 9 | `FRONTEND_URL` | `https://app.instaedit.org` |
-| 10 | `CORS_ALLOWED_ORIGINS` | `https://instaedit.org,https://app.instaedit.org` (comma-separated, **no spaces**) |
-| 11 | `COOKIE_DOMAIN` | `.instaedit.org` (leading dot — needed for the SPA to read the csrf_token across subdomains; see `internal/config/config.go` Blocco #2.4) |
+| 9 | `FRONTEND_URL` | `https://app.instaedit.org` (public, lives in `/srv/instaedit/Caddyfile`) |
+| 10 | `CORS_ALLOWED_ORIGINS` | `https://instaedit.org,https://app.instaedit.org` (comma-separated, no spaces) |
+| 11 | `COOKIE_DOMAIN` | `.instaedit.org` (leading dot for cross-subdomain CSRF; see `internal/config/config.go` Blocco #2.4) |
 | 12 | `INSTAGRAM_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/instagram/callback` |
 | 13 | `FACEBOOK_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/facebook/callback` |
 | 14 | `THREADS_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/threads/callback` |
 | 15 | `X_CLIENT_ID` | X Developer Portal → created app → "Keys and tokens" → "OAuth 2.0 Client ID" (post-App Review for scopes `tweet.read` / `tweet.write` / `users.read` / `offline.access`) |
-| 16 | `X_CLIENT_SECRET` | X Developer Portal → created app → "Keys and tokens" → "OAuth 2.0 Client Secret" (show-once; never committed — capture immediately on display) |
-| 17 | `X_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/twitter/callback` in X Developer Portal → Apps → "User authentication settings" → "Callback URIs". Also lives in `fly.toml` `[env]` as a public, non-sensitive value. |
-| 18 | `TIKTOK_CLIENT_ID` | TikTok Developer Portal → created app → "App ID" (Client Key, post-App Review for scopes `user.info.basic` + `video.publish`). The Client Key is the alpha-numeric string issued by TikTok when registering a Web/App platform. |
-| 19 | `TIKTOK_CLIENT_SECRET` | TikTok Developer Portal → created app → "App secret" (visible ONLY right after creation; if you reload the dashboard later it stops showing — capture immediately). |
-| 20 | `TIKTOK_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/tiktok/callback` in TikTok Developer Portal → created app → "Login Kit" → "Redirect URI" (also surfaced under "App settings" → "Authentication" → "Callback URL"). Also lives in `fly.toml` `[env]` as a public, non-sensitive value. |
-| 21 | `YOUTUBE_CLIENT_ID` | Google Cloud Console → "APIs & Services" → "Credentials" → "Create credentials" → "OAuth client ID" → "Web application" → Client ID (post-OAuth consent screen verification + Data API v3 scope approval for `youtube.upload`). Google identifies Client IDs with the suffix `.apps.googleusercontent.com` — the WHOLE string (including the suffix) is the canonical value. |
-| 22 | `YOUTUBE_CLIENT_SECRET` | Same flow as `YOUTUBE_CLIENT_ID` — shown immediately after client creation in the "OAuth client created" modal. Capture ONCE; if you reload the dialog without copying, you must reset the secret via "Reset Secret" (which invalidates in-flight tokens). |
-| 23 | `YOUTUBE_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/youtube/callback` in Google Cloud Console → "APIs & Services" → "Credentials" → the OAuth 2.0 client → "Authorized redirect URIs". Also lives in `fly.toml` `[env]` as a public, non-sensitive value. **NOTE:** the YouTube Data API v3 does NOT require a per-callback "data" prefix (unlike LinkedIn OAuth 2.0) — the bare `https://api.instaedit.org/api/v1/auth/youtube/callback` is sufficient. |
-| 24 | `LINKEDIN_CLIENT_ID` | LinkedIn Developer Portal → My Apps → "Auth" tab → "OAuth 2.0 settings" → "Client ID". |
-| 25 | `LINKEDIN_CLIENT_SECRET` | LinkedIn Developer Portal → "Auth" tab → "Client Secret". |
-| 26 | `LINKEDIN_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/linkedin/callback` in LinkedIn Developer Portal → My Apps → "Auth" tab → "OAuth 2.0 settings" → "Authorized redirect URLs for your app". Also lives in `fly.toml` `[env]` as a public, non-sensitive value. |
+| 16 | `X_CLIENT_SECRET` | X Developer Portal → created app → "Keys and tokens" → "OAuth 2.0 Client Secret" (show-once — capture immediately) |
+| 17 | `X_REDIRECT_URI` | Register `https://api.instaedit.org/api/v1/auth/twitter/callback` in X Developer Portal → Apps → "User authentication settings" → "Callback URIs". Public value in `/srv/instaedit/.env.production`. |
+| 18 | `TIKTOK_CLIENT_ID` | TikTok Developer Portal → created app → "App ID" (Client Key, post-App Review for scopes `user.info.basic` + `video.publish`) |
+| 19 | `TIKTOK_CLIENT_SECRET` | TikTok Developer Portal → created app → "App secret" (visible ONLY right after creation; capture immediately) |
+| 20 | `TIKTOK_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/tiktok/callback` |
+| 21 | `YOUTUBE_CLIENT_ID` | Google Cloud Console → "APIs & Services" → "Credentials" → OAuth client ID (suffix `.apps.googleusercontent.com`) |
+| 22 | `YOUTUBE_CLIENT_SECRET` | Same flow as `YOUTUBE_CLIENT_ID`; capture immediately on display |
+| 23 | `YOUTUBE_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/youtube/callback` |
+| 24 | `LINKEDIN_CLIENT_ID` | LinkedIn Developer Portal → My Apps → "Auth" tab → "OAuth 2.0 settings" → "Client ID" |
+| 25 | `LINKEDIN_CLIENT_SECRET` | LinkedIn Developer Portal → "Auth" tab → "Client Secret" |
+| 26 | `LINKEDIN_REDIRECT_URI` | `https://api.instaedit.org/api/v1/auth/linkedin/callback` |
 
-> **Note on `EMAIL_PROVIDER_KEY`**: capture it in your password manager (`instaedit-login/email/EMAIL_PROVIDER_KEY`, Resend scope = `Sending Access` ONLY) for the Gmail inbox test in [`docs/OPERATIONS.md` §7.3](./OPERATIONS.md#73-gmail-inbox-test-protocol). Do **not** add it to `.env.production` / `make fly-secrets` until the backend wires Resend (see [`docs/OPERATIONS.md` §7.5](./OPERATIONS.md#75-email_provider_key-capture-protocol)).
+> **Note on `EMAIL_PROVIDER_KEY`**: capture it in your password manager
+> (`instaedit-login/email/EMAIL_PROVIDER_KEY`, Resend scope = `Sending
+> Access` ONLY) for the Gmail inbox test in [docs/OPERATIONS.md §7.3](./OPERATIONS.md#73-gmail-inbox-test-protocol).
+> Do **not** add it to `/srv/instaedit/.env.production` until the
+> backend wires Resend (see [docs/OPERATIONS.md §7.5](./OPERATIONS.md#75-email_provider_key-capture-protocol)).
 
-**Do NOT include** (disabled providers, beta scope): `STRIPE_*`.
-The set script refuses to push if any of these prefixes appear in the .env file.
-
-**Where to store the .env.production file**:
-
-```bash
-# 1. Copy the dev template
-cp .env.example .env.production
-
-# 2. Fill in the 26 values above. Use your secret manager (1Password,
-#    Bitwarden, …) — never paste real secrets into chat / git / issues.
-
-# 3. Verify the file is gitignored (it should be — `.env` is in
-#    .gitignore at the repo root).
-ls -la .env.production   # confirm the file exists locally
-git check-ignore .env.production || echo "WARN: .env.production is NOT gitignored"
-```
+**Do NOT include** (disabled providers, beta scope): `STRIPE_*`. The
+deploy pipeline refuses to start any container that references these
+prefixes.
 
 > **`ENCRYPTION_KEYS` format (per `internal/crypto/encrypt.go`)**:
 > The config loader parses this with `strconv.ParseUint(idStr, 10, 32)`,
-> so each id MUST be a uint32 digit string. Each entry is
+> so each id MUST be a `uint32` digit string. Each entry is
 > `id:base64key` separated by commas (no spaces). The base64 payload
 > is the 32-byte AES-256-GCM key. Single-quote the value in the .env
 > file to prevent bash from interpreting the `:` or `,`:
@@ -266,145 +320,104 @@ git check-ignore .env.production || echo "WARN: .env.production is NOT gitignore
 > echo "ACTIVE_ENCRYPTION_KEY_ID=1"
 > ```
 >
-> Example for the .env file:
+> Example for the `.env.production` file:
 > ```env
 > ENCRYPTION_KEYS='1:Abc123Base64KeyHere,2:Def456AnotherBase64Key'
 > ACTIVE_ENCRYPTION_KEY_ID=1
 > ```
->
-> The bootstrap (`internal/crypto/encrypt.go`) uses the active key for
-> **new** encryption operations and the full map (id → base64) for
-> **decryption** — so existing tokens encrypted with an older key are
-> still readable after rotation, as long as the old entry stays in the
-> CSV. See §6 for the zero-downtime rotation runbook.
+
+### 3.0 Operator reference manifest (2026-07-25)
+
+**Per-secret status table**: confirms what has already been captured +
+the shape constraints the captured value should match + where in the
+password manager the captured value lives. **Values are NEVER printed in
+this manifest** — only the status + shape (length / charset / regex) +
+capture location.
+
+| # | Secret | Source (resolved) | Shape | Password manager entry | Captured? | Action ref |
+|---|--------|-------------------|-------|------------------------|-----------|------------|
+| 1 | `DATABASE_URL` | Local URL from /srv/instaedit/.env.production (Compose `db` service; sslmode=disable on the docker network) | Format: `postgres://<user>:<pw>@db:5432/<db>?sslmode=disable` (≈ 60–90 chars; the password URI-component is the only randomized segment) | `instaedit-login/database-url/production` | ○ PENDING | DEPLOY.md §2 + §3 row 1 |
+| 2 | `JWT_SECRET` | `openssl rand -hex 32` (sha12=`2df3c07a1d40`) | 64 lowercase hex chars / 32 bytes binary (RFC 7518 HS256 minimum per `internal/config/config.go::jwtSecretMinBytes=32`) | `instaedit-login/jwt-secret/production` | ✓ CAPTURED | already in PM |
+| 3 | `ENCRYPTION_KEYS` | `openssl rand -base64 32` for id=1 (sha12=`94e5775e101d`) | CSV `id:base64,…`; each base64 decodes to exactly 32 bytes (AES-256-GCM slot per `internal/crypto/encrypt.go::aesKeyBytes=32`) | `instaedit-login/encryption-key-1/production` (one entry per slot) | ✓ CAPTURED (1 slot) | already in PM |
+| 4 | `ACTIVE_ENCRYPTION_KEY_ID` | literal `1` (uint32, MUST be present in `ENCRYPTION_KEYS` map) | digit string in [0, 4294967295] | `instaedit-login/active-encryption-key-id/production` | ✓ CAPTURED | already in PM |
+| 5 | `S3_ACCESS_KEY` | Local MinIO root credential (paired with row 6) | non-empty (≈ 30–40 chars for `openssl rand -base64 24`) | `instaedit-login/s3-access-key/production` | ○ PENDING | DEPLOY.md §4 launch step |
+| 6 | `S3_SECRET_KEY` | Local MinIO root credential (paired with row 5; rotate the pair ONLY together) | non-empty (≈ 30–40 chars) | `instaedit-login/s3-secret-key/production` | ○ PENDING | DEPLOY.md §4 launch step |
+| 7 | `META_APP_ID` | Meta Developer Console → prod-app → Settings → Basic (numeric) | numeric string (typically 15 digits) | `instaedit-login/meta-app-id/production` | ○ PENDING | Meta prod-app review |
+| 8 | `META_APP_SECRET` | Meta Developer Console → Settings → Basic → "Show" | ≥ 32 chars (per `internal/config/config.go::secretMinChars=32`) | `instaedit-login/meta-app-secret/production` | ○ PENDING | Meta prod-app review |
+| 9 | `FRONTEND_URL` | Canonical per commit `716c709` + Caddyfile | exactly `https://app.instaedit.org` (HTTPS required; no trailing slash; no localhost) | N/A (public, in `/srv/instaedit/Caddyfile`) | ✓ STABLE | no action |
+| 10 | `CORS_ALLOWED_ORIGINS` | Canonical per commit `716c709` + apex redirect | exactly `https://instaedit.org,https://app.instaedit.org` | N/A (public) | ✓ STABLE | no action |
+| 11 | `COOKIE_DOMAIN` | Canonical per `internal/config/config.go` Blocco #2.4 | exactly `.instaedit.org` (leading dot) | N/A (public) | ✓ STABLE | no action |
+| 12 | `INSTAGRAM_REDIRECT_URI` | Canonical per Caddyfile + Meta console registration | exactly `https://api.instaedit.org/api/v1/auth/instagram/callback` | N/A (public; pinned by Meta console) | ✓ STABLE | no action |
+| 13 | `FACEBOOK_REDIRECT_URI` | Canonical per Caddyfile | exactly `https://api.instaedit.org/api/v1/auth/facebook/callback` | N/A (public) | ✓ STABLE | no action |
+| 14 | `THREADS_REDIRECT_URI` | Canonical per Caddyfile | exactly `https://api.instaedit.org/api/v1/auth/threads/callback` | N/A (public) | ✓ STABLE | no action |
+| 15 | `X_CLIENT_ID` | X Developer Portal (post-App Review) | exact OAuth Client ID (≈ 22-char alphanumeric) | `instaedit-login/x-client-id/production` | ○ PENDING | requires App Review for scopes `tweet.read` / `tweet.write` / `users.read` / `offline.access` |
+| 16 | `X_CLIENT_SECRET` | X Developer Portal (post-App Review) | exact OAuth Client Secret (≈ 40–50 chars) | `instaedit-login/x-client-secret/production` | ○ PENDING | captured together with row 15 |
+| 17 | `X_REDIRECT_URI` | Canonical per Caddyfile | exactly `https://api.instaedit.org/api/v1/auth/twitter/callback` | N/A (public; pinned by X Developer Portal) | ✓ STABLE | no action |
+| 18 | `TIKTOK_CLIENT_ID` | TikTok Developer Portal (post-App Review) | exact TikTok Client Key (≈ 32 alphanumeric chars) | `instaedit-login/tiktok-client-id/production` | ○ PENDING | requires App Review for `user.info.basic` + `video.publish` |
+| 19 | `TIKTOK_CLIENT_SECRET` | TikTok Developer Portal (post-App Review) | exact TikTok Client Secret (≈ 32–50 chars; visible ONLY right after creation — capture immediately) | `instaedit-login/tiktok-client-secret/production` | ○ PENDING | captured together with row 18 |
+| 20 | `TIKTOK_REDIRECT_URI` | Canonical per Caddyfile | exactly `https://api.instaedit.org/api/v1/auth/tiktok/callback` | N/A (public; pinned by TikTok Developer Portal) | ✓ STABLE | no action |
+| 21 | `YOUTUBE_CLIENT_ID` | Google Cloud Console (post-OAuth consent screen verification) | exactly `<random>.apps.googleusercontent.com` (≈ 72 chars) | `instaedit-login/youtube-client-id/production` | ○ PENDING | requires OAuth consent screen verification + Data API v3 `youtube.upload` scope |
+| 22 | `YOUTUBE_CLIENT_SECRET` | Google Cloud Console (post-OAuth verification) | exactly the Client Secret shown in "OAuth client created" dialog (≈ 24–35 chars) | `instaedit-login/youtube-client-secret/production` | ○ PENDING | captured together with row 21 |
+| 23 | `YOUTUBE_REDIRECT_URI` | Canonical per Caddyfile | exactly `https://api.instaedit.org/api/v1/auth/youtube/callback` | N/A (public; pinned by Google Cloud Console) | ✓ STABLE | no action |
+| 24 | `LINKEDIN_CLIENT_ID` | LinkedIn Developer Portal → My Apps → "Auth" → "OAuth 2.0 settings" | alphanumeric string (≈ 14–18 chars) | `instaedit-login/linkedin-client-id/production` | ○ PENDING | requires LinkedIn product approval for `r_liteprofile` + `r_emailaddress` |
+| 25 | `LINKEDIN_CLIENT_SECRET` | LinkedIn Developer Portal → "Auth" → "Client Secret" | alphanumeric string (≈ 32–40 chars) | `instaedit-login/linkedin-client-secret/production` | ○ PENDING | captured together with row 24 |
+| 26 | `LINKEDIN_REDIRECT_URI` | Canonical per Caddyfile | exactly `https://api.instaedit.org/api/v1/auth/linkedin/callback` | N/A (public; pinned by LinkedIn Developer Portal) | ✓ STABLE | no action |
+
+**Aggregate status (2026-07-25)**: 3 CAPTURED • 10 STABLE • 13 PENDING —
+requires operator-side actions against external services (Meta Dev
+Console + X Developer Portal App Review + TikTok Developer Portal App
+Review + YouTube Data API v3 OAuth Verification + LinkedIn Developer
+Portal product approval).
+
+**Privacy contract**: the actual secret values are NEVER printed in this
+manifest or in any commit output. The shape column gives the operator
+enough metadata to confirm locally (a) the captured value satisfies the
+input contract, (b) the captured value is correctly stored. If you ever
+need to actually verify a value, paste it into your terminal locally
+WITHOUT piping it to the chat agent.
 
 ---
 
-### 3.0 Operator reference manifest (2026-07-14)
+## 4. Post-deploy smoke test (VPS-only)
 
-**Per-secret status table**: confirms what has already been captured + the shape
-constraints the captured value should match + where in the password manager
-the captured value lives. **Values are NEVER printed in this manifest** — only
-the status + shape (length / charset / regex) + capture location.
+**APPLY ALL of these AFTER `docker compose up` exits 0.**
 
-| # | Secret | Source (resolved) | Shape (length / charset / regex) | Password manager entry | Captured? | Action ref |
-|---|--------|-------------------|----------------------------------|------------------------|-----------|------------|
-| 1 | `DATABASE_URL` | Pooled URL from `fly postgres create` (§2 step 2). PgBouncer on port 6432; sslmode=require baked in via flycast | Format spec: see DEPLOY.md §2 step 2 for the canonical DIRECT/POOLED structure (≈ 70–110 chars; Flycast URI; pooler port 6432; sslmode=require; the password URI-component is the only randomized segment). The ACTUAL DATABASE_URL is never printed in this manifest — only the password-manager entry column tells the operator where the captured value lives | `instaedit-login/database-url/production/pooled` ( + `/direct` separately) | ○ PENDING | DEPLOY.md §2 step 2 |
-| 2 | `JWT_SECRET` | `openssl rand -hex 32 \| head -c 64` (sha12=`2df3c07a1d40`) | 64 lowercase hex chars / 32 bytes binary (RFC 7518 HS256 minimum per `internal/config/config.go::jwtSecretMinBytes=32`) | `instaedit-login/jwt-secret/production` | ✓ CAPTURED | already in PM |
-| 3 | `ENCRYPTION_KEYS` | `openssl rand -base64 32 \| tr -d '\n'` for id=1 (sha12=`94e5775e101d`) | CSV `id:base64,id:base64,...`; each base64 decodes to exactly 32 bytes (AES-256 GCM slot per `internal/crypto/encrypt.go::aesKeyBytes=32`); each id is uint32 in [0, 4294967295] | `instaedit-login/encryption-key-1/production` (one entry per slot) | ✓ CAPTURED (1 slot) | already in PM |
-| 4 | `ACTIVE_ENCRYPTION_KEY_ID` | literal `1` (uint32, no randomness; MUST be present in the parsed `ENCRYPTION_KEYS` map) | digit string in [0, 4294967295]; MUST equal one of the ids in the `ENCRYPTION_KEYS` CSV | `instaedit-login/active-encryption-key-id/production` | ✓ CAPTURED (literal `1`) | already in PM |
-| 5 | `S3_ACCESS_KEY` | Tigris dashboard → Access Keys → Generate new (paired with row 6) | non-empty (length ≈ 32–40 chars for Tigris tokens) | `instaedit-login/s3-access-key/production` | ○ PENDING | DEPLOY.md §2 step 5 + `scripts/s3/provision-tigris.sh` |
-| 6 | `S3_SECRET_KEY` | Tigris dashboard → Access Keys (paired with row 5; rotate the pair ONLY together) | non-empty (length ≈ 32–40 chars) | `instaedit-login/s3-secret-key/production` | ○ PENDING | DEPLOY.md §2 step 5 |
-| 7 | `META_APP_ID` | Meta Developer Console → your prod-app → Settings → Basic (App ID) | numeric string (typically 15 digits) | `instaedit-login/meta-app-id/production` | ○ PENDING | DEPLOY.md §6 followup (Meta prod-app review) |
-| 8 | `META_APP_SECRET` | Meta Developer Console → Settings → Basic → “Show” | ≥ 32 chars (per `internal/config/config.go::secretMinChars=32`) | `instaedit-login/meta-app-secret/production` | ○ PENDING | DEPLOY.md §6 followup |
-| 9 | `FRONTEND_URL` | Canonical per commit `716c709` + DNS §1.5 | exactly `https://app.instaedit.org` (HTTPS required; no trailing slash; no localhost) | N/A (public, lives in `fly.toml` `[env]`) | ✓ STABLE | no action |
-| 10 | `CORS_ALLOWED_ORIGINS` | Canonical per commit `716c709` + DNS §1.5 (apex redirect) | exactly `https://instaedit.org,https://app.instaedit.org` (2 comma-separated entries; no spaces) | N/A (public) | ✓ STABLE | no action |
-| 11 | `COOKIE_DOMAIN` | Canonical per commit `716c709` + `internal/config/config.go` Blocco #2.4 (cross-subdomain CSRF) | exactly `.instaedit.org` (leading dot — required for cross-subdomain match) | N/A (public) | ✓ STABLE | no action |
-| 12 | `INSTAGRAM_REDIRECT_URI` | Canonical per `fly.toml` `[env]`; exact registration in Meta Dev Console | exactly `https://api.instaedit.org/api/v1/auth/instagram/callback` | N/A (public; pinned by Meta console) | ✓ STABLE | no action |
-| 13 | `FACEBOOK_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/facebook/callback` | N/A (public) | ✓ STABLE | no action |
-| 14 | `THREADS_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/threads/callback` | N/A (public) | ✓ STABLE | no action |
-| 15 | `X_CLIENT_ID` | Sourced from X Developer Portal (post-App Review) | exactly an OAuth 2.0 Client ID (≈ 22-char alphanumeric) | `instaedit-login/x-client-id/production` | ○ PENDING | requires App Review for scopes `tweet.read` / `tweet.write` / `users.read` / `offline.access`; capture **together** with `X_CLIENT_SECRET` in a single password-manager pull |
-| 16 | `X_CLIENT_SECRET` | Sourced from X Developer Portal (post-App Review) | exactly an OAuth 2.0 Client Secret (≈ 40-50 chars) | `instaedit-login/x-client-secret/production` | ○ PENDING | captured together with `X_CLIENT_ID` (both surfaced in the same dashboard modal) |
-| 17 | `X_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/twitter/callback` | N/A (public; pinned by X Developer Portal) | ✓ STABLE | no action |
-| 18 | `TIKTOK_CLIENT_ID` | Sourced from TikTok Developer Portal (post-App Review) | exactly a TikTok Client Key (≈ 32 alphanumeric chars) | `instaedit-login/tiktok-client-id/production` | ○ PENDING | requires App Review for scopes `user.info.basic` + `video.publish`; capture **together** with `TIKTOK_CLIENT_SECRET` in a single dashboard pull |
-| 19 | `TIKTOK_CLIENT_SECRET` | Sourced from TikTok Developer Portal (post-App Review) | exactly a TikTok Client Secret (≈ 32-50 chars) | `instaedit-login/tiktok-client-secret/production` | ○ PENDING | captured together with `TIKTOK_CLIENT_ID` (both visible only IMMEDIATELY after app creation — capture before page refresh) |
-| 20 | `TIKTOK_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/tiktok/callback` | N/A (public; pinned by TikTok Developer Portal) | ✓ STABLE | no action |
-| 21 | `YOUTUBE_CLIENT_ID` | Sourced from Google Cloud Console (post-OAuth consent screen verification + scope-approval) | exactly a Google-format Client ID (`<random>.apps.googleusercontent.com` — ≈ 72 chars) | `instaedit-login/youtube-client-id/production` | ○ PENDING | requires OAuth consent screen verification (Internal or External depending on holdback policy) + Data API v3 scope approval for `youtube.upload`; capture **together** with `YOUTUBE_CLIENT_SECRET` in a single Cloud Console pull |
-| 22 | `YOUTUBE_CLIENT_SECRET` | Sourced from Google Cloud Console (post-OAuth consent screen verification + scope-approval) | exactly the Client Secret shown in the "OAuth client created" dialog (≈ 24-35 chars) | `instaedit-login/youtube-client-secret/production` | ○ PENDING | captured together with `YOUTUBE_CLIENT_ID` (both surfaced in the same dialog) |
-| 23 | `YOUTUBE_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/youtube/callback` | N/A (public; pinned by Google Cloud Console) | ✓ STABLE | no action |
-| 24 | `LINKEDIN_CLIENT_ID` | LinkedIn Developer Portal → My Apps → "Auth" tab → "OAuth 2.0 settings" → "Client ID" | alphanumeric string (typically 14–18 chars) | `instaedit-login/linkedin-client-id/production` | ○ PENDING | requires LinkedIn product approval for `r_liteprofile` + `r_emailaddress`; capture **together** with `LINKEDIN_CLIENT_SECRET` in a single dashboard pull |
-| 25 | `LINKEDIN_CLIENT_SECRET` | LinkedIn Developer Portal → "Auth" tab → "Client Secret" | alphanumeric string (≈ 32–40 chars) | `instaedit-login/linkedin-client-secret/production` | ○ PENDING | captured together with `LINKEDIN_CLIENT_ID` (both surfaced in the same dashboard modal) |
-| 26 | `LINKEDIN_REDIRECT_URI` | Canonical per `fly.toml` `[env]` | exactly `https://api.instaedit.org/api/v1/auth/linkedin/callback` | N/A (public; pinned by LinkedIn Developer Portal) | ✓ STABLE | no action |
-
-**Aggregate status (2026-07-14)**: 3 CAPTURED (JWT_SECRET + ENCRYPTION_KEYS[id=1] + ACTIVE_ENCRYPTION_KEY_ID) • 10 STABLE (3 public env + 7 redirect URIs) • 13 PENDING — requires operator-side actions against external services (Fly Postgres / Tigris dashboard / Meta Dev Console + **X Developer Portal App Review** for scopes `tweet.read`/`tweet.write`/`users.read`/`offline.access` + **TikTok Developer Portal App Review** for scopes `user.info.basic` + `video.publish` + **YouTube Data API v3 OAuth Verification** for scope `youtube.upload` + **LinkedIn Developer Portal product approval** for `r_liteprofile` + `r_emailaddress` + OAuth consent screen publication).
-
-**Privacy contract**: the actual secret values are NEVER printed in this manifest or in any commit output. The shape column gives the operator enough metadata to confirm locally (a) the captured value satisfies the input contract (e.g. JWT_SECRET is exactly 64 hex chars), (b) the captured value is correctly stored (the password-manager-entry column matches where the operator saved it). If you ever need to actually verify a value, paste it into your terminal locally WITHOUT piping it to the chat agent.
-
-**Pipeline self-test (pure local, no flyctl needed)**:
-```text
-# Equivalent to `make fly-secrets-dry-run` minus the bash wrapper's flyctl pre-flight.
-# Verified 2026-07-14 on the synthetic shape-valid fixture: exit code 0, 26 keys validated.
-# The bash wrapper (make fly-secrets-dry-run) and the parser-direct (this snippet) share
-# the SAME _parse_envfile.py contract; the regression suite scripts/test_parse_envfile.py
-# pins the contract with 15 invariant tests.
-umask 077
-python3 scripts/_parse_envfile.py .env.production dry-run instaedit-login scripts \
-  2>&1 >/dev/null
-# Expected: exit 0 + redacted preview `KEY = first3***last3 (len=N)` per key on stderr.
-# Synthetic fixture leak-audit (2026-07-14): none of the 7 known fixture strings appeared
-# in stderr; 26 `len=N` preview entries emitted; stdout was 0 bytes.
-```
-
-**Operator-sequence prerequisite (sandbox-blocked steps)**:
-The push + verify + deploy chain (`make fly-secrets` + `make fly-secrets-verify` + `make fly-deploy`) requires an authenticated `flyctl` session. The bash wrapper pre-flight `[[ -x ./scripts/set-fly-secrets.sh ]]` + `command -v flyctl` + `flyctl auth whoami` gates the actual `flyctl secrets set --stage -` push; the dry-run validates the .env shape upstream of any flyctl call. Pipeline parity is guaranteed by `scripts/test_parse_envfile.py` (15 regression tests pin the contract). To execute the push: complete steps 4–5 of the operator next-steps block (see the `Suggest followups` of the prior turn).
-
-## 4. First deploy (the canonical pipeline)
-
-```bash
-# 0. Auth (one-time per machine)
-flyctl auth login
-
-# 1. Preview the secrets push (no secrets leave your machine)
-make fly-secrets-dry-run
-#    → prints a redacted table of all 26 keys + lengths
-#    → exits 0 if validation passes
-
-# 2. Stage the secrets on Fly (NO restart triggered)
-make fly-secrets
-#    → pipes the .env to `flyctl secrets set --app X --stage -` via stdin
-#    → Fly banks the secrets; they attach to instances on the next
-#      `fly deploy`
-
-# 3. Verify clean state
-make fly-secrets-verify
-#    → asserts no <redacted>, no disabled-provider keys, all 26 keys present
-#    → exits 0 if all checks pass
-
-# 4. Sanity-check fly.toml
-make fly-verify
-#    → pure-shell parse of fly.toml (app name, processes, health checks)
-
-# 5. Deploy the code (attaches the staged secrets to the new image)
-make fly-deploy
-#    → runs release_command = "./migrate" first, then rolls api + worker
-```
-
-If any step fails, fix the input and re-run from that step. The pipeline
-is idempotent — re-running `fly-secrets` overwrites, `fly-deploy`
-re-builds and re-rolls.
-
----
-
-## 5. Post-deploy smoke test
-
-**APPLY ALL of these on operator laptop AFTER `make fly-deploy` exits 0:**
-
-### 5.0 Lightweight shell probes (read-only)
+### 4.0 Lightweight shell probes (read-only)
 
 ```bash
 # 1. Health endpoint
-curl -sS https://api.instaedit.org/api/v1/health | jq
-#    → {"status":"ok","service":"InstaEdit","version":"...","platforms":["instagram","facebook","threads"]}
+curl -fsS https://api.instaedit.org/api/v1/health | jq
+#   → {"status":"ok","service":"InstaEditLogin","version":"...","platforms":[...]}
 
 # 2. OAuth round-trip (302 → Facebook)
 curl -sI https://api.instaedit.org/api/v1/auth/instagram/login
-#    → HTTP/1.1 302 Found
-#    → Location: https://www.facebook.com/v18.0/dialog/oauth?...
+#   → HTTP/2 302 Found
+#   → Location: https://www.facebook.com/v18.0/dialog/oauth?...
 
 # 3. Cross-subdomain CSRF cookie contract
 curl -sI -H "Origin: https://app.instaedit.org" \
   https://api.instaedit.org/api/v1/auth/me | grep -i 'set-cookie'
-#    → must include: csrf_token=...; Domain=instaedit.org; Secure; SameSite=None
-#      (NO Domain= on session / refresh cookies — they stay host-only.
-#       See Blocco #2.4 in internal/config/config.go.)
+#   → must include: csrf_token=...; Domain=instaedit.org; Secure; SameSite=None
+#     (NO Domain= on session / refresh cookies — they stay host-only.
+#      See Blocco #2.4 in internal/config/config.go.)
 
-# 4. Tail logs
-flyctl logs --app instaedit-login
+# 4. Caddy cert + identity
+echo | openssl s_client -servername api.instaedit.org \
+  -connect api.instaedit.org:443 2>/dev/null \
+  | openssl x509 -noout -issuer -subject -dates
+#   → issuer: O = Let's Encrypt, CN = R10 / R11 (depends on issuance date)
+#   → subject: CN = api.instaedit.org (or *.instaedit.org if wildcard rotated in)
+
+# 5. Require Bunny-CDN-style readiness to the LE staging threshold
+#    (LE has rate limits on prod issuance; the staging env is free).
+#    This block is intentionally NOT auto-run in CI.
 ```
 
-### 5.1 Comprehensive end-to-end smoke (`scripts/ops/post_deploy_smoke.sh`)
+### 4.1 Comprehensive end-to-end smoke (`scripts/ops/post_deploy_smoke.sh`)
 
-The script above is a quick check (4 probes). The **THOROUGH pre-launch verification** lives in `scripts/ops/post_deploy_smoke.sh` and covers Phase 9 sub-phases 1, 2, 3, 4, 5 + 7:
+`scripts/ops/post_deploy_smoke.sh` covers Phase 9 sub-phases 1, 2, 3, 4,
+5 + 7 against `https://api.instaedit.org`. Run from the operator
+laptop:
 
 ```bash
 # Default mode (read-only — probes only, no prod-state-creation):
@@ -413,177 +426,48 @@ The script above is a quick check (4 probes). The **THOROUGH pre-launch verifica
 # Verbose mode (also creates a real draft post + polls state 30s):
 APPLY_PUBLISH=1 ./scripts/ops/post_deploy_smoke.sh
 
-# Against a staging deploy:
+# Against staging (when ran on a VPS that serves staging.instaedit.org):
 BASE_URL=https://staging.instaedit.org ./scripts/ops/post_deploy_smoke.sh
 ```
 
-Pass criteria: ALL PASS count > 0 AND FAIL count = 0; WARNs are advisory (e.g., magic-link dev-fallback path detected). The script **is adaptive** on Phase 9.1: if the backend reply includes the dev-fallback `magic_link_token` field, the script consumes the token via `/verify` and exercises the cookie/CSRF contract end-to-end. If NOT (production email-wired path), the cookie/CSRF + /accounts + /media sub-phases are SKIPPED with a `DEFERRED` warning (until backend Resend wiring lands — see `docs/OPERATIONS.md` §7.5).
+Pass criteria: PASS count > 0 AND FAIL count = 0; WARNs are advisory.
 
-### 5.2 Workspace isolation test (`scripts/ops/workspace_isolation_test.sh`)
+### 4.2 Workspace isolation test (`scripts/ops/workspace_isolation_test.sh`)
 
-Phase 9 sub-phase 6 — verifies user A cannot access user B's data across /accounts + /posts/workspace/{wid} + cross-workspace POST /posts. The script creates 2 fresh users via the **email/password register flow** (not magic-link — the test must NOT depend on Resend email delivery), runs 4 isolation assertions, then **hard-deletes its own test data** via `psql $DATABASE_URL` CASCADE on users matching the random suffix.
+Phase 9 sub-phase 6 — verifies user A cannot access user B's data across
+`/accounts` + `/posts/workspace/{wid}` + cross-workspace `POST /posts`.
+The script creates 2 fresh users via the email/password register flow
+(not magic-link — the test must NOT depend on Resend email delivery),
+runs 4 isolation assertions, then hard-deletes its own test data via
+`psql $DATABASE_URL` CASCADE on users matching the random suffix.
 
 ```bash
 # Preview only (no mutations):
 ./scripts/ops/workspace_isolation_test.sh --dry-run
 
 # Apply (creates 2 users + 2 workspaces + runs assertions + hard-deletes on EXIT):
-DATABASE_URL=postgres://<POOL-URL-FROM-PM> \
+DATABASE_URL=postgres://instaedit:<pw>@127.0.0.1:5432/instaedit_login?sslmode=disable \
   ./scripts/ops/workspace_isolation_test.sh
-
-# Hard cleanup is ALWAYS attempted on EXIT (trap) — even on FAIL.
-# If cleanup fails (network, DB unreachable), the script prints the exact
-# psql commands to run by hand to remove the test users.
 ```
 
-Pass criteria: 4/4 PASS; each FAIL exits 1 after cleanup. Cleanup SQL uses the random suffix so even if the trap fails, the operator can run a manual `psql ... WHERE email LIKE 'isol-%-%<SUFFIX>'`.
-
-> Both scripts integrate with the established pattern: idempotent, dry-run-by-default, `set -euo pipefail`, `bash -n` clean, exit codes (0/1/2/3), `mktemp` + `trap` cleanup. See `scripts/db/check-postgres-health.sh` + `scripts/email/check-email-deliverability.sh` + `scripts/s3/provision-tigris.sh` for the canonical pattern.
+Pass criteria: 4/4 PASS; each FAIL exits 1 after cleanup. Cleanup SQL
+uses the random suffix so even if the trap fails, the operator can run
+a manual `psql ... WHERE email LIKE 'isol-%-%<SUFFIX>'`.
 
 ---
 
-## 6. Rotation
+## 5. Phase 5: Post-deploy Verification
 
-### `JWT_SECRET`
-
-```bash
-# Generate the new value
-NEW_JWT=$(openssl rand -hex 32)
-# Edit .env.production: JWT_SECRET=$NEW_JWT
-make fly-secrets                  # stages the new secret
-make fly-deploy                   # rolls out (in-flight JWTs are now invalid; users get 401 → re-login)
-```
-
-> JWT rotation invalidates ALL in-flight sessions. Plan for a brief
-> re-login window. For zero-downtime, you'd need a JWT key ring (not
-> in scope for the beta).
-
-### `ENCRYPTION_KEYS` (zero-downtime rotation)
-
-The bootstrap (`internal/crypto/encrypt.go`) uses the active key for
-**new** encryption and the full key map for **decryption**. So you can
-add a new key alongside the old, roll the deploy, then drop the old
-key once all tokens have been re-encrypted.
-
-```bash
-# 1. Read the current ENCRYPTION_KEYS + ACTIVE_ENCRYPTION_KEY_ID
-grep -E '^(ENCRYPTION_KEYS|ACTIVE_ENCRYPTION_KEY_ID)' .env.production
-
-# 2. Append a new key (e.g. id=2) to the CSV. Generate the key:
-NEW_B64=$(openssl rand -base64 32)
-#    Then edit .env.production:
-#      was: ENCRYPTION_KEYS='1:<OLD>'
-#            ACTIVE_ENCRYPTION_KEY_ID=1
-#      now: ENCRYPTION_KEYS='1:<OLD>,2:<NEW_B64>'
-#            ACTIVE_ENCRYPTION_KEY_ID=1   # CRITICAL: keep on the OLD key
-#    Why: ACTIVE_ENCRYPTION_KEY_ID=2 here would mean in-flight writes
-#    between deploy 1 and deploy 2 use the new key for ENCRYPTION,
-#    but existing tokens still in flight decrypt with the old key on
-#    re-read. Setting it to 1 keeps the new key in the map (decrypt)
-#    while the old key still owns new writes. The cutover is step 4.
-
-# 3. Push + deploy (no downtime — both keys are accepted on decrypt)
-make fly-secrets
-make fly-deploy
-#    → existing tokens still decrypt with id=1; new writes use id=1.
-
-# 4. Cut over: bump the active id to the new key
-#      now: ACTIVE_ENCRYPTION_KEY_ID=2
-make fly-secrets
-make fly-deploy
-#    → existing tokens still decrypt with id=1; new writes use id=2.
-
-# 5. After all tokens have been re-written (watch the metric
-#    `instaedit_vault_cipher_id` — it should converge to 2), drop
-#    the old key:
-#      now: ENCRYPTION_KEYS='2:<NEW_B64>'
-make fly-secrets
-make fly-deploy
-```
-
-### Provider / Mail / S3 rotation
-
-These are usually set-and-forget (rotate the credential in the provider
-console, then push the new value to Fly):
-
-```bash
-# Edit .env.production
-make fly-secrets
-make fly-deploy
-```
-
----
-
-## 7. Phase 7: Deploy Backend (operator laptop flow)
-
-The target is `instaedit-login` on Fly.io. Code deploys should only occur *after* secrets are successfully staged (§3).
-
-### 7.1 One-time setup
-
-Ensure you have authenticated your local terminal with Fly.io:
-
-```bash
-flyctl auth login
-```
-
-### 7.2 Pre-deploy checks
-
-Verify your environment is shaped correctly for the Fly infrastructure:
-
-```bash
-make fly-verify
-```
-
-*Passes if `fly.toml` matches expected bounds (`min_machines_running=1`, valid process groups `api` and `worker`, `release_command = "./migrate"`).*
-
-### 7.3 Deploy command
-
-```bash
-make fly-deploy
-```
-
-### 7.4 What `fly-deploy` does
-
-1. **Builds the unified image** via the `[production]` target in `Dockerfile` (api + worker + migrate bundled into a single image so a single `fly deploy` ships all three binaries).
-2. **Runs `release_command`** (`./migrate`) in an ephemeral machine to apply pending database schema updates. If migrations fail, Fly ABORTS the rollout and the existing api/worker VMs keep running on their previous image (no half-deployed state).
-3. **Rolls the existing instances** (api and worker process groups) with the new image, binding any staged secrets via `fly secrets import --stage` (committed in `make fly-secrets` from §4).
-
-### 7.5 Secret-rotated redeploys
-
-If deploying specifically to lock in a secret rotation (e.g. a new `JWT_SECRET`), remember that all active in-flight worker and HTTP instances will immediately adopt the new value upon restart. For keys like JWT, this drops all current sessions, requiring user re-authentication. For `ENCRYPTION_KEYS` see §6 — the zero-downtime path requires keeping the old key in the CSV during the cutover window.
-
-### 7.6 Live tailing + log privacy
-
-To tail logs during a rollout:
-
-```bash
-flyctl logs --app instaedit-login
-```
-
-*Privacy contract:* Fly logs must **never** show any of the **27 staged secrets** enumerated in §3 secret collection. That is: `DATABASE_URL` (the password embedded in the URI is just as risky as a separate column), `JWT_SECRET`, `ENCRYPTION_KEYS`, `ACTIVE_ENCRYPTION_KEY_ID`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `META_APP_ID`, `META_APP_SECRET`, plus first-party credentials: `access_token`, `refresh_token`, user passwords, the `csrf_token` value, and any magic-link `?token=` query parameter. `EMAIL_PROVIDER_KEY` is intentionally NOT staged until the backend wires Resend (see [`docs/OPERATIONS.md` §7.5](./OPERATIONS.md#75-email_provider_key-capture-protocol)).
-
-Any such leak is an immediate incident requiring credential revocation. The `fly.toml` contract also relies on the app binary's own `*http.Request` log filter (see `pkg/api/handlers.go` and `internal/services/sessions_service.go`) — the Fly platform strips injected ENV vars from logs by default; we're defending in depth. The canonical secret-name list is pinned in `scripts/_parse_envfile.py` + `scripts/test_parse_envfile.py` (27 required secrets, 15 regression tests) so any future secret addition automatically inherits the privacy contract.
-
-### 7.7 Common failure modes
-
-- **`release_command` fails:** Usually means the `DATABASE_URL` is pointing to the wrong host (e.g. localhost / Direct URL not Pooled URL) or `sslmode=require` is missing. Run `make fly-secrets-verify` to confirm the secret staged correctly, then re-run `/ready` on a prior-machine if accessible.
-- **Worker group failing tcp_checks:** The worker binds `WORKER_HEALTH_PORT` (9090 by default; 0 disables the listener per `cmd/worker/health_listener.go`). Ensure this port matches `fly.toml` service definitions for the worker process group.
-- **Health-check timeout:** App takes longer than `grace_period` to boot (default 10s in `fly.toml`). Bump `grace_period` if migrations took longer than ~8s on first start.
-- **Image build failure:** Dockerfile stage issues (Go version mismatch; missing build-arg). Retry with `flyctl deploy --config fly.toml --build-only` to isolate image-build problems from rollout problems.
-
----
-
-## 8. Phase 8: Post-deploy Verification
-
-Perform these 3 gates on the live domain to confirm the rollout succeeded. All probes are read-only — they do NOT depend on a populated session.
+Performed on the live domain from operator laptop. All probes are
+read-only — they do NOT depend on a populated session.
 
 ### Gate A — Healthz (HTTP api process responding)
 
 ```bash
-curl -sS https://api.instaedit.org/api/v1/health | jq
+curl -fsS https://api.instaedit.org/api/v1/health | jq
 ```
 
-**Expected envelope** (exact keys per `pkg/api/handlers.go::handleHealth`):
+**Expected envelope** (per `pkg/api/handlers.go::handleHealth`):
 
 ```json
 {
@@ -594,15 +478,18 @@ curl -sS https://api.instaedit.org/api/v1/health | jq
 }
 ```
 
-*What this proves:* The HTTP listener binds successfully on port 8080, the Go handlers package is reachable, and the provider capabilities block initialized (no provider-secret-missing panic on startup). It does NOT prove wire-level correctness — Phase 9.4 covers that.
+*What this proves:* the Go API listener bound successfully on `:8080`,
+the handlers package is reachable, and the provider capabilities block
+initialized (no provider-secret-missing panic on startup). It does NOT
+prove wire-level correctness — sub-phase 9.4 covers that.
 
 ### Gate B — Readiness (DB + migrations + worker goroutines)
 
 ```bash
-curl -sS https://api.instaedit.org/ready | jq
+curl -fsS https://api.instaedit.org/ready | jq
 ```
 
-**Expected envelope** (exact keys per `pkg/api/ready.go::readinessResponse`, in priority order):
+**Expected envelope (warm)**:
 
 ```json
 {
@@ -613,413 +500,290 @@ curl -sS https://api.instaedit.org/ready | jq
 }
 ```
 
-> **CAVEAT (schema-inferred):** The healthy-state envelope (`workers_ready: true`) above is inferred from `pkg/api/ready.go::readinessResponse` + `pkg/api/worker_status.go::startedFields`. Live evidence on **2026-07-14 ONLY observed the FAILURE shape** (HTTP 503 + `workers_pending: [...]`). The healthy state has **no live evidence yet** — once `make fly-deploy` succeeds, the fresh probe should match the JSON above; if it returns something different, treat it as a regression and re-read `pkg/api/worker_status.go::startedFields` against the new response shape.
+**Live evidence**: `docs/VPS-DEPLOY-STATUS.md` §3 captures the probe
+of 2026-07-25 — `db: ok`, `migrations: ok`, `workers_pending`
+non-empty (cold-start signature). The warm-state has no live capture
+yet; re-run after Compose stabilises and append a row to §6.
 
-If failing, `"status"` reads `"not_ready"`, AND you may see `"workers_pending": ["metrics", "outbox", "publish", "reconcile", "webhook"]` (the 5 startup-race losers that haven't yet flipped their `atomic.Bool` to true per `pkg/api/worker_status.go`), OR a non-`"ok"` value on `db` / `migrations`.
+If failing, `"status"` reads `"unavailable"` and `workers_pending` names
+the goroutines that have not finished their first iteration
+(`drive_batch_crawler`, `metrics`, `publish`, …, per
+`pkg/api/worker_status.go::startedFields`).
 
-*What this proves:* Postgres connection pool is active, all 9 canary tables (schema head from the migrations in `internal/database/migrations/`) exist, and all 5 background goroutines reached their first executable line without deadlocking.
-
-### Gate C — Fly machine state
-
-```bash
-flyctl status --app instaedit-login
-```
-
-*What this proves:* At least 2 machines are running in `started` state — 1 with `processes = ["api"]` and 1 with `processes = ["worker"]` — per the `min_machines_running = 1` per-process-group contract in `fly.toml`. Any per-process-group count less than 1 means Fly auto-stop kicked in (shouldn't happen with `min_machines_running=1` unless the app is being regionally migrated).
-
-### 8.1 Current status (2026-07-14) — INVESTIGATION REQUIRED before trusting any probe
-
-**CRITICAL WARNING:** As of today, the live `api.instaedit.org` is **almost certainly NOT** the latest `a74f575` deploy, and is **likely NOT** a Fly-deployed binary at all. Operators MUST investigate before assuming a `fly-deploy` will seamlessly replace what is responding today.
-
-Live probes via `curl -i` from a sandboxed host on 2026-07-14 returned:
-
-| Probe | Expected | Actual | Interpretation |
-|-------|----------|--------|----------------|
-| `GET /api/v1/health` | 200 | **200** + `{"platforms":["threads"],"service":"InstaEditLogin","status":"ok","version":"2.0.0"}` | API is alive, but `platforms=["threads"]` (NOT 3 platforms — our latest has IG/FB/Threads arrays of providers successfully configured) |
-| `GET /ready` | 200 | **503** + `{"status":"not_ready","db":"ok","migrations":"ok","workers_pending":["metrics","outbox","publish","reconcile","webhook"]}` | All 5 worker loops NOT yet flipped their `workers_ready` atomic.Bool |
-| `GET /api/v1/accounts` | 401 | **404** (NOT 401) | Our commit `033ab78`'s `handleListAccounts` route is NOT mounted on the live build — suggests a stale or partially-deployed codebase |
-| `POST /api/v1/auth/magic-link/start` | 200 | **404** | Our existing magic-link-start route is not mounted either |
-| `Server:` header + `Fly-Region` header + other Fly proxy signals | Fly-specific | **`Server: Caddy`** AND NO `Fly-Region` AND NO `fly-request-id` | This COMBINED signature is strong cross-evidence for a non-Fly origin. Fly's edge proxy always emits `fly-request-id` + `fly-region`; their absence (alongside a non-Fly `Server:`) is very unlikely to be coincidence. A Caddy `Server:` alone could be a custom entrypoint layer; the COMBINATION (Caddy + missing Fly proxy signals) is the diagnostic. |
-
-**Concrete hypotheses to disambiguate (test in this order):**
-
-1. **DNS re-pointed away from Fly**: run `dig +short api.instaedit.org CNAME` on the operator laptop — expected canonical is `instaedit-login.fly.dev.` per §1.5. If it resolves to a different host (e.g. a Caddy-box A record, a Vercel proxy, a personal-server IP), the DNS CNAME has been re-pointed by a prior session and `make fly-deploy` will not claim this endpoint.
-2. **Stale Fly deploy not yet reached this endpoint**: if the CNAME IS `instaedit-login.fly.dev.`, run `flyctl status --app instaedit-login` to confirm the app exists; if `Image` tag doesn't match the SHA just pushed, it's a prior-rollout artifact (older Go binary lacking our `handleListAccounts` from commit `033ab78`).
-3. **Other developer's isolated deploy**: if the live response shows code paths that don't exist anywhere in our `main` (e.g. platform count from earlier wiring), it's a separate instance addressing the same CNAME during testing.
-
-Do NOT assume a `fly-deploy` will seamlessly replace what is responding today. The live verify (Gate A + Gate B + Gate C in this section) MUST be re-run after each `make fly-deploy` to confirm the new image is the one serving.
-
-**Operator action sequence before declaring a fresh deploy successful:**
-
-1. Run `dig +short api.instaedit.org CNAME` — confirm it still resolves to `instaedit-login.fly.dev.` per §1.5. If it points elsewhere (e.g. Caddy's box), the CNAME has been re-pointed; update.
-2. Confirm `flyctl status --app instaedit-login` lists at least one healthy machine whose `Image` tag matches the SHA just pushed.
-3. Re-run all 3 gates (A + B + C) — Gate B in particular must return `workers_ready: true` BEFORE declaring the rollout successful.
-
-### 8.1.1 DNS correction checklist (if `api.instaedit.org` currently points away from Fly)
-
-If the live probes in §8.1 show `Server: Caddy` or missing Fly headers (`Fly-Region`, `fly-request-id`), the CNAME has likely been repointed. Apply these records at the registrar:
-
-1. **Remove** any existing `A`, `AAAA`, or `CNAME` records for `api.instaedit.org`.
-2. **Add** a single `CNAME`:
-   - Host: `api.instaedit.org`
-   - Value: `instaedit-login.fly.dev.` (trailing dot matters in some dashboards)
-   - TTL: `300`
-3. **Disable proxying** for `api.instaedit.org` (Cloudflare: grey cloud / DNS-only; other registrars: disable any "redirect" or "proxy" feature). Orange-cloud proxying breaks Fly's LE HTTP-01 validation.
-4. **Wait for propagation** (up to one old TTL window, typically 5 min), then verify:
-   ```bash
-   dig +short api.instaedit.org CNAME
-   # expected: instaedit-login.fly.dev.
-
-   curl -sI https://api.instaedit.org/api/v1/health | grep -i 'fly-request-id'
-   # expected: a fly-request-id header is present
-   ```
-5. **Re-issue the Fly cert** if it was previously validated against a different target:
-   ```bash
-   flyctl certs add api.instaedit.org --app instaedit-login
-   ```
-6. **Re-run Gates A, B, C** from §8 to confirm the new Fly deployment is the one serving traffic.
-
-> **Registrar-specific notes:**
-> - **Cloudflare:** set `api.instaedit.org` to DNS-only; the apex `instaedit.org` A record and `app.instaedit.org` CNAME can stay proxied or not as desired, but `api.` must be grey-cloud.
-> - **Namecheap / Route 53 / Gandi:** use a plain CNAME, not an ALIAS/ANAME, for `api.instaedit.org`.
-> - **TTL:** 300s is the canonical value in §1.5; if the previous record had a longer TTL, lower it first and wait one old-TTL window before expecting global propagation.
-
-### 8.2 Deeper probes (operator laptop)
-
-Beyond the 3 gates, run the canonical post-deploy E2E runbooks (NO code commit needed; these invoke existing scripts):
+### Gate C — VPS container state
 
 ```bash
-# Comprehensive Phase 9 sub-1-5+7 smoke (read-only by default)
-make ops-smoke
-
-# Workspace isolation (Phase 9 sub-6) — creates 2 users + asserts cross-tenant boundaries
-make ops-isolation-dry-run     # preview the plan + cleanup SQL without mutating
-DATABASE_URL=postgres://...@instaedit-production-bouncer.flycast:6432/instaedit-production?sslmode=require \
-  make ops-isolation           # apply: 2 users + 4 assertions + psql CASCADE on EXIT
+# On the VPS, as `instaedit`:
+cd /opt/instaedit/InstaeditLogin
+docker compose --env-file /srv/instaedit/.env.production ps
+#   → api          running   127.0.0.1:8080->8080/tcp
+#   → worker       running
+#   → postgres     running   127.0.0.1:5432->5432/tcp
+#   → minio        running   127.0.0.1:9000-9001->9000-9001/tcp
+#   → caddy        running   0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp
 ```
 
-Both scripts are idempotent + bash -n clean (per commit `a74f575` review). Pass criteria: ALL PASS count > 0 AND FAIL count = 0; WARNs are advisory.
+Also confirm image freshness:
+
+```bash
+docker compose --env-file /srv/instaedit/.env.production images
+# The image tag should match the SHA just pushed.
+```
+
+### 5.1 Current status (2026-07-25) — CUTOVER VERIFIED
+
+Live probes from a sandboxed host on 2026-07-25 confirmed:
+
+| Probe | Result | Interpretation |
+|-------|--------|----------------|
+| `dig +short api.instaedit.org A` | `51.91.11.36` | API on VPS single-host A record (not Vercel anycast, not Fly) |
+| `curl -sI https://api.instaedit.org/health` | `server: Caddy` (404) | Caddy is the only entry; **no `fly-request-id`, no `fly-region`** |
+| `curl -sI https://api.instaedit.org/ready` | `server: Caddy` (405 on HEAD; use GET) | Caddy routes `api.` SNI → API reverse-proxy |
+| `curl -sS https://api.instaedit.org/ready` (GET) | 503 + `db: ok` + `migrations: ok` + `workers_pending` non-empty | Postgres connected, all migrations applied, worker goroutines warming (cold-start) |
+
+The Fly stack is gone. The cutover is operative. See
+`docs/VPS-DEPLOY-STATUS.md` §6 for the probe log table.
 
 ---
 
-## 9. Phase 9: Sandbox vs Operator Boundary
+## 6. Rotation
 
-There is a hard boundary between what the Codex agent sandbox can verify locally and what strictly requires the operator's laptop with authenticated Fly.io access.
+### `JWT_SECRET`
 
-### 9.1 Local Sandbox (CAN verify)
+```bash
+# On the VPS:
+ssh instaedit@$VPS_IP
+NEW_JWT=$(openssl rand -hex 32)
+# Edit /srv/instaedit/.env.production: JWT_SECRET=$NEW_JWT
+cd /opt/instaedit/InstaeditLogin
+docker compose --env-file /srv/instaedit/.env.production up -d --force-recreate api worker
+# In-flight JWTs are now invalid; users get 401 → re-login.
+```
 
-- HTTP probes against `https://api.instaedit.org` (the sandbox has outbound internet egress — see today's live probes in §8.1).
-- `make fly-verify` — pure-shell parse of `fly.toml` (app name, processes, health checks, env surface counts).
-- `make lint-check` (gofmt + go vet + oxlint) — confirms Go code is lint-clean regardless of deploy state.
-- `make fly-secrets-test` — runs the .env parser's 15-case regression suite in `scripts/test_parse_envfile.py`.
+> JWT rotation invalidates ALL in-flight sessions. Plan for a brief
+> re-login window. For zero-downtime, you'd need a JWT key ring (not
+> in scope for the beta).
+
+### `ENCRYPTION_KEYS` (zero-downtime rotation)
+
+The bootstrap (`internal/crypto/encrypt.go`) uses the active key for
+**new** encryption and the full key map for **decryption**. Add a new
+key alongside the old, roll the deploy, then drop the old key once
+all tokens have been re-encrypted.
+
+```bash
+# 1. Read the current ENCRYPTION_KEYS + ACTIVE_ENCRYPTION_KEY_ID
+ssh instaedit@$VPS_IP 'grep -E "^(ENCRYPTION_KEYS|ACTIVE_ENCRYPTION_KEY_ID)" /srv/instaedit/.env.production'
+
+# 2. Append a new key (e.g. id=2) to the CSV
+NEW_B64=$(openssl rand -base64 32)
+# Edit /srv/instaedit/.env.production on the VPS:
+#   was: ENCRYPTION_KEYS='1:<OLD>'
+#         ACTIVE_ENCRYPTION_KEY_ID=1
+#   now: ENCRYPTION_KEYS='1:<OLD>,2:<NEW_B64>'
+#         ACTIVE_ENCRYPTION_KEY_ID=1   # keep on the OLD key
+
+# 3. Restart api + worker (no downtime — both keys accepted on decrypt)
+cd /opt/instaedit/InstaeditLogin
+docker compose --env-file /srv/instaedit/.env.production up -d --force-recreate api worker
+#   → existing tokens still decrypt with id=1; new writes use id=1.
+
+# 4. Cut over: bump the active id to the new key
+#   now: ACTIVE_ENCRYPTION_KEY_ID=2
+docker compose --env-file /srv/instaedit/.env.production up -d --force-recreate api worker
+#   → existing tokens still decrypt with id=1; new writes use id=2.
+
+# 5. After all tokens have been re-written (watch the metric
+#   `instaedit_vault_cipher_id` — should converge to 2), drop the old key:
+#   now: ENCRYPTION_KEYS='2:<NEW_B64>'
+docker compose --env-file /srv/instaedit/.env.production up -d --force-recreate api worker
+```
+
+### Provider / Mail / S3 rotation
+
+Editor change on the VPS, then restart the affected service:
+`docker compose up -d --force-recreate api worker`.
+
+For the MinIO bucket: rotate via the MinIO admin console
+(`https://<VPS_IP>:9001` over the host network; the admin port is NOT
+exposed publicly) — generate a fresh access key + secret, then update
+rows 5 + 6 of `/srv/instaedit/.env.production` AND the `MINIO_ROOT_*`
+env block in the Compose override. Restart `minio` then `api` +
+`worker` in that order.
+
+---
+
+## 7. Sandbox vs Operator Boundary (VPS-only)
+
+There is a hard boundary between what the Codex agent sandbox can
+verify locally and what strictly requires operator-side VPS access.
+
+### 7.1 Local Sandbox (CAN verify)
+
+- HTTP probes against `https://api.instaedit.org` (the sandbox has
+  outbound internet egress — see §5.1 / `docs/VPS-DEPLOY-STATUS.md`).
+- `make lint-check` (gofmt + go vet) — confirms Go code is lint-clean
+  regardless of deploy state.
 - Local file inspection (grep, awk, jq on git-tracked files).
-- Static code review against the just-committed source tree on `main`.
+- Static code review against `git log main --oneline`.
+- `make backend-test` + `make test-integration` (the latter requires
+  Docker on the operator/runner).
 
-### 9.2 Operator Laptop (REQUIRES Fly auth + raw secrets)
+### 7.2 Operator VPS (REQUIRES ssh to the VPS)
 
-- `flyctl` CLI invocation (Fly OAuth session).
-- Real `.env.production` file with actual secret values.
-- `make fly-secrets` — the actual `flyctl secrets import --stage -` push.
-- `make fly-deploy` — the actual `flyctl deploy` push.
-- `flyctl logs --app instaedit-login` — live log tailing during rollout.
-- `flyctl status --app instaedit-login` — Gate C of §8.
+- `ssh instaedit@$VPS_IP` for any change to `/srv/instaedit/`.
+- `docker compose ps` / `docker compose logs` against the running stack
+  (live tail: `docker compose logs -f worker`).
+- `psql` against `postgres` on `127.0.0.1:5432` for SQL audits
+  (NEVER from the public network — pg is bound to loopback).
+- For MinIO: `mc` CLI over the loopback admin port `9001`.
 
-### 9.3 Canonical Deploy Execution Block (paste-ready)
+### 7.3 Canonical Deploy Execution Block (paste-ready)
 
-> **Safety property reminder:** `make fly-deploy` runs `release_command = "./migrate"` BEFORE any api/worker VM rollouts. If migrations fail, Fly aborts the rollout and the existing api/worker VMs keep running on their previous image (`pkg/api/ready.go` will keep reporting `status: "ok"` because the existing VMs are still healthy). An exit-0 from `make fly-deploy` is therefore the ONLY acceptable deployment success signal — partial deploys cannot occur.
-
-For a fresh environment, paste this EXACT block into the operator's authenticated terminal session:
+For a fresh VPS (or after the host is wiped), the operator laptop
+runs:
 
 ```bash
-# ----- phase 7: deploy backend (this document, §7) -----
+# ----- §2: one-time host setup (skip on re-deploys) -----
+ssh root@$VPS_IP
+# ... follow §2 steps 3-5 ...
 
-# 0. One-time per machine
-flyctl auth login
+# ----- §3: secrets on disk -----
+# Local: write /srv/instaedit/.env.production with the 26 vars from §3.
+# (Use your secret manager — never paste real secrets into chat.)
+scp .env.production instaedit@$VPS_IP:/srv/instaedit/.env.production
+ssh instaedit@$VPS_IP 'chmod 600 /srv/instaedit/.env.production'
 
-# 1. Verify the .env.production file is clean (no leftover placeholder values, no disabled provider keys)
-make fly-secrets-test        # local: 15 regression cases pass
-make fly-secrets-dry-run     # local: parser-direct redacted preview
+# ----- §2.3 / §4: first boot -----
+ssh instaedit@$VPS_IP
+cd /opt/instaedit/InstaeditLogin
+docker compose --env-file /srv/instaedit/.env.production up -d --build
+docker compose --env-file /srv/instaedit/.env.production run --rm migrate
 
-# 2. Push the 27 secrets to Fly (--stage = no premature restart)
-make fly-secrets             # operator: flyctl secrets import --stage
+# ----- §4 / §5: post-deploy verification -----
+curl -fsS https://api.instaedit.org/api/v1/health | jq   # Gate A
+curl -fsS https://api.instaedit.org/ready | jq           # Gate B
+docker compose ps                                        # Gate C
 
-# 3. Verify staged secrets are clean on Fly
-make fly-secrets-verify      # operator: flyctl secrets list + assertions
-
-# 4. Sanity-check fly.toml pre-deploy
-make fly-verify              # local: pure-shell parse
-
-# 5. Ship it
-make fly-deploy              # operator: flyctl deploy --config fly.toml
-                             #   -> release_command ./migrate (rolling abort on failure)
-                             #   -> rollout api group   (http_checks /api/v1/health)
-                             #   -> rollout worker group (tcp_checks :9090)
-
-# ----- phase 8: post-deploy verification (§8) -----
-
-# Gate A — Healthz (HTTP api + provider init)
-curl -sS https://api.instaedit.org/api/v1/health | jq
-
-# Gate B — Readiness (DB + 9 canary tables + 5 worker goroutines)
-curl -sS https://api.instaedit.org/ready | jq
-
-# Gate C — Fly machine state (>= 1 api + 1 worker per min_machines_running)
-flyctl status --app instaedit-login
-
-# ----- phase 9: deeper E2E (§9 + Phase 9.4-7) -----
-
-# Read-only smoke (Phase 9 sub-1-5+7)
-make ops-smoke
-
-# Workspace isolation drill (Phase 9 sub-6) — REQUIRES DATABASE_URL locally
-make ops-isolation-dry-run   # preview only
-# single-line to avoid `\` continuation + inline-comment shell-parse ambiguity:
-DATABASE_URL=postgres://...@instaedit-production-bouncer.flycast:6432/instaedit-production?sslmode=require make ops-isolation   # apply + CASCADE cleanup on EXIT
+./scripts/ops/post_deploy_smoke.sh                       # §4.1
+./scripts/ops/workspace_isolation_test.sh --dry-run      # §4.2 preview
+DATABASE_URL=postgres://... ./scripts/ops/workspace_isolation_test.sh   # §4.2 apply
 ```
 
-**Reconciliation notes:**
-- Satisfies `docs/OPERATIONS.md §5` go-live gate (the 9-box checklist).
-- The deploy sequence aligns with `internal/bootstrap/app.go::RunMigrationThenServer` — migrations run before any HTTP listener binds.
-- `make ops-smoke` / `make ops-isolation` are wired via `Makefile` targets added in commit `a74f575`.
+For a re-deploy (image update only):
+
+```bash
+ssh instaedit@$VPS_IP
+cd /opt/instaedit/InstaeditLogin
+git pull --ff-only
+docker compose --env-file /srv/instaedit/.env.production up -d --build
+docker compose --env-file /srv/instaedit/.env.production run --rm migrate
+docker compose --env-file /srv/instaedit/.env.production up -d --force-recreate api worker
+# Then re-run Gate A + Gate B from the operator laptop.
+```
 
 ---
 
-## 10. Troubleshooting
+## 8. Failure modes (VPS-specific)
 
-### `❌ flyctl not installed`
-Install: https://fly.io/docs/hands-on/install-flyctl/
-
-### `❌ Not authenticated with Fly.io`
-Run `flyctl auth login` (opens a browser OAuth flow).
-
-### `❌ <redacted> placeholder found in .env.production`
-You left a literal `<redacted>` string in your env file. Replace it
-with the real value (e.g., from 1Password). The script refuses to push
-a placeholder.
-
-### `❌ disabled-provider secret detected in .env.production (pattern: ^STRIPE_*)`
-Beta scope excludes Stripe / TikTok / X / YouTube / LinkedIn. Remove
-the line from `.env.production` (you can leave it commented for
-context) and re-run.
-
-### `❌ missing required keys: META_APP_SECRET`
-You forgot to set one of the 26. See §3 for the full list + where to
-get each.
-
-### `App is not deployed` (during `fly secrets import`)
-The app must exist before you can stage secrets. Run
-`flyctl apps create instaedit-login` first (see §2).
-
-### Secrets staged but instances don't see them
-You ran `fly-secrets` but skipped `fly-deploy`. `--stage` banks the
-secrets on Fly; they attach to instances only on the next deploy.
-Run `make fly-deploy`.
-
-### `release_command` fails on first deploy
-The release_command runs `./migrate` against `DATABASE_URL`. If it
-fails, check:
-- `DATABASE_URL` is set as a secret (run `make fly-secrets-verify`).
-- The Postgres is reachable from Fly's network (Fly Postgres is on
-  Flycast, so this should be automatic if you used `flyctl postgres
-  attach`).
-- The migrations in `internal/database/migrations/` are valid SQL
-  (canonical set; embedded via `go:embed` into the Go binary and applied
-  at boot by `db.Migrate` — see `internal/database/migrations.go`).
-
-### `min_machines_running = 1` and you see two healthy instances
-That's normal during a rolling deploy. The new VM comes up healthy
-on `/api/v1/health` before the old VM is torn down.
+- **`docker compose up` fails on the postgres volume:**
+  check `/srv/instaedit/pgdata` permissions; `chown -R
+  instaedit:instaedit /srv/instaedit/pgdata` if needed.
+- **Caddy cannot obtain the LE cert:**
+  confirm `dig +short instaedit.org` returns `51.91.11.36` BEFORE the
+  first `up`. If you recently changed the A record, wait until the
+  TTL (-old TTL window) has elapsed globally. Cloudflare users must
+  set the three names to **DNS-only** ("grey cloud").
+- **`/api/v1/health` 502 from Caddy:** the api container is down or
+  not yet listening. `docker compose logs api` for the Go startup
+  output; fix the env or the image, restart with
+  `docker compose up -d --force-recreate api`.
+- **Worker group health-check timeout:** worker binds `WORKER_HEALTH_PORT`
+  (9090 by default; 0 disables the listener per
+  `cmd/worker/health_listener.go`). The Compose healthcheck in
+  `docker-compose.yml` references this — keep the default unless you
+  have a reason to override.
+- **MinIO unavailable:** `docker compose logs minio`; the admin port
+  is `127.0.0.1:9001`, not public. The Go SigV4 signer
+  (`internal/services/storage.go`) retries 3× on transient errors.
+- **Image build failure:** `docker build --target production .` on the
+  VPS to isolate. Source-level issues are caught by
+  `make lint-check` BEFORE the build; if the build fails on the VPS,
+  it's almost certainly a network or change-in-base-image issue.
 
 ---
 
-## 11. Cross-references
+## 9. Cross-references
 
-| Concern | Reference |
-|---------|-----------|
-| fly.toml secrets policy | `fly.toml` (header comment block) |
-| Config env validation | `internal/config/config.go` (Blocco #2.4) |
-| CSRF cookie Domain semantics | `internal/auth/csrf.go` + Blocco #2.4 |
-| API health endpoint | `pkg/api/handlers.go` (`/api/v1/health`) |
-| Process groups (api / worker) | `Makefile` (`fly-help`, `fly-verify`) + `Dockerfile` (Blocco #4.1) |
-| Migrations | `internal/database/migrations/` (apply via `release_command`) |
-| Local dev handoff | `HANDOFF-LINUX.md` |
-| Operational runbook (DNS, certs, monitoring, recovery) | **[`docs/OPERATIONS.md`](./OPERATIONS.md)** |
-| OpenAPI spec | `api/openapi.yaml` |
+- **Live probe log:** [docs/VPS-DEPLOY-STATUS.md](./VPS-DEPLOY-STATUS.md)
+  (DNS resolution, HTTP identity probes, /ready envelope, ready/warm
+  log table).
+- **DNS runbook + cert renewal + DMARC escalation + Gmail inbox test:**
+  [docs/OPERATIONS.md §1 + §7](./OPERATIONS.md).
+- **OAuth provider configuration for each platform:** [docs/OAUTH-PRODUCTION.md](./OAUTH-PRODUCTION.md).
+- **Capability / provider matrix:** [docs/PROVIDER_MATRIX.md](./PROVIDER_MATRIX.md).
+- **API surface / endpoints:** [docs/ENDPOINTS.md](./ENDPOINTS.md).
+- **OpenAPI spec:** [docs/OPENAPI.md](./OPENAPI.md) + [api/openapi.yaml](../api/openapi.yaml).
+- **Architecture overview:** [docs/ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ---
 
-## 12. Frontend deploy (Vercel)
+## 10. Tigris retirement (one-time migration)
 
-The Vite SPA (`web/`) deploys to Vercel; the Go backend deploys to Fly
-(§2–§7). The two are decoupled — the frontend is a static bundle that
-hits the backend over HTTPS. This section is the canonical reference
-for the first Vercel setup + subsequent preview/production deploys.
-
-### 12.1 Pre-flight
-
-- Vercel account (https://vercel.com/signup) — sign up with GitHub for
-  the auto-deploy integration.
-- The `InstaeditLogin` repo connected to Vercel via the GitHub app.
-- (Optional) `vercel` CLI for env-var management from the terminal:
-  `npm i -g vercel`.
-
-### 12.2 Project settings (Vercel dashboard)
-
-Set these in the project's **Settings → General** page. They are
-file-equivalent in `web/vercel.json` (so re-importing the project
-preserves them) but the dashboard wins for the canonical values:
-
-| Setting | Value | Source of truth |
-|---------|-------|-----------------|
-| **Root Directory** | `web` | Vercel project setting (NOT in vercel.json) |
-| **Framework Preset** | Vite | `web/vercel.json` (`"framework": "vite"`) |
-| **Install Command** | `npm ci` | `web/vercel.json` (`"installCommand"`) |
-| **Build Command** | `npm run build` | `web/vercel.json` (`"buildCommand"`) |
-| **Output Directory** | `dist` | `web/vercel.json` (`"outputDirectory"`) |
-| **Node.js Version** | 22.12 | `web/vercel.json` (`"engines.node"`) + the Vercel runtime selector |
-
-> **Node version precedence**: Vercel resolves the runtime as
-> `vercel.json` `engines.node` → `package.json` `engines.node` →
-> project setting → default. The `engines.node` in `web/package.json`
-> is `>=20.19.0` (loose, so local dev works on any modern Node) —
-> `web/vercel.json` pins the Vercel production runtime to 22.12. They
-> do NOT need to match: local dev = minimum, Vercel = exact.
-
-### 12.3 SPA rewrites (history push for React Router)
-
-React Router uses the browser history API (e.g. `/connections`,
-`/compose`, `/posts`). Vercel must serve `index.html` for ALL
-non-asset routes so the client-side router can take over.
-
-`web/vercel.json` already configures this:
-
-```json
-"rewrites": [
-  { "source": "/(.*)", "destination": "/index.html" }
-]
-```
-
-This rewrites every request that doesn't match a static asset in
-`dist/` to `/index.html`. Vite emits assets at well-known paths
-(`/assets/index-*.js`, `/assets/index-*.css`, `/favicon.ico`, etc.)
-which Vercel serves before the rewrite rule fires, so the fallback
-is safe.
-
-> The rewrites block is technically redundant with
-> `"framework": "vite"` (Vercel auto-configures the SPA fallback for
-> Vite projects). We keep it explicit for readability — a future
-> maintainer who deletes the `framework` field won't silently break
-> client-side routing.
-
-If a future route legitimately needs a different file (e.g.
-`/robots.txt`, `/sitemap.xml`), add an explicit `routes` entry BEFORE
-the catch-all rewrite — the first match wins.
-
-### 12.4 Environment variables
-
-Set these in **Settings → Environment Variables**. For each var, pick
-the scope (Production / Preview / Development). For beta, only
-Production matters.
-
-| Variable | Value | Scope | Notes |
-|----------|-------|-------|-------|
-| `VITE_API_BASE_URL` | `https://api.instaedit.org` | Production | The Fly-deployed backend. Preview deployments can override this to a Fly preview URL or stay on production — see §12.7. |
-
-CLI equivalent (after `vercel login`):
+If the historical Tigris bucket (`instaedit-prod-media`) is still in
+use, the cutover to MinIO is a bucket-to-bucket copy. This is a
+self-contained project that does not block the production cutover.
 
 ```bash
-cd web
-vercel env add VITE_API_BASE_URL production
-# paste: https://api.instaedit.org
+# 1. Take inventory of the Tigris bucket:
+AWS_ACCESS_KEY_ID=$TIGRIS_KEY AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET \
+  aws --endpoint https://t3.storage.dev s3 ls s3://instaedit-prod-media/ --recursive | tee /tmp/objects.txt
+
+# 2. Provision the MinIO bucket with the same name + CORS + lifecycle:
+#    (Use the MinIO admin console at http://127.0.0.1:9001 on the VPS.)
+
+# 3. Mirror the data:
+AWS_ACCESS_KEY_ID=$TIGRIS_KEY AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET \
+  aws --endpoint https://t3.storage.dev s3 sync \
+    s3://instaedit-prod-media/ /tmp/media-mirror/
+# Then rsync /tmp/media-mirror/ into the MinIO volume on the VPS:
+rsync -a /tmp/media-mirror/ instaedit@$VPS_IP:/srv/instaedit/miniostore/instaedit-prod-media/
+
+# 4. Re-point the backend's S3_ENDPOINT (in /srv/instaedit/.env.production):
+#      S3_ENDPOINT=http://minio:9000
+#      S3_BUCKET=instaedit-prod-media
+#      AWS_REGION=us-east-1   # MinIO ignores but the SigV4 signer wants it
+#      (the rest of rows 5–6 stays the same)
+
+# 5. Restart api + worker and re-run §4 probes:
+docker compose --env-file /srv/instaedit/.env.production up -d --force-recreate api worker
+
+# 6. Once §4 probes confirm parity, retire the Tigris account:
+#    tigrisdata.com → delete bucket → delete access key → close account.
 ```
 
-> **Do NOT** put the production URL in `web/.env.example` or
-> `web/.env.production` — Vercel env vars override file-based ones
-> at build time, and committing a `.env.production` to the repo would
-> leak the URL to anyone with repo read access.
+The Tigris → MinIO migration is NOT a pre-requisite for the production
+cutover; both can run in parallel, with the Go API's `S3_ENDPOINT`
+env var toggling which one is current. Roll back to Tigris by flipping
+the env var back to `https://t3.storage.dev` if needed.
 
-### 12.5 Build-time validation
+---
 
-`web/vite.config.ts` ships with a `verifyApiBaseUrlPlugin` that
-inspects `VITE_API_BASE_URL` at build start. The plugin:
+## 11. Open items
 
-- **Production** build (`vite build` with `VERCEL_ENV=production`):
-  FAILS the build if the URL is missing, non-https, or pointing to
-  `localhost`. This catches the classic "Vercel stale deploy" bug
-  class before it ships to users.
-- **Preview** build (PR previews): WARNS but does not fail — the
-  operator may legitimately point a preview at a Fly staging URL.
-- **Local** build: silent on success, warns on the dev defaults.
-
-See `web/scripts/verify-api-base-url.ts` for the validation rules.
-
-### 12.6 First deploy
-
-```bash
-# 1. Push to main (Vercel auto-detects the push via the GitHub app)
-git push origin main
-
-# 2. Watch the deploy in the Vercel dashboard
-#    → "Building…" → "Deploying…" → "Ready" (or "Error" with logs)
-
-# 3. Smoke test the production URL
-#    (If you haven't set up the custom domain yet, use the Vercel-assigned
-#     default URL from the dashboard — same rewrite contract applies.)
-curl -sSI https://app.instaedit.org | head -5
-#    Expected: HTTP/2 200 + a Vercel header
-curl -sS https://app.instaedit.org | grep -o '<title>[^<]*</title>'
-#    Expected: <title>InstaEdit — ...</title>
-
-# 4. Smoke test the SPA route (history push)
-curl -sSI https://app.instaedit.org/connections | head -3
-#    Expected: HTTP/2 200 (NOT 404 — the rewrite rule kicks in)
-```
-
-### 12.7 Preview deployments (per PR)
-
-Vercel auto-creates a preview deployment for every PR. The preview
-URL looks like `https://instaedit-login-git-<branch>-<team>.vercel.app`.
-The preview can either:
-
-- Use the **same** `VITE_API_BASE_URL` as production (simplest, hits
-  the real Fly backend — use with caution on user-facing features).
-- Use a **per-PR** override (Settings → Environment Variables → add
-  `VITE_API_BASE_URL` scoped to "Preview" with a different value,
-  e.g. a Fly staging URL).
-
-For the beta, leave the Preview scope empty so previews hit the
-production Fly backend (single source of truth, simplest to debug).
-
-### 12.8 Troubleshooting
-
-#### Build fails: "VITE_API_BASE_URL validation failed in production context"
-The `verifyApiBaseUrlPlugin` rejected the env. Common causes:
-- Forgot to set the env var in the Vercel dashboard (§12.4).
-- Set the env var on the wrong scope (Preview only, not Production).
-- The value is `http://...` instead of `https://...` (Vite treats
-  `http://api.instaedit.org` as an error in production because
-  mixed-content + CORS issues).
-- The value is `http://localhost:8080` (the local-dev default
-  leaked into the production env).
-
-Fix: set the correct value in **Settings → Environment Variables**,
-then redeploy (the dashboard has a "Redeploy" button on the failed
-deploy that re-runs with the new env).
-
-#### SPA route returns 404 on hard refresh
-The `vercel.json` rewrites block is missing or wrong. Verify:
-```bash
-cat web/vercel.json | jq '.rewrites'
-# Expected: [{ "source": "/(.*)", "destination": "/index.html" }]
-```
-
-#### "Build failed: Could not resolve …"
-Usually a missing dev dep or a typescript error. Check:
-- `web/package.json` has all required deps
-- `cd web && npm ci` succeeds locally
-- `cd web && npm run build` succeeds locally
-
-#### "Deploy succeeded but the page shows the Vercel default"
-The Output Directory is wrong. Vercel is serving an empty `dist/`.
-Verify `web/vercel.json` has `"outputDirectory": "dist"` AND the
-Vite build actually emitted files to `dist/` (check the build log).
+- `verify-log-redaction` Makefile target currently reads `flyctl logs`;
+  follow-up commit to re-point its log source at
+  `docker compose logs`. The target itself stays; only the script changes.
+- `docker-build-production` Makefile target now orphans (only `fly-deploy`
+  consumed it); follow-up commit to either rename / repurpose it (compose
+  builds) or remove.
+- `.github/workflows/integration.yml` still references `make fly-secrets-test`;
+  follow-up commit to wire `python3 scripts/test_parse_envfile.py` as a
+  standalone job (the test script itself is unchanged).
+- Caddy + Compose + MinIO + Postgres compose file
+  ([ops/vps/Caddyfile](../ops/vps/Caddyfile), `docker-compose.yml`,
+  `docker-compose.local.yml`) are kept as-is — they remain correct for
+  the VPS target even after the Fly-era docs are stripped.
+- The Fly gate probe (`docs/DEPLOY-AUDIT.md`) is now historical; a
+  Redis-style audit at this checkpoint is still useful and should be
+  archived separately after this cutover ships.
