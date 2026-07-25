@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -1069,9 +1070,13 @@ func retryableError(err error) bool {
 	return false
 }
 
-// doWithRetry runs fn up to maxAttempts with exponential backoff. It
-// only retries when fn returns a retryable error and honors context
-// cancellation before each attempt and between attempts.
+// doWithRetry runs fn up to maxAttempts with exponential backoff and
+// bounded jitter. It only retries when fn returns a retryable error and
+// honors context cancellation before each attempt and between attempts.
+//
+// The delay for attempt i is min(cap, base * 2^i) and then jittered
+// between 50% and 100% of that value to prevent synchronized retries
+// (thundering herd) when many goroutines retry simultaneously.
 func doWithRetry(ctx context.Context, maxAttempts int, baseDelay time.Duration, fn func() error) error {
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
@@ -1091,6 +1096,13 @@ func doWithRetry(ctx context.Context, maxAttempts int, baseDelay time.Duration, 
 			delay := baseDelay * time.Duration(1<<uint(attempt))
 			if delay > 30*time.Second {
 				delay = 30 * time.Second
+			}
+			// Add bounded jitter to avoid thundering herd. The wait time is
+			// uniformly distributed in [delay/2, delay].
+			if delay > 0 {
+				half := delay / 2
+				jitter := time.Duration(rand.Int63n(int64(half) + 1))
+				delay = half + jitter
 			}
 			select {
 			case <-ctx.Done():
