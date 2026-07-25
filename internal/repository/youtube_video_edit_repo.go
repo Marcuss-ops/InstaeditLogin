@@ -18,6 +18,7 @@ import (
 type YouTubeVideoEditStore interface {
 	Create(ctx context.Context, edit *models.YouTubeVideoEdit) error
 	FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
+	FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
 	Update(ctx context.Context, edit *models.YouTubeVideoEdit) error
 }
 
@@ -71,6 +72,29 @@ func (r *YouTubeVideoEditRepository) FindByID(ctx context.Context, id string) (*
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to find youtube video edit: %w", err)
+	}
+	return edit, nil
+}
+
+// FindByVeloxProjectID returns the edit session for the given velox
+// project id, or (nil, nil) when no row matches.
+func (r *YouTubeVideoEditRepository) FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
+	edit := &models.YouTubeVideoEdit{}
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT id, workspace_id, platform_account_id, youtube_video_id, velox_project_id,
+		        source_thumbnail_url, thumbnail_media_id, desired_privacy, publish_at,
+		        status, last_error, created_at, updated_at
+		 FROM youtube_video_edits
+		 WHERE velox_project_id = $1`,
+		projectID,
+	).Scan(
+		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID, &edit.VeloxProjectID,
+		&edit.SourceThumbnailURL, &edit.ThumbnailMediaID, &edit.DesiredPrivacy, &edit.PublishAt,
+		&edit.Status, &edit.LastError, &edit.CreatedAt, &edit.UpdatedAt,
+	); err == sql.ErrNoRows {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to find youtube video edit by project: %w", err)
 	}
 	return edit, nil
 }

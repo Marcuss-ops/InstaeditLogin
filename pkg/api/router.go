@@ -701,6 +701,7 @@ type YouTubeOAuthService interface {
 type YouTubeVideoEditStore interface {
 	Create(ctx context.Context, edit *models.YouTubeVideoEdit) error
 	FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
+	FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
 	Update(ctx context.Context, edit *models.YouTubeVideoEdit) error
 }
 

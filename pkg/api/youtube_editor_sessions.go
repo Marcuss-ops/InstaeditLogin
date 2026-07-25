@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
@@ -27,6 +28,13 @@ type createYouTubeEditorSessionResponse struct {
 	SessionID      string `json:"session_id"`
 	VeloxProjectID string `json:"velox_project_id"`
 	EditorURL      string `json:"editor_url"`
+}
+
+// updateYouTubeEditorSessionRequest is the body accepted by the
+// PATCH /api/v1/youtube/editor-sessions/by-project/{velox_project_id}
+// endpoint.
+type updateYouTubeEditorSessionRequest struct {
+	ThumbnailMediaID string `json:"thumbnail_media_id"`
 }
 
 // handleCreateYouTubeEditorSession creates a YouTube thumbnail editor
@@ -193,4 +201,85 @@ func (r *Router) editorURLForProject(projectID string) string {
 		base = "https://editor.instaedit.org"
 	}
 	return fmt.Sprintf("%s/editor/%s", base, projectID)
+}
+
+// handleUpdateYouTubeEditorSession updates a thumbnail editor session.
+// It is used by the dark editor after uploading the generated thumbnail
+// to InstaEdit storage so the session keeps a reference to the verified
+// asset (thumbnail_media_id) before the user clicks Publish.
+func (r *Router) handleUpdateYouTubeEditorSession(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.UserID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+
+	veloxProjectID := chi.URLParam(req, "velox_project_id")
+	if veloxProjectID == "" {
+		writeError(w, http.StatusBadRequest, "velox_project_id is required")
+		return
+	}
+
+	var payload updateYouTubeEditorSessionRequest
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if payload.ThumbnailMediaID == "" {
+		writeError(w, http.StatusBadRequest, "thumbnail_media_id is required")
+		return
+	}
+
+	if r.mediaStore == nil {
+		writeError(w, http.StatusNotImplemented, "media not configured on this server")
+		return
+	}
+
+	if r.youtubeVideoEditStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "youtube video edit store not configured")
+		return
+	}
+
+	edit, err := r.youtubeVideoEditStore.FindByVeloxProjectID(req.Context(), veloxProjectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find editor session: "+err.Error())
+		return
+	}
+	if edit == nil {
+		writeError(w, http.StatusNotFound, "editor session not found")
+		return
+	}
+
+	// Verify the media asset exists, is ready, and belongs to the caller.
+	asset, err := r.mediaStore.FindByID(payload.ThumbnailMediaID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find media asset: "+err.Error())
+		return
+	}
+	if asset == nil || asset.UserID != identity.UserID() || asset.Status != models.MediaAssetStatusReady {
+		writeError(w, http.StatusBadRequest, "invalid or unverified media asset")
+		return
+	}
+
+	workspace, err := r.workspaceStore.FindByID(edit.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find workspace: "+err.Error())
+		return
+	}
+	if workspace == nil || !r.userCanAccessWorkspace(identity.UserID(), workspace) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	edit.ThumbnailMediaID = &payload.ThumbnailMediaID
+	edit.UpdatedAt = time.Now().UTC()
+	if err := r.youtubeVideoEditStore.Update(req.Context(), edit); err != nil {
+		writeError(w, http.StatusInternalServerError, "update editor session: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"session_id":         edit.ID,
+		"thumbnail_media_id": edit.ThumbnailMediaID,
+	})
 }

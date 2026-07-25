@@ -3,9 +3,9 @@ CREATE TABLE IF NOT EXISTS youtube_video_edits (
     workspace_id BIGINT NOT NULL,
     platform_account_id BIGINT NOT NULL,
     youtube_video_id TEXT NOT NULL,
-    velox_project_id TEXT NOT NULL,
+    velox_project_id TEXT NOT NULL UNIQUE,
     source_thumbnail_url TEXT,
-    thumbnail_media_id BIGINT,
+    thumbnail_media_id TEXT,
     desired_privacy TEXT NOT NULL DEFAULT 'public',
     publish_at TIMESTAMPTZ,
     status TEXT NOT NULL DEFAULT 'editing',
@@ -22,3 +22,6 @@ CREATE INDEX IF NOT EXISTS idx_youtube_video_edits_account
 
 CREATE INDEX IF NOT EXISTS idx_youtube_video_edits_status
     ON youtube_video_edits(status);
+
+CREATE INDEX IF NOT EXISTS idx_youtube_video_edits_velox_project
+    ON youtube_video_edits(velox_project_id);

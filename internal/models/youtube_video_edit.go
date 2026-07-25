@@ -12,9 +12,9 @@ type YouTubeVideoEdit struct {
 	PlatformAccountID  int64      `json:"platform_account_id"`
 	YouTubeVideoID     string     `json:"youtube_video_id"`
 	VeloxProjectID     string     `json:"velox_project_id"`
-	SourceThumbnailURL string     `json:"source_thumbnail_url,omitempty"`
-	ThumbnailMediaID   *int64     `json:"thumbnail_media_id,omitempty"`
-	DesiredPrivacy     string     `json:"desired_privacy"`
+	SourceThumbnailURL string   `json:"source_thumbnail_url,omitempty"`
+	ThumbnailMediaID   *string  `json:"thumbnail_media_id,omitempty"`
+	DesiredPrivacy     string   `json:"desired_privacy"`
 	PublishAt          *time.Time `json:"publish_at,omitempty"`
 	Status               string     `json:"status"`
 	LastError          string     `json:"last_error,omitempty"`

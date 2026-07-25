@@ -17,9 +17,10 @@ import (
 
 // mockYouTubeVideoEditStore is an test seam for YouTubeVideoEditStore.
 type mockYouTubeVideoEditStore struct {
-	created []*models.YouTubeVideoEdit
-	findFn  func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
-	update  func(ctx context.Context, edit *models.YouTubeVideoEdit) error
+	created         []*models.YouTubeVideoEdit
+	findFn          func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
+	findByProjectFn func(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
+	update          func(ctx context.Context, edit *models.YouTubeVideoEdit) error
 }
 
 func (m *mockYouTubeVideoEditStore) Create(ctx context.Context, edit *models.YouTubeVideoEdit) error {
@@ -30,6 +31,13 @@ func (m *mockYouTubeVideoEditStore) Create(ctx context.Context, edit *models.You
 func (m *mockYouTubeVideoEditStore) FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
 	if m.findFn != nil {
 		return m.findFn(ctx, id)
+	}
+	return nil, nil
+}
+
+func (m *mockYouTubeVideoEditStore) FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
+	if m.findByProjectFn != nil {
+		return m.findByProjectFn(ctx, projectID)
 	}
 	return nil, nil
 }
@@ -316,5 +324,87 @@ func TestCreateYouTubeEditorSession_PublicVideoRejected(t *testing.T) {
 	}
 	if len(editStore.created) != 0 {
 		t.Fatalf("expected no edit session to be created, got %d", len(editStore.created))
+	}
+}
+
+func TestUpdateYouTubeEditorSession_StoresThumbnailMediaID(t *testing.T) {
+	account := &models.PlatformAccount{
+		ID:             42,
+		UserID:         1,
+		Platform:       models.PlatformYouTube,
+		PlatformUserID: "UC123",
+		Username:       "testchannel",
+		Status:         models.AccountStatusActive,
+	}
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if id == account.ID {
+				return account, nil
+			}
+			return nil, nil
+		},
+	}
+	workspaceStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			if id == workspace.ID {
+				return workspace, nil
+			}
+			return nil, nil
+		},
+	}
+
+	mediaStore := newMockMediaStore()
+	mediaStore.assets["asset-uuid-123"] = &models.MediaAsset{
+		ID:     "asset-uuid-123",
+		UserID: 1,
+		Status: models.MediaAssetStatusReady,
+	}
+
+	var updated *models.YouTubeVideoEdit
+	editStore := &mockYouTubeVideoEditStore{
+		findByProjectFn: func(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:                "session-123",
+				WorkspaceID:       workspace.ID,
+				PlatformAccountID: account.ID,
+				YouTubeVideoID:    "abc123",
+				VeloxProjectID:    "ve-project-123",
+				Status:            "editing",
+			}, nil
+		},
+		update: func(ctx context.Context, edit *models.YouTubeVideoEdit) error {
+			updated = edit
+			return nil
+		},
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		store,
+		auth.NewManager(testJWTSecret, 24),
+		"https://app.instaedit.org",
+		nil,
+		WithWorkspaceStore(workspaceStore),
+		WithYouTubeVideoEditStore(editStore),
+		WithMediaStore(mediaStore),
+	)
+
+	payload := map[string]any{"thumbnail_media_id": "asset-uuid-123"}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/youtube/editor-sessions/by-project/ve-project-123", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if updated == nil {
+		t.Fatalf("expected session to be updated")
+	}
+	if updated.ThumbnailMediaID == nil || *updated.ThumbnailMediaID != "asset-uuid-123" {
+		t.Fatalf("expected thumbnail_media_id to be asset-uuid-123, got %v", updated.ThumbnailMediaID)
 	}
 }

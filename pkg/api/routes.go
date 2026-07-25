@@ -166,6 +166,12 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions", r.protected(createEditorSessionHandler.ServeHTTP))
 
+	var updateEditorSessionHandler http.Handler = http.HandlerFunc(r.handleUpdateYouTubeEditorSession)
+	if r.csrfMiddleware != nil {
+		updateEditorSessionHandler = r.csrfMiddleware(updateEditorSessionHandler)
+	}
+	r.mux.Method(http.MethodPatch, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}", r.protected(updateEditorSessionHandler.ServeHTTP))
+
 	r.mux.Method(http.MethodGet, "/api/v1/metrics", http.HandlerFunc(r.handleMetrics))
 
 	// Mount every registered module against the chi mux.
