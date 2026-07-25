@@ -440,28 +440,16 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		return
 	}
 
-	// Resolve and validate privacy status and publish time early, before
-	// touching any dependency. This keeps the error surface predictable and
-	// lets cheap request validation fail fast.
-	privacyStatus := strings.ToLower(strings.TrimSpace(payload.PrivacyStatus))
-	if privacyStatus == "" {
-		privacyStatus = "public"
-	}
-	if privacyStatus != "public" && privacyStatus != "unlisted" && privacyStatus != "private" {
-		writeError(w, http.StatusBadRequest, "privacy_status must be public, unlisted, or private")
-		return
-	}
-	if payload.PublishAt != nil && !payload.PublishAt.IsZero() {
-		if payload.PublishAt.Before(time.Now().UTC()) {
-			writeError(w, http.StatusBadRequest, "publish_at must be in the future")
-			return
-		}
-		if privacyStatus != "private" {
-			writeError(w, http.StatusBadRequest, "scheduled publishing requires privacy_status=private")
-			return
-		}
-	}
-
+	// Body-level Title/Description validation only here. Privacy status +
+	// publish_at validation happens AFTER the session is loaded — the
+	// resolved privacyStatus falls back to edit.DesiredPrivacy when the
+	// payload omits privacy_status (Bug-fix Blocco #5 P0 #1). The original
+	// early validation incorrectly rejected a valid scheduled publish
+	// when the session itself was already private: the body-only
+	// privacyStatus defaulted missing → "public", and then the
+	// "future publish_at requires private" rule triggered 400 — even
+	// though the session's desired_privacy would have resolved the
+	// final privacyStatus to "private" downstream.
 	if r.youtubeVideoEditStore == nil {
 		writeError(w, http.StatusServiceUnavailable, "youtube video edit store not configured")
 		return
@@ -507,6 +495,39 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		return
 	}
 
+	// Resolve privacy status. Order of preference:
+	//   1. payload.PrivacyStatus (request-body override);
+	//   2. edit.DesiredPrivacy (session-stored default);
+	//   3. "public" (final default).
+	// Then validate (enum membership + publish_at vs privacy =
+	// "scheduled requires private"). Placed AFTER the session load +
+	// idempotency + in-flight checks + BEFORE the media/store/ytSvc
+	// nil checks: this is the bug-fix for "Validazione anticipata
+	// della privacy" + it fails fast on bad input without touching
+	// the media layer.
+	privacyStatus := payload.PrivacyStatus
+	if privacyStatus == "" {
+		privacyStatus = edit.DesiredPrivacy
+	}
+	privacyStatus = strings.ToLower(strings.TrimSpace(privacyStatus))
+	if privacyStatus == "" {
+		privacyStatus = "public"
+	}
+	if privacyStatus != "public" && privacyStatus != "unlisted" && privacyStatus != "private" {
+		writeError(w, http.StatusBadRequest, "privacy_status must be public, unlisted, or private")
+		return
+	}
+	if payload.PublishAt != nil && !payload.PublishAt.IsZero() {
+		if payload.PublishAt.Before(time.Now().UTC()) {
+			writeError(w, http.StatusBadRequest, "publish_at must be in the future")
+			return
+		}
+		if privacyStatus != "private" {
+			writeError(w, http.StatusBadRequest, "scheduled publishing requires privacy_status=private")
+			return
+		}
+	}
+
 	if r.mediaStore == nil || r.storageProvider == nil {
 		writeError(w, http.StatusNotImplemented, "media not configured on this server")
 		return
@@ -529,17 +550,6 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		writeError(w, http.StatusBadRequest, "invalid or unverified media asset")
 		return
 	}
-
-	// Use the request-level privacy status if provided, otherwise fall back to
-	// the one stored in the session. Validation already happened above.
-	privacyStatus = payload.PrivacyStatus
-	if privacyStatus == "" {
-		privacyStatus = edit.DesiredPrivacy
-	}
-	if privacyStatus == "" {
-		privacyStatus = "public"
-	}
-	privacyStatus = strings.ToLower(strings.TrimSpace(privacyStatus))
 
 	// Fetch a fresh access token.
 	token, err := r.vault.Get(req.Context(), edit.PlatformAccountID, models.TokenTypeBearer)
