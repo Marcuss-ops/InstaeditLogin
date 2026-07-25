@@ -2,12 +2,11 @@
 
 Canonical reference for first deploy and ongoing operations to the VPS
 production target. **This is the single source of truth for production
-deployment as of 2026-07-25.** The historical managed-platform
-configurations have been removed from the live path; their files
-(`fly.toml`, `scripts/set-fly-secrets.sh`, `scripts/verify-fly-secrets.sh`,
-the `web/` Vercel preview workflow, etc.) were deleted in earlier
-cutover commits. The remaining references in the repo are archaeological
-only.
+deployment as of 2026-07-25.** Earlier managed-platform configurations
+have been removed from the live path; the now-retired top-level TOML
+config, the matching shell helpers in `scripts/`, and the Vercel
+preview workflow were deleted in earlier cutover commits. The
+remaining references in the repo are archaeological only.
 
 The doc is structured around the 10 deploy surface areas. End-to-end
 deploy execution lives in **§10**; the prior sections are build blocks
@@ -234,8 +233,8 @@ Caddy obtains and renews a Let's Encrypt cert for every host it
 listens on. The HTTP-01 challenge goes to
 `http://51.91.11.36/.well-known/acme-challenge/...` from the LE CA
 vantage points, so verify **`dig +short instaedit.org A` returns
-`51.91.11.36`** before the first `docker compose up`. No manual cert
-step is required (the historical `flyctl certs add` step is intentionally gone).
+`51.91.11.36`** before the first `docker compose up`.No manual cert step is required — Caddy handles cert issuance via
+Let's Encrypt HTTP-01 automatically.
 
 LE has rate limits on prod issuance (5/h per host); the staging env is
 free. Confirm renewal cadence weekly (`docker compose logs caddy | grep -i certificate`).
@@ -572,8 +571,8 @@ of the cutover. None resolve to anything useful post-cutover:
 
 - `_vercel` TXT (or any Vercel-style TXT)
 - `cname.vercel-dns.com.` CNAME
-- The historical hosted-platform app hostname (`*.fly.dev.` style CNAME)
-- Anything pointing at the historical managed-app VIP
+- Managed-platform hosted-app CNAMEs (any non-VPS CNAME pointing at a managed-app VIP)
+- Anything pointing at the historical managed-app hostname
 
 ### 7.5 Verification
 
