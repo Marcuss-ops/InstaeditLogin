@@ -300,11 +300,11 @@ jobs:
           echo "Run locally: make test-e2e"
           echo "Run with -tags=e2e only (no need for `make`): go test -tags=e2e -timeout 15m ./tests/e2e/..."
 
-  # ─── envfile parser regression test (formerly ci step 8.5 + make fly-secrets-test) ───
+  # ─── envfile parser regression test (formerly ci step 8.5 + python3 scripts/test_parse_envfile.py) ───
   # The .env parser in scripts/_parse_envfile.py is the security
   # boundary of the deploy — a bug here could push a malformed value
   # (panic at boot) or a shell-expanded value (silently mutate a
-  # secret). The `make fly-secrets-test` Makefile target was retired
+  # secret). The `python3 scripts/test_parse_envfile.py` Makefile target was retired
   # alongside the Fly cutover (commit 1ab88ef), so this test now
   # runs directly via `python3 scripts/test_parse_envfile.py`.
   # Fast (<1s) pure-python — no Docker / no external services needed.
