@@ -40,11 +40,19 @@
 #   5 = a `gh secret delete` call failed (network / 403 / 404), OR operator
 #       typed something other than "yes" at the confirmation prompt
 #   6 = --apply invoked without an interactive TTY (refuse + suggest --ui-fallback)
+#
+# CI / monitoring note: as of this revision, emit-codes are {0,1,2,3,5,6}.
+# A probe previously wired to exit 4 (partial-delete refusal,
+# superseded by soft-proceed) should be updated to wire exit 5 instead,
+# which now also covers the operator-no confirmation case. The current
+# version does NOT emit exit 4 from any code path; reserved to keep
+# the numbering stable for scripts relying on the prior layout.
 set -euo pipefail
 
 # Trap any exit path so temp files don't leak on shared hosts / CI
-# containers. Per-exit-path explicit `rm -f /tmp/list_out` is still
-# present in many branches for readability; the trap is the safety net.
+# containers. Single-source-of-truth: cleanup is centralized here; no
+# per-branch `rm -f /tmp/list_out` calls are emitted in the script
+# body.
 trap 'rm -f /tmp/list_out /tmp/list_err /tmp/del_err 2>/dev/null || true' EXIT
 
 REPO="Marcuss-ops/InstaeditLogin"
@@ -123,10 +131,8 @@ EOF
       if grep -qi '403' /tmp/list_err; then
         echo "   PAT likely lacks secrets:write scope. Run --ui-fallback." >&2
       fi
-      rm -f /tmp/list_err
       exit 3
     fi
-    rm -f /tmp/list_err
 
     listed=$(gh secret list --repo "$REPO" 2>/dev/null | awk 'NR>1 {print $1}')
 
@@ -166,10 +172,8 @@ EOF
     if ! gh secret list --repo "$REPO" >/tmp/list_out 2>/tmp/list_err; then
       err=$(cat /tmp/list_err)
       echo "❌ gh secret list failed: $err" >&2
-      rm -f /tmp/list_out /tmp/list_err
       exit 3
     fi
-    rm -f /tmp/list_err
 
     absent=0
     for s in "${SECRETS[@]}"; do
@@ -180,7 +184,6 @@ EOF
         echo "  ✓ absent: $s"
       fi
     done
-    rm -f /tmp/list_out
     if [[ "$absent" -gt 0 ]]; then
       echo
       echo "─── Result: $absent of ${#SECRETS[@]} target secrets are still on github.com ───"
@@ -202,13 +205,11 @@ EOF
     if ! gh secret list --repo "$REPO" >/tmp/list_out 2>/tmp/list_err; then
       err=$(cat /tmp/list_err)
       echo "❌ gh secret list failed: $err" >&2
-      rm -f /tmp/list_out /tmp/list_err
       if grep -qi '403' /tmp/list_err 2>/dev/null; then
         echo "    PAT lacks secrets:write scope. Run: $0 --ui-fallback" >&2
       fi
       exit 3
     fi
-    rm -f /tmp/list_err
 
     echo "─── Pre-delete presence check ───"
     missing=()
@@ -226,7 +227,6 @@ EOF
     if [[ ${#present[@]} -eq 0 ]]; then
       echo
       echo "─── Nothing to delete: all ${#SECRETS[@]} target secrets already absent ───"
-      rm -f /tmp/list_out
       exit 0
     fi
 
@@ -244,7 +244,6 @@ EOF
     if [[ ! -t 0 ]]; then
       echo "❌ --apply requires an interactive terminal (stdin is not a TTY)." >&2
       echo "   Re-run from a real shell, or use --ui-fallback." >&2
-      rm -f /tmp/list_out
       exit 6
     fi
 
@@ -252,7 +251,6 @@ EOF
     read -rp "Confirm: delete [${present[*]}] on $REPO? Type 'yes' to continue: " confirm
     if [[ "$confirm" != "yes" ]]; then
       echo "Aborted by operator. No secrets were modified." >&2
-      rm -f /tmp/list_out
       exit 5
     fi
 
@@ -271,7 +269,6 @@ EOF
         failures+=("$s")
       fi
     done
-    rm -f /tmp/del_err /tmp/list_out
 
     # Step 4: re-list to verify.
     echo
