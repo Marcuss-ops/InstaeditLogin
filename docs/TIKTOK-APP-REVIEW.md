@@ -79,6 +79,25 @@ https://instaedit.org/tiktok
   `curl -fsSL https://instaedit.org/tiktok` from any host before
   submission.
 
+### Postgres connection (`DATABASE_URL`)
+
+```
+DATABASE_URL=postgresql://instaedit:<password>@db:5432/instaedit_login?sslmode=disable
+```
+
+* `<password>` lives only in `/srv/instaedit/.env.production` on the
+  VPS — never committed, never echoed in this doc. The local-dev
+  override is the literal `instaedit:dev_password`, published by
+  `docker-compose.yml` at lines 44, 61, 104, 142 — the four
+  Compose-managed services each inherit this DSN via env injection;
+  the matching `postgres` image boot-time seed lives in the compose
+  stack (NOT in `internal/database/migrations/001_init.sql`, which
+  only models the data tables).
+* `db` is the compose-network alias for the `postgres` service inside
+  the docker bridge; `?sslmode=disable` is the correct setting there —
+  TLS is Caddy's job, not Postgres's. Full canonical 26-secret
+  mapping: [`docs/DEPLOY.md` §3](./DEPLOY.md#3-secret-collection).
+
 ## Reviewer explanation (≤ 1000 chars, paste verbatim)
 
 ```
