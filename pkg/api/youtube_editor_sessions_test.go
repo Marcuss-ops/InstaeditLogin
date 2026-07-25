@@ -505,7 +505,7 @@ func TestPublishYouTubeEditorSession_ScheduledPublishing(t *testing.T) {
 		if gotPublishAt.IsZero() {
 			t.Errorf("expected non-zero publishAt for scheduled publishing")
 		}
-		if !gotPublishAt.Equal(publishAt) && gotPublishAt.Sub(publishAt).Abs() > time.Second {
+		if gotPublishAt.Format(time.RFC3339) != publishAt.Format(time.RFC3339) {
 			t.Errorf("publishAt mismatch: want %v, got %v", publishAt, gotPublishAt)
 		}
 		return "https://www.youtube.com/watch?v=" + videoID, nil
@@ -555,6 +555,108 @@ func TestPublishYouTubeEditorSession_ScheduledPublishing(t *testing.T) {
 	}
 	if resp.PublishedAt == nil {
 		t.Errorf("expected published_at in response")
+	}
+}
+
+func TestPublishYouTubeEditorSession_ScheduledPublishingRequiresPrivate(t *testing.T) {
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+	editStore := &mockYouTubeVideoEditStore{
+		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:               "session-123",
+				WorkspaceID:      workspace.ID,
+				YouTubeVideoID:   "ytvideo123",
+				VeloxProjectID:   "ve-project-123",
+				Status:           "editing",
+				DesiredPrivacy:   "public",
+				ThumbnailMediaID: strPtr("asset-uuid-123"),
+			}, nil
+		},
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		"https://app.instaedit.org",
+		nil,
+		WithWorkspaceStore(&mockWorkspaceStore{
+			findByIDFn: func(id int64) (*models.Workspace, error) {
+				if id == workspace.ID {
+					return workspace, nil
+				}
+				return nil, nil
+			},
+		}),
+		WithYouTubeVideoEditStore(editStore),
+		WithMediaStore(newMockMediaStore()),
+		WithStorageProvider(newMockStorageProvider()),
+	)
+
+	payload := map[string]any{
+		"privacy_status": "public",
+		"publish_at":     time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339),
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for scheduled publishing without private status, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPublishYouTubeEditorSession_PastPublishAtRejected(t *testing.T) {
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+	editStore := &mockYouTubeVideoEditStore{
+		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:               "session-123",
+				WorkspaceID:      workspace.ID,
+				YouTubeVideoID:   "ytvideo123",
+				VeloxProjectID:   "ve-project-123",
+				Status:           "editing",
+				DesiredPrivacy:   "public",
+				ThumbnailMediaID: strPtr("asset-uuid-123"),
+			}, nil
+		},
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		"https://app.instaedit.org",
+		nil,
+		WithWorkspaceStore(&mockWorkspaceStore{
+			findByIDFn: func(id int64) (*models.Workspace, error) {
+				if id == workspace.ID {
+					return workspace, nil
+				}
+				return nil, nil
+			},
+		}),
+		WithYouTubeVideoEditStore(editStore),
+		WithMediaStore(newMockMediaStore()),
+		WithStorageProvider(newMockStorageProvider()),
+	)
+
+	payload := map[string]any{
+		"privacy_status": "private",
+		"publish_at":     time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339),
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for past publish_at, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

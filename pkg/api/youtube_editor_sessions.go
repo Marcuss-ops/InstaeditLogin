@@ -336,6 +336,28 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		return
 	}
 
+	// Resolve and validate privacy status and publish time early, before
+	// touching any dependency. This keeps the error surface predictable and
+	// lets cheap request validation fail fast.
+	privacyStatus := strings.ToLower(strings.TrimSpace(payload.PrivacyStatus))
+	if privacyStatus == "" {
+		privacyStatus = "public"
+	}
+	if privacyStatus != "public" && privacyStatus != "unlisted" && privacyStatus != "private" {
+		writeError(w, http.StatusBadRequest, "privacy_status must be public, unlisted, or private")
+		return
+	}
+	if payload.PublishAt != nil && !payload.PublishAt.IsZero() {
+		if payload.PublishAt.Before(time.Now().UTC()) {
+			writeError(w, http.StatusBadRequest, "publish_at must be in the future")
+			return
+		}
+		if privacyStatus != "private" {
+			writeError(w, http.StatusBadRequest, "scheduled publishing requires privacy_status=private")
+			return
+		}
+	}
+
 	if r.youtubeVideoEditStore == nil {
 		writeError(w, http.StatusServiceUnavailable, "youtube video edit store not configured")
 		return
@@ -400,8 +422,9 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		return
 	}
 
-	// Resolve privacy status and publish time.
-	privacyStatus := payload.PrivacyStatus
+	// Use the request-level privacy status if provided, otherwise fall back to
+	// the one stored in the session. Validation already happened above.
+	privacyStatus = payload.PrivacyStatus
 	if privacyStatus == "" {
 		privacyStatus = edit.DesiredPrivacy
 	}
@@ -409,20 +432,6 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		privacyStatus = "public"
 	}
 	privacyStatus = strings.ToLower(strings.TrimSpace(privacyStatus))
-	if privacyStatus != "public" && privacyStatus != "unlisted" && privacyStatus != "private" {
-		writeError(w, http.StatusBadRequest, "privacy_status must be public, unlisted, or private")
-		return
-	}
-	if payload.PublishAt != nil && !payload.PublishAt.IsZero() {
-		if payload.PublishAt.Before(time.Now().UTC()) {
-			writeError(w, http.StatusBadRequest, "publish_at must be in the future")
-			return
-		}
-		if privacyStatus != "private" {
-			writeError(w, http.StatusBadRequest, "scheduled publishing requires privacy_status=private")
-			return
-		}
-	}
 
 	// Fetch a fresh access token.
 	token, err := r.vault.Get(req.Context(), edit.PlatformAccountID, models.TokenTypeBearer)
