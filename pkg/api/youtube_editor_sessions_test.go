@@ -632,6 +632,51 @@ func TestPublishYouTubeEditorSession_PastPublishAtRejected(t *testing.T) {
 	}
 }
 
+func TestPublishYouTubeEditorSession_PublishingInFlightReturnsConflict(t *testing.T) {
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+	editStore := &mockYouTubeVideoEditStore{
+		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:               "session-123",
+				WorkspaceID:      workspace.ID,
+				YouTubeVideoID:   "ytvideo123",
+				VeloxProjectID:   "ve-project-123",
+				Status:           "publishing",
+				DesiredPrivacy:   "public",
+				ThumbnailMediaID: strPtr("asset-uuid-123"),
+				UpdatedAt:        time.Now().UTC().Add(-30 * time.Second),
+			}, nil
+		},
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		WithWorkspaceStore(&mockWorkspaceStore{
+			findByIDFn: func(id int64) (*models.Workspace, error) {
+				if id == workspace.ID {
+					return workspace, nil
+				}
+				return nil, nil
+			},
+		}),
+		WithYouTubeVideoEditStore(editStore),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for in-flight publishing session, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestPublishYouTubeEditorSession_RetryFromFailed(t *testing.T) {
 	account := &models.PlatformAccount{
 		ID:             42,
