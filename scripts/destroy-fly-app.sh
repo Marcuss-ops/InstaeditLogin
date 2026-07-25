@@ -378,6 +378,55 @@ if [[ "$mode" == "apply" ]]; then
       echo "── Step $step_no: $label ──"
     }
 
+    # ─── Step 0 — Tigris disambiguation + conditional backup ───
+    # Integrated into --apply so the operator has a single-shot workflow.
+    # Mirrors docs/FLY-DESTROY-RUNBOOK.md §2-§3 (jq disambiguation + mc
+    # version enable + Path A local mirror); uses the bare-value jq
+    # recursive-descent so $ATTACHED is a clean app id (no field name,
+    # no surrounding quotes). Bypasses the step() helper so the existing
+    # 6 step numbers stay untouched.
+    #
+    # New exit codes:
+    #   7 = disambiguation failure (jq missing OR ambiguous attached_to)
+    #   8 = backup transfer failure (mc cp non-zero)
+    #
+    # mc-missing path is graceful (warn + skip) — matches runbook §1
+    # caveat "mc only required if §3 path is taken".
+    echo "── Step 0: TIGRIS BUCKET (disambiguate; backup if Fly-attached) ──"
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "  ❌ jq missing — cannot safely disambiguate Tigris." >&2
+      failed_steps+=(0); exit 7
+    fi
+    flyctl storage list --app "$APP" --json > /tmp/fly-storage.json 2>/dev/null || true
+    ATTACHED=$(jq -r '.[]? | (.attached_to // .AttachedTo // .app_id) // ""' \
+                /tmp/fly-storage.json 2>/dev/null | head -1 || true)
+    [[ -z "$ATTACHED" && -s /tmp/fly-storage.json ]] \
+      && ATTACHED=$(jq -r '.. | objects | to_entries[] | select(.key|test("^(attached_to|AttachedTo|app_id)$")) | .value' \
+                    /tmp/fly-storage.json 2>/dev/null | head -1 || true)
+    if [[ "$ATTACHED" == *"$APP"* ]]; then
+      echo "  · Fly-attached detected: ${ATTACHED}"
+      if ! command -v mc >/dev/null 2>&1; then
+        echo "  ⚠️  mc missing — SKIPPING §3 backup (Tigris contents at risk)" >&2
+        echo "     install mc: brew install minio/stable/mc (or apt install mc)" >&2
+      else
+        echo "  · running §3 backup (mc version enable + Path A)"
+        mc version enable tigris/instaedit-prod-media 2>/dev/null || true
+        SNAP_DIR="/tmp/tigris-snapshot-$(date -u +%Y%m%dT%H%M%SZ)"
+        mkdir -p "$SNAP_DIR"
+        if mc cp --recursive tigris/instaedit-prod-media/ "${SNAP_DIR}/" >/dev/null 2>&1; then
+          echo "  ✓ Path A local mirror: ${SNAP_DIR} ($(du -sh "${SNAP_DIR}" | cut -f1))"
+        else
+          echo "  ❌ mc cp failed — refusing destroy without backup." >&2
+          failed_steps+=(0); exit 8
+        fi
+      fi
+    elif [[ -z "$ATTACHED" ]]; then
+      echo "  · standalone Tigris (or no bucket) — no backup needed"
+    else
+      echo "  ❌ ambiguous attached_to='${ATTACHED}' — refusing destruction." >&2
+      failed_steps+=(0); exit 7
+    fi
+
     # Step 1 — machines
     step "MACHINES (api + worker + any others)"
     if [[ $app_present -eq 1 ]]; then
