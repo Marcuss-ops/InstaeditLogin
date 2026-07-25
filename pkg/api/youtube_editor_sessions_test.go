@@ -101,6 +101,33 @@ func (m *mockYouTubeOAuthServiceForEditor) PublishThumbnail(ctx context.Context,
 	return "", errors.New("not implemented")
 }
 
+// newPublishRouter builds the minimal router required by the publish
+// handler tests. It wires a workspace store that resolves the given
+// workspace and a YouTube video edit store backed by the supplied mock.
+// Additional RouterOption values can be appended when a test needs
+// extra dependencies such as media or storage providers.
+func newPublishRouter(t *testing.T, workspace *models.Workspace, editStore *mockYouTubeVideoEditStore, opts ...RouterOption) *Router {
+	t.Helper()
+	return mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		append([]RouterOption{
+			WithWorkspaceStore(&mockWorkspaceStore{
+				findByIDFn: func(id int64) (*models.Workspace, error) {
+					if id == workspace.ID {
+						return workspace, nil
+					}
+					return nil, nil
+				},
+			}),
+			WithYouTubeVideoEditStore(editStore),
+		}, opts...)...,
+	)
+}
+
 func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 	account := &models.PlatformAccount{
 		ID:             42,
@@ -249,21 +276,7 @@ func TestPublishYouTubeEditorSession_TooLongTitle(t *testing.T) {
 		},
 	}
 
-	r := mustNewRouterWithDefaults(
-		services.NewCapabilityRouter(),
-		&mockUserStore{},
-		auth.NewManager(testJWTSecret, 24),
-		"https://app.instaedit.org",
-		nil,
-		WithWorkspaceStore(&mockWorkspaceStore{
-			findByIDFn: func(id int64) (*models.Workspace, error) {
-				if id == workspace.ID {
-					return workspace, nil
-				}
-				return nil, nil
-			},
-		}),
-		WithYouTubeVideoEditStore(editStore),
+	r := newPublishRouter(t, workspace, editStore,
 		WithMediaStore(newMockMediaStore()),
 		WithStorageProvider(newMockStorageProvider()),
 	)
@@ -400,21 +413,7 @@ func TestPublishYouTubeEditorSession_IdempotentWhenPublished(t *testing.T) {
 		},
 	}
 
-	r := mustNewRouterWithDefaults(
-		services.NewCapabilityRouter(),
-		&mockUserStore{},
-		auth.NewManager(testJWTSecret, 24),
-		"https://app.instaedit.org",
-		nil,
-		WithWorkspaceStore(&mockWorkspaceStore{
-			findByIDFn: func(id int64) (*models.Workspace, error) {
-				if id == workspace.ID {
-					return workspace, nil
-				}
-				return nil, nil
-			},
-		}),
-		WithYouTubeVideoEditStore(editStore),
+	r := newPublishRouter(t, workspace, editStore,
 		WithMediaStore(newMockMediaStore()),
 		WithStorageProvider(newMockStorageProvider()),
 	)
@@ -562,22 +561,7 @@ func TestPublishYouTubeEditorSession_ScheduledPublishingRequiresPrivate(t *testi
 	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
 	// Validation happens before the session is looked up, so a minimal
 	// router with just workspace/edit stores is sufficient.
-	r := mustNewRouterWithDefaults(
-		services.NewCapabilityRouter(),
-		&mockUserStore{},
-		auth.NewManager(testJWTSecret, 24),
-		"",
-		nil,
-		WithWorkspaceStore(&mockWorkspaceStore{
-			findByIDFn: func(id int64) (*models.Workspace, error) {
-				if id == workspace.ID {
-					return workspace, nil
-				}
-				return nil, nil
-			},
-		}),
-		WithYouTubeVideoEditStore(&mockYouTubeVideoEditStore{}),
-	)
+	r := newPublishRouter(t, workspace, &mockYouTubeVideoEditStore{})
 
 	payload := map[string]any{
 		"privacy_status": "public",
@@ -599,22 +583,7 @@ func TestPublishYouTubeEditorSession_PastPublishAtRejected(t *testing.T) {
 	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
 	// Validation happens before the session is looked up, so a minimal
 	// router with just workspace/edit stores is sufficient.
-	r := mustNewRouterWithDefaults(
-		services.NewCapabilityRouter(),
-		&mockUserStore{},
-		auth.NewManager(testJWTSecret, 24),
-		"",
-		nil,
-		WithWorkspaceStore(&mockWorkspaceStore{
-			findByIDFn: func(id int64) (*models.Workspace, error) {
-				if id == workspace.ID {
-					return workspace, nil
-				}
-				return nil, nil
-			},
-		}),
-		WithYouTubeVideoEditStore(&mockYouTubeVideoEditStore{}),
-	)
+	r := newPublishRouter(t, workspace, &mockYouTubeVideoEditStore{})
 
 	payload := map[string]any{
 		"privacy_status": "private",
@@ -649,22 +618,7 @@ func TestPublishYouTubeEditorSession_PublishingInFlightReturnsConflict(t *testin
 		},
 	}
 
-	r := mustNewRouterWithDefaults(
-		services.NewCapabilityRouter(),
-		&mockUserStore{},
-		auth.NewManager(testJWTSecret, 24),
-		"",
-		nil,
-		WithWorkspaceStore(&mockWorkspaceStore{
-			findByIDFn: func(id int64) (*models.Workspace, error) {
-				if id == workspace.ID {
-					return workspace, nil
-				}
-				return nil, nil
-			},
-		}),
-		WithYouTubeVideoEditStore(editStore),
-	)
+	r := newPublishRouter(t, workspace, editStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", bytes.NewReader([]byte("{}")))
 	req.Header.Set("Content-Type", "application/json")
