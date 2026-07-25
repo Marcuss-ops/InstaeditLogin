@@ -140,4 +140,9 @@ var (
 	// (where parent_group_id IS NULL). Subgroups reuse the workspace
 	// uniqueness via their parent chain. Maps to HTTP 409.
 	ErrGroupDuplicate = errors.New("group with this name already exists at this level")
+
+	// ErrYouTubeVideoEditNotFound is returned by
+	// YouTubeVideoEditRepository.Update when no row matches the
+	// supplied id. Maps to HTTP 404 at the API layer.
+	ErrYouTubeVideoEditNotFound = errors.New("youtube video edit not found")
 )

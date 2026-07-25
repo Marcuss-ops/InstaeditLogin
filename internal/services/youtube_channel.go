@@ -796,6 +796,57 @@ func (s *YouTubeOAuthService) getVideoDetails(ctx context.Context, accessToken s
 	return items, nil
 }
 
+// GetYouTubeVideo fetches the details for a single YouTube video by id
+// and returns the narrow subset of fields the InstaEdit BFF needs to
+// validate a video before creating a thumbnail editor session. It
+// returns an error when the video does not exist or the upstream call
+// fails.
+func (s *YouTubeOAuthService) GetYouTubeVideo(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
+	if videoID == "" {
+		return nil, fmt.Errorf("youtube video details: empty video id")
+	}
+
+	params := url.Values{}
+	params.Set("part", "snippet,status,contentDetails")
+	params.Set("id", videoID)
+
+	reqURL := "https://www.googleapis.com/youtube/v3/videos?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("youtube video details: create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("youtube video details: request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return nil, fmt.Errorf("youtube video details: videos.list returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result youtubeVideosResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("youtube video details: decode: %w", err)
+	}
+	if len(result.Items) == 0 {
+		return nil, fmt.Errorf("youtube video details: video %s not found", videoID)
+	}
+
+	v := result.Items[0]
+	return &models.YouTubeVideoDetails{
+		ID:           v.ID,
+		Title:        v.Snippet.Title,
+		ChannelID:    v.Snippet.ChannelID,
+		ThumbnailURL: youtubeBestThumbnail(v.Snippet.Thumbnails),
+		Privacy:      v.Status.PrivacyStatus,
+		UploadStatus: v.Status.UploadStatus,
+	}, nil
+}
+
 // formatCount returns a human-readable count string (e.g. "125K", "1.2M").
 func formatCount(n int64) string {
 	switch {

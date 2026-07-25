@@ -294,6 +294,14 @@ type Router struct {
 	// owns the routing decision.
 	youTubeSvc YouTubeOAuthService
 
+	// youtubeVideoEditStore persists thumbnail editor sessions for
+	// YouTube videos. Wired via WithYouTubeVideoEditStore.
+	youtubeVideoEditStore YouTubeVideoEditStore
+
+	// editorURL is the base URL of the dark editor SPA. When empty,
+	// frontendURL is used as a fallback.
+	editorURL string
+
 	// trustedProxies contains the parsed TRUSTED_PROXIES networks.
 	// When non-empty, clientIP() trusts X-Forwarded-For / X-Real-IP
 	// only from these peers. Wired via WithTrustedProxies in
@@ -630,6 +638,23 @@ func WithMetricsAuth(user, pass string) RouterOption {
 	}
 }
 
+// WithYouTubeVideoEditStore wires the repository used to persist
+// YouTube thumbnail editor sessions. When nil, the
+// /api/v1/youtube/editor-sessions endpoint returns 503.
+func WithYouTubeVideoEditStore(store YouTubeVideoEditStore) RouterOption {
+	return func(r *Router) {
+		r.youtubeVideoEditStore = store
+	}
+}
+
+// WithEditorURL wires the base URL of the dark editor SPA. When
+// empty, frontendURL is used as a fallback when building editor_url.
+func WithEditorURL(url string) RouterOption {
+	return func(r *Router) {
+		r.editorURL = url
+	}
+}
+
 // Compile-time assertion that *repository.WorkspaceRepository
 // satisfies the extended WorkspaceStore interface (post-P0#4
 // channel surfaces). Caught at go vet time, not at runtime.
@@ -665,6 +690,18 @@ type YouTubeOAuthService interface {
 	CanaryUpload(ctx context.Context, accessToken, expectedChannelID string) (*services.CanaryUploadResult, error)
 	FetchEarnings(ctx context.Context, accessToken, channelID string, days int) ([]repository.AccountMetricPoint, error)
 	ClientID() string
+	// GetYouTubeVideo validates that a video exists on the connected
+	// YouTube channel and returns a narrow summary of its metadata.
+	GetYouTubeVideo(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error)
+}
+
+// YouTubeVideoEditStore is the persistence contract for thumbnail
+// editor sessions. Defined inline in pkg/api so tests can supply a
+// fake; production wiring passes *repository.YouTubeVideoEditRepository.
+type YouTubeVideoEditStore interface {
+	Create(ctx context.Context, edit *models.YouTubeVideoEdit) error
+	FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
+	Update(ctx context.Context, edit *models.YouTubeVideoEdit) error
 }
 
 // P2 — ops dashboard store. AdminStore is the read-side
@@ -814,6 +851,10 @@ func (r *Router) validateRequiredDeps() error {
 // on RefreshOAuthToken) silently breaks the wiring at the
 // injection site rather than at compile time.
 var _ YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)
+
+// Compile-time assertion that *repository.YouTubeVideoEditRepository
+// satisfies the YouTubeVideoEditStore interface.
+var _ YouTubeVideoEditStore = (*repository.YouTubeVideoEditRepository)(nil)
 
 // The following thin wrappers keep existing unit tests (which call the
 // handlers directly on *Router) compiling while the public module

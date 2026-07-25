@@ -50,7 +50,6 @@ func WireAPI(core *Core) (http.Handler, error) {
 
 	rateLimitRepo := repository.NewRateLimitRepository(core.DB)
 	rateLimitSvc := services.NewRateLimitServiceWithMemory(rateLimitRepo, core.MemoryLimiter)
-
 	opts := []api.RouterOption{
 		api.WithCredentialVault(core.Vault),
 		api.WithChannelAuthorizer(channelAuthorizer),
@@ -67,6 +66,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 		api.WithPostStore(core.postRepo),
 		api.WithMediaStore(core.mediaRepo),
 		api.WithUploadJobStore(core.uploadJobRepo),
+		api.WithYouTubeVideoEditStore(core.youtubeVideoEditRepo),
 		api.WithAdminStore(repository.NewAdminRepository(core.DB)),
 		api.WithImportBatchStore(core.importBatchRepo),
 		api.WithConnectionStateStore(&connectionStateStoreWrapper{core.connectionStateRepo}),
@@ -92,6 +92,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 		api.WithAdminInviteToken(cfg.Auth.AdminInviteToken),
 		api.WithSnapshotStore(repository.NewSnapshotRepository(core.DB)),
 		api.WithMetricHistoryStore(repository.NewAccountMetricsRepository(core.DB)),
+		api.WithEditorURL(cfg.HTTP.EditorURL),
 	}
 
 	// Sentry init (lazy). Empty DSN means no SDK.

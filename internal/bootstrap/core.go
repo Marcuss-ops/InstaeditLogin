@@ -54,6 +54,7 @@ type Core struct {
 	externalDestinationRepo *repository.ExternalDestinationRepository
 	externalDeliveryRepo    *repository.ExternalDeliveryRepository
 	connectLinkNonceRepo    *repository.ConnectLinkNonceRepository
+	youtubeVideoEditRepo    *repository.YouTubeVideoEditRepository
 }
 
 // WireCore builds the shared runtime dependencies used by every binary.
@@ -114,6 +115,7 @@ func WireCore(ctx context.Context) (*Core, error) {
 	externalDestinationRepo := repository.NewExternalDestinationRepository(db)
 	externalDeliveryRepo := repository.NewExternalDeliveryRepository(db)
 	connectLinkNonceRepo := repository.NewConnectLinkNonceRepository(db)
+	youtubeVideoEditRepo := repository.NewYouTubeVideoEditRepository(db)
 
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
 
@@ -172,5 +174,6 @@ func WireCore(ctx context.Context) (*Core, error) {
 		externalDestinationRepo: externalDestinationRepo,
 		externalDeliveryRepo:    externalDeliveryRepo,
 		connectLinkNonceRepo:    connectLinkNonceRepo,
+		youtubeVideoEditRepo:    youtubeVideoEditRepo,
 	}, nil
 }

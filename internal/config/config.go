@@ -203,6 +203,9 @@ type MonitoringConfig struct {
 type HTTPConfig struct {
 	// FrontendURL is where the OAuth callback should redirect.
 	FrontendURL string
+	// EditorURL is the base URL of the dark editor SPA. When empty,
+	// FrontendURL is used as a fallback.
+	EditorURL string
 	// AllowedCORSOrigins is the comma-separated list of origins.
 	AllowedCORSOrigins []string
 	// CookieDomain is the optional `Domain` attribute applied to the
@@ -533,6 +536,7 @@ func Load() (*Config, error) {
 		},
 		HTTP: HTTPConfig{
 			FrontendURL:        getEnv("FRONTEND_URL", ""),
+			EditorURL:            getEnv("EDITOR_URL", ""),
 			AllowedCORSOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
 			CookieDomain:       getEnv("COOKIE_DOMAIN", ""),
 			LogLevel:           getEnv("LOG_LEVEL", "info"),

@@ -158,6 +158,14 @@ func (r *Router) Setup() http.Handler {
 		FrontendURL:    r.frontendURL,
 	}))
 
+	// YouTube thumbnail editor sessions. Protected via the standard
+	// session cookie/JWT chain and CSRF (when configured).
+	var createEditorSessionHandler http.Handler = http.HandlerFunc(r.handleCreateYouTubeEditorSession)
+	if r.csrfMiddleware != nil {
+		createEditorSessionHandler = r.csrfMiddleware(createEditorSessionHandler)
+	}
+	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions", r.protected(createEditorSessionHandler.ServeHTTP))
+
 	r.mux.Method(http.MethodGet, "/api/v1/metrics", http.HandlerFunc(r.handleMetrics))
 
 	// Mount every registered module against the chi mux.

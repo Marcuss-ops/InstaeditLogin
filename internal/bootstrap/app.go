@@ -203,6 +203,7 @@ func Wire(ctx context.Context) (*App, error) {
 	externalDestinationRepo := repository.NewExternalDestinationRepository(db)
 	externalDeliveryRepo := repository.NewExternalDeliveryRepository(db)
 	connectLinkNonceRepo := repository.NewConnectLinkNonceRepository(db)
+	youtubeVideoEditRepo := repository.NewYouTubeVideoEditRepository(db)
 
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
 
@@ -365,6 +366,8 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithAdminInviteToken(cfg.Auth.AdminInviteToken),
 		api.WithSnapshotStore(repository.NewSnapshotRepository(db)),
 		api.WithMetricHistoryStore(repository.NewAccountMetricsRepository(db)),
+		api.WithYouTubeVideoEditStore(youtubeVideoEditRepo),
+		api.WithEditorURL(cfg.HTTP.EditorURL),
 		// P1#7 — export the importBatchRepo on App so the
 		// command-line crawler (cmd/worker) can wire it directly.
 	}
