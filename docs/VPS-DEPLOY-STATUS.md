@@ -130,7 +130,7 @@ Failure mode to escalate on: any header containing the substring `fly`
 ## 7. Open items
 
 - `/health` (top-level) **resolution: removed from §2 + §5** (2026-07-25
-  `19:00:00 UTC`, commit befdbae). Decision: drop the probe rather than
+  19:00:00 UTC, commit befdbae). Decision: drop the probe rather than
   mount a new handler. Canonical VPS-Caddy path is `/api/v1/health` (see
   `pkg/api/routes.go:52` and `pkg/api/middleware_handlers.go:14`); the
   legacy worker `/health` listener remains on TCP/9090 for Fly-style
