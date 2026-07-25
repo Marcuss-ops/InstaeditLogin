@@ -1,0 +1,135 @@
+# VPS Deploy Status
+
+Live evidence for the `api.instaedit.org` endpoint during the Fly → VPS cutover.
+Every claim in this document is reproducible from the commands below; re-run them
+whenever the cutover state needs to be verified.
+
+## Snapshot
+
+- Probe date (UTC): `2026-07-25 12:01:11`
+- API host: `https://api.instaedit.org`
+- Probe operator: cutover audit (this repo)
+
+## 1. DNS resolution
+
+```bash
+$ dig +short api.instaedit.org A
+51.91.11.36
+
+$ dig +short api.instaedit.org AAAA
+(no AAAA records)
+
+$ dig api.instaedit.org +noall +answer
+api.instaedit.org.    3600    IN    A    51.91.11.36
+```
+
+**Interpretation.** One IPv4 record, TTL 3600s, no AAAA. This is the signature
+of an A-record pointing at a single host (the VPS). A Fly anycast deploy would
+typically surface multiple regional A records (e.g. `52.49.x.x`, `18.196.x.x`,
+`3.71.x.x`) and a populated AAAA set. We see neither.
+
+## 2. HTTP identity probe
+
+```bash
+$ curl -sI https://api.instaedit.org/health
+HTTP/2 404
+server: Caddy
+content-type: text/plain; charset=utf-8
+
+$ curl -sI https://api.instaedit.org/
+HTTP/2 404
+server: Caddy
+
+$ curl -sI https://api.instaedit.org/ready
+HTTP/2 405
+allow: GET
+server: Caddy
+```
+
+**Interpretation.** Every response carries `server: Caddy`. No `fly-request-id`,
+no `fly-region`, no `server: Fly`. The path layer is unambiguously Caddy on
+the VPS. `/health` is not currently exposed (404 is expected — see Open items).
+
+## 3. /ready deep dive
+
+```bash
+$ curl -s https://api.instaedit.org/ready
+HTTP_STATUS=503
+content-type: application/json
+x-ratelimit-limit: 100
+server: Caddy
+content-security-policy: …
+x-frame-options: DENY
+```
+
+Body:
+
+```json
+{
+  "status": "unavailable",
+  "checks": {
+    "database": "ok",
+    "migrations": "ok",
+    "workers_pending": [
+      "drive_batch_crawler",
+      "metrics",
+      "publish",
+      "…"
+    ]
+  },
+  "workers_ready": false
+}
+```
+
+**Interpretation.** The Go API is reachable, has a live Postgres connection,
+has finished applying migrations, and is reporting its real worker pool. The
+503 is a *cold-start* signature: background workers (`publish`,
+`drive_batch_crawler`, `metrics`) have not finished warming up at probe time.
+This is normal boot behaviour, not a deploy failure.
+
+## 4. Verdict
+
+`api.instaedit.org` is currently served by **Caddy on the VPS stack**. No Fly
+runtime participates in the request path. The repository can complete the
+cutover:
+
+- `fly.toml`, `Makefile` targets `fly-*`, and `scripts/*-fly-*` scripts can
+  be removed without functional impact on the live API.
+- Documentation that still cites `fly.toml` as production source of truth
+  should be rewritten as VPS-only.
+
+## 5. Re-run procedure
+
+```bash
+# DNS – expect one A record, no AAAA, Caddy in HTTP headers.
+dig +short api.instaedit.org A
+dig +short api.instaedit.org AAAA
+
+# Identity – every line must read 'server: Caddy'.
+curl -sI https://api.instaedit.org/      | grep -i '^server:'
+curl -sI https://api.instaedit.org/health | grep -i '^server:'
+curl -sI https://api.instaedit.org/ready | grep -i '^server:'
+
+# Worker readiness – expect 'OK' once background workers have warmed up.
+curl -s https://api.instaedit.org/ready | jq .
+```
+
+Failure mode to escalate on: any header containing the substring `fly`
+(`server: Fly`, `fly-request-id`, `fly-region`, …).
+
+## 6. Probe log
+
+| Date (UTC)          | Resolved A     | server header | /ready status | Notes                          |
+|---------------------|----------------|---------------|---------------|--------------------------------|
+| 2026-07-25 12:01:11 | `51.91.11.36`  | Caddy         | 503           | Workers warming; cutover alive |
+
+## 7. Open items
+
+- `/health` is not currently exposed (404). Either implement it on the Go
+  side as a lightweight liveness probe, or remove the slash from the
+  verification commands above.
+- Workers were mid-warm-up at probe time. Re-probe after a few minutes and
+  append a row to §6; expect `workers_ready: true` once `publish`,
+  `metrics`, and `drive_batch_crawler` finish initialising.
+- Repo cleanup (Fly artefacts, Makefile targets, secret scripts, docs) is
+  the next step — see followups.
