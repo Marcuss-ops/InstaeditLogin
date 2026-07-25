@@ -199,11 +199,11 @@ Vai su `/status` e leggi la ragione (es. `vercel_stale_deploy` vs `unreachable` 
 >
 > **DNS / cert / monitoring**: vedi [docs/OPERATIONS.md §1-§7](./docs/OPERATIONS.md) — record canonici (apex A / app CNAME Vercel / api CNAME Fly / `_vercel` TXT / CAA / SPF Resend / DKIM Resend / DMARC), failure-recovery playbook, monitoring baseline + pre-flight "go-live" gate + email deliverability runbook (`no-reply@instaedit.org` via Resend: Gmail inbox test, tracking verification, DMARC progression, `EMAIL_PROVIDER_KEY` capture). Una modifica a DNS / cert / monitoring → prima aggiorna `docs/OPERATIONS.md`, poi l'eventuale cross-ref in `docs/DEPLOY.md`.
 
-> **Email DNS check (read-only)**: `./scripts/email/check-email-deliverability.sh` (idempotent, non muta DNS) — verifica i 3 record Resend (`_spf.resend.com` include + DKIM CNAME + `_dmarc` TXT) prima di invitare utenti. Backend wiring di Resend è deferred (vedi [docs/OPERATIONS.md §7.5](./docs/OPERATIONS.md#75-email_provider_key-capture-protocol)): il `EMAIL_PROVIDER_KEY` vive SOLO nel password manager (`instaedit-login/email/EMAIL_PROVIDER_KEY`, scope = `Sending Access` ONLY) finché `internal/services/email_sender.go` non viene aggiunto. Non pusharlo ancora in `make fly-secrets`.
+> **Email DNS check (read-only)**: `./scripts/email/check-email-deliverability.sh` (idempotent, non muta DNS) — verifica i 3 record Resend (`_spf.resend.com` include + DKIM CNAME + `_dmarc` TXT) prima di invitare utenti. Backend wiring di Resend è deferred (vedi [docs/OPERATIONS.md §7.5](./docs/OPERATIONS.md#75-email_provider_key-capture-protocol)): il `EMAIL_PROVIDER_KEY` vive SOLO nel password manager (`instaedit-login/email/EMAIL_PROVIDER_KEY`, scope = `Sending Access` ONLY) finché `internal/services/email_sender.go` non viene aggiunto. Non pusharlo ancora in `/srv/instaedit/.env.production` (zero readers finché `internal/services/email_sender.go` non viene aggiunto).
 
 Dopo che il flow locale funziona, per andare in produzione:
 - **Database Postgres**: `fly postgres create --name instaedit-production --region iad --vm-size shared-cpu-1x --vm-memory 1gb --initial-cluster-size 1 --pg-bouncer-enabled=true` (parametri lockati in `scripts/db/provision-postgres-runbook.sh`).
-- **Backend**: deploy su Fly.io via `make fly-deploy` (release_command `./migrate` gira prima dell'api/worker rollout).
+- **Backend**: deploy su VPS via `git pull && docker compose up -d --build` (il container `migrate` applica migrations prima dell'api/worker rollout).
 - **Frontend**: deploy su Vercel (già configurato via `web/vercel.json`).
 - **Vercel env**: `VITE_API_BASE_URL` deve puntare all'URL pubblica del backend.
 - **CORS**: nel backend `.env`, `CORS_ALLOWED_ORIGINS=https://instaedit.org,https://www.instaedit.org`.

@@ -21,13 +21,7 @@ file** and the relevant `docs/DEPLOY.md` cross-reference. The reverse
 (changing operational state without updating this doc) is the failure
 mode `OPERATIONS.md` exists to prevent.
 
-> **Note on the cutover.** The historical Fly.io + Vercel production
-> stack was retired in commits `7e8beec` (removed `fly.toml`),
-> `615314b` (stripped `fly-*` Makefile targets), and `5ac159c`
-> (deleted `scripts/set-fly-secrets.sh` and friends). This runbook
-> was rewritten to live with the VPS stack; residual Fly/Vercel
-> references in this file are intentional historical framing only,
-> or open-items markers tracked in `docs/DEPLOY.md` §11.
+**VPS canonical refs:** the live stack is `docker-compose.yml` (topology) + `ops/vps/Caddyfile` (edge routing) + `docs/DEPLOY.md` (full cutover runbook). This runbook has been migrated to the VPS-native stack; if you find legacy Fly.io references here please treat them as drift and remove them.
 
 ---
 
@@ -244,7 +238,7 @@ the script encodes for the VPS shape.
 #### 3.1.0 Caveat — script migration is a follow-up
 
 `scripts/db/production-restore-drill.sh` (and the runbook PDF it
-accompanies) post-date the cutover. They reference `flyctl postgres
+accompanies) post-date the cutover. They document the Fly-Postgres-shaped tooling pipeline (
 fork`, `~/.fly-secrets-database-url-pooled.txt`, and the Flycast URI
 shape. They are NOT wired into the live VPS stack — re-pointing them
 is a separate follow-up commit (§3.1.0 open item in DEPLOY.md §11
@@ -498,7 +492,7 @@ initialises the bucket via the Compose `init` lifecycle):
   `SELECT count(*) FROM publish_jobs WHERE status='dlq'` > 0 → alert.
 - [ ] **Refresh-token-failure alert** (Sentry capture event tag `auth.refresh.failed`).
 - [ ] **Compose stack always-on alert**: cron `docker compose -f /opt/instaedit/InstaeditLogin/docker-compose.yml ps --services --filter "status=exited"` returns non-empty → alert. Same cron fires when any of `api`, `worker`, `caddy`, `postgres`, `minio` is not `running`.
-- [ ] **Log privacy assertion**: `make verify-log-redaction` runs cleanly on the live docker compose logs in the last 1h (catches runtime leaks that the static CI grep cannot — see §5.3). Recommended cadence: after every VPS deploy (`git pull && docker compose up -d --build`) + weekly cron. *NOTE: `verify-log-redaction` still reads `flyctl logs` per DEPLOY.md §11 open item — re-point the script to `docker compose logs --since 1h` as a follow-up.*
+- [ ] **Log privacy assertion**: `make verify-log-redaction` runs cleanly on the live docker compose logs in the last 1h (catches runtime leaks that the static CI grep cannot — see §5.3). Recommended cadence: after every VPS deploy (`git pull && docker compose up -d --build`) + weekly cron. *NOTE: `verify-log-redaction` should source from `docker compose logs --since 1h api worker` on the VPS — re-point the underlying script as a follow-up (DEPLOY.md §11).*
 
 ### 5.2 DNS / email hygiene
 
@@ -530,7 +524,7 @@ Automated guard: `grep -RnE '(refresh_token|jwt_secret|encryption_key|access_tok
 >
 > The script streams recent service logs into a chmod-700 tmpdir (trap-cleaned on EXIT), greps against the canonical 7-pattern list (env var names + values, Resend `re_*` tokens, AWS `AKIA*` access keys, embedded DB URI passwords, literal `password=...`, `csrf_token=<hex>` URL params, `?token=<base64url>` magic-link tokens). It pipes each `grep` hit DIRECTLY into `awk` so the FULL secret-bearing line never enters a shell var; awk truncates to the first 80 chars + appends `***redacted***` so the operator NEVER sees actual captured secrets. Exit 0 if clean / exit 1 with sanitized snippet list + remediation pointers if any pattern hit.
 >
-> **Open item (per DEPLOY.md §11)**: the script's `flyctl logs` source must be re-pointed at `docker compose logs --since <window>` before this Makefile target is reliable on the VPS. Track: re-point script to `docker compose logs --tail=2000 api worker`, then `make verify-log-redaction` works on the VPS-native stack.
+> **Open item (per DEPLOY.md §11)**: the script's log source must be re-pointed at `docker compose logs --since <window> api worker` before this Makefile target is reliable on the VPS. Track: re-point script to `docker compose logs --tail=2000 api worker`, then `make verify-log-redaction` works on the VPS-native stack.
 >
 > Wire into a weekly cron on the operator laptop so a future regression gets caught without a manual prompt. Cadence: after every VPS deploy + weekly cron + on any `slog.Warn`/`slog.Info` regression PR.
 
@@ -562,7 +556,7 @@ var in `/srv/instaedit/.env.production` (already `production` from
 
 Canonical reference for the Resend-based transactional email sender. Companion to `scripts/email/check-email-deliverability.sh` (read-only DNS verification). **NO app code commits in this section** — the backend does not yet wire Resend (see §7.5 for the deferred wiring plan).
 
-[Section §7 verbatim from the previous runbook — Resend wiring is platform-agnostic: SPF apex TXT, DKIM CNAME, DMARC ramp, Gmail inbox test, tracking verification, EMAIL_PROVIDER_KEY capture protocol. References to `make fly-secrets` in §7.5 map to `/srv/instaedit/.env.production` edits in the new VPS context.]
+[Section §7 verbatim from the previous runbook — Resend wiring is platform-agnostic: SPF apex TXT, DKIM CNAME, DMARC ramp, Gmail inbox test, tracking verification, EMAIL_PROVIDER_KEY capture protocol. References in §7.5 are sourced from `/srv/instaedit/.env.production` edits in the new VPS context.]
 
 ### 7.0 State assertion
 
@@ -747,7 +741,7 @@ Task 10/10 wires the operator-triage workflow for all six worker failure-path sc
 
 A row appears in this list ONLY when `MarkDeadLetter` runs, which itself fires from `internal/worker/upload_worker.go::handleProcessingError` when `job.AttemptCount >= job.MaxAttempts` (the retry budget has been exhausted). The operator decides per row: manual retry, cancel, or ignore.
 
-**VPS operator diagnostic flow** (replaces the deleted `flyctl logs --app instaedit-login --since 15m | grep canDownload` line — the worker lives in the Compose stack now):
+**VPS operator diagnostic flow** (live `docker compose logs --since 15m worker | grep canDownload` on the VPS — the worker runs in the Compose stack):
 
 ```bash
 ssh instaedit@$VPS_IP \
@@ -783,7 +777,7 @@ Each test fails in CI if the protection under test is removed — the runbook an
 
 These are surgically tracked followup commits, NOT documentation gaps:
 
-1. `make verify-log-redaction` + `scripts/obs/verify-log-redaction.sh` still tail `flyctl logs`. Re-point to `docker compose logs --since <window>` to make the live redactor work on the VPS-native stack (§5.3 above references this; DEPLOY.md §11 owns it).
+1. `make verify-log-redaction` + `scripts/obs/verify-log-redaction.sh` must source from `docker compose logs --since <window> api worker` to make the live redactor work on the VPS-native stack (§5.3 above references this; DEPLOY.md §11 owns it).
 2. `scripts/db/production-restore-drill.sh` is still Fly-Postgres-shaped. Rewrite for VPS pg_dump → throwaway container (§3.1.0 above flags this; sub-task of DEPLOY.md §11).
-3. `.github/workflows/integration.yml` still references `make fly-secrets-test`. Substitute `python3 scripts/test_parse_envfile.py` as a standalone job (DEPLOY.md §11 owns it).
+3. `.github/workflows/integration.yml` still has the `Verify Fly secrets parser` step (the underlying `make fly-secrets-test` and the `.py` parsers were dropped at commit `1ab88ef`). Remove the step entirely from the workflow (DEPLOY.md §11 owns it).
 4. `docker-build-production` Makefile target is orphaned post-cutover. Drop or repurpose for local single-image compose builds (DEPLOY.md §11 owns it).
