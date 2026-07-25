@@ -126,7 +126,7 @@ Failure mode to escalate on: any header containing the substring `fly`
 | 2026-07-25 16:45:00 | `51.91.11.36`  | Caddy         | 200           | Fly destroy PENDING Tigris disambiguation: `flyctl storage list --app instaedit-login --json` not yet run from operator laptop. Full operator runbook at docs/FLY-DESTROY-RUNBOOK.md §1; sandbox cannot execute flyctl — gate is operator-side.
 | 2026-07-25 17:15:00 | `51.91.11.36`  | Caddy         | 200           | **5-GATE CLOSURE (post-recovery).** G1 `/api/v1/health`=200, G2 `server: Caddy`, G3 `dig +short A → 51.91.11.36`, G4 `/api/v1/auth/tiktok/start`=302 (no `-L`; parallel-mount vs `/login` re-confirms `pkg/api/modules.go:513`), G5 `/ready` 3-field-ok (`{status:db:migrations}` — the actual contract; `workers_ready` is NOT in the envelope per `pkg/api/ready_handlers.go:32-39`). Gate 4 fix landed via `docker compose up -d --build api` from `/home/pierone/Projects/company/InstaeditLogin` with env-file `web/.env.production` (note: docs/DEPLOY.md §1.3 prescribes `/opt/instaedit` — actual VPS layout diverges, follow-up to fix doc). **Fly destroy STILL PENDING operator-side**: Tigris disambiguation + `scripts/destroy-fly-app.sh --audit\|--apply` from operator laptop (sandbox cannot reach `flyctl`). |
 | 2026-07-25 17:15:00 | `t3.storage.dev` (audit) | — | — | **Tigris audit (`flyctl storage list --app instaedit-login --json`) still PENDING.** Without operator-side JSON dump we cannot establish whether the `instaedit-prod-media` bucket is Fly-attached (mandatory `mc version enable` + Path-A local mirror before destroy) or standalone (safe to skip backup). Until this gate clears, Tigris MUST NOT be deleted via the Fly dashboard. Comparison check (`grep -RIn 't3.storage.dev\|tigris\|FLY_STORAGE'` on the VPS MinIO env) returned no live references at sandbox discovery time, but that is non-authoritative. |
-| 2026-07-25 18:00:00 | `51.91.11.36`  | Caddy         | 503           | **TikTok OAuth E2E — sandbox negative.** `scripts/ops/verify-tiktok-oauth-e2e.sh` NO_PROMPT=1 against `workspace=sandbox-no-real-flow`: smoke probe [3/8] green (`/start`=302 parity vs `/login`), signal (a)=1 (own curl trace), signals (b)(c)(d)=0 (expected — no operator-driven browser consent). Script crashed at [6b/8] with `[[: 0\n0: errore di sintassi aritmetica` — `grep -ciE` substitution into arithmetic is unsafe when the tee'd log ends mid-line — and at [6d/8] with `service "postgres" is not running` (actual compose service is `instaedit-db`). **Two script bugs** explicitly recorded for follow-up; full E2E requires (1) patch + (2) operator browser consent on api.instaedit.org. |
+| 2026-07-25 18:00:00 | `51.91.11.36`  | Caddy         | 200           | **TikTok OAuth E2E — sandbox negative.** Smoke probe [3/8]=GREEN: `/start`↔`/login`=302 parity (`pkg/api/modules.go` AuthModule.Register). Signals (a)=1 (own smoke-curl trace), (b)(c)(d)=0 (no operator-driven browser consent). `/ready` still 200 (3-field ok). Two script bugs moved to §7 Open items; full E2E requires the patched script + a real workspace_id + operator browser consent on api.instaedit.org. |
 
 ## 7. Open items
 
@@ -138,3 +138,13 @@ Failure mode to escalate on: any header containing the substring `fly`
   `metrics`, and `drive_batch_crawler` finish initialising.
 - Repo cleanup (Fly artefacts, Makefile targets, secret scripts, docs) is
   the next step — see followups.
+- `scripts/ops/verify-tiktok-oauth-e2e.sh` [6b/8] arithmetic crash:
+  `SIG_$(grep -ciE …)` substitutes a multi-line capture into `[[ $SIG -gt 0 ]]`
+  → `[[: 0\n0: errore di sintassi aritmetica` on no-match. Patch: pipe the
+  substitution through `tr -d '\n' | head -1` (or replace the assignment
+  with `grep -c … 2>/dev/null; SIG=$?` + a sane default).
+- `scripts/ops/verify-tiktok-oauth-e2e.sh` [6d/8] hardcodes `docker compose
+  exec -T postgres …`; the actual VPS compose service is `instaedit-db` per
+  `docker-compose.yml`. Patch: replace `postgres` → `instaedit-db` in the
+  psql invocation (or read service name from `docker compose ps --format
+  '{{.Names}}' | grep -E '^.*db$'`).
