@@ -28,6 +28,8 @@ plus the VPS-side gate verifications.
 | `flyctl` installed    | `command -v flyctl`                              | exits 0 |
 | `flyctl` authed       | `flyctl auth whoami`                             | prints your email |
 | `python3` available   | `command -v python3`                             | exits 0 (only needed for `--audit` JSON parsing) |
+| `jq` available        | `command -v jq`                                  | exits 0 (used by §2 disambiguation + §5 sequence) |
+| `mc` available        | `command -v mc`                                  | exits 0 (only required if §3 path is taken; `brew install minio/stable/mc` or `apt install mc`) |
 | VPS DNS for `api.instaedit.org` | `dig +short api.instaedit.org A`   | returns VPS IP `51.91.11.36` (NOT Fly) |
 | VPS health            | `curl -fsS https://api.instaedit.org/api/v1/health` | JSON with `status: ok` |
 
@@ -109,19 +111,29 @@ mc ls --versions tigris/instaedit-prod-media > /tmp/tigris-versions-pre-destroy.
 echo "captured $(wc -l < /tmp/tigris-versions-pre-destroy.txt) version records"
 ```
 
-### 3.3. Snapshot — copy current state to a frozen bucket
+### 3.3. Snapshot — copy current state (Path A local; Path B optional)
+
+`mc cp` needs the destination to exist. Two paths:
 
 ```bash
 SNAP=$(date -u +%Y%m%dT%H%M%SZ)
-DEST="tigris/instaedit-prod-media-snapshot-$SNAP"
 
-# If the bucket supports object versioning + mc cp --recursive,
-# take a literal snapshot (preserves current state):
-mc cp --recursive tigris/instaedit-prod-media/ $DEST/
+# Path A — local mirror (always works; lifeboat-quality snapshot).
+mkdir -p /tmp/tigris-snapshot-$SNAP
+mc cp --recursive tigris/instaedit-prod-media/ /tmp/tigris-snapshot-$SNAP/
+du -sh /tmp/tigris-snapshot-$SNAP/        # confirm non-zero
 
-# Or if literal copy is not allowed (some Fly Storage tiers):
-# → versioning §3.2 already provides forensic completeness; the
-#   /tmp/tigris-versions-pre-destroy.txt listing is your snapshot.
+# Path B — sibling bucket on the SAME alias (only on standalone Tigris;
+# Fly-attached WILL REJECT `mc mb` on new sibling buckets; the
+# conditional handles rejection gracefully).
+if mc mb tigris/instaedit-prod-media-snapshot-$SNAP 2>/dev/null; then
+  mc cp --recursive tigris/instaedit-prod-media/ \
+    tigris/instaedit-prod-media-snapshot-$SNAP/
+fi
+
+# On Fly-attached rejection (Path B failed silently), the §3.2.3
+# versioned-listing IS the forensic snapshot. Path A (/tmp/tigris-snapshot-$SNAP/)
+# remains as the lifeboat.
 ```
 
 After §3 completes, **leave the snapshot where it is** (Tigris-stored,
@@ -144,7 +156,8 @@ reference. This § is a digest with the operational primitives.
 | ----------------- | ----------------------------------------------------------------------------- |
 | (no-arg, default) | Identical to `--audit` — operator-friendly default                           |
 | `--dry-run`       | Prints destruction plan ONLY (no flyctl calls)                                |
-| `--audit`         | Calls flyctl list --json × 6; prints inventory; safety-gate verdict           |
+| `--audit`         | Calls flyctl list --json × 6 — **network-dependent** (5-10s); prints inventory + safety-gate verdict; no mutations           |
+| `--dry-run`       | Prints destruction plan ONLY — **fully local, no flyctl calls**                                            |
 | `--apply`         | Real destruction; **requires interactive TTY**; one `yes`-typed confirmation   |
 | `--ui-fallback`   | Manual Fly dashboard URLs (works without flyctl/python3 installed)            |
 
@@ -212,7 +225,14 @@ curl -fsSL -m 5 https://api.instaedit.org/api/v1/health >/dev/null \
 
 # === §2 Tigris disambiguation ===
 flyctl storage list --app instaedit-login --json > /tmp/fly-storage.json
-ATTACHED=$(jq -r '.[0].attached_to // ""' /tmp/fly-storage.json)
+# Defensive schema probe: Fly CLI versions wrap the result differently
+# across releases (`.[].attached_to`, `..|.attached_to?`, `data[]`,
+# etc.). Try the common top-level array form first; fall back to
+# recursive descent; last-resort grep on raw JSON.
+ATTACHED=$(jq -r '.[]? | (.attached_to // .AttachedTo // .app_id) // ""' /tmp/fly-storage.json 2>/dev/null | head -1 || true)
+if [[ -z "$ATTACHED" && -s /tmp/fly-storage.json ]]; then
+  ATTACHED=$(grep -oE '"(attached_to|AttachedTo|app_id)"[^"]*"[^"]*"' /tmp/fly-storage.json | head -1 || true)
+fi
 
 # === §3 conditional Fly-attached backup ===
 if [[ "$ATTACHED" == *"instaedit-login"* ]]; then
@@ -232,6 +252,9 @@ fi
 scripts/destroy-fly-app.sh --audit
 # (Operator: read the audit output; if any of the 6 steps look wrong,
 #  do NOT proceed with --apply.)
+
+# TTY required by --apply (exit 6 if non-interactive).
+[[ -t 0 ]] || { echo "no TTY — re-run from a real shell"; exit 1; }
 scripts/destroy-fly-app.sh --apply
 # (--apply will: detect TTY; if absent, exit 6 → re-run from a real
 #  shell; otherwise print detected inventory + ask "Confirm: destroy
@@ -280,6 +303,23 @@ Once all 5 are green, append a `Date (UTC)` row to
 - `Notes`: a one-line summary (e.g. *"Fly destroy complete; VPS canonical; Tigris bucket was standalone (or `tigris-snapshot-…` archived)"*).
 
 That row's stamp closes the cutover record.
+
+**Workers footnote**: if `workers_ready` stays `false` for more than
+5 minutes post-destroy, ssh the VPS and `docker compose restart worker`
+per `docs/VPS-DEPLOY-STATUS.md` §3 (the worker pool is independent of
+the Fly runtime; warming is normal cold-boot behaviour). Don't
+post-destroy-debug beyond this without first checking the probe-log
+row at §6 — the 503/workers_pending signature is benign on first boot.
+
+**Worked example** (paste-back format ready to copy to VPS-DEPLOY-STATUS.md):
+
+```
+| 2026-07-25 HH:MM:SS | `51.91.11.36` | Caddy | 200 | Fly destroy complete; 6 audit-gate assets cleared; VPS canonical; Tigris was standalone (no §3 backup needed). |
+```
+
+Replace `HH:MM:SS` with the operator's commit-push timestamp; tune the
+`Notes` field to reflect the actual disambiguation (standalone vs
+Fly-attached vs Fly-attached-with-§3-backup).
 
 ---
 
