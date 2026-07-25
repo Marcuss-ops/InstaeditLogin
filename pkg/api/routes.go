@@ -178,6 +178,19 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/publish", r.protected(publishEditorSessionHandler.ServeHTTP))
 
+	// Direct handoff endpoint (Blocco #5 P0 #4): callers (typically the
+	// dark editor SPA after uploading the rendered thumbnail to
+	// InstaEdit storage) supply a verified media_assets.id and the
+	// handler atomically links it to the session. Coexists with the
+	// PATCH-by-project flow (which goes through Velox) — the direct
+	// handoff path skips the Velox roundtrip for the "thumbnail
+	// already uploaded" case.
+	var attachThumbnailHandler http.Handler = http.HandlerFunc(r.handleAttachThumbnailToEditorSession)
+	if r.csrfMiddleware != nil {
+		attachThumbnailHandler = r.csrfMiddleware(attachThumbnailHandler)
+	}
+	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/thumbnail", r.protected(attachThumbnailHandler.ServeHTTP))
+
 	r.mux.Method(http.MethodGet, "/api/v1/metrics", http.HandlerFunc(r.handleMetrics))
 
 	// Mount every registered module against the chi mux.

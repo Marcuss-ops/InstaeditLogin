@@ -51,6 +51,13 @@ tags:
       `crypto/subtle.ConstantTimeCompare`; 401 (missing/malformed
       header), 403 (token mismatch), 503 (token not configured)
       per RFC 7235 + the Velox retry contract.
+  - name: YouTube
+    description: |
+      YouTube thumbnail-editor session endpoints (the dark-editor
+      SPA integrates against these). Pair with the Velox BFF module
+      for the actual rendering work; this tag covers the
+      InstaEdit-side session lifecycle (create / link thumbnail /
+      publish).
 
 paths:
 
@@ -900,6 +907,119 @@ paths:
           $ref: '#/components/responses/InternalServerError'
         '503':
           $ref: '#/components/responses/VeloxServiceAuthUnconfigured'
+
+  # ──────────── YouTube editor sessions ──────────────────────────────────────
+  #
+  # Direct handoff endpoint (Blocco #5 P0 #4): callers (typically the
+  # dark editor SPA after uploading the rendered thumbnail to InstaEdit
+  # storage) supply a verified media_assets.id and the handler
+  # atomically links it to the session in a single UPDATE statement
+  # with a CAS predicate `status IN ('editing','failed')`. Coexists
+  # with the PATCH-by-project flow that goes through Velox; the direct
+  # handoff path skips the Velox roundtrip for the "thumbnail already
+  # uploaded" case.
+  #
+  # 4 error branches + 1 happy path (per the action-plan spec):
+  #   - missing thumbnail_media_id payload              → 400
+  #   - asset not found                                  → 404
+  #   - asset exists but Status != ready                 → 409
+  #   - workspace not accessible by the caller           → 403
+  #   - session not found                                → 404
+  #   - CAS-loss (session in 'publishing' / 'published') → 409
+  /api/v1/youtube/editor-sessions/{id}/thumbnail:
+    post:
+      tags: [YouTube]
+      summary: Attach a verified thumbnail asset to an editor session.
+      description: |
+        Direct handoff for the thumbnail-media link. The handler
+        validates the supplied media asset (existence, readiness,
+        ownership) + the caller's workspace access on the session,
+        then atomically stamps `thumbnail_media_id` on the
+        `youtube_video_edits` row in a single UPDATE statement with
+        a CAS predicate (`status IN ('editing','failed')`). A
+        concurrent publish request that already moved the session
+        into `publishing` or `published` state will cause the CAS
+        to fail (0-rows match) and the handler returns 409.
+
+        Coexists with PATCH
+        `/api/v1/youtube/editor-sessions/by-project/{velox_project_id}`
+        which goes through Velox; the direct handoff path skips that
+        roundtrip for callers who already uploaded the rendered
+        thumbnail to InstaEdit storage.
+      operationId: attachThumbnailToEditorSession
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: |
+            Editor session id (UUID, the `id` returned by
+            `POST /api/v1/youtube/editor-sessions`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [thumbnail_media_id]
+              properties:
+                thumbnail_media_id:
+                  type: string
+                  description: |
+                    The verified media asset id from
+                    `POST /api/v1/media/presign` + the subsequent
+                    `POST /api/v1/media/{id}/complete`. The asset
+                    must exist, be in `status='ready'`, and belong
+                    to the calling user.
+      responses:
+        '200':
+          description: Thumbnail attached to session.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id, thumbnail_media_id, thumbnail_status]
+                properties:
+                  session_id:
+                    type: string
+                  thumbnail_media_id:
+                    type: string
+                  thumbnail_status:
+                    type: string
+                    description: |
+                      Current editor-session status
+                      (`editing`, `failed`, `publishing`,
+                      `published`).
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: |
+            Cross-tenant attempt: the caller does not own the
+            workspace the session belongs to, or the supplied asset
+            is owned by a different user.
+        '404':
+          description: |
+            Editor session not found OR the supplied
+            `thumbnail_media_id` does not resolve to a media asset.
+        '409':
+          description: |
+            Asset exists but is not in `status='ready'`, OR the
+            session is in a state that does not match the CAS
+            predicate (`status IN ('editing','failed')`) — i.e. a
+            concurrent publish already moved the session into
+            `publishing` or `published`.
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '501':
+          description: Media store not configured on this server.
+        '503':
+          description: YouTube video edit store not configured.
 components:
 
   securitySchemes:

@@ -392,6 +392,144 @@ func (r *Router) handleUpdateYouTubeEditorSession(w http.ResponseWriter, req *ht
 	})
 }
 
+// attachThumbnailRequest is the body accepted by
+// POST /api/v1/youtube/editor-sessions/{id}/thumbnail. This is the
+// "direct" handoff endpoint (Blocco #5 P0 #4): callers (typically the
+// dark editor SPA, post-upload) supply a verified media_assets.id
+// instead of going through Velox's PATCH-by-project flow. The handler
+// validates asset existence + readiness + workspace accessibility, then
+// atomically links the asset to the session via a single UPDATE with a
+// CAS predicate (status IN ('editing','failed')).
+type attachThumbnailRequest struct {
+	ThumbnailMediaID string `json:"thumbnail_media_id"`
+}
+
+// attachThumbnailResponse is returned on success.
+type attachThumbnailResponse struct {
+	SessionID        string `json:"session_id"`
+	ThumbnailMediaID string `json:"thumbnail_media_id"`
+	ThumbnailStatus  string `json:"thumbnail_status"`
+}
+
+// handleAttachThumbnailToEditorSession is the direct handoff entry
+// point. It accepts a verified thumbnail_media_id, validates the
+// asset + workspace, and atomically links the asset to the session.
+//
+// Error branches (4 per the user spec + 1 happy path):
+//   - asset not found                                  → 404
+//   - asset exists but Status != ready                 → 409
+//   - workspace not accessible by the caller           → 403
+//   - session not found / CAS-loss (status flipped)    → 404 / 409
+//   - missing thumbnail_media_id payload               → 400
+//
+// Order matters: session-load BEFORE workspace-check BEFORE asset-load
+// so the error messages line up with the user's intent ("workspace
+// accessibile" is the explicit 403 gate). The asset is the FIRST
+// ownership check the user asked for (asset esista), so it comes after
+// the workspace gate but BEFORE the asset-readiness check.
+//
+// The AttachThumbnail call is the atomic CAS that simultaneously
+// stamps thumbnail_media_id AND guards against concurrent publishes
+// (status must be 'editing' or 'failed' — a session in 'publishing'
+// or 'published' state will not match, the 0-rows return maps to 409).
+func (r *Router) handleAttachThumbnailToEditorSession(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.UserID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+
+	sessionID := chi.URLParam(req, "id")
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session id is required")
+		return
+	}
+
+	var payload attachThumbnailRequest
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if payload.ThumbnailMediaID == "" {
+		writeError(w, http.StatusBadRequest, "thumbnail_media_id is required")
+		return
+	}
+
+	if r.youtubeVideoEditStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "youtube video edit store not configured")
+		return
+	}
+	if r.mediaStore == nil {
+		writeError(w, http.StatusNotImplemented, "media not configured on this server")
+		return
+	}
+
+	// 1. Session load.
+	edit, err := r.youtubeVideoEditStore.FindByID(req.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find editor session: "+err.Error())
+		return
+	}
+	if edit == nil {
+		writeError(w, http.StatusNotFound, "editor session not found")
+		return
+	}
+
+	// 2. Workspace access (403 — explicit gate per user spec).
+	workspace, err := r.workspaceStore.FindByID(edit.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find workspace: "+err.Error())
+		return
+	}
+	if workspace == nil || !r.userCanAccessWorkspace(identity.UserID(), workspace) {
+		writeError(w, http.StatusForbidden, "workspace not accessible")
+		return
+	}
+
+	// 3. Asset existence (404).
+	asset, err := r.mediaStore.FindByID(payload.ThumbnailMediaID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "find media asset: "+err.Error())
+		return
+	}
+	if asset == nil {
+		writeError(w, http.StatusNotFound, "media asset not found")
+		return
+	}
+
+	// 4. Asset ownership (403 — defensive against cross-tenant probing).
+	if asset.UserID != identity.UserID() {
+		writeError(w, http.StatusForbidden, "media asset not owned by caller")
+		return
+	}
+
+	// 5. Asset readiness (409 — exists but not ready to be linked).
+	if asset.Status != models.MediaAssetStatusReady {
+		writeError(w, http.StatusConflict, "media asset is not ready")
+		return
+	}
+
+	// 6. Atomic CAS: link thumbnail_media_id AND guard against
+	// concurrent publishes (status must be 'editing' or 'failed').
+	updated, err := r.youtubeVideoEditStore.AttachThumbnail(req.Context(), sessionID, payload.ThumbnailMediaID)
+	if err != nil {
+		if errors.Is(err, repository.ErrYouTubeVideoEditNotFound) {
+			// CAS-loss: status was 'publishing' / 'published' (or the
+			// row was deleted between the read and the write).
+			writeError(w, http.StatusConflict, "editor session is not in an editable state")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "attach thumbnail: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, attachThumbnailResponse{
+		SessionID:        updated.ID,
+		ThumbnailMediaID: *updated.ThumbnailMediaID,
+		ThumbnailStatus:  updated.Status,
+	})
+}
+
 // publishYouTubeEditorSessionRequest is the body accepted by
 // POST /api/v1/youtube/editor-sessions/{id}/publish.
 // Title and Description are optional; when provided they are sent to

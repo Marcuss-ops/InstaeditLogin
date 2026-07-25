@@ -33,6 +33,17 @@ type YouTubeVideoEditStore interface {
 	// Returns (nil, ErrYouTubeVideoEditNotFound) on 0-rows match — the
 	// handler maps to 409 (CAS-loss).
 	MarkPublishing(ctx context.Context, id string, desiredPrivacy string, publishAt *time.Time, inFlightTimeout time.Duration) (*models.YouTubeVideoEdit, error)
+	// AttachThumbnail (Blocco #5 P0 #4) atomically links a verified
+	// media asset (thumbnail) to an editor session. Single UPDATE
+	// statement with CAS predicate `status IN ('editing','failed')` so
+	// concurrent publish requests can't race the link (a row already
+	// in 'publishing' or 'published' state is rejected with
+	// ErrYouTubeVideoEditNotFound on 0-rows match — handler maps to
+	// 409). The thumbnail_media_id is the only column updated;
+	// thumbnail_status is left untouched (still owned by the broader
+	// pipeline state machine). Returns the updated row or
+	// ErrYouTubeVideoEditNotFound when 0 rows match.
+	AttachThumbnail(ctx context.Context, sessionID, thumbnailMediaID string) (*models.YouTubeVideoEdit, error)
 }
 
 // YouTubeVideoEditRepository handles CRUD for youtube_video_edits.
@@ -199,6 +210,38 @@ func (r *YouTubeVideoEditRepository) MarkPublishing(ctx context.Context, id stri
 	}
 	if err != nil {
 		return nil, fmt.Errorf("youtube video edit MarkPublishing: %w", err)
+	}
+	return edit, nil
+}
+
+// AttachThumbnail atomically links a verified media asset (the
+// rendered thumbnail) to an editor session. Single UPDATE statement
+// with CAS predicate `status IN ('editing','failed')` so concurrent
+// publishes cannot race the link (a session already in 'publishing' or
+// 'published' state will not match — handler maps 0-rows to 409).
+// Returns ErrYouTubeVideoEditNotFound (wrapped) on 0-rows match.
+func (r *YouTubeVideoEditRepository) AttachThumbnail(ctx context.Context, sessionID, thumbnailMediaID string) (*models.YouTubeVideoEdit, error) {
+	edit := &models.YouTubeVideoEdit{}
+	err := r.db.QueryRowContext(ctx,
+		`UPDATE youtube_video_edits
+		 SET thumbnail_media_id = $2, updated_at = NOW()
+		 WHERE id = $1 AND status IN ('editing','failed')
+		 RETURNING id, workspace_id, platform_account_id, youtube_video_id,
+		           velox_project_id, source_thumbnail_url, thumbnail_media_id,
+		           desired_privacy, publish_at, status, last_error,
+		           created_at, updated_at`,
+		sessionID, thumbnailMediaID,
+	).Scan(
+		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+		&edit.CreatedAt, &edit.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("%w: id=%s", ErrYouTubeVideoEditNotFound, sessionID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("youtube video edit AttachThumbnail: %w", err)
 	}
 	return edit, nil
 }

@@ -773,6 +773,14 @@ type YouTubeVideoEditStore interface {
 	// (nil, repository.ErrYouTubeVideoEditNotFound) to HTTP 409
 	// (CAS-loss). Mirrors repository.YouTubeVideoEditRepository.MarkPublishing.
 	MarkPublishing(ctx context.Context, id string, desiredPrivacy string, publishAt *time.Time, inFlightTimeout time.Duration) (*models.YouTubeVideoEdit, error)
+	// AttachThumbnail (Blocco #5 P0 #4) atomically links a verified
+	// media asset (thumbnail) to an editor session. Single UPDATE
+	// statement with CAS predicate `status IN ('editing','failed')` so
+	// concurrent publish requests cannot race the link (a session in
+	// 'publishing' or 'published' state will not match — handler maps
+	// 0-rows to 409). Mirrors
+	// repository.YouTubeVideoEditRepository.AttachThumbnail.
+	AttachThumbnail(ctx context.Context, sessionID, thumbnailMediaID string) (*models.YouTubeVideoEdit, error)
 }
 
 // P2 — ops dashboard store. AdminStore is the read-side
