@@ -513,6 +513,36 @@ docker compose restart minio
 #   (-T disabilita pseudo-tty, pipe via stdin al container)
 # → docker compose restart minio (ri-carica la config)
 
+# Verifica post-restart (step 4 — conferma runtime):
+#   docker compose exec minio mc admin config get minio | grep -A 4 encrypt
+#   atteso: presenza di una regola { sse: { algorithm: AES256 } }.
+#   Senza questo check l'operatore assume apply senza conferma
+#   state in runtime config.
+#
+# Caveat oggetti esistenti (CRITICAL per Tigris-parity retroattivo):
+#   mc encrypt set sse-s3 influenza solo NUOVE scritture —
+#   oggetti già presenti mantengono lo stato di crittografia che
+#   avevano al PUT time (es: scritti con SSE=none restano
+#   non-crittati anche dopo mc encrypt set). Per Tigris-parity
+#   retroattivo serve ri-cryptare gli oggetti esistenti:
+#     docker compose exec minio mc cp --recursive --encrypt-sse-s3
+#       minio/instaedit-local/ minio/instaedit-local-encrypted/
+#     # poi confronta via mc ls --recursive o audit diff con Tigris
+#   oppure:
+#     rclone sync minio:bucket minio:bucket
+#       --s3-sse AES256 --s3-no-check-bucket
+#   Tracked P1 follow-up post-mirror; flaggato qui per evitare
+#   silent-mismatch al taglio Tigris (SSE:none retroattivo !=
+#   SSE:AES256 retroattivo anche dopo mc encrypt set).
+#
+# Footnote service-restart:
+#   encrypt richiede solo docker compose restart minio. Sezioni
+#   notify_* / audit richiedono ANCHE
+#     docker compose exec minio mc admin service restart minio
+#   per propagare ai goroutine service-level. Non rilevante per
+#   §10 ma segnalato per future audit-step che tocchino altre
+#   sezioni config.
+
 # (b) Default sul bucket specifico:
 docker compose exec minio mc encrypt set sse-s3 minio/instaedit-local
 
