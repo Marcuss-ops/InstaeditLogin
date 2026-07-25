@@ -2,7 +2,7 @@
 
 Canonical reference for first deploy and ongoing operations to the VPS
 production target. **This is the single source of truth for production
-deployment as of 2026-07-25.** The historical Fly.io / Vercel
+deployment as of 2026-07-25.** The historical managed-platform
 configurations have been removed from the live path; their files
 (`fly.toml`, `scripts/set-fly-secrets.sh`, `scripts/verify-fly-secrets.sh`,
 the `web/` Vercel preview workflow, etc.) were deleted in earlier
@@ -235,7 +235,7 @@ listens on. The HTTP-01 challenge goes to
 `http://51.91.11.36/.well-known/acme-challenge/...` from the LE CA
 vantage points, so verify **`dig +short instaedit.org A` returns
 `51.91.11.36`** before the first `docker compose up`. No manual cert
-step is required (`flyctl certs add` is intentionally gone).
+step is required (the historical `flyctl certs add` step is intentionally gone).
 
 LE has rate limits on prod issuance (5/h per host); the staging env is
 free. Confirm renewal cadence weekly (`docker compose logs caddy | grep -i certificate`).
@@ -572,8 +572,8 @@ of the cutover. None resolve to anything useful post-cutover:
 
 - `_vercel` TXT (or any Vercel-style TXT)
 - `cname.vercel-dns.com.` CNAME
-- `instaedit-login.fly.dev.` CNAME
-- Anything pointing at the historical Fly app hostname
+- The historical hosted-platform app hostname (`*.fly.dev.` style CNAME)
+- Anything pointing at the historical managed-app VIP
 
 ### 7.5 Verification
 
