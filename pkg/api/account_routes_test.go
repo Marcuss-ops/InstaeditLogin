@@ -983,7 +983,7 @@ func TestHandleSyncAccount_CrossTenant_404(t *testing.T) {
 func TestHandleAccountContent_Happy(t *testing.T) {
 	svc := &mockDetailProvider{
 		mockProvider: mockProvider{platform: "youtube"},
-		contentFn: func(ctx context.Context, accessToken, platformUserID string, cursor string, limit int) (*models.AccountContentPage, error) {
+		contentFn: func(ctx context.Context, accessToken, platformUserID string, cursor string, limit int, privacy string) (*models.AccountContentPage, error) {
 			return &models.AccountContentPage{
 				Items: []models.AccountContentItem{
 					{
@@ -1062,6 +1062,35 @@ func TestHandleAccountContent_CrossTenant_404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("cross-tenant content: want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleAccountContent_PrivacyFilter_400 proves the handler rejects
+// unknown privacy values before touching the provider.
+func TestHandleAccountContent_PrivacyFilter_400(t *testing.T) {
+	svc := &mockDetailProvider{
+		mockProvider: mockProvider{platform: "youtube"},
+	}
+	owner := ownedAccountFixture(1, "youtube")
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		getFn: func(ctx context.Context, id int64, tt string) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "test-token"}, nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/21/content?privacy=secret", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid privacy: want 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

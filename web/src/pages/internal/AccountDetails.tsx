@@ -96,14 +96,21 @@ function MetricCard({ metric }: { metric: AccountMetric }) {
   );
 }
 
-function ContentVideoCard({ item }: { item: ContentItem }) {
+function ContentVideoCard({
+  item,
+  onEditThumbnail,
+}: {
+  item: ContentItem;
+  onEditThumbnail?: (item: ContentItem) => void;
+}) {
+  const handleEdit = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onEditThumbnail?.(item);
+  };
+
   return (
-    <a
-      href={item.public_url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex gap-4 p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors no-underline group"
-    >
+    <div className="flex gap-4 p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] transition-colors no-underline group">
       <div className="w-40 h-24 rounded-lg bg-white/[0.08] overflow-hidden shrink-0 relative">
         {item.thumbnail_url ? (
           <img
@@ -145,11 +152,25 @@ function ContentVideoCard({ item }: { item: ContentItem }) {
           ))}
         </div>
       </div>
-      <ExternalLink
-        size={14}
-        className="text-white/0 group-hover:text-white/40 transition-colors shrink-0 mt-1"
-      />
-    </a>
+      <div className="flex flex-col items-end justify-center gap-2 shrink-0">
+        <a
+          href={item.public_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/[0.06] border border-white/[0.08] text-[11px] font-semibold text-[#9aa0aa] hover:bg-white/[0.10] hover:text-white transition-colors no-underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          Open on YouTube <ExternalLink size={12} />
+        </a>
+        <button
+          type="button"
+          onClick={handleEdit}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-[11px] font-semibold text-blue-400 hover:bg-blue-500/20 hover:text-blue-300 transition-colors"
+        >
+          Modifica copertina
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -210,6 +231,8 @@ export function AccountDetailsPage() {
     };
   }, [loadAccount]);
 
+  const currentPlatform = state.kind === "ready" ? state.account.platform : undefined;
+
   const loadContent = useCallback(
     async (cursor?: string) => {
       const isAppend = !!cursor;
@@ -223,7 +246,10 @@ export function AccountDetailsPage() {
         setContentState({ kind: "loading" });
       }
       try {
-        const url = `/api/v1/accounts/${accountId}/content?limit=20${cursor ? `&cursor=${cursor}` : ""}`;
+        // YouTube content is filtered to private videos only so the user can
+        // pick a video to edit the thumbnail before publishing.
+        const privacy = currentPlatform === "youtube" ? "private" : "";
+        const url = `/api/v1/accounts/${accountId}/content?limit=20${cursor ? `&cursor=${cursor}` : ""}${privacy ? `&privacy=${privacy}` : ""}`;
         const response = await authedFetch(url);
         const data = (await response.json()) as ContentPage;
         setContentState((prev) => ({
@@ -246,8 +272,14 @@ export function AccountDetailsPage() {
         });
       }
     },
-    [accountId],
+    [accountId, currentPlatform],
   );
+
+  const handleEditThumbnail = useCallback((item: ContentItem) => {
+    // Phase 2 will create a YouTube editor session and open the Dark Editor.
+    // eslint-disable-next-line no-console
+    console.log("[AccountDetails] open thumbnail editor for", item.external_id);
+  }, []);
 
   useEffect(() => {
     if (activeTab === "videos" && contentState.kind === "idle") {
@@ -509,7 +541,7 @@ export function AccountDetailsPage() {
                 ) : (
                   <>
                     {contentState.items.map((item) => (
-                      <ContentVideoCard key={item.external_id} item={item} />
+                      <ContentVideoCard key={item.external_id} item={item} onEditThumbnail={handleEditThumbnail} />
                     ))}
                     {contentState.nextCursor && !contentState.isLoadingMore && !contentState.loadMoreError && (
                       <button

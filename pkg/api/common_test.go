@@ -775,8 +775,8 @@ func (m *mockSnapshotStore) IsSnapshotStale(platformAccountID int64, maxAge time
 // mockDetailProvider extends mockProvider with AccountDetailsProvider + AccountContentProvider.
 type mockDetailProvider struct {
 	mockProvider
-	detailsFn func(ctx context.Context, accessToken, platformUserID string) (*models.AccountDetails, error)
-	contentFn func(ctx context.Context, accessToken, platformUserID string, cursor string, limit int) (*models.AccountContentPage, error)
+	detailsFn      func(ctx context.Context, accessToken, platformUserID string) (*models.AccountDetails, error)
+	contentFn      func(ctx context.Context, accessToken, platformUserID string, cursor string, limit int, privacy string) (*models.AccountContentPage, error)
 }
 
 func (m *mockDetailProvider) GetAccountDetails(ctx context.Context, accessToken, platformUserID string) (*models.AccountDetails, error) {
@@ -785,9 +785,9 @@ func (m *mockDetailProvider) GetAccountDetails(ctx context.Context, accessToken,
 	}
 	return nil, fmt.Errorf("GetAccountDetails not implemented")
 }
-func (m *mockDetailProvider) ListAccountContent(ctx context.Context, accessToken, platformUserID string, cursor string, limit int) (*models.AccountContentPage, error) {
+func (m *mockDetailProvider) ListAccountContent(ctx context.Context, accessToken, platformUserID string, cursor string, limit int, privacy string) (*models.AccountContentPage, error) {
 	if m.contentFn != nil {
-		return m.contentFn(ctx, accessToken, platformUserID, cursor, limit)
+		return m.contentFn(ctx, accessToken, platformUserID, cursor, limit, privacy)
 	}
 	return nil, fmt.Errorf("ListAccountContent not implemented")
 }
@@ -797,11 +797,13 @@ func (m *mockDetailProvider) ListAccountContent(ctx context.Context, accessToken
 func TestAccountContent_Paginates(t *testing.T) {
 	var gotCursor string
 	var gotLimit int
+	var gotPrivacy string
 	svc := &mockDetailProvider{
 		mockProvider: mockProvider{platform: "youtube"},
-		contentFn: func(ctx context.Context, accessToken, platformUserID string, cursor string, limit int) (*models.AccountContentPage, error) {
+		contentFn: func(ctx context.Context, accessToken, platformUserID string, cursor string, limit int, privacy string) (*models.AccountContentPage, error) {
 			gotCursor = cursor
 			gotLimit = limit
+			gotPrivacy = privacy
 			return &models.AccountContentPage{
 				Items: []models.AccountContentItem{
 					{ExternalID: "vid1", Title: "Video One"},
@@ -837,6 +839,9 @@ func TestAccountContent_Paginates(t *testing.T) {
 	}
 	if gotLimit != 5 {
 		t.Errorf("limit forwarded: want 5, got %d", gotLimit)
+	}
+	if gotPrivacy != "" {
+		t.Errorf("privacy forwarded: want empty, got %q", gotPrivacy)
 	}
 
 	var resp struct {

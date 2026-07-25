@@ -554,7 +554,7 @@ func (s *YouTubeOAuthService) GetAccountDetails(ctx context.Context, accessToken
 // ListAccountContent returns recent videos from a YouTube channel by
 // reading the channel's uploads playlist and then fetching video
 // details. Pagination is supported via the cursor (nextPageToken).
-func (s *YouTubeOAuthService) ListAccountContent(ctx context.Context, accessToken, platformUserID string, cursor string, limit int) (*models.AccountContentPage, error) {
+func (s *YouTubeOAuthService) ListAccountContent(ctx context.Context, accessToken, platformUserID string, cursor string, limit int, privacyFilter string) (*models.AccountContentPage, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
@@ -565,7 +565,63 @@ func (s *YouTubeOAuthService) ListAccountContent(ctx context.Context, accessToke
 		return nil, fmt.Errorf("get uploads playlist: %w", err)
 	}
 
-	// Step 2: List recent items from the uploads playlist.
+	// No privacy filter: preserve the original single-page behaviour.
+	if privacyFilter == "" {
+		return s.listUnfilteredAccountContent(ctx, accessToken, uploadsPlaylist, cursor, limit)
+	}
+
+	// Filtered path: walk playlist pages until we collect enough private
+	// videos, run out of pages, or hit a safety cap. We use maxResults=50
+	// per page to minimise round-trips and pass the cursor through so
+	// load-more continues from the next YouTube page.
+	const maxPages = 10
+	var (
+		items     []models.AccountContentItem
+		pageToken = cursor
+		pages     int
+	)
+	for pages < maxPages {
+		videoIDs, nextPage, err := s.listPlaylistItems(ctx, accessToken, uploadsPlaylist, pageToken, 50)
+		if err != nil {
+			return nil, fmt.Errorf("list playlist items: %w", err)
+		}
+		if len(videoIDs) == 0 {
+			return &models.AccountContentPage{Items: items}, nil
+		}
+
+		details, err := s.getVideoDetails(ctx, accessToken, videoIDs)
+		if err != nil {
+			return nil, fmt.Errorf("get video details: %w", err)
+		}
+
+		for _, item := range details {
+			if item.Privacy == privacyFilter {
+				items = append(items, item)
+			}
+		}
+
+		if len(items) >= limit {
+			// We have enough items to satisfy the request. Return what we
+			// collected plus the next YouTube page token so the client can
+			// load more. We intentionally do NOT slice to exactly `limit`
+			// because that would drop already-fetched private videos from
+			// the current chunk, causing data loss on the next page.
+			return &models.AccountContentPage{Items: items, NextCursor: nextPage}, nil
+		}
+
+		if nextPage == "" {
+			return &models.AccountContentPage{Items: items}, nil
+		}
+
+		pageToken = nextPage
+		pages++
+	}
+
+	return &models.AccountContentPage{Items: items, NextCursor: pageToken}, nil
+}
+
+func (s *YouTubeOAuthService) listUnfilteredAccountContent(ctx context.Context, accessToken, uploadsPlaylist, cursor string, limit int) (*models.AccountContentPage, error) {
+	// Step 1: List recent items from the uploads playlist.
 	videoIDs, nextPageToken, err := s.listPlaylistItems(ctx, accessToken, uploadsPlaylist, cursor, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list playlist items: %w", err)
@@ -575,7 +631,7 @@ func (s *YouTubeOAuthService) ListAccountContent(ctx context.Context, accessToke
 		return &models.AccountContentPage{Items: []models.AccountContentItem{}}, nil
 	}
 
-	// Step 3: Fetch video details (snippet, statistics, contentDetails, status).
+	// Step 2: Fetch video details (snippet, statistics, contentDetails, status).
 	items, err := s.getVideoDetails(ctx, accessToken, videoIDs)
 	if err != nil {
 		return nil, fmt.Errorf("get video details: %w", err)
@@ -701,6 +757,7 @@ func (s *YouTubeOAuthService) getVideoDetails(ctx context.Context, accessToken s
 			PublicURL:    "https://www.youtube.com/watch?v=" + v.ID,
 			Privacy:      v.Status.PrivacyStatus,
 			Status:       v.Status.UploadStatus,
+			Duration:     v.ContentDetails.Duration,
 			Metrics: []models.AccountMetric{
 				{
 					Key:          "views",

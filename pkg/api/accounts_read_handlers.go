@@ -402,8 +402,13 @@ func (r *Router) handleAccountContent(w http.ResponseWriter, req *http.Request) 
 			limit = parsed
 		}
 	}
+	privacy := req.URL.Query().Get("privacy")
+	if privacy != "" && privacy != "private" && privacy != "public" && privacy != "unlisted" {
+		writeError(w, http.StatusBadRequest, "invalid privacy value: must be one of private, public, unlisted")
+		return
+	}
 
-	page, err := contentProvider.ListAccountContent(req.Context(), token.AccessToken, account.PlatformUserID, cursor, limit)
+	page, err := contentProvider.ListAccountContent(req.Context(), token.AccessToken, account.PlatformUserID, cursor, limit, privacy)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list account content: "+err.Error())
 		return

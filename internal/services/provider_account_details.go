@@ -36,12 +36,15 @@ type AccountContentProvider interface {
 	// for the account identified by platformUserID. cursor is an
 	// opaque provider-defined cursor for pagination; empty string
 	// means "start from the beginning". limit caps the number of
-	// items returned.
+	// items returned. privacyFilter, when non-empty, restricts the
+	// returned items to videos whose privacy status matches the
+	// given value (e.g. "private").
 	ListAccountContent(
 		ctx context.Context,
 		accessToken string,
 		platformUserID string,
 		cursor string,
 		limit int,
+		privacyFilter string,
 	) (*models.AccountContentPage, error)
 }
