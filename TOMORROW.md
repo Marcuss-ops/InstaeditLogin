@@ -606,9 +606,19 @@ docker compose restart minio
 #               # forensic post-cutover.
 #               # Cleanup post-audit (RIMUOVI SOLO DOPO che la
 #               # decisione finale — rollback confermato OPPURE commit
-#               # sul NEW bucket — è presa; cleanup prematuro perde
-#               # l'unica copia forensic; un operatore che cambia idea
-#               # dopo cleanup non può più recuperare i dati):
+#               # sul NEW bucket — è PRESA ED ESEGUITA; cleanup prematuro
+#               # perde l'unica copia forensic; inoltre una terza via
+#               # valida è "estendere smoke test di altre 24h" che NON è
+#               # ancora la decisione finale e non autorizza cleanup):
+#                 # Tre path di decisione finale:
+#                 #   1. rollback confermato: esegui b–d completamente,
+#                 #      POI cleanup.
+#                 #   2. commit sul NEW bucket: `mc rb --force` source
+#                 #      (step 4 originale), POI cleanup.
+#                 #   3. estendi smoke di ulteriori 24h: NON cleanup,
+#                 #      aspetta fino a decisione 1 o 2.
+#                 # Cleanup PRE-ESECUZIONE (rollback o commit) o DURANTE
+#                 # estensione smoke = perdita forensic irreparabile.
 #               docker compose exec minio mc rm --recursive --force \\
 #                 minio/instaedit-local-pre-NEW-failed-cutover-$(date +%F)/
 #               (B) Merge esplicito dentro OLD bucket (selettivo):
