@@ -295,12 +295,12 @@ into the operator-side choreography. **The script itself still needs a parallel 
 #### 3.1.0 Caveat — script migration is a follow-up
 
 `scripts/db/production-restore-drill.sh` (and the runbook PDF it
-accompanies) post-date the cutover. They document the Fly-Postgres-shaped tooling pipeline (
-fork`, `~/.fly-secrets-database-url-pooled.txt`, and the Flycast URI
-shape. They are NOT wired into the live VPS stack — re-pointing them
-is a separate follow-up commit (§3.1.0 open item in DEPLOY.md §11
-tracks this). The procedure below is the operator's authoritative
-flow today until the script rewrite merges.
+accompanies) post-date the cutover. They document the legacy managed-Postgres tooling pipeline (cluster
+fork, secrets-pool file name, internal-cluster URI shape). They are
+NOT wired into the live VPS stack — re-pointing them is a separate
+follow-up commit (§3.1.0 open item in DEPLOY.md §11 tracks this).
+The procedure below is the operator's authoritative flow today until
+the script rewrite merges.
 
 #### 3.1.1 Cadence
 
@@ -495,9 +495,10 @@ enforced at THREE layers:
 **Anti-pattern**: pointing at `localhost:5432/instaedit_login_dev` (a
 dev-shape DB) from the production VPS. The check `current_database()`
 + the drill §3.1.3 STEP 5 fingerprint catches this BEFORE any API
-traffic flows. The VPS-shape risk is lower than the Fly-shape risk
-(no cross-VPC confusion), but the discipline stays so the roll-back
-path is identical.
+traffic flows. The single-host VPS shape keeps the recovery
+fingerprint clean (no cross-cluster / managed-Postgres confusion),
+and the discipline stays so the roll-back path remains identical
+to drift recovery.
 
 ---
 
@@ -836,5 +837,5 @@ These are surgically tracked followup commits, NOT documentation gaps:
 
 1. `make verify-log-redaction` + `scripts/obs/verify-log-redaction.sh` must source from `docker compose logs --since <window> api worker` to make the live redactor work on the VPS-native stack (§5.3 above references this; DEPLOY.md §11 owns it).
 2. `scripts/db/production-restore-drill.sh` still follows the pre-cutover managed-Postgres pattern. Rewrite for VPS pg_dump → throwaway container (§3.1.0 above flags this; sub-task of DEPLOY.md §11).
-3. `.github/workflows/integration.yml` still has the stale secrets-parser step (the underlying `make fly-secrets-test` target + .py parsers were dropped at commit `1ab88ef`). Remove that step entirely from the workflow (DEPLOY.md §11 owns it).
+3. `.github/workflows/integration.yml` still has the stale secrets-parser step (the underlying make-target and .py parsers were dropped at commit `1ab88ef`). Remove that step entirely from the workflow (DEPLOY.md §11 owns it).
 4. `docker-build-production` Makefile target was orphaned post-cutover. **Dropped at commit `4382ae8`** (target removed from `.PHONY` and recipe block); residue cleanup, if any, tracked in DEPLOY.md §11.
