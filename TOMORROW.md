@@ -152,7 +152,7 @@ in produzione in mezza giornata.
 ### Step pratici
 
 ```bash
-# 1. Rimuovi i 13 secret non più necessari da required-fly-secrets.txt
+# 1. Rimuovi i 13 secret non più necessari dalla hosted-platform secrets manifest
 #    (LinkedIn, TikTok, YouTube, X — 12 secret + EMAIL_PROVIDER_KEY = 13)
 #    → portalo da 27 a 14
 
@@ -244,3 +244,333 @@ con il prossimo comando o il fix. No screenshot, no copia-incolla di
 secret, no panico.
 
 **Buona sessione domani. 🚀**
+
+---
+
+## 🔍 Tigris-vs-MinIO cutover audit (2026-07-25, post-Fly-destroy)
+
+> **Verdict: ⚠️ NOT YET SAFE TO REMOVE TIGRIS.** Code-side ✅ GREEN;
+> bucket-side + VPS runtime ⏸️ UNCLEAR (needs operator execution on VPS).
+
+### Audit gate (4-step user spec from chat)
+
+| # | Step | Verifier | Result |
+|---|------|----------|--------|
+| 1 | VPS-side `docker compose exec minio mc ls minio/instaedit-local` | operator SSH | ⏸️ UNCLEAR |
+| 2 | Tigris bucket listing (`aws --endpoint https://t3.storage.dev s3 ls s3://instaedit-prod-media/ --recursive`) | operator + Tigris creds | ⏸️ UNCLEAR |
+| 3 | Local grep: `t3.storage.dev` \| `tigris` \| `FLY_STORAGE` in code/compose/env/scripts | sandbox | ✅ GREEN |
+| 4 | Bucket parity diff (1 vs 2) | post 1+2 | ⏸️ BLOCKED — depends on 1+2 |
+
+### Code-side detail (executed from this sandbox)
+
+**Portabile / nessuna ref hard-coded:**
+- `internal/config/config.go:583` — `S3Endpoint: getEnv("S3_ENDPOINT", "")`
+  completamente env-driven, nessun default Tigris.
+- `internal/services/storage.go` —comment: `S3-compatible — requires S3_ENDPOINT + S3_BUCKET + S3_ACCESS_KEY + S3_SECRET_KEY` (neutro rispetto al provider).
+- `docker-compose.yml` — solo servizio `minio`. Nessun servizio `tigris`.
+- Tests (`internal/services/youtube_oauth_resume_test.go:381+`): puntano a `http://localhost:9000` (MinIO locale).
+- `internal/worker/upload_worker.go` — nessun riferimento a `t3.storage.dev` o `FLY_STORAGE` trovato.
+
+**Riferimenti Tigris rimasti (intenzionali):**
+- `scripts/s3/provision-tigris.sh` — script di provisioning del bucket
+  `instaedit-prod-media` (default endpoint `https://t3.storage.dev`).
+- `scripts/ops/post_deploy_smoke.sh:10,40,206` — Phase 9.4 Tigris presigned-PUT
+  smoke test (§B.5).
+- `docs/DEPLOY.md:373,471-498,817` (§10) — playbook di ritiro Tigris (la
+  this-section è la documentazione del piano di migrazione, NON codice vivo).
+- `docs/OPERATIONS.md:192,206,514-520,767` — Tigris marcato come legacy +
+  rollback window note.
+
+### Operator pre-destroy checklist (sequenza verificabile)
+
+```bash
+# ─── 1. Snapshot VPS-side MinIO ──────────────────────────────────
+ssh root@51.91.11.36
+docker compose exec minio mc ls minio/instaedit-local --recursive \
+  | tee /tmp/minio-listing.txt
+docker compose exec minio mc ls --summarize minio/instaedit-local \
+  | tee /tmp/minio-summary.txt
+
+# ─── 2. Snapshot Tigris ─────────────────────────────────────────
+# Da locale, con le Tigris key di 1Password (NON incollare in chat)
+AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
+  aws --endpoint https://t3.storage.dev s3 ls s3://instaedit-prod-media/ --recursive \
+  | tee /tmp/tigris-listing.txt
+
+# ─── 3. Bucket parity diff ──────────────────────────────────────
+diff /tmp/minio-listing.txt /tmp/tigris-listing.txt
+# Exit 0 = set uguali. Exit 1 = ci sono file solo da un lato.
+
+# ─── 4. VPS .env: conferma S3_ENDPOINT punta a MinIO ────────────
+grep -E '^S3_ENDPOINT' /opt/instaedit/.env.production
+# Atteso: S3_ENDPOINT=http://minio:9000 (o https://minio.instaedit.local)
+# Se punta ancora a https://t3.storage.dev → BONK prima di toccare Fly.
+
+# ─── 5. Smoke test §B.5 contro MinIO ────────────────────────────
+bash scripts/ops/post_deploy_smoke.sh
+# Atteso: "/api/v1/media/presign: 200 + presigned URL + key=... (Tigris
+# signed PUT OK)". Se il nome dello smoke dice ancora "Tigris" ma il
+# flusso passa, OK; altrimenti rinomina §B.5 in "S3 signed PUT OK".
+```
+
+### Decisione finale
+
+- Se TUTTI i 5 punti sopra sono verdi → `Tigris-safe-to-remove: ✅`
+- Altrimenti → esegui prima `docs/DEPLOY.md` §10 (mc mirror Tigris → MinIO).
+
+### Perché questo blocco è pre-destroy
+
+`scripts/destroy-fly-app.sh` ha Tigris marcato come **OUT-OF-SCOPE**
+intenzionalmente (riga 27, 69): tocca solo l'app `instaedit-login` su
+Fly, non bucket esterni. Quindi **distruggere Fly NON rompe Tigris** —
+la domanda "Tigris è ancora necessario?" è ortogonale al Fly cutover
+ed è un'operazione di igiene storage separata.
+
+### Riferimenti interni
+
+- Manuale migrazione: `docs/DEPLOY.md` §10 (Tigris retirement)
+- Audit log destroy: `scripts/destroy-fly-app.sh --apply` (NON tocca Tigris)
+- Runbook smoke test: `scripts/ops/post_deploy_smoke.sh` §B.5
+
+---
+
+## 🩹 Code-side disambiguation: `internal/worker/upload_worker.go:910`
+
+> **Verifica:** il match `tigris` nelle `*.go` cade dentro
+> `classifyUploadError`, NON in un endpoint hard-coded.
+
+La riga esatta:
+
+```go
+// internal/worker/upload_worker.go (~line 910)
+case containsAny(s, "s3", "tigris", "minio", "presigned"):
+    return "s3_error"
+```
+
+**Cosa fa realmente:** `containsAny` è un helper di substring-match
+usato da `classifyUploadError` per classificare gli error runtime in
+una tassonomia stabile (`drive_error`, `s3_error`, `youtube_error`,
+`auth_error`, `timeout`, …). Le stringhe `"s3"`, `"tigris"`,
+`"minio"`, `"presigned"` sono **needle** nell'err.Error() — NON
+endpoint di storage.
+
+**Implicazioni per il cutover:**
+
+1. **Nessun data-plane coupling.** La classifier non legge da Tigris;
+   mappa solo errori. Post-cutover (Tigris rimosso) la voce `tigris`
+   è dead-but-harmless: nessun errore runtime la triggera più.
+2. **Nessun refuso end-user.** Il match non trapela in UI né in
+   payload response — solo nel campo `error_code` della riga in DB.
+3. **Cleanup consigliato (post-cutover, NON blocker):** rimuovere
+   `"tigris"` dagli needles di `containsAny`. È un refactor cosmetico,
+   non un correctness fix. Tracked come followup dopo Destroy Fly.
+
+**Conclusione:** code-side ✅ GREEN confermato. L'evidenza non
+obbliga ad azione immediata; richiede solo un futuro cleanup cosmetico.
+
+---
+
+## 🛡️ Audit conditions mancanti (integrate dopo code-review)
+
+Il primo cut della checklist operatoriale copriva solo la **bucket
+parity**. Mancano 4 condizioni di **runtime/contract parity** che, se
+non verdi, possono rompere il cutover dal lato utente senza rompersi
+dal lato bucket. Aggiunte al gate:
+
+### 6. CORS policy diff (Tigris vs MinIO)
+
+```bash
+# Tigris default (Storage dashboard → bucket → CORS):
+#   - AllowOrigins: ["*"]
+#   - AllowMethods: ["GET","PUT","POST","DELETE","HEAD"]
+#   - AllowHeaders: ["*"]
+#   - ExposeHeaders: ["ETag","Content-Length","Content-Type"]
+#   - MaxAgeSeconds: 3600
+
+# MinIO default su docker-compose: NESSUNA CORS rule.
+# La SPA in https://app.instaedit.org (Vercel) non potrà fare
+# presigned-URL PUT/GET se MinIO non espone la CORS rule all'origine
+# Vercel.
+
+# FIX sulla VPS (3 step; ATTENZIONE: heredoc-bare non funziona perché
+# `docker compose exec` non vede il filesystem dell'host — serve docker cp
+# OR stdin via `-T`):
+cat > /tmp/cors-minio.json <<'EOF'
+{
+  "cors": {
+    "0": {
+      "allowedOrigins": ["https://app.instaedit.org","https://instaedit.org"],
+      "allowedMethods": ["GET","PUT","POST","DELETE","HEAD"],
+      "allowedHeaders": ["*"],
+      "exposeHeaders": ["ETag","Content-Length","Content-Type"],
+      "maxAgeSeconds": 3600
+    }
+  }
+}
+EOF
+docker compose exec minio mc admin config import < /tmp/cors-minio.json
+# `mc admin config import` legge da stdin, quindi l'host-side heredoc
+# sopravvive il boundary host→container. Restart per ricaricare:
+docker compose restart minio
+```
+
+### 7. Public-read bucket policy diff
+
+```bash
+# Se il bucket Tigris espone oggetti pubblici (avatar, thumbnail,
+# post preview), MinIO deve avere la policy equivalente.
+
+# Lista oggetti Tigris pubblici:
+AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
+  aws --endpoint https://t3.storage.dev s3api list-objects-v2 \
+  --bucket instaedit-prod-media --query 'Contents[?contains(Key, `public/`)]'
+
+# Replica su MinIO (VPS):
+docker compose exec minio mc anonymous set download minio/instaedit-local
+# (oppure solo prefix-specifici se serve granularità)
+```
+
+### 8. S3_REGION / S3_USE_SSL parity
+
+```bash
+# Tigris: HTTPS + region "auto" (o "us-east-1").
+# MinIO compose: HTTP + region "us-east-1" (placeholder).
+# Se il Go client ha `S3_USE_SSL` o `S3_REGION` env-driven, devono
+# essere settati correttamente per il nuovo endpoint.
+
+# Verifica runtime sulla VPS:
+grep -E '^S3_(REGION|USE_SSL|ENDPOINT|PATH_STYLE)' /opt/instaedit/.env.production
+# Atteso (la VPS gira dentro docker-compose: HTTP single-host):
+#   S3_ENDPOINT=http://minio:9000
+#   S3_REGION=us-east-1              # placeholder per MinIO (ignorato)
+#   S3_USE_SSL=false                 # solo se la Caddy termina TLS
+#   S3_PATH_STYLE=true               # CRITICAL per MinIO single-host
+
+# S3_PATH_STYLE è letto da `internal/config/config.go::StorageConfig.S3PathStyle`
+# (bool) e passato al client S3 Go. Per single-host MinIO (compose) DEVE
+# essere `true`; altrimenti il client costruisce URL virtual-hosted
+# (`minio:9000.instaedit-local`) e fallisce la PUT silenziosamente.
+```
+
+### 9. Object-locking / versioning / lifecycle replication
+
+```bash
+# Se Tigris bucket ha lifecycle rules (es. expire-after-30d),
+# Versioning ON, o Object Lock, vanno replicate su MinIO.
+
+# Ispezione Tigris:
+AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
+  aws --endpoint https://t3.storage.dev s3api get-bucket-lifecycle-configuration \
+  --bucket instaedit-prod-media
+AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
+  aws --endpoint https://t3.storage.dev s3api get-bucket-versioning \
+  --bucket instaedit-prod-media
+
+# Replica su MinIO (VPS). STEP:
+# (a) Cattura lifecycle da Tigris in JSON pulito (AWS CLI v2 only — v1
+#     emette XML anche dietro --endpoint):
+AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
+  aws --endpoint https://t3.storage.dev s3api get-bucket-lifecycle-configuration \
+  --bucket instaedit-prod-media > /tmp/lifecycle-tigris.json
+python3 -c 'import json,sys; json.load(open("/tmp/lifecycle-tigris.json"))' \
+  || { echo 'FAIL: AWS CLI v1 emette XML — usa v2 (aws --version >= 2.0)'; exit 1; }
+
+# (b) Import lifecycle + attiva versioning su MinIO. `mc ilm import`
+#     legge da stdin (stesso workaround host→container descritto in §6):
+docker compose exec minio mc ilm import minio/instaedit-local < /tmp/lifecycle-tigris.json
+docker compose exec minio mc version enable minio/instaedit-local
+```
+
+### 10. KMS / SSE-S3 encryption parity
+
+```bash
+# Tigris può avere default SSE-S3 encryption (o custom KMS keys) sul
+# bucket. MinIO NON lo eredita — va configurato esplicitamente.
+
+# Ispezione Tigris:
+AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
+  aws --endpoint https://t3.storage.dev s3api get-bucket-encryption \
+  --bucket instaedit-prod-media
+# Output tipico: {"ServerSideEncryptionConfiguration":{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}}
+
+# Replica su MinIO (BOTH server-default + per-bucket):
+# (a) Default a livello di server (env in docker-compose.yml):
+#     MINIO_API_KMS_SECRET_KEY=<base64-32-byte>   # opzionale; usa solo se KMS custom
+docker compose exec minio mc admin config set /tmp/enc.json <<'EOF'
+{ "encrypt": { "0": { "sse": { "algorithm": "AES256" } } } }
+EOF
+# (ATTENZIONE: stesso heredoc-host/container gotcha del §6 — se redisca
+# problemi, usa il pattern docker cp descritto sopra.)
+
+# (b) Default sul bucket specifico:
+docker compose exec minio mc encrypt set sse-s3 minio/instaedit-local
+
+# Se Tigris usa SSE-KMS custom: serve ri-cryptare gli oggetti esistenti
+# con `rclone sync ... --s3-sse aws:kms --s3-sse-kms-key-id …`. Esula
+# dal cutover; flaggato come follow-up post-mirror.
+```
+
+### Decisione finale (aggiornata)
+
+- Se TUTTI i 10 punti (1-5 originali + 6-10 sopra) sono verdi → `Tigris-safe-to-remove: ✅`
+- Altrimenti → esegui prima `docs/DEPLOY.md` §10 (mc mirror Tigris → MinIO).
+- Se il bucket ha SSE-KMS custom (non SSE-S3 default) → served KMS-mirror
+  post-cutover; non blocker, ma tracked come P1 follow-up.
+
+---
+
+## ⚠️ Cascade-destroy warning: Tigris Fly-managed
+
+> Rischio non-Fly-side ma REALE: bucket Fly-managed può essere rimosso
+> automaticamente da `fly apps destroy` anche se i nostri script
+> sono OUT-OF-SCOPE in spirit.
+
+**Problema:** `scripts/s3/provision-tigris.sh:10` documenta una
+variante **Fly-managed**:
+
+```
+# For Fly.io's managed Tigris (regional),
+# export S3_ENDPOINT=https://fly.storage.tigris.dev
+```
+
+Se il bucket `instaedit-prod-media` è stato creato con `fly storage
+create` o `flyctl storage attach` (anziché indipendentemente dalla
+dashboard t3.storage.dev), ALLORA `fly apps destroy --app
+instaedit-login` **potrebbe cascade-rimuovere il bucket Tigris**
+tramite teardown dei volumi Fly-attached.
+
+`scripts/destroy-fly-app.sh` NON chiama esplicitamente `fly storage
+...` quindi è out-of-scope in **codice**. Ma il teardown Fly potrebbe
+comunque rimuovere il bucket come side-effect.
+
+**Pre-destroy disambiguation obbligatoria:**
+
+```bash
+# 1. Sul Fly dashboard → "Storage" per l'app instaedit-login.
+#    Lista bucket attached.
+
+# 2. Comando CLI (operator-only):
+flyctl storage list --app instaedit-login
+# Se l'output include "instaedit-prod-media" come Fly-attached:
+#   → bucket è Fly-managed → RISK CASCADE-DESTROY
+# Altrimenti:
+#   → bucket è standalone → destroy-fly-app.sh è sicuro
+
+# 3. Se RISK CASCADE-DESTROY confermato, PRIMA del destroy:
+#    a) Backup bucket locale MinIO (step 1-4 della checklist sopra)
+#    b) Versioning Tigris ON prima del destroy:
+#       aws --endpoint https://t3.storage.dev s3api put-bucket-versioning \
+#         --bucket instaedit-prod-media --versioning-configuration Status=Enabled
+#    c) Solo DOPO backup-and-confirmed: proceed destroy.
+```
+
+**Perché questo blocco è pre-destroy:** questo controllo **NON** è
+coperto da `destroy-fly-app.sh` (che è giustamente out-of-scope). È
+una decisione operator-side che va presa PRIMA di lanciare
+`destroy-fly-app.sh --apply`.
+
+### Riferimenti interni
+
+- Manuale migrazione: `docs/DEPLOY.md` §10 (Tigris retirement)
+- Audit log destroy: `scripts/destroy-fly-app.sh --apply` (NON tocca Tigris)
+- Runbook smoke test: `scripts/ops/post_deploy_smoke.sh` §B.5
