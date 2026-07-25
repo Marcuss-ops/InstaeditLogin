@@ -5,25 +5,37 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // mockYouTubeVideoEditStore is an test seam for YouTubeVideoEditStore.
+//
+// Blocco #5 P0 #2 — added MarkPublishing with D1 (sync.Mutex + counter)
+// atomic-simulator: first call wins (returns a synthesised 'claimed'
+// row from FindByID's return value), every other call returns
+// (nil, repository.ErrYouTubeVideoEditNotFound) — mirrors the real
+// Postgres CAS behaviour for tests that don't inject markPublishingFn.
 type mockYouTubeVideoEditStore struct {
-	created         []*models.YouTubeVideoEdit
-	findFn          func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
-	findByProjectFn func(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
-	update          func(ctx context.Context, edit *models.YouTubeVideoEdit) error
+	created                []*models.YouTubeVideoEdit
+	findFn                 func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
+	findByProjectFn        func(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
+	update                 func(ctx context.Context, edit *models.YouTubeVideoEdit) error
+	markPublishingMu       sync.Mutex
+	markPublishingAttempts int
+	markPublishingFn       func(ctx context.Context, id string, desiredPrivacy string, publishAt *time.Time, inFlightTimeout time.Duration) (*models.YouTubeVideoEdit, error)
 }
 
 func (m *mockYouTubeVideoEditStore) Create(ctx context.Context, edit *models.YouTubeVideoEdit) error {
@@ -50,6 +62,37 @@ func (m *mockYouTubeVideoEditStore) Update(ctx context.Context, edit *models.You
 		return m.update(ctx, edit)
 	}
 	return nil
+}
+
+// MarkPublishing (Blocco #5 P0 #2) — atomic simulator. With no
+// override callback set, the first concurrent call wins (bootstraps
+// a "claimed" row from findFn's return value with
+// Status='publishing' + desired_privacy + publish_at overwritten)
+// and every other call returns the typed sentinel wrapped to mirror
+// the real repository's no-rows error. Tests that need explicit
+// sequencing can inject markPublishingFn.
+func (m *mockYouTubeVideoEditStore) MarkPublishing(ctx context.Context, id string, desiredPrivacy string, publishAt *time.Time, inFlightTimeout time.Duration) (*models.YouTubeVideoEdit, error) {
+	if m.markPublishingFn != nil {
+		return m.markPublishingFn(ctx, id, desiredPrivacy, publishAt, inFlightTimeout)
+	}
+	m.markPublishingMu.Lock()
+	defer m.markPublishingMu.Unlock()
+	m.markPublishingAttempts++
+	if m.markPublishingAttempts == 1 {
+		if m.findFn == nil {
+			return nil, errors.New("markPublishing fallback: no findFn to bootstrap claimed row")
+		}
+		row, err := m.findFn(ctx, id)
+		if err != nil || row == nil {
+			return nil, fmt.Errorf("markPublishing fallback: find returned nil: %w", err)
+		}
+		row.Status = "publishing"
+		row.DesiredPrivacy = desiredPrivacy
+		row.PublishAt = publishAt
+		row.UpdatedAt = time.Now().UTC()
+		return row, nil
+	}
+	return nil, fmt.Errorf("%w: simulated CAS-loss", repository.ErrYouTubeVideoEditNotFound)
 }
 
 // mockYouTubeOAuthServiceForEditor implements the subset of
@@ -1084,6 +1127,183 @@ func TestPublishYouTubeEditorSession_ScheduledFromSessionPrivacy(t *testing.T) {
 	}
 	if capturedPrivacy != "private" {
 		t.Errorf("resolved privacy must be 'private' (from session.DesiredPrivacy), got %q", capturedPrivacy)
+	}
+}
+
+// TestPublishYouTubeEditorSession_ConcurrentPublishClaimsAtomically is the
+// concurrency regression for Blocco #5 P0 #2 — the atomic CAS claim
+// must guarantee that exactly ONE publish fires PublishThumbnail per
+// N concurrent requests on the same session_id. Pre-fix the handler's
+// read-then-update race would stamp status='publishing' on the same row
+// from multiple goroutines, each dispatching a PublishThumbnail call.
+// Post-fix, MarkPublishing's CAS returns the typed sentinel from N-1
+// callers; the handler maps to 409.
+func TestPublishYouTubeEditorSession_ConcurrentPublishClaimsAtomically(t *testing.T) {
+	account := &models.PlatformAccount{
+		ID:             42,
+		UserID:         1,
+		Platform:       models.PlatformYouTube,
+		PlatformUserID: "UC123",
+		Username:       "testchannel",
+		Status:         models.AccountStatusActive,
+	}
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if id == account.ID {
+				return account, nil
+			}
+			return nil, nil
+		},
+	}
+	workspaceStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			if id == workspace.ID {
+				return workspace, nil
+			}
+			return nil, nil
+		},
+	}
+
+	mediaStore := newMockMediaStore()
+	mediaStore.assets["asset-uuid-123"] = &models.MediaAsset{
+		ID:          "asset-uuid-123",
+		UserID:      1,
+		UploadKey:   "uploads/1/thumb.jpg",
+		ContentType: "image/jpeg",
+		SizeBytes:   1024,
+		Status:      models.MediaAssetStatusReady,
+	}
+
+	var publishCalls int32
+	capturedPrivacyMu := sync.Mutex{}
+	var capturedPrivacy string
+	editStore := &mockYouTubeVideoEditStore{
+		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:                "session-123",
+				WorkspaceID:       workspace.ID,
+				PlatformAccountID: account.ID,
+				YouTubeVideoID:    "ytvideo123",
+				VeloxProjectID:    "ve-project-123",
+				ThumbnailMediaID:  strPtr("asset-uuid-123"),
+				DesiredPrivacy:    "public",
+				Status:            "editing",
+			}, nil
+		},
+		update: func(ctx context.Context, edit *models.YouTubeVideoEdit) error {
+			return nil
+		},
+	}
+
+	youTubeSvc := &mockYouTubeOAuthServiceForEditor{}
+
+	thumbnailBytes := []byte("fake-thumbnail-bytes")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(thumbnailBytes)
+	}))
+	defer server.Close()
+
+	storage := newMockStorageProvider()
+	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
+
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+		atomic.AddInt32(&publishCalls, 1)
+		capturedPrivacyMu.Lock()
+		capturedPrivacy = privacyStatus
+		capturedPrivacyMu.Unlock()
+		return "https://www.youtube.com/watch?v=" + videoID, nil
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		store,
+		auth.NewManager(testJWTSecret, 24),
+		"https://app.instaedit.org",
+		nil,
+		WithWorkspaceStore(workspaceStore),
+		WithYouTubeVideoEditStore(editStore),
+		WithMediaStore(mediaStore),
+		WithStorageProvider(storage),
+		WithYouTubeService(youTubeSvc),
+		WithCredentialVault(&mockCredentialVault{
+			getFn: func(ctx context.Context, id int64, tt string) (*models.OAuthToken, error) {
+				if id == account.ID {
+					return &models.OAuthToken{AccessToken: "valid-token"}, nil
+				}
+				return nil, errors.New("token not found")
+			},
+		}),
+	)
+
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	type callResult struct {
+		code int
+		body string
+	}
+	results := make([]callResult, numGoroutines)
+	payload := []byte("{}")
+
+	// Sync barrier: release every goroutine at once so the HTTP
+	// dispatch lands as close to "all at once" as the runtime
+	// allows. Without this, goroutines that reach the publish handler
+	// a few microseconds apart would still hit the CAS — with this,
+	// any flaky ordering regressions surface under repeated runs.
+	//
+	// r.Setup() MUST be called exactly once here, NOT per-goroutine:
+	// each Setup() rebuilds the chi.Mux mux + AuthModule/csrf module
+	// route tables, neither of which is safe for concurrent
+	// map writes. Capture the handler and call it from every
+	// goroutine — http.Handler is safe to invoke concurrently.
+	handler := r.Setup()
+	start := make(chan struct{})
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", bytes.NewReader(payload))
+			req.Header.Set("Content-Type", "application/json")
+			withBearerJWT(t, req, 1)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			results[idx] = callResult{code: rec.Code, body: rec.Body.String()}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	var success, conflict, other int
+	for _, res := range results {
+		switch res.code {
+		case http.StatusOK:
+			success++
+		case http.StatusConflict:
+			conflict++
+		default:
+			other++
+			t.Errorf("unexpected status code %d (body=%s)", res.code, res.body)
+		}
+	}
+	if success != 1 {
+		t.Errorf("expected exactly 1 successful publish (200), got %d", success)
+	}
+	if conflict != numGoroutines-1 {
+		t.Errorf("expected %d concurrent CAS-loss (409), got %d", numGoroutines-1, conflict)
+	}
+	if other != 0 {
+		t.Errorf("expected 0 unexpected statuses, got %d", other)
+	}
+	if got := atomic.LoadInt32(&publishCalls); got != 1 {
+		t.Errorf("expected exactly 1 PublishThumbnail YouTube API call, got %d", got)
+	}
+	capturedPrivacyMu.Lock()
+	gotPrivacy := capturedPrivacy
+	capturedPrivacyMu.Unlock()
+	if gotPrivacy != "public" {
+		t.Errorf("expected resolved privacy 'public' on the winning publish, got %q", gotPrivacy)
 	}
 }
 

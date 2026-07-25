@@ -763,6 +763,16 @@ type YouTubeVideoEditStore interface {
 	FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
 	FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
 	Update(ctx context.Context, edit *models.YouTubeVideoEdit) error
+	// MarkPublishing (Blocco #5 P0 #2) atomically transitions the row to
+	// status='publishing' WITH desired_privacy + publish_at stamped in the
+	// same statement. CAS predicate (extended form): status IN
+	// ('editing','failed') OR (status='publishing' AND updated_at <
+	// NOW() - make_interval(secs => inFlightTimeout)). The strict
+	// (inFlightTimeout <= 0) branch runs the same SQL minus the
+	// orphan-recovery branch (E1 — Go-level guard). The handler maps
+	// (nil, repository.ErrYouTubeVideoEditNotFound) to HTTP 409
+	// (CAS-loss). Mirrors repository.YouTubeVideoEditRepository.MarkPublishing.
+	MarkPublishing(ctx context.Context, id string, desiredPrivacy string, publishAt *time.Time, inFlightTimeout time.Duration) (*models.YouTubeVideoEdit, error)
 }
 
 // P2 — ops dashboard store. AdminStore is the read-side

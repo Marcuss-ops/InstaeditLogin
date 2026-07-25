@@ -15,6 +15,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -578,15 +579,41 @@ func (r *Router) handlePublishYouTubeEditorSession(w http.ResponseWriter, req *h
 		return
 	}
 
-	// Mark publishing and attempt the publish.
-	edit.Status = "publishing"
-	edit.DesiredPrivacy = privacyStatus
-	edit.PublishAt = payload.PublishAt
-	edit.UpdatedAt = time.Now().UTC()
-	if err := r.youtubeVideoEditStore.Update(req.Context(), edit); err != nil {
-		writeError(w, http.StatusInternalServerError, "update editor session: "+err.Error())
+	// Atomic CAS claim (Blocco #5 P0 #2 — Bug #2 fix). The previous
+	// read-then-update pattern (`edit.Status = "publishing"; Update(edit)`)
+	// had a TOCTOU race: two concurrent publish requests could both
+	// pass the row-state read AND stamp status='publishing', firing
+	// two PublishThumbnail calls (real bug — thumbnail would be
+	// uploaded to YouTube twice). MarkPublishing stamps
+	// status + desired_privacy + publish_at in a single statement
+	// AND honours an extended predicate (orphan recovery): a stuck
+	// 'publishing' row whose heartbeat is older than
+	// publishingInFlightTimeout can be re-claimed by a fresh
+	// request after the timeout. The handler's own in-flight check
+	// above already rejects recent-publishing rows with 409 — the
+	// orphan-recovery branch only matches rows older than the
+	// timeout. inFlightTimeout was already resolved by the in-flight
+	// guard above (defaulted to DefaultPublishingInFlightTimeout if
+	// the Router field is zero); retry the same variable to keep
+	// the orphan-recovery timeout consistent with the in-flight
+	// window.
+	claimed, err := r.youtubeVideoEditStore.MarkPublishing(
+		req.Context(), sessionID, privacyStatus, payload.PublishAt, inFlightTimeout,
+	)
+	if err != nil {
+		if errors.Is(err, repository.ErrYouTubeVideoEditNotFound) {
+			// CAS-loss: 0 rows matched the predicate. Either the row
+			// is in 'publishing' state AND within the in-flight
+			// timeout (already rejected by the in-flight check
+			// above, but defensive), OR the row is in a terminal
+			// state ('published'). Either way: 409 + clear message.
+			writeError(w, http.StatusConflict, "publish already in progress or terminal state")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "mark publishing: "+err.Error())
 		return
 	}
+	edit = claimed
 
 	publicURL, err := r.youTubeSvc.PublishThumbnail(
 		req.Context(),

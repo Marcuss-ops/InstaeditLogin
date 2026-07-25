@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -20,6 +21,18 @@ type YouTubeVideoEditStore interface {
 	FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
 	FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
 	Update(ctx context.Context, edit *models.YouTubeVideoEdit) error
+	// MarkPublishing (Blocco #5 P0 #2) atomically transitions status →
+	// 'publishing' WITH desired_privacy + publish_at stamped in the
+	// same statement. CAS predicate (extended form):
+	//   status IN ('editing','failed')                  -- primary path
+	//   OR (status='publishing' AND updated_at <
+	//       NOW() - make_interval(secs => inFlightTimeout))  -- orphan recovery
+	// The two-branch SQL is selected in Go (E1) based on
+	// inFlightTimeout > 0 to avoid the timeout=0 degenerate case where
+	// make_interval(secs => 0) would match ALL 'publishing' rows.
+	// Returns (nil, ErrYouTubeVideoEditNotFound) on 0-rows match — the
+	// handler maps to 409 (CAS-loss).
+	MarkPublishing(ctx context.Context, id string, desiredPrivacy string, publishAt *time.Time, inFlightTimeout time.Duration) (*models.YouTubeVideoEdit, error)
 }
 
 // YouTubeVideoEditRepository handles CRUD for youtube_video_edits.
@@ -100,6 +113,96 @@ func (r *YouTubeVideoEditRepository) FindByVeloxProjectID(ctx context.Context, p
 }
 
 // Update persists lifecycle changes to an existing edit session.
+// MarkPublishing (Blocco #5 P0 #2) is the atomic CAS claim for the
+// thumbnail-publish transition. The handler's previous read-then-update
+// pattern (`edit.Status = "publishing"; Update(ctx, edit)`) had a TOCTOU
+// race: two concurrent publish requests could both pass the row-state
+// read and fire two PublishThumbnail calls (a real production bug —
+// video would be thumbnail-published twice).
+//
+// CAS structure:
+//   STRICT BRANCH (inFlightTimeout <= 0):
+//     UPDATE ... SET status, updated_at, desired_privacy, publish_at
+//      WHERE id=$1 AND status IN ('editing','failed')
+//      RETURNING ...
+//   EXTENDED BRANCH (inFlightTimeout > 0):
+//     UPDATE ... SET ...  WHERE id=$1 AND (
+//        status IN ('editing','failed')
+//        OR (status='publishing' AND updated_at < NOW() - make_interval(secs => $4))
+//     ) RETURNING ...
+//
+// The extended branch is the orphan-recovery path: a previous publish
+// was claimed but the worker died mid-call (status stuck at
+// 'publishing' with no published_at stamp). The handler's in-flight
+// read at the top of the function would have already rejected a
+// recent (within timeout) sticky 'publishing' row with 409; this
+// branch picks up only rows older than the timeout.
+//
+// include-desired_privacy-and-publish_at-in-CAS so the publish call sees
+// the values that were atomically stamped (no chance of a concurrent
+// reader flipping the resolved privacy between the MarkPublishing
+// return and the PublishThumbnail call). Avoiding the
+// read-then-modify-write reverts every race that the original
+// handler was subject to (privacy/publish_at swap while the row was
+// being updated).
+//
+// Returns ErrYouTubeVideoEditNotFound (wrapped) when 0 rows match —
+// distinct from a real *sql.DB error so the handler can branch on
+// errors.Is(..., ErrYouTubeVideoEditNotFound) to map to HTTP 409.
+func (r *YouTubeVideoEditRepository) MarkPublishing(ctx context.Context, id string, desiredPrivacy string, publishAt *time.Time, inFlightTimeout time.Duration) (*models.YouTubeVideoEdit, error) {
+	selectColumns := `id, workspace_id, platform_account_id, youtube_video_id,
+	                   velox_project_id, source_thumbnail_url, thumbnail_media_id,
+	                   desired_privacy, publish_at, status, last_error,
+	                   created_at, updated_at`
+	edit := &models.YouTubeVideoEdit{}
+	var err error
+	if inFlightTimeout <= 0 {
+		// Strict branch: only editing/failed are claimable.
+		err = r.db.QueryRowContext(ctx,
+			`UPDATE youtube_video_edits
+			 SET status = 'publishing', updated_at = NOW(),
+			     desired_privacy = $2, publish_at = $3
+			 WHERE id = $1 AND status IN ('editing','failed')
+			 RETURNING `+selectColumns,
+			id, desiredPrivacy, publishAt,
+		).Scan(
+			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+			&edit.CreatedAt, &edit.UpdatedAt,
+		)
+	} else {
+		// Extended branch: also re-claim a stale 'publishing' row.
+		err = r.db.QueryRowContext(ctx,
+			`UPDATE youtube_video_edits
+			 SET status = 'publishing', updated_at = NOW(),
+			     desired_privacy = $2, publish_at = $3
+			 WHERE id = $1
+			   AND (
+			       status IN ('editing','failed')
+			       OR (
+			            status = 'publishing'
+			            AND updated_at < NOW() - make_interval(secs => $4)
+			        )
+			   )
+			 RETURNING `+selectColumns,
+			id, desiredPrivacy, publishAt, int(inFlightTimeout.Seconds()),
+		).Scan(
+			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+			&edit.CreatedAt, &edit.UpdatedAt,
+		)
+	}
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("%w: id=%s", ErrYouTubeVideoEditNotFound, id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("youtube video edit MarkPublishing: %w", err)
+	}
+	return edit, nil
+}
+
 func (r *YouTubeVideoEditRepository) Update(ctx context.Context, edit *models.YouTubeVideoEdit) error {
 	result, err := r.db.ExecContext(ctx,
 		`UPDATE youtube_video_edits
