@@ -43,9 +43,9 @@ server: Caddy
 
 **Interpretation.** Every response carries `server: Caddy`. No `fly-request-id`,
 no `fly-region`, no `server: Fly`. The path layer is unambiguously Caddy on
-the VPS. The canonical targets are `/api/v1/health` (mounted in
-`pkg/api/middleware_handlers.go`, see `pkg/api/routes.go:52`) and
-`/ready` (see `pkg/api/ready_handlers.go`). `/health` (top-level) is
+the VPS. The canonical targets are `/api/v1/health` (`pkg/api/middleware_handlers.go:14`
+defines `handleHealth`; mounted at `/api/v1/health` in
+`pkg/api/routes.go:52`) and `/ready` (see `pkg/api/ready_handlers.go`). `/health` (top-level) is
 intentionally NOT mounted on the VPS-Caddy path; orchestrator probes
 target `/api/v1/health`.
 
@@ -130,8 +130,8 @@ Failure mode to escalate on: any header containing the substring `fly`
 ## 7. Open items
 
 - `/health` (top-level) **resolution: removed from §2 + §5** (2026-07-25
-  ~19:00 UTC). Decision: drop the probe rather than mount a new handler.
-  Canonical VPS-Caddy path is `/api/v1/health` (see
+  `19:00:00 UTC`, commit befdbae). Decision: drop the probe rather than
+  mount a new handler. Canonical VPS-Caddy path is `/api/v1/health` (see
   `pkg/api/routes.go:52` and `pkg/api/middleware_handlers.go:14`); the
   legacy worker `/health` listener remains on TCP/9090 for Fly-style
   readinessProbe (see `cmd/worker/health_listener.go:61`), independent of
