@@ -12,7 +12,7 @@ referenced from:
 
 - `docs/DEPLOY.md` §1.5 — DNS records (quick-reference table — apex/app/api → `51.91.11.36` + email-deliverability records)
 - `docs/DEPLOY.md` §2-§7 — deploy pipeline (host setup + secret collection + first deploy + post-deploy verification + rotation + Sandbox/operator boundary)
-- `docs/DEPLOY.md` §11 — open items (verify-log-redaction → docker compose logs, orphan `docker-build-production`, integration.yml `fly-secrets-test` job)
+- `docs/DEPLOY.md` §11 — open items (verify-log-redaction → docker compose logs; orphan `docker-build-production` Makefile target; integration.yml stale secrets-parser step)
 - `HANDOFF-LINUX.md` §11 — local dev workflow
 - `docs/OPERATIONS.md` §7 — email sender (`no-reply@instaedit.org`) deliverability runbook (Resend)
 
@@ -21,7 +21,7 @@ file** and the relevant `docs/DEPLOY.md` cross-reference. The reverse
 (changing operational state without updating this doc) is the failure
 mode `OPERATIONS.md` exists to prevent.
 
-**VPS canonical refs:** the live stack is `docker-compose.yml` (topology) + `ops/vps/Caddyfile` (edge routing) + `docs/DEPLOY.md` (full cutover runbook). This runbook has been migrated to the VPS-native stack; if you find legacy Fly.io references here please treat them as drift and remove them.
+**VPS canonical refs:** the live stack is `docker-compose.yml` (topology) + `ops/vps/Caddyfile` (edge routing) + `docs/DEPLOY.md` (full cutover runbook). This runbook anchors the VPS-native stack end-to-end; legacy hosting-platform references (managed-Postgres forks, hidden-service URI shapes, platform-specific CI steps) should be removed in favor of the corresponding VPS procedure.
 
 ---
 
@@ -133,7 +133,7 @@ Cross-references to the existing recovery scripts:
 
 | Drill | Script / doc | Cadence |
 |-------|--------------|---------|
-| **Postgres backup + restore** | [`scripts/db/production-restore-drill.sh`](../scripts/db/production-restore-drill.sh) — *still Fly-Postgres-shaped; rewrite required for VPS (§3.1 below)* | First drill within 24h of first migration; then quarterly |
+| **Postgres backup + restore** | [`scripts/db/production-restore-drill.sh`](../scripts/db/production-restore-drill.sh) — *still follows the pre-cutover managed-Postgres pattern; rewrite required for VPS pg_dump → throwaway (§3.1 below; tracked in DEPLOY.md §11)* | First drill within 24h of first migration; then quarterly |
 | **Postgres health check** | [`scripts/db/check-postgres-health.sh`](../scripts/db/check-postgres-health.sh) | Pre-deploy + post-deploy + on incident |
 | **MinIO bucket provisioning** | (was Tigris `scripts/s3/provision-tigris.sh`) — covered by the Compose service + MinIO admin console at `https://127.0.0.1:9001` (loopback only) | One-time at provisioning; re-run on key rotation |
 | **Stack always-on contract** | `docker compose -f /opt/instaedit/InstaeditLogin/docker-compose.yml ps` | Uptime monitor alerts if `/health` or `/ready` down > 2x consecutive ticks |
@@ -230,10 +230,7 @@ would 403 mid-stream.
 ### 3.1 Postgres backup + restore drill — VPS procedure
 
 This subsection expands the one-line row from §3 (`production-restore-drill.sh`)
-into the operator-side choreography. **The script itself is still
-Fly-Postgres-shaped and needs a parallel rewrite for the VPS — see
-the §3.1.0 note below.** This section is the HUMAN-side procedure that
-the script encodes for the VPS shape.
+into the operator-side choreography. **The script itself still needs a parallel rewrite for the VPS pg_dump → throwaway flow — see the §3.1.0 note below.** This section is the HUMAN-side procedure the operator follows until the script rewrite lands.
 
 #### 3.1.0 Caveat — script migration is a follow-up
 
@@ -596,7 +593,7 @@ The 2026 best-practice for brand-new sender domains enforces a slow ramp because
 
 ### 7.3 Gmail inbox test protocol
 
-This is the operator's first concrete verification — runs from the operator's laptop using their own Gmail address. The test MUST pass before inviting any non-operator user. This section is platform-agnostic: the SMTP / Resend sender path is independent of whether the landing zone is Fly or VPS.
+This is the operator's first concrete verification — runs from the operator's laptop using their own Gmail address. The test MUST pass before inviting any non-operator user. This section is platform-agnostic: the SMTP / Resend sender path is independent of the runtime hosting platform.
 
 **Step 1 — pre-flight**: run `./scripts/email/check-email-deliverability.sh` to confirm all 3 records resolve. Exit code must be 0.
 
@@ -724,7 +721,7 @@ The provider key has different capture semantics than the rest of the `/srv/inst
 | OpenAPI spec | [`api/openapi.yaml`](../api/openapi.yaml) |
 | Cookie / CSRF cross-subdomain semantic | `internal/auth/csrf.go` + `internal/config/config.go` Blocco #2.4 |
 | Free-tier provider matrix (TikTok/X/YouTube/LinkedIn/Stripe disabled in beta) | [`docs/PROVIDER_MATRIX.md`](./PROVIDER_MATRIX.md) |
-| Historical cutover (deleted fly.toml, deleted fly-* Makefile targets, deleted Fly secrets scripts) | commits `7e8beec`, `615314b`, `5ac159c` |
+| Platform cutover origin (deleted hosted-platform config, dropped hosted-platform Makefile targets, deleted hosted-platform secrets scripts) | commits `7e8beec`, `615314b`, `5ac159c` |
 
 ---
 
@@ -778,6 +775,6 @@ Each test fails in CI if the protection under test is removed — the runbook an
 These are surgically tracked followup commits, NOT documentation gaps:
 
 1. `make verify-log-redaction` + `scripts/obs/verify-log-redaction.sh` must source from `docker compose logs --since <window> api worker` to make the live redactor work on the VPS-native stack (§5.3 above references this; DEPLOY.md §11 owns it).
-2. `scripts/db/production-restore-drill.sh` is still Fly-Postgres-shaped. Rewrite for VPS pg_dump → throwaway container (§3.1.0 above flags this; sub-task of DEPLOY.md §11).
-3. `.github/workflows/integration.yml` still has the `Verify Fly secrets parser` step (the underlying `make fly-secrets-test` and the `.py` parsers were dropped at commit `1ab88ef`). Remove the step entirely from the workflow (DEPLOY.md §11 owns it).
-4. `docker-build-production` Makefile target is orphaned post-cutover. Drop or repurpose for local single-image compose builds (DEPLOY.md §11 owns it).
+2. `scripts/db/production-restore-drill.sh` still follows the pre-cutover managed-Postgres pattern. Rewrite for VPS pg_dump → throwaway container (§3.1.0 above flags this; sub-task of DEPLOY.md §11).
+3. `.github/workflows/integration.yml` still has the stale secrets-parser step (the underlying `make fly-secrets-test` target + .py parsers were dropped at commit `1ab88ef`). Remove that step entirely from the workflow (DEPLOY.md §11 owns it).
+4. `docker-build-production` Makefile target was orphaned post-cutover. **Dropped at commit `4382ae8`** (target removed from `.PHONY` and recipe block); residue cleanup, if any, tracked in DEPLOY.md §11.
