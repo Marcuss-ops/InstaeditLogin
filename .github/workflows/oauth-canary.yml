@@ -1,18 +1,19 @@
 # .github/workflows/oauth-canary.yml — InstaEdit OAuth scope drift canary
 #
-# Two responsibilities, run together as a single job:
+# Single responsibility (post-cutover): probe Google OAuth's v3 tokeninfo
+# endpoint and diff the granted scopes against the hardcoded canonical
+# manifest in cmd/oauth-scope-canary/main.go. Drift in EITHER direction
+# (missing canonical / extra granted / forbidden scope present) fails the
+# run with a non-zero exit code.
 #
-#   1. SEcrets coherence (always-on): parses
-#      scripts/required-fly-secrets.txt + scripts/disabled-fly-secrets-prefixes.txt
-#      and asserts the three invariants documented in cmd/oauth-scope-canary/main.go
-#      (disjoint + complete OAuth triples + non-empty enable/disable symmetry).
-#      This leg does NOT need any secrets and runs on every schedule + on-demand.
-#
-#   2. Live tokeninfo drift check (credential-gated): when the
-#      DRIVE_OAUTH_CANARY_TOKEN repository secret is present, the canary
-#      binary hits Google's oauth2/v3/tokeninfo endpoint with a real
-#      access token and diffs the granted scopes against the canonical
-#      hardcoded list. Drift in EITHER direction fails the run.
+# The previous Fly-secrets-coherence leg has been removed in this workflow.
+# The two fixture files (scripts/required-fly-secrets.txt +
+# scripts/disabled-fly-secrets-prefixes.txt) were deleted in the cutover
+# chain; the env-var overrides (INSTAEDIT_REQUIRED_SECRETS_PATH +
+# INSTAEDIT_DISABLED_SECRETS_PATH) no longer exist on the binary. The
+# secrets-coherence responsibility now lives in scripts/_parse_envfile.py
+# + scripts/test_parse_envfile.py as a standalone CI job wired in
+# .github/workflows/integration.yml.
 #
 # Why a SEPARATE workflow vs. integration.yml?
 #   - integration.yml is the PR-lane gate (forked PRs cannot bring
@@ -21,7 +22,7 @@
 #     never run on pull_request. The canary lives entirely in trusted
 #     context.
 #   - Mixing live-Google network calls into the PR lane would either (a)
-#     fail PRs on transient Gooble-API flakiness (network, regional
+#     fail PRs on transient Google-API flakiness (network, regional
 #     outage), or (b) introduce a long-running step outside the
 #     integration.yml timeout-minutes: 20 budget.
 #
@@ -32,9 +33,9 @@
 #   - workflow_dispatch: manual trigger for one-off spot-checks after
 #     any consent-screen republish.
 #
-# Authz: GitHub repository secrets (DRIVE_OAUTH_CANARY_TOKEN) are
-# injected into env: only when present. The secrets-coherence leg is
-# ALWAYS-on so an absent token still produces a useful result.
+# Authz: GitHub repository secret DRIVE_OAUTH_CANARY_TOKEN is injected
+# into the binary's env. If absent, the binary logs SKIPPED and exits 0
+# — a missing-token schedule run is informational, not a failure.
 
 name: oauth-canary
 
@@ -45,20 +46,14 @@ name: oauth-canary
 permissions:
   contents: read
 
-# Same YAML-portability comment as integration.yml — quote the `on:`
-# key so older yaml.safe_load parsers don't barf.
+# YAML-portability: quote the `on:` key so older yaml.safe_load parsers
+# don't barf.
 "on":
   schedule:
     # Monday 08:00 UTC. Each operator day's first deploy-up review
     # opens ~09:00 UTC; findings land in their inbox before lunch.
     - cron: '0 8 * * 1'
   workflow_dispatch:
-    inputs:
-      skip_tokeninfo:
-        description: 'Skip live tokeninfo (run secrets-coherence only)'
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   canary:
@@ -81,26 +76,23 @@ jobs:
           cache: true
 
       # ─── 1. Unit tests for the canary (always-on, no external dep)
-      # Run the binary's tests on the build host. This exercise the
-      # diffScopes + verifySecretCoherence pure-function paths AND
-      # the TestVerifySecretCoherence_RealProjectLists test against
-      # the actual scripts/ folder — failures here block the run.
+      # Run the binary's tests on the build host. This exercises the
+      # diffScopes + checkLiveScopeDrift pure-function paths; the docs
+      # lint (TestOAuthScopes_DocsMatchCanonical) verifies the markdown
+      # table mirrors the hardcoded canonical scope list. Failures
+      # here block the run.
       - name: Run canary unit tests
         run: go test -count=1 ./cmd/oauth-scope-canary/...
 
       # ─── 2. Live canary (token-gated) ─────────────────────────────
       # The binary itself handles the missing-token path with a clear
-      # "secrets coherence only" log line, so we always invoke it.
-      # DRIVE_OAUTH_CANARY_TOKEN is an operator-controlled repo secret;
-      # if it's absent the binary exits 0 (skip is not a failure).
+      # SKIPPED log line, so we always invoke it. DRIVE_OAUTH_CANARY_TOKEN
+      # is an operator-controlled repo secret; if absent the binary exits
+      # 0 (a missing token is informational, not a failure).
       - name: Run OAuth scope canary
         env:
           DRIVE_OAUTH_CANARY_TOKEN: ${{ secrets.DRIVE_OAUTH_CANARY_TOKEN }}
-        run: |
-          if [ "${{ github.event.inputs.skip_tokeninfo }}" = "true" ]; then
-            unset DRIVE_OAUTH_CANARY_TOKEN
-          fi
-          go run ./cmd/oauth-scope-canary
+        run: go run ./cmd/oauth-scope-canary
 
       # ─── 3. Failure summary (operator-friendly) ────────────────────
       - name: Canary failure summary
@@ -109,8 +101,7 @@ jobs:
           echo "=== Likely causes ==="
           echo "  - docs/OAUTH-PRODUCTION.md missing one of the canonical scopes (the TestOAuthScopes_DocsMatchCanonical unit test catches this)"
           echo "  - REAL Google's oauth2/v3/tokeninfo returns a scope not in cmd/oauth-scope-canary/main.go::canonicalScopes"
-          echo "  - scripts/required-fly-secrets.txt has an incomplete OAuth triple (TestVerifySecretCoherence_IncompleteTriple catches this)"
-          echo "  - scripts/required-fly-secrets.txt + disabled-fly-secrets-prefixes.txt overlap (TestVerifySecretCoherence_Disjoint catches this)"
+          echo "  - REAL Google's oauth2/v3/tokeninfo grants a forbidden scope (the forbiddenScopes list is a hard-deny; consent-screen hardening required)"
           echo
           echo "Run locally:"
           echo "  go test -count=1 ./cmd/oauth-scope-canary/..."

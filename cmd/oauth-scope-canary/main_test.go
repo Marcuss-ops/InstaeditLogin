@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -158,221 +157,16 @@ func TestCheckLiveScopeDrift_5xxTranslation(t *testing.T) {
 	}
 }
 
-// ─── Secret list parsing ────────────────────────────────────────────────
-
-func TestReadSecretList_LineByLine(t *testing.T) {
-	dir := t.TempDir()
-	want := []string{"YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REDIRECT_URI"}
-	body := "# header comment\n\nYOUTUBE_CLIENT_ID\nYOUTUBE_CLIENT_SECRET  # trailing\nYOUTUBE_REDIRECT_URI\n"
-	if err := os.WriteFile(filepath.Join(dir, "secrets.txt"), []byte(body), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	got, err := readSecretList(filepath.Join(dir, "secrets.txt"))
-	if err != nil {
-		t.Fatalf("readSecretList: %v", err)
-	}
-	sort.Strings(got)
-	if !equalSlices(got, want) {
-		t.Errorf("keys: want %v, got %v", want, got)
-	}
-}
-
-func TestReadSecretList_RejectsInvalidKey(t *testing.T) {
-	dir := t.TempDir()
-	body := "lowercase-is-bad  # invalid POSIX env-var\n"
-	if err := os.WriteFile(filepath.Join(dir, "bad.txt"), []byte(body), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	if _, err := readSecretList(filepath.Join(dir, "bad.txt")); err == nil {
-		t.Fatal("want error on lowercase secret key, got nil")
-	}
-}
-
-// ─── Secrets coherence invariants ───────────────────────────────────────
-
-// TestVerifySecretCoherence_Disjoint pins invariant (1): a required
-// key that has any disabled-prefix as a prefix is incoherent.
-func TestVerifySecretCoherence_Disjoint(t *testing.T) {
-	dir := writeCoherenceFixtures(t, []string{
-		"STRIPE_WEBHOOK_SECRET", // required + disabled prefix STRIPE_ → incoherent
-		"YOUTUBE_CLIENT_ID",
-	}, []string{
-		"STRIPE_",
-	})
-	errs := verifySecretCoherence(
-		filepath.Join(dir, "required.txt"),
-		filepath.Join(dir, "disabled.txt"),
-	)
-	if len(errs) == 0 {
-		t.Fatal("want at least 1 issue (STRIPE_ collision), got 0")
-	}
-	foundCollider := false
-	for _, e := range errs {
-		if strings.Contains(e.Error(), "STRIPE_WEBHOOK_SECRET") &&
-			strings.Contains(e.Error(), "STRIPE_") {
-			foundCollider = true
-		}
-	}
-	if !foundCollider {
-		t.Errorf("issue list must include the STRIPE_* collision; got %v", errs)
-	}
-}
-
-// TestVerifySecretCoherence_CompleteTriple pins invariant (2): the
-// YOUTUBE_ provider is in required with its full {CLIENT_ID,
-// CLIENT_SECRET, REDIRECT_URI} triple. No issue.
-func TestVerifySecretCoherence_CompleteTriple(t *testing.T) {
-	dir := writeCoherenceFixtures(t, []string{
-		"YOUTUBE_CLIENT_ID",
-		"YOUTUBE_CLIENT_SECRET",
-		"YOUTUBE_REDIRECT_URI",
-	}, []string{
-		"STRIPE_",
-	})
-	errs := verifySecretCoherence(
-		filepath.Join(dir, "required.txt"),
-		filepath.Join(dir, "disabled.txt"),
-	)
-	if len(errs) != 0 {
-		t.Errorf("want coherence on complete triple, got %v", errs)
-	}
-}
-
-// TestVerifySecretCoherence_IncompleteTriple pins invariant (2)'s
-// failure half: YOUTUBE_ is in required but only 2/3 keys.
-func TestVerifySecretCoherence_IncompleteTriple(t *testing.T) {
-	dir := writeCoherenceFixtures(t, []string{
-		"YOUTUBE_CLIENT_ID",
-		"YOUTUBE_CLIENT_SECRET",
-		// YOUTUBE_REDIRECT_URI missing
-	}, []string{})
-	errs := verifySecretCoherence(
-		filepath.Join(dir, "required.txt"),
-		filepath.Join(dir, "disabled.txt"),
-	)
-	if len(errs) == 0 {
-		t.Fatal("want at least 1 issue on incomplete triple, got 0")
-	}
-	foundMissing := false
-	for _, e := range errs {
-		if strings.Contains(e.Error(), "YOUTUBE_") &&
-			strings.Contains(e.Error(), "YOUTUBE_REDIRECT_URI") {
-			foundMissing = true
-		}
-	}
-	if !foundMissing {
-		t.Errorf("issue list must call out YOUTUBE_REDIRECT_URI missing; got %v", errs)
-	}
-}
-
-// TestVerifySecretCoherence_RealProjectLists pins that the actual
-// project-side scripts/required-fly-secrets.txt +
-// scripts/disabled-fly-secrets-prefixes.txt pass coherence today.
-// Catches a regression that breaks the production fly secret contract.
-func TestVerifySecretCoherence_RealProjectLists(t *testing.T) {
-	root, err := repoRoot()
-	if err != nil {
-		t.Skipf("could not locate repo root (not running inside the InstaeditLogin tree?): %v", err)
-	}
-	requiredPath := filepath.Join(root, "scripts", "required-fly-secrets.txt")
-	disabledPath := filepath.Join(root, "scripts", "disabled-fly-secrets-prefixes.txt")
-	if _, err := os.Stat(requiredPath); err != nil {
-		t.Skipf("required-fly-secrets.txt not present at %s (skipping)", requiredPath)
-	}
-	errs := verifySecretCoherence(requiredPath, disabledPath)
-	if len(errs) != 0 {
-		for _, e := range errs {
-			t.Logf("coherence issue: %v", e)
-		}
-		t.Errorf("production fly secrets lists MUST be coherent today; got %d issue(s); see git log for canonical OK state", len(errs))
-	}
-}
-
-// TestVerifySecretCoherence_LinksAndMETA pins that META provider
-// (which uses APP_ID + APP_SECRET suffixes — distinct from the
-// CLIENT_ID/SECRET pattern) is recognised by inferProviderPrefix.
-// A regression that misses META's pattern would let the operator
-// ship a half-configured facebook/Instagram config silently.
-func TestVerifySecretCoherence_LinksAndMETA(t *testing.T) {
-	dir := writeCoherenceFixtures(t, []string{
-		"META_APP_ID",
-		"META_APP_SECRET",
-		"LINKEDIN_CLIENT_ID",
-		"LINKEDIN_CLIENT_SECRET",
-		"LINKEDIN_REDIRECT_URI",
-	}, []string{})
-	errs := verifySecretCoherence(
-		filepath.Join(dir, "required.txt"),
-		filepath.Join(dir, "disabled.txt"),
-	)
-	if len(errs) != 0 {
-		t.Errorf("META + LINKEDIN complete triples must be coherent; got %v", errs)
-	}
-}
-
-// TestVerifySecretCoherence_MetaSubPlatformWithoutParentMeta exercises
-// invariant 3: sub-platforms (INSTAGRAM_) present WITHOUT META_APP_ID/SECRET.
-// run() must surface this as a coherence issue (sub-platforms cannot
-// authenticate without the parent META cognito client).
-func TestVerifySecretCoherence_MetaSubPlatformWithoutParentMeta(t *testing.T) {
-	dir := writeCoherenceFixtures(t, []string{
-		// META_APP_ID/SECRET DELIBERATELY missing
-		"INSTAGRAM_REDIRECT_URI", "FACEBOOK_REDIRECT_URI", "THREADS_REDIRECT_URI",
-		"YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REDIRECT_URI",
-	}, []string{})
-	errs := verifySecretCoherence(
-		filepath.Join(dir, "required.txt"),
-		filepath.Join(dir, "disabled.txt"),
-	)
-	if len(errs) == 0 {
-		t.Fatal("want at least 1 issue (META_ parent missing), got 0")
-	}
-	foundMETA := false
-	for _, e := range errs {
-		if strings.Contains(e.Error(), "META_") {
-			foundMETA = true
-		}
-	}
-	if !foundMETA {
-		t.Errorf("issue list must call out META_ parent missing; got %v", errs)
-	}
-}
-
-// ─── Provider prefix inference ─────────────────────────────────────────
-
-func TestInferProviderPrefix_MatchesOAuthSuffixes(t *testing.T) {
-	cases := map[string]string{
-		"YOUTUBE_CLIENT_ID":      "YOUTUBE_",
-		"YOUTUBE_CLIENT_SECRET":  "YOUTUBE_",
-		"YOUTUBE_REDIRECT_URI":   "YOUTUBE_",
-		"LINKEDIN_CLIENT_ID":     "LINKEDIN_",
-		"TIKTOK_CLIENT_SECRET":   "TIKTOK_",
-		"META_APP_ID":            "META_",
-		"META_APP_SECRET":        "META_",
-		"X_CLIENT_ID":            "X_",
-		"INSTAGRAM_REDIRECT_URI": "INSTAGRAM_",
-		"FACEBOOK_REDIRECT_URI":  "FACEBOOK_",
-		"THREADS_REDIRECT_URI":   "THREADS_",
-		"DATABASE_URL":           "",
-		"JWT_SECRET":             "",
-		"ADMIN_INVITE_TOKEN":     "",
-	}
-	for k, want := range cases {
-		got := inferProviderPrefix(k)
-		if got != want {
-			t.Errorf("inferProviderPrefix(%q): want %q, got %q", k, want, got)
-		}
-	}
-}
-
 // ─── Docs-vs-canonical sync ─────────────────────────────────────────────
 
 // TestOAuthScopes_DocsMatchCanonical pins that docs/OAUTH-PRODUCTION.md
-// Step 3 actually lists every canonical scope.
+// Step 3 actually lists every canonical scope. The test is the
+// single source-of-truth lock: edit canonicalScopes, then either
+// edit the docs too OR expect this test to fail.
 func TestOAuthScopes_DocsMatchCanonical(t *testing.T) {
-	root, err := repoRoot()
+	root, err := repoRootForTest()
 	if err != nil {
-		t.Skipf("could not locate repo root: %v", err)
+		t.Skipf("could not locate repo root (not running inside the InstaeditLogin tree?): %v", err)
 	}
 	docPath := filepath.Join(root, "docs", "OAUTH-PRODUCTION.md")
 	body, err := os.ReadFile(docPath)
@@ -392,48 +186,28 @@ func TestOAuthScopes_DocsMatchCanonical(t *testing.T) {
 
 // ─── End-to-end orchestration ───────────────────────────────────────────
 
-// TestRun_SecretsOnly_NoTokenEnv covers the most common CI path:
-// DRIVE_OAUTH_CANARY_TOKEN is unset. run() executes the secrets
-// coherence check via env-var-overridden fixture paths and exits nil
-// if both fixture files are coherent. The live tokeninfo leg is
-// skipped.
-func TestRun_SecretsOnly_NoTokenEnv(t *testing.T) {
-	dir := writeCoherenceFixtures(t, []string{
-		"YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REDIRECT_URI",
-		"DATABASE_URL",
-	}, []string{
-		"STRIPE_",
-	})
-	requiredPath, disabledPath := fixturePaths(t, dir)
-	t.Setenv(envRequiredSecretsPath, requiredPath)
-	t.Setenv(envDisabledSecretsPath, disabledPath)
-	t.Setenv(envTokeninfoURL, "")
+// TestRun_NoTokenEnv_ExitsCleanly covers the most common CI path:
+// DRIVE_OAUTH_CANARY_TOKEN is unset. run() logs SKIPPED and returns
+// nil — the secrets-coherence leg has been removed post-cutover, so
+// the only orchestration remaining is the live tokeninfo leg.
+func TestRun_NoTokenEnv_ExitsCleanly(t *testing.T) {
 	t.Setenv("DRIVE_OAUTH_CANARY_TOKEN", "")
-
-	err := run(newDiscardLogger())
-	if err != nil {
-		t.Errorf("run() with no token + coherent fixtures: want nil, got %v", err)
+	t.Setenv(envTokeninfoURL, "")
+	if err := run(newDiscardLogger()); err != nil {
+		t.Errorf("run() with no token: want nil (SKIPPED), got %v", err)
 	}
 }
 
 // TestRun_TokenPlusDriftEnv: DRIVE_OAUTH_CANARY_TOKEN set, OAUTH_TOKENINFO_URL
-// points at an httptest.Server returning wrong scope. run() must return
-// errScopeDrift (or errBoth if secrets also incoherent; here secrets
-// are coherent so we expect errScopeDrift alone).
+// points at an httptest.Server returning wrong scope. run() must wrap
+// errScopeDrift. The previous coherence-coupling has been removed;
+// secrets-coherence lives in scripts/_parse_envfile.py now.
 func TestRun_TokenPlusDriftEnv(t *testing.T) {
-	dir := writeCoherenceFixtures(t, []string{
-		"YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REDIRECT_URI",
-	}, []string{
-		"STRIPE_",
-	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"scope":"https://www.googleapis.com/auth/openid"}`)) // scalped
 	}))
 	defer srv.Close()
 
-	requiredPath, disabledPath := fixturePaths(t, dir)
-	t.Setenv(envRequiredSecretsPath, requiredPath)
-	t.Setenv(envDisabledSecretsPath, disabledPath)
 	t.Setenv(envTokeninfoURL, srv.URL)
 	t.Setenv("DRIVE_OAUTH_CANARY_TOKEN", "fake-token-xyz")
 
@@ -441,86 +215,8 @@ func TestRun_TokenPlusDriftEnv(t *testing.T) {
 	if err == nil {
 		t.Fatal("run() with drift in tokeninfo: want errScopeDrift, got nil")
 	}
-	if !errors.Is(err, errScopeDrift) && !errors.Is(err, errBoth) {
-		t.Errorf("run() must wrap errScopeDrift or errBoth; got %v", err)
-	}
-}
-
-// TestRun_SecretsIncoherentEvenWithoutToken: secrets list has an
-// incomplete triple (YOUTUBE_REDIRECT_URI missing). No token set.
-// run() must errSecretCoherence regardless of the live-token leg.
-func TestRun_SecretsIncoherentEvenWithoutToken(t *testing.T) {
-	dir := writeCoherenceFixtures(t, []string{
-		"YOUTUBE_CLIENT_ID",
-		"YOUTUBE_CLIENT_SECRET",
-		// YOUTUBE_REDIRECT_URI missing
-	}, []string{})
-
-	requiredPath, disabledPath := fixturePaths(t, dir)
-	t.Setenv(envRequiredSecretsPath, requiredPath)
-	t.Setenv(envDisabledSecretsPath, disabledPath)
-	t.Setenv(envTokeninfoURL, "")
-	t.Setenv("DRIVE_OAUTH_CANARY_TOKEN", "")
-
-	err := run(newDiscardLogger())
-	if err == nil {
-		t.Fatal("run() with incomplete triple + no token: want errSecretCoherence, got nil")
-	}
-	if !errors.Is(err, errSecretCoherence) {
-		t.Errorf("run() must wrap errSecretCoherence; got %v", err)
-	}
-}
-
-// TestRun_MetaCognitoOk covers the full Meta-cognito cohesion path:
-// META_APP_ID + META_APP_SECRET (the parent auth client) + each
-// sub-platform REDIRECT_URI (the per-platform redirect). run() must
-// return nil even though the sub-platforms lack CLIENT_ID/SECRET.
-func TestRun_MetaCognitoOk(t *testing.T) {
-	dir := writeCoherenceFixtures(t, []string{
-		"META_APP_ID", "META_APP_SECRET",
-		"INSTAGRAM_REDIRECT_URI", "FACEBOOK_REDIRECT_URI", "THREADS_REDIRECT_URI",
-		"YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REDIRECT_URI",
-	}, []string{})
-
-	requiredPath, disabledPath := fixturePaths(t, dir)
-	t.Setenv(envRequiredSecretsPath, requiredPath)
-	t.Setenv(envDisabledSecretsPath, disabledPath)
-	t.Setenv(envTokeninfoURL, "")
-	t.Setenv("DRIVE_OAUTH_CANARY_TOKEN", "")
-
-	err := run(newDiscardLogger())
-	if err != nil {
-		t.Errorf("run() with Meta-cognito coherent fixtures: want nil, got %v", err)
-	}
-}
-
-// TestRun_BothCoherenceAndDrift: secrets missing YOUTUBE_REDIRECT_URI
-// (incoherent) AND a scalped tokeninfo response. run() returns errBoth
-// (coherence=2, drift=1, bitwise-OR'd = 3) so the operator sees both
-// classes of failure in a single exit-code bucket.
-func TestRun_BothCoherenceAndDrift(t *testing.T) {
-	dir := writeCoherenceFixtures(t, []string{
-		"YOUTUBE_CLIENT_ID",
-		"YOUTUBE_CLIENT_SECRET",
-		// YOUTUBE_REDIRECT_URI missing
-	}, []string{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"scope":"openid"}`))
-	}))
-	defer srv.Close()
-
-	requiredPath, disabledPath := fixturePaths(t, dir)
-	t.Setenv(envRequiredSecretsPath, requiredPath)
-	t.Setenv(envDisabledSecretsPath, disabledPath)
-	t.Setenv(envTokeninfoURL, srv.URL)
-	t.Setenv("DRIVE_OAUTH_CANARY_TOKEN", "fake-token-xyz")
-
-	err := run(newDiscardLogger())
-	if err == nil {
-		t.Fatal("run() with both coherence+drift: want errBoth, got nil")
-	}
-	if !errors.Is(err, errBoth) {
-		t.Errorf("run() must wrap errBoth (coherence=2 | drift=1); got %v", err)
+	if !errors.Is(err, errScopeDrift) {
+		t.Errorf("run() must wrap errScopeDrift; got %v", err)
 	}
 }
 
@@ -533,43 +229,26 @@ func newDiscardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
-func equalSlices(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+// repoRootForTest walks upward from the binary's working directory
+// until it finds go.mod (the canonical InstaEdit monorepo root).
+// Test-only helper; previously repoRoot() lived in main.go but was
+// dropped along with the Fly-coherence leg that consumed it. Kept
+// here so TestOAuthScopes_DocsMatchCanonical can locate the docs.
+func repoRootForTest() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	dir := wd
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
 		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
 	}
-	return true
-}
-
-// writeCoherenceFixtures writes the two secrets-fixture files into a
-// fresh tempdir and returns the dir path. Tests pair this with
-// fixturePaths(t, dir) to discover the (required, disabled) paths
-// and pass them into run() via t.Setenv on the
-// INSTAEDIT_REQUIRED_SECRETS_PATH / INSTAEDIT_DISABLED_SECRETS_PATH
-// env vars — the production-side paths are bypassed entirely, no
-// os.Chdir global-state trick required.
-func writeCoherenceFixtures(t *testing.T, required, disabled []string) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "required.txt"),
-		[]byte(strings.Join(required, "\n")+"\n"), 0o600); err != nil {
-		t.Fatalf("write required: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "disabled.txt"),
-		[]byte(strings.Join(disabled, "\n")+"\n"), 0o600); err != nil {
-		t.Fatalf("write disabled: %v", err)
-	}
-	return dir
-}
-
-// fixturePaths returns the canonical two-path signatures that the
-// tests pass to t.Setenv. Centralised so adding more path-style env
-// vars is a one-line scrub.
-func fixturePaths(t *testing.T, dir string) (required, disabled string) {
-	t.Helper()
-	return filepath.Join(dir, "required.txt"), filepath.Join(dir, "disabled.txt")
+	return "", nil
 }
