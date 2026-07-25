@@ -72,6 +72,15 @@ type DriveBatchCrawlerOptions struct {
 	// crawler doesn't race against stale leases from a previous
 	// crash. Default true.
 	ReclaimOnStart bool
+	// PublishHorizonDays (Blocco #3 P0) caps the EXACT projected
+	// publish cursor at fan-out time. The producer-side heuristic
+	// (handleDriveBatchImportV2) projects a worst-case 10_000-file
+	// range BEFORE listing Drive; the crawler uses the actual file
+	// count to reject batches whose projected cursor lands past
+	// now + PublishHorizonDays. Default 30 = env PUBLISH_HORIZON_DAYS.
+	// Zero / negative → the check is skipped (matches the producer's
+	// "no cap" silent-truncation pre-Blocco #2 behaviour).
+	PublishHorizonDays int
 }
 
 // DriveBatchCrawler is the P1#7 background consumer that drains
@@ -145,6 +154,26 @@ func (c *DriveBatchCrawler) applyDefaults() {
 	if c.opts.ReclaimInterval <= 0 {
 		c.opts.ReclaimInterval = 30 * time.Second
 	}
+	// Blocco #3 P0 — PublishHorizonDays defaults to the same 30
+	// used by the HTTP layer's r.publishHorizonDays(). Zero would
+	// skip the D6 exact horizon re-stamp (matching the legacy
+	// silent-truncation behaviour pre-Blocco #2); tests / fixtures
+	// that want to disable the check pass 0 explicitly.
+	if c.opts.PublishHorizonDays < 0 {
+		c.opts.PublishHorizonDays = 0
+	} else if c.opts.PublishHorizonDays == 0 {
+		c.opts.PublishHorizonDays = 30
+	}
+}
+
+// publishHorizonDays returns the configured horizon with a safe
+// fallback (matches the HTTP-layer r.publishHorizonDays() helper in
+// pkg/api/limits.go so the worker and the API enforce identical caps).
+func (c *DriveBatchCrawler) publishHorizonDays() int {
+	if c.opts.PublishHorizonDays <= 0 {
+		return 30
+	}
+	return c.opts.PublishHorizonDays
 }
 
 // Run orchestrates the crawler goroutines:
@@ -443,6 +472,43 @@ func (c *DriveBatchCrawler) processBatch(ctx context.Context, batch *models.Impo
 			// Advance the schedule.
 			gap := c.randomGap(batch.PublishScheduleMinGap, batch.PublishScheduleMaxGap)
 			currentPublishAt = currentPublishAt.Add(gap)
+
+			// Blocco #3 P0 — D6 exact horizon re-stamp. The producer's
+			// heuristic check (handleDriveBatchImportV2) projects a
+			// 10_000-file worst-case BEFORE the actual listing; the
+			// real file count is now known. Reject the batch when the
+			// EXACT projected cursor would land past now + horizon so
+			// the SPA gets a clear 422 instead of the rows silently
+			// being clamped to a date in the past at publish-time. The
+			// BatchID/folder/page context stays in the error message
+			// for the operator-triage dashboard.
+			//
+			// Without this check, a Drive folder with 10_001 videos
+			// scheduled 1 minute apart would pass the 10k-day producer
+			// guard (which uses the WORST-CASE projection) but then
+			// discover at fan-out time that file #10_001 lands on
+			// day 10k+1 — silently squashing into the horizon limit on
+			// the last few rows. The Reject path means the SPA can
+			// prompt the operator to widen the gap and resubmit.
+			horizonDays := c.publishHorizonDays()
+			if horizonDays > 0 {
+				horizon := time.Now().Add(time.Duration(horizonDays) * 24 * time.Hour)
+				if currentPublishAt.After(horizon) {
+					terminalErr = fmt.Errorf(
+						"publish schedule exceeds %d-day horizon at video #%d (projected publish_at=%s, folder_id=%q). Widen the gap and resubmit the batch.",
+						horizonDays, indexed, currentPublishAt.UTC().Format(time.RFC3339), batch.SourceFolderID,
+					)
+					c.logger.Error("drive batch crawler: exact horizon re-stamp exceeded",
+						"batch_id", batch.ID,
+						"folder_id", batch.SourceFolderID,
+						"indexed_count", indexed,
+						"projected_publish_at", currentPublishAt.UTC().Format(time.RFC3339),
+						"horizon_days", horizonDays,
+						"horizon_at", horizon.UTC().Format(time.RFC3339),
+					)
+					return
+				}
+			}
 		}
 		// Increment the cumulative counter so the dashboard's
 		// "by-batch" gauge updates without polling upload_jobs.

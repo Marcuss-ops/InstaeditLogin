@@ -290,6 +290,26 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 	// P1#4 — resolve the canonical publish cursor via the alias
 	// helper (publish_at wins; scheduled_at falls back).
 	publishAt := body.ResolvePublishAt()
+	// Blocco #3 P0 — horizon enforcement on POST /api/v1/posts.
+	// The producer-side heuristic in drive_batch_v2_handlers already
+	// caps the worst-case projected batch horizon; this single-post
+	// endpoint applies the SAME env-driven cap from the user-facing
+	// schedule view so a manual "/posts now + calendar" planning
+	// can never park a post past PUBLISH_HORIZON_DAYS. The 5-second
+	// minimum-future floor and the past-date rejection are NOT
+	// applied here — handleCreatePost's callers include the
+	// "publish immediately" flow (publishAt == nil) which must
+	// pass; the producer-side validation in handleRescheduleUpload
+	// owns the floors for the reschedule path.
+	if publishAt != nil {
+		maxHorizon := time.Now().Add(time.Duration(r.publishHorizonDays()) * 24 * time.Hour)
+		if publishAt.After(maxHorizon) {
+			writeError(w, http.StatusUnprocessableEntity,
+				fmt.Sprintf("publish_at must be within %d days from now (PUBLISH_HORIZON_DAYS)", r.publishHorizonDays()),
+			)
+			return
+		}
+	}
 	status := models.PostStatusDraft
 	if body.Status != "" {
 		status = body.Status

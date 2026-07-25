@@ -723,6 +723,14 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				HeartbeatInterval: 100 * time.Second,
 				ReclaimInterval:   30 * time.Second,
 				ReclaimOnStart:    true,
+				// Blocco #3 P0 — propagate the env-driven horizon
+				// (default 30) so the crawler's D6 EXACT re-stamp
+				// rejects batches whose projected cursor lands past
+				// now + horizon. Mirrors r.publishHorizonDays() in
+				// pkg/api/limits.go and handleDriveBatchImportV2's
+				// worst-case producer check; the crawler applies the
+				// REAL file count instead of the 10k-file heuristic.
+				PublishHorizonDays: a.Cfg.Worker.PublishHorizonDays,
 			}
 			dbcc := worker.NewDriveBatchCrawler(
 				repository.NewImportBatchRepository(a.DB),

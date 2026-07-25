@@ -23,12 +23,42 @@ import "time"
 //                                (or failed after Velox rejects the crop).
 //   * desired_privacy          — snapshot of the publish cascade at
 //                                row-creation time; defaults to 'public'.
+//   * youtube_uploaded_at — TIMESTAMPTZ stamp when videos.insert
+//                                returned 200 + youtube_upload_status
+//                                transitioned to 'youtube_uploaded'. NULL
+//                                until upload completes; added in
+//                                migration 067. Sister field of the
+//                                youtube_upload_status enum — the
+//                                timestamp gives the operator-triage
+//                                dashboard SLA metrics; the status
+//                                gives the worker its next state.
+//   * youtube_processed_at — TIMESTAMPTZ stamp when YouTube API
+//                                processingStatus='processed' (webhook
+//                                callback or reconcile worker poll).
+//                                NULL throughout the upload +
+//                                processing window. Sister of
+//                                youtube_processing_status.
 //   * publish_at + published_at — publish-worker cursors (NULL = publish
 //                                immediately; published_at sentinel = the
 //                                publish phase fired).
 //   * last_error + attempt_count — retry/dead-letter accounting mirroring
 //                                post_targets.
 //   * created_at + updated_at   — audit timestamps.
+//
+// STATUS SEPARATION (Blocco #3 P0):
+//   * cross-platform post_targets.status (queued/publishing/published/
+//     blocked_auth) covers the publish pipeline for ALL platforms.
+//     YouTube transitions it to 'publishing' ONLY when the videos.update
+//     side-effect fires, NOT during the upload-as-private phase.
+//   * youtube_target_publications.youtube_upload_status (and its sister
+//     timestamps) covers the YouTube-specific lifecycle (upload, processing,
+//     thumbnail editing) for THIS per-target row.
+//
+//   This separation is INTENTIONALLY not modelled as new enums on
+//   post_targets — cross-platform state should not know about per-platform
+//   sub-states (YouTube's "youtube_uploading" is meaningless to a
+//   Facebook post). The verdict explicitly asks for this separation; we
+//   achieve it via table shape, not enum layout.
 //
 // This model is the single source of truth for "where is this video on its
 // specific channel today" — used by:
@@ -44,7 +74,17 @@ type YouTubeTargetPublication struct {
 	PlatformAccountID       int64     `json:"platform_account_id"`
 	YouTubeVideoID          *string   `json:"youtube_video_id,omitempty"`
 	YouTubeUploadStatus     string    `json:"youtube_upload_status"`
+	// YouTubeProcessingStatus TEXT — kept distinct from upload_status
+	// because the two phases are asynchronous (uploading finishes
+	// before YouTube even starts its own background processing).
 	YouTubeProcessingStatus *string   `json:"youtube_processing_status,omitempty"`
+	// YouTubeUploadedAt (migration 067, Blocco #3 P0): stamp NOW()
+	// when MarkYouTubeUploaded transitions the row. NULL pre-upload.
+	YouTubeUploadedAt        *time.Time `json:"youtube_uploaded_at,omitempty"`
+	// YouTubeProcessedAt (migration 067): stamp NOW() when the
+	// reconcile worker / webhook hears YouTube processingStatus='processed'.
+	// NULL pre-processed.
+	YouTubeProcessedAt       *time.Time `json:"youtube_processed_at,omitempty"`
 	EditorSessionID         *string   `json:"editor_session_id,omitempty"`
 	VeloxProjectID          *string   `json:"velox_project_id,omitempty"`
 	ThumbnailMediaID        *string   `json:"thumbnail_media_id,omitempty"`

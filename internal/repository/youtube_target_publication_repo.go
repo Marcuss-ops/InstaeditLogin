@@ -31,6 +31,12 @@ type YouTubeTargetPublicationStore interface {
 	MarkThumbnailReady(ctx context.Context, id int64, mediaID string) error
 	IncrementAttempt(ctx context.Context, id int64, lastError string) error
 	MarkPublished(ctx context.Context, id int64) error
+	// MarkYouTubeProcessed (migration 067, Blocco #3 P0) flips
+	// youtube_processing_status to 'processed' AND stamps
+	// youtube_processed_at = NOW() in one atomic statement. Called
+	// by the reconcile worker / YouTube webhook when
+	// processingStatus='processed' is observed on the live API.
+	MarkYouTubeProcessed(ctx context.Context, id int64) error
 }
 
 // YouTubeTargetPublicationRepository is the concrete *sql.DB-backed
@@ -49,9 +55,14 @@ func NewYouTubeTargetPublicationRepository(db *sql.DB) *YouTubeTargetPublication
 // in a fixed order that the row-scanner below mirrors. Column-list-vs-
 // Scan-list is a manual invariant — keep these two lists in sync when
 // adding new columns.
+//
+// Blocco #3 P0 (migration 067) — YouTubeUploadedAt +
+// YouTubeProcessedAt slots in AFTER the processing-status string
+// (sisters of the two status enums they timestamp).
 const ytTargetPubsSelectColumns = `
 	id, upload_job_id, post_target_id, platform_account_id,
 	youtube_video_id, youtube_upload_status, youtube_processing_status,
+	youtube_uploaded_at, youtube_processed_at,
 	editor_session_id, velox_project_id, thumbnail_media_id, thumbnail_status,
 	desired_privacy, publish_at, published_at, last_error, attempt_count,
 	created_at, updated_at`
@@ -68,10 +79,17 @@ type ytPubsRowScanner interface {
 // scanYouTubeTargetPublication reads one ytTargetPubsSelectColumns-shaped
 // row into pub. Mirrors youtube_video_edit_repo's scan style (separate
 // NullString/NullTime locals → populate pointer fields on success).
+//
+// Blocco #3 P0 (migration 067) — YouTubeUploadedAt + YouTubeProcessedAt
+// scan as sql.NullTime so pre-067 rows (NULL on both new columns) and
+// post-067 rows (NOW()-stamped by the Mark* helpers) both round-trip
+// cleanly.
 func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetPublication) error {
 	var (
 		youtubeVideoID          sql.NullString
 		youtubeProcessingStatus sql.NullString
+		youtubeUploadedAt       sql.NullTime
+		youtubeProcessedAt      sql.NullTime
 		editorSessionID         sql.NullString
 		veloxProjectID          sql.NullString
 		thumbnailMediaID        sql.NullString
@@ -82,6 +100,7 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
 	if err := s.Scan(
 		&pub.ID, &pub.UploadJobID, &pub.PostTargetID, &pub.PlatformAccountID,
 		&youtubeVideoID, &pub.YouTubeUploadStatus, &youtubeProcessingStatus,
+		&youtubeUploadedAt, &youtubeProcessedAt,
 		&editorSessionID, &veloxProjectID, &thumbnailMediaID, &thumbnailStatus,
 		&pub.DesiredPrivacy, &publishAt, &publishedAt, &pub.LastError, &pub.AttemptCount,
 		&pub.CreatedAt, &pub.UpdatedAt,
@@ -90,6 +109,8 @@ func scanYouTubeTargetPublication(s ytPubsRowScanner, pub *models.YouTubeTargetP
 	}
 	pub.YouTubeVideoID = ytPubsNullStringPtr(youtubeVideoID)
 	pub.YouTubeProcessingStatus = ytPubsNullStringPtr(youtubeProcessingStatus)
+	pub.YouTubeUploadedAt = ytPubsNullTimePtr(youtubeUploadedAt)
+	pub.YouTubeProcessedAt = ytPubsNullTimePtr(youtubeProcessedAt)
 	pub.EditorSessionID = ytPubsNullStringPtr(editorSessionID)
 	pub.VeloxProjectID = ytPubsNullStringPtr(veloxProjectID)
 	pub.ThumbnailMediaID = ytPubsNullStringPtr(thumbnailMediaID)
@@ -141,6 +162,13 @@ func ytPubsNullableTime(t *time.Time) sql.NullTime {
 // when post_target_id already has a publication row — the caller's job
 // to fall through to FindByPostTargetID and UPDATE the existing row
 // instead.
+//
+// Blocco #3 P0 (migration 067) — youtube_uploaded_at and
+// youtube_processed_at are inserted as NULL by default; the Mark*
+// helpers transition them to NOW() at the moment of status change.
+// Treating them as DB-default-NULL keeps Create's signature narrow and
+// prevents any caller from stamping a fake "uploaded_at" without going
+// through MarkYouTubeUploaded's atomic state-machine check.
 func (r *YouTubeTargetPublicationRepository) Create(ctx context.Context, pub *models.YouTubeTargetPublication) error {
 	return r.db.QueryRowContext(ctx,
 		`INSERT INTO youtube_target_publications
@@ -242,6 +270,14 @@ func (r *YouTubeTargetPublicationRepository) ListByUploadJobID(ctx context.Conte
 // Returns ErrYouTubeTargetPublicationNotFound (wrapped) when 0 rows
 // match — distinct from a real *sql.DB error so callers can branch.
 func (r *YouTubeTargetPublicationRepository) Update(ctx context.Context, pub *models.YouTubeTargetPublication) error {
+	// Blocco #3 P0 — Update persists caller-supplied timestamp values
+	// (e.g. operator backfill via a one-off script) verbatim. The
+	// recommended transition path is the Mark* helpers (which stamp
+	// NOW() atomically); Update is the catch-all for callers driving
+	// the row through states the schema doesn't know about. We do
+	// NOT touch youtube_uploaded_at/youtube_processed_at from Update's
+	// SQL — those columns are exclusively Mark* managed to keep the
+	// "timestamp implies status transition" invariant observable.
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE youtube_target_publications
 		 SET upload_job_id = $2, post_target_id = $3, platform_account_id = $4,
@@ -268,10 +304,21 @@ func (r *YouTubeTargetPublicationRepository) Update(ctx context.Context, pub *mo
 // 'youtube_uploaded'. Idempotent: a second call overwrites the
 // video_id with whatever YouTube echoed (defensive against retries that
 // picked a different URI on resume).
+//
+// Blocco #3 P0 (migration 067) — also stamps youtube_uploaded_at = NOW()
+// atomically with the status transition. The composite write means
+// any DB-shape check that asserts "youtube_upload_status='youtube_uploaded'
+// ⇒ youtube_uploaded_at IS NOT NULL" holds without needing a trigger.
+// The timestamp is NOT refreshed on a re-Mark (idempotency deliberately
+// keeps the FIRST transition timestamp so the operator-triage
+// dashboard's "time-to-upload" SLA accurate).
 func (r *YouTubeTargetPublicationRepository) MarkYouTubeUploaded(ctx context.Context, id int64, videoID string) error {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE youtube_target_publications
-		 SET youtube_video_id = $2, youtube_upload_status = 'youtube_uploaded', updated_at = NOW()
+		 SET youtube_video_id = $2,
+		     youtube_upload_status = 'youtube_uploaded',
+		     youtube_uploaded_at = COALESCE(youtube_uploaded_at, NOW()),
+		     updated_at = NOW()
 		 WHERE id = $1`,
 		id, videoID,
 	)
@@ -330,6 +377,37 @@ func (r *YouTubeTargetPublicationRepository) MarkPublished(ctx context.Context, 
 	)
 	if err != nil {
 		return fmt.Errorf("youtube target publication MarkPublished: %w", err)
+	}
+	return r.checkRowsAffected(res, id)
+}
+
+// MarkYouTubeProcessed (Blocco #3 P0, migration 067) flips
+// youtube_processing_status to 'processed' AND stamps
+// youtube_processed_at = NOW() in one atomic statement. Called by:
+//   - the YouTube webhook callback when processingStatus='processed'
+//     arrives via the topics/push notification channel;
+//   - the future reconcile worker poll (YouTube videos.list every
+//     60s for in-progress 'processing' rows).
+//
+// COALESCE on youtube_processed_at keeps idempotency: a second
+// reconcile poll that finds the row already 'processed' won't
+// re-stamp the timestamp (preserves "time-to-processed" SLA
+// accuracy across retries).
+//
+// Returns ErrYouTubeTargetPublicationNotFound when 0 rows match —
+// distinct from a real DB error so callers can branch on
+// errors.Is(..., ErrYouTubeTargetPublicationNotFound).
+func (r *YouTubeTargetPublicationRepository) MarkYouTubeProcessed(ctx context.Context, id int64) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE youtube_target_publications
+		 SET youtube_processing_status = 'processed',
+		     youtube_processed_at = COALESCE(youtube_processed_at, NOW()),
+		     updated_at = NOW()
+		 WHERE id = $1`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("youtube target publication MarkYouTubeProcessed: %w", err)
 	}
 	return r.checkRowsAffected(res, id)
 }

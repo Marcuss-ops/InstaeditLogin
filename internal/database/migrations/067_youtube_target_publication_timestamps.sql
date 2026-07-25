@@ -1,0 +1,50 @@
+-- =============================================================================
+-- Migration 067: youtube_target_publication_timestamps
+-- =============================================================================
+-- P0 — Blocco #3 — per-target YouTube pipeline state extension.
+-- Adds explicit TIMESTAMPTZ columns for the two upload/processing phases
+-- already tracked as TEXT status enums on the row (zero behavior change to
+-- the status columns themselves; the new columns add OBSERVABILITY into how
+-- long each phase takes for the operator-triage + capacity dashboards).
+--
+-- Phase separation rationale:
+--   * drive_queued        → ingest worker hands off to upload pool
+--   * youtube_uploading   → resumable PUT in flight (private), upload worker
+--   * youtube_uploaded    → videos.insert returned 200 with a video_id
+--                                  ← NEW: youtube_uploaded_at stamps this moment
+--   * youtube_processin g → YouTube API echoes processingStatus='processing'
+--                                  (poll-driven: reconcile worker / webhook)
+--   * youtube_processed   → YouTube API echoes processingStatus='processed'
+--                                  ← NEW: youtube_processed_at stamps this moment
+--   * thumbnail_editing   → Velox dark editor open
+--   * thumbnail_ready     → cover-linked, ready for the publish phase
+--   * scheduled           → post_target.publish_at <= far future, waiting
+--   * publishing          → publish_worker fires videos.update
+--   * published           → videos.update returned 200 + privacy=desired
+--
+-- Net effect: the operator can quantify "videos that took > 1m to upload"
+-- (column youtube_uploaded_at minus created_at), "videos that YouTube is
+-- still processing after 5m" (no youtube_processed_at yet), and emit
+-- reasonable SLAs without re-fetching anything from the YouTube API.
+--
+-- BACKFILL — intentionally NO backfill in this migration. Existing rows
+-- have NULL on both columns (the operator-triage dashboard renders
+-- "no upload timestamp" rather than backfilling to created_at; the phase
+-- timing was never recorded historically and inventing it would be
+-- inaccurate). New rows stamp NOW() on transition via Mark* helpers in
+-- the repository layer.
+--
+-- NULL semantics: a row with youtube_uploaded_at = NULL is by definition
+-- still in 'youtube_uploading' (or earlier) state. A row with
+-- youtube_processed_at = NULL but youtube_uploaded_at != NULL is in the
+-- race window between upload completion and YouTube processing side.
+--
+-- IDEMPOTENT: every DDL is `ADD COLUMN IF NOT EXISTS`. The migration
+-- engine in internal/database treats IF NOT EXISTS as a no-op when the
+-- column already exists (re-running this migration on a partially-deployed
+-- cluster is safe).
+-- =============================================================================
+
+ALTER TABLE youtube_target_publications
+    ADD COLUMN IF NOT EXISTS youtube_uploaded_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS youtube_processed_at TIMESTAMPTZ;
