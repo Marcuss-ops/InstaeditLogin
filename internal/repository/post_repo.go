@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1120,6 +1121,61 @@ func (r *PostRepository) SetTargetCanaryVideoID(targetID int64, videoID string) 
 	)
 	if err != nil {
 		return fmt.Errorf("failed to set target canary video id: %w", err)
+	}
+	return nil
+}
+
+// SetTargetStatus is a narrow atomic status-flip for a single
+// post_target row, used by the upload worker's
+// uploadVideoAsPrivateForTarget helper when channels.list(mine=true)
+// returns a channel id other than platform_account.platform_user_id
+// (the P0#3 channel-binding guard).
+//
+// Differs from UpdateStatus(target) in two ways:
+//   1. Status-only update — does NOT touch platform_post_id /
+//      error_message / provider_state / container_id. The full row
+//      stamp is UpdateStatus's job; SetTargetStatus's job is the
+//      narrow "flip to blocked_auth + stamp error_message" used by the
+//      per-target upload phase.
+//   2. Returns ErrPostTargetNotFound (NOT ErrPostUnauthorized) so the
+//      upload worker's caller can distinguish a missing row from a
+//      tenant boundary violation (UpdateStatus uses the latter because
+//      its WHERE includes the workspace_id scope).
+//
+// errorMessage is COALESCE'd via NULLIF so an empty string preserves
+// any existing error_message column (e.g. a prior failed attempt's
+// prose). status itself is NOT NULL DB-side so unset status would
+// fail at the SQL layer — the IsValid guard catches this at Go-side.
+//
+// CAS via version+1 mirrors the optimistic-concurrency contract
+// introduced by migration 012 (post_targets.version). Bumping on
+// every status flip keeps the row's revision counter monotonic for
+// reconciler queries.
+func (r *PostRepository) SetTargetStatus(ctx context.Context, targetID int64, status models.PostStatus, errorMessage string) error {
+	if targetID <= 0 {
+		return fmt.Errorf("post target SetTargetStatus: targetID must be positive (got %d)", targetID)
+	}
+	if !status.IsValid() {
+		return fmt.Errorf("post target SetTargetStatus: status %q is not a valid PostStatus", status)
+	}
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE post_targets
+		 SET status = $2,
+		     error_message = COALESCE(NULLIF($3, ''), error_message),
+		     version = version + 1,
+		     updated_at = NOW()
+		 WHERE id = $1`,
+		targetID, string(status), errorMessage,
+	)
+	if err != nil {
+		return fmt.Errorf("post target SetTargetStatus: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("post target SetTargetStatus rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, targetID)
 	}
 	return nil
 }

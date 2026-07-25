@@ -64,11 +64,57 @@ type UploadMediaStore interface {
 type UploadPostStore interface {
 	Create(post *models.Post, targets []*models.PostTarget) error
 	PublishPost(postID int64) error
+	// SetTargetStatus flips one post_target row's status atomically
+	// with an optional error_message stamp. Used by the upload
+	// worker's per-target phase to route a single target to
+	// status='blocked_auth' on a YouTube channel-binding mismatch
+	// (P0#3 channel-binding guard) WITHOUT touching the row's other
+	// lifecycle columns (platform_post_id, provider_state, etc —
+	// those stay whatever the prior failed/queued write left them at).
+	// Caller passes targetID directly (no full target struct needed).
+	// errorMessage empty == preserve any existing error_message.
+	SetTargetStatus(ctx context.Context, targetID int64, status models.PostStatus, errorMessage string) error
 }
 
-// UploadUserStore resolves platform accounts for target validation.
+// UploadUserStore resolves platform accounts + flips reauth flags for
+// the per-target YouTube private upload phase. FindPlatformAccountByID
+// resolves the grant's expected channel id. MarkReauthRequired
+// (P0#3 server-side channel-binding guard — mirrors
+// publish_worker_process.go::prepareCredentials) flips
+// platform_account.status='reauth_required' on a
+// channels.list(mine=true) mismatch so the operator's UI prompts the
+// user to reconnect. The non-mismatch (transient) case does NOT call
+// MarkReauthRequired — the upload worker surfaces the error to the
+// outer job's retry path instead.
 type UploadUserStore interface {
 	FindPlatformAccountByID(id int64) (*models.PlatformAccount, error)
+	MarkReauthRequired(ctx context.Context, accountID int64, code, message string) error
+}
+
+// UploadYouTubeTargetPubStore is the narrow persistence contract the
+// per-target YouTube private upload phase needs on
+// youtube_target_publications (migration 066). Concrete impl is
+// *repository.YouTubeTargetPublicationRepository; tests inject an
+// in-memory fake so worker-level integration tests don't need a DB.
+//
+// Methods included cover:
+//   - Create / FindByPostTargetID  : idempotent row setup per (post_target_id).
+//   - MarkYouTubeUploaded         : happy-path terminal transition (status='youtube_uploaded').
+//   - IncrementAttempt            : bump attempt_count + stamp last_error on chunked-PUT failure.
+//   - Update                      : blocked_auth / last_error mutations (full row for partial fields).
+//
+// Methods related to the POST-upload phases are intentionally absent:
+// FindByYouTubeVideoID (webhook callbacks), ListByUploadJobID
+// (unified pipeline view), MarkThumbnailReady (Velox editor hand-off),
+// MarkPublished (publish phase). Those run on separate goroutines and
+// use the full repository surface directly — keeping the upload worker's
+// interface narrow prevents accidental coupling.
+type UploadYouTubeTargetPubStore interface {
+	Create(ctx context.Context, pub *models.YouTubeTargetPublication) error
+	FindByPostTargetID(ctx context.Context, postTargetID int64) (*models.YouTubeTargetPublication, error)
+	MarkYouTubeUploaded(ctx context.Context, id int64, videoID string) error
+	IncrementAttempt(ctx context.Context, id int64, lastError string) error
+	Update(ctx context.Context, pub *models.YouTubeTargetPublication) error
 }
 
 // UploadWorkerOptions configures the worker pool sizing + cadence.
@@ -112,6 +158,14 @@ type UploadWorkerOptions struct {
 // pools share the lease + heartbeat machinery added in P1 step 1
 // (commit 4888c40). Per-claimed-row heartbeat goroutines keep the
 // lease alive during the long streaming phases.
+//
+// Blocco #1 P0 — ytPubStore is the per-target YouTube publication
+// store. Wired post-construction via SetYouTubeTargetPublishStore
+// (boom-strapped in internal/bootstrap/app.go to
+// *repository.YouTubeTargetPublicationRepository). When nil, the
+// upload-as-private phase is a skip-and-warn — the legacy publish-only
+// flow remains intact for non-YouTube platforms and for environments
+// where the YT pub store isn't wired.
 type UploadWorker struct {
 	jobRepo          UploadJobStore
 	mediaStore       UploadMediaStore
@@ -122,6 +176,7 @@ type UploadWorker struct {
 	vault            credentials.VaultAPI
 	sourceRegistry   *ArtifactSourceRegistry
 	deliveryVerifier ExternalDeliveryVerifier
+	ytPubStore       UploadYouTubeTargetPubStore
 	interval         time.Duration
 	logger           *slog.Logger
 	uploadTimeout    time.Duration
@@ -166,6 +221,29 @@ func NewUploadWorker(
 		uploadTimeout:    30 * time.Minute,
 		opts:             opts,
 	}
+}
+
+// SetYouTubeTargetPublishStore wires the per-target YouTube
+// publication store. The upload worker reads this from
+// processPublishJob's per-target phase to Create / MarkYouTubeUploaded
+// / IncrementAttempt on the youtube_target_publications table.
+//
+// Called once at bootstrap (cmd/server) immediately after
+// NewUploadWorker. If never called (or called with nil), the upload
+// worker logs at its first per-target upload attempt + gracefully
+// skips the private upload phase — the legacy publish-only flow
+// remains intact. The setter pattern keeps the constructor signature
+// stable across wires (production + tests) without breaking the
+// optional-stage contract.
+func (w *UploadWorker) SetYouTubeTargetPublishStore(store UploadYouTubeTargetPubStore) {
+	w.ytPubStore = store
+}
+
+// YouTubeTargetPublishStore returns the wired per-target publication
+// store, or nil if not yet wired. Read-only accessor used by tests
+// assertions + the per-target helper's nil-check.
+func (w *UploadWorker) YouTubeTargetPublishStore() UploadYouTubeTargetPubStore {
+	return w.ytPubStore
 }
 
 // uniqueWorkerID derives a per-pod, per-restart lease identity.
@@ -850,6 +928,36 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 		return fmt.Errorf("create post: %w", err)
 	}
 
+	// Blocco #1 P0 — per-target YouTube private upload phase. Runs
+	// AFTER post + targets are persisted (so target.ID is populated
+	// via RETURNING id) and BEFORE the publish_at gate below. The
+	// upload lands as privacy='private' immediately so the rest of
+	// the pipeline (Velox thumbnail editor, etc.) can resolve to a
+	// real youtube_video_id without waiting on the user's calendar
+	// cursor. publish_at stays on the post_target row for the LATER
+	// videos.update phase (Blocco #1 phase 2, owned by publish_worker).
+	//
+	// Inside the loop, transient failures bubble up so handleProcessingError
+	// MarkRetry's the parent upload_job (next claim re-runs the helper
+	// idempotently — UNIQUE(post_target_id) on the YT pub table means
+	// re-runs hit the existing row + idempotently stamp status).
+	// blocked_auth (channel-binding mismatch) is handled IN-band: the
+	// helper routes that target to status='blocked_auth' and returns
+	// nil so the parent job can continue for OTHER targets.
+	if w.ytPubStore != nil {
+		for _, target := range targets {
+			if target == nil {
+				continue
+			}
+		if err := w.uploadVideoAsPrivateForTarget(ctx, job, target, post, mediaURL); err != nil {
+			return fmt.Errorf("per-target youtube private upload target=%d: %w", target.ID, err)
+		}
+		}
+	} else {
+		w.logger.Warn("upload worker: ytPubStore not wired — per-target youtube private upload skipped (publish-phase trigger will still fire)",
+			"job_id", job.ID)
+	}
+
 	// Trigger publishing only for jobs that should publish NOW.
 	// Future-scheduled jobs (job.PublishAt > now) stay in the
 	// `status='queued'` state and the publish_worker picks them up
@@ -896,6 +1004,292 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 	w.logger.Info("upload worker: publish done",
 		"pool", "upload", "job_id", job.ID, "post_id", post.ID, "asset_id", assetID)
 	return nil
+}
+
+// uploadVideoAsPrivateForTarget performs the per-target YouTube
+// resumable upload-as-private for a single post_target row (Blocco
+// #1 P0). The upload lands regardless of publish_at so the rest of
+// the pipeline (Velox thumbnail editor, etc.) can resolve to a real
+// youtube_video_id immediately. publish_at remains on the
+// post_target row for the LATER videos.update phase (publish
+// worker / Blocco #1 phase 2).
+//
+// Routing:
+//   - targetID == 0 OR platform_account_id == 0 → error (caller bug).
+//   - Platform ≠ YouTube                          → skip (return nil);
+//     the per-target private step is YouTube-only; other platforms
+//     keep using publish_worker's synchronous upload+publish flow.
+//   - Token refresh transient error              → return error
+//     (outer job retries on next claim).
+//   - Channel binding ErrYouTubeChannelMismatch   → handleTargetBlockedAuth
+//     (post_target.status='blocked_auth' +
+//      platform_account.status='reauth_required' +
+//      yt_pub row status='failed' + last_error) + return nil so the
+//     parent job continues. Other binding errors (5xx, network) →
+//     return error (retry).
+//   - UploadChannelUploader not on the provider  → return error
+//     (registration bug — BootstrapRegistry must register YouTube's
+//     UploadChannelUploader conformance).
+//   - Chunked PUT erred                          → IncrementAttempt on
+//     yt_pub row + return error (outer retries).
+//   - Chunked PUT succeeded with non-empty videoID → MarkYouTubeUploaded
+//     + return nil.
+//
+// Runs inside runWithHeartbeat's lease heartbeat so a worker crash
+// mid-upload leaves the row with youtube_upload_status='youtube_uploading'
+// (UNIQUE(post_target_id) makes the next worker's re-run idempotent).
+//
+// Idempotent on the row level (Create is best-effort + re-fetch on
+// UNIQUE collision); not idempotent on the YouTube side — every
+// re-run does a fresh videos.insert, which YouTube itself dedupes
+// via the resumable-session protocol only if the worker re-attaches// to the prior session URI (NOT a concern here since the helper
+// always starts a fresh session).
+//
+// KNOWN LIMITATION (Blocca #1 followup — ACCEPT-THIS-PR): a transient
+// failure BETWEEN post.Create (called by the calling processPublishJob)
+// AND MarkCompleted triggers MarkRetry on the parent upload_job. The
+// retry's processPublishJob calls w.postStore.Create with a fresh
+// Post{} (post.ID=0), so PostRepository.Create inserts a brand-new
+// post + fan-out (post_targets.id are also fresh via RETURNING id).
+// The per-target YouTube pub rows from the prior attempt reference
+// the OLD target.ID and are invisible to the retry's helper call.
+// Result: each retry creates phantom posts + fires a fresh
+// videos.insert on the same channel. The helper-level idempotency
+// skip fires only WITHIN a single claim — not across claim retries.
+//
+// Fix scope (next PR): migration adding
+// `posts.upload_job_id BIGINT UNIQUE NOT NULL REFERENCES upload_jobs(id)
+// ON DELETE CASCADE` and making PostRepository.Create idempotent via
+// `ON CONFLICT (upload_job_id) DO NOTHING` + a follow-up ListByPost
+// re-load. This PR accepts the limitation; the happy-path (one
+// attempt succeeds) is unchanged.
+
+func (w *UploadWorker) uploadVideoAsPrivateForTarget(
+	ctx context.Context,
+	job *models.UploadJob,
+	target *models.PostTarget,
+	post *models.Post,
+	mediaURL string,
+) error {
+	if w.ytPubStore == nil {
+		w.logger.Warn("upload worker: ytPubStore unset at per-target upload time (skipping)",
+			"job_id", job.ID, "target_id", target.ID)
+		return nil
+	}
+	if target == nil || target.ID == 0 {
+		return fmt.Errorf("per-target private upload on nil/zero-id target (PostRepository.Create must populate via RETURNING id)")
+	}
+	if target.PlatformAccountID == 0 {
+		return fmt.Errorf("per-target private upload on target with platform_account_id=0 (target_id=%d)", target.ID)
+	}
+
+	// Resolve platform_account so we know the channel + grant.
+	account, err := w.userRepo.FindPlatformAccountByID(target.PlatformAccountID)
+	if err != nil {
+		return fmt.Errorf("FindPlatformAccountByID(%d): %w", target.PlatformAccountID, err)
+	}
+	if account == nil {
+		return fmt.Errorf("nil platform account for id=%d", target.PlatformAccountID)
+	}
+	if account.Platform != models.PlatformYouTube {
+		// Per verdict: only YouTube gets the per-target private upload
+		// step. TikTok / Instagram / Facebook keep using publish_worker's
+		// synchronous upload+publish flow at publish_at.
+		return nil
+	}
+
+	provider, has := w.capRouter.Get(account.Platform)
+	if !has {
+		return fmt.Errorf("provider not found for platform=%s", account.Platform)
+	}
+
+	// Token refresh via vault.Renew + OAuthProvider.RefreshOAuthToken.
+	// Mirrors publish_worker_process.go::prepareCredentials.
+	oauthProvider, ok := provider.(services.OAuthProvider)
+	if !ok {
+		return fmt.Errorf("provider for %s does not implement OAuthProvider", account.Platform)
+	}
+	refresher := credentials.TokenRefresher(func(c context.Context, refreshToken string) (*models.TokenData, error) {
+		return oauthProvider.RefreshOAuthToken(c, refreshToken)
+	})
+	oauthToken, err := w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+	if err != nil {
+		// Same transient-classify as publish_worker::prepareCredentials:
+		// retry via outer MarkRetry.
+		return fmt.Errorf("token refresh for platform_account=%d: %w", account.ID, err)
+	}
+
+	// Channel-binding check (channels.list mine=true verify) — same
+	// pre-flight publish_worker drives. Mismatch is structural
+	// (non-recoverable without user re-auth) so we route to
+	// blocked_auth + reauth_required + DON'T fail the parent job.
+	if binder, hasBinder := provider.(services.YouTubeChannelBinder); hasBinder {
+		bindErr := binder.ValidateChannelBinding(ctx, oauthToken.AccessToken, account.PlatformUserID)
+		if bindErr != nil {
+			if errors.Is(bindErr, services.ErrYouTubeChannelMismatch) {
+				if err := w.handleTargetBlockedAuth(ctx, target, account, post.ID, bindErr.Error()); err != nil {
+					w.logger.Warn("upload worker: handleTargetBlockedAuth partial-failure (continuing with parent job)",
+						"target_id", target.ID, "platform_account_id", account.ID, "error", err)
+				}
+				return nil
+			}
+			// Transient (5xx, network, decode) — retry.
+			return fmt.Errorf("channel binding check platform_account=%d (transient): %w", account.ID, bindErr)
+		}
+	}
+
+	// Create or fetch the per-target publication row. The Create path
+	// stamps server-side fields (id, created_at, updated_at) and lands
+	// with youtube_upload_status='youtube_uploading' (DB DEFAULT).
+	pub, err := w.ytPubStore.FindByPostTargetID(ctx, target.ID)
+	if err != nil {
+		return fmt.Errorf("FindByPostTargetID(target=%d): %w", target.ID, err)
+	}
+	// Idempotency skip: a previous claim's helper already stamped
+	// youtube_upload_status='youtube_uploaded' on this target. Re-runs
+	// would otherwise re-fire a fresh videos.insert for the same
+	// channel (wasted YouTube quota + a duplicate video on the channel).
+	// UNIQUE(post_target_id) keeps the row singular; this check is a
+	// CPU-only short-circuit on top of that. The retry path still
+	// re-runs the channel-binding check + DB writes (idempotent) so a
+	// crash mid-MarkYouTubeUploaded is recoverable (next claim finds a
+	// row with status='youtube_uploading' or 'failed' and retries).
+	if pub != nil && pub.YouTubeUploadStatus == "youtube_uploaded" {
+		w.logger.Debug("upload worker: per-target youtube already uploaded (idempotent skip)",
+			"job_id", job.ID, "target_id", target.ID, "yt_pub_id", pub.ID)
+		return nil
+	}
+	if pub == nil {
+		pub = &models.YouTubeTargetPublication{
+			UploadJobID:         job.ID,
+			PostTargetID:        target.ID,
+			PlatformAccountID:   account.ID,
+			YouTubeUploadStatus: "youtube_uploading",
+			DesiredPrivacy:      resolveDesiredPrivacy(post),
+			PublishAt:           post.PublishAt,
+		}
+		if err := w.ytPubStore.Create(ctx, pub); err != nil {
+			// UNIQUE violation on post_target_id OR a peer raced to
+			// create — re-fetch and continue without re-creating.
+			existing, eErr := w.ytPubStore.FindByPostTargetID(ctx, target.ID)
+			if eErr == nil && existing != nil {
+				pub = existing
+			} else {
+				return fmt.Errorf("Create youtube_target_publication: %w", err)
+			}
+		}
+	}
+
+	// Resolve the UploadChannelUploader capability + start the upload.
+	uploader, ok := provider.(services.UploadChannelUploader)
+	if !ok {
+		return fmt.Errorf("provider for %s does not implement UploadChannelUploader (YouTubeOAuthService implements it; bootstrap must register the capability)", account.Platform)
+	}
+	videoID, err := uploader.UploadVideoAsPrivate(ctx, oauthToken.AccessToken, post, mediaURL)
+	if err != nil {
+		// Stamp attempt + last_error then bubble up so the parent
+		// upload_job retry path picks up the row on its next claim.
+		if incErr := w.ytPubStore.IncrementAttempt(ctx, pub.ID, fmt.Sprintf("upload failed: %v", err)); incErr != nil {
+			w.logger.Warn("upload worker: IncrementAttempt failed (continuing with parent error)",
+				"yt_pub_id", pub.ID, "target_id", target.ID, "error", incErr)
+		}
+		return fmt.Errorf("UploadVideoAsPrivate target=%d: %w", target.ID, err)
+	}
+	if videoID == "" {
+		return fmt.Errorf("UploadVideoAsPrivate target=%d returned empty videoID", target.ID)
+	}
+
+	// Transition the per-target row: status='youtube_uploaded' +
+	// youtube_video_id set.
+	if err := w.ytPubStore.MarkYouTubeUploaded(ctx, pub.ID, videoID); err != nil {
+		return fmt.Errorf("MarkYouTubeUploaded(pub=%d, videoID=%s): %w", pub.ID, videoID, err)
+	}
+	w.logger.Info("upload worker: per-target youtube private upload OK",
+		"job_id", job.ID, "target_id", target.ID, "platform_account_id", account.ID, "youtube_video_id", videoID)
+	return nil
+}
+
+// handleTargetBlockedAuth centralizes the per-target side effects on a
+// channels.list(mine=true) mismatch:
+//  1. persist last_error on youtube_target_publications (status='failed' + attempt++),
+//     so dashboards + the unified pipeline view surface the failure cause.
+//  2. set post_target.status='blocked_auth' so the publish worker
+//     skips the row (and any "schedule it again" UI flow prompts
+//     re-connect first).
+//  3. set platform_account.status='reauth_required' (P0#3 server-side
+//     channel-binding guard) so the operator's UI prompts the user to
+//     reconnect.
+//
+// All side effects are best-effort — a partial failure logs WARN and
+// returns nil so the parent job continues for OTHER targets. The
+// uploadVideoAsPrivateForTarget caller treats a nil result as a
+// "target done" so the loop advances to the next target.
+func (w *UploadWorker) handleTargetBlockedAuth(
+	ctx context.Context,
+	target *models.PostTarget,
+	account *models.PlatformAccount,
+	postID int64,
+	reason string,
+) error {
+	w.logger.Warn("upload worker: youtube channel binding mismatch; routing target to blocked_auth",
+		"target_id", target.ID, "post_id", postID, "platform_account_id", account.ID,
+		"expected_channel_id", account.PlatformUserID, "reason", reason)
+
+	// (1) Persist YT pub row's last_error + attempted-count. Find
+	// first (idempotent — may already exist from a prior partial upload).
+	pub, err := w.ytPubStore.FindByPostTargetID(ctx, target.ID)
+	if err == nil && pub != nil {
+		if uErr := w.ytPubStore.Update(ctx, &models.YouTubeTargetPublication{
+			ID:                  pub.ID,
+			UploadJobID:         pub.UploadJobID,
+			PostTargetID:        pub.PostTargetID,
+			PlatformAccountID:   pub.PlatformAccountID,
+			YouTubeUploadStatus: "failed",
+			DesiredPrivacy:      pub.DesiredPrivacy,
+			PublishAt:           pub.PublishAt,
+			LastError:           "youtube_channel_mismatch: " + reason,
+			AttemptCount:        pub.AttemptCount + 1,
+			CreatedAt:           pub.CreatedAt,
+			UpdatedAt:           time.Now().UTC(),
+		}); uErr != nil {
+			w.logger.Warn("upload worker: YT pub row Update on blocked_auth failed (continuing)",
+				"yt_pub_id", pub.ID, "target_id", target.ID, "error", uErr)
+		}
+	}
+
+	// (2) post_target.status='blocked_auth'. error_message stamps the
+	// mismatch reason for the operator's audit log.
+	if tErr := w.postStore.SetTargetStatus(ctx, target.ID, models.PostStatusBlockedAuth,
+		"youtube channel mismatch: "+reason); tErr != nil {
+		w.logger.Warn("upload worker: post_target SetTargetStatus(blocked_auth) failed (continuing)",
+			"target_id", target.ID, "error", tErr)
+	}
+
+	// (3) platform_account.status='reauth_required' (mirrors
+	// publish_worker_process.go::prepareCredentials).
+	if aErr := w.userRepo.MarkReauthRequired(ctx, account.ID, "youtube_channel_mismatch", reason); aErr != nil {
+		w.logger.Warn("upload worker: userRepo.MarkReauthRequired failed (continuing)",
+			"platform_account_id", account.ID, "error", aErr)
+	}
+	return nil
+}
+
+// resolveDesiredPrivacy mirrors the publish_worker_process.go buildPayload
+// cascade (post.PrivacyLevel > post.DefaultPrivacyLevel > "unlisted"
+// YouTube-safe fallback). Used at Create-time of the per-target
+// youtube_target_publications row so the row snapshots the EVENTUAL
+// desired privacy the publish phase will target via videos.update.
+// The upload ITSELF always uses "private" (independent of this
+// snapshot) — the publish phase flips to the snapshot value at
+// publish_at.
+func resolveDesiredPrivacy(post *models.Post) string {
+	if post.PrivacyLevel != "" {
+		return post.PrivacyLevel
+	}
+	if post.DefaultPrivacyLevel != "" {
+		return post.DefaultPrivacyLevel
+	}
+	return "unlisted"
 }
 
 // classifyUploadError maps a process-time error onto a stable taxonomy

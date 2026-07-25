@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
@@ -746,4 +747,89 @@ func (s *YouTubeOAuthService) queryUploadStatusWithRetry(ctx context.Context, up
 		}
 	}
 	return 0, lastErr
+}
+
+// UploadVideoAsPrivate implements services.UploadChannelUploader. It
+// performs the Drive→YouTube resumable upload for one target, marking
+// the video's status.privacyStatus='private' and returning the assigned
+// YouTube video id. NO publish phase — the publish worker drives the
+// videos.update call later (privacy=public + publishAt cursor).
+//
+// Differs from Publish() in that Publish drives the full upload + videos.update
+// synchronously (privacy=public + publishAt=...). Here we want the
+// upload to land as 'private' immediately so per-channel binding is
+// discoverable via YouTube API BEFORE publish_at elapses — and so the
+// follow-on Velox thumbnail-editor session can resolve to a real video
+// id (the editor's invariant requires a non-public video).
+//
+// Lifecycle within one call:
+//  1. HEAD source URL → size + content-type for chunk math.
+//  2. POST metadata (snippet=post.title+caption; status.privacyStatus=private)
+//     with X-Upload-Content-Length + X-Upload-Content-Type → Location URL.
+//  3. PUT chunks via the existing chunked loop (handles Resume-After,
+//     404 session recovery, Retry-After aware backoff).
+//  4. Return the video id parsed from the terminal 200 response.
+//
+// Returns the LAST failure encountered wrapped with context. The upload
+// worker decides whether to retry or route to blocked_auth; this method
+// has no opinion.
+//
+// Defensive guards: nil receiver / nil post / empty accessToken / empty
+// videoURL → typed error so the worker logs a clear breadcrumb instead of
+// a generic nil pointer panic.
+func (s *YouTubeOAuthService) UploadVideoAsPrivate(ctx context.Context, accessToken string, post *models.Post, videoURL string) (string, error) {
+	if s == nil {
+		return "", fmt.Errorf("youtube UploadVideoAsPrivate: nil service")
+	}
+	if post == nil {
+		return "", fmt.Errorf("youtube UploadVideoAsPrivate: nil post")
+	}
+	if accessToken == "" {
+		return "", fmt.Errorf("youtube UploadVideoAsPrivate: empty accessToken")
+	}
+	if videoURL == "" {
+		return "", fmt.Errorf("youtube UploadVideoAsPrivate: empty videoURL")
+	}
+
+	// 1. HEAD source — authoritative size + content-type for chunk math.
+	size, contentType, err := s.headVideo(ctx, videoURL)
+	if err != nil {
+		return "", fmt.Errorf("youtube UploadVideoAsPrivate: head source: %w", err)
+	}
+	if size <= 0 {
+		return "", fmt.Errorf("youtube UploadVideoAsPrivate: unknown source size (%d)", size)
+	}
+
+	// 2. Build metadata. status.privacyStatus='private' is MANDATORY
+	// here — the Velox thumbnail editor requires a non-public video,
+	// and the publish phase will flip privacy to the desired
+	// post.PrivacyLevel (or cascade fallback) via the separate
+	// videos.update call the publish worker drives at publish_at.
+	metadata := map[string]interface{}{
+		"snippet": map[string]interface{}{
+			"title":       post.Title,
+			"description": post.Caption,
+		},
+		"status": map[string]interface{}{
+			"privacyStatus": "private",
+		},
+	}
+
+	uploadURL, err := s.initiateResumableSession(ctx, accessToken, metadata, size, contentType)
+	if err != nil {
+		return "", fmt.Errorf("youtube UploadVideoAsPrivate: initiate resumable session: %w", err)
+	}
+
+	// 3. Stream chunks. The existing loop returns the video id parsed
+	// from the terminal 200/201 response. The chunk loop's internal
+	// per-chunk backoff is independent of the worker lease heartbeat
+	// (which the upload-worker shell keeps alive via runWithHeartbeat).
+	videoID, err := s.uploadVideoChunks(ctx, uploadURL, videoURL, size)
+	if err != nil {
+		return "", fmt.Errorf("youtube UploadVideoAsPrivate: chunked PUT: %w", err)
+	}
+	if videoID == "" {
+		return "", fmt.Errorf("youtube UploadVideoAsPrivate: completed but no video id returned")
+	}
+	return videoID, nil
 }

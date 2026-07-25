@@ -685,6 +685,14 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				slog.Default(),
 				uploadOpts,
 			)
+			// Blocco #1 P0 — wire the per-target YouTube publication
+			// store so processPublishJob's per-target private upload
+			// phase can Create / MarkYouTubeUploaded / IncrementAttempt
+			// on youtube_target_publications (migration 066). Constructed
+			// here (post-construction of UploadWorker) so the setter
+			// pattern keeps the constructor signature stable across
+			// wires (production + tests).
+			uw.SetYouTubeTargetPublishStore(repository.NewYouTubeTargetPublicationRepository(a.DB))
 			return uw.Run(ctx)
 		},
 	})
