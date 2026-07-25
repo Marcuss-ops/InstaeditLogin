@@ -26,7 +26,7 @@ into the TikTok Developer Portal UI.
 | **Web/Desktop URL**                                | `https://instaedit.org/tiktok`                                                                                  | web/src/pages/platforms/PlatformPage.tsx → landing page for `/tiktok`                                       |
 | **Products**                                       | `Login Kit` + `Content Posting API`                                                                            | web/src/pages/platforms/data/tiktok.tsx + internal/services/tiktok_oauth_oauth.go                            |
 | **Scopes** (must list ALL of them)                 | `user.info.basic`, `video.publish`, `video.upload`                                                              | internal/services/tiktok_oauth_oauth.go::GetLoginURLWithOptions (line 31) — must match verbatim              |
-| **Redirect URI** (under Login Kit + Content Posting API) | `https://api.instaedit.org/api/v1/auth/tiktok/callback`                                                   | fly.toml [env] `TIKTOK_REDIRECT_URI` line 185                                                                |
+| **Redirect URI** (under Login Kit + Content Posting API) | `https://api.instaedit.org/api/v1/auth/tiktok/callback`                                                   | `/srv/instaedit/.env.production` on the VPS (entry `TIKTOK_REDIRECT_URI`); dev default falls back to `http://localhost:8080/...` in `internal/config/config.go:510`; catalogued in [docs/DEPLOY.md §3 row 20](./DEPLOY.md#3-secret-collection)                                  |
 | **Web / Desktop URL** (Login Kit config)           | `https://instaedit.org/tiktok`                                                                                  | web/src/pages/platforms/PlatformPage.tsx                                                                      |
 | **Required reviewer explanation** (≤ 1000 chars)   | Paste the block from `Reviewer explanation` below                                                              | solidal block; do not paraphrase                                                                              |
 | **Demo video** (mp4/mov, ≤ 5 files, ≤ 50 MB each)  | See `Demo video recording recipe` below                                                                        | Filename suggestion: `instaedit-tiktok-app-review-demo-YYYY-MM-DD.mp4`                                      |
@@ -47,7 +47,8 @@ into the TikTok Developer Portal UI.
 https://api.instaedit.org/api/v1/auth/tiktok/callback
 ```
 
-* Lives in `fly.toml [env]` as `TIKTOK_REDIRECT_URI` (line 185).
+* Lives in `/srv/instaedit/.env.production` on the VPS as `TIKTOK_REDIRECT_URI`
+  (also exported as a public, non-sensitive value in `docker-compose.yml`).
   Pinned at deploy time; cannot drift without a code change.
 * Mirrored in `docs/DEPLOY.md §3` table row 20.
 * `internal/config/config.go:510` reads `TIKTOK_REDIRECT_URI`
@@ -225,7 +226,7 @@ The most common rejection reasons are (in frequency of 2026 Q1 + Q2):
 | Rejection feedback                                            | Fix                                                                                                  |
 | ---                                                           | ---                                                                                                  |
 | **"Demo video images pixelated, kindly use high quality image"** | Re-record at 1920×1080, bitrate ≥ 15 Mbps, browser zoom 100%, DPR 1 (see Demo video recording recipe). |
-| **"Privacy policy URL inaccessible"**                         | `curl -fsSL https://instaedit.org/privacy` — verify 200. If the Caddy/Vercel route broke, fix it.      |
+| **"Privacy policy URL inaccessible"**                         | `curl -fsSL https://instaedit.org/privacy` — verify 200. If the Caddy route broke on the VPS, fix it via `docker compose logs caddy` and reload the affected site block (see [docs/DEPLOY.md §2](./DEPLOY.md#2-one-time-host-setup-operator-laptop--vps) and `docs/OPERATIONS.md §3`). |
 | **"App icon does not match the website logo"**                | Ship the SAME icon at 1024×1024 in both surfaces (no upscaling).                                     |
 | **"OAuth flow did not complete"**                             | Make sure the redirect URI on the portal matches `api.instaedit.org` exactly — `trycloudflare.com` tunnels fail here.    |
 | **"Scopes do not match the requested permissions"**          | Cross-check with `scripts/verify-tiktok-app-review-config.sh` plus the App Review form field.       |
