@@ -57,10 +57,15 @@ cat /tmp/fly-storage.json             # raw JSON paste                   ⇒ [ p
 # Defensive jq schema probe (Fly CLI wraps differently across releases).
 ATTACHED=$(jq -r '.[]? | (.attached_to // .AttachedTo // .app_id) // ""' \
               /tmp/fly-storage.json 2>/dev/null | head -1)
-# Last-resort grep if jq parsing fails (auth error / empty response).
+# Last-resort jq recursive descent if the top-level-array probe returns empty
+# (e.g. flyctl wrapped the result in an envelope / a different schema).
+# Walks every object in the tree, picks the first key matching any of
+# the three Fly CLI field-name variants, and emits ONLY the bare value
+# (no field name, no surrounding quotes) — unlike the prior grep wart
+# that returned "attached_to":"instaedit-login".
 if [[ -z "$ATTACHED" && -s /tmp/fly-storage.json ]]; then
-  ATTACHED=$(grep -oE '"(attached_to|AttachedTo|app_id)"[^"]*"[^"]*"' \
-              /tmp/fly-storage.json | head -1)
+  ATTACHED=$(jq -r '.. | objects | to_entries[] | select(.key|test("^(attached_to|AttachedTo|app_id)$")) | .value' \
+              /tmp/fly-storage.json 2>/dev/null | head -1)
 fi
 echo "ATTACHED='$ATTACHED'"          # ⇒ [ paste the echo line ]
 ```

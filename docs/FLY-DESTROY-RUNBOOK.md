@@ -228,10 +228,11 @@ flyctl storage list --app instaedit-login --json > /tmp/fly-storage.json
 # Defensive schema probe: Fly CLI versions wrap the result differently
 # across releases (`.[].attached_to`, `..|.attached_to?`, `data[]`,
 # etc.). Try the common top-level array form first; fall back to
-# recursive descent; last-resort grep on raw JSON.
+# recursive descent; last-resort jq on raw JSON (recursive object walk
+# emits the BARE value of any matching key — no field name, no quotes).
 ATTACHED=$(jq -r '.[]? | (.attached_to // .AttachedTo // .app_id) // ""' /tmp/fly-storage.json 2>/dev/null | head -1 || true)
 if [[ -z "$ATTACHED" && -s /tmp/fly-storage.json ]]; then
-  ATTACHED=$(grep -oE '"(attached_to|AttachedTo|app_id)"[^"]*"[^"]*"' /tmp/fly-storage.json | head -1 || true)
+  ATTACHED=$(jq -r '.. | objects | to_entries[] | select(.key|test("^(attached_to|AttachedTo|app_id)$")) | .value' /tmp/fly-storage.json 2>/dev/null | head -1 || true)
 fi
 
 # === §3 conditional Fly-attached backup ===
