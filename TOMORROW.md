@@ -493,6 +493,15 @@ docker compose exec minio mc version enable minio/instaedit-local
 # Tigris può avere default SSE-S3 encryption (o custom KMS keys) sul
 # bucket. MinIO NON lo eredita — va configurato esplicitamente.
 
+# Prerequisito alias (NON documentato altrove; tutti i `mc ... <bucket>`
+# richiedono un alias configurato):
+#   Sul primo run operazionale (universalmente corretto in BOTH
+#   inside-container e dalla VPS-host perché docker-compose DNS
+#   risolve `minio` cross-namespace):
+#     docker compose exec minio mc alias set minio http://minio:9000
+#   Senza questo, `minio/instaedit-local` non risolve e ogni comando
+#   mc in §10 ritorna `mc: <bucket> does not exist`.
+
 # Ispezione Tigris:
 AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
   aws --endpoint https://t3.storage.dev s3api get-bucket-encryption \
@@ -514,8 +523,14 @@ docker compose restart minio
 # → docker compose restart minio (ri-carica la config)
 
 # Verifica post-restart (step 4 — conferma runtime):
-#   docker compose exec minio mc admin config get minio | grep -A 4 encrypt
-#   atteso: presenza di una regola { sse: { algorithm: AES256 } }.
+#   JSON-pretty-print whitespace varies across minio releases; raw
+#   `grep -A 4 encrypt` is brittle (may return stale braces). Use a
+#   real JSON parser:
+#     docker compose exec minio mc admin config get minio \\
+#       | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("encrypt",{}), indent=2))'
+#     # atteso: {"0": {"sse": {"algorithm": "AES256"}}}#     oppure se jq è nel container (NOTA: jq NON è nel minio/minio
+#       Alpine image di default; python è il path canonico):
+#       docker compose exec minio sh -c 'mc admin config get minio | jq .encrypt'
 #   Senza questo check l'operatore assume apply senza conferma
 #   state in runtime config.
 #
@@ -524,24 +539,50 @@ docker compose restart minio
 #   oggetti già presenti mantengono lo stato di crittografia che
 #   avevano al PUT time (es: scritti con SSE=none restano
 #   non-crittati anche dopo mc encrypt set). Per Tigris-parity
-#   retroattivo serve ri-cryptare gli oggetti esistenti:
-#     docker compose exec minio mc cp --recursive --encrypt-sse-s3
-#       minio/instaedit-local/ minio/instaedit-local-encrypted/
-#     # poi confronta via mc ls --recursive o audit diff con Tigris
-#   oppure:
-#     rclone sync minio:bucket minio:bucket
+#   retroattivo serve un WORKFLOW 4-STEP (NON singolo mc cp):
+#     1. cp su nuovo bucket cifrato:
+#          # mb PRIMA: `mc cp` NON auto-crea il bucket di dest, errore
+#          # `<Bucket> instaedit-local-encrypted does not exist` se skip.
+#          # Defensive: `mc ls || mc mb` per evitare errore `bucket
+#          # already exists` se l'operatore re-runna §10.
+#          docker compose exec minio sh -c '
+#            mc ls minio/instaedit-local-encrypted >/dev/null 2>&1 ||
+#            mc mb minio/instaedit-local-encrypted'
+#          docker compose exec minio mc cp --recursive
+#            minio/instaedit-local/ minio/instaedit-local-encrypted/
+#     2. verifica parity: `mc ls --recursive` su entrambi i bucket,
+#        confronta count + size + ETag; idealmente `mc diff` se
+#        disponibile; altrimenti audit custom via JSON dump.
+#     3. cut reads/writes: aggiorna S3_BUCKET + S3_ENDPOINT nella
+#        VPS .env a `instaedit-local-encrypted`; restart api+worker.
+#     4a. se versioning abilitato (§9 step 3 ha `mc version enable ...`),
+#         rimuovi TUTTE le versioni prima del `rb` — altrimenti
+#         `mc rb --force` rifiuta per default (safe-delete):
+#          docker compose exec minio mc rm --recursive --force --versions
+#            minio/instaedit-local
+#     4. delete source: solo DOPO 24-48h di smoke-test positivo,
+#        `docker compose exec minio mc rb --force minio/instaedit-local`.
+#   In-place rclone alternative (richiede rclone >= 1.55):
+#     rclone sync minio:instaedit-local minio:instaedit-local-encrypted
 #       --s3-sse AES256 --s3-no-check-bucket
+#   ATTENZIONE: rclone rifiuta self-sync di default. Mai specificare
+#   stesso source e destination senza `--force`/dest bucket differente.
 #   Tracked P1 follow-up post-mirror; flaggato qui per evitare
 #   silent-mismatch al taglio Tigris (SSE:none retroattivo !=
 #   SSE:AES256 retroattivo anche dopo mc encrypt set).
 #
-# Footnote service-restart:
-#   encrypt richiede solo docker compose restart minio. Sezioni
-#   notify_* / audit richiedono ANCHE
-#     docker compose exec minio mc admin service restart minio
+# Footnote service-restart (single-node vs distributed):
+#   §10 + §6 vivono su VPS-COMPOSE MinIO single-node. Per questo
+#   deployment:
+#     - `docker compose restart minio` è il SOLO restart che serve
+#       per `encrypt` (§10) + `cors` (§6).
+#     - `mc admin service restart minio` è terminologia DISTRIBUTED-
+#       MINIO: su single-node è no-op OPPURE errore. NON eseguirlo
+#       in VPS-COMPOSE salvo rebrand esplicito a multi-node.
+#   Per sezioni `notify_*` / `audit` su deployment DISTRIBUITED
+#   futuri serve ANCHE `mc admin service restart <alias>`
 #   per propagare ai goroutine service-level. Non rilevante per
-#   §10 ma segnalato per future audit-step che tocchino altre
-#   sezioni config.
+#   §10 in questo deployment.
 
 # (b) Default sul bucket specifico:
 docker compose exec minio mc encrypt set sse-s3 minio/instaedit-local
