@@ -510,9 +510,15 @@ if [[ "$mode" == "apply" ]]; then
   # Always disclose the audit-log path + SHA-256 chain-of-custody,
   # regardless of failure count. On partial-failure runs, the operator
   # still needs to find the partial log on disk.
+  #
+  # Defensive: capture sha256sum into a variable first, then print with
+  # a `${hash:-<unavailable>}` fallback. On Alpine/slim/macOS environments
+  # without coreutils sha256sum, the substitution would otherwise leave
+  # the SHA row torn on the terminal.
   echo
   echo "Audit log:    $apply_log"
-  echo "SHA-256:      $(sha256sum "$apply_log" 2>/dev/null | awk '{print $1}')"
+  hash=$(sha256sum "$apply_log" 2>/dev/null | awk '{print $1}')
+  echo "SHA-256:      ${hash:-<unavailable>}"
 
   if [[ $failures -eq 0 ]]; then
     exit 0
