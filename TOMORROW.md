@@ -560,7 +560,12 @@ docker compose restart minio
 #        confronta count + size + ETag; idealmente `mc diff` se
 #        disponibile; altrimenti audit custom via JSON dump.
 #     3. cut reads/writes: aggiorna S3_BUCKET + S3_ENDPOINT nella
-#        VPS .env a `instaedit-local-encrypted`; restart api+worker.
+#        VPS .env a `instaedit-local-encrypted`. SUBITO DOPO:
+#          docker compose up -d api worker
+#        # (oppure `docker compose restart api worker`). Senza questo,
+#        # l'env è aggiornato ma api/worker continuano a leggere i bucket
+#        # originali = silent stale-state (nessun errore, letture/writes
+#        # continuano dal vecchio percorso). NON skippare il bounce.
 #     4a. SOLO se §9 step 3 ha abilitato versioning. Altrimenti
 #         SKIP questo step: su bucket senza versioning, `mc rm --versions`
 #         rimuove solo il current marker (semanticamente equivalente
@@ -571,6 +576,14 @@ docker compose restart minio
 #            minio/instaedit-local
 #     4. delete source: solo DOPO 24-48h di smoke-test positivo,
 #        `docker compose exec minio mc rb --force minio/instaedit-local`.
+#        Rollback path (se smoke-test fallisce):
+#          a. ripristina VPS .env: S3_BUCKET + S3_ENDPOINT al valore
+#             originale (instaedit-local).
+#          b. `docker compose up -d api worker`.
+#          c. verifica: `mc ls minio/instaedit-local` ritorna oggetti
+#             (= source ancora intatto).
+#        Senza rollback-path documentato, smoke-failure costringe a
+#        rolling-forward (distrugge prima di validare).
 #   In-place rclone alternative (richiede rclone >= 1.55):
 #     rclone sync minio:instaedit-local minio:instaedit-local-encrypted
 #       --s3-sse AES256 --s3-no-check-bucket
