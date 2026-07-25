@@ -146,6 +146,17 @@ type UploadWorkerOptions struct {
 	// don't race against any leases left over by a previous
 	// crash. Default true.
 	ReclaimOnStart bool
+	// VideoRetentionBufferDays (Blocco #2 P0) drives the media_asset
+	// expires_at calc at the worker ingest site. Default 7 = env
+	// VIDEO_RETENTION_BUFFER_DAYS. Without this, the worker used a
+	// hardcoded `time.Now().Add(7*24h)` which silently expired assets
+	// scheduled 8..30 days out (since 7 < horizon 30). The new formula:
+	//   expires_at = now + VideoRetentionBufferDays (no publish_at on
+	//                this path because the post hasn't been created yet)
+	// The bootstrap reads cfg.Worker.VideoRetentionBufferDays and passes
+	// it via this field; defaults in applyDefaults handle the
+	// test-fixture / option-bypass path.
+	VideoRetentionBufferDays int
 }
 
 // UploadWorker processes upload_jobs in the background. It downloads
@@ -277,6 +288,12 @@ func (w *UploadWorker) applyDefaults() {
 	}
 	if w.opts.ReclaimInterval <= 0 {
 		w.opts.ReclaimInterval = 30 * time.Second
+	}
+	// Blocco #2 P0 — VideoRetentionBufferDays defaults to 7 (mirrors
+	// env VIDEO_RETENTION_BUFFER_DAYS=7). Zero would compute
+	// expires_at = now (already-expired asset → /complete 410 forever).
+	if w.opts.VideoRetentionBufferDays <= 0 {
+		w.opts.VideoRetentionBufferDays = 7
 	}
 }
 
@@ -781,13 +798,24 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 
 	// Build S3 key and create pending media asset.
 	key := services.BuildUploadKey(job.UserID, job.SourceID)
+	// Blocco #2 P0 — buffer-aware TTL. The worker creates the
+	// media_asset at ingest time, BEFORE the post is created via
+	// PostRepository.Create (which stamps PublishAt). The asset must
+	// live long enough for the post-creation + publish phases to
+	// consume it; buffer (default 7d) covers the worst-case lag from
+	// ingest → publish_at (limited by the user's cron drop). Falls
+	// back to 7d if applyDefaults hasn't been called yet (test fixtures).
+	buffer := w.opts.VideoRetentionBufferDays
+	if buffer <= 0 {
+		buffer = 7
+	}
 	asset := &models.MediaAsset{
 		UserID:      job.UserID,
 		UploadKey:   key,
 		ContentType: contentType,
 		SizeBytes:   sizeBytes,
 		Status:      models.MediaAssetStatusPending,
-		ExpiresAt:   time.Now().Add(7 * 24 * time.Hour),
+		ExpiresAt:   time.Now().Add(time.Duration(buffer) * 24 * time.Hour),
 	}
 	if err := w.mediaStore.Create(asset); err != nil {
 		return fmt.Errorf("create media asset: %w", err)

@@ -41,6 +41,14 @@ func WithMediaStore(s MediaStore) RouterOption {
 // The client declares what it wants to upload; the server returns a
 // presigned URL + an asset_id the client commits via /complete after
 // the PUT succeeds.
+//
+// Blocco #2 P0 — PublishAt is OPTIONAL: when the client already knows
+// the publish time (a single-file drive_import flow with a calendar
+// cursor, or the SPA's "schedule this video before upload" affordance),
+// supplying it up-front lets the server compute a precise expires_at
+// (publish_at + VIDEO_RETENTION_BUFFER_DAYS) instead of the
+// horizon-based default. Leave nil for publish-now flows; the server
+// falls through to now + PublishHorizonDays.
 type PresignMediaRequest struct {
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
@@ -49,6 +57,10 @@ type PresignMediaRequest struct {
 	// a hash at presign time. The /complete handler can then verify
 	// the S3-returned hash against this expected value.
 	SHA256 string `json:"sha256,omitempty"`
+	// PublishAt is optional (Blocco #2 P0). When set, the asset's
+	// expires_at is computed as max(now+1d, publish_at + buffer)
+	// instead of now + horizon. RFC3339.
+	PublishAt *time.Time `json:"publish_at,omitempty"`
 }
 
 // PresignMediaResponse is the response for POST /api/v1/media/presign.
@@ -69,12 +81,17 @@ type PresignMediaResponse struct {
 // ~13 min), short enough that leaked URLs don't live forever.
 const mediaPresignTTL = 15 * time.Minute
 
-// mediaAssetLifetime is how long an asset is valid for use in posts
-// after presign. After this expires, /complete returns 410 Gone and
-// the publish flow rejects the asset. 24h is generous for an
-// authoring flow (upload + post + schedule) without letting stale
-// assets linger indefinitely.
-const mediaAssetLifetime = 24 * time.Hour
+// mediaAssetLifetime (Blocco #2 P0) is RETIRED — moved to
+// r.computeMediaAssetLifetime(publishAt) which derives the TTL from
+// the env-driven WorkerConfig.PublishHorizonDays + VideoRetentionBufferDays.
+// The hardcoded 24h floor became dangerously short for the 30-day
+// publish horizon: a video scheduled 25 days out had its asset
+// expire before the publish_at cursor, surfacing "video missing" at
+// videos.update time. The new formula:
+//   - publish_at + VIDEO_RETENTION_BUFFER_DAYS when publish_at is set
+//   - now + PUBLISH_HORIZON_DAYS when publish_at is nil
+// See limits.go::computeMediaAssetLifetime for the full formula.
+// mediaAssetLifetime = 24h — REMOVED.
 
 // handlePresignMedia (POST /api/v1/media/presign, protected) creates
 // a media_assets row in `pending` state and returns a presigned S3
@@ -148,7 +165,12 @@ func (r *Router) handlePresignMedia(w http.ResponseWriter, req *http.Request) {
 		SizeBytes:   body.SizeBytes,
 		SHA256:      body.SHA256,
 		Status:      models.MediaAssetStatusPending,
-		ExpiresAt:   time.Now().Add(mediaAssetLifetime),
+		// Blocco #2 P0 — buffer-aware TTL. When the client supplies
+		// publish_at, the asset lives until publish_at + buffer (default 7d);
+		// otherwise the asset lives for the full horizon (default 30d).
+		// The 1-day min-floor inside the helper protects against the
+		// "publish_at in the past" silent-expire bug.
+		ExpiresAt: r.computeMediaAssetLifetime(body.PublishAt),
 	}
 	if err := r.mediaStore.Create(asset); err != nil {
 		logAndError(w, req, "failed to create media asset", err, "user_id", userID)

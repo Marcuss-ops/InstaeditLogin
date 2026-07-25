@@ -17,13 +17,16 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-// scheduleClampHorizonDays caps the cumulative publish schedule
-// push-ahead at 90 days. The historical 7-day cap (driveBatchJitterMaxSeconds)
-// was silently truncated; the new flag surfaces this as
-// schedule_clamped in the response per the spec. Operators wanting
-// a longer horizon can bump this constant; consider surfacing it as
-// an env-driven config in a follow-up so the SPA can show "max
-// horizon: 90 days" without redeploying the server.
+// scheduleClampHorizonDays (Blocco #2 P0) is RETIRED — moved to
+// r.scheduleLimits.PublishHorizonDays (env PUBLISH_HORIZON_DAYS,
+// default 30). The hardcoded 90-day cap was removed because:
+//   1. operators wanting a longer horizon (annual content calendars,
+//      6-months-out evergreen re-uploads) had to rebuild + redeploy;
+//   2. the per-account reschedule cap (uploads_handlers.go) used 60
+//      days with the SAME semantic — divergent caps were a footgun.
+// The horizon now flows from a single env-driven source of truth
+// surfaced to the SPA via /api/v1/health's `limits.publish_horizon_days`
+// (see handleHealth in middleware_handlers.go).
 //
 // P1 refactor: this is now a HARD cap. When the heuristic projects
 // the schedule past the horizon, the handler returns 422 with an
@@ -32,7 +35,7 @@ import (
 // is known (D6 from the prior thinker review) so the DB end-state
 // is truthful, but the user-facing contract is now fail-loud rather
 // than accept-and-warn.
-const scheduleClampHorizonDays = 90
+// scheduleClampHorizonDays = 90 — REMOVED (use r.publishHorizonDays()).
 
 // scheduleClampHeuristicMaxFiles is the worst-case projection N used
 // by the heuristic. Drive folders in practice max at a few thousand
@@ -203,26 +206,28 @@ func (r *Router) handleDriveBatchImportV2(w http.ResponseWriter, req *http.Reque
 	// Schedule overflow check — P1 refactor: HARD 422. The previous
 	// heuristic returned 202 + clamped=true flag; the user explicitly
 	// asked for the silent-truncation behaviour to stop. When the
-	// worst-case projection (heuristic) would exceed the 90-day cap,
-	// we refuse the batch up-front so the SPA can prompt the operator
-	// to widen the gap or shorten the horizon.
-	projectedDays := heuristicScheduleClampProjectedDays(body.PublishSchedule)
-	if projectedDays > scheduleClampHorizonDays {
+	// worst-case projection (heuristic) would exceed the cap, we refuse
+	// the batch up-front so the SPA can prompt the operator to widen the
+	// gap or shorten the horizon. The cap is config-driven (env
+	// PUBLISH_HORIZON_DAYS, default 30) — see ScheduleLimits.
+	horizonDays := r.publishHorizonDays()
+	projectedDays := heuristicScheduleClampProjectedDays(body.PublishSchedule, horizonDays)
+	if projectedDays > horizonDays {
 		reason := fmt.Sprintf(
 			"projected horizon %d days exceeds the %d-day cap (worst-case %d files × min_gap %ds)",
-			projectedDays, scheduleClampHorizonDays,
+			projectedDays, horizonDays,
 			scheduleClampHeuristicMaxFiles, body.PublishSchedule.MinGapSeconds,
 		)
 		slog.Info("drive batch v2: schedule overflow → 422",
 			"user_id", userID, "workspace_id", ws.ID,
-			"projected_days", projectedDays, "max_days", scheduleClampHorizonDays,
+			"projected_days", projectedDays, "max_days", horizonDays,
 		)
 		writeJSON(w, http.StatusUnprocessableEntity, DriveBatchImportV2OverflowResponse{
 			Error:                "schedule would exceed the publish horizon cap",
 			Clamped:              true,
 			ClampReason:          reason,
 			ProjectedHorizonDays: projectedDays,
-			MaxHorizonDays:       scheduleClampHorizonDays,
+			MaxHorizonDays:       horizonDays,
 		})
 		return
 	}
@@ -442,14 +447,18 @@ func (r *Router) resolveV2Targets(ctx context.Context, userID, workspaceID int64
 // upload_worker.go::processIngestJob already respects the schedule
 // envelope and is bounded by the same horizon).
 //
-// The handler compares the returned days to scheduleClampHorizonDays;
-// if greater, the request is refused with a HARD 422 (P1 refactor).
-func heuristicScheduleClampProjectedDays(schedule models.PublishScheduleRef) int {
+// The horizonDays parameter (typically r.publishHorizonDays()) is
+// PASSED IN by the caller so the function stays pure (easier to test,
+// no r receiver dependency). Deprecated callers that still pass the
+// legacy constant are caught at the call-site compile-time.
+//
+// Returns 0 when min_gap_seconds <= 0 (every file publishes at
+// start_at — never exceeds the horizon). The handler's envelope
+// validation already rejected negative gaps; this is the defensive
+// floor for zero.
+func heuristicScheduleClampProjectedDays(schedule models.PublishScheduleRef, horizonDays int) int {
+	_ = horizonDays // reserved for a future "buffer-aware clamp" variation
 	if schedule.MinGapSeconds <= 0 {
-		// Zero/negative gap means every file publishes at start_at —
-		// never exceeds the horizon. The handler's envelope
-		// validation already rejected negative gaps; this is the
-		// defensive floor for zero.
 		return 0
 	}
 	totalSec := int64(schedule.MinGapSeconds) * int64(scheduleClampHeuristicMaxFiles)

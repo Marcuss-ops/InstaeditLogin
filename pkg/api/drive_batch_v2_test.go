@@ -364,9 +364,14 @@ func TestDriveBatchImportV2_ScheduleOverflow_Returns422(t *testing.T) {
 		t.Errorf("response.projected_horizon_days: want 10000 (1d × 10k files), got %d",
 			got.ProjectedHorizonDays)
 	}
-	if got.MaxHorizonDays != scheduleClampHorizonDays {
-		t.Errorf("response.max_horizon_days: want %d (scheduleClampHorizonDays), got %d",
-			scheduleClampHorizonDays, got.MaxHorizonDays)
+	// Blocco #2 P0 — read the configured cap (env-driven; defaults
+	// to 30 when WithScheduleLimits isn't called) via the router helper,
+	// so the test tracks the operator's PUBLISH_HORIZON_DAYS setting
+	// rather than the retired scheduleClampHorizonDays constant (=90).
+	expectedHorizon := router.publishHorizonDays()
+	if got.MaxHorizonDays != expectedHorizon {
+		t.Errorf("response.max_horizon_days: want %d (PUBLISH_HORIZON_DAYS), got %d",
+			expectedHorizon, got.MaxHorizonDays)
 	}
 	// The mock's forbidCreateOnTest = true already hard-fails via
 	// t.Errorf from inside Create() if the safety net is somehow

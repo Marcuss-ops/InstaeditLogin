@@ -368,6 +368,16 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithMetricHistoryStore(repository.NewAccountMetricsRepository(db)),
 		api.WithYouTubeVideoEditStore(youtubeVideoEditRepo),
 		api.WithEditorURL(cfg.HTTP.EditorURL),
+		// Blocco #2 P0 — wire the env-driven publish-horizon +
+		// retention-buffer values into the Router so handleRescheduleUpload,
+		// the batch V2 producer's horizon comparison, and
+		// r.computeMediaAssetLifetime (all media_asset create sites)
+		// read from a single source of truth. Without this option
+		// the helpers fall through to the safe defaults (30/7).
+		api.WithScheduleLimits(api.ScheduleLimits{
+			PublishHorizonDays:       cfg.Worker.PublishHorizonDays,
+			VideoRetentionBufferDays: cfg.Worker.VideoRetentionBufferDays,
+		}),
 		// P1#7 — export the importBatchRepo on App so the
 		// command-line crawler (cmd/worker) can wire it directly.
 	}
@@ -653,6 +663,11 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				HeartbeatInterval: time.Duration(a.Cfg.Worker.UploadHeartbeatIntervalSeconds) * time.Second,
 				ReclaimInterval:   time.Duration(a.Cfg.Worker.UploadReclaimIntervalSeconds) * time.Second,
 				ReclaimOnStart:    a.Cfg.Worker.UploadReclaimOnStart,
+				// Blocco #2 P0 — propagate the env-driven retention
+				// buffer (default 7d) so processIngestJob's media_asset
+				// create site uses the same value as the HTTP layer's
+				// computeMediaAssetLifetime helper.
+				VideoRetentionBufferDays: a.Cfg.Worker.VideoRetentionBufferDays,
 			}
 			sourceRegistry := worker.NewArtifactSourceRegistry()
 			if provider, ok := a.CapRouter.Get("google-drive"); ok {

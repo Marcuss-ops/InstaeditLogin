@@ -251,6 +251,25 @@ type WorkerConfig struct {
 	YouTubeUploadBackoffCapMs int
 	// YouTubeDailyQuotaLimit is the daily videos.insert quota cap.
 	YouTubeDailyQuotaLimit int
+	// PublishHorizonDays (Blocco #2 P0) caps how far in the future a
+	// user/operator can schedule a publish. Used by:
+	//   - uploads_handlers.go::handleRescheduleUpload (drag-drop reject
+	//     when publish_at > now+horizon),
+	//   - drive_batch_v2_handlers.go::handleDriveBatchImportV2 (HARD 422
+	//     when the projected worst-case horizon > cap),
+	//   - the /api/v1/health response (so the SPA can render the cap).
+	// Default 30 = env PUBLISH_HORIZON_DAYS. Operators wanting a longer
+	// horizon (e.g. annual content calendars) bump this without a redeploy.
+	PublishHorizonDays int
+	// VideoRetentionBufferDays (Blocco #2 P0) is the post-publish tail
+	// for media_assets.expires_at. Formula:
+	//   - with publish_at: max(now+1d, publish_at + buffer)
+	//   - without publish_at: now + PublishHorizonDays
+	// The 1-day min-floor keeps a slow uploader from racing /complete
+	// (returns 410 when asset is already expired). Default 7 = env
+	// VIDEO_RETENTION_BUFFER_DAYS. Smaller values free S3 space faster;
+	// larger values give the retry worker more slack.
+	VideoRetentionBufferDays int
 }
 
 // Config holds all configuration for the application.
@@ -561,6 +580,12 @@ func Load() (*Config, error) {
 			YouTubeUploadBackoffBaseMs:     getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
 			YouTubeUploadBackoffCapMs:      getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
 			YouTubeDailyQuotaLimit:         getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
+			// Blocco #2 P0 — publish horizon + retention buffer are
+			// env-driven. Defaults (30 days / 7 days) match the user-facing
+			// spec; surface them via the Worker's struct fields so the HTTP
+			// layer + worker pool read the same source of truth.
+			PublishHorizonDays:             getEnvInt("PUBLISH_HORIZON_DAYS", 30),
+			VideoRetentionBufferDays:       getEnvInt("VIDEO_RETENTION_BUFFER_DAYS", 7),
 			PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
 			ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
 			WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
@@ -765,6 +790,18 @@ func (c *Config) validate() error {
 	if c.Auth.YouTubeClientID != "" {
 		if c.Worker.YouTubeUploadChunkBytes <= 0 || c.Worker.YouTubeUploadChunkBytes%262144 != 0 {
 			return fmt.Errorf("YOUTUBE_UPLOAD_CHUNK_BYTES must be a positive multiple of 256 KB (262144 bytes); got %d (default 16777216 = 16 MB)", c.Worker.YouTubeUploadChunkBytes)
+		}
+		// Blocco #2 P0 — publish horizon + retention buffer must be
+		// positive; 0 would let the worker compute expires_at in
+		// the past and /complete would 410 every upload. Operators
+		// wanting to disable the gating should bump to a large value
+		// (e.g. 365) instead of 0 — the spam-prevention here is
+		// explicit (no implicit "disable by zero").
+		if c.Worker.PublishHorizonDays <= 0 {
+			return fmt.Errorf("PUBLISH_HORIZON_DAYS must be a positive integer (got %d); set to 365 to effectively disable the cap, not 0", c.Worker.PublishHorizonDays)
+		}
+		if c.Worker.VideoRetentionBufferDays <= 0 {
+			return fmt.Errorf("VIDEO_RETENTION_BUFFER_DAYS must be a positive integer (got %d); set to a large value (e.g. 90) to extend the tail, not 0", c.Worker.VideoRetentionBufferDays)
 		}
 		if c.Worker.YouTubeUploadMaxRetries < 1 {
 			return fmt.Errorf("YOUTUBE_UPLOAD_MAX_RETRIES must be at least 1 (got %d)", c.Worker.YouTubeUploadMaxRetries)

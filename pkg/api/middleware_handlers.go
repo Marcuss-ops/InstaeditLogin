@@ -12,11 +12,36 @@ import (
 // ----------------------------------------------------------------------- Handlers
 
 func (r *Router) handleHealth(w http.ResponseWriter, req *http.Request) {
+	// Blocco #2 P0 — surface the publish horizon + retention buffer
+	// to the SPA via /api/v1/health. The frontend's calendar widget
+	// renders the unique-of-both knobs as "max horizon: 30 days" /
+	// "asset retention: 7 days past publish", and a single
+	// GET /api/v1/health on dashboard mount is enough (cheap, public,
+	// already hit by the SPA's status ping). The `limits` envelope
+	// is nested so future knobs (max upload bytes, chunk size, etc.)
+	// can sit alongside without changing the SPA's wire parsing.
+	//
+	// The endpoint stays "liveness"-shaped (status, platforms)
+	// — the new `limits` block is operator-facing config, NOT a
+	// readiness signal. /ready remains the canonical readiness
+	// surface (DB ping + migrations).
+	publishHorizonDays := r.scheduleLimits.PublishHorizonDays
+	if publishHorizonDays <= 0 {
+		publishHorizonDays = 30
+	}
+	retentionBufferDays := r.scheduleLimits.VideoRetentionBufferDays
+	if retentionBufferDays <= 0 {
+		retentionBufferDays = 7
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":    "ok",
 		"service":   "InstaEditLogin",
 		"version":   "2.0.0",
 		"platforms": r.capabilities.Names(),
+		"limits": map[string]int{
+			"publish_horizon_days":       publishHorizonDays,
+			"video_retention_buffer_days": retentionBufferDays,
+		},
 	})
 }
 

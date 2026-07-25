@@ -275,6 +275,10 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Build the S3 key and create a pending media asset.
+	// Blocco #2 P0 — TTL is buffer-aware now. Drive-import doesn't
+	// know the publish_at at THIS call site (the import handler
+	// publishes immediately via PublishPost); pass nil so the
+	// helper uses the now + horizon formula (default 30d).
 	key := services.BuildUploadKey(userID, fileMeta.Name)
 	asset := &models.MediaAsset{
 		UserID:      userID,
@@ -282,7 +286,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 		ContentType: fileMeta.MimeType,
 		SizeBytes:   sizeBytes,
 		Status:      models.MediaAssetStatusPending,
-		ExpiresAt:   time.Now().Add(mediaAssetLifetime),
+		ExpiresAt:   r.computeMediaAssetLifetime(nil),
 	}
 	if err := r.mediaStore.Create(asset); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create media asset: "+err.Error())

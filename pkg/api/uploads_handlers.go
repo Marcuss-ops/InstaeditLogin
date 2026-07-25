@@ -26,13 +26,17 @@ import (
 // enough that the entire batch fits in one round-trip.
 const uploadJobCalendarDefaultLimit = 200
 
-// uploadJobMaxScheduleHorizonDays caps how far in the future a user
-// can move a scheduled video via drag-drop. 60 days matches the
-// drive_batch_jitter_max_seconds (7 days) plus a generous safety
-// margin so the dashboard never lets a user accidentally park a post
-// 6 months out (which would silently reduce the "the worker will
-// publish this" inspection frequency).
-const uploadJobMaxScheduleHorizonDays = 60
+// uploadJobMaxScheduleHorizonDays (Blocco #2 P0) is RETIRED — moved to
+// r.scheduleLimits.PublishHorizonDays (env PUBLISH_HORIZON_DAYS,
+// default 30). The hardcoded 60-day cap was removed because:
+//   1. the batch V2 contract's 90-day cap (drive_batch_v2_handlers.go)
+//      and the per-account reschedule cap diverged;
+//   2. operators wanting a longer horizon had to rebuild + redeploy;
+//   3. the value 60 = drive_batch_jitter_max(7) + safety was a stale
+//      sentence-type comment, not a real semantic invariant.
+// See WithScheduleLimits + (*Router).publishHorizonDays for the
+// new accessor.
+// uploadJobMaxScheduleHorizonDays = 60 — REMOVED (use r.publishHorizonDays()).
 
 // UploadJobDTO is the wire shape returned to the SPA. We deliberately
 // do NOT return the full models.UploadJob struct (it leaks user_id,
@@ -426,10 +430,15 @@ func (r *Router) handleRescheduleUpload(w http.ResponseWriter, req *http.Request
 		writeError(w, http.StatusBadRequest, "publish_at must be at least 5 seconds in the future")
 		return
 	}
-	maxHorizon := time.Now().Add(time.Duration(uploadJobMaxScheduleHorizonDays) * 24 * time.Hour)
+	// Blocco #2 P0 — horizon is config-driven (env
+	// PUBLISH_HORIZON_DAYS, default 30). The single-account reschedule
+	// endpoint mirrors the batch V2 producer's horizon so a user can't
+	// drag-drop a single video beyond the same cap the batch enforces.
+	maxHorizonDays := r.publishHorizonDays()
+	maxHorizon := time.Now().Add(time.Duration(maxHorizonDays) * 24 * time.Hour)
 	if newPublishAt.After(maxHorizon) {
 		writeError(w, http.StatusBadRequest,
-			fmt.Sprintf("publish_at must be within %d days from now", uploadJobMaxScheduleHorizonDays),
+			fmt.Sprintf("publish_at must be within %d days from now", maxHorizonDays),
 		)
 		return
 	}

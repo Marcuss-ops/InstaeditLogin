@@ -326,6 +326,16 @@ type Router struct {
 	// (503). Wired via WithMetricsAuth.
 	metricsUser string
 	metricsPass string
+
+	// scheduleLimits (Blocco #2 P0) is the narrow read-only view of
+	// WorkerConfig.PublishHorizonDays + VideoRetentionBufferDays
+	// constructed by bootstrap from cfg.Worker and passed via
+	// WithScheduleLimits. Used by handleRescheduleUpload,
+	// handleDriveBatchImportV2 (heuristic cap), and
+	// computeMediaAssetLifetime (all media_asset create sites).
+	// Defaulted inside the helper functions to 30 / 7 so dev
+	// fixtures that bypass the setter still get a sane TTL.
+	scheduleLimits ScheduleLimits
 }
 
 // ConnectionStateStore is declared in pkg/api/connections.go (SPRINT 1.2);
