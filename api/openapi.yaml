@@ -86,6 +86,39 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /auth/{provider}/start:
+    get:
+      tags: [Auth]
+      operationId: authGetLoginUrlStart
+      deprecated: true
+      summary: Alias of /auth/{provider}/login (backwards-compat).
+      description: |
+        Backwards-compat alias of `/auth/{provider}/login`. Some older
+        scripts and docs reference `start` as the OAuth initiation URL;
+        this entry serves those. The `/login` and `/start` paths are
+        functionally identical (same handler, same middleware chain,
+        same response). Canonical URL is `/auth/{provider}/login`; new
+        integrations should prefer that path. Added in commit c9e760d.
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [meta, tiktok, twitter, youtube, linkedin]
+      responses:
+        '302':
+          description: Redirect to provider authorization URL (`Location` header).
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+              description: Provider's `/authorize` URL.
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /auth/{provider}/callback:
     get:
       tags: [Auth]
