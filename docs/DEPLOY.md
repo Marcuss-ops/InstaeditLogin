@@ -78,7 +78,7 @@ involved.
 | Outbound         | unrestricted (LE ACME + provider OAuth round-trips) |
 | DNS path         | A record + Cloudflare proxy OFF (DNS-only / "grey") |
 
-### 1.2 First-time host setup (operator laptop → VPS)
+### 1.2 First-time host setup
 
 ```bash
 # 1. Provision the VPS at your host of choice (Hetzner, OVH,
