@@ -248,8 +248,8 @@ browser naviga alla URL ma riceve una pagina di errore invece del redirect
 verso Meta/TikTok/etc.
 
 **Fix**: `VITE_API_BASE_URL` deve essere l'URL diretto del backend
-Go — Railway / Render / Fly.io / custom domain (es.
-`https://api.example.com`). MAI un sottodominio `*.vercel.app`.
+Go su VPS (es. `https://api.instaedit.org`) o, in subordine, un custom
+domain che punti alla stessa VPS. MAI un sottodominio `*.vercel.app`.
 
 ### 2. Dimenticare di redeploy dopo aver cambiato l'env
 
@@ -279,8 +279,7 @@ non c'è nessun run-time che risponde a quei path.
 e ogni probe restituisce 404 — sia `/health` che `/auth/{provider}/login`.
 
 **Fix**: i due URL vivono su host **diversi**. Il frontend è Vercel (asset
-statici, `vercel.json` → `dist/`), il backend è un servizio long-running
-separato (Go + Postgres, deployato su Railway/Render/Fly.io/VPS). Esempio:
+statici, `vercel.json` → `dist/`),il backend è un servizio long-running separato (Go + Postgres, deployato su VPS — singolo host, Caddy + Docker Compose, vedi `docs/DEPLOY.md`). Esempio:
 frontend su `https://instaedit.vercel.app`, backend su
 `https://instaedit-api.fly.dev`. Metti il secondo in `VITE_API_BASE_URL`.
 
