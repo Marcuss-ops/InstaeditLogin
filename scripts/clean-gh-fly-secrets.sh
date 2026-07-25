@@ -43,10 +43,22 @@
 #
 # CI / monitoring note: as of this revision, emit-codes are {0,1,2,3,5,6}.
 # A probe previously wired to exit 4 (partial-delete refusal,
-# superseded by soft-proceed) should be updated to wire exit 5 instead,
-# which now also covers the operator-no confirmation case. The current
-# version does NOT emit exit 4 from any code path; reserved to keep
-# the numbering stable for scripts relying on the prior layout.
+# superseded by soft-proceed) should be updated to wire exit 5.
+# The current version does NOT emit exit 4 from any code path; reserved
+# to keep the numbering stable for scripts relying on the prior layout.
+#
+# CAVEAT for exit 5: that code covers TWO semantically distinct
+# outcomes and you may want to split them in your alerting:
+#   - "deletion failure": one or more `gh secret delete` calls
+#     failed mid-loop (network glitch / 403 mid-run / API outage) →
+#     page-worthy. The failure-tagged stderr lines start with `❌`.
+#   - "operator cancellation": the operator typed something other
+#     than `yes` at the confirmation prompt → deliberate abort,
+#     NOT a failure → NOT page-worthy. The cancellation stderr line
+#     is exactly `Aborted by operator. No secrets were modified.`.
+# A grep for the cancellation tell (`Aborted by operator`) on
+# stderr is a reliable split-key if you want to keep alerting on
+# (a) only, without smearing (b) into the failure channel.
 set -euo pipefail
 
 # Trap any exit path so temp files don't leak on shared hosts / CI
