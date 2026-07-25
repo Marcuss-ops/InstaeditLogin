@@ -502,12 +502,16 @@ AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
 # Replica su MinIO (BOTH server-default + per-bucket):
 # (a) Default a livello di server (env in docker-compose.yml):
 #     MINIO_API_KMS_SECRET_KEY=<base64-32-byte>   # opzionale; usa solo se KMS custom
+cat > /tmp/enc-minio.json <<'EOF'
+{ "encrypt": { "0": { "sse": { "algorithm": "AES256" } } } }
+EOF
 docker compose exec -T minio mc admin config import < /tmp/enc-minio.json
 docker compose restart minio
-# (a) sopra è il pattern corretto: scrivi l'host heredoc in
-# /tmp/enc-minio.json, poi pipe via `docker compose exec -T` (-T
-# disabilita pseudo-tty, evita LF→CRLF corruption),
-# infine restart per ricaricare la config.
+# (a) sopra è il pattern corretto: cat > /tmp/enc-minio.json <<'EOF'
+# { "encrypt": … } EOF  (crea il file sull'host)
+# → docker compose exec -T minio mc admin config import < /tmp/enc-minio.json
+#   (-T disabilita pseudo-tty, pipe via stdin al container)
+# → docker compose restart minio (ri-carica la config)
 
 # (b) Default sul bucket specifico:
 docker compose exec minio mc encrypt set sse-s3 minio/instaedit-local
