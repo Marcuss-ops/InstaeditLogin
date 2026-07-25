@@ -5,13 +5,13 @@
 // manifest. Drift in EITHER direction (missing canonical / extra granted /
 // forbidden scope present) trips a non-zero exit code.
 //
-// The previous Fly-secrets-coherence leg has been removed (the underlying
-// scripts/required-fly-secrets.txt + scripts/disabled-fly-secrets-prefixes.txt
-// file pair was dropped in earlier commits; the env-var overrides
-// INSTAEDIT_REQUIRED_SECRETS_PATH / INSTAEDIT_DISABLED_SECRETS_PATH are no
-// longer wired). The secrets-coherence responsibility now lives entirely in
-// scripts/_parse_envfile.py + scripts/test_parse_envfile.py (a standalone
-// Python CI job), as documented in .github/workflows/integration.yml.
+// The previous second responsibility (a hosted-platform secrets-coherence
+// leg) has been removed from this binary; the underlying two secrets-
+// fixture files were dropped in earlier cutover commits and the matching
+// env-var overrides no longer exist. Any future cohesion validation
+// lives entirely in scripts/_parse_envfile.py + scripts/test_parse_envfile.py
+// (a standalone Python CI job), as documented in
+// .github/workflows/integration.yml.
 //
 // Trigger flow:
 //   - weekly scheduled run + on-demand workflow_dispatch (see
@@ -115,9 +115,10 @@ var errScopeDrift = errors.New("oauth scope drift detected")
 // run is the orchestration entry point; returns nil on success or
 // errScopeDrift (or a wrapped instance) on drift.
 //
-// The previous Fly-coherence leg has been removed; run() now ONLY
-// probes the live tokeninfo endpoint when DRIVE_OAUTH_CANARY_TOKEN
-// is set. Missing token is a logged SKIP, not a failure.
+// The previous second responsibility (hosted-platform secrets-coherence)
+// has been removed; run() now ONLY probes the live tokeninfo endpoint
+// when DRIVE_OAUTH_CANARY_TOKEN is set. Missing token is a logged
+// SKIP, not a failure.
 func run(logger *slog.Logger) error {
 	driveToken := os.Getenv("DRIVE_OAUTH_CANARY_TOKEN")
 	if driveToken == "" {
