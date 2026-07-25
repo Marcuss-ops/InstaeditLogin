@@ -408,9 +408,11 @@ cat > /tmp/cors-minio.json <<'EOF'
   }
 }
 EOF
-docker compose exec minio mc admin config import < /tmp/cors-minio.json
-# `mc admin config import` legge da stdin, quindi l'host-side heredoc
-# sopravvive il boundary host→container. Restart per ricaricare:
+docker compose exec -T minio mc admin config import < /tmp/cors-minio.json
+# `-T` disabilita la pseudo-tty di `docker compose exec`; senza `-T`
+# la TTY-mode line-discipline può corrompere il JSON (LF→CRLF, escape
+# sequences). `mc admin config import` legge da stdin — l'host-side
+# heredoc sopravvive il boundary host→container. Restart per ricaricare:
 docker compose restart minio
 ```
 
@@ -477,8 +479,12 @@ python3 -c 'import json,sys; json.load(open("/tmp/lifecycle-tigris.json"))' \
 
 # (b) Import lifecycle + attiva versioning su MinIO. `mc ilm import`
 #     legge da stdin (stesso workaround host→container descritto in §6):
-docker compose exec minio mc ilm import minio/instaedit-local < /tmp/lifecycle-tigris.json
+docker compose exec -T minio mc ilm import minio/instaedit-local < /tmp/lifecycle-tigris.json
+# `-T` idempotente come in §6. `mc ilm import` legge da stdin.
 docker compose exec minio mc version enable minio/instaedit-local
+# `mc version enable` NON legge stdin; l'argomento è solo il <alias>
+# del bucket. `-T` qui è opzionale (nessun TTY-mode corruption risk),
+# ma incluso per coerenza con il pattern §6/§10.
 ```
 
 ### 10. KMS / SSE-S3 encryption parity
@@ -496,11 +502,12 @@ AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
 # Replica su MinIO (BOTH server-default + per-bucket):
 # (a) Default a livello di server (env in docker-compose.yml):
 #     MINIO_API_KMS_SECRET_KEY=<base64-32-byte>   # opzionale; usa solo se KMS custom
-docker compose exec minio mc admin config set /tmp/enc.json <<'EOF'
-{ "encrypt": { "0": { "sse": { "algorithm": "AES256" } } } }
-EOF
-# (ATTENZIONE: stesso heredoc-host/container gotcha del §6 — se redisca
-# problemi, usa il pattern docker cp descritto sopra.)
+docker compose exec -T minio mc admin config import < /tmp/enc-minio.json
+docker compose restart minio
+# (a) sopra è il pattern corretto: scrivi l'host heredoc in
+# /tmp/enc-minio.json, poi pipe via `docker compose exec -T` (-T
+# disabilita pseudo-tty, evita LF→CRLF corruption),
+# infine restart per ricaricare la config.
 
 # (b) Default sul bucket specifico:
 docker compose exec minio mc encrypt set sse-s3 minio/instaedit-local
