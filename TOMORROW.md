@@ -395,6 +395,22 @@ dal lato bucket. Aggiunte al gate:
 # FIX sulla VPS (3 step; ATTENZIONE: heredoc-bare non funziona perché
 # `docker compose exec` non vede il filesystem dell'host — serve docker cp
 # OR stdin via `-T`):
+#
+# Prerequisito alias (NON documentato altrove; tutti i `mc ... <bucket>`
+# richiedono un alias configurato):
+#   Sul primo run operazionale:
+#     docker compose exec minio mc alias set minio http://localhost:9000
+#   Universale per due motivi:
+#     - dentro il container minio: `localhost` = self-loopback →
+#       minio stesso in ascolto sulla sua porta 9000.
+#     - dalla VPS-host: port-mapping docker-compose inoltra
+#       `localhost:9000` dell'host sulla porta 9000 del container.
+#   Da EVITARE invece `http://minio:9000`: funziona SOLO dal compose
+#   network namespace (DNS-compose non cross-namespace di default);
+#   dalla VPS-host dà errore DNS resolution.
+#   Senza questo, `minio/instaedit-local` non risolve e ogni comando
+#   mc in §10 ritorna `mc: <bucket> does not exist`.
+
 cat > /tmp/cors-minio.json <<'EOF'
 {
   "cors": {
@@ -414,6 +430,9 @@ docker compose exec -T minio mc admin config import < /tmp/cors-minio.json
 # sequences). `mc admin config import` legge da stdin — l'host-side
 # heredoc sopravvive il boundary host→container. Restart per ricaricare:
 docker compose restart minio
+
+# Verifica post-restart (conferma runtime):
+docker compose exec minio mc admin config get minio | grep -A6 -i 'cors\|api_'
 ```
 
 ### 7. Public-read bucket policy diff
@@ -430,6 +449,9 @@ AWS_ACCESS_KEY_ID=$tig_key AWS_SECRET_ACCESS_KEY=$tig_sec \
 # Replica su MinIO (VPS):
 docker compose exec minio mc anonymous set download minio/instaedit-local
 # (oppure solo prefix-specifici se serve granularità)
+
+# Verifica applicazione policy:
+docker compose exec minio mc anonymous get minio/instaedit-local
 ```
 
 ### 8. S3_REGION / S3_USE_SSL parity
@@ -479,12 +501,33 @@ python3 -c 'import json,sys; json.load(open("/tmp/lifecycle-tigris.json"))' \
 
 # (b) Import lifecycle + attiva versioning su MinIO. `mc ilm import`
 #     legge da stdin (stesso workaround host→container descritto in §6):
+#
+# Prerequisito alias (NON documentato altrove; tutti i `mc ... <bucket>`
+# richiedono un alias configurato):
+#   Sul primo run operazionale:
+#     docker compose exec minio mc alias set minio http://localhost:9000
+#   Universale per due motivi:
+#     - dentro il container minio: `localhost` = self-loopback →
+#       minio stesso in ascolto sulla sua porta 9000.
+#     - dalla VPS-host: port-mapping docker-compose inoltra
+#       `localhost:9000` dell'host sulla porta 9000 del container.
+#   Da EVITARE invece `http://minio:9000`: funziona SOLO dal compose
+#   network namespace (DNS-compose non cross-namespace di default);
+#   dalla VPS-host dà errore DNS resolution.
+#   Senza questo, `minio/instaedit-local` non risolve e ogni comando
+#   mc in §10 ritorna `mc: <bucket> does not exist`.
+
 docker compose exec -T minio mc ilm import minio/instaedit-local < /tmp/lifecycle-tigris.json
 # `-T` idempotente come in §6. `mc ilm import` legge da stdin.
+# Verifica post-import (conferma runtime):
+docker compose exec minio mc ilm ls minio/instaedit-local
+
 docker compose exec minio mc version enable minio/instaedit-local
 # `mc version enable` NON legge stdin; l'argomento è solo il <alias>
 # del bucket. `-T` qui è opzionale (nessun TTY-mode corruption risk),
 # ma incluso per coerenza con il pattern §6/§10.
+# Verifica post-enable (conferma runtime):
+docker compose exec minio mc version info minio/instaedit-local
 ```
 
 ### 10. KMS / SSE-S3 encryption parity
