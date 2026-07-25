@@ -9,6 +9,13 @@ side-by-side with the runbook on the operator's laptop. Paste back the
 filled-in sections (everything between the `==>` arrows) into the
 operator prompt after each section completes.
 
+> **Replacement rule** — every `⇒ [ paste ]` marker is a *placeholder*,
+> not a literal. Replace it with the actual command output from your
+> terminal: raw stdout/stderr, the single-line reply written to stdout,
+> or the JSON contents you cat'd. Don't paste back the literal text
+> `[ paste ]`. The `||>` arrows are visual aids only — the real
+> paste unit is the text immediately to the right of `⇒`.
+
 ---
 
 ## Pre-status
@@ -26,14 +33,14 @@ operator prompt after each section completes.
 
 ```text
 # Command                          # Expected pass criterion          # Paste here
-command -v flyctl                  → exits 0                         ⇒ [ paste ]
-command -v python3                 → exits 0                         ⇒ [ paste ]
-command -v jq                      → exits 0                         ⇒ [ paste ]
-command -v mc                      → exits 0 (if §3 planned)         ⇒ [ paste ]
-flyctl auth whoami                 → prints your email                ⇒ [ paste ]
-dig +short api.instaedit.org A     → "51.91.11.36"                    ⇒ [ paste ]
+command -v flyctl                  → exits 0                         ⇒ [ paste ]  # §1.1 flyctl installed
+flyctl auth whoami                 → prints your email                ⇒ [ paste ]  # §1.2 flyctl authed
+command -v python3                 → exits 0                         ⇒ [ paste ]  # §1.3 python3 available
+command -v jq                      → exits 0                         ⇒ [ paste ]  # §1.4 jq available
+command -v mc                      → exits 0 (if §3 planned)         ⇒ [ paste ]  # §1.5 mc available
+dig +short api.instaedit.org A     → "51.91.11.36"                    ⇒ [ paste ]  # §1.6 VPS DNS
 curl -fsS https://api.instaedit.org/api/v1/health
-                                  → JSON with "status":"ok"          ⇒ [ paste ]
+                                  → JSON with "status":"ok"          ⇒ [ paste ]  # §1.7 VPS health
 ```
 
 **GATE.** If any line is red, STOP. Do not proceed to §2.
@@ -179,6 +186,10 @@ The final version (paste-back as one line):
 ```
 [ single-line row ready to copy into docs/VPS-DEPLOY-STATUS.md §6 ]
 ```
+
+**Copy the `| YYYY-MM-DD | …` line itself, NOT the surrounding `[ ]`
+brackets or the code-block fences**, into `docs/VPS-DEPLOY-STATUS.md`
+§6 at the bottom of the existing probe-log table.
 
 ---
 
