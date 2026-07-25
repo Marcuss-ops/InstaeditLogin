@@ -123,6 +123,7 @@ Failure mode to escalate on: any header containing the substring `fly`
 |---------------------|----------------|---------------|---------------|--------------------------------|
 | 2026-07-25 12:01:11 | `51.91.11.36`  | Caddy         | 503           | Workers warming; cutover alive |
 | 2026-07-25 16:09:00 | `51.91.11.36`  | Caddy         | 404           | PENDING E2E: sandbox smoke probe found /api/v1/auth/tiktok/start=404 vs /login=302 (deploy lag suspected). Source confirmed wired (pkg/api/modules.go:513). Fix on VPS: `cd /opt/instaedit/InstaeditLogin && docker compose up -d --build api`, then run `scripts/ops/verify-tiktok-oauth-e2e.sh <workspace_id>`. (c9e760d /start alias) |
+| 2026-07-25 16:45:00 | `51.91.11.36`  | Caddy         | 200           | Fly destroy PENDING Tigris disambiguation: `flyctl storage list --app instaedit-login --json` not yet run from operator laptop. Full operator runbook at docs/FLY-DESTROY-RUNBOOK.md §1; sandbox cannot execute flyctl — gate is operator-side.
 
 ## 7. Open items
 
