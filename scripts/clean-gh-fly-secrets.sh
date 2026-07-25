@@ -33,12 +33,19 @@
 #
 # Exit codes:
 #   0 = clean state (default list-only print, --check success, or --apply succeeded)
-#   1 = gh CLI not installed or not authenticated as Marcuss-ops
-#   2 = repo detection failed (gh repo view errored)
+#   1 = gh CLI not installed or not authenticated as Marcuss-ops, OR unknown flag
+#   2 = repo detection failed (gh repo view errored) OR wrong owner
 #   3 = `gh secret list` failed (PAT lacks scope; print UI fallback)
-#   4 = one or more target secrets were not registered (and --apply was used → refuse)
-#   5 = a `gh secret delete` call failed (network / 403 / 404)
+#   4 = RESERVED (was partial-delete refusal, superseded by soft-proceed in present[] mode)
+#   5 = a `gh secret delete` call failed (network / 403 / 404), OR operator
+#       typed something other than "yes" at the confirmation prompt
+#   6 = --apply invoked without an interactive TTY (refuse + suggest --ui-fallback)
 set -euo pipefail
+
+# Trap any exit path so temp files don't leak on shared hosts / CI
+# containers. Per-exit-path explicit `rm -f /tmp/list_out` is still
+# present in many branches for readability; the trap is the safety net.
+trap 'rm -f /tmp/list_out /tmp/list_err /tmp/del_err 2>/dev/null || true' EXIT
 
 REPO="Marcuss-ops/InstaeditLogin"
 SECRETS=(
