@@ -203,14 +203,6 @@ jobs:
           echo
           echo "✓ frontend gateway passed"
 
-      # ─── 8.5. Fly secrets parser regression test (Blocco #4.1) ───
-      # The .env parser in scripts/_parse_envfile.py is the security
-      # boundary of the deploy — a bug here could push a malformed
-      # value (panic at boot) or a shell-expanded value (silently
-      # mutate a secret). This is a fast (<1s) pure-python test that
-      # locks the contract. No Docker / no external services needed.
-      - name: Verify Fly secrets parser
-        run: make fly-secrets-test
 
       # ─── 8.6. OAuth scope canary unit tests (PR-lane only) ────────
       # The canary binary's *pure-function* test suite runs here so
@@ -307,3 +299,34 @@ jobs:
           echo
           echo "Run locally: make test-e2e"
           echo "Run with -tags=e2e only (no need for `make`): go test -tags=e2e -timeout 15m ./tests/e2e/..."
+
+  # ─── envfile parser regression test (formerly ci step 8.5 + make fly-secrets-test) ───
+  # The .env parser in scripts/_parse_envfile.py is the security
+  # boundary of the deploy — a bug here could push a malformed value
+  # (panic at boot) or a shell-expanded value (silently mutate a
+  # secret). The `make fly-secrets-test` Makefile target was retired
+  # alongside the Fly cutover (commit 1ab88ef), so this test now
+  # runs directly via `python3 scripts/test_parse_envfile.py`.
+  # Fast (<1s) pure-python — no Docker / no external services needed.
+  # Mirrors the sibling `e2e:` standalone-job shape.
+  test-parse-envfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    concurrency:
+      group: test-parse-envfile-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # The test_parse_envfile.py script is a pure-python regression
+      # test that exercises 15 cases on _parse_envfile.py. Exit 0 on
+      # all-pass, non-zero on first failure.
+      - name: Run envfile parser regression test
+        run: python3 scripts/test_parse_envfile.py

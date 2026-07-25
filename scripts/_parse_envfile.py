@@ -17,7 +17,7 @@ INTERFACE:
     mode:        "apply" (emit KEY=VAL on stdout for flyctl pipe) or
                  "dry-run" (no stdout; only stderr preview)
     app_name:    Fly app name (for the preview header)
-    script_dir:  directory holding required-fly-secrets.txt and
+    script_dir:  directory holding the envfile fixture directory and
                  disabled-fly-secrets-prefixes.txt (so this file is
                  self-contained — the bash wrapper passes its own
                  `$(dirname "$0")` so PYTHONPATH / cwd don't matter)
@@ -25,7 +25,7 @@ INTERFACE:
 OUTPUT CONTRACT:
     stderr:  redacted preview table (always, in both modes)
     stdout:  KEY=VAL lines, ONE PER LINE, only in --apply mode
-             (the bash wrapper pipes this to `flyctl secrets set -`)
+             (the bash wrapper pipes this to `set -`)
 
 EXIT CODES:
     0  OK
@@ -255,9 +255,6 @@ def main() -> int:
     emit_preview(parsed, required_keys, app_name)
 
     if mode == "apply":
-        # Emit KEY=VAL to stdout (one per line) for the flyctl pipe.
-        # No quoting — flyctl expects literal KEY=VAL, and these values
-        # are URL/hex/base64 strings (no whitespace, no shell specials).
         for key in required_keys:
             print(f"{key}={parsed[key]}", flush=True)
 
