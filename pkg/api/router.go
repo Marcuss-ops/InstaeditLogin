@@ -801,6 +801,13 @@ type YouTubeVideoEditStore interface {
 	// 0-rows to 409). Mirrors
 	// repository.YouTubeVideoEditRepository.AttachThumbnail.
 	AttachThumbnail(ctx context.Context, sessionID, thumbnailMediaID string) (*models.YouTubeVideoEdit, error)
+	// ListByWorkspace feeds the dashboard "code da modificare" widget.
+	// Workspace-scoped + optional AccountID/Statuses filters + bounded
+	// LIMIT. See repository.YouTubeEditorSessionListFilter for the full
+	// semantics; the handler validates ?workspace_id and parses
+	// ?account_id / ?status / ?limit, defaulting the status set to
+	// YouTubeVideoEditNonTerminalStatuses when no ?status= is supplied.
+	ListByWorkspace(ctx context.Context, filter repository.YouTubeEditorSessionListFilter) ([]*models.YouTubeVideoEdit, error)
 }
 
 // P2 — ops dashboard store. AdminStore is the read-side

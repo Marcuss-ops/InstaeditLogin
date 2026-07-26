@@ -166,6 +166,15 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions", r.protected(createEditorSessionHandler.ServeHTTP))
 
+	// GET /api/v1/youtube/editor-sessions — dashboard "code da modificare"
+	// list. Returns the non-terminal YouTube video edit sessions in the
+	// caller's workspace (with optional ?account_id, ?status, ?limit
+	// filters). Read-only, no CSRF (GET exempt by spec), no body.
+	// ?workspace_id is REQUIRED; the handler refuses to enumerate rows
+	// without an explicit workspace scope (cross-tenant probe prevention).
+	var listEditorSessionsHandler http.Handler = http.HandlerFunc(r.handleListYouTubeEditorSessions)
+	r.mux.Method(http.MethodGet, "/api/v1/youtube/editor-sessions", r.protected(listEditorSessionsHandler.ServeHTTP))
+
 	var updateEditorSessionHandler http.Handler = http.HandlerFunc(r.handleUpdateYouTubeEditorSession)
 	if r.csrfMiddleware != nil {
 		updateEditorSessionHandler = r.csrfMiddleware(updateEditorSessionHandler)

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { ChevronDown, ExternalLink, Info } from "lucide-react";
+import { ChevronDown, ExternalLink, Info, Lock } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { FormField } from "./FormField";
 import { FormSelect } from "./FormSelect";
@@ -16,7 +16,7 @@ export function UploadFilters({
   form,
   setForm,
   workspaces,
-  pages,
+  youtubeChannels,
   drives,
   folderValid,
   isSubmitting,
@@ -25,14 +25,12 @@ export function UploadFilters({
   form: FormValues;
   setForm: React.Dispatch<React.SetStateAction<FormValues>>;
   workspaces: Workspace[];
-  pages: PlatformAccount[];
+  youtubeChannels: PlatformAccount[];
   drives: PlatformAccount[];
   folderValid: boolean | null;
   isSubmitting: boolean;
   firstFieldRef: React.RefObject<HTMLInputElement | null>;
 }) {
-  // Focus the folder ID input on mount so keyboard users land on a
-  // labelled field without a tab trip.
   useEffect(() => {
     firstFieldRef.current?.focus();
   }, []);
@@ -52,17 +50,17 @@ export function UploadFilters({
           options={workspaces.map((w) => ({ value: w.id, label: w.name }))}
         />
         <FormSelect
-          id="uploads-fb-account"
-          label="Facebook Page"
-          value={form.facebookAccountId}
+          id="uploads-yt-channel"
+          label="YouTube Channel"
+          value={form.youtubeAccountId}
           onChange={(v) =>
-            setForm((f) => ({ ...f, facebookAccountId: v as number | "" }))
+            setForm((f) => ({ ...f, youtubeAccountId: v as number | "" }))
           }
-          placeholder="Select a Page…"
+          placeholder="Select a channel…"
           disabled={isSubmitting}
-          options={pages.map((p) => ({
-            value: p.id,
-            label: `@${p.username}`,
+          options={youtubeChannels.map((c) => ({
+            value: c.id,
+            label: `@${c.username}`,
           }))}
         />
       </div>
@@ -110,31 +108,81 @@ export function UploadFilters({
         </FormField>
       </div>
 
-      {drives.length > 0 && (
-        <div>
-          <FormSelect
-            id="uploads-drive-account"
-            label="Drive account (optional)"
-            value={form.driveAccountId}
-            onChange={(v) =>
-              setForm((f) => ({ ...f, driveAccountId: v as number | "" }))
-            }
-            placeholder="Public folder — server API key"
-            disabled={isSubmitting}
-            options={drives.map((d) => ({
-              value: d.id,
-              label: `Linked Drive · @${d.username}`,
-            }))}
-          />
-          <p className="mt-1.5 text-[12px] text-[#9aa0aa]/80 flex items-start gap-1.5">
+      <div>
+        <FormSelect
+          id="uploads-drive-account"
+          label="Google Drive account"
+          value={form.driveAccountId}
+          onChange={(v) =>
+            setForm((f) => ({ ...f, driveAccountId: v as number | "" }))
+          }
+          placeholder="Select a Drive account…"
+          disabled={isSubmitting}
+          options={drives.map((d) => ({
+            value: d.id,
+            label: `Linked Drive · @${d.username}`,
+          }))}
+        />
+        {drives.length === 0 && (
+          <p className="mt-1.5 text-[12px] text-amber-400/80 flex items-start gap-1.5">
             <Info size={11} className="mt-0.5 shrink-0" aria-hidden="true" />
             <span>
-              Pick a linked Drive if this folder is private to you. Leave
-              blank to use the server&apos;s public-folder API key.
+              No Google Drive accounts linked. Connect one in /app/linking to
+              access private folders.
             </span>
           </p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <FormField
+            id="uploads-privacy"
+            label="Default visibility"
+            helpText="Videos are uploaded with this visibility. You can change per-video after import."
+          >
+            <div className="flex gap-2">
+              {(["private", "unlisted", "public"] as const).map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() =>
+                    setForm((f) => ({ ...f, privacyLevel: level }))
+                  }
+                  className={cn(
+                    "flex-1 px-3 py-2 rounded-xl text-[13px] font-semibold border transition-colors capitalize",
+                    form.privacyLevel === level
+                      ? "bg-white/[0.10] border-white/[0.20] text-white"
+                      : "bg-white/[0.03] border-white/[0.08] text-[#9aa0aa] hover:text-white hover:bg-white/[0.06]",
+                  )}
+                >
+                  <Lock size={12} className="inline mr-1.5 -mt-0.5" />
+                  {level}
+                </button>
+              ))}
+            </div>
+          </FormField>
         </div>
-      )}
+        <div>
+          <FormField
+            id="uploads-start-at"
+            label="Start publishing at"
+            helpText="Leave empty to start immediately after import completes."
+          >
+            <input
+              id="uploads-start-at"
+              type="datetime-local"
+              value={form.startAt}
+              disabled={isSubmitting}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, startAt: e.target.value }))
+              }
+              className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white focus:outline-none focus:border-white/[0.20] focus:ring-1 focus:ring-white/10 transition-all"
+            />
+          </FormField>
+        </div>
+      </div>
 
       <button
         type="button"
@@ -213,7 +261,7 @@ export function UploadFilters({
             <FormField
               id="uploads-title"
               label="Internal title prefix (optional)"
-              helpText="Prepended to each post's internal title so you can recognise the batch in /app/posts."
+              helpText="Prepended to each video's internal title so you can recognise the batch in /app/posts."
             >
               <input
                 id="uploads-title"
@@ -232,17 +280,17 @@ export function UploadFilters({
           <div>
             <FormField
               id="uploads-caption"
-              label="Caption prefix (optional)"
-              helpText="Prepended to each post's caption when published to Facebook."
+              label="Description prefix (optional)"
+              helpText="Prepended to each video's description when published to YouTube."
             >
               <textarea
                 id="uploads-caption"
                 rows={2}
                 placeholder="New video from my Drive folder — "
                 disabled={isSubmitting}
-                value={form.captionPrefix}
+                value={form.descriptionPrefix}
                 onChange={(e) =>
-                  setForm((f) => ({ ...f, captionPrefix: e.target.value }))
+                  setForm((f) => ({ ...f, descriptionPrefix: e.target.value }))
                 }
                 className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white placeholder:text-white/20 focus:outline-none focus:border-white/[0.20] focus:ring-1 focus:ring-white/10 transition-all resize-y"
               />
