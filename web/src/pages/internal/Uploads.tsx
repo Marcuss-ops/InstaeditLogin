@@ -44,9 +44,9 @@ export function InternalUploads() {
                 Import a Drive folder to YouTube
               </h1>
               <p className="text-[15px] text-[#9aa0aa] mt-2 max-w-xl">
-                Upload every video in a Google Drive folder to YouTube, with
-                random gaps between posts. One round-trip, even for folders with
-                thousands of clips.
+                Download videos from Drive → upload to YouTube → edit thumbnail
+                → publish as private on a schedule. One round-trip, even for
+                folders with thousands of clips.
               </p>
             </div>
             <div className="hidden sm:flex items-center gap-3">
@@ -121,6 +121,27 @@ export function InternalUploads() {
 
             {loadState.workspaces.length > 0 &&
               loadState.youtubeChannels.length > 0 &&
+              loadState.driveAccounts.length === 0 && (
+                <EmptyState
+                  title="No Google Drive account linked"
+                  description="Link a Google Drive account in /app/linking — the importer needs OAuth to read your Drive folder."
+                  icon={<FolderInput size={32} />}
+                  cta={
+                    <Link
+                      to="/app/linking"
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
+                    >
+                      Link a Drive account
+                      <ArrowRight size={14} />
+                    </Link>
+                  }
+                  className="bg-[#1f1f2e] border-white/[0.12]"
+                />
+              )}
+
+            {loadState.workspaces.length > 0 &&
+              loadState.youtubeChannels.length > 0 &&
+              loadState.driveAccounts.length > 0 &&
               (submitState.kind === "queued" ? (
                 <QueuedView
                   batchId={submitState.batchId}
