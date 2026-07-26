@@ -47,6 +47,15 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
+// Compile-time interface check: *services.YouTubeOAuthService must
+// satisfy api.YouTubeOAuthService. If a future signature drift breaks
+// the contract the build fails here instead of leaving r.youTubeSvc
+// nil at runtime. Mirrors the existing
+// `var _ YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)`
+// in pkg/api/router.go and is duplicated on purpose so a signature
+// drift in either direction is caught at the nearest compile site.
+var _ api.YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)
+
 // App is the wired runtime holding every dependency that the api and
 // worker binaries share. cmd/api reads App.HTTPHandler (and App.Cfg for
 // PORT); cmd/worker reads App.DB / App.Vault / App.CapRouter /
@@ -67,8 +76,8 @@ type App struct {
 	// keeping the live *Router pointer around is cheap (it owns
 	// routes + stores) and lets worker wiring avoid an unholy
 	// type-assertion chain on http.Handler.
-	Router   *api.Router
-	Logger   *slog.Logger
+	Router *api.Router
+	Logger *slog.Logger
 
 	// WorkerRegistry (Blocco #5.3 refactor) supervises the lifecycle
 	// of every background goroutine. It is constructed in Wire() and
@@ -395,6 +404,50 @@ func Wire(ctx context.Context) (*App, error) {
 		// P1#7 — export the importBatchRepo on App so the
 		// command-line crawler (cmd/worker) can wire it directly.
 	}
+
+	// Wire the YouTube service into the router for editor-sessions
+	// and validate-account endpoints. Hard-fail when YouTubeClientID
+	// is configured but the provider is missing or does not implement
+	// the capability interface — a silent no-op would leave
+	// r.youTubeSvc nil and the /accounts/{id}/validate 4-step
+	// pipeline would fall back to the legacy token-freshness probe.
+	// The /cmd/api and /cmd/server entrypoints both call Wire() here
+	// (NOT bootstrap.WireAPI in api.go), so this is the production
+	// injection site; api.go carries the same wiring for the
+	// WireCore+WireAPI refactor path.
+	rawYouTubeService, youtubeRegistered :=
+		capRouter.Get(models.PlatformYouTube)
+
+	if cfg.Auth.YouTubeClientID != "" && !youtubeRegistered {
+		return nil, fmt.Errorf(
+			"youtube configured but provider missing from capability registry",
+		)
+	}
+
+	if youtubeRegistered {
+		youtubeService, ok :=
+			rawYouTubeService.(*services.YouTubeOAuthService)
+		if !ok {
+			return nil, fmt.Errorf(
+				"youtube registry returned unexpected provider type %T",
+				rawYouTubeService,
+			)
+		}
+
+		// This assignment is also a compile-time interface check.
+		var editorService api.YouTubeOAuthService = youtubeService
+
+		opts = append(
+			opts,
+			api.WithYouTubeService(editorService),
+		)
+
+		slog.Info(
+			"YouTube API service wired",
+			"provider_type", fmt.Sprintf("%T", youtubeService),
+		)
+	}
+
 	// Blocco #5.3 — Sentry init (lazy). The user contract is
 	// "SENTRY_DSN empty == no init; non-empty == CaptureException
 	// pipeline". We honour that by short-circuiting sentry.Init
