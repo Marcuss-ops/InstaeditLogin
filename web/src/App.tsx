@@ -16,6 +16,7 @@ import { InternalPosts } from "./pages/internal/Posts";
 import { InternalCompose } from "./pages/internal/Compose";
 import { CalendarPage } from "./pages/internal/Calendar";
 import { InternalUploads } from "./pages/internal/Uploads";
+import { InternalYouTubeStudio } from "./pages/internal/YouTubeStudio";
 import { GroupsPage } from "./pages/internal/Groups";
 import { CookieBanner } from "./components/CookieBanner";
 import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
@@ -87,6 +88,7 @@ function App() {
                   calendar" CTA land on the same drag-to-reschedule
                   surface. */}
                 <Route path="uploads" element={<InternalUploads />} />
+                <Route path="youtube/studio" element={<InternalYouTubeStudio />} />
                 <Route path="linking" element={<InternalLinking />} />
                 <Route path="accounts/:accountId" element={<AccountDetailsPage />} />
                 <Route path="accounts/:accountId/performance" element={<AccountPerformancePage />} />
