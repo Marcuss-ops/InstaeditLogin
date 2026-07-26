@@ -5,6 +5,8 @@ export function FormSelect({
   onChange,
   placeholder,
   disabled,
+  required,
+  testId,
   options,
 }: {
   id: string;
@@ -13,6 +15,8 @@ export function FormSelect({
   onChange: (v: number | "") => void;
   placeholder: string;
   disabled?: boolean;
+  required?: boolean;
+  testId?: string;
   options: Array<{ value: number; label: string }>;
 }) {
   return (
@@ -22,11 +26,18 @@ export function FormSelect({
         className="block text-[13px] font-semibold text-[#9aa0aa] mb-1.5"
       >
         {label}
+        {required && (
+          <span className="ml-1 text-red-400" aria-hidden="true">
+            *
+          </span>
+        )}
       </label>
       <select
         id={id}
         value={value === "" ? "" : String(value)}
         disabled={disabled}
+        required={required}
+        data-testid={testId}
         onChange={(e) =>
           onChange(e.target.value === "" ? "" : Number(e.target.value))
         }

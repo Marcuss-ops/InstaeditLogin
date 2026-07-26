@@ -112,6 +112,8 @@ export function UploadFilters({
         <FormSelect
           id="uploads-drive-account"
           label="Google Drive account"
+          required
+          testId="uploads-drive-account-select"
           value={form.driveAccountId}
           onChange={(v) =>
             setForm((f) => ({ ...f, driveAccountId: v as number | "" }))
