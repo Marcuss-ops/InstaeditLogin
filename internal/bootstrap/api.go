@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 
@@ -14,6 +15,15 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxclient"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 )
+
+// Compile-time interface check: *services.YouTubeOAuthService must
+// satisfy api.YouTubeOAuthService. If a future signature drift breaks
+// the contract the build fails here instead of leaving r.youTubeSvc
+// nil at runtime. Mirrors the existing
+// `var _ YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)`
+// in pkg/api/router.go and is duplicated on purpose so a signature
+// drift in either direction is caught at the nearest compile site.
+var _ api.YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)
 
 // WireAPI builds the HTTP handler using only the shared Core.
 // It must be called after WireCore. It constructs the router with
@@ -37,7 +47,10 @@ func WireAPI(core *Core) (http.Handler, error) {
 	if ytp, ok := core.CapRouter.Get(models.PlatformYouTube); ok {
 		b, typeOK := ytp.(services.YouTubeChannelBinder)
 		if !typeOK {
-			return nil, err
+			return nil, fmt.Errorf(
+				"youtube provider registered as %T but does not implement YouTubeChannelBinder",
+				ytp,
+			)
 		}
 		ytBinder = b
 	}
@@ -93,6 +106,45 @@ func WireAPI(core *Core) (http.Handler, error) {
 		api.WithSnapshotStore(repository.NewSnapshotRepository(core.DB)),
 		api.WithMetricHistoryStore(repository.NewAccountMetricsRepository(core.DB)),
 		api.WithEditorURL(cfg.HTTP.EditorURL),
+	}
+
+	// Wire the YouTube service into the router for editor-sessions
+	// and validate-account endpoints. Hard-fail when YouTubeClientID
+	// is configured but the provider is missing or does not implement
+	// the capability interface — a silent no-op would leave
+	// r.youTubeSvc nil and the /accounts/{id}/validate 4-step
+	// pipeline would fall back to the legacy token-freshness probe.
+	rawYouTubeService, youtubeRegistered :=
+		core.CapRouter.Get(models.PlatformYouTube)
+
+	if cfg.Auth.YouTubeClientID != "" && !youtubeRegistered {
+		return nil, fmt.Errorf(
+			"youtube configured but provider missing from capability registry",
+		)
+	}
+
+	if youtubeRegistered {
+		youtubeService, ok :=
+			rawYouTubeService.(*services.YouTubeOAuthService)
+		if !ok {
+			return nil, fmt.Errorf(
+				"youtube registry returned unexpected provider type %T",
+				rawYouTubeService,
+			)
+		}
+
+		// This assignment is also a compile-time interface check.
+		var editorService api.YouTubeOAuthService = youtubeService
+
+		opts = append(
+			opts,
+			api.WithYouTubeService(editorService),
+		)
+
+		core.Logger.Info(
+			"YouTube API service wired",
+			"provider_type", fmt.Sprintf("%T", youtubeService),
+		)
 	}
 
 	// Sentry init (lazy). Empty DSN means no SDK.
