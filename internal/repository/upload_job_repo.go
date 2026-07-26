@@ -10,6 +10,13 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
+// ErrUploadJobNotFoundForPost is the sentinel returned when a post
+// has no linked upload_jobs row (post.ingest path never wrote one).
+// Returned by FindByPostID only when postID is positive but no row
+// matches — distinct from a real *sql.DB error so callers can
+// branch on errors.Is.
+var ErrUploadJobNotFoundForPost = errors.New("upload job not found for post")
+
 // UploadJobRepository handles persistence for upload_jobs — the background
 // queue that downloads videos from Google Drive and publishes them.
 type UploadJobRepository struct {

@@ -299,6 +299,15 @@ type Router struct {
 	// YouTube videos. Wired via WithYouTubeVideoEditStore.
 	youtubeVideoEditStore YouTubeVideoEditStore
 
+	// contentPipelineStore (Blocco Carosello) backs the unified
+	// GET /api/v1/content/{id}/pipeline endpoint. Single workspace-
+	// scoped fan-out returns posts + targets + pubs + accounts +
+	// media + upload_job in 4 round-trips. When nil the route
+	// returns 503 (matches the nil-store pattern used by the
+	// other feature flags). Wired via WithContentPipelineStore
+	// in internal/bootstrap/app.go.
+	contentPipelineStore ContentPipelineStore
+
 	// editorURL is the base URL of the dark editor SPA. When empty,
 	// frontendURL is used as a fallback.
 	editorURL string
@@ -673,6 +682,17 @@ func WithYouTubeVideoEditStore(store YouTubeVideoEditStore) RouterOption {
 	}
 }
 
+// WithContentPipelineStore wires the consolidated read-side repo
+// used by GET /api/v1/content/{id}/pipeline. When nil, the route
+// returns 503 (matches the rest of the nil-store feature flags).
+// Production wiring in internal/bootstrap/app.go passes
+// repository.NewContentPipelineRepository(app.DB).
+func WithContentPipelineStore(store ContentPipelineStore) RouterOption {
+	return func(r *Router) {
+		r.contentPipelineStore = store
+	}
+}
+
 // WithEditorURL wires the base URL of the dark editor SPA. When
 // empty, frontendURL is used as a fallback when building editor_url.
 func WithEditorURL(url string) RouterOption {
@@ -938,6 +958,27 @@ var _ YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)
 // Compile-time assertion that *repository.YouTubeVideoEditRepository
 // satisfies the YouTubeVideoEditStore interface.
 var _ YouTubeVideoEditStore = (*repository.YouTubeVideoEditRepository)(nil)
+
+// ContentPipelineStore (Blocco Carosello content-pipeline endpoint) is
+// the read-only contract for GET /api/v1/content/{id}/pipeline.
+// One call returns a workspace-scoped fan-out covering posts +
+// post_targets + youtube_target_publications + platform_accounts
+// + media_assets + upload_jobs. The handler renders the entry into
+// the timeline response; the API layer does NOT cache or persist
+// anything on the read path.
+//
+// Same pattern as PostStore / UploadJobStore: a local interface
+// so test fixtures can supply an in-memory fake without dragging
+// *sql.DB-bound concrete types. Production wiring in
+// internal/bootstrap/app.go passes *repository.ContentPipelineRepository.
+type ContentPipelineStore interface {
+	GetPipeline(ctx context.Context, workspaceID, postID int64) (*repository.ContentPipelineEntry, error)
+}
+
+// Compile-time assertion that *repository.ContentPipelineRepository
+// satisfies the ContentPipelineStore interface (catches signature
+// drift at go vet time, not at runtime).
+var _ ContentPipelineStore = (*repository.ContentPipelineRepository)(nil)
 
 // The following thin wrappers keep existing unit tests (which call the
 // handlers directly on *Router) compiling while the public module

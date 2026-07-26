@@ -227,6 +227,18 @@ type WorkerConfig struct {
 	WebhookWorkerIntervalSeconds int
 	// SessionCleanupIntervalSeconds is the cadence of the sessions cleanup worker.
 	SessionCleanupIntervalSeconds int
+	// AssetCleanupIntervalSeconds is the cadence of the media-asset
+	// cleanup worker. Drives the periodic AssetCleanupWorker that
+	// DELETEs rows from media_assets whose YouTube publish + post
+	// pipeline has fully completed AND aged past
+	// VideoRetentionBufferDays. Cadence is intentionally coarse
+	// (default 86400s = 24h) because the cleanup predicate is
+	// multi-table and benefits from a snapshot read; under typical
+	// load a daily sweep keeps the S3 footprint bounded without
+	// thrashing Postgres with DELETE/.../USING queries. Operators
+	// wanting more aggressive space reclamation can lower to e.g.
+	// 3600 (hourly) — set ASSET_CLEANUP_INTERVAL_SECONDS.
+	AssetCleanupIntervalSeconds int
 	// UploadWorkerIntervalSeconds is the cadence of the upload worker.
 	UploadWorkerIntervalSeconds int
 	// UploadIngestConcurrency is the number of ingest goroutines.
@@ -589,8 +601,9 @@ func Load() (*Config, error) {
 			PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
 			ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
 			WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
-			SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
-			UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+		SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
+		AssetCleanupIntervalSeconds:    getEnvInt("ASSET_CLEANUP_INTERVAL_SECONDS", 86400),
+		UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
 			// P1 step 2 — worker pool config (see struct comment above).
 			UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
 			YouTubeUploadConcurrency:       getEnvInt("YOUTUBE_UPLOAD_CONCURRENCY", 4),
@@ -802,6 +815,14 @@ func (c *Config) validate() error {
 		}
 		if c.Worker.VideoRetentionBufferDays <= 0 {
 			return fmt.Errorf("VIDEO_RETENTION_BUFFER_DAYS must be a positive integer (got %d); set to a large value (e.g. 90) to extend the tail, not 0", c.Worker.VideoRetentionBufferDays)
+		}
+		// Asset cleanup interval must be positive; 0 would spin the
+		// ticker hot-loop and DDoS Postgres. Operators wanting to
+		// effectively disable the schedule should set a very large
+		// value (e.g. 86400*365) and not set 0 — the explicit-default
+		// shape mirrors PublishHorizonDays + VideoRetentionBufferDays.
+		if c.Worker.AssetCleanupIntervalSeconds <= 0 {
+			return fmt.Errorf("ASSET_CLEANUP_INTERVAL_SECONDS must be a positive integer (got %d); set to a large value (e.g. 86400) to effectively disable frequent sweeps, not 0", c.Worker.AssetCleanupIntervalSeconds)
 		}
 		if c.Worker.YouTubeUploadMaxRetries < 1 {
 			return fmt.Errorf("YOUTUBE_UPLOAD_MAX_RETRIES must be at least 1 (got %d)", c.Worker.YouTubeUploadMaxRetries)

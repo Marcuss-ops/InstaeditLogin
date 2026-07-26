@@ -191,6 +191,13 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/thumbnail", r.protected(attachThumbnailHandler.ServeHTTP))
 
+	// Blocco Carosello — unified pipeline view endpoint. Aggregates
+	// Drive + storage + per-target YouTube publish + Velox editor
+	// state into a single response that the SPA timeline UI consumes
+	// (GET /api/v1/content/{id}/pipeline). Read-only; no CSRF needed
+	// — GET requests are exempt by spec.
+	r.mux.Method(http.MethodGet, "/api/v1/content/{content_id}/pipeline", r.protected(http.HandlerFunc(r.handleGetContentPipeline).ServeHTTP))
+
 	r.mux.Method(http.MethodGet, "/api/v1/metrics", http.HandlerFunc(r.handleMetrics))
 
 	// Mount every registered module against the chi mux.

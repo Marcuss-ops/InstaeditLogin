@@ -213,6 +213,10 @@ func Wire(ctx context.Context) (*App, error) {
 	externalDeliveryRepo := repository.NewExternalDeliveryRepository(db)
 	connectLinkNonceRepo := repository.NewConnectLinkNonceRepository(db)
 	youtubeVideoEditRepo := repository.NewYouTubeVideoEditRepository(db)
+	// Blocco Carosello — consolidated read-side fan-out for
+	// GET /api/v1/content/{id}/pipeline (4 round-trips regardless of
+	// target fan-out size). Wired via WithContentPipelineStore.
+	contentPipelineRepo := repository.NewContentPipelineRepository(db)
 
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
 
@@ -376,6 +380,7 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithSnapshotStore(repository.NewSnapshotRepository(db)),
 		api.WithMetricHistoryStore(repository.NewAccountMetricsRepository(db)),
 		api.WithYouTubeVideoEditStore(youtubeVideoEditRepo),
+		api.WithContentPipelineStore(contentPipelineRepo),
 		api.WithEditorURL(cfg.HTTP.EditorURL),
 		// Blocco #2 P0 — wire the env-driven publish-horizon +
 		// retention-buffer values into the Router so handleRescheduleUpload,
@@ -670,6 +675,24 @@ func (a *App) RunWorkers(ctx context.Context) error {
 				slog.Default(),
 			)
 			return scw.Run(ctx)
+		},
+	})
+
+	// 11. Asset cleanup worker (Blocco Carosello cleanup) -- hard-deletes media_assets whose YouTube
+	// publish pipeline has fully run AND aged past the operator-
+	// configured retention buffer (default 7d). NOT critical: a
+	// transient DB failure here MUST NOT take the process down.
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "asset_cleanup",
+		Critical: false,
+		Run: func(ctx context.Context) error {
+			acw := worker.NewAssetCleanupWorker(
+				repository.NewMediaAssetRepository(a.DB),
+				time.Duration(a.Cfg.Worker.AssetCleanupIntervalSeconds)*time.Second,
+				a.Cfg.Worker.VideoRetentionBufferDays,
+				slog.Default(),
+			)
+			return acw.Run(ctx)
 		},
 	})
 

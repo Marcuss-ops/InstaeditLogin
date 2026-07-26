@@ -249,16 +249,38 @@ func (r *PostRepository) Update(post *models.Post) error {
 // FindByID returns the post with the given id (without its targets),
 // or (nil, nil) when no row matches. Use ListByPost for the target fan-out.
 func (r *PostRepository) FindByID(id int64) (*models.Post, error) {
+	return r.FindByIDForWorkspace(0, id)
+}
+
+// contentPipelineSelectColumns lists every posts column read by the
+// pipeline-shaped lookup. Same column-list vs Scan-list invariant as
+// qSelectPostByID — keep these aligned if you add columns.
+const contentPipelineSelectColumns = `
+	id, workspace_id, title, caption, media_url,
+	ingest_after, publish_at, status,
+	privacy_level, default_privacy_level,
+	created_at`
+
+// FindByIDForWorkspace (Blocco Carosello content-pipeline endpoint):
+// returns the post with the given id SCOPED to the given workspace.
+// (nil, nil) when no row matches EITHER id or workspace. The SQL
+// predicate is `id = $2 AND workspace_id = $1` — the workspace is
+// the FIRST predicate so the index-only lookup short-circuits on
+// (workspace_id, id). Use this when the route is workspace-scoped
+// (e.g. GET /api/v1/content/{id}/pipeline) so the tenant isolation
+// check happens at the SQL layer rather than Go-side after a wider
+// FindByID call. The legacy FindByID remains for the historical
+// callers (the OAuth-attached flow, internal worker reads); it
+// delegates to this method with workspace_id=0 (disabled predicate),
+// preserving the existing behaviour.
+func (r *PostRepository) FindByIDForWorkspace(workspaceID, postID int64) (*models.Post, error) {
 	p := &models.Post{}
-	// P1#4 — qSelectPostByID now SELECTs ingest_after, publish_at
-	// instead of scheduled_at (queries.go).
-	// P1 (migration 053) — read the two new privacy columns too. Order
-	// MUST match qSelectPostByID's column list. PrivacyLevel + DefaultPrivacyLevel
-	// are NON-NULL strings (default empty) so plain &p.PrivacyLevel works
-	// — no sql.NullString wrapping required.
 	err := r.db.QueryRow(
-		qSelectPostByID,
-		id,
+		`SELECT `+contentPipelineSelectColumns+`
+		 FROM posts
+		 WHERE ($1::bigint = 0 OR workspace_id = $1)
+		   AND id = $2`,
+		workspaceID, postID,
 	).Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
 		&p.IngestAfter, &p.PublishAt, &p.Status,
 		&p.PrivacyLevel, &p.DefaultPrivacyLevel,
@@ -267,11 +289,10 @@ func (r *PostRepository) FindByID(id int64) (*models.Post, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to find post by id: %w", err)
+		return nil, fmt.Errorf("failed to find post by id (workspace-scoped): %w", err)
 	}
 	return p, nil
 }
-
 // ListByWorkspace returns every post in the given workspace, ordered by
 // created_at DESC (most-recent first). Targets are NOT loaded — use
 // ListByPost separately to fetch the fan-out set.

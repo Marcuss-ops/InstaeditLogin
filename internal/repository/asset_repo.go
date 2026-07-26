@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -213,4 +214,86 @@ func (r *MediaAssetRepository) MarkExpired(now time.Time) (int64, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// DeleteEligibleAssets hard-deletes media_assets rows whose YouTube
+// publish + post pipeline has fully run AND aged past retentionDays
+// days (the operator-configured buffer; defaults to cfg.Worker
+// .VideoRetentionBufferDays = 7 days).
+//
+// Single DELETE FROM ... USING round-trip across media_assets +
+// upload_jobs + post_targets + youtube_target_publications. The
+// canonical published-state semantics:
+//   * youtube_target_publications.youtube_upload_status MUST equal
+//     'youtube_uploaded' (the canonical uploaded-state string the
+//     upload_worker stamps via MarkYouTubeUploaded).
+//   * youtube_target_publications.published_at MUST be non-null
+//     AND published_at + retentionDays < NOW() (the publish-window
+//     has lapsed AND the operator-configured buffer has elapsed).
+//   * NO post_targets row on the same post may be in
+//     {'retrying','dlq'} -- operator-triage states where the asset
+//     is still load-bearing for live debugging + audit.
+//   * NO youtube_target_publications row on the same upload_job may
+//     have publish_at > NOW() -- even if THIS row reached published,
+//     a peer target may still have a future-scheduled publish so
+//     the asset MUST stay alive until that lands.
+//
+// Returns the number of media_assets rows hard-deleted (int64 to
+// match the cast­er pattern of pkg/repository.MarkExpired). (0,
+// nil) is the normal "nothing eligible this tick" outcome. The
+// caller (asset_cleanup_worker) decides whether the loop continues
+// on error or backs off.
+func (r *MediaAssetRepository) DeleteEligibleAssets(ctx context.Context, retentionDays int) (int64, error) {
+	// Reviewer Sharp 1: cap retentionDays at 3650 (10 years) — Postgres
+	// make_interval(days => $1) overflows into seconds-relative math
+	// past ~2.5M days, and operators who mean "effectively disable"
+	// should bump VideoRetentionBufferDays to a large value, not 0.
+	// 3650 keeps operators safely above the overflow boundary while
+	// still rejecting accidental `10000000`-style typos.
+	if retentionDays <= 0 || retentionDays > 3650 {
+		return 0, fmt.Errorf("media asset DeleteEligibleAssets: retentionDays must be between 1 and 3650 days (got %d)", retentionDays)
+	}
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM media_assets ma
+		 USING upload_jobs uj, post_targets pt, youtube_target_publications ytp
+		 WHERE ma.id = uj.asset_id
+		   AND uj.post_id = pt.post_id
+		   AND uj.id = ytp.upload_job_id
+		   AND ytp.youtube_upload_status = 'youtube_uploaded'
+		   AND ytp.published_at IS NOT NULL
+		   AND ytp.published_at + make_interval(days => $1::int) < NOW()
+		   AND NOT EXISTS (
+			   SELECT 1 FROM post_targets pt2
+			   WHERE pt2.post_id = uj.post_id
+			     AND pt2.status IN ('retrying','dlq')
+		   )
+		   AND NOT EXISTS (
+			   SELECT 1 FROM posts p
+			   WHERE p.id = uj.post_id
+			     AND p.publish_at IS NOT NULL
+			     AND p.publish_at > NOW()
+		   )
+		   AND NOT EXISTS (
+			   SELECT 1 FROM youtube_target_publications ytp2
+			   WHERE ytp2.upload_job_id = uj.id
+			     AND ytp2.publish_at IS NOT NULL
+			     AND ytp2.publish_at > NOW()
+		   )`, retentionDays)
+	if err != nil {
+		return 0, fmt.Errorf("media asset DeleteEligibleAssets: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("media asset DeleteEligibleAssets rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// CleanupOnce is the AssetCleaner-interface-satisfying thin wrapper
+// the worker wires against. Delegates to DeleteEligibleAssets with the
+// configured retentionDays -- letting MediaAssetRepository satisfy
+// both the repo internal contract AND the AssetCleanupWorker's
+// narrower interface from a single concrete.
+func (r *MediaAssetRepository) CleanupOnce(ctx context.Context, retentionDays int) (int64, error) {
+	return r.DeleteEligibleAssets(ctx, retentionDays)
 }
