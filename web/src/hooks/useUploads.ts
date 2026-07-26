@@ -72,9 +72,14 @@ export function useUploads() {
         const youtubeChannels = accts.filter(
           (a) => a.platform === "youtube",
         );
-        const drives = accts.filter((a) => a.platform === "google-drive");
+        const driveAccounts = accts.filter((a) => a.platform === "google-drive");
 
-        setLoadState({ kind: "ready", workspaces: ws, youtubeChannels, drives });
+        setLoadState({
+          kind: "ready",
+          workspaces: ws,
+          youtubeChannels,
+          driveAccounts,
+        });
         setForm((f) => ({
           ...f,
           workspaceId:

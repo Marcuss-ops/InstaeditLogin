@@ -1,6 +1,3 @@
-// Shared types and constants for the Drive folder import / uploads page.
-// Mirrors pkg/api/uploads_batch.go → UploadsBatchByFolderResponse on the SPA side.
-
 export type Workspace = {
   id: number;
   name: string;
@@ -9,7 +6,9 @@ export type Workspace = {
 export type PlatformAccount = {
   id: number;
   platform: string;
+  platform_user_id: string;
   username: string;
+  status: string;
   created_at: string;
 };
 
@@ -18,86 +17,75 @@ export type LoadState =
   | {
       kind: "ready";
       workspaces: Workspace[];
-      pages: PlatformAccount[];
-      drives: PlatformAccount[];
+      youtubeChannels: PlatformAccount[];
+      driveAccounts: PlatformAccount[];
     }
   | { kind: "error"; message: string };
 
-export type BatchResponse = {
-  folder_id: string;
-  scheduled_count: number;
-  page_count: number;
-  total_runtime_estimate_seconds?: number;
-  first_publish_at: string;
-  last_scheduled_at: string;
-  entries?: Array<{
-    index: number;
-    drive_file_id: string;
-    name: string;
-    job_id: number;
-    scheduled_at: string;
-    relative_hours_from_now: number;
-  }>;
-  partial_failure?: boolean;
-  failed_at_page?: number;
-  failed_at_page_token?: string;
-  note?: string;
-  needs_google_drive_api_key?: boolean;
-  needs_drive_account?: boolean;
-  error?: string;
+export type AsyncBatchResponse = {
+  batch_id: string;
+  status: string;
+  schedule_clamped: boolean;
+  schedule_clamp_reason?: string;
 };
 
-export type SuccessPayload = {
-  folderId: string;
-  scheduledCount: number;
-  pageCount: number;
-  firstPublishAt: string;
-  lastScheduledAt: string;
-  entries: NonNullable<BatchResponse["entries"]>;
+export type BatchStatusResponse = {
+  id: string;
+  user_id: number;
+  workspace_id: number;
+  source_provider: string;
+  source_drive_account_id: number | null;
+  source_folder_id: string;
+  target_account_ids: number[];
+  target_group_name: string | null;
+  publish_schedule_start_at: string;
+  publish_schedule_min_gap: number;
+  publish_schedule_max_gap: number;
+  default_privacy_level: string;
+  status: string;
+  file_count: number | null;
+  processed_count: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
 };
 
-export type PartialPayload = {
-  folderId: string;
-  scheduledCount: number;
-  pageCount: number;
-  entries: NonNullable<BatchResponse["entries"]>;
-  failedAtPage: number;
-  failedAtPageToken: string;
-  note: string;
-  firstPublishAt: string;
-  lastScheduledAt: string;
+export type EditorSession = {
+  id: string;
+  youtube_video_id: string;
+  velox_project_id: string;
+  editor_url: string;
+  status: string;
+  thumbnail_media_id: string | null;
+  desired_privacy: string;
+  publish_at: string | null;
 };
 
 export type SubmitState =
   | { kind: "idle" }
   | { kind: "submitting" }
-  | { kind: "success"; payload: SuccessPayload }
-  | { kind: "partial"; payload: PartialPayload }
-  | { kind: "guidance"; note: string }
+  | { kind: "queued"; batchId: string }
+  | { kind: "polling"; batchId: string }
   | { kind: "error"; message: string };
 
 export type FormValues = {
   workspaceId: number | "";
-  facebookAccountId: number | "";
+  youtubeAccountId: number | "";
   driveAccountId: number | "";
   folderId: string;
+  privacyLevel: "private" | "unlisted" | "public";
+  startAt: string;
   advanced: boolean;
   title: string;
-  captionPrefix: string;
+  descriptionPrefix: string;
   minJitterSeconds: number;
   maxJitterSeconds: number;
 };
 
-// Folder IDs in Google Drive are URL-safe base64ish — the suffix of
-// https://drive.google.com/drive/folders/<ID>. Server enforces
-// `^[A-Za-z0-9_-]{1,100}$`; mirror it here for inline feedback.
 export const FOLDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
 
-// Jitter: 60 s floor (server also enforces) — anything below collapses
-// into "publish back-to-back" anti-pattern detection.
 export const MIN_JITTER_SEC = 60;
 export const MAX_JITTER_SEC = 7 * 24 * 60 * 60;
 
-// Defaults mirror the CLI: 4 h ± 30 min (centre-anchored).
 export const DEFAULT_MIN_JITTER_SEC = 4 * 60 * 60 - 30 * 60;
 export const DEFAULT_MAX_JITTER_SEC = 4 * 60 * 60 + 30 * 60;
