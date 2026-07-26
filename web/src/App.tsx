@@ -89,6 +89,7 @@ function App() {
                   surface. */}
                 <Route path="uploads" element={<InternalUploads />} />
                 <Route path="youtube/studio" element={<InternalYouTubeStudio />} />
+                <Route path="youtube-studio" element={<Navigate to="youtube/studio" replace />} />
                 <Route path="linking" element={<InternalLinking />} />
                 <Route path="accounts/:accountId" element={<AccountDetailsPage />} />
                 <Route path="accounts/:accountId/performance" element={<AccountPerformancePage />} />
