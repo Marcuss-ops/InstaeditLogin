@@ -3,13 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { AuthError, authedFetch } from "../lib/auth";
 import { useToast } from "../components/toast";
 import type {
-  BatchResponse,
+  AsyncBatchResponse,
+  BatchStatusResponse,
   FormValues,
   LoadState,
-  PartialPayload,
   PlatformAccount,
   SubmitState,
-  SuccessPayload,
   Workspace,
 } from "../types/uploads";
 import {
@@ -20,6 +19,14 @@ import {
   MIN_JITTER_SEC,
 } from "../types/uploads";
 
+const POLL_INTERVAL_MS = 5_000;
+const TERMINAL_STATUSES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "partially_completed",
+]);
+
 export function useUploads() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -29,21 +36,20 @@ export function useUploads() {
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: "idle" });
   const [form, setForm] = useState<FormValues>({
     workspaceId: "",
-    facebookAccountId: "",
+    youtubeAccountId: "",
     driveAccountId: "",
     folderId: "",
+    privacyLevel: "private",
+    startAt: "",
     advanced: false,
     title: "",
-    captionPrefix: "",
+    descriptionPrefix: "",
     minJitterSeconds: DEFAULT_MIN_JITTER_SEC,
     maxJitterSeconds: DEFAULT_MAX_JITTER_SEC,
   });
   const abortRef = useRef<AbortController | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Fetch dependencies (workspaces + facebook pages + drive accounts)
-  // every time the page mounts. Mirrors the pattern from Compose.tsx so
-  // the dropdowns are never stale (a freshly disconnected drive account
-  // disappears from the list on next mount).
   useEffect(() => {
     setLoadState({ kind: "loading" });
     abortRef.current?.abort();
@@ -63,10 +69,12 @@ export function useUploads() {
         const accts =
           ((await acctsR.json()) as { accounts: PlatformAccount[] }).accounts ??
           [];
-        const pages = accts.filter((a) => a.platform === "facebook");
+        const youtubeChannels = accts.filter(
+          (a) => a.platform === "youtube",
+        );
         const drives = accts.filter((a) => a.platform === "google-drive");
 
-        setLoadState({ kind: "ready", workspaces: ws, pages, drives });
+        setLoadState({ kind: "ready", workspaces: ws, youtubeChannels, drives });
         setForm((f) => ({
           ...f,
           workspaceId:
@@ -75,12 +83,12 @@ export function useUploads() {
               : ws.length === 1
                 ? ws[0].id
                 : "",
-          facebookAccountId:
-            f.facebookAccountId &&
-            pages.find((p) => p.id === f.facebookAccountId)
-              ? f.facebookAccountId
-              : pages.length === 1
-                ? pages[0].id
+          youtubeAccountId:
+            f.youtubeAccountId &&
+            youtubeChannels.find((c) => c.id === f.youtubeAccountId)
+              ? f.youtubeAccountId
+              : youtubeChannels.length === 1
+                ? youtubeChannels[0].id
                 : "",
         }));
       } catch (err) {
@@ -126,22 +134,74 @@ export function useUploads() {
 
   const canSubmit =
     submitState.kind !== "submitting" &&
+    submitState.kind !== "polling" &&
     form.workspaceId !== "" &&
-    form.facebookAccountId !== "" &&
+    form.youtubeAccountId !== "" &&
+    form.driveAccountId !== "" &&
     folderValid === true &&
-    jitterError === null;
+    jitterError === null &&
+    (form.startAt === "" || !isNaN(new Date(form.startAt).getTime()));
 
   const handleRunAnother = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
     setSubmitState({ kind: "idle" });
     setForm((f) => ({
       ...f,
       folderId: "",
       title: "",
-      captionPrefix: "",
+      descriptionPrefix: "",
     }));
   }, []);
 
-  const resetSubmit = useCallback(() => setSubmitState({ kind: "idle" }), []);
+  const resetSubmit = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    setSubmitState({ kind: "idle" });
+  }, []);
+
+  const startPolling = useCallback(
+    (batchId: string) => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      setSubmitState({ kind: "polling", batchId });
+
+      const poll = async () => {
+        try {
+          const resp = await authedFetch(
+            `/api/v1/media/import/drive/folder/async/${batchId}`,
+          );
+          if (!resp.ok) {
+            return;
+          }
+          const data = (await resp.json()) as BatchStatusResponse;
+          if (TERMINAL_STATUSES.has(data.status)) {
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            if (data.status === "completed") {
+              setSubmitState({ kind: "queued", batchId });
+              toast.success(
+                `Batch completed — ${data.processed_count} file${data.processed_count === 1 ? "" : "s"} processed.`,
+              );
+            } else {
+              setSubmitState({ kind: "error", message: `Batch ${data.status}` });
+            }
+          }
+        } catch {
+          // Network hiccup — keep polling.
+        }
+      };
+
+      pollRef.current = setInterval(poll, POLL_INTERVAL_MS);
+      void poll();
+    },
+    [toast],
+  );
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -150,33 +210,43 @@ export function useUploads() {
       setSubmitState({ kind: "submitting" });
 
       try {
-        const body: Record<string, unknown> = {
-          folder_id: form.folderId.trim(),
-          workspace_id: form.workspaceId,
-          facebook_account_id: form.facebookAccountId,
-        };
-        if (form.driveAccountId !== "") {
-          body.drive_account_id = form.driveAccountId;
-        }
-        if (form.title.trim()) body.title = form.title.trim();
-        if (form.captionPrefix.trim()) {
-          body.caption_prefix = form.captionPrefix.trim();
-        }
-        if (form.advanced) {
-          body.min_jitter_seconds = form.minJitterSeconds;
-          body.max_jitter_seconds = form.maxJitterSeconds;
-        }
+        const startAtDate =
+          form.startAt !== "" ? new Date(form.startAt) : new Date();
 
-        const response = await authedFetch("/api/v1/uploads/batch/by-folder", {
-          method: "POST",
-          body: JSON.stringify(body),
-        });
+        const body = {
+          source: {
+            provider: "google_drive",
+            drive_account_id: form.driveAccountId,
+            folder_id: form.folderId.trim(),
+          },
+          workspace_id: form.workspaceId,
+          target_account_ids: [form.youtubeAccountId],
+          default_privacy_level: form.privacyLevel,
+          publish_schedule: {
+            start_at: startAtDate.toISOString(),
+            min_gap_seconds: form.advanced
+              ? form.minJitterSeconds
+              : DEFAULT_MIN_JITTER_SEC,
+            max_gap_seconds: form.advanced
+              ? form.maxJitterSeconds
+              : DEFAULT_MAX_JITTER_SEC,
+          },
+        };
+
+        const response = await authedFetch(
+          "/api/v1/media/import/drive/folder/async",
+          {
+            method: "POST",
+            body: JSON.stringify(body),
+          },
+        );
+
         if (!response.ok) {
           let message = `Request failed (status ${response.status})`;
           try {
-            const data = (await response.json()) as Partial<BatchResponse>;
+            const data = await response.json();
             if (data.error) message = data.error;
-            else if (data.note) message = data.note;
+            else if (data.clamp_reason) message = data.clamp_reason;
           } catch {
             // Body wasn't JSON.
           }
@@ -184,53 +254,9 @@ export function useUploads() {
           return;
         }
 
-        const payload = (await response.json()) as BatchResponse;
-        if (payload.needs_google_drive_api_key || payload.needs_drive_account) {
-          setSubmitState({
-            kind: "guidance",
-            note:
-              payload.note ||
-              "Server is missing configuration to list this public Drive folder.",
-          });
-          return;
-        }
-        if (payload.partial_failure) {
-          const partialPayload: PartialPayload = {
-            folderId: payload.folder_id,
-            scheduledCount: payload.scheduled_count,
-            pageCount: payload.page_count,
-            entries: payload.entries ?? [],
-            failedAtPage: payload.failed_at_page ?? -1,
-            failedAtPageToken: payload.failed_at_page_token ?? "",
-            note: payload.note ?? "",
-            firstPublishAt: payload.first_publish_at,
-            lastScheduledAt: payload.last_scheduled_at,
-          };
-          setSubmitState({
-            kind: "partial",
-            payload: partialPayload,
-          });
-          toast.warning(
-            "Import partially completed — see resume instructions below.",
-          );
-          return;
-        }
-
-        const successPayload: SuccessPayload = {
-          folderId: payload.folder_id,
-          scheduledCount: payload.scheduled_count,
-          pageCount: payload.page_count,
-          firstPublishAt: payload.first_publish_at,
-          lastScheduledAt: payload.last_scheduled_at,
-          entries: payload.entries ?? [],
-        };
-        setSubmitState({
-          kind: "success",
-          payload: successPayload,
-        });
-        toast.success(
-          `Scheduled ${payload.scheduled_count} video${payload.scheduled_count === 1 ? "" : "s"} from ${payload.folder_id.slice(0, 6)}…`,
-        );
+        const payload = (await response.json()) as AsyncBatchResponse;
+        toast.success(`Batch queued — ${payload.batch_id.slice(0, 8)}…`);
+        startPolling(payload.batch_id);
       } catch (err) {
         if (err instanceof AuthError) {
           navigate("/login", { replace: true });
@@ -246,15 +272,18 @@ export function useUploads() {
     [
       canSubmit,
       form.advanced,
-      form.captionPrefix,
+      form.descriptionPrefix,
       form.driveAccountId,
-      form.facebookAccountId,
       form.folderId,
       form.maxJitterSeconds,
       form.minJitterSeconds,
+      form.privacyLevel,
+      form.startAt,
       form.title,
       form.workspaceId,
+      form.youtubeAccountId,
       navigate,
+      startPolling,
       toast,
     ],
   );
