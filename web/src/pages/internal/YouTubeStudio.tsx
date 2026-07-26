@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -33,10 +33,19 @@ type LoadState =
 
 type ActionState =
   | { kind: "idle" }
-  | { kind: "creating"; videoId: string }
-  | { kind: "creating"; session: EditorSession }
+  | { kind: "creating" }
   | { kind: "attaching"; sessionId: string }
   | { kind: "publishing"; sessionId: string };
+
+// The list endpoint requires workspace_id; account_id is optional and
+// narrows results to a single channel. Keep these in sync with the
+// handler in pkg/api/youtube_editor_sessions.go (handleListYouTubeEditorSessions).
+function buildSessionsQuery(workspaceId: number | "", accountId: number | "") {
+  const params = new URLSearchParams();
+  if (workspaceId !== "") params.set("workspace_id", String(workspaceId));
+  if (accountId !== "") params.set("account_id", String(accountId));
+  return params.toString();
+}
 
 export function InternalYouTubeStudio() {
   const toast = useToast();
@@ -52,6 +61,24 @@ export function InternalYouTubeStudio() {
   const [thumbnailMediaId, setThumbnailMediaId] = useState("");
   const [scheduleAt, setScheduleAt] = useState("");
   const [action, setAction] = useState<ActionState>({ kind: "idle" });
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchSessions = useCallback(
+    async (
+      workspaceId: number | "",
+      accountId: number | "",
+      signal?: AbortSignal,
+    ): Promise<EditorSession[]> => {
+      const qs = buildSessionsQuery(workspaceId, accountId);
+      const resp = await authedFetch(
+        `/api/v1/youtube/editor-sessions?${qs}`,
+        { signal },
+      );
+      const data = (await resp.json()) as { sessions: EditorSession[] };
+      return data.sessions ?? [];
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     setLoadState({ kind: "loading" });
@@ -59,12 +86,9 @@ export function InternalYouTubeStudio() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
-      const [wsR, acctsR, sessionsR] = await Promise.all([
+      const [wsR, acctsR] = await Promise.all([
         authedFetch("/api/v1/workspaces", { signal: ctrl.signal }),
         authedFetch("/api/v1/accounts", { signal: ctrl.signal }),
-        authedFetch("/api/v1/youtube/editor-sessions", {
-          signal: ctrl.signal,
-        }),
       ]);
       if (ctrl.signal.aborted) return;
 
@@ -73,35 +97,32 @@ export function InternalYouTubeStudio() {
       const accts =
         ((await acctsR.json()) as { accounts: PlatformAccount[] }).accounts ??
         [];
-      const sessionsData =
-        ((await sessionsR.json()) as { sessions: EditorSession[] }).sessions ??
-        [];
       const youtubeChannels = accts.filter((a) => a.platform === "youtube");
 
+      const resolvedWorkspaceId =
+        ws.length === 1 ? ws[0].id : "";
+      const resolvedChannelId =
+        youtubeChannels.length === 1 ? youtubeChannels[0].id : "";
+
+      // First list fetch uses the auto-resolved single-workspace/single-channel
+      // (if any). If both are empty the user must pick before we can list;
+      // we still set ready so the filters render.
+      const sessions = resolvedWorkspaceId
+        ? await fetchSessions(resolvedWorkspaceId, resolvedChannelId, ctrl.signal)
+        : [];
+
+      if (ctrl.signal.aborted) return;
       setLoadState({
         kind: "ready",
         workspaces: ws,
         youtubeChannels,
-        sessions: sessionsData,
+        sessions,
       });
-      setSelectedWorkspaceId((prev) => {
-        if (prev && ws.find((w) => w.id === prev)) return prev;
-        return ws.length === 1 ? ws[0].id : "";
-      });
-      setSelectedChannelId((prev) => {
-        if (
-          prev &&
-          youtubeChannels.find((c) => c.id === prev)
-        )
-          return prev;
-        return youtubeChannels.length === 1 ? youtubeChannels[0].id : "";
-      });
+      setSelectedWorkspaceId(resolvedWorkspaceId);
+      setSelectedChannelId(resolvedChannelId);
     } catch (err) {
       if (ctrl.signal.aborted) return;
       if (err instanceof AuthError) {
-        // The ProtectedRoute wrapper normally redirects on 401; this is the
-        // fallback for any non-401 AuthError path. Re-throwing would leave
-        // us with an unresponsive page.
         toast.error("Session expired — please sign in again.");
         return;
       }
@@ -113,26 +134,62 @@ export function InternalYouTubeStudio() {
             : "Unable to load YouTube editor sessions.",
       });
     }
-  }, [toast]);
+  }, [fetchSessions, toast]);
 
   useEffect(() => {
     void load();
     return () => abortRef.current?.abort();
   }, [load]);
 
-  const reloadSessions = useCallback(async () => {
-    try {
-      const resp = await authedFetch("/api/v1/youtube/editor-sessions");
-      const data = (await resp.json()) as { sessions: EditorSession[] };
+  // Re-fetch sessions whenever the workspace or channel filter changes.
+  // The list endpoint filters server-side, so we don't need client-side
+  // filtering on the response payload. Skip during the initial `loading`
+  // fetch (load() owns that) and abort in-flight requests to avoid races.
+  useEffect(() => {
+    if (loadState.kind !== "ready") return;
+    if (selectedWorkspaceId === "") {
       setLoadState((prev) =>
-        prev.kind === "ready"
-          ? { ...prev, sessions: data.sessions ?? [] }
-          : prev,
+        prev.kind === "ready" ? { ...prev, sessions: [] } : prev,
+      );
+      return;
+    }
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    void (async () => {
+      try {
+        const sessions = await fetchSessions(
+          selectedWorkspaceId,
+          selectedChannelId,
+          ctrl.signal,
+        );
+        if (ctrl.signal.aborted) return;
+        setLoadState((prev) =>
+          prev.kind === "ready" ? { ...prev, sessions } : prev,
+        );
+      } catch {
+        // Non-fatal: keep the previous list visible.
+      }
+    })();
+  }, [fetchSessions, loadState.kind, selectedChannelId, selectedWorkspaceId]);
+
+  const handleRefresh = useCallback(async () => {
+    if (refreshing || selectedWorkspaceId === "") return;
+    setRefreshing(true);
+    try {
+      const sessions = await fetchSessions(
+        selectedWorkspaceId,
+        selectedChannelId,
+      );
+      setLoadState((prev) =>
+        prev.kind === "ready" ? { ...prev, sessions } : prev,
       );
     } catch {
-      // Non-fatal — keep the previous list visible.
+      // toast surfaced by authedFetch
+    } finally {
+      setRefreshing(false);
     }
-  }, []);
+  }, [fetchSessions, refreshing, selectedChannelId, selectedWorkspaceId]);
 
   const handleCreateSession = useCallback(async () => {
     if (
@@ -143,25 +200,29 @@ export function InternalYouTubeStudio() {
       return;
     }
     const videoId = manualVideoId.trim();
-    setAction({ kind: "creating", videoId });
+    setAction({ kind: "creating" });
     try {
-      const resp = await authedFetch(
-        "/api/v1/youtube/editor-sessions",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            workspace_id: selectedWorkspaceId,
-            platform_account_id: selectedChannelId,
-            youtube_video_id: videoId,
-          }),
-        },
-      );
-      const data = (await resp.json()) as EditorSession;
+      const resp = await authedFetch("/api/v1/youtube/editor-sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_id: selectedWorkspaceId,
+          platform_account_id: selectedChannelId,
+          youtube_video_id: videoId,
+        }),
+      });
+      const data = (await resp.json()) as {
+        session_id: string;
+        velox_project_id: string;
+        editor_url: string;
+      };
       toast.success("Editor session created — opening Velox…");
       setManualVideoId("");
-      setAction({ kind: "creating", session: data });
+      // Reset to idle immediately so the form re-enables for the next
+      // submission. The opened tab is the user's confirmation; we don't
+      // gate further form interaction on it.
+      setAction({ kind: "idle" });
       window.open(data.editor_url, "_blank", "noopener,noreferrer");
-      void reloadSessions();
+      void handleRefresh();
     } catch (err) {
       if (err instanceof AuthError) return;
       setAction({ kind: "idle" });
@@ -169,8 +230,8 @@ export function InternalYouTubeStudio() {
       // mounted so the user can retry.
     }
   }, [
+    handleRefresh,
     manualVideoId,
-    reloadSessions,
     selectedChannelId,
     selectedWorkspaceId,
     toast,
@@ -192,14 +253,14 @@ export function InternalYouTubeStudio() {
         toast.success("Thumbnail attached.");
         setThumbnailMediaId("");
         setActiveSessionId(null);
-        void reloadSessions();
+        void handleRefresh();
       } catch {
         // toast surfaced by authedFetch
       } finally {
         setAction({ kind: "idle" });
       }
     },
-    [reloadSessions, thumbnailMediaId, toast],
+    [handleRefresh, thumbnailMediaId, toast],
   );
 
   const handlePublishNow = useCallback(
@@ -216,14 +277,14 @@ export function InternalYouTubeStudio() {
           },
         );
         toast.success("Video published.");
-        void reloadSessions();
+        void handleRefresh();
       } catch {
         // toast surfaced by authedFetch
       } finally {
         setAction({ kind: "idle" });
       }
     },
-    [reloadSessions, toast],
+    [handleRefresh, toast],
   );
 
   const handleSchedule = useCallback(
@@ -249,14 +310,14 @@ export function InternalYouTubeStudio() {
         toast.success("Publication scheduled.");
         setScheduleAt("");
         setActiveSessionId(null);
-        void reloadSessions();
+        void handleRefresh();
       } catch {
         // toast surfaced by authedFetch
       } finally {
         setAction({ kind: "idle" });
       }
     },
-    [reloadSessions, scheduleAt, toast],
+    [handleRefresh, scheduleAt, toast],
   );
 
   const canCreate =
@@ -264,14 +325,6 @@ export function InternalYouTubeStudio() {
     selectedWorkspaceId !== "" &&
     selectedChannelId !== "" &&
     manualVideoId.trim().length > 0;
-
-  const filteredSessions = useMemo(() => {
-    if (loadState.kind !== "ready") return [];
-    if (selectedChannelId === "") return loadState.sessions;
-    return loadState.sessions.filter(
-      (s) => s.youtube_video_id.length > 0,
-    );
-  }, [loadState, selectedChannelId]);
 
   if (loadState.kind === "loading") {
     return (
@@ -395,15 +448,28 @@ export function InternalYouTubeStudio() {
           </div>
           <button
             type="button"
-            onClick={() => void reloadSessions()}
-            className="text-[12px] font-semibold text-[#9aa0aa] hover:text-white transition-colors"
+            onClick={() => void handleRefresh()}
+            disabled={refreshing || selectedWorkspaceId === ""}
+            className="inline-flex items-center gap-1 text-[12px] font-semibold text-[#9aa0aa] hover:text-white transition-colors disabled:opacity-50"
             data-testid="yt-studio-refresh"
           >
+            {refreshing ? (
+              <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+            ) : null}
             Refresh
           </button>
         </header>
 
-        {noChannels && (
+        {selectedWorkspaceId === "" && (
+          <EmptyState
+            title="Select a workspace first"
+            description="The list of editor sessions is scoped per workspace."
+            icon={<Video size={32} />}
+            className="bg-white/[0.02] border-white/[0.06]"
+          />
+        )}
+
+        {selectedWorkspaceId !== "" && noChannels && (
           <EmptyState
             title="No YouTube channels connected"
             description="Connect a YouTube channel in /app/linking to manage its videos."
@@ -412,7 +478,7 @@ export function InternalYouTubeStudio() {
           />
         )}
 
-        {!noChannels && sessions.length === 0 && (
+        {selectedWorkspaceId !== "" && !noChannels && sessions.length === 0 && (
           <EmptyState
             title="Nothing waiting"
             description="Once the Drive-folder importer finishes, editor sessions will appear here."
@@ -421,13 +487,15 @@ export function InternalYouTubeStudio() {
           />
         )}
 
-        {!noChannels && sessions.length > 0 && (
+        {selectedWorkspaceId !== "" && !noChannels && sessions.length > 0 && (
           <div className="space-y-3" data-testid="yt-studio-sessions">
-            {filteredSessions.map((session) => (
+            {sessions.map((session) => (
               <SessionRow
                 key={session.id}
                 session={session}
-                isActive={action.kind === "attaching" && action.sessionId === session.id}
+                isActive={
+                  action.kind === "attaching" && action.sessionId === session.id
+                }
                 isPublishing={
                   action.kind === "publishing" && action.sessionId === session.id
                 }
@@ -495,7 +563,8 @@ function SessionRow({
             {session.youtube_video_id || "(unknown video)"}
           </p>
           <p className="text-[11px] text-[#9aa0aa] mt-0.5">
-            status: <span className="font-semibold text-white">{session.status}</span>
+            status:{" "}
+            <span className="font-semibold text-white">{session.status}</span>
             {" · "}
             desired privacy:{" "}
             <span className="font-semibold text-white">
@@ -564,7 +633,7 @@ function SessionRow({
           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.10] text-[12px] font-semibold text-white hover:bg-white/[0.10] transition-colors"
           data-testid="yt-studio-schedule-toggle"
         >
-          Programma
+          Programma pubblicazione
         </button>
       </div>
 
@@ -572,7 +641,7 @@ function SessionRow({
         <div className="space-y-3 pt-2 border-t border-white/[0.06]">
           <FormField
             id={`yt-studio-thumb-${session.id}`}
-            label="thumbnail_media_id"
+            label={hasThumbnail ? "Sostituisci thumbnail_media_id" : "thumbnail_media_id"}
             helpText="Paste the media asset ID returned by /api/v1/media presign+complete."
           >
             <input
@@ -600,7 +669,7 @@ function SessionRow({
               ) : (
                 <ImageIcon size={12} aria-hidden="true" />
               )}
-              Allega copertina
+              {hasThumbnail ? "Sostituisci copertina" : "Allega copertina"}
             </button>
           </div>
 
