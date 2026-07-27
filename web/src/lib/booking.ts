@@ -108,20 +108,17 @@ export const GOAL_OPTIONS: ReadonlyArray<{
   },
 ];
 
-/** Budget options — the user-message specifies dollar ranges for
- *  qualification. We render the matching plan name under each option. */
+/** Budget options — clean dollar ranges (no backend-tier names or god-tier
+ *  labels that would expose internal sales logic to the visitor). The
+ *  selection still serializes to the BookingBudget type for analytics
+ *  and lead scoring downstream. */
 export const BUDGET_OPTIONS: ReadonlyArray<{
   value: BookingBudget;
   label: string;
-  route: string;
 }> = [
-  { value: "starter", label: "Under $200", route: "Routes to Starter · $197" },
-  { value: "base", label: "$500 – $1,000", route: "Routes to Base / Medium plan" },
-  {
-    value: "premium",
-    label: "$1,500 – $5,000+",
-    route: "Routes to Premium / GOD Tier",
-  },
+  { value: "starter", label: "Under $200" },
+  { value: "base", label: "$500 – $1,000" },
+  { value: "premium", label: "$1,500 – $5,000+" },
 ];
 
 export const READY_OPTIONS: ReadonlyArray<{

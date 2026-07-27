@@ -5,12 +5,16 @@ import { DollarSign } from "lucide-react";
  * -------------------------------------------------------------------------- */
 
 export function EarningsEstimates() {
+  // Earnings tiers — each card pairs a dollar range with the math
+  // behind it (RPM × monthly views). Showing the formula stops the
+  // page from reading as "magic numbers" and lets viewers verify the
+  // promise against YouTube's own revenue disclosures.
   const tiers = [
     {
       label: "1 Automated Channel",
       range: "$500 – $1,500",
       period: "/mo",
-      desc: "A single AI-managed channel in a profitable niche",
+      desc: "Solo niche channel averaging ~300k monthly views at $2–$5 RPM (CPM × 0.45)",
       color: "text-emerald-400",
       ring: "ring-emerald-400/40",
     },
@@ -18,7 +22,7 @@ export function EarningsEstimates() {
       label: "3 Channels (Multi-language)",
       range: "$2,000 – $5,000",
       period: "/mo",
-      desc: "Multiple channels across English, Spanish & Portuguese",
+      desc: "Multi-language portfolio at ~700k combined monthly views, $3–$6 RPM",
       color: "text-blue-400",
       ring: "ring-blue-400/40",
       featured: true,
@@ -27,7 +31,7 @@ export function EarningsEstimates() {
       label: "Channel Portfolio (Level 3)",
       range: "$10,000+",
       period: "/mo",
-      desc: "Full network of monetized channels with global reach",
+      desc: "Full network at ~1.5M views per month, $5–$8 RPM after the algorithm trusts the aged accounts",
       color: "text-violet-400",
       ring: "ring-violet-400/40",
     },

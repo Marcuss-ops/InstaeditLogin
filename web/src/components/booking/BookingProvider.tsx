@@ -17,7 +17,6 @@ import {
   CheckCircle2,
   Clock,
   Rocket,
-  Send,
   ShieldCheck,
   Sparkles,
   TrendingUp,
@@ -39,10 +38,6 @@ import {
   type BookingReady,
 } from "../../lib/booking";
 import { submitBookingEvent } from "../../lib/booking-api";
-import {
-  CONTACT_DISCORD_HANDLE,
-  CONTACT_DISCORD_URL,
-} from "../editor/shared";
 
 // Re-export so consumers (Mentoring, CTASection) can import the type
 // alongside `useBooking` from the same module — keeps the public
@@ -472,12 +467,10 @@ function FormStep({
           hint="We'll only recommend a plan that matches this number."
         >
           <div role="radiogroup" aria-label="Budget" className="grid gap-2.5">
-            {BUDGET_OPTIONS.map((opt, i) => (
+            {BUDGET_OPTIONS.map((opt) => (
               <BudgetRadio
                 key={opt.value}
-                badge={["Starter · $197", "Base / Medium", "Premium / GOD Tier"][i]}
                 title={opt.label}
-                route={opt.route}
                 selected={qualification.budget === opt.value}
                 onSelect={() => onBudget(opt.value)}
               />
@@ -518,18 +511,6 @@ function FormStep({
           Schedule my free call
           <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
         </button>
-        <a
-          href={CONTACT_DISCORD_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center justify-center gap-2 px-4 py-3 sm:py-3.5 rounded-xl surface-glass border border-white/10 text-sm text-zinc-300 hover:text-white hover:border-white/25 transition-colors"
-        >
-          <Send className="w-4 h-4 text-sky-300" />
-          <span>
-            Prefer to chat first?{" "}
-            <span className="text-zinc-400">Discord {CONTACT_DISCORD_HANDLE}</span>
-          </span>
-        </a>
       </div>
 
       <div className="mt-5 flex items-center gap-2 text-[11px] text-zinc-500">
@@ -726,15 +707,11 @@ function RadioCard({
 }
 
 function BudgetRadio({
-  badge,
   title,
-  route,
   selected,
   onSelect,
 }: {
-  badge: string;
   title: string;
-  route: string;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -763,10 +740,6 @@ function BudgetRadio({
         <span className="block text-sm font-semibold text-white">
           {title}
         </span>
-        <span className="block text-[11px] text-zinc-500 mt-0.5">{route}</span>
-      </span>
-      <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-white/[0.06] text-zinc-400 ring-1 ring-white/10">
-        {badge}
       </span>
       {selected && (
         <CheckCircle2
