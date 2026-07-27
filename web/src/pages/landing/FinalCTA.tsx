@@ -35,11 +35,11 @@ export function FinalCTA() {
             <button
               type="button"
               onClick={() => openBooking()}
-              className="group inline-flex items-center gap-2 px-8 py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all"
+              className="group relative inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white font-semibold text-base hover:shadow-[0_0_50px_-8px_rgba(239,68,68,0.55)] hover:scale-[1.02] active:scale-100 transition-all"
             >
-              <Calendar className="w-4 h-4" />
-              Schedule My Free Call
-              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              <Calendar className="w-5 h-5" />
+              Schedule your free strategy call
+              <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </button>
           </div>
         </div>

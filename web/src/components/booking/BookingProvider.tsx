@@ -20,18 +20,15 @@ import {
   ShieldCheck,
   Sparkles,
   TrendingUp,
-  Wallet,
   X,
 } from "lucide-react";
 import {
   BOOKING_URL,
-  BUDGET_OPTIONS,
   GOAL_OPTIONS,
   INTENT_TIER_LABEL,
   MONTHLY_CAPACITY_LABEL,
   READY_OPTIONS,
   isQualificationComplete,
-  type BookingBudget,
   type BookingGoal,
   type BookingIntent,
   type BookingQualification,
@@ -132,9 +129,14 @@ export function useBooking(): BookingCtx {
  * Modal
  * ------------------------------------------------------------------------ */
 
+// Budget is intentionally hidden from the visitor per operator direction
+// ("senza chiedere budget — troppo confusa"), but the booking_events
+// row in Postgres still requires the column. We default it to "starter"
+// so the analytics payload keeps a low-friction value without ever
+// showing a money question in the modal UI.
 const EMPTY_QUALIFICATION: BookingQualification = {
   goal: null,
-  budget: null,
+  budget: "starter",
   ready: null,
 };
 
@@ -226,9 +228,6 @@ function BookingModal({
   function setGoal(value: BookingGoal) {
     setQualification((prev) => ({ ...prev, goal: value }));
   }
-  function setBudget(value: BookingBudget) {
-    setQualification((prev) => ({ ...prev, budget: value }));
-  }
   function setReady(value: BookingReady) {
     setQualification((prev) => ({ ...prev, ready: value }));
   }
@@ -265,7 +264,7 @@ function BookingModal({
     void submitBookingEvent({
       intent,
       goal: qualification.goal!,
-      budget: qualification.budget!,
+      budget: qualification.budget,
       ready: qualification.ready!,
       metadata: { utm_source: "instagram_landing" },
     }).catch((err: unknown) => {
@@ -371,7 +370,6 @@ function BookingModal({
             qualification={qualification}
             complete={complete}
             onGoal={setGoal}
-            onBudget={setBudget}
             onReady={setReady}
             onSubmit={handleSubmit}
           />
@@ -398,7 +396,6 @@ function FormStep({
   qualification,
   complete,
   onGoal,
-  onBudget,
   onReady,
   onSubmit,
 }: {
@@ -408,7 +405,6 @@ function FormStep({
   qualification: BookingQualification;
   complete: boolean;
   onGoal: (value: BookingGoal) => void;
-  onBudget: (value: BookingBudget) => void;
   onReady: (value: BookingReady) => void;
   onSubmit: (e: FormEvent) => void;
 }) {
@@ -439,13 +435,16 @@ function FormStep({
           id={descriptionId}
           className="text-sm text-zinc-400 mt-3 max-w-[52ch]"
         >
-          Three quick questions so we map the right plan in 30 minutes —
+          Two quick questions so we map the right plan in 30 minutes —
           even if you're starting from scratch.
         </p>
       </header>
 
-      <div className="space-y-7">
-        <Question index={1} question="What is your primary goal right now?" hint="Pick the path that matches where you are today.">
+      <div className="space-y-7">        <Question
+          index={1}
+          question="What is your primary goal right now?"
+          hint="Pick the path that matches where you are today."
+        >
           <div role="radiogroup" aria-label="Primary goal" className="grid sm:grid-cols-3 gap-3">
             {GOAL_OPTIONS.map((opt, i) => {
               const Icon = i === 0 ? Rocket : i === 1 ? TrendingUp : Bot;
@@ -467,23 +466,6 @@ function FormStep({
 
         <Question
           index={2}
-          question="What budget have you reserved for channel setup and production?"
-          hint="We'll only recommend a plan that matches this number."
-        >
-          <div role="radiogroup" aria-label="Budget" className="grid gap-2.5">
-            {BUDGET_OPTIONS.map((opt) => (
-              <BudgetRadio
-                key={opt.value}
-                title={opt.label}
-                selected={qualification.budget === opt.value}
-                onSelect={() => onBudget(opt.value)}
-              />
-            ))}
-          </div>
-        </Question>
-
-        <Question
-          index={3}
           question="If it's a fit on the call, ready to get started this week?"
           hint="This helps us block time for the right plan immediately."
         >
@@ -509,11 +491,11 @@ function FormStep({
           type="submit"
           disabled={!complete}
           aria-disabled={!complete}
-          className="group relative inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-xl bg-white text-black font-semibold text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:bg-white/90 enabled:hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.35)]"
+          className="group relative inline-flex items-center justify-center gap-2 px-7 py-4 rounded-xl bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white font-semibold text-base transition-all disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:shadow-[0_0_50px_-8px_rgba(239,68,68,0.55)] enabled:hover:scale-[1.02] enabled:active:scale-100"
         >
-          <Calendar className="w-4 h-4" />
-          Schedule my free call
-          <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+          <Calendar className="w-5 h-5" />
+          Schedule your free strategy call
+          <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
         </button>
       </div>
 
@@ -711,6 +693,11 @@ function RadioCard({
 }
 
 function BudgetRadio({
+  // Removed: budget question was hiding the modal from visitors per
+  // operator signal "senza chiedere budget — troppo confusa". The
+  // component keeps a no-op signature so any stale import doesn't
+  // make tsc red; delete outright in a follow-up cleanup commit if
+  // desired.
   title,
   selected,
   onSelect,
@@ -731,26 +718,11 @@ function BudgetRadio({
           : "border-white/10 bg-white/[0.03] hover:border-white/25 hover:bg-white/[0.06]"
       }`}
     >
-      <span
-        className={`inline-flex w-9 h-9 items-center justify-center rounded-lg shrink-0 ${
-          selected
-            ? "bg-cyan-500/20 text-cyan-200"
-            : "bg-white/[0.04] text-zinc-400"
-        }`}
-      >
-        <Wallet className="w-4 h-4" aria-hidden="true" />
-      </span>
       <span className="flex-1 min-w-0">
         <span className="block text-sm font-semibold text-white">
           {title}
         </span>
       </span>
-      {selected && (
-        <CheckCircle2
-          className="w-4 h-4 text-cyan-300 shrink-0"
-          aria-hidden="true"
-        />
-      )}
     </button>
   );
 }
