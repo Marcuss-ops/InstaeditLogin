@@ -247,6 +247,99 @@ secret, no panico.
 
 ---
 
+## 🎯 Booking flow go-live (post-MR)
+
+> Sprint: marketing strategy-call funnel (`POST /api/v1/booking_events`,
+> `BookingProvider` modal). Code-side pronto end-to-end — mancano solo i
+> 2 swap operatore-side descritti sotto prima di mergiare / deployare.
+
+### Operatori: 1 swap prima del deploy (`BOOKING_HASH_SECRET`)
+
+> **✅ già fatto nel codice**: L'URL dello scheduler è ora cablato in
+> `web/src/lib/booking.ts` come
+> `https://calendar.app.google/QTmr3puFKCX42i9Q8?utm_source=instagram_landing`
+> (formato "Copy scheduling page link" di Google Appointment
+> Schedules — il short id `QTmr3puFKCX42i9Q8` sopravvive a querystring
+> forwarding, utm_source arriva intatto alla pagina di booking).
+> Rimane solo l'env-var lato backend.
+
+**1. Aggiungi `BOOKING_HASH_SECRET` al container di produzione**
+
+- Genera una stringa random ≥32 char (`openssl rand -hex 32`).
+- Iniettala come env var sul container che gira `cmd/api` /
+  `cmd/server`: `BOOKING_HASH_SECRET=<stringa>`.
+- WITHOUT questo env var, `pkg/api/booking_events.go::computeBookingPepper()`
+  logga `WARN: BOOKING_HASH_SECRET unset; booking_events uses a fresh
+  per-process random pepper` e i `dedupe_hash` NON sono stabili tra
+  restart (refresh-spam da stesso browser produrrà nuove righe invece
+  di essere idempotente).
+
+### Operatori: `CORS_ALLOWED_ORIGINS` esplicito
+
+- Anche se `FRONTEND_URL` popola l'allowlist del same-origin gate del
+  booking endpoint, è consigliato settare `CORS_ALLOWED_ORIGINS`
+  esplicitamente con il dominio di produzione (CSV se multi-dominio).
+- Esempio (comporre con il proprio apex):
+  `CORS_ALLOWED_ORIGINS=https://instaedit.org,https://app.instaedit.org`
+- Formato atteso: lista CSV, EXACT match (no suffix/glob). Lo stesso
+  valore popola sia l'allowlist CORS globale sia
+  `BookingEventsModule.AllowedOrigins` (vedi
+  `pkg/api/routes.go:55-59` → `r.allowedOrigin`).
+
+### Backlog logico (post go-live, NON blocker)
+
+| # | Task | Owner | Note |
+|---|------|-------|------|
+| 1 | `GET /api/v1/admin/booking_events` con API-key auth + cursor su `created_at` | backend | Permette al sales team di skippare SQL/Metabase |
+| 2 | Dashboard metabase/custom collegata alla (1) | data | Dopo che (1) è in piedi |
+| 3 | Test d'integrazione backend `INSERT ... ON CONFLICT DO UPDATE` idempotency | backend | Aggiungere a `pkg/api/booking_events_test.go` (già esistente? verifica) |
+| 4 | Hardening: BOOKING_HASH_SECRET rotate-on-deploy | backend | Operazionale; documentare runbook rotazione |
+
+### Verifica pre-merge
+
+```bash
+# Test E2E del flusso BookingProvider:
+cd InstaeditLogin/web && npx playwright test tests/e2e/booking-flow.spec.ts --reporter=line
+# Atteso: 1 passed (10.5s) — come da baseline corrente.
+
+# Typecheck TS del web:
+cd InstaeditLogin/web && npx tsc -b --pretty
+# Atteso: zero errori, build-deps aggiornati.
+
+# Smoke backend (con server in piedi):
+curl -X POST http://localhost:8080/api/v1/booking_events \
+  -H "Origin: http://localhost:5173" \
+  -H "Content-Type: application/json" \
+  -d '{"intent":"general","goal":"launch","budget":"starter","ready":"yes"}'
+# Atteso: 200 + {"status":"recorded"}. 403 se Origin manca o non matcha.
+```
+
+### Note GDPR / privacy (già rispettate dal codice)
+
+- `ip_hash` SHA-256(pepper + ip) → mai memorizzato raw IP.
+- `user_agent` / `referer` troncati a 512 byte sul lato Go
+  (`bookingEventUATruncate`, `bookingEventRefererTruncate`).
+- Nessuna PII (no email / nome) nella tabella `booking_events` —
+  primo punto di raccolta contatto è la call stessa.
+- ON CONFLICT (dedupe_hash) DO UPDATE = idempotenza refresh-spam;
+  cambio risposte stesso IP = nuova riga (corretto, NON inteso come
+  suppression).
+
+### Riferimenti interni
+
+- Endpoint handler: `pkg/api/booking_events.go`
+- Module wiring: `pkg/api/routes.go:55-59`
+- Bootstrap wiring: `internal/bootstrap/app.go` (`bookingEventRepo` +
+  `api.WithBookingEventStore`)
+- Schema: `internal/database/migrations/076_booking_events.sql`
+- Backend model: `internal/models/booking_event.go`
+- Frontend modal: `web/src/components/booking/BookingProvider.tsx`
+- Frontend config (URL swap): `web/src/lib/booking.ts`
+- E2E test: `web/tests/e2e/booking-flow.spec.ts`
+
+
+---
+
 ## 🔍 Tigris-vs-MinIO cutover audit (2026-07-25, post-Fly-destroy)
 
 > **Verdict: ⚠️ NOT YET SAFE TO REMOVE TIGRIS.** Code-side ✅ GREEN;

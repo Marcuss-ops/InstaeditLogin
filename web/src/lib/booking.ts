@@ -10,18 +10,29 @@
  *     `console.info` in BookingProvider); centralizing the options keeps
  *     the analytics payload identical across every CTA that opens it.
  *
- * Why a placeholder URL:
- *   - We don't have a real Calendly/Google-Appointment URL yet. The
- *     BookingProvider opens the URL in `_blank` so swapping it here
- *     updates Hero, Nav, FinalCTA, CTASection tiers, Mentoring
- *     packages, Login, and EditorContact in one move — instead of
- *     hunting 8+ files. Replace with the real scheduler URL when ready.
+ * Scheduler: Google Appointment Schedules (LIVE)
+ *   - The URL is the Google-managed "Copy scheduling page link" format
+ *     (`https://calendar.app.google/<short_id>`). Google forwards
+ *     querystring params through the redirect, so `?utm_source=...`
+ *     survives intact on the landing page.
+ *   - Swap it ONCE here — the BookingProvider opens the URL in
+ *     `_blank` and the change fan-outs to Hero, Nav, FinalCTA,
+ *     CTASection tiers, Mentoring packages, Login, and EditorContact
+ *     automatically.
+ *   - Get the real URL: Google Calendar → Appointment schedules →
+ *     click the share icon → "Copy scheduling page link".
+ *   - Keep `?utm_source=instagram_landing` so leads from this funnel
+ *     stay tagged in the Appointment Schedule analytics.
  * -------------------------------------------------------------------------- */
 
-/** External scheduler that opens in a new tab when the qualification
- *  form is submitted. */
+/** External scheduler (Google Appointment Schedules) that opens in a
+ *  new tab when the qualification form is submitted. LIVE URL — the
+ *  operator-side Appointment Schedule `QTmr3puFKCX42i9Q8` is wired
+ *  into the SPA bundle; if the slot is rotated, replace the ID after
+ *  `/` here and rebuild. Do NOT strip the utm_source tag: the e2e
+ *  test asserts on it. */
 export const BOOKING_URL =
-  "https://calendly.com/instaedit/strategy-call?utm_source=instagram_landing";
+  "https://calendar.app.google/QTmr3puFKCX42i9Q8?utm_source=instagram_landing";
 
 /** "Limited spots" copy. Hook for A/B tests — pass through as the chip
  *  label on every CTA section so the banner can be reworded in one place. */
