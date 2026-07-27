@@ -145,10 +145,17 @@ jobs:
       # pin to the GHA runner's version (20 by default) and risk a
       # version skew vs Vercel's own build image.
       - name: Deploy web/app to Vercel (production)
-        # Pinned to amondnet/vercel-action v25.1.1 (commit SHA) to avoid
+        # Pinned to amondnet/vercel-action v42.3.0 (commit SHA) to avoid
         # silent breaking changes from floating tags. The action reads
         # ./web/vercel.json for build/install/output configuration.
-        uses: amondnet/vercel-action@f1452eb59d0b1aa6af4c60d5f1b11e0c2d6d8e7
+        #
+        # Pin history:
+        #   - v25.1.1 (@f1452eb59d0b1aa6af4c60d5f1b11e0c2d6d8e7) — 26 Jul,
+        #     SHA deleted upstream → GitHub Actions returned 422 on every
+        #     attempt. Replaced with the current latest stable v42.3.0,
+        #     the only v25.x...v41.x intermediate releases were also removed.
+        #   - v42.3.0 (@de09aeac2ace6599ec9b11ef87558759a496bac4) — current.
+        uses: amondnet/vercel-action@de09aeac2ace6599ec9b11ef87558759a496bac4
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
