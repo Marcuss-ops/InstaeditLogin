@@ -90,6 +90,16 @@ func WithYouTubeService(svc YouTubeOAuthService) RouterOption {
 	return func(r *Router) { r.youTubeSvc = svc }
 }
 
+// WithUserStore wires the user-store on the Router. The store satisfies
+// the UserStore interface declared in router.go (covers
+// FindPlatformAccountByID, etc.). Missing previously: tests that needed
+// to override the empty default mockStore had to mutate *Router fields
+// post-construction; this option makes the wiring declarative and
+// matches the pattern of WithWorkspaceStore / WithYouTubeService.
+func WithUserStore(s UserStore) RouterOption {
+	return func(r *Router) { r.userRepo = s }
+}
+
 // WithCredentialVault injects the central credential vault. The Router
 // REQUIRES this to be set (via main.go) before serving
 // handleCallback — the call site panics with a nil-pointer dereference

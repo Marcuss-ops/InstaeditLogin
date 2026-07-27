@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -154,6 +155,16 @@ type YouTubeVideoEditStore interface {
 	// volume is bounded by the chain cardinality). Caller-side
 	// join happens against the (account_id, video_id) tuple.
 	ListByWorkspaceAccountIDs(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error)
+	// FindOrCreateEditableSession (P0#3 click-idempotency) — returns
+	// the open (non-terminal) editor session for the given
+	// (workspace, account, video) triple, or inserts a fresh one
+	// under the partial UNIQUE INDEX `uniq_youtube_video_edits_open_session`
+	// (migration 071). Same YouTube video clicked twice from the
+	// dashboard card grid converges on a single velox_project_id so
+	// the SPA can re-route the operator to the same Dark Editor URL
+	// on every click. See YouTubeVideoEditRepository.FindOrCreateEditableSession
+	// for the race-safe sequence.
+	FindOrCreateEditableSession(ctx context.Context, workspaceID int64, platformAccountID int64, youtubeVideoID string, sessionIDHint string, projectIDHint string) (*models.YouTubeVideoEdit, error)
 }
 
 // YouTubeVideoEditRepository handles CRUD for youtube_video_edits.
@@ -451,6 +462,169 @@ func (r *YouTubeVideoEditRepository) ListByWorkspaceAccountIDs(ctx context.Conte
 		return nil, fmt.Errorf("youtube video edit ListByWorkspaceAccountIDs rows: %w", err)
 	}
 	return out, nil
+}
+
+// FindOrCreateEditableSession atomically returns the open (non-terminal)
+// editor session for the (workspaceID, platformAccountID, youtubeVideoID)
+// triple, or creates a fresh one if no such row exists.
+//
+// Three-step race-safe sequence:
+//   1. SELECT — lookup an existing open session for the triple.
+//      If a row in ('editing','failed','publishing') state is found,
+//      return it WITH its existing (id, velox_project_id) untouched so
+//      the SPA reuses the same Dark Editor URL across clicks.
+//   2. INSERT — if no row exists, mint a fresh (session_id, velox_project_id)
+//      from the hint args (or auto-generate UUIDs when the hints are
+//      empty) and pin status='editing'. Single-row INSERT; the partial
+//      UNIQUE INDEX `uniq_youtube_video_edits_open_session` (migration
+//      071) protects against two concurrent inserts for the same triple.
+//   3. ON 23505 CONFLICT — if step 2 loses the race, the winning row was
+//      inserted by a peer goroutine between our SELECT and INSERT.
+//      Re-SELECT the triple; the partial UNIQUE INDEX guarantees
+//      exactly one row is visible; return it. The rare case where the
+//      re-SELECT returns (nil, nil) — meaning the row flipped to a
+//      terminal state in the tiny window between INSERT-fail and
+//      SELECT — surfaces the original 23505 sentinel so the operator
+//      can re-trigger the click.
+//
+// Args:
+//   - sessionIDHint: optional pre-generated UUID for the new row's ID.
+//     Empty → repo auto-generates (`uuid.NewString`). The handler always
+//     supplies a hint to keep id/velox_project_id generated in the same
+//     logging boundary as the request, but the repo tolerates empty.
+//   - projectIDHint: optional pre-generated `ve_<uuid>` for the new row's
+//     Velox project id. Empty → repo auto-generates.
+//
+// Edge cases:
+//   - workspaceID <= 0 / platformAccountID <= 0 / empty videoID → error
+//     (no SQL executed). The handler-level CreateEditorSession already
+//     runs the same gate; this is defence-in-depth.
+//   - found pointer's ID/velox_project_id are returned as-is. The hint
+//     args are silently discarded on the SELECT path — they only take
+//     effect on the INSERT path.
+func (r *YouTubeVideoEditRepository) FindOrCreateEditableSession(
+	ctx context.Context,
+	workspaceID int64,
+	platformAccountID int64,
+	youtubeVideoID string,
+	sessionIDHint string,
+	projectIDHint string,
+) (*models.YouTubeVideoEdit, error) {
+	if workspaceID <= 0 || platformAccountID <= 0 || youtubeVideoID == "" {
+		return nil, fmt.Errorf("youtube video edit FindOrCreateEditableSession: invalid triple (workspaceID=%d platformAccountID=%d youtubeVideoID=%q)", workspaceID, platformAccountID, youtubeVideoID)
+	}
+
+	// Step 1 — SELECT fast path: an editor session in
+	// ('editing','failed','publishing') state already exists for this
+	// triple. Return it so the SPA keeps the same velox_project_id.
+	existing, err := r.findOpenEditableSessionByTriple(ctx, workspaceID, platformAccountID, youtubeVideoID)
+	if err != nil {
+		return nil, fmt.Errorf("youtube video edit FindOrCreateEditableSession lookup: %w", err)
+	}
+	if existing != nil {
+		return existing, nil
+	}
+
+	// Step 2 — INSERT: mint a fresh (session_id, velox_project_id)
+	// from the hint args or auto-generate. The partial UNIQUE INDEX
+	// (migration 071) protects this INSERT from racing siblings.
+	now := time.Now().UTC()
+	sessionID := sessionIDHint
+	if sessionID == "" {
+		sessionID = uuid.NewString()
+	}
+	projectID := projectIDHint
+	if projectID == "" {
+		projectID = "ve_" + uuid.NewString()
+	}
+	newRow := &models.YouTubeVideoEdit{
+		ID:               sessionID,
+		WorkspaceID:      workspaceID,
+		PlatformAccountID: platformAccountID,
+		YouTubeVideoID:    youtubeVideoID,
+		VeloxProjectID:    projectID,
+		DesiredPrivacy:    "public",
+		Status:            "editing",
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := r.Create(ctx, newRow); err == nil {
+		return newRow, nil
+	} else if !isPQUniqueViolation(err) {
+		return nil, fmt.Errorf("youtube video edit FindOrCreateEditableSession insert: %w", err)
+	} else {
+		// Step 3 — RACE-LOSER: 23505 means a concurrent goroutine won
+		// the partial-UNIQUE contest between step 1's SELECT and our
+		// step 2 INSERT. Re-SELECT to pick up the winner's row.
+		winner, err2 := r.findOpenEditableSessionByTriple(ctx, workspaceID, platformAccountID, youtubeVideoID)
+		if err2 != nil {
+			return nil, fmt.Errorf("youtube video edit FindOrCreateEditableSession re-lookup: %w", err2)
+		}
+		if winner == nil {
+			// Defence-in-depth: the partial UNIQUE guarantees at
+			// least one open row exists for this triple the moment
+			// 23505 fires. If the row flipped through 'published'
+			// before our re-SELECT, surface the original error so
+			// the caller can re-trigger and let the new session be
+			// minted (partial UNIQUE allows re-creating after
+			// 'published').
+			return nil, fmt.Errorf("youtube video edit FindOrCreateEditableSession: 23505 fired but re-SELECT found no open row (original=%v)", err)
+		}
+		return winner, nil
+	}
+}
+
+// findOpenEditableSessionByTriple is the inner SELECT used by both
+// the fast path and the race-loser re-lookup of
+// FindOrCreateEditableSession. Returns (nil, nil) when no open row
+// exists yet for the triple — the contract every caller branches on.
+//
+// Index hint: the partial UNIQUE INDEX `uniq_youtube_video_edits_open_session`
+// (migration 071) covers exactly the predicate below, so this
+// query is always an index-only scan regardless of the workspace's
+// total row count.
+func (r *YouTubeVideoEditRepository) findOpenEditableSessionByTriple(
+	ctx context.Context,
+	workspaceID int64,
+	platformAccountID int64,
+	youtubeVideoID string,
+) (*models.YouTubeVideoEdit, error) {
+	edit := &models.YouTubeVideoEdit{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT `+youtubeVideoEditSelectColumns+`
+		 FROM youtube_video_edits
+		 WHERE workspace_id = $1
+		   AND platform_account_id = $2
+		   AND youtube_video_id = $3
+		   AND status IN ('editing', 'failed', 'publishing')
+		 LIMIT 1`,
+		workspaceID, platformAccountID, youtubeVideoID,
+	).Scan(
+		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+		&edit.CreatedAt, &edit.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("findOpenEditableSessionByTriple: %w", err)
+	}
+	return edit, nil
+}
+
+// isPQUniqueViolation reports whether err is a Postgres SQLSTATE 23505
+// unique_violation raised by lib/pq. Centralised so the
+// FindOrCreateEditableSession race-handler keeps a single source of
+// truth for the violation check (and so other repository methods can
+// borrow the helper when they grow the same pattern).
+func isPQUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505"
 }
 
 // youtubeVideoEditSelectColumns is the canonical column list shared

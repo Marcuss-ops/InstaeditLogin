@@ -49,6 +49,14 @@ type mockYouTubeVideoEditStore struct {
 	// default behaviour returns (nil, nil) so production callers
 	// that don't override see "no sessions yet".
 	listByAccountsFn func(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error)
+	// findOrCreateFn (P0#3 click-idempotency) is the production-click
+	// idempotency callback. The router's CreateEditorSession helper
+	// routes through it after YouTube validation to ensure the same
+	// YouTube video clicked twice from the dashboard card grid
+	// converges on a single editor session + velox_project_id.
+	// Tests supply a non-nil closure to assert on the find-or-create
+	// race-safe sequence; default returns (nil, nil).
+	findOrCreateFn func(ctx context.Context, workspaceID int64, platformAccountID int64, youtubeVideoID string, sessionIDHint string, projectIDHint string) (*models.YouTubeVideoEdit, error)
 }
 
 func (m *mockYouTubeVideoEditStore) Create(ctx context.Context, edit *models.YouTubeVideoEdit) error {
@@ -155,6 +163,22 @@ func (m *mockYouTubeVideoEditStore) ListByWorkspaceAccountIDs(ctx context.Contex
 		return m.listByAccountsFn(ctx, workspaceID, accountIDs)
 	}
 	if workspaceID <= 0 || len(accountIDs) == 0 {
+		return nil, nil
+	}
+	return nil, nil
+}
+
+// FindOrCreateEditableSession (P0#3 click-idempotency) routes to
+// findOrCreateFn when supplied; default returns (nil, nil). The mock
+// behaviour matches the production contract: tests supply a closure
+// that fakes either the SELECT-fast-path (returning a synthesised
+// existing row) or the race-loser path (returning an error on the
+// first insert, then a winner on the re-SELECT).
+func (m *mockYouTubeVideoEditStore) FindOrCreateEditableSession(ctx context.Context, workspaceID int64, platformAccountID int64, youtubeVideoID string, sessionIDHint string, projectIDHint string) (*models.YouTubeVideoEdit, error) {
+	if m.findOrCreateFn != nil {
+		return m.findOrCreateFn(ctx, workspaceID, platformAccountID, youtubeVideoID, sessionIDHint, projectIDHint)
+	}
+	if workspaceID <= 0 || platformAccountID <= 0 || youtubeVideoID == "" {
 		return nil, nil
 	}
 	return nil, nil

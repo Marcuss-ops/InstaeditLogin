@@ -84,17 +84,32 @@ type updateYouTubeEditorSessionRequest struct {
 // youtube_processing_reconciler worker call this helper so the 1-per-
 // target contract lives in one place.
 //
+// Click-idempotency (P0#3): the helper enforces the *FindOrCreate*
+// semantics — same (workspace, account, video) tuple routed here
+// twice returns the SAME row, with the SAME (id, velox_project_id).
+// The partial UNIQUE INDEX `uniq_youtube_video_edits_open_session`
+// (migration 071) + the SELECT-then-INSERT race-safe sequence in
+// YouTubeVideoEditRepository.FindOrCreateEditableSession guarantee
+// that two concurrent goroutines (e.g. a slow operator + the
+// processing reconciler re-claiming the same video) converge on a
+// single row, never two. Once a session lands in 'published' state
+// the partial UNIQUE filter no longer matches it, so the next click
+// mints a fresh row (the operator can re-edit a previously-published
+// video in a new session).
+//
 // The helper enforces the same invariants in BOTH call sites:
 //   - workspace exists;
 //   - platform account is platform=YouTube;
 //   - (workspace, account) channel linkage exists;
 //   - a valid token is in the vault;
 //   - YouTube API confirms the video is on the channel AND
-//     processingStatus='processed' AND privacy != 'public';
-//   - a fresh uuid is generated for session_id + velox_project_id
-//     (no reuse cross-channel, no reuse cross-target).
+//     processingStatus='processed' AND privacy != 'public'.
+//   - The fresh (session_id, velox_project_id) hints are USED only
+//     when no open session exists for the triple; on the REUSE path
+//     the hints are discarded and the existing row wins.
 //
-// Returns the persisted YouTubeVideoEdit row + nil error on success.
+// Returns the persisted YouTubeVideoEdit row + nil error on success
+// (whether the row was newly created or already existed).
 // A typed sentinel error (above) is returned on each failure mode so
 // the HTTP handler can map to 4xx via errors.Is.
 func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSessionInput) (*models.YouTubeVideoEdit, error) {
@@ -160,25 +175,36 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	if r.youtubeVideoEditStore == nil {
 		return nil, ErrEditorSessionEditStoreUnconfigured
 	}
-	now := time.Now().UTC()
+	// Pre-generate UUID hints for the (rare) INSERT path. The FindOrCreate
+	// repository method mints fresh UUIDs internally if these hints are
+	// empty; supplying them explicitly keeps the response shape
+	// stable for the CREATE path and lets a debugger trace the
+	// session_id back to the originating request log entry.
 	sessionID := uuid.NewString()
 	projectID := "ve_" + uuid.NewString()
-	edit := &models.YouTubeVideoEdit{
-		ID:                 sessionID,
-		WorkspaceID:        in.WorkspaceID,
-		PlatformAccountID:  in.PlatformAccountID,
-		YouTubeVideoID:     in.YouTubeVideoID,
-		VeloxProjectID:     projectID,
-		SourceThumbnailURL: in.SourceThumbnailURL,
-		DesiredPrivacy:     "public",
-		Status:             "editing",
-		CreatedAt:          now,
-		UpdatedAt:          now,
+	persisted, err := r.youtubeVideoEditStore.FindOrCreateEditableSession(
+		ctx,
+		in.WorkspaceID,
+		in.PlatformAccountID,
+		in.YouTubeVideoID,
+		sessionID,
+		projectID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("find or create editor session: %w", err)
 	}
-	if err := r.youtubeVideoEditStore.Create(ctx, edit); err != nil {
-		return nil, fmt.Errorf("create editor session: %w", err)
+	// On the CREATE path, stamp the operator-supplied
+	// SourceThumbnailURL hint. On the REUSE path, leave the row's
+	// existing SourceThumbnailURL untouched (the first click's
+	// operator-typed value wins; subsequent clicks don't overwrite).
+	if persisted.SourceThumbnailURL == "" && in.SourceThumbnailURL != "" {
+		persisted.SourceThumbnailURL = in.SourceThumbnailURL
+		persisted.UpdatedAt = time.Now().UTC()
+		if updateErr := r.youtubeVideoEditStore.Update(ctx, persisted); updateErr != nil {
+			return nil, fmt.Errorf("update editor session source thumbnail: %w", updateErr)
+		}
 	}
-	return edit, nil
+	return persisted, nil
 }
 
 // handleCreateYouTubeEditorSession is the HTTP entry point of POST
@@ -920,7 +946,9 @@ func (r *Router) handleListYouTubeEditorSessions(w http.ResponseWriter, req *htt
 
 	filter := repository.YouTubeEditorSessionListFilter{
 		WorkspaceID:     workspaceID,
-		IncludeTerminal: false,
+		// Keep terminal rows visible when explicitly requested so the
+		// dashboard can observe editing -> publishing -> published.
+		IncludeTerminal: strings.EqualFold(strings.TrimSpace(q.Get("include_terminal")), "true"),
 	}
 
 	if accountIDRaw := strings.TrimSpace(q.Get("account_id")); accountIDRaw != "" {
