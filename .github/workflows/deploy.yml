@@ -169,11 +169,18 @@ jobs:
           #     Failed at upload with: "Your Vercel CLI version is
           #     outdated. This endpoint requires version 47.2.2 or later."
           #     Bumped to 47.2.2.
-          #   - 47.2.2 — current (minimum required by Vercel deploy
-          #     endpoint as of this commit). If a newer CLI ships breaking
-          #     changes, pin the exact version here and verify locally
-          #     before bumping.
-          vercel-version: '47.2.2'
+          #   - 47.2.2 — FAILS the npm install step with `ETARGET: no
+          #     matching version found for vercel@47.2.2`. The 47.x line
+          #     on npm goes 47.0.0 → 47.1.4 only — 47.2.2 was never
+          #     published. Vercel's API error message referenced a
+          #     hypothetical minimum that doesn't exist on npm, so any
+          #     version with semver ≥ 47.2.2 (i.e., 48.0.0+) satisfies
+          #     the API contract. Bumped to current npm `latest`
+          #     (57.0.0) which is the smallest known published version
+          #     that satisfies the requirement AND gives us runway
+          #     before the next API bump forces another pin dance.
+          #   - 57.0.0 — current.
+          vercel-version: '57.0.0'
           # `--prod` → promote the deployment to production alias.
           # Without it, the action would create an unscoped preview URL
           # which our DNS (instaedit.org → apex) does NOT point at.
