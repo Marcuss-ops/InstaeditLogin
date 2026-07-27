@@ -21,7 +21,18 @@ type BookingEvent struct {
 	UserAgent  string    `json:"user_agent,omitempty"`
 	Referer    string    `json:"referer,omitempty"`
 	DedupeHash string    `json:"dedupe_hash,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	// Metadata is a free-form map persisted into the JSONB column
+	// introduced by migration 076. The SPA submits marketing tags
+	// (utm_source / utm_campaign / etc.) here as a fallback when the
+	// upstream scheduler's redirect chain strips the query string
+	// — verified empirically for Google Appointment Schedules
+	// (`calendar.app.google/<id>` drops every `?…` on the 302 hop to
+	// `calendar.google.com/calendar/appointments/schedules/<id>`).
+	// The repository JSON-marshals the map; an empty map is
+	// COALESCE'd to '{}'::jsonb on the SQL side, so omitting the key
+	// is equivalent to passing nil.
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	CreatedAt  time.Time      `json:"created_at"`
 }
 
 // Intent constants mirror web/src/lib/booking.ts → BookingIntent.

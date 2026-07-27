@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -38,7 +39,30 @@ func NewBookingEventRepository(db *sql.DB) *BookingEventRepository {
 // `event.IPHash` (the SHA-256 hashes). Doing the hashing in the
 // handler keeps the repository side pure-SQL so the SQL stays
 // reviewable in isolation.
+//
+// Metadata is JSON-marshaled here rather than in the handler so the
+// handler stays JSON-decode-only and the repo owns the JSONB encoding
+// policy. An empty/nil map yields `[]byte("{}")`; the SQL COALESCE
+// downgrades an empty string to `'{}'::jsonb` so legacy rows keep
+// the constraint `metadata NOT NULL`. The optional payload extensions
+// (utm_source / utm_campaign / etc.) ride this column when the
+// upstream scheduler's redirect chain strips query strings — see
+// `pkg/api/booking_events.go::handleCreateBookingEvent` and the
+// `BookingProvider` modal in `web/src/components/booking/`.
 func (r *BookingEventRepository) Insert(event *models.BookingEvent) error {
+	// Marshal-once + bound to []byte so we don't take on a JSON
+	// dependency in the handler; the array form also round-trips
+	// through pgx correctly (passing a map[string]any as the SQL
+	// driver value would require a pgx type-specific hook).
+	var metadataJSON []byte
+	if len(event.Metadata) > 0 {
+		var err error
+		metadataJSON, err = json.Marshal(event.Metadata)
+		if err != nil {
+			return fmt.Errorf("booking_events insert: marshal metadata: %w", err)
+		}
+	}
+
 	err := r.db.QueryRow(
 		`INSERT INTO booking_events (
 			intent, goal, budget, ready,
@@ -51,13 +75,10 @@ func (r *BookingEventRepository) Insert(event *models.BookingEvent) error {
 		event.Intent, event.Goal, event.Budget, event.Ready,
 		event.IPHash, event.UserAgent, event.Referer,
 		event.DedupeHash,
-		// Pass empty string when metadata is nil; the COALESCE
-		// above interprets NULL → '{}'::jsonb. We avoid using
-		// `[]byte`/json.Marshal here so the repo doesn't take
-		// on a JSON dependency; the handler/json coupling is a
-		// future refactor if marketing ever wants to attach
-		// per-row payload extensions.
-		"",
+		// Empty []byte when Metadata is nil/empty -> COALESCE in
+		// the SQL drops it to '{}'::jsonb so the NOT NULL column
+		// constraint always has a valid JSON object.
+		string(metadataJSON),
 	).Scan(&event.ID, &event.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("booking_events insert: %w", err)

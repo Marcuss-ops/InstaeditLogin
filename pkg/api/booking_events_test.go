@@ -110,7 +110,7 @@ func (s *fakeBookingEventStore) Insert(ev *models.BookingEvent) error {
 func TestBookingEvents_IdempotentOnSameDedupeHash(t *testing.T) {
 	var store fakeBookingEventStore
 
-	body := []byte(`{"intent":"general","goal":"launch","budget":"starter","ready":"yes"}`)
+	body := []byte(`{"intent":"general","goal":"launch","budget":"starter","ready":"yes","metadata":{"utm_source":"instagram_landing"}}`)
 	// Stable, deterministic client IP shared across both POSTs.
 	// Reaches trustedClientIP(req, nil) via req.RemoteAddr (the
 	// production extractIV path when trusted-proxy list is empty);
@@ -212,13 +212,18 @@ func TestBookingEvents_IdempotentOnSameDedupeHash(t *testing.T) {
 			canonicalCreatedAt, got)
 	}
 
-	// ─── 4. BookingEvent lifecycle hygiene ────────────────────────
-	// The handler's *models.BookingEvent pointer must still carry
-	// the canonical id (post-second-call) so downstream Go code
-	// that holds the pointer across calls reads a stable id. We
-	// can't observe that directly in this test, but the stub
-	// back-filling on Insert covers it: after the second POST
-	// returns, the row stored on the stub matches the handler's
-	// expected output shape.
-	_ = canonicalCreatedAt // keep the variable referenced for go vet
+	// ─── 4. Metadata passthrough (analytics fallback) ─────────────
+	// Google Appointment Schedules strips utm_source off its 302
+	// chain (verified empirically:
+	// calendar.app.google/<id>?utm_source=…  →  302 → calendar.google.com/…/<id>
+	// without the query string). The SPA submits utm_source in
+	// `metadata` (web/src/components/booking/BookingProvider.tsx →
+	// handleSubmit) so the row in booking_events carries the tag
+	// regardless of what the upstream scheduler did with the URL.
+	// After ON CONFLICT DO UPDATE the canonical row must continue
+	// to expose the metadata — losing it on the second call would
+	// silently break the sales team's source-attribution dashboard.
+	if got := store.rows[0].Metadata["utm_source"]; got != "instagram_landing" {
+		t.Fatalf("metadata passthrough: expected utm_source=instagram_landing after ON CONFLICT, got %v", got)
+	}
 }

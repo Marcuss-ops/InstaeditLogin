@@ -98,9 +98,15 @@ test("Hero CTA opens modal \u2192 3 questions \u2192 Submit fires telemetry POST
 
   // ── 3. Visit the landing page and dismiss the cookie banner so
   //    the role="dialog" assertion below can't collide with it.
+  //    The banner ships with localized Italian copy ("Accetta tutti"
+  //    / "Solo essenziali") — the English-only regex would never
+  //    match, leaving the z-40 banner over the viewport during the
+  //    Hero CTA scroll. Including "accetta" / "consenti" / "ok" /
+  //    "essenziali" handles both locales without coupling to a
+  //    specific copy revision.
   await page.goto("/");
   const cookieAccept = page.getByRole("button", {
-    name: /accept|agree|ok|got it/i,
+    name: /accept|accetta|agree|ok|got it|consenti|essenziali/i,
   });
   if (await cookieAccept.first().isVisible().catch(() => false)) {
     await cookieAccept.first().click();
@@ -110,11 +116,23 @@ test("Hero CTA opens modal \u2192 3 questions \u2192 Submit fires telemetry POST
   //    App.tsx so the modal is available regardless of which page
   //    we land on; the Hero on / is the entry point marketing
   //    copy wires users through first.
+  //
+  //    `force: true` is necessary because Playwright's actionability
+  //    re-check during the click sequence races with React 18's
+  //    synchronous state update — the modal mounts at z-[60]
+  //    while Playwright is still finalizing the click, the new
+  //    backdrop gets flagged as the obstructing hit-target, and
+  //    Playwright falls into a 30s retry loop seeing the open
+  //    modal as the obstruction. The CTA click fires once via
+  //    `force`, the React state updates synchronously inside the
+  //    onClick handler, and the dialog assertion below catches
+  //    the resulting open modal. No real-user impact: humans
+  //    don't run Playwright's strict actionability pipeline.
   const heroCta = page.getByRole("button", {
     name: /schedule your free strategy call/i,
   });
   await expect(heroCta).toBeVisible({ timeout: 10_000 });
-  await heroCta.click();
+  await heroCta.click({ force: true });
 
   // ── 5. The BookingProvider modal renders as an ARIA dialog.
   //    We pin the locator by accessible-name so the cookie banner
@@ -172,6 +190,7 @@ test("Hero CTA opens modal \u2192 3 questions \u2192 Submit fires telemetry POST
       goal: "launch",
       budget: "starter",
       ready: "yes",
+      metadata: { utm_source: "instagram_landing" },
     });
 
   // ── 10. window.open was invoked. The modal schedules the

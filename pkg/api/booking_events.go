@@ -197,10 +197,22 @@ func (m *BookingEventsModule) handleCreateBookingEvent(w http.ResponseWriter, re
 	ip := extractIP(req, nil)
 
 	var payload struct {
-		Intent string `json:"intent"`
-		Goal   string `json:"goal"`
-		Budget string `json:"budget"`
-		Ready  string `json:"ready"`
+		Intent   string         `json:"intent"`
+		Goal     string         `json:"goal"`
+		Budget   string         `json:"budget"`
+		Ready    string         `json:"ready"`
+		// Metadata is the SPA passthrough for marketing tags
+		// (utm_source / utm_campaign / etc.). Optional; missing
+		// key falls through to a nil map and the repository
+		// COALESCE's it down to '{}'::jsonb on insert. Used as
+		// an analytics fallback when the upstream Google
+		// Appointment Schedules redirect chain strips the query
+		// string (verified empirically: calendar.app.google
+		// rewrites without utm_* on the 302 to
+		// calendar.google.com/calendar/appointments/schedules/<id>).
+		// See web/src/components/booking/BookingProvider.tsx →
+		// handleSubmit for the SPA-side submission contract.
+		Metadata map[string]any `json:"metadata,omitempty"`
 	}
 	dec := json.NewDecoder(req.Body)
 	dec.DisallowUnknownFields()
@@ -233,6 +245,13 @@ func (m *BookingEventsModule) handleCreateBookingEvent(w http.ResponseWriter, re
 		return
 	}
 
+	// Metadata is treated as opaque — no field-level schema
+	// validation. Marketing teams iterate the payload shape
+	// without redeploying the Go binary; the JSONB column
+	// absorbs any new key. The repository JSON-marshals the map
+	// into a Postgres `jsonb` so NULL/missing stays distinguishable
+	// from explicit `{}` (a future dashboard query can filter on
+	// metadata->>'utm_source' IS NOT NULL).
 	ipHash := hashForStorage(ip)
 	dedupeHash := hashForStorage(
 		ipHash + "|" + payload.Intent + "|" + payload.Goal + "|" + payload.Budget + "|" + payload.Ready,
@@ -247,6 +266,7 @@ func (m *BookingEventsModule) handleCreateBookingEvent(w http.ResponseWriter, re
 		UserAgent:  truncate(req.UserAgent(), bookingEventUATruncate),
 		Referer:    truncate(req.Referer(), bookingEventRefererTruncate),
 		DedupeHash: dedupeHash,
+		Metadata:   payload.Metadata,
 	}
 
 	if err := m.deps.Store.Insert(event); err != nil {

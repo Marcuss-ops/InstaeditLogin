@@ -36,16 +36,35 @@ import type {
 import { apiClient, ApiClientError } from "./api-client";
 
 /**
- * Payload the modal sends. The four fields are the only ones the
- * backend validates; additional tracking metadata is generated
- * server-side from the request itself (ip-hash, user-agent,
- * referer, dedupe-hash). See pkg/api/booking_events.go.
+ * Payload the modal sends. The four closed-set fields are
+ * validated by the backend (`pkg/api/booking_events.go::
+ * handleCreateBookingEvent`); additional `metadata` is treated as
+ * opaque and JSON-marshaled into the `booking_events.metadata`
+ * JSONB column (introduced by migration 076). The metadata
+ * passthrough is the SPA-side fallback for the case where the
+ * upstream Google Appointment Schedules redirect chain
+ * (`calendar.app.google/<id>` → `calendar.google.com/...`) strips
+ * utm-style query params on its 302 — empirically verified via
+ * `curl -Lv ... | grep 'Location:'`. Submitting utm_source in the
+ * payload as a fallback lets the booking_events row carry the
+ * attribution regardless of what the scheduler did to the URL.
+ *
+ * See web/src/components/booking/BookingProvider.tsx → handleSubmit
+ * for the call site that populates `metadata.utm_source`.
  */
 export interface BookingEventPayload {
   intent: BookingIntent;
   goal: BookingGoal;
   budget: BookingBudget;
   ready: BookingReady;
+  /**
+   * Free-form marketing tags (utm_source / utm_campaign / etc.)
+   * persisted into the `metadata` JSONB column. The server does
+   * not validate the shape: any string-keyed record is accepted
+   * and round-tripped as-is. Marketing may add new keys without
+   * a backend deploy.
+   */
+  metadata?: Record<string, string>;
 }
 
 /**
