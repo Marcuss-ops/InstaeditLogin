@@ -46,3 +46,11 @@ afterEach(() => {
   cleanup();
   toastBus.__resetForTests();
 });
+
+// Stub VITE_API_BASE_URL so isomorphic fetch mocks in component tests
+// resolve against a stable localhost origin rather than an empty
+// string. Required by Landing.test.tsx (YouTube embeds mock path)
+// and the InternalUploads test cluster (waitFor over fetch mocks).
+// Production builds set this explicitly via .env / fly secrets —
+// see scripts/verify-api-base-url.ts for the live-env contract.
+vi.stubEnv('VITE_API_BASE_URL', 'http://localhost:8080');
