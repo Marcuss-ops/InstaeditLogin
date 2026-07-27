@@ -57,6 +57,14 @@ type mockYouTubeVideoEditStore struct {
 	// Tests supply a non-nil closure to assert on the find-or-create
 	// race-safe sequence; default returns (nil, nil).
 	findOrCreateFn func(ctx context.Context, workspaceID int64, platformAccountID int64, youtubeVideoID string, sessionIDHint string, projectIDHint string) (*models.YouTubeVideoEdit, error)
+	// markPublishedWithActualPrivacyFn (P0#7) is the atomic-CAS
+	// simulator that the publish orchestrator calls as the FINAL
+	// step. Tests inject a closure to capture the actual_privacy +
+	// youtube_sync_status values the orchestrator derived from the
+	// videos.list read-back, then assert the CAS payload matches
+	// the operator's intended visibility (or, on drift, the
+	// observed mismatch).
+	markPublishedWithActualPrivacyFn func(ctx context.Context, id string, actualPrivacy string, syncStatus string) (*models.YouTubeVideoEdit, error)
 }
 
 func (m *mockYouTubeVideoEditStore) Create(ctx context.Context, edit *models.YouTubeVideoEdit) error {
@@ -182,6 +190,37 @@ func (m *mockYouTubeVideoEditStore) FindOrCreateEditableSession(ctx context.Cont
 		return nil, nil
 	}
 	return nil, nil
+}
+
+// MarkPublishedWithActualPrivacy (P0#7) routes to
+// markPublishedWithActualPrivacyFn when supplied. Default behaviour
+// stamps the supplied actual_privacy + sync_status on the row
+// returned by findFn and returns it — matching the production CAS
+// that flips publishing → published in the same SQL statement. Tests
+// that need a CAS-loss (concurrent reconcilertealing the row)
+// inject a closure returning the ErrYouTubeVideoEditNotFound.
+func (m *mockYouTubeVideoEditStore) MarkPublishedWithActualPrivacy(ctx context.Context, id string, actualPrivacy string, syncStatus string) (*models.YouTubeVideoEdit, error) {
+	if m.markPublishedWithActualPrivacyFn != nil {
+		return m.markPublishedWithActualPrivacyFn(ctx, id, actualPrivacy, syncStatus)
+	}
+	if m.findFn == nil {
+		return nil, errors.New("markPublishedWithActualPrivacy fallback: no findFn to bootstrap published row")
+	}
+	row, err := m.findFn(ctx, id)
+	if err != nil || row == nil {
+		return nil, fmt.Errorf("markPublishedWithActualPrivacy fallback: find returned nil: %w", err)
+	}
+	if row.Status != "publishing" {
+		return nil, fmt.Errorf("%w: simulated CAS-loss (status=%s)", repository.ErrYouTubeVideoEditNotFound, row.Status)
+	}
+	if actualPrivacy != "" {
+		row.ActualPrivacy = &actualPrivacy
+	}
+	row.YouTubeSyncStatus = &syncStatus
+	row.Status = "published"
+	row.LastError = ""
+	row.UpdatedAt = time.Now().UTC()
+	return row, nil
 }
 
 // mockYouTubeOAuthServiceForEditor implements the subset of

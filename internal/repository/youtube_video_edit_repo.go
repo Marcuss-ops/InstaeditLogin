@@ -165,6 +165,21 @@ type YouTubeVideoEditStore interface {
 	// on every click. See YouTubeVideoEditRepository.FindOrCreateEditableSession
 	// for the race-safe sequence.
 	FindOrCreateEditableSession(ctx context.Context, workspaceID int64, platformAccountID int64, youtubeVideoID string, sessionIDHint string, projectIDHint string) (*models.YouTubeVideoEdit, error)
+	// MarkPublishedWithActualPrivacy (P0#7 actual_privacy read-back)
+	// atomically transitions a row from 'publishing' → 'published'
+	// AND stamps actual_privacy + youtube_sync_status in the same
+	// SQL statement. CAS predicate: status='publishing' ONLY (a row
+	// in 'editing'/'failed' must NEVER reach this branch — the
+	// PublishThumbnail YouTube API call has not yet succeeded).
+	//
+	// syncStatus is the lifecycle marker the SPA uses to colour the
+	// privacy badge; valid values: 'pending' / 'confirmed' /
+	// 'drift' / 'failed' (CHECK constraint, migration 072).
+	//
+	// Returns ErrYouTubeVideoEditNotFound on 0-rows match —
+	// handler maps to 409 (CAS-loss). A real *sql.DB error
+	// propagates wrapped.
+	MarkPublishedWithActualPrivacy(ctx context.Context, id string, actualPrivacy string, syncStatus string) (*models.YouTubeVideoEdit, error)
 }
 
 // YouTubeVideoEditRepository handles CRUD for youtube_video_edits.
@@ -201,16 +216,16 @@ func (r *YouTubeVideoEditRepository) Create(ctx context.Context, edit *models.Yo
 func (r *YouTubeVideoEditRepository) FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
 	edit := &models.YouTubeVideoEdit{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, workspace_id, platform_account_id, youtube_video_id, velox_project_id,
-		        source_thumbnail_url, thumbnail_media_id, desired_privacy, publish_at,
-		        status, last_error, created_at, updated_at
+		`SELECT `+youtubeVideoEditSelectColumns+`
 		 FROM youtube_video_edits
 		 WHERE id = $1`,
 		id,
 	).Scan(
-		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID, &edit.VeloxProjectID,
-		&edit.SourceThumbnailURL, &edit.ThumbnailMediaID, &edit.DesiredPrivacy, &edit.PublishAt,
-		&edit.Status, &edit.LastError, &edit.CreatedAt, &edit.UpdatedAt,
+		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
+		&edit.CreatedAt, &edit.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -226,16 +241,15 @@ func (r *YouTubeVideoEditRepository) FindByID(ctx context.Context, id string) (*
 func (r *YouTubeVideoEditRepository) FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
 	edit := &models.YouTubeVideoEdit{}
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT id, workspace_id, platform_account_id, youtube_video_id, velox_project_id,
-		        source_thumbnail_url, thumbnail_media_id, desired_privacy, publish_at,
-		        status, last_error, created_at, updated_at
+		`SELECT `+youtubeVideoEditSelectColumns+`
 		 FROM youtube_video_edits
 		 WHERE velox_project_id = $1`,
 		projectID,
 	).Scan(
 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID, &edit.VeloxProjectID,
 		&edit.SourceThumbnailURL, &edit.ThumbnailMediaID, &edit.DesiredPrivacy, &edit.PublishAt,
-		&edit.Status, &edit.LastError, &edit.CreatedAt, &edit.UpdatedAt,
+		&edit.Status, &edit.LastError, &edit.ActualPrivacy, &edit.YouTubeSyncStatus,
+		&edit.CreatedAt, &edit.UpdatedAt,
 	); err == sql.ErrNoRows {
 		return nil, nil
 	} else if err != nil {
@@ -282,10 +296,6 @@ func (r *YouTubeVideoEditRepository) FindByVeloxProjectID(ctx context.Context, p
 // distinct from a real *sql.DB error so the handler can branch on
 // errors.Is(..., ErrYouTubeVideoEditNotFound) to map to HTTP 409.
 func (r *YouTubeVideoEditRepository) MarkPublishing(ctx context.Context, id string, desiredPrivacy string, publishAt *time.Time, inFlightTimeout time.Duration) (*models.YouTubeVideoEdit, error) {
-	selectColumns := `id, workspace_id, platform_account_id, youtube_video_id,
-	                   velox_project_id, source_thumbnail_url, thumbnail_media_id,
-	                   desired_privacy, publish_at, status, last_error,
-	                   created_at, updated_at`
 	edit := &models.YouTubeVideoEdit{}
 	var err error
 	if inFlightTimeout <= 0 {
@@ -295,12 +305,13 @@ func (r *YouTubeVideoEditRepository) MarkPublishing(ctx context.Context, id stri
 			 SET status = 'publishing', updated_at = NOW(),
 			     desired_privacy = $2, publish_at = $3
 			 WHERE id = $1 AND status IN ('editing','failed')
-			 RETURNING `+selectColumns,
+			 RETURNING `+youtubeVideoEditSelectColumns,
 			id, desiredPrivacy, publishAt,
 		).Scan(
 			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
 			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
 			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+			&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 			&edit.CreatedAt, &edit.UpdatedAt,
 		)
 	} else {
@@ -317,12 +328,13 @@ func (r *YouTubeVideoEditRepository) MarkPublishing(ctx context.Context, id stri
 			            AND updated_at < NOW() - make_interval(secs => $4)
 			        )
 			   )
-			 RETURNING `+selectColumns,
+			 RETURNING `+youtubeVideoEditSelectColumns,
 			id, desiredPrivacy, publishAt, int(inFlightTimeout.Seconds()),
 		).Scan(
 			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
 			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
 			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+			&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 			&edit.CreatedAt, &edit.UpdatedAt,
 		)
 	}
@@ -347,15 +359,13 @@ func (r *YouTubeVideoEditRepository) AttachThumbnail(ctx context.Context, sessio
 		`UPDATE youtube_video_edits
 		 SET thumbnail_media_id = $2, updated_at = NOW()
 		 WHERE id = $1 AND status IN ('editing','failed')
-		 RETURNING id, workspace_id, platform_account_id, youtube_video_id,
-		           velox_project_id, source_thumbnail_url, thumbnail_media_id,
-		           desired_privacy, publish_at, status, last_error,
-		           created_at, updated_at`,
+		 RETURNING `+youtubeVideoEditSelectColumns,
 		sessionID, thumbnailMediaID,
 	).Scan(
 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
 		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
 		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 		&edit.CreatedAt, &edit.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -363,6 +373,79 @@ func (r *YouTubeVideoEditRepository) AttachThumbnail(ctx context.Context, sessio
 	}
 	if err != nil {
 		return nil, fmt.Errorf("youtube video edit AttachThumbnail: %w", err)
+	}
+	return edit, nil
+}
+
+// MarkPublishedWithActualPrivacy (P0#7 actual_privacy read-back) is
+// the atomic CAS that stamps the YouTube-side projection in the same
+// SQL statement as the status='published' flip, so a concurrent
+// dashboard reader cannot observe a 'published' row with stale NULL
+// actual_privacy / pending youtube_sync_status.
+//
+// Why CAS, not a follow-up Update:
+//   The orchestrator's previous final-step pattern (`edit.Status =
+//   "published"; Update(...)`) had a subtle race: a concurrent GET on
+//   the same velox_project_id could observe Status='published' but
+//   ActualPrivacy=NULL (the row had not yet been written with the new
+//   projection). Operators then saw "Pubblicato" badges with no
+//   actual privacy colour — confusing + missed drift. The CAS below
+//   guarantees the four columns (status, actual_privacy,
+//   youtube_sync_status, updated_at) flip together in the same SQL,
+//   so a reader either sees the row pre-CAS or post-CAS, never in
+//   between.
+//
+// CAS predicate: status='publishing' (only). MarkPublishing was the
+// gate prior to this — a row in 'editing'/'failed' must never reach
+// this branch because PublishThumbnail has not successfully run yet,
+// and a row in 'published' (e.g. on a replay) was caught at the
+// orchestrator's idempotency guard.
+//
+// Returns ErrYouTubeVideoEditNotFound (wrapped) on 0-rows — the
+// orchestrator maps to 409 (CAS-loss). This is distinct from a real
+// Postgres error so the handlers can branch on errors.Is.
+func (r *YouTubeVideoEditRepository) MarkPublishedWithActualPrivacy(
+	ctx context.Context,
+	id string,
+	actualPrivacy string,
+	syncStatus string,
+) (*models.YouTubeVideoEdit, error) {
+	// syncStatus is constrained at the DB layer (CHECK constraint,
+	// migration 072). We do NOT re-validate here: the application
+	// layer is the single source of truth for the four lifecycle
+	// values; overlaying an allow-list at this layer would just
+	// drift the truth away from the DB constraint.
+	//
+	// actualPrivacy uses NULLIF($2, '') so the orchestrator's
+	// pending fallback (empty string when videos.list read-back
+	// errored) collapses to a true SQL NULL on the column. This
+	// preserves the schema invariant the verdict pivots on:
+	//   NULL  = no read-back yet (transient state)
+	//   ''    = read-back completed AND YouTube reports empty
+	//            privacy (a different failure mode — emitted only
+	//            if YouTube returns a malformed status payload).
+	// Both keep the DTO's `omitempty` behaviour intact.
+	edit := &models.YouTubeVideoEdit{}
+	err := r.db.QueryRowContext(ctx,
+		`UPDATE youtube_video_edits
+		 SET status = 'published', updated_at = NOW(),
+		     last_error = '',
+		     actual_privacy = NULLIF($2, ''), youtube_sync_status = $3
+		 WHERE id = $1 AND status = 'publishing'
+		 RETURNING `+youtubeVideoEditSelectColumns,
+		id, actualPrivacy, syncStatus,
+	).Scan(
+		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
+		&edit.CreatedAt, &edit.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("%w: id=%s", ErrYouTubeVideoEditNotFound, id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("youtube video edit MarkPublishedWithActualPrivacy: %w", err)
 	}
 	return edit, nil
 }
@@ -452,6 +535,7 @@ func (r *YouTubeVideoEditRepository) ListByWorkspaceAccountIDs(ctx context.Conte
 			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
 			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
 			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+			&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 			&edit.CreatedAt, &edit.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("youtube video edit ListByWorkspaceAccountIDs scan: %w", err)
@@ -603,6 +687,7 @@ func (r *YouTubeVideoEditRepository) findOpenEditableSessionByTriple(
 		&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
 		&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
 		&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+		&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 		&edit.CreatedAt, &edit.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -633,9 +718,15 @@ func isPQUniqueViolation(err error) bool {
 // FindByVeloxProjectID and ListByWorkspace — a future column added
 // to youtube_video_edits (e.g. a 'failure_reason' diagnostic) is
 // then automatically returned by every read without per-call edits.
+//
+// actual_privacy + youtube_sync_status are the YouTube-side
+// projections (migration 072). Every read method returns them so the
+// publish-by-project GET, the dashboard list, and the groups videos
+// endpoint all surface them without per-call SQL edits.
 const youtubeVideoEditSelectColumns = `id, workspace_id, platform_account_id, youtube_video_id,
 	        velox_project_id, source_thumbnail_url, thumbnail_media_id,
 	        desired_privacy, publish_at, status, last_error,
+	        actual_privacy, youtube_sync_status,
 	        created_at, updated_at`
 
 // ListByWorkspace returns the editor sessions visible to the

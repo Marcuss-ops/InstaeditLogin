@@ -6,6 +6,19 @@ import "time"
 // session for a specific YouTube video. It links the InstaEdit
 // workspace/account, the YouTube video, and the Velox dark-editor
 // project used to produce the thumbnail.
+//
+// ActualPrivacy and YouTubeSyncStatus are the YouTube-side
+// projection of the publish outcome. They are stamped by the
+// publish orchestrator right after the read-back videos.list call
+// (P0#7) and updated again by the drift_reconciler when YouTube
+// independently drifts (e.g. operator edited through YouTube Studio
+// after our publish). Pointer-to-string for both because:
+//   - the field can be unset (publish hasn't completed yet) —
+//     `omitempty` on the JSON layer keeps the API contract clean;
+//   - a NULL column scanned into Go string would lose the
+//     "unset vs empty string" distinction (we use '' to mean
+//     "operator erased the title", NULL to mean "publish hasn't
+//     happened yet or read-back errored").
 type YouTubeVideoEdit struct {
 	ID                 string     `json:"id"`
 	WorkspaceID        int64      `json:"workspace_id"`
@@ -16,10 +29,36 @@ type YouTubeVideoEdit struct {
 	ThumbnailMediaID   *string  `json:"thumbnail_media_id,omitempty"`
 	DesiredPrivacy     string   `json:"desired_privacy"`
 	PublishAt          *time.Time `json:"publish_at,omitempty"`
-	Status               string     `json:"status"`
-	LastError          string     `json:"last_error,omitempty"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	// ActualPrivacy is what YouTube's videos.list reports when the
+	// publish orchestrator reads back the published video's status.
+	// It can diverge from DesiredPrivacy in two cases:
+	//   1. Operator scheduled a private publish via the 'publish_at'
+	//      field — YouTube initially honours DesiredPrivacy but flips
+	//      the video to public at publish_at time; the value seen
+	//      during read-back depends on whether the read-back fires
+	//      before or after the schedule fires.
+	//   2. Operator manually edited the privacy in YouTube Studio
+	//      after our publish — the drift_reconciler will eventually
+	//      re-stamp this on its sweep tick.
+	//   Reconciliation converges ActualPrivacy toward DesiredPrivacy
+	//   whenever the operator's intent remains Persist-At.
+	ActualPrivacy *string `json:"actual_privacy,omitempty"`
+	// YouTubeSyncStatus is the lifecycle marker the SPA uses to
+	// colour the privacy badge (see the verdict's DTO projection).
+	// Valid values (CHECK constraint enforced at the DB layer):
+	//   - pending  : read-back hasn't happened yet OR errored
+	//                transiently; the reconciler will retry.
+	//   - confirmed: ActualPrivacy matches DesiredPrivacy at read-back.
+	//   - drift    : ActualPrivacy diverges from DesiredPrivacy AND
+	//                the publish is still terminal-published. The
+	//                reconciler attempts convergence on the next sweep.
+	//   - failed   : terminal publish failure (PublishThumbnail +
+	//                read-back both errored). Operator replay needed.
+	YouTubeSyncStatus *string `json:"youtube_sync_status,omitempty"`
+	Status            string     `json:"status"`
+	LastError         string     `json:"last_error,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 // YouTubeVideoDetails is the narrow view of a YouTube video returned

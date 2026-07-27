@@ -593,12 +593,13 @@ type publishYouTubeEditorSessionRequest struct {
 	Translations         map[string]models.YouTubeTranslation `json:"translations,omitempty"`
 }
 
-// publishYouTubeEditorSessionResponse is returned on a successful publish.
-type publishYouTubeEditorSessionResponse struct {
-	PublicURL    string     `json:"public_url"`
-	VideoID      string     `json:"video_id"`
-	PrivacyStatus string    `json:"privacy_status"`
-	PublishedAt  *time.Time `json:"published_at,omitempty"`
+// publishYouTubeEditorSessionResponse is returned on a successful publish.type publishYouTubeEditorSessionResponse struct {
+	PublicURL         string     `json:"public_url"`
+	VideoID           string     `json:"video_id"`
+	PrivacyStatus     string     `json:"privacy_status"`
+	ActualPrivacy     string     `json:"actual_privacy,omitempty"`
+	YouTubeSyncStatus string     `json:"youtube_sync_status,omitempty"`
+	PublishedAt       *time.Time `json:"published_at,omitempty"`
 }
 
 // youTubePublishOptionsForRequest folds a publishYouTubeEditorSessionRequest

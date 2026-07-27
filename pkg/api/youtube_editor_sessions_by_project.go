@@ -25,20 +25,28 @@ import (
 // model struct intentionally avoids tags to stay storage-agnostic).
 // `last_error` is included as an operator hint for the dashboard's
 // "Perché ha fallito?" copy — internal diagnostics only.
+//
+// ActualPrivacy + YouTubeSyncStatus are the YouTube-side projection
+// (P0#7). Pointer-to-string so the SPA sees `null` (not empty string)
+// when the publish hasn't completed or the read-back errored — the
+// SPA treats `null actual_privacy` as "in flight", the same way it
+// treats no `editor_url` on a freshly-discovered card grid entry.
 type youTubeEditorSessionDetail struct {
-	ID                string     `json:"id"`
-	WorkspaceID       int64      `json:"workspace_id"`
-	PlatformAccountID int64      `json:"platform_account_id"`
-	YouTubeVideoID    string     `json:"youtube_video_id"`
-	VeloxProjectID    string     `json:"velox_project_id"`
-	SourceThumbnailURL string    `json:"source_thumbnail_url,omitempty"`
-	ThumbnailMediaID  *string    `json:"thumbnail_media_id,omitempty"`
-	DesiredPrivacy    string     `json:"desired_privacy"`
-	PublishAt         *time.Time `json:"publish_at,omitempty"`
-	Status            string     `json:"status"`
-	LastError         string     `json:"last_error,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ID                 string     `json:"id"`
+	WorkspaceID        int64      `json:"workspace_id"`
+	PlatformAccountID  int64      `json:"platform_account_id"`
+	YouTubeVideoID     string     `json:"youtube_video_id"`
+	VeloxProjectID     string     `json:"velox_project_id"`
+	SourceThumbnailURL string     `json:"source_thumbnail_url,omitempty"`
+	ThumbnailMediaID   *string    `json:"thumbnail_media_id,omitempty"`
+	DesiredPrivacy     string     `json:"desired_privacy"`
+	PublishAt          *time.Time `json:"publish_at,omitempty"`
+	Status             string     `json:"status"`
+	LastError          string     `json:"last_error,omitempty"`
+	ActualPrivacy      *string    `json:"actual_privacy,omitempty"`
+	YouTubeSyncStatus  *string    `json:"youtube_sync_status,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSessionDetail {
@@ -54,6 +62,8 @@ func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSe
 		PublishAt:          edit.PublishAt,
 		Status:             edit.Status,
 		LastError:          edit.LastError,
+		ActualPrivacy:      edit.ActualPrivacy,
+		YouTubeSyncStatus:  edit.YouTubeSyncStatus,
 		CreatedAt:          edit.CreatedAt,
 		UpdatedAt:          edit.UpdatedAt,
 	}
@@ -238,13 +248,18 @@ func (r *Router) executePublishYouTubeEditorSession(
 	payload publishYouTubeEditorSessionRequest,
 ) {
 	// Idempotency: published sessions can be replayed without
-	// re-running the YouTube API call.
+	// re-running the YouTube API call. The YouTube-side projection
+	// (ActualPrivacy + YouTubeSyncStatus) is also cached on the row
+	// by MarkPublishedWithActualPrivacy during the FIRST successful
+	// publish, so a replay returns the same terminal-state shape.
 	if edit.Status == "published" {
 		writeJSON(w, http.StatusOK, publishYouTubeEditorSessionResponse{
-			PublicURL:     "https://www.youtube.com/watch?v=" + edit.YouTubeVideoID,
-			VideoID:       edit.YouTubeVideoID,
-			PrivacyStatus: edit.DesiredPrivacy,
-			PublishedAt:   edit.PublishAt,
+			PublicURL:         "https://www.youtube.com/watch?v=" + edit.YouTubeVideoID,
+			VideoID:           edit.YouTubeVideoID,
+			PrivacyStatus:     edit.DesiredPrivacy,
+			ActualPrivacy:     derefString(edit.ActualPrivacy),
+			YouTubeSyncStatus: derefString(edit.YouTubeSyncStatus),
+			PublishedAt:       edit.PublishAt,
 		})
 		return
 	}
@@ -377,6 +392,54 @@ func (r *Router) executePublishYouTubeEditorSession(
 		return
 	}
 
+	// P0#7 actual_privacy read-back. Right after the snippet+status
+	// + localizations loop completes (above), call YouTube videos.list
+	// to confirm what YouTube ACTUALLY accepted for the privacy.
+	//
+	// Three terminal outcomes for the sync_status marker:
+	//   'confirmed': YouTube accepted exactly the privacy we requested.
+	//   'drift': YouTube accepted a DIFFERENT privacy (rare — typically
+	//                a YouTube-side fluke on scheduled_publish at the
+	//                moment of read-back). The publish is still terminal-
+	//                published; the drift_reconciler sweeps the row on
+	//                its next tick and attempts to converge.
+	//   'pending': The videos.list read-back errored transiently (5xx,
+	//                network). The publish is still terminal-published;
+	//                the drift_reconciler's partial index sweep on
+	//                youtube_sync_status='pending' retries until the
+	//                read-back succeeds.
+	//
+	// Failure policy: the PublishThumbnail YouTube call succeeded,
+	// so we never DOWNGRADE to a 5xx from this branch — we always
+	// surface 200 + a terminal-published row, deferring read-back
+	// success to the reconciler. This is the operator-friendly
+	// contract: "you clicked Pubblica, your visibility is set, we'll
+	// confirm the precise state with YouTube in a few seconds."
+	actualPrivacy := privacyStatus
+	syncStatus := "confirmed"
+	if video, lookupErr := r.youTubeSvc.GetYouTubeVideo(ctx, token.AccessToken, edit.YouTubeVideoID); lookupErr != nil {
+		// Read-back transport error: stamp pending, defer to
+		// reconciler. We log the error internally for the
+		// dashboard's diagnostics but do NOT surface it to the
+		// operator — the publish itself succeeded.
+		actualPrivacy = ""
+		syncStatus = "pending"
+	} else if video == nil {
+		// Defensive: videos.list returning empty shouldn't happen
+		// (we just successfully updated it) but treat the same as
+		// a transport error.
+		actualPrivacy = ""
+		syncStatus = "pending"
+	} else {
+		ytPrivacy := strings.ToLower(strings.TrimSpace(video.Privacy))
+		if ytPrivacy != privacyStatus {
+			syncStatus = "drift"
+			actualPrivacy = ytPrivacy
+		} else {
+			actualPrivacy = ytPrivacy
+		}
+	}
+
 	// Apply per-language localizations AFTER the snippet+status
 	// update succeeds. Each language is a separate
 	// videos.update(part=localizations) call — YouTube rejects
@@ -410,20 +473,43 @@ func (r *Router) executePublishYouTubeEditorSession(
 		}
 	}
 
-	edit.Status = "published"
+	// MarkPublishedWithActualPrivacy (P0#7) atomically flips
+	// status='publishing' -> 'published' AND stamps actual_privacy +
+	// youtube_sync_status. The CAS guarantees a concurrent reader
+	// cannot observe Status='published' with NULL ActualPrivacy
+	// (the partial-state bug we fixed).
 	edit.LastError = ""
-	edit.UpdatedAt = time.Now().UTC()
-	if err := r.youtubeVideoEditStore.Update(ctx, edit); err != nil {
-		writeError(w, http.StatusInternalServerError, "update editor session: "+err.Error())
+	claimed, err := r.youtubeVideoEditStore.MarkPublishedWithActualPrivacy(
+		ctx, edit.ID, actualPrivacy, syncStatus,
+	)
+	if err != nil {
+		if errors.Is(err, repository.ErrYouTubeVideoEditNotFound) {
+			writeError(w, http.StatusConflict, "publish already in progress or terminal state")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "mark published: "+err.Error())
 		return
 	}
+	edit = claimed
 
 	writeJSON(w, http.StatusOK, publishYouTubeEditorSessionResponse{
-		PublicURL:     publicURL,
-		VideoID:       edit.YouTubeVideoID,
-		PrivacyStatus: privacyStatus,
-		PublishedAt:   payload.PublishAt,
+		PublicURL:         publicURL,
+		VideoID:           edit.YouTubeVideoID,
+		PrivacyStatus:     privacyStatus,
+		ActualPrivacy:     derefString(edit.ActualPrivacy),
+		YouTubeSyncStatus: derefString(edit.YouTubeSyncStatus),
+		PublishedAt:       payload.PublishAt,
 	})
+}
+
+// derefString returns the dereferenced value of a *string pointer
+// ("" if nil). Used by the publish + replay responses to flatten
+// the nullable model fields onto the JSON projection.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // sortedTranslationKeys returns the map keys in a stable,

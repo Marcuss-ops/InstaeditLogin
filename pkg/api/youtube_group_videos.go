@@ -59,15 +59,14 @@ const groupYouTubeVideosMaxTotalVideos = 500
 // already carries the field so the SPA implements the badge logic
 // once and the reconciler can flip the value remotely.
 //
-// PLACEHOLDER FIELDS: actual_privacy and youtube_sync_status are
-// placeholders today (mirror desired_privacy + always "unconfirmed").
-// Two follow-up commits flip them into live values:
-//   1. The reconciler (P0#7) updates actual_privacy + sync_status
-//      from YouTube videos.list after a publish round-trip;
-//   2. The publish endpoint (P0#7) stamps actual_privacy
-//      synchronously instead of mirroring desired_privacy.
-// Until those land, do NOT build UI logic that trusts these fields
-// — the verdict explicitly calls them out as placeholders.
+// LIVE PROJECTION (P0#7): actual_privacy and youtube_sync_status are
+// now stamped by the publish orchestrator's read-back
+// (MarkPublishedWithActualPrivacy) the moment a publish completes,
+// and refreshed by the drift_reconciler on every periodic sweep.
+// The SPA's privacy badge + "Syncing with YouTube…" copy is wired
+// against these fields. The DTO comment block above describes the
+// field semantics; the mapping block (below "sessionMap lookup")
+// projects the live fields straight onto the response.
 type groupYouTubeVideoEntry struct {
 	YouTubeVideoID    string `json:"youtube_video_id"`
 	Title             string `json:"title"`
@@ -89,17 +88,20 @@ type groupYouTubeVideoEntry struct {
 	// DesiredPrivacy: what the operator chose on the editor's "Pubblica"
 	// panel (publish flow will use it). Empty when no session exists.
 	DesiredPrivacy string `json:"desired_privacy,omitempty"`
-	// ActualPrivacy: YouTube's confirmed privacy right after our publish
-	// call. Empty when no session exists OR when the publish flow
-	// hasn't stamped it yet. For now this field mirrors
-	// DesiredPrivacy on existing sessions — the reconciler of a
-	// follow-up commit will keep it strictly in sync with YouTube's
-	// videos.list read.
-	ActualPrivacy string `json:"actual_privacy,omitempty"`
-	// YouTubeSyncStatus: "unconfirmed" until the reconciler of a
-	// follow-up commit confirms the privacy via videos.list. Always
-	// "unconfirmed" today (the SPA uses it as a UI hint).
-	YouTubeSyncStatus string `json:"youtube_sync_status,omitempty"`
+	// ActualPrivacy: what YouTube's videos.list confirmed right after
+	// our publish call, projected by the P0#7 read-back
+	// (MarkPublishedWithActualPrivacy). Pointer-to-string so the
+	// SPA can distinguish "we did read back and got X" from "we
+	// haven't read back yet" (nil → null in JSON). The drift_reconciler
+	// refreshes both fields on its periodic sweep.
+	ActualPrivacy *string `json:"actual_privacy,omitempty"`
+	// YouTubeSyncStatus: lifecycle marker stamped by the publish
+	// orchestrator (confirmed/drift/pending/failed) and refreshed
+	// by the drift_reconciler. Same pointer-to-string rationale as
+	// ActualPrivacy. Valid values are constrained at the DB layer
+	// by the CHECK constraint on youtube_video_edits.youtube_sync_status
+	// (migration 072).
+	YouTubeSyncStatus *string `json:"youtube_sync_status,omitempty"`
 }
 
 // groupYouTubeVideosResponse is the envelope. `videos: []` is
@@ -381,10 +383,22 @@ if len(accountLookup) > groupYouTubeVideosMaxAccounts {
 				entry.VeloxProjectID = &vid
 				u := r.editorURLForProject(s.VeloxProjectID)
 				entry.EditorURL = &u
-				entry.EditorStatus = s.Status
-				entry.DesiredPrivacy = s.DesiredPrivacy
-				entry.ActualPrivacy = s.DesiredPrivacy // placeholder; reconciler will overwrite once videos.list confirms
+			entry.EditorStatus = s.Status
+			entry.DesiredPrivacy = s.DesiredPrivacy
+			// Live projection from the P0#7 read-back (stamped by
+			// MarkPublishedWithActualPrivacy on a successful publish
+			// and refreshed by the drift_reconciler on its sweep).
+			// Both fields stay nil until the FIRST successful
+			// publish completes; the SPA renders the privacy badge
+			// with the "syncing with YouTube…" placeholder copy in
+			// that window.
+			if s.ActualPrivacy != nil {
+				entry.ActualPrivacy = s.ActualPrivacy
 			}
+			if s.YouTubeSyncStatus != nil {
+				entry.YouTubeSyncStatus = s.YouTubeSyncStatus
+			}
+		}
 			entries = append(entries, entry)
 		}
 	}
