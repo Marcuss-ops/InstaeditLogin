@@ -340,6 +340,50 @@ curl -X POST http://localhost:8080/api/v1/booking_events \
 
 ---
 
+## 🔁 Schedule rotation playbook (post go-live)
+
+> **Quando serve**: hai cambiato account Google / vuoi un nuovo scheduleId / hai cancellato per errore il vecchio Appointment Schedule.
+
+### Tempo medio di turnaround
+
+- **3-5 minuti** round-trip (copia ID → commit + push → Vercel rebuild → smoke anonimo).
+
+### 5 step operator-side
+
+1. **Copia nuovo ID da Google Calendar**
+   - Google Calendar → Appointment schedules → click lucchetto/share → *"Copy scheduling page link"*.
+   - URL risultante: `https://calendar.app.google/<NEW_ID>`.
+2. **Sostituisci ID in `web/src/lib/booking.ts`** (riga 31 circa)
+   - In-source: rimpiazza la stringa fallback `QTmr3puFKCX42i9Q8` con `<NEW_ID>`.
+   - **OPPURE** (rotazione senza commit code-side): setta `VITE_BOOKING_URL=https://calendar.app.google/<NEW_ID>?utm_source=instagram_landing` come **build-arg** su Vercel o Fly. Vedi il callout al commento `web/src/lib/booking.ts:11-14`. ⚠️ **NON** usare `flyctl secrets set VITE_BOOKING_URL=…` — è runtime-only e Vite non lo vede a build-time.
+3. **Rebuild frontend**
+   - Vercel: push su `main` trigger auto-rebuild.
+   - Locale: `cd InstaeditLogin/web && npm ci && npx tsc --noEmit -p tsconfig.app.json && npm run build`.
+4. **Deploy**
+   - Vercel: si pubblica automaticamente dopo il commit.
+   - Fly: `flyctl deploy --build-arg VITE_BOOKING_URL=<NEW_URL>` (oppure setta `[build.args]` in `fly.toml`).
+5. **Smoke test anonimo (3 min)**
+   - Apri `https://instaedit.org` in incognito.
+   - Click CTA *"Schedule Your Free Strategy Call"* → completa le 3 domande → Submit.
+   - Verifica apertura nuova tab verso `https://calendar.app.google/<NEW_ID>?utm_source=instagram_landing` con griglia di slot visibile senza login Google.
+   - Facoltativo: completa una booking reale con email alias per validare il path completo (email di conferma + evento su Google Calendar + Meet link).
+
+### Link interni
+
+- Sezione go-live completo: vedi [`🎯 Booking flow go-live (post-MR)`](#-booking-flow-go-live-post-mr) sopra.
+- File sorgente del fallback URL: `web/src/lib/booking.ts:31`.
+- Env override hook (header comment con tutte le semantiche): `web/src/lib/booking.ts:1-37`.
+- E2E test che pinna il contratto: `web/tests/e2e/booking-flow.spec.ts`.
+- Endpoint backend **NON impattato** dalla rotazione: `/api/v1/booking_events` valida solo `intent/goal/budget/ready` (vedi `pkg/api/booking_events.go`); il redirect URL è solo client-side.
+
+### Quando NON serve rotazione
+
+- **Cambio copy marketing** (limited spots, tier labels, copy form): modifica solo `MONTHLY_CAPACITY_LABEL`, `GOAL_OPTIONS`, `INTENT_TIER_LABEL` in `web/src/lib/booking.ts`. Endpoint invariato.
+- **Cambio dominio frontend** (es. `instaedit.org` → `.com`): solo env `FRONTEND_URL` + `CORS_ALLOWED_ORIGINS` lato backend (`pkg/api/router.go:55-58`).
+- **Cambio layout modal/CTA**: refactor component-side in `web/src/components/booking/` o nelle pagine CTA; niente env/url da toccare.
+
+---
+
 ## 🔍 Tigris-vs-MinIO cutover audit (2026-07-25, post-Fly-destroy)
 
 > **Verdict: ⚠️ NOT YET SAFE TO REMOVE TIGRIS.** Code-side ✅ GREEN;
