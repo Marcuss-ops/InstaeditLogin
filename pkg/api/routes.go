@@ -200,6 +200,14 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/thumbnail", r.protected(attachThumbnailHandler.ServeHTTP))
 
+	// GET /api/v1/groups/{group_id}/youtube/videos — dashboard card
+	// grid. Read-only, no CSRF (GET exempt). Aggregates the
+	// YouTube-listing per channel for every account in the group (and
+	// its sub-groups when ?include_subgroups=true), joined with the
+	// existing editor_sessions for each (account, video) tuple.
+	var listGroupYouTubeVideosHandler http.Handler = http.HandlerFunc(r.handleListGroupYouTubeVideos)
+	r.mux.Method(http.MethodGet, "/api/v1/groups/{group_id}/youtube/videos", r.protected(listGroupYouTubeVideosHandler.ServeHTTP))
+
 	// Blocco Carosello — unified pipeline view endpoint. Aggregates
 	// Drive + storage + per-target YouTube publish + Velox editor
 	// state into a single response that the SPA timeline UI consumes

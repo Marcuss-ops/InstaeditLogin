@@ -760,6 +760,14 @@ type YouTubeOAuthService interface {
 	// GetYouTubeVideo validates that a video exists on the connected
 	// YouTube channel and returns a narrow summary of its metadata.
 	GetYouTubeVideo(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error)
+	// ListEditableVideos (P0 group videos endpoint) returns one page
+	// of processed private/unlisted videos belonging to channelID.
+	// pageToken="" starts from the first page; subsequent pages are
+	// fetched with the NextPageToken from the previous response. The
+	// service-level filter (privacy != public AND uploadStatus =
+	// processed) already filters out the long tail of public/
+	// uploading/deleted rows the editor flow rejects at create time.
+	ListEditableVideos(ctx context.Context, accessToken, channelID, pageToken string) (*services.YouTubeVideoPage, error)
 	// SetThumbnail uploads a JPEG/PNG image to YouTube and applies it
 	// as the custom thumbnail for the given video. The caller must
 	// supply a valid access token (retrieved from the vault).
@@ -808,6 +816,15 @@ type YouTubeVideoEditStore interface {
 	// ?account_id / ?status / ?limit, defaulting the status set to
 	// YouTubeVideoEditNonTerminalStatuses when no ?status= is supplied.
 	ListByWorkspace(ctx context.Context, filter repository.YouTubeEditorSessionListFilter) ([]*models.YouTubeVideoEdit, error)
+	// ListByWorkspaceAccountIDs (P0 group videos endpoint) feeds the
+	// GET /api/v1/groups/{group_id}/youtube/videos join: one SQL
+	// query returns every editor session in the workspace whose
+	// platform_account_id is in the supplied slice. The handler
+	// caller (pkg/api/youtube_group_videos.go) joins the result onto
+	// YouTube's fresh per-channel listing by (account_id, video_id)
+	// tuple. See repository.YouTubeVideoEditRepository.ListByWorkspaceAccountIDs
+	// for the SQL contract + index hint.
+	ListByWorkspaceAccountIDs(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error)
 }
 
 // P2 — ops dashboard store. AdminStore is the read-side

@@ -78,6 +78,15 @@ var YouTubeEditorSessionListStatusAllowList = map[string]struct{}{
 //
 // The concrete type is intentionally placed in internal/repository
 // (not pkg/api) to keep the API package free of *sql.DB details.
+//
+// ListByWorkspaceAccountIDs (P0 group videos) returns every editor
+// session in the given workspace whose platform_account_id is in the
+// supplied slice. Used by GET /api/v1/groups/{group_id}/youtube/videos
+// to project existing per-video editor sessions onto YouTube's fresh
+// video listing for all channels in the group in a single SQL query
+// (avoids the N+1 round-trip of calling ListByWorkspace per account).
+// The workspace_id predicate is the cross-tenant guard — the handler
+// validates caller ownership of the workspace but defence-in-depth.
 type YouTubeVideoEditStore interface {
 	Create(ctx context.Context, edit *models.YouTubeVideoEdit) error
 	FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
@@ -136,6 +145,15 @@ type YouTubeVideoEditStore interface {
 	// Empty result is a valid (rows=0, err=nil) return — the handler
 	// maps to 200 + {"sessions": []} (NOT 404).
 	ListByWorkspace(ctx context.Context, filter YouTubeEditorSessionListFilter) ([]*models.YouTubeVideoEdit, error)
+	// ListByWorkspaceAccountIDs (P0 group videos endpoint) — see
+	// YouTubeVideoEditRepository.ListByWorkspaceAccountIDs for full
+	// contract. Differences vs ListByWorkspace: NO status filter
+	// (we want every row that's been touched for the channel,
+	// including 'published' for the "re-edit" CTA), NO limit (the
+	// channel fan-out caps the WS count upstream so per-WS row
+	// volume is bounded by the chain cardinality). Caller-side
+	// join happens against the (account_id, video_id) tuple.
+	ListByWorkspaceAccountIDs(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error)
 }
 
 // YouTubeVideoEditRepository handles CRUD for youtube_video_edits.
@@ -368,6 +386,71 @@ func (r *YouTubeVideoEditRepository) Update(ctx context.Context, edit *models.Yo
 		return fmt.Errorf("%w: id=%s", ErrYouTubeVideoEditNotFound, edit.ID)
 	}
 	return nil
+}
+
+// ListByWorkspaceAccountIDs returns every youtube_video_edits row
+// in the given workspace whose platform_account_id is in the
+// supplied slice. Backs GET /api/v1/groups/{group_id}/youtube/videos's
+// "project existing editor sessions onto YouTube's fresh listing"
+// join: one SQL query feeds every channel in the group, avoiding the
+// N+1 round-trip cost of calling ListByWorkspace per account.
+//
+// SQL notes:
+//   - workspace_id predicate is the cross-tenant guard (the
+//     handler ALSO verifies the caller owns the workspace, but
+//     defence-in-depth on top of the SQL filter).
+//   - `platform_account_id = ANY($2)` uses lib/pq's pq.Array to
+//     bind the slice as a PostgreSQL ARRAY(BIGINT). Index
+//     `idx_youtube_video_edits_account` keeps this query to an
+//     index range scan when accountIDs is small (the common case
+//     for a group with <20 channels).
+//   - NO Limit / NO Statuses filter — we want every row that has
+//     been touched for the channels (the SPA needs sessions in
+//     'published' state too so the card can show a "re-edit" CTA
+//     after a publish completed). The handler caps the WS row
+//     count indirectly via the per-channel account count.
+//
+// Order: ORDER BY updated_at DESC so the "most-recently-touched"
+// card surfaces first when the SPA applies a default sort.
+//
+// Empty inputs collapse to (nil, nil) — a misconfigured caller
+// never triggers a Postgres-side error.
+func (r *YouTubeVideoEditRepository) ListByWorkspaceAccountIDs(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error) {
+	if workspaceID <= 0 {
+		return nil, nil
+	}
+	if len(accountIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+youtubeVideoEditSelectColumns+`
+		 FROM youtube_video_edits
+		 WHERE workspace_id = $1
+		   AND platform_account_id = ANY($2)
+		 ORDER BY updated_at DESC`,
+		workspaceID, pq.Array(accountIDs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("youtube video edit ListByWorkspaceAccountIDs query: %w", err)
+	}
+	defer rows.Close()
+	out := make([]*models.YouTubeVideoEdit, 0, len(accountIDs))
+	for rows.Next() {
+		edit := &models.YouTubeVideoEdit{}
+		if err := rows.Scan(
+			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
+			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
+			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+			&edit.CreatedAt, &edit.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("youtube video edit ListByWorkspaceAccountIDs scan: %w", err)
+		}
+		out = append(out, edit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("youtube video edit ListByWorkspaceAccountIDs rows: %w", err)
+	}
+	return out, nil
 }
 
 // youtubeVideoEditSelectColumns is the canonical column list shared

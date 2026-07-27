@@ -1020,6 +1020,94 @@ paths:
           description: Media store not configured on this server.
         '503':
           description: YouTube video edit store not configured.
+
+  # ──────────── YouTube groups (P0 group videos endpoint) ───────
+  #
+  # Aggregates the YouTube-listing per channel for every account in
+  # the group (and its sub-groups when ?include_subgroups=true),
+  # joined with the existing editor_sessions for each (account,
+  # video) tuple. Powers the SPA's Group → Click-to-edit video
+  # card-grid. Read-only GET; no body, no CSRF.
+  /api/v1/groups/{group_id}/youtube/videos:
+    get:
+      tags: [YouTube]
+      operationId: listGroupYouTubeVideos
+      summary: List the YouTube private/unlisted videos in a group.
+      description: |
+        Aggregates YouTube's per-channel `videos.list` (filtered to
+        private/unlisted/processed uploads) for every account that
+        belongs to the requested group. When `include_subgroups=true`
+        the parent_group_id tree is traversed in O(N) and accounts
+        from sub-groups are added (deduped) to the fan-out.
+
+        Each YouTube row is joined with the existing
+        `youtube_video_edits` row for the (account, video) tuple —
+        the join happens in a single SQL query (the repository
+        method `ListByWorkspaceAccountIDs`).
+
+        Concurrency: a bounded per-request semaphore (4 concurrent
+        YouTube chains) keeps upstream pressure at a fraction of
+        quota while still aggregating groups with ~16 channels
+        well under the 5s SLA.
+
+        Behaviour matrix:
+          - 401 — no JWT identity on context.
+          - 400 — `group_id` is non-numeric / non-positive; OR
+            `?include_subgroups=true` and the resolved group's
+            account count exceeds 200.
+          - 404 — group is unknown OR caller does not own the
+            workspace (collapsed into the same response for
+            enumeration-oracle safety).
+          - 502 — every per-account YouTube fetch failed (graceful
+            degradation per-account: partial success is 200 +
+            warnings[]).
+          - 200 — `videos[]` in per-channel newest-first order,
+            capped at 500 cards (spa render budget).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - in: path
+          name: group_id
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - in: query
+          name: include_subgroups
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: |
+            When true, the handler walks the parent_group_id tree
+            and aggregates accounts from sub-groups (deduped).
+      responses:
+        '200':
+          description: Video cards aggregated across the group's channels.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupYouTubeVideosResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '502':
+          description: |
+            Every per-account YouTube fetch failed for this group.
+            The response body is the canonical `Error` envelope
+            listing the joined warning strings for diagnostics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: |
+            YouTube service OR vault not configured on this server.
 components:
 
   securitySchemes:
@@ -1854,6 +1942,75 @@ components:
             When `true`, allows retrying from `partially_published`
             or `waiting_provider` states. Default retry is `failed`
             only.
+
+    # ────── YouTube group videos (P0 group-videos endpoint) ────────
+    GroupYouTubeVideoEntry:
+      type: object
+      description: |
+        One row of the GET /api/v1/groups/{group_id}/youtube/videos
+        response. YouTube-fresh listing joined with the existing
+        per-video editor_session row, if any. `editor_session_id` /
+        `velox_project_id` / `editor_url` are omitted when no
+        youtube_video_edits row exists yet for this (account, video)
+        tuple — the SPA routes the click to POST /editor-sessions.
+        `actual_privacy` and `youtube_sync_status` are placeholders
+        for now (mirror desired_privacy + always "unconfirmed" —
+        see the handler godoc for the two follow-up commits that
+        flip them into live values).
+      required:
+        - youtube_video_id
+        - title
+        - thumbnail_url
+        - privacy_status
+        - processing_status
+        - platform_account_id
+        - channel_name
+        - editor_status
+      properties:
+        youtube_video_id: { type: string }
+        title: { type: string }
+        thumbnail_url: { type: string, format: uri }
+        privacy_status:
+          type: string
+          enum: [private, unlisted, public]
+          description: YouTube-side status as returned by videos.list.
+        processing_status: { type: string, enum: [processed, uploading, failed, deleted] }
+        platform_account_id: { type: integer, format: int64 }
+        channel_name:
+          type: string
+          description: |
+            PlatformAccount.Username when set, otherwise the YouTube
+            channel id (PlatformAccount.PlatformUserID).
+        editor_session_id: { type: string, nullable: true }
+        velox_project_id: { type: string, nullable: true }
+        editor_url:
+          type: string
+          format: uri
+          nullable: true
+        editor_status:
+          type: string
+          enum: [ready, editing, failed, publishing, published]
+        desired_privacy: { type: string, nullable: true }
+        actual_privacy: { type: string, nullable: true }
+        youtube_sync_status: { type: string, nullable: true }
+
+    GroupYouTubeVideosResponse:
+      type: object
+      required: [videos]
+      properties:
+        videos:
+          type: array
+          items: { $ref: '#/components/schemas/GroupYouTubeVideoEntry' }
+        warnings:
+          type: array
+          items: { type: string }
+          description: |
+            Per-account fetch failure messages. The 200 + videos[]
+            path returns warnings inline so the SPA can surface a
+            soft "some channels couldn't be read, click here to
+            reconnect" hint. The 502 path is the SAME warnings[]
+            surfaced as the canonical Error.message.
+
     VeloxArtifactRef:
       type: object
       required: [artifact_id, sha256, size_bytes, mime_type]

@@ -42,6 +42,13 @@ type mockYouTubeVideoEditStore struct {
 	// listFn is supplied by tests that need to assert on the filter
 	// shape (AccountID / Statuses / Limit) handed to the repository.
 	listFn func(ctx context.Context, filter repository.YouTubeEditorSessionListFilter) ([]*models.YouTubeVideoEdit, error)
+	// listByAccountsFn is the GET /api/v1/groups/{id}/youtube/videos
+	// callback that returns every editor session in the workspace
+	// whose platform_account_id is in the supplied slice. Tests
+	// supply a non-nil closure to assert on the join logic; the
+	// default behaviour returns (nil, nil) so production callers
+	// that don't override see "no sessions yet".
+	listByAccountsFn func(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error)
 }
 
 func (m *mockYouTubeVideoEditStore) Create(ctx context.Context, edit *models.YouTubeVideoEdit) error {
@@ -138,11 +145,27 @@ func (m *mockYouTubeVideoEditStore) ListByWorkspace(ctx context.Context, filter 
 	return nil, nil
 }
 
+// ListByWorkspaceAccountIDs (P0 group videos endpoint) routes to
+// listByAccountsFn when supplied; default returns (nil, nil). The
+// mock default mirrors the production contract: an empty input
+// set or a workspace with no sessions collapses to zero rows,
+// (nil, nil), without triggering a Postgres error.
+func (m *mockYouTubeVideoEditStore) ListByWorkspaceAccountIDs(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error) {
+	if m.listByAccountsFn != nil {
+		return m.listByAccountsFn(ctx, workspaceID, accountIDs)
+	}
+	if workspaceID <= 0 || len(accountIDs) == 0 {
+		return nil, nil
+	}
+	return nil, nil
+}
+
 // mockYouTubeOAuthServiceForEditor implements the subset of
 // YouTubeOAuthService needed by the editor session handler.
 type mockYouTubeOAuthServiceForEditor struct {
-	getVideoFn         func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error)
-	publishThumbnailFn func(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error)
+	getVideoFn            func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error)
+	publishThumbnailFn    func(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error)
+	listEditableVideosFn  func(ctx context.Context, accessToken, channelID, pageToken string) (*services.YouTubeVideoPage, error)
 }
 
 func (m *mockYouTubeOAuthServiceForEditor) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
@@ -173,6 +196,12 @@ func (m *mockYouTubeOAuthServiceForEditor) GetYouTubeVideo(ctx context.Context, 
 		Privacy:      "private",
 		UploadStatus: "processed",
 	}, nil
+}
+func (m *mockYouTubeOAuthServiceForEditor) ListEditableVideos(ctx context.Context, accessToken, channelID, pageToken string) (*services.YouTubeVideoPage, error) {
+	if m.listEditableVideosFn != nil {
+		return m.listEditableVideosFn(ctx, accessToken, channelID, pageToken)
+	}
+	return &services.YouTubeVideoPage{Items: []models.YouTubeVideoDetails{}}, nil
 }
 func (m *mockYouTubeOAuthServiceForEditor) SetThumbnail(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error {
 	return errors.New("not implemented")
