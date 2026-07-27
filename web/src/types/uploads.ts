@@ -66,7 +66,40 @@ export type SubmitState =
   | { kind: "submitting" }
   | { kind: "queued"; batchId: string }
   | { kind: "polling"; batchId: string }
+  | { kind: "success"; payload: { scheduledCount: number } }
+  | { kind: "partial"; payload: { scheduledCount: number } }
+  | { kind: "guidance" }
   | { kind: "error"; message: string };
+
+// BatchEntry / BatchResponse re-homed from
+// src/pages/internal/DriveBatchImportDialog.tsx (where they remain as a
+// duplicate local type for now) so that UploadsTable.tsx can import the
+// shared `NonNullable<BatchResponse["entries"]>` shape and `preview.map((e) => ...)`
+// narrows `e` to BatchEntry automatically (clearing the TS7006 implicit-any
+// error on the map callback). Consolidating DriveBatchImportDialog to
+// import these from here is a separate cleanup.
+export type BatchEntry = {
+  job_id: string;
+  name: string;
+  scheduled_at: string;
+  relative_hours_from_now: number;
+  video_id?: string;
+  status?: string;
+};
+
+export type BatchResponse = {
+  folder_id: string;
+  scheduled_count: number;
+  first_publish_at: string;
+  last_scheduled_at: string;
+  entries: BatchEntry[];
+  next_page_token: string;
+  note: string;
+  cursor_clamped_to_now: boolean;
+  needs_google_drive_api_key: boolean;
+  needs_drive_account: boolean;
+  error: string;
+};
 
 export type FormValues = {
   workspaceId: number | "";
