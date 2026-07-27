@@ -882,7 +882,14 @@ func (s *YouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken, vid
 // privacy to "private" and provide a future publishAt timestamp; YouTube
 // will make the video public at that time. Non-empty title/description
 // are included in the snippet part and sent with part=snippet,status.
-func (s *YouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+// PublishThumbnail uploads a custom thumbnail to YouTube, then
+// updates the video privacy status (and, when supplied, the snippet
+// title + description) in a single videos.update(part=snippet,status)
+// call. Retries transient failures internally (3 retries with
+// linear-backoff reset via doWithRetry).
+//
+// Returns the public YouTube watch URL on success.
+func (s *YouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
 	const maxThumbnailBytes = 2 * 1024 * 1024
 	if len(thumbnailData) == 0 {
 		return "", fmt.Errorf("youtube publish thumbnail: empty thumbnail data")
@@ -902,15 +909,222 @@ func (s *YouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken,
 		return "", fmt.Errorf("youtube publish thumbnail: set thumbnail failed: %w", setErr)
 	}
 
-	// 2. Update video metadata + privacy with retry.
+	// 2. Update video metadata + privacy with retry. When opts carries
+	//    the P1 extensions (tags / default language / default audio
+	//    language) we update them together via the extended-snippet
+	//    payload; otherwise we delegate to the byte-identical
+	//    UpdateVideoPrivacy path used by every other caller (job
+	//    workers, the publish reconciler, …) so the pre-extension
+	//    behaviour for callers that only supply title/description is
+	//    preserved byte-for-byte.
 	updateErr := doWithRetry(ctx, 3, time.Second, func() error {
-		return s.UpdateVideoPrivacy(ctx, accessToken, videoID, privacyStatus, publishAt, title, description)
+		if hasExtendedSnippet(opts) {
+			return s.updateVideoWithExtendedSnippet(ctx, accessToken, videoID, privacyStatus, publishAt, opts)
+		}
+		return s.UpdateVideoPrivacy(ctx, accessToken, videoID, privacyStatus, publishAt, opts.Title, opts.Description)
 	})
 	if updateErr != nil {
 		return "", fmt.Errorf("youtube publish thumbnail: update video failed: %w", updateErr)
 	}
 
 	return "https://www.youtube.com/watch?v=" + videoID, nil
+}
+
+// hasExtendedSnippet reports whether opts carries any of the
+// P1 snippet extensions beyond plain title/description. The
+// orchestrator uses this gate to decide whether to fold tags +
+// default languages into the single videos.update call or to
+// delegate to the pre-extension UpdateVideoPrivacy path.
+//
+// Localizations (Translations) are NOT included here — they are
+// applied via separate UpsertLocalizations calls (one per
+// language) AFTER the snippet+status update succeeds.
+func hasExtendedSnippet(opts models.YouTubePublishOptions) bool {
+	return len(opts.Tags) > 0 || opts.DefaultLanguage != "" || opts.DefaultAudioLanguage != ""
+}
+
+// updateVideoWithExtendedSnippet issues a single
+// videos.update(part=snippet,status) call carrying:
+//   - status.privacyStatus + (optional) status.publishAt
+//   - snippet.title + snippet.description (when supplied)
+//   - snippet.tags[] (when supplied)
+//   - snippet.defaultLanguage + snippet.defaultAudioLanguage
+//     (when supplied)
+//
+// YouTube charges 1600 quota units per videos.update call, so
+// folding tags + default languages into the SAME call as the
+// privacy change saves one round-trip vs. running a separate
+// snippet-only update after the status update. The payload
+// shape mirrors the existing UpdateVideoPrivacy path so a
+// downstream reader that already parses that payload can accept
+// the new keys without a refactor.
+//
+// Returns the same typed errors as UpdateVideoPrivacy
+// (YouTubeAPIError, snippet-validation, etc.) so callers'
+// failure-path handling stays unchanged.
+func (s *YouTubeOAuthService) updateVideoWithExtendedSnippet(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) error {
+	privacyStatus = strings.ToLower(strings.TrimSpace(privacyStatus))
+	switch privacyStatus {
+	case "public", "unlisted", "private":
+		// ok
+	default:
+		return fmt.Errorf("youtube update video: invalid privacy status %q", privacyStatus)
+	}
+	if err := ValidateYouTubeSnippet(opts.Title, opts.Description); err != nil {
+		return fmt.Errorf("youtube update video: %w", err)
+	}
+
+	// status object — always present.
+	status := map[string]interface{}{
+		"privacyStatus": privacyStatus,
+	}
+	if publishAt != nil && !publishAt.IsZero() {
+		if privacyStatus != "private" {
+			return fmt.Errorf("youtube update video: publishAt requires privacyStatus=private")
+		}
+		status["publishAt"] = publishAt.UTC().Format(time.RFC3339)
+	}
+
+	// snippet object — only added when at least one snippet field
+	// is non-empty. Without this gate YouTube would 4xx on an
+	// empty snippet.
+	snippet := make(map[string]interface{})
+	if opts.Title != "" {
+		snippet["title"] = opts.Title
+	}
+	if opts.Description != "" {
+		snippet["description"] = opts.Description
+	}
+	if len(opts.Tags) > 0 {
+		// Defensive copy so a calling test that re-uses opts
+		// after the call still sees consistent state.
+		tagsCopy := make([]string, len(opts.Tags))
+		copy(tagsCopy, opts.Tags)
+		snippet["tags"] = tagsCopy
+	}
+	if opts.DefaultLanguage != "" {
+		snippet["defaultLanguage"] = opts.DefaultLanguage
+	}
+	if opts.DefaultAudioLanguage != "" {
+		snippet["defaultAudioLanguage"] = opts.DefaultAudioLanguage
+	}
+
+	payload := map[string]interface{}{
+		"id":     videoID,
+		"status": status,
+	}
+	if len(snippet) > 0 {
+		payload["snippet"] = snippet
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("youtube update video: marshal metadata: %w", err)
+	}
+
+	parts := "status"
+	if len(snippet) > 0 {
+		parts = "snippet,status"
+	}
+	reqURL := "https://www.googleapis.com/youtube/v3/videos?part=" + parts
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("youtube update video: create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return &YouTubeAPIError{StatusCode: 0, Category: "network", Message: fmt.Sprintf("youtube update video: request: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+
+	rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return &YouTubeAPIError{StatusCode: http.StatusUnauthorized, Category: "auth", Message: "youtube update video: unauthorized (status 401)"}
+	case resp.StatusCode == http.StatusForbidden:
+		return &YouTubeAPIError{StatusCode: http.StatusForbidden, Category: "auth", Message: "youtube update video: forbidden (status 403)"}
+	case resp.StatusCode == http.StatusNotFound:
+		return &YouTubeAPIError{StatusCode: http.StatusNotFound, Category: "not_found", Message: "youtube update video: video not found (status 404)"}
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return &YouTubeAPIError{StatusCode: http.StatusTooManyRequests, Category: "rate_limit", Message: "youtube update video: rate limited (status 429)"}
+	case resp.StatusCode >= 500:
+		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube update video: server error (status %d)", resp.StatusCode)}
+	default:
+		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube update video: unexpected status %d: %s", resp.StatusCode, string(rbody))}
+	}
+}
+
+// UpsertLocalizations sets (or replaces) a single per-language
+// localization on a YouTube video via videos.update(part=localizations).
+// YouTube expects one language per call (the body is shaped as
+// {id, localizations: {<lang>: {title, description}}}); the
+// orchestrator loops over opts.Translations calling this once per
+// language AFTER the snippet+status update succeeds.
+//
+// Retries transient failures (3x) via doWithRetry; permanent
+// errors propagate. lang is validated upstream by
+// YouTubePublishOptions.Validate so this method does not re-check
+// the BCP-47 shape — a malformed lang is the orchestrator's bug,
+// not the API call's.
+func (s *YouTubeOAuthService) UpsertLocalizations(ctx context.Context, accessToken, videoID, lang string, tr models.YouTubeTranslation) error {
+	if err := ValidateYouTubeSnippet(tr.Title, tr.Description); err != nil {
+		return fmt.Errorf("youtube upsert localizations %s: %w", lang, err)
+	}
+	payload := map[string]interface{}{
+		"id": videoID,
+		"localizations": map[string]interface{}{
+			lang: map[string]interface{}{
+				"title":       tr.Title,
+				"description": tr.Description,
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("youtube upsert localizations %s: marshal payload: %w", lang, err)
+	}
+	reqURL := "https://www.googleapis.com/youtube/v3/videos?part=localizations"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("youtube upsert localizations %s: create request: %w", lang, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	return doWithRetry(ctx, 3, time.Second, func() error {
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			return &YouTubeAPIError{StatusCode: 0, Category: "network", Message: fmt.Sprintf("youtube upsert localizations %s: request: %v", lang, err)}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			return nil
+		}
+		rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized:
+			return &YouTubeAPIError{StatusCode: http.StatusUnauthorized, Category: "auth", Message: fmt.Sprintf("youtube upsert localizations %s: unauthorized (status 401)", lang)}
+		case resp.StatusCode == http.StatusForbidden:
+			return &YouTubeAPIError{StatusCode: http.StatusForbidden, Category: "auth", Message: fmt.Sprintf("youtube upsert localizations %s: forbidden (status 403)", lang)}
+		case resp.StatusCode == http.StatusNotFound:
+			return &YouTubeAPIError{StatusCode: http.StatusNotFound, Category: "not_found", Message: fmt.Sprintf("youtube upsert localizations %s: video not found (status 404)", lang)}
+		case resp.StatusCode == http.StatusTooManyRequests:
+			return &YouTubeAPIError{StatusCode: http.StatusTooManyRequests, Category: "rate_limit", Message: fmt.Sprintf("youtube upsert localizations %s: rate limited (status 429)", lang)}
+		case resp.StatusCode >= 500:
+			return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube upsert localizations %s: server error (status %d)", lang, resp.StatusCode)}
+		default:
+			return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube upsert localizations %s: unexpected status %d: %s", lang, resp.StatusCode, string(rbody))}
+		}
+	})
 }
 
 func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, title, description string) error {

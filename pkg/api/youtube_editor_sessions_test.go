@@ -188,7 +188,8 @@ func (m *mockYouTubeVideoEditStore) FindOrCreateEditableSession(ctx context.Cont
 // YouTubeOAuthService needed by the editor session handler.
 type mockYouTubeOAuthServiceForEditor struct {
 	getVideoFn            func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error)
-	publishThumbnailFn    func(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error)
+	publishThumbnailFn    func(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error)
+	upsertLocalizationsFn func(ctx context.Context, accessToken, videoID, lang string, tr models.YouTubeTranslation) error
 	listEditableVideosFn  func(ctx context.Context, accessToken, channelID, pageToken string) (*services.YouTubeVideoPage, error)
 }
 
@@ -233,11 +234,21 @@ func (m *mockYouTubeOAuthServiceForEditor) SetThumbnail(ctx context.Context, acc
 func (m *mockYouTubeOAuthServiceForEditor) UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, title, description string) error {
 	return errors.New("not implemented")
 }
-func (m *mockYouTubeOAuthServiceForEditor) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+func (m *mockYouTubeOAuthServiceForEditor) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
 	if m.publishThumbnailFn != nil {
-		return m.publishThumbnailFn(ctx, accessToken, videoID, thumbnailData, mimeType, privacyStatus, publishAt, title, description)
+		return m.publishThumbnailFn(ctx, accessToken, videoID, thumbnailData, mimeType, privacyStatus, publishAt, opts)
 	}
 	return "", errors.New("not implemented")
+}
+
+func (m *mockYouTubeOAuthServiceForEditor) UpsertLocalizations(ctx context.Context, accessToken, videoID, lang string, tr models.YouTubeTranslation) error {
+	if m.upsertLocalizationsFn != nil {
+		return m.upsertLocalizationsFn(ctx, accessToken, videoID, lang, tr)
+	}
+	// Default no-op: tests that don't care about localizations
+	// pass nil and the helper returns nil — matches the
+	// production behaviour when opts.Translations is empty.
+	return nil
 }
 
 // newPublishRouter builds the minimal router required by the publish
@@ -338,7 +349,7 @@ func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
 
 	var publishCalled bool
-	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
 		publishCalled = true
 		if string(data) != string(thumbnailBytes) {
 			t.Errorf("expected thumbnail data %q, got %q", string(thumbnailBytes), string(data))
@@ -346,11 +357,11 @@ func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 		if privacyStatus != "public" {
 			t.Errorf("expected privacyStatus public, got %s", privacyStatus)
 		}
-		if title != "Updated title" {
-			t.Errorf("expected title \"Updated title\", got %q", title)
+		if opts.Title != "Updated title" {
+			t.Errorf("expected title \"Updated title\", got %q", opts.Title)
 		}
-		if description != "Updated description" {
-			t.Errorf("expected description \"Updated description\", got %q", description)
+		if opts.Description != "Updated description" {
+			t.Errorf("expected description \"Updated description\", got %q", opts.Description)
 		}
 		return "https://www.youtube.com/watch?v=" + videoID, nil
 	}
@@ -497,9 +508,9 @@ func TestPublishYouTubeEditorSession_WithoutTitleDescription(t *testing.T) {
 	storage := newMockStorageProvider()
 	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
 
-	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
-		if title != "" || description != "" {
-			t.Errorf("expected empty title and description, got title=%q description=%q", title, description)
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
+		if opts.Title != "" || opts.Description != "" {
+			t.Errorf("expected empty title and description, got title=%q description=%q", opts.Title, opts.Description)
 		}
 		return "https://www.youtube.com/watch?v=" + videoID, nil
 	}
@@ -855,7 +866,7 @@ func TestPublishYouTubeEditorSession_InFlightTimeoutExpiredRetries(t *testing.T)
 	storage := newMockStorageProvider()
 	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
 
-	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
 		return "https://www.youtube.com/watch?v=" + videoID, nil
 	}
 
@@ -942,7 +953,7 @@ func TestPublishYouTubeEditorSession_DefaultInFlightTimeoutExpiredRetries(t *tes
 	storage := newMockStorageProvider()
 	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
 
-	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
 		return "https://www.youtube.com/watch?v=" + videoID, nil
 	}
 
@@ -1045,7 +1056,7 @@ func TestPublishYouTubeEditorSession_RetryFromFailed(t *testing.T) {
 	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
 
 	var publishCalls int
-	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
 		publishCalls++
 		return "https://www.youtube.com/watch?v=" + videoID, nil
 	}
@@ -1304,7 +1315,7 @@ func TestPublishYouTubeEditorSession_ConcurrentPublishClaimsAtomically(t *testin
 	storage := newMockStorageProvider()
 	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
 
-	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
 		atomic.AddInt32(&publishCalls, 1)
 		capturedPrivacyMu.Lock()
 		capturedPrivacy = privacyStatus

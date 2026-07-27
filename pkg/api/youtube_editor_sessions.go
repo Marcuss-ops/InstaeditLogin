@@ -559,14 +559,38 @@ func (r *Router) handleAttachThumbnailToEditorSession(w http.ResponseWriter, req
 
 // publishYouTubeEditorSessionRequest is the body accepted by
 // POST /api/v1/youtube/editor-sessions/{id}/publish.
+//
 // Title and Description are optional; when provided they are sent to
 // YouTube's videos.update with part=snippet,status. YouTube enforces a
 // 100-character title limit and a 5000-character description limit.
+//
+// Tags + DefaultLanguage + DefaultAudioLanguage + Translations are
+// the P1#1 "metadati completi" extensions: when provided, the
+// orchestrator updates the YouTube snippet (single combined call
+// alongside title/description/privacy) and then iterates over
+// Translations to upsert each per-language localization.
+//
+//   - Tags: max 30 items, total character count (incl. commas) must
+//     not exceed 500. Enforced by YouTubePublishOptions.Validate().
+//   - DefaultLanguage / DefaultAudioLanguage: BCP-47 codes (e.g. "en",
+//     "it", "pt-BR"); a light sanity check is run before the API call
+//     to fail fast on typos.
+//   - Translations: map[lang]YouTubeTranslation; when non-empty,
+//     DefaultLanguage MUST be set (YouTube rejects otherwise and
+//     burns a 1600-quota call).
+//
+// All fields are omitempty so existing callers that only send
+// {title, description, privacy_status, publish_at} keep working
+// unchanged — the orchestrator path is identical for both shapes.
 type publishYouTubeEditorSessionRequest struct {
-	Title         string     `json:"title,omitempty"`
-	Description   string     `json:"description,omitempty"`
-	PrivacyStatus string     `json:"privacy_status,omitempty"`
-	PublishAt     *time.Time `json:"publish_at,omitempty"`
+	Title                string                              `json:"title,omitempty"`
+	Description          string                              `json:"description,omitempty"`
+	PrivacyStatus        string                              `json:"privacy_status,omitempty"`
+	PublishAt            *time.Time                          `json:"publish_at,omitempty"`
+	Tags                 []string                            `json:"tags,omitempty"`
+	DefaultLanguage      string                              `json:"default_language,omitempty"`
+	DefaultAudioLanguage string                              `json:"default_audio_language,omitempty"`
+	Translations         map[string]models.YouTubeTranslation `json:"translations,omitempty"`
 }
 
 // publishYouTubeEditorSessionResponse is returned on a successful publish.
@@ -575,6 +599,24 @@ type publishYouTubeEditorSessionResponse struct {
 	VideoID      string     `json:"video_id"`
 	PrivacyStatus string    `json:"privacy_status"`
 	PublishedAt  *time.Time `json:"published_at,omitempty"`
+}
+
+// youTubePublishOptionsForRequest folds a publishYouTubeEditorSessionRequest
+// into a models.YouTubePublishOptions struct for the service layer.
+// The orchestrator passes Title + Description into the same single
+// videos.update(part=snippet,status) call that carries the new tags +
+// languages, so the request DTO and the service struct must keep the
+// same shape (per the thinker's quota-conservation recommendation:
+// a single combined call instead of two).
+func youTubePublishOptionsForRequest(payload publishYouTubeEditorSessionRequest) models.YouTubePublishOptions {
+	return models.YouTubePublishOptions{
+		Title:                payload.Title,
+		Description:          payload.Description,
+		Tags:                 payload.Tags,
+		DefaultLanguage:      payload.DefaultLanguage,
+		DefaultAudioLanguage: payload.DefaultAudioLanguage,
+		Translations:         payload.Translations,
+	}
 }
 
 // handlePublishYouTubeEditorSession publishes the edited thumbnail to

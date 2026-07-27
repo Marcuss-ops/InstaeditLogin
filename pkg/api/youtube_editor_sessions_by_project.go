@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -197,14 +199,37 @@ func (r *Router) handlePublishYouTubeEditorSessionByProject(w http.ResponseWrite
 // publish endpoints (handlePublishYouTubeEditorSession keyed by
 // session_id, handlePublishYouTubeEditorSessionByProject keyed by
 // velox_project_id). Both wrappers perform identity + payload + lookup
-// + workspace-ownership checks; this helper handles the side-effects
-// (idempotency / in-flight / privacy resolution / media / token /
-// CAS / YouTube API / write response).
+// + workspace-ownership checks; this helper handles the side-effects.
 //
-// Behaviour — see the long-form handler comments for the by-session
-// variant. The by-project variant inherits the exact same semantics
-// because the only thing that varies between the two is the session
-// lookup, which the wrappers handle before calling this helper.
+// Step order (single goroutine, no concurrency hazards):
+//  1. idempotency: if status=='published' return 200 + stored URL;
+//  2. in-flight guard: if status=='publishing' within the timeout
+//     window → 409;
+//  3. privacy + publish_at validation (resolved against the payload
+//     override OR edit.DesiredPrivacy);
+//  4. YouTubePublishOptions.Validate() gate (tag count / char limit /
+//     BCP-47 sanity / translations require default_language) —
+//     runs BEFORE any side-effect fetch (media + token) so a bad
+//     payload fails fast with 400, no API quota consumed;
+//  5. media asset + thumbnail bytes fetch from storage;
+//  6. token fetch from vault;
+//  7. MarkPublishing atomic CAS (status → 'publishing', stamped
+//     desired_privacy + publish_at);
+//  8. PublishThumbnail: thumbnail.set + single videos.update
+//     (part=snippet,status) carrying title + description + tags +
+//     default_language + default_audio_language; on the pre-extension
+//     path (no tags/langs) it delegates to the byte-identical
+//     UpdateVideoPrivacy;
+//  9. translations loop: per-language videos.update(part=localizations)
+//     call, in sorted order so retries converge. Mid-loop failure
+//     flips status → 'failed' + records the failing lang on
+//     last_error so a retry picks up at the right point;
+// 10. status='published' write + 200 response.
+//
+// Behaviour parity with handlePublishYouTubeEditorSession:
+// the by-project variant inherits the exact same semantics because
+// the only thing that varies between the two is the session lookup,
+// which the wrappers handle before calling this helper.
 func (r *Router) executePublishYouTubeEditorSession(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -255,6 +280,20 @@ func (r *Router) executePublishYouTubeEditorSession(
 			writeError(w, http.StatusBadRequest, "scheduled publishing requires privacy_status=private")
 			return
 		}
+	}
+
+	// Validate the P1 extension fields (tags / default language /
+	// default audio language / translations) BEFORE any side effect
+	// (media download, token fetch, CAS). YouTubePublishOptions.Validate
+	// enforces the YouTube-published bounds (tag count, tag char
+	// length, BCP-47 sanity, translations require default_language).
+	// Failing fast saves the operator an entire round-trip when the
+	// payload is malformed: a 4xx from YouTube would still cost the
+	// 1600 quota the snippet+status call would burn if we deferred
+	// the check.
+	if err := youTubePublishOptionsForRequest(payload).Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if r.mediaStore == nil || r.storageProvider == nil {
@@ -318,6 +357,7 @@ func (r *Router) executePublishYouTubeEditorSession(
 	}
 	edit = claimed
 
+	opts := youTubePublishOptionsForRequest(payload)
 	publicURL, err := r.youTubeSvc.PublishThumbnail(
 		ctx,
 		token.AccessToken,
@@ -326,8 +366,7 @@ func (r *Router) executePublishYouTubeEditorSession(
 		asset.ContentType,
 		privacyStatus,
 		payload.PublishAt,
-		payload.Title,
-		payload.Description,
+		opts,
 	)
 	if err != nil {
 		edit.Status = "failed"
@@ -336,6 +375,39 @@ func (r *Router) executePublishYouTubeEditorSession(
 		_ = r.youtubeVideoEditStore.Update(ctx, edit)
 		writeError(w, http.StatusBadGateway, "youtube publish failed: "+err.Error())
 		return
+	}
+
+	// Apply per-language localizations AFTER the snippet+status
+	// update succeeds. Each language is a separate
+	// videos.update(part=localizations) call — YouTube rejects
+	// multi-language requests in a single body. The loop is
+	// idempotent: a retry after a mid-loop failure re-applies
+	// every translation (YouTube upserts), so an operator replay
+	// converges to the same final state without leaving a
+	// half-applied set on the video.
+	//
+	// Order: we use a sorted slice of (lang -> translation) so the
+	// iteration order is deterministic across retries — important
+	// for test stability + a clean violation trace when a partial
+	// failure leaves N translated langs and 1 that still needs to
+	// be applied.
+	for _, lang := range sortedTranslationKeys(opts.Translations) {
+		tr := opts.Translations[lang]
+		localErr := r.youTubeSvc.UpsertLocalizations(ctx, token.AccessToken, edit.YouTubeVideoID, lang, tr)
+		if localErr != nil {
+			// Mid-loop failure: stamp status='failed' + record the
+			// failing language on last_error so a retry can
+			// pick up where the previous attempt left off (the
+			// published flag is NOT set — the operator retries
+			// the whole publish flow which is idempotent on the
+			// localizations loop).
+			edit.Status = "failed"
+			edit.LastError = truncateError(fmt.Sprintf("localizations[%s] failed: %v", lang, localErr))
+			edit.UpdatedAt = time.Now().UTC()
+			_ = r.youtubeVideoEditStore.Update(ctx, edit)
+			writeError(w, http.StatusBadGateway, fmt.Sprintf("youtube upsert localizations %s failed: %v", lang, localErr))
+			return
+		}
 	}
 
 	edit.Status = "published"
@@ -352,4 +424,26 @@ func (r *Router) executePublishYouTubeEditorSession(
 		PrivacyStatus: privacyStatus,
 		PublishedAt:   payload.PublishAt,
 	})
+}
+
+// sortedTranslationKeys returns the map keys in a stable,
+// deterministic order. The orchestrator's per-language loop uses
+// this so the iteration order is reproducible across retries
+// (important when the loop fails mid-way — re-running the same
+// map with a different iteration order would still arrive at the
+// same end state, but a stable order keeps the test failure
+// signatures clean).
+//
+// Empty map → empty slice. Nil map → empty slice. Both callers
+// go through the same branch in the orchestrator.
+func sortedTranslationKeys(m map[string]models.YouTubeTranslation) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

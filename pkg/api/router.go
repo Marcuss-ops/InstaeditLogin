@@ -778,9 +778,27 @@ type YouTubeOAuthService interface {
 	// privacyStatus="private".
 	UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, title, description string) error
 	// PublishThumbnail uploads a thumbnail to YouTube and updates the
-	// video privacy and snippet. It retries transient failures internally
-	// and returns the public YouTube URL on success.
-	PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error)
+	// video privacy + snippet in a SINGLE videos.update(part=snippet,status)
+	// call. Title / Description are still supported but moved into the
+	// YouTubePublishOptions struct so the signature doesn't grow
+	// unboundedly as more snippet fields (tags / localizations / default
+	// languages) are added.
+	//
+	// Retries transient failures internally and returns the public
+	// YouTube URL on success.
+	PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error)
+	// UpsertLocalizations sets (or replaces) one per-language
+	// localization entry on a YouTube video via
+	// videos.update(part=localizations). YouTube expects a single
+	// language per call; the orchestrator loops over the
+	// Translations map calling this once per entry after the
+	// snippet+status update succeeds.
+	//
+	// The lang argument is a BCP-47 code (e.g. "en", "it", "pt-BR");
+	// the orchestrator validates against the YouTubePublishOptions
+	// sanity bounds before invoking the call so quota isn't burned
+	// on a guaranteed-4xx response.
+	UpsertLocalizations(ctx context.Context, accessToken, videoID, lang string, tr models.YouTubeTranslation) error
 }
 
 // YouTubeVideoEditStore is the persistence contract for thumbnail
