@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
 // TestUpdateVideoPrivacy_SendsSnippetAndStatus verifies that non-empty
@@ -254,7 +256,7 @@ func TestPublishThumbnail_RetriesOn429AndSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	svc := newTestYouTubeService(srv)
-	_, err := svc.PublishThumbnail(t.Context(), "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, "", "")
+	_, err := svc.PublishThumbnail(t.Context(), "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, models.YouTubePublishOptions{})
 	if err != nil {
 		t.Fatalf("expected success after retry, got %v", err)
 	}
@@ -273,7 +275,7 @@ func TestPublishThumbnail_DoesNotRetryOn401(t *testing.T) {
 	defer srv.Close()
 
 	svc := newTestYouTubeService(srv)
-	_, err := svc.PublishThumbnail(t.Context(), "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, "", "")
+	_, err := svc.PublishThumbnail(t.Context(), "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, models.YouTubePublishOptions{})
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -354,7 +356,7 @@ func TestPublishThumbnail_RetriesOn5xxAndSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	svc := newTestYouTubeService(srv)
-	_, err := svc.PublishThumbnail(t.Context(), "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, "", "")
+	_, err := svc.PublishThumbnail(t.Context(), "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, models.YouTubePublishOptions{})
 	if err != nil {
 		t.Fatalf("expected success after retry, got %v", err)
 	}
@@ -376,7 +378,7 @@ func TestPublishThumbnail_ContextCancelledStopsRetry(t *testing.T) {
 	cancel()
 
 	svc := newTestYouTubeService(srv)
-	_, err := svc.PublishThumbnail(ctx, "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, "", "")
+	_, err := svc.PublishThumbnail(ctx, "token", "VID123", []byte("thumb"), "image/jpeg", "public", nil, models.YouTubePublishOptions{})
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
