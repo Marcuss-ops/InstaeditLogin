@@ -375,15 +375,16 @@ if len(accountLookup) > groupYouTubeVideosMaxAccounts {
 				entry.EditorURL = &u
 			entry.EditorStatus = s.Status
 			entry.DesiredPrivacy = s.DesiredPrivacy
-			// Live projection from the P0#7 read-back (stamped by
-			// MarkPublishedWithActualPrivacy on a successful publish
-			// and refreshed by the drift_reconciler on its sweep).
-			// Both fields stay nil until the FIRST successful
-			// publish completes; the SPA renders the privacy badge
-			// with the "syncing with YouTube…" placeholder copy in
-			// that window.
+			// Placeholder: mirror desired_privacy into actual_privacy
+			// until the FIRST successful publish completes. This
+			// lets the SPA render the privacy badge immediately
+			// instead of showing "syncing with YouTube…" for every
+			// freshly-opened session.
 			if s.ActualPrivacy != nil {
 				entry.ActualPrivacy = s.ActualPrivacy
+			} else if s.DesiredPrivacy != "" {
+				dp := s.DesiredPrivacy
+				entry.ActualPrivacy = &dp
 			}
 			if s.YouTubeSyncStatus != nil {
 				entry.YouTubeSyncStatus = s.YouTubeSyncStatus

@@ -387,8 +387,8 @@ func TestBuildEditorURL(t *testing.T) {
 		t.Errorf("want URL containing ve-abc-123, got %q", got)
 	}
 	// Trailing slash on the base must NOT double up.
-	if got := buildEditorURL("https://editor.instaedit.test/", pub); !strings.Contains(got, "/projects/ve-abc-123") {
-		t.Errorf("trailing slash: want /projects/<id>, got %q", got)
+	if got := buildEditorURL("https://editor.instaedit.test/", pub); !strings.Contains(got, "/editor/ve-abc-123") {
+		t.Errorf("trailing slash: want /editor/<id>, got %q", got)
 	}
 	// Empty base → empty URL (no fallback).
 	if got := buildEditorURL("", pub); got != "" {

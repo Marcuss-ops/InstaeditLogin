@@ -11,6 +11,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { authedFetch, AuthError } from "../../lib/auth";
+import { useToast } from "../../components/toast";
 import { PROVIDERS, type ProviderId } from "../../lib/providers";
 import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
@@ -189,6 +190,7 @@ export function AccountDetailsPage() {
   const { accountId } = useParams<{ accountId: string }>();
   const navigate = useNavigate();
   const abortRef = useRef<AbortController | null>(null);
+  const toast = useToast();
 
   const [state, setState] = useState<FetchState>({ kind: "loading" });
   const [activeTab, setActiveTab] = useState<TabId>("overview");
@@ -275,11 +277,31 @@ export function AccountDetailsPage() {
     [accountId, currentPlatform],
   );
 
-  const handleEditThumbnail = useCallback((item: ContentItem) => {
-    // Phase 2 will create a YouTube editor session and open the Dark Editor.
-    // eslint-disable-next-line no-console
-    console.log("[AccountDetails] open thumbnail editor for", item.external_id);
-  }, []);
+  const handleEditThumbnail = useCallback(async (item: ContentItem) => {
+    if (!accountId) return;
+    try {
+      const wsResp = await authedFetch("/api/v1/workspaces");
+      const { workspaces } = (await wsResp.json()) as { workspaces: { id: number }[] };
+      if (!workspaces.length) {
+        toast.error("No workspaces found. Create one first.");
+        return;
+      }
+      const resp = await authedFetch("/api/v1/youtube/editor-sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_id: workspaces[0].id,
+          platform_account_id: Number(accountId),
+          youtube_video_id: item.external_id,
+        }),
+      });
+      const data = (await resp.json()) as { editor_url: string };
+      toast.success("Editor session created — opening Velox…");
+      window.open(data.editor_url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      if (err instanceof AuthError) return;
+      // authedFetch already toasts on non-OK responses
+    }
+  }, [accountId, toast]);
 
   useEffect(() => {
     if (activeTab === "videos" && contentState.kind === "idle") {

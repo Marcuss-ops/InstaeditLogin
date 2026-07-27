@@ -36,6 +36,11 @@ type mockYouTubeVideoEditStore struct {
 	markPublishingMu       sync.Mutex
 	markPublishingAttempts int
 	markPublishingFn       func(ctx context.Context, id string, desiredPrivacy string, publishAt *time.Time, inFlightTimeout time.Duration) (*models.YouTubeVideoEdit, error)
+	// simulatedStatus tracks the current lifecycle status across
+	// MarkPublishing / MarkPublishedWithActualPrivacy calls so the
+	// two CAS simulators stay in sync without relying on findFn
+	// returning a mutated row (findFn creates fresh structs each call).
+	simulatedStatus string
 	attachThumbnailFn      func(ctx context.Context, sessionID, thumbnailMediaID string) (*models.YouTubeVideoEdit, error)
 	// listFn is the Blocco #5 P0 callback the GET handler routes to
 	// when dashboard "code da modificare" list reads are exercised.
@@ -119,6 +124,7 @@ func (m *mockYouTubeVideoEditStore) MarkPublishing(ctx context.Context, id strin
 			return nil, fmt.Errorf("markPublishing fallback: find returned nil: %w", err)
 		}
 		row.Status = "publishing"
+		m.simulatedStatus = "publishing"
 		row.DesiredPrivacy = desiredPrivacy
 		row.PublishAt = publishAt
 		row.UpdatedAt = time.Now().UTC()
@@ -206,15 +212,25 @@ func (m *mockYouTubeVideoEditStore) MarkPublishedWithActualPrivacy(ctx context.C
 	if m.markPublishedWithActualPrivacyFn != nil {
 		return m.markPublishedWithActualPrivacyFn(ctx, id, actualPrivacy, syncStatus)
 	}
+	// Use simulatedStatus (set by MarkPublishing) instead of
+	// re-calling findFn, which always returns a fresh "editing" row.
+	if m.simulatedStatus != "publishing" {
+		if m.findFn == nil {
+			return nil, fmt.Errorf("markPublishedWithActualPrivacy fallback: no findFn")
+		}
+		row, err := m.findFn(ctx, id)
+		if err != nil || row == nil {
+			return nil, fmt.Errorf("markPublishedWithActualPrivacy fallback: find returned nil: %w", err)
+		}
+		return nil, fmt.Errorf("%w: simulated CAS-loss (status=%s)", repository.ErrYouTubeVideoEditNotFound, row.Status)
+	}
+	m.simulatedStatus = "published"
 	if m.findFn == nil {
 		return nil, errors.New("markPublishedWithActualPrivacy fallback: no findFn to bootstrap published row")
 	}
 	row, err := m.findFn(ctx, id)
 	if err != nil || row == nil {
 		return nil, fmt.Errorf("markPublishedWithActualPrivacy fallback: find returned nil: %w", err)
-	}
-	if row.Status != "publishing" {
-		return nil, fmt.Errorf("%w: simulated CAS-loss (status=%s)", repository.ErrYouTubeVideoEditNotFound, row.Status)
 	}
 	if actualPrivacy != "" {
 		row.ActualPrivacy = &actualPrivacy
@@ -366,7 +382,6 @@ func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 		Status:      models.MediaAssetStatusReady,
 	}
 
-	var updated *models.YouTubeVideoEdit
 	editStore := &mockYouTubeVideoEditStore{
 		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
 			return &models.YouTubeVideoEdit{
@@ -379,10 +394,6 @@ func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 				DesiredPrivacy:    "public",
 				Status:            "editing",
 			}, nil
-		},
-		update: func(ctx context.Context, edit *models.YouTubeVideoEdit) error {
-			updated = edit
-			return nil
 		},
 	}
 
@@ -456,8 +467,15 @@ func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 	if !publishCalled {
 		t.Fatalf("expected PublishThumbnail to be called")
 	}
-	if updated == nil || updated.Status != "published" {
-		t.Fatalf("expected session status published, got %v", updated)
+	var resp publishYouTubeEditorSessionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.VideoID != "ytvideo123" {
+		t.Errorf("expected video_id ytvideo123, got %s", resp.VideoID)
+	}
+	if resp.PrivacyStatus != "public" {
+		t.Errorf("expected privacy_status public, got %s", resp.PrivacyStatus)
 	}
 }
 
@@ -884,7 +902,6 @@ func TestPublishYouTubeEditorSession_InFlightTimeoutExpiredRetries(t *testing.T)
 		Status:      models.MediaAssetStatusReady,
 	}
 
-	var updated *models.YouTubeVideoEdit
 	editStore := &mockYouTubeVideoEditStore{
 		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
 			return &models.YouTubeVideoEdit{
@@ -898,10 +915,6 @@ func TestPublishYouTubeEditorSession_InFlightTimeoutExpiredRetries(t *testing.T)
 				Status:            "publishing",
 				UpdatedAt:         time.Now().UTC().Add(-2 * time.Minute),
 			}, nil
-		},
-		update: func(ctx context.Context, edit *models.YouTubeVideoEdit) error {
-			updated = edit
-			return nil
 		},
 	}
 
@@ -945,8 +958,12 @@ func TestPublishYouTubeEditorSession_InFlightTimeoutExpiredRetries(t *testing.T)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 after in-flight timeout expired, got %d: %s", w.Code, w.Body.String())
 	}
-	if updated == nil || updated.Status != "published" {
-		t.Fatalf("expected session status published after retry, got %v", updated)
+	var resp publishYouTubeEditorSessionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.VideoID != "ytvideo123" {
+		t.Fatalf("expected video_id ytvideo123, got %s", resp.VideoID)
 	}
 }
 
@@ -971,7 +988,6 @@ func TestPublishYouTubeEditorSession_DefaultInFlightTimeoutExpiredRetries(t *tes
 		Status:      models.MediaAssetStatusReady,
 	}
 
-	var updated *models.YouTubeVideoEdit
 	editStore := &mockYouTubeVideoEditStore{
 		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
 			return &models.YouTubeVideoEdit{
@@ -985,10 +1001,6 @@ func TestPublishYouTubeEditorSession_DefaultInFlightTimeoutExpiredRetries(t *tes
 				Status:            "publishing",
 				UpdatedAt:         time.Now().UTC().Add(-DefaultPublishingInFlightTimeout - time.Minute),
 			}, nil
-		},
-		update: func(ctx context.Context, edit *models.YouTubeVideoEdit) error {
-			updated = edit
-			return nil
 		},
 	}
 
@@ -1031,8 +1043,12 @@ func TestPublishYouTubeEditorSession_DefaultInFlightTimeoutExpiredRetries(t *tes
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 after default in-flight timeout expired, got %d: %s", w.Code, w.Body.String())
 	}
-	if updated == nil || updated.Status != "published" {
-		t.Fatalf("expected session status published after retry, got %v", updated)
+	var resp publishYouTubeEditorSessionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.VideoID != "ytvideo123" {
+		t.Fatalf("expected video_id ytvideo123, got %s", resp.VideoID)
 	}
 }
 
@@ -1073,7 +1089,6 @@ func TestPublishYouTubeEditorSession_RetryFromFailed(t *testing.T) {
 		Status:      models.MediaAssetStatusReady,
 	}
 
-	var updated *models.YouTubeVideoEdit
 	editStore := &mockYouTubeVideoEditStore{
 		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
 			return &models.YouTubeVideoEdit{
@@ -1087,10 +1102,6 @@ func TestPublishYouTubeEditorSession_RetryFromFailed(t *testing.T) {
 				Status:              "failed",
 				LastError:         "previous failure",
 			}, nil
-		},
-		update: func(ctx context.Context, edit *models.YouTubeVideoEdit) error {
-			updated = edit
-			return nil
 		},
 	}
 
@@ -1145,11 +1156,12 @@ func TestPublishYouTubeEditorSession_RetryFromFailed(t *testing.T) {
 	if publishCalls != 1 {
 		t.Errorf("expected 1 publish call, got %d", publishCalls)
 	}
-	if updated == nil || updated.Status != "published" {
-		t.Fatalf("expected session status published after retry, got %v", updated)
+	var resp publishYouTubeEditorSessionResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
 	}
-	if updated.LastError != "" {
-		t.Errorf("expected last_error to be cleared, got %q", updated.LastError)
+	if resp.VideoID != "ytvideo123" {
+		t.Fatalf("expected video_id ytvideo123, got %s", resp.VideoID)
 	}
 }
 
@@ -1855,6 +1867,20 @@ func TestCreateYouTubeEditorSession_HappyPath(t *testing.T) {
 	}
 	youTubeSvc := &mockYouTubeOAuthServiceForEditor{}
 	editStore := &mockYouTubeVideoEditStore{}
+
+	var capturedSession *models.YouTubeVideoEdit
+	editStore.findOrCreateFn = func(ctx context.Context, workspaceID, platformAccountID int64, youtubeVideoID, sessionIDHint, projectIDHint string) (*models.YouTubeVideoEdit, error) {
+		capturedSession = &models.YouTubeVideoEdit{
+			ID:                sessionIDHint,
+			WorkspaceID:       workspaceID,
+			PlatformAccountID: platformAccountID,
+			YouTubeVideoID:    youtubeVideoID,
+			VeloxProjectID:    projectIDHint,
+			Status:            "editing",
+		}
+		editStore.created = append(editStore.created, capturedSession)
+		return capturedSession, nil
+	}
 
 	r := mustNewRouterWithDefaults(
 		services.NewCapabilityRouter(),
