@@ -611,6 +611,51 @@ provider console AND baked into the relevant env var.
 | X (Twitter) | `https://api.instaedit.org/api/v1/auth/twitter/callback` | `X_REDIRECT_URI` + X Developer Portal |
 | TikTok | `https://api.instaedit.org/api/v1/auth/tiktok/callback` | `TIKTOK_REDIRECT_URI` + TikTok Developer Portal |
 | YouTube | `https://api.instaedit.org/api/v1/auth/youtube/callback` | `YOUTUBE_REDIRECT_URI` + Google Cloud Console |
+
+> **P0 — `EDITOR_URL` MUST include `/dark_editor_v2`** (VeloxFrontend basePath)
+>
+> VeloxFrontend serve la SPA del Dark Editor sotto il basePath `/dark_editor_v2`
+> (`VeloxFrontend/web/dark_editor/next.config.js` → `basePath: '/dark_editor_v2'`).
+> L'UI di InstaEdit costruisce l'URL di sessione come
+> `${EDITOR_URL}/editor/{velox_project_id}`. Se `EDITOR_URL` non include
+> `/dark_editor_v2`, l'editor fallirà con 404/SPA non montata.
+>
+> Esempio di configurazione valida per `dev.instaedit.org`:
+>
+> ```env
+> EDITOR_URL=https://dev.instaedit.org/dark_editor_v2
+> ```
+>
+> URL finale atteso (PASS):
+> `https://dev.instaedit.org/dark_editor_v2/editor/ve_xxxxx`
+>
+> URL finale NON valido (FAIL — config sbagliata):
+> `https://dev.instaedit.org/editor/ve_xxxxx`
+>
+> Se `EDITOR_URL` non è impostato, il sistema usa `FRONTEND_URL`
+> come fallback (`internal/config/config.go::HTTPConfig.EditorURL`,
+> vedi anche commento al campo in `pkg/api/velox/routes.go`). Il
+> fallback produrrà l'URL sbagliato di cui sopra: la regola è
+> **impostare sempre `EDITOR_URL` esplicitamente** in produzione.
+>
+> ---
+>
+> **P0 — `VELOX_CONTROL_JWT_SECRET` MUST equal `INSTAEDIT_CONTROL_JWT_SECRET`**
+>
+> Il secret JWT di controllo è HS256, lato InstaEdit firmato in
+> `internal/veloxclient/auth.go` e verificato lato Velox in
+> `DataServer/internal/instaeditauth/verifier.go`. Drift tra i due
+> valori → ogni chiamata `/api/v1/velox/*` e `/api/v1/editor/*` ritorna
+> 401 con `"invalid control JWT"` nei log. Generare **una volta** con
+> `openssl rand -hex 32` e propagare allo stesso momento sia su Fly
+> (`flyctl secrets set VELOX_CONTROL_JWT_SECRET=…`) sia su
+> `/etc/velox-server.env` del master (`INSTAEDIT_CONTROL_JWT_SECRET=…`).
+> Il preflight di deploy `VeloxEditiingg/deploy/validate-master-env.sh`
+> rifiuta il boot del master se il valore è vuoto o `CHANGE_ME_*`
+> (HARD-FAIL), o se è più corto di 32 caratteri (WARN).
+>
+> Vedi anche `InstaeditLogin/ops/env/dev.instaedit.org.env.example`
+> per il set completo di env richiesto da questo target.
 | LinkedIn | `https://api.instaedit.org/api/v1/auth/linkedin/callback` | `LINKEDIN_REDIRECT_URI` + LinkedIn Developer Portal |
 | Google Drive | `https://api.instaedit.org/api/v1/auth/google-drive/callback` | `GOOGLE_DRIVE_REDIRECT_URI` + Google Cloud Console |
 
