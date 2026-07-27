@@ -34,13 +34,13 @@ import (
 // All fields are optional. An empty payload produces an empty draft
 // (operator intentionally clearing a previously-saved draft).
 type youTubeEditorSessionDraftRequest struct {
-	Title                  string                            `json:"title"`
-	Description            string                            `json:"description"`
-	Tags                   []string                          `json:"tags"`
-	DefaultLanguage        string                            `json:"default_language"`
-	DefaultAudioLanguage   string                            `json:"default_audio_language"`
-	Translations           map[string]models.YouTubeTranslation `json:"translations"`
-	DesiredPrivacy         string                            `json:"desired_privacy"`
+	Title                string                               `json:"title"`
+	Description          string                               `json:"description"`
+	Tags                 []string                             `json:"tags"`
+	DefaultLanguage      string                               `json:"default_language"`
+	DefaultAudioLanguage string                               `json:"default_audio_language"`
+	Translations         map[string]models.YouTubeTranslation `json:"translations"`
+	DesiredPrivacy       string                               `json:"desired_privacy"`
 }
 
 // youTubeEditorSessionDraftResponse is returned on a 200. It echoes
@@ -55,15 +55,15 @@ type youTubeEditorSessionDraftRequest struct {
 //     those values); the response is informational so tests can assert
 //     "what the server saw == what the SPA sent".
 type youTubeEditorSessionDraftResponse struct {
-	VeloxProjectID            string                                            `json:"velox_project_id"`
-	DraftTitle                string                                            `json:"draft_title"`
-	DraftDescription          string                                            `json:"draft_description"`
-	DraftTags                 []string                                          `json:"draft_tags"`
-	DraftDefaultLanguage      string                                            `json:"draft_default_language"`
-	DraftDefaultAudioLanguage string                                            `json:"draft_default_audio_language"`
-	DraftTranslations         map[string]models.YouTubeTranslation              `json:"draft_translations"`
-	DraftDesiredPrivacy       string                                            `json:"draft_desired_privacy"`
-	DraftUpdatedAt            time.Time                                         `json:"draft_updated_at"`
+	VeloxProjectID            string                               `json:"velox_project_id"`
+	DraftTitle                string                               `json:"draft_title"`
+	DraftDescription          string                               `json:"draft_description"`
+	DraftTags                 []string                             `json:"draft_tags"`
+	DraftDefaultLanguage      string                               `json:"draft_default_language"`
+	DraftDefaultAudioLanguage string                               `json:"draft_default_audio_language"`
+	DraftTranslations         map[string]models.YouTubeTranslation `json:"draft_translations"`
+	DraftDesiredPrivacy       string                               `json:"draft_desired_privacy"`
+	DraftUpdatedAt            time.Time                            `json:"draft_updated_at"`
 }
 
 // handleSaveEditorSessionDraftByProject is the HTTP entry point for
@@ -87,31 +87,31 @@ type youTubeEditorSessionDraftResponse struct {
 //
 // Why CAS instead of an unconditional UPDATE:
 //
-//   The publish orchestrator owns the row during the 'publishing'
-//   window. A plain UPDATE here would let an operator's typo overwrite
-//   the privacy/title the orchestrator just pushed to YouTube — a
-//   subtle data-loss bug. CAS on status IN ('editing', 'failed') keeps
-//   the operator's draft writes out of the publish critical section
-//   entirely. The handler maps 0-row CAS-match to 409 so the SPA can
-//   surface "publish already in progress" instead of silently dropping
-//   the operator's keystroke.
+//	The publish orchestrator owns the row during the 'publishing'
+//	window. A plain UPDATE here would let an operator's typo overwrite
+//	the privacy/title the orchestrator just pushed to YouTube — a
+//	subtle data-loss bug. CAS on status IN ('editing', 'failed') keeps
+//	the operator's draft writes out of the publish critical section
+//	entirely. The handler maps 0-row CAS-match to 409 so the SPA can
+//	surface "publish already in progress" instead of silently dropping
+//	the operator's keystroke.
 //
 // Why relaxed validation here, strict at /publish:
 //
-//   YouTubePublishOptions.Validate() runs at the publish boundary (NOT
-//   here). The draft endpoint accepts incomplete payloads because the
-//   operator is mid-typing; e.g. a temporarily over-length title while
-//   the user is shortening it should NOT bounce a 400 mid-keystroke.
-//   Strict validation at /publish preserves the YouTube-published
-//   bounds without making the auto-save indicator annoying to use.
+//	YouTubePublishOptions.Validate() runs at the publish boundary (NOT
+//	here). The draft endpoint accepts incomplete payloads because the
+//	operator is mid-typing; e.g. a temporarily over-length title while
+//	the user is shortening it should NOT bounce a 400 mid-keystroke.
+//	Strict validation at /publish preserves the YouTube-published
+//	bounds without making the auto-save indicator annoying to use.
 //
 // Idempotency:
 //
-//   A duplicate PUT (same draft content + same second) is idempotent.
-//   The handler does NOT increment draft_updated_at per read-modify
-//   cycle, it always sets it to NOW() so the indicator advances. The
-//   dirty_flag column flips true on the form-change side and false on
-//   the PUT 200 side (mirrors the dashboard "unsaved changes" pill).
+//	A duplicate PUT (same draft content + same second) is idempotent.
+//	The handler does NOT increment draft_updated_at per read-modify
+//	cycle, it always sets it to NOW() so the indicator advances. The
+//	dirty_flag column flips true on the form-change side and false on
+//	the PUT 200 side (mirrors the dashboard "unsaved changes" pill).
 func (r *Router) handleSaveEditorSessionDraftByProject(w http.ResponseWriter, req *http.Request) {
 	identity := auth.IdentityFromContext(req.Context())
 	if identity == nil || identity.UserID() <= 0 {

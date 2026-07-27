@@ -234,6 +234,7 @@ func (r *Router) handlePublishYouTubeEditorSessionByProject(w http.ResponseWrite
 //     call, in sorted order so retries converge. Mid-loop failure
 //     flips status → 'failed' + records the failing lang on
 //     last_error so a retry picks up at the right point;
+//
 // 10. status='published' write + 200 response.
 //
 // Behaviour parity with handlePublishYouTubeEditorSession:
@@ -501,8 +502,6 @@ func (r *Router) executePublishYouTubeEditorSession(
 		PublishedAt:       payload.PublishAt,
 	})
 }
-
-
 
 // sortedTranslationKeys returns the map keys in a stable,
 // deterministic order. The orchestrator's per-language loop uses

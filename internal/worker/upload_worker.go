@@ -977,9 +977,9 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 			if target == nil {
 				continue
 			}
-		if err := w.uploadVideoAsPrivateForTarget(ctx, job, target, post, mediaURL); err != nil {
-			return fmt.Errorf("per-target youtube private upload target=%d: %w", target.ID, err)
-		}
+			if err := w.uploadVideoAsPrivateForTarget(ctx, job, target, post, mediaURL); err != nil {
+				return fmt.Errorf("per-target youtube private upload target=%d: %w", target.ID, err)
+			}
 		}
 	} else {
 		w.logger.Warn("upload worker: ytPubStore not wired — per-target youtube private upload skipped (publish-phase trigger will still fire)",

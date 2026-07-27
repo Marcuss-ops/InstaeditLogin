@@ -959,9 +959,9 @@ func NewRouter(
 		userRepo:     userRepo,
 		auth:         authMgr,
 
-		frontendURL:   frontendURL,
-		allowedOrigin: allowedOrigins,
-		rateLimiter:   newRateLimiter(nil), // FASE 1.2: per-IP token bucket (trusted proxies wired via option below)
+		frontendURL:               frontendURL,
+		allowedOrigin:             allowedOrigins,
+		rateLimiter:               newRateLimiter(nil), // FASE 1.2: per-IP token bucket (trusted proxies wired via option below)
 		publishingInFlightTimeout: DefaultPublishingInFlightTimeout,
 		thumbnailDownloadClient: &http.Client{
 			Timeout: 30 * time.Second,

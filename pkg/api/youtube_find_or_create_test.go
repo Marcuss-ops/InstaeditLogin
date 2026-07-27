@@ -53,7 +53,7 @@ func buildFindOrCreateRouter(
 	youTubeSvc := &mockYouTubeOAuthServiceForEditor{
 		getVideoFn: func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
 			return &models.YouTubeVideoDetails{
-				ID:      videoID,
+				ID:           videoID,
 				ChannelID:    channelID,
 				UploadStatus: "processed",
 				Privacy:      "private",

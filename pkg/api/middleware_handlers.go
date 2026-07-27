@@ -39,7 +39,7 @@ func (r *Router) handleHealth(w http.ResponseWriter, req *http.Request) {
 		"version":   "2.0.0",
 		"platforms": r.capabilities.Names(),
 		"limits": map[string]int{
-			"publish_horizon_days":       publishHorizonDays,
+			"publish_horizon_days":        publishHorizonDays,
 			"video_retention_buffer_days": retentionBufferDays,
 		},
 	})

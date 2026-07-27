@@ -293,6 +293,7 @@ func (r *PostRepository) FindByIDForWorkspace(workspaceID, postID int64) (*model
 	}
 	return p, nil
 }
+
 // ListByWorkspace returns every post in the given workspace, ordered by
 // created_at DESC (most-recent first). Targets are NOT loaded — use
 // ListByPost separately to fetch the fan-out set.
@@ -1153,15 +1154,15 @@ func (r *PostRepository) SetTargetCanaryVideoID(targetID int64, videoID string) 
 // (the P0#3 channel-binding guard).
 //
 // Differs from UpdateStatus(target) in two ways:
-//   1. Status-only update — does NOT touch platform_post_id /
-//      error_message / provider_state / container_id. The full row
-//      stamp is UpdateStatus's job; SetTargetStatus's job is the
-//      narrow "flip to blocked_auth + stamp error_message" used by the
-//      per-target upload phase.
-//   2. Returns ErrPostTargetNotFound (NOT ErrPostUnauthorized) so the
-//      upload worker's caller can distinguish a missing row from a
-//      tenant boundary violation (UpdateStatus uses the latter because
-//      its WHERE includes the workspace_id scope).
+//  1. Status-only update — does NOT touch platform_post_id /
+//     error_message / provider_state / container_id. The full row
+//     stamp is UpdateStatus's job; SetTargetStatus's job is the
+//     narrow "flip to blocked_auth + stamp error_message" used by the
+//     per-target upload phase.
+//  2. Returns ErrPostTargetNotFound (NOT ErrPostUnauthorized) so the
+//     upload worker's caller can distinguish a missing row from a
+//     tenant boundary violation (UpdateStatus uses the latter because
+//     its WHERE includes the workspace_id scope).
 //
 // errorMessage is COALESCE'd via NULLIF so an empty string preserves
 // any existing error_message column (e.g. a prior failed attempt's

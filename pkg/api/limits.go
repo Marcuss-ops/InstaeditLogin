@@ -12,8 +12,9 @@ import "time"
 // WorkspaceStore / MediaStore interfaces declared inline.
 //
 // Blocco #2 P0 — both fields are env-driven via WorkerConfig:
-//   PublishHorizonDays        = PUBLISH_HORIZON_DAYS         (default 30)
-//   VideoRetentionBufferDays  = VIDEO_RETENTION_BUFFER_DAYS  (default 7)
+//
+//	PublishHorizonDays        = PUBLISH_HORIZON_DAYS         (default 30)
+//	VideoRetentionBufferDays  = VIDEO_RETENTION_BUFFER_DAYS  (default 7)
 type ScheduleLimits struct {
 	// PublishHorizonDays caps how far in the future a user/operator
 	// can schedule a publish. Used in handleRescheduleUpload + the
@@ -46,9 +47,9 @@ func WithScheduleLimits(l ScheduleLimits) RouterOption {
 //
 // Formula:
 //   - when publishAt is set (scheduled content):
-//       max(now+1d, publishAt + buffer)
+//     max(now+1d, publishAt + buffer)
 //   - when publishAt is nil (publish-now flow):
-//       max(now+1d, now + horizon)
+//     max(now+1d, now + horizon)
 //
 // The 1-day min-floor protects against the "user scheduled in the
 // past via clock skew" silent bug where a pure `publishAt + buffer`

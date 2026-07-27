@@ -300,13 +300,13 @@ func TestPublishYouTubeEditorSession_HappyPathWithTagsAndTranslations(t *testing
 	}
 
 	var (
-		updated               *models.YouTubeVideoEdit
-		publishCalled         bool
-		capturedOpts          models.YouTubePublishOptions
-		localOrderMu          sync.Mutex
-		localOrderCallCount   int
-		localOrderLanguages   []string
-		localFailingLanguage  string
+		updated              *models.YouTubeVideoEdit
+		publishCalled        bool
+		capturedOpts         models.YouTubePublishOptions
+		localOrderMu         sync.Mutex
+		localOrderCallCount  int
+		localOrderLanguages  []string
+		localFailingLanguage string
 	)
 	editStore := &mockYouTubeVideoEditStore{
 		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
@@ -380,11 +380,11 @@ func TestPublishYouTubeEditorSession_HappyPathWithTagsAndTranslations(t *testing
 	// iteration ("en" before "pt" alphabetically). Capture tags +
 	// default_language in opts.
 	payload := map[string]any{
-		"privacy_status":        "public",
-		"title":                 "Titolo principale",
-		"description":           "Descrizione principale",
-		"tags":                  []string{"news", "italia", "video"},
-		"default_language":      "it",
+		"privacy_status":         "public",
+		"title":                  "Titolo principale",
+		"description":            "Descrizione principale",
+		"tags":                   []string{"news", "italia", "video"},
+		"default_language":       "it",
 		"default_audio_language": "it",
 		"translations": map[string]map[string]string{
 			"en": {"title": "English title", "description": "English description"},
@@ -437,7 +437,7 @@ func TestPublishYouTubeEditorSession_HappyPathWithTagsAndTranslations(t *testing
 	// to the caller. Both 'en' (first in sorted order) and 'pt'
 	// were attempted; the failing lang is the one after en.
 	localFailingLanguage = "pt"
-	updated = nil                                                     // reset to detect this run's update
+	updated = nil // reset to detect this run's update
 	// Reset the CAS simulation state so MarkPublishing succeeds again
 	// on the second request (the first leg consumed attempt 1).
 	editStore.markPublishingMu.Lock()

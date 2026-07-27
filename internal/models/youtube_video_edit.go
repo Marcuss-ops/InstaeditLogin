@@ -16,7 +16,7 @@ import "time"
 //   - the field can be unset (publish hasn't completed yet) —
 //     `omitempty` on the JSON layer keeps the API contract clean;
 //   - a NULL column scanned into Go string would lose the
-//     "unset vs empty string" distinction (we use '' to mean
+//     "unset vs empty string" distinction (we use ” to mean
 //     "operator erased the title", NULL to mean "publish hasn't
 //     happened yet or read-back errored").
 type YouTubeVideoEdit struct {
@@ -25,9 +25,9 @@ type YouTubeVideoEdit struct {
 	PlatformAccountID  int64      `json:"platform_account_id"`
 	YouTubeVideoID     string     `json:"youtube_video_id"`
 	VeloxProjectID     string     `json:"velox_project_id"`
-	SourceThumbnailURL string   `json:"source_thumbnail_url,omitempty"`
-	ThumbnailMediaID   *string  `json:"thumbnail_media_id,omitempty"`
-	DesiredPrivacy     string   `json:"desired_privacy"`
+	SourceThumbnailURL string     `json:"source_thumbnail_url,omitempty"`
+	ThumbnailMediaID   *string    `json:"thumbnail_media_id,omitempty"`
+	DesiredPrivacy     string     `json:"desired_privacy"`
 	PublishAt          *time.Time `json:"publish_at,omitempty"`
 	// ActualPrivacy is what YouTube's videos.list reports when the
 	// publish orchestrator reads back the published video's status.
@@ -54,11 +54,11 @@ type YouTubeVideoEdit struct {
 	//                reconciler attempts convergence on the next sweep.
 	//   - failed   : terminal publish failure (PublishThumbnail +
 	//                read-back both errored). Operator replay needed.
-	YouTubeSyncStatus *string `json:"youtube_sync_status,omitempty"`
-	Status            string     `json:"status"`
-	LastError         string     `json:"last_error,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	YouTubeSyncStatus *string   `json:"youtube_sync_status,omitempty"`
+	Status            string    `json:"status"`
+	LastError         string    `json:"last_error,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 	// Draft* fields are the Dark Editor auto-save persistence
 	// (P2 — migration 073). They hold the operator's mid-edit
 	// values for title/description/tags/default audio language /
@@ -72,14 +72,14 @@ type YouTubeVideoEdit struct {
 	// click, NOT the draft_*.mirror (the publish payload overrides the
 	// draft on the publish side — Draft* is only persistence for "I closed
 	// my laptop mid-edit and want to come back to the same form later").
-	DraftTitle               *string                            `json:"draft_title,omitempty"`
-	DraftDescription         *string                            `json:"draft_description,omitempty"`
-	DraftTags                []string                           `json:"draft_tags,omitempty"`
-	DraftDefaultLanguage    *string                            `json:"draft_default_language,omitempty"`
-	DraftDefaultAudioLanguage *string                           `json:"draft_default_audio_language,omitempty"`
-	DraftTranslations       map[string]YouTubeTranslation        `json:"draft_translations,omitempty"`
-	DraftDesiredPrivacy     *string                            `json:"draft_desired_privacy,omitempty"`
-	DraftUpdatedAt          *time.Time                         `json:"draft_updated_at,omitempty"`
+	DraftTitle                *string                       `json:"draft_title,omitempty"`
+	DraftDescription          *string                       `json:"draft_description,omitempty"`
+	DraftTags                 []string                      `json:"draft_tags,omitempty"`
+	DraftDefaultLanguage      *string                       `json:"draft_default_language,omitempty"`
+	DraftDefaultAudioLanguage *string                       `json:"draft_default_audio_language,omitempty"`
+	DraftTranslations         map[string]YouTubeTranslation `json:"draft_translations,omitempty"`
+	DraftDesiredPrivacy       *string                       `json:"draft_desired_privacy,omitempty"`
+	DraftUpdatedAt            *time.Time                    `json:"draft_updated_at,omitempty"`
 	// DirtyFlag stamps the dashboard's "unsaved changes" card pill.
 	// Set to TRUE by the SPA on form-change; set to FALSE in the same
 	// SQL as draft_updated_at by SaveDraft (a successful 200). The

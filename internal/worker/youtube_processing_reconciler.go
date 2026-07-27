@@ -99,7 +99,7 @@ type YoutubeProcessingReconcilerOptions struct {
 //  3. Block on ctx.Done() + waitGroup.Wait() for graceful shutdown.
 type YoutubeProcessingReconciler struct {
 	ytPubStore    ReconcileYoutubeProcessingStore
-	uploadRepo   ReconcileUploadJobStore
+	uploadRepo    ReconcileUploadJobStore
 	editorCreator EditorSessionCreator
 	opts          YoutubeProcessingReconcilerOptions
 	logger        *slog.Logger
@@ -120,11 +120,11 @@ func NewYoutubeProcessingReconciler(
 		logger = slog.Default()
 	}
 	return &YoutubeProcessingReconciler{
-		ytPubStore:     ytPubStore,
-		uploadRepo:     uploadRepo,
-		editorCreator:  editorCreator,
-		opts:           opts,
-		logger:         logger,
+		ytPubStore:    ytPubStore,
+		uploadRepo:    uploadRepo,
+		editorCreator: editorCreator,
+		opts:          opts,
+		logger:        logger,
 	}
 }
 

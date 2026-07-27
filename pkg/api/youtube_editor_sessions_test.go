@@ -40,8 +40,8 @@ type mockYouTubeVideoEditStore struct {
 	// MarkPublishing / MarkPublishedWithActualPrivacy calls so the
 	// two CAS simulators stay in sync without relying on findFn
 	// returning a mutated row (findFn creates fresh structs each call).
-	simulatedStatus string
-	attachThumbnailFn      func(ctx context.Context, sessionID, thumbnailMediaID string) (*models.YouTubeVideoEdit, error)
+	simulatedStatus   string
+	attachThumbnailFn func(ctx context.Context, sessionID, thumbnailMediaID string) (*models.YouTubeVideoEdit, error)
 	// listFn is the Blocco #5 P0 callback the GET handler routes to
 	// when dashboard "code da modificare" list reads are exercised.
 	// listFn is supplied by tests that need to assert on the filter
@@ -695,7 +695,7 @@ func TestPublishYouTubeEditorSession_ScheduledPublishing(t *testing.T) {
 				VeloxProjectID:    "ve-project-123",
 				ThumbnailMediaID:  strPtr("asset-uuid-123"),
 				DesiredPrivacy:    "public",
-				Status:              "editing",
+				Status:            "editing",
 			}, nil
 		},
 	}
@@ -1099,7 +1099,7 @@ func TestPublishYouTubeEditorSession_RetryFromFailed(t *testing.T) {
 				VeloxProjectID:    "ve-project-123",
 				ThumbnailMediaID:  strPtr("asset-uuid-123"),
 				DesiredPrivacy:    "public",
-				Status:              "failed",
+				Status:            "failed",
 				LastError:         "previous failure",
 			}, nil
 		},
@@ -1953,7 +1953,7 @@ func TestCreateYouTubeEditorSession_RequiresAuth(t *testing.T) {
 	payload := map[string]any{
 		"workspace_id":        1,
 		"platform_account_id": 1,
-		"youtube_video_id":  "abc123",
+		"youtube_video_id":    "abc123",
 	}
 	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions", bytes.NewReader(body))
@@ -2184,12 +2184,12 @@ func TestUpdateYouTubeEditorSession_StoresThumbnailMediaID(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 type attachThumbnailRig struct {
-	router      *Router
-	mediaStore  *mockMediaStore
-	editStore   *mockYouTubeVideoEditStore
-	workspace   *models.Workspace
-	account     *models.PlatformAccount
-	sessionID   string
+	router     *Router
+	mediaStore *mockMediaStore
+	editStore  *mockYouTubeVideoEditStore
+	workspace  *models.Workspace
+	account    *models.PlatformAccount
+	sessionID  string
 }
 
 func newAttachThumbnailTestRig(t *testing.T) *attachThumbnailRig {

@@ -224,16 +224,16 @@ func (r *MediaAssetRepository) MarkExpired(now time.Time) (int64, error) {
 // Single DELETE FROM ... USING round-trip across media_assets +
 // upload_jobs + post_targets + youtube_target_publications. The
 // canonical published-state semantics:
-//   * youtube_target_publications.youtube_upload_status MUST equal
+//   - youtube_target_publications.youtube_upload_status MUST equal
 //     'youtube_uploaded' (the canonical uploaded-state string the
 //     upload_worker stamps via MarkYouTubeUploaded).
-//   * youtube_target_publications.published_at MUST be non-null
+//   - youtube_target_publications.published_at MUST be non-null
 //     AND published_at + retentionDays < NOW() (the publish-window
 //     has lapsed AND the operator-configured buffer has elapsed).
-//   * NO post_targets row on the same post may be in
+//   - NO post_targets row on the same post may be in
 //     {'retrying','dlq'} -- operator-triage states where the asset
 //     is still load-bearing for live debugging + audit.
-//   * NO youtube_target_publications row on the same upload_job may
+//   - NO youtube_target_publications row on the same upload_job may
 //     have publish_at > NOW() -- even if THIS row reached published,
 //     a peer target may still have a future-scheduled publish so
 //     the asset MUST stay alive until that lands.

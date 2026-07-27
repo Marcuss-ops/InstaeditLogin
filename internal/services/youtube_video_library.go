@@ -48,8 +48,8 @@ type youtubeLibraryVideosResponse struct {
 type youtubeLibraryVideo struct {
 	ID      string `json:"id"`
 	Snippet struct {
-		Title     string `json:"title"`
-		ChannelID string `json:"channelId"`
+		Title      string `json:"title"`
+		ChannelID  string `json:"channelId"`
 		Thumbnails struct {
 			Default youtubeLibraryThumbnail `json:"default"`
 			Medium  youtubeLibraryThumbnail `json:"medium"`

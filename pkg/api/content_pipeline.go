@@ -60,34 +60,34 @@ type contentPipelineTargetBlock struct {
 // fields show only what fits the user's "where does this post think
 // it is" question; the targets[] array is the per-channel fan-out.
 type contentPipelineResponse struct {
-	ContentID      int64                         `json:"content_id"`
-	WorkspaceID    int64                         `json:"workspace_id"`
-	PostStatus     string                        `json:"post_status,omitempty"`
-	Title          string                        `json:"title,omitempty"`
-	Caption        string                        `json:"caption,omitempty"`
-	MediaURL       string                        `json:"media_url,omitempty"`
-	CreatedAt      time.Time                     `json:"created_at"`
-	UpdatedAt      time.Time                     `json:"updated_at"`
-	PublishAt      *time.Time                    `json:"publish_at,omitempty"`
-	PublishedAtAny *time.Time                    `json:"published_at,omitempty"` // earliest non-null PublishedAt across targets (timeline bookmark)
-	Drive          *contentPipelineDriveBlock    `json:"drive,omitempty"`
-	Storage        *contentPipelineStorageBlock  `json:"storage,omitempty"`
-	Targets        []contentPipelineTargetBlock  `json:"targets"`
+	ContentID      int64                        `json:"content_id"`
+	WorkspaceID    int64                        `json:"workspace_id"`
+	PostStatus     string                       `json:"post_status,omitempty"`
+	Title          string                       `json:"title,omitempty"`
+	Caption        string                       `json:"caption,omitempty"`
+	MediaURL       string                       `json:"media_url,omitempty"`
+	CreatedAt      time.Time                    `json:"created_at"`
+	UpdatedAt      time.Time                    `json:"updated_at"`
+	PublishAt      *time.Time                   `json:"publish_at,omitempty"`
+	PublishedAtAny *time.Time                   `json:"published_at,omitempty"` // earliest non-null PublishedAt across targets (timeline bookmark)
+	Drive          *contentPipelineDriveBlock   `json:"drive,omitempty"`
+	Storage        *contentPipelineStorageBlock `json:"storage,omitempty"`
+	Targets        []contentPipelineTargetBlock `json:"targets"`
 }
 
 // handleGetContentPipeline is the HTTP entry point for
 // GET /api/v1/content/{content_id}/pipeline?workspace_id=N.
 //
 // Flow:
-//   1. Identity (401 if missing).
-//   2. content_id parse — 400 on missing / non-positive.
-//   3. workspace_id parse from query — 400 on missing / non-positive.
-//      Cross-checked against identity.WorkspaceIDs() — 403 on
-//      mismatch (no information leak).
-//   4. r.contentPipelineStore.GetPipeline(wsID, postID) — 404 on
-//      ErrContentPipelineNotFound, 500 on real DB error.
-//   5. Response assembly: walk ContentPipelineEntry + nest the
-//      child tables into the timeline JSON shape.
+//  1. Identity (401 if missing).
+//  2. content_id parse — 400 on missing / non-positive.
+//  3. workspace_id parse from query — 400 on missing / non-positive.
+//     Cross-checked against identity.WorkspaceIDs() — 403 on
+//     mismatch (no information leak).
+//  4. r.contentPipelineStore.GetPipeline(wsID, postID) — 404 on
+//     ErrContentPipelineNotFound, 500 on real DB error.
+//  5. Response assembly: walk ContentPipelineEntry + nest the
+//     child tables into the timeline JSON shape.
 //
 // The handler does NOT consult post.Status — post_targets[i].Status
 // is the canonical cross-platform column today; the top-level
@@ -241,12 +241,12 @@ func buildContentPipelineResponse(entry *repository.ContentPipelineEntry, editor
 	)
 	for _, t := range entry.Targets {
 		block := contentPipelineTargetBlock{
-			PostTargetID:    t.ID,
+			PostTargetID:      t.ID,
 			PlatformAccountID: t.PlatformAccountID,
-			PostStatus:      string(t.Status),
-			PublishedAt:     t.PublishedAt,
-			LastError:       t.ErrorMessage,
-			AttemptCount:    t.AttemptCount,
+			PostStatus:        string(t.Status),
+			PublishedAt:       t.PublishedAt,
+			LastError:         t.ErrorMessage,
+			AttemptCount:      t.AttemptCount,
 		}
 		if acct, ok := entry.Accounts[t.PlatformAccountID]; ok && acct != nil {
 			block.ChannelName = acct.Username
@@ -341,15 +341,15 @@ func buildEditorURL(editorBaseURL string, pub *models.YouTubeTargetPublication) 
 type targetTimelineStatus string
 
 const (
-	statusUnknown                targetTimelineStatus = ""
-	statusDraft                  targetTimelineStatus = "draft"
-	statusQueued                 targetTimelineStatus = "queued"
-	statusPublishing             targetTimelineStatus = "publishing"
-	statusPublished              targetTimelineStatus = "published"
-	statusPartiallyPublished     targetTimelineStatus = "partially_published"
-	statusFailed                 targetTimelineStatus = "failed"
-	statusRetrying               targetTimelineStatus = "retrying"
-	statusBlockedAuth            targetTimelineStatus = "blocked_auth"
+	statusUnknown            targetTimelineStatus = ""
+	statusDraft              targetTimelineStatus = "draft"
+	statusQueued             targetTimelineStatus = "queued"
+	statusPublishing         targetTimelineStatus = "publishing"
+	statusPublished          targetTimelineStatus = "published"
+	statusPartiallyPublished targetTimelineStatus = "partially_published"
+	statusFailed             targetTimelineStatus = "failed"
+	statusRetrying           targetTimelineStatus = "retrying"
+	statusBlockedAuth        targetTimelineStatus = "blocked_auth"
 )
 
 // combinePostStatus picks the leftmost-in-time status from a fan-out

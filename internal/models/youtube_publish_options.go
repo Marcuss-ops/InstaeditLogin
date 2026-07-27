@@ -50,11 +50,11 @@ type YouTubeTranslation struct {
 //     4xx response, so we catch it in the orchestrator before
 //     the API call.
 type YouTubePublishOptions struct {
-	Title                string                       `json:"title,omitempty"`
-	Description          string                       `json:"description,omitempty"`
-	Tags                 []string                     `json:"tags,omitempty"`
-	DefaultLanguage      string                       `json:"default_language,omitempty"`
-	DefaultAudioLanguage string                       `json:"default_audio_language,omitempty"`
+	Title                string                        `json:"title,omitempty"`
+	Description          string                        `json:"description,omitempty"`
+	Tags                 []string                      `json:"tags,omitempty"`
+	DefaultLanguage      string                        `json:"default_language,omitempty"`
+	DefaultAudioLanguage string                        `json:"default_audio_language,omitempty"`
 	Translations         map[string]YouTubeTranslation `json:"translations,omitempty"`
 }
 

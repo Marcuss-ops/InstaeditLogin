@@ -69,7 +69,7 @@ const bookingEventMaxBodyBytes = 4 * 1024
 // VARCHAR(512) bound in migration 076 so we never write values past
 // the column limit (Postgres would otherwise truncate silently).
 const (
-	bookingEventUATruncate     = 512
+	bookingEventUATruncate      = 512
 	bookingEventRefererTruncate = 512
 )
 
@@ -197,10 +197,10 @@ func (m *BookingEventsModule) handleCreateBookingEvent(w http.ResponseWriter, re
 	ip := extractIP(req, nil)
 
 	var payload struct {
-		Intent   string         `json:"intent"`
-		Goal     string         `json:"goal"`
-		Budget   string         `json:"budget"`
-		Ready    string         `json:"ready"`
+		Intent string `json:"intent"`
+		Goal   string `json:"goal"`
+		Budget string `json:"budget"`
+		Ready  string `json:"ready"`
 		// Metadata is the SPA passthrough for marketing tags
 		// (utm_source / utm_campaign / etc.). Optional; missing
 		// key falls through to a nil map and the repository

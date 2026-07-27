@@ -27,6 +27,7 @@ import (
 //   - the publishThumbnailFn override on youTubeSvc
 //   - the getVideoFn override on youTubeSvc
 //   - the markPublishedWithActualPrivacyFn override on editStore
+//
 // then POSTs the publish payload and asserts the captured CAS args
 // + the response body / status code.
 func commonPublishBackbone(t *testing.T, youTubeSvc *mockYouTubeOAuthServiceForEditor, editStore *mockYouTubeVideoEditStore) (*Router, *models.YouTubeVideoEdit) {
@@ -160,13 +161,13 @@ func TestPublishByProject_ReadBackConfirmed(t *testing.T) {
 			capturedActualPrivacy = actualPrivacy
 			capturedSyncStatus = syncStatus
 			row := &models.YouTubeVideoEdit{
-				ID:               id,
-				WorkspaceID:      7,
-				YouTubeVideoID:   "ytvideo123",
-				VeloxProjectID:   "ve-project-123",
-				Status:           "published",
-				DesiredPrivacy:   "public",
-				ActualPrivacy:    &actualPrivacy,
+				ID:                id,
+				WorkspaceID:       7,
+				YouTubeVideoID:    "ytvideo123",
+				VeloxProjectID:    "ve-project-123",
+				Status:            "published",
+				DesiredPrivacy:    "public",
+				ActualPrivacy:     &actualPrivacy,
 				YouTubeSyncStatus: &syncStatus,
 			}
 			return row, nil

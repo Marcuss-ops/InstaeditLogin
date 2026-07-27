@@ -19,6 +19,7 @@ import (
 // without ever seeing the control secret.
 //
 // SCOPE CONTRACT (architect verdict Q2):
+//
 //   - When the caller supplies a non-empty `scopes` slice, the JWT is
 //     signed with EXACTLY those scopes. The Velox middleware enforces
 //     the operation-grained grant and 403s on mismatch.

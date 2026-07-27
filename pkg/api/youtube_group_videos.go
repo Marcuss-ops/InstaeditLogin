@@ -142,12 +142,13 @@ type groupYouTubeVideosResponse struct {
 //     per-channel newest-first.
 //
 // Concurrency:
-//   The fan-out uses a bounded semaphore (groupYouTubeVideosFanoutConcurrency)
-//   so a group with N channels incurs at most N / 4 simultaneous
-//   YouTube API chains, regardless of how many channels the operator
-//   has piled into one folder. Each individual chain is wrapped in a
-//   per-account timeout (groupYouTubeVideosPerAccountTimeout) so a
-//   single slow channel does not stall the whole request.
+//
+//	The fan-out uses a bounded semaphore (groupYouTubeVideosFanoutConcurrency)
+//	so a group with N channels incurs at most N / 4 simultaneous
+//	YouTube API chains, regardless of how many channels the operator
+//	has piled into one folder. Each individual chain is wrapped in a
+//	per-account timeout (groupYouTubeVideosPerAccountTimeout) so a
+//	single slow channel does not stall the whole request.
 func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.Request) {
 	identity := auth.IdentityFromContext(req.Context())
 	if identity == nil || identity.UserID() <= 0 {
@@ -226,61 +227,61 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 	// lookup at the FIRST occurrence so a dup across direct +
 	// sub-group resolves to the "direct" origin (matches the SPA's
 	// primary-card-in-folder rendering intent).
-type accountEntry struct {
-	account *models.PlatformAccount
-}
-accountLookup := make(map[int64]accountEntry)
-for _, g := range groupsInScope {
-	aids, err := r.groupStore.ListAccountsInGroup(g.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError,
-			fmt.Sprintf("list accounts in group %d: %s", g.ID, err.Error()))
+	type accountEntry struct {
+		account *models.PlatformAccount
+	}
+	accountLookup := make(map[int64]accountEntry)
+	for _, g := range groupsInScope {
+		aids, err := r.groupStore.ListAccountsInGroup(g.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError,
+				fmt.Sprintf("list accounts in group %d: %s", g.ID, err.Error()))
+			return
+		}
+		for _, aid := range aids {
+			if _, seen := accountLookup[aid]; seen {
+				continue
+			}
+			accountLookup[aid] = accountEntry{
+				account: nil, // resolved in step 4
+			}
+		}
+	}
+	if len(accountLookup) == 0 {
+		writeJSON(w, http.StatusOK, groupYouTubeVideosResponse{Videos: []groupYouTubeVideoEntry{}})
 		return
 	}
-	for _, aid := range aids {
-		if _, seen := accountLookup[aid]; seen {
+
+	// 4. Resolve each account_id to *PlatformAccount and filter to
+	// YouTube only. We MATERIALISE the resolver result here so an
+	// account that turned out to be non-YouTube gets discarded entirely
+	// without leaving a no-op entry in accountLookup.
+	accountIDs := make([]int64, 0, len(accountLookup))
+	for aid, entry := range accountLookup {
+		acc, err := r.userRepo.FindPlatformAccountByID(aid)
+		if err != nil || acc == nil {
+			delete(accountLookup, aid)
 			continue
 		}
-		accountLookup[aid] = accountEntry{
-			account: nil, // resolved in step 4
+		if acc.Platform != models.PlatformYouTube {
+			delete(accountLookup, aid)
+			continue
 		}
+		entry.account = acc
+		accountLookup[aid] = entry
+		accountIDs = append(accountIDs, aid)
 	}
-}
-if len(accountLookup) == 0 {
-	writeJSON(w, http.StatusOK, groupYouTubeVideosResponse{Videos: []groupYouTubeVideoEntry{}})
-	return
-}
-
-// 4. Resolve each account_id to *PlatformAccount and filter to
-// YouTube only. We MATERIALISE the resolver result here so an
-// account that turned out to be non-YouTube gets discarded entirely
-// without leaving a no-op entry in accountLookup.
-accountIDs := make([]int64, 0, len(accountLookup))
-for aid, entry := range accountLookup {
-	acc, err := r.userRepo.FindPlatformAccountByID(aid)
-	if err != nil || acc == nil {
-		delete(accountLookup, aid)
-		continue
+	if len(accountLookup) == 0 {
+		writeJSON(w, http.StatusOK, groupYouTubeVideosResponse{Videos: []groupYouTubeVideoEntry{}})
+		return
 	}
-	if acc.Platform != models.PlatformYouTube {
-		delete(accountLookup, aid)
-		continue
+	if len(accountLookup) > groupYouTubeVideosMaxAccounts {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"group resolves to %d accounts (max %d) — narrow the group or split subfolders",
+			len(accountLookup), groupYouTubeVideosMaxAccounts,
+		))
+		return
 	}
-	entry.account = acc
-	accountLookup[aid] = entry
-	accountIDs = append(accountIDs, aid)
-}
-if len(accountLookup) == 0 {
-	writeJSON(w, http.StatusOK, groupYouTubeVideosResponse{Videos: []groupYouTubeVideoEntry{}})
-	return
-}
-if len(accountLookup) > groupYouTubeVideosMaxAccounts {
-	writeError(w, http.StatusBadRequest, fmt.Sprintf(
-		"group resolves to %d accounts (max %d) — narrow the group or split subfolders",
-		len(accountLookup), groupYouTubeVideosMaxAccounts,
-	))
-	return
-}
 
 	// 5. Fetch existing editor sessions in a single SQL query.
 	// The query is workspace-scoped + account-id-ANY so a hostile
@@ -373,23 +374,23 @@ if len(accountLookup) > groupYouTubeVideosMaxAccounts {
 				entry.VeloxProjectID = &vid
 				u := r.editorURLForProject(s.VeloxProjectID)
 				entry.EditorURL = &u
-			entry.EditorStatus = s.Status
-			entry.DesiredPrivacy = s.DesiredPrivacy
-			// Placeholder: mirror desired_privacy into actual_privacy
-			// until the FIRST successful publish completes. This
-			// lets the SPA render the privacy badge immediately
-			// instead of showing "syncing with YouTube…" for every
-			// freshly-opened session.
-			if s.ActualPrivacy != nil {
-				entry.ActualPrivacy = s.ActualPrivacy
-			} else if s.DesiredPrivacy != "" {
-				dp := s.DesiredPrivacy
-				entry.ActualPrivacy = &dp
+				entry.EditorStatus = s.Status
+				entry.DesiredPrivacy = s.DesiredPrivacy
+				// Placeholder: mirror desired_privacy into actual_privacy
+				// until the FIRST successful publish completes. This
+				// lets the SPA render the privacy badge immediately
+				// instead of showing "syncing with YouTube…" for every
+				// freshly-opened session.
+				if s.ActualPrivacy != nil {
+					entry.ActualPrivacy = s.ActualPrivacy
+				} else if s.DesiredPrivacy != "" {
+					dp := s.DesiredPrivacy
+					entry.ActualPrivacy = &dp
+				}
+				if s.YouTubeSyncStatus != nil {
+					entry.YouTubeSyncStatus = s.YouTubeSyncStatus
+				}
 			}
-			if s.YouTubeSyncStatus != nil {
-				entry.YouTubeSyncStatus = s.YouTubeSyncStatus
-			}
-		}
 			entries = append(entries, entry)
 		}
 	}

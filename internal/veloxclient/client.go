@@ -26,11 +26,11 @@ const veloxAPIPrefix = "/api/v1/instaedit"
 
 // allScopesSuperset is the fallback scope set the Client uses when
 // the caller does not declare its own. Two cases:
-//   1. The BFF EditorBFFModule calls Proxy(path) without a per-operation
-//      scope yet — Proxy falls back to the superset so the routed
-//      editor UI keeps working during the cutover window.
-//   2. Tests / fixtures that exercise the Client without wiring scope
-//      per-call.
+//  1. The BFF EditorBFFModule calls Proxy(path) without a per-operation
+//     scope yet — Proxy falls back to the superset so the routed
+//     editor UI keeps working during the cutover window.
+//  2. Tests / fixtures that exercise the Client without wiring scope
+//     per-call.
 //
 // TODO(EditorBFFModule wiring): remove this fallback once every
 // EditorBFFModule call site supplies an explicit []string{...} per

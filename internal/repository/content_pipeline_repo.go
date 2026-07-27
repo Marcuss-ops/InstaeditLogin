@@ -87,12 +87,12 @@ func NewContentPipelineRepository(db *sql.DB) *ContentPipelineRepository {
 // running / YT upload not started" timeline.
 //
 // SQL strategy: 4 round-trips regardless of target fan-out size:
-//   1) posts              WHERE id = $2 AND workspace_id = $1
-//   2) post_targets WHERE post_id = $postID  + youtube_target_publications
-//      WHERE post_target_id = ANY($1::bigint[])
-//   3) platform_accounts  WHERE id = ANY($1::bigint[]) AND workspace_id = $2
-//   4) upload_jobs WHERE post_id = $postID ORDER BY id ASC LIMIT 1
-//   5) media_assets       WHERE id = $assetID
+//  1. posts              WHERE id = $2 AND workspace_id = $1
+//  2. post_targets WHERE post_id = $postID  + youtube_target_publications
+//     WHERE post_target_id = ANY($1::bigint[])
+//  3. platform_accounts  WHERE id = ANY($1::bigint[]) AND workspace_id = $2
+//  4. upload_jobs WHERE post_id = $postID ORDER BY id ASC LIMIT 1
+//  5. media_assets       WHERE id = $assetID
 //
 // The post_targets + youtube_target_publications pair is one query
 // (the targets fan-out also produces the publication-row primary-
@@ -219,10 +219,10 @@ func (r *ContentPipelineRepository) findTargetsAndPubs(
 	for rows.Next() {
 		t := &models.PostTarget{}
 		var (
-			nextAttempt           sql.NullTime
-			providerIdemKey       sql.NullString
-			publishedAt           sql.NullTime
-			completedAt           sql.NullTime
+			nextAttempt     sql.NullTime
+			providerIdemKey sql.NullString
+			publishedAt     sql.NullTime
+			completedAt     sql.NullTime
 		)
 		if err := rows.Scan(
 			&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
@@ -425,6 +425,6 @@ func (r *ContentPipelineRepository) findMediaAsset(
 // Compile-time assertion that the imports stay in sync with our
 // column-list helpers. Built once at link time; cheap.
 var (
-	_ = time.Time{}     // models.Post.UpdatedAt is time.Time via the scan list
+	_ = time.Time{}      // models.Post.UpdatedAt is time.Time via the scan list
 	_ = sql.NullString{} // platform_accounts.reauth_required_at, etc.
 )

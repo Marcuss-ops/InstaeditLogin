@@ -136,20 +136,20 @@ func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 //
 // Least-privilege rationale (each scope earns its keep):
 //
-//   youtube.upload     — videos.insert (chunked-PUT resumable upload).
-//                        The single scope strictly required to push
-//                        bytes to YouTube.
-//   youtube.readonly   — channels.list?mine=true (channel binding guard
-//                        in ValidateChannelBinding) + videos.list
-//                        (processing-status poll). Read-only; no
-//                        quotable writes.
-//   youtube.force-ssl  — thumbnails.set (custom thumbnail upload) +
-//                        videos.update (privacyStatus + publishAt +
-//                        snippet title/description). youtube.upload
-//                        alone does NOT grant write access to video
-//                        metadata, so both thumbnail and publish
-//                        rows REQUIRE this scope.
-//   openid + email + profile — OIDC identity (user id, email, name).
+//	youtube.upload     — videos.insert (chunked-PUT resumable upload).
+//	                     The single scope strictly required to push
+//	                     bytes to YouTube.
+//	youtube.readonly   — channels.list?mine=true (channel binding guard
+//	                     in ValidateChannelBinding) + videos.list
+//	                     (processing-status poll). Read-only; no
+//	                     quotable writes.
+//	youtube.force-ssl  — thumbnails.set (custom thumbnail upload) +
+//	                     videos.update (privacyStatus + publishAt +
+//	                     snippet title/description). youtube.upload
+//	                     alone does NOT grant write access to video
+//	                     metadata, so both thumbnail and publish
+//	                     rows REQUIRE this scope.
+//	openid + email + profile — OIDC identity (user id, email, name).
 //
 // We deliberately do NOT request any of the YouTube Analytics scopes
 // (yt-analytics-monetary.readonly, yt-analytics.readonly). The publish

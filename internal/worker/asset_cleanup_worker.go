@@ -50,9 +50,9 @@ type AssetCleaner interface {
 // background job runner. The ticker loop is resilient: errors log
 // WARN and the next tick retries with fresh state.
 type AssetCleanupWorker struct {
-	assetCleaner   AssetCleaner
-	interval       time.Duration
-	retentionDays  int
+	assetCleaner  AssetCleaner
+	interval      time.Duration
+	retentionDays int
 	logger        *slog.Logger
 }
 

@@ -12,15 +12,15 @@ import "time"
 // web BookingProvider options array AND the corresponding constant
 // in this file so a typo in either side surfaces immediately.
 type BookingEvent struct {
-	ID         int64     `json:"id"`
-	Intent     string    `json:"intent"`
-	Goal       string    `json:"goal"`
-	Budget     string    `json:"budget"`
-	Ready      string    `json:"ready"`
-	IPHash     string    `json:"ip_hash,omitempty"`
-	UserAgent  string    `json:"user_agent,omitempty"`
-	Referer    string    `json:"referer,omitempty"`
-	DedupeHash string    `json:"dedupe_hash,omitempty"`
+	ID         int64  `json:"id"`
+	Intent     string `json:"intent"`
+	Goal       string `json:"goal"`
+	Budget     string `json:"budget"`
+	Ready      string `json:"ready"`
+	IPHash     string `json:"ip_hash,omitempty"`
+	UserAgent  string `json:"user_agent,omitempty"`
+	Referer    string `json:"referer,omitempty"`
+	DedupeHash string `json:"dedupe_hash,omitempty"`
 	// Metadata is a free-form map persisted into the JSONB column
 	// introduced by migration 076. The SPA submits marketing tags
 	// (utm_source / utm_campaign / etc.) here as a fallback when the
@@ -31,8 +31,8 @@ type BookingEvent struct {
 	// The repository JSON-marshals the map; an empty map is
 	// COALESCE'd to '{}'::jsonb on the SQL side, so omitting the key
 	// is equivalent to passing nil.
-	Metadata   map[string]any `json:"metadata,omitempty"`
-	CreatedAt  time.Time      `json:"created_at"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 // Intent constants mirror web/src/lib/booking.ts → BookingIntent.
@@ -45,9 +45,9 @@ const (
 
 // Goal constants mirror web/src/lib/booking.ts → BookingGoal.
 const (
-	BookingGoalLaunch     = "launch"
-	BookingGoalScale      = "scale"
-	BookingGoalAutomated  = "automated"
+	BookingGoalLaunch    = "launch"
+	BookingGoalScale     = "scale"
+	BookingGoalAutomated = "automated"
 )
 
 // Budget constants mirror web/src/lib/booking.ts → BookingBudget.

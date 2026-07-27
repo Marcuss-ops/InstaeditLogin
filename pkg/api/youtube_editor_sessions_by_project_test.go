@@ -64,7 +64,7 @@ func newByProjectRouter(t *testing.T, workspace *models.Workspace, edit *models.
 	youTubeSvc := &mockYouTubeOAuthServiceForEditor{
 		getVideoFn: func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
 			return &models.YouTubeVideoDetails{
-				ID:      videoID,
+				ID:           videoID,
 				ChannelID:    "channel-1",
 				UploadStatus: "processed",
 				Privacy:      "private",
@@ -89,12 +89,12 @@ func TestGetYouTubeEditorSessionByProject_401_NoAuth(t *testing.T) {
 	t.Parallel()
 	workspace := &models.Workspace{ID: 7, OwnerID: 1}
 	edit := &models.YouTubeVideoEdit{
-		ID:              "sess-1",
-		WorkspaceID:     workspace.ID,
+		ID:                "sess-1",
+		WorkspaceID:       workspace.ID,
 		PlatformAccountID: 42,
-		YouTubeVideoID:  "yt-1",
-		VeloxProjectID:  "vp-1",
-		Status:          "editing",
+		YouTubeVideoID:    "yt-1",
+		VeloxProjectID:    "vp-1",
+		Status:            "editing",
 	}
 	router := newByProjectRouter(t, workspace, edit)
 

@@ -28,13 +28,13 @@ const DefaultPublishingInFlightTimeout = 5 * time.Minute
 // to status codes via errors.Is below; the reconciler worker reads
 // them for retry vs skip decisions.
 var (
-	ErrEditorSessionWorkspaceNotFound = errors.New("workspace not found")
-	ErrEditorSessionAccountNotFound   = errors.New("youtube account not found")
-	ErrEditorSessionChannelUnlinked   = errors.New("account not linked to workspace")
-	ErrEditorSessionNoValidToken      = errors.New("no valid token found for this account")
-	ErrEditorSessionVideoWrongChannel = errors.New("video does not belong to selected channel")
-	ErrEditorSessionVideoNotReady     = errors.New("video is not ready for thumbnail editing")
-	ErrEditorSessionVideoAlreadyPub   = errors.New("video is already public; thumbnail editing allowed only for private or unlisted videos")
+	ErrEditorSessionWorkspaceNotFound     = errors.New("workspace not found")
+	ErrEditorSessionAccountNotFound       = errors.New("youtube account not found")
+	ErrEditorSessionChannelUnlinked       = errors.New("account not linked to workspace")
+	ErrEditorSessionNoValidToken          = errors.New("no valid token found for this account")
+	ErrEditorSessionVideoWrongChannel     = errors.New("video does not belong to selected channel")
+	ErrEditorSessionVideoNotReady         = errors.New("video is not ready for thumbnail editing")
+	ErrEditorSessionVideoAlreadyPub       = errors.New("video is already public; thumbnail editing allowed only for private or unlisted videos")
 	ErrEditorSessionYTServiceUnconfigured = errors.New("youtube service not configured")
 	ErrEditorSessionEditStoreUnconfigured = errors.New("youtube video edit store not configured")
 )
@@ -583,13 +583,13 @@ func (r *Router) handleAttachThumbnailToEditorSession(w http.ResponseWriter, req
 // {title, description, privacy_status, publish_at} keep working
 // unchanged — the orchestrator path is identical for both shapes.
 type publishYouTubeEditorSessionRequest struct {
-	Title                string                              `json:"title,omitempty"`
-	Description          string                              `json:"description,omitempty"`
-	PrivacyStatus        string                              `json:"privacy_status,omitempty"`
-	PublishAt            *time.Time                          `json:"publish_at,omitempty"`
-	Tags                 []string                            `json:"tags,omitempty"`
-	DefaultLanguage      string                              `json:"default_language,omitempty"`
-	DefaultAudioLanguage string                              `json:"default_audio_language,omitempty"`
+	Title                string                               `json:"title,omitempty"`
+	Description          string                               `json:"description,omitempty"`
+	PrivacyStatus        string                               `json:"privacy_status,omitempty"`
+	PublishAt            *time.Time                           `json:"publish_at,omitempty"`
+	Tags                 []string                             `json:"tags,omitempty"`
+	DefaultLanguage      string                               `json:"default_language,omitempty"`
+	DefaultAudioLanguage string                               `json:"default_audio_language,omitempty"`
 	Translations         map[string]models.YouTubeTranslation `json:"translations,omitempty"`
 }
 
@@ -789,11 +789,12 @@ type listYouTubeEditorSessionsResponse struct {
 //     Empty result is 200 + {"sessions": []}, NOT 404.
 //
 // Concurrency:
-//   The repository method is a read-only SELECT; no row-level locks.
-//   Two concurrent dashboard refreshes returning different "snapshots"
-//   are expected (updated_at moves forward under writes), so the
-//   the SPA should re-fetch on interval rather than rely on snapshot
-//   equality.
+//
+//	The repository method is a read-only SELECT; no row-level locks.
+//	Two concurrent dashboard refreshes returning different "snapshots"
+//	are expected (updated_at moves forward under writes), so the
+//	the SPA should re-fetch on interval rather than rely on snapshot
+//	equality.
 func (r *Router) handleListYouTubeEditorSessions(w http.ResponseWriter, req *http.Request) {
 	identity := auth.IdentityFromContext(req.Context())
 	if identity == nil || identity.UserID() <= 0 {
@@ -823,7 +824,7 @@ func (r *Router) handleListYouTubeEditorSessions(w http.ResponseWriter, req *htt
 	}
 
 	filter := repository.YouTubeEditorSessionListFilter{
-		WorkspaceID:     workspaceID,
+		WorkspaceID: workspaceID,
 		// Keep terminal rows visible when explicitly requested so the
 		// dashboard can observe editing -> publishing -> published.
 		IncludeTerminal: strings.EqualFold(strings.TrimSpace(q.Get("include_terminal")), "true"),

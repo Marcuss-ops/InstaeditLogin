@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Landing } from "./Landing";
+import { BookingProvider } from "../components/booking/BookingProvider";
 
 /**
  * Smoke test for the public marketing landing.
@@ -17,14 +18,16 @@ describe("Landing", () => {
   it("renders hero copy, dashboard mockup, and 6 YouTube embeds", () => {
     render(
       <MemoryRouter>
-        <Landing />
+        <BookingProvider>
+          <Landing />
+        </BookingProvider>
       </MemoryRouter>,
     );
 
     // --- Hero -------------------------------------------------------------
     const h1 = screen.getByRole("heading", { level: 1 });
-    expect(h1).toHaveTextContent(/under 3 weeks/);
-    expect(h1).toHaveTextContent(/YouTube/);
+    expect(h1).toHaveTextContent(/Your First/i);
+    expect(h1).toHaveTextContent(/Video/i);
 
     // --- Dashboard mockup -------------------------------------------------
     expect(

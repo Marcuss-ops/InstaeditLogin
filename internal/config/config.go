@@ -567,7 +567,7 @@ func Load() (*Config, error) {
 		},
 		HTTP: HTTPConfig{
 			FrontendURL:        getEnv("FRONTEND_URL", ""),
-			EditorURL:            getEnv("EDITOR_URL", ""),
+			EditorURL:          getEnv("EDITOR_URL", ""),
 			AllowedCORSOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "")),
 			CookieDomain:       getEnv("COOKIE_DOMAIN", ""),
 			LogLevel:           getEnv("LOG_LEVEL", "info"),
@@ -587,11 +587,11 @@ func Load() (*Config, error) {
 			// valutazione doc spec (16 MB chunks, 5 per-chunk retries, 1 s/5 min
 			// backoff). Validation runs unconditionally (so an operator typo
 			// surfaces at boot, not first upload).
-			YouTubeUploadChunkBytes:        getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
-			YouTubeUploadMaxRetries:        getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
-			YouTubeUploadBackoffBaseMs:     getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
-			YouTubeUploadBackoffCapMs:      getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
-			YouTubeDailyQuotaLimit:         getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
+			YouTubeUploadChunkBytes:    getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
+			YouTubeUploadMaxRetries:    getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
+			YouTubeUploadBackoffBaseMs: getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
+			YouTubeUploadBackoffCapMs:  getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
+			YouTubeDailyQuotaLimit:     getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
 			// Blocco #2 P0 — publish horizon + retention buffer are
 			// env-driven. Defaults (30 days / 7 days) match the user-facing
 			// spec; surface them via the Worker's struct fields so the HTTP
@@ -601,9 +601,9 @@ func Load() (*Config, error) {
 			PublishWorkerIntervalSeconds:   getEnvInt("PUBLISH_WORKER_INTERVAL_SECONDS", 30),
 			ReconcileWorkerIntervalSeconds: getEnvInt("RECONCILE_WORKER_INTERVAL_SECONDS", 5),
 			WebhookWorkerIntervalSeconds:   getEnvInt("WEBHOOK_WORKER_INTERVAL_SECONDS", 5),
-		SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
-		AssetCleanupIntervalSeconds:    getEnvInt("ASSET_CLEANUP_INTERVAL_SECONDS", 86400),
-		UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+			SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
+			AssetCleanupIntervalSeconds:    getEnvInt("ASSET_CLEANUP_INTERVAL_SECONDS", 86400),
+			UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
 			// P1 step 2 — worker pool config (see struct comment above).
 			UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
 			YouTubeUploadConcurrency:       getEnvInt("YOUTUBE_UPLOAD_CONCURRENCY", 4),

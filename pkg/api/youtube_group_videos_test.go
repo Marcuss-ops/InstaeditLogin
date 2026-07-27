@@ -28,14 +28,14 @@ import (
 // code uses *repository.GroupRepository. The interface itself
 // lives in pkg/api/router.go.
 type mockGroupStore struct {
-	findByIDFn                func(id int64) (*models.Group, error)
-	listByWorkspaceFn         func(workspaceID int64) ([]models.Group, error)
-	listAccountsInGroupFn     func(groupID int64) ([]int64, error)
+	findByIDFn                 func(id int64) (*models.Group, error)
+	listByWorkspaceFn          func(workspaceID int64) ([]models.Group, error)
+	listAccountsInGroupFn      func(groupID int64) ([]int64, error)
 	validateAccountOwnershipFn func(userID, workspaceID int64, accountIDs []int64) ([]int64, error)
-	createFn                  func(g *models.Group) error
-	updateFn                  func(g *models.Group) error
-	deleteFn                  func(id int64) error
-	setAccountsFn             func(groupID int64, accountIDs []int64) error
+	createFn                   func(g *models.Group) error
+	updateFn                   func(g *models.Group) error
+	deleteFn                   func(id int64) error
+	setAccountsFn              func(groupID int64, accountIDs []int64) error
 }
 
 func (m *mockGroupStore) FindByID(id int64) (*models.Group, error) {
@@ -151,14 +151,14 @@ func userStoreIfNil(s *mockUserStore) UserStore {
 // success case: a workspace with one YouTube account in the group
 // surfaces a single private/unlisted/processed YouTube video whose
 // youtube_video_edits row already exists. The handler must:
-//   1. resolve the account + vault token + YouTube.ListEditableVideos;
-//   2. join with the existing session row (via
-//      ListByWorkspaceAccountIDs);
-//   3. fill editor_session_id / velox_project_id / editor_url /
-//      editor_status / desired_privacy on the response;
-//   4. derive actual_privacy = desired_privacy placeholder;
-//   5. set editor_status = "editing" (mirroring the row state);
-//   6. channel_name = account.Username.
+//  1. resolve the account + vault token + YouTube.ListEditableVideos;
+//  2. join with the existing session row (via
+//     ListByWorkspaceAccountIDs);
+//  3. fill editor_session_id / velox_project_id / editor_url /
+//     editor_status / desired_privacy on the response;
+//  4. derive actual_privacy = desired_privacy placeholder;
+//  5. set editor_status = "editing" (mirroring the row state);
+//  6. channel_name = account.Username.
 func TestListGroupYouTubeVideos_HappyPath(t *testing.T) {
 	workspace := &models.Workspace{ID: 7, OwnerID: 1}
 	ytAccount := &models.PlatformAccount{

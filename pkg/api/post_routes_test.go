@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -99,7 +100,17 @@ func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 		WithPostStore(postStore),
 	)
 
-	body := `{"workspace_id":1,"content":{"title":"future post"},"scheduled_at":"2030-01-01T00:00:00Z","targets":[{"platform_account_id":10}]}`
+	// Pick a `scheduled_at` 7 days in the future, in RFC3339 form, so
+	// the test stays inside `publishHorizonDays=30` regardless of when
+	// CI runs. A literal date (e.g. "2026-08-10T00:00:00Z") silently
+	// rots: on 2026-08-11 the date moves outside the 30-day window and
+	// the test silently regresses to a 422 from the publish_at guard.
+	scheduledAt := time.Now().UTC().Add(7 * 24 * time.Hour).Format(time.RFC3339)
+
+	body := fmt.Sprintf(
+		`{"workspace_id":1,"content":{"title":"future post"},"scheduled_at":"%s","targets":[{"platform_account_id":10}]}`,
+		scheduledAt,
+	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/posts", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -121,8 +132,8 @@ func TestHandleCreatePost_HappyWithScheduledAt(t *testing.T) {
 	if resp.Status != "queued" {
 		t.Fatalf("status: want scheduled, got %s", resp.Status)
 	}
-	if resp.ScheduledAt != "2030-01-01T00:00:00Z" {
-		t.Fatalf("scheduled_at: want 2030-01-01T00:00:00Z, got %s", resp.ScheduledAt)
+	if resp.ScheduledAt != scheduledAt {
+		t.Fatalf("scheduled_at: want %s, got %s", scheduledAt, resp.ScheduledAt)
 	}
 }
 

@@ -775,8 +775,8 @@ func (m *mockSnapshotStore) IsSnapshotStale(platformAccountID int64, maxAge time
 // mockDetailProvider extends mockProvider with AccountDetailsProvider + AccountContentProvider.
 type mockDetailProvider struct {
 	mockProvider
-	detailsFn      func(ctx context.Context, accessToken, platformUserID string) (*models.AccountDetails, error)
-	contentFn      func(ctx context.Context, accessToken, platformUserID string, cursor string, limit int, privacy string) (*models.AccountContentPage, error)
+	detailsFn func(ctx context.Context, accessToken, platformUserID string) (*models.AccountDetails, error)
+	contentFn func(ctx context.Context, accessToken, platformUserID string, cursor string, limit int, privacy string) (*models.AccountContentPage, error)
 }
 
 func (m *mockDetailProvider) GetAccountDetails(ctx context.Context, accessToken, platformUserID string) (*models.AccountDetails, error) {

@@ -284,15 +284,16 @@ func (r *YouTubeVideoEditRepository) FindByVeloxProjectID(ctx context.Context, p
 // video would be thumbnail-published twice).
 //
 // CAS structure:
-//   STRICT BRANCH (inFlightTimeout <= 0):
-//     UPDATE ... SET status, updated_at, desired_privacy, publish_at
-//      WHERE id=$1 AND status IN ('editing','failed')
-//      RETURNING ...
-//   EXTENDED BRANCH (inFlightTimeout > 0):
-//     UPDATE ... SET ...  WHERE id=$1 AND (
-//        status IN ('editing','failed')
-//        OR (status='publishing' AND updated_at < NOW() - make_interval(secs => $4))
-//     ) RETURNING ...
+//
+//	STRICT BRANCH (inFlightTimeout <= 0):
+//	  UPDATE ... SET status, updated_at, desired_privacy, publish_at
+//	   WHERE id=$1 AND status IN ('editing','failed')
+//	   RETURNING ...
+//	EXTENDED BRANCH (inFlightTimeout > 0):
+//	  UPDATE ... SET ...  WHERE id=$1 AND (
+//	     status IN ('editing','failed')
+//	     OR (status='publishing' AND updated_at < NOW() - make_interval(secs => $4))
+//	  ) RETURNING ...
 //
 // The extended branch is the orphan-recovery path: a previous publish
 // was claimed but the worker died mid-call (status stuck at
@@ -401,16 +402,17 @@ func (r *YouTubeVideoEditRepository) AttachThumbnail(ctx context.Context, sessio
 // actual_privacy / pending youtube_sync_status.
 //
 // Why CAS, not a follow-up Update:
-//   The orchestrator's previous final-step pattern (`edit.Status =
-//   "published"; Update(...)`) had a subtle race: a concurrent GET on
-//   the same velox_project_id could observe Status='published' but
-//   ActualPrivacy=NULL (the row had not yet been written with the new
-//   projection). Operators then saw "Pubblicato" badges with no
-//   actual privacy colour — confusing + missed drift. The CAS below
-//   guarantees the four columns (status, actual_privacy,
-//   youtube_sync_status, updated_at) flip together in the same SQL,
-//   so a reader either sees the row pre-CAS or post-CAS, never in
-//   between.
+//
+//	The orchestrator's previous final-step pattern (`edit.Status =
+//	"published"; Update(...)`) had a subtle race: a concurrent GET on
+//	the same velox_project_id could observe Status='published' but
+//	ActualPrivacy=NULL (the row had not yet been written with the new
+//	projection). Operators then saw "Pubblicato" badges with no
+//	actual privacy colour — confusing + missed drift. The CAS below
+//	guarantees the four columns (status, actual_privacy,
+//	youtube_sync_status, updated_at) flip together in the same SQL,
+//	so a reader either sees the row pre-CAS or post-CAS, never in
+//	between.
 //
 // CAS predicate: status='publishing' (only). MarkPublishing was the
 // gate prior to this — a row in 'editing'/'failed' must never reach
@@ -570,23 +572,23 @@ func (r *YouTubeVideoEditRepository) ListByWorkspaceAccountIDs(ctx context.Conte
 // triple, or creates a fresh one if no such row exists.
 //
 // Three-step race-safe sequence:
-//   1. SELECT — lookup an existing open session for the triple.
-//      If a row in ('editing','failed','publishing') state is found,
-//      return it WITH its existing (id, velox_project_id) untouched so
-//      the SPA reuses the same Dark Editor URL across clicks.
-//   2. INSERT — if no row exists, mint a fresh (session_id, velox_project_id)
-//      from the hint args (or auto-generate UUIDs when the hints are
-//      empty) and pin status='editing'. Single-row INSERT; the partial
-//      UNIQUE INDEX `uniq_youtube_video_edits_open_session` (migration
-//      071) protects against two concurrent inserts for the same triple.
-//   3. ON 23505 CONFLICT — if step 2 loses the race, the winning row was
-//      inserted by a peer goroutine between our SELECT and INSERT.
-//      Re-SELECT the triple; the partial UNIQUE INDEX guarantees
-//      exactly one row is visible; return it. The rare case where the
-//      re-SELECT returns (nil, nil) — meaning the row flipped to a
-//      terminal state in the tiny window between INSERT-fail and
-//      SELECT — surfaces the original 23505 sentinel so the operator
-//      can re-trigger the click.
+//  1. SELECT — lookup an existing open session for the triple.
+//     If a row in ('editing','failed','publishing') state is found,
+//     return it WITH its existing (id, velox_project_id) untouched so
+//     the SPA reuses the same Dark Editor URL across clicks.
+//  2. INSERT — if no row exists, mint a fresh (session_id, velox_project_id)
+//     from the hint args (or auto-generate UUIDs when the hints are
+//     empty) and pin status='editing'. Single-row INSERT; the partial
+//     UNIQUE INDEX `uniq_youtube_video_edits_open_session` (migration
+//  071. protects against two concurrent inserts for the same triple.
+//  3. ON 23505 CONFLICT — if step 2 loses the race, the winning row was
+//     inserted by a peer goroutine between our SELECT and INSERT.
+//     Re-SELECT the triple; the partial UNIQUE INDEX guarantees
+//     exactly one row is visible; return it. The rare case where the
+//     re-SELECT returns (nil, nil) — meaning the row flipped to a
+//     terminal state in the tiny window between INSERT-fail and
+//     SELECT — surfaces the original 23505 sentinel so the operator
+//     can re-trigger the click.
 //
 // Args:
 //   - sessionIDHint: optional pre-generated UUID for the new row's ID.
@@ -639,8 +641,8 @@ func (r *YouTubeVideoEditRepository) FindOrCreateEditableSession(
 		projectID = "ve_" + uuid.NewString()
 	}
 	newRow := &models.YouTubeVideoEdit{
-		ID:               sessionID,
-		WorkspaceID:      workspaceID,
+		ID:                sessionID,
+		WorkspaceID:       workspaceID,
 		PlatformAccountID: platformAccountID,
 		YouTubeVideoID:    youtubeVideoID,
 		VeloxProjectID:    projectID,
@@ -763,7 +765,7 @@ const youtubeVideoEditSelectColumns = `id, workspace_id, platform_account_id, yo
 //     empty Statuses slice and didn't let us hydrate the default).
 //   - `ORDER BY updated_at DESC LIMIT $4` bounds the response size
 //     regardless of the workspace's row count. The `idx_youtube_video_edits_workspace`
-//     + `idx_youtube_video_edits_status` indexes (migration 065)
+//   - `idx_youtube_video_edits_status` indexes (migration 065)
 //     make this query a planner-friendly index range scan.
 //
 // Validation:
@@ -865,6 +867,7 @@ func (r *YouTubeVideoEditRepository) ListByWorkspace(ctx context.Context, filter
 //   - non-nil map → json.Marshal then bind as the JSONB column;
 //   - nil map → SQL NULL (lighter row than '{}', and the SPA can
 //     distinguish "draft cleared translations" via the typed echo).
+//
 // We do NOT run YouTubePublishOptions.Validate() here — strict bounds
 // live at the publish endpoint. Drafts by definition can be
 // incomplete (mid-typing) or temporarily out-of-spec (the operator
@@ -943,7 +946,7 @@ func (r *YouTubeVideoEditRepository) SaveDraft(
 //
 //   - NULL    = "no draft written yet" (column never touched)
 //   - ""      = "operator actively cleared this field" (column was
-//               written with an empty value, distinct from no-row)
+//     written with an empty value, distinct from no-row)
 //
 // Coercing empty -> nil here would collapse both into the same SQL
 // NULL, removing the operator's "I cleared the title" intent from

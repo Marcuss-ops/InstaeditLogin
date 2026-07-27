@@ -241,7 +241,6 @@ func TestDeleteEligibleAssets_RetainsRetryPeer(t *testing.T) {
 	}
 }
 
-
 // ===== Test rig =====
 
 // newAssetCleanupMockDB wires a sqlmock-backed *sql.DB into a fresh

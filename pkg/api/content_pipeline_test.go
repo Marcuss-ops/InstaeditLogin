@@ -120,12 +120,12 @@ func TestHandleGetContentPipeline_HappyPath(t *testing.T) {
 					AttemptCount:      1,
 				}},
 				UploadJob: &models.UploadJob{
-					ID:             9001,
-					SourceID:       "drive-file-abc",
-					SourceType:     models.UploadJobSourceAuthenticatedDrive,
-					Title:          "happy-path.mp4",
-					Status:         models.UploadJobStatusPublishCompleted,
-					AssetID:        ptrStringPipeline("asset-uuid-1"),
+					ID:                  9001,
+					SourceID:            "drive-file-abc",
+					SourceType:          models.UploadJobSourceAuthenticatedDrive,
+					Title:               "happy-path.mp4",
+					Status:              models.UploadJobStatusPublishCompleted,
+					AssetID:             ptrStringPipeline("asset-uuid-1"),
 					DefaultPrivacyLevel: "private",
 				},
 				Asset: &models.MediaAsset{
