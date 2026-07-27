@@ -24,6 +24,32 @@ var _ veloxapi.Client = (*Client)(nil)
 // requires a valid InstaEdit control JWT.
 const veloxAPIPrefix = "/api/v1/instaedit"
 
+// allScopesSuperset is the fallback scope set the Client uses when
+// the caller does not declare its own. Two cases:
+//   1. The BFF EditorBFFModule calls Proxy(path) without a per-operation
+//      scope yet — Proxy falls back to the superset so the routed
+//      editor UI keeps working during the cutover window.
+//   2. Tests / fixtures that exercise the Client without wiring scope
+//      per-call.
+//
+// TODO(EditorBFFModule wiring): remove this fallback once every
+// EditorBFFModule call site supplies an explicit []string{...} per
+// the per-method scope table (the verdicts documented in
+// InstaeditLogin/internal/veloxclient/auth.go). The fallback is
+// safe during the cutover but the eventual goal is operation-grained
+// tokens.
+//
+// Until removed, the JWT always carries the union of the four editor
+// scopes. Velox's per-route middleware accepts "exact OR superset"
+// (HasAllScopes), so the superset never widens the privilege — it
+// only relaxes the audit-trail granularity on the Velox side.
+var allScopesSuperset = []string{
+	ScopeEditorProjectRead,
+	ScopeEditorProjectWrite,
+	ScopeEditorAssetUpload,
+	ScopeYouTubeSessionPublish,
+}
+
 // Client calls the Velox master with a per-request signed JWT. It
 // implements veloxapi.Client (pkg/api/velox/routes.go). Construct
 // once at bootstrap via New() and inject via api.WithVeloxBFFClient.
@@ -51,7 +77,7 @@ func New(baseURL, jwtSecret string) *Client {
 	// here. That shared client's retryRoundTripper retries 404
 	// responses for idempotent methods (GET), which would convert
 	// a definitive "not found" from Velox into a retryableHTTPError
-	// — preventing do() from mapping 404 to veloxapi.ErrJobNotFound.
+	// — preventing do() from mapping 404 to veloxapi.ErrNotFound.
 	// The Velox BFF needs raw status codes, so we use a plain
 	// http.Client with a conservative timeout instead.
 	return &Client{
@@ -68,12 +94,21 @@ func New(baseURL, jwtSecret string) *Client {
 	}
 }
 
-// do signs a fresh control JWT for (userID, workspaceID), builds the
-// HTTP request, sends it, and decodes the JSON response into out.
-// Returns a typed error when Velox returns 404 (not found) or 403
-// (workspace mismatch) so the BFF handler can map to 404.
-func (c *Client) do(ctx context.Context, method, path string, userID, workspaceID int64, body io.Reader, out interface{}) error {
-	token, err := signControlToken(c.secret, userID, workspaceID)
+// do signs a fresh control JWT for (userID, workspaceID) using ONLY
+// the supplied scopes, builds the HTTP request, sends it, and decodes
+// the JSON response into out. Returns a typed error when Velox returns
+// 404 (not found) or 403 (workspace mismatch) so the BFF handler can
+// map to 404. The Velox middleware maps a 403 caused by an
+// insufficient-scope JWT to its own clearer 403 body — the BFF's
+// ErrWorkspaceMismatch path therefore only fires when the JWT's
+// workspace_id does not own the resource.
+//
+// CALLER CONTRACT: every public API wrapper on Client MUST pass a
+// non-empty scopes slice per the per-method table in the package
+// godoc of auth.go. An empty slice is rejected by signControlToken
+// so the package refuses to silently widen privileges.
+func (c *Client) do(ctx context.Context, method, path string, userID, workspaceID int64, scopes []string, body io.Reader, out interface{}) error {
+	token, err := signControlToken(c.secret, userID, workspaceID, scopes)
 	if err != nil {
 		return fmt.Errorf("veloxclient: sign token: %w", err)
 	}
@@ -114,6 +149,6 @@ func (c *Client) do(ctx context.Context, method, path string, userID, workspaceI
 // doNoBody is do() for calls that have no request body and no
 // response payload (e.g. CancelJob → 204). Equivalent to do() with
 // body=nil and out=nil but kept as a named helper for readability.
-func (c *Client) doNoBody(ctx context.Context, method, path string, userID, workspaceID int64) error {
-	return c.do(ctx, method, path, userID, workspaceID, nil, nil)
+func (c *Client) doNoBody(ctx context.Context, method, path string, userID, workspaceID int64, scopes []string) error {
+	return c.do(ctx, method, path, userID, workspaceID, scopes, nil, nil)
 }

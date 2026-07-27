@@ -17,8 +17,29 @@ import (
 // This is used by the EditorBFFModule so the Dark Editor SPA can talk
 // to the Velox private master through InstaEdit's authenticated BFF
 // without ever seeing the control secret.
-func (c *Client) Proxy(ctx context.Context, method, path string, userID, workspaceID int64, body io.Reader, contentType string) (*http.Response, error) {
-	token, err := signControlToken(c.secret, userID, workspaceID)
+//
+// SCOPE CONTRACT (architect verdict Q2):
+//   - When the caller supplies a non-empty `scopes` slice, the JWT is
+//     signed with EXACTLY those scopes. The Velox middleware enforces
+//     the operation-grained grant and 403s on mismatch.
+//
+//   - When the caller passes `scopes == nil` (or empty), the BFF
+//     falls back to allScopesSuperset (the union of the four editor
+//     scopes). This is a transitional safeguard for the EditorBFFModule
+//     call sites that have not yet been wired to declare their
+//     per-operation scopes.
+//
+// REMOVAL PLAN: once every EditorBFFModule callsite passes an
+// explicit per-operation []string{...} (TODO followup commit), the
+// fallback and the `scopes == nil` default should be removed so a
+// bare `Proxy(...)` call fails closed instead of silently widening
+// to superset.
+func (c *Client) Proxy(ctx context.Context, method, path string, userID, workspaceID int64, body io.Reader, contentType string, scopes []string) (*http.Response, error) {
+	if len(scopes) == 0 {
+		// Transitional fallback — see architect verdict Q2.
+		scopes = allScopesSuperset
+	}
+	token, err := signControlToken(c.secret, userID, workspaceID, scopes)
 	if err != nil {
 		return nil, fmt.Errorf("veloxclient: sign token: %w", err)
 	}

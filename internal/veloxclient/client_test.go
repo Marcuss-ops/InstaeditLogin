@@ -77,21 +77,27 @@ func TestNewTrimsTrailingSlash(t *testing.T) {
 }
 
 // TestSignControlToken_EmptySecret confirms the signer fails fast
-// when the secret is empty (no silent unauthenticated calls).
+// when the secret is empty (no silent unauthenticated calls). The
+// scopes arg is non-nil (a valid scope) so the secret-empty branch
+// fires first in the validation order — we are NOT testing the
+// empty-scopes branch here, that's covered by auth_test.go's
+// TestSignControlToken_RejectsEmptyScopes.
 func TestSignControlToken_EmptySecret(t *testing.T) {
-	if _, err := signControlToken(nil, 1, 1); err == nil {
+	if _, err := signControlToken(nil, 1, 1, []string{ScopeEditorProjectRead}); err == nil {
 		t.Error("signControlToken with empty secret should return error")
 	}
 }
 
 // TestSignControlToken_InvalidIdentity confirms the signer rejects
 // zero user or workspace ids (a BFF that somehow lost the session
-// identity fails closed rather than signing a bogus token).
+// identity fails closed rather than signing a bogus token). The
+// scopes arg is non-nil so the user/workspace validation branch
+// fires first; empty-scopes is exercised by auth_test.go.
 func TestSignControlToken_InvalidIdentity(t *testing.T) {
-	if _, err := signControlToken([]byte(testSecret), 0, 1); err == nil {
+	if _, err := signControlToken([]byte(testSecret), 0, 1, []string{ScopeEditorProjectRead}); err == nil {
 		t.Error("signControlToken with userID=0 should return error")
 	}
-	if _, err := signControlToken([]byte(testSecret), 1, 0); err == nil {
+	if _, err := signControlToken([]byte(testSecret), 1, 0, []string{ScopeEditorProjectRead}); err == nil {
 		t.Error("signControlToken with workspaceID=0 should return error")
 	}
 }

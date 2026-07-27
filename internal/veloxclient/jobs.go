@@ -15,6 +15,8 @@ import (
 // is signed into the JWT; Velox scopes the query. The BFF handler
 // additionally filters the returned rows by WorkspaceID as
 // defense-in-depth.
+//
+// Permission: editor.project.read.
 func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter veloxapi.ListJobsFilter) ([]veloxapi.Job, error) {
 	q := url.Values{}
 	if filter.Status != "" {
@@ -31,7 +33,7 @@ func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter
 	// (Velox scopes by workspace_id); we pass workspaceID as both
 	// sub and workspace_id so the verifier has a non-zero subject.
 	var resp listJobsResponse
-	if err := c.do(ctx, "GET", path, userID, workspaceID, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeEditorProjectRead}, nil, &resp); err != nil {
 		return nil, err
 	}
 	jobs := make([]veloxapi.Job, 0, len(resp.Jobs))
@@ -51,6 +53,8 @@ func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter
 // CreateJob implements veloxapi.Client.CreateJob. The body carries
 // project_id, render_spec, delivery_plan only; workspace_id and
 // user_id are signed into the JWT, never in the body.
+//
+// Permission: editor.project.write.
 func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req veloxapi.CreateJobRequest) (*veloxapi.Job, error) {
 	body := createJobRequest{
 		ProjectID:   req.ProjectID,
@@ -72,7 +76,7 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 		return nil, fmt.Errorf("veloxclient: marshal create job: %w", err)
 	}
 	var resp jobResponse
-	if err := c.do(ctx, "POST", "/api/v1/instaedit/jobs", userID, workspaceID, bytes.NewReader(payload), &resp); err != nil {
+	if err := c.do(ctx, "POST", "/api/v1/instaedit/jobs", userID, workspaceID, []string{ScopeEditorProjectWrite}, bytes.NewReader(payload), &resp); err != nil {
 		return nil, err
 	}
 	return &veloxapi.Job{
@@ -88,10 +92,12 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 // GetJob implements veloxapi.Client.GetJob. Returns the aggregated
 // JobDetail (job + deliveries) so the BFF renders rendering +
 // publishing status as a single view.
+//
+// Permission: editor.project.read.
 func (c *Client) GetJob(ctx context.Context, workspaceID, userID int64, jobID string) (*veloxapi.JobDetail, error) {
 	var resp jobDetailResponse
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s", url.PathEscape(jobID))
-	if err := c.do(ctx, "GET", path, userID, workspaceID, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeEditorProjectRead}, nil, &resp); err != nil {
 		return nil, err
 	}
 	detail := &veloxapi.JobDetail{
@@ -119,16 +125,20 @@ func (c *Client) GetJob(ctx context.Context, workspaceID, userID int64, jobID st
 
 // CancelJob implements veloxapi.Client.CancelJob. Returns nil on
 // success (Velox responds 204 No Content).
+//
+// Permission: editor.project.write.
 func (c *Client) CancelJob(ctx context.Context, workspaceID, userID int64, jobID string) error {
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s/cancel", url.PathEscape(jobID))
-	return c.doNoBody(ctx, "POST", path, userID, workspaceID)
+	return c.doNoBody(ctx, "POST", path, userID, workspaceID, []string{ScopeEditorProjectWrite})
 }
 
 // ListJobDeliveries implements veloxapi.Client.ListJobDeliveries.
+//
+// Permission: editor.project.read.
 func (c *Client) ListJobDeliveries(ctx context.Context, workspaceID, userID int64, jobID string) ([]veloxapi.Delivery, error) {
 	var resp listDeliveriesResponse
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s/deliveries", url.PathEscape(jobID))
-	if err := c.do(ctx, "GET", path, userID, workspaceID, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeEditorProjectRead}, nil, &resp); err != nil {
 		return nil, err
 	}
 	deliveries := make([]veloxapi.Delivery, 0, len(resp.Deliveries))

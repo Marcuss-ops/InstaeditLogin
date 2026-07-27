@@ -25,22 +25,44 @@ const (
 	tokenTTL = 3 * time.Minute
 )
 
-// defaultScopes is the full scope set the InstaEdit BFF requests. The
-// Velox verifier checks that every endpoint's required scope is
-// present; issuing the full set up-front avoids per-call scope
-// negotiation while still being narrow (no admin scopes).
-var defaultScopes = []string{
-	"velox:jobs:read",
-	"velox:jobs:write",
-	"velox:workers:read",
-	"velox:assets:read",
-}
+// New scope taxonomy. Each BFF API call signs a JWT containing ONLY
+// the scope(s) that the operation needs (per-call, not all-scopes):
+// the Velox middleware MUST see exactly the scope it requires on the
+// route being called; extra scopes are accepted but a missing scope
+// is a hard 403 ("insufficient scope").
+//
+// Naming matches VeloxEditiingg/internal/instaeditauth/scopes.go
+// (declared as the authoritative source on the Velox side). The
+// values are duplicated here so a drift between the two repos
+// surfaces as a 403 at the first call, not at deploy time.
+//
+//	editor.project.read      : read a dark-editor project (Velox
+//	                           GET /internal/v1/editor/projects/*,
+//	                           list-jobs, list-deliveries, list-workers,
+//	                           get-asset)
+//	editor.project.write     : mutate a dark-editor project (Velox
+//	                           POST/PATCH/DELETE on projects/cancel)
+//	editor.asset.upload      : upload a render asset (Velox
+//	                           PUT/POST /internal/v1/editor/assets/*)
+//	youtube.session.publish  : publish a thumbnail update to YouTube
+//	                           (Velox POST
+//	                           /internal/v1/editor/sessions/.../publish)
+const (
+	ScopeEditorProjectRead     = "editor.project.read"
+	ScopeEditorProjectWrite    = "editor.project.write"
+	ScopeEditorAssetUpload     = "editor.asset.upload"
+	ScopeYouTubeSessionPublish = "youtube.session.publish"
+)
 
 // signControlToken issues a short-lived HS256 JWT for the InstaEdit→
 // Velox internal control plane. The secret is the
 // VELOX_CONTROL_JWT_SECRET shared between the two services (distinct
 // from the reverse-direction VELOX_API_TOKEN). userID becomes the
 // JWT subject (sub); workspaceID becomes the workspace_id claim.
+// scopes is the list of authorization grants the caller needs
+// (subslice of the 4 valid scopes above); the JWT carries ONLY
+// these scopes — a Velox route demanding a scope not in this list
+// will 403.
 //
 // The token is fresh per call (random jti, exp = now + tokenTTL) so
 // a replay would require intercepting and reusing within the 3-minute
@@ -57,12 +79,23 @@ var defaultScopes = []string{
 // exactly. MapClaims also already implements jwt.Claims, so
 // jwt.NewWithClaims and jwt.ParseWithClaims work without custom
 // getter methods.
-func signControlToken(secret []byte, userID, workspaceID int64) (string, error) {
+func signControlToken(secret []byte, userID, workspaceID int64, scopes []string) (string, error) {
 	if len(secret) == 0 {
 		return "", fmt.Errorf("veloxclient: control JWT secret is empty (VELOX_CONTROL_JWT_SECRET not configured)")
 	}
 	if userID <= 0 || workspaceID <= 0 {
 		return "", fmt.Errorf("veloxclient: invalid identity (user=%d workspace=%d)", userID, workspaceID)
+	}
+	if len(scopes) == 0 {
+		// A JWT with no scopes would 403 on every protected route;
+		// reject here at the source rather than at the Velox side
+		// so the BFF handler surfaces a clearer error.
+		return "", fmt.Errorf("veloxclient: sign control token: at least one scope is required")
+	}
+	for _, s := range scopes {
+		if s == "" {
+			return "", fmt.Errorf("veloxclient: empty scope string in claim (programmer error)")
+		}
 	}
 	jti, err := randomJTI()
 	if err != nil {
@@ -74,7 +107,7 @@ func signControlToken(secret []byte, userID, workspaceID int64) (string, error) 
 		"aud":          expectedAudience, // plain string, NOT ClaimStrings
 		"sub":          fmt.Sprintf("%d", userID),
 		"workspace_id": workspaceID,
-		"scopes":       defaultScopes,
+		"scopes":       scopes,
 		"exp":          now.Add(tokenTTL).Unix(), // int64, NOT NumericDate
 		"jti":          jti,
 	}
