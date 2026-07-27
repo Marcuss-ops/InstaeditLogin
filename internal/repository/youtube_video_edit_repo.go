@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -165,6 +166,22 @@ type YouTubeVideoEditStore interface {
 	// on every click. See YouTubeVideoEditRepository.FindOrCreateEditableSession
 	// for the race-safe sequence.
 	FindOrCreateEditableSession(ctx context.Context, workspaceID int64, platformAccountID int64, youtubeVideoID string, sessionIDHint string, projectIDHint string) (*models.YouTubeVideoEdit, error)
+	// SaveDraft (P2 — Dark Editor auto-save) atomically writes the
+	// operator's mid-edit form values to youtube_video_edits.draft_*
+	// AND stamps dirty_flag=false AND draft_updated_at=NOW() in a
+	// single SQL statement. CAS predicate: status IN
+	// ('editing','failed'). The publish orchestrator owns the row
+	// during 'publishing' — racing a draft save against a publish
+	// would let an operator's keystrokes silently overwrite the
+	// privacy/title the orchestrator just pushed to YouTube. Once
+	// the row lands in 'published' state, the partial UNIQUE INDEX
+	// `uniq_youtube_video_edits_open_session` (migration 071) keeps
+	// 'published' rows invisible to the predicate — a re-edit click
+	// will mint a FRESH row (FindOrCreateEditableSession re-issues).
+	// Returns ErrYouTubeVideoEditNotFound (wrapped) on 0-rows match —
+	// handler maps to HTTP 409 (CAS-loss). A real *sql.DB error
+	// propagates wrapped.
+	SaveDraft(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, draftUpdatedAt time.Time) error
 	// MarkPublishedWithActualPrivacy (P0#7 actual_privacy read-back)
 	// atomically transitions a row from 'publishing' → 'published'
 	// AND stamps actual_privacy + youtube_sync_status in the same
@@ -822,4 +839,121 @@ func (r *YouTubeVideoEditRepository) ListByWorkspace(ctx context.Context, filter
 		return nil, fmt.Errorf("youtube video edit ListByWorkspace rows: %w", err)
 	}
 	return out, nil
+}
+
+// SaveDraft (P2 — Dark Editor auto-save) atomically writes the operator's
+// mid-edit form values to youtube_video_edits.draft_* AND stamps
+// dirty_flag=false AND draft_updated_at=$11 in a single SQL statement.
+//
+// CAS predicate: id=$1 AND status IN ('editing','failed'). The publish
+// orchestrator owns the row during the 'publishing' window — racing a
+// draft save against a publish would let an operator's keystrokes
+// silently overwrite the privacy/title the orchestrator just pushed
+// to YouTube. Once a row lands in 'published' state, the partial
+// UNIQUE INDEX `uniq_youtube_video_edits_open_session` (migration
+// 071) keeps 'published' rows invisible to the predicate; a re-edit
+// click after a successful publish will mint a FRESH row through
+// FindOrCreateEditableSession (CAS predicate matches open rows only).
+//
+// Returns ErrYouTubeVideoEditNotFound (wrapped) on 0-rows match — the
+// handler maps to 409 (CAS-loss). A real *sql.DB error propagates
+// wrapped. Idempotency: same payload, same final UPSERT, no timestamp
+// drift per call (draftUpdatedAt is supplied by the handler so the
+// response echo and the row stamp agree to the microsecond).
+//
+// draft_translations encoding (P2 architecture verdict Option A):
+//   - non-nil map → json.Marshal then bind as the JSONB column;
+//   - nil map → SQL NULL (lighter row than '{}', and the SPA can
+//     distinguish "draft cleared translations" via the typed echo).
+// We do NOT run YouTubePublishOptions.Validate() here — strict bounds
+// live at the publish endpoint. Drafts by definition can be
+// incomplete (mid-typing) or temporarily out-of-spec (the operator
+// is shortening an over-long title).
+func (r *YouTubeVideoEditRepository) SaveDraft(
+	ctx context.Context,
+	id string,
+	title string,
+	description string,
+	tags []string,
+	defaultLanguage string,
+	defaultAudioLanguage string,
+	translations map[string]models.YouTubeTranslation,
+	desiredPrivacy string,
+	draftUpdatedAt time.Time,
+) error {
+	// Nil → SQL NULL. Empty map → {} (so the SPA can distinguish
+	// "operator just opened the editor" / "operator actively cleared").
+	var translationsJSON interface{}
+	if translations != nil {
+		b, err := json.Marshal(translations)
+		if err != nil {
+			return fmt.Errorf("youtube video edit SaveDraft marshal translations: %w", err)
+		}
+		translationsJSON = b
+	}
+	// Nil tags → NULL (lighter than '{}}::text[]'). Empty
+	// []string{} → '{}'::text[] so the SPA can distinguish
+	// "all-tags-removed" from "no draft yet".
+	var tagsVal interface{}
+	if tags != nil {
+		tagsVal = pq.Array(tags)
+	}
+
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE youtube_video_edits
+		 SET draft_title = $2,
+		     draft_description = $3,
+		     draft_tags = $4,
+		     draft_default_language = $5,
+		     draft_default_audio_language = $6,
+		     draft_translations = $7,
+		     draft_desired_privacy = $8,
+		     draft_updated_at = $9,
+		     dirty_flag = FALSE,
+		     updated_at = NOW()
+		 WHERE id = $1
+		   AND status IN ('editing','failed')`,
+		id,
+		nullableDraftString(title),
+		nullableDraftString(description),
+		tagsVal,
+		nullableDraftString(defaultLanguage),
+		nullableDraftString(defaultAudioLanguage),
+		translationsJSON,
+		nullableDraftString(desiredPrivacy),
+		draftUpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("youtube video edit SaveDraft: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("youtube video edit SaveDraft rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: id=%s", ErrYouTubeVideoEditNotFound, id)
+	}
+	return nil
+}
+
+// nullableDraftString binds a string column from an optional form
+// value WITHOUT coercing empty-string to NULL. The P2 architect
+// verdict explicitly preserves two distinct states the operator can
+// produce:
+//
+//   - NULL    = "no draft written yet" (column never touched)
+//   - ""      = "operator actively cleared this field" (column was
+//               written with an empty value, distinct from no-row)
+//
+// Coercing empty -> nil here would collapse both into the same SQL
+// NULL, removing the operator's "I cleared the title" intent from
+// the read-back. We bind "" as "" so the JSON DTO renders
+// `draft_title: ""` (the SPA's "Bozza salvata" indicator shows the
+// field was cleared) vs `draft_title` omitted when the column is
+// genuinely NULL.
+//
+// The function is a thin type-coercion helper (string -> any); the
+// name is preserved for grep-tracking against the architect verdict.
+func nullableDraftString(s string) interface{} {
+	return s
 }

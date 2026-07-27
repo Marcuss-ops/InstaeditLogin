@@ -195,6 +195,17 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish", r.protected(publishEditorSessionByProjectHandler.ServeHTTP))
 
+	// P2 — Dark Editor auto-save endpoint. The Dark Editor PUTs the
+	// form values on debounce + on-blur so an operator who closed
+	// the tab mid-edit can resume the same form state on reload.
+	// CSRF semantics match the publish endpoint above (middleware
+	// falls through to a passthrough when not wired).
+	var saveDraftByProjectHandler http.Handler = http.HandlerFunc(r.handleSaveEditorSessionDraftByProject)
+	if r.csrfMiddleware != nil {
+		saveDraftByProjectHandler = r.csrfMiddleware(saveDraftByProjectHandler.ServeHTTP)
+	}
+	r.mux.Method(http.MethodPut, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/draft", r.protected(saveDraftByProjectHandler.ServeHTTP))
+
 	var publishEditorSessionHandler http.Handler = http.HandlerFunc(r.handlePublishYouTubeEditorSession)
 	if r.csrfMiddleware != nil {
 		publishEditorSessionHandler = r.csrfMiddleware(publishEditorSessionHandler)

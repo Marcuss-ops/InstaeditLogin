@@ -59,6 +59,33 @@ type YouTubeVideoEdit struct {
 	LastError         string     `json:"last_error,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+	// Draft* fields are the Dark Editor auto-save persistence
+	// (P2 — migration 073). They hold the operator's mid-edit
+	// values for title/description/tags/default audio language /
+	// translations/desired privacy between the moment they start
+	// typing and the publish boundary. NULL = "no draft yet" (the
+	// common case for a freshly-minted row from FindOrCreateEditableSession);
+	// empty string = "operator cleared this field intentionally" (a real
+	// state the SPA distinguishes). The SaveDraft endpoint mirrors these
+	// fields from the request body verbatim; the publish endpoint reads
+	// DesiredPrivacy / Tags / etc. as the source of truth at the time of
+	// click, NOT the draft_*.mirror (the publish payload overrides the
+	// draft on the publish side — Draft* is only persistence for "I closed
+	// my laptop mid-edit and want to come back to the same form later").
+	DraftTitle               *string                            `json:"draft_title,omitempty"`
+	DraftDescription         *string                            `json:"draft_description,omitempty"`
+	DraftTags                []string                           `json:"draft_tags,omitempty"`
+	DraftDefaultLanguage    *string                            `json:"draft_default_language,omitempty"`
+	DraftDefaultAudioLanguage *string                           `json:"draft_default_audio_language,omitempty"`
+	DraftTranslations       map[string]YouTubeTranslation        `json:"draft_translations,omitempty"`
+	DraftDesiredPrivacy     *string                            `json:"draft_desired_privacy,omitempty"`
+	DraftUpdatedAt          *time.Time                         `json:"draft_updated_at,omitempty"`
+	// DirtyFlag stamps the dashboard's "unsaved changes" card pill.
+	// Set to TRUE by the SPA on form-change; set to FALSE in the same
+	// SQL as draft_updated_at by SaveDraft (a successful 200). The
+	// publish orchestrator does not touch it (its lifecycle is the
+	// editor's lifecycle, not the publish's).
+	DirtyFlag bool `json:"dirty_flag"`
 }
 
 // YouTubeVideoDetails is the narrow view of a YouTube video returned
