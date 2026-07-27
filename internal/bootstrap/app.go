@@ -301,6 +301,14 @@ func Wire(ctx context.Context) (*App, error) {
 
 	webhookRepo := repository.NewWebhookRepository(db)
 
+	// Booking-event repo backing POST /api/v1/booking_events
+	// (anonymous strategy-call capture from the marketing
+	// BookingProvider modal). Wired unconditionally — the
+	// module's nil-guard handles the "I really don't want this
+	// endpoint" case via api.WithBookingEventStore(nil) instead
+	// of a conditional Repo construction here.
+	bookingEventRepo := repository.NewBookingEventRepository(db)
+
 	opts := []api.RouterOption{
 		api.WithCredentialVault(vault),
 		// Task 1/10 atomic OAuth finalize gate. Wired
@@ -383,6 +391,7 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithCookieDomain(cfg.HTTP.CookieDomain),
 		api.WithRateLimitService(rateLimitSvc),
 		api.WithWebhookStore(webhookRepo),
+		api.WithBookingEventStore(bookingEventRepo),
 		// ADMIN_INVITE_TOKEN gates public registration. If the env
 		// is unset, registration is disabled (handler returns 403).
 		api.WithAdminInviteToken(cfg.Auth.AdminInviteToken),

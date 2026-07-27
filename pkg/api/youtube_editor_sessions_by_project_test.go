@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -63,7 +64,7 @@ func newByProjectRouter(t *testing.T, workspace *models.Workspace, edit *models.
 	youTubeSvc := &mockYouTubeOAuthServiceForEditor{
 		getVideoFn: func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
 			return &models.YouTubeVideoDetails{
-				VideoID:      videoID,
+				ID:      videoID,
 				ChannelID:    "channel-1",
 				UploadStatus: "processed",
 				Privacy:      "private",
@@ -72,7 +73,7 @@ func newByProjectRouter(t *testing.T, workspace *models.Workspace, edit *models.
 	}
 	vault := &mockCredentialVault{
 		getFn: func(ctx context.Context, accountID int64, kind string) (*models.OAuthToken, error) {
-			return &models.OAuthToken{AccessToken: "test-token", Type: kind}, nil
+			return &models.OAuthToken{AccessToken: "test-token", TokenType: kind}, nil
 		},
 	}
 	return newPublishRouter(t, workspace, editStore,
@@ -100,7 +101,7 @@ func TestGetYouTubeEditorSessionByProject_401_NoAuth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/youtube/editor-sessions/by-project/vp-1", nil)
 	// no withBearerJWT — unauthenticated
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	router.Setup().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d (body=%s)", rec.Code, rec.Body.String())
@@ -118,7 +119,7 @@ func TestGetYouTubeEditorSessionByProject_404_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/youtube/editor-sessions/by-project/vp-missing", nil)
 	withBearerJWT(t, req, 1)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	router.Setup().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d (body=%s)", rec.Code, rec.Body.String())
@@ -144,7 +145,7 @@ func TestGetYouTubeEditorSessionByProject_200_HappyPath(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/youtube/editor-sessions/by-project/vp-1", nil)
 	withBearerJWT(t, req, 1)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	router.Setup().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
@@ -186,7 +187,7 @@ func TestPublishYouTubeEditorSessionByProject_409_Idempotent(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/vp-1/publish", body)
 	withBearerJWT(t, req, 1)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	router.Setup().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 on idempotent replay, got %d (body=%s)", rec.Code, rec.Body.String())
@@ -207,7 +208,7 @@ func TestPublishYouTubeEditorSessionByProject_404_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/vp-missing/publish", body)
 	withBearerJWT(t, req, 1)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	router.Setup().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d (body=%s)", rec.Code, rec.Body.String())
@@ -234,11 +235,9 @@ func TestPublishYouTubeEditorSessionByProject_BadJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/vp-1/publish", bytes.NewReader([]byte("{not-json")))
 	withBearerJWT(t, req, 1)
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	router.Setup().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d (body=%s)", rec.Code, rec.Body.String())
 	}
 }
-
-func strPtr(s string) *string { return &s }

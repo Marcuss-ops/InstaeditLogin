@@ -1,11 +1,19 @@
-import { ArrowRight, Zap, Clock, Bot } from "lucide-react";
+import { ArrowRight, Calendar, Clock, Zap, Bot } from "lucide-react";
 import { DashboardMockup } from "./shared";
+import { useBooking } from "../../components/booking/BookingProvider";
 
 /* ----------------------------------------------------------------------------
- * Hero — gain-focused: immediate income, easy, guided
+ * Hero — gain-focused: immediate income, easy, guided.
+ *
+ * Primary CTA is the booking modal (Calendly-style scheduling flow
+ * with a 3-question qualification form). Discord is intentionally
+ * not exposed here — the funnel moves visitors through qualification
+ * before any human contact.
  * -------------------------------------------------------------------------- */
 
 export function Hero() {
+  const { open: openBooking } = useBooking();
+
   return (
     <section className="relative pt-32 pb-20 overflow-hidden">
       <div aria-hidden="true" className="absolute inset-0 hero-aurora pointer-events-none" />
@@ -17,12 +25,18 @@ export function Hero() {
 
       <div className="relative mx-auto max-w-7xl px-6 grid lg:grid-cols-12 gap-10 items-center">
         <div className="lg:col-span-7 xl:col-span-6 animate-fade-up">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full surface-glass border border-white/15 text-xs font-medium text-zinc-200 mb-7">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-pulse-glow absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
+          <div className="flex flex-wrap items-center gap-2 mb-7">
+            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full surface-glass border border-emerald-400/30 text-xs font-medium text-emerald-200">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-pulse-glow absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
+              </span>
+              <span>Turnkey system &mdash; zero experience needed</span>
             </span>
-            <span>Turnkey system &mdash; zero experience needed</span>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full surface-glass border border-red-400/30 text-xs font-medium text-red-300">
+              <Clock className="w-3 h-3" />
+              <span>Limited &mdash; 10 new clients this month</span>
+            </span>
           </div>
 
           <h1 className="text-display-1 text-white">
@@ -37,15 +51,15 @@ export function Hero() {
           </p>
 
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mt-8">
-            <a
-              href="https://discord.com/users/1201477873719050332"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group"
+            <button
+              type="button"
+              onClick={() => openBooking()}
+              className="group inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all"
             >
-              Get Your Monetized Channel
+              <Calendar className="w-4 h-4" />
+              Schedule Your Free Strategy Call
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-            </a>
+            </button>
             <a
               href="#proof"
               className="inline-flex items-center gap-2 px-6 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-200 hover:border-white/30 hover:text-white transition-all"

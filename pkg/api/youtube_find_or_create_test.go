@@ -53,7 +53,7 @@ func buildFindOrCreateRouter(
 	youTubeSvc := &mockYouTubeOAuthServiceForEditor{
 		getVideoFn: func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
 			return &models.YouTubeVideoDetails{
-				VideoID:      videoID,
+				ID:      videoID,
 				ChannelID:    channelID,
 				UploadStatus: "processed",
 				Privacy:      "private",
@@ -86,7 +86,7 @@ func buildFindOrCreateRouter(
 		WithUserStore(userStore),
 		WithCredentialVault(&mockCredentialVault{
 			getFn: func(ctx context.Context, accountID int64, kind string) (*models.OAuthToken, error) {
-				return &models.OAuthToken{AccessToken: "test-token", Type: kind}, nil
+				return &models.OAuthToken{AccessToken: "test-token", TokenType: kind}, nil
 			},
 		}),
 		WithYouTubeService(youTubeSvc),

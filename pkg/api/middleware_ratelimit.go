@@ -165,3 +165,59 @@ func OAuthStartLimit(svc *services.RateLimitService, trusted []*net.IPNet) func(
 		})
 	}
 }
+
+// BookingEventRateLimit enforces 5/min/IP on POST /api/v1/booking_events.
+// In-memory coarse backstop. The real per-IP gate is the edge
+// tier (Cloudflare/reverse proxy); this is the in-process
+// over-and-above cap. Logs on reject so the operator can spot
+// a single bot making one submission per window reset.
+// Anonymous — there is no JWT identity to consult, so the
+// middleware is purely IP-keyed.
+//
+// Privacy: the log line hashes the IP via the same SHA-256
+// algorithm the handler uses for ip_hash column population, so
+// a tail-Grep of the application log surfaces dedup'able
+// patterns without leaking plaintext peer addresses.
+func BookingEventRateLimit(svc *services.RateLimitService, trusted []*net.IPNet) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := extractIP(r, trusted)
+			tier := services.BookingEventLimit(ip)
+			allowed, remaining, resetAt, _ := svc.Check(r.Context(), tier, tier.Limit)
+			if !allowed {
+				slog.Info("booking event rate-limited", "ip_hash", hashIPForLog(ip), "limit", tier.Limit)
+				writeRateLimitExceeded(w, tier.Limit, resetAt)
+				return
+			}
+			rateLimitHeaders(w, tier.Limit, remaining, resetAt)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// hashIPForLog returns the EXACT same SHA-256(ip_hash) representation
+// the booking_events row stores, so a log-tail grep on
+// `ip_hash=<value>` surfaces the matching database row.
+//
+// Both files live in `package api`, so we delegate to the
+// canonical `hashForStorage` helper in booking_events.go. The
+// formula (SHA-256(pepper + "|" + raw)) lives in exactly one
+// place — a future tweak (e.g. switching to HMAC-SHA256 or
+// rotating the pepper) updates BOTH the row column AND the
+// log line in lock-step.
+func hashIPForLog(ip string) string {
+	return hashForStorage(ip)
+}
+
+// BookingEventRateLimitIfConfigured is the no-op fallback for the
+// BookingEventsModule when the rate-limit service is not wired
+// (dev / test). Production wiring in internal/bootstrap passes the
+// live RateLimitService so this collapses to BookingEventRateLimit(svc,
+// trusted) — matching the OAuthStartLimitIfConfigured sibling in
+// auth_handlers.go.
+func BookingEventRateLimitIfConfigured(svc *services.RateLimitService, trusted []*net.IPNet) func(http.Handler) http.Handler {
+	if svc == nil {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return BookingEventRateLimit(svc, trusted)
+}

@@ -1,10 +1,11 @@
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Zap, Mail, Lock, ArrowRight } from "lucide-react";
+import { Zap, Mail, Lock, ArrowRight, Calendar } from "lucide-react";
 import { fetchSession } from "../lib/auth";
 import { API_BASE_URL } from "../lib/api";
 import { isDemoMode } from "../lib/demo";
 import { PROVIDERS } from "../lib/providers";
+import { useBooking } from "../components/booking/BookingProvider";
 
 export function Login() {
   const [email, setEmail] = useState("");
@@ -12,6 +13,7 @@ export function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const { open: openBooking } = useBooking();
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -184,14 +186,14 @@ export function Login() {
             </div>
             <p className="text-xs text-center text-[#9aa0aa]/70 mt-4">
               No account yet?{" "}
-              <a
-                href="https://discord.com/users/1201477873719050332"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-white hover:underline"
+              <button
+                type="button"
+                onClick={() => openBooking()}
+                className="inline-flex items-center gap-1 text-white hover:underline underline-offset-2"
               >
-                Get started here
-              </a>
+                <Calendar className="w-3 h-3" />
+                Schedule a free strategy call
+              </button>
             </p>
           </div>
         </div>

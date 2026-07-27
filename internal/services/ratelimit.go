@@ -188,6 +188,22 @@ func OAuthStartLimit(ip string) Tier {
 	}
 }
 
+// BookingEventLimit returns the per-IP /api/v1/booking_events
+// tier: 5/min/IP, in-memory coarse backstop. The marketing
+// funnel catches a steady noise of bot-submitted forms; this
+// tier keeps the table from being flooded even when the edge
+// tier (Cloudflare/reverse proxy) is misconfigured. The
+// booking_events endpoint also layers a same-origin check + a
+// per-content-hash dedupe so the SAME submission from the same
+// IP within the window is idempotent at the SQL layer.
+func BookingEventLimit(ip string) Tier {
+	return Tier{
+		Storage: StorageMemory,
+		Scope:   "booking_event_ip:" + ip,
+		Limit:   5,
+	}
+}
+
 // APIKeyReadLimitFromKeyID is a convenience for handlers that
 // hold the apiKeyID directly (avoids building the scope by hand).
 func APIKeyReadLimitFromKeyID(keyID int64) Tier { return APIKeyReadLimit(keyID) }

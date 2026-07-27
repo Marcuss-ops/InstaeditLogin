@@ -297,6 +297,7 @@ requires.
 | --- | ---                                                              | ---            | ---                                                                                                       |
 | YouTube | `https://www.googleapis.com/auth/youtube.upload`                 | Sensitive      | `videos.insert` (upload a video) — required for the entire publish path                                   |
 | YouTube | `https://www.googleapis.com/auth/youtube.readonly`              | Sensitive      | `channels.list?mine=true` (P0#3 channel binding check), `videos.list` (processing-status poll)             |
+| YouTube | `https://www.googleapis.com/auth/youtube.force-ssl`             | Sensitive      | Required to set video thumbnails via `thumbnails.set` — ensures the thumbnail upload is sent over HTTPS    |
 | YouTube | `https://www.googleapis.com/auth/yt-analytics-monetary.readonly` | Sensitive      | YouTube Analytics earnings report for revenue, RPM and CPM on monetized channels |
 | Drive | `https://www.googleapis.com/auth/drive.readonly`                | Restricted     | Drive folder import — folder-level listing for the batch crawler (the production batch-import flow walks arbitrary folder contents at install time) |
 | Identity | `https://www.googleapis.com/auth/userinfo.email`                 | Non-sensitive  | Identify the operator's Google Account during OAuth                                                       |

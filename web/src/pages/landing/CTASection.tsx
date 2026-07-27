@@ -1,70 +1,95 @@
-import { Zap, Globe, ArrowRight, CheckCircle2, Target } from "lucide-react";
+import { Zap, Globe, ArrowRight, Calendar, CheckCircle2, Target } from "lucide-react";
+import { useBooking, type BookingIntent as _BookingIntent } from "../../components/booking/BookingProvider";
 
 /* ----------------------------------------------------------------------------
- * CTA Section — 3 paths to automated income
+ * CTA Section — 3 paths to automated income.
+ *
+ * Each tier opens the booking modal with a tier-specific intent so
+ * the modal shows a matching accent chip ("Tier 2 · Growth") against
+ * the same 3-question qualification form.
  * -------------------------------------------------------------------------- */
 
+// Re-export the type so the prop typing in `TierCTAButton` reads
+// correctly without forcing consumers to know about BookingProvider.
+type BookingIntent = _BookingIntent;
+
+const TIERS: ReadonlyArray<{
+  level: string;
+  tagline: string;
+  title: string;
+  subtitle: string;
+  ringColor: string;
+  iconColor: string;
+  bgGradient: string;
+  hoverBorder: string;
+  desc: string;
+  features: ReadonlyArray<string>;
+  cta: string;
+  intent: BookingIntent;
+  featured?: boolean;
+}> = [
+  {
+    level: "Level 1",
+    tagline: "Guided & fast income",
+    title: "Start & Earn",
+    subtitle: "From zero to your first monthly paycheck in 30 days.",
+    ringColor: "ring-emerald-400/40",
+    iconColor: "text-emerald-300",
+    bgGradient: "from-emerald-500/20 to-teal-500/20",
+    hoverBorder: "hover:border-emerald-400/30",
+    desc: "The guided path for anyone who wants to start earning right away. You get an already-monetized channel, a personal mentor, and a proven system to reach your first payout in 30 days.",
+    features: [
+      "Aged YouTube channel included — skip the algorithm's \"grind\" phase",
+      "1-on-1 personal mentor on the highest-paying niches",
+      "Zero editing — AI templates do all the work for you",
+      "Step-by-step roadmap to your first $1,000/mo",
+    ],
+    cta: "Book the Starter Call",
+    intent: "starter",
+  },
+  {
+    level: "Level 2",
+    tagline: "100% passive",
+    title: "Done-For-You",
+    subtitle: "No camera, no voice, no time spent. We do everything.",
+    ringColor: "ring-blue-400/40",
+    iconColor: "text-blue-300",
+    bgGradient: "from-blue-500/20 to-cyan-500/20",
+    hoverBorder: "hover:border-blue-400/30",
+    desc: "We create, optimize, and publish daily content for you. Your channel generates revenue while you sleep.",
+    features: [
+      "Full-auto management across 7 platforms from day one",
+      "5 channels + 10 AI videos included immediately",
+      "Revenue from YouTube Shorts, TikTok, Reels & sponsorships",
+      "Daily optimized content — you do nothing",
+    ],
+    cta: "Book the Premium Call",
+    intent: "premium",
+    featured: true,
+  },
+  {
+    level: "Level 3",
+    tagline: "Scale & multiply",
+    title: "Channel Portfolio",
+    subtitle: "From one channel to a global content empire.",
+    ringColor: "ring-violet-400/40",
+    iconColor: "text-violet-300",
+    bgGradient: "from-violet-500/20 to-purple-500/20",
+    hoverBorder: "hover:border-violet-400/30",
+    desc: "Turn one monetized channel into a full portfolio. Expand into multiple languages and niches with unlimited AI content and dedicated infrastructure.",
+    features: [
+      "Portfolio-wide automation and analytics dashboard",
+      "Multi-language expansion for global reach",
+      "Unlimited AI-generated videos across all channels",
+      "Dedicated infrastructure and priority support",
+    ],
+    cta: "Book the Portfolio Call",
+    intent: "growth",
+  },
+];
+
 export function CTASection() {
-  const tiers = [
-    {
-      level: "Level 1",
-      tagline: "Guided & fast income",
-      title: "Start & Earn",
-      subtitle: "From zero to your first monthly paycheck in 30 days.",
-      ringColor: "ring-emerald-400/40",
-      iconColor: "text-emerald-300",
-      bgGradient: "from-emerald-500/20 to-teal-500/20",
-      hoverBorder: "hover:border-emerald-400/30",
-      desc: "The guided path for anyone who wants to start earning right away. You get an already-monetized channel, a personal mentor, and a proven system to reach your first payout in 30 days.",
-      features: [
-        "Aged YouTube channel included — skip the algorithm's \"grind\" phase",
-        "1-on-1 personal mentor on the highest-paying niches",
-        "Zero editing — AI templates do all the work for you",
-        "Step-by-step roadmap to your first $1,000/mo",
-      ],
-      cta: "Book Your Mentoring Session",
-      ctaLink: "https://discord.com/users/1201477873719050332",
-    },
-    {
-      level: "Level 2",
-      tagline: "100% passive",
-      title: "Done-For-You",
-      subtitle: "No camera, no voice, no time spent. We do everything.",
-      ringColor: "ring-blue-400/40",
-      iconColor: "text-blue-300",
-      bgGradient: "from-blue-500/20 to-cyan-500/20",
-      hoverBorder: "hover:border-blue-400/30",
-      desc: "We create, optimize, and publish daily content for you. Your channel generates revenue while you sleep.",
-      features: [
-        "Full-auto management across 7 platforms from day one",
-        "5 channels + 10 AI videos included immediately",
-        "Revenue from YouTube Shorts, TikTok, Reels & sponsorships",
-        "Daily optimized content — you do nothing",
-      ],
-      cta: "Activate Full Automation",
-      ctaLink: "https://discord.com/users/1201477873719050332",
-      featured: true,
-    },
-    {
-      level: "Level 3",
-      tagline: "Scale & multiply",
-      title: "Channel Portfolio",
-      subtitle: "From one channel to a global content empire.",
-      ringColor: "ring-violet-400/40",
-      iconColor: "text-violet-300",
-      bgGradient: "from-violet-500/20 to-purple-500/20",
-      hoverBorder: "hover:border-violet-400/30",
-      desc: "Turn one monetized channel into a full portfolio. Expand into multiple languages and niches with unlimited AI content and dedicated infrastructure.",
-      features: [
-        "Portfolio-wide automation and analytics dashboard",
-        "Multi-language expansion for global reach",
-        "Unlimited AI-generated videos across all channels",
-        "Dedicated infrastructure and priority support",
-      ],
-      cta: "Scale Your Income",
-      ctaLink: "https://discord.com/users/1201477873719050332",
-    },
-  ];
+  const { open: openBooking } = useBooking();
 
   return (
     <section id="programs" className="relative py-24 sm:py-32 bg-elevated overflow-hidden">
@@ -82,7 +107,7 @@ export function CTASection() {
           </p>
         </div>
         <div className="grid md:grid-cols-3 gap-6">
-          {tiers.map((t, i) => (
+          {TIERS.map((t, i) => (
             <div
               key={t.level}
               className={`surface-card p-7 relative overflow-hidden animate-fade-up ${t.hoverBorder} transition-all duration-300 group ${
@@ -114,19 +139,19 @@ export function CTASection() {
                     </li>
                   ))}
                 </ul>
-                <a
-                  href={t.ctaLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={`inline-flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm transition-all group/btn ${
+                <button
+                  type="button"
+                  onClick={() => openBooking(t.intent)}
+                  className={`group/btn inline-flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm transition-all ${
                     t.featured
                       ? "bg-white text-black hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)]"
                       : "surface-glass border border-white/15 text-zinc-200 hover:border-white/30 hover:text-white"
                   }`}
                 >
+                  <Calendar className="w-4 h-4" />
                   {t.cta}
                   <ArrowRight className="w-4 h-4 group-hover/btn:translate-x-1 transition-transform" />
-                </a>
+                </button>
               </div>
             </div>
           ))}

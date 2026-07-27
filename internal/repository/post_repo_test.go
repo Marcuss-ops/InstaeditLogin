@@ -421,8 +421,8 @@ func TestPostFindByID_FoundWithNullableTime(t *testing.T) {
 	mock.ExpectQuery(
 		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
 		 FROM posts
-		 WHERE id = $1`,
-	).WithArgs(int64(100)).
+		 WHERE ($1::bigint = 0 OR workspace_id = $1) AND id = $2`,
+	).WithArgs(int64(0), int64(100)).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at"},
 		).AddRow(100, 1, "scheduled", "cap", "url", now, now, models.PostStatusScheduled, "", "", time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)))
@@ -450,8 +450,8 @@ func TestPostFindByID_NilScheduledAt_RoundTripsClean(t *testing.T) {
 	mock.ExpectQuery(
 		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
 		 FROM posts
-		 WHERE id = $1`,
-	).WithArgs(int64(1)).
+		 WHERE ($1::bigint = 0 OR workspace_id = $1) AND id = $2`,
+	).WithArgs(int64(0), int64(1)).
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at"},
 		).AddRow(1, 1, "draft", "", "", now, nil, models.PostStatusDraft, "", "", now))
@@ -475,8 +475,8 @@ func TestPostFindByID_NotFoundReturnsNilNil(t *testing.T) {
 	mock.ExpectQuery(
 		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
 		 FROM posts
-		 WHERE id = $1`,
-	).WithArgs(int64(999)).
+		 WHERE ($1::bigint = 0 OR workspace_id = $1) AND id = $2`,
+	).WithArgs(int64(0), int64(999)).
 		WillReturnError(sql.ErrNoRows)
 
 	p, err := repo.FindByID(999)

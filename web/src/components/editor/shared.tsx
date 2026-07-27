@@ -139,6 +139,11 @@ export const CONTACT_DISCORD_HANDLE = "@instaedit";
 export const CONTACT_EMAIL = "futurimilionariposta@gmail.com";
 export const CONTACT_EMAIL_DISPLAY = "futurimilionariposta@…";
 
+// re-exports for Booking URL so editor-area code can reference the
+// scheduler outside the booking lib without creating a circular
+// import between `editor/shared` and `lib/booking`.
+export { BOOKING_URL as CONTACT_BOOKING_URL } from "../../lib/booking";
+
 export const LANGUAGES = [
   { code: "en", name: "English", flag: "🇬🇧" },
   { code: "es", name: "Español", flag: "🇪🇸" },

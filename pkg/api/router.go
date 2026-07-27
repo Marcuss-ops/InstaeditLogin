@@ -193,6 +193,16 @@ type Router struct {
 	// GET /accounts/{id}/performance returns 501.
 	metricHistoryStore MetricHistoryStore
 
+	// bookingEventStore persists the anonymous lead-capture events
+	// from the marketing strategy-call modal (POST
+	// /api/v1/booking_events). Wired via WithBookingEventStore;
+	// when nil, the BookingEventsModule does not register its
+	// route (matches the webhookStore / uploadJobStore nil-guard
+	// pattern). The endpoint sits OUTSIDE the JWT auth chain
+	// (it's anonymous) and OUTSIDE the CSRF chain (anonymous
+	// browsers have no csrf_token cookie).
+	bookingEventStore BookingEventStore
+
 	// Blocco #5.3 — Sentry hub + /ready wiring.
 	// sentryHub is nil when SENTRY_DSN is unset (operator-disables-
 	// by-omission). When set, the recovery middleware uses
@@ -583,6 +593,21 @@ type AuditLogStore interface {
 	Log(ctx context.Context, eventType, actorID string, resourceType, resourceID string, metadata map[string]interface{}) error
 }
 
+// BookingEventStore is the persistence contract for the
+// POST /api/v1/booking_events endpoint (anonymous lead capture
+// from the marketing strategy-call modal). The Contract has
+// exactly one method so the handler stays narrow — see
+// pkg/api/booking_events.go for the security model (per-IP
+// rate-limit + same-origin + ON CONFLICT idempotency).
+//
+// Production wiring in internal/bootstrap/app.go passes
+// *repository.BookingEventRepository which satisfies this
+// interface. The compile-time assertion below catches
+// signature drift at go vet time.
+type BookingEventStore interface {
+	Insert(event *models.BookingEvent) error
+}
+
 // UploadJobStore is the persistence contract for the background
 // upload_jobs queue. The API layer both creates new jobs (batches)
 // AND reads aggregates for the dashboard status endpoint. The
@@ -843,6 +868,18 @@ type YouTubeVideoEditStore interface {
 	// tuple. See repository.YouTubeVideoEditRepository.ListByWorkspaceAccountIDs
 	// for the SQL contract + index hint.
 	ListByWorkspaceAccountIDs(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error)
+	// FindOrCreateEditableSession (P0#3 click-idempotency) returns the
+	// open (non-terminal) editor session for the given (workspace,
+	// account, video) triple, or inserts a fresh one.
+	FindOrCreateEditableSession(ctx context.Context, workspaceID int64, platformAccountID int64, youtubeVideoID string, sessionIDHint string, projectIDHint string) (*models.YouTubeVideoEdit, error)
+	// SaveDraft (P2 — Dark Editor auto-save) atomically writes the
+	// operator's mid-edit form values to youtube_video_edits.draft_*
+	// AND stamps dirty_flag=false AND draft_updated_at=NOW().
+	SaveDraft(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, draftUpdatedAt time.Time) error
+	// MarkPublishedWithActualPrivacy (P0#7) atomically transitions
+	// status='publishing' → 'published' AND stamps actual_privacy +
+	// youtube_sync_status.
+	MarkPublishedWithActualPrivacy(ctx context.Context, id string, actualPrivacy string, syncStatus string) (*models.YouTubeVideoEdit, error)
 }
 
 // P2 — ops dashboard store. AdminStore is the read-side
@@ -1021,6 +1058,21 @@ type ContentPipelineStore interface {
 // satisfies the ContentPipelineStore interface (catches signature
 // drift at go vet time, not at runtime).
 var _ ContentPipelineStore = (*repository.ContentPipelineRepository)(nil)
+
+// Compile-time assertion that *repository.BookingEventRepository
+// satisfies the BookingEventStore interface. Same rationale as the
+// other `var _ XxxStore = (*repository.XxxRepository)(nil)` lines
+// in this file: signature drift in either the repo or the
+// interface surfaces at go vet time rather than as a runtime nil
+// dereference.
+var _ BookingEventStore = (*repository.BookingEventRepository)(nil)
+
+// WithBookingEventStore wires the repository used to persist the
+// strategy-call marketing events. Optional (nil → route not
+// registered) — matches the webhookStore / uploadJobStore pattern.
+func WithBookingEventStore(store BookingEventStore) RouterOption {
+	return func(r *Router) { r.bookingEventStore = store }
+}
 
 // The following thin wrappers keep existing unit tests (which call the
 // handlers directly on *Router) compiling while the public module

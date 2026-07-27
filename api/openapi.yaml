@@ -1,3 +1,31 @@
+# =========================================================
+# API AUDIT SUMMARY (1 dropped, 22 kept endpoints)
+# =========================================================
+# KEPT: 22 PUBLIC_INTER_SERVICE paths across:
+#   * Auth          — /auth/exchange, /auth/logout, /auth/me,
+#                     /auth/{provider}/callback, /auth/{provider}/login
+#   * Auth/API key  — /api-keys, /api-keys/{id}, /api-keys/{id}/rotate
+#   * Posts         — /posts, /posts/workspace/{wid},
+#                     /posts/{id} (GET/PATCH/DELETE),
+#                     /posts/{id}/{cancel,publish,retry,schedule,targets}
+#   * PostTargets   — /post_targets/{id}, /post_targets/{id}/retry
+#   * Velox Internal— /internal/v1/deliveries,
+#                     /internal/v1/deliveries/{id},
+#                     /internal/v1/destinations/{id}/validate
+#   * YouTube       — /api/v1/youtube/editor-sessions/{id}/thumbnail
+#
+# DROPPED: 1 path
+#   * /auth/{provider}/start  (INTERNAL_EXPERIMENTAL)
+#     Deprecated backwards-compat alias of /auth/{provider}/login.
+#     Same handler, same middleware chain. Removed from the public
+#     spec so SDKs and documentation don't encourage new callers,
+#     but the Go handler remains mounted in pkg/api/router.go
+#     for legacy crons / pinned-URL scripts that haven't migrated.
+#
+# Orphan schemas after the drop: zero. /auth/{provider}/start reuses
+# NotFoundError + InternalError which are still referenced by the
+# kept paths.
+# =========================================================
 openapi: 3.1.0
 
 info:
@@ -73,39 +101,6 @@ paths:
         sets a one-shot `oauth_state_{provider}` HttpOnly cookie for
         CSRF protection; the `state` query param on the callback is
         matched against this cookie.
-      security: []
-      parameters:
-        - name: provider
-          in: path
-          required: true
-          schema:
-            type: string
-            enum: [meta, tiktok, twitter, youtube, linkedin]
-      responses:
-        '302':
-          description: Redirect to provider authorization URL (`Location` header).
-          headers:
-            Location:
-              schema: { type: string, format: uri }
-              description: Provider's `/authorize` URL.
-        '404':
-          $ref: '#/components/responses/NotFoundError'
-        '500':
-          $ref: '#/components/responses/InternalError'
-
-  /auth/{provider}/start:
-    get:
-      tags: [Auth]
-      operationId: authGetLoginUrlStart
-      deprecated: true
-      summary: Alias of /auth/{provider}/login (backwards-compat).
-      description: |
-        Backwards-compat alias of `/auth/{provider}/login`. Some older
-        scripts and docs reference `start` as the OAuth initiation URL;
-        this entry serves those. The `/login` and `/start` paths are
-        functionally identical (same handler, same middleware chain,
-        same response). Canonical URL is `/auth/{provider}/login`; new
-        integrations should prefer that path. Added in commit c9e760d.
       security: []
       parameters:
         - name: provider

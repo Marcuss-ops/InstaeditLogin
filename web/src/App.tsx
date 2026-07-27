@@ -21,6 +21,7 @@ import { GroupsPage } from "./pages/internal/Groups";
 import { CookieBanner } from "./components/CookieBanner";
 import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
 import { ToastProvider } from "./components/toast";
+import { BookingProvider } from "./components/booking/BookingProvider";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import { AdminProtectedRoute } from "./components/auth/AdminProtectedRoute";
 import { InternalLayout } from "./components/layout/InternalLayout";
@@ -36,6 +37,7 @@ function App() {
   return (
     <ToastProvider>
       <ErrorBoundary>
+        <BookingProvider>
         <BrowserRouter>
           <CookieBanner />
           <Routes>
@@ -118,6 +120,7 @@ function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
+        </BookingProvider>
       </ErrorBoundary>
     </ToastProvider>
   );

@@ -479,7 +479,7 @@ func (r *Router) executePublishYouTubeEditorSession(
 	// cannot observe Status='published' with NULL ActualPrivacy
 	// (the partial-state bug we fixed).
 	edit.LastError = ""
-	claimed, err := r.youtubeVideoEditStore.MarkPublishedWithActualPrivacy(
+	claimed, err = r.youtubeVideoEditStore.MarkPublishedWithActualPrivacy(
 		ctx, edit.ID, actualPrivacy, syncStatus,
 	)
 	if err != nil {
@@ -502,15 +502,7 @@ func (r *Router) executePublishYouTubeEditorSession(
 	})
 }
 
-// derefString returns the dereferenced value of a *string pointer
-// ("" if nil). Used by the publish + replay responses to flatten
-// the nullable model fields onto the JSON projection.
-func derefString(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
+
 
 // sortedTranslationKeys returns the map keys in a stable,
 // deterministic order. The orchestrator's per-language loop uses

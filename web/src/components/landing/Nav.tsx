@@ -1,9 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Zap, Menu, X } from "lucide-react";
+import { Zap, Menu, X, Calendar } from "lucide-react";
+import { useBooking } from "../booking/BookingProvider";
 
 /* ----------------------------------------------------------------------------
- * Sticky Nav with mobile hamburger + focus trap
+ * Sticky Nav with mobile hamburger + focus trap.
+ *
+ * CTA strategy: the primary button opens the global booking modal
+ * (Calendly-style strategy-call flow) instead of linking directly to
+ * Discord. See `BookingProvider` for the qualification form that
+ * runs before the scheduler opens.
  * -------------------------------------------------------------------------- */
 
 export function Nav() {
@@ -11,6 +17,7 @@ export function Nav() {
   const drawerRef = useRef<HTMLDivElement>(null);
   const lastFocusedElement = useRef<HTMLElement | null>(null);
   const drawerId = "mobile-nav-drawer";
+  const { open: openBooking } = useBooking();
 
   // Close on escape
   useEffect(() => {
@@ -122,14 +129,23 @@ export function Nav() {
                 ),
               )}
             </div>
-            <a
-              href="https://discord.com/users/1201477873719050332"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-white text-black text-sm font-semibold hover:bg-white/90 transition-all"
+            <button
+              type="button"
+              onClick={() => {
+                close();
+                openBooking();
+              }}
+              className="group inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-white text-black text-sm font-semibold hover:bg-white/90 transition-all"
             >
-              Start Earning
-            </a>
+              <Calendar className="w-3.5 h-3.5" />
+              Schedule a Call
+              <span
+                aria-hidden="true"
+                className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 group-hover:text-zinc-700 transition-colors"
+              >
+                Free
+              </span>
+            </button>
           </div>
 
           {/* Mobile hamburger */}
@@ -178,15 +194,19 @@ export function Nav() {
                 ),
               )}
               <hr className="border-white/10 my-3" />
-              <a
-                href="https://discord.com/users/1201477873719050332"
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={close}
-                className="block py-3 text-sm font-semibold text-center text-white bg-gradient-to-r from-violet-500 to-cyan-500 rounded-xl hover:opacity-90 transition-opacity"
+              <button
+                type="button"
+                onClick={() => {
+                  close();
+                  openBooking();
+                }}
+                className="w-full block py-3 text-sm font-semibold text-center text-black bg-white rounded-xl hover:bg-white/90 transition-colors"
               >
-                Start Earning
-              </a>
+                <span className="inline-flex items-center justify-center gap-2">
+                  <Calendar className="w-4 h-4" />
+                  Schedule a Free Strategy Call
+                </span>
+              </button>
             </div>
           </div>
         )}

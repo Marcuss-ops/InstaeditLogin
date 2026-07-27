@@ -4,7 +4,7 @@ import {
   ArrowRight,
   Users,
   Video,
-  MessageCircle,
+  Calendar,
   CheckCircle2,
   Target,
   Award,
@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { MarketingNav } from "../components/layout/MarketingNav";
 import { MarketingFooter } from "../components/layout/MarketingFooter";
+import { useBooking, type BookingIntent } from "../components/booking/BookingProvider";
 
 const SEO = {
   title: "InstaEdit Mentoring — Grow with a mentor",
@@ -64,11 +65,22 @@ const MENTORING_PATH = [
  * onboarding. See docs/MARKETING-FUNNEL.md > Claims & Pricing Policy.
  *
  * Pricing copy MUST match the destination of the package CTA. The package CTA
- * buttons route to `/login` (low-friction self-serve signup), so the pricing
- * lines describe what happens AFTER signup. Discovery calls are reserved for
- * the bottom-of-page CTASection (mailto with Mentoring%20Request subject).
+ * buttons now trigger the booking flow with a tier-specific `intent`
+ * (starter | growth | premium) so the modal shows a matching chip and the
+ * intent is logged for downstream analytics.
  */
-const PACKAGES = [
+const PACKAGES: ReadonlyArray<{
+  title: string;
+  tagline: string;
+  description: string;
+  pricing: string;
+  features: ReadonlyArray<string>;
+  color: string;
+  iconBg: string;
+  cta: string;
+  intent: BookingIntent;
+  featured?: boolean;
+}> = [
   {
     title: "Starter Mentoring",
     tagline: "For creators starting from zero",
@@ -84,8 +96,8 @@ const PACKAGES = [
     ],
     color: "from-violet-500 to-purple-500",
     iconBg: "from-violet-500 to-purple-500",
-    cta: "Start Now",
-    ctaLink: "https://discord.com/users/1201477873719050332",
+    cta: "Book Starter Call",
+    intent: "starter",
   },
   {
     title: "Growth Mentoring",
@@ -103,8 +115,8 @@ const PACKAGES = [
     color: "from-cyan-500 to-blue-500",
     iconBg: "from-cyan-500 to-blue-500",
     featured: true,
-    cta: "Start Now",
-    ctaLink: "https://discord.com/users/1201477873719050332",
+    cta: "Book Growth Call",
+    intent: "growth",
   },
   {
     title: "Team Mentoring",
@@ -121,8 +133,8 @@ const PACKAGES = [
     ],
     color: "from-emerald-500 to-teal-500",
     iconBg: "from-emerald-500 to-teal-500",
-    cta: "Contact Sales",
-    ctaLink: "https://discord.com/users/1201477873719050332",
+    cta: "Book Team Call",
+    intent: "premium",
   },
 ];
 
@@ -303,6 +315,7 @@ function HowItWorks() {
 }
 
 function PackagesSection() {
+  const { open: openBooking } = useBooking();
   return (
     <section id="packages" className="relative py-24 sm:py-32 overflow-hidden">
       <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
@@ -348,24 +361,15 @@ function PackagesSection() {
                     <span>{p.pricing}</span>
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3">
-                    <a
-                      href={p.ctaLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group whitespace-nowrap"
+                    <button
+                      type="button"
+                      onClick={() => openBooking(p.intent)}
+                      className="group inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all whitespace-nowrap"
                     >
+                      <Calendar className="w-4 h-4" />
                       {p.cta}
                       <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                    </a>
-                    <a
-                      href={p.ctaLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
-                    >
-                      <MessageCircle className="w-4 h-4" />
-                      Chat on Discord
-                    </a>
+                    </button>
                   </div>
                 </div>
                 <div className="lg:col-span-7">
@@ -404,7 +408,7 @@ function TestimonialsSection() {
               key={t.author}
               className={`surface-card p-6 animate-fade-up ${["", "animation-delay-100", "animation-delay-200"][i]}`}
             >
-              <MessageCircle className="w-5 h-5 text-violet-300 mb-4" />
+              <Sparkles className="w-5 h-5 text-violet-300 mb-4" />
               <p className="text-sm text-zinc-300 leading-relaxed mb-5">"{t.quote}"</p>
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white text-sm font-semibold">
@@ -424,30 +428,34 @@ function TestimonialsSection() {
 }
 
 function CTASection() {
+  const { open: openBooking } = useBooking();
   return (
     <section className="relative py-24 sm:py-32 overflow-hidden">
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="surface-glass border border-white/15 rounded-2xl p-8 lg:p-12 relative overflow-hidden text-center animate-fade-up">
           <div aria-hidden="true" className="absolute inset-0 cta-glow opacity-30 pointer-events-none" />
           <div className="relative">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full surface-glass border border-red-400/30 text-xs font-medium text-red-300 mb-5">
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Limited — 10 new mentoring slots opened this month</span>
+            </div>
             <h2 className="text-display-2 text-white mb-4">
               Not sure which path is right for you?
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[55ch] mx-auto mb-8">
-              Write us on Discord and we'll figure out together
-              whether Starter, Growth, or Team is the best fit for where you are right now.
+              Book a free strategy call and we'll map out whether Starter,
+              Growth, or Team is the right fit for where you are right now.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-              <a
-                href="https://discord.com/users/1201477873719050332"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all group"
+              <button
+                type="button"
+                onClick={() => openBooking("general")}
+                className="group inline-flex items-center gap-2 px-8 py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 hover:shadow-[0_0_40px_-8px_rgba(255,255,255,0.3)] transition-all"
               >
-                <MessageCircle className="w-4 h-4" />
-                Chat on Discord
+                <Calendar className="w-4 h-4" />
+                Schedule a Free Strategy Call
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </a>
+              </button>
             </div>
           </div>
         </div>

@@ -28,7 +28,7 @@ import (
 // code uses *repository.GroupRepository. The interface itself
 // lives in pkg/api/router.go.
 type mockGroupStore struct {
-	findByIDFn                func(ctx context.Context, id int64) (*models.Group, error)
+	findByIDFn                func(id int64) (*models.Group, error)
 	listByWorkspaceFn         func(workspaceID int64) ([]models.Group, error)
 	listAccountsInGroupFn     func(groupID int64) ([]int64, error)
 	validateAccountOwnershipFn func(userID, workspaceID int64, accountIDs []int64) ([]int64, error)
@@ -38,9 +38,9 @@ type mockGroupStore struct {
 	setAccountsFn             func(groupID int64, accountIDs []int64) error
 }
 
-func (m *mockGroupStore) FindByID(ctx context.Context, id int64) (*models.Group, error) {
+func (m *mockGroupStore) FindByID(id int64) (*models.Group, error) {
 	if m.findByIDFn != nil {
-		return m.findByIDFn(ctx, id)
+		return m.findByIDFn(id)
 	}
 	return nil, nil
 }
@@ -172,7 +172,7 @@ func TestListGroupYouTubeVideos_HappyPath(t *testing.T) {
 	group := &models.Group{ID: 3, WorkspaceID: workspace.ID, Name: "Marketing"}
 
 	groupStore := &mockGroupStore{
-		findByIDFn: func(ctx context.Context, id int64) (*models.Group, error) {
+		findByIDFn: func(id int64) (*models.Group, error) {
 			if id == group.ID {
 				return group, nil
 			}
@@ -276,25 +276,25 @@ func TestListGroupYouTubeVideos_HappyPath(t *testing.T) {
 	if got.DesiredPrivacy != "unlisted" {
 		t.Errorf("desired_privacy: want unlisted, got %q", got.DesiredPrivacy)
 	}
-	if got.ActualPrivacy != "unlisted" {
-		t.Errorf("actual_privacy placeholder must mirror desired until reconciler lands, want unlisted, got %q", got.ActualPrivacy)
+	if got.ActualPrivacy == nil || *got.ActualPrivacy != "unlisted" {
+		val := ""
+		if got.ActualPrivacy != nil {
+			val = *got.ActualPrivacy
+		}
+		t.Errorf("actual_privacy placeholder must mirror desired until reconciler lands, want unlisted, got %q", val)
 	}
-	if got.YouTubeSyncStatus != "unconfirmed" {
-		t.Errorf("youtube_sync_status: want unconfirmed, got %q", got.YouTubeSyncStatus)
-	}
-	if got.GroupOrigin != "direct" {
-		t.Errorf("group_origin: want direct, got %q", got.GroupOrigin)
+	if got.YouTubeSyncStatus == nil || *got.YouTubeSyncStatus != "unconfirmed" {
+		val := ""
+		if got.YouTubeSyncStatus != nil {
+			val = *got.YouTubeSyncStatus
+		}
+		t.Errorf("youtube_sync_status: want unconfirmed, got %q", val)
 	}
 	if got.PrivacyStatus != "private" {
 		t.Errorf("privacy_status: want private, got %q", got.PrivacyStatus)
 	}
 	if got.ProcessingStatus != "processed" {
 		t.Errorf("processing_status: want processed, got %q", got.ProcessingStatus)
-	}
-	if got.GroupOrigin != "" {
-		// field was removed from the verdict contract; the response
-		// must never carry it any more.
-		t.Errorf("group_origin field was dropped from contract; response carried %q", got.GroupOrigin)
 	}
 }
 
@@ -318,7 +318,7 @@ func TestListGroupYouTubeVideos_JoinMissesReady(t *testing.T) {
 	group := &models.Group{ID: 3, WorkspaceID: workspace.ID, Name: "Marketing"}
 
 	groupStore := &mockGroupStore{
-		findByIDFn: func(ctx context.Context, id int64) (*models.Group, error) {
+		findByIDFn: func(id int64) (*models.Group, error) {
 			if id == group.ID {
 				return group, nil
 			}
@@ -404,8 +404,8 @@ func TestListGroupYouTubeVideos_JoinMissesReady(t *testing.T) {
 	if got.DesiredPrivacy != "" {
 		t.Errorf("desired_privacy: want empty, got %q", got.DesiredPrivacy)
 	}
-	if got.ActualPrivacy != "" {
-		t.Errorf("actual_privacy: want empty when no session, got %q", got.ActualPrivacy)
+	if got.ActualPrivacy != nil {
+		t.Errorf("actual_privacy: want nil when no session, got %q", *got.ActualPrivacy)
 	}
 	if got.PrivacyStatus != "unlisted" {
 		t.Errorf("privacy_status: want unlisted, got %q", got.PrivacyStatus)
@@ -421,7 +421,7 @@ func TestListGroupYouTubeVideos_CrossTenant404(t *testing.T) {
 	workspace := &models.Workspace{ID: 7, OwnerID: 99} // owned by user 99, not 1
 	group := &models.Group{ID: 3, WorkspaceID: workspace.ID, Name: "Marketing"}
 	groupStore := &mockGroupStore{
-		findByIDFn: func(ctx context.Context, id int64) (*models.Group, error) {
+		findByIDFn: func(id int64) (*models.Group, error) {
 			if id == group.ID {
 				return group, nil
 			}
@@ -458,7 +458,7 @@ func TestListGroupYouTubeVideos_EmptyGroupReturns200EmptyArray(t *testing.T) {
 	workspace := &models.Workspace{ID: 7, OwnerID: 1}
 	group := &models.Group{ID: 3, WorkspaceID: workspace.ID, Name: "Empty"}
 	groupStore := &mockGroupStore{
-		findByIDFn: func(ctx context.Context, id int64) (*models.Group, error) {
+		findByIDFn: func(id int64) (*models.Group, error) {
 			if id == group.ID {
 				return group, nil
 			}
@@ -543,7 +543,7 @@ func TestListGroupYouTubeVideos_AllAccountsFailReturns502(t *testing.T) {
 	acc2 := &models.PlatformAccount{ID: 12, UserID: 1, Platform: models.PlatformYouTube, PlatformUserID: "UC-B", Username: "chB"}
 	group := &models.Group{ID: 3, WorkspaceID: workspace.ID, Name: "All fail"}
 	groupStore := &mockGroupStore{
-		findByIDFn:            func(ctx context.Context, id int64) (*models.Group, error) { return group, nil },
+		findByIDFn:            func(id int64) (*models.Group, error) { return group, nil },
 		listAccountsInGroupFn: func(groupID int64) ([]int64, error) { return []int64{acc1.ID, acc2.ID}, nil },
 	}
 	userStore := &mockUserStore{
@@ -603,7 +603,7 @@ func TestListGroupYouTubeVideos_IncludeSubgroups(t *testing.T) {
 	subGroup := &models.Group{ID: 4, WorkspaceID: workspace.ID, Name: "Sub", ParentGroupID: &rootGroup.ID}
 
 	groupStore := &mockGroupStore{
-		findByIDFn: func(ctx context.Context, id int64) (*models.Group, error) {
+		findByIDFn: func(id int64) (*models.Group, error) {
 			if id == rootGroup.ID {
 				return rootGroup, nil
 			}

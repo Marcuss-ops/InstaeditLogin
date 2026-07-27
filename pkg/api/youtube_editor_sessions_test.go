@@ -65,6 +65,9 @@ type mockYouTubeVideoEditStore struct {
 	// the operator's intended visibility (or, on drift, the
 	// observed mismatch).
 	markPublishedWithActualPrivacyFn func(ctx context.Context, id string, actualPrivacy string, syncStatus string) (*models.YouTubeVideoEdit, error)
+	// saveDraftFn (P2 Dark Editor auto-save) is the CAS simulator
+	// for draft persistence. Default returns nil (success).
+	saveDraftFn func(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, draftUpdatedAt time.Time) error
 }
 
 func (m *mockYouTubeVideoEditStore) Create(ctx context.Context, edit *models.YouTubeVideoEdit) error {
@@ -221,6 +224,15 @@ func (m *mockYouTubeVideoEditStore) MarkPublishedWithActualPrivacy(ctx context.C
 	row.LastError = ""
 	row.UpdatedAt = time.Now().UTC()
 	return row, nil
+}
+
+// SaveDraft (P2 — Dark Editor auto-save) routes to saveDraftFn when
+// supplied; default returns nil (success).
+func (m *mockYouTubeVideoEditStore) SaveDraft(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, draftUpdatedAt time.Time) error {
+	if m.saveDraftFn != nil {
+		return m.saveDraftFn(ctx, id, title, description, tags, defaultLanguage, defaultAudioLanguage, translations, desiredPrivacy, draftUpdatedAt)
+	}
+	return nil
 }
 
 // mockYouTubeOAuthServiceForEditor implements the subset of
@@ -683,7 +695,7 @@ func TestPublishYouTubeEditorSession_ScheduledPublishing(t *testing.T) {
 	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
 
 	publishAt := time.Now().UTC().Add(24 * time.Hour)
-	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, gotPublishAt *time.Time, title, description string) (string, error) {
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, gotPublishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
 		if privacyStatus != "private" {
 			t.Errorf("expected privacyStatus private for scheduled publishing, got %s", privacyStatus)
 		}
@@ -1226,7 +1238,7 @@ func TestPublishYouTubeEditorSession_ScheduledFromSessionPrivacy(t *testing.T) {
 	storage := newMockStorageProvider()
 	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
 
-	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, gotPublishAt *time.Time, title, description string) (string, error) {
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, gotPublishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
 		publishCalled = true
 		capturedPrivacy = privacyStatus
 		return "https://www.youtube.com/watch?v=" + videoID, nil

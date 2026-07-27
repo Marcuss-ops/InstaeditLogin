@@ -281,23 +281,12 @@ if len(accountLookup) > groupYouTubeVideosMaxAccounts {
 	))
 	return
 }
-	if len(accountLookup) == 0 {
-		writeJSON(w, http.StatusOK, groupYouTubeVideosResponse{Videos: []groupYouTubeVideoEntry{}})
-		return
-	}
-	if len(accountLookup) > groupYouTubeVideosMaxAccounts {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(
-			"group resolves to %d accounts (max %d) — narrow the group or split subfolders",
-			len(accountLookup), groupYouTubeVideosMaxAccounts,
-		))
-		return
-	}
 
 	// 5. Fetch existing editor sessions in a single SQL query.
 	// The query is workspace-scoped + account-id-ANY so a hostile
 	// caller cannot bypass the gate (the handler already verified
 	// the workspace is theirs; this is defence-in-depth).
-	accountIDs := make([]int64, 0, len(accountLookup))
+	accountIDs = make([]int64, 0, len(accountLookup))
 	for aid := range accountLookup {
 		accountIDs = append(accountIDs, aid)
 	}
@@ -365,6 +354,7 @@ if len(accountLookup) > groupYouTubeVideosMaxAccounts {
 			chName = lookup.account.PlatformUserID
 		}
 		for _, v := range res.items {
+			unconfirmed := "unconfirmed"
 			entry := groupYouTubeVideoEntry{
 				YouTubeVideoID:    v.ID,
 				Title:             v.Title,
@@ -374,7 +364,7 @@ if len(accountLookup) > groupYouTubeVideosMaxAccounts {
 				PlatformAccountID: res.accountID,
 				ChannelName:       chName,
 				EditorStatus:      "ready",
-				YouTubeSyncStatus: "unconfirmed",
+				YouTubeSyncStatus: &unconfirmed,
 			}
 			if s, ok := sessionMap[sessionKey(res.accountID, v.ID)]; ok {
 				sid := s.ID

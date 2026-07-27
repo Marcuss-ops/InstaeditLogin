@@ -46,6 +46,17 @@ func (r *Router) Setup() http.Handler {
 		AuthMiddleware:           r.authMiddleware,
 		CSRFMiddleware:           r.csrfMiddleware,
 	}))
+	// Marketing strategy-call funnel (POST /api/v1/booking_events).
+	// Anonymous (no JWT, no CSRF); layered with per-IP rate-limit +
+	// same-origin gate + SQL-level idempotency. Mounted AFTER the
+	// Integrations module so two anonymous surfaces don't share
+	// middleware-ordering accidents. See BookingEventsModule for
+	// the full security model.
+	reg.Register(NewBookingEventsModule(BookingEventsModuleDeps{
+		Store:          r.bookingEventStore,
+		RateLimit:      BookingEventRateLimitIfConfigured(r.rateLimitSvc, r.trustedProxies),
+		AllowedOrigins: r.allowedOrigin,
+	}))
 
 	// Public / health probes are mounted before the auth module so the
 	// route table stays easy to scan top-down.
@@ -191,7 +202,7 @@ func (r *Router) Setup() http.Handler {
 
 	var publishEditorSessionByProjectHandler http.Handler = http.HandlerFunc(r.handlePublishYouTubeEditorSessionByProject)
 	if r.csrfMiddleware != nil {
-		publishEditorSessionByProjectHandler = r.csrfMiddleware(publishEditorSessionByProjectHandler.ServeHTTP)
+		publishEditorSessionByProjectHandler = r.csrfMiddleware(publishEditorSessionByProjectHandler)
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish", r.protected(publishEditorSessionByProjectHandler.ServeHTTP))
 
@@ -202,7 +213,7 @@ func (r *Router) Setup() http.Handler {
 	// falls through to a passthrough when not wired).
 	var saveDraftByProjectHandler http.Handler = http.HandlerFunc(r.handleSaveEditorSessionDraftByProject)
 	if r.csrfMiddleware != nil {
-		saveDraftByProjectHandler = r.csrfMiddleware(saveDraftByProjectHandler.ServeHTTP)
+		saveDraftByProjectHandler = r.csrfMiddleware(saveDraftByProjectHandler)
 	}
 	r.mux.Method(http.MethodPut, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/draft", r.protected(saveDraftByProjectHandler.ServeHTTP))
 
