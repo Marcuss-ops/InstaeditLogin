@@ -161,7 +161,15 @@ jobs:
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
           vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
           # Pinned Vercel CLI version. Upgrade intentionally after testing.
-          vercel-version: '39.2.0'
+          # Pin history:
+          #   - 39.2.0 — was paired with v25.1.1 action. Upgraded to 42.3.0
+          #     because npx vercel@39.2.0 deploy --prod exits with code 1
+          #     when run on ubuntu-latest with actions/checkout@v4 forced
+          #     onto Node 24 by GitHub (Node 20 deprecation on 2025-09-19).
+          #     42.3.0 ships its own Node 24 build target and matches the
+          #     action's own internal default CLI version.
+          #   - 42.3.0 — current.
+          vercel-version: '42.3.0'
           # `--prod` → promote the deployment to production alias.
           # Without it, the action would create an unscoped preview URL
           # which our DNS (instaedit.org → apex) does NOT point at.
