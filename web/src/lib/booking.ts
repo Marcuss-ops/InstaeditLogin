@@ -65,15 +65,18 @@ export type BookingIntent =
   | "premium"
   | "general";
 
-/** Intake answers. Each is `null` until the user selects a radio card;
- *  the Submit button is disabled until all three are non-null. */
+/** Intake answers. Goal + Ready are `null` until the user picks; budget
+ *  defaults to `"starter"` server-side because the question was
+ *  removed from the modal per operator direction ("senza chiedere
+ *  budget"). The Submit button is disabled until goal + ready are
+ *  non-null; the analytics payload always carries a budget value. */
 export type BookingGoal = "launch" | "scale" | "automated";
 export type BookingBudget = "starter" | "base" | "premium";
 export type BookingReady = "yes" | "no";
 
 export interface BookingQualification {
   goal: BookingGoal | null;
-  budget: BookingBudget | null;
+  budget: BookingBudget;
   ready: BookingReady | null;
 }
 

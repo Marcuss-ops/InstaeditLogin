@@ -692,37 +692,3 @@ function RadioCard({
   );
 }
 
-function BudgetRadio({
-  // Removed: budget question was hiding the modal from visitors per
-  // operator signal "senza chiedere budget — troppo confusa". The
-  // component keeps a no-op signature so any stale import doesn't
-  // make tsc red; delete outright in a follow-up cleanup commit if
-  // desired.
-  title,
-  selected,
-  onSelect,
-}: {
-  title: string;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      onClick={onSelect}
-      className={`flex items-center gap-3 p-3.5 rounded-xl border text-left transition-all ${
-        selected
-          ? "border-cyan-400/50 bg-cyan-500/10 ring-1 ring-cyan-400/30 shadow-[0_0_24px_-12px_rgba(34,211,238,0.45)]"
-          : "border-white/10 bg-white/[0.03] hover:border-white/25 hover:bg-white/[0.06]"
-      }`}
-    >
-      <span className="flex-1 min-w-0">
-        <span className="block text-sm font-semibold text-white">
-          {title}
-        </span>
-      </span>
-    </button>
-  );
-}
