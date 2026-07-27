@@ -593,7 +593,8 @@ type publishYouTubeEditorSessionRequest struct {
 	Translations         map[string]models.YouTubeTranslation `json:"translations,omitempty"`
 }
 
-// publishYouTubeEditorSessionResponse is returned on a successful publish.type publishYouTubeEditorSessionResponse struct {
+// publishYouTubeEditorSessionResponse is returned on a successful publish.
+type publishYouTubeEditorSessionResponse struct {
 	PublicURL         string     `json:"public_url"`
 	VideoID           string     `json:"video_id"`
 	PrivacyStatus     string     `json:"privacy_status"`
