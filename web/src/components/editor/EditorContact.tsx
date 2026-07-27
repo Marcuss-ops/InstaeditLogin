@@ -2,13 +2,10 @@ import { Link } from "react-router-dom";
 import {
   ArrowRight,
   Phone,
-  Send,
   Mail,
   Calendar,
 } from "lucide-react";
 import {
-  CONTACT_DISCORD_URL,
-  CONTACT_DISCORD_HANDLE,
   CONTACT_EMAIL,
   CONTACT_EMAIL_DISPLAY,
   CONTACT_PHONE_DISPLAY,
@@ -113,10 +110,10 @@ export function EditorContact() {
             </Link>
           </div>
 
-          {/* Alt-row: Email is the next-most-likely channel.
-              Discord is intentionally demoted to a tiny pill so the
-              funnel prioritizes booking — but the handle stays
-              discoverable for anyone who prefers chat. */}
+          {/* Alt-row: Email is the only non-call/booking channel — the
+              funnel is intentionally single-track now. Phone + booking
+              are the dominant actions above; email sits below for
+              long-form inquiries that don't fit a 30-minute call. */}
           <div className="mt-5 flex items-center justify-center gap-3 flex-wrap">
             <a
               href={`mailto:${CONTACT_EMAIL}`}
@@ -134,23 +131,6 @@ export function EditorContact() {
                 <span className="text-zinc-400">
                   {CONTACT_EMAIL_DISPLAY}
                 </span>
-              </span>
-            </a>
-            <a
-              href={CONTACT_DISCORD_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full text-[12px] font-medium text-zinc-500 hover:text-zinc-200 transition-colors"
-              aria-label={`Open Discord chat with ${CONTACT_DISCORD_HANDLE}`}
-            >
-              <Send
-                className="w-3.5 h-3.5 text-sky-300/80"
-                aria-hidden="true"
-                focusable="false"
-              />
-              <span>
-                or chat{" "}
-                <span className="text-zinc-400">Discord {CONTACT_DISCORD_HANDLE}</span>
               </span>
             </a>
           </div>

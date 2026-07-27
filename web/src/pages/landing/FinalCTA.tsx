@@ -1,13 +1,13 @@
-import { ArrowRight, Calendar, Send } from "lucide-react";
+import { ArrowRight, Calendar } from "lucide-react";
 import { useBooking } from "../../components/booking/BookingProvider";
-import { CONTACT_DISCORD_HANDLE, CONTACT_DISCORD_URL } from "../../components/editor/shared";
 
 /* ----------------------------------------------------------------------------
  * Final CTA — scarcity + booking funnel.
  *
- * Primary CTA opens the booking modal. Discord is preserved as a
- * visible alt-channel pill so visitors who prefer chat can still
- * reach us — but the funnel goes through the strategy-call flow.
+ * Primary CTA opens the booking modal. The funnel is single-track:
+ * visitors go through the 3-question qualification flow inside the
+ * modal, then into the live scheduler. Everything else (email, phone,
+ * WhatsApp) lives on the editor contact card, NOT on the marketing page.
  * -------------------------------------------------------------------------- */
 
 export function FinalCTA() {
@@ -41,20 +41,6 @@ export function FinalCTA() {
               Schedule My Free Call
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </button>
-            <a
-              href={CONTACT_DISCORD_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="group inline-flex items-center gap-2 px-6 py-3.5 rounded-xl surface-glass border border-white/15 text-sm font-medium text-zinc-300 hover:border-white/30 hover:text-white transition-all"
-            >
-              <Send className="w-3.5 h-3.5 text-sky-300" />
-              <span>
-                Prefer to chat first?{" "}
-                <span className="text-zinc-400 group-hover:text-zinc-200 transition-colors">
-                  Discord {CONTACT_DISCORD_HANDLE}
-                </span>
-              </span>
-            </a>
           </div>
         </div>
       </div>

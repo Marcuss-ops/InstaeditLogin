@@ -134,8 +134,6 @@ export const LONGFORM_DEMOS: ReadonlyArray<{ id: string; title: string }> = [
 
 export const CONTACT_PHONE_DISPLAY = "+39 327 464 9129";
 export const CONTACT_PHONE_TEL = "+393274649129";
-export const CONTACT_DISCORD_URL = "https://discord.com/users/1201477873719050332";
-export const CONTACT_DISCORD_HANDLE = "@instaedit";
 export const CONTACT_EMAIL = "futurimilionariposta@gmail.com";
 export const CONTACT_EMAIL_DISPLAY = "futurimilionariposta@…";
 

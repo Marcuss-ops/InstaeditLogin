@@ -52,9 +52,13 @@ export type { BookingIntent };
  * inside the Router (Nav, Hero, FinalCTA on /, the Mentoring page,
  * EditorContact inside InternalLayout, and the OAuth Login page).
  *
- * The Discord handle stays exported for the alt-channel link inside
- * the modal ("Prefer to chat first?") — Discord is demoted from the
- * primary CTA everywhere in the funnel; it lives on as a backup.
+ * The funnel is strictly single-track: every CTA in the app — Nav,
+ * Hero, FinalCTA on /, the Mentoring page, EditorContact inside the
+ * authenticated shell, and the OAuth Login page — opens the same
+ * modal. Conversion is concentrated on the booking CTA so leads can't
+ * spike a chat channel with low-intent traffic; the modal still
+ * carries the three qualification fields so the qualify→schedule
+ * handoff stays warm.
  * -------------------------------------------------------------------------- */
 
 type BookingCtx = {

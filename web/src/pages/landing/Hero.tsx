@@ -6,9 +6,8 @@ import { useBooking } from "../../components/booking/BookingProvider";
  * Hero — gain-focused: immediate income, easy, guided.
  *
  * Primary CTA is the booking modal (Calendly-style scheduling flow
- * with a 3-question qualification form). Discord is intentionally
- * not exposed here — the funnel moves visitors through qualification
- * before any human contact.
+ * with a 3-question qualification form). The funnel moves visitors
+ * through qualification before any human contact.
  * -------------------------------------------------------------------------- */
 
 export function Hero() {

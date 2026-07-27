@@ -7,9 +7,9 @@ import { useBooking } from "../booking/BookingProvider";
  * Sticky Nav with mobile hamburger + focus trap.
  *
  * CTA strategy: the primary button opens the global booking modal
- * (Calendly-style strategy-call flow) instead of linking directly to
- * Discord. See `BookingProvider` for the qualification form that
- * runs before the scheduler opens.
+ * (Calendly-style strategy-call flow) is the only secondary CTA on
+ * the marketing surface. See `BookingProvider` for the qualification
+ * form that runs before the scheduler opens.
  * -------------------------------------------------------------------------- */
 
 export function Nav() {
