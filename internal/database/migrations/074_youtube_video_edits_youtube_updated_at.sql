@@ -1,0 +1,77 @@
+-- Migration 074 — YouTube drift-reconciler timestamp + sweep index
+--
+-- What problem this solves
+-- =========================
+-- The P0#7 publish orchestrator stamps actual_privacy +
+-- youtube_sync_status via MarkPublishedWithActualPrivacy CAS at the
+-- moment a publish call returns from YouTube's videos.update. The
+-- operator can ALSO edit the video in YouTube Studio after our
+-- publish — at which point our actual_privacy is stale and the SPA
+-- card grid shows the wrong colour until the operator triggers
+-- another publish or refreshes manually.
+--
+-- A periodic worker (`internal/worker/youtube_drift_reconciler.go`,
+-- P2 followup commit) re-reads the live YouTube state and stamps
+-- `actual_privacy`, `youtube_updated_at`, and `youtube_sync_status`
+-- on rows in status IN ('editing','ready','publishing','published').
+-- This migration supplies the column the worker writes + the partial
+-- index the SQL sweep uses to keep stale rows first in the priority
+-- queue.
+--
+-- Why a column named `youtube_updated_at` instead of re-using
+-- `updated_at`:
+--   `updated_at` is the row's "InstaeditLogin last touched" timestamp
+--   (it bumps on SaveDraft, MarkPublishing, the reconciler's own
+--   stamp). The drift_reconciler needs a separate column meaning
+--   "the last time YouTube confirmed the published state" so the
+--   SPA can render "Last verified by YouTube Studio hh:mm" without
+--   conflating it with operator edits.
+--
+-- Why ASC NULLS FIRST in the partial index:
+--   The reconciler sweep is `WHERE status IN (...)
+--   ORDER BY youtube_updated_at ASC NULLS FIRST LIMIT 50`. NULL means
+--   "we've never read YouTube for this row" — those are the highest
+--   priority (a freshly-minted editor session with no read history
+--   yet). A partial index on the predicate ` youtube_updated_at IS
+--   NOT NULL OR status IN ('editing','ready','publishing','published')`
+--   is not feasible (status is checked separately). Instead we put
+--   the index on the column directly; the planner picks it up for
+--   the non-NULL tail. Newly-NULL rows (the first sweep's
+--   re-encounters) pay an extra cost but only on the FIRST tick.
+--
+-- Migration safety
+-- =================
+-- - The column is TIMESTAMPTZ (nullable) so existing rows keep their
+--   pre-migration NULL semantics — "we've never read YouTube for
+--   this row". The P0#7 publish orchestrator's existing stamp on
+--   status='publishing'->'published' does NOT write this column;
+--   it starts as NULL and the FIRST reconciler tick populates it.
+-- - The partial index is purely additive. Drop index is non-destructive.
+-- - Out-of-order migration safety: this column is read by the SPA at
+--   the yTVideo card grid AND the GET-by-project endpoint. Until the
+--   reconciler ship lands in the same deploy, the column stays NULL
+--   on most rows (publish orchestrator doesn't write it) — the
+--   SPA must render NULL as "no verification yet" (already the
+--   behaviour for missing fields with `omitempty`).
+--
+-- Companion changes
+-- ==================
+-- - models/youtube_video_edit.go adds `YouTubeUpdatedAt *time.Time`.
+-- - repository/youtube_video_edit_repo.go extends
+--   `youtubeVideoEditSelectColumns` + every Scan call + adds two
+--   new methods (`ListForDriftReconciliation`,
+--   `UpdateYouTubeSyncState`). The selectColumns extension also
+--   back-fills the `actual_privacy` + `youtube_sync_status` columns
+--   in `ListByWorkspace.Scan` which had silently drifted out of
+--   sync in the pre-072 commit.
+-- - worker/youtube_drift_reconciler.go ticks every
+--   DRIFT_RECON_INTERVAL_SECONDS (default 600s).
+-- - bootstrap/workers.go registers it as worker #10 (NON-critical —
+--   a reconciler crash does not stop the publish pipeline).
+
+ALTER TABLE youtube_video_edits
+  ADD COLUMN IF NOT EXISTS youtube_updated_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_youtube_video_edits_drift
+  ON youtube_video_edits (youtube_updated_at ASC NULLS FIRST)
+  WHERE status IN ('editing', 'failed', 'publishing', 'published');
