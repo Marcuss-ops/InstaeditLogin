@@ -81,7 +81,7 @@ export type SubmitState =
 export type BatchEntry = {
   job_id: string;
   name: string;
-  scheduled_at: string;
+  scheduled_at?: string | null;
   relative_hours_from_now: number;
   video_id?: string;
   status?: string;

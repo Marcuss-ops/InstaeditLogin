@@ -36,7 +36,7 @@ export function UploadsTable({
               {e.name}
             </span>
             <time className="text-[11px] text-[#9aa0aa] tabular-nums whitespace-nowrap">
-              {new Date(e.scheduled_at).toLocaleString()}
+              {e.scheduled_at ? new Date(e.scheduled_at).toLocaleString() : "—"}
             </time>
           </li>
         ))}
