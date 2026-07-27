@@ -47,10 +47,10 @@ import (
 // returning to the BFF handler. WorkspaceID is included so the BFF
 // can verify ownership (defense-in-depth on top of the signed JWT).
 type jobResponse struct {
-	ID           string    `json:"id"`
-	WorkspaceID  int64     `json:"workspace_id"`
+	ID           string    `json:"id" validate:"required,min=1"`
+	WorkspaceID  int64     `json:"workspace_id" validate:"required,gte=1"`
 	ProjectID    string    `json:"project_id,omitempty"`
-	RenderStatus string    `json:"render_status"`
+	RenderStatus string    `json:"render_status" validate:"required,min=1"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -67,9 +67,9 @@ type jobDetailResponse struct {
 // delivery associated with a job. Velox retains the relationship with
 // social_delivery_id; InstaEdit retains the social state.
 type deliveryResponse struct {
-	ExternalDestinationID string `json:"external_destination_id"`
-	SocialDeliveryID      string `json:"social_delivery_id"`
-	Status                string `json:"status"`
+	ExternalDestinationID string `json:"external_destination_id" validate:"required,min=1"`
+	SocialDeliveryID      string `json:"social_delivery_id" validate:"omitempty,min=1"`
+	Status                string `json:"status" validate:"required,min=1"`
 	PlatformMediaID       string `json:"platform_media_id,omitempty"`
 	PlatformURL           string `json:"platform_url,omitempty"`
 }
@@ -78,9 +78,9 @@ type deliveryResponse struct {
 // worker. WorkspaceID scopes visibility (a worker belongs to the
 // workspace that provisioned it).
 type workerResponse struct {
-	ID          string `json:"id"`
-	WorkspaceID int64  `json:"workspace_id"`
-	Status      string `json:"status"`
+	ID          string `json:"id" validate:"required,min=1"`
+	WorkspaceID int64  `json:"workspace_id" validate:"required,gte=1"`
+	Status      string `json:"status" validate:"required,min=1"`
 	CPU         int    `json:"cpu,omitempty"`
 	RAMMB       int    `json:"ram_mb,omitempty"`
 	GPU         string `json:"gpu,omitempty"`
@@ -91,12 +91,12 @@ type workerResponse struct {
 // artifact. The download_url is included so the BFF could, if needed,
 // proxy a time-limited fetch; WorkspaceID scopes ownership.
 type assetResponse struct {
-	ID          string `json:"id"`
-	WorkspaceID int64  `json:"workspace_id"`
-	SHA256      string `json:"sha256"`
-	SizeBytes   int64  `json:"size_bytes"`
-	MimeType    string `json:"mime_type"`
-	DownloadURL string `json:"download_url,omitempty"`
+	ID          string `json:"id" validate:"required,min=1"`
+	WorkspaceID int64  `json:"workspace_id" validate:"required,gte=1"`
+	SHA256      string `json:"sha256" validate:"required,min=64,max=64"`
+	SizeBytes   int64  `json:"size_bytes" validate:"required,gte=0"`
+	MimeType    string `json:"mime_type" validate:"required,min=1"`
+	DownloadURL string `json:"download_url,omitempty" validate:"omitempty,url"`
 }
 
 // listJobsResponse wraps the Velox list endpoint envelope.
@@ -119,20 +119,20 @@ type listDeliveriesResponse struct {
 // JWT claims and as explicit body fields so Velox can log/audit the
 // request without needing to parse the JWT.
 type createJobRequest struct {
-	ProjectID    string          `json:"project_id"`
-	WorkspaceID  int64           `json:"workspace_id"`
-	UserID       int64           `json:"user_id"`
-	RenderSpec   json.RawMessage `json:"render_spec"`
-	DeliveryPlan deliveryPlanReq `json:"delivery_plan"`
+	ProjectID    string          `json:"project_id" validate:"required,min=1"`
+	WorkspaceID  int64           `json:"workspace_id" validate:"required,gte=1"`
+	UserID       int64           `json:"user_id" validate:"required,gte=1"`
+	RenderSpec   json.RawMessage `json:"render_spec" validate:"required"`
+	DeliveryPlan deliveryPlanReq `json:"delivery_plan" validate:"required"`
 }
 
 // deliveryPlanReq mirrors veloxapi.DeliveryPlan for the outbound body.
 type deliveryPlanReq struct {
-	Destinations []deliveryDestinationReq `json:"destinations"`
+	Destinations []deliveryDestinationReq `json:"destinations" validate:"required,min=1"`
 }
 
 // deliveryDestinationReq mirrors veloxapi.DeliveryDestination.
 type deliveryDestinationReq struct {
-	ExternalDestinationID string          `json:"external_destination_id"`
+	ExternalDestinationID string          `json:"external_destination_id" validate:"required,min=1"`
 	Metadata              json.RawMessage `json:"metadata"`
 }
