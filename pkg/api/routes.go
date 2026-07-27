@@ -181,6 +181,20 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPatch, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}", r.protected(updateEditorSessionHandler.ServeHTTP))
 
+	// P0#5: project-centric entry points for the Dark Editor. The
+	// Dark Editor holds only velox_project_id in its URL; it must be
+	// able to (a) fetch the session row + (b) trigger a publish
+	// without first POSTing /editor-sessions to discover the
+	// session_id.
+	var getEditorSessionByProjectHandler http.Handler = http.HandlerFunc(r.handleGetYouTubeEditorSessionByProject)
+	r.mux.Method(http.MethodGet, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}", r.protected(getEditorSessionByProjectHandler.ServeHTTP))
+
+	var publishEditorSessionByProjectHandler http.Handler = http.HandlerFunc(r.handlePublishYouTubeEditorSessionByProject)
+	if r.csrfMiddleware != nil {
+		publishEditorSessionByProjectHandler = r.csrfMiddleware(publishEditorSessionByProjectHandler.ServeHTTP)
+	}
+	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish", r.protected(publishEditorSessionByProjectHandler.ServeHTTP))
+
 	var publishEditorSessionHandler http.Handler = http.HandlerFunc(r.handlePublishYouTubeEditorSession)
 	if r.csrfMiddleware != nil {
 		publishEditorSessionHandler = r.csrfMiddleware(publishEditorSessionHandler)
