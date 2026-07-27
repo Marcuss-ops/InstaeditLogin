@@ -455,7 +455,7 @@ def test_10_disabled_provider_commented_is_ok() -> None:
 
 
 def test_11_missing_required_key_rejected() -> None:
-    """If one of the 27 required keys is missing or empty, reject (rc=3)."""
+    """If one of the 28 required keys is missing or empty, reject (rc=3)."""
     lines = valid_env().split("\n")
     # Drop THREADS_REDIRECT_URI
     lines = [l for l in lines if not l.startswith("THREADS_REDIRECT_URI=")]
