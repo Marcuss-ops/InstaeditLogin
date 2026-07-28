@@ -170,6 +170,16 @@ func TestPublishYouTubeEditorSessionByProject_200_ResponseContainsStatus(t *test
 	if resp.YouTubeSyncStatus != "confirmed" {
 		t.Fatalf("expected youtube_sync_status=confirmed, got %q", resp.YouTubeSyncStatus)
 	}
+	// Raw-wire assertion (P0 contract lock): catches json-tag drift on
+	// the publishYouTubeEditorSessionResponse struct. If someone renames
+	// `json:"status"` to a different tag the struct decode above would
+	// still report the right value (because the test round-trips the
+	// body), but the wire payload would not contain the literal
+	// `"status":"published"` key, breaking the dark editor's
+	// `publishResult.status` consumer.
+	if !strings.Contains(rec.Body.String(), `"status":"published"`) {
+		t.Fatalf("expected raw wire body to contain literal `\"status\":\"published\"`, got %s", rec.Body.String())
+	}
 }
 
 // TestGetYouTubeEditorSessionByProject_200_HappyPath verifies the

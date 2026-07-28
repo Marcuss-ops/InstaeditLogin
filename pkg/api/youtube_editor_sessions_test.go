@@ -479,6 +479,147 @@ func TestPublishYouTubeEditorSession_HappyPath(t *testing.T) {
 	}
 }
 
+// TestPublishYouTubeEditorSession_HappyPathResponseContainsStatus is the
+// P0 contract lock for the by-id publish pathway
+// (POST /api/v1/youtube/editor-sessions/{id}/publish). The dark editor's
+// publish handler reads publishResult.status and broadcasts it on the
+// BroadcastChannel -- a missing or wrong JSON key there breaks the live
+// card update for every session published via this endpoint. The
+// by-project pathway has its own equivalent test in
+// youtube_editor_sessions_by_project_test.go; this test closes the
+// by-id gap so a future refactor that bypasses the shared
+// executePublishYouTubeEditorSession helper (which already populates
+// Status) cannot silently drop the field on this route.
+//
+// Two assertion layers:
+//  1. Decoded struct: publishYouTubeEditorSessionResponse.Status must
+//     equal "published" -- catches handler-vs-DTO drift (e.g. writing
+//     the response literal without the Status: edit.Status line).
+//  2. Raw wire body: the response bytes must contain the literal
+//     substring `"status":"published"` -- catches JSON-tag drift on
+//     the struct (e.g. someone renaming `json:"status"` would still
+//     leave the decoded struct populated but the wire key would no
+//     longer be `"status"`).
+func TestPublishYouTubeEditorSession_HappyPathResponseContainsStatus(t *testing.T) {
+	account := &models.PlatformAccount{
+		ID:             42,
+		UserID:         1,
+		Platform:       models.PlatformYouTube,
+		PlatformUserID: "UC123",
+		Username:       "testchannel",
+		Status:         models.AccountStatusActive,
+	}
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if id == account.ID {
+				return account, nil
+			}
+			return nil, nil
+		},
+	}
+	workspaceStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			if id == workspace.ID {
+				return workspace, nil
+			}
+			return nil, nil
+		},
+	}
+
+	mediaStore := newMockMediaStore()
+	mediaStore.assets["asset-uuid-123"] = &models.MediaAsset{
+		ID:          "asset-uuid-123",
+		UserID:      1,
+		UploadKey:   "uploads/1/thumb.jpg",
+		ContentType: "image/jpeg",
+		SizeBytes:   1024,
+		Status:      models.MediaAssetStatusReady,
+	}
+
+	editStore := &mockYouTubeVideoEditStore{
+		findFn: func(ctx context.Context, id string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:                "session-123",
+				WorkspaceID:       workspace.ID,
+				PlatformAccountID: account.ID,
+				YouTubeVideoID:    "ytvideo123",
+				VeloxProjectID:    "ve-project-123",
+				ThumbnailMediaID:  strPtr("asset-uuid-123"),
+				DesiredPrivacy:    "public",
+				Status:            "editing",
+			}, nil
+		},
+	}
+
+	youTubeSvc := &mockYouTubeOAuthServiceForEditor{}
+	thumbnailBytes := []byte("fake-thumbnail-bytes")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(thumbnailBytes)
+	}))
+	defer server.Close()
+
+	storage := newMockStorageProvider()
+	storage.assetURLFn = func(key string) string { return server.URL + "/" + key }
+
+	youTubeSvc.publishThumbnailFn = func(ctx context.Context, accessToken, videoID string, data []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
+		return "https://www.youtube.com/watch?v=" + videoID, nil
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		store,
+		auth.NewManager(testJWTSecret, 24),
+		"https://app.instaedit.org",
+		nil,
+		WithWorkspaceStore(workspaceStore),
+		WithYouTubeVideoEditStore(editStore),
+		WithMediaStore(mediaStore),
+		WithStorageProvider(storage),
+		WithYouTubeService(youTubeSvc),
+		WithCredentialVault(&mockCredentialVault{
+			getFn: func(ctx context.Context, id int64, tt string) (*models.OAuthToken, error) {
+				if id == account.ID {
+					return &models.OAuthToken{AccessToken: "valid-token"}, nil
+				}
+				return nil, errors.New("token not found")
+			},
+		}),
+	)
+
+	body := bytes.NewReader([]byte(`{"privacy_status":"public"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/session-123/publish", body)
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	rec := httptest.NewRecorder()
+	r.Setup().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	// Layer 1: decoded struct catches handler-vs-DTO drift.
+	var resp publishYouTubeEditorSessionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != "published" {
+		t.Fatalf("expected response.status=published, got %q (full resp: %+v)", resp.Status, resp)
+	}
+	if resp.VideoID != "ytvideo123" {
+		t.Fatalf("expected response.video_id=ytvideo123, got %q", resp.VideoID)
+	}
+	if resp.PrivacyStatus != "public" {
+		t.Fatalf("expected response.privacy_status=public, got %q", resp.PrivacyStatus)
+	}
+
+	// Layer 2: raw-wire substring catches JSON-tag drift on the struct.
+	if !strings.Contains(rec.Body.String(), `"status":"published"`) {
+		t.Fatalf("expected raw wire body to contain literal `\"status\":\"published\"`, got %s", rec.Body.String())
+	}
+}
+
 func TestPublishYouTubeEditorSession_TooLongTitle(t *testing.T) {
 	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
 	editStore := &mockYouTubeVideoEditStore{
