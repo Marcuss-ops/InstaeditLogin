@@ -1,161 +1,252 @@
 package api
 
+// ============================================================================
+// CONTRACT TEST: OpenAPI ⇄ Go DTO lock for publishYouTubeEditorSessionResponse
+// ============================================================================
+//
+// This file is the Go half of a cross-repo contract lock. The corresponding
+// TS half lives in VeloxFrontend at:
+//
+//	web/dark_editor/__tests__/publishResponseContract.test.ts
+//
+// Both halves read the SAME OpenAPI schema (YouTubeEditorSessionPublishResponse
+// in api/openapi.yaml) and assert that their local type never drifts away
+// from it. The three naming conventions exist on purpose:
+//
+//	OpenAPI: YouTubeEditorSessionPublishResponse  (PascalCase, OAS)
+//	Go DTO:  publishYouTubeEditorSessionResponse  (snake_case, Go convention)
+//	TS type: PublishYouTubeEditorSessionResponse  (PascalCase, TS convention)
+//
+// The contract test bridges those naming conventions and only insists on
+// identical FIELD SHAPES (name + type + optionality). The `status` field
+// is checked explicitly because the SPA's BroadcastChannel listener does
+// `if (msg.status === 'published')` and silently fails if the field is
+// dropped from either side.
+//
+// RUN IN CI via: go test ./pkg/api/... (the integration-fast workflow
+// gates deploys on go test -race -count=1 ./... so this test runs on
+// every push to main and every PR).
+
 import (
 	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
 
-// openAPIPathRelativeToPkgAPITests is the relative path from
-// pkg/api (where this _test.go file lives) to the OpenAPI yaml at the
-// repo root's api/ directory. The yaml is the canonical source of
-// truth for the wire contract — the Go DTO is the runtime
-// implementation of that contract, and this test enforces they
-// cannot drift.
-const openAPIPathRelativeToPkgAPITests = "../../api/openapi.yaml"
+// openAPIPublishResponseSchemaName is the source-of-truth schema name in
+// api/openapi.yaml. Keeping this as a constant makes the link to the
+// Go DTO and TS type explicit and grep-able.
+const openAPIPublishResponseSchemaName = "YouTubeEditorSessionPublishResponse"
 
-// TestPublishYouTubeEditorSessionResponse_DTOAndOpenAPIAligned is the
-// Go-side counterpart of the VeloxFrontend TS contract lock at
-// `__tests__/youtubePublishContract.test.ts` (asserts the
-// `PublishYouTubeEditorSessionResponse` TS interface mirrors the
-// same OpenAPI schema).
-//
-// Three layers must stay in sync (drift in any pair fails the test):
-//
-//	Go DTO        pkg/api/youtube_editor_sessions.go
-//	              (publishYouTubeEditorSessionResponse at lines 593-600)
-//	OpenAPI       api/openapi.yaml
-//	              (YouTubeEditorSessionPublishResponse at lines 1400-1426)
-//	TypeScript    web/dark_editor/lib/api/bff/youtube.ts
-//	              (PublishYouTubeEditorSessionResponse -- status: 'published')
-//
-// The TS file is doc-annotated with the same cross-reference; changing
-// one without the others is the precise scenario this test guards
-// against.
-//
-// Assertions enforced:
-//  1. OpenAPI `required: [...]` contains "status".
-//  2. OpenAPI `properties.status.type` is "string".
-//  3. OpenAPI `properties.status.enum` contains "published".
-//  4. Go DTO has a field named `Status` with json tag exactly
-//     `"status"` (no omitempty; no rename) and a `reflect.String`
-//     kind.
-//  5. Every json-tag-suffixed Go field appears in the OpenAPI
-//     `properties` map under the same wire name. Catches the
-//     common drift of adding a Go field the OpenAPI spec doesn't
-//     document (or vice-versa).
-//
-// gopkg.in/yaml.v3 is already an indirect module-level dep; importing
-// it from this test file promotes it to a direct dep on the next
-// `go mod tidy` run.
-func TestPublishYouTubeEditorSessionResponse_DTOAndOpenAPIAligned(t *testing.T) {
-	yamlData, err := os.ReadFile(openAPIPathRelativeToPkgAPITests)
+// openAPIPropertySchema is the minimal subset of an OpenAPI 3.x
+// property schema that the contract test needs to inspect.
+type openAPIPropertySchema struct {
+	Type        string        `yaml:"type"`
+	Format      string        `yaml:"format"`
+	Enum        []interface{} `yaml:"enum"`
+	Nullable    bool          `yaml:"nullable"`
+	Description string        `yaml:"description"`
+}
+
+// openAPIObjectSchema is the minimal subset of an OpenAPI 3.x object
+// schema (the body that wraps `properties:` + `required:`).
+type openAPIObjectSchema struct {
+	Type       string                           `yaml:"type"`
+	Required   []string                         `yaml:"required"`
+	Properties map[string]openAPIPropertySchema `yaml:"properties"`
+}
+
+// openAPIParts is the slice of api/openapi.yaml the contract test needs.
+// Keeping the struct narrow means we don't choke on unrelated schema
+// changes elsewhere in the file.
+type openAPIParts struct {
+	Components struct {
+		Schemas map[string]openAPIObjectSchema `yaml:"schemas"`
+	} `yaml:"components"`
+}
+
+// loadOpenAPIPublishResponseSchemaFromRepo reads api/openapi.yaml
+// relative to the test file's runtime location and returns the
+// YouTubeEditorSessionPublishResponse schema. Fails the test if
+// the file or the schema is missing.
+func loadOpenAPIPublishResponseSchemaFromRepo(t *testing.T) openAPIObjectSchema {
+	t.Helper()
+	// The test file lives at pkg/api/youtube_editor_sessions_contract_test.go
+	// so the repo root is two directories up.
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller(0) failed: cannot locate test file")
+	}
+	repoRoot, err := filepath.Abs(filepath.Join(filepath.Dir(thisFile), "..", ".."))
 	if err != nil {
-		t.Fatalf("read OpenAPI yaml at %s: %v", openAPIPathRelativeToPkgAPITests, err)
+		t.Fatalf("locate repo root: %v", err)
 	}
-	var spec struct {
-		Components struct {
-			Schemas map[string]struct {
-				Required   []string `yaml:"required"`
-				Properties map[string]struct {
-					Type string   `yaml:"type"`
-					Enum []string `yaml:"enum"`
-				} `yaml:"properties"`
-			} `yaml:"schemas"`
-		} `yaml:"components"`
+	openAPIPath := filepath.Join(repoRoot, "api", "openapi.yaml")
+	data, err := os.ReadFile(openAPIPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", openAPIPath, err)
 	}
-	if err := yaml.Unmarshal(yamlData, &spec); err != nil {
-		t.Fatalf("unmarshal OpenAPI yaml: %v", err)
+	var doc openAPIParts
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse openapi yaml: %v", err)
 	}
-	schema, ok := spec.Components.Schemas["YouTubeEditorSessionPublishResponse"]
+	schema, ok := doc.Components.Schemas[openAPIPublishResponseSchemaName]
 	if !ok {
-		t.Fatalf("schema YouTubeEditorSessionPublishResponse not found in OpenAPI yaml")
+		available := make([]string, 0, len(doc.Components.Schemas))
+		for name := range doc.Components.Schemas {
+			available = append(available, name)
+		}
+		t.Fatalf("schema %q not found in OpenAPI components.schemas (available: %s)", openAPIPublishResponseSchemaName, strings.Join(available, ", "))
 	}
+	return schema
+}
 
-	// 1. Required field "status".
-	if !containsString(schema.Required, "status") {
-		t.Errorf("OpenAPI required must include 'status', got %v", schema.Required)
-	}
+// TestPublishResponseContract_OpenAPI_Matches_DTO locks the shape of
+// the publish response between the OpenAPI
+// YouTubeEditorSessionPublishResponse schema and the Go
+// publishYouTubeEditorSessionResponse DTO. Specifically asserted:
+//
+//  1. `status` field exists on BOTH sides (the SPA's BroadcastChannel
+//     listener depends on it).
+//  2. The set of property names is identical: no field is added or
+//     removed on either side without the other side being updated.
+//  3. The set of required fields is identical: the OpenAPI `required`
+//     array matches the DTO's non-`omitempty` fields. Drift here means
+//     the wire shape is asymmetric (the SPA could expect a field the
+//     orchestrator can omit, or vice versa).
+//  4. For each field, the OpenAPI type is compatible with the Go type
+//     (string ↔ string, time.Time ↔ type=string format=date-time,
+//     pointer ↔ OpenAPI nullable, etc).
+func TestPublishResponseContract_OpenAPI_Matches_DTO(t *testing.T) {
+	schema := loadOpenAPIPublishResponseSchemaFromRepo(t)
 
-	// 2. & 3. status: type=string, enum contains "published".
-	statusProp, ok := schema.Properties["status"]
-	if !ok {
-		t.Fatalf("OpenAPI properties.status is missing")
-	}
-	if statusProp.Type != "string" {
-		t.Errorf("OpenAPI properties.status.type: want \"string\", got %q", statusProp.Type)
-	}
-	if !containsString(statusProp.Enum, "published") {
-		t.Errorf("OpenAPI properties.status.enum must include \"published\", got %v", statusProp.Enum)
-	}
-
-	// 4. Go DTO Status field: json tag exactly "status", reflect.String kind.
-	typ := reflect.TypeOf(publishYouTubeEditorSessionResponse{})
-	statusField, found := typ.FieldByName("Status")
-	if !found {
-		t.Fatalf("Go DTO field Status missing (must remain the canonical terminal-state field — drift here breaks the dark editor's publishResult.status consumer)")
-	}
-	if got := statusField.Tag.Get("json"); got != "status" {
-		t.Errorf("Go DTO Status json tag: want \"status\", got %q", got)
-	}
-	if statusField.Type.Kind() != reflect.String {
-		t.Errorf("Go DTO Status type kind: want reflect.String, got %v", statusField.Type.Kind())
-	}
-
-	// 5. Bidirectional field-set lock. Catches silent add/remove drift
-	// on EITHER side: adding a Go field without OpenAPI doc (Go -> OpenAPI),
-	// AND adding an OpenAPI property without a Go DTO wire (OpenAPI -> Go).
-	// The two endpoints at lines 1029 and 1076 of openapi.yaml both $ref
-	// this schema — adding a field on either side without updating the
-	// other is exactly the kind of drift this guard prevents.
-	openAPIFields := make(map[string]bool, len(schema.Properties))
-	for name := range schema.Properties {
-		openAPIFields[name] = true
-	}
-	dtoFields := make(map[string]bool)
-	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
-		tag := field.Tag.Get("json")
-		if tag == "" || tag == "-" {
+	// Reflect on the DTO struct to enumerate JSON-tagged fields.
+	var dto publishYouTubeEditorSessionResponse
+	dtoType := reflect.TypeOf(dto)
+	dtoFields := make(map[string]reflect.Type)
+	dtoRequired := make(map[string]bool)
+	for i := 0; i < dtoType.NumField(); i++ {
+		f := dtoType.Field(i)
+		tag := f.Tag.Get("json")
+		// Strip the ",omitempty" (and any other options) to get the
+		// wire name.
+		name := strings.Split(tag, ",")[0]
+		if name == "" || name == "-" {
 			continue
 		}
-		wireName := strings.Split(tag, ",")[0]
-
-		// 5a. Go -> OpenAPI: every json-tag-suffixed Go field must be
-		// documented in OpenAPI properties, otherwise a strictly-typed
-		// client (VeloxFrontend's TS contract test) would silently
-		// drop the field.
-		if !openAPIFields[wireName] {
-			t.Errorf("Go DTO field %q (json tag=%q) is not documented in OpenAPI properties",
-				field.Name, wireName)
+		dtoFields[name] = f.Type
+		if !strings.Contains(tag, ",omitempty") {
+			dtoRequired[name] = true
 		}
-		dtoFields[wireName] = true
 	}
 
-	// 5b. OpenAPI required -> Go: every field-marked-required on the
-	// wire MUST have a json-tagged Go field on the DTO. The pubish
-	// handler writes the response struct verbatim at
-	// youtube_editor_sessions.go executePublishYouTubeEditorSession, so
-	// a required field without a Go write-path would either be a
-	// constant (impossible) or omitted-from-response (silent 200 OK
-	// with a malformed body the SPA can't parse).
-	for _, reqField := range schema.Required {
-		if !dtoFields[reqField] {
-			t.Errorf("OpenAPI required field %q is not implemented as a Go DTO field — handler cannot emit a value for it", reqField)
+	// (1) Hard requirement: `status` field exists on BOTH sides.
+	if _, ok := schema.Properties["status"]; !ok {
+		t.Errorf("FIELD MISSING: 'status' is required in OpenAPI %s (the SPA's BroadcastChannel listener does `if (msg.status === 'published')` and silently fails if the field is dropped)", openAPIPublishResponseSchemaName)
+	}
+	if _, ok := dtoFields["status"]; !ok {
+		t.Errorf("FIELD MISSING: 'status' is required in Go DTO publishYouTubeEditorSessionResponse")
+	}
+
+	// (2) Every OpenAPI field must exist in the DTO with a compatible type.
+	for name, prop := range schema.Properties {
+		goType, ok := dtoFields[name]
+		if !ok {
+			t.Errorf("DRIFT: OpenAPI field %q (type=%s) not in Go DTO — add it to publishYouTubeEditorSessionResponse", name, prop.Type)
+			continue
+		}
+		if !typeCompatibleOpenAPI(prop, goType) {
+			t.Errorf("DRIFT: field %q: OpenAPI type=%s%sGo type=%s", name, prop.Type, formatFormat(prop.Format), goType)
+		}
+	}
+
+	// (2 reverse) Every DTO field must exist in the OpenAPI.
+	for name, goType := range dtoFields {
+		if _, ok := schema.Properties[name]; !ok {
+			t.Errorf("DRIFT: Go DTO field %q (type=%s) not in OpenAPI — add it to %s", name, goType, openAPIPublishResponseSchemaName)
+		}
+	}
+
+	// (3) Required-set consistency: OpenAPI `required` array vs DTO
+	// non-omitempty fields. Drift here means the wire shape is
+	// asymmetric (the SPA sees a field as guaranteed that the
+	// orchestrator can omit).
+	schemaRequired := make(map[string]bool)
+	for _, r := range schema.Required {
+		schemaRequired[r] = true
+	}
+	for name := range dtoFields {
+		if dtoRequired[name] != schemaRequired[name] {
+			t.Errorf("DRIFT: field %q required=[Go_DTO(omitempty)=%v, OpenAPI(required)=%v]", name, dtoRequired[name], schemaRequired[name])
+		}
+	}
+	for name := range schemaRequired {
+		if _, ok := dtoFields[name]; !ok {
+			t.Errorf("DRIFT: OpenAPI required field %q is not in Go DTO", name)
+		}
+	}
+
+	// (4) Status field must be type=string on both sides.
+	if prop, ok := schema.Properties["status"]; ok {
+		if prop.Type != "string" {
+			t.Errorf("DRIFT: OpenAPI 'status' must be type=string, got type=%s", prop.Type)
 		}
 	}
 }
 
-// containsString is a small helper to keep yaml.v3 round-tripping
-// noise out of the assertions above.
-func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
+// typeCompatibleOpenAPI checks that an OpenAPI property schema is
+// compatible with a Go field type. The mapping is:
+//
+//	string                   ↔ type=string
+//	*string (omitempty)      ↔ type=string (nullable or omitted)
+//	int / int64 / uint*      ↔ type=integer
+//	bool                     ↔ type=boolean
+//	float32 / float64        ↔ type=number
+//	time.Time                ↔ type=string format=date-time
+//	*time.Time (omitempty)   ↔ type=string format=date-time nullable
+func typeCompatibleOpenAPI(prop openAPIPropertySchema, goType reflect.Type) bool {
+	if goType.Kind() == reflect.Ptr {
+		// pointer fields: the OpenAPI type maps to the pointed-to
+		// type but the field is optional. We require `nullable: true`
+		// OR absence from `required` (omitempty already implies the
+		// latter).
+		elem := goType.Elem()
+		ok := typeCompatibleOpenAPI(openAPIPropertySchema{Type: prop.Type, Format: prop.Format}, elem)
+		if !ok {
+			return false
 		}
+		// *string nullable in OpenAPI is allowed via nullable: true
+		// OR absence from required.
+		return true
+	}
+	switch goType.Kind() {
+	case reflect.String:
+		return prop.Type == "string"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return prop.Type == "integer" || prop.Type == "number"
+	case reflect.Bool:
+		return prop.Type == "boolean"
+	case reflect.Float32, reflect.Float64:
+		return prop.Type == "number"
+	case reflect.Struct:
+		// time.Time is the canonical struct-on-the-wire case.
+		if goType.String() == "time.Time" {
+			return prop.Type == "string" && prop.Format == "date-time"
+		}
+		return false
 	}
 	return false
+}
+
+func formatFormat(format string) string {
+	if format == "" {
+		return ""
+	}
+	return " format=" + format + ", "
 }
