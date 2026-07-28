@@ -99,7 +99,7 @@ permissions:
   # `if` below enforces that the triggering run was successful on the
   # `main` branch. This prevents unverified code from reaching production.
   workflow_run:
-    workflows: [integration]
+    workflows: [integration-fast]
     types: [completed]
     branches: [main]
   # Manual override. Useful when Vercel edge cache serves stale assets
