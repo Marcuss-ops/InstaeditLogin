@@ -255,6 +255,7 @@ func (r *Router) executePublishYouTubeEditorSession(
 	// publish, so a replay returns the same terminal-state shape.
 	if edit.Status == "published" {
 		writeJSON(w, http.StatusOK, publishYouTubeEditorSessionResponse{
+			Status:            edit.Status,
 			PublicURL:         "https://www.youtube.com/watch?v=" + edit.YouTubeVideoID,
 			VideoID:           edit.YouTubeVideoID,
 			PrivacyStatus:     edit.DesiredPrivacy,
@@ -332,6 +333,10 @@ func (r *Router) executePublishYouTubeEditorSession(
 	}
 	if asset == nil || asset.UserID != identity.UserID() || asset.Status != models.MediaAssetStatusReady {
 		writeError(w, http.StatusBadRequest, "invalid or unverified media asset")
+		return
+	}
+	if asset.ContentType != "image/jpeg" && asset.ContentType != "image/png" {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported thumbnail content type %q (only image/jpeg and image/png are allowed)", asset.ContentType))
 		return
 	}
 
@@ -494,6 +499,7 @@ func (r *Router) executePublishYouTubeEditorSession(
 	edit = claimed
 
 	writeJSON(w, http.StatusOK, publishYouTubeEditorSessionResponse{
+		Status:            edit.Status,
 		PublicURL:         publicURL,
 		VideoID:           edit.YouTubeVideoID,
 		PrivacyStatus:     privacyStatus,

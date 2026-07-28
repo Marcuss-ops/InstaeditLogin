@@ -77,7 +77,7 @@ services:
       - VELOX_DOWNLOAD_TIMEOUT_SECONDS=1800
       - VELOX_MAX_ARTIFACT_BYTES=2147483648
     ports:
-      - "127.0.0.1:8080:8080"
+      - "0.0.0.0:8080:8080"
     # Sit on the default bridge for db/minio/s3 DNS AND on the internal
     # media-backend network for Velox handoff. Listing both keeps the
     # api reachable on `:8080` from the host while restricting Velox
@@ -142,7 +142,7 @@ services:
       - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
       - PORT=8080
     ports:
-      - "127.0.0.1:8080:8080"
+      - "0.0.0.0:8080:8080"
     depends_on:
       db:
         condition: service_healthy
