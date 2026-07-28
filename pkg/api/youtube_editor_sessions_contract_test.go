@@ -198,6 +198,17 @@ func TestPublishResponseContract_OpenAPI_Matches_DTO(t *testing.T) {
 	// non-omitempty fields. Drift here means the wire shape is
 	// asymmetric (the SPA sees a field as guaranteed that the
 	// orchestrator can omit).
+	//
+	// CROSS-REPO CONTRACT (3-way parity):
+	//    OpenAPI NOT in `[required]`  ↔  Go `,omitempty`  ↔  TS `?`
+	// All three sides MUST agree per field. This is the Go half of
+	// the lock; the TS half lives at
+	// VeloxFrontend/web/dark_editor/__tests__/publishResponseContract.test.ts
+	// (the "every TS field optionality matches the OpenAPI required
+	// array" it() block). Drift between the two halves surfaces
+	// here (Go) and there (TS) independently — the CI workflow gates
+	// deploys on both running `go test -race ./pkg/api/...` AND
+	// `npx vitest run`, so a 3-way mismatch fails the build in CI.
 	schemaRequired := make(map[string]bool)
 	for _, r := range schema.Required {
 		schemaRequired[r] = true
