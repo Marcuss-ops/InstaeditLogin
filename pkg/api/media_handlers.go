@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -249,7 +250,7 @@ func (r *Router) handleCompleteMedia(w http.ResponseWriter, req *http.Request) {
 	// need to handle the case where the SHA differs from the
 	// presign-declared value — locked as followup).
 	if asset.SHA256 == "" {
-		_ = r.mediaStore.MarkFailed(id, "sha256 required: client must compute SHA-256 locally and pass it in the /presign body before /complete (Task 6/10 enforcement)")
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,id, "sha256 required: client must compute SHA-256 locally and pass it in the /presign body before /complete (Task 6/10 enforcement)")
 		writeError(w, http.StatusBadRequest,
 			"sha256 required: client must compute SHA-256 locally and pass it in the /presign body before /complete")
 		return
@@ -258,19 +259,19 @@ func (r *Router) handleCompleteMedia(w http.ResponseWriter, req *http.Request) {
 	// HEAD the S3 object to confirm the upload actually landed.
 	contentType, sizeBytes, err := r.storageProvider.VerifyUpload(req.Context(), asset.UploadKey)
 	if err != nil {
-		_ = r.mediaStore.MarkFailed(id, err.Error())
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,id, err.Error())
 		writeError(w, http.StatusBadRequest, "media upload verification failed: "+err.Error())
 		return
 	}
 	if sizeBytes != asset.SizeBytes {
 		reason := fmt.Sprintf("size mismatch: uploaded=%d expected=%d", sizeBytes, asset.SizeBytes)
-		_ = r.mediaStore.MarkFailed(id, reason)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,id, reason)
 		writeError(w, http.StatusUnprocessableEntity, reason)
 		return
 	}
 	if contentType != asset.ContentType {
 		reason := fmt.Sprintf("content-type mismatch: uploaded=%q expected=%q", contentType, asset.ContentType)
-		_ = r.mediaStore.MarkFailed(id, reason)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,id, reason)
 		writeError(w, http.StatusUnprocessableEntity, reason)
 		return
 	}
