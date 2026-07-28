@@ -170,8 +170,16 @@ func TestPublishTarget_YouTube_ReusesPhase1VideoID_VideosUpdate(t *testing.T) {
 	if svc.capturedUpdatePrivacyVID != phase1VideoID {
 		t.Errorf("UpdateVideoPrivacy videoID: want %q (Phase-1 stamped), got %q", phase1VideoID, svc.capturedUpdatePrivacyVID)
 	}
-	if svc.capturedUpdatePrivacyStatus != "public" {
-		t.Errorf("UpdateVideoPrivacy privacyStatus: want %q (cascade result of post.PrivacyLevel=\"public\"), got %q", "public", svc.capturedUpdatePrivacyStatus)
+	// After Commit #2 (Finding #2 videos.update coercion): for a
+	// future publishAt + privacy=public input, the publish_worker bypass
+	// + UpdateVideoPrivacy both pass through services.CoercePrivacyForUpdate
+	// which flips privacy to "private" (YouTube's API requires
+	// privacyStatus=private alongside publishAt for scheduled
+	// transitions). The captured mock value reflects the post-coerce
+	// arg passed INTO UpdateVideoPrivacy — so "private" (NOT the
+	// pre-coerce "public") is correct here.
+	if svc.capturedUpdatePrivacyStatus != "private" {
+		t.Errorf("UpdateVideoPrivacy privacyStatus: want %q (CoercePrivacyForUpdate: future+public → \"private\"), got %q", "private", svc.capturedUpdatePrivacyStatus)
 	}
 	if svc.capturedUpdatePrivacyTitle != "yt-title" {
 		t.Errorf("UpdateVideoPrivacy title: want %q, got %q", "yt-title", svc.capturedUpdatePrivacyTitle)

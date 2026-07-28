@@ -652,12 +652,24 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 			raw, hasRaw := w.router.Get(account.Platform)
 			if hasRaw {
 				if updater, ok := raw.(services.YouTubePrivacyUpdater); ok {
+					// Blocco #1 followup — Finding #2: coerce privacy +
+					// publishAt here so the values the worker LOGS
+					// (and the values UpdateVideoPrivacy sees) are
+					// both YouTube-API-legal. UpdateVideoPrivacy also
+					// calls the helper internally (defense in depth);
+					// the helper is idempotent so the two calls produce
+					// the same result. time.Now() is passed inline to
+					// avoid clashing with the outer `now := time.Now()`
+					// already in publishTarget's platform-update block
+					// (which would surface as a vet `no new variables
+					// on left side of :=` error).
+					effectivePrivacy, effectivePublishAt := services.CoercePrivacyForUpdate(payload.PrivacyLevel, post.PublishAt, time.Now())
 					if err := updater.UpdateVideoPrivacy(
 						ctx,
 						oauthToken.AccessToken,
 						*ytPub.YouTubeVideoID,
-						payload.PrivacyLevel,
-						post.PublishAt,
+						effectivePrivacy,
+						effectivePublishAt,
 						post.Title,
 						post.Caption,
 					); err != nil {

@@ -1146,13 +1146,21 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 	title = strings.TrimSpace(title)
 	description = strings.TrimSpace(description)
 
+	// Blocco #1 followup — Finding #2 (videos.update rejection):
+	// apply CoercePrivacyForUpdate BEFORE building the status block.
+	// The future-publishAt branch forces privacyStatus="private" so
+	// the YouTube v3 videos.update endpoint accepts the request
+	// ("publishAt requires privacyStatus=private" is its invariant).
+	// The past-or-nil branch passes each value through unchanged so
+	// tests pinning the legacy "privacy=public + no publishAt" shape
+	// (TestUpdateVideoPrivacy_SendsSnippetAndStatus etc.) keep
+	// passing.
+	privacyStatus, publishAt = CoercePrivacyForUpdate(privacyStatus, publishAt, s.now())
+
 	status := map[string]string{
 		"privacyStatus": privacyStatus,
 	}
-	if publishAt != nil && !publishAt.IsZero() {
-		if privacyStatus != "private" {
-			return fmt.Errorf("youtube update video: publishAt requires privacyStatus=private")
-		}
+	if publishAt != nil {
 		status["publishAt"] = publishAt.UTC().Format(time.RFC3339)
 	}
 

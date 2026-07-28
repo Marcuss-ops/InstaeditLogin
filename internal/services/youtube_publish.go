@@ -327,3 +327,41 @@ func validateYouTubePrivacyLevel(level string) error {
 func normalizeYouTubePrivacyLevel(level string) string {
 	return strings.ToLower(strings.TrimSpace(level))
 }
+
+// CoercePrivacyForUpdate (Blocco #1 followup — Finding #2) is the single
+// source of truth for the privacyStatus × publishAt transform that
+// YouTube's v3 videos.update endpoint accepts. Caller contract:
+//
+//   - publishAt == nil   → return (privacyLevel, nil)
+//   - publishAt.IsZero() → return (privacyLevel, nil)  (defensive — same shape as nil)
+//   - publishAt <= now   → return (privacyLevel, nil)  (clear publishAt; YouTube can't reschedule in the past)
+//   - publishAt > now    → return ("private", publishAt) (YouTube ONLY accepts publishAt with privacyStatus=private)
+//
+// Why force "private" on the future branch: YouTube's v3 API
+// mandates publishAt's effective privacy transition is private→public.
+// Sending (privacy=public + publishAt=future) is rejected with HTTP
+// 400 by the videos.update endpoint — the helper flips privacy to
+// "private" so the subsequent call passes the API guard. The
+// internal guard in UpdateVideoPrivacy
+// ("publishAt requires privacyStatus=private") mirrors that API rule
+// and would error if the coerce didn't run first.
+//
+// "now" is a parameter so tests inject deterministic clocks without
+// monkey-patching time.Now(). Production callers pass s.now() (in
+// UpdateVideoPrivacy) or time.Now() (in publish_worker.go bypass).
+//
+// Idempotent: applying the helper to its own output is a fixed point
+// (already-coerced (privacy="private", publishAt=non-nil-in-future)
+// → same output). This matters because publish_worker calls it from
+// BOTH the bypass AND inside UpdateVideoPrivacy (defense in depth) —
+// double-coercion produces identical results.
+func CoercePrivacyForUpdate(privacyLevel string, publishAt *time.Time, now time.Time) (string, *time.Time) {
+	if publishAt == nil || publishAt.IsZero() || !publishAt.After(now) {
+		return privacyLevel, nil
+	}
+	// Future path: YouTube requires privacyStatus="private" alongside
+	// publishAt. The selector block in UpdateVideoPrivacy already
+	// validates privacyLevel ∈ {public, unlisted, private} upstream,
+	// so the helper does NOT re-validate here.
+	return "private", publishAt
+}
