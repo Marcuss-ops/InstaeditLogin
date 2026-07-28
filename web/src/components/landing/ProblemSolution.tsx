@@ -47,16 +47,16 @@ export function ProblemSolution() {
               <span className="text-gradient-animated">real income.</span>
             </h2>
             <p className="text-body-lg text-zinc-400 max-w-[52ch] mb-6">
-              We hand you the keys: a channel already past YouTube's trust filter,
+              We hand you the keys: an instant algorithmic indexing setup,
               AI that produces professional videos from a single line of text, and
               a mentor who tells you exactly what to post and when.
             </p>
             <div className="space-y-4">
               {[
-                "Ready-made channel — you skip the \"grind\" phase entirely",
+                "Fast-Track Partner Monetization setup — pre-configured onboarding",
                 "ChronoN AI: type one sentence, get a ready-to-publish video",
                 "One video becomes 7 posts across 7 platforms automatically",
-                "Daily content without lifting a finger — 100% hands-free",
+                "Semi-automated pipeline — daily content, ~3 h/week of your time",
               ].map((item) => (
                 <div key={item} className="flex items-start gap-3">
                   <span className="w-5 h-5 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0 mt-0.5">

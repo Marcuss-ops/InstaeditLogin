@@ -2,7 +2,7 @@ import { Bot, Globe, DollarSign } from "lucide-react";
 import { IconSchedule } from "./shared";
 
 /* ----------------------------------------------------------------------------
- * Features — zero effort, maximum income (gain-focused)
+ * Features — semi-automated pipeline, maximum income (gain-focused)
  * -------------------------------------------------------------------------- */
 
 export function Features() {
@@ -12,9 +12,9 @@ export function Features() {
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="max-w-3xl mb-16 animate-fade-up">
           <div className="text-eyebrow text-violet-300/90 mb-3">How it works</div>
-          <h2 className="text-display-2 text-white">Zero effort. Maximum income.</h2>
+          <h2 className="text-display-2 text-white">Semi-automated. Maximum income.</h2>
           <p className="text-body-lg text-zinc-400 mt-5 max-w-[58ch]">
-            No camera. No editing. No experience. Our AI-powered system turns a single
+            No camera. No editing software. No experience. Our 90% AI-executed system turns a single
             idea into daily content across 7 platforms &mdash; engineered to generate revenue.
           </p>
         </div>
@@ -71,9 +71,9 @@ export function Features() {
             </div>
             <h3 className="text-display-3 text-white mb-2">Revenue from day one.</h3>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              Aged channels skip YouTube's trust filter. You hit the Partner
-              Program faster and start earning ad revenue, sponsorships and
-              affiliate income sooner.
+              Our Fast-Track Partner Monetization setup gets your content through
+              the Partner Program review window in days, not months — so you
+              start earning ad revenue, sponsorships and affiliate income sooner.
             </p>
           </div>
           <div className="surface-card p-6 relative overflow-hidden lg:col-span-3 animate-fade-up animation-delay-300 hover:border-amber-400/30 transition-all duration-300">

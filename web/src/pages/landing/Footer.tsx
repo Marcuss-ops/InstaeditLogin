@@ -44,12 +44,12 @@ export function Footer() {
             <span className="font-bold tracking-tight text-white text-base">InstaEdit</span>
           </Link>
           <p className="text-sm text-zinc-400 mt-4 max-w-[42ch] leading-relaxed">
-            Turn YouTube into passive income. We handle the channel, the content
-            and the monetization — you collect the revenue.
+            Turn YouTube into a semi-automated income stream. Our AI produces
+            the content and runs publishing — you approve scripts and collect the revenue.
           </p>
           <div className="inline-flex items-center gap-2 mt-5 surface-glass border border-white/10 px-3 py-1.5 rounded-full">
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            <span className="text-xs text-zinc-300 font-medium">Automated income · zero effort</span>
+            <span className="text-xs text-zinc-300 font-medium">Semi-automated pipeline · 90% AI-executed</span>
           </div>
         </div>
         <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-8">
@@ -72,7 +72,7 @@ export function Footer() {
       <div className="border-t border-white/5">
         <div className="mx-auto max-w-7xl px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
           <div>&copy; {new Date().getFullYear()} InstaEdit, Inc.</div>
-          <div>Built for creators who want passive income.</div>
+          <div>Built for creators who want a real income machine, not a side hustle.</div>
         </div>
       </div>
     </footer>

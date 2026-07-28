@@ -16,7 +16,7 @@ export function Landing() {
     <>
       <Seo
         title="InstaEdit — Your First $2,000/Mo From YouTube, On Autopilot"
-        description="Earn $2,000+/mo from YouTube on autopilot — zero experience, zero camera, zero editing. AI-powered channel automation and 1-on-1 mentoring."
+        description="Earn $2,000+/mo from YouTube on autopilot. Semi-automated pipeline, 90% AI-executed. AI-powered content engine and 1-on-1 mentoring."
         canonical="https://app.instaedit.org/"
       />
       <Nav />

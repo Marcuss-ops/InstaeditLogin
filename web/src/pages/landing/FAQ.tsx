@@ -15,15 +15,15 @@ export function FAQ() {
     },
     {
       q: "How can I start earning money in just 14 days?",
-      a: "We use aged YouTube channels that already bypass the algorithm's initial trust filter. Combined with optimized content strategy, SEO, and automated publishing, your channel hits the Partner Program thresholds much faster than starting from scratch.",
+      a: "Our fast-track Partner Monetization setup gets your content through the Partner Program review window in days, not months. Combined with optimized content strategy, SEO, and automated publishing, your channel hits the Partner Program thresholds much faster than starting from scratch.",
     },
     {
-      q: "What is an aged YouTube channel and why does it matter?",
-      a: "An aged channel is an established account created months or years ago. YouTube's algorithm trusts older channels more, so content gets indexed faster, avoids anti-spam filters, and reaches monetization milestones sooner. It's the shortcut most creators don't know exists.",
+      q: "What does your fast-track Partner Monetization setup actually do?",
+      a: "A pre-configured channel framework plus an indexing acceleration protocol: YouTube's algorithm starts surfacing your videos in days, anti-spam filters don't gate-keep you, and you reach monetization milestones weeks earlier than a brand-new account. It's a structured onboarding path, not a trade of accounts.",
     },
     {
       q: "What's the difference between Mentoring and Done-For-You?",
-      a: "Mentoring teaches you step-by-step how to build and monetize a channel with 1-on-1 guidance — you learn the system. Done-For-You means we build, manage, and grow the entire channel while you own the asset and collect all revenue. Zero effort on your end.",
+      a: "Mentoring teaches you step-by-step how to build and monetize a channel with 1-on-1 guidance — you learn the system. Done-For-You means we build, manage, and grow the entire channel while you own the asset and collect all revenue. You review scripts for ~3 hours per week; we run the rest.",
     },
     {
       q: "How much time do I need to commit each week?",
