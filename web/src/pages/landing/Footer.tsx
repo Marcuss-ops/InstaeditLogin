@@ -18,7 +18,7 @@ export function Footer() {
       heading: "Product",
       links: [
         { l: "How it works", href: "#features" },
-        { l: "Programs", href: "#programs" },
+        { l: "Programs", to: "/programs" },
         { l: "Results", href: "#results" },
         { l: "FAQ", href: "#faq" },
       ],

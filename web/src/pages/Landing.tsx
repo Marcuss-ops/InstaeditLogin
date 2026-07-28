@@ -5,7 +5,6 @@ import { Hero } from "./landing/Hero";
 import { Features } from "./landing/Features";
 import { EarningsEstimates } from "./landing/EarningsEstimates";
 import { ResultsSection } from "./landing/ResultsSection";
-import { CTASection } from "./landing/CTASection";
 import { Proof } from "./landing/Proof";
 import { FAQ } from "./landing/FAQ";
 import { FinalCTA } from "./landing/FinalCTA";
@@ -26,7 +25,6 @@ export function Landing() {
       <Features />
       <ResultsSection />
       <Proof />
-      <CTASection />
       <FAQ />
       <FinalCTA />
       <Footer />

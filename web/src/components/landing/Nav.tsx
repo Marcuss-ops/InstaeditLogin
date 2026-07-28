@@ -87,7 +87,7 @@ export function Nav() {
 
   const links: Array<{ label: string; to?: string; href?: string }> = [
     { label: "How it works", href: "#features" },
-    { label: "Programs", href: "#programs" },
+    { label: "Programs", to: "/programs" },
     { label: "Results", href: "#results" },
     { label: "FAQ", href: "#faq" },
     { label: "Contact", href: "#contact" },
