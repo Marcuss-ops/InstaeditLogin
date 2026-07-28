@@ -9,13 +9,14 @@ import { BookingProvider } from "../components/booking/BookingProvider";
  *
  * Goal: a single cheap assertion block that fails the moment any of:
  *   - the hero h1 copy is rewritten or the core promise drops
- *   - the dashboard mockup gets removed or restructured enough that its
- *     window-chrome title text isn't in the DOM anymore
+ *   - the YouTube Studio monetization mockup gets removed or
+ *     restructured enough that its window-chrome title text isn't in
+ *     the DOM anymore
  *   - one of the six YouTube embed IDs (SHORT_DEMOS or LONGFORM_DEMOS) is
  *     removed, swapped, or duplicated
  */
 describe("Landing", () => {
-  it("renders hero copy, dashboard mockup, and 6 YouTube embeds", () => {
+  it("renders hero copy, YT Studio monetization mockup, and 6 YouTube embeds", () => {
     render(
       <MemoryRouter>
         <BookingProvider>
@@ -29,10 +30,10 @@ describe("Landing", () => {
     expect(h1).toHaveTextContent(/Your First/i);
     expect(h1).toHaveTextContent(/Video/i);
 
-    // --- Dashboard mockup -------------------------------------------------
+    // --- YT Studio monetization mockup -----------------------------------
     expect(
-      screen.getByText(/instaedit\.app · Calendar/),
-      "expected the dashboard mockup window-chrome title to be rendered",
+      screen.getByText(/studio\.youtube\.com · Monetization/),
+      "expected the YT Studio monetization mockup window-chrome title to be rendered",
     ).toBeInTheDocument();
 
     // --- YouTube short-form embeds ---------------------------------------

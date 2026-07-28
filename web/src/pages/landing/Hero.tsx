@@ -1,5 +1,5 @@
 import { ArrowRight, Calendar, Clock, Zap, Bot } from "lucide-react";
-import { DashboardMockup } from "./shared";
+import { YouTubeStudioMockup } from "./YouTubeStudioMockup";
 import { useBooking } from "../../components/booking/BookingProvider";
 
 /* ----------------------------------------------------------------------------
@@ -30,7 +30,7 @@ export function Hero() {
                 <span className="animate-pulse-glow absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
               </span>
-              <span>Turnkey system &mdash; zero experience needed</span>
+              <span>Semi-automated pipeline &mdash; 90% AI-executed</span>
             </span>
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full surface-glass border border-red-400/30 text-xs font-medium text-red-300">
               <Clock className="w-3 h-3" />
@@ -40,13 +40,13 @@ export function Hero() {
 
           <h1 className="text-display-1 text-white">
             Your First $2,000/Mo From Video{" "}
-            <span className="text-gradient-animated">On Autopilot &mdash; No Experience Needed.</span>
+            <span className="text-gradient-animated">On Autopilot. No Camera. No Editing.</span>
           </h1>
 
           <p className="text-body-lg text-zinc-300/90 mt-7 max-w-[62ch]">
-            Stop wasting months figuring out the algorithm. We give you an
-            already-monetized YouTube channel, AI that creates the videos for you,
-            and 1-on-1 coaching to get you to your first payout &mdash; fast.
+            Stop wasting months figuring out the algorithm. Our AI produces
+            the videos, our partner-program setup gets you monetized fast,
+            and 1-on-1 coaching takes you to your first payout &mdash; predictably.
           </p>
 
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mt-8">
@@ -80,14 +80,14 @@ export function Hero() {
             </div>
             <div className="flex items-center gap-2 surface-glass border border-white/10 px-3 py-1.5 rounded-full">
               <Bot className="w-4 h-4 text-violet-400" />
-              <span className="text-zinc-200 font-medium">100%</span>
-              <span>AI-automated</span>
+              <span className="text-zinc-200 font-medium">90%</span>
+              <span>AI-automated execution</span>
             </div>
           </div>
         </div>
 
         <div className="lg:col-span-5 xl:col-span-6 relative">
-          <DashboardMockup />
+          <YouTubeStudioMockup />
         </div>
       </div>
     </section>
