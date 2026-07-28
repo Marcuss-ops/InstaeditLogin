@@ -37,6 +37,18 @@ type ActionState =
   | { kind: "attaching"; sessionId: string }
   | { kind: "publishing"; sessionId: string };
 
+type ContentItem = {
+  external_id: string;
+  title?: string;
+  description?: string;
+  thumbnail_url?: string;
+  public_url?: string;
+  privacy?: string;
+  status?: string;
+  published_at?: string;
+  duration?: string;
+};
+
 // The list endpoint requires workspace_id; account_id is optional and
 // narrows results to a single channel. Keep these in sync with the
 // handler in pkg/api/youtube_editor_sessions.go (handleListYouTubeEditorSessions).
@@ -62,6 +74,28 @@ export function InternalYouTubeStudio() {
   const [scheduleAt, setScheduleAt] = useState("");
   const [action, setAction] = useState<ActionState>({ kind: "idle" });
   const [refreshing, setRefreshing] = useState(false);
+  const [privateVideos, setPrivateVideos] = useState<ContentItem[]>([]);
+  const [loadingVideos, setLoadingVideos] = useState(false);
+  const privateVideosAbortRef = useRef<AbortController | null>(null);
+
+  const fetchPrivateVideos = useCallback(
+    async (accountId: number, signal?: AbortSignal) => {
+      setLoadingVideos(true);
+      try {
+        const resp = await authedFetch(
+          `/api/v1/accounts/${accountId}/content?limit=50&privacy=private`,
+          { signal },
+        );
+        const data = (await resp.json()) as { items: ContentItem[] };
+        if (!signal?.aborted) setPrivateVideos(data.items ?? []);
+      } catch {
+        if (!signal?.aborted) setPrivateVideos([]);
+      } finally {
+        if (!signal?.aborted) setLoadingVideos(false);
+      }
+    },
+    [],
+  );
 
   const fetchSessions = useCallback(
     async (
@@ -172,6 +206,16 @@ export function InternalYouTubeStudio() {
       }
     })();
   }, [fetchSessions, loadState.kind, selectedChannelId, selectedWorkspaceId]);
+
+  useEffect(() => {
+    privateVideosAbortRef.current?.abort();
+    setPrivateVideos([]);
+    if (selectedChannelId === "") return;
+    const ctrl = new AbortController();
+    privateVideosAbortRef.current = ctrl;
+    void fetchPrivateVideos(selectedChannelId, ctrl.signal);
+    return () => ctrl.abort();
+  }, [fetchPrivateVideos, selectedChannelId]);
 
   const handleRefresh = useCallback(async () => {
     if (refreshing || selectedWorkspaceId === "") return;
@@ -432,6 +476,84 @@ export function InternalYouTubeStudio() {
           </button>
         </div>
       </section>
+
+      {selectedChannelId !== "" && (
+        <section className="bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6 space-y-4 shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
+          <header>
+            <h2 className="text-[16px] font-bold text-white flex items-center gap-2">
+              <Video size={16} aria-hidden="true" />
+              Video privati sul canale
+            </h2>
+            <p className="text-[13px] text-[#9aa0aa] mt-1">
+              Clicca un video per iniziare a modificare la copertina.
+            </p>
+          </header>
+
+          {loadingVideos && (
+            <div className="flex items-center gap-2 text-[13px] text-[#9aa0aa]">
+              <Loader2 size={14} className="animate-spin" /> Caricamento video…
+            </div>
+          )}
+
+          {!loadingVideos && privateVideos.length === 0 && (
+            <EmptyState
+              title="Nessun video privato trovato"
+              description="Carica un video privato su YouTube e ricarica la pagina."
+              icon={<Video size={32} />}
+              className="bg-white/[0.02] border-white/[0.06]"
+            />
+          )}
+
+          {!loadingVideos && privateVideos.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {privateVideos.map((v) => (
+                <button
+                  key={v.external_id}
+                  type="button"
+                  onClick={() => {
+                    setManualVideoId(v.external_id);
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                  className={cn(
+                    "flex gap-3 p-3 rounded-xl border text-left transition-all no-underline group",
+                    manualVideoId === v.external_id
+                      ? "border-blue-500/50 bg-blue-500/[0.08]"
+                      : "border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/[0.15]",
+                  )}
+                >
+                  <div className="w-28 h-16 rounded-lg bg-white/[0.08] overflow-hidden shrink-0">
+                    {v.thumbnail_url ? (
+                      <img
+                        src={v.thumbnail_url}
+                        alt={v.title ?? ""}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Video size={16} className="text-white/20" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12px] font-semibold text-white truncate">
+                      {v.title || v.external_id}
+                    </p>
+                    <p className="text-[11px] text-[#9aa0aa] font-mono mt-0.5">
+                      {v.external_id}
+                    </p>
+                    {v.published_at && (
+                      <p className="text-[10px] text-[#9aa0aa] mt-0.5">
+                        {new Date(v.published_at).toLocaleDateString("it-IT")}
+                      </p>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6 space-y-4 shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
         <header className="flex items-center justify-between gap-3">

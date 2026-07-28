@@ -30,15 +30,19 @@ export function InternalLayout({ children }: { children?: ReactNode }) {
     });
   }, [resetTimer]);
 
-  // Reset the timer on any mouse movement inside the sidebar area
-  // so it stays open while the user is interacting.
-  const handleMouseMove = useCallback(() => {
+  const handleSidebarEnter = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
+
+  const handleSidebarLeave = useCallback(() => {
     if (!collapsed) resetTimer();
   }, [collapsed, resetTimer]);
 
   return (
-    <div className="h-screen w-full flex bg-[#030308] text-[#e8e8ef] overflow-hidden" onMouseMove={handleMouseMove}>
-      <Sidebar collapsed={collapsed} onToggle={handleToggle} />
+    <div className="h-screen w-full flex bg-[#030308] text-[#e8e8ef] overflow-hidden">
+      <div onMouseEnter={handleSidebarEnter} onMouseLeave={handleSidebarLeave}>
+        <Sidebar collapsed={collapsed} onToggle={handleToggle} />
+      </div>
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-16 flex-none flex items-center justify-end px-6 border-b border-white/[0.08] bg-[#030308]/80 backdrop-blur-sm">
           <AccountSwitcher />
