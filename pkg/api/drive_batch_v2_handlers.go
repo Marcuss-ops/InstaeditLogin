@@ -193,7 +193,7 @@ func (r *Router) handleDriveBatchImportV2(w http.ResponseWriter, req *http.Reque
 
 	// Resolve target account list — XOR rule was enforced in
 	// validateDriveBatchV2Request; here we expand target_group_id → accounts.
-	accountIDs, err := r.resolveV2Targets(req.Context(), userID, ws.ID, body.TargetGroupID)
+	accountIDs, err := r.resolveV2Targets(req.Context(), ws.ID, body.TargetGroupID)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "could not resolve targets: "+err.Error())
 		return
@@ -211,7 +211,7 @@ func (r *Router) handleDriveBatchImportV2(w http.ResponseWriter, req *http.Reque
 	// gap or shorten the horizon. The cap is config-driven (env
 	// PUBLISH_HORIZON_DAYS, default 30) — see ScheduleLimits.
 	horizonDays := r.publishHorizonDays()
-	projectedDays := heuristicScheduleClampProjectedDays(body.PublishSchedule, horizonDays)
+	projectedDays := heuristicScheduleClampProjectedDays(body.PublishSchedule)
 	if projectedDays > horizonDays {
 		reason := fmt.Sprintf(
 			"projected horizon %d days exceeds the %d-day cap (worst-case %d files × min_gap %ds)",
@@ -395,7 +395,7 @@ func validateDriveBatchV2Request(req *DriveBatchImportV2Request) error {
 // (after a duplicate-cull). For target_group_id, queries
 // workspace_channels where group_name = $1 AND workspace_id = $2
 // AND enabled IS TRUE.
-func (r *Router) resolveV2Targets(ctx context.Context, userID, workspaceID int64, groupID *string) ([]int64, error) {
+func (r *Router) resolveV2Targets(ctx context.Context, workspaceID int64, groupID *string) ([]int64, error) {
 	if groupID == nil || *groupID == "" {
 		// Should never reach here — validateDriveBatchV2Request
 		// enforces XOR, so by this point either target_account_ids
@@ -432,7 +432,6 @@ func (r *Router) resolveV2Targets(ctx context.Context, userID, workspaceID int64
 	if len(out) == 0 {
 		return nil, fmt.Errorf("group %q has no enabled channels in workspace %d", wantGroup, workspaceID)
 	}
-	_ = userID // reserved for future ownership filter; the workspace query already scopes per workspaceID
 	return out, nil
 }
 
@@ -456,8 +455,7 @@ func (r *Router) resolveV2Targets(ctx context.Context, userID, workspaceID int64
 // start_at — never exceeds the horizon). The handler's envelope
 // validation already rejected negative gaps; this is the defensive
 // floor for zero.
-func heuristicScheduleClampProjectedDays(schedule models.PublishScheduleRef, horizonDays int) int {
-	_ = horizonDays // reserved for a future "buffer-aware clamp" variation
+func heuristicScheduleClampProjectedDays(schedule models.PublishScheduleRef) int {
 	if schedule.MinGapSeconds <= 0 {
 		return 0
 	}

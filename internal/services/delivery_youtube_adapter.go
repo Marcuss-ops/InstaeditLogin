@@ -95,7 +95,6 @@ func (a *YouTubeDeliveryAdapter) Deliver(
 	if dest.RemoteID == "" {
 		return nil, fmt.Errorf("%w: youtube adapter: dest.RemoteID (channel id) is empty", ErrDeliveryProviderNotImplemented)
 	}
-	_ = a // a is unused today (no-op forward) but kept for forward compat
 
 	// Deliberately no PublishPayload assembly + no Publisher.Publish
 	// call here. The actual YouTube upload happened via the existing
@@ -105,12 +104,6 @@ func (a *YouTubeDeliveryAdapter) Deliver(
 	// design — it returns a "published" DeliveryResult so the
 	// publish_worker's post-completion log line shows the registry
 	// dispatched correctly without burning the YouTube upload slot.
-	// Asset (MediaAsset fields: ID, UploadKey, SHA256, …) is NOT
-	// accessed here; the no-op forward doesn't need any of it. A
-	// future Task 7.1 followup may surface asset metadata into the
-	// DeliveryResult.Metadata for operator audit; today the result
-	// carries the destination fields + idempotency_key only.
-	_ = asset
 	return &models.DeliveryResult{
 		ProviderName: a.Name(),
 		Status:       "published",

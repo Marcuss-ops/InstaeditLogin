@@ -43,7 +43,7 @@ import (
 // handleExchangeCode which already uses r.csrfConfig()).
 // Every call site was updated in the same commit; the
 // free-function form is removed.
-func (r *Router) setSessionCookie(w http.ResponseWriter, req *http.Request, res *services.StartSessionResult) {
+func (r *Router) setSessionCookie(w http.ResponseWriter, res *services.StartSessionResult) {
 	cfg := r.csrfConfig()
 	secure := r.cookieSecure
 	// Access JWT cookie (HttpOnly, short TTL).
@@ -71,10 +71,6 @@ func (r *Router) setSessionCookie(w http.ResponseWriter, req *http.Request, res 
 	// cannot be guessed by a pre-login attacker (the
 	// SetCSRFToken docs in csrf.go for the full rationale).
 	_, _ = auth.SetCSRFToken(w, cfg)
-	_ = req // reserved for future per-request cookie-domain
-	// pinning (e.g. setting Domain from the request host when
-	// the SPA and API share a parent domain but live on
-	// different subdomains).
 }
 
 // clearSessionCookie clears the same 3 cookies and removes the
@@ -138,7 +134,7 @@ func (h *Router) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	h.setSessionCookie(w, r, res)
+	h.setSessionCookie(w, res)
 	w.WriteHeader(http.StatusNoContent)
 }
 

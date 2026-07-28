@@ -559,7 +559,7 @@ func (r *Router) handleExchangeCode(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	metrics.IncJWTIssued()
-	r.setSessionCookie(w, req, result)
+	r.setSessionCookie(w, result)
 	w.WriteHeader(http.StatusNoContent)
 }
 

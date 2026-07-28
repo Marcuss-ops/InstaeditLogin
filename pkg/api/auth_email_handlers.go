@@ -151,7 +151,7 @@ func (r *Router) handleRegister(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
 		return
 	}
-	r.setSessionCookie(w, req, result)
+	r.setSessionCookie(w, result)
 
 	resp := map[string]interface{}{
 		"user_id":      user.ID,
@@ -223,7 +223,7 @@ func (r *Router) handleLoginEmail(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to start session: "+err.Error())
 		return
 	}
-	r.setSessionCookie(w, req, result)
+	r.setSessionCookie(w, result)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"user_id":      user.ID,

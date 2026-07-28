@@ -360,7 +360,17 @@ func (p *S3Provider) GetObject(ctx context.Context, key string, ttl time.Duratio
 // (S3-compatible stores accept the upload as long as X-Amz-Signature
 // validates).
 func (p *S3Provider) SignUpload(ctx context.Context, userID int64, key, contentType string, sizeBytes int64, ttl time.Duration) (*UploadGrant, error) {
-	_ = ctx
+	// `_ = ctx` was removed in PR-2A (YAGNI placeholder; not part of
+	// the StorageProvider INTERFACE contract — the ctx param is
+	// passed through but the S3 impl doesn't read it because
+	// signS3V4URL doesn't take a context). The 3 blanks below STAY
+	// because they ARE part of the storage contract: other impls
+	// (hypothetical StorageGateway, custom CDN provider) may read
+	// userID/contentType/sizeBytes for header-based validation. S3
+	// SigV4 PUT URL signing canonicalises only the host header
+	// (AWS SigV4 spec), so userID/contentType/sizeBytes are unused
+	// in this specific impl but the interface guarantees them
+	// available for forward-consumers.
 	_ = userID
 	_ = contentType
 	_ = sizeBytes

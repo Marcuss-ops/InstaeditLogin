@@ -98,7 +98,7 @@ func (r *Router) handleSwitchWorkspace(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	metrics.IncJWTIssued()
-	r.setSessionCookie(w, req, result)
+	r.setSessionCookie(w, result)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"workspace_id": targetWS,
