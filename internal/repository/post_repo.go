@@ -127,13 +127,52 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 	// raw SQL strings so order is a manual invariant here. A future
 	// taglio can swap to a small struct-bound builder to compile-enforce
 	// this.
+	// Insert the parent Post; capture auto-assigned id + created_at.
+	// P1 (migration 053) — bind the inherited batch default + the explicit
+	// per-post override.
+	// P1 (migration 077) — bind upload_job_id as $10 + Scan returns 3 cols
+	// (id, created_at, upload_job_id). The partial unique index
+	// uq_posts_upload_job_id enforces "one post per upload_job", so qInsertPost's
+	// `ON CONFLICT ... DO NOTHING` clause surfaces sql.ErrNoRows via RETURNING
+	// when a worker retry re-lands the same upload_job_id.
+	// Order MUST match qInsertPost's column list; the schema-side VALIDATE()
+	// of qInsertPost (via go vet) doesn't run on raw SQL strings so order
+	// is a manual invariant here.
 	err = tx.QueryRow(
 		qInsertPost,
 		post.WorkspaceID, post.Title, post.Caption, post.MediaURL,
 		post.IngestAfter, post.PublishAt,
 		post.DefaultPrivacyLevel, post.PrivacyLevel,
 		post.Status,
-	).Scan(&post.ID, &post.CreatedAt)
+		post.UploadJobID,
+	).Scan(&post.ID, &post.CreatedAt, &post.UploadJobID)
+	if err == sql.ErrNoRows {
+		// P1 (migration 077) — ON CONFLICT (upload_job_id) WHERE
+		// upload_job_id IS NOT NULL DO NOTHING fired: the canonical
+		// row already exists (worker retry path). Rehydrate the
+		// caller's struct + targets slice from the DB and commit.
+		// Skipping the target/outbox INSERTs on the conflict path is
+		// essential: those would 23505 on UNIQUE(post_id,
+		// platform_account_id).
+		//
+		// post.UploadJobID is the caller's input arg (Scan didn't
+		// execute so the pointer-to-nil-receive-via-Scan didn't
+		// happen); the partial index WHERE upload_job_id IS NOT NULL
+		// predicate guarantees we only get here with a non-nil
+		// UploadJobID. The defensive nil-check is paranoia — if a future
+		// SQL refactor removes the partial-index predicate, this branch
+		// would surface the regression loudly rather than nil-deref.
+		if post.UploadJobID == nil {
+			return fmt.Errorf("post create: ON CONFLICT fired for nil upload_job_id (impossible per partial index predicate, but defensive): %w", err)
+		}
+		if err = r.fetchExistingByUploadJobID(tx, *post.UploadJobID, post, targets); err != nil {
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit create-post tx (conflict path): %w", err)
+		}
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to create post: %w", err)
 	}
@@ -203,6 +242,102 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 	return nil
 }
 
+// fetchExistingByUploadJobID (Blocco #1 P1 followup — migration 077) is
+// the ON CONFLICT path handler for PostRepository.Create. When
+// qInsertPost's `ON CONFLICT (upload_job_id) ... DO NOTHING` clause
+// fires for a duplicate upload_job_id, Postgres returns 0 rows via
+// RETURNING → QueryRow().Scan() surfaces sql.ErrNoRows. We treat
+// ErrNoRows as "row already exists, rehydrate the caller's struct from
+// the canonical DB row".
+//
+// Returns nil on success (caller's `post` + `targets` slices rehydrated
+// from DB). Caller is responsible for committing the tx on success —
+// deferred rollback in Create covers the error paths.
+//
+// Returns error if:
+//   - The post SELECT returns 0 rows (race: row was deleted between
+//     ON CONFLICT firing and the re-fetch). Extremely rare; surface
+//     without silent retry, defer-rollback handles the cleanup.
+//   - The fanout (scan count from post_targets) doesn't match the
+//     caller's `targets` slice. A worker retry always builds the same
+//     fanout so a mismatch is a real bug (operator SQL edit, a buggy
+//     backfill, etc.). Escalate via error + (deferred) rollback so
+//     the worker can surface the inconsistency to the operator.
+//
+// Stamps DB-derived fields onto caller's `targets` slice:
+//   - targets[i].ID
+//   - targets[i].PostID
+//   - targets[i].Status (DB wins over caller's optimistic 'draft' —
+//     typically 'queued' after upload_worker stamping).
+//
+// Other caller's `targets[i]` field mutations are preserved verbatim.
+// The DB-stamps-are-authoritative contract applies to the parent `post`
+// struct only (DB wins for all read-back fields).
+//
+// Run inside the same tx as the qInsertPost call so the re-fetch sees
+// its own uncommitted state (and so the deferred rollback handles
+// cleanup on any error path).
+func (r *PostRepository) fetchExistingByUploadJobID(tx *sql.Tx, uploadJobID int64, post *models.Post, targets []*models.PostTarget) error {
+	// SELECT the existing post row — same column order as the qSelectPost*
+	// family (migration 053 + 077 shared canonical column list).
+	err := tx.QueryRow(qSelectPostByUploadJobID, uploadJobID).Scan(
+		&post.ID, &post.WorkspaceID, &post.Title, &post.Caption, &post.MediaURL,
+		&post.IngestAfter, &post.PublishAt, &post.Status,
+		&post.PrivacyLevel, &post.DefaultPrivacyLevel,
+		&post.CreatedAt, &post.UploadJobID,
+	)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("post create: ON CONFLICT fired but no post row found for upload_job_id=%d (race detected — row deleted between CONFLICT and re-fetch): %w", uploadJobID, err)
+	}
+	if err != nil {
+		return fmt.Errorf("post create: failed to re-fetch existing post by upload_job_id=%d: %w", uploadJobID, err)
+	}
+
+	// SELECT the existing target fan-out. Backed by the FK index with WHERE
+	// post_id = $1 — O(log N) on the existing post's target count.
+	rows, err := tx.Query(qSelectTargetsByPost, post.ID)
+	if err != nil {
+		return fmt.Errorf("post create: failed to re-fetch existing post_targets by post_id=%d: %w", post.ID, err)
+	}
+	defer rows.Close()
+
+	var existing []models.PostTarget
+	for rows.Next() {
+		var t models.PostTarget
+		if err := rows.Scan(&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+			&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+			&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt); err != nil {
+			return fmt.Errorf("post create: failed to scan re-fetched post_targets: %w", err)
+		}
+		existing = append(existing, t)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("post create: rows.Err() on re-fetch post_targets: %w", err)
+	}
+
+	// Safety guard: a mismatch is a real bug — escalate via error +
+	// (deferred) rollback so the worker can surface the inconsistency.
+	if len(existing) != len(targets) {
+		return fmt.Errorf("post create: ON CONFLICT fanout mismatch (existing=%d vs caller=%d for upload_job_id=%d) — escalate: worker must rebuild post from canonical source",
+			len(existing), len(targets), uploadJobID)
+	}
+
+	// Stamp DB-derived fields onto caller's targets. Order matters:
+	// qSelectTargetsByPost orders by id ASC, so existing[i] is the canonical
+	// pair for the i-th caller's target slot. The caller built its slice in
+	// the same fan-out order the upload_job declared (the worker's
+	// single-shot construction) so positional pairing is safe.
+	for i := range targets {
+		if targets[i] == nil {
+			continue
+		}
+		targets[i].ID = existing[i].ID
+		targets[i].PostID = existing[i].PostID
+		targets[i].Status = existing[i].Status
+	}
+	return nil
+}
+
 // Update persists the editable state of an existing post (title, caption,
 // media_url, scheduled_at, status). workspace_id and created_at are
 // intentionally NOT updated (immutable from this entrypoint).
@@ -259,7 +394,7 @@ const contentPipelineSelectColumns = `
 	id, workspace_id, title, caption, media_url,
 	ingest_after, publish_at, status,
 	privacy_level, default_privacy_level,
-	created_at`
+	created_at, upload_job_id`
 
 // FindByIDForWorkspace (Blocco Carosello content-pipeline endpoint):
 // returns the post with the given id SCOPED to the given workspace.
@@ -284,7 +419,7 @@ func (r *PostRepository) FindByIDForWorkspace(workspaceID, postID int64) (*model
 	).Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
 		&p.IngestAfter, &p.PublishAt, &p.Status,
 		&p.PrivacyLevel, &p.DefaultPrivacyLevel,
-		&p.CreatedAt)
+		&p.CreatedAt, &p.UploadJobID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -315,7 +450,7 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
 			&p.IngestAfter, &p.PublishAt, &p.Status,
 			&p.PrivacyLevel, &p.DefaultPrivacyLevel,
-			&p.CreatedAt); err != nil {
+			&p.CreatedAt, &p.UploadJobID); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, p)
@@ -346,7 +481,7 @@ func (r *PostRepository) ListQueued(before time.Time) ([]models.Post, error) {
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
 			&p.IngestAfter, &p.PublishAt, &p.Status,
 			&p.PrivacyLevel, &p.DefaultPrivacyLevel,
-			&p.CreatedAt); err != nil {
+			&p.CreatedAt, &p.UploadJobID); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, p)
