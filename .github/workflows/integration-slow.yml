@@ -179,7 +179,7 @@ jobs:
               `- **Deploy status**: this lane is **NOT** the deploy gate — \`integration-fast\` ran in parallel and the bundle deploys regardless of this lane\\'s status.`,
               '',
               triageBlock,
-              `Auto-opened by \`${context.workflow}\`@${runId} (slow lane)",
+              `Auto-opened by ${context.workflow} run#${runId} (slow lane).`,
             ].join('\n');
 
             await github.rest.issues.create({
