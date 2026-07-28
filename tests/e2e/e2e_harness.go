@@ -902,6 +902,36 @@ func backdateHeartbeat(ctx context.Context, h *E2EHarness, targetID int64, age t
 // embedding the migration runner would force every test to
 // materialize columns the suite never reads. CREATE TABLE IF NOT
 // EXISTS keeps the bootstrap idempotent across re-runs.
+//
+// Schema-coverage matrix (verified by ripgrep across tests/e2e/
+// for every INSERT/UPDATE/SELECT that targets these tables):
+//
+//	users              seeders INSERT (email); no other reads
+//	workspaces         seeders INSERT (name, owner_id) — owner_id
+//	                   references users(id) ON DELETE CASCADE
+//	platform_accounts  seeders INSERT
+//	                   (user_id, workspace_id, platform,
+//	                    platform_user_id, status, username,
+//	                    created_at, updated_at); SELECTs read
+//	                   user_id + status; UPDATE flips status+updated_at
+//	posts              scenario_5 INSERT covers the full shape
+//	post_targets       scenarios 8–12 reference
+//	                   locked_by/locked_at/heartbeat_at/next_attempt_at
+//	                   /last_error_message in addition to the
+//	                   INSERT-time columns
+//	sessions           youtube_oauth_browser_e2e_test.go needs it
+//	                   for session-middleware path-verification
+//	oauth_connections  the OAuth-callback-bind tests ASSERT row
+//	                   counts against this table
+//	upload_jobs        the OAuth-callback-bind tests ASSERT row
+//	                   counts against this table
+//
+// We surface every column the suite actually reads. Adding columns
+// here (NOT NULL or otherwise) when a column is mandatory; default
+// ”/NULL with optional semantic. Production migrations 033/043/etc.
+// define a richer shape; we only need the columns the assertions
+// read. The schema is recreated by Postgres per testcontainer start
+// so we never need ALTER — fresh DB, fresh schema, no drift.
 func applyE2ESchema(db *sql.DB) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS users (
@@ -912,16 +942,24 @@ func applyE2ESchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS workspaces (
 			id BIGSERIAL PRIMARY KEY,
 			name TEXT NOT NULL,
+			owner_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
-		// Channels = platform_accounts in production. The exact
-		// column set isn't material for scenario_5 (which only
-		// references ID) so we keep the boot surface minimal.
+		// Channels = platform_accounts in production. The full
+		// boot shape mirrors the columns the seed helpers INSERT
+		// + the columns the OAuth-bind tests read back (user_id
+		// for attach checks, status for the negative-bind path
+		// assertion that the row was never promoted to active).
 		`CREATE TABLE IF NOT EXISTS platform_accounts (
 			id BIGSERIAL PRIMARY KEY,
+			user_id BIGINT NOT NULL,
+			workspace_id BIGINT NOT NULL,
 			platform TEXT NOT NULL,
 			platform_user_id TEXT NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			username TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending_authorization',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		// posts: user_id + workspace_id + status + publish_at
 		// cover scenario_5. Other columns are present for shape
@@ -962,6 +1000,53 @@ func applyE2ESchema(db *sql.DB) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		// sessions: youtube_oauth_browser_e2e_test.go's
+		// session-middleware path-verification
+		// (idx_sessions_user_id index kept for shape parity with
+		// the production table — keeps SELECT-by-user_id plans
+		// identical to production behaviour).
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id BIGSERIAL PRIMARY KEY,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			workspace_id BIGINT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+			token_hash TEXT NOT NULL DEFAULT '',
+			expires_at TIMESTAMPTZ NOT NULL,
+			revoked_at TIMESTAMPTZ NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id)`,
+		// oauth_connections: counter-ASSERTed by the bind-test's
+		// assertOAuthConnectionCount helper (provider_resource_id
+		// SELECT). Production migration 043 defines a richer shape;
+		// we surface only what the suite reads.
+		`CREATE TABLE IF NOT EXISTS oauth_connections (
+			id BIGSERIAL PRIMARY KEY,
+			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			provider TEXT NOT NULL,
+			provider_resource_id TEXT NOT NULL,
+			scopes TEXT[] NOT NULL DEFAULT '{}',
+			last_validated_at TIMESTAMPTZ NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (user_id, provider, provider_resource_id)
+		)`,
+		// upload_jobs: counter-ASSERTed by the bind-test's
+		// assertUploadJobCount helper (account_id SELECT).
+		// Production migration 045/046 define a richer shape;
+		// we surface only what the suite reads.
+		`CREATE TABLE IF NOT EXISTS upload_jobs (
+			id BIGSERIAL PRIMARY KEY,
+			account_id BIGINT NULL,
+			ingest_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			publish_at TIMESTAMPTZ NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			user_id BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
+			workspace_id BIGINT NULL REFERENCES workspaces(id) ON DELETE SET NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_upload_jobs_account_id ON upload_jobs (account_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_post_targets_platform_account_id ON post_targets (platform_account_id)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
