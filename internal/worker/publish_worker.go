@@ -608,11 +608,43 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		ytPub, lookupErr := w.ytPubLookup.FindByPostTargetID(ctx, target.ID)
 		switch {
 		case lookupErr != nil:
-			// Treat as transient: mark the target failed so it
-			// drops out of the publish filter set; the next tick
-			// retries. Same shape as a MarkRetry on the post_target
-			// — the publish driver's per-target error counter
-			// increments and the operator sees the failure mode.			return w.markFailed(target, "youtube target publication lookup: "+lookupErr.Error())
+			// PR-1 fix — transient yt_pub lookup error must NOT
+			// hard-fail the target. The pre-fix branch called
+			// w.markFailed(target, ...) which transitioned the row
+			// to status='failed' (terminal); the comment previously
+			// claimed "the next tick retries" but that was a lie —
+			// ListPending filters on status='queued' so a terminal-
+			// failed row never gets re-picked up by the driver.
+			//
+			// Correct semantics: roll back our atomic claim
+			// (publishing → queued) so the next tick's ListPending
+			// re-picks this target and retries the lookup. We
+			// still return the wrapped lookup error so that
+			// tick() counts this attempt as a failure (per-target
+			// error counter increments, operator sees the cause in
+			// the tick-failed log line) — but the STATE is
+			// recoverable, not terminal.
+			//
+			// Two non-fatal edge cases:
+			//   1. UpdateStatus itself errors (DB blip during
+			//      the rollback): logged at warn, target stays in
+			//      'publishing' until lease expiry. Operator still
+			//      sees the lookup_err via tick log.
+			//   2. The claim rollback races with another replica's
+			//      concurrent tick that picked up the same row from
+			//      ListPending's transient overlap window: rejected
+			//      by the WHERE-clause guard in UpdateStatus
+			//      (RowsAffected==0 → ErrPostTargetNotFound). Same
+			//      warning-shape handling.
+			target.Status = models.PostStatusQueued
+			if rbErr := w.postRepo.UpdateStatus(target); rbErr != nil {
+				w.logger.Warn(
+					"publish worker: yt-pub lookup transient — could not roll back claim to queued",
+					"target_id", target.ID, "post_id", target.PostID,
+					"lookup_error", lookupErr, "rollback_error", rbErr,
+				)
+			}
+			return fmt.Errorf("youtube target publication lookup: %w", lookupErr)
 		case ytPub != nil &&
 			ytPub.YouTubeUploadStatus == "youtube_uploaded" &&
 			ytPub.YouTubeVideoID != nil &&
