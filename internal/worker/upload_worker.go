@@ -114,6 +114,14 @@ type UploadYouTubeTargetPubStore interface {
 	FindByPostTargetID(ctx context.Context, postTargetID int64) (*models.YouTubeTargetPublication, error)
 	MarkYouTubeUploaded(ctx context.Context, id int64, videoID string) error
 	IncrementAttempt(ctx context.Context, id int64, lastError string) error
+	// MarkYouTubeUploadedAtomic (Blocco #1 followup — Finding #3
+	// split-tx drift fix) is the success-path atomic transition. The
+	// worker calls this INSTEAD of the standalone MarkYouTubeUploaded
+	// so attempt_count + status + youtube_video_id commit or not in one
+	// Postgres UPDATE. The standalone MarkYouTubeUploaded stays in the
+	// interface for legacy callers (handler tests, read-only mocks)
+	// that don't need the increment-folded shape.
+	MarkYouTubeUploadedAtomic(ctx context.Context, id int64, videoID string) error
 	Update(ctx context.Context, pub *models.YouTubeTargetPublication) error
 }
 
@@ -944,6 +952,14 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 		// sets it explicitly via the post-update endpoint when they want a
 		// per-post override.
 		DefaultPrivacyLevel: job.DefaultPrivacyLevel,
+		// Blocco #1 P0 — FIXED via migration 077: stamp the upload_job_id
+		// onto the post so PostRepository.Create's ON CONFLICT
+		// (upload_job_id) DO NOTHING path can re-use the existing row on
+		// a MarkRetry instead of stacking phantom posts. The pointer
+		// &job.ID is taken because models.Post.UploadJobID is *int64
+		// (Migration 077 made the column nullable + partial-unique so
+		// the HTTP /api/v1/posts path can leave it nil and coexist).
+		UploadJobID: &job.ID,
 	}
 	targets := make([]*models.PostTarget, 0, len(job.Targets))
 	for _, accountID := range job.Targets {
@@ -1073,24 +1089,22 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 // via the resumable-session protocol only if the worker re-attaches// to the prior session URI (NOT a concern here since the helper
 // always starts a fresh session).
 //
-// KNOWN LIMITATION (Blocca #1 followup — ACCEPT-THIS-PR): a transient
-// failure BETWEEN post.Create (called by the calling processPublishJob)
-// AND MarkCompleted triggers MarkRetry on the parent upload_job. The
-// retry's processPublishJob calls w.postStore.Create with a fresh
-// Post{} (post.ID=0), so PostRepository.Create inserts a brand-new
-// post + fan-out (post_targets.id are also fresh via RETURNING id).
-// The per-target YouTube pub rows from the prior attempt reference
-// the OLD target.ID and are invisible to the retry's helper call.
-// Result: each retry creates phantom posts + fires a fresh
-// videos.insert on the same channel. The helper-level idempotency
-// skip fires only WITHIN a single claim — not across claim retries.
-//
-// Fix scope (next PR): migration adding
-// `posts.upload_job_id BIGINT UNIQUE NOT NULL REFERENCES upload_jobs(id)
-// ON DELETE CASCADE` and making PostRepository.Create idempotent via
-// `ON CONFLICT (upload_job_id) DO NOTHING` + a follow-up ListByPost
-// re-load. This PR accepts the limitation; the happy-path (one
-// attempt succeeds) is unchanged.
+// FIXED (Blocco #1 followup — migration 077): the prior transient-failure
+// phantom-posts-on-MarkRetry symptom was eliminated by the migration
+// below: posts.upload_job_id is now stamped with &job.ID at this layer
+// (see the post struct literal at the top of processPublishJob), and
+// PostRepository.Create's ON CONFLICT (upload_job_id) WHERE
+// upload_job_id IS NOT NULL DO NOTHING + qSelectPostByUploadJobID
+// re-fetch path (internal/repository/post_repo.go::Create +
+// fetchExistingByUploadJobID) reuses the existing post row + its
+// post_targets fan-out instead of inserting a fresh row when the
+// retry's processPublishJob reaches this code path. youtube_target_
+// publications rows already-per-target (per attempt one) remain
+// unaffected: those have UNIQUE(post_target_id) which the per-target
+// helper's FindByPostTargetID short-circuit already handles for
+// within-claim reruns; across claim retries the OnConflict-style
+// shim below the post-rehydrate reuses the existing target.IDs and
+// the helper's idempotent-skip fires correctly.
 
 func (w *UploadWorker) uploadVideoAsPrivateForTarget(
 	ctx context.Context,
@@ -1228,9 +1242,16 @@ func (w *UploadWorker) uploadVideoAsPrivateForTarget(
 	}
 
 	// Transition the per-target row: status='youtube_uploaded' +
-	// youtube_video_id set.
-	if err := w.ytPubStore.MarkYouTubeUploaded(ctx, pub.ID, videoID); err != nil {
-		return fmt.Errorf("MarkYouTubeUploaded(pub=%d, videoID=%s): %w", pub.ID, videoID, err)
+	// youtube_video_id set. Blocco #1 followup — Finding #3 split-tx
+	// drift fix: use MarkYouTubeUploadedAtomic instead of the
+	// standalone MarkYouTubeUploaded so the attempt_count++ bump is
+	// folded into the same row-level Postgres UPDATE. Row-level UPDATEs
+	// are ACID-atomic, so a worker crash mid-call cannot leave the
+	// row in status='youtube_uploading' with attempt_count bumped (the
+	// pre-fix failure mode that produced orphan videos.insert on the
+	// next claim).
+	if err := w.ytPubStore.MarkYouTubeUploadedAtomic(ctx, pub.ID, videoID); err != nil {
+		return fmt.Errorf("MarkYouTubeUploadedAtomic(pub=%d, videoID=%s): %w", pub.ID, videoID, err)
 	}
 	w.logger.Info("upload worker: per-target youtube private upload OK",
 		"job_id", job.ID, "target_id", target.ID, "platform_account_id", account.ID, "youtube_video_id", videoID)

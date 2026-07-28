@@ -17,6 +17,17 @@ import (
 // case and either re-claim or 404 the API call.
 var ErrYouTubeTargetPublicationNotFound = errors.New("youtube target publication not found")
 
+// ErrYouTubeUploadedEmptyVideoID (Blocco #1 followup — Finding #3
+// split-tx drift fix) is the typed-sentinel returned by
+// MarkYouTubeUploadedAtomic when videoID == "". The pre-flight
+// guard rejects empty ids BEFORE issuing any UPDATE so the row
+// stays in the pre-call state (no `attempt_count++`, no status
+// flip, no `youtube_video_id` stamp). Wrapped alongside the
+// publish id so the worker log surfaces BOTH the failure mode
+// and which row the guard fired on. Use errors.Is to branch
+// from caller code (vs. parsing error strings).
+var ErrYouTubeUploadedEmptyVideoID = errors.New("youtube target publication MarkYouTubeUploadedAtomic: empty videoID (rejected pre-flight; row not mutated)")
+
 // YouTubeTargetPublicationStore is the persistence contract other packages
 // (workers, API handlers) depend on. Mirrors the conventions of
 // youtube_video_edit_repo.go::YouTubeVideoEditStore — declared next to
@@ -32,6 +43,21 @@ type YouTubeTargetPublicationStore interface {
 	MarkYouTubeUploaded(ctx context.Context, id int64, videoID string) error
 	MarkThumbnailReady(ctx context.Context, id int64, mediaID string) error
 	IncrementAttempt(ctx context.Context, id int64, lastError string) error
+	// MarkYouTubeUploadedAtomic (Blocco #1 followup — Finding #3
+	// split-tx drift fix) combines IncrementAttempt-by-1 + the
+	// MarkYouTubeUploaded flip + youtube_uploaded_at + youtube_video_id
+	// stamp into ONE Postgres UPDATE statement. Row-level UPDATE in
+	// Postgres is ACID-atomic, so the chunked-PUT-success and the
+	// attempt-counter increment cannot desync from one another —
+	// either both fields commit, or neither does. The pre-flight
+	// guard rejects videoID="" upfront so the method does NOT start
+	// a tx / issue an UPDATE for an empty video id (a worker bug
+	// upstream would otherwise leave the row in the
+	// `youtube_uploading` state with attempt_count bumped, mirroring
+	// the pre-fix failure mode). Returns ErrYouTubeTargetPublicationNotFound
+	// when 0 rows match the id — the upload_worker surfaces this as
+	// a parent-job retry signal (same shape as MarkYouTubeUploaded).
+	MarkYouTubeUploadedAtomic(ctx context.Context, id int64, videoID string) error
 	MarkPublished(ctx context.Context, id int64) error
 	// MarkYouTubeProcessed (migration 067, Blocco #3 P0) flips
 	// youtube_processing_status to 'processed' AND stamps
@@ -406,6 +432,18 @@ func (r *YouTubeTargetPublicationRepository) MarkThumbnailReady(ctx context.Cont
 // statement. The worker's Claim+increment pattern stays the right shape
 // — pair IncrementAttempt with whichever transition the worker is
 // retrying (e.g. MarkThumbnailReady once Velox responds 200).
+//
+// Blocco #1 followup — Finding #3 split-tx drift fix: IncrementAttempt
+// is now the **FAILURE-PATH ONLY** bump. The SUCCESS path uses
+// MarkYouTubeUploadedAtomic (which folds the attempt++ with the
+// status flip + video_id stamp into one atomic UPDATE). Do NOT
+// replace IncrementAttempt with MarkYouTubeUploadedAtomic on
+// failure paths — IncrementAttempt stamps `last_error = "upload
+// failed: ..."` for the operator-triage dashboard's retry-observability
+// view; a status flip + video_id stamp on a failed-but-not-uploaded
+// row would silently corrupt the unified-pipeline view. Call sites:
+//   - FAILURE path (UploadVideoAsPrivate returns err): IncrementAttempt(...)
+//   - SUCCESS path (UploadVideoAsPrivate returns non-empty videoID): MarkYouTubeUploadedAtomic(...)
 func (r *YouTubeTargetPublicationRepository) IncrementAttempt(ctx context.Context, id int64, lastError string) error {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE youtube_target_publications
@@ -415,6 +453,47 @@ func (r *YouTubeTargetPublicationRepository) IncrementAttempt(ctx context.Contex
 	)
 	if err != nil {
 		return fmt.Errorf("youtube target publication IncrementAttempt: %w", err)
+	}
+	return r.checkRowsAffected(res, id)
+}
+
+// MarkYouTubeUploadedAtomic (Blocco #1 followup — Finding #3) is the
+// success-path atomic transition: it folds IncrementAttempt-by-1
+// + the status flip to 'youtube_uploaded' + youtube_video_id stamp
+// + the youtube_uploaded_at timestamp (only on first transition, via
+// COALESCE so re-runs preserve the FIRST transition timestamp) +
+// updated_at touch into one UPDATE. Postgres row-level UPDATE is
+// ACID-atomic so the attempt counter and the terminal-state stamp
+// cannot desync if the worker crashes mid-call (the pre-fix split
+// form — separate IncrementAttempt (failure) + MarkYouTubeUploaded
+// (success) on different code paths — could leave a row with
+// `attempt_count++ + status='youtube_uploading'` on a partial
+// commit, making the next claim's idempotent-skip false and producing
+// an orphan videos.insert). Upfront guards: videoID == "" is
+// rejected with a typed error, no DB call. Returns
+// ErrYouTubeTargetPublicationNotFound on 0 rows (same shape as
+// MarkYouTubeUploaded).
+func (r *YouTubeTargetPublicationRepository) MarkYouTubeUploadedAtomic(ctx context.Context, id int64, videoID string) error {
+	// Pre-flight guard (Finding #3). Empty videoID MUST be rejected
+	// BEFORE issuing any UPDATE — otherwise the row would be
+	// left in `status='youtube_uploading'` with attempt_count++, the
+	// exact pre-fix failure mode. The typed sentinel wraps the id
+	// so the worker log can attribute the rejection precisely.
+	if videoID == "" {
+		return fmt.Errorf("%w: pub=%d", ErrYouTubeUploadedEmptyVideoID, id)
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE youtube_target_publications
+		 SET attempt_count = attempt_count + 1,
+		     youtube_video_id = $2,
+		     youtube_upload_status = 'youtube_uploaded',
+		     youtube_uploaded_at = COALESCE(youtube_uploaded_at, NOW()),
+		     updated_at = NOW()
+		 WHERE id = $1`,
+		id, videoID,
+	)
+	if err != nil {
+		return fmt.Errorf("youtube target publication MarkYouTubeUploadedAtomic: %w", err)
 	}
 	return r.checkRowsAffected(res, id)
 }
