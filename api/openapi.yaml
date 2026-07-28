@@ -1016,6 +1016,118 @@ paths:
         '503':
           description: YouTube video edit store not configured.
 
+  /api/v1/youtube/editor-sessions/{id}/publish:
+    post:
+      tags: [YouTube]
+      summary: Publish the edited thumbnail to YouTube.
+      description: |
+        Kicks off the publish orchestrator for the editor session.
+        Idempotent: a `published` session replays the stored public
+        URL; a `publishing` session in the in-flight window returns
+        409. On success returns the new status, the YouTube video
+        URL, and the actual privacy/sync-status read-back.
+      operationId: publishYouTubeEditorSession
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Editor session id (UUID).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/YouTubeEditorSessionPublishRequest'
+      responses:
+        '200':
+          description: Publish accepted and terminal-published.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YouTubeEditorSessionPublishResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          description: Publish already in progress or terminal state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: YouTube API failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish:
+    post:
+      tags: [YouTube]
+      summary: Publish the edited thumbnail to YouTube using the project id.
+      description: |
+        Same as `POST /api/v1/youtube/editor-sessions/{id}/publish`
+        but keyed by `velox_project_id`, which is the only handle the
+        Dark Editor holds.
+      operationId: publishYouTubeEditorSessionByProject
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - in: path
+          name: velox_project_id
+          required: true
+          schema:
+            type: string
+          description: Velox project id (the dark editor's project handle).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/YouTubeEditorSessionPublishRequest'
+      responses:
+        '200':
+          description: Publish accepted and terminal-published.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YouTubeEditorSessionPublishResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          description: Publish already in progress or terminal state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: YouTube API failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/InternalError'
+
 
   # ON 2026-07-27 (commit 8097e30-equivalent local) the path
   # /api/v1/groups/{group_id}/youtube/videos + the
@@ -1251,6 +1363,66 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+
+    # ────── YouTube editor session publish contract ──────────
+    YouTubeEditorSessionPublishRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 5000
+        privacy_status:
+          type: string
+          enum: [public, unlisted, private]
+        publish_at:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: string
+        default_language:
+          type: string
+        default_audio_language:
+          type: string
+        translations:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              title:
+                type: string
+              description:
+                type: string
+    YouTubeEditorSessionPublishResponse:
+      type: object
+      required: [status, public_url, video_id, privacy_status]
+      properties:
+        status:
+          type: string
+          enum: [published]
+          description: Editor session status on a successful publish.
+        public_url:
+          type: string
+          format: uri
+        video_id:
+          type: string
+        privacy_status:
+          type: string
+          enum: [public, unlisted, private]
+        actual_privacy:
+          type: string
+          enum: [public, unlisted, private]
+        youtube_sync_status:
+          type: string
+          enum: [confirmed, drift, pending, failed]
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
 
     # ────── Errors (canonical envelope, Taglio 5.x design) ──────────
     Error:

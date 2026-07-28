@@ -126,6 +126,52 @@ func TestGetYouTubeEditorSessionByProject_404_NotFound(t *testing.T) {
 	}
 }
 
+// TestPublishYouTubeEditorSessionByProject_200_ResponseContainsStatus
+// verifies that a successful publish response includes the `status`
+// field (P0 contract alignment).
+func TestPublishYouTubeEditorSessionByProject_200_ResponseContainsStatus(t *testing.T) {
+	t.Parallel()
+	workspace := &models.Workspace{ID: 7, OwnerID: 1}
+	edit := &models.YouTubeVideoEdit{
+		ID:                "sess-1",
+		WorkspaceID:       workspace.ID,
+		PlatformAccountID: 42,
+		YouTubeVideoID:    "yt-1",
+		VeloxProjectID:    "vp-1",
+		DesiredPrivacy:    "public",
+		Status:            "published",
+		ActualPrivacy:     strPtr("public"),
+		YouTubeSyncStatus: strPtr("confirmed"),
+	}
+	router := newByProjectRouter(t, workspace, edit)
+
+	body := bytes.NewReader([]byte(`{"privacy_status":"public"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/vp-1/publish", body)
+	withBearerJWT(t, req, 1)
+	rec := httptest.NewRecorder()
+	router.Setup().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	var resp publishYouTubeEditorSessionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Status != "published" {
+		t.Fatalf("expected status=published, got %q", resp.Status)
+	}
+	if resp.VideoID != "yt-1" {
+		t.Fatalf("expected video_id=yt-1, got %q", resp.VideoID)
+	}
+	if resp.ActualPrivacy != "public" {
+		t.Fatalf("expected actual_privacy=public, got %q", resp.ActualPrivacy)
+	}
+	if resp.YouTubeSyncStatus != "confirmed" {
+		t.Fatalf("expected youtube_sync_status=confirmed, got %q", resp.YouTubeSyncStatus)
+	}
+}
+
 // TestGetYouTubeEditorSessionByProject_200_HappyPath verifies the
 // happy-path GET returns the YouTubeEditorSessionDetail DTO.
 func TestGetYouTubeEditorSessionByProject_200_HappyPath(t *testing.T) {
