@@ -34,6 +34,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx stdlib driver for sql.Open("pgx", ...)
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/runtime"
 )
 
 // statusResumeIncomplete is the YouTube resumable-upload protocol's
@@ -76,12 +78,29 @@ type E2EHarness struct {
 func NewE2EHarness(t *testing.T) *E2EHarness {
 	t.Helper()
 
+	// Docker-availability guard: keeps this harness symmetric with
+	// internal/testutil/postgres.go + redis.go so a dev laptop
+	// without a running daemon t.Skip's instead of hanging the
+	// suite on the first ConnectedTaskFailed.
+	runtime.RequireDocker(t)
+
 	h := &E2EHarness{t: t}
 	h.driveFake = newFakeDriveServer()
 	h.youTubeFake = newFakeYouTubeServer()
 	h.veloxFake = newFakeVeloxServer()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	// Outer context bumped 120s -> 240s to absorb two failure modes
+	// observed in CI:
+	//   - testcontainers-go/modules/postgres v0.43.0 default
+	//     WaitForLog startup timeout is 60s and races the
+	//     container's TCP listener on busy ubuntu-latest runners.
+	//   - In a "connection reset by peer" recovery, the second
+	//     container start can hit the same race and pull the
+	//     startup-tail past 2 minutes.
+	// The explicit WithWaitStrategy below uses a 180s startup budget
+	// which is the inner ceiling; 240s is the safety margin for the
+	// outer ctx (Run + ConnectionString + WaitReady).
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
 
 	pgC, err := tcpostgres.RunContainer(ctx,
@@ -89,6 +108,19 @@ func NewE2EHarness(t *testing.T) *E2EHarness {
 		tcpostgres.WithDatabase("instaedit_e2e"),
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("postgres"),
+		// No explicit WithWaitStrategy override: the modules/postgres
+		// default WaitForLog("database system is ready to accept
+		// connections") already covers postgres's canonical "ready"
+		// signal. The failure mode observed under CI was NOT a
+		// missing-log race but a TCP-listener race AFTER the log
+		// fired — absorbed by the runtime.WaitReady db.PingContext
+		// poll below (the second-stage readiness probe). Customizing
+		// the strategy here would only obfuscate the real fix path
+		// (WaitReady) without addressing the bit that matters.
+		// Keeping postgres:17-alpine pinned because
+		// TestMigrations_OrderIndependent (integration.yml comment
+		// line 220+) intentionally exercises post-17 features; do
+		// NOT downgrade to 16.
 	)
 	if err != nil {
 		t.Skipf("testcontainers: cannot start Postgres (Docker unavailable?): %v", err)
@@ -112,6 +144,21 @@ func NewE2EHarness(t *testing.T) *E2EHarness {
 	// ~1 listener + ~4 simultaneous INSERTs is plenty.
 	db.SetMaxOpenConns(4)
 	h.pgDB = db
+
+	// Second-stage readiness probe: the explicit WaitStrategy above
+	// already passed (the "database system is ready" log fired),
+	// but testcontainers-go's log-based signal races the TCP
+	// listener being able to honour a real connection. Absorb the
+	// race with runtime.WaitReady's canonical 30s/200ms contract
+	// (matching internal/testutil/postgres.go's "instance ready =
+	// log + ping" two-stage model with a slightly wider e2e
+	// budget because the TCP listener race is wider on the e2e
+	// suite's auth-bearing image than on the lighter unit-helper
+	// image).
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	runtime.WaitReady(t, func() error { return db.PingContext(pingCtx) },
+		30*time.Second, 200*time.Millisecond)
+	pingCancel()
 
 	if err := applyE2ESchema(h.pgDB); err != nil {
 		_ = h.pgDB.Close()
