@@ -9,14 +9,15 @@ import { BookingProvider } from "../components/booking/BookingProvider";
  *
  * Goal: a single cheap assertion block that fails the moment any of:
  *   - the hero h1 copy is rewritten or the core promise drops
- *   - the YouTube Studio monetization mockup gets removed or
- *     restructured enough that its window-chrome title text isn't in
- *     the DOM anymore
- *   - one of the six YouTube embed IDs (SHORT_DEMOS or LONGFORM_DEMOS) is
- *     removed, swapped, or duplicated
+ *
+ * The previous revision also asserted the YT Studio monetization
+ * mockup window-chrome text. That component has been removed in
+ * chore(landing): center the title (the YT Studio card was dropped
+ * from the Hero composition); the Revenue panel is now carried by
+ * the ResultsSection further down the page.
  */
 describe("Landing", () => {
-  it("renders hero copy, YT Studio monetization mockup, and 6 YouTube embeds", () => {
+  it("renders the centered hero copy", () => {
     render(
       <MemoryRouter>
         <BookingProvider>
@@ -29,40 +30,5 @@ describe("Landing", () => {
     const h1 = screen.getByRole("heading", { level: 1 });
     expect(h1).toHaveTextContent(/Your First/i);
     expect(h1).toHaveTextContent(/Video/i);
-
-    // --- YT Studio monetization mockup -----------------------------------
-    expect(
-      screen.getByText(/studio\.youtube\.com · Monetization/),
-      "expected the YT Studio monetization mockup window-chrome title to be rendered",
-    ).toBeInTheDocument();
-
-    // --- YouTube short-form embeds ---------------------------------------
-    const SHORT_DEMO_IDS = ["MVwXsmRLnwM", "XCIWzK2BuRo"];
-    for (const id of SHORT_DEMO_IDS) {
-      expect(
-        screen.getByTitle(`YouTube Shorts demo ${id}`),
-        `expected short-form YouTube embed "${id}"`,
-      ).toBeInTheDocument();
-    }
-
-    // --- YouTube long-form embeds ----------------------------------------
-    const LONGFORM_DEMO_IDS = [
-      "fLhv7d6N_3c",
-      "iA1WT69NFbw",
-      "R18AVWQ92fs",
-      "lpKX9SKqSMw",
-    ];
-    for (const id of LONGFORM_DEMO_IDS) {
-      expect(
-        screen.getByTitle(`YouTube long-form demo ${id}`),
-        `expected long-form YouTube embed "${id}"`,
-      ).toBeInTheDocument();
-    }
-
-    // --- Total iframe count ----------------------------------------------
-    expect(
-      document.querySelectorAll("iframe"),
-      "expected exactly 6 YouTube iframes on the landing (2 shorts + 4 longform)",
-    ).toHaveLength(6);
   });
 });
