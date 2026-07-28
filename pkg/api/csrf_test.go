@@ -295,7 +295,9 @@ func TestWriteSessionCookies_AlsoSetsCsrfCookie(t *testing.T) {
 	// Router is exactly what the refactor needs.
 	h := csrfHarnessNew(t)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	// PR-2A follow-up: `req := httptest.NewRequest(...)` removed —
+	// setSessionCookie's signature no longer takes req after the
+	// YAGNI placeholder cleanup. The local was dead state.
 	result := &services.StartSessionResult{
 		SessionID:        1,
 		AccessToken:      "fake-jwt",
@@ -309,7 +311,7 @@ func TestWriteSessionCookies_AlsoSetsCsrfCookie(t *testing.T) {
 	// cmd/server/main.go: the CSRF cookie must be Secure in
 	// production so SameSite=None is honoured by browsers.
 	h.Router.cookieSecure = true
-	h.Router.setSessionCookie(w, req, result)
+	h.Router.setSessionCookie(w, result)
 	cookies := w.Result().Cookies()
 	var session, csrf *http.Cookie
 	for _, c := range cookies {
@@ -361,7 +363,11 @@ func TestCookieDomain_AppliesOnlyToCsrfCookie(t *testing.T) {
 	h.Router.cookieDomain = ".instaedit.org"
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	// PR-2A follow-up: was `req := httptest.NewRequest(...)` to thread
+	// req into setSessionCookie. The YAGNI cleanup dropped `req` from
+	// setSessionCookie's signature, so the local was left as dead
+	// state. Removed inline. Each test below continues to use only
+	// `w` (the recorder) + `result` (the StartSessionResult fixture).
 	result := &services.StartSessionResult{
 		SessionID:        1,
 		AccessToken:      "fake-jwt",
@@ -371,7 +377,7 @@ func TestCookieDomain_AppliesOnlyToCsrfCookie(t *testing.T) {
 		RefreshHash:      []byte("fake-refresh-hash"),
 		RefreshExpiresAt: time.Now().Add(30 * 24 * time.Hour),
 	}
-	h.Router.setSessionCookie(w, req, result)
+	h.Router.setSessionCookie(w, result)
 
 	var session, refresh, csrf *http.Cookie
 	for _, c := range w.Result().Cookies() {
@@ -446,7 +452,11 @@ func TestCookieDomain_Empty_AllCookiesHostOnly(t *testing.T) {
 	// Deliberately leave cookieDomain at its zero value (empty string).
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	// PR-2A follow-up: was `req := httptest.NewRequest(...)` to thread
+	// req into setSessionCookie. The YAGNI cleanup dropped `req` from
+	// setSessionCookie's signature, so the local was left as dead
+	// state. Removed inline. Each test below continues to use only
+	// `w` (the recorder) + `result` (the StartSessionResult fixture).
 	result := &services.StartSessionResult{
 		SessionID:        1,
 		AccessToken:      "fake-jwt",
@@ -456,7 +466,7 @@ func TestCookieDomain_Empty_AllCookiesHostOnly(t *testing.T) {
 		RefreshHash:      []byte("fake-refresh-hash"),
 		RefreshExpiresAt: time.Now().Add(30 * 24 * time.Hour),
 	}
-	h.Router.setSessionCookie(w, req, result)
+	h.Router.setSessionCookie(w, result)
 
 	for _, c := range w.Result().Cookies() {
 		if c.Name != auth.SessionCookieName && c.Name != auth.RefreshCookieName && c.Name != auth.CSRFTokenCookieName {
