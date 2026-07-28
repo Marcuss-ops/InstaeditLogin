@@ -44,8 +44,8 @@
 
 | Tipo | Count | Range LOC |
 |---|---:|---|
-| prod | 7 | 1025 → 1433 |
-| test | 13 | 976 → 2616 |
+| prod | 9 | 1025 → 1433 |
+| test | 11 | 976 → 2616 |
 
 ## Top production code (non-test) — focus del refactor
 
@@ -187,4 +187,4 @@ Stima: **~35 commit** solo per i test file > 900 LOC.
 ### Fase 4 — Frontend (3 commit)
 1. `web/.../DriveBatchImportDialog.tsx` split
 
-Stima totale: **~82 commit** per InstaeditLogin.
+Stima totale: **~75 commit** per InstaeditLogin.
