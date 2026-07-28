@@ -43,6 +43,16 @@ const groupYouTubeVideosMaxAccounts = 200
 // order = newest first per channel).
 const groupYouTubeVideosMaxTotalVideos = 500
 
+// groupYouTubeVideosPhantomMaxAge bounds how far back the handler
+// emits "phantom" entries for published sessions whose YouTube row
+// was filtered out (see handleListGroupYouTubeVideos step 7.5).
+// Without this cap a long-history channel would saturate the
+// response with year-old publishes and push out the current
+// editable videos. 90 days covers the typical "I just published
+// this week / month" operator workflow without forcing a hard
+// expiry for occasional re-edits of older videos.
+const groupYouTubeVideosPhantomMaxAge = 90 * 24 * time.Hour
+
 // groupYouTubeVideoEntry is the per-row JSON shape returned by GET
 // /api/v1/groups/{group_id}/youtube/videos. The shape mirrors
 // models.YouTubeVideoDetails (from YouTube list) joined with the
@@ -102,6 +112,14 @@ type groupYouTubeVideoEntry struct {
 	// by the CHECK constraint on youtube_video_edits.youtube_sync_status
 	// (migration 072).
 	YouTubeSyncStatus *string `json:"youtube_sync_status,omitempty"`
+	// Phantom: true when this entry was synthesized from a session
+	// row that no longer matches a YouTube row in the per-account
+	// fan-out (ListEditableVideos filters out privacy=public).
+	// The thumbnail URL points to YouTube's public CDN so the
+	// operator gets a visual signal even though we did not query
+	// the video's snippet. A deleted video surfaces a grey
+	// placeholder thumbnail; that's an acceptable edge case.
+	Phantom bool `json:"phantom,omitempty"`
 }
 
 // groupYouTubeVideosResponse is the envelope. `videos: []` is
@@ -304,7 +322,15 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 	}
 	sessionMap := make(map[string]*models.YouTubeVideoEdit, len(sessions))
 	for _, s := range sessions {
-		sessionMap[sessionKey(s.PlatformAccountID, s.YouTubeVideoID)] = s
+		// ListByWorkspaceAccountIDs returns rows ORDER BY updated_at
+		// DESC, so the FIRST occurrence in this loop is the newest.
+		// Keep the newest; ignore older duplicates. (Without this
+		// guard the map would end up with the OLDEST session for
+		// any (account, video) tuple that was ever edited twice.)
+		key := sessionKey(s.PlatformAccountID, s.YouTubeVideoID)
+		if _, exists := sessionMap[key]; !exists {
+			sessionMap[key] = s
+		}
 	}
 
 	// 6. Fan-out: per-account YouTube listing. Bounded concurrency
@@ -343,6 +369,13 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 	// 7. Aggregate. Each YouTube row joins with the existing session
 	// map by (account_id, youtube_video_id) — O(1) per row.
 	entries := make([]groupYouTubeVideoEntry, 0, 64)
+	// emittedKeys tracks (account_id, youtube_video_id) tuples
+	// that the fan-out already emitted, so the phantom pass below
+	// does not double-emit when a race surfaces a public video in
+	// both lists (very rare; happens when the privacy flip lands
+	// AFTER our ListEditableVideos call but before we finish the
+	// aggregation).
+	emittedKeys := make(map[string]struct{}, 64)
 	warnings := make([]string, 0)
 	for res := range results {
 		if res.warning != "" {
@@ -367,6 +400,7 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 				EditorStatus:      "ready",
 				YouTubeSyncStatus: &unconfirmed,
 			}
+			emittedKeys[sessionKey(res.accountID, v.ID)] = struct{}{}
 			if s, ok := sessionMap[sessionKey(res.accountID, v.ID)]; ok {
 				sid := s.ID
 				entry.EditorSessionID = &sid
@@ -394,6 +428,97 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 			entries = append(entries, entry)
 		}
 	}
+
+	// 7.5. Phantom emission: published sessions whose
+	// (account_id, youtube_video_id) tuple has no matching YouTube
+	// row in the fan-out. ListEditableVideos filters out
+	// privacy=public videos, so a session we just published as
+	// public disappears from the YouTube side of the join — without
+	// this pass it would also vanish from the group's video grid.
+	//
+	// The thumbnail URL is YouTube's public CDN
+	// (i.ytimg.com/vi/{ID}/hqdefault.jpg), which works for any
+	// public/unlisted video without an extra API call. A deleted
+	// video would surface a grey placeholder; that's an acceptable
+	// edge case for a recently-published video.
+	//
+	// Cross-group guard: only emit phantoms for sessions whose
+	// PlatformAccountID is in the current group's account set, so
+	// a leaked account row cannot surface a phantom entry in
+	// another group's response.
+	//
+	// Recency filter: sessions updated more than
+	// groupYouTubeVideosPhantomMaxAge ago are skipped to avoid
+	// saturating the response with year-old publishes.
+	now := time.Now()
+	for _, s := range sessions {
+		if s.Status != "published" {
+			continue
+		}
+		if now.Sub(s.UpdatedAt) > groupYouTubeVideosPhantomMaxAge {
+			continue
+		}
+		key := sessionKey(s.PlatformAccountID, s.YouTubeVideoID)
+		if _, emitted := emittedKeys[key]; emitted {
+			// Race: YouTube briefly included the public video
+			// before the privacy flip took effect. The fan-out
+			// already emitted a regular entry; don't double-count.
+			continue
+		}
+		if _, inGroup := accountLookup[s.PlatformAccountID]; !inGroup {
+			continue
+		}
+		emittedKeys[key] = struct{}{}
+		chName := strings.TrimSpace(accountLookup[s.PlatformAccountID].account.Username)
+		if chName == "" {
+			chName = accountLookup[s.PlatformAccountID].account.PlatformUserID
+		}
+		thumbnailURL := fmt.Sprintf("https://i.ytimg.com/vi/%s/hqdefault.jpg", s.YouTubeVideoID)
+		title := ""
+		if s.DraftTitle != nil {
+			title = strings.TrimSpace(*s.DraftTitle)
+		}
+		if title == "" {
+			title = "(Titolo sconosciuto \u2014 Pubblicato)"
+		}
+		// Resolve privacy: actual_privacy (preferred) → desired_privacy
+		// → public fallback (a published session with no privacy
+		// resolved yet is virtually always public since we only
+		// synthesize phantoms for sessions that are no longer in
+		// ListEditableVideos = privacy != private AND != unlisted).
+		privacy := s.ActualPrivacy
+		if privacy == nil || *privacy == "" {
+			if s.DesiredPrivacy != "" {
+				dp := s.DesiredPrivacy
+				privacy = &dp
+			}
+		}
+		if privacy == nil || *privacy == "" {
+			p := "public"
+			privacy = &p
+		}
+		sid := s.ID
+		vid := s.VeloxProjectID
+		u := r.editorURLForProject(s.VeloxProjectID)
+		entries = append(entries, groupYouTubeVideoEntry{
+			YouTubeVideoID:    s.YouTubeVideoID,
+			Title:             title,
+			ThumbnailURL:      thumbnailURL,
+			PrivacyStatus:     *privacy,
+			ProcessingStatus:  "processed",
+			PlatformAccountID: s.PlatformAccountID,
+			ChannelName:       chName,
+			EditorSessionID:   &sid,
+			VeloxProjectID:    &vid,
+			EditorURL:         &u,
+			EditorStatus:      "published",
+			DesiredPrivacy:    s.DesiredPrivacy,
+			ActualPrivacy:     s.ActualPrivacy,
+			YouTubeSyncStatus: s.YouTubeSyncStatus,
+			Phantom:           true,
+		})
+	}
+
 	// Hard cap on response size. The slice is already in
 	// per-channel newest-first order (post-fan-out concatenation
 	// preserves each channel's order), so the cap truncates the
