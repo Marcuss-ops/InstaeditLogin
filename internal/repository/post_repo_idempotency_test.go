@@ -2,7 +2,6 @@ package repository_test
 
 import (
 	"database/sql"
-	"errors"
 	"strings"
 	"testing"
 	"time"

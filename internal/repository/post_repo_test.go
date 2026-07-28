@@ -79,13 +79,13 @@ func TestPostCreate_AtomicTx_Happy(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(
-		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		 RETURNING id, created_at`,
-	).WithArgs(int64(1), "hello", "world", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
+	mock.ExpectBegin()	mock.ExpectQuery(
+		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
+ RETURNING id, created_at, upload_job_id`,
+	).WithArgs(int64(1), "hello", "world", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(100, now, nil))
 	// Target A: id=200 from RETURNING (first iteration of targets loop).
 	mock.ExpectQuery(
 		`INSERT INTO post_targets (post_id, platform_account_id, status)
@@ -154,12 +154,12 @@ func TestPostCreate_EmptyTargets_OKSkipsTargetInserts(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		 RETURNING id, created_at`).
-		WithArgs(int64(1), "draft", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
+	mock.ExpectBegin()	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
+ RETURNING id, created_at, upload_job_id`).
+		WithArgs(int64(1), "draft", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(100, now, nil))
 	// No target insert expectations — we pass nil/empty targets.
 	// No outbox insert expectations either — no targets means no outbox events.
 	mock.ExpectCommit()
@@ -182,12 +182,12 @@ func TestPostRepository_Create_TxRollback(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		 RETURNING id, created_at`).
-		WithArgs(int64(1), "hello", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
+	mock.ExpectBegin()	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
+ RETURNING id, created_at, upload_job_id`).
+		WithArgs(int64(1), "hello", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(100, now, nil))
 	mock.ExpectQuery(`INSERT INTO post_targets (post_id, platform_account_id, status)
 		 VALUES ($1, $2, $3)
 		 RETURNING id`).
@@ -491,18 +491,16 @@ func TestPostFindByID_NotFoundReturnsNilNil(t *testing.T) {
 func TestPostListByWorkspace_OK(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
-	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-
-	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
-		 FROM posts
-		 WHERE workspace_id = $1
-		 ORDER BY created_at DESC`,
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)	mock.ExpectQuery(
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
+	 FROM posts
+	 WHERE workspace_id = $1
+	 ORDER BY created_at DESC`,
 	).WithArgs(int64(1)).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at"},
-		).AddRow(2, 1, "B", "", "", now, nil, models.PostStatusDraft, "", "", now).
-			AddRow(1, 1, "A", "", "", now, nil, models.PostStatusDraft, "", "", now))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id"},
+		).AddRow(2, 1, "B", "", "", now, nil, models.PostStatusDraft, "", "", now, nil).
+			AddRow(1, 1, "A", "", "", now, nil, models.PostStatusDraft, "", "", now, nil))
 
 	got, err := repo.ListByWorkspace(1)
 	if err != nil {
@@ -561,17 +559,15 @@ func TestPostListQueued_BeforeTimeFilterApplied(t *testing.T) {
 	// parameter rather than SQL NOW() → deterministic across timezones.
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
-	cutoff := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
-
-	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
-		 FROM posts
-		 WHERE status = 'queued' AND (publish_at IS NULL OR publish_at <= $1)
-		 ORDER BY publish_at ASC NULLS FIRST`,
+	cutoff := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)	mock.ExpectQuery(
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
+	 FROM posts
+	 WHERE status = 'queued' AND (publish_at IS NULL OR publish_at <= $1)
+	 ORDER BY publish_at ASC NULLS FIRST`,
 	).WithArgs(cutoff).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at"},
-		).AddRow(1, 1, "due", "", "", cutoff, cutoff, models.PostStatusScheduled, "", "", cutoff))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id"},
+		).AddRow(1, 1, "due", "", "", cutoff, cutoff, models.PostStatusScheduled, "", "", cutoff, nil))
 
 	posts, err := repo.ListQueued(cutoff)
 	if err != nil {
@@ -648,11 +644,11 @@ func TestPostCreate_ZeroIngestAfter_AutoStampsBeforeBind(t *testing.T) {
 		before := time.Now().UTC()
 		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-		mock.ExpectBegin()
-		mock.ExpectQuery(
-			`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-			 RETURNING id, created_at`,
+		mock.ExpectBegin()		mock.ExpectQuery(
+			`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
+ RETURNING id, created_at, upload_job_id`,
 		// sqlmock.AnyArg at position $5 is sufficient for the auto-stamp
 		// branch: the production code's `if post.IngestAfter.IsZero()`
 		// gate rewrites $5 to a non-zero time.Time before sqlmock sees
@@ -661,8 +657,8 @@ func TestPostCreate_ZeroIngestAfter_AutoStampsBeforeBind(t *testing.T) {
 		// would still slip past AnyArg; the type assertion in the
 		// post-call bracket (post.IngestAfter, Location, etc.) catches
 		// that too because the bind result is whatever the gate stamped.
-		).WithArgs(int64(1), "auto-stamp", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft).
-			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(100, now))
+		).WithArgs(int64(1), "auto-stamp", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(100, now, nil))
 		mock.ExpectCommit()
 
 		post := &models.Post{
@@ -706,13 +702,13 @@ func TestPostCreate_ZeroIngestAfter_AutoStampsBeforeBind(t *testing.T) {
 		explicitTime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
 		now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
-		mock.ExpectBegin()
-		mock.ExpectQuery(
-			`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-			 RETURNING id, created_at`,
-		).WithArgs(int64(2), "override", "", "", explicitTime, (*time.Time)(nil), "", "", models.PostStatusDraft).
-			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(200, now))
+		mock.ExpectBegin()	mock.ExpectQuery(
+		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
+ RETURNING id, created_at, upload_job_id`,
+	).WithArgs(int64(2), "override", "", "", explicitTime, (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(200, now, nil))
 		mock.ExpectCommit()
 
 		post := &models.Post{
@@ -765,12 +761,13 @@ func TestPostCreate_ConcurrentGoroutines_NoSharedState(t *testing.T) {
 			tgtBID := int64(201 + idx*10)
 
 			mock.ExpectBegin()
-			mock.ExpectQuery(
-				`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		 RETURNING id, created_at`,
-			).WithArgs(int64(1), "title", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft).
-				WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(postID, now))
+		mock.ExpectQuery(
+			`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
+ RETURNING id, created_at, upload_job_id`,
+		).WithArgs(int64(1), "title", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(postID, now, nil))
 			// Taglio 5.0 STEP 1: BOTH post_targets INSERT first (so the
 			// RETURNING ids fill target.ID for both rows), THEN BOTH
 			// outbox INSERTs.

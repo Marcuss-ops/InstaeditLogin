@@ -58,6 +58,19 @@ type YouTubeTargetPublicationStore interface {
 	// when 0 rows match the id — the upload_worker surfaces this as
 	// a parent-job retry signal (same shape as MarkYouTubeUploaded).
 	MarkYouTubeUploadedAtomic(ctx context.Context, id int64, videoID string) error
+	// ClearYouTubeUpload (Blocco #1 followup — Finding #4
+	// orphan-video recovery) nullifies the Phase-1 youtube_video_id
+	// stamp + resets status to 'upload_session_initiated' and
+	// attempt_count to 0 in ONE Postgres UPDATE. Called by
+	// PublishWorker.publishTarget when videos.update reports a 404
+	// on the Phase-1 stamped video_id (YouTube Studio deletion,
+	// moderator takedown, etc.) so the next tick does NOT re-take
+	// the bypass branch with a dead video_id. The fresh
+	// publisher.Publish call that follows the ClearYouTubeUpload
+	// upload-progresses through upload_worker.uploadVideoAsPrivateForTarget
+	// which stamps a NEW video_id via MarkYouTubeUploadedAtomic.
+	// Returns ErrYouTubeTargetPublicationNotFound on 0 rows.
+	ClearYouTubeUpload(ctx context.Context, id int64) error
 	MarkPublished(ctx context.Context, id int64) error
 	// MarkYouTubeProcessed (migration 067, Blocco #3 P0) flips
 	// youtube_processing_status to 'processed' AND stamps
@@ -494,6 +507,41 @@ func (r *YouTubeTargetPublicationRepository) MarkYouTubeUploadedAtomic(ctx conte
 	)
 	if err != nil {
 		return fmt.Errorf("youtube target publication MarkYouTubeUploadedAtomic: %w", err)
+	}
+	return r.checkRowsAffected(res, id)
+}
+
+// ClearYouTubeUpload (Blocco #1 followup — Finding #4 orphan-video
+// recovery) nullifies the Phase-1 youtube_video_id stamp and resets
+// youtube_upload_status / attempt_count to their pre-Publish
+// initial values in ONE Postgres UPDATE so a future publish-worker
+// tick that picks up the same post_target_id does NOT re-take the
+// bypass branch with a dead video_id. Called by
+// PublishWorker.publishTarget when videos.update returns a 404 on
+// the Phase-1 stamped video_id (user deleted the orphan via YouTube
+// Studio, moderator takedown, etc.). The next tick sees
+// youtube_upload_status='upload_session_initiated' + NULL
+// youtube_video_id and falls through to publisher.Publish +
+// upload_worker.uploadVideoAsPrivateForTarget, which freshly uploads
+// and stamps a new video_id via MarkYouTubeUploadedAtomic.
+//
+// Single-statement UPDATE = ACID-atomic at the row level (same
+// isolation guarantee as MarkYouTubeUploadedAtomic). Returns
+// ErrYouTubeTargetPublicationNotFound on 0 rows (matches the
+// MarkYouTubeUploaded / MarkYouTubeUploadedAtomic shape so
+// callers can use a single typed-sentinel branch).
+func (r *YouTubeTargetPublicationRepository) ClearYouTubeUpload(ctx context.Context, id int64) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE youtube_target_publications
+		 SET youtube_video_id = NULL,
+		     youtube_upload_status = 'upload_session_initiated',
+		     attempt_count = 0,
+		     updated_at = NOW()
+		 WHERE id = $1`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("youtube target publication ClearYouTubeUpload: %w", err)
 	}
 	return r.checkRowsAffected(res, id)
 }

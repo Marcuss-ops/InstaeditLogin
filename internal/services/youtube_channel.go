@@ -1215,7 +1215,18 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 	case resp.StatusCode == http.StatusForbidden:
 		return &YouTubeAPIError{StatusCode: http.StatusForbidden, Category: "auth", Message: "youtube update video: forbidden (status 403)"}
 	case resp.StatusCode == http.StatusNotFound:
-		return &YouTubeAPIError{StatusCode: http.StatusNotFound, Category: "not_found", Message: "youtube update video: video not found (status 404)"}
+		// Blocco #1 followup — Finding #4 (Phase-1 orphan-video
+		// recovery): wrap the typed sentinel via Go 1.20+ multi-%w
+		// so callers can match with errors.Is(err, ErrYouTubeVideoNotFound)
+		// (worker-side fallback on 404 + video_id-match) while
+		// preserving the *YouTubeAPIError diagnostic shape via
+		// errors.As(err, &apiErr). The wrap carries the offending
+		// video_id so the orphan-recovery branch's substring
+		// classifier (defense for any non-sentinel-aware code path)
+		// can confirm the 404 references OUR yt_pub row's video_id
+		// rather than a stale value from a previous target.
+		apiErr := &YouTubeAPIError{StatusCode: http.StatusNotFound, Category: "not_found", Message: "youtube update video: video not found (status 404)"}
+		return fmt.Errorf("%w: video_id=%s: %w", ErrYouTubeVideoNotFound, videoID, apiErr)
 	case resp.StatusCode == http.StatusTooManyRequests:
 		return &YouTubeAPIError{StatusCode: http.StatusTooManyRequests, Category: "rate_limit", Message: "youtube update video: rate limited (status 429)"}
 	case resp.StatusCode >= 500:

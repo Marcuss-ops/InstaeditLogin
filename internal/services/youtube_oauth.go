@@ -124,8 +124,14 @@ var _ error = (*ErrChannelListSafetyCap)(nil)
 // services.YouTubeChannelBinder capability interface. Caught by
 // `go vet`, not at runtime.
 var _ YouTubeChannelBinder = (*YouTubeOAuthService)(nil)
-
 var _ YouTubeCanaryUploader = (*YouTubeOAuthService)(nil)
+// P1 (Blocco #1 followup) — youtube_privacy_updater.go adds the
+// post-upload privacy-transition cast used by PublishWorker in
+// Phase 2 (skip-reupload path). The assertion keeps the contract
+// honest: a future refactor that renames UpdateVideoPrivacy or
+// changes its signature would surface here at vet time instead of
+// at runtime on a real publish tick.
+var _ YouTubePrivacyUpdater = (*YouTubeOAuthService)(nil)
 
 func (s *YouTubeOAuthService) GetLoginURL(state string) string {
 	return s.GetLoginURLWithOptions(state, OAuthLoginOptions{})

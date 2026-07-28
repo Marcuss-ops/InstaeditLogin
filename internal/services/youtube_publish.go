@@ -19,6 +19,27 @@ import (
 // (env YOUTUBE_UPLOAD_CHUNK_BYTES, default 16 MB / 16777216, must be a
 // multiple of 262144 = 256 KB per Google's resumable upload protocol).
 
+// ErrYouTubeVideoNotFound is the typed sentinel surfaced from
+// videos.update / setThumbnail / UpsertLocalizations when YouTube's
+// v3 API returns HTTP 404 with Category="not_found" — meaning the
+// referenced video_id no longer exists on the platform (user deleted
+// it via YouTube Studio, moderator takedown, etc.). The original
+// *YouTubeAPIError stays reachable via errors.As(err, &apiErr) for
+// callers that need the StatusCode / Category / Message diagnostic
+// fields. Errors.Is(err, ErrYouTubeVideoNotFound) returns true
+// regardless of which wrapping layer added the sentinel (the wrap
+// in UpdateVideoPrivacy / SetThumbnail uses Go 1.20+ multi-%w so the
+// chain is preserved).
+//
+// Blocco #1 followup — Finding #4 (Phase-1 orphan video): publish
+// workers detecting this sentinel route to a fresh publisher.Publish
+// path (and clear the stale youtube_target_publications row) instead
+// of hard-failing the post_target. See publish_worker.go's
+// isOrphanedYouTubeVideo classifier for the worker-side dispatch
+// (defense-in-depth fallback to substring match for any code path
+// that has not been re-wired to the sentinel yet).
+var ErrYouTubeVideoNotFound = errors.New("youtube video not found")
+
 // Publish uploads a video to YouTube using the resumable upload protocol.
 // For YouTube this is the async entrypoint: the upload completes synchronously
 // and returns a composite publishID (channelID:videoID). The reconciler will

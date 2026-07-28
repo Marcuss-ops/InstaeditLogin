@@ -150,7 +150,7 @@ html {
    * Uses bg-clip-text so the gradient is applied to glyphs, not text-stroke.
    * ================================================================== */
   .text-gradient {
-    background: linear-gradient(135deg, #a78bfa 0%, #22d3ee 50%, #f472b6 100%);
+    background: linear-gradient(135deg, #ff3b30 0%, #ff453a 50%, #ff2d55 100%);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
@@ -253,24 +253,18 @@ html {
    * PREMIUM WORD ANIMATIONS — animated gradient text, glow pulse, float.
    * Applied to key words in headings for a living, premium feel.
    * ================================================================== */
-  @keyframes gradient-shift {
-    0%   { background-position: 0% 50%; }
-    50%  { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
-  }
+
   @keyframes glow-breathe {
-    0%, 100% { text-shadow: 0 0 20px rgba(167, 139, 250, 0.4), 0 0 40px rgba(167, 139, 250, 0.2); }
-    50%      { text-shadow: 0 0 30px rgba(167, 139, 250, 0.7), 0 0 60px rgba(167, 139, 250, 0.35), 0 0 90px rgba(34, 211, 238, 0.2); }
+    0%, 100% { text-shadow: 0 0 20px rgba(255, 59, 48, 0.4), 0 0 40px rgba(255, 59, 48, 0.2); }
+    50%      { text-shadow: 0 0 30px rgba(255, 59, 48, 0.7), 0 0 60px rgba(255, 59, 48, 0.35), 0 0 90px rgba(255, 45, 85, 0.2); }
   }
 
   .text-gradient-animated {
-    background: linear-gradient(135deg, #a78bfa 0%, #22d3ee 30%, #f472b6 60%, #a78bfa 100%);
-    background-size: 300% 300%;
+    background: linear-gradient(135deg, #ff3b30 0%, #ff453a 50%, #ff2d55 100%);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
-    animation: gradient-shift 6s ease infinite;
-    filter: drop-shadow(0 0 18px rgba(167, 139, 250, 0.5)) drop-shadow(0 0 40px rgba(34, 211, 238, 0.25));
+    filter: drop-shadow(0 0 12px rgba(255, 59, 48, 0.35));
   }
 
   .text-glow {

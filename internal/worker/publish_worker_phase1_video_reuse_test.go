@@ -2,62 +2,67 @@ package worker
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // TestPublishTarget_YouTube_ReusesPhase1VideoID_VideosUpdate validates
 // the Phase-2 publish-bypass fix (Blocco #1 followup, P1 Migration 077).
 //
 // CONCRETE FIX:
-//   1. PublishWorker.publishTarget now queries
-//      youtube_target_publications.youtube_video_id for the target
-//      BEFORE dispatching publisher.Publish.
-//   2. When the row exists with youtube_upload_status="youtube_uploaded"
-//      AND a non-empty youtube_video_id, the worker routes through
-//      services.YouTubePrivacyUpdater.UpdateVideoPrivacy
-//      (videos.update) instead of publisher.Publish (videos.insert).
-//   3. publisher.Publish is NEVER called on the reuse path. The
-//      YouTube quota charge drops from 1600 + chunking units (videos.insert)
-//      to ~50 (videos.update metadata-only call).
-//   4. The post_target ends with PlatformPostID == phase1VideoID
-//      (NOT a brand-new videos.insert's id) and PublishedAt set.
+//  1. PublishWorker.publishTarget now queries
+//     youtube_target_publications.youtube_video_id for the target
+//     BEFORE dispatching publisher.Publish.
+//  2. When the row exists with youtube_upload_status="youtube_uploaded"
+//     AND a non-empty youtube_video_id, the worker routes through
+//     services.YouTubePrivacyUpdater.UpdateVideoPrivacy
+//     (videos.update) instead of publisher.Publish (videos.insert).
+//  3. publisher.Publish is NEVER called on the reuse path. The
+//     YouTube quota charge drops from 1600 + chunking units (videos.insert)
+//     to ~50 (videos.update metadata-only call).
+//  4. The post_target ends with PlatformPostID == phase1VideoID
+//     (NOT a brand-new videos.insert's id) and PublishedAt set.
 //
 // ─────────── BEFORE THE FIX (documented for posterity) ───────────
 //
 // Two-phase YouTube publishing flow:
-//   PHASE 1 (upload_worker.processPublishJob::uploadVideoAsPrivateForTarget)
-//     - Calls services.YouTubeOAuthService.UploadVideoAsPrivate
-//       (videos.insert, privacy HARDCODED to "private")
-//     - On success stamps the youtube_target_publications row via
-//       YouTubeTargetPublicationRepository.MarkYouTubeUploaded.
-//   PHASE 2 (publish_worker.publishTarget) — PRE-FIX behaviour:
-//     - Called publisher.Publish UNCONDITIONALLY for YouTube; produced
-//       a fresh full-resumable videos.insert. Orphaned the Phase-1
-//       private video. The post_target ended up with PlatformPostID =
-//       <PHASE2_VID> instead of <PHASE1_VID>. Dashboard "Published
-//       Video" link pointed at the wrong upload. YouTube quota was
-//       double-charged.
+//
+//	PHASE 1 (upload_worker.processPublishJob::uploadVideoAsPrivateForTarget)
+//	  - Calls services.YouTubeOAuthService.UploadVideoAsPrivate
+//	    (videos.insert, privacy HARDCODED to "private")
+//	  - On success stamps the youtube_target_publications row via
+//	    YouTubeTargetPublicationRepository.MarkYouTubeUploaded.
+//	PHASE 2 (publish_worker.publishTarget) — PRE-FIX behaviour:
+//	  - Called publisher.Publish UNCONDITIONALLY for YouTube; produced
+//	    a fresh full-resumable videos.insert. Orphaned the Phase-1
+//	    private video. The post_target ended up with PlatformPostID =
+//	    <PHASE2_VID> instead of <PHASE1_VID>. Dashboard "Published
+//	    Video" link pointed at the wrong upload. YouTube quota was
+//	    double-charged.
 //
 // ─────────── WHAT THE FIX-PATH TEST ASSERTS ───────────
 //
-// 1. publisher.Publish was NOT called for the reused Phase-1 video.
-//    (Phase 2 took the videos.update path, not the videos.insert path.)
-// 2. services.YouTubePrivacyUpdater.UpdateVideoPrivacy WAS called
-//    exactly once with:
-//      - videoID == phase1VideoID           (the YouTube video id Phase 1 stamped)
-//      - privacyStatus == "public"         (post.PrivacyLevel cascade result)
-//      - publishAt == post.PublishAt        (schedule cursor passed verbatim)
-//      - title/description == post fields   (snippet reuse)
-//      - accessToken == "fresh-bearer"      (post-vault.Renew, not stale)
-// 3. The post_target transitioned to status=published with
-//    PlatformPostID == phase1VideoID and PublishedAt != nil
-//    (matches the SYNC-PUBLISH branch's full target stamp shape).
-// 4. The youtube_target_publications row had MarkPublished called
-//    exactly once (stamp published_at on the row).
+//  1. publisher.Publish was NOT called for the reused Phase-1 video.
+//     (Phase 2 took the videos.update path, not the videos.insert path.)
+//  2. services.YouTubePrivacyUpdater.UpdateVideoPrivacy WAS called
+//     exactly once with:
+//     - videoID == phase1VideoID           (the YouTube video id Phase 1 stamped)
+//     - privacyStatus == "public"         (post.PrivacyLevel cascade result)
+//     - publishAt == post.PublishAt        (schedule cursor passed verbatim)
+//     - title/description == post fields   (snippet reuse)
+//     - accessToken == "fresh-bearer"      (post-vault.Renew, not stale)
+//  3. The post_target transitioned to status=published with
+//     PlatformPostID == phase1VideoID and PublishedAt != nil
+//     (matches the SYNC-PUBLISH branch's full target stamp shape).
+//  4. The youtube_target_publications row had MarkPublished called
+//     exactly once (stamp published_at on the row).
 //
 // ─────────── SCOPE (YOUTUBE-ONLY) ───────────
 //
@@ -131,8 +136,8 @@ func TestPublishTarget_YouTube_ReusesPhase1VideoID_VideosUpdate(t *testing.T) {
 		findByPostTargetIDFn: func(ctx context.Context, postTargetID int64) (*models.YouTubeTargetPublication, error) {
 			vid := phase1VideoID
 			return &models.YouTubeTargetPublication{
-				ID:                 phase1YTPubRowID,
-				PostTargetID:       postTargetID,
+				ID:                  phase1YTPubRowID,
+				PostTargetID:        postTargetID,
 				YouTubeUploadStatus: "youtube_uploaded",
 				YouTubeVideoID:      &vid,
 			}, nil
@@ -304,4 +309,117 @@ func TestPublishTarget_YouTube_NoPhase1Row_FallsThroughToPublish(t *testing.T) {
 			"FRESH_VID_NO_PHASE1_ROW",
 			posts.updateTargets[len(posts.updateTargets)-1].PlatformPostID)
 	}
+}
+
+// TestIsOrphanedYouTubeVideo covers the publish-worker's Phase-1 orphan-
+// video classifier (Blocco #1 followup — Finding #4). The classifier
+// decides whether UpdateVideoPrivacy returned a 404 referencing OUR
+// yt_pub row's youtube_video_id, signalling that the Phase-1 orphan
+// was deleted out from under us (user manual delete via YouTube
+// Studio, moderator takedown, etc.) and that the worker should
+// synchronously fall through to publisher.Publish after clearing
+// the stale yt_pub row.
+//
+// Primary signal: typed sentinel errors.Is on
+// services.ErrYouTubeVideoNotFound. Defense-in-depth substring fallback:
+// when the err message contains BOTH the offending videoID AND a
+// "not found" marker, fire the recovery branch anyway. Covers any
+// future code path not yet re-wired to wrap with the typed sentinel.
+//
+// Scenarios verified:
+//   - nil error                       → false (defensive nil-check)
+//   - typed sentinel wrapped error     → true (canonical orphan path)
+//   - non-sentinel error, empty videoID → false (substring fallback disabled when no videoID)
+//   - non-sentinel error, missing videoID in msg → false (no false-positive orphan classification)
+//   - non-sentinel error, msg contains both videoID + "not found" → true (substring fallback fires)
+func TestIsOrphanedYouTubeVideo(t *testing.T) {
+	const orphanVideoID = "dQw4w9WgXcQ"
+
+	tests := []struct {
+		name    string
+		err     error
+		videoID string
+		want    bool
+	}{
+		{
+			name:    "nil error returns false (defensive nil-check)",
+			err:     nil,
+			videoID: orphanVideoID,
+			want:    false,
+		},
+		{
+			name:    "nil error with empty videoID returns false",
+			err:     nil,
+			videoID: "",
+			want:    false,
+		},
+		{
+			name:    "typed sentinel-wrapped error returns true (canonical orphan path)",
+			err:     fmt.Errorf("youtube update video: video not found (status 404): video_id=%s: %w", orphanVideoID, services.ErrYouTubeVideoNotFound),
+			videoID: orphanVideoID,
+			want:    true,
+		},
+		{
+			name:    "typed sentinel-wrapped error returns true even with empty videoID (sentinel is authoritative)",
+			err:     fmt.Errorf("orphan: %w", services.ErrYouTubeVideoNotFound),
+			videoID: "",
+			want:    true,
+		},
+		{
+			name:    "non-sentinel error with empty videoID returns false (substring fallback disabled)",
+			err:     errors.New("youtube update video: video not found (status 404)"),
+			videoID: "",
+			want:    false,
+		},
+		{
+			name:    "non-sentinel error with videoID but no 'not found' marker returns false",
+			err:     errors.New("youtube update video: internal server error (status 500) for video_id=" + orphanVideoID),
+			videoID: orphanVideoID,
+			want:    false,
+		},
+		{
+			name:    "non-sentinel error with 'not found' but no matching videoID returns false",
+			err:     errors.New("youtube update video: video not found (status 404) for video_id=other123abc"),
+			videoID: orphanVideoID,
+			want:    false,
+		},
+		{
+			name:    "non-sentinel error matching both videoID and 'not found' returns true (substring fallback)",
+			err:     errors.New("youtube update video: video not found (status 404) for video_id=" + orphanVideoID),
+			videoID: orphanVideoID,
+			want:    true,
+		},
+		{
+			name:    "non-sentinel error with case-insensitive 'NOT FOUND' marker still matches (defense-in-depth)",
+			err:     errors.New("youtube update video: video NOT FOUND (status 404) for video_id=" + orphanVideoID),
+			videoID: orphanVideoID,
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isOrphanedYouTubeVideo(tt.err, tt.videoID)
+			if got != tt.want {
+				t.Errorf("isOrphanedYouTubeVideo(%q, %q) = %v, want %v", errString(tt.err), tt.videoID, got, tt.want)
+			}
+		})
+	}
+}
+
+// errString is a tiny helper for test output readability — returns
+// "<nil>" when err is nil so the message renders cleanly. Avoids
+// pulling in a third-party dep just for nil-error formatting.
+func errString(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	// Truncate very long error messages so test names stay
+	// readable; the substring-fallback test cases use msg strings
+	// ~70 chars long, so a 60-char cap keeps output balanced.
+	msg := err.Error()
+	if len(msg) > 60 {
+		msg = strings.TrimRight(msg[:57], " ") + "..."
+	}
+	return msg
 }

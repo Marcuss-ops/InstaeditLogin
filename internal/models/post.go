@@ -184,6 +184,27 @@ type Post struct {
 	// platform-specific fallback ("unlisted" for YouTube,
 	// "PUBLIC_TO_EVERYONE" for TikTok / other platforms).
 	DefaultPrivacyLevel string `json:"default_privacy_level,omitempty"`
+	// P1 (migration 077) — UploadJobID is the optional back-reference
+	// to the upload_jobs row this post was materialised from. NULL for
+	// posts created via POST /api/v1/posts (HTTP path has no associated
+	// ingest job); non-NULL for posts created by
+	// UploadWorker.processPublishJob (which always sets it to job.ID).
+	//
+	// The PARTIAL UNIQUE INDEX `uq_posts_upload_job_id` (migration
+	// 077, defined as `WHERE upload_job_id IS NOT NULL`) enforces
+	// "one post per upload_job" — so on a worker retry (MarkRetry
+	// re-running processPublishJob after a transient failure between
+	// PostRepository.Create and MarkCompleted), qInsertPost's
+	// `ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL
+	// DO NOTHING` clause reuses the existing row instead of creating
+	// a phantom post (the original Blocco #1 KNOWN LIMITATION, now
+	// fixed). The HTTP /api/v1/posts path leaves UploadJobID nil —
+	// the partial index predicate lets NULL rows coexist freely so
+	// the HTTP path is unaffected.
+	//
+	// Pointer-typed so NULL ↔ omitempty maps cleanly through the API
+	// JSON contract.
+	UploadJobID *int64 `json:"upload_job_id,omitempty"`
 	// P1#4 — split of the old scheduled_at field.
 	// IngestAfter: NOT NULL DEFAULT NOW() at the SQL level; ingest
 	//             happens at insert time (or at the row's first

@@ -1,0 +1,72 @@
+-- =============================================================================
+-- Migration 077: posts.upload_job_id — per-worker retry idempotency
+-- =============================================================================
+-- P0 — Blocco #1 follow-up — FIX for the "phantom post on MarkRetry" bug
+-- documented in internal/worker/upload_worker.go::processPublishJob (post
+-- create works, MarkCompleted fails transiently, the retry calls
+-- PostRepository.Create again with a fresh (post.ID=0) — leaving orphan
+-- posts + duplicate youtube_target_publications references on retry).
+--
+-- This migration adds a nullable BIGINT column `posts.upload_job_id` and
+-- a PARTIAL unique index `uq_posts_upload_job_id` that ONLY enforces
+-- uniqueness for non-NULL values (Postgres standard idiomatic way to
+-- have "unique when present"). The migration creates the index on the
+-- `worker` code path; the HTTP /api/v1/posts path (which creates posts
+-- WITHOUT an upload_job_id) is unaffected because the index `WHERE
+-- upload_job_id IS NOT NULL` lets multiple NULL values coexist.
+--
+-- Column provenance:
+--   * NULL: post created via POST /api/v1/posts (HTTP) — no associated
+--           upload_job because the caller didn't import from Drive /
+--           Velox. Legacy pre-migration-077 rows are also NULL.
+--   * NOT NULL: post created via UploadWorker.processPublishJob — the
+--           worker writes &job.ID into post.UploadJobID before calling
+--           PostRepository.Create. ON CONFLICT (upload_job_id) DO NOTHING
+--           in qInsertPost lets the retry reuse the same row.
+--
+-- Why PDF (partial index) rather than NOT NULL + full UNIQUE:
+--   * The HTTP /api/v1/posts handler creates posts without an
+--     upload_jobs row. Making upload_job_id NOT NULL would force the
+--     handler to mint a fake or scaffold upload_jobs row it doesn't own
+--     — leaks the worker domain into the HTTP edge.
+--   * PDF lets both paths coexist: HTTP rows have NULL (no uniqueness
+--     constraint), worker rows have non-NULL + uniqueness enforced.
+--   * A future "every post has an upload_job_id" refactor can DROP the
+--     partial WHERE clause and ALTER COLUMN ... SET NOT NULL after a
+--     backfill that mints synthetic upload_jobs rows.
+--
+-- ON DELETE CASCADE on upload_job_id was deliberately omitted. The
+-- canonical youtube_target_publications FK (migration 066) is also a
+-- soft FK: upload_jobs rows may be GC'd by the crawl cleanup while the
+-- per-target publications still reference them. Keeping posts.upload_job_id
+-- FK-less matches that pattern (and matches the user's intent that
+-- DeleteUploadJob doesn't cascade-delete published posts).
+--
+-- Index design:
+--   * `uq_posts_upload_job_id` (PARTIAL UNIQUE) is a B-tree ordered on
+--     (upload_job_id). Postgres uses it for the qSelectPostByUploadJobID
+--     retry-path lookup too (predicate-matched WHERE upload_job_id = $1
+--     satisfies the partial WHERE upload_job_id IS NOT NULL), so a
+--     separate non-unique lookup index is unnecessary. Avoiding the
+--     second B-tree keeps every INSERT/UPDATE on the column cheap.
+--
+-- ON CONFLICT inference: Postgres REQUIRES the WHERE predicate on
+-- `ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING`
+-- to mirror the partial index predicate. Without it PG raises 42P10
+-- ("there is no unique or exclusion constraint matching the ON
+-- CONFLICT specification"). The constraint name is mirrored in
+-- internal/repository/queries.go::qInsertPost.
+--
+-- IDEMPOTENT: every DDL uses `IF NOT EXISTS`. Re-runs are no-ops.
+-- =============================================================================
+
+ALTER TABLE posts
+    ADD COLUMN IF NOT EXISTS upload_job_id BIGINT;
+
+-- Partial unique index: NULLs allowed, non-NULLs must be unique.
+-- Mirrors the migration-066 youtube_target_publications.soft-FK
+-- pattern (BIGINT NOT NULL there; BIGINT NULL + partial here because
+-- posts has both worker and HTTP paths and we want to keep them separate).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_posts_upload_job_id
+    ON posts (upload_job_id)
+    WHERE upload_job_id IS NOT NULL;

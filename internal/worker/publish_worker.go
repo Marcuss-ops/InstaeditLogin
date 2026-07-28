@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
@@ -673,55 +674,88 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 						post.Title,
 						post.Caption,
 					); err != nil {
-						return w.markFailed(target, "UpdateVideoPrivacy: "+err.Error())
+						// Blocco #1 followup — Finding #4 (Phase-1
+						// orphan-video recovery): if videos.update returned
+						// 404 on OUR yt_pub's video_id (user manually deleted
+						// the Phase-1 orphan, moderator takedown, etc.),
+						// DON'T markFailed (terminal). Instead: log a
+						// warning, clear the stale yt_pub row via
+						// ClearYouTubeUpload so the next tick doesn't re-take
+						// the bypass with a dead video_id, and synchronously
+						// fall through to the publisher.Publish path below.
+						//
+						// Classification is defense-in-depth: typed sentinel
+						// errors.Is on services.ErrYouTubeVideoNotFound is
+						// the primary signal; substring fallback covers any
+						// future code path that hasn't been re-wired to the
+						// sentinel yet.
+						if isOrphanedYouTubeVideo(err, *ytPub.YouTubeVideoID) {
+							w.logger.Warn(
+								"publish worker: Phase-1 YouTube video orphaned (404 from videos.update); clearing yt-pub row + falling through to fresh publisher.Publish",
+								"yt_pub_id", ytPub.ID,
+								"target_id", target.ID,
+								"stale_video_id", *ytPub.YouTubeVideoID,
+								"update_privacy_error", err,
+							)
+							if clearErr := w.ytPubLookup.ClearYouTubeUpload(ctx, ytPub.ID); clearErr != nil {
+								w.logger.Warn(
+									"publish worker: yt-pub ClearYouTubeUpload failed (non-fatal; fresh publisher.Publish will overwrite on success)",
+									"yt_pub_id", ytPub.ID, "target_id", target.ID,
+									"error", clearErr,
+								)
+							}
+						} else {
+							return w.markFailed(target, "UpdateVideoPrivacy: "+err.Error())
+						}
+					} else {
+						// YouTube privacy transition succeeded — stamp
+						// published_at on the YT pub row. MarkPublished
+						// is an Upsert-shaped stamped-once helper
+						// (youtube_target_publication_repo.go::422),
+						// 0 rows affected is treated as transient /
+						// already-published and we continue downstream.
+						if err := w.ytPubLookup.MarkPublished(ctx, ytPub.ID); err != nil {
+							w.logger.Warn(
+								"publish worker: yt-pub MarkPublished failed (non-fatal; post_target publish transition continues)",
+								"yt_pub_id", ytPub.ID, "target_id", target.ID, "error", err,
+							)
+						}
+						// Mirror the SYNC-PUBLISH branch's full target
+						// stamp shape (publish_worker.go SYNC block):
+						// status + PlatformPostID + PublishedAt — so the
+						// dashboard's "published" filter renders correctly
+						// and the Published Video link points at the
+						// Phase-1 reused video_id (NOT a phantom).
+						now := time.Now()
+						target.Status = models.PostStatusPublished
+						// Composite-shape fix (Blocco #1 followup — Finding #1):
+						// stamp `channelID:videoID` so this branch produces the
+						// SAME PlatformPostID shape the async-publish branch
+						// already stamps via
+						// services.EncodeYouTubePublishID(platformUserID,
+						// videoID) inside StartPublish. decodeYouTubePublishID
+						// (in ReconcileWorker) only accepts the composite shape,
+						// so a plain video_id stamp here would surface as
+						// `invalid youtube publish id` on every reconciler tick
+						// and never transition publishing → published.
+						target.PlatformPostID = services.EncodeYouTubePublishID(account.PlatformUserID, *ytPub.YouTubeVideoID)
+						target.PublishedAt = &now
+						if err := w.postRepo.UpdateStatus(target); err != nil {
+							return fmt.Errorf("publish worker: update target after YouTube reuse: %w", err)
+						}
+						// Post-completion dispatch is a best-effort
+						// forward; for YouTube Phase-2 reuse it would
+						// re-emit the same webhook we'd otherwise emit
+						// on the fresh-publish path. The DeliveryRegistry
+						// YouTube adapter is a no-op forward (no
+						// re-publish) so the dispatch is a cheap memo
+						// to subscribers — kept for parity with the
+						// SYNC-PUBLISH branch.
+						w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
+							ID: post.MediaURL, UploadKey: post.MediaURL, ContentType: "video/mp4",
+						}, post.MediaURL)
+						return nil
 					}
-					// YouTube privacy transition succeeded — stamp
-					// published_at on the YT pub row. MarkPublished
-					// is an Upsert-shaped stamped-once helper
-					// (youtube_target_publication_repo.go::422),
-					// 0 rows affected is treated as transient /
-					// already-published and we continue downstream.
-					if err := w.ytPubLookup.MarkPublished(ctx, ytPub.ID); err != nil {
-						w.logger.Warn(
-							"publish worker: yt-pub MarkPublished failed (non-fatal; post_target publish transition continues)",
-							"yt_pub_id", ytPub.ID, "target_id", target.ID, "error", err,
-						)
-					}
-					// Mirror the SYNC-PUBLISH branch's full target
-					// stamp shape (publish_worker.go SYNC block):
-					// status + PlatformPostID + PublishedAt — so the
-					// dashboard's "published" filter renders correctly
-					// and the Published Video link points at the
-					// Phase-1 reused video_id (NOT a phantom).
-				now := time.Now()
-				target.Status = models.PostStatusPublished
-				// Composite-shape fix (Blocco #1 followup — Finding #1):
-				// stamp `channelID:videoID` so this branch produces the
-				// SAME PlatformPostID shape the async-publish branch
-				// already stamps via
-				// services.EncodeYouTubePublishID(platformUserID,
-				// videoID) inside StartPublish. decodeYouTubePublishID
-				// (in ReconcileWorker) only accepts the composite shape,
-				// so a plain video_id stamp here would surface as
-				// `invalid youtube publish id` on every reconciler tick
-				// and never transition publishing → published.
-				target.PlatformPostID = services.EncodeYouTubePublishID(account.PlatformUserID, *ytPub.YouTubeVideoID)
-				target.PublishedAt = &now
-					if err := w.postRepo.UpdateStatus(target); err != nil {
-						return fmt.Errorf("publish worker: update target after YouTube reuse: %w", err)
-					}
-					// Post-completion dispatch is a best-effort
-					// forward; for YouTube Phase-2 reuse it would
-					// re-emit the same webhook we'd otherwise emit
-					// on the fresh-publish path. The DeliveryRegistry
-					// YouTube adapter is a no-op forward (no
-					// re-publish) so the dispatch is a cheap memo
-					// to subscribers — kept for parity with the
-					// SYNC-PUBLISH branch.
-					w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
-						ID: post.MediaURL, UploadKey: post.MediaURL, ContentType: "video/mp4",
-					}, post.MediaURL)
-					return nil
 				}
 			}
 			w.logger.Warn(
@@ -828,6 +862,13 @@ func (w *PublishWorker) SetCanonicalCanaryUploader(u services.YouTubeCanaryUploa
 type YouTubeTargetPublicationLookup interface {
 	FindByPostTargetID(ctx context.Context, postTargetID int64) (*models.YouTubeTargetPublication, error)
 	MarkPublished(ctx context.Context, id int64) error
+	// ClearYouTubeUpload (Blocco #1 followup — Finding #4 orphan-video
+	// recovery) nullifies the Phase-1 youtube_video_id stamp + resets
+	// status to 'upload_session_initiated' and attempt_count to 0.
+	// Called by PublishWorker.publishTarget when videos.update reports
+	// a 404 on the Phase-1 stamped video_id so the next tick does NOT
+	// re-take the bypass branch with a dead video_id.
+	ClearYouTubeUpload(ctx context.Context, id int64) error
 }
 
 // SetYouTubeTargetPublicationStore assigns the YouTube target
@@ -863,4 +904,32 @@ func (w *PublishWorker) isCanaryEnabled(ctx context.Context, post *models.Post) 
 	}
 	v, _ := m["canary_upload"].(bool)
 	return v
+}
+
+// isOrphanedYouTubeVideo (Blocco #1 followup — Finding #4) is the
+// classifier the publish worker uses to detect the Phase-1 orphan-video
+// case: UpdateVideoPrivacy returned a 404 referencing our yt_pub row's
+// youtube_video_id (user deleted the orphan via YouTube Studio, moderator
+// takedown, etc.). Primary signal: typed sentinel errors.Is on
+// services.ErrYouTubeVideoNotFound (wrapped in UpdateVideoPrivacy via
+// Go 1.20+ multi-%w). Defense-in-depth substring fallback also fires
+// when the err message contains BOTH the offending video_id AND a
+// "not found" marker — covers any future code path not yet re-wired
+// to wrap with the typed sentinel.
+//
+// Returns false for nil errors so the worker's caller can defensively
+// `if isOrphanedYouTubeVideo(err, *ytPub.YouTubeVideoID)` without
+// nil-checking first.
+func isOrphanedYouTubeVideo(err error, videoID string) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, services.ErrYouTubeVideoNotFound) {
+		return true
+	}
+	if videoID == "" {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, videoID) && strings.Contains(strings.ToLower(msg), "not found")
 }

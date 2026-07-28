@@ -15,9 +15,36 @@ package repository
 
 // --- post_create.go ---
 
-const qInsertPost = `INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
- RETURNING id, created_at`
+// P1 (migration 077) — qInsertPost now binds upload_job_id as $10 and
+// uses `ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO
+// NOTHING` + `RETURNING id, created_at, upload_job_id`. The partial
+// unique index `uq_posts_upload_job_id` (same WHERE predicate as the
+// ON CONFLICT clause so Postgres can mirror-infer the index) enforces
+// "one post per upload_job" so a worker retry reuses the existing row
+// instead of creating a phantom post.
+//
+// ON CONFLICT inference: Postgres REQUIRES the `WHERE upload_job_id IS
+// NOT NULL` predicate on ON CONFLICT to mirror the partial index's
+// own WHERE clause (otherwise it raises 42P10 — "there is no unique or
+// exclusion constraint matching the ON CONFLICT specification").
+// Without the WHERE clause, the request fails at runtime. The
+// mirrored predicate also makes the inference deterministic: the only
+// candidate index is the partial one (no other unique constraint on
+// upload_job_id exists), so the inference picks it unambiguously.
+//
+// On DO NOTHING firing, Postgres returns ZERO rows via RETURNING — so
+// QueryRow().Scan(&id, &created_at, &upload_job_id) returns
+// sql.ErrNoRows. PostRepository.Create treats ErrNoRows as the
+// idempotent-retried path and re-fetches the existing row + its
+// post_targets fan-out via qSelectPostByUploadJobID +
+// qSelectTargetsByPost (still inside the same tx so the re-fetch sees
+// its own uncommitted state). Skipping the target/outbox INSERTs on
+// the conflict path is essential: those would 23505 on
+// UNIQUE(post_id, platform_account_id).
+const qInsertPost = `INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
+ RETURNING id, created_at, upload_job_id`
 
 const qInsertPostTarget = `INSERT INTO post_targets (post_id, platform_account_id, status)
  VALUES ($1, $2, $3)
@@ -31,47 +58,65 @@ const qInsertOutboxEvent = `INSERT INTO outbox_events (aggregate_type, aggregate
 // P1 (migration 053) — schema-wide: every SELECT against posts now
 // returns the two new privacy columns (privacy_level, default_privacy_level)
 // so the publish_worker can apply the precedence cascade without an extra
-// round-trip. Column order is canonicalised: ingest_after, publish_at,
-// status, privacy_level, default_privacy_level, created_at. Whatever order
-// the caller reads the row via Scan, the same ORDER BY must stay in sync
-// here — post_repo_test.go's mock assertions live here. The created_at
-// timestamp is intentionally last so existing test regex anchors don't
-// need to be updated (the implicit invariant: tests assert on the FIRST
-// N columns they care about).
-const qSelectPostByID = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
+// round-trip.
+// P1 (migration 077) — every post-column-listing SELECT now also returns
+// upload_job_id (the last column) so the worker / API layer can read
+// the back-reference without a second round-trip. Column-order
+// invariant callers depend on: `id, workspace_id, title, caption,
+// media_url, ingest_after, publish_at, status, privacy_level,
+// default_privacy_level, created_at, upload_job_id` — and the Scan
+// arity in post_repo.go matches exactly. Whatever order the caller
+// reads the row via Scan, the same ORDER BY must stay in sync here —
+// post_repo_test.go's mock assertions live here.
+const qSelectPostByID = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
  FROM posts
  WHERE id = $1`
 
-const qSelectPostsByWorkspace = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
+// P1 (migration 077) — for the ON CONFLICT resolution path. Used by
+// PostRepository.fetchExistingByUploadJobID to rehydrate the caller's
+// Post struct when qInsertPost's `ON CONFLICT ... DO NOTHING` fired for
+// a duplicate upload_job_id. Backed by the partial index
+// `idx_posts_upload_job_id_lookup` (also `WHERE upload_job_id IS NOT
+// NULL` predicate) so the lookup is O(log N) on the retry path.
+//
+// Column order matches the family of qSelectPost* (with upload_job_id
+// appended at the end). The caller re-reads the row that already
+// exists on disk and stamps the canonical id/created_at back onto the
+// caller's pointer.
+const qSelectPostByUploadJobID = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
+ FROM posts
+ WHERE upload_job_id = $1`
+
+const qSelectPostsByWorkspace = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
  FROM posts
  WHERE workspace_id = $1
  ORDER BY created_at DESC`
 
-const qSelectQueuedPosts = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at
+const qSelectQueuedPosts = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
  FROM posts
  WHERE status = 'queued' AND (publish_at IS NULL OR publish_at <= $1)
  ORDER BY publish_at ASC NULLS FIRST`
 
 const qSelectTargetsByPost = `SELECT id, post_id, platform_account_id, status,
-		        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
-		        COALESCE(provider_state, ''), COALESCE(container_id, ''),
-		provider_idempotency_key, completed_at
-		 FROM post_targets
-		 WHERE post_id = $1
-		 ORDER BY id ASC`
+	        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
+	        COALESCE(provider_state, ''), COALESCE(container_id, ''),
+	provider_idempotency_key, completed_at
+	 FROM post_targets
+	 WHERE post_id = $1
+	 ORDER BY id ASC`
 
 const qSelectPublishingTargets = `SELECT id, post_id, platform_account_id, status,
-		        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
-		        COALESCE(provider_state, ''), COALESCE(container_id, ''),
-		provider_idempotency_key, completed_at
-		 FROM post_targets
-		 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
-		 ORDER BY id ASC`
+	        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
+	        COALESCE(provider_state, ''), COALESCE(container_id, ''),
+	provider_idempotency_key, completed_at
+	 FROM post_targets
+	 WHERE status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''
+	 ORDER BY id ASC`
 
 const qSelectPendingTargets = `SELECT pt.id, pt.post_id, pt.platform_account_id, pt.status,
-		        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
-		        COALESCE(pt.provider_state, ''), COALESCE(pt.container_id, ''),
-		        pt.provider_idempotency_key, pt.completed_at
+	        COALESCE(pt.platform_post_id, ''), COALESCE(pt.error_message, ''), pt.published_at,
+	        COALESCE(pt.provider_state, ''), COALESCE(pt.container_id, ''),
+	        pt.provider_idempotency_key, pt.completed_at
 	 FROM post_targets pt
 	 JOIN posts p ON p.id = pt.post_id
 	 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider')

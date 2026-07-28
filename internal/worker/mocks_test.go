@@ -145,6 +145,28 @@ type mockProvider struct {
 	// account's platform_user_id (not stale values).
 	capturedAccessToken     string
 	capturedExpectedChannel string
+	// updateVideoPrivacyFn (Blocco #1 followup — P1 Phase-2 bypass
+	// fix) — when non-nil, UpdateVideoPrivacy delegates to this fn.
+	// When nil (default), UpdateVideoPrivacy returns nil (no-op
+	// success) so existing tests that don't exercise the bypass
+	// path keep their prior assertion surface — the new interface
+	// method compiles in cleanly without disrupting any other
+	// publish flow.
+	updateVideoPrivacyFn func(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, title, description string) error
+	// updateVideoPrivacyCalls (Blocco #1 followup) — mu-protected
+	// counter so tests can assert the bypass fired exactly N times
+	// (the canonical assertion is == 1 in the fix-path test).
+	updateVideoPrivacyCalls int
+	// capturedUpdatePrivacy* record the inputs to UpdateVideoPrivacy
+	// so tests can assert: videoID==PHASE1_VID (re-use), privacyStatus
+	// matches the cascade, publishAt == post.PublishAt. The captured
+	// publishAt is a pointer-equality check on time.Time (zero alloc).
+	capturedUpdatePrivacyVID          string
+	capturedUpdatePrivacyStatus       string
+	capturedUpdatePrivacyPublishAt    *time.Time
+	capturedUpdatePrivacyTitle        string
+	capturedUpdatePrivacyDescription  string
+	capturedUpdatePrivacyAccessToken  string
 }
 
 func (m *mockProvider) GetLoginURL(state string) string {
@@ -204,6 +226,40 @@ func (m *mockProvider) CanaryUpload(ctx context.Context, accessToken, expectedCh
 		return nil, services.ErrYouTubeCanaryRejected
 	}
 	return m.canaryUploadFn(ctx, accessToken, expectedChannelID)
+}
+
+// UpdateVideoPrivacy (Blocco #1 followup — Phase-2 bypass) implements
+// services.YouTubePrivacyUpdater. When updateVideoPrivacyFn is nil
+// (default for tests that don't exercise the bypass path), returns
+// nil so the worker's bypass block proceeds to stamping the post
+// target — the test's real assertion surface (publishWorker reuses
+// PHASE1_VID) is unchanged. Tests pinning the new capability wire
+// updateVideoPrivacyFn to record the call count + inputs.
+//
+// Captures every input parameter so the fix-path test can assert:
+//
+//	videoID == "PHASE1_VID" (the upload_worker row's youtube_video_id)
+//	privacyStatus == cascade result (post.PrivacyLevel > post.DefaultPrivacyLevel > platform fallback)
+//	publishAt == post.PublishAt (cursor passed verbatim)
+//	title/description == post.Caption (text content matches PublishPayload.Text/Title)
+//
+// The capturedAccessToken asserts the post-renEW access_token was the
+// input (NOT a stale pre-renew value), mirroring the
+// ValidateChannelBinding / capturedAccessToken invariant.
+func (m *mockProvider) UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, title, description string) error {
+	m.mu.Lock()
+	m.updateVideoPrivacyCalls++
+	m.capturedUpdatePrivacyVID = videoID
+	m.capturedUpdatePrivacyStatus = privacyStatus
+	m.capturedUpdatePrivacyPublishAt = publishAt
+	m.capturedUpdatePrivacyTitle = title
+	m.capturedUpdatePrivacyDescription = description
+	m.capturedUpdatePrivacyAccessToken = accessToken
+	m.mu.Unlock()
+	if m.updateVideoPrivacyFn == nil {
+		return nil
+	}
+	return m.updateVideoPrivacyFn(ctx, accessToken, videoID, privacyStatus, publishAt, title, description)
 }
 
 // mockAsyncProvider (Taglio 4.2) satisfies services.AsyncPublisher
@@ -452,11 +508,87 @@ func publishingTarget() *models.PostTarget {
 	}
 }
 
-// Compile-time assertion that the mockUserStore here satisfies the
-// runtime interface used by the production wiring. Caught at
-// go vet time, not at runtime. ReconcileUserStore is a type alias
-// of PublisherUserStore (declared in reconcile_worker.go), so a
-// single assertion on PublisherUserStore is sufficient — adding a
+// mockYouTubeTargetPublicationLookup (Blocco #1 followup) is the
+// publish-worker's narrow view of the youtube_target_publications
+// store: only FindByPostTargetID + MarkPublished, matching the
+// new worker.YouTubeTargetPublicationLookup interface. The full
+// YouTubeTargetPublicationRepository surface (FindByID,
+// FindByYouTubeVideoID, ListByUploadJobID, etc.) is intentionally
+// absent — the worker doesn't need it and a narrower mock keeps
+// tests' assertion surfaces tight.
+//
+// findByPostTargetIDFn is the lookup function the test configures;
+// markPublishedFn is the post-videos.update stamp the worker calls
+// after a successful Phase-2 reuse. Both default to (nil, nil)
+// / nil so existing tests that don't exercise the bypass don't
+// break. Tests wiring the new bypass path set findFn to a closure
+// returning a row with youtube_upload_status="youtube_uploaded"
+// + a non-empty youtube_video_id.
+type mockYouTubeTargetPublicationLookup struct {
+	mu                       sync.Mutex
+	findByPostTargetIDFn     func(ctx context.Context, postTargetID int64) (*models.YouTubeTargetPublication, error)
+	markPublishedFn          func(ctx context.Context, id int64) error
+	clearYouTubeUploadFn     func(ctx context.Context, id int64) error
+	findByPostTargetIDCalls  int
+	markPublishedCalls       int
+	clearYouTubeUploadCalls  int
+	lastFindPostTargetID     int64
+	lastMarkPublishedID      int64
+	lastClearYouTubeUploadID int64
+}
+
+func (m *mockYouTubeTargetPublicationLookup) FindByPostTargetID(ctx context.Context, postTargetID int64) (*models.YouTubeTargetPublication, error) {
+	m.mu.Lock()
+	m.findByPostTargetIDCalls++
+	m.lastFindPostTargetID = postTargetID
+	m.mu.Unlock()
+	if m.findByPostTargetIDFn == nil {
+		return nil, nil // not-found is the existing-test default
+	}
+	return m.findByPostTargetIDFn(ctx, postTargetID)
+}
+
+func (m *mockYouTubeTargetPublicationLookup) MarkPublished(ctx context.Context, id int64) error {
+	m.mu.Lock()
+	m.markPublishedCalls++
+	m.lastMarkPublishedID = id
+	m.mu.Unlock()
+	if m.markPublishedFn == nil {
+		return nil
+	}
+	return m.markPublishedFn(ctx, id)
+}
+
+// ClearYouTubeUpload (Blocco #1 followup — Finding #4 orphan-video
+// recovery) implements YouTubeTargetPublicationLookup.ClearYouTubeUpload.
+// When clearYouTubeUploadFn is nil (default for tests that don't
+// exercise the orphan-recovery path), returns nil so the worker's call
+// is a successful no-op — the test's existing assertion surface is
+// preserved.
+func (m *mockYouTubeTargetPublicationLookup) ClearYouTubeUpload(ctx context.Context, id int64) error {
+	m.mu.Lock()
+	m.clearYouTubeUploadCalls++
+	m.lastClearYouTubeUploadID = id
+	m.mu.Unlock()
+	if m.clearYouTubeUploadFn == nil {
+		return nil
+	}
+	return m.clearYouTubeUploadFn(ctx, id)
+}
+
+// Compile-time assertions that the mocks here satisfy the runtime
+// interfaces used by the production wiring. Caught at go vet time,
+// not at runtime. ReconcileUserStore is a type alias of
+// PublisherUserStore (declared in reconcile_worker.go), so a single
+// assertion on PublisherUserStore is sufficient — adding a
 // second `_ ReconcileUserStore = ...` would test the identical
 // underlying type and produce a redundant identity check.
+//
+// YouTubeTargetPublicationLookup is published by this package
+// (publish_worker.go), so the same-package assertion needs no
+// qualifier. YouTubePrivacyUpdater / YouTubeChannelBinder live in
+// the services package, so the qualified reference is required.
 var _ PublisherUserStore = (*mockUserStore)(nil)
+var _ YouTubeTargetPublicationLookup = (*mockYouTubeTargetPublicationLookup)(nil)
+var _ services.YouTubePrivacyUpdater = (*mockProvider)(nil)
+var _ services.YouTubeChannelBinder = (*mockProvider)(nil)

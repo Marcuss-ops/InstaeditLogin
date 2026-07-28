@@ -669,6 +669,16 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			_ = deliveryRegistry.Register(services.NewVeloxCallbackDeliveryAdapter(false))
 			pw = pw.WithDeliveryRegistry(deliveryRegistry)
 			slog.Info("publish worker: delivery registry wired", "providers", deliveryRegistry.Names())
+			// Blocco #1 P0 (P1 Migration 077 followup) — wire the
+			// YouTube target publication lookup so PublishWorker.publishTarget's
+			// Phase-2 bypass block can FindByPostTargetID the
+			// Phase-1 stamped youtube_video_id and skip the fresh
+			// videos.insert when status="youtube_uploaded". The
+			// same *repository.YouTubeTargetPublicationRepository
+			// the upload worker uses — the youtube_target_publications
+			// table is the contract boundary for the Blocco #1
+			// two-phase split (Phase-1 stamps, Phase-2 reads + videos.update).
+			pw.SetYouTubeTargetPublicationStore(repository.NewYouTubeTargetPublicationRepository(a.DB))
 			return pw.Run(ctx)
 		},
 	})
