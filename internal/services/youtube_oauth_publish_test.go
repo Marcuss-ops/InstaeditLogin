@@ -15,7 +15,7 @@ import (
 // publishID encoding and decoding used to carry the channel ID through
 // the async publishing lifecycle.
 func TestYouTubeAsyncPublish_EncodeDecodePublishID(t *testing.T) {
-	publishID := encodeYouTubePublishID("UCexpected", "yt-async-video-id")
+	publishID := EncodeYouTubePublishID("UCexpected", "yt-async-video-id")
 	if publishID != "UCexpected:yt-async-video-id" {
 		t.Errorf("publishID: want UCexpected:yt-async-video-id, got %q", publishID)
 	}
@@ -58,7 +58,7 @@ func TestYouTubeAsyncPublish_Reconcile_Processing_ReturnsNil(t *testing.T) {
 	defer srv.Close()
 	svc := newTestYouTubeService(srv)
 
-	publishID := encodeYouTubePublishID("UCexpected", "yt-async-video-id")
+	publishID := EncodeYouTubePublishID("UCexpected", "yt-async-video-id")
 	res, err := svc.Reconcile(context.Background(), "token", publishID)
 	if err != nil {
 		t.Fatalf("Reconcile returned error: %v", err)
@@ -87,7 +87,7 @@ func TestYouTubeAsyncPublish_Reconcile_Succeeded_ReturnsResult(t *testing.T) {
 	defer srv.Close()
 	svc := newTestYouTubeService(srv)
 
-	publishID := encodeYouTubePublishID("UCexpected", "yt-async-video-id")
+	publishID := EncodeYouTubePublishID("UCexpected", "yt-async-video-id")
 	res, err := svc.Reconcile(context.Background(), "token", publishID)
 	if err != nil {
 		t.Fatalf("Reconcile returned error: %v", err)
@@ -123,7 +123,7 @@ func TestYouTubeAsyncPublish_Reconcile_Failed_ReturnsError(t *testing.T) {
 	defer srv.Close()
 	svc := newTestYouTubeService(srv)
 
-	publishID := encodeYouTubePublishID("UCexpected", "yt-async-video-id")
+	publishID := EncodeYouTubePublishID("UCexpected", "yt-async-video-id")
 	res, err := svc.Reconcile(context.Background(), "token", publishID)
 	if err == nil {
 		t.Fatal("expected terminal error for failed status, got nil")
@@ -152,7 +152,7 @@ func TestYouTubeAsyncPublish_Reconcile_ChannelMismatch_ReturnsError(t *testing.T
 	defer srv.Close()
 	svc := newTestYouTubeService(srv)
 
-	publishID := encodeYouTubePublishID("UCexpected", "yt-async-video-id")
+	publishID := EncodeYouTubePublishID("UCexpected", "yt-async-video-id")
 	res, err := svc.Reconcile(context.Background(), "token", publishID)
 	if err == nil {
 		t.Fatal("expected channel mismatch error, got nil")
@@ -181,7 +181,7 @@ func TestYouTubeAsyncPublish_Reconcile_Terminated_ReturnsError(t *testing.T) {
 	defer srv.Close()
 	svc := newTestYouTubeService(srv)
 
-	publishID := encodeYouTubePublishID("UCexpected", "yt-async-video-id")
+	publishID := EncodeYouTubePublishID("UCexpected", "yt-async-video-id")
 	res, err := svc.Reconcile(context.Background(), "token", publishID)
 	if err == nil {
 		t.Fatal("expected terminal error for terminated status, got nil")
@@ -222,7 +222,7 @@ func TestYouTubeAsyncPublish_Reconcile_MissingChannelID_ReturnsError(t *testing.
 	defer srv.Close()
 	svc := newTestYouTubeService(srv)
 
-	publishID := encodeYouTubePublishID("UCexpected", "yt-async-video-id")
+	publishID := EncodeYouTubePublishID("UCexpected", "yt-async-video-id")
 	res, err := svc.Reconcile(context.Background(), "token", publishID)
 	if err == nil {
 		t.Fatal("expected channel mismatch error for missing channelId, got nil")
@@ -250,7 +250,7 @@ func TestYouTubeAsyncPublish_CheckPublishStatus_ReturnsStatus(t *testing.T) {
 	defer srv.Close()
 	svc := newTestYouTubeService(srv)
 
-	publishID := encodeYouTubePublishID("UCexpected", "yt-async-video-id")
+	publishID := EncodeYouTubePublishID("UCexpected", "yt-async-video-id")
 	state, err := svc.CheckPublishStatus(context.Background(), "token", publishID)
 	if err != nil {
 		t.Fatalf("CheckPublishStatus returned error: %v", err)

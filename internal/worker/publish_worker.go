@@ -181,6 +181,18 @@ type PublishWorker struct {
 	// harness uses that setter). Nil-safe at runtime: a nil uploader
 	// makes the canary block warn + fall through to markPublishBlockedAuth.
 	canonicalCanaryUploader services.YouTubeCanaryUploader
+
+	// ytPubLookup (Blocco #1 followup — P1 Migration 077/Phase-2
+	// bypass) — the YouTube target-publication store used by the
+	// publish worker to discover the existing youtube_video_id that
+	// Phase 1 (upload_worker.MarkYouTubeUploaded) stamped. When non-nil
+	// and the row exists with youtube_upload_status='youtube_uploaded',
+	// publishTarget routes through YouTubePrivacyUpdater.UpdateVideoPrivacy
+	// (videos.update) instead of doing a fresh publisher.Publish
+	// (videos.insert). Wired at startup via SetYouTubeTargetPublicationStore.
+	// Nil at startup means the bypass is silently disabled — the
+	// pre-fix behaviour is preserved for callers that don't wire it.
+	ytPubLookup YouTubeTargetPublicationLookup
 }
 
 // NewPublishWorker wires the dependencies. interval <= 0 falls back to
@@ -570,6 +582,111 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	// and platform-specific defaults in the process phase.
 	payload := w.buildPayload(account, post, key)
 
+	// PHASE 2 BYPASS (Blocco #1 followup — Migration 077 contract):
+	// When Phase 1 (upload_worker.MarkYouTubeUploaded) has stamped a
+	// youtube_target_publications row with youtube_upload_status
+	// "youtube_uploaded" + a non-empty youtube_video_id, skip the
+	// fresh videos.insert and re-use the existing video via
+	// YouTubePrivacyUpdater.UpdateVideoPrivacy (videos.update).
+	// Eliminates the double-upload bug documented in
+	// internal/worker/publish_worker_phase1_video_reuse_test.go's
+	// header comment.
+	//
+	// Placement rationale: AFTER throttle Wait wouldn't help
+	// (UpdateVideoPrivacy is a metadata-only POST that doesn't
+	// benefit from throttle shaping for chunked uploads) BUT after
+	// payload build means payload.PrivacyLevel / Title / Text are
+	// already cascade-resolved (no need to duplicate the cascade
+	// logic inline). When the cast into YouTubePrivacyUpdater
+	// fails (older test fixtures / a future non-YouTube platform
+	// that registers under the youtube name), we fall through
+	// with a warn log — the existing publisher.Publish path is
+	// unaffected. Nil ytPubLookup (older test fixtures not yet
+	// wired) is also a graceful fall-through — matches the
+	// canonicalCanaryUploader nil-safe pattern documented above.
+	if account.Platform == models.PlatformYouTube && w.ytPubLookup != nil {
+		ytPub, lookupErr := w.ytPubLookup.FindByPostTargetID(ctx, target.ID)
+		switch {
+		case lookupErr != nil:
+			// Treat as transient: mark the target failed so it
+			// drops out of the publish filter set; the next tick
+			// retries. Same shape as a MarkRetry on the post_target
+			// — the publish driver's per-target error counter
+			// increments and the operator sees the failure mode.			return w.markFailed(target, "youtube target publication lookup: "+lookupErr.Error())
+		case ytPub != nil &&
+			ytPub.YouTubeUploadStatus == "youtube_uploaded" &&
+			ytPub.YouTubeVideoID != nil &&
+			*ytPub.YouTubeVideoID != "":
+			raw, hasRaw := w.router.Get(account.Platform)
+			if hasRaw {
+				if updater, ok := raw.(services.YouTubePrivacyUpdater); ok {
+					if err := updater.UpdateVideoPrivacy(
+						ctx,
+						oauthToken.AccessToken,
+						*ytPub.YouTubeVideoID,
+						payload.PrivacyLevel,
+						post.PublishAt,
+						post.Title,
+						post.Caption,
+					); err != nil {
+						return w.markFailed(target, "UpdateVideoPrivacy: "+err.Error())
+					}
+					// YouTube privacy transition succeeded — stamp
+					// published_at on the YT pub row. MarkPublished
+					// is an Upsert-shaped stamped-once helper
+					// (youtube_target_publication_repo.go::422),
+					// 0 rows affected is treated as transient /
+					// already-published and we continue downstream.
+					if err := w.ytPubLookup.MarkPublished(ctx, ytPub.ID); err != nil {
+						w.logger.Warn(
+							"publish worker: yt-pub MarkPublished failed (non-fatal; post_target publish transition continues)",
+							"yt_pub_id", ytPub.ID, "target_id", target.ID, "error", err,
+						)
+					}
+					// Mirror the SYNC-PUBLISH branch's full target
+					// stamp shape (publish_worker.go SYNC block):
+					// status + PlatformPostID + PublishedAt — so the
+					// dashboard's "published" filter renders correctly
+					// and the Published Video link points at the
+					// Phase-1 reused video_id (NOT a phantom).
+				now := time.Now()
+				target.Status = models.PostStatusPublished
+				// Composite-shape fix (Blocco #1 followup — Finding #1):
+				// stamp `channelID:videoID` so this branch produces the
+				// SAME PlatformPostID shape the async-publish branch
+				// already stamps via
+				// services.EncodeYouTubePublishID(platformUserID,
+				// videoID) inside StartPublish. decodeYouTubePublishID
+				// (in ReconcileWorker) only accepts the composite shape,
+				// so a plain video_id stamp here would surface as
+				// `invalid youtube publish id` on every reconciler tick
+				// and never transition publishing → published.
+				target.PlatformPostID = services.EncodeYouTubePublishID(account.PlatformUserID, *ytPub.YouTubeVideoID)
+				target.PublishedAt = &now
+					if err := w.postRepo.UpdateStatus(target); err != nil {
+						return fmt.Errorf("publish worker: update target after YouTube reuse: %w", err)
+					}
+					// Post-completion dispatch is a best-effort
+					// forward; for YouTube Phase-2 reuse it would
+					// re-emit the same webhook we'd otherwise emit
+					// on the fresh-publish path. The DeliveryRegistry
+					// YouTube adapter is a no-op forward (no
+					// re-publish) so the dispatch is a cheap memo
+					// to subscribers — kept for parity with the
+					// SYNC-PUBLISH branch.
+					w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
+						ID: post.MediaURL, UploadKey: post.MediaURL, ContentType: "video/mp4",
+					}, post.MediaURL)
+					return nil
+				}
+			}
+			w.logger.Warn(
+				"publish worker: YouTube provider missing YouTubePrivacyUpdater capability; falling through to publisher.Publish (Phase 1 video may be orphaned unless uploader is upgraded)",
+				"target_id", target.ID, "platform_account_id", account.ID,
+			)
+		}
+	}
+
 	// FASE 1.3: throttle per-platform API calls to avoid rate-limit
 	// bans. If the throttle is nil (test mode), skip. If the platform's
 	// bucket is empty, Wait() blocks until a token is available or
@@ -646,6 +763,40 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 // pre-flight (handler will fall through with a warn-level log).
 func (w *PublishWorker) SetCanonicalCanaryUploader(u services.YouTubeCanaryUploader) {
 	w.canonicalCanaryUploader = u
+}
+
+// YouTubeTargetPublicationLookup is the narrow interface the publish
+// worker needs from the youtube_target_publications table for the
+// Phase-2 upload-bypass (read existing video_id, stamp PublishedAt
+// after videos.update). Distinct from the full
+// YouTubeTargetPublicationStore interface in
+// internal/repository/youtube_target_publication_repo.go so the
+// worker's dep surface stays minimal (the worker doesn't need
+// FindByID, FindByYouTubeVideoID, MarkYouTubeUploaded,
+// IncrementAttempt, etc. — only the two methods below).
+//
+// Implementations must:
+//   - Return (nil, nil) when no row exists for the given postTargetID
+//     (matches the codebase's repository convention; not-found is
+//     NOT a hard error in this read-side call shape).
+//   - Plain-wrap non-ErrNoRows errors so the worker can mark the
+//     target failed and let the next tick retry.
+type YouTubeTargetPublicationLookup interface {
+	FindByPostTargetID(ctx context.Context, postTargetID int64) (*models.YouTubeTargetPublication, error)
+	MarkPublished(ctx context.Context, id int64) error
+}
+
+// SetYouTubeTargetPublicationStore assigns the YouTube target
+// publication store used by the publish worker's Phase-2 bypass
+// block. Pass nil to disable the bypass (worker falls through to
+// publisher.Publish per the pre-fix behaviour, matching the
+// canonicalCanaryUploader nil-safe pattern).
+//
+// Production wire-up: internal/bootstrap/app.go calls this with
+// *repository.YouTubeTargetPublicationRepository right after
+// NewPublishWorker.
+func (w *PublishWorker) SetYouTubeTargetPublicationStore(s YouTubeTargetPublicationLookup) {
+	w.ytPubLookup = s
 }
 
 // isCanaryEnabled (Task 7/10) returns true when the post's metadata

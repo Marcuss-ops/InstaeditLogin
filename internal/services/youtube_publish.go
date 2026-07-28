@@ -121,7 +121,7 @@ func (s *YouTubeOAuthService) StartPublish(ctx context.Context, accessToken, pla
 
 	slog.Info("YouTube: video uploaded successfully", "video_id", videoID)
 
-	return encodeYouTubePublishID(platformUserID, videoID), "processing", nil
+	return EncodeYouTubePublishID(platformUserID, videoID), "processing", nil
 }
 
 // CheckPublishStatus returns the processing status of a YouTube video by
@@ -238,18 +238,31 @@ func (s *YouTubeOAuthService) fetchVideoStatus(ctx context.Context, accessToken,
 	return &result.Items[0], nil
 }
 
-// encodeYouTubePublishID encodes the channel ID and video ID into a single
+// EncodeYouTubePublishID encodes the channel ID and video ID into a single
 // opaque publish ID used during the async publishing lifecycle.
 //
 // The composite is stored temporarily in post_target.platform_post_id while
 // the target is in 'publishing' status. On a successful Reconcile, the final
 // stored value is overwritten with the plain video ID.
-func encodeYouTubePublishID(channelID, videoID string) string {
+//
+// P1 (Blocco #1 followup) — exported so PublishWorker.publishTarget's
+// Phase-2 reuse block can stamp the SAME composite shape on
+// target.PlatformPostID as the async/sync Publish branches already
+// stamp via result.PlatformMediaID. Without this export the bypass
+// branch used the plain video_id and broke the unified-pipeline view's
+// decode shape (ReconcileWorker + dashboard unified pipeline view
+// assumed composite). Single rename of the package-private symbol.
+func EncodeYouTubePublishID(channelID, videoID string) string {
 	return channelID + ":" + videoID
 }
 
 // decodeYouTubePublishID splits an encoded publish ID back into channel ID
 // and video ID.
+//
+// Mirror of EncodeYouTubePublishID — kept package-private because no
+// external consumer needs it today (ReconcileWorker is in the same
+// services package and can use the lowercase form). If a future
+// package needs to decode, promote it the same way as the encode.
 func decodeYouTubePublishID(publishID string) (channelID, videoID string, err error) {
 	parts := strings.SplitN(publishID, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
