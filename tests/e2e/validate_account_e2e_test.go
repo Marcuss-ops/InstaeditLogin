@@ -43,6 +43,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -118,8 +119,25 @@ func (s *stubYouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken,
 func (s *stubYouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, title, description string) error {
 	return nil
 }
-func (s *stubYouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, title, description string) (string, error) {
+func (s *stubYouTubeOAuthService) PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error) {
 	return "", nil
+}
+
+// GetYouTubeVideo, ListEditableVideos, UpsertLocalizations round out
+// the YouTubeOAuthService interface (pkg/api/router.go:778). The
+// validate-pipeline tests never reach these methods but the
+// interface assertion in buildValidateRouterHarness (via
+// api.WithYouTubeService(ytSvc)) requires every method to be
+// implemented — return zero values so any incidental call is loud
+// but does not crash.
+func (s *stubYouTubeOAuthService) GetYouTubeVideo(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
+	return nil, nil
+}
+func (s *stubYouTubeOAuthService) ListEditableVideos(ctx context.Context, accessToken, channelID, pageToken string) (*services.YouTubeVideoPage, error) {
+	return &services.YouTubeVideoPage{}, nil
+}
+func (s *stubYouTubeOAuthService) UpsertLocalizations(ctx context.Context, accessToken, videoID, lang string, tr models.YouTubeTranslation) error {
+	return nil
 }
 
 // stubCredentialVault — minimal implementation of credentials.VaultAPI
