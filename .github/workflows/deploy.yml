@@ -107,11 +107,21 @@ permissions:
   # full integration run (use sparingly and with documented approval).
   workflow_dispatch:
 
-# Cancel in-progress deploys so a fast follow-up push doesn't spawn
-# duplicate runners re-uploading the same artifacts to Vercel. Group
-# by ref so PR #X deploys don't cancel main deploys.
+# Cancel in-progress deploys so a fast follow-up push OR a manual
+# workflow_dispatch override doesn't spawn duplicate runners
+# re-uploading the same artifacts to Vercel. Group by `github.ref`
+# (NOT the older `head_branch || github.ref`) so BOTH trigger lanes
+# — workflow_run (CI-spawned) and workflow_dispatch (manual override)
+# — share ONE concurrency group and cancel each other. The older
+# expression produced different group keys per trigger
+# (`deploy-main` vs `deploy-refs/heads/main`) and therefore never
+# cancelled across lanes; the documented intent of
+# `cancel-in-progress` is "deduplicate Vercel uploads", not
+# "preserve manual-override progress", so unifying to `github.ref`
+# is the correct semantic. PR #X deploys still don't cancel main
+# deploys because their `github.ref` differs.
 concurrency:
-  group: deploy-${{ github.event.workflow_run.head_branch || github.ref }}
+  group: deploy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
