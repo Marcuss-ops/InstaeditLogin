@@ -2123,9 +2123,20 @@ func TestUpdateYouTubeEditorSession_StoresThumbnailMediaID(t *testing.T) {
 				Status:            "editing",
 			}, nil
 		},
-		update: func(ctx context.Context, edit *models.YouTubeVideoEdit) error {
+		attachThumbnailFn: func(ctx context.Context, sessionID, thumbnailMediaID string) (*models.YouTubeVideoEdit, error) {
+			media := thumbnailMediaID
+			edit := &models.YouTubeVideoEdit{
+				ID:                sessionID,
+				WorkspaceID:       workspace.ID,
+				PlatformAccountID: account.ID,
+				YouTubeVideoID:    "abc123",
+				VeloxProjectID:    "ve-project-123",
+				ThumbnailMediaID:  &media,
+				Status:            "editing",
+				UpdatedAt:         time.Now().UTC(),
+			}
 			updated = edit
-			return nil
+			return edit, nil
 		},
 	}
 
@@ -2156,6 +2167,193 @@ func TestUpdateYouTubeEditorSession_StoresThumbnailMediaID(t *testing.T) {
 	}
 	if updated.ThumbnailMediaID == nil || *updated.ThumbnailMediaID != "asset-uuid-123" {
 		t.Fatalf("expected thumbnail_media_id to be asset-uuid-123, got %v", updated.ThumbnailMediaID)
+	}
+}
+
+// TestUpdateYouTubeEditorSession_AssetNotReady_ReturnsConflict verifies
+// that the refactored PATCH-by-project endpoint uses the shared
+// resolver and returns the same 409 the direct /thumbnail endpoint
+// would return for a non-ready asset.
+func TestUpdateYouTubeEditorSession_AssetNotReady_ReturnsConflict(t *testing.T) {
+	account := &models.PlatformAccount{
+		ID:             42,
+		UserID:         1,
+		Platform:       models.PlatformYouTube,
+		PlatformUserID: "UC123",
+		Username:       "testchannel",
+		Status:         models.AccountStatusActive,
+	}
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if id == account.ID {
+				return account, nil
+			}
+			return nil, nil
+		},
+	}
+	workspaceStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			if id == workspace.ID {
+				return workspace, nil
+			}
+			return nil, nil
+		},
+	}
+
+	mediaStore := newMockMediaStore()
+	mediaStore.assets["asset-uuid-123"] = &models.MediaAsset{
+		ID:     "asset-uuid-123",
+		UserID: 1,
+		Status: models.MediaAssetStatusPending,
+	}
+
+	editStore := &mockYouTubeVideoEditStore{
+		findByProjectFn: func(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:                "session-123",
+				WorkspaceID:       workspace.ID,
+				PlatformAccountID: account.ID,
+				YouTubeVideoID:    "abc123",
+				VeloxProjectID:    "ve-project-123",
+				Status:            "editing",
+			}, nil
+		},
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		store,
+		auth.NewManager(testJWTSecret, 24),
+		"https://app.instaedit.org",
+		nil,
+		WithWorkspaceStore(workspaceStore),
+		WithYouTubeVideoEditStore(editStore),
+		WithMediaStore(mediaStore),
+	)
+
+	payload := map[string]any{"thumbnail_media_id": "asset-uuid-123"}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/youtube/editor-sessions/by-project/ve-project-123", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for non-ready asset, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestUpdateYouTubeEditorSession_WorkspaceMismatch_ReturnsForbidden verifies
+// that the shared resolver returns 403 when the caller does not own
+// the session's workspace.
+func TestUpdateYouTubeEditorSession_WorkspaceMismatch_ReturnsForbidden(t *testing.T) {
+	workspace := &models.Workspace{ID: 7, OwnerID: 2, Name: "Other Workspace"}
+	workspaceStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			if id == workspace.ID {
+				return workspace, nil
+			}
+			return nil, nil
+		},
+	}
+
+	mediaStore := newMockMediaStore()
+	mediaStore.assets["asset-uuid-123"] = &models.MediaAsset{
+		ID:     "asset-uuid-123",
+		UserID: 1,
+		Status: models.MediaAssetStatusReady,
+	}
+
+	editStore := &mockYouTubeVideoEditStore{
+		findByProjectFn: func(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:             "session-123",
+				WorkspaceID:    workspace.ID,
+				YouTubeVideoID: "abc123",
+				VeloxProjectID: "ve-project-123",
+				Status:         "editing",
+			}, nil
+		},
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		"https://app.instaedit.org",
+		nil,
+		WithWorkspaceStore(workspaceStore),
+		WithYouTubeVideoEditStore(editStore),
+		WithMediaStore(mediaStore),
+	)
+
+	body, _ := json.Marshal(map[string]string{"thumbnail_media_id": "asset-uuid-123"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/youtube/editor-sessions/by-project/ve-project-123", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for workspace mismatch, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestUpdateYouTubeEditorSession_AssetOwnershipMismatch_ReturnsForbidden
+// verifies the shared resolver returns 403 when the asset belongs to
+// another user.
+func TestUpdateYouTubeEditorSession_AssetOwnershipMismatch_ReturnsForbidden(t *testing.T) {
+	workspace := &models.Workspace{ID: 7, OwnerID: 1, Name: "Test Workspace"}
+	workspaceStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			if id == workspace.ID {
+				return workspace, nil
+			}
+			return nil, nil
+		},
+	}
+
+	mediaStore := newMockMediaStore()
+	mediaStore.assets["asset-uuid-123"] = &models.MediaAsset{
+		ID:     "asset-uuid-123",
+		UserID: 2,
+		Status: models.MediaAssetStatusReady,
+	}
+
+	editStore := &mockYouTubeVideoEditStore{
+		findByProjectFn: func(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
+			return &models.YouTubeVideoEdit{
+				ID:             "session-123",
+				WorkspaceID:    workspace.ID,
+				YouTubeVideoID: "abc123",
+				VeloxProjectID: "ve-project-123",
+				Status:         "editing",
+			}, nil
+		},
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{},
+		auth.NewManager(testJWTSecret, 24),
+		"https://app.instaedit.org",
+		nil,
+		WithWorkspaceStore(workspaceStore),
+		WithYouTubeVideoEditStore(editStore),
+		WithMediaStore(mediaStore),
+	)
+
+	body, _ := json.Marshal(map[string]string{"thumbnail_media_id": "asset-uuid-123"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/youtube/editor-sessions/by-project/ve-project-123", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for asset ownership mismatch, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
