@@ -84,7 +84,7 @@ backend-test:
 # run under `go test -race ./...` via the `backend-test` target — no
 # integration tag needed.
 # This Makefile target is the canonical command invoked by
-# .github/workflows/integration.yml — if you change the command here,
+# .github/workflows/integration-fast.yml — if you change the command here,
 # CI follows automatically.
 test-integration:
 	go test -tags=integration -v -timeout 10m ./internal/database/... ./internal/worker/... ./internal/testutil/redis/...
@@ -99,7 +99,7 @@ test-integration:
 # Requires Docker on the runner. Local dev: install Docker
 # Desktop or use `make test-integration` which is hermetic.
 # CI: runs in the dedicated `e2e` job in
-# .github/workflows/integration.yml so the fast unit PR gate stays
+# .github/workflows/integration-fast.yml so the fast unit PR gate stays
 # untouched. ~5-15 s of container spin-up runs once per suite.
 #
 # Build tag `e2e` is required because tests/e2e/*.go is gated
@@ -119,7 +119,7 @@ frontend-test:
 #
 # `make lint-check` is the CI-friendly shape: gofmt CHECKS and FAILS
 # on unformatted files (no -w), identical to the gate in
-# .github/workflows/integration.yml. Use this in pre-commit hooks and
+# .github/workflows/integration-fast.yml. Use this in pre-commit hooks and
 # other CI surfaces where mutation is wrong.
 #
 # The canonical CI command remains `make lint-check` so PRs that
@@ -131,7 +131,7 @@ lint:
 	cd web && npm run lint
 
 # CI-friendly variant: FAIL on unformatted Go files (no -w).
-# The check mirrors the gate inside .github/workflows/integration.yml
+# The check mirrors the gate inside .github/workflows/integration-fast.yml
 # exactly. Run in pre-commit; CI uses the same command.
 lint-check:
 	@UNFORMATTED=$$(gofmt -l .); \

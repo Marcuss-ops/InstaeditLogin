@@ -12,7 +12,7 @@ referenced from:
 
 - `docs/DEPLOY.md` §1.5 — DNS records (quick-reference table — apex/app/api → `51.91.11.36` + email-deliverability records)
 - `docs/DEPLOY.md` §2-§7 — deploy pipeline (host setup + secret collection + first deploy + post-deploy verification + rotation + Sandbox/operator boundary)
-- `docs/DEPLOY.md` §11 — open items (verify-log-redaction → docker compose logs; orphan `docker-build-production` Makefile target; integration.yml stale secrets-parser step)
+- `docs/DEPLOY.md` §11 — open items (verify-log-redaction → docker compose logs; orphan `docker-build-production` Makefile target; legacy `integration.yml` retired at this commit — split into `integration-fast.yml` (deploy-gating) + `integration-slow.yml` (e2e, alert-only))
 - `HANDOFF-LINUX.md` §11 — local dev workflow
 - `docs/OPERATIONS.md` §7 — email sender (`no-reply@instaedit.org`) deliverability runbook (Resend)
 
@@ -831,5 +831,5 @@ These are surgically tracked followup commits, NOT documentation gaps:
 
 1. `make verify-log-redaction` + `scripts/obs/verify-log-redaction.sh` must source from `docker compose logs --since <window> api worker` to make the live redactor work on the VPS-native stack (§5.3 above references this; DEPLOY.md §11 owns it).
 2. `scripts/db/production-restore-drill.sh` still follows the pre-cutover managed-Postgres pattern. Rewrite for VPS pg_dump → throwaway container (§3.1.0 above flags this; sub-task of DEPLOY.md §11).
-3. `.github/workflows/integration.yml` still has the stale secrets-parser step (the underlying make-target and .py parsers were dropped at commit `1ab88ef`). Remove that step entirely from the workflow (DEPLOY.md §11 owns it).
+3. **(RESOLVED at this commit.)** Legacy `.github/workflows/integration.yml` USED to host the stale secrets-parser step; the underlying make-target and .py parsers were dropped at commit `1ab88ef`. The legacy workflow file itself is now retired (deleted alongside this scrub) and coverage lives in `integration-fast.yml` (gate) + `integration-slow.yml` (e2e, alert-only).
 4. `docker-build-production` Makefile target was orphaned post-cutover. **Dropped at commit `4382ae8`** (target removed from `.PHONY` and recipe block); residue cleanup, if any, tracked in DEPLOY.md §11.

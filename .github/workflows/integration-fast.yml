@@ -1,12 +1,15 @@
 # .github/workflows/integration-fast.yml — InstaEditLogin CI FAST gate
 #
 # This file is the PRODUCTION-DEPLOY-GATING workflow. deploy.yml's
-# workflow_run gate in commit #Y will switch from `workflows:
-# [integration]` to `workflows: [integration-fast]`. Until that
-# commit lands, BOTH this workflow and the legacy `integration`
-# workflow run on every push — duplication is expected and tolerated
-# for the bake-in window (operator has time to confirm the split
-# shape before the deploy-gate flip).
+# workflow_run gate is `workflows: [integration-fast]` — this file's
+# `success` conclusion is the only signal that triggers a production
+# deploy. integration-slow.yml runs in parallel and alert-onlys on
+# failure (auto-GH-issue with label `flaky-or-broken/e2e`). The split
+# rationale is in TOMORROW.md: shared ubuntu-runner + testcontainers
+# Postgres infra was structurally flakey and was masking product-code
+# regressions with infra noise — strict-gating the bundle was
+# disproportionate. The slow lane preserves the coverage; the fast
+# lane preserves the gate.
 #
 # Coverage (this file):
 #   1. Go files are gofmt-clean (Blocco #3.1 hard requirement).
@@ -48,7 +51,7 @@ permissions:
 # NOTE: GitHub Actions YAML 1.2 treats `on` as a normal string, but
 # some YAML tools (yaml.safe_load in Python ≤1.1 mode, older SDK
 # parsers) interpret `on` as boolean true. Quoting the key makes the
-# file portable across both parsers — matches integration.yml's
+# file portable across both parsers — matches the sibling conventions in integration-fast.yml + integration-slow.yml (legacy integration.yml retired at this commit)
 # existing convention.
 "on":
   push:
@@ -264,7 +267,7 @@ jobs:
           echo "  make test-integration"
           echo "  cd web && npm ci && npm run lint && npm run test && npm run build"
 
-  # ─── envfile parser regression test (formerly integration.yml step 8.5 + python3 scripts/test_parse_envfile.py) ───
+  # ─── envfile parser regression test (formerly integrated in legacy integration.yml step 8.5; that workflow was retired at the CI-split commit and the test was lifted into this file) ───
   # The .env parser in scripts/_parse_envfile.py is the security
   # boundary of the deploy — a bug here could push a malformed value
   # (panic at boot) or a shell-expanded value (silently mutate a
@@ -272,7 +275,7 @@ jobs:
   # alongside the Fly cutover (commit 1ab88ef), so this test now
   # runs directly via `python3 scripts/test_parse_envfile.py`.
   # Fast (<1s) pure-python — no Docker / no external services needed.
-  # Mirrors the sibling `integration.yml::test-parse-envfile` shape.
+  # Mirrors the `integration.yml::test-parse-envfile` shape (legacy file retired at the CI-split commit; the test now lives in this file).
   test-parse-envfile:
     runs-on: ubuntu-latest
     timeout-minutes: 5

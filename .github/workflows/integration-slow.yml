@@ -51,7 +51,7 @@ permissions:
   issues: write
 
 # YAML-portability: quote the `on:` key so older yaml.safe_load parsers
-# don't barf (matches integration-fast.yml + integration.yml).
+# don't barf (matches the integration-fast.yml gating sibling; legacy integration.yml retired at this commit).
 "on":
   push:
     branches: [main]
@@ -67,8 +67,11 @@ permissions:
 
 jobs:
   # ─── Task 9/10: E2E pipeline suite (Drive → Velox → S3 → callback)
-  # Same shape as the legacy integration.yml::e2e job. The split moves
-  # this out of the deploy-gating chain into an alert-only lane.
+  # Same shape as the legacy integration.yml::e2e job. That file is
+  # now retired at the CI-split commit; this file is its
+  # successor (e2e lives here, alert-only) per the deploy-gate
+  # flip + integration.yml retirement documented in
+  # .github/workflows/integration-fast.yml's header.
   #
   # Docker is pre-installed on ubuntu-latest and has full socket access
   # for testcontainers-go. The build tag `e2e` keeps `go test ./...`
@@ -83,7 +86,9 @@ jobs:
     timeout-minutes: 15
 
     concurrency:
-      # Same group key as legacy integration.yml::e2e so a legacy run
+      # Backward-compat note: legacy integration.yml::e2e was retired
+      # at the CI-split commit; this group IS the canonical
+      # post-retirement e2e cancel-in-progress queue.
       # started before this split AND a fast run after the split
       # share the same cancel-in-progress queue — no duplicate
       # Postgres + httptest-fixture spin-ups.

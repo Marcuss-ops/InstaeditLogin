@@ -23,7 +23,7 @@ scope** of this audit per the cutover plan (handled in §6 of TOMORROW.md).
 ## 1. GitHub Secrets SAFE TO REMOVE (Fly platform tokens)
 
 These were used exclusively by the `flyctl` deploy pipeline that was
-removed across the cleanup chain (Makefile, Dockerfile, integration.yml
+removed across the cleanup chain (Makefile, Dockerfile, legacy integration.yml (retired at this commit)
 `Verify Fly secrets parser` step, oauth-canary's `verifySecretCoherence`
 logic). They are **not referenced by any current `.github/workflows/*`**.
 
@@ -57,7 +57,7 @@ If the user previously also staged `INSTAEDIT_REQUIRED_SECRETS_PATH` /
 (pointing to `scripts/required-fly-secrets.txt` and
 `scripts/disabled-fly-secrets-prefixes.txt` respectively), they can be
 removed too — those files are slated for `git rm` in §3 and the
-`integration.yml` step that read them is already gone.
+`integration.yml` step that read them was already gone; the legacy file itself retired at this commit.
 
 ---
 
@@ -121,7 +121,7 @@ in separate commits after §1/§2.
 | `scripts/db/production-restore-drill.sh`                     | 3 `flyctl postgres destroy` references                            | Disaster-recovery drill for Fly Postgres. Rewrite for local Postgres.                          |
 | `scripts/clean-gh-fly-secrets.sh`                            | 8 references to the three FLY secrets (this is the helper that automates §2's *Secret* half) | **Preferred path for §2's Secret half**: `./scripts/clean-gh-fly-secrets.sh --apply` once instead of the manual `gh secret delete` loop. The script defaults to list-only dry-run; `--apply` enables the actual deletes. **Scope**: it handles ONLY the 3 FLY_* secrets — the 2 INSTAEDIT_*_PATH variables still need the §2 manual `gh variable delete` loop (the helper does not touch Variables). Delete this helper after running. |
 | `scripts/s3/provision-tigris.sh`                             | 2 `flyctl auth login` comments                                    | Tigris bucket provisioning. **OUT OF SCOPE** of this audit per cutover plan.                  |
-| `scripts/_parse_envfile.py`                                  | 5 refs to `disabled-fly-secrets-prefixes.txt` / `required-fly-secrets.txt` | Parser for the deleted Fly .env contract. Zero callers after `integration.yml` step removed. `git rm`. |
+| `scripts/_parse_envfile.py`                                  | 5 refs to `disabled-fly-secrets-prefixes.txt` / `required-fly-secrets.txt` | Parser for the deleted Fly .env contract. Zero callers after legacy `integration.yml` step (and its parent workflow file, now retired) were removed at this commit. `git rm`. |
 | `scripts/test_parse_envfile.py`                              | Same                                                              | Parser test. `git rm`.                                                                          |
 | `scripts/required-fly-secrets.txt`                           | Fly-secrets contract spec                                         | Char-set/list of expected Fly secrets. `git rm`.                                                |
 | `scripts/disabled-fly-secrets-prefixes.txt`                  | Fly disabled-provider prefix list                                | Reject-list contract. `git rm`.                                                                 |
@@ -157,7 +157,7 @@ the env-file pointers:
 ```bash
 grep -rnE 'INSTAEDIT_REQUIRED_SECRETS_PATH|INSTAEDIT_DISABLED_SECRETS_PATH|required-fly-secrets\.txt|disabled-fly-secrets-prefixes\.txt' \
   .github/workflows/
-# expected: 0 matches after cleanup chain (was 1 in integration.yml pre-cutover)
+# expected: 0 matches after cleanup chain (was 1 in legacy integration.yml pre-cutover; file retired at this commit)
 ```
 
 ---

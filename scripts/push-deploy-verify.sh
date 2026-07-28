@@ -35,7 +35,7 @@ set -Eeuo pipefail
 REPO="${REPO:-Marcuss-ops/InstaeditLogin}"
 BRANCH="${BRANCH:-main}"
 
-CI_WORKFLOW="${CI_WORKFLOW:-integration.yml}"
+CI_WORKFLOW="${CI_WORKFLOW:-integration-fast.yml}"
 DEPLOY_WORKFLOW="${DEPLOY_WORKFLOW:-deploy.yml}"
 
 VERCEL_PROJECT="${VERCEL_PROJECT:-instaedit-login-267l}"

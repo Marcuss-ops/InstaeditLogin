@@ -1,8 +1,12 @@
 # .github/workflows/deploy.yml — InstaEditLogin Vercel deploy
 #
-# Independent from .github/workflows/integration.yml (which is CI-only —
-# gofmt / vet / race-test / vitest / vite build) and is responsible for
-# shipping the web bundle to Vercel production.
+# Independent from .github/workflows/integration-fast.yml (which is
+# CI-only — gofmt / vet / race-test / vitest / vite build / oauth-
+# canary unit tests / envfile-parser regression) and is responsible
+# for shipping the web bundle to Vercel production. The slow-lane
+# coverage (e2e via testcontainers-go) lives in
+# .github/workflows/integration-slow.yml and is alert-only — it
+# does NOT block this deploy on failure.
 #
 # Why a dedicated deploy workflow instead of relying on the
 # Vercel-for-Git integration:
@@ -13,16 +17,19 @@
 # makes the deploy loop durable: the next green CI run WILL produce a
 # deploy, the build artifact WILL be re-uploaded, the CDN WILL refresh.
 #
-# Why the deploy is gated on the integration workflow:
+# Why the deploy is gated on the integration-fast workflow:
 # The previous model deployed on every push to `main` without waiting
 # for CI. That required perfect branch-protection discipline to avoid
-# shipping unverified code. Gating on the green `integration` workflow
-# enforces the "CI passes before deploy" contract automatically and
-# reduces the blast radius of a bad push.
+# shipping unverified code. Gating on the green `integration-fast`
+# workflow enforces the "CI passes before deploy" contract
+# automatically and reduces the blast radius of a bad push. The slow
+# e2e lane (integration-slow) is deliberately NOT in the gate — its
+# failure pattern is infrastructure-flake-on-ephemeral-postgres, which
+# would mask product regressions with infra noise if it held bundles.
 #
 # Trigger model:
-#   - This workflow runs when the `integration` workflow completes.
-#   - The deploy job only starts if `integration` concluded with success.
+#   - This workflow runs when the `integration-fast` workflow completes.
+#   - The deploy job only starts if `integration-fast` concluded with success.
 #   - `workflow_dispatch` remains available as a manual override.
 #
 # SAFETY: if you ever need to bypass the CI gate (true emergency),
@@ -92,12 +99,15 @@ permissions:
 # NOTE: GitHub Actions YAML 1.2 treats `on` as a normal string, but
 # some YAML tools (yaml.safe_load in Python ≤1.1 mode, older SDK
 # parsers) interpret `on` as boolean true. Quoting the key keeps the
-# file portable across both. (Existing integration.yml has the same
-# convention — keep them aligned.)
+# file portable across both. (Existing integration-fast.yml + integration-slow.yml use
+# the same convention — keep them aligned.)
 "on":
-  # Run only after the `integration` workflow completes. The job-level
-  # `if` below enforces that the triggering run was successful on the
-  # `main` branch. This prevents unverified code from reaching production.
+  # Run only after the `integration-fast` workflow completes. The
+  # job-level `if` below enforces that the triggering run was
+  # successful on the `main` branch. This prevents unverified code
+  # from reaching production. The slow e2e lane (integration-slow)
+  # runs in parallel and alerts via GH-issue on failure without
+  # blocking this deploy.
   workflow_run:
     workflows: [integration-fast]
     types: [completed]
@@ -129,7 +139,7 @@ jobs:
     name: Deploy web/app to Vercel (production)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Only deploy when the integration workflow succeeded on main,
+    # Only deploy when the integration-fast workflow succeeded on main,
     # or when a repository admin explicitly triggers a manual deploy.
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -138,8 +148,7 @@ jobs:
        github.event.workflow_run.head_branch == 'main')
 
     steps:
-      # ─── 1. Checkout ─────────────────────────────────────────────
-      # actions/checkout@v4 is the pinned major used by integration.yml.
+      # ─── 1. Checkout ─────────────────────────────────────────────        # actions/checkout@v4 is the pinned major used by integration-fast.yml.
       # Stay aligned so both workflows have identical checkout semantics.
       #
       # `ref:` pins the checkout to the EXACT commit this run was
