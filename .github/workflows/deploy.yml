@@ -131,7 +131,22 @@ jobs:
       # ─── 1. Checkout ─────────────────────────────────────────────
       # actions/checkout@v4 is the pinned major used by integration.yml.
       # Stay aligned so both workflows have identical checkout semantics.
+      #
+      # `ref:` pins the checkout to the EXACT commit this run was
+      # spawned for. Without it:
+      #   - on workflow_run (the production path) the runner checks
+      #     out the current `main` HEAD, which can have drifted from
+      #     the head_sha that triggered this run if a fast-followup
+      #     push landed during integration. The deploy would then
+      #     publish a DIFFERENT commit than the green-CI one.
+      #   - on workflow_dispatch (manual override) `github.sha` is
+      #     the SHA of the workflow_dispatch event itself, which is
+      #     still a stable, deterministic per-run anchor.
+      # Source: scripts/push-deploy-verify.sh (CLI deploy verifier)
+      # calls out exactly this race for the operator.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       # ─── 2. Deploy ───────────────────────────────────────────────
       # amondnet/vercel-action reads ./web/vercel.json and runs:
