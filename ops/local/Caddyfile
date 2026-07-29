@@ -18,6 +18,39 @@
 # machine (scp'd here), Chrome trusts the localhost:8443 origin and the
 # browser can hit Vite (via this Caddy) at the same single-origin as the
 # Go API — cookies stay host-only, SessionStorage + refresh cookies work.
+#
+# ── ARCHITECTURE NOTE — locked-in routing intent ─────────────────────
+# * PRIMARY APP is InstaEdit Social (Vite on 127.0.0.1:5173, SPA
+#   fallback handler at the bottom of this site block). The browser
+#   enters at `/` and navigates to /groups/:groupId/videos, /login, etc.
+# * SECONDARY APP is the Dark Editor (Next.js on 127.0.0.1:3001) and it
+#   is reachable EXCLUSIVELY under the Next basePath `/dark_editor_v2/*`.
+#   Next emits its `_next/*` assets under the basePath automatically, so
+#   they are intercepted by `handle /dark_editor_v2/*` below. There is
+#   INTENTIONALLY NO root-level `handle /_next*` handler here — adding one
+#   would leak the editor's static assets out of the /dark_editor_v2
+#   namespace and is forbidden.
+# * `/api/*` is the Go API (127.0.0.1:8080 — the container port; with
+#   docker-compose.local.yml's overlay binding 127.0.0.1:8081:8080 also
+#   reachable, but 8080 is canonical because it matches docker-compose.yml).
+# * `/internal/*` is INTENTIONALLY ABORTED in this block — those routes
+#   are auth-gated on the API container and only reachable from the
+#   `media-backend` docker network (see docker-compose.yml). This is the
+#   VPS hardening mirrored locally.
+# * AUTHORIZATION IS NOT PERFORMED BY CADDY. Caddy is pure routing.
+#   Authorization lives in:
+#     (a) Go auth/CSRF middleware on `/api/v1/*`, and
+#     (b) the Dark Editor session-loader which MUST call
+#         GET /api/v1/youtube/editor-sessions/by-project/{projectId}
+#         BEFORE mounting the Canvas. A direct hit to
+#         /dark_editor_v2/editor/{unknown-id} returns 404 from the
+#         backend, the gate refuses to mount, and the page redirects
+#         back to /groups or /dashboard-channels.
+# * TEST ENTRYPOINTS MUST start from `/` (InstaEdit Social) →
+#   `/groups/:groupId/videos` → click "Apri Dark Editor" → use the
+#   `editor_url` returned by POST /api/v1/youtube/editor-sessions.
+#   Never short-circuit straight to /dark_editor_v2/editor/<fabricated>
+#   in E2E tests.
 
 {
     admin off
