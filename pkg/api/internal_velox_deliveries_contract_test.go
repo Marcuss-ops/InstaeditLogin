@@ -32,6 +32,16 @@ func buildValidContractVeloxRequest(t *testing.T, jobID, artifactID string, work
 		// `idempotency_key` in the body) and the live contract tests
 		// fail with 422 "idempotency_key is required".
 		"contract_version": ContractVersionV1,
+		// Body-side idempotency_key is required by the legacy-path
+		// validator (validateVeloxDeliveryRequest), which runs BEFORE
+		// the contract discriminator branches. The legacy validator
+		// reads the BODY field (not the header) and rejects empty
+		// values with 422 "idempotency_key is required".
+		// fireContractDeliveryRequest sets the header explicitly;
+		// we mirror it here in the body so the legacy validator
+		// (which runs first) is satisfied. The contract path is
+		// exercised against the header value, not this body field.
+		"idempotency_key": "velox-fallback-key-for-test-fixture",
 		"source": map[string]any{
 			"system":      "velox",
 			"job_id":      jobID,
