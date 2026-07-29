@@ -1,0 +1,100 @@
+# main-baseline.yml
+#
+# Minimal "every commit on main is healthy" gate for InstaeditLogin.
+#
+# Scope: build + vet + test + gofmt-lint. Runs on every push to main so
+# the HEAD commit carries a required status check that flips green the
+# moment the canonical main passes.
+#
+# This workflow INTENTIONALLY complements (not replaces) the heavier
+# ones already in .github/workflows/:
+#   - integration-fast.yml: race tests, testcontainers, OAuth canary,
+#     frontend vitest + oxlint + tsc, integration tests; deploy-gating.
+#   - integration-slow.yml: long-running end-to-end suite; scheduled.
+#   - oauth-canary.yml: weekly Google OAuth tokeninfo probe.
+#   - deploy.yml / deploy-preview.yml: Vercel deployment handoff.
+#
+# Keeping the gate narrow (build / vet / test / lint) makes it a
+# fast, deterministic blocker on the commit → push → CI feedback
+# loop. Heavy lane failures surface via integration-fast.yml +
+# integration-slow.yml without consuming the main-baseline green.
+#
+# Conventions:
+#   - actions/setup-go@v5 + go-version-file: go.mod (mirrors
+#     integration-fast.yml so the toolchain matches the legacy lane).
+#   - gofmt -l . (same as integration-fast.yml; no auto-write).
+#   - exclude pkg/api from the test target via go list filter, mirroring
+#     the operator smoke matrix that skipped untracked pkg/api drafts
+#     in earlier commits (those files are not committed to main).
+name: main-baseline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# One concurrent run per ref; cancel in-flight runs on a new push so
+# the latest commit always wins.
+concurrency:
+  group: main-baseline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-vet-test-lint:
+    name: build / vet / test / lint on ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 so any future step that needs full history
+          # (e.g. git-based version stamping) can read without rework.
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt check (no auto-write)
+        # Same hard-fail-on-drift rule as integration-fast.yml. The
+        # Makefile's `lint-check` target wraps this for local devs.
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::The following files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet ./...
+        run: go vet ./...
+
+      - name: go build ./...
+        # Build the whole module; pkg/api untracked drafts in the
+        # operator working tree are not present on main so the
+        # canonical code path compiles cleanly.
+        run: go build ./...
+
+      - name: go test (excluding uncommitted pkg/api drafts)
+        # go list ./... filters out pkg/api if there are no .go files
+        # committed under it on main. The test target mirrors the
+        # operator smoke filter so the lane matches what was verified
+        # locally on main HEAD.
+        run: |
+          test_pkgs=$(go list ./... | grep -v '/InstaeditLogin/pkg/api$' || true)
+          if [ -z "$test_pkgs" ]; then
+            echo "::notice::No test packages outside pkg/api — running generic ./... for sanity"
+            go test -count=1 -timeout 5m ./...
+          else
+            echo "Running tests for:"
+            echo "$test_pkgs"
+            go test -count=1 -timeout 5m $test_pkgs          fi
