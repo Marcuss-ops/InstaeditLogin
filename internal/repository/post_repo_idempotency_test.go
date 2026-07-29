@@ -72,7 +72,13 @@ func TestPostCreate_NoUploadJobID_FreshInsertPath(t *testing.T) {
 		Title:               "http-path",
 		Status:              models.PostStatusDraft,
 		UploadJobID:         nil, // HTTP /api/v1/posts path
-		DefaultPrivacyLevel: "unlisted",
+		// DefaultPrivacyLevel is intentionally left as the zero-value
+		// (empty string) so the test's `WithArgs(... 5th empty ...)`
+		// and the production's `post.DefaultPrivacyLevel = ""` both
+		// agree on the SQL bind. Previous version set
+		// `DefaultPrivacyLevel: "unlisted"` and the test expected "" —
+		// an inconsistency that surfaced as a sqlmock arg-mismatch
+		// after $6 was instrumented.
 	}
 	targets := []*models.PostTarget{
 		{PlatformAccountID: 10, Status: models.PostStatusDraft},
