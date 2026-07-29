@@ -1,22 +1,29 @@
 package api
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
+
+// NOTE — handleCreateInternalDelivery was relocated to
+// `pkg/api/deliveries_create.go` (out of `pkg/api/internal/` because
+// Go's internal-visibility rule prevents a file in the internal
+// subtree from referencing symbols in its parent package; the
+// handler shares types like VeloxModule, writeError, sha256HexRegex,
+// mimeAllowlist that live in a sibling file). Imports above are
+// pruned to the GET/validate handlers + option functions in this
+// file only. New types added by the relocation live in
+// `deliveries_create.go` (VeloxDeliverContractRequest,
+// VeloxDeliverContractResponse, VeloxContractIdempotencyKeyRegex).
+
 
 // handleGetInternalDelivery implements
 // GET /internal/v1/deliveries/{id} for the Velox integration
@@ -95,283 +102,6 @@ func (m *VeloxModule) handleGetInternalDelivery(w http.ResponseWriter, req *http
 		"status", delivery.Status,
 	)
 	writeJSON(w, http.StatusOK, resp)
-}
-
-// handleCreateInternalDelivery implements
-// POST /internal/v1/deliveries for the Velox integration
-// contract.
-//
-// IDEMPOTENCY CONTRACT (per user spec):
-//  1. Compute request_sha256 = sha256(raw_body_bytes) inside
-//     external_delivery_repo.Insert (the Insert computes the
-//     hex from rawBody internally).
-//  2. INSERT path look-and-write happens under a single
-//     pg_advisory_xact_lock so concurrent replays serialise.
-//  3. SAME SHA → reuse social_delivery_id, return 202 with
-//     already_exists=true.
-//  4. DIFFERENT SHA → 409 with structured
-//     VeloxDeliverArtifactConflictResponse body
-//     (error/code/idempotency_key).
-//  5. NOT FOUND → INSERT new row, return 202 with
-//     already_exists=false.
-//
-// The three-way outcome is detected in the handler by comparing
-// the returned record's ID to the minted ID: equal → freshly
-// inserted by THIS request; different → reused from a previous
-// row (same idempotency_key + same SHA pre-existed).
-//
-// SLA — 500ms p99 target (per user spec). The Insert with
-// pg_advisory_xact_lock + SELECT + maybe INSERT is bounded
-// by the lock-holder's transaction speed (typically 50-150ms
-// on healthy Postgres). We add a 5s ctx timeout as a safety
-// cap; an Insert > 300ms is logged WARN so operators can
-// alert on slow path without paging.
-//
-// VALIDATION CHAIN (fast-fail-first, ordered by error cost):
-//  1. Authorization (Bearer middleware, 401/403/503)
-//  2. Body cap (8 MB → 413 if over)
-//  3. JSON parsing (400 if malformed)
-//  4. idempotency_key presence + length ≤ 256 (422)
-//  5. artifact.sha256 regex (422)
-//  6. artifact.size_bytes > 0 (422)
-//  7. artifact.mime_type allowlist (422)
-//  8. metadata non-empty JSON object (422)
-//  9. external_destination_id present in DB (422)
-//  10. Insert call (3-way outcome)
-//
-// All 422 paths funnel through writeError so callers see the
-// uniform {"error": "validation: ..."} envelope. The 409
-// conflict is the ONLY structured-body response in this
-// handler — by design, so callers can distinguish
-// "validate-and-fix" (422) from "permanent conflict, don't
-// retry" (409).
-func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *http.Request) {
-	if m.deps.ExternalDeliveryStore == nil {
-		writeError(w, http.StatusNotImplemented, "internal velox delivery store not configured")
-		return
-	}
-	if m.deps.ExternalDestinationStore == nil {
-		writeError(w, http.StatusInternalServerError, "external destination store not configured")
-		return
-	}
-
-	// Defensive ctx cap. 5s is well above the 500ms p99 SLA — the
-	// Insert is bounded by transactional speed. The cap means a
-	// runaway DB never blocks the handler indefinitely.
-	ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
-	defer cancel()
-
-	// Step 2 — body cap via http.MaxBytesReader. The Reader
-	// returns *http.MaxBytesError on truncation, which we
-	// detect with errors.As (not string match).
-	body, err := io.ReadAll(http.MaxBytesReader(w, req.Body, maxDeliveryBodyBytes))
-	if err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			slog.Warn("velox deliver: body too large",
-				"limit_bytes", maxDeliveryBodyBytes)
-			writeError(w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("request body exceeds %d MB", maxDeliveryBodyBytes/(1024*1024)))
-			return
-		}
-		slog.Error("velox deliver: body read failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "body read failed")
-		return
-	}
-	if len(body) == 0 {
-		writeError(w, http.StatusBadRequest, "empty request body")
-		return
-	}
-
-	// Step 3 — JSON parse. Decode on a COPY of the raw bytes
-	// because the Insert needs the raw bytes for SHA
-	// computation; the unmarshal call below does NOT consume
-	// the body iterator (it's a fresh Unmarshal pass).
-	var veloxReq VeloxDeliverArtifactRequest
-	if err := json.Unmarshal(body, &veloxReq); err != nil {
-		slog.Warn("velox deliver: json unmarshal failed", "err", err)
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
-		return
-	}
-
-	// Step 4 — idempotency_key presence + max length.
-	if veloxReq.IdempotencyKey == "" {
-		writeError(w, http.StatusUnprocessableEntity,
-			"validation: idempotency_key is required")
-		return
-	}
-	if len(veloxReq.IdempotencyKey) > 256 {
-		writeError(w, http.StatusUnprocessableEntity,
-			"validation: idempotency_key exceeds 256 characters")
-		return
-	}
-
-	// Step 5 — artifact.sha256 lowercase hex regex.
-	if !sha256HexRegex.MatchString(veloxReq.Artifact.SHA256) {
-		writeError(w, http.StatusUnprocessableEntity,
-			"validation: artifact.sha256 must be 64 lowercase hex characters")
-		return
-	}
-
-	// Step 6 — artifact.size_bytes positive.
-	if veloxReq.Artifact.SizeBytes <= 0 {
-		writeError(w, http.StatusUnprocessableEntity,
-			"validation: artifact.size_bytes must be > 0")
-		return
-	}
-
-	// Step 7 — mime allowlist (4 video formats).
-	if !mimeAllowlist[veloxReq.Artifact.MimeType] {
-		writeError(w, http.StatusUnprocessableEntity,
-			fmt.Sprintf("validation: artifact.mime_type %q not supported (allowed: video/mp4, video/quicktime, video/webm, video/x-matroska)",
-				veloxReq.Artifact.MimeType))
-		return
-	}
-
-	// Step 8 — metadata must be a non-empty JSON object. This
-	// fast-fail happens BEFORE the destination lookup so callers
-	// always see 422 for malformed metadata, even if the
-	// destination id is unknown.
-	if !services.IsNonEmptyJSONObject(veloxReq.Metadata) {
-		writeError(w, http.StatusUnprocessableEntity,
-			"validation: metadata must be a non-empty JSON object")
-		return
-	}
-
-	// Step 9 — external_destination_id must exist.
-	dest, err := m.deps.ExternalDestinationStore.GetByID(ctx, veloxReq.ExternalDestinationID)
-	if err != nil {
-		// Sentinel-aware: a not-found sentinel from the
-		// destination repo is the SAME 404 a missing-row
-		// produces, so the caller can't distinguish them
-		// (closes a status-code-oracle / existence-leak path:
-		// without this branch, the 500/404 split on missing
-		// destinations would let a malicious Velox peer iterate
-		// IDs and enumerate which are live).
-		if errors.Is(err, repository.ErrExternalDestinationNotFound) {
-			writeError(w, http.StatusNotFound, veloxDestinationNotFoundBody)
-			return
-		}
-		slog.Error("velox deliver: destination lookup failed",
-			"external_destination_id", veloxReq.ExternalDestinationID,
-			"err", err)
-		writeError(w, http.StatusInternalServerError, "destination lookup failed")
-		return
-	}
-	if dest == nil {
-		// Spec mandate: a missing destination row is NOT a
-		// payload validation failure (the body IS well-formed) —
-		// return 404 because the resource the request refers to
-		// doesn't exist. This matches the user spec
-		// "ErrExternalDeliveryNotFound → 404 (se destination_id
-		// manca)" + collapses with the /validate 404 "destination
-		// not found" so the Velox consumer treats both
-		// identically and a missing row never leaks a 422/500
-		// distinction.
-		writeError(w, http.StatusNotFound, veloxDestinationNotFoundBody)
-		return
-	}
-	// Destination defaults are authoritative for the downstream uploader.
-	// Merge them before persistence so the Velox peer remains opaque while
-	// InstaEdit resolves the Drive account and folder locally.
-	veloxReq.Metadata = services.MergeVeloxDestinationMetadata(dest, veloxReq.Metadata)
-
-	// Step 8 — parse and validate the merged metadata once at the HTTP
-	// boundary. All downstream consumers use the typed result.
-	meta, err := models.ParseVeloxDeliveryMetadata(veloxReq.Metadata)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity,
-			"validation: "+err.Error())
-		return
-	}
-	if err := meta.Validate(); err != nil {
-		writeError(w, http.StatusUnprocessableEntity,
-			"validation: "+err.Error())
-		return
-	}
-
-	// Step 10 — mint social_delivery_id (ULID-shaped opaque).
-	mintedID, err := services.GenerateVeloxDeliveryID()
-	if err != nil {
-		slog.Error("velox deliver: id mint failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "id mint failed")
-		return
-	}
-
-	// Build the ExternalDelivery record. The Insert computes
-	// RequestSHA256 from rawBody internally (no double-read).
-	delivery := &models.ExternalDelivery{
-		ID:                    mintedID,
-		SourceSystem:          veloxSourceSystemTag,
-		ExternalDeliveryID:    veloxReq.ExternalDeliveryID,
-		IdempotencyKey:        veloxReq.IdempotencyKey,
-		ExternalDestinationID: veloxReq.ExternalDestinationID,
-		SourceArtifactID:      veloxReq.Artifact.ArtifactID,
-		ExpectedSHA256:        veloxReq.Artifact.SHA256,
-		ExpectedSizeBytes:     veloxReq.Artifact.SizeBytes,
-		ExpectedMimeType:      veloxReq.Artifact.MimeType,
-		DownloadURL:           veloxReq.Artifact.DownloadURL,
-		Metadata:              veloxReq.Metadata,
-		PublishAt:             veloxReq.PublishAt,
-		CallbackURL:           veloxReq.CallbackURL,
-		Status:                models.ExternalDeliveryStatusAccepted,
-	}
-
-	// Insert with rawBody so repo computes SHA from the EXACT
-	// bytes (no serialization round-trip mismatch possible).
-	t0 := time.Now()
-	inserted, err := m.deps.ExternalDeliveryStore.Insert(ctx, delivery, body)
-	elapsed := time.Since(t0)
-	if elapsed > 300*time.Millisecond {
-		slog.Warn("velox deliver: insert slow",
-			"elapsed_ms", elapsed.Milliseconds(),
-			"idempotency_key", veloxReq.IdempotencyKey)
-	}
-
-	if err != nil {
-		// 3-way outcome: ErrIdempotencyConflict → 409 structured.
-		if errors.Is(err, repository.ErrIdempotencyConflict) {
-			var existingID string
-			if inserted != nil {
-				existingID = inserted.ID
-			}
-			slog.Info("velox deliver: replay with different sha rejected",
-				"idempotency_key", veloxReq.IdempotencyKey,
-				"existing_social_delivery_id", existingID,
-			)
-			writeJSON(w, http.StatusConflict, VeloxDeliverArtifactConflictResponse{
-				Error:          "idempotency_key_conflict",
-				Code:           "idempotency_key_conflict",
-				IdempotencyKey: veloxReq.IdempotencyKey,
-			})
-			return
-		}
-		slog.Error("velox deliver: insert failed",
-			"err", err, "idempotency_key", veloxReq.IdempotencyKey)
-		writeError(w, http.StatusInternalServerError, "delivery persist failed")
-		return
-	}
-
-	// 3-way outcome — fresh (mintedID == inserted.ID) vs
-	// replay (mintedID != inserted.ID). ALWAYS 202.
-	alreadyExists := inserted.ID != mintedID
-	slog.Info("velox deliver: accepted",
-		"social_delivery_id", inserted.ID,
-		"idempotency_key", veloxReq.IdempotencyKey,
-		"already_exists", alreadyExists,
-		"elapsed_ms", elapsed.Milliseconds(),
-	)
-
-	// The delivery is persisted in external_deliveries. The worker
-	// polls that table and claims rows atomically; no in-process
-	// channel is used. 202 "accepted" therefore means "persisted",
-	// not "delivered to the worker".
-
-	writeJSON(w, http.StatusAccepted, VeloxDeliverArtifactResponse{
-		SocialDeliveryID: inserted.ID,
-		Status:           "accepted",
-		AlreadyExists:    alreadyExists,
-	})
 }
 
 // handleValidateInternalDestination implements
