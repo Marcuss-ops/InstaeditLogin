@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 // =====================================================================

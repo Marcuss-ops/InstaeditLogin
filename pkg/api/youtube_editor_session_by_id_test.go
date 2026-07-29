@@ -11,7 +11,6 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
 // fakeAuthIdentity is the minimal auth.Identity implementation the
@@ -24,7 +23,11 @@ type fakeAuthIdentity struct {
 
 func (f *fakeAuthIdentity) UserID() int64                { return f.uid }
 func (f *fakeAuthIdentity) IsAdmin() bool                { return false }
-func (f *fakeAuthIdentity) WorkspaceIDs() []int64        { return nil }
+func (f *fakeAuthIdentity) IsAPIKey() bool               { return false }
+func (f *fakeAuthIdentity) KeyID() int64                 { return 0 }
+func (f *fakeAuthIdentity) WorkspaceID() int64           { return 0 }
+func (f *fakeAuthIdentity) SessionID() int64             { return 0 }
+func (f *fakeAuthIdentity) Permissions() []string        { return nil }
 func (f *fakeAuthIdentity) HasPermission(_ string) bool  { return false }
 
 // withIdentity returns a child context carrying the supplied

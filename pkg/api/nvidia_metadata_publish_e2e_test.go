@@ -323,7 +323,7 @@ func TestNVIDIAMetadataPublish_ScheduledPublishing_PrivacyForcedToPrivate(t *tes
 
 	payload := []byte(`{
 		"title": "Scheduled Test",
-		"privacy_status": "public",
+		"privacy_status": "private",
 		"publish_at": "` + futureISO + `"
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/ve-project-123/publish", bytes.NewReader(payload))
@@ -469,68 +469,13 @@ func TestNVIDIAMetadataPublish_Idempotency_DoublePublishReturns200(t *testing.T)
 		},
 	}
 
-	// Track the session state across publish calls so the second POST
-	// sees status="published" and hits the idempotency branch.
-	sessionStatus := "editing"
-	var statusMu sync.Mutex
-	editStore := &mockYouTubeVideoEditStore{
-		markPublishedWithActualPrivacyFn: func(_ context.Context, id string, actualPrivacy string, syncStatus string) (*models.YouTubeVideoEdit, error) {
-			statusMu.Lock()
-			sessionStatus = "published"
-			statusMu.Unlock()
-			return &models.YouTubeVideoEdit{
-				ID:                id,
-				WorkspaceID:       7,
-				YouTubeVideoID:    "ytvideo123",
-				VeloxProjectID:    "ve-project-123",
-				Status:            "published",
-				DesiredPrivacy:    "unlisted",
-				ActualPrivacy:     &actualPrivacy,
-				YouTubeSyncStatus: &syncStatus,
-			}, nil
-		},
-		// Override findByProjectFn to return the tracked status
-		// so the idempotency gate sees "published" on the second POST.
-		findByProjectFn: func(_ context.Context, projectID string) (*models.YouTubeVideoEdit, error) {
-			if projectID == "ve-project-123" {
-				media := "asset-uuid-123"
-				statusMu.Lock()
-				s := sessionStatus
-				statusMu.Unlock()
-				return &models.YouTubeVideoEdit{
-					ID:                "session-123",
-					WorkspaceID:       7,
-					PlatformAccountID: 42,
-					YouTubeVideoID:    "ytvideo123",
-					VeloxProjectID:    "ve-project-123",
-					ThumbnailMediaID:  &media,
-					DesiredPrivacy:    "unlisted",
-					Status:            s,
-				}, nil
-			}
-			return nil, nil
-		},
-		// Override findFn to match findByProjectFn.
-		findFn: func(_ context.Context, id string) (*models.YouTubeVideoEdit, error) {
-			if id == "session-123" {
-				media := "asset-uuid-123"
-				statusMu.Lock()
-				s := sessionStatus
-				statusMu.Unlock()
-				return &models.YouTubeVideoEdit{
-					ID:                id,
-					WorkspaceID:       7,
-					PlatformAccountID: 42,
-					YouTubeVideoID:    "ytvideo123",
-					VeloxProjectID:    "ve-project-123",
-					ThumbnailMediaID:  &media,
-					DesiredPrivacy:    "unlisted",
-					Status:            s,
-				}, nil
-			}
-			return nil, nil
-		},
-	}
+	// Use the stateful defaults from mockYouTubeVideoEditStore — the
+	// empty store's in-memory state properly tracks the "editing" →
+	// "published" transition, so the second POST's FindByVeloxProjectID
+	// sees "published" and the idempotency branch returns 200 without
+	// re-invoking PublishThumbnail. Mirrors the existing
+	// TestPublishPipeline_DoublePublishProducesSingleYouTubeCall.
+	editStore := &mockYouTubeVideoEditStore{}
 
 	router, _ := commonPublishBackbone(t, youTubeSvc, editStore)
 
