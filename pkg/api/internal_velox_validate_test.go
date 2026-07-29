@@ -121,6 +121,12 @@ func (a *workspaceStoreAdapter) ListChannels(_ context.Context, _ int64) ([]mode
 	return nil, nil
 }
 
+// Compile-time guarantee that workspaceStoreAdapter satisfies the
+// production WorkspaceStore interface wired by VeloxModule. Catches
+// signature drift on the production interface — same guard as
+// fakeE2EWorkspace in internal_velox_e2e_helpers_test.go.
+var _ WorkspaceStore = (*workspaceStoreAdapter)(nil)
+
 // wrapWorkspaceLookup binds a mockWorkspaceLookup to a fresh
 // adapter, returning a WorkspaceStore the Router.workspaceStore
 // field can hold.

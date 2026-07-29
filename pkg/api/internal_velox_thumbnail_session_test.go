@@ -596,16 +596,16 @@ func TestHandleCreateThumbnailSession_EmptyTokenReturns503(t *testing.T) {
 	store, ws, users := freshHarnessForThumbnail()
 	body := `{"workspace_id":12,"platform_account_id":381,"youtube_video_id":"vid"}`
 	w := runCreateThumbnailSession(t, store, ws, users, "", body, "")
-	// vm.Register skips mounting the route when VeloxAPIToken is
-	// empty (the auth-middleware path is a no-op without a token),
-	// so the chi mux returns 404 before the middleware fires. The
-	// service is bootstrapped but the route isn't reachable until
-	// the operator supplies the token via env. Both 503 (from the
-	// middleware) and 404 (from the mux) signal "service misconfigured"
-	// — the route-skip convention is preferred so a 503 leak doesn't
-	// attract scrapers probing an unconfigured endpoint.
+	// Per pkg/api/modules.go:175, VeloxModule.Register returns early
+	// when VeloxAPIToken == "" without registering ANY of the module's
+	// routes. The chi mux thus has no match for POST
+	// /internal/v1/thumbnail-sessions and returns 404 before the auth
+	// middleware (which would have emitted 503) is even reached. This
+	// is the documented "don't leak unmounted routes to scrapers"
+	// behaviour in modules.go and matches the AdminModule.Register
+	// nil-guard pattern at modules.go:60.
 	if w.Code != http.StatusNotFound {
-		t.Errorf("empty token: want 404 (route skipped when token empty), got %d body=%s", w.Code, w.Body.String())
+		t.Errorf("empty token: want 404 (per modules.go:175 route-skip), got %d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -636,14 +636,14 @@ func TestHandleCreateThumbnailSession_StoreUnconfigured(t *testing.T) {
 	req.Header.Set("Authorization", buildAuthHeader(testVeloxAPIToken))
 	w := httptest.NewRecorder()
 	chiRouter.ServeHTTP(w, req)
-	// vm.Register skips mounting the route when YouTubeVideoEditStore
-	// is nil (the handler's nil-guard is meaningless without the
-	// mount point), so the chi mux returns 404 before the handler
-	// fires. Matches VeloxModule's defensive "don't leak an unmounted
-	// route" convention so a misconfigured server doesn't exfiltrate
-	// handler code paths to a scraper.
+	// Per pkg/api/modules.go:206-208, VeloxModule.Register only mounts
+	// /internal/v1/thumbnail-sessions when YouTubeVideoEditStore != nil.
+	// When nil, the route is NOT registered, so the chi mux returns 404
+	// before the handler's nil-guard is reached. Same defensive
+	// "don't leak handler code paths to scrapers" pattern as
+	// modules.go:175 (token skip) and modules.go:60 (AdminModule).
 	if w.Code != http.StatusNotFound {
-		t.Errorf("status: want 404 (route skipped when YVEstore nil), got %d body=%s", w.Code, w.Body.String())
+		t.Errorf("status: want 404 (per modules.go:206-208 route-skip), got %d body=%s", w.Code, w.Body.String())
 	}
 }
 

@@ -84,6 +84,11 @@ func (f *fakeWorkspaceStoreForSessionGet) ListChannels(_ context.Context, _ int6
 	return nil, nil
 }
 
+// Compile-time guarantee that fakeWorkspaceStoreForSessionGet
+// satisfies the production WorkspaceStore interface. Same guard as
+// fakeE2EWorkspace + workspaceStoreAdapter in this package.
+var _ WorkspaceStore = (*fakeWorkspaceStoreForSessionGet)(nil)
+
 // runGetEditorSessionByID wires a Router with the supplied fakes
 // + the test JWT-equivalent identity, then issues GET against the
 // new endpoint. Centralised so per-test setup stays minimal.
