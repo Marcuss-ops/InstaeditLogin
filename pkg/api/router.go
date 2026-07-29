@@ -1090,6 +1090,7 @@ func (r *Router) veloxModule() *VeloxModule {
 		ExternalDeliveryStore:    r.externalDeliveries,
 		WorkspaceStore:           r.workspaceStore,
 		UserStore:                r.userRepo,
+		GroupStore:               r.groupStore,
 		VeloxAPIToken:            r.veloxAPIToken,
 		VeloxValidateRateLimiter: r.veloxValidateRateLimiter,
 	}).(*VeloxModule)
@@ -1116,6 +1117,10 @@ func (r *Router) registerUserVeloxDestinations(mux chi.Router) {
 
 func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *http.Request) {
 	r.veloxModule().handleValidateInternalDestination(w, req)
+}
+
+func (r *Router) handleResolveTargetInternalDestination(w http.ResponseWriter, req *http.Request) {
+	r.veloxModule().handleResolveTargetInternalDestination(w, req)
 }
 
 func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.Request) {

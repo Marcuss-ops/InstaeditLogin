@@ -108,7 +108,16 @@ type VeloxModuleDeps struct {
 	ExternalDeliveryStore    ExternalDeliveryStore
 	WorkspaceStore           WorkspaceStore
 	UserStore                UserStore
-	VeloxAPIToken            string
+	// GroupStore backs the OPTIONAL POST
+	// /internal/v1/destinations/resolve-target endpoint (group
+	// expansion branch). When omitted, the route is not
+	// registered (matches the postStore / workspaceStore
+	// nil-guard pattern documented at router.go top). Wired in
+	// internal/bootstrap/app.go via the same repository that
+	// powers /api/v1/groups/* so the resolve-target handler
+	// reuses the production GroupRepository.
+	GroupStore              GroupStore
+	VeloxAPIToken           string
 	VeloxValidateRateLimiter *validateRateLimiter
 }
 
@@ -130,6 +139,17 @@ func (m *VeloxModule) Register(mux chi.Router) {
 	}
 	mux.Method(http.MethodPost, "/internal/v1/destinations/{id}/validate",
 		internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleValidateInternalDestination)))
+	// Resolve-target is the body-based target-descriptor validator
+	// (POST /internal/v1/destinations/resolve-target) — gated on
+	// the per-feature nil-guard pattern: the route is registered
+	// ONLY if GroupStore + WorkspaceStore + UserStore are all
+	// wired. Production wiring (internal/bootstrap/app.go) sets
+	// all three from the same *sql.DB-backed repositories, so the
+	// guard is purely a dependency-injection signal.
+	if m.deps.GroupStore != nil && m.deps.WorkspaceStore != nil && m.deps.UserStore != nil {
+		mux.Method(http.MethodPost, "/internal/v1/destinations/resolve-target",
+			internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleResolveTargetInternalDestination)))
+	}
 	if m.deps.ExternalDeliveryStore != nil {
 		mux.Method(http.MethodPost, "/internal/v1/deliveries",
 			internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleCreateInternalDelivery)))
