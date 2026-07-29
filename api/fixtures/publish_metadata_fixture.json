@@ -1,0 +1,29 @@
+{
+  "_comment": "CONTRACT FIXTURE — canonical publish payload. Validated by: NVIDIA schema (internal/services/nvidia_types.go), Go DTO (pkg/api/youtube_editor_sessions.go), OpenAPI (api/openapi.yaml §YouTubeEditorSessionPublishRequest), validator backend (internal/models/youtube_publish_options.go), TypeScript Dark Editor types, and E2E tests. DO NOT change any field name, type, or constraint without updating ALL six representations.",
+  "title": "Come automatizzare la pubblicazione YouTube nel 2026",
+  "description": "In questo video vediamo come creare, modificare e pubblicare contenuti YouTube attraverso un flusso automatizzato con InstaEdit e NVIDIA AI.",
+  "privacy_status": "private",
+  "publish_at": "2026-07-30T16:00:00Z",
+  "tags": [
+    "youtube automation",
+    "video editing",
+    "instaedit",
+    "content creation"
+  ],
+  "default_language": "it",
+  "default_audio_language": "it",
+  "translations": {
+    "en": {
+      "title": "How to Automate YouTube Publishing in 2026",
+      "description": "This video explains how to create, edit and publish YouTube content through an automated workflow with InstaEdit and NVIDIA AI."
+    },
+    "es": {
+      "title": "Cómo automatizar la publicación en YouTube en 2026",
+      "description": "Este video explica cómo crear, editar y publicar contenido de YouTube mediante un flujo automatizado con InstaEdit y NVIDIA AI."
+    },
+    "pt-BR": {
+      "title": "Como automatizar publicações no YouTube em 2026",
+      "description": "Este vídeo mostra como criar, editar e publicar conteúdo no YouTube por meio de um fluxo automatizado com InstaEdit e NVIDIA AI."
+    }
+  }
+}
