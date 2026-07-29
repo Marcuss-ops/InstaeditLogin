@@ -84,20 +84,13 @@ jobs:
         # canonical code path compiles cleanly.
         run: go build ./...
 
-      - name: go test (excluding uncommitted pkg/api drafts)
-        # go list ./... filters out pkg/api if there are no .go files
-        # committed under it on main. The test target mirrors the
-        # operator smoke filter so the lane matches what was verified
-        # locally on main HEAD.
-        run: |
-          # Strip every package under pkg/api (a literal-suffix
-          # anchor like '/pkg/api$' would only drop the bare pkg
-          # path, not subpackages like .../pkg/api/something).
-          test_pkgs=$(go list ./... | grep -v '/pkg/api' || true)
-          if [ -z "$test_pkgs" ]; then
-            echo "::notice::No test packages outside pkg/api — running generic ./... for sanity"
-            go test -count=1 -timeout 5m ./...
-          else
-            echo "Running tests for:"
-            echo "$test_pkgs"
-            go test -count=1 -timeout 5m $test_pkgs          fi
+      - name: go test ./...
+        # Full ./... test target — NO package filter. The historical
+        # pkg/api exclusion was added to skip "uncommitted drafts" but
+        # pkg/api IS committed on main with substantial test code
+        # (contracts, account routes, velox validation, e2e harnesses).
+        # Excluding it silently bypasses the main-baseline gate that
+        # the operator-facing "every commit on main gets green status
+        # check" contract depends on. CI now catches pkg/api
+        # regressions that the operator smoke lane (dev-only) cannot.
+        run: go test -count=1 -timeout 5m ./...
