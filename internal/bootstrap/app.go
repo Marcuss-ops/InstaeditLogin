@@ -414,6 +414,20 @@ func Wire(ctx context.Context) (*App, error) {
 		// command-line crawler (cmd/worker) can wire it directly.
 	}
 
+	// Wire NVIDIA AI metadata generator (optional). When NVIDIA_API_KEY
+	// is empty, the /generate-metadata endpoint returns 503 and manual
+	// metadata entry works unchanged. Constructed unconditionally
+	// (even with empty key) so the nil-guard is in the handler, not
+	// in the wiring — a future env-var reload (unlikely but
+	// architecturally sound) would pick up the key without a restart.
+	nvidiaSvc := services.NewMetadataGenerator(cfg.AI.NVIDIAAPIKey)
+	if cfg.AI.NVIDIAAPIKey != "" {
+		slog.Info("NVIDIA AI metadata generator configured")
+	} else {
+		slog.Info("NVIDIA AI metadata generator NOT configured (NVIDIA_API_KEY empty) — /generate-metadata returns 503, manual entry still works")
+	}
+	opts = append(opts, api.WithNvidiaMetadataService(nvidiaSvc))
+
 	// Wire the YouTube service into the router for editor-sessions
 	// and validate-account endpoints. Hard-fail when YouTubeClientID
 	// is configured but the provider is missing or does not implement

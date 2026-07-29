@@ -90,17 +90,17 @@ func (o YouTubePublishOptions) Validate() error {
 	if total > YouTubeTagsTotalCharsMax {
 		return fmt.Errorf("total tag characters %d exceeds YouTube bound %d", total, YouTubeTagsTotalCharsMax)
 	}
-	if err := checkBCP47Like("default_language", o.DefaultLanguage); err != nil {
+	if err := CheckBCP47Like("default_language", o.DefaultLanguage); err != nil {
 		return err
 	}
-	if err := checkBCP47Like("default_audio_language", o.DefaultAudioLanguage); err != nil {
+	if err := CheckBCP47Like("default_audio_language", o.DefaultAudioLanguage); err != nil {
 		return err
 	}
 	if len(o.Translations) > 0 && o.DefaultLanguage == "" {
 		return fmt.Errorf("translations require default_language (YouTube refuses localizations without one)")
 	}
 	for lang, tr := range o.Translations {
-		if err := checkBCP47Like("translation key", lang); err != nil {
+		if err := CheckBCP47Like("translation key", lang); err != nil {
 			return err
 		}
 		if tr.Title == "" && tr.Description == "" {
@@ -110,13 +110,13 @@ func (o YouTubePublishOptions) Validate() error {
 	return nil
 }
 
-// checkBCP47Like is a tiny sanity gate against obviously-malformed
+// CheckBCP47Like is a tiny sanity gate against obviously-malformed
 // language tags (length out of band, contains a slash, unknown chars).
 // Full BCP-47 validation is delegated to YouTube — the API will reject
 // truly malformed codes. We only catch the obvious misspellings here
 // so the operator gets a friendly 400 message instead of a paid-for
 // 4xx response.
-func checkBCP47Like(label, code string) error {
+func CheckBCP47Like(label, code string) error {
 	if code == "" {
 		return nil
 	}

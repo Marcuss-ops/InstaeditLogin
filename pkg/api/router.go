@@ -305,6 +305,12 @@ type Router struct {
 	// owns the routing decision.
 	youTubeSvc YouTubeOAuthService
 
+	// nvidiaMetadataSvc is the NVIDIA AI metadata generator.
+	// Optional — when nil, the /generate-metadata endpoint returns
+	// 503 and the manual metadata flow remains fully functional.
+	// Wired via WithNvidiaMetadataService in internal/bootstrap/app.go.
+	nvidiaMetadataSvc *services.MetadataGenerator
+
 	// youtubeVideoEditStore persists thumbnail editor sessions for
 	// YouTube videos. Wired via WithYouTubeVideoEditStore.
 	youtubeVideoEditStore YouTubeVideoEditStore
@@ -1105,6 +1111,17 @@ func (r *Router) integrationsModule() *IntegrationsModule {
 		AuthMiddleware:           r.authMiddleware,
 		CSRFMiddleware:           r.csrfMiddleware,
 	}).(*IntegrationsModule)
+}
+
+// WithNvidiaMetadataService wires the NVIDIA AI metadata generator
+// used by the /generate-metadata endpoint. When nil (the default),
+// the endpoint returns 503 and manual metadata entry still works.
+// Production wiring in internal/bootstrap/app.go passes
+// services.NewMetadataGenerator(cfg.AI.NVIDIAAPIKey).
+func WithNvidiaMetadataService(svc *services.MetadataGenerator) RouterOption {
+	return func(r *Router) {
+		r.nvidiaMetadataSvc = svc
+	}
 }
 
 func (r *Router) registerInternalVeloxRoutes() {

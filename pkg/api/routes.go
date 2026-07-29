@@ -219,6 +219,18 @@ func (r *Router) Setup() http.Handler {
 	}
 	r.mux.Method(http.MethodPut, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/draft", r.protected(saveDraftByProjectHandler.ServeHTTP))
 
+	// POST /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/generate-metadata
+	// NVIDIA AI metadata generation. Read-only step BEFORE publish:
+	// generates title, description, tags, languages and translations
+	// via NVIDIA API. The operator reviews + optionally edits the
+	// generated values before submitting through /publish. CSRF
+	// semantics match the publish endpoint.
+	var generateNVIDIAMetadataHandler http.Handler = http.HandlerFunc(r.handleGenerateNVIDIAMetadata)
+	if r.csrfMiddleware != nil {
+		generateNVIDIAMetadataHandler = r.csrfMiddleware(generateNVIDIAMetadataHandler)
+	}
+	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/by-project/{velox_project_id}/generate-metadata", r.protected(generateNVIDIAMetadataHandler.ServeHTTP))
+
 	var publishEditorSessionHandler http.Handler = http.HandlerFunc(r.handlePublishYouTubeEditorSession)
 	if r.csrfMiddleware != nil {
 		publishEditorSessionHandler = r.csrfMiddleware(publishEditorSessionHandler)
