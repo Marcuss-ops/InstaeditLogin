@@ -103,6 +103,24 @@ func (a *workspaceStoreAdapter) FindByID(_ int64) (*models.Workspace, error) {
 	return a.m.findByIDResult, a.m.findByIDErr
 }
 
+// FindChannel + ListChannels are required to satisfy the production
+// WorkspaceStore interface which (*deliveries.TargetResolver).resolveSavedDestination
+// calls at the binding check (after FindByID + FindPlatformAccountByID).
+//
+// Without these overrides a method call promotes to the nil embedded
+// interface and SIGSEGVs (NOT the usual Go nil-pointer panic). The
+// happy-path validate test intentionally has no per-account binding
+// rows; (nil, nil) is the correct semantic — the resolver treats
+// binding==nil as "no workspace-side disable" and proceeds with the
+// eligibility check.
+func (a *workspaceStoreAdapter) FindChannel(_ context.Context, _ int64, _ int64) (*models.WorkspaceChannel, error) {
+	return nil, nil
+}
+
+func (a *workspaceStoreAdapter) ListChannels(_ context.Context, _ int64) ([]models.WorkspaceChannel, error) {
+	return nil, nil
+}
+
 // wrapWorkspaceLookup binds a mockWorkspaceLookup to a fresh
 // adapter, returning a WorkspaceStore the Router.workspaceStore
 // field can hold.

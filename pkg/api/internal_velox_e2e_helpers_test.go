@@ -380,11 +380,37 @@ type fakeE2EWorkspace struct {
 	rows map[int64]*models.Workspace
 }
 
+// Compile-time guarantee that fakeE2EWorkspace satisfies the
+// production WorkspaceStore used by VeloxModule wiring. Surfaces
+// signature drift the next time someone adds a method to the
+// production interface — exactly the SIGSEGV regression this file
+// is here to prevent.
+var _ WorkspaceStore = (*fakeE2EWorkspace)(nil)
+
 func (f *fakeE2EWorkspace) FindByID(id int64) (*models.Workspace, error) {
 	if f.rows == nil {
 		return nil, errors.New("fakeE2EWorkspace: FindByID called before init")
 	}
 	return f.rows[id], nil
+}
+
+// FindChannel + ListChannels are required to satisfy the production
+// WorkspaceStore interface which (*deliveries.TargetResolver).resolveSavedDestination
+// calls (binding check inside the eligibility pipeline after
+// WorkspaceStore.FindByID + UserStore.FindPlatformAccountByID).
+//
+// Without these overrides a method call promotes to the nil embedded
+// interface and SIGSEGVs (NOT the usual Go nil-pointer panic). The
+// happy-path e2e harness intentionally has no per-account binding
+// rows; (nil, nil) is the correct semantic — the resolver treats
+// binding==nil as "no workspace-side disable" and proceeds with the
+// eligibility check.
+func (f *fakeE2EWorkspace) FindChannel(_ context.Context, _ int64, _ int64) (*models.WorkspaceChannel, error) {
+	return nil, nil
+}
+
+func (f *fakeE2EWorkspace) ListChannels(_ context.Context, _ int64) ([]models.WorkspaceChannel, error) {
+	return nil, nil
 }
 
 // fakeE2EUser mirrors fakeE2EWorkspace: embed UserStore + override

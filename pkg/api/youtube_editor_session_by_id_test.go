@@ -21,14 +21,14 @@ type fakeAuthIdentity struct {
 	uid int64
 }
 
-func (f *fakeAuthIdentity) UserID() int64                { return f.uid }
-func (f *fakeAuthIdentity) IsAdmin() bool                { return false }
-func (f *fakeAuthIdentity) IsAPIKey() bool               { return false }
-func (f *fakeAuthIdentity) KeyID() int64                 { return 0 }
-func (f *fakeAuthIdentity) WorkspaceID() int64           { return 0 }
-func (f *fakeAuthIdentity) SessionID() int64             { return 0 }
-func (f *fakeAuthIdentity) Permissions() []string        { return nil }
-func (f *fakeAuthIdentity) HasPermission(_ string) bool  { return false }
+func (f *fakeAuthIdentity) UserID() int64               { return f.uid }
+func (f *fakeAuthIdentity) IsAdmin() bool               { return false }
+func (f *fakeAuthIdentity) IsAPIKey() bool              { return false }
+func (f *fakeAuthIdentity) KeyID() int64                { return 0 }
+func (f *fakeAuthIdentity) WorkspaceID() int64          { return 0 }
+func (f *fakeAuthIdentity) SessionID() int64            { return 0 }
+func (f *fakeAuthIdentity) Permissions() []string       { return nil }
+func (f *fakeAuthIdentity) HasPermission(_ string) bool { return false }
 
 // withIdentity returns a child context carrying the supplied
 // identity. The handler reads it via auth.IdentityFromContext;
@@ -49,7 +49,8 @@ func withIdentity(ctx context.Context, id auth.Identity) context.Context {
 // invocations to the test author.
 type fakeWorkspaceStoreForSessionGet struct {
 	WorkspaceStore
-	rows map[int64]*models.Workspace
+	rows    map[int64]*models.Workspace
+	binding *models.WorkspaceChannel
 }
 
 func newFakeWorkspaceStoreForSessionGet() *fakeWorkspaceStoreForSessionGet {
@@ -61,6 +62,26 @@ func (f *fakeWorkspaceStoreForSessionGet) FindByID(id int64) (*models.Workspace,
 		return nil, nil
 	}
 	return f.rows[id], nil
+}
+
+// FindChannel + ListChannels are required to satisfy the production
+// WorkspaceStore interface which
+// (*VeloxModule).CreateThumbnailSessionForDelivery calls in its
+// defense-in-depth (workspace, account) binding check.
+//
+// Without FindChannel, a method call promotes to the nil embedded
+// interface and SIGSEGVs. The HappyPath / CrossTenant tests must
+// set f.binding to a non-nil enabled WorkspaceChannel BEFORE
+// calling seedGetTestRow — otherwise the production helper rejects
+// the (workspace, account) pair with ErrEditorSessionChannelUnlinked
+// (mapped to 404 in production now). ListChannels returns empty
+// because the GET-by-id handler never exercises channel_id-resolution.
+func (f *fakeWorkspaceStoreForSessionGet) FindChannel(_ context.Context, _ int64, _ int64) (*models.WorkspaceChannel, error) {
+	return f.binding, nil
+}
+
+func (f *fakeWorkspaceStoreForSessionGet) ListChannels(_ context.Context, _ int64) ([]models.WorkspaceChannel, error) {
+	return nil, nil
 }
 
 // runGetEditorSessionByID wires a Router with the supplied fakes
@@ -122,6 +143,9 @@ func TestGetYouTubeEditorSessionByID_HappyPath(t *testing.T) {
 	store := newFakeYouTubeVideoEditStore()
 	ws := newFakeWorkspaceStoreForSessionGet()
 	ws.rows[12] = &models.Workspace{ID: 12, OwnerID: 42, Name: "ws"}
+	// Seed the (workspace, account) binding so the real
+	// CreateThumbnailSessionForDelivery defense-in-depth check passes.
+	ws.binding = &models.WorkspaceChannel{WorkspaceID: 12, PlatformAccountID: 381, Enabled: true}
 	users := &fakeE2EUser{accounts: map[int64]*models.PlatformAccount{
 		381: {ID: 381, Platform: "youtube", Status: "active"},
 	}}
@@ -180,6 +204,7 @@ func TestGetYouTubeEditorSessionByID_CrossTenant(t *testing.T) {
 	store := newFakeYouTubeVideoEditStore()
 	ws := newFakeWorkspaceStoreForSessionGet()
 	ws.rows[12] = &models.Workspace{ID: 12, OwnerID: 42, Name: "ws"} // owned by 42
+	ws.binding = &models.WorkspaceChannel{WorkspaceID: 12, PlatformAccountID: 381, Enabled: true}
 	users := &fakeE2EUser{accounts: map[int64]*models.PlatformAccount{
 		381: {ID: 381, Platform: "youtube", Status: "active"},
 	}}

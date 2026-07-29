@@ -55,7 +55,7 @@ func (a *groupStoreAdapter) ListAccountsInGroup(_ int64) ([]int64, error) {
 // use case.
 func (a *groupStoreAdapter) Create(_ *models.Group) error { return nil }
 func (a *groupStoreAdapter) Update(_ *models.Group) error { return nil }
-func (a *groupStoreAdapter) Delete(_ int64) error        { return nil }
+func (a *groupStoreAdapter) Delete(_ int64) error         { return nil }
 func (a *groupStoreAdapter) ListByWorkspace(_ int64) ([]models.Group, error) {
 	return nil, nil
 }
@@ -385,8 +385,8 @@ func TestResolveTarget_RevokedStatus(t *testing.T) {
 			}
 			var resp VeloxResolveTargetResponse
 			_ = json.Unmarshal(w.Body.Bytes(), &resp)
-			if resp.ErrorCode != "BLOCKED_AUTH" {
-				t.Errorf("%s: error_code want BLOCKED_AUTH; got %q", tc.name, resp.ErrorCode)
+			if resp.ErrorCode != "TARGET_NOT_AVAILABLE" {
+				t.Errorf("%s: error_code want TARGET_NOT_AVAILABLE; got %q", tc.name, resp.ErrorCode)
 			}
 		})
 	}

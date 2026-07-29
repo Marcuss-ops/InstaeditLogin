@@ -61,16 +61,16 @@ type createThumbnailSessionRequest struct {
 // dark-editor SPA can immediately distinguish "thumbnail needs to be
 // applied" from "thumbnail already applied" on its first GET.
 type createThumbnailSessionResponse struct {
-	EditorSessionID    string `json:"editor_session_id"`
-	YouTubeVideoID     string `json:"youtube_video_id"`
-	VeloxProjectID     string `json:"velox_project_id"`
-	WorkspaceID        int64  `json:"workspace_id"`
-	PlatformAccountID  int64  `json:"platform_account_id"`
-	Status             string `json:"status"`
-	ThumbnailStatus    string `json:"thumbnail_status"`
-	FinalPrivacy       string `json:"final_privacy"`
-	EditorURL          string `json:"editor_url,omitempty"`
-	Duplicate          bool   `json:"duplicate,omitempty"`
+	EditorSessionID   string `json:"editor_session_id"`
+	YouTubeVideoID    string `json:"youtube_video_id"`
+	VeloxProjectID    string `json:"velox_project_id"`
+	WorkspaceID       int64  `json:"workspace_id"`
+	PlatformAccountID int64  `json:"platform_account_id"`
+	Status            string `json:"status"`
+	ThumbnailStatus   string `json:"thumbnail_status"`
+	FinalPrivacy      string `json:"final_privacy"`
+	EditorURL         string `json:"editor_url,omitempty"`
+	Duplicate         bool   `json:"duplicate,omitempty"`
 }
 
 // CreateThumbnailSessionForDelivery is the canonical helper called
@@ -283,6 +283,14 @@ func (m *VeloxModule) handleCreateThumbnailSession(w http.ResponseWriter, req *h
 			return
 		case errors.Is(err, ErrEditorSessionAccountNotFound):
 			writeError(w, http.StatusNotFound, "youtube account not found")
+			return
+		case errors.Is(err, ErrEditorSessionChannelUnlinked):
+			// Defense-in-depth: the (workspace, account) binding is
+			// missing OR the binding lookup errored. Both surface as
+			// the canonical "channel not bound" 404, matching the
+			// manual-creator (Router.CreateEditorSession) error
+			// contract so the two paths return identical wire shapes.
+			writeError(w, http.StatusNotFound, "account not linked to workspace")
 			return
 		case errors.Is(err, ErrEditorSessionEditStoreUnconfigured):
 			writeError(w, http.StatusServiceUnavailable, err.Error())

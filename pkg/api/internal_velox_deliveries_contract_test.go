@@ -27,6 +27,11 @@ func contractValidEnv() (ExternalDeliveryStore, ExternalDestinationStore) {
 func buildValidContractVeloxRequest(t *testing.T, jobID, artifactID string, workspaceID, platformAccountID int64) []byte {
 	t.Helper()
 	payload := map[string]any{
+		// contract_version is the SPEC §7.1 DISCRIMINATOR — without it
+		// the handler falls through to the legacy path (which expects
+		// `idempotency_key` in the body) and the live contract tests
+		// fail with 422 "idempotency_key is required".
+		"contract_version": ContractVersionV1,
 		"source": map[string]any{
 			"system":      "velox",
 			"job_id":      jobID,
@@ -47,10 +52,10 @@ func buildValidContractVeloxRequest(t *testing.T, jobID, artifactID string, work
 			"platform_account_id": platformAccountID,
 		},
 		"publication": map[string]any{
-			"title":            "Contract Test Title",
-			"description":      "Contract test description",
-			"initial_privacy":  "private",
-			"final_privacy":    "public",
+			"title":             "Contract Test Title",
+			"description":       "Contract test description",
+			"initial_privacy":   "private",
+			"final_privacy":     "public",
 			"require_thumbnail": true,
 		},
 	}
@@ -393,12 +398,12 @@ func TestParseVeloxContractIdempotencyKey(t *testing.T) {
 	}{
 		{"velox-job_123-artifact_abc-youtube-account_381", true, "job_123", "artifact_abc", "youtube", "account_381"},
 		{"velox-j-a-b-c", true, "j", "a", "b", "c"},
-		{"velox-job-foo-bar", false, "", "", "", ""},  // 3 trailing segments
+		{"velox-job-foo-bar", false, "", "", "", ""},                          // 3 trailing segments
 		{"prefix-velox-job-artifact-platform-account", false, "", "", "", ""}, // doesn't start with velox-
-		{"velox--artifact-platform-account", false, "", "", "", ""},          // empty job segment
-		{"", false, "", "", "", ""},                                              // empty
-		{"velox-JOB-artifact-platform-account", false, "", "", "", ""},         // uppercase rejected by [a-z0-9_]+
-		{"VELOX-job-artifact-platform-account", false, "", "", "", ""},          // capital V rejected
+		{"velox--artifact-platform-account", false, "", "", "", ""},           // empty job segment
+		{"", false, "", "", "", ""},                                           // empty
+		{"velox-JOB-artifact-platform-account", false, "", "", "", ""},        // uppercase rejected by [a-z0-9_]+
+		{"VELOX-job-artifact-platform-account", false, "", "", "", ""},        // capital V rejected
 	}
 	for _, c := range cases {
 		c := c
