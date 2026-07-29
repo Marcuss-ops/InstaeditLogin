@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   build-vet-test-lint:
-    name: build / vet / test / lint on ${{ matrix.os }}
+    name: build / vet / test / lint
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -90,7 +90,10 @@ jobs:
         # operator smoke filter so the lane matches what was verified
         # locally on main HEAD.
         run: |
-          test_pkgs=$(go list ./... | grep -v '/InstaeditLogin/pkg/api$' || true)
+          # Strip every package under pkg/api (a literal-suffix
+          # anchor like '/pkg/api$' would only drop the bare pkg
+          # path, not subpackages like .../pkg/api/something).
+          test_pkgs=$(go list ./... | grep -v '/pkg/api' || true)
           if [ -z "$test_pkgs" ]; then
             echo "::notice::No test packages outside pkg/api — running generic ./... for sanity"
             go test -count=1 -timeout 5m ./...
