@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/deliveries"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
@@ -116,18 +117,43 @@ type VeloxModuleDeps struct {
 	// internal/bootstrap/app.go via the same repository that
 	// powers /api/v1/groups/* so the resolve-target handler
 	// reuses the production GroupRepository.
-	GroupStore              GroupStore
-	VeloxAPIToken           string
+	GroupStore               GroupStore
+	YouTubeVideoEditStore    YouTubeVideoEditStore
+	VeloxAPIToken            string
 	VeloxValidateRateLimiter *validateRateLimiter
+	// EditorBaseURL is the base URL the auto-provisioner stamps
+	// into editor_url response fields. Optional; defaults to
+	// "https://editor.instaedit.org" when empty (same default as
+	// Router.editorURLForProject).
+	EditorBaseURL string
 }
 
 // VeloxModule mounts the service-to-service /internal/v1 routes.
 type VeloxModule struct {
-	deps VeloxModuleDeps
+	deps           VeloxModuleDeps
+	targetResolver *deliveries.TargetResolver
 }
 
 func NewVeloxModule(deps VeloxModuleDeps) RouteModule {
-	return &VeloxModule{deps: deps}
+	m := &VeloxModule{deps: deps}
+	// Construct the unified TargetResolver at module-creation time
+	// (not lazily) to avoid a data race on the resolver field under
+	// concurrent requests. All deps are available at construction;
+	// nil stores are handled fail-closed by the resolver itself.
+	m.targetResolver = deliveries.NewTargetResolver(deliveries.TargetResolverDeps{
+		DestinationStore: deps.ExternalDestinationStore,
+		WorkspaceStore:   deps.WorkspaceStore,
+		UserStore:        deps.UserStore,
+		GroupStore:       deps.GroupStore,
+	})
+	return m
+}
+
+// resolver returns the pre-constructed TargetResolver shared across
+// validate and resolve-target handlers, eliminating the duplicated
+// workspace/account/binding/eligibility checks the audit flagged.
+func (m *VeloxModule) resolver() *deliveries.TargetResolver {
+	return m.targetResolver
 }
 
 // Compile-time assertion: VeloxModule implements RouteModule.
@@ -155,6 +181,16 @@ func (m *VeloxModule) Register(mux chi.Router) {
 			internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleCreateInternalDelivery)))
 		mux.Method(http.MethodGet, "/internal/v1/deliveries/{id}",
 			internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleGetInternalDelivery)))
+	}
+	// Thumbnail-session auto-provisioner. Called by Velox after
+	// PRIVATE_UPLOADED (state machine §10 in
+	// docs/velox-instaedit-contract.md). Creates a
+	// youtube_video_edits row with editor_session_id in the
+	// ytedit_<uuid> format; the dark-editor SPA reads it back via
+	// GET /api/v1/youtube/editor-sessions/{id}.
+	if m.deps.YouTubeVideoEditStore != nil {
+		mux.Method(http.MethodPost, "/internal/v1/thumbnail-sessions",
+			internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleCreateThumbnailSession)))
 	}
 }
 

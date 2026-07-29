@@ -1,13 +1,13 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/deliveries"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
@@ -124,34 +124,17 @@ type VeloxResolvedTargetEntry struct {
 	TargetErrorCode string `json:"target_error_code,omitempty"`
 }
 
-// veloxResolveTargetDestinationIDPrefix is the canonical
-// destination_id stamp for the resolve-target response. The
-// value format "instaedit_<platform>" matches the existing
-// diagnostic JSON in handleValidateInternalDestination's
-// VeloxValidateDestinationResponse (which stamps "instaedit_youtube"
-// for the active platform).
-const veloxResolveTargetDestinationIDPrefix = "instaedit_"
-
 // handleResolveTargetInternalDestination implements
 // POST /internal/v1/destinations/resolve-target.
 //
-// ASYMMETRY with /internal/v1/destinations/{id}/validate:
-//   - The legacy id-based endpoint looks up an existing
-//     external_destinations row.
-//   - The resolve-target endpoint takes a target descriptor
-//     (workspace_id + platform + channel|group) and validates
-//     it WITHOUT requiring a stored destinations row. This is
-//     the spec'd pre-flight gate for the Velox worker.
+// Thin adapter: delegates to the unified TargetResolver
+// (internal/deliveries/target_resolver.go). The handler keeps
+// JSON decode/validation + wire response mapping; the resolver
+// owns all persistence-layer checks (workspace, account, binding,
+// eligibility, group expansion).
 //
 // See docs/velox-instaedit-contract.md §3 for the canonical
 // request/response shape and the error-code taxonomy.
-//
-// VELOX_API_TOKEN: enforced by the internalVeloxAuthMiddleware
-// wrapper in VeloxModule.Register. The middleware emits 401 (no
-// header), 403 (token mismatch), 503 (token not configured) —
-// this handler emits only 200, 422, 500. The split lets the
-// 401/403/503 signals route to the operator's paging while the
-// 422/200 routing stays Velox-spec-compliant.
 func (m *VeloxModule) handleResolveTargetInternalDestination(w http.ResponseWriter, req *http.Request) {
 	if m.deps.WorkspaceStore == nil {
 		writeError(w, http.StatusInternalServerError, "workspace store not configured")
@@ -175,81 +158,71 @@ func (m *VeloxModule) handleResolveTargetInternalDestination(w http.ResponseWrit
 		return
 	}
 
-	// Step 1: structural validation. WorkspaceID>0 AND
-	// platform AND target type are mandatory. The Target union
-	// must specify exactly one resolution source.
+	// Step 1: structural validation (unchanged).
 	if err := validateResolveTargetRequest(&payload); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "validation: "+err.Error())
 		return
 	}
 
-	// Step 2: workspace existence (collapses "wrong workspace"
-	// with "non-existent" to TARGET_NOT_AVAILABLE so a probing
-	// caller cannot enumerate valid workspace ids).
-	ws, err := m.deps.WorkspaceStore.FindByID(payload.WorkspaceID)
+	// Step 2: delegate to the unified TargetResolver (DirectTarget path).
+	result, err := m.resolver().Resolve(req.Context(), deliveries.ResolveRequest{
+		WorkspaceID: payload.WorkspaceID,
+		Platform:    payload.Platform,
+		Target: deliveries.TargetDescriptor{
+			Type:              payload.Target.Type,
+			PlatformAccountID: payload.Target.PlatformAccountID,
+			ChannelID:         payload.Target.ChannelID,
+			GroupID:           payload.Target.GroupID,
+		},
+	})
 	if err != nil {
-		slog.Error("velox resolve-target: workspace lookup failed",
+		slog.Error("velox resolve-target: resolver failed",
 			"workspace_id", payload.WorkspaceID, "err", err)
-		writeError(w, http.StatusInternalServerError, "workspace lookup failed")
-		return
-	}
-	if ws == nil {
-		respondResolveTargetInvalid(w, VeloxResolveTargetError{}, "TARGET_NOT_AVAILABLE", "workspace not found")
+		writeError(w, http.StatusInternalServerError, "target resolution failed")
 		return
 	}
 
-	// Step 3: target-type discriminator dispatches to the
-	// channel resolution or the group expansion branch. Both
-	// branches populate the same response shape so the caller
-	// doesn't need to dispatch on the request discriminator
-	// later.
-	switch payload.Target.Type {
-	case "channel":
-		entries, code, msg := m.resolveChannelTarget(req.Context(),
-			payload.WorkspaceID, payload.Platform, payload.Target)
-		if code != "" {
-			respondResolveTargetInvalid(w,
-				VeloxResolveTargetError{Target: entries}, code, msg)
-			return
-		}
-		writeJSON(w, http.StatusOK, VeloxResolveTargetResponse{
-			Valid:           true,
-			DestinationID:   veloxResolveTargetDestinationIDPrefix + payload.Platform,
-			ResolvedTargets: entries,
+	// Step 3: map resolver result to wire response.
+	if !result.Valid {
+		writeJSON(w, http.StatusUnprocessableEntity, VeloxResolveTargetResponse{
+			Valid:           false,
+			ResolvedTargets: convertResolvedEntries(result.ResolvedTargets),
+			ErrorCode:       result.ErrorCode,
+			Message:         result.Message,
 		})
-		return
-	case "group":
-		entries, code, msg := m.resolveGroupTarget(req.Context(),
-			payload.WorkspaceID, payload.Platform, payload.Target.GroupID)
-		if code != "" {
-			respondResolveTargetInvalid(w,
-				VeloxResolveTargetError{Target: entries}, code, msg)
-			return
-		}
-		writeJSON(w, http.StatusOK, VeloxResolveTargetResponse{
-			Valid:           true,
-			DestinationID:   veloxResolveTargetDestinationIDPrefix + payload.Platform,
-			ResolvedTargets: entries,
-		})
-		return
-	default:
-		// validateResolveTargetRequest already rejected unknown
-		// types; this branch is defensive against a future payload
-		// shape that adds a new type without registering it here.
-		writeError(w, http.StatusUnprocessableEntity,
-			"validation: unsupported target.type (this is a server bug; supported: channel|group)")
 		return
 	}
+
+	writeJSON(w, http.StatusOK, VeloxResolveTargetResponse{
+		Valid:           true,
+		DestinationID:   result.DestinationID,
+		ResolvedTargets: convertResolvedEntries(result.ResolvedTargets),
+	})
 }
 
-// VeloxResolveTargetError is the internal carrier for invalid
-// results so respondResolveTargetInvalid can stay a single
-// helper used twice (channel + group branches). The Target
-// slice may carry partial-failure rows so the operator UI can
-// highlight which member failed; an empty Target means "no
-// rows produced" (e.g. GROUP_EMPTY before expansion).
-type VeloxResolveTargetError struct {
-	Target []VeloxResolvedTargetEntry
+// convertResolvedEntries maps the resolver's internal
+// deliveries.ResolvedTargetEntry to the wire-visible
+// VeloxResolvedTargetEntry. Fields are 1:1; the conversion
+// exists because the resolver lives in internal/deliveries
+// (Pattern 0 typed port) and the handler layer owns its own
+// JSON-annotated DTOs.
+func convertResolvedEntries(in []deliveries.ResolvedTargetEntry) []VeloxResolvedTargetEntry {
+	if len(in) == 0 {
+		return []VeloxResolvedTargetEntry{}
+	}
+	out := make([]VeloxResolvedTargetEntry, len(in))
+	for i, e := range in {
+		out[i] = VeloxResolvedTargetEntry{
+			PlatformAccountID: e.PlatformAccountID,
+			Platform:          e.Platform,
+			ChannelID:         e.ChannelID,
+			ChannelName:       e.ChannelName,
+			Status:            e.Status,
+			Enabled:           e.Enabled,
+			TargetErrorCode:   e.TargetErrorCode,
+		}
+	}
+	return out
 }
 
 // validateResolveTargetRequest enforces the structural rules
@@ -308,316 +281,4 @@ func validateResolveTargetRequest(p *VeloxResolveTargetRequest) error {
 	return nil
 }
 
-// respondResolveTargetInvalid emits the 422 + JSON body for all
-// valid=false paths. Centralising the wire shape keeps the
-// channel/group branches' invalid-path code identical (no risk
-// of a 200-only or 200/422 wire mismatch).
-func respondResolveTargetInvalid(w http.ResponseWriter, e VeloxResolveTargetError, code, msg string) {
-	if e.Target == nil {
-		e.Target = []VeloxResolvedTargetEntry{}
-	}
-	writeJSON(w, http.StatusUnprocessableEntity, VeloxResolveTargetResponse{
-		Valid:           false,
-		ResolvedTargets: e.Target,
-		ErrorCode:       code,
-		Message:         msg,
-	})
-}
 
-// resolveChannelTarget validates one channel target and returns
-// the resolved entry (or empty + error code when invalid).
-//
-// Returns ([entry], "", "") on full validity.
-// Returns ([], "CODE", "msg") on a no-rows surface failure.
-// Returns ([partial-entry], "CODE", "msg") on a per-target
-// blockage where the row still exists in resolved_targets so
-// the operator UI can highlight the failing member.
-//
-// Algorithm:
-//  1. Resolve platform_account_id from the discriminator
-//     (PlatformAccountID direct OR ChannelID via
-//     WorkspaceStore.ListChannels filtered on
-//     platform_account.PlatformUserID).
-//  2. WorkspaceStore.FindChannel(workspace_id, account_id) →
-//     binding check (binding exists + enabled).
-//  3. UserStore.FindPlatformAccountByID → status/eligibility
-//     (active, NOT reauth_required, NOT revoked/disconnected).
-//  4. If caller supplied ChannelID additional cross-check that
-//     pa.PlatformUserID == channel_id (defends against
-//     "wrong-channel grant" — a stale OAuth whose grant id
-//     maps to a different YouTube channel).
-//
-// Error-code precedence (most-severe wins):
-//
-//	BLOCKED_AUTH > TARGET_NOT_AVAILABLE
-//
-// The classes cover mutually-exclusive failure surfaces:
-//   - BLOCKED_AUTH fires whenever the platform_account status
-//     is non-actionable (reauth_required, revoked, disconnected,
-//     pending_authorization, suspended, error). Error is
-//     grant-side → operator action is "rotate the grant".
-//   - TARGET_NOT_AVAILABLE fires when the row is eligible but
-//     not bound (no workspace_channels row, disabled binding,
-//     cross-workspace leak). Error is workspace-side → operator
-//     action is "fix the binding".
-func (m *VeloxModule) resolveChannelTarget(
-	ctx context.Context,
-	workspaceID int64,
-	platform string,
-	t VeloxResolveTargetPayload,
-) ([]VeloxResolvedTargetEntry, string, string) {
-	// Step 1 — resolve platform_account_id from the discriminator.
-	accountID, err := m.resolveAccountIDForChannelTarget(ctx, workspaceID, platform, t)
-	if err != nil {
-		// resolveAccountIDForChannelTarget already mapped
-		// transient DB errors to TARGET_NOT_AVAILABLE with a
-		// specific message; pass it through.
-		return nil, "TARGET_NOT_AVAILABLE", err.Error()
-	}
-	if accountID == 0 {
-		return nil, "TARGET_NOT_AVAILABLE",
-			"target channel is not bound to this workspace"
-	}
-
-	// Step 2 — workspace binding check.
-	binding, err := m.deps.WorkspaceStore.FindChannel(ctx, workspaceID, accountID)
-	if err != nil {
-		slog.Error("velox resolve-target: workspace channel lookup failed",
-			"workspace_id", workspaceID, "platform_account_id", accountID, "err", err)
-		return nil, "TARGET_NOT_AVAILABLE", "workspace channel lookup failed"
-	}
-	if binding == nil {
-		return nil, "TARGET_NOT_AVAILABLE",
-			"platform_account is not bound to this workspace"
-	}
-
-	// Step 3 — platform_account status / eligibility.
-	pa, err := m.deps.UserStore.FindPlatformAccountByID(accountID)
-	if err != nil {
-		slog.Error("velox resolve-target: platform_account lookup failed",
-			"platform_account_id", accountID, "err", err)
-		return nil, "BLOCKED_AUTH", "platform_account lookup failed"
-	}
-	if pa == nil {
-		return nil, "TARGET_NOT_AVAILABLE", "platform_account row not found"
-	}
-	if pa.Platform != platform {
-		// Platform mismatch is a wiring bug — the producer
-		// asked for "youtube" but the bound account is, say,
-		// "tiktok". 422 (canonical) but with a TARGET-style
-		// error so the operator fixes it.
-		return nil, "TARGET_NOT_AVAILABLE",
-			"platform_account is not registered for platform " + platform
-	}
-
-	// Pre-eligibility channel-binding cross-check: caller
-	// supplied ChannelID, verify it matches pa.PlatformUserID.
-	// Catches the "OAuth grant switched channel" failure mode
-	// where the access token used to be valid for the expected
-	// channel but the channel was transferred/reassigned
-	// since the grant (rare but documented as a YouTube
-	// behavior; OAuth grant stays valid for the new owner).
-	if t.ChannelID != "" && pa.PlatformUserID != t.ChannelID {
-		entry := VeloxResolvedTargetEntry{
-			PlatformAccountID: pa.ID,
-			Platform:          pa.Platform,
-			ChannelID:         pa.PlatformUserID,
-			ChannelName:       pa.Username,
-			Status:            pa.Status,
-			Enabled:           binding.Enabled,
-			TargetErrorCode:   "BLOCKED_AUTH",
-		}
-		return []VeloxResolvedTargetEntry{entry},
-			"BLOCKED_AUTH",
-			"OAuth grant does not match expected channel_id (channel was transferred/reassigned)"
-	}
-
-	// Status check — reauth_required / revoked / disconnected /
-	// pending / suspended / error → BLOCKED_AUTH. We separate
-	// revocation classes so the error message is actionable
-	// (operator runbook is different for "reauth" vs "revoke").
-	if pa.Status == models.AccountStatusReauthRequired || pa.ReauthRequiredAt != nil {
-		entry := makeErrorEntry(pa, binding, "BLOCKED_AUTH")
-		return []VeloxResolvedTargetEntry{entry},
-			"BLOCKED_AUTH",
-			"platform_account requires re-authorization"
-	}
-	if pa.Status != models.AccountStatusActive {
-		entry := makeErrorEntry(pa, binding, "BLOCKED_AUTH")
-		return []VeloxResolvedTargetEntry{entry},
-			"BLOCKED_AUTH",
-			fmt.Sprintf("platform_account status is %q (must be %q)", pa.Status, models.AccountStatusActive)
-	}
-
-	// Workspace-side disabled check (binding exists but disabled).
-	if !binding.Enabled {
-		entry := makeErrorEntry(pa, binding, "TARGET_NOT_AVAILABLE")
-		return []VeloxResolvedTargetEntry{entry},
-			"TARGET_NOT_AVAILABLE",
-			"channel is disabled in this workspace"
-	}
-
-	// Valid path.
-	return []VeloxResolvedTargetEntry{{
-		PlatformAccountID: pa.ID,
-		Platform:          pa.Platform,
-		ChannelID:         pa.PlatformUserID,
-		ChannelName:       pa.Username,
-		Status:            pa.Status,
-		Enabled:           binding.Enabled,
-	}}, "", ""
-}
-
-// resolveAccountIDForChannelTarget bridges the discriminator
-// variants on VeloxResolveTargetPayload into a single
-// platform_account_id. The platform_account_id path is direct;
-// the channel_id path walks the workspace's channel list and
-// matches on platform_user_id (= YouTube channel id).
-//
-// Returns (0, error) when no match is found; the error message
-// distinguishes "not bound to workspace" from "DB transient
-// failure" so the caller's wire response can be diagnostic
-// without leaking internal errors to the response body.
-func (m *VeloxModule) resolveAccountIDForChannelTarget(
-	ctx context.Context,
-	workspaceID int64,
-	platform string,
-	t VeloxResolveTargetPayload,
-) (int64, error) {
-	if t.PlatformAccountID != 0 {
-		return t.PlatformAccountID, nil
-	}
-	// ChannelID path: list workspace channels, then resolve
-	// each candidate's platform_account row to find the matching
-	// provider id. The list is bounded by the per-workspace
-	// row cap (see repository.WorkspaceRepository.ListChannels)
-	// so an O(N×M) full scan stays cheap.
-	channels, err := m.deps.WorkspaceStore.ListChannels(ctx, workspaceID)
-	if err != nil {
-		return 0, errors.New("workspace channels list failed")
-	}
-	for _, ch := range channels {
-		pa, err := m.deps.UserStore.FindPlatformAccountByID(ch.PlatformAccountID)
-		if err != nil || pa == nil {
-			continue
-		}
-		if pa.Platform == platform && pa.PlatformUserID == t.ChannelID {
-			return ch.PlatformAccountID, nil
-		}
-	}
-	return 0, nil
-}
-
-// resolveGroupTarget expands a group_id into N platform_accounts
-// and validates each (all-or-nothing — the spec says "valid=true
-// if all accounts are active+enabled+binded to expected channel").
-//
-//   - Group not found / wrong workspace  → TARGET_NOT_AVAILABLE
-//   - Group has zero accounts attached   → GROUP_EMPTY
-//   - Per-member validation failure      → bubbling code wins
-//     (BLOCKED_AUTH outranks TARGET_NOT_AVAILABLE) and partial
-//     entries are returned so the operator UI can highlight
-//     the failing member(s).
-func (m *VeloxModule) resolveGroupTarget(
-	ctx context.Context,
-	workspaceID int64,
-	platform string,
-	groupID int64,
-) ([]VeloxResolvedTargetEntry, string, string) {
-	g, err := m.deps.GroupStore.FindByID(groupID)
-	if err != nil {
-		slog.Error("velox resolve-target: group lookup failed",
-			"group_id", groupID, "err", err)
-		return nil, "TARGET_NOT_AVAILABLE", "group lookup failed"
-	}
-	if g == nil {
-		return nil, "TARGET_NOT_AVAILABLE",
-			fmt.Sprintf("group %d not found", groupID)
-	}
-	if g.WorkspaceID != workspaceID {
-		// Cross-workspace leak guard: the group exists but the
-		// requestor is not its workspace — same collapse as
-		// "not found" so probing callers cannot enumerate
-		// group ids across tenants.
-		return nil, "TARGET_NOT_AVAILABLE",
-			fmt.Sprintf("group %d does not belong to workspace %d", groupID, workspaceID)
-	}
-
-	accountIDs, err := m.deps.GroupStore.ListAccountsInGroup(groupID)
-	if err != nil {
-		slog.Error("velox resolve-target: group accounts lookup failed",
-			"group_id", groupID, "err", err)
-		return nil, "TARGET_NOT_AVAILABLE", "group members lookup failed"
-	}
-	if len(accountIDs) == 0 {
-		return nil, "GROUP_EMPTY",
-			fmt.Sprintf("group %d has no accounts attached", groupID)
-	}
-
-	// Per-member validation. We compose on the channel-target
-	// resolver by synthesising a payload per member.
-	entries := make([]VeloxResolvedTargetEntry, 0, len(accountIDs))
-	var severestCode, severestMsg string
-	for _, acctID := range accountIDs {
-		syntheticPayload := VeloxResolveTargetPayload{
-			Type:             "channel",
-			PlatformAccountID: acctID,
-		}
-		subEntries, subCode, subMsg := m.resolveChannelTarget(ctx, workspaceID, platform, syntheticPayload)
-		// subEntries is never nil when the row exists; when the
-		// channel-target resolver returns ([], "...", ...) with
-		// no row (rare path: account not bound to workspace even
-		// though it's in the group), synthesise a stub entry so
-		// the operator UI can still surface the failing member.
-		if len(subEntries) == 0 && subCode != "" {
-			pa, _ := m.deps.UserStore.FindPlatformAccountByID(acctID)
-			if pa != nil {
-				subEntries = []VeloxResolvedTargetEntry{{
-					PlatformAccountID: pa.ID,
-					Platform:          pa.Platform,
-					ChannelID:         pa.PlatformUserID,
-					ChannelName:       pa.Username,
-					Status:            pa.Status,
-					TargetErrorCode:   subCode,
-				}}
-			}
-		}
-		entries = append(entries, subEntries...)
-		if subCode == "BLOCKED_AUTH" {
-			severestCode = "BLOCKED_AUTH"
-			severestMsg = subMsg
-		} else if subCode != "" && severestCode == "" {
-			severestCode = subCode
-			severestMsg = subMsg
-		}
-	}
-
-	if severestCode != "" {
-		return entries, severestCode, severestMsg
-	}
-	return entries, "", ""
-}
-
-// makeErrorEntry is a small builder for the error-path entries
-// returned by resolveChannelTarget. Centralised so the target-
-// scoped error_code annotation stays consistent across the
-// BLOCKED_AUTH and TARGET_NOT_AVAILABLE surfaces.
-func makeErrorEntry(pa *models.PlatformAccount, binding *models.WorkspaceChannel, code string) VeloxResolvedTargetEntry {
-	status := ""
-	if pa != nil {
-		status = pa.Status
-	}
-	enabled := false
-	if binding != nil {
-		enabled = binding.Enabled
-	}
-	return VeloxResolvedTargetEntry{
-		PlatformAccountID: pa.ID,
-		Platform:          pa.Platform,
-		ChannelID:         pa.PlatformUserID,
-		ChannelName:       pa.Username,
-		Status:            status,
-		Enabled:           enabled,
-		TargetErrorCode:   code,
-	}
-}
