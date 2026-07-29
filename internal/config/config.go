@@ -165,6 +165,19 @@ type VeloxConfig struct {
 	VeloxWebhookSecret string
 }
 
+// AIConfig holds AI/ML provider secrets for metadata generation,
+// translations, and other AI-assisted features. These keys are
+// server-side only — NEVER exposed to the frontend bundle, logs,
+// or localStorage. The absence of these keys MUST NOT block manual
+// metadata entry or the YouTube publish flow.
+type AIConfig struct {
+	// NVIDIAAPIKey authenticates calls to the NVIDIA AI API for
+	// generating title, description, tags, and translations.
+	// Loaded from NVIDIA_API_KEY. Empty = AI metadata generation
+	// unavailable (fallback: manual entry in Dark Editor).
+	NVIDIAAPIKey string
+}
+
 // MonitoringConfig holds observability and metrics configuration.
 type MonitoringConfig struct {
 	// Sentry (optional, Blocco #5.3).
@@ -325,6 +338,9 @@ type Config struct {
 
 	// Velox integration secrets.
 	Velox VeloxConfig
+
+	// AI/ML provider secrets (NVIDIA, etc.).
+	AI AIConfig
 
 	// Monitoring (Sentry + metrics).
 	Monitoring MonitoringConfig
@@ -515,6 +531,9 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
+		AI: AIConfig{
+			NVIDIAAPIKey: getEnv("NVIDIA_API_KEY", ""),
+		},
 		Velox: VeloxConfig{
 			VeloxAPIToken:         getEnv("VELOX_API_TOKEN", ""),
 			VeloxControlURL:       getEnv("VELOX_CONTROL_URL", ""),

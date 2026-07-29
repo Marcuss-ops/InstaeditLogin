@@ -30,8 +30,10 @@ func (r *Router) Setup() http.Handler {
 		ExternalDeliveryStore:    r.externalDeliveries,
 		WorkspaceStore:           r.workspaceStore,
 		UserStore:                r.userRepo,
+		YouTubeVideoEditStore:    r.youtubeVideoEditStore,
 		VeloxAPIToken:            r.veloxAPIToken,
 		VeloxValidateRateLimiter: r.veloxValidateRateLimiter,
+		EditorBaseURL:            r.editorURL,
 	}))
 	reg.Register(NewVeloxBFFModule(VeloxBFFModuleDeps{
 		Client:         r.veloxBFFClient,
@@ -222,6 +224,15 @@ func (r *Router) Setup() http.Handler {
 		publishEditorSessionHandler = r.csrfMiddleware(publishEditorSessionHandler)
 	}
 	r.mux.Method(http.MethodPost, "/api/v1/youtube/editor-sessions/{id}/publish", r.protected(publishEditorSessionHandler.ServeHTTP))
+
+	// GET /api/v1/youtube/editor-sessions/{id} — session-id-keyed
+	// companion to GET /by-project/{velox_project_id}. Powers the
+	// dark-editor SPA after the auto-provisioner
+	// (POST /internal/v1/thumbnail-sessions) returns a fresh
+	// ytedit_<uuid> that the SPA reads back through this endpoint.
+	// Read-only; no CSRF (GET exempt by spec).
+	var getEditorSessionByIDHandler http.Handler = http.HandlerFunc(r.handleGetYouTubeEditorSessionByID)
+	r.mux.Method(http.MethodGet, "/api/v1/youtube/editor-sessions/{id}", r.protected(getEditorSessionByIDHandler.ServeHTTP))
 
 	// Direct handoff endpoint (Blocco #5 P0 #4): callers (typically the
 	// dark editor SPA after uploading the rendered thumbnail to

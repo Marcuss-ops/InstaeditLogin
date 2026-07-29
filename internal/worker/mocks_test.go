@@ -161,12 +161,12 @@ type mockProvider struct {
 	// so tests can assert: videoID==PHASE1_VID (re-use), privacyStatus
 	// matches the cascade, publishAt == post.PublishAt. The captured
 	// publishAt is a pointer-equality check on time.Time (zero alloc).
-	capturedUpdatePrivacyVID          string
-	capturedUpdatePrivacyStatus       string
-	capturedUpdatePrivacyPublishAt    *time.Time
-	capturedUpdatePrivacyTitle        string
-	capturedUpdatePrivacyDescription  string
-	capturedUpdatePrivacyAccessToken  string
+	capturedUpdatePrivacyVID         string
+	capturedUpdatePrivacyStatus      string
+	capturedUpdatePrivacyPublishAt   *time.Time
+	capturedUpdatePrivacyTitle       string
+	capturedUpdatePrivacyDescription string
+	capturedUpdatePrivacyAccessToken string
 }
 
 func (m *mockProvider) GetLoginURL(state string) string {

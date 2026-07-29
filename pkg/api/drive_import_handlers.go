@@ -296,7 +296,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// Presign an S3 PUT for the key.
 	grant, err := r.storageProvider.SignUpload(req.Context(), userID, key, fileMeta.MimeType, sizeBytes, mediaPresignTTL)
 	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,asset.ID, err.Error(), err)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
 		writeError(w, http.StatusInternalServerError, "failed to sign s3 upload: "+err.Error())
 		return
 	}
@@ -304,7 +304,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// Stream the file from Drive to S3.
 	downloadResp, err := driveSvc.DownloadFile(req.Context(), oauthToken.AccessToken, body.DriveFileID)
 	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,asset.ID, err.Error(), err)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
 		// P0 hardening refactor: ErrDriveDownloadTooLarge is the
 		// reader-layer cap firing on a > 10 GiB file. Map it to
 		// 422 (operator can split the file) instead of the generic
@@ -332,14 +332,14 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	}
 	verifyReader, err := worker.NewArtifactVerifyReader(downloadResp.Body, policy)
 	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,asset.ID, err.Error(), err)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
 		writeError(w, http.StatusInternalServerError, "failed to wrap drive body for verification: "+err.Error())
 		return
 	}
 
 	uploadReq, err := http.NewRequestWithContext(req.Context(), http.MethodPut, grant.UploadURL, verifyReader)
 	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,asset.ID, err.Error(), err)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
 		writeError(w, http.StatusInternalServerError, "failed to build s3 upload request: "+err.Error())
 		return
 	}
@@ -351,7 +351,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	s3Client := &http.Client{Timeout: driveImportS3UploadTimeout}
 	uploadResp, err := s3Client.Do(uploadReq)
 	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,asset.ID, err.Error(), err)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
 		writeError(w, http.StatusBadGateway, "failed to upload to s3: "+err.Error())
 		return
 	}
@@ -362,7 +362,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// the single source of truth.
 	if uploadResp.StatusCode >= 300 {
 		reason := fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode)
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,asset.ID, reason, errors.New(reason))
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, reason, errors.New(reason))
 		writeError(w, http.StatusBadGateway, reason)
 		return
 	}
@@ -372,7 +372,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// 422 lets the operator-triage dashboard catch Drive-side
 	// SHA drift / corruption instead of marking a broken asset ready.
 	if vErr := verifyReader.Verify(); vErr != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,asset.ID, vErr.Error(), vErr)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, vErr.Error(), vErr)
 		writeError(w, http.StatusUnprocessableEntity, "drive file verification failed: "+vErr.Error())
 		return
 	}
@@ -380,7 +380,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// Verify the upload and mark the asset ready.
 	verifiedContentType, verifiedSize, err := r.storageProvider.VerifyUpload(req.Context(), key)
 	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,asset.ID, err.Error(), err)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
 		writeError(w, http.StatusBadGateway, "failed to verify s3 upload: "+err.Error())
 		return
 	}
@@ -391,7 +391,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// surface the upstream-side regression.
 	if policy.ExpectedMIME != "" && verifiedContentType != policy.ExpectedMIME {
 		reason := fmt.Sprintf("mime mismatch (expected %q, S3 returned %q)", policy.ExpectedMIME, verifiedContentType)
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore,asset.ID, reason, errors.New(reason))
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, reason, errors.New(reason))
 		writeError(w, http.StatusUnprocessableEntity, reason)
 		return
 	}

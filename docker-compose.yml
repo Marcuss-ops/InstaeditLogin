@@ -60,6 +60,10 @@ services:
     environment:
       - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
       - PORT=8080
+      # NVIDIA AI metadata generation (server-side only — NEVER exposed
+      # to the frontend bundle, logs, or localStorage). Empty = AI
+      # metadata generation unavailable; manual entry still works.
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
       # Velox integration (Phase 1 — destination + handoff). When
       # VELOX_INTEGRATION_ENABLED=false the /internal/v1/* router hides
       # every Velox-facing route AND the artifact_source_registry refuses
@@ -102,6 +106,8 @@ services:
       - .env.dev
     environment:
       - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      # NVIDIA AI metadata generation (mirrors the api service).
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
       # Velox integration (mirrors the api service). The worker reads
       # Velox-resumable YouTube sessions + velox_artifact upload_jobs
       # from the same env block — having the same VELOX_* keys on
@@ -141,6 +147,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
       - PORT=8080
+      # NVIDIA AI metadata generation (mirrors the api + worker services).
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
     ports:
       - "0.0.0.0:8080:8080"
     depends_on:

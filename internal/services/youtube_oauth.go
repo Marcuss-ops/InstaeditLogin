@@ -125,6 +125,7 @@ var _ error = (*ErrChannelListSafetyCap)(nil)
 // `go vet`, not at runtime.
 var _ YouTubeChannelBinder = (*YouTubeOAuthService)(nil)
 var _ YouTubeCanaryUploader = (*YouTubeOAuthService)(nil)
+
 // P1 (Blocco #1 followup) — youtube_privacy_updater.go adds the
 // post-upload privacy-transition cast used by PublishWorker in
 // Phase 2 (skip-reupload path). The assertion keeps the contract
