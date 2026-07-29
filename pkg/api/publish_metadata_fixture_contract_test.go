@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,11 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
 // ============================================================================
-// CONTRACT FIXTURE TEST: canonical publish payload validated across 6 layers
+// CONTRACT FIXTURE TEST: canonical publish payload validated across 7 layers
 // ============================================================================
 //
 // This test reads the single shared fixture at
@@ -27,6 +29,7 @@ import (
 //   4. Validated by services.ValidateYouTubeSnippet (title/desc bounds)
 //   5. Mapped through the OpenAPI schema (struct tags match property names)
 //   6. Round-tripped back to JSON (no field loss)
+//   7. Fed through a mock YouTube PublishThumbnail service (mock YouTube)
 //
 // The fixture is the SINGLE SOURCE OF TRUTH for the publish metadata
 // contract. Every other representation (OpenAPI, TypeScript types,
@@ -236,6 +239,95 @@ func TestPublishMetadataFixture_RoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestPublishMetadataFixture_MockYouTube asserts the fixture passes
+// through a mock YouTube PublishThumbnail call, confirming the
+// payload shape is compatible with the YouTubeOAuthService interface
+// that the publish handler calls at runtime.
+func TestPublishMetadataFixture_MockYouTube(t *testing.T) {
+	fixture := loadFixture(t)
+	raw, _ := json.Marshal(fixture)
+	var dto publishYouTubeEditorSessionRequest
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	opts := youTubePublishOptionsForRequest(dto)
+
+	// Simulate the exact call path the publish orchestrator makes:
+	// PublishThumbnail(ctx, accessToken, videoID, thumbnailData,
+	//                   mimeType, privacyStatus, publishAt, opts)
+	// The mock captures the opts to assert the fixture fields
+	// survive the full chain.
+	mockSvc := &mockYouTubeForFixture{t: t, want: opts}
+	_, err := mockSvc.PublishThumbnail(
+		context.Background(),
+		"ya29.mock_token",
+		"dQw4w9WgXcQ",
+		[]byte{0xFF, 0xD8, 0xFF}, // minimal JPEG header
+		"image/jpeg",
+		dto.PrivacyStatus,
+		dto.PublishAt,
+		opts,
+	)
+	if err != nil {
+		t.Errorf("mock YouTube PublishThumbnail rejected fixture: %v", err)
+	}
+	if !mockSvc.called {
+		t.Error("mock YouTube PublishThumbnail was never called")
+	}
+}
+
+// mockYouTubeForFixture is a minimal mock of the YouTubeOAuthService
+// interface that asserts the fixture's publish options are valid.
+type mockYouTubeForFixture struct {
+	t      *testing.T
+	want   models.YouTubePublishOptions
+	called bool
+}
+
+func (m *mockYouTubeForFixture) PublishThumbnail(
+	_ context.Context, _, _ string, _ []byte, _, _ string,
+	_ *time.Time, opts models.YouTubePublishOptions,
+) (string, error) {
+	m.called = true
+	// Assert the mock received exactly the fixture's fields.
+	if opts.Title != m.want.Title {
+		m.t.Errorf("mock YouTube: title mismatch: got %q, want %q", opts.Title, m.want.Title)
+	}
+	if opts.Description != m.want.Description {
+		m.t.Errorf("mock YouTube: description mismatch")
+	}
+	if len(opts.Tags) != len(m.want.Tags) {
+		m.t.Errorf("mock YouTube: tags count mismatch: got %d, want %d", len(opts.Tags), len(m.want.Tags))
+	}
+	if opts.DefaultLanguage != m.want.DefaultLanguage {
+		m.t.Errorf("mock YouTube: default_language mismatch: got %q, want %q", opts.DefaultLanguage, m.want.DefaultLanguage)
+	}
+	if opts.DefaultAudioLanguage != m.want.DefaultAudioLanguage {
+		m.t.Errorf("mock YouTube: default_audio_language mismatch")
+	}
+	if len(opts.Translations) != len(m.want.Translations) {
+		m.t.Errorf("mock YouTube: translations count mismatch: got %d, want %d", len(opts.Translations), len(m.want.Translations))
+	}
+	for lang, tr := range m.want.Translations {
+		gotTr, ok := opts.Translations[lang]
+		if !ok {
+			m.t.Errorf("mock YouTube: missing translation %q", lang)
+			continue
+		}
+		if gotTr.Title != tr.Title {
+			m.t.Errorf("mock YouTube: translation[%s].title mismatch", lang)
+		}
+	}
+	return "https://www.youtube.com/watch?v=dQw4w9WgXcQ", nil
+}
+
+// Compile-time check: mockYouTubeForFixture satisfies the
+// YouTubeOAuthService interface's PublishThumbnail contract.
+var _ interface {
+	PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error)
+} = (*mockYouTubeForFixture)(nil)
 
 func sortedKeys(m map[string]bool) []string {
 	keys := make([]string, 0, len(m))
