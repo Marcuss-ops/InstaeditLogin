@@ -166,7 +166,7 @@ func (f *fakeYouTubeVideoEditStore) ListByWorkspaceAccountIDs(_ context.Context,
 	panic("fakeYouTubeVideoEditStore.ListByWorkspaceAccountIDs: not implemented in thumbnail-session test fixture")
 }
 
-func (f *fakeYouTubeVideoEditStore) SaveDraft(_ context.Context, _ string, _, _ string, _ []string, _, _ string, _ map[string]models.YouTubeTranslation, _ string, _ time.Time) error {
+func (f *fakeYouTubeVideoEditStore) SaveDraft(_ context.Context, _ string, _, _ string, _ []string, _, _ string, _ map[string]models.YouTubeTranslation, _ string, _ *time.Time, _ time.Time) error {
 	panic("fakeYouTubeVideoEditStore.SaveDraft: not implemented in thumbnail-session test fixture")
 }
 

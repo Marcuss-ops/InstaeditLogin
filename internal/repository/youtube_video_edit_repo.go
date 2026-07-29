@@ -181,7 +181,7 @@ type YouTubeVideoEditStore interface {
 	// Returns ErrYouTubeVideoEditNotFound (wrapped) on 0-rows match —
 	// handler maps to HTTP 409 (CAS-loss). A real *sql.DB error
 	// propagates wrapped.
-	SaveDraft(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, draftUpdatedAt time.Time) error
+	SaveDraft(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, publishAt *time.Time, draftUpdatedAt time.Time) error
 	// MarkPublishedWithActualPrivacy (P0#7 actual_privacy read-back)
 	// atomically transitions a row from 'publishing' → 'published'
 	// AND stamps actual_privacy + youtube_sync_status in the same
@@ -882,6 +882,7 @@ func (r *YouTubeVideoEditRepository) SaveDraft(
 	defaultAudioLanguage string,
 	translations map[string]models.YouTubeTranslation,
 	desiredPrivacy string,
+	publishAt *time.Time,
 	draftUpdatedAt time.Time,
 ) error {
 	// Nil → SQL NULL. Empty map → {} (so the SPA can distinguish
@@ -911,7 +912,8 @@ func (r *YouTubeVideoEditRepository) SaveDraft(
 		     draft_default_audio_language = $6,
 		     draft_translations = $7,
 		     draft_desired_privacy = $8,
-		     draft_updated_at = $9,
+		     draft_publish_at = $9,
+		     draft_updated_at = $10,
 		     dirty_flag = FALSE,
 		     updated_at = NOW()
 		 WHERE id = $1
@@ -924,6 +926,7 @@ func (r *YouTubeVideoEditRepository) SaveDraft(
 		nullableDraftString(defaultAudioLanguage),
 		translationsJSON,
 		nullableDraftString(desiredPrivacy),
+		publishAt,
 		draftUpdatedAt,
 	)
 	if err != nil {

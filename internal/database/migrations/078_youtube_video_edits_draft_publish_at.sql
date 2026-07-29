@@ -1,0 +1,36 @@
+-- Migration 078 — YouTube editor-session draft_publish_at column
+--
+-- What problem this solves
+-- =========================
+-- The Dark Editor's publish form now includes a publish_at (scheduling)
+-- field. The draft columns (migration 073) persist every other field
+-- across tab reloads / cross-device resume. This migration adds the
+-- draft_publish_at column so an operator who schedules a video, closes
+-- the tab, and comes back finds the same date pre-filled in the form.
+--
+-- Column semantics
+-- =================
+-- - draft_publish_at: TIMESTAMPTZ, nullable. NULL = no draft schedule
+--   yet (the operator didn't pick a date, or cleared the field). Any
+--   non-NULL value is the UTC timestamp the operator last typed into
+--   the datetime-local picker, before the publish orchestrator
+--   commits the row's publish_at on a successful /publish call.
+--
+-- Why separate from publish_at
+-- ============================
+-- The row's main `publish_at` column is set atomically by the
+-- orchestrator's MarkPublishing CAS. The draft_publish_at column
+-- captures the operator's mid-typing intent, which may differ from
+-- the committed value (e.g. the operator changed the date between two
+-- auto-save cycles but hasn't clicked "Programma" yet). Keeping them
+-- separate avoids the draft write racing the publish CAS.
+--
+-- Migration safety
+-- =================
+-- - Column is nullable with no default → existing rows stay unchanged.
+-- - No index needed: the draft_publish_at is only ever read per-row
+--   (in the GET /by-project/{id} endpoint) so a table-wide index
+--   would never be used.
+
+ALTER TABLE youtube_video_edits
+    ADD COLUMN IF NOT EXISTS draft_publish_at TIMESTAMPTZ;

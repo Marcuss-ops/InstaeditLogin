@@ -41,6 +41,7 @@ type youTubeEditorSessionDraftRequest struct {
 	DefaultAudioLanguage string                               `json:"default_audio_language"`
 	Translations         map[string]models.YouTubeTranslation `json:"translations"`
 	DesiredPrivacy       string                               `json:"desired_privacy"`
+	PublishAt            *time.Time                           `json:"publish_at,omitempty"`
 }
 
 // youTubeEditorSessionDraftResponse is returned on a 200. It echoes
@@ -63,6 +64,7 @@ type youTubeEditorSessionDraftResponse struct {
 	DraftDefaultAudioLanguage string                               `json:"draft_default_audio_language"`
 	DraftTranslations         map[string]models.YouTubeTranslation `json:"draft_translations"`
 	DraftDesiredPrivacy       string                               `json:"draft_desired_privacy"`
+	DraftPublishAt            *time.Time                           `json:"draft_publish_at,omitempty"`
 	DraftUpdatedAt            time.Time                            `json:"draft_updated_at"`
 }
 
@@ -189,6 +191,7 @@ func (r *Router) handleSaveEditorSessionDraftByProject(w http.ResponseWriter, re
 		payload.DefaultAudioLanguage,
 		payload.Translations,
 		payload.DesiredPrivacy,
+		payload.PublishAt,
 		draftUpdatedAt,
 	); saveErr != nil {
 		if errors.Is(saveErr, repository.ErrYouTubeVideoEditNotFound) {
@@ -224,6 +227,7 @@ func (r *Router) handleSaveEditorSessionDraftByProject(w http.ResponseWriter, re
 		DraftDefaultAudioLanguage: payload.DefaultAudioLanguage,
 		DraftTranslations:         translationsCopy,
 		DraftDesiredPrivacy:       payload.DesiredPrivacy,
+		DraftPublishAt:            payload.PublishAt,
 		DraftUpdatedAt:            draftUpdatedAt,
 	})
 }

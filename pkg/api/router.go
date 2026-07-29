@@ -881,7 +881,7 @@ type YouTubeVideoEditStore interface {
 	// SaveDraft (P2 — Dark Editor auto-save) atomically writes the
 	// operator's mid-edit form values to youtube_video_edits.draft_*
 	// AND stamps dirty_flag=false AND draft_updated_at=NOW().
-	SaveDraft(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, draftUpdatedAt time.Time) error
+	SaveDraft(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, publishAt *time.Time, draftUpdatedAt time.Time) error
 	// MarkPublishedWithActualPrivacy (P0#7) atomically transitions
 	// status='publishing' → 'published' AND stamps actual_privacy +
 	// youtube_sync_status.
