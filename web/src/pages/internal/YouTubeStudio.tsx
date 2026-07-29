@@ -21,6 +21,45 @@ import type {
   Workspace,
 } from "../../types/uploads";
 
+// ─── Europe/Rome timezone helpers ───────────────────────────────────
+
+/** Returns the current Europe/Rome offset and DST label. */
+function getRomeTZ(): { offsetMinutes: number; label: string; abbr: string } {
+  const now = new Date();
+  const year = now.getFullYear();
+  // EU DST: last Sunday of March (02:00 CET → 03:00 CEST)
+  //          last Sunday of October (03:00 CEST → 02:00 CET)
+  const marLast = new Date(year, 2, 31 - new Date(year, 2, 31).getDay());
+  const octLast = new Date(year, 9, 31 - new Date(year, 9, 31).getDay());
+  marLast.setHours(2, 0, 0, 0);
+  octLast.setHours(3, 0, 0, 0);
+  const isDST = now >= marLast && now < octLast;
+  const offsetMinutes = isDST ? 120 : 60;
+  const abbr = isDST ? "CEST" : "CET";
+  const label = `Europe/Rome (${abbr}, UTC${isDST ? "+2" : "+1"})`;
+  return { offsetMinutes, label, abbr };
+}
+
+/** Returns true when the user-supplied local datetime is in the past.
+ *  Compares UTC epoch ms, so it works regardless of browser timezone. */
+function isScheduleInPast(localDateTime: string): boolean {
+  if (!localDateTime) return false;
+  const d = new Date(localDateTime);
+  if (isNaN(d.getTime())) return false;
+  return d.getTime() <= Date.now();
+}
+
+/** Converts a &#96;datetime-local&#96; value to a UTC ISO-8601 string.
+ *  &#96;new Date(localDateTime)&#96; treats the input as local time per spec,
+ *  and &#96;.toISOString()&#96; returns the equivalent UTC timestamp. */
+function localToUTC(localDateTime: string): string {
+  const d = new Date(localDateTime);
+  if (isNaN(d.getTime())) return "";
+  return d.toISOString();
+}
+
+// ─── Types ──────────────────────────────────────────────────────────
+
 type LoadState =
   | { kind: "loading" }
   | {
@@ -339,6 +378,11 @@ export function InternalYouTubeStudio() {
         toast.error("Pick a valid publish date.");
         return;
       }
+      if (isScheduleInPast(scheduleAt)) {
+        toast.error("La data di pubblicazione deve essere nel futuro.");
+        return;
+      }
+      const utcISO = localToUTC(scheduleAt);
       setAction({ kind: "publishing", sessionId });
       try {
         await authedFetch(
@@ -347,7 +391,7 @@ export function InternalYouTubeStudio() {
             method: "POST",
             body: JSON.stringify({
               privacy_status: "private",
-              publish_at: publishAtDate.toISOString(),
+              publish_at: utcISO,
             }),
           },
         );
@@ -672,7 +716,20 @@ function SessionRow({
 }) {
   const hasThumbnail = !!session.thumbnail_media_id;
   const canAttach = !isActive && thumbnailMediaId.trim().length > 0;
-  const canSchedule = !isPublishing && scheduleAt.length > 0;
+  const scheduleInPast = isScheduleInPast(scheduleAt);
+  const hasValidSchedule = scheduleAt.length > 0 && !scheduleInPast;
+  const canSchedule = !isPublishing && hasValidSchedule;
+  const tz = getRomeTZ();
+  const isScheduling = hasValidSchedule;
+
+  // Format the scheduled date for the button when scheduling.
+  const scheduleDate = hasValidSchedule ? new Date(scheduleAt) : null;
+  const scheduleLabel = scheduleDate
+    ? scheduleDate.toLocaleString("it-IT", {
+        dateStyle: "short",
+        timeStyle: "short",
+      })
+    : "";
 
   return (
     <article
@@ -735,27 +792,47 @@ function SessionRow({
         >
           {hasThumbnail ? "Replace thumbnail" : "Allega copertina"}
         </button>
-        <button
-          type="button"
-          onClick={onPublishNow}
-          disabled={isPublishing}
-          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500/[0.12] border border-emerald-500/30 text-[12px] font-semibold text-emerald-200 hover:bg-emerald-500/[0.18] transition-colors disabled:opacity-50"
-          data-testid="yt-studio-publish-now"
-        >
-          {isPublishing ? (
-            <Loader2 size={12} className="animate-spin" aria-hidden="true" />
-          ) : (
-            <Send size={12} aria-hidden="true" />
-          )}
-          Pubblica ora
-        </button>
+
+        {/* Smart publish/schedule button */}
+        {isScheduling ? (
+          <button
+            type="button"
+            onClick={onSchedule}
+            disabled={!canSchedule}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/[0.18] border border-blue-500/30 text-[12px] font-semibold text-blue-100 hover:bg-blue-500/[0.26] transition-colors disabled:opacity-50"
+            data-testid="yt-studio-publish-now"
+          >
+            {isPublishing ? (
+              <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <ArrowRight size={12} aria-hidden="true" />
+            )}
+            Programma per {scheduleLabel}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onPublishNow}
+            disabled={isPublishing}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500/[0.12] border border-emerald-500/30 text-[12px] font-semibold text-emerald-200 hover:bg-emerald-500/[0.18] transition-colors disabled:opacity-50"
+            data-testid="yt-studio-publish-now"
+          >
+            {isPublishing ? (
+              <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <Send size={12} aria-hidden="true" />
+            )}
+            Pubblica ora
+          </button>
+        )}
+
         <button
           type="button"
           onClick={onToggle}
           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.10] text-[12px] font-semibold text-white hover:bg-white/[0.10] transition-colors"
           data-testid="yt-studio-schedule-toggle"
         >
-          Programma pubblicazione
+          {isScheduling ? "Modifica programmazione" : "Programma pubblicazione"}
         </button>
       </div>
 
@@ -799,20 +876,45 @@ function SessionRow({
             <p className="text-[12px] font-semibold text-[#9aa0aa] uppercase tracking-wider">
               Schedule publication
             </p>
+            {/* Timezone indicator */}
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/[0.06] border border-blue-500/15">
+              <span className="text-[11px] font-semibold text-blue-200/80">
+                🕐 Fuso orario: {tz.label}
+              </span>
+            </div>
             <FormField
               id={`yt-studio-publish-at-${session.id}`}
-              label="Publish at"
-              helpText="Video will be set to private and go public at this time."
+              label="Data e ora di pubblicazione"
+              helpText={
+                hasValidSchedule
+                  ? `UTC: ${localToUTC(scheduleAt)} — Il video resterà privato fino all'orario indicato, poi diventerà pubblico automaticamente.`
+                  : "Il video resterà privato fino all'orario indicato, poi diventerà pubblico automaticamente."
+              }
+              error={
+                scheduleInPast
+                  ? "La data di pubblicazione deve essere nel futuro."
+                  : null
+              }
             >
               <input
                 id={`yt-studio-publish-at-${session.id}`}
                 type="datetime-local"
                 value={scheduleAt}
                 onChange={(e) => onScheduleAtChange(e.target.value)}
-                className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[13px] text-white focus:outline-none focus:border-white/[0.20] focus:ring-1 focus:ring-white/10 transition-all"
+                className={cn(
+                  "w-full px-3 py-2 bg-white/[0.04] border rounded-xl text-[13px] text-white placeholder:text-white/20 focus:outline-none focus:ring-1 focus:ring-white/10 transition-all",
+                  scheduleInPast
+                    ? "border-red-500/40 focus:border-red-500/60"
+                    : "border-white/[0.08] focus:border-white/[0.20]",
+                )}
                 data-testid="yt-studio-schedule-input"
               />
             </FormField>
+            {/* DST note */}
+            <p className="text-[10px] text-[#9aa0aa]/60">
+              L'ora legale viene gestita automaticamente. Inserisci l'orario
+              come lo vedi sull'orologio in Italia — il sistema converte in UTC.
+            </p>
             <div className="flex items-center justify-end">
               <button
                 type="button"
