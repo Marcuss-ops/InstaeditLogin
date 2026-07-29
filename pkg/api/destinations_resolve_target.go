@@ -22,8 +22,6 @@ type VeloxResolveTargetRequest struct {
 	Target      VeloxResolveTargetPayload `json:"target"`
 }
 
-// VeloxResolveTargetPayload is the discriminator payload. catalog intentionally
-// carries no identifier: workspace_id + platform define the discovery scope.
 type VeloxResolveTargetPayload struct {
 	Type              string `json:"type"`
 	PlatformAccountID int64  `json:"platform_account_id,omitempty"`
@@ -31,9 +29,6 @@ type VeloxResolveTargetPayload struct {
 	GroupID           int64  `json:"group_id,omitempty"`
 }
 
-// VeloxResolveTargetResponse is shared by validation and catalog discovery.
-// A catalog request returns valid=true when discovery completed, even when
-// individual channels have can_post=false; row-level fields explain the block.
 type VeloxResolveTargetResponse struct {
 	Valid           bool                       `json:"valid"`
 	DestinationID   string                     `json:"destination_id,omitempty"`
@@ -42,27 +37,23 @@ type VeloxResolveTargetResponse struct {
 	Message         string                     `json:"message,omitempty"`
 }
 
-// VeloxResolvedTargetEntry is the stable channel row returned to Velox and job
-// senders. Stable IDs are authoritative; channel_name is display-only.
+// VeloxResolvedTargetEntry exposes both human-readable channel data and the
+// opaque external_destination_id Velox must persist in its own destination
+// registry. Stable IDs are authoritative; channel_name is display-only.
 type VeloxResolvedTargetEntry struct {
-	PlatformAccountID int64                             `json:"platform_account_id"`
-	Platform          string                            `json:"platform"`
-	ChannelID         string                            `json:"channel_id"`
-	ChannelName       string                            `json:"channel_name,omitempty"`
-	Status            string                            `json:"status"`
-	Enabled           bool                              `json:"enabled"`
-	CanPost           bool                              `json:"can_post"`
-	BlockReason       string                            `json:"block_reason,omitempty"`
-	Capabilities      deliveries.PublishingCapabilities `json:"capabilities"`
-	TargetErrorCode   string                            `json:"target_error_code,omitempty"`
+	PlatformAccountID    int64                              `json:"platform_account_id"`
+	Platform             string                             `json:"platform"`
+	ChannelID            string                             `json:"channel_id"`
+	ChannelName          string                             `json:"channel_name,omitempty"`
+	ExternalDestinationID string                            `json:"external_destination_id,omitempty"`
+	Status               string                             `json:"status"`
+	Enabled              bool                               `json:"enabled"`
+	CanPost              bool                               `json:"can_post"`
+	BlockReason          string                             `json:"block_reason,omitempty"`
+	Capabilities         deliveries.PublishingCapabilities `json:"capabilities"`
+	TargetErrorCode      string                             `json:"target_error_code,omitempty"`
 }
 
-// handleResolveTargetInternalDestination implements
-// POST /internal/v1/destinations/resolve-target.
-//
-// It is deliberately the only target-discovery boundary. channel/group
-// validation and catalog listing both use the same TargetResolver and shared
-// eligibility gate, preventing UI discovery from disagreeing with delivery.
 func (m *VeloxModule) handleResolveTargetInternalDestination(w http.ResponseWriter, req *http.Request) {
 	if m.deps.WorkspaceStore == nil {
 		writeError(w, http.StatusInternalServerError, "workspace store not configured")
@@ -100,7 +91,7 @@ func (m *VeloxModule) handleResolveTargetInternalDestination(w http.ResponseWrit
 		writeJSON(w, http.StatusOK, VeloxResolveTargetResponse{
 			Valid:           true,
 			DestinationID:   "instaedit_" + payload.Platform,
-			ResolvedTargets: convertResolvedEntries(entries),
+			ResolvedTargets: convertCatalogEntries(entries),
 		})
 		return
 	}
@@ -137,27 +128,46 @@ func (m *VeloxModule) handleResolveTargetInternalDestination(w http.ResponseWrit
 	})
 }
 
+func convertCatalogEntries(in []deliveries.CatalogTargetEntry) []VeloxResolvedTargetEntry {
+	if len(in) == 0 {
+		return []VeloxResolvedTargetEntry{}
+	}
+	out := make([]VeloxResolvedTargetEntry, len(in))
+	for i, catalogEntry := range in {
+		out[i] = convertResolvedEntry(catalogEntry.ResolvedTargetEntry)
+		out[i].ExternalDestinationID = catalogEntry.ExternalDestinationID
+		if catalogEntry.ExternalDestinationID == "" && out[i].BlockReason == "channel is not available for publishing" {
+			out[i].BlockReason = "channel has no enabled Velox publishing destination"
+		}
+	}
+	return out
+}
+
 func convertResolvedEntries(in []deliveries.ResolvedTargetEntry) []VeloxResolvedTargetEntry {
 	if len(in) == 0 {
 		return []VeloxResolvedTargetEntry{}
 	}
 	out := make([]VeloxResolvedTargetEntry, len(in))
 	for i, entry := range in {
-		capabilities := deliveries.CapabilitiesForTarget(entry)
-		out[i] = VeloxResolvedTargetEntry{
-			PlatformAccountID: entry.PlatformAccountID,
-			Platform:          entry.Platform,
-			ChannelID:         entry.ChannelID,
-			ChannelName:       entry.ChannelName,
-			Status:            entry.Status,
-			Enabled:           entry.Enabled,
-			CanPost:           capabilities.UploadVideo && capabilities.Publish,
-			BlockReason:       resolvedTargetBlockReason(entry),
-			Capabilities:      capabilities,
-			TargetErrorCode:   entry.TargetErrorCode,
-		}
+		out[i] = convertResolvedEntry(entry)
 	}
 	return out
+}
+
+func convertResolvedEntry(entry deliveries.ResolvedTargetEntry) VeloxResolvedTargetEntry {
+	capabilities := deliveries.CapabilitiesForTarget(entry)
+	return VeloxResolvedTargetEntry{
+		PlatformAccountID: entry.PlatformAccountID,
+		Platform:          entry.Platform,
+		ChannelID:         entry.ChannelID,
+		ChannelName:       entry.ChannelName,
+		Status:            entry.Status,
+		Enabled:           entry.Enabled,
+		CanPost:           capabilities.UploadVideo && capabilities.Publish,
+		BlockReason:       resolvedTargetBlockReason(entry),
+		Capabilities:      capabilities,
+		TargetErrorCode:   entry.TargetErrorCode,
+	}
 }
 
 func resolvedTargetBlockReason(entry deliveries.ResolvedTargetEntry) string {
