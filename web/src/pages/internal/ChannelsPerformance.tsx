@@ -276,7 +276,7 @@ function RankingCard({
                 {index + 1}
               </span>
               <Link
-                to={`/app/accounts/${item.id}`}
+                to={`/app/dashboard-channels/${item.id}`}
                 className="text-[13px] font-medium text-white truncate hover:text-[#9aa0aa] transition-colors no-underline"
               >
                 @{item.username}

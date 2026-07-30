@@ -223,7 +223,7 @@ export function InternalLinking() {
                             {accounts.map((account) => (
                               <Link
                                 key={account.id}
-                                to={`/app/accounts/${account.id}`}
+                                to={`/app/dashboard-channels/${account.id}`}
                                 className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] transition-colors no-underline"
                               >
                                 <div className="flex items-center gap-3 min-w-0">

@@ -568,7 +568,7 @@ function SuccessTargetRow({ target }: { target: PostTarget }) {
   const ytUrl = target.public_url ?? fallbackUrl;
   const channelUrl = videoId
     ? `/app/dashboard-channels/${target.platform_account_id}?video=${encodeURIComponent(videoId)}`
-    : `/app/accounts/${target.platform_account_id}`;
+    : `/app/dashboard-channels/${target.platform_account_id}`;
   return (
     <div
       className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] px-4 py-3"

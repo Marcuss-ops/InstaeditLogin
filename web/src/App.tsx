@@ -1,5 +1,11 @@
 import { lazy, Suspense } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useParams,
+} from "react-router-dom";
 import { Landing } from "./pages/Landing";
 import { Editor } from "./pages/Editor";
 import { Login } from "./pages/Login";
@@ -9,7 +15,11 @@ import { Programs } from "./pages/Programs";
 import { Mentoring } from "./pages/Mentoring";
 import { InternalDashboard } from "./pages/internal/Dashboard";
 import { InternalLinking } from "./pages/internal/Linking";
-import { AccountDetailsPage } from "./pages/internal/AccountDetails";
+// AccountDetailsPage is no longer mounted on /app/accounts/:accountId
+// — that slug now redirects to /app/dashboard-channels/:accountId via
+// the RedirectAccount helper below. The .tsx file is kept (with its
+// tests) for now so the analytics scaffolding + any future per-account
+// drill-down page can reuse it without re-creating from scratch.
 import { AccountPerformancePage } from "./pages/internal/AccountPerformance";
 import { ChannelsPerformancePage } from "./pages/internal/ChannelsPerformance";
 import { InternalPosts } from "./pages/internal/Posts";
@@ -43,7 +53,25 @@ const PlatformPage = lazy(() =>
  * + useChannelAccount + useChannelContent hooks from the channels
  * feature. The page itself owns the URL state (useSearchParams for
  * ?privacy= + ?video=).)
+ *
+ * Taglio 5.1 step 3 — /app/accounts/:accountId now redirects (one-shot,
+ * `replace`) to /app/dashboard-channels/:accountId. The legacy
+ * AccountDetailsPage mount is demoted to redirect source so incoming
+ * partners / deep-linked URLs land on the channel-page without a
+ * double-mount hop. The `/performance` sub-route on /accounts/* is
+ * intentionally left untouched (no perf page on the new dashboard
+ * yet; redirecting it would break the analytics flow until the new
+ * surface ships).
  */
+function RedirectAccount() {
+  // React Router v6 Navigate doesn't auto-interpolate route params;
+  // a small wrapper that reads `accountId` from useParams and
+  // composes the destination via template-literal keeps the redirect
+  // type-safe + 1-shot (the `replace` flag rewrites history so the
+  // back button doesn't loop).
+  const { accountId } = useParams<{ accountId: string }>();
+  return <Navigate to={`dashboard-channels/${accountId}`} replace />;
+}
 
 function App() {
   return (
@@ -105,7 +133,11 @@ function App() {
                 <Route path="youtube/studio" element={<InternalYouTubeStudio />} />
                 <Route path="youtube-studio" element={<Navigate to="youtube/studio" replace />} />
                 <Route path="linking" element={<InternalLinking />} />
-                <Route path="accounts/:accountId" element={<AccountDetailsPage />} />
+                {/* /app/accounts/:accountId → /app/dashboard-channels/:accountId
+                    (Taglio 5.1 step 3; ReplaceAccount wrapper above). The
+                    legacy AccountDetailsPage is no longer mounted here —
+                    incoming deep-links land on the Blocco #2 channel-page. */}
+                <Route path="accounts/:accountId" element={<RedirectAccount />} />
                 <Route path="accounts/:accountId/performance" element={<AccountPerformancePage />} />
                 <Route path="performance" element={<ChannelsPerformancePage />} />
                 <Route path="posts" element={<InternalPosts />} />
@@ -120,9 +152,9 @@ function App() {
                     (ChannelHeader + ChannelVideoFilters +
                     ChannelVideoCard) on top of useChannelAccount +
                     useChannelContent. URL state is owned by the page
-                    (useSearchParams for ?privacy= + ?video=). The
-                    AccountDetailsPage still exists for the legacy
-                    /app/accounts/:accountId flow. */}
+                    (useSearchParams for ?privacy= + ?video=). The legacy
+                    /app/accounts/:accountId flow now redirects here via
+                    <RedirectAccount /> (Taglio 5.1 step 3). */}
                 <Route
                   path="dashboard-channels/:accountId"
                   element={<DashboardChannelsPage />}

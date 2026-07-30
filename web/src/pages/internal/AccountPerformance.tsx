@@ -245,7 +245,7 @@ export function AccountPerformancePage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div className="flex items-center gap-3">
             <Link
-              to={`/app/accounts/${accountId}`}
+              to={`/app/dashboard-channels/${accountId}`}
               className="inline-flex items-center gap-1.5 text-[13px] text-[#9aa0aa] hover:text-white transition-colors no-underline"
             >
               <ArrowLeft size={14} /> Back to account
