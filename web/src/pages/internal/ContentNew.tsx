@@ -38,6 +38,7 @@ import { ArrowLeft } from "lucide-react";
 import { StepIndicator } from "../../components/wizard/StepIndicator";
 import { VideoUploadStep } from "../../features/publishing/wizard/VideoUploadStep";
 import { ChannelMetadataStep } from "../../features/publishing/wizard/ChannelMetadataStep";
+import { ConfirmationStep } from "../../features/publishing/wizard/ConfirmationStep";
 import type { MediaAsset } from "../../features/publishing/api/mediaApi";
 import type { ChannelMetadata } from "../../features/publishing/wizard/ChannelMetadataStep";
 
@@ -47,32 +48,6 @@ const STEPS = [
   { label: "Conferma" },
 ] as const;
 
-/**
- * Placeholder shown for Steps yet to be implemented. Today Step 3
- * uses this; future commits will replace it with ConfirmStep.
- */
-function PlaceholderStep({
-  number,
-  label,
-  body,
-}: {
-  number: 2 | 3;
-  label: string;
-  body: string;
-}) {
-  return (
-    <div
-      className="rounded-2xl border border-white/[0.08] bg-[#0d0d14]/80 backdrop-blur p-6 md:p-8"
-      data-testid={`placeholder-step-${number}`}
-    >
-      <h2 className="text-xl font-semibold text-white mb-1">
-        Step {number} — {label}
-      </h2>
-      <p className="text-sm text-[#9aa0aa]">{body}</p>
-    </div>
-  );
-}
-
 export function ContentNew() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [asset, setAsset] = useState<MediaAsset | null>(null);
@@ -80,6 +55,7 @@ export function ContentNew() {
   const [youtubeTarget, setYoutubeTarget] = useState<ChannelMetadata | null>(
     null,
   );
+
 
   return (
     <div
@@ -132,11 +108,13 @@ export function ContentNew() {
         />
       )}
 
-      {step === 3 && (
-        <PlaceholderStep
-          number={3}
-          label="Conferma"
-          body="Step 3 (riepilogo + chiamata POST /api/v1/posts con Idempotency-Key) verrà implementato in un commit successivo del Blocco #1."
+      {step === 3 && asset && youtubeTarget && (
+        <ConfirmationStep
+          asset={asset}
+          internalTitle={internalTitle}
+          channel={youtubeTarget}
+          onBack={() => setStep(2)}
+          onJumpToStep={(jumpTo) => setStep(jumpTo)}
         />
       )}
 
