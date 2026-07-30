@@ -16,6 +16,7 @@ import { PROVIDERS, type ProviderId } from "../../lib/providers";
 import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
 import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
+import { useGroupVideosLiveUpdate } from "../../features/channels/hooks/useYouTubePublishLiveUpdate";
 
 type AccountMetric = {
   key: string;
@@ -325,6 +326,23 @@ export function AccountDetailsPage() {
       setSyncing(false);
     }
   }, [accountId, loadAccount]);
+
+  // Cross-tab invalidation for the legacy "Videos" tab (group-
+  // videos cache). NUMERIC id only — bogus URL values short-
+  // circuit the registration. Only fires when the Videos tab is
+  // currently ACTIVE so the refetch doesn't accidentally wipe a
+  // tab the user isn't looking at. Placed AFTER loadContent so
+  // the useCallback can reference it (loadContent is declared up
+  // above in this same component function).
+  const accountIdNum = accountId ? Number(accountId) : NaN;
+  const accountIdNumeric =
+    Number.isFinite(accountIdNum) && accountIdNum > 0 ? accountIdNum : null;
+  const handleGroupPublishChanged = useCallback(() => {
+    if (activeTab === "videos") {
+      void loadContent();
+    }
+  }, [activeTab, loadContent]);
+  useGroupVideosLiveUpdate(accountIdNumeric, handleGroupPublishChanged);
 
   if (state.kind === "loading") {
     return (

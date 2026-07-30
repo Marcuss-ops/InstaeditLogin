@@ -44,7 +44,7 @@
  *   - "Apri su YouTube" → target.public_url when set, else the
  *     canonical watch URL constructed from external_id.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
   AlertCircle,
@@ -66,6 +66,7 @@ import { ErrorState } from "../../components/feedback/ErrorState";
 import { retryPostTarget } from "../../features/publishing/api/postTargetsApi";
 import { usePostTargetStatus } from "../../features/publishing/hooks/usePostTargetStatus";
 import type { PostStatus, PostTarget } from "../../features/publishing/api/types";
+import { dispatchYouTubePublishChanged } from "../../features/channels/hooks/useYouTubePublishLiveUpdate";
 
 // ─── Status badge mapping (single source of truth) ────────────────────
 
@@ -199,6 +200,35 @@ export function ContentPublish() {
   // failed targets can each show their own retry button + spinner.
   const [retryingId, setRetryingId] = useState<number | null>(null);
   const [retryErrorById, setRetryErrorById] = useState<Record<number, string>>({});
+
+  // Cross-tab DISPATCH on terminal+published. Fires ONCE per post
+  // lifetime — the dispatchFiredRef flips on the first edge so a
+  // subsequent refetch that re-confirms allPublished doesn't re-
+  // broadcast (which would cause every subscriber to do a duplicate
+  // refetch). For multi-target posts we emit one event per
+  // published target keyed by exact account_id.
+  const dispatchFiredRef = useRef(false);
+  useEffect(() => {
+    if (dispatchFiredRef.current) return;
+    if (numericId == null) return;
+    if (targets.length === 0) return;
+    if (!targets.every((t) => t.status === "published")) return;
+    const publishedTargets = targets.filter(
+      (t) =>
+        t.status === "published" &&
+        typeof t.platform_account_id === "number" &&
+        t.platform_account_id > 0,
+    );
+    if (publishedTargets.length === 0) return;
+    for (const t of publishedTargets) {
+      dispatchYouTubePublishChanged({
+        type: "youtube-publish-changed",
+        account_id: t.platform_account_id!,
+        status: t.status,
+      });
+    }
+    dispatchFiredRef.current = true;
+  }, [numericId, targets]);
 
   const handleRetry = async (target: PostTarget): Promise<void> => {
     setRetryingId(target.id);

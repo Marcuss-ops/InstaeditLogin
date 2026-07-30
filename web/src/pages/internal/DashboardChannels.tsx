@@ -54,6 +54,7 @@ import { ChannelVideoFilters } from "../../features/channels/components/ChannelV
 import { ChannelVideoCard } from "../../features/channels/components/ChannelVideoCard";
 import { useChannelAccount } from "../../features/channels/hooks/useChannelAccount";
 import { useChannelContent } from "../../features/channels/hooks/useChannelContent";
+import { useChannelContentLiveUpdate } from "../../features/channels/hooks/useYouTubePublishLiveUpdate";
 import type { ChannelVideo, PrivacyFilter } from "../../features/channels/types";
 import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
 
@@ -96,6 +97,20 @@ export function DashboardChannelsPage() {
     privacy,
     limit: DEFAULT_LIMIT,
   });
+
+  // Cross-tab invalidation: when ANY tab publishes a YouTube
+  // change for this account, refetch BOTH the header (OAuth
+  // status, avatar, etc.) AND the video list (new thumbnail,
+  // new privacy, removed/added row). useCallback deps stay on
+  // the .refetch fns (stable across renders thanks to empty
+  // deps inside each hook) so the registry add/remove in
+  // useChannelContentLiveUpdate does NOT churn on every render.
+  const accountRefetch = accountState.refetch;
+  const contentRefetch = contentState.refetch;
+  const handlePublishChanged = useCallback(() => {
+    void Promise.all([accountRefetch(), contentRefetch()]);
+  }, [accountRefetch, contentRefetch]);
+  useChannelContentLiveUpdate(accountId, handlePublishChanged);
 
   const handleRefreshBoth = useCallback(async (): Promise<void> => {
     setRefreshing(true);
