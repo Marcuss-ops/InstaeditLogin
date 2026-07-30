@@ -423,6 +423,12 @@ type mockPostStore struct {
 	findByIDFn        func(id int64) (*models.Post, error)
 	updateFn          func(*models.Post) error
 	listByWorkspaceFn func(workspaceID int64) ([]models.Post, error)
+	// listByPostFn + findTargetByIDFn added for the
+	// Taglio 5.1 step 2 polling endpoint suite (closes the
+	// empty-array handleGetPostTargets gap and adds the single
+	// target GET).
+	listByPostFn      func(postID int64) ([]models.PostTarget, error)
+	findTargetByIDFn  func(id int64) (*models.PostTarget, error)
 	deleteFn          func(id int64) error
 	saveTargetFn      func(*models.PostTarget) error
 	publishPostFn     func(id int64) error
@@ -466,6 +472,18 @@ func (m *mockPostStore) ListByWorkspace(workspaceID int64) ([]models.Post, error
 		return nil, nil
 	}
 	return m.listByWorkspaceFn(workspaceID)
+}
+func (m *mockPostStore) ListByPost(postID int64) ([]models.PostTarget, error) {
+	if m.listByPostFn == nil {
+		return nil, nil
+	}
+	return m.listByPostFn(postID)
+}
+func (m *mockPostStore) FindTargetByID(id int64) (*models.PostTarget, error) {
+	if m.findTargetByIDFn != nil {
+		return m.findTargetByIDFn(id)
+	}
+	return nil, nil
 }
 func (m *mockPostStore) Delete(id int64) error {
 	if m.deleteFn == nil {

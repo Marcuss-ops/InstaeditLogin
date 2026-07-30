@@ -506,6 +506,17 @@ type PostStore interface {
 	FindByID(id int64) (*models.Post, error)
 	Update(post *models.Post) error
 	ListByWorkspace(workspaceID int64) ([]models.Post, error)
+	// ListByPost returns the full target fan-out for a single post
+	// (Taglio 5.1 step 2 — closes the empty-array gap on GET
+	// /api/v1/posts/{id}/targets). Returns (nil, nil) when the
+	// post has no targets. The companion is FindTargetByID below.
+	ListByPost(postID int64) ([]models.PostTarget, error)
+	// FindTargetByID returns a single post_target (Taglio 5.1
+	// step 2 — GET /api/v1/post-targets/{id} polling endpoint).
+	// Returns (nil, nil) when no row matches the id. The handler
+	// reads the parent post + workspace separately so the IDOR
+	// guard stays in Go (single owner check, single round-trip).
+	FindTargetByID(id int64) (*models.PostTarget, error)
 	Delete(id int64) error
 	SaveTarget(target *models.PostTarget) error
 	PublishPost(id int64) error

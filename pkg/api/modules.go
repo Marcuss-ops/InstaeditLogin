@@ -390,7 +390,7 @@ func (m *MediaModule) Register(mux chi.Router) {
 
 // PublishingModuleDeps is the narrow set of dependencies the
 // publishing module needs to mount its routes.
-type PublishingModuleDeps struct {
+type	PublishingModuleDeps struct {
 	RateLimitSvc         *services.RateLimitService
 	Protected            func(http.HandlerFunc) http.HandlerFunc
 	CreatePost           http.HandlerFunc
@@ -404,6 +404,11 @@ type PublishingModuleDeps struct {
 	CancelPost           http.HandlerFunc
 	RetryPost            http.HandlerFunc
 	GetPostTargets       http.HandlerFunc
+	// GetPostTarget (Taglio 5.1 step 2) serves the polling
+	// single-target GET /api/v1/post-targets/{id}. Same handler
+	// path resolution, same workspace isolation, distinct URL
+	// from the per-post fan-out endpoint.
+	GetPostTarget        http.HandlerFunc
 	AddPostTarget        http.HandlerFunc
 	RetryTarget          http.HandlerFunc
 	UploadCounts         http.HandlerFunc
@@ -445,6 +450,12 @@ func (m *PublishingModule) Register(mux chi.Router) {
 		sr.Post("/{id}/targets", m.deps.Protected(m.deps.AddPostTarget))
 	})
 	mux.Route("/api/v1/post-targets", func(sr chi.Router) {
+		// Taglio 5.1 step 2: single-target GET for the polling
+		// frontend. Same /post-targets route group, hyphenated per
+		// existing convention. The handler applies workspace
+		// isolation in Go so we don't depend on a SQL JOIN for the
+		// IDOR guard.
+		sr.Get("/{id}", m.deps.Protected(m.deps.GetPostTarget))
 		sr.Post("/{id}/retry", m.deps.Protected(m.deps.RetryTarget))
 	})
 	mux.Route("/api/v1/uploads", func(sr chi.Router) {

@@ -485,3 +485,224 @@ var errBoomAPI = errBoom{}
 type errBoom struct{}
 
 func (errBoom) Error() string { return "boom" }
+
+// ---------------------------------------------------------------------------
+// Taglio 5.1 step 2 — GET /api/v1/posts/{id}/targets (empty-array fix)
+// + GET /api/v1/post-targets/{id} (new polling endpoint)
+// ---------------------------------------------------------------------------
+
+// TestHandleGetPostTargets_NonEmpty_200 closes the historical
+// empty-array bug on GET /api/v1/posts/{id}/targets. Pre-fix the
+// handler returned {"targets":[]} unconditionally (stub); the
+// postStore.ListByPost wiring + the assertion below pins the
+// contract that ListByPost IS called and its result IS rendered.
+func TestHandleGetPostTargets_NonEmpty_200(t *testing.T) {
+	listByPostCalled := 0
+	r := newPostsTestRouter(&mockPostStore{
+		listByPostFn: func(postID int64) ([]models.PostTarget, error) {
+			listByPostCalled++
+			return []models.PostTarget{
+				{ID: 200, PostID: postID, PlatformAccountID: 10, Status: models.PostStatusQueued},
+				{ID: 201, PostID: postID, PlatformAccountID: 11, Status: models.PostStatusPublishing},
+			}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/100/targets", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if listByPostCalled != 1 {
+		t.Errorf("listByPostFn call count: want 1, got %d (handler must consult postStore.ListByPost)", listByPostCalled)
+	}
+	var body struct {
+		Targets []models.PostTarget `json:"targets"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Targets) != 2 {
+		t.Fatalf("want 2 targets, got %d (handler must forward ListByPost result verbatim)", len(body.Targets))
+	}
+	if body.Targets[0].ID != 200 || body.Targets[0].Status != models.PostStatusQueued {
+		t.Errorf("first target mismatch: %+v", body.Targets[0])
+	}
+}
+
+// TestHandleGetSinglePostTarget_Happy_200 is the canonical happy
+// path for the polling endpoint (Taglio 5.1 step 2). Asserts the
+// payload exposes every field the polling frontend relies on:
+// privacy, privacy_status, made_for_kids, error_message,
+// attempt_count, next_retry_at. The JSON tag assertion is
+// name-sensitive (NEXT_RETRY_AT, not NextAttemptAt) per the task
+// spec.
+func TestHandleGetSinglePostTarget_Happy_200(t *testing.T) {
+	payload := []byte(`{"data_persistence":"youtube_load","seed":"meta-test","made_for_kids":true}`)
+	r := newPostsTestRouter(
+		&mockPostStore{
+			findTargetByIDFn: func(id int64) (*models.PostTarget, error) {
+				return &models.PostTarget{
+					ID:                id,
+					PostID:            100,
+					PlatformAccountID: 42,
+					Status:            models.PostStatusQueued,
+					AttemptCount:      3,
+					PlatformPostID:    "yt_video_abc",
+					ErrorMessage:      "transient upload timeout",
+				}, nil
+			},
+			findByIDFn: func(id int64) (*models.Post, error) {
+				if id != 100 {
+					t.Errorf("FindByID called with %d, want 100 (parent of target)", id)
+				}
+				return &models.Post{
+					ID:           100,
+					WorkspaceID:  1,
+					PrivacyLevel: "private",
+					Status:       models.PostStatusQueued,
+					CreatedAt:    time.Now(),
+					Metadata:     payload,
+				}, nil
+			},
+		},
+		&mockWorkspaceStore{
+			findByIDFn: func(id int64) (*models.Workspace, error) {
+				return &models.Workspace{ID: id, Name: "primary", OwnerID: 1, CreatedAt: time.Now()}, nil
+			},
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/post-targets/200", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(w.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	wantKeys := []string{
+		"id", "post_id", "platform_account_id", "status",
+		"platform_post_id", "error_message", "attempt_count",
+		"next_retry_at", "privacy", "privacy_status", "made_for_kids",
+	}
+	for _, k := range wantKeys {
+		if _, ok := raw[k]; !ok {
+			t.Errorf("response missing required key %q (full body=%s)", k, w.Body.String())
+		}
+	}
+	if string(raw["privacy"]) != `"private"` {
+		t.Errorf("privacy: want \"private\", got %s", raw["privacy"])
+	}
+	if string(raw["privacy_status"]) != `"private"` {
+		t.Errorf("privacy_status: want \"private\", got %s", raw["privacy_status"])
+	}
+	if string(raw["made_for_kids"]) != "true" {
+		t.Errorf("made_for_kids: want true, got %s", raw["made_for_kids"])
+	}
+	if string(raw["error_message"]) != `"transient upload timeout"` {
+		t.Errorf("error_message: want transient upload timeout, got %s", raw["error_message"])
+	}
+	if string(raw["attempt_count"]) != "3" {
+		t.Errorf("attempt_count: want 3, got %s", raw["attempt_count"])
+	}
+}
+
+// TestHandleGetPostTargets_CrossOwner_404 nails the IDOR guard on
+// the LIST endpoint. The historical empty-array stub masked a real
+// cross-tenant leak: any authenticated caller could probe the
+// endpoint and observe empty (no info) or non-empty (counts).
+// Step 2 fixed it by mirroring the Target → Post → Workspace owner
+// check that handleGetPost + handleGetSinglePostTarget use. This
+// test pins the contract so the regression is permanently blocked.
+func TestHandleGetPostTargets_CrossOwner_404(t *testing.T) {
+	listByPostCalled := 0
+	r := newPostsTestRouter(
+		&mockPostStore{
+			findByIDFn: func(id int64) (*models.Post, error) {
+				return &models.Post{
+					ID:          id,
+					WorkspaceID: 2, // not owned by JWT user
+					Status:      models.PostStatusQueued,
+					CreatedAt:   time.Now(),
+				}, nil
+			},
+			listByPostFn: func(postID int64) ([]models.PostTarget, error) {
+				listByPostCalled++
+				return []models.PostTarget{}, nil // would leak if the guard regressed
+			},
+		},
+		&mockWorkspaceStore{
+			findByIDFn: func(id int64) (*models.Workspace, error) {
+				return &models.Workspace{ID: id, Name: "other", OwnerID: 999, CreatedAt: time.Now()}, nil
+			},
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/posts/100/targets", nil)
+	withBearerJWT(t, req, 1) // caller ≠ workspace owner
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 (cross-owner probe), got %d: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"error":"post not found"`)) {
+		t.Errorf("response body should be the cross-owner 404 message, got %q", w.Body.String())
+	}
+	if listByPostCalled != 0 {
+		t.Errorf("listByPostFn call count: want 0 (cross-owner must short-circuit BEFORE query), got %d (proves IDOR regression if this fires)", listByPostCalled)
+	}
+}
+
+// TestHandleGetSinglePostTarget_CrossOwner_404 nails the IDOR
+// guard. The target's parent post belongs to a workspace owned by
+// userID=999; the caller is the JWT userID=1 — the handler must
+// surface 404 (NOT 403, NOT 200, NOT 410) to avoid leaking the
+// existence of cross-tenant target ids.
+func TestHandleGetSinglePostTarget_CrossOwner_404(t *testing.T) {
+	r := newPostsTestRouter(
+		&mockPostStore{
+			findTargetByIDFn: func(id int64) (*models.PostTarget, error) {
+				return &models.PostTarget{
+					ID:                id,
+					PostID:            100,
+					PlatformAccountID: 42,
+					Status:            models.PostStatusQueued,
+				}, nil
+			},
+			findByIDFn: func(id int64) (*models.Post, error) {
+				return &models.Post{
+					ID:          100,
+					WorkspaceID: 2, // NOT owned by JWT user
+					Status:      models.PostStatusQueued,
+					CreatedAt:   time.Now(),
+				}, nil
+			},
+		},
+		&mockWorkspaceStore{
+			findByIDFn: func(id int64) (*models.Workspace, error) {
+				return &models.Workspace{ID: id, Name: "other", OwnerID: 999, CreatedAt: time.Now()}, nil
+			},
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/post-targets/200", nil)
+	withBearerJWT(t, req, 1) // caller ≠ workspace owner
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 (cross-owner probe), got %d: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(`"error":"post_target not found"`)) {
+		t.Errorf("response body should be the cross-owner 404 message, got %q", w.Body.String())
+	}
+}

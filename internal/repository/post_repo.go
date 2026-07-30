@@ -1056,6 +1056,36 @@ func (r *PostRepository) ClaimPublishingTarget(id int64) (bool, error) {
 // rows expose NULL. Includes the completed_at column added by migration
 // 035 (SPRINT 5.2) so DLQ-triage queries can filter on terminal
 // timestamps.
+
+// FindTargetByID (Taglio 5.1 step 2 — POST /posts/{id}/targets
+// polling endpoint contract) returns a single post_target by id.
+// Returns (nil, nil) when no row matches the id. Reads the FULL
+// retry-aware column set so the API layer can render attempt_count
+// / next_retry_at / error_message without an N+1 fetch.
+//
+// The companion SQL qSelectTargetByID does NOT join posts on purpose:
+// workspace isolation (workspace.OwnerID == userID) is the API
+// layer's responsibility, called explicitly through r.postStore.FindByID.
+// Two round-trips intentional — agrees with the existing handlerGetPost
+// pattern in pkg/api/posts_handlers.go so we don't regress the IDOR
+// guard with a "clever JOIN".
+func (r *PostRepository) FindTargetByID(id int64) (*models.PostTarget, error) {
+	t := &models.PostTarget{}
+	err := r.db.QueryRow(qSelectTargetByID, id).Scan(
+		&t.ID, &t.PostID, &t.PlatformAccountID, &t.Status,
+		&t.PlatformPostID, &t.ErrorMessage, &t.PublishedAt,
+		&t.ProviderState, &t.ContainerID, &t.ProviderIdempotencyKey, &t.CompletedAt,
+		&t.AttemptCount, &t.NextAttemptAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to find post_target by id: %w", err)
+	}
+	return t, nil
+}
+
 func (r *PostRepository) ListByPost(postID int64) ([]models.PostTarget, error) {
 	rows, err := r.db.Query(
 		qSelectTargetsByPost,

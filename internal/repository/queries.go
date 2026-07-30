@@ -123,6 +123,30 @@ const qSelectPendingTargets = `SELECT pt.id, pt.post_id, pt.platform_account_id,
 	   AND (p.publish_at IS NULL OR p.publish_at <= $1)
 	 ORDER BY p.publish_at ASC NULLS FIRST`
 
+// qSelectTargetByID — single post_target lookup for the GET
+// /api/v1/post-targets/{id} polling endpoint (Taglio 5.1 step 2).
+// Returns ALL retry-aware columns the polling frontend needs:
+// attempt_count + next_attempt_at are projected as the API-level
+// `next_retry_at` + convenience fields alongside the target lifecycle
+// data. JSON tag for NextAttemptAt on the Go side stays
+// `next_attempt_at`; the API layer renames it to `next_retry_at` via
+// postTargetDetailResponse.MarshalJSON (the public-facing name is
+// semantically clearer for "when will the platform retry" — see
+// pkg/api/posts_handlers.go::handleGetSinglePostTarget).
+//
+// Posts are NOT joined here on purpose: the API layer needs the
+// post_id + workspace_id of the parent post for ownership checks
+// (workspace isolation must NOT come from a JOIN) so the handler
+// calls PostRepository.FindByID separately. Two round-trips, one
+// for security clarity.
+const qSelectTargetByID = `SELECT id, post_id, platform_account_id, status,
+	        COALESCE(platform_post_id, ''), COALESCE(error_message, ''), published_at,
+	        COALESCE(provider_state, ''), COALESCE(container_id, ''),
+	provider_idempotency_key, completed_at,
+	attempt_count, next_attempt_at
+	 FROM post_targets
+	 WHERE id = $1`
+
 // --- post_update.go ---
 
 // P1 (migration 053) — qUpdatePost now writes the two privacy columns so

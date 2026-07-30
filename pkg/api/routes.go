@@ -156,6 +156,10 @@ func (r *Router) Setup() http.Handler {
 		CancelPost:           r.handleCancelPost,
 		RetryPost:            r.handleRetryPost,
 		GetPostTargets:       r.handleGetPostTargets,
+		// Taglio 5.1 step 2 — wires the polling single-target
+		// GET /api/v1/post-targets/{id}. Mirrors the existing
+		// handleGetPostTargets handler resolution.
+		GetPostTarget:        r.handleGetSinglePostTarget,
 		AddPostTarget:        r.handleAddTarget,
 		RetryTarget:          r.handleRetryTarget,
 		UploadCounts:         r.handleUploadCounts,
