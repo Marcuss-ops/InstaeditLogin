@@ -13,7 +13,8 @@
  *
  *   loading                            ↘
  *                                       ready { items, nextCursor,
- *                                              isLoadingMore?, loadMoreError? }
+ *                                              isLoadingMore?, loadMoreError?,
+ *                                              cacheBust }
  *                                       ↘ error { message }
  *
  * Auto-refetch: any change to `accountId` or `privacy` (depth-
@@ -41,6 +42,46 @@
  *     loadMoreError never sets for a stale filter.
  *   - Cleanup on unmount aborts the in-flight fetch to prevent
  *     zombie setState.
+ *
+ * ─── Refresh options (Blocco #2 spec) ─────────────────────────────────
+ *
+ * `refetchOnWindowFocus` — fires the same refetch code path that
+ * `refetch` exposes whenever the browser tab regains focus. Useful
+ * after the user closes the Velox Dark Editor popup and refocuses
+ * the channel tab — the live-update hook (useYouTubePublishLiveUpdate)
+ * may not have fired (BC has no echo on the same sender tab), but
+ * the focus event definitely has. Cleanup removes the listener on
+ * unmount; React StrictMode double-mount is handled by the natural
+ * addEventListener/removeEventListener cycle.
+ *
+ * `refetchInterval` — three forms:
+ *   - `number`: poll every N milliseconds.
+ *   - `null | undefined`: no polling (the default).
+ *   - `(state) => number | null`: predicate evaluated against the
+ *     LIVE state. The interval is rescheduled as soon as the
+ *     predicate returns a NEW number (including transitions to
+ *     and from `null`). This is the spec's "5–10s while any
+ *     video is processing/publishing or just updated" requirement:
+ *     callers wire `(state) => items.some(v => v.status ∈
+ *     {processing, publishing}) ? 5_000 : null`.
+ *
+ * `cacheBust` — exposed twice:
+ *   1. On the `ready` state shape as a stable field — the
+ *      timestamp of the LAST successful fetch, bumped on every
+ *      refill / append / refresh.
+ *   2. As a top-level field on the hook return — same value,
+ *      exposed without forcing a read through the state union.
+ *
+ *   Caller pattern:
+ *     const { state, cacheBust } = useChannelContent({...});
+ *     <ChannelVideoCard video={v} cacheBust={cacheBust} />
+ *
+ *   Why stable-from-state and not generated per-render: a
+ *   per-render `Date.now()` would invalidate the browser image
+ *   cache on every React re-render and cause visible flicker on
+ *   unrelated state changes (e.g. `isLoadingMore` toggling).
+ *   Tying it to the fetch lifecycle means the timestamp changes
+ *   ONLY when content actually changes.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -62,6 +103,26 @@ export interface UseChannelContentOptions {
    * AccountDetails precedent).
    */
   limit?: number;
+  /**
+   * When true, the hook listens to window `focus` events and
+   * fires the same refetch code path the `refetch` callback
+   * exposes. Default `false` (opt-in — see comment above).
+   */
+  refetchOnWindowFocus?: boolean;
+  /**
+   * Polling interval. Three forms:
+   *   - number (ms): poll every N ms;
+   *   - null/undefined: no polling (default);
+   *   - predicate `(state) => number | null`: dynamic cadence,
+   *     rescheduled on every state transition.
+   *
+   * The default `null` keeps the hook quiet when the caller
+   * doesn't opt in.
+   */
+  refetchInterval?:
+    | number
+    | null
+    | ((state: ChannelContentLoadState) => number | null);
 }
 
 export type ChannelContentLoadState =
@@ -79,6 +140,17 @@ export type ChannelContentLoadState =
        * successful loadMore attempt.
        */
       loadMoreError?: string;
+      /**
+       * Timestamp (epoch ms) of the LAST successful fetch. Bumped
+       * on every completed refresh / append / reload. Page-level
+       * thumbnail cache-busters read this to invalidate the
+       * browser image cache when a new thumbnail revision comes
+       * from the server.
+       *
+       * Initialized on first successful fetch; absent from the
+       * type because the loading branch doesn't have one.
+       */
+      cacheBust: number;
     }
   | { kind: "error"; message: string };
 
@@ -92,12 +164,28 @@ export interface UseChannelContentResult {
    * loading-more.
    */
   loadMore: () => Promise<void>;
+  /**
+   * Latest `cacheBust` from any successful fetch. Same value as
+   * `state.cacheBust` when `state.kind === "ready"`, otherwise 0
+   * (the page-level default). Callers wire this into
+   * <ChannelVideoCard cacheBust={cacheBust} /> so the image URL
+   * busts on every successful refetch.
+   */
+  cacheBust: number;
+}
+
+function deriveErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) return err.message;
+  if (err instanceof Error) return err.message;
+  return "Unable to load channel content.";
 }
 
 export function useChannelContent({
   accountId,
   privacy,
   limit,
+  refetchOnWindowFocus = false,
+  refetchInterval = null,
 }: UseChannelContentOptions): UseChannelContentResult {
   const [state, setState] = useState<ChannelContentLoadState>({
     kind: "loading",
@@ -115,6 +203,11 @@ export function useChannelContent({
   // would silently repeat page 1.
   const stateRef = useRef<ChannelContentLoadState>(state);
   stateRef.current = state;
+  // Stable handle for the refetch callback so window-focus +
+  // interval listeners don't churn on every render. cfetchFnRef
+  // is updated synchronously each render — listeners always call
+  // the LATEST refetch.
+  const cfetchFnRef = useRef<() => Promise<void>>(async () => {});
 
   const runFetch = useCallback(
     async (
@@ -154,6 +247,11 @@ export function useChannelContent({
           signal,
         });
         if (signal.aborted) return;
+        // Bump the cache-bust timestamp on every successful fetch.
+        // Single epoch-millis value shared by all consumers of the
+        // hook return; same value lives on the ready state for
+        // tight-coupling with state-driven rendering paths.
+        const freshBust = Date.now();
         setState((prev) => {
           if (mode === "append" && prev.kind === "ready") {
             // Append: keep existing items, append the new page.
@@ -164,6 +262,7 @@ export function useChannelContent({
                 ? { nextCursor: result.next_cursor }
                 : {}),
               isLoadingMore: false,
+              cacheBust: freshBust,
             };
           }
           // Refresh: replace fully.
@@ -173,6 +272,7 @@ export function useChannelContent({
             ...(result.next_cursor != null
               ? { nextCursor: result.next_cursor }
               : {}),
+            cacheBust: freshBust,
           };
         });
       } catch (err) {
@@ -183,10 +283,7 @@ export function useChannelContent({
           // and useCreatePost.
           throw err;
         }
-        const message =
-          err instanceof ApiError
-            ? err.message
-            : "Unable to load channel content.";
+        const message = deriveErrorMessage(err);
         setState((prev) => {
           if (mode === "append" && prev.kind === "ready") {
             // Append failure: keep existing items, surface the
@@ -206,31 +303,6 @@ export function useChannelContent({
     // effect and cause an infinite render loop.
     [],
   );
-
-  // Auto-refetch on accountId OR privacy change. We pass accountId
-  // AND privacy as a stable stringified key so flips between
-  // equivalent values (e.g. "all" rerenders) still trigger a
-  // fetch — but NOT a rerender that doesn't change either prop.
-  useEffect(() => {
-    if (accountId == null) {
-      // Undefined accountId → keep "loading" so the page doesn't
-      // pretend content exists for a missing route param.
-      setState({ kind: "loading" });
-      return;
-    }
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    setState({ kind: "loading" });
-    void runFetch(ctrl.signal, "refresh");
-  }, [accountId, privacy, runFetch]);
-
-  // Unmount cleanup.
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, []);
 
   const refetch = useCallback(async (): Promise<void> => {
     abortRef.current?.abort();
@@ -256,5 +328,92 @@ export function useChannelContent({
     await runFetch(ctrl.signal, "append");
   }, [runFetch]);
 
-  return { state, refetch, loadMore };
+  // Always-fresh refetch handle for window-focus + interval
+  // listeners. The interaction with useCallback is delicate:
+  //   - useCallback creates a new refetch whenever its deps change
+  //     (currently only `runFetch` which is stable).
+  //   - The window-focus + interval effects should be stable too,
+  //     so they fire unconditionally across renders.
+  //   - cfetchFnRef makes the LISTENER stable while letting the
+  //     function it calls point at the latest refetch closure.
+  cfetchFnRef.current = refetch;
+
+  // Auto-refetch on accountId OR privacy change. We pass accountId
+  // AND privacy as deps so flips between equivalent values (e.g.
+  // "all" rerenders) still trigger a fetch.
+  useEffect(() => {
+    if (accountId == null) {
+      // Undefined accountId → keep "loading" so the page doesn't
+      // pretend content exists for a missing route param.
+      setState({ kind: "loading" });
+      return;
+    }
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setState({ kind: "loading" });
+    void runFetch(ctrl.signal, "refresh");
+  }, [accountId, privacy, runFetch]);
+
+  // ─── refetchOnWindowFocus ──────────────────────────────────────────
+  // Skip registration when accountId is null — the handler is a
+  // safe no-op anyway (runFetch early-returns) but the listener
+  // is dead weight. accountId goes into the dep array so flipping
+  // back to a real id re-installs the listener automatically.
+  useEffect(() => {
+    if (!refetchOnWindowFocus) return;
+    if (accountId == null) return;
+    if (typeof window === "undefined") return;
+    const handler = (): void => {
+      // Trigger the latest refetch closure. cfcatch swallows
+      // AuthError so the listener doesn't leak rejects; the
+      // router-level boundary handles navigation.
+      void cfetchFnRef.current().catch((err: unknown) => {
+        if (err instanceof AuthError) return;
+        throw err;
+      });
+    };
+    window.addEventListener("focus", handler);
+    return () => {
+      window.removeEventListener("focus", handler);
+    };
+  }, [refetchOnWindowFocus, accountId]);
+
+  // ─── refetchInterval ───────────────────────────────────────────────
+  // Resolve the predicate to a concrete ms value whenever the
+  // state changes. The interval reschedules when the result
+  // changes (null → 5000 → null all clear+restart the timer).
+  const intervalMs = (() => {
+    if (refetchInterval == null) return null;
+    if (typeof refetchInterval === "number") return refetchInterval;
+    return refetchInterval(state);
+  })();
+  useEffect(() => {
+    if (intervalMs == null) return;
+    if (typeof window === "undefined") return;
+    const id = window.setInterval(() => {
+      void cfetchFnRef.current().catch((err: unknown) => {
+        if (err instanceof AuthError) return;
+        throw err;
+      });
+    }, intervalMs);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [intervalMs]);
+
+  // Unmount cleanup.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  // Top-level cacheBust mirror for callers that prefer not to
+  // descend through the ready union. Returns 0 when state is
+  // loading/error (cards default to a no-bust thumbnail URL in
+  // that case).
+  const cacheBust = state.kind === "ready" ? state.cacheBust : 0;
+
+  return { state, refetch, loadMore, cacheBust };
 }

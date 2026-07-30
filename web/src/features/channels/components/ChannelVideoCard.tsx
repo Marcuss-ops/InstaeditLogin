@@ -32,6 +32,7 @@ import { ExternalLink, Sparkles, Video } from "lucide-react";
 import { cn } from "../../../lib/utils";
 import type { ChannelVideo } from "../types";
 import { buildYouTubeFallbackUrl, getViewsDisplay, normalizePrivacy } from "../types";
+import { withThumbnailCacheBust } from "../utils/thumbnailUrl";
 
 export interface ChannelVideoCardProps {
   video: ChannelVideo;
@@ -41,6 +42,22 @@ export interface ChannelVideoCardProps {
    * the highlight ring + "Appena caricato" badge.
    */
   highlightVideoId?: string;
+  /**
+   * The cache-bust key from `useChannelContent().cacheBust`.
+   * Forwarded to {@link withThumbnailCacheBust} so the YouTube
+   * CDN image URL busts on every successful refetch — a new
+   * thumbnail revision from the server therefore renders
+   * immediately instead of being served from the browser's
+   * `<img>` disk cache.
+   *
+   * Recommended: forward the hook's `cacheBust` directly:
+   *   <ChannelVideoCard cacheBust={cacheBust} />
+   *
+   * When omitted, no bust is applied (helper no-ops); the card
+   * still renders correctly, just without the freshness
+   * guarantee.
+   */
+  cacheBust?: number;
   /**
    * Fires when the user clicks "Modifica copertina". The parent
    * page owns the editor-sessions POST so error toasts and
@@ -170,6 +187,7 @@ const STATUS_CHIP_LABEL: Record<string, string> = {
 export function ChannelVideoCard({
   video,
   highlightVideoId,
+  cacheBust,
   onEditThumbnail,
 }: ChannelVideoCardProps) {
   const isHighlighted = highlightVideoId === video.external_id;
@@ -179,6 +197,13 @@ export function ChannelVideoCard({
   const statusStyle = STATUS_CHIP[normalizedStatus] ?? STATUS_CHIP["unknown"]!;
   const durationLabel = formatDuration(video.duration);
   const viewsDisplay = getViewsDisplay(video.metrics);
+  // Cache-bust the thumbnail on every page-level fetch. The hook
+  // bumps `cacheBust` IMMEDIATELY after a successful fetch, so
+  // the prop change forces React to remount the <img> (the src
+  // string changes) and the browser re-fetches the YouTube CDN
+  // image. Confined to YouTube CDN hosts by the helper — see
+  // utils/thumbnailUrl.ts for the S3-signed-URL safety contract.
+  const thumbnailSrc = withThumbnailCacheBust(video.thumbnail_url, cacheBust);
 
   const handleEdit = (e: React.MouseEvent<HTMLButtonElement>) => {
     // Stop propagation so the wrapping <a>-as-card (if any future
@@ -216,9 +241,9 @@ export function ChannelVideoCard({
 
       {/* Thumbnail */}
       <div className="w-40 h-24 rounded-lg bg-white/[0.08] overflow-hidden shrink-0 relative">
-        {video.thumbnail_url ? (
+        {thumbnailSrc ? (
           <img
-            src={video.thumbnail_url}
+            src={thumbnailSrc}
             alt={video.title ?? ""}
             className="w-full h-full object-cover"
           />

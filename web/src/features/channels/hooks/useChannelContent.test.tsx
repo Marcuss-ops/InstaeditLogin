@@ -328,3 +328,152 @@ describe("useChannelContent", () => {
     }
   });
 });
+
+// ─── refresh options (Blocco #2 spec extension) ──────────────────────
+describe("useChannelContent — refresh options", () => {
+  beforeEach(() => {
+    listChannelContentMock.mockReset();
+  });
+
+  it("does NOT register a window focus listener by default", async () => {
+    listChannelContentMock.mockResolvedValue(makePage([]));
+    const addSpy = vi.spyOn(window, "addEventListener");
+    renderHook(() => useChannelContent({ accountId: 123, privacy: "all" }));
+    await waitFor(() =>
+      expect(addSpy).toHaveBeenCalled(), // some listener fired (e.g. StrictMode)
+    );
+    const focusAdds = addSpy.mock.calls.filter(([name]) => name === "focus");
+    expect(focusAdds).toHaveLength(0);
+    addSpy.mockRestore();
+  });
+
+  it("refetches when focus fires WITH refetchOnWindowFocus:true", async () => {
+    listChannelContentMock.mockResolvedValue(makePage([]));
+    const { result } = renderHook(() =>
+      useChannelContent({
+        accountId: 123,
+        privacy: "all",
+        refetchOnWindowFocus: true,
+      }),
+    );
+    await waitFor(() => expect(result.current.state.kind).toBe("ready"));
+    expect(listChannelContentMock).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    // give the focus handler a tick to fire the refetch promise
+    await act(async () => {});
+    expect(listChannelContentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes the focus listener on unmount (no leak)", async () => {
+    listChannelContentMock.mockResolvedValue(makePage([]));
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    const { unmount } = renderHook(() =>
+      useChannelContent({
+        accountId: 123,
+        privacy: "all",
+        refetchOnWindowFocus: true,
+      }),
+    );
+    await waitFor(() =>
+      expect(listChannelContentMock).toHaveBeenCalledTimes(1),
+    );
+    unmount();
+    const focusRemoves = removeSpy.mock.calls.filter(
+      ([name]) => name === "focus",
+    );
+    expect(focusRemoves.length).toBeGreaterThan(0);
+    removeSpy.mockRestore();
+  });
+
+  it("does NOT poll by default (refetchInterval undefined)", async () => {
+    listChannelContentMock.mockResolvedValue(makePage([]));
+    const { result } = renderHook(() =>
+      useChannelContent({ accountId: 123, privacy: "all" }),
+    );
+    await waitFor(() => expect(result.current.state.kind).toBe("ready"));
+    // Wait 30ms (well below any reasonable poll interval) → no extra fetches.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(listChannelContentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("polls at a fixed ms cadence when refetchInterval is a number", async () => {
+    listChannelContentMock.mockResolvedValue(makePage([]));
+    renderHook(() =>
+      useChannelContent({
+        accountId: 123,
+        privacy: "all",
+        refetchInterval: 30,
+      }),
+    );
+    // Initial fetch fires immediately.
+    await waitFor(() =>
+      expect(listChannelContentMock).toHaveBeenCalledTimes(1),
+    );
+    // Poll fires at the 30ms cadence — assert at least one extra tick landed.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 80));
+    });
+    expect(listChannelContentMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("polls while the predicate returns a number; stops when it returns null", async () => {
+    let predicateValue: number | null = 30;
+    listChannelContentMock.mockResolvedValue(makePage([]));
+    renderHook(() =>
+      useChannelContent({
+        accountId: 123,
+        privacy: "all",
+        refetchInterval: () => predicateValue,
+      }),
+    );
+    await waitFor(() =>
+      expect(listChannelContentMock).toHaveBeenCalledTimes(1),
+    );
+    // Poll in flight.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 80));
+    });
+    const callsWhilePolled = listChannelContentMock.mock.calls.length;
+    expect(callsWhilePolled).toBeGreaterThan(1);
+    // Flip predicate to null → polling should stop.
+    predicateValue = null;
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 80));
+    });
+    const callsAfterStop = listChannelContentMock.mock.calls.length;
+    expect(callsAfterStop).toBe(callsWhilePolled);
+  });
+
+  it("exposes cacheBust=0 before any successful fetch", async () => {
+    listChannelContentMock.mockImplementationOnce(
+      () => new Promise(() => {}) as ReturnType<typeof listChannelContentMock>,
+    );
+    const { result } = renderHook(() =>
+      useChannelContent({ accountId: 123, privacy: "all" }),
+    );
+    expect(result.current.cacheBust).toBe(0);
+  });
+
+  it("bumps cacheBust on every successful fetch", async () => {
+    listChannelContentMock.mockResolvedValue(makePage([]));
+    const { result } = renderHook(() =>
+      useChannelContent({ accountId: 123, privacy: "all" }),
+    );
+    await waitFor(() => expect(result.current.state.kind).toBe("ready"));
+    const firstBust = result.current.cacheBust;
+    expect(firstBust).toBeGreaterThan(0);
+    if (result.current.state.kind === "ready") {
+      expect(result.current.state.cacheBust).toBe(firstBust);
+    }
+    // Mutate busted value across an explicit refetch.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      await result.current.refetch();
+    });
+    expect(result.current.cacheBust).toBeGreaterThan(firstBust);
+  });
+});

@@ -96,6 +96,24 @@ export function DashboardChannelsPage() {
     accountId,
     privacy,
     limit: DEFAULT_LIMIT,
+    // Refresh on window focus events so closing the Velox popup
+    // + refocusing the channel tab auto-invalidates whatever
+    // changed server-side (the BC listener may not have echoed
+    // because BroadcastChannel does NOT fire on the sender's tab).
+    refetchOnWindowFocus: true,
+    // Poll every 5s ONLY while any video is processing or
+    // publishing — the steady-state case is a no-op. The
+    // predicate is re-evaluated on every state transition so a
+    // 'processing' video that drops off the list (rare; usually
+    // the API bumps it to live / failed) immediately stops
+    // polling without a manual unmount cycle.
+    refetchInterval: (state) =>
+      state.kind === "ready" &&
+      state.items.some(
+        (v) => v.status === "processing" || v.status === "publishing",
+      )
+        ? 5_000
+        : null,
   });
 
   // Cross-tab invalidation: when ANY tab publishes a YouTube
@@ -232,6 +250,7 @@ export function DashboardChannelsPage() {
 
         <ContentGrid
           state={contentState.state}
+          cacheBust={contentState.cacheBust}
           highlightVideoId={highlightVideoId}
           onEditThumbnail={handleEditThumbnail}
           onLoadMore={() => void contentState.loadMore()}
@@ -244,6 +263,13 @@ export function DashboardChannelsPage() {
 
 interface ContentGridProps {
   state: ReturnType<typeof useChannelContent>["state"];
+  /**
+   * Cache-bust key from `useChannelContent().cacheBust`. Bumped
+   * by the hook on every successful fetch (refresh / append /
+   * loadMore). Forwarded into the card so YouTube CDN thumbnail
+   * URLs invalidate on every successful server response.
+   */
+  cacheBust: number;
   highlightVideoId?: string;
   onEditThumbnail: (video: ChannelVideo) => Promise<void>;
   onLoadMore: () => Promise<void>;
@@ -252,6 +278,7 @@ interface ContentGridProps {
 
 function ContentGrid({
   state,
+  cacheBust,
   highlightVideoId,
   onEditThumbnail,
   onLoadMore,
@@ -295,6 +322,7 @@ function ContentGrid({
           key={video.external_id}
           video={video}
           highlightVideoId={highlightVideoId}
+          cacheBust={cacheBust}
           onEditThumbnail={(v) => void onEditThumbnail(v)}
         />
       ))}

@@ -17,6 +17,7 @@ import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
 import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
 import { useGroupVideosLiveUpdate } from "../../features/channels/hooks/useYouTubePublishLiveUpdate";
+import { withThumbnailCacheBust } from "../../features/channels/utils/thumbnailUrl";
 
 type AccountMetric = {
   key: string;
@@ -102,9 +103,17 @@ function MetricCard({ metric }: { metric: AccountMetric }) {
 function ContentVideoCard({
   item,
   onEditThumbnail,
+  cacheBust,
 }: {
   item: ContentItem;
   onEditThumbnail?: (item: ContentItem) => void;
+  /**
+   * Cache-bust key from the page's `contentCacheBust` state.
+   * Forwarded into `withThumbnailCacheBust` so the YouTube CDN
+   * thumbnail URL busts on every successful `/content` refetch.
+   * Same contract as ChannelVideoCard's `cacheBust` prop.
+   */
+  cacheBust?: number;
 }) {
   const handleEdit = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
@@ -117,7 +126,7 @@ function ContentVideoCard({
       <div className="w-40 h-24 rounded-lg bg-white/[0.08] overflow-hidden shrink-0 relative">
         {item.thumbnail_url ? (
           <img
-            src={item.thumbnail_url}
+            src={withThumbnailCacheBust(item.thumbnail_url, cacheBust)}
             alt={item.title ?? ""}
             className="w-full h-full object-cover"
           />
@@ -198,6 +207,11 @@ export function AccountDetailsPage() {
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [contentState, setContentState] = useState<ContentState>({ kind: "idle" });
   const [syncing, setSyncing] = useState(false);
+  // Per-fetch cache-bust key for the legacy Videos-tab thumbnails.
+  // Bumped inside `loadContent` on every successful fetch (refresh
+  // / append). Same pattern as the new channel page's
+  // useChannelContent().cacheBust — see utils/thumbnailUrl.ts.
+  const [contentCacheBust, setContentCacheBust] = useState(0);
 
   const loadAccount = useCallback(async () => {
     abortRef.current?.abort();
@@ -266,6 +280,12 @@ export function AccountDetailsPage() {
           isLoadingMore: false,
           loadMoreError: undefined,
         }));
+        // Bump the cache-bust key AFTER the contentState commit
+        // (POST-setState, not pre) — keeps the bust semantically
+        // linked to a successful items update. The state setter +
+        // Date.now() keep the bumped value stable across renders
+        // until the next fetch.
+        setContentCacheBust(Date.now());
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unable to load content.";
         setContentState((prev) => {
@@ -586,7 +606,12 @@ export function AccountDetailsPage() {
                 ) : (
                   <>
                     {contentState.items.map((item) => (
-                      <ContentVideoCard key={item.external_id} item={item} onEditThumbnail={handleEditThumbnail} />
+                      <ContentVideoCard
+                        key={item.external_id}
+                        item={item}
+                        onEditThumbnail={handleEditThumbnail}
+                        cacheBust={contentCacheBust}
+                      />
                     ))}
                     {contentState.nextCursor && !contentState.isLoadingMore && !contentState.loadMoreError && (
                       <button
