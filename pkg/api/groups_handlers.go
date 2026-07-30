@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
@@ -87,25 +88,44 @@ func (r *Router) requireWorkspaceOwnership(w http.ResponseWriter, req *http.Requ
 
 // --- Handlers ---------------------------------------------------------------
 
-// handleListGroups returns every group for the supplied workspace (the
-// caller is expected to pass ?workspace_id=…). The response is a flat
-// list — the frontend builds the tree from the parent_group_id pointers
-// in O(N).
+// handleListGroups returns every group for the active workspace of the
+// caller. If ?workspace_id=… is supplied the handler honors it as an
+// explicit override; otherwise it falls back to the workspace stamped
+// on the JWT/API-key identity by the auth middleware
+// (auth.IdentityFromContext). An empty value (?workspace_id=) is
+// treated identically to a fully absent query — it falls back to the
+// identity just like the implicit path. The response is a flat list —
+// the frontend builds the tree from the parent_group_id pointers in
+// O(N).
 //
-// GET /api/v1/groups?workspace_id=…
+// GET /api/v1/groups?workspace_id=…      (explicit override)
+// GET /api/v1/groups                      (implicit: identity.WorkspaceID)
+//
+// In the implicit path, auth.Manager.Verify (see internal/auth/jwt.go)
+// refuses to stamp an identity whose JWT `ws` claim is zero, so the
+// fallback wid is guaranteed > 0 in production. The `if wid <= 0`
+// guard below is a defence-in-depth branch for misconfigured
+// fixtures (e.g. a test that stamps auth.WithIdentity(ctx, …) with a
+// zero ws claim by accident).
 func (r *Router) handleListGroups(w http.ResponseWriter, req *http.Request) {
 	if r.groupStore == nil {
 		writeError(w, http.StatusNotImplemented, "groups not configured on this server")
 		return
 	}
 	wsIDStr := req.URL.Query().Get("workspace_id")
-	if wsIDStr == "" {
-		writeError(w, http.StatusBadRequest, "workspace_id query parameter is required")
-		return
+	var wid int64
+	if wsIDStr != "" {
+		parsed, err := strconv.ParseInt(wsIDStr, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid workspace_id")
+			return
+		}
+		wid = parsed
+	} else if id := auth.IdentityFromContext(req.Context()); id != nil {
+		wid = id.WorkspaceID()
 	}
-	wid, err := strconv.ParseInt(wsIDStr, 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid workspace_id")
+	if wid <= 0 {
+		writeError(w, http.StatusBadRequest, "workspace_id query parameter is required")
 		return
 	}
 	if ok, _ := r.requireWorkspaceOwnership(w, req, wid); !ok {

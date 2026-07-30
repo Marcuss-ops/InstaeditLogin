@@ -208,6 +208,7 @@ func Wire(ctx context.Context) (*App, error) {
 	userRepo := repository.NewUserRepository(db)
 	tokenRepo := repository.NewTokenRepository(db)
 	teamRepo := repository.NewTeamRepository(db)
+	groupRepo := repository.NewGroupRepository(db)
 	workspaceRepo := repository.NewWorkspaceRepository(db)
 	apiKeyRepo := repository.NewApiKeyRepository(db)
 	apiKeyAuth := auth.NewApiKeyAuthenticator(apiKeyRepo)
@@ -322,6 +323,7 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithIdempotencyStore(idempotencyRepo),
 		api.WithUserWorkspaceHelper(userWorkspaceHelper),
 		api.WithTeamStore(teamRepo),
+		api.WithGroupStore(groupRepo),
 		api.WithAuthEmailService(authEmailSvc),
 		api.WithSessionsService(sessionsSvc),
 		api.WithWorkspaceStore(workspaceRepo),
