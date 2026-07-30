@@ -1,4 +1,4 @@
-.PHONY: dev stop seed test lint lint-check backend-test frontend-test test-integration \
+.PHONY: dev stop seed lint lint-check backend-test test-integration \
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
@@ -57,8 +57,8 @@ run-server:
 run-server-api-only:
 	RUN_WORKERS=false go run ./cmd/server
 
-# Run all tests (Go + frontend)
-test: backend-test frontend-test
+# Run all Go tests
+test: backend-test
 
 # Run Go tests with race detection (unit only — no Docker required)
 backend-test:
@@ -108,10 +108,6 @@ test-e2e:
 	go test -tags=e2e -timeout 15m -v ./tests/e2e/...
 
 
-# Run frontend lint, tests and build
-frontend-test:
-	cd web && npm ci && npm run lint && npm run test && npm run build
-
 # Run formatters and linters
 #
 # `make lint` is the DEVELOPER-friendly shape: it AUTO-FIXES gofmt
@@ -128,7 +124,6 @@ frontend-test:
 lint:
 	gofmt -w .
 	go vet ./...
-	cd web && npm run lint
 
 # CI-friendly variant: FAIL on unformatted Go files (no -w).
 # The check mirrors the gate inside .github/workflows/integration-fast.yml
@@ -145,7 +140,6 @@ lint-check:
 	fi
 	@echo "✓ gofmt clean"
 	go vet ./...
-	cd web && npm run lint
 
 # Build the migrate-only stage (one-shot pre-deploy; also baked into
 # the production stage above so release_command resolves ./migrate).

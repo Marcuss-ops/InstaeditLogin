@@ -258,27 +258,3 @@ volumes:
 networks:
   media-backend:
     internal: true
-
-# ──────────────────────────────────────────────────────────────────
-# (Kept separate from the api/worker/migrate block above so a frontend
-#  refresh doesn't require rediscovering the wire-up.)
-#
-#   frontend:
-#     image: node:20-alpine
-#     container_name: instaedit-frontend
-#     working_dir: /app/web
-#     volumes:
-#       - ./web:/app/web
-#     ports:
-#       - "5173:5173"
-#     env_file:
-#       - .env.dev
-#     environment:
-#       - VITE_API_BASE_URL=http://localhost:8080
-#     depends_on:
-#       - api
-#     command: >
-#       sh -c "npm ci && npm run dev -- --host 0.0.0.0"
-#
-# Uncomment the frontend block above if you also want the SPA auto-reload
-# in dev. The api/worker/migrate shape above is the Blocco #2.1 default.

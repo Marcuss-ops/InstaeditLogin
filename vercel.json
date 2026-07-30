@@ -1,0 +1,5 @@
+{
+  "buildCommand": "go build -o api ./cmd/server",
+  "outputDirectory": ".",
+  "framework": null
+}
