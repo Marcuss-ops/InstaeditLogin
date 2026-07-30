@@ -97,7 +97,7 @@ type SummaryData = {
   period_days: number;
   aggregates: Aggregates;
   channels: ChannelSummary[];
-  rankings: Rankings;
+  rankings?: Rankings;
   trends: TrendPoint[];
 };
 
@@ -421,11 +421,11 @@ export function ChannelsPerformancePage() {
   }, [load]);
 
   const topSubscribers =
-    state.kind === "ready"
-      ? state.data.rankings.by_subscribers.slice(0, 5).map((item) => ({
+    state.kind === "ready" && state.data.rankings
+      ? state.data.rankings.by_subscribers?.slice(0, 5).map((item) => ({
           name: item.username,
           value: item.value,
-        }))
+        })) ?? []
       : [];
 
   return (
@@ -694,81 +694,87 @@ export function ChannelsPerformancePage() {
                 </div>
               </div>
 
-              <RankingCard
-                title="Fastest growing (subscribers)"
-                icon={TrendingUp}
-                items={state.data.rankings.fastest_growing_subscribers}
-                valueLabel="percent"
-              />
+              {state.data.rankings && (
+                <RankingCard
+                  title="Fastest growing (subscribers)"
+                  icon={TrendingUp}
+                  items={state.data.rankings.fastest_growing_subscribers}
+                  valueLabel="percent"
+                />
+              )}
             </div>
 
-            {/* Rankings grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 mb-8">
-              <RankingCard
-                title="Top by subscribers"
-                icon={Trophy}
-                items={state.data.rankings.by_subscribers}
-                valueLabel="subscribers"
-              />
-              <RankingCard
-                title="Top by views"
-                icon={Eye}
-                items={state.data.rankings.by_views}
-                valueLabel="views"
-              />
-              <RankingCard
-                title="Top by videos"
-                icon={Video}
-                items={state.data.rankings.by_videos}
-                valueLabel="videos"
-              />
-              <RankingCard
-                title="Fastest growing (views)"
-                icon={TrendingUp}
-                items={state.data.rankings.fastest_growing_views}
-                valueLabel="percent"
-              />
-              <RankingCard
-                title="Top engagement"
-                icon={TrendingUp}
-                items={state.data.rankings.top_engagement}
-                valueLabel="engagement"
-              />
-            </div>
+            {state.data.rankings && (
+              <>
+                {/* Rankings grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 mb-8">
+                  <RankingCard
+                    title="Top by subscribers"
+                    icon={Trophy}
+                    items={state.data.rankings.by_subscribers}
+                    valueLabel="subscribers"
+                  />
+                  <RankingCard
+                    title="Top by views"
+                    icon={Eye}
+                    items={state.data.rankings.by_views}
+                    valueLabel="views"
+                  />
+                  <RankingCard
+                    title="Top by videos"
+                    icon={Video}
+                    items={state.data.rankings.by_videos}
+                    valueLabel="videos"
+                  />
+                  <RankingCard
+                    title="Fastest growing (views)"
+                    icon={TrendingUp}
+                    items={state.data.rankings.fastest_growing_views}
+                    valueLabel="percent"
+                  />
+                  <RankingCard
+                    title="Top engagement"
+                    icon={TrendingUp}
+                    items={state.data.rankings.top_engagement}
+                    valueLabel="engagement"
+                  />
+                </div>
 
-            <h2 className="text-[16px] font-bold text-white mb-4">Bottom performers</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 mb-8">
-              <RankingCard
-                title="Bottom by subscribers"
-                icon={TrendingDown}
-                items={state.data.rankings.bottom_subscribers}
-                valueLabel="subscribers"
-              />
-              <RankingCard
-                title="Bottom by views"
-                icon={TrendingDown}
-                items={state.data.rankings.bottom_views}
-                valueLabel="views"
-              />
-              <RankingCard
-                title="Bottom engagement"
-                icon={TrendingDown}
-                items={state.data.rankings.bottom_engagement}
-                valueLabel="engagement"
-              />
-              <RankingCard
-                title="Slowest growing (subscribers)"
-                icon={TrendingDown}
-                items={state.data.rankings.bottom_growing_subscribers}
-                valueLabel="percent"
-              />
-              <RankingCard
-                title="Slowest growing (views)"
-                icon={TrendingDown}
-                items={state.data.rankings.bottom_growing_views}
-                valueLabel="percent"
-              />
-            </div>
+                <h2 className="text-[16px] font-bold text-white mb-4">Bottom performers</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 mb-8">
+                  <RankingCard
+                    title="Bottom by subscribers"
+                    icon={TrendingDown}
+                    items={state.data.rankings.bottom_subscribers}
+                    valueLabel="subscribers"
+                  />
+                  <RankingCard
+                    title="Bottom by views"
+                    icon={TrendingDown}
+                    items={state.data.rankings.bottom_views}
+                    valueLabel="views"
+                  />
+                  <RankingCard
+                    title="Bottom engagement"
+                    icon={TrendingDown}
+                    items={state.data.rankings.bottom_engagement}
+                    valueLabel="engagement"
+                  />
+                  <RankingCard
+                    title="Slowest growing (subscribers)"
+                    icon={TrendingDown}
+                    items={state.data.rankings.bottom_growing_subscribers}
+                    valueLabel="percent"
+                  />
+                  <RankingCard
+                    title="Slowest growing (views)"
+                    icon={TrendingDown}
+                    items={state.data.rankings.bottom_growing_views}
+                    valueLabel="percent"
+                  />
+                </div>
+              </>
+            )}
 
             {/* Channel table */}
             <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6">
