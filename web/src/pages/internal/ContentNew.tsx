@@ -2,36 +2,44 @@
  * ContentNew — page mounted at /app/content/new.
  *
  * Wizard container that lifts the shared publish-state out of the
- * step components (so Step 2 can read the asset id and title that
- * Step 1 produced without prop-drilling or a global store). Today
- * only Step 1 is functional; Steps 2/3 are placeholders that will
- * be implemented in subsequent vertical-slice commits.
+ * step components (so Step 3 can read the consolidated payload
+ * without prop-drilling or a global store).
  *
  * Layout (lives inside `InternalLayout`'s Outlet):
  *   ┌────────────────────────────────────────────────┐
- *   │  Page heading                                  │
- *   │  StepIndicator (3 steps, current=stepState)    │
- *   │  ┌──────────────────────────────────────┐      │
- *   │  │ Step component (Slide in/out later)  │      │
- *   │  └──────────────────────────────────────┘      │
- *   │  Footer note on private-by-default             │
+ *   │  Back-link to dashboard                         │
+ *   │  Page heading                                   │
+ *   │  StepIndicator (3 steps, current=stepState)     │
+ *   │  ┌──────────────────────────────────────┐       │
+ *   │  │ Step component                       │       │
+ *   │  └──────────────────────────────────────┘       │
+ *   │  Debug snippet with the lifted state shape      │
  *   └────────────────────────────────────────────────┘
  *
  * State model:
- *   - `step` ∈ {1, 2, 3} — which step is currently visible
- *   - `asset` — MediaAsset returned by Step 1's useUploadMedia
- *   - `internalTitle` — free-form title collected in Step 1
+ *   step           ∈ {1, 2, 3}    current visible step
+ *   asset          MediaAsset | null  from Step 1 (useUploadMedia)
+ *   internalTitle  string            collected in Step 1
+ *   youtubeTarget  ChannelMetadata | null  from Step 2 — Step 3
+ *                                          reads this when POSTing
+ *                                          /api/v1/posts
  *
- * The wizard is intentionally linear: forward-only navigation
- * inside the slice; Escape-hatches (browser back, Sidebar nav)
- * re-mount Step 1 with cleared state.
+ * Lifecycle:
+ *   - Back → forward preserves each step's user-entered state
+ *     (Step 1 reads `initialTitle`, Step 2 reads `initial`). Going
+ *     completely forward+back N times does NOT clear the state.
+ *   - Sidebar / browser back resets Step 1 (the useUploadMedia
+ *     hook unmounts → state cleared). Steps 2/3 lifted values
+ *     survive a same-mount navigation but reset on full page reload.
  */
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { StepIndicator } from "../../components/wizard/StepIndicator";
 import { VideoUploadStep } from "../../features/publishing/wizard/VideoUploadStep";
+import { ChannelMetadataStep } from "../../features/publishing/wizard/ChannelMetadataStep";
 import type { MediaAsset } from "../../features/publishing/api/mediaApi";
+import type { ChannelMetadata } from "../../features/publishing/wizard/ChannelMetadataStep";
 
 const STEPS = [
   { label: "Video" },
@@ -40,9 +48,8 @@ const STEPS = [
 ] as const;
 
 /**
- * Placeholder shown for Steps 2 + 3. Stays in place until the
- * follow-up commits land. The vertical-slice plan keeps these
- * trivial so we can review the wizard seams before filling them.
+ * Placeholder shown for Steps yet to be implemented. Today Step 3
+ * uses this; future commits will replace it with ConfirmStep.
  */
 function PlaceholderStep({
   number,
@@ -70,9 +77,15 @@ export function ContentNew() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [asset, setAsset] = useState<MediaAsset | null>(null);
   const [internalTitle, setInternalTitle] = useState("");
+  const [youtubeTarget, setYoutubeTarget] = useState<ChannelMetadata | null>(
+    null,
+  );
 
   return (
-    <div className="px-4 md:px-8 py-8 max-w-3xl mx-auto" data-testid="content-new-page">
+    <div
+      className="px-4 md:px-8 py-8 max-w-3xl mx-auto"
+      data-testid="content-new-page"
+    >
       <Link
         to="/app/dashboard"
         className="inline-flex items-center gap-2 text-sm text-[#9aa0aa] hover:text-white mb-6 no-underline transition-colors"
@@ -109,10 +122,13 @@ export function ContentNew() {
       )}
 
       {step === 2 && (
-        <PlaceholderStep
-          number={2}
-          label="Canale + Metadati"
-          body="Step 2 (selezione canale YouTube + titolo/descrizione/tag) verrà implementato in un commit successivo del Blocco #1."
+        <ChannelMetadataStep
+          initial={youtubeTarget}
+          onComplete={(meta) => {
+            setYoutubeTarget(meta);
+            setStep(3);
+          }}
+          onBack={() => setStep(1)}
         />
       )}
 
@@ -120,16 +136,31 @@ export function ContentNew() {
         <PlaceholderStep
           number={3}
           label="Conferma"
-          body="Step 3 (riepilogo + chiamata POST /api/v1/posts con Idempotency-Key) verrà implementato in un commit successivo."
+          body="Step 3 (riepilogo + chiamata POST /api/v1/posts con Idempotency-Key) verrà implementato in un commit successivo del Blocco #1."
         />
       )}
 
       {/* Internal dev snippet — confirms the lifted state shape
-          for the next commit (read-only, no controls). */}
-      {asset && (
-        <p className="mt-6 text-xs text-[#5c6473] font-mono" data-testid="debug-summary">
-          [dev] asset_id={asset.id} · title={JSON.stringify(internalTitle)} ·
-          step={step}
+          across commits (read-only, no controls). Adds `target`
+          payload below the asset line for back-compat visibility. */}
+      {(asset || youtubeTarget) && (
+        <p
+          className="mt-6 text-xs text-[#5c6473] font-mono break-all"
+          data-testid="debug-summary"
+        >
+          [dev] asset_id={asset?.id ?? "—"} · title=
+          {JSON.stringify(internalTitle)} · step=
+          {step}
+          {youtubeTarget && (
+            <>
+              {" "}
+              · target: workspace=
+              {youtubeTarget.workspaceId} channel=
+              {youtubeTarget.channelId} channelTitle=
+              {JSON.stringify(youtubeTarget.ytTitle)} tags=
+              {youtubeTarget.tags.length}
+            </>
+          )}
         </p>
       )}
     </div>
