@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Landing } from "./pages/Landing";
 import { Editor } from "./pages/Editor";
 import { Login } from "./pages/Login";
@@ -17,6 +17,7 @@ import { InternalCompose } from "./pages/internal/Compose";
 import { CalendarPage } from "./pages/internal/Calendar";
 import { ContentNew } from "./pages/internal/ContentNew";
 import { ContentPublish } from "./pages/internal/ContentPublish";
+import { DashboardChannelsPage } from "./pages/internal/DashboardChannels";
 import { InternalUploads } from "./pages/internal/Uploads";
 import { InternalYouTubeStudio } from "./pages/internal/YouTubeStudio";
 import { GroupsPage } from "./pages/internal/Groups";
@@ -36,22 +37,13 @@ const PlatformPage = lazy(() =>
 );
 
 /**
- * Wraps the spec URL `/app/dashboard-channels/:accountId?video=…` and
- * forwards params + search to the existing AccountDetailsPage. Lives
- * here (not in ContentPublish) because nothing else uses it and
- * keeping the wrapper local avoids spreading URL semantics across pages.
+ * (DashboardChannelsRedirect wrapper removed at e51430c → now replaced
+ * by the real <DashboardChannelsPage /> that consumes the
+ * ChannelHeader / ChannelVideoFilters / ChannelVideoCard components
+ * + useChannelAccount + useChannelContent hooks from the channels
+ * feature. The page itself owns the URL state (useSearchParams for
+ * ?privacy= + ?video=).)
  */
-function DashboardChannelsRedirect() {
-  const { accountId } = useParams();
-  const location = useLocation();
-  // No `accountId` → bounce to the channels list instead of rendering
-  // a malformed `/app/accounts/?…` URL that hits the catch-all.
-  if (!accountId) {
-    return <Navigate to="/app/accounts" replace />;
-  }
-  const target = `/app/accounts/${accountId}${location.search ?? ""}`;
-  return <Navigate to={target} replace />;
-}
 
 function App() {
   return (
@@ -123,13 +115,17 @@ function App() {
                   path="content/:postId/publish"
                   element={<ContentPublish />}
                 />
-                {/* /dashboard-channels/{id}?video=... — spec URL. The
-                    Blocco #2 page itself isn't built yet; for now we
-                    redirect to the existing AccountDetailsPage which
-                    already has Open on YouTube + Modifica copertina. */}
+                {/* /app/dashboard-channels/:accountId?video=… — spec URL.
+                    Blocco #2 page: mounts the channel-page primitives
+                    (ChannelHeader + ChannelVideoFilters +
+                    ChannelVideoCard) on top of useChannelAccount +
+                    useChannelContent. URL state is owned by the page
+                    (useSearchParams for ?privacy= + ?video=). The
+                    AccountDetailsPage still exists for the legacy
+                    /app/accounts/:accountId flow. */}
                 <Route
                   path="dashboard-channels/:accountId"
-                  element={<DashboardChannelsRedirect />}
+                  element={<DashboardChannelsPage />}
                 />
                 <Route path="calendar" element={<CalendarPage />} />
                 <Route path="groups" element={<GroupsPage />} />                <Route path="uploads/calendar"
