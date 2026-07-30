@@ -1,54 +1,57 @@
+// Package api — per-channel analytics endpoints.
+//
+// handleGetAccountPerformance replaces the legacy v0
+// (accountPerformanceResponse) implementation with the canonical
+// ChannelPerformanceResponse DTO shipped in Step 1 (analytics/contract.go)
+// and the period resolver shipped in Step 3 (analytics/period_resolver.go).
+//
+// The handler is intentionally thin: it only authenticates, parses
+// the days parameter, owns the period resolution and workspace
+// ownership check, then delegates the data-shape assembly to
+// assembleChannelPerformance (this same package).
+//
+// Error map is kept short so the SPA can wire each code to a
+// predictable UX:
+//   - 400  ?days= missing / unparseable / outside {7,14,28}
+//   - 401  missing user identity (defence-in-depth on top of r.protected)
+//   - 404  account not found OR belongs to a different user (no existence leak)
+//   - 422  account is not a YouTube platform OR YouTube channel id missing
+//   - 501  metric history store not wired (operator misconfigured)
+//   - 500  history fetch failure (logged with request_id)
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 )
 
-// accountPerformanceResponse is the wire shape for
-// GET /api/v1/accounts/{id}/performance.
-type accountPerformanceResponse struct {
-	Summary    accountPerformanceSummary       `json:"summary"`
-	Growth     accountPerformanceGrowth        `json:"growth"`
-	History    []repository.AccountMetricPoint `json:"history"`
-	PeriodDays int                             `json:"period_days"`
-}
+// youtubePlatform is the wire-level platform string any OAuth-bound
+// YouTube channel carries on PlatformAccount.Platform. Defined as a
+// local const (rather than reading from internal/models) because
+// every other handler in pkg/api that gates a YouTube-specific path
+// uses the literal string — keeping this file aligned with that
+// convention removes a future refactor's breakage risk if
+// internal/models' exported Platform constants get renamed.
+const youtubePlatform = "youtube"
 
-type accountPerformanceSummary struct {
-	Subscribers          int64   `json:"subscribers"`
-	Views                int64   `json:"views"`
-	Videos               int64   `json:"videos"`
-	EngagementRate       float64 `json:"engagement_rate"`
-	PublicationFrequency float64 `json:"publication_frequency"`
-	Revenue              *int64  `json:"revenue_cents,omitempty"`
-	RPM                  *int64  `json:"rpm_cents,omitempty"`
-	CPM                  *int64  `json:"cpm_cents,omitempty"`
-}
-
-type accountPerformanceMetricGrowth struct {
-	Absolute int64   `json:"absolute"`
-	Percent  float64 `json:"percent"`
-}
-
-type accountPerformanceGrowth struct {
-	Subscribers accountPerformanceMetricGrowth  `json:"subscribers"`
-	Views       accountPerformanceMetricGrowth  `json:"views"`
-	Videos      accountPerformanceMetricGrowth  `json:"videos"`
-	Revenue     *accountPerformanceMetricGrowth `json:"revenue,omitempty"`
-}
-
-// handleGetAccountPerformance returns a historical performance view
-// for a single connected account. Supports ?days=7|30|90 (default 30).
-// Returns 501 if the metric history store is not wired.
+// handleGetAccountPerformance returns the canonical per-channel
+// analytics payload for the user's own account.
+//
+// The canonical wire shape (analytics.ChannelPerformanceResponse) is
+// built by assembleChannelPerformance so this handler stays thin:
+// authentication, parameter parsing, period resolution, workspace
+// ownership, and platform-type check happen here; everything else
+// (summary, comparison, daily-series gap-fill, top-videos stub,
+// data freshness) lives in the assembler.
 func (r *Router) handleGetAccountPerformance(w http.ResponseWriter, req *http.Request) {
 	if r.metricHistoryStore == nil {
 		writeError(w, http.StatusNotImplemented, "metric history store not configured")
 		return
 	}
-
 	id, ok := parsePathIDAsInt64(w, req, "id")
 	if !ok {
 		return
@@ -57,89 +60,78 @@ func (r *Router) handleGetAccountPerformance(w http.ResponseWriter, req *http.Re
 	if !ok {
 		return
 	}
-
-	days := 30
-	if d := req.URL.Query().Get("days"); d != "" {
-		if parsed, err := strconv.Atoi(d); err == nil && (parsed == 7 || parsed == 30 || parsed == 90) {
-			days = parsed
-		}
-	}
-
-	to := time.Now().UTC()
-	from := to.AddDate(0, 0, -days+1)
-
-	history, err := r.metricHistoryStore.GetHistory(account.ID, from, to)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load performance history: "+err.Error())
+	days, ok := parseAnalyticsDays(w, req)
+	if !ok {
 		return
 	}
-
-	resp := accountPerformanceResponse{
-		PeriodDays: days,
-		History:    history,
-		Summary:    accountPerformanceSummary{},
-		Growth:     accountPerformanceGrowth{},
+	if account.Platform != youtubePlatform {
+		writeError(w, http.StatusUnprocessableEntity,
+			"channel is not a YouTube account; the per-channel analytics view is YouTube-only")
+		return
 	}
-
-	if len(history) > 0 {
-		latest := history[len(history)-1]
-		resp.Summary = accountPerformanceSummary{
-			Subscribers:    latest.Subscribers,
-			Views:          latest.Views,
-			Videos:         latest.Videos,
-			Revenue:        latest.RevenueCents,
-			RPM:            latest.RPMCents,
-			CPM:            latest.CPMCents,
-			EngagementRate: engagementRateForSummary(latest.Views, latest.Videos),
-		}
-		if len(history) >= 2 {
-			first := history[0]
-			resp.Summary.PublicationFrequency = publicationFrequency(first.Videos, latest.Videos, days)
-		}
+	// Resolve the YouTube channel id BEFORE the DB call so a
+	// re-link-required account does not pay for a 28-day history
+	// query it cannot render. Empty id is a per-account data-quality
+	// problem (the OAuth-binding record is missing), not a transient
+	// condition the SPA should retry on.
+	channelID := resolvedYouTubeChannelID(account)
+	if channelID == "" {
+		writeError(w, http.StatusUnprocessableEntity,
+			"youtube channel id not bound; re-link the channel")
+		return
 	}
-
-	if len(history) >= 2 {
-		first := history[0]
-		latest := history[len(history)-1]
-		resp.Growth.Subscribers = growth(first.Subscribers, latest.Subscribers)
-		resp.Growth.Views = growth(first.Views, latest.Views)
-		resp.Growth.Videos = growth(first.Videos, latest.Videos)
-		if first.RevenueCents != nil && latest.RevenueCents != nil {
-			g := growth(*first.RevenueCents, *latest.RevenueCents)
-			resp.Growth.Revenue = &g
+	period, err := analytics.Resolve(days)
+	if err != nil {
+		if errors.Is(err, analytics.ErrInvalidPeriod) {
+			writeError(w, http.StatusBadRequest,
+				"invalid days: "+strconv.Itoa(days)+" not in {7,14,28}")
+			return
 		}
+		logAndError(w, req, "resolve period failed", err)
+		return
 	}
-
+	// One repository call covers BOTH [previous_start, prev_end]
+	// AND [current_start, current_end]; the assembler slices it in
+	// memory. Doing two queries would risk in-flight drift (a row
+	// written between calls would silently change the comparison)
+	// and burns an extra DB roundtrip on a hot endpoint.
+	history, err := r.metricHistoryStore.GetHistory(
+		account.ID,
+		period.PreviousStartDate,
+		period.EndDate,
+	)
+	if err != nil {
+		logAndError(w, req, "load performance history failed", err,
+			"platform_account_id", account.ID, "days", days)
+		return
+	}
+	resp := assembleChannelPerformance(account, channelID, history, period, time.Now().UTC())
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func growth(previous, current int64) accountPerformanceMetricGrowth {
-	g := accountPerformanceMetricGrowth{Absolute: current - previous}
-	if previous != 0 {
-		g.Percent = float64(g.Absolute) / float64(previous) * 100
+// parseAnalyticsDays extracts and validates the ?days= query
+// parameter against the canonical {7, 14, 28} closed set. The
+// closure of this set is asserted by analytics.IsValidPeriod and the
+// period_resolver_test.go contract; silently falling back to a
+// default would mask client misconfiguration, so a missing /
+// unparsable / out-of-range value is a 400, not a default.
+func parseAnalyticsDays(w http.ResponseWriter, req *http.Request) (int, bool) {
+	raw := req.URL.Query().Get("days")
+	if raw == "" {
+		writeError(w, http.StatusBadRequest,
+			"missing days query parameter; must be one of 7, 14, 28")
+		return 0, false
 	}
-	return g
-}
-
-// engagementRateForSummary returns average views per video, which we
-// surface as the channel-level engagement rate. Matches the
-// "engagement" ranking in the comparative dashboard.
-func engagementRateForSummary(views, videos int64) float64 {
-	if videos <= 0 {
-		return 0
+	days, err := strconv.Atoi(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest,
+			"invalid days: "+raw+" (must be a positive integer ∈ {7,14,28})")
+		return 0, false
 	}
-	return float64(views) / float64(videos)
-}
-
-// publicationFrequency returns the average number of new videos
-// published per day over the requested period.
-func publicationFrequency(firstVideos, latestVideos int64, days int) float64 {
-	if days <= 0 {
-		return 0
+	if !analytics.IsValidPeriod(days) {
+		writeError(w, http.StatusBadRequest,
+			"invalid days: "+strconv.Itoa(days)+" must be one of 7, 14, 28")
+		return 0, false
 	}
-	newVideos := latestVideos - firstVideos
-	if newVideos < 0 {
-		newVideos = 0
-	}
-	return float64(newVideos) / float64(days)
+	return days, true
 }
