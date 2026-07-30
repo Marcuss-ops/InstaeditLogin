@@ -15,6 +15,7 @@ import { ChannelsPerformancePage } from "./pages/internal/ChannelsPerformance";
 import { InternalPosts } from "./pages/internal/Posts";
 import { InternalCompose } from "./pages/internal/Compose";
 import { CalendarPage } from "./pages/internal/Calendar";
+import { ContentNew } from "./pages/internal/ContentNew";
 import { InternalUploads } from "./pages/internal/Uploads";
 import { InternalYouTubeStudio } from "./pages/internal/YouTubeStudio";
 import { GroupsPage } from "./pages/internal/Groups";
@@ -98,6 +99,7 @@ function App() {
                 <Route path="performance" element={<ChannelsPerformancePage />} />
                 <Route path="posts" element={<InternalPosts />} />
                 <Route path="compose" element={<InternalCompose />} />
+                <Route path="content/new" element={<ContentNew />} />
                 <Route path="calendar" element={<CalendarPage />} />
                 <Route path="groups" element={<GroupsPage />} />                <Route path="uploads/calendar"
                   element={<CalendarPage />}

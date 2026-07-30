@@ -21,6 +21,17 @@ import type {
   PresignMediaResponse,
 } from "./types";
 
+// Public re-export: callers (hooks, wizard components) import these from
+// `../api/mediaApi` so the api module is the single entry point — they
+// don't have to reach into `./types` directly. Aligns with the pattern
+// already used by `postsApi.ts` (workspace_id, status, etc.).
+export type {
+  MediaAsset,
+  MediaAssetContentType,
+  PresignMediaRequest,
+  PresignMediaResponse,
+};
+
 const PRESIGN_PATH = "/api/v1/media/presign";
 
 /**

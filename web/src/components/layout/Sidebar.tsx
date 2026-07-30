@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Video,
+  PlusCircle,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { fetchSession, logout } from "../../lib/auth";
@@ -22,6 +23,7 @@ const baseNavItems = [
   { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/app/performance", label: "Performance", icon: BarChart3 },
   { to: "/app/uploads", label: "Imports", icon: FolderInput },
+  { to: "/app/content/new", label: "Nuovo post", icon: PlusCircle },
   { to: "/app/youtube/studio", label: "YouTube Studio", icon: Video },
   { to: "/app/calendar", label: "Calendar", icon: Calendar },
   { to: "/app/groups", label: "Groups", icon: FolderTree },
