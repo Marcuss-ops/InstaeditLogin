@@ -367,7 +367,12 @@ func buildDailySeries(
 		key := d.Format("2006-01-02")
 		row, ok := byDate[key]
 		pt := analytics.DailyPoint{Date: d}
+		// rowRev captures the row's RevenueCents pointer inside
+		// the if-ok block so we never dereference outside; a nil
+		// rowRev means "no snapshot today" (gap day).
+		var rowRev *int64
 		if ok {
+			rowRev = row.RevenueCents
 			pt.Views = row.Views
 			if row.WatchTimeMins != nil {
 				pt.WatchTimeMinutes = *row.WatchTimeMins
@@ -375,30 +380,31 @@ func buildDailySeries(
 			if prevSubscribers != nil {
 				pt.SubscribersNet = row.Subscribers - *prevSubscribers
 			} else {
-				// First day of the window: net is conventionally 0
-				// because the ASSEMBLER hasn't been given a baseline
-				// earlier than period.PreviousStartDate. The Summary
-				// section covers the cross-window net via
-				// SubscribersGained/SubscribersNet so this isn't a
-				// data loss; the chart simply shows "no movement
-				// before the first row".
 				pt.SubscribersNet = 0
 			}
 			today := row.Subscribers
 			prevSubscribers = &today
-			if row.RevenueCents != nil {
-				v := *row.RevenueCents
-				pt.EstimatedRevenueCents = &v
-				lastRev = &v
-			} else if lastRev != nil {
-				v := *lastRev
-				pt.EstimatedRevenueCents = &v
-			}
+		}
+		// Revenue carry-forward: a CUMULATIVE snapshot
+		// (yt-analytics returns the reconciled earning amount per
+		// complete day), so a missing value rolls forward the LAST
+		// KNOWN revenue (whether the row exists at all OR the
+		// monetary value isn't stamped today). Runs OUTSIDE the
+		// if-ok block so a gap day still inherits.
+		if rowRev != nil {
+			v := *rowRev
+			pt.EstimatedRevenueCents = &v
+			lastRev = &v
+		} else if lastRev != nil {
+			v := *lastRev
+			pt.EstimatedRevenueCents = &v
 		}
 		out = append(out, pt)
 	}
 	return out
 }
+
+
 
 // avatarURLFromMetadata reads the account.Metadata JSONB blob for
 // the avatar_url key. Returns empty string (which omitempty will
@@ -430,6 +436,15 @@ func buildDataFreshness(current windowRowStats, period analytics.Period, generat
 	stale := true
 	if ttl > 0 && generatedAt.Sub(last) <= ttl {
 		stale = false
+	}
+	// No data in the window = always stale. The above TTL math
+	// can return stale=false for ``generatedAt=period.EndDate``
+	// + lastDate=period.EndDate (zero gap), which would mislead
+	// the SPA into showing "fresh" on a channel with no metrics.
+	// Forcing stale=true here preserves the no-data affordance
+	// the SPA uses to surface the "Refresh data" button.
+	if !current.hasData {
+		stale = true
 	}
 	return analytics.DataFreshness{LastSyncedAt: last, IsStale: stale}
 }

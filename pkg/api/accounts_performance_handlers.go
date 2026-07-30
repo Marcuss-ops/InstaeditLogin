@@ -24,7 +24,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 )
@@ -105,7 +104,16 @@ func (r *Router) handleGetAccountPerformance(w http.ResponseWriter, req *http.Re
 			"platform_account_id", account.ID, "days", days)
 		return
 	}
-	resp := assembleChannelPerformance(account, channelID, history, period, time.Now().UTC())
+	// Anchor freshness to period.EndDate (NOT time.Now().UTC()).
+	// The window is bounded by resolver-truncated midnight UTC
+	// (period.EndDate = today 00:00:00); stamping `time.Now()` as
+	// the freshness anchor produces nonsensical IsStale readings
+	// (wall clock is hours past midnight while rowDate ≤ period.EndDate,
+	// so generatedAt − lastRowDate spans the entire UTC day and
+	// always exceeds the 10-min 7d TTL). Anchoring to period.EndDate
+	// matches the SPA's semantic: "data was reconciled within TTL of
+	// the period boundary, so it's fresh relative to this view".
+	resp := assembleChannelPerformance(account, channelID, history, period, period.EndDate)
 	writeJSON(w, http.StatusOK, resp)
 }
 

@@ -336,20 +336,30 @@ func TestAssembleChannelPerformance_DataFreshnessTTLTable(t *testing.T) {
 			t.Errorf("Resolve(%d): %v", tc.days, err)
 			continue
 		}
-		// Fresh: generatedAt = last + (TTL - 1s).
-		genFresh := period.EndDate.Add(tc.ttl - time.Second)
-		resp := assembleChannelPerformance(account, "UCabc", nil, period, genFresh)
+		// Populate one row dated at period.StartDate so the window
+		// has data (round-9's no-data gate requires hasData=true for
+		// the TTL math to apply; an empty window forces stale=true
+		// regardless of TTL — that path is owned by
+		// NoDataReturns200, not by this TTL-boundary table test).
+		history := []repository.AccountMetricPoint{
+			ptRow{date: period.StartDate, views: 100, subscribers: 1000, videos: 1}.toPoint(),
+		}
+		// Fresh: generatedAt = last_synced_at + (TTL - 1s).
+		genFresh := period.StartDate.Add(tc.ttl - time.Second)
+		resp := assembleChannelPerformance(account, "UCabc", history, period, genFresh)
 		if resp.DataFreshness.IsStale {
 			t.Errorf("TTL=%s: is_stale should be FRESH when generatedAt is within TTL, got stale", tc.ttl)
 		}
-		// Stale: generatedAt = last + (TTL + 1s).
-		genStale := period.EndDate.Add(tc.ttl + time.Second)
-		resp2 := assembleChannelPerformance(account, "UCabc", nil, period, genStale)
+		// Stale: generatedAt = last_synced_at + (TTL + 1s).
+		genStale := period.StartDate.Add(tc.ttl + time.Second)
+		resp2 := assembleChannelPerformance(account, "UCabc", history, period, genStale)
 		if !resp2.DataFreshness.IsStale {
 			t.Errorf("TTL=%s: is_stale should be STALE 1s past TTL, got fresh", tc.ttl)
 		}
-		if resp2.DataFreshness.LastSyncedAt.IsZero() {
-			t.Errorf("LastSyncedAt fallback: must equal Period.EndDate when history is empty, got zero")
+		wantSync := period.StartDate
+		if !resp2.DataFreshness.LastSyncedAt.Equal(wantSync) {
+			t.Errorf("LastSyncedAt: want %v (last repo row date), got %v",
+				wantSync, resp2.DataFreshness.LastSyncedAt)
 		}
 	}
 }
@@ -439,5 +449,208 @@ func TestAssembleChannelPerformance_LastDateInvariant(t *testing.T) {
 	if !resp.DataFreshness.LastSyncedAt.Equal(want) {
 		t.Errorf("last_synced_at: want %v (last repo row date), got %v",
 			want, resp.DataFreshness.LastSyncedAt)
+	}
+}
+
+// TestAssembleChannelPerformance_DailySeriesRevenueCarryForwardOnGap
+// pins the "revenue carries forward" rule the assembler applies on
+// gap days. Revenue is a CUMULATIVE snapshot (yt-analytics returns
+// the reconciled earning amount per complete day) so a missing
+// snapshot ought to surface as "earnings roll forward unchanged"
+// rather than "earnings vanished".
+//
+// Without this pinning, a refactor that drops the lastRev closure
+// would silently regress the chart to zero-fill revenue on quiet
+// days, mirroring the inviolate subscribers-net=0 rule but the
+// OPPOSITE mathematical meaning (subscribers is a delta, revenue
+// is a cumulative snapshot).
+func TestAssembleChannelPerformance_DailySeriesRevenueCarryForwardOnGap(t *testing.T) {
+	period, err := analytics.Resolve(7)
+	if err != nil {
+		t.Fatalf("Resolve(7): %v", err)
+	}
+	account := makeAccount()
+	rev := int64(25000)
+	history := []repository.AccountMetricPoint{
+		ptRow{
+			date: period.StartDate, views: 100, subscribers: 100, videos: 1,
+			revenueCents: &rev,
+		}.toPoint(),
+		// Gap day 2 has NO repo row → revenue MUST inherit day-1's $250.
+		ptRow{
+			date: period.StartDate.AddDate(0, 0, 3), views: 200, subscribers: 110,
+			videos: 2, revenueCents: &rev,
+		}.toPoint(),
+	}
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+	if len(resp.DailySeries) != 7 {
+		t.Fatalf("DailySeries length: want 7, got %d", len(resp.DailySeries))
+	}
+	// Day 0 (the first repo row) must surface its own revenue.
+	if v := resp.DailySeries[0].EstimatedRevenueCents; v == nil || *v != 25000 {
+		t.Errorf("DailySeries[0].EstimatedRevenueCents: want 25000, got %v", v)
+	}
+	// Day 1 (gap day with NO row) must carry forward $250 unchanged.
+	if v := resp.DailySeries[1].EstimatedRevenueCents; v == nil || *v != 25000 {
+		t.Errorf("DailySeries[1] (gap day).EstimatedRevenueCents: want inherited 25000, got %v", v)
+	}
+	// Day 2 (the second repo row) must surface its own revenue.
+	if v := resp.DailySeries[2].EstimatedRevenueCents; v == nil || *v != 25000 {
+		t.Errorf("DailySeries[2].EstimatedRevenueCents: want 25000, got %v", v)
+	}
+	// Subsequent gap days MUST continue to carry forward the last
+	// known revenue value.
+	for i := 3; i < 7; i++ {
+		v := resp.DailySeries[i].EstimatedRevenueCents
+		if v == nil || *v != 25000 {
+			t.Errorf("DailySeries[%d] (post-row gap).EstimatedRevenueCents: want inherited 25000, got %v", i, v)
+		}
+	}
+}
+
+// TestAssembleChannelPerformance_DailySeriesRevenueOmittedOnFirstGap
+// pins the dual rule: revenue is omitted (not zero) until we see
+// the first row carrying revenue. Without this, the SPA's renderer
+// would draw a $0 line on day 0/1 (literal false data) and a $X
+// line on day 2+ (carry-forward), which is the same visual signal
+// but with a different truth meaning.
+func TestAssembleChannelPerformance_DailySeriesRevenueOmittedOnFirstGap(t *testing.T) {
+	period, err := analytics.Resolve(7)
+	if err != nil {
+		t.Fatalf("Resolve(7): %v", err)
+	}
+	account := makeAccount()
+	rev := int64(1500)
+	history := []repository.AccountMetricPoint{
+		// Only the LAST day has revenue; days 0..5 must be nil (not 0).
+		ptRow{
+			date: period.EndDate, views: 100, subscribers: 100, videos: 1,
+			revenueCents: &rev,
+		}.toPoint(),
+	}
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+	for i := 0; i < 6; i++ {
+		if resp.DailySeries[i].EstimatedRevenueCents != nil {
+			t.Errorf("DailySeries[%d] (pre-revenue).EstimatedRevenueCents: want nil, got %v",
+				i, *resp.DailySeries[i].EstimatedRevenueCents)
+		}
+	}
+	// Day 6 has the actual row.
+	if v := resp.DailySeries[6].EstimatedRevenueCents; v == nil || *v != 1500 {
+		t.Errorf("DailySeries[6].EstimatedRevenueCents: want 1500, got %v", v)
+	}
+}
+
+// TestAssembleChannelPerformance_ComparisonPrevVideosZeroOmittedPercentage
+// pins the AverageViewsPerVideo percentage_change omission rule
+// when previous videosPublished = 0. The contract says: NEVER
+// encode an Infinity float into JSON (encoding/json refuses to
+// marshal +Inf / -Inf; it writes `null`, which the SPA then has
+// to special-case). The omission rule (vs. a zero literal) is
+// what makes the wire shape forward-compatible.
+//
+// Regression direction a future refactor could introduce:
+//   - accidentally summing two averages via the viewsRatio formula
+//     (current-prev / prev) — when prev=0, this yields +Inf.
+//   - comparing videos counts directly instead of average per video.
+func TestAssembleChannelPerformance_ComparisonPrevVideosZeroOmittedPercentage(t *testing.T) {
+	period, err := analytics.Resolve(7)
+	if err != nil {
+		t.Fatalf("Resolve(7): %v", err)
+	}
+	account := makeAccount()
+	// Current: videos GROW across rows so videos_published > 0
+	// (delta = last_videos - first_videos, the assembler formula).
+	// views > 0 too so the average is computable.
+	current := []repository.AccountMetricPoint{}
+	for i := 0; i < 7; i++ {
+		current = append(current, ptRow{
+			date:        period.StartDate.AddDate(0, 0, i),
+			views:       int64(1400 + i*100),
+			subscribers: int64(1000 + i*10),
+			videos:      int64(i + 1), // monotonically increasing → delta > 0
+		}.toPoint())
+	}
+	// Previous: 0 videos (regression fixture). avg_per_video == 0.
+	previous := []repository.AccountMetricPoint{}
+	for i := 0; i < 7; i++ {
+		previous = append(previous, ptRow{
+			date: period.PreviousStartDate.AddDate(0, 0, i),
+			views: 0, subscribers: 0, videos: 0,
+		}.toPoint())
+	}
+	history := append(previous, current...)
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+
+	if resp.Summary.VideosPublished <= 0 {
+		t.Fatalf("current VideosPublished must be > 0 (sanity): got %d",
+			resp.Summary.VideosPublished)
+	}
+	if resp.Summary.AverageViewsPerVideo <= 0 {
+		t.Fatalf("current AverageViewsPerVideo must be > 0 (sanity): got %v",
+			resp.Summary.AverageViewsPerVideo)
+	}
+
+	// The pivot: comparison MUST have PercentageChange = nil (NOT
+	// +Inf, NOT null wire literal). Same wire-shape rule as views
+	// when previous == 0.
+	if resp.Comparison.AverageViewsPerVideo.PercentageChange != nil {
+		t.Errorf("AverageViewsPerVideo.PercentageChange: want nil (previous.videosPublished=0), got %v",
+			*resp.Comparison.AverageViewsPerVideo.PercentageChange)
+	}
+	if resp.Comparison.AverageViewsPerVideo.PreviousValue != 0 {
+		t.Errorf("AverageViewsPerVideo.PreviousValue: want 0, got %v",
+			resp.Comparison.AverageViewsPerVideo.PreviousValue)
+	}
+	raw, _ := json.Marshal(resp)
+	if strings.Contains(string(raw), `"percentage_change":null`) {
+		t.Errorf("wire JSON must not contain \"percentage_change\":null literal: %s", string(raw))
+	}
+}
+
+// TestAssembleChannelPerformance_TopVideosExplicitSlices pins the
+// "TopVideos emitted as empty arrays, NOT nil" contract decision.
+//
+// The handler contract says top_videos { most_viewed: [], growing:
+// [] }. If a refactor changes the assembler to nil these slices
+// (e.g. by `return analytics.TopVideosRanking{}` with zero-value
+// fields), the SPA's unconditional iteration over `.most_viewed`
+// would crash with "cannot read property 'length' of null".
+//
+// Empty data is the realistic default today (the per-video metrics
+// source does not exist yet; scorer lands in Step 4 wiring), so
+// this is the production wire shape we're emitting on every
+// instance until then.
+func TestAssembleChannelPerformance_TopVideosExplicitSlices(t *testing.T) {
+	period, err := analytics.Resolve(7)
+	if err != nil {
+		t.Fatalf("Resolve(7): %v", err)
+	}
+	account := makeAccount()
+	// Construct a populated history so we rule out "empty data, so
+	// we just didn't reach the emit" as a false positive.
+	current := []repository.AccountMetricPoint{
+		ptRow{date: period.StartDate, views: 1000, subscribers: 1100, videos: 5}.toPoint(),
+		ptRow{date: period.StartDate.AddDate(0, 0, 6), views: 1500, subscribers: 1200, videos: 6}.toPoint(),
+	}
+	resp := assembleChannelPerformance(account, "UCabc", current, period, d(2026, 7, 30))
+	if resp.TopVideos.MostViewed == nil {
+		t.Errorf("TopVideos.MostViewed: want []TopVideo{} (non-nil empty), got nil")
+	}
+	if len(resp.TopVideos.MostViewed) != 0 {
+		t.Errorf("TopVideos.MostViewed length: want 0, got %d", len(resp.TopVideos.MostViewed))
+	}
+	if resp.TopVideos.Growing == nil {
+		t.Errorf("TopVideos.Growing: want []TopVideo{} (non-nil empty), got nil")
+	}
+	if len(resp.TopVideos.Growing) != 0 {
+		t.Errorf("TopVideos.Growing length: want 0, got %d", len(resp.TopVideos.Growing))
+	}
+	raw, _ := json.Marshal(resp)
+	if strings.Contains(string(raw), `"most_viewed":null`) {
+		t.Errorf("wire JSON: top_videos.most_viewed must be [] / [], never null: %s", string(raw))
+	}
+	if strings.Contains(string(raw), `"growing":null`) {
+		t.Errorf("wire JSON: top_videos.growing must be [] / [], never null: %s", string(raw))
 	}
 }
