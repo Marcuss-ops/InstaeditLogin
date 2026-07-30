@@ -12,6 +12,13 @@ import {
   Video,
 } from "lucide-react";
 import { AuthError, authedFetch } from "../../lib/auth";
+import {
+  createYouTubeEditorSession,
+  listYouTubeEditorSessions,
+  attachYouTubeEditorSessionThumbnail,
+  publishYouTubeEditorSession,
+  openEditorInNewTab,
+} from "../../features/youtube/api/editorSessionsApi";
 import { useToast } from "../../components/toast";
 import { EmptyState, ErrorState, Skeleton } from "../../components/feedback";
 import { cn } from "../../lib/utils";
@@ -88,16 +95,6 @@ type ContentItem = {
   duration?: string;
 };
 
-// The list endpoint requires workspace_id; account_id is optional and
-// narrows results to a single channel. Keep these in sync with the
-// handler in pkg/api/youtube_editor_sessions.go (handleListYouTubeEditorSessions).
-function buildSessionsQuery(workspaceId: number | "", accountId: number | "") {
-  const params = new URLSearchParams();
-  if (workspaceId !== "") params.set("workspace_id", String(workspaceId));
-  if (accountId !== "") params.set("account_id", String(accountId));
-  return params.toString();
-}
-
 export function InternalYouTubeStudio() {
   const toast = useToast();
   const abortRef = useRef<AbortController | null>(null);
@@ -142,13 +139,16 @@ export function InternalYouTubeStudio() {
       accountId: number | "",
       signal?: AbortSignal,
     ): Promise<EditorSession[]> => {
-      const qs = buildSessionsQuery(workspaceId, accountId);
-      const resp = await authedFetch(
-        `/api/v1/youtube/editor-sessions?${qs}`,
-        { signal },
-      );
-      const data = (await resp.json()) as { sessions: EditorSession[] };
-      return data.sessions ?? [];
+      // The list helper composes the workspace_id + account_id query
+      // string into /api/v1/youtube/editor-sessions. We narrow
+      // `number | ""` to `number | undefined` for the helper's
+      // optional-key shape (it does the `if (x !== undefined)` check
+      // internally so we don't need to pre-filter empty strings).
+      return listYouTubeEditorSessions({
+        workspace_id: workspaceId === "" ? undefined : workspaceId,
+        account_id: accountId === "" ? undefined : accountId,
+        signal,
+      });
     },
     [],
   );
@@ -285,26 +285,31 @@ export function InternalYouTubeStudio() {
     const videoId = manualVideoId.trim();
     setAction({ kind: "creating" });
     try {
-      const resp = await authedFetch("/api/v1/youtube/editor-sessions", {
-        method: "POST",
-        body: JSON.stringify({
-          workspace_id: selectedWorkspaceId,
-          platform_account_id: selectedChannelId,
-          youtube_video_id: videoId,
-        }),
+      // Narrow before the call. `canCreate` already guards against
+      // `selectedWorkspaceId === ""`, but tsc types the field as
+      // `number | ""` (whole form) so we narrow explicitly instead
+      // of casting via `as number` (which was a pre-existing latent
+      // bug: JSON.stringify would have injected `""` if a stale
+      // state ever slipped past canCreate).
+      if (
+        typeof selectedWorkspaceId !== "number" ||
+        typeof selectedChannelId !== "number"
+      ) {
+        setAction({ kind: "idle" });
+        return;
+      }
+      const session = await createYouTubeEditorSession({
+        workspace_id: selectedWorkspaceId,
+        platform_account_id: selectedChannelId,
+        youtube_video_id: videoId,
       });
-      const data = (await resp.json()) as {
-        session_id: string;
-        velox_project_id: string;
-        editor_url: string;
-      };
       toast.success("Editor session created — opening Velox…");
       setManualVideoId("");
       // Reset to idle immediately so the form re-enables for the next
       // submission. The opened tab is the user's confirmation; we don't
       // gate further form interaction on it.
       setAction({ kind: "idle" });
-      window.open(data.editor_url, "_blank", "noopener,noreferrer");
+      openEditorInNewTab(session.editor_url);
       void handleRefresh();
     } catch (err) {
       if (err instanceof AuthError) return;
@@ -326,13 +331,9 @@ export function InternalYouTubeStudio() {
       if (!mediaId) return;
       setAction({ kind: "attaching", sessionId });
       try {
-        await authedFetch(
-          `/api/v1/youtube/editor-sessions/${sessionId}/thumbnail`,
-          {
-            method: "POST",
-            body: JSON.stringify({ thumbnail_media_id: mediaId }),
-          },
-        );
+        await attachYouTubeEditorSessionThumbnail(sessionId, {
+          thumbnail_media_id: mediaId,
+        });
         toast.success("Thumbnail attached.");
         setThumbnailMediaId("");
         setActiveSessionId(null);
@@ -350,15 +351,9 @@ export function InternalYouTubeStudio() {
     async (sessionId: string) => {
       setAction({ kind: "publishing", sessionId });
       try {
-        await authedFetch(
-          `/api/v1/youtube/editor-sessions/${sessionId}/publish`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              privacy_status: "public",
-            }),
-          },
-        );
+        await publishYouTubeEditorSession(sessionId, {
+          privacy_status: "public",
+        });
         toast.success("Video published.");
         void handleRefresh();
       } catch {
@@ -385,16 +380,10 @@ export function InternalYouTubeStudio() {
       const utcISO = localToUTC(scheduleAt);
       setAction({ kind: "publishing", sessionId });
       try {
-        await authedFetch(
-          `/api/v1/youtube/editor-sessions/${sessionId}/publish`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              privacy_status: "private",
-              publish_at: utcISO,
-            }),
-          },
-        );
+        await publishYouTubeEditorSession(sessionId, {
+          privacy_status: "private",
+          publish_at: utcISO,
+        });
         toast.success("Publication scheduled.");
         setScheduleAt("");
         setActiveSessionId(null);

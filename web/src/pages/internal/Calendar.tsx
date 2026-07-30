@@ -19,6 +19,7 @@ import { useToast } from "../../components/toast";
 import { CalendarGrid, type CalendarViewMode } from "./CalendarGrid";
 import { Skeleton, ErrorState } from "../../components/feedback";
 import { EmptyState } from "../../components/feedback/EmptyState";
+import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
 
 type Post = {
   id: number;
@@ -233,23 +234,25 @@ export function CalendarPage() {
     async (item: ContentItem) => {
       if (!accountId) return;
       try {
+        // Workspace lookup is the only thing that stays inline —
+        // there's no shared workspaces hook today, and the
+        // empty-workspaces fallback is a Calendar-specific UX call.
         const wsResp = await authedFetch("/api/v1/workspaces");
         const { workspaces } = (await wsResp.json()) as { workspaces: { id: number }[] };
         if (!workspaces.length) {
           toast.error("No workspaces found. Create one first.");
           return;
         }
-        const resp = await authedFetch("/api/v1/youtube/editor-sessions", {
-          method: "POST",
-          body: JSON.stringify({
-            workspace_id: workspaces[0].id,
-            platform_account_id: Number(accountId),
-            youtube_video_id: item.external_id,
-          }),
+        // Canonical create+open entrypoint — mirrors AccountDetails
+        // exactly so the "Modifica copertina" UX is consistent
+        // across the app; the response shape (full session record)
+        // lives in the editorSessionsApi client.
+        await createEditorSessionAndOpen({
+          workspace_id: workspaces[0].id,
+          platform_account_id: Number(accountId),
+          youtube_video_id: item.external_id,
         });
-        const data = (await resp.json()) as { editor_url: string };
         toast.success("Editor session created — opening Velox…");
-        window.open(data.editor_url, "_blank", "noopener,noreferrer");
       } catch (err) {
         if (err instanceof AuthError) return;
       }

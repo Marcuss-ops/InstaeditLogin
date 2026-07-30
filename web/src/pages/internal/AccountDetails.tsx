@@ -15,6 +15,7 @@ import { useToast } from "../../components/toast";
 import { PROVIDERS, type ProviderId } from "../../lib/providers";
 import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
+import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
 
 type AccountMetric = {
   key: string;
@@ -280,23 +281,27 @@ export function AccountDetailsPage() {
   const handleEditThumbnail = useCallback(async (item: ContentItem) => {
     if (!accountId) return;
     try {
+      // Workspace lookup stays inline — there's no shared workspaces
+      // hook today. The error UX (no workspaces → toast + abort) is
+      // the page-level concern, not the editor-sessions client's.
       const wsResp = await authedFetch("/api/v1/workspaces");
       const { workspaces } = (await wsResp.json()) as { workspaces: { id: number }[] };
       if (!workspaces.length) {
         toast.error("No workspaces found. Create one first.");
         return;
       }
-      const resp = await authedFetch("/api/v1/youtube/editor-sessions", {
-        method: "POST",
-        body: JSON.stringify({
-          workspace_id: workspaces[0].id,
-          platform_account_id: Number(accountId),
-          youtube_video_id: item.external_id,
-        }),
+      // createEditorSessionAndOpen is the canonical ”Modifica
+      // copertina” entrypoint: bundles the POST + the popup-window
+      // dance so AccountDetails and Calendar stay in sync with the
+      // server contract (full `{ session_id, velox_project_id,
+      // editor_url }` response, not just `{ editor_url }` as a stale
+      // type cast assumed pre-refactor).
+      await createEditorSessionAndOpen({
+        workspace_id: workspaces[0].id,
+        platform_account_id: Number(accountId),
+        youtube_video_id: item.external_id,
       });
-      const data = (await resp.json()) as { editor_url: string };
       toast.success("Editor session created — opening Velox…");
-      window.open(data.editor_url, "_blank", "noopener,noreferrer");
     } catch (err) {
       if (err instanceof AuthError) return;
       // authedFetch already toasts on non-OK responses
