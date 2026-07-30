@@ -180,12 +180,6 @@ const RETRIABLE_STATUSES = new Set<PostStatus>([
   "waiting_provider",
 ]);
 
-function forceFlagFor(_status: PostStatus): boolean {
-  // Only `waiting_provider` is in the retriable set; the parameter
-  // underscore marks intentional non-use. If the retriable set grows
-  // to include other non-failed terminal states, extend this switch.
-  return _status === "waiting_provider";
-}
 
 // ─── Component ────────────────────────────────────────────────────────
 
@@ -238,7 +232,7 @@ export function ContentPublish() {
       return next;
     });
     try {
-      await retryPostTarget(target.id, { force: forceFlagFor(target.status) });
+      await retryPostTarget(target.id, { force: target.status === "waiting_provider" });
       await refetch();
     } catch (err) {
       if (err instanceof AuthError) {
