@@ -22,13 +22,40 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
-// Hoisted mock object: define it BEFORE vi.mock so the factory
-// can close over the same references.
-const { mockSubmit, mockReset, useCreatePostMock } = vi.hoisted(() => {
+// ── File-level react-router-dom mock ──────────────────────────────────
+//
+// Replaces the formerly inline `vi.spyOn` + dynamic-import pattern
+// that broke under some vitest ESM loader configurations:
+//   const rr = await import("react-router-dom");
+//   vi.spyOn(rr, "useNavigate").mockImplementation(() => navigateSpy)
+//
+// The static `vi.mock` factory runs during module instantiation
+// (before any user code runs), so react-router-dom internals pick up
+// the stubbed `useNavigate` before `<MemoryRouter>` is constructed.
+// Other react-router-dom exports (`useParams`, `Link`, `useLocation`,
+// `useSearchParams`) pass through via `...actual` so non-target
+// code paths continue to work as expected.
+const {
+  mockSubmit,
+  mockReset,
+  useCreatePostMock,
+  navigateSpy,
+} = vi.hoisted(() => {
   const mockSubmit = vi.fn();
   const mockReset = vi.fn();
   const useCreatePostMock = vi.fn();
-  return { mockSubmit, mockReset, useCreatePostMock };
+  const navigateSpy = vi.fn();
+  return { mockSubmit, mockReset, useCreatePostMock, navigateSpy };
+});
+
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("react-router-dom")>();
+  return {
+    ...actual,
+    useNavigate: () =>
+      navigateSpy as unknown as ReturnType<typeof actual.useNavigate>,
+  };
 });
 
 vi.mock(
@@ -336,18 +363,18 @@ describe("ConfirmationStep — error / auth / submit-state UX", () => {
 });
 
 describe("ConfirmationStep — success navigates exactly once", () => {
-  let navigateSpy: ReturnType<typeof vi.fn>;
-  beforeEach(async () => {
-    // Spy on useNavigate so the post-success redirect target is
-    // observable. The MemoryRouter stub doesn't track navigation;
-    // we replace its return value with a vi.fn we can assert against.
-    const rr = await import("react-router-dom");
-    navigateSpy = vi.fn();
-    vi.spyOn(rr, "useNavigate").mockImplementation(() => navigateSpy);
+  // The navigateSpy is hoisted + the react-router-dom module mock
+  // is registered at file-level (see top-of-file docblock). Per-test
+  // isolation comes from clearing our hoisted references here rather
+  // than re-installing the module mock on every beforeEach.
+  beforeEach(() => {
+    navigateSpy.mockClear();
+    mockReset.mockReset();
+    mockSubmit.mockReset();
+    useCreatePostMock.mockReset();
   });
   afterEach(() => {
     vi.clearAllMocks();
-    vi.restoreAllMocks();
   });
 
   it("navigates to /app/content/{post.id}/publish when state becomes success, and not on a same-id re-render", async () => {
