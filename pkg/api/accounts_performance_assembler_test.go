@@ -107,7 +107,7 @@ func TestAssembleChannelPerformance_CanonicalShape(t *testing.T) {
 		row.RevenueCents = &rev
 		history = append(history, row)
 	}
-	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 	raw, _ := json.Marshal(resp)
 	var asMap map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &asMap)
@@ -164,7 +164,7 @@ func TestAssembleChannelPerformance_DailySeriesIgnoresPreviousWindow(t *testing.
 			date: period.StartDate.AddDate(0, 0, i),
 		}.toPoint())
 	}
-	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 	if got := len(resp.DailySeries); got != period.Days {
 		t.Fatalf("DailySeries length: want %d (one per current-window day), got %d", period.Days, got)
 	}
@@ -190,7 +190,7 @@ func TestAssembleChannelPerformance_DailySeriesGapFill(t *testing.T) {
 		ptRow{date: period.StartDate.AddDate(0, 0, 2), views: 200, subscribers: 110, videos: 2}.toPoint(),
 		ptRow{date: period.StartDate.AddDate(0, 0, 4), views: 400, subscribers: 120, videos: 4}.toPoint(),
 	}
-	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 	if len(resp.DailySeries) != period.Days {
 		t.Fatalf("DailySeries length: want %d, got %d", period.Days, len(resp.DailySeries))
 	}
@@ -224,7 +224,7 @@ func TestAssembleChannelPerformance_ComparisonPreviousZeroOmitted(t *testing.T) 
 			videos:      int64(i + 1),
 		}.toPoint())
 	}
-	resp := assembleChannelPerformance(account, "UCabc", current, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", current, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 	if resp.Comparison.Views.PercentageChange != nil {
 		t.Errorf("Comparison.Views.PercentageChange: want nil (previous=0), got %v", *resp.Comparison.Views.PercentageChange)
 	}
@@ -279,7 +279,7 @@ func TestAssembleChannelPerformance_ComparisonNegativeDeltaPresent(t *testing.T)
 		previous = append(previous, ptRow{date: period.PreviousStartDate.AddDate(0, 0, i), revenueCents: &revPrev}.toPoint())
 	}
 	history := append(previous, current...)
-	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 	pct := resp.Comparison.EstimatedRevenue.PercentageChange
 	if pct == nil {
 		t.Fatalf("Comparison.EstimatedRevenue.PercentageChange must be non-nil for negative delta with previous != 0")
@@ -303,7 +303,7 @@ func TestAssembleChannelPerformance_OptionalFieldsOmitted(t *testing.T) {
 	current := []repository.AccountMetricPoint{
 		ptRow{date: period.StartDate, views: 0, subscribers: 0, videos: 0}.toPoint(),
 	}
-	resp := assembleChannelPerformance(account, "UCabc", current, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", current, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 	raw, _ := json.Marshal(resp)
 	s := string(raw)
 	if strings.Contains(s, `"impressions":`) {
@@ -346,13 +346,13 @@ func TestAssembleChannelPerformance_DataFreshnessTTLTable(t *testing.T) {
 		}
 		// Fresh: generatedAt = last_synced_at + (TTL - 1s).
 		genFresh := period.StartDate.Add(tc.ttl - time.Second)
-		resp := assembleChannelPerformance(account, "UCabc", history, period, genFresh)
+		resp := assembleChannelPerformance(account, "UCabc", history, period, genFresh, analytics.TopVideosRanking{})
 		if resp.DataFreshness.IsStale {
 			t.Errorf("TTL=%s: is_stale should be FRESH when generatedAt is within TTL, got stale", tc.ttl)
 		}
 		// Stale: generatedAt = last_synced_at + (TTL + 1s).
 		genStale := period.StartDate.Add(tc.ttl + time.Second)
-		resp2 := assembleChannelPerformance(account, "UCabc", history, period, genStale)
+		resp2 := assembleChannelPerformance(account, "UCabc", history, period, genStale, analytics.TopVideosRanking{})
 		if !resp2.DataFreshness.IsStale {
 			t.Errorf("TTL=%s: is_stale should be STALE 1s past TTL, got fresh", tc.ttl)
 		}
@@ -384,7 +384,7 @@ func TestAssembleChannelPerformance_VideosPublishedDeltaNet(t *testing.T) {
 		ptRow{date: period.StartDate.AddDate(0, 0, 0), views: 100, subscribers: 100, videos: 50}.toPoint(),
 		ptRow{date: period.StartDate.AddDate(0, 0, 6), views: 250, subscribers: 130, videos: 49}.toPoint(),
 	}
-	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 	if resp.Summary.VideosPublished != 0 {
 		t.Errorf("Summary.VideosPublished must clamp at 0 on regression (50→49), got %d", resp.Summary.VideosPublished)
 	}
@@ -409,7 +409,7 @@ func TestAssembleChannelPerformance_SubscribersGainedLostSignedDelta(t *testing.
 			ptRow{date: period.StartDate, subscribers: 100, videos: 0}.toPoint(),
 			ptRow{date: period.StartDate.AddDate(0, 0, 6), subscribers: 150, videos: 5}.toPoint(),
 		}
-		resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+		resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 		if resp.Summary.SubscribersGained != 50 || resp.Summary.SubscribersLost != 0 || resp.Summary.SubscribersNet != 50 {
 			t.Errorf("growth: gained=%d lost=%d net=%d, want 50/0/50",
 				resp.Summary.SubscribersGained, resp.Summary.SubscribersLost, resp.Summary.SubscribersNet)
@@ -420,7 +420,7 @@ func TestAssembleChannelPerformance_SubscribersGainedLostSignedDelta(t *testing.
 			ptRow{date: period.StartDate, subscribers: 200, videos: 0}.toPoint(),
 			ptRow{date: period.StartDate.AddDate(0, 0, 6), subscribers: 150, videos: 5}.toPoint(),
 		}
-		resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+		resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 		if resp.Summary.SubscribersGained != 0 || resp.Summary.SubscribersLost != 50 || resp.Summary.SubscribersNet != -50 {
 			t.Errorf("churn: gained=%d lost=%d net=%d, want 0/50/-50",
 				resp.Summary.SubscribersGained, resp.Summary.SubscribersLost, resp.Summary.SubscribersNet)
@@ -444,7 +444,7 @@ func TestAssembleChannelPerformance_LastDateInvariant(t *testing.T) {
 		ptRow{date: period.StartDate.AddDate(0, 0, 3), views: 200, subscribers: 1100, videos: 2}.toPoint(),
 		ptRow{date: period.StartDate.AddDate(0, 0, 6), views: 300, subscribers: 1200, videos: 3}.toPoint(),
 	}
-	resp := assembleChannelPerformance(account, "UCabc", current, period, period.EndDate)
+	resp := assembleChannelPerformance(account, "UCabc", current, period, period.EndDate, analytics.TopVideosRanking{})
 	want := period.StartDate.AddDate(0, 0, 6)
 	if !resp.DataFreshness.LastSyncedAt.Equal(want) {
 		t.Errorf("last_synced_at: want %v (last repo row date), got %v",
@@ -482,7 +482,7 @@ func TestAssembleChannelPerformance_DailySeriesRevenueCarryForwardOnGap(t *testi
 			videos: 2, revenueCents: &rev,
 		}.toPoint(),
 	}
-	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 	if len(resp.DailySeries) != 7 {
 		t.Fatalf("DailySeries length: want 7, got %d", len(resp.DailySeries))
 	}
@@ -528,7 +528,7 @@ func TestAssembleChannelPerformance_DailySeriesRevenueOmittedOnFirstGap(t *testi
 			revenueCents: &rev,
 		}.toPoint(),
 	}
-	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 	for i := 0; i < 6; i++ {
 		if resp.DailySeries[i].EstimatedRevenueCents != nil {
 			t.Errorf("DailySeries[%d] (pre-revenue).EstimatedRevenueCents: want nil, got %v",
@@ -580,7 +580,7 @@ func TestAssembleChannelPerformance_ComparisonPrevVideosZeroOmittedPercentage(t 
 		}.toPoint())
 	}
 	history := append(previous, current...)
-	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", history, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 
 	if resp.Summary.VideosPublished <= 0 {
 		t.Fatalf("current VideosPublished must be > 0 (sanity): got %d",
@@ -633,7 +633,7 @@ func TestAssembleChannelPerformance_TopVideosExplicitSlices(t *testing.T) {
 		ptRow{date: period.StartDate, views: 1000, subscribers: 1100, videos: 5}.toPoint(),
 		ptRow{date: period.StartDate.AddDate(0, 0, 6), views: 1500, subscribers: 1200, videos: 6}.toPoint(),
 	}
-	resp := assembleChannelPerformance(account, "UCabc", current, period, d(2026, 7, 30))
+	resp := assembleChannelPerformance(account, "UCabc", current, period, d(2026, 7, 30), analytics.TopVideosRanking{})
 	if resp.TopVideos.MostViewed == nil {
 		t.Errorf("TopVideos.MostViewed: want []TopVideo{} (non-nil empty), got nil")
 	}

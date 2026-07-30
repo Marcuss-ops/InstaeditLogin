@@ -193,6 +193,14 @@ type Router struct {
 	// GET /accounts/{id}/performance returns 501.
 	metricHistoryStore MetricHistoryStore
 
+	// channelAnalyticsService is the Step-4 extracted business logic
+	// for GET /accounts/{id}/performance: workspace ownership + YT
+	// platform + channel-id resolution + period resolution +
+	// history fetch + video lister + trending rank + DTO assembly.
+	// Wired via WithChannelAnalyticsService; when nil, the handler
+	// returns 501 ("channel analytics service not configured").
+	channelAnalyticsService *ChannelAnalyticsService
+
 	// bookingEventStore persists the anonymous lead-capture events
 	// from the marketing strategy-call modal (POST
 	// /api/v1/booking_events). Wired via WithBookingEventStore;

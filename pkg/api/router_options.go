@@ -275,3 +275,18 @@ func WithSnapshotStore(s SnapshotStore) RouterOption {
 func WithMetricHistoryStore(s MetricHistoryStore) RouterOption {
 	return func(r *Router) { r.metricHistoryStore = s }
 }
+
+// WithChannelAnalyticsService wires the Step-4 extracted business
+// logic for GET /accounts/{id}/performance. The service owns
+// workspace ownership + YouTube platform + channel-id resolution
+// + period + history + video fetch + trending rank + DTO assembly;
+// the handler is a thin delegator. When nil, the handler returns
+// 501 ("channel analytics service not configured").
+//
+// Production wiring: NewChannelAnalyticsService(r.userRepo,
+// r.metricHistoryStore). The option is exposed so a future
+// variant — e.g. a service that adds a cache layer or a metrics
+// decorator — can be injected without touching the bootstrap.
+func WithChannelAnalyticsService(s *ChannelAnalyticsService) RouterOption {
+	return func(r *Router) { r.channelAnalyticsService = s }
+}

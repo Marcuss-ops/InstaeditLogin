@@ -105,6 +105,12 @@ func WireAPI(core *Core) (http.Handler, error) {
 		api.WithAdminInviteToken(cfg.Auth.AdminInviteToken),
 		api.WithSnapshotStore(repository.NewSnapshotRepository(core.DB)),
 		api.WithMetricHistoryStore(repository.NewAccountMetricsRepository(core.DB)),
+		api.WithChannelAnalyticsService(
+			api.NewChannelAnalyticsService(
+				core.userRepo,
+				repository.NewAccountMetricsRepository(core.DB),
+			),
+		),
 		api.WithEditorURL(cfg.HTTP.EditorURL),
 	}
 

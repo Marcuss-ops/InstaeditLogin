@@ -1,23 +1,27 @@
 // Package api — per-channel analytics endpoints.
 //
-// handleGetAccountPerformance replaces the legacy v0
-// (accountPerformanceResponse) implementation with the canonical
-// ChannelPerformanceResponse DTO shipped in Step 1 (analytics/contract.go)
-// and the period resolver shipped in Step 3 (analytics/period_resolver.go).
+// handleGetAccountPerformance is the HTTP boundary for
+// GET /api/v1/accounts/{platform_account_id}/performance?days=7|14|28.
 //
-// The handler is intentionally thin: it only authenticates, parses
-// the days parameter, owns the period resolution and workspace
-// ownership check, then delegates the data-shape assembly to
-// assembleChannelPerformance (this same package).
+// After Step 4 the handler is intentionally thin: it parses the
+// path id + ?days= query, reads identity from the request context,
+// then delegates to ChannelAnalyticsService.GetChannelPerformance
+// and maps that service's typed errors to HTTP status codes. All
+// business logic (ownership, platform-type check, YouTube channel
+// id resolution, period resolution, history + video fetching,
+// trending rank, DTO assembly) lives in the service so future
+// callers (a worker that runs the same computation off-request,
+// an admin tool that inspects a different account, a CLI export)
+// reuse the rules without duplicating them.
 //
-// Error map is kept short so the SPA can wire each code to a
-// predictable UX:
-//   - 400  ?days= missing / unparseable / outside {7,14,28}
-//   - 401  missing user identity (defence-in-depth on top of r.protected)
-//   - 404  account not found OR belongs to a different user (no existence leak)
-//   - 422  account is not a YouTube platform OR YouTube channel id missing
-//   - 501  metric history store not wired (operator misconfigured)
-//   - 500  history fetch failure (logged with request_id)
+// Error map:
+//
+//   - 400 ?days= missing / unparseable / outside {7,14,28}
+//   - 401 missing user identity (defence-in-depth on r.protected)
+//   - 404 service.ErrAccountNotVisible (covers missing + cross-tenant)
+//   - 422 service.ErrNotYouTubePlatform OR service.ErrYouTubeChannelIDMissing
+//   - 501 channel analytics service not wired (operator misconfigured)
+//   - 500 service error (logged with request_id)
 package api
 
 import (
@@ -26,6 +30,7 @@ import (
 	"strconv"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 )
 
 // youtubePlatform is the wire-level platform string any OAuth-bound
@@ -35,86 +40,76 @@ import (
 // uses the literal string — keeping this file aligned with that
 // convention removes a future refactor's breakage risk if
 // internal/models' exported Platform constants get renamed.
+//
+// Component-level ChannelAnalyticsService checks the same literal
+// (see pkg/api/channel_analytics_service.go).
 const youtubePlatform = "youtube"
 
 // handleGetAccountPerformance returns the canonical per-channel
-// analytics payload for the user's own account.
-//
-// The canonical wire shape (analytics.ChannelPerformanceResponse) is
-// built by assembleChannelPerformance so this handler stays thin:
-// authentication, parameter parsing, period resolution, workspace
-// ownership, and platform-type check happen here; everything else
-// (summary, comparison, daily-series gap-fill, top-videos stub,
-// data freshness) lives in the assembler.
+// analytics payload for the user's own account. The handler is
+// post-Step-4 a thin orchestrator: parameter parsing, identity
+// extraction, service delegation, error mapping. Every nontrivial
+// rule lives in ChannelAnalyticsService.
 func (r *Router) handleGetAccountPerformance(w http.ResponseWriter, req *http.Request) {
-	if r.metricHistoryStore == nil {
-		writeError(w, http.StatusNotImplemented, "metric history store not configured")
+	if r.channelAnalyticsService == nil {
+		writeError(w, http.StatusNotImplemented, "channel analytics service not configured")
 		return
 	}
 	id, ok := parsePathIDAsInt64(w, req, "id")
 	if !ok {
 		return
 	}
-	account, _, ok := r.loadOwnAccountByID(w, req, id)
-	if !ok {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.UserID() <= 0 {
+		// Defence-in-depth: r.protected() should have already
+		// rejected this with 401. If a future refactor accidentally
+		// wires this handler without the middleware, refuse the
+		// request rather than silently returning any user's data.
+		writeError(w, http.StatusUnauthorized, "missing user identity")
 		return
 	}
 	days, ok := parseAnalyticsDays(w, req)
 	if !ok {
 		return
 	}
-	if account.Platform != youtubePlatform {
+
+	resp, err := r.channelAnalyticsService.GetChannelPerformance(
+		req.Context(),
+		identity.UserID(),
+		identity.WorkspaceID(),
+		id,
+		days,
+	)
+	if err == nil {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// Map typed service errors to HTTP status codes. Always return
+	// a stable JSON shape so the SPA can branch on the code, never
+	// on the message text.
+	switch {
+	case errors.Is(err, ErrAccountNotVisible):
+		// No existence leak: 404 covers both missing and
+		// cross-tenant probes (the service cannot distinguish them
+		// to the caller; that's the security contract).
+		writeError(w, http.StatusNotFound, "account not found")
+	case errors.Is(err, ErrNotYouTubePlatform):
 		writeError(w, http.StatusUnprocessableEntity,
 			"channel is not a YouTube account; the per-channel analytics view is YouTube-only")
-		return
-	}
-	// Resolve the YouTube channel id BEFORE the DB call so a
-	// re-link-required account does not pay for a 28-day history
-	// query it cannot render. Empty id is a per-account data-quality
-	// problem (the OAuth-binding record is missing), not a transient
-	// condition the SPA should retry on.
-	channelID := resolvedYouTubeChannelID(account)
-	if channelID == "" {
+	case errors.Is(err, ErrYouTubeChannelIDMissing):
 		writeError(w, http.StatusUnprocessableEntity,
 			"youtube channel id not bound; re-link the channel")
-		return
+	case errors.Is(err, analytics.ErrInvalidPeriod):
+		// parseAnalyticsDays already screens this on the HTTP
+		// boundary, but the service re-checks defensively. If it
+		// somehow gets here the wire shape is still 400.
+		writeError(w, http.StatusBadRequest,
+			"invalid days: "+strconv.Itoa(days)+" not in {7,14,28}")
+	default:
+		logAndError(w, req, "channel analytics service failed", err,
+			"platform_account_id", id, "days", days)
 	}
-	period, err := analytics.Resolve(days)
-	if err != nil {
-		if errors.Is(err, analytics.ErrInvalidPeriod) {
-			writeError(w, http.StatusBadRequest,
-				"invalid days: "+strconv.Itoa(days)+" not in {7,14,28}")
-			return
-		}
-		logAndError(w, req, "resolve period failed", err)
-		return
-	}
-	// One repository call covers BOTH [previous_start, prev_end]
-	// AND [current_start, current_end]; the assembler slices it in
-	// memory. Doing two queries would risk in-flight drift (a row
-	// written between calls would silently change the comparison)
-	// and burns an extra DB roundtrip on a hot endpoint.
-	history, err := r.metricHistoryStore.GetHistory(
-		account.ID,
-		period.PreviousStartDate,
-		period.EndDate,
-	)
-	if err != nil {
-		logAndError(w, req, "load performance history failed", err,
-			"platform_account_id", account.ID, "days", days)
-		return
-	}
-	// Anchor freshness to period.EndDate (NOT time.Now().UTC()).
-	// The window is bounded by resolver-truncated midnight UTC
-	// (period.EndDate = today 00:00:00); stamping `time.Now()` as
-	// the freshness anchor produces nonsensical IsStale readings
-	// (wall clock is hours past midnight while rowDate ≤ period.EndDate,
-	// so generatedAt − lastRowDate spans the entire UTC day and
-	// always exceeds the 10-min 7d TTL). Anchoring to period.EndDate
-	// matches the SPA's semantic: "data was reconciled within TTL of
-	// the period boundary, so it's fresh relative to this view".
-	resp := assembleChannelPerformance(account, channelID, history, period, period.EndDate)
-	writeJSON(w, http.StatusOK, resp)
 }
 
 // parseAnalyticsDays extracts and validates the ?days= query

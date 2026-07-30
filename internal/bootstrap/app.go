@@ -397,6 +397,12 @@ func Wire(ctx context.Context) (*App, error) {
 		api.WithAdminInviteToken(cfg.Auth.AdminInviteToken),
 		api.WithSnapshotStore(repository.NewSnapshotRepository(db)),
 		api.WithMetricHistoryStore(repository.NewAccountMetricsRepository(db)),
+		api.WithChannelAnalyticsService(
+			api.NewChannelAnalyticsService(
+				userRepo,
+				repository.NewAccountMetricsRepository(db),
+			),
+		),
 		api.WithYouTubeVideoEditStore(youtubeVideoEditRepo),
 		api.WithContentPipelineStore(contentPipelineRepo),
 		api.WithEditorURL(cfg.HTTP.EditorURL),

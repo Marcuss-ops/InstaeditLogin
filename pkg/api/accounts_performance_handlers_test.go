@@ -137,9 +137,30 @@ var _ UserStore = (*mockUserStore)(nil)
 // Returns the recorded response.
 func runGetAccountPerf(t *testing.T, r *Router, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
+	wireAnalyticsServiceForTest(r)
 	w := httptest.NewRecorder()
 	r.handleGetAccountPerformance(w, req)
 	return w
+}
+
+// wireAnalyticsServiceForTest lazily wires a ChannelAnalyticsService
+// into the test Router using whatever userRepo + metricHistoryStore
+// the test already configured. Production wiring uses
+// NewRouter() + WithChannelAnalyticsService() OR MustNewRouter();
+// tests build the Router struct directly, so this helper is the
+// bridge that keeps every existing fixture working without forcing
+// every test function to duplicate the constructor wiring.
+//
+// Idempotent: a test that already set channelAnalyticsService
+// explicitly is left untouched.
+func wireAnalyticsServiceForTest(r *Router) {
+	if r.channelAnalyticsService != nil {
+		return
+	}
+	if r.userRepo == nil || r.metricHistoryStore == nil {
+		return
+	}
+	r.channelAnalyticsService = NewChannelAnalyticsService(r.userRepo, r.metricHistoryStore)
 }
 
 // ---------------------------------------------------------------------------

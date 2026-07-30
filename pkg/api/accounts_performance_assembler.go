@@ -78,6 +78,7 @@ func assembleChannelPerformance(
 	history []repository.AccountMetricPoint,
 	period analytics.Period,
 	generatedAt time.Time,
+	topVideos analytics.TopVideosRanking,
 ) analytics.ChannelPerformanceResponse {
 	current, previous := splitHistoryByPeriod(history, period)
 	currentSum := sumWindow(current)
@@ -106,7 +107,7 @@ func assembleChannelPerformance(
 		Summary:       summary,
 		Comparison:    comparison,
 		DailySeries:   dailySeries,
-		TopVideos:     analytics.TopVideosRanking{MostViewed: []analytics.TopVideo{}, Growing: []analytics.TopVideo{}},
+		TopVideos:     topVideos,
 		GeneratedAt:   generatedAt,
 		DataFreshness: freshness,
 	}
