@@ -142,6 +142,46 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetMissing(t *testing.T) {
 	}
 }
 
+// TestMediaDownloadResolver_ResolveForUpload_AssetExpired verifies the
+// resolver fails fast when the resolved asset row has expires_at < NOW(),
+// even if status='ready' (MarkExpired only transitions status='pending'
+// rows; a row that reached 'ready' and then expired will show up to the
+// resolver as status=ready + expires_at in the past). The error MUST
+// wrap the typed sentinel ErrAssetExpired so the worker can emit a clear
+// "re-upload required" message instead of the generic "not ready".
+func TestMediaDownloadResolver_ResolveForUpload_AssetExpired(t *testing.T) {
+	expired := time.Now().Add(-5 * time.Minute)
+	store := &fakeMediaAssetStore{
+		assets: map[string]*models.MediaAsset{
+			"asset-expired": {
+				ID:        "asset-expired",
+				UploadKey: "uploads/7/x.mp4",
+				// status=ready is what an asset row that never got swept
+				// by MarkExpired looks like at the resolver. The resolver
+				// must NOT trust status alone — the expires_at gate is
+				// the second invariant. Today the production code would
+				// pass status=ready + a stale presigned URL to YouTube,
+				// which would 403 mid-upload. This test pins the gate so
+				// the worker falls into a deterministic "re-upload
+				// required" failed status instead.
+				Status:    models.MediaAssetStatusReady,
+				ExpiresAt: expired,
+			},
+		},
+	}
+	getter := &fakeObjectGetter{nextURL: "https://example.com/x"}
+	resolver := NewMediaDownloadResolver(getter, store, nil)
+
+	post := &models.Post{MediaAssetID: ptrToString("asset-expired")}
+	_, err := resolver.ResolveForUpload(context.Background(), post, time.Minute)
+	if !errors.Is(err, ErrAssetExpired) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrAssetExpired)", err)
+	}
+	if len(getter.calls) != 0 {
+		t.Errorf("ObjectGetter.GetObject must not be called when asset expired; got %d call(s)", len(getter.calls))
+	}
+}
+
 // TestMediaDownloadResolver_ResolveForUpload_StorageObjectKey verifies
 // the legacy / direct branch: when post.MediaAssetID is empty BUT
 // (post.Bucket, post.StorageObjectKey) are set, the resolver falls back

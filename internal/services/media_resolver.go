@@ -67,6 +67,19 @@ type MediaAssetStore interface {
 // operator-fixable rows from transient failures.
 var ErrPostMissingMediaReference = errors.New("media resolver: post has no resolvable media reference (media_asset_id and storage_object_key are both empty)")
 
+// ErrAssetExpired is the typed sentinel returned when the resolved
+// media_assets row has expires_at < NOW(). A status='ready' row can
+// still be expired: the MarkExpired cleanup pass transitions
+// status='pending' → 'expired' but does NOT touch already-ready rows
+// (they're past their TTL but the user still owns the storage object).
+// The publish path is the one place that needs to refuse service
+// against an expired-ready row because the platform API will see a
+// valid presigned signature even though the asset's pre-signed URL
+// window has lapsed. The worker maps this to a deterministic
+// status='failed' with an operator-friendly message ("media asset
+// expired at time of publish; re-upload required").
+var ErrAssetExpired = errors.New("media resolver: media asset expired at time of publish (re-upload required)")
+
 // mediaDownloadResolver is the production implementation. The resolver
 // composes a MediaAssetStore lookup (canonical asset-id branch) with a
 // fast (bucket, key) direct path (legacy backfill + recovery paths).
@@ -113,6 +126,14 @@ func (r *mediaDownloadResolver) resolveAssetByID(ctx context.Context, assetID st
 	}
 	if asset.Status != models.MediaAssetStatusReady {
 		return "", asset, fmt.Errorf("media resolver: asset %q not ready (status=%s); the worker should NOT have scheduled a publish on a non-ready asset", assetID, asset.Status)
+	}
+	// Expiry gate (immediately before publishing): a status='ready' row can
+	// still have expires_at in the past if the row's TTL was breached and
+	// the MarkExpired cleanup pass hasn't swept it yet. Return a typed
+	// sentinel so the worker can write a clearer operator message instead
+	// of the generic "not ready" error.
+	if !asset.ExpiresAt.IsZero() && time.Now().After(asset.ExpiresAt) {
+		return "", asset, fmt.Errorf("%w (asset_id=%q expires_at=%s now=%s)", ErrAssetExpired, assetID, asset.ExpiresAt.UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
 	}
 	key := asset.UploadKey
 	if key == "" {

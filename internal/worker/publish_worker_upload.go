@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -33,6 +34,15 @@ func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostT
 	if w.resolver != nil {
 		freshURL, err := w.resolver.ResolveForUpload(ctx, post, 1*time.Hour)
 		if err != nil {
+			// ErrAssetExpired (services.ErrAssetExpired) — the resolved
+			// media_assets row has expires_at < NOW(). Mark this target
+			// 'failed' with an operator-friendly message so the dashboard
+			// surfaces "re-upload required" instead of a generic resolver
+			// error. Any other error remains wrapped with the original
+			// resolver context.
+			if errors.Is(err, services.ErrAssetExpired) {
+				return w.markFailed(target, "media asset expired at time of publish; re-upload required")
+			}
 			return fmt.Errorf("resolve fresh media upload URL: %w", err)
 		}
 		payload.VideoURL = freshURL
