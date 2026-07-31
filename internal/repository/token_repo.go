@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/lib/pq"
 
@@ -20,17 +21,15 @@ func NewTokenRepository(db *sql.DB) *TokenRepository {
 	return &TokenRepository{db: db}
 }
 
-// SaveToken saves a new encrypted token for a platform account and prunes
-// older rows for the same (oauth_connection_id, token_type) so the table does
-// not grow unbounded across refreshes. Encrypted refresh tokens are stored
-// alongside access tokens when present (PostgreSQL treats nil []byte as NULL bytea).
-//
-// Cryptographic invariant (P0#3): the encrypted_token +
-// encrypted_refresh_token columns are byte-for-byte preserved across
-// the migration — the encryptor key ids + envelope format are
-// unchanged. Only the indexing key has shifted from
-// platform_account_id to oauth_connection_id; the ciphertext bytes
-// themselves are not re-encrypted by this method.
+const insertTokenSQL = `INSERT INTO tokens (
+                platform_account_id, oauth_connection_id, token_type,
+                encrypted_access_token, encrypted_token, encrypted_refresh_token,
+                access_token_expires_at, expires_at, refresh_token_expires_at)
+         VALUES ($1::BIGINT, $2::BIGINT, $3::VARCHAR, $4::BYTEA, $4::BYTEA,
+                 COALESCE($5::BYTEA, (SELECT encrypted_refresh_token FROM tokens WHERE oauth_connection_id = $2::BIGINT AND token_type = $3::VARCHAR ORDER BY created_at DESC LIMIT 1)),
+                 $6::TIMESTAMPTZ, $6::TIMESTAMPTZ,
+                 COALESCE($7::TIMESTAMPTZ, (SELECT refresh_token_expires_at FROM tokens WHERE oauth_connection_id = $2::BIGINT AND token_type = $3::VARCHAR ORDER BY created_at DESC LIMIT 1))) RETURNING id, created_at`
+
 func (r *TokenRepository) SaveToken(token *models.Token) error {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -42,44 +41,30 @@ func (r *TokenRepository) SaveToken(token *models.Token) error {
 		}
 	}()
 
-	err = tx.QueryRow(
-		`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
-			 VALUES ($1, $2, $3, $4,
-			         COALESCE($5, (SELECT encrypted_refresh_token FROM tokens WHERE oauth_connection_id = $2 AND token_type = $3 ORDER BY created_at DESC LIMIT 1)),
-			         $6,
-			         COALESCE($7, (SELECT scopes FROM tokens WHERE oauth_connection_id = $2 AND token_type = $3 ORDER BY created_at DESC LIMIT 1))) RETURNING id, created_at`,
-		token.PlatformAccountID, token.OAuthConnectionID, token.TokenType, token.EncryptedToken,
-		token.EncryptedRefreshToken, token.ExpiresAt, pq.Array(token.Scopes),
+	err = tx.QueryRow(insertTokenSQL,
+		token.PlatformAccountID, token.OAuthConnectionID, token.TokenType,
+		accessCiphertext(token), nullableCiphertext(token.EncryptedRefreshToken),
+		accessExpiresAt(token), token.RefreshTokenExpiresAt,
 	).Scan(&token.ID, &token.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to save token: %w", err)
 	}
-
+	if err = updateGrantScopesTx(tx, token.OAuthConnectionID, grantedScopes(token)); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(
 		`DELETE FROM tokens WHERE oauth_connection_id = $1 AND token_type = $2 AND id <> $3`,
 		token.OAuthConnectionID, token.TokenType, token.ID,
 	); err != nil {
 		return fmt.Errorf("failed to prune older tokens: %w", err)
 	}
-
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit save tx: %w", err)
 	}
 	return nil
 }
 
-// SaveTokenTx is the tx-aware sibling of SaveToken. ChannelAuthorizationService
-// uses this primitive to keep the OAuth finalize flow atomic — when the
-// caller's tx rolls back (e.g. platform_accounts.status='active' promotion
-// fails after the token row INSERTed), the token write AND its internal
-// pruner rows are dropped together. ctx is honoured for
-// cancellation/deadline propagation so a cancelled tx surfaces the
-// documented sql.ErrTxDone rather than hanging.
-//
-// Behaviour is identical to SaveToken for SQL ordering and lock semantics
-// — only the outer tx is owned by the caller. The pruner runs INSIDE
-// the supplied tx so a parent ROLLBACK drops the new + older rows
-// atomically. The function does NOT call Commit / Rollback.
+// SaveTokenTx writes and prunes a token inside a caller-owned transaction.
 func (r *TokenRepository) SaveTokenTx(ctx context.Context, tx *sql.Tx, token *models.Token) error {
 	if tx == nil {
 		return fmt.Errorf("save token (tx): nil tx")
@@ -87,61 +72,76 @@ func (r *TokenRepository) SaveTokenTx(ctx context.Context, tx *sql.Tx, token *mo
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	scanErr := tx.QueryRowContext(ctx,
-		`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
-			 VALUES ($1, $2, $3, $4,
-			         COALESCE($5, (SELECT encrypted_refresh_token FROM tokens WHERE oauth_connection_id = $2 AND token_type = $3 ORDER BY created_at DESC LIMIT 1)),
-			         $6,
-			         COALESCE($7, (SELECT scopes FROM tokens WHERE oauth_connection_id = $2 AND token_type = $3 ORDER BY created_at DESC LIMIT 1))) RETURNING id, created_at`,
-		token.PlatformAccountID, token.OAuthConnectionID, token.TokenType, token.EncryptedToken,
-		token.EncryptedRefreshToken, token.ExpiresAt, pq.Array(token.Scopes),
-	).Scan(&token.ID, &token.CreatedAt)
-	if scanErr != nil {
-		return fmt.Errorf("failed to save token (tx): %w", scanErr)
+	if err := tx.QueryRowContext(ctx, insertTokenSQL,
+		token.PlatformAccountID, token.OAuthConnectionID, token.TokenType,
+		accessCiphertext(token), nullableCiphertext(token.EncryptedRefreshToken),
+		accessExpiresAt(token), token.RefreshTokenExpiresAt,
+	).Scan(&token.ID, &token.CreatedAt); err != nil {
+		return fmt.Errorf("failed to save token (tx): %w", err)
 	}
-
-	if _, execErr := tx.ExecContext(ctx,
+	if err := updateGrantScopesTxContext(ctx, tx, token.OAuthConnectionID, grantedScopes(token)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM tokens WHERE oauth_connection_id = $1 AND token_type = $2 AND id <> $3`,
 		token.OAuthConnectionID, token.TokenType, token.ID,
-	); execErr != nil {
-		return fmt.Errorf("failed to prune older tokens (tx): %w", execErr)
+	); err != nil {
+		return fmt.Errorf("failed to prune older tokens (tx): %w", err)
 	}
 	return nil
 }
 
-// FindLatestToken finds the most recent token for an oauth connection of a given
-// type. The encrypted refresh token is included (may be nil if the platform did
-// not issue one).
-//
-// P0#3 retarget: arguments are keyed by oauth_connection_id (the
-// canonical grant lineage). Pre-053 callers passed platform_account_id
-// — the vault's public API keeps that on the wire and resolves to
-// oauth_connection_id internally before reaching this method.
+// UpdateOAuthConnectionStatus records grant-level refresh health. lastError is
+// an application classification, never a provider response or token value.
+func (r *TokenRepository) UpdateOAuthConnectionStatus(ctx context.Context, oauthConnectionID int64, status, lastError string) error {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE oauth_connections
+		    SET status = $2,
+		        last_refresh_error = NULLIF($3, ''),
+		        last_refresh_at = CASE WHEN $2 = 'active' THEN NOW() ELSE last_refresh_at END,
+		        updated_at = NOW()
+		  WHERE id = $1`,
+		oauthConnectionID, status, lastError,
+	)
+	if err != nil {
+		return fmt.Errorf("update OAuth connection status: %w", err)
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("read OAuth connection status rows affected: %w", err)
+	} else if n == 0 {
+		return fmt.Errorf("OAuth connection %d not found", oauthConnectionID)
+	}
+	return nil
+}
+
+// FindLatestToken reads canonical columns and normalizes legacy aliases for
+// callers that still use the pre-083 model fields.
 func (r *TokenRepository) FindLatestToken(oauthConnectionID int64, tokenType string) (*models.Token, error) {
 	token := &models.Token{}
 	err := r.db.QueryRow(
-		`SELECT id, oauth_connection_id, platform_account_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes, created_at
-		 FROM tokens
-		 WHERE oauth_connection_id = $1 AND token_type = $2
-		 ORDER BY created_at DESC LIMIT 1`,
+		`SELECT t.id, t.oauth_connection_id, t.platform_account_id, t.token_type,
+		        t.encrypted_access_token, t.encrypted_token, t.encrypted_refresh_token,
+		        t.access_token_expires_at, t.expires_at, t.refresh_token_expires_at,
+		        COALESCE(NULLIF(oc.granted_scopes, '{}'::TEXT[]), oc.scopes), t.created_at
+		   FROM tokens t
+		   LEFT JOIN oauth_connections oc ON oc.id = t.oauth_connection_id
+		  WHERE t.oauth_connection_id = $1 AND t.token_type = $2
+		  ORDER BY t.created_at DESC LIMIT 1`,
 		oauthConnectionID, tokenType,
 	).Scan(&token.ID, &token.OAuthConnectionID, &token.PlatformAccountID, &token.TokenType,
-		&token.EncryptedToken, &token.EncryptedRefreshToken, &token.ExpiresAt, pq.Array(&token.Scopes), &token.CreatedAt)
-
+		&token.EncryptedAccessToken, &token.EncryptedToken, &token.EncryptedRefreshToken,
+		&token.AccessTokenExpiresAt, &token.ExpiresAt, &token.RefreshTokenExpiresAt,
+		pq.Array(&token.GrantedScopes), &token.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to find latest token: %w", err)
 	}
+	normalizeTokenAliases(token)
 	return token, nil
 }
 
-// DeleteToken deletes a single token by ID. Returns ErrTokenNotFound
-// (wrapped with id context) when no row matches — the API layer can
-// map to 404 via errors.Is. Used by revoke / disconnect flows that
-// should fail loudly on stale ids.
 func (r *TokenRepository) DeleteToken(tokenID int64) error {
 	result, err := r.db.Exec(`DELETE FROM tokens WHERE id = $1`, tokenID)
 	if err != nil {
@@ -157,18 +157,6 @@ func (r *TokenRepository) DeleteToken(tokenID int64) error {
 	return nil
 }
 
-// DeleteAllTokensForOAuthConnection removes all tokens for a given
-// oauth connection. Returns ErrTokenNotFound (wrapped with
-// oauth_connection_id context) when zero rows match — this is the
-// legitimate "connection has no tokens" idempotent case, e.g. on
-// user logout. Callers in revoke/disconnect flows should use
-// errors.Is(err, ErrTokenNotFound) to treat this as non-fatal.
-//
-// P0#3 retarget: was previously DeleteAllTokensForPlatformAccount
-// (keyed by platform_account_id); the @043 oauth_connections lineage
-// made the grant the more correct anchor, and migration 053
-// transitioned the tokens table itself to oauth_connection_id FK,
-// so this method's key matches the new schema.
 func (r *TokenRepository) DeleteAllTokensForOAuthConnection(oauthConnectionID int64) error {
 	result, err := r.db.Exec(`DELETE FROM tokens WHERE oauth_connection_id = $1`, oauthConnectionID)
 	if err != nil {
@@ -184,29 +172,12 @@ func (r *TokenRepository) DeleteAllTokensForOAuthConnection(oauthConnectionID in
 	return nil
 }
 
-// UpdateCiphertexts atomically replaces the encrypted_token column
-// for a single token row, with optimistic-concurrency guarding: the
-// UPDATE only fires if the row's current encrypted_token still
-// matches oldEncrypted. This is the lazy re-encrypt primitive the
-// vault uses on the Get() path when a row is stamped with a
-// non-active key id (or a legacy pre-Sprint-5.3 ciphertext).
-//
-// Concurrency contract: two workers reading the same stale row
-// race here. Worker A wins the UPDATE (its oldEncrypted matches),
-// row is now stamped with the active key. Worker B's UPDATE
-// affects 0 rows (its oldEncrypted no longer matches the new
-// state) and the method returns a "ciphertext stale" error.
-// The vault logs and ignores that error — the row was already
-// upgraded by A, so B's work is redundant.
-//
-// Returning the error is also a debugging signal: a non-zero rate
-// of "ciphertext stale" errors means many concurrent re-encrypts
-// are racing, which suggests a hot key (or a bug in the rotation
-// flow). Operators should see the log line and know what to look
-// at.
 func (r *TokenRepository) UpdateCiphertexts(tokenID int64, oldEncrypted, newEncrypted []byte) error {
 	result, err := r.db.Exec(
-		`UPDATE tokens SET encrypted_token = $1 WHERE id = $2 AND encrypted_token = $3`,
+		`UPDATE tokens
+		    SET encrypted_access_token = $1, encrypted_token = $1
+		  WHERE id = $2
+		    AND COALESCE(encrypted_access_token, encrypted_token) = $3`,
 		newEncrypted, tokenID, oldEncrypted,
 	)
 	if err != nil {
@@ -217,11 +188,82 @@ func (r *TokenRepository) UpdateCiphertexts(tokenID int64, oldEncrypted, newEncr
 		return fmt.Errorf("failed to read rows affected: %w", err)
 	}
 	if n == 0 {
-		// Either the row was deleted (rare, possible) or another
-		// worker already upgraded the ciphertext. Both are
-		// non-fatal for the vault's Get() caller, which swallows
-		// this specific error.
 		return fmt.Errorf("ciphertext stale: another re-encrypt already applied (id=%d)", tokenID)
 	}
 	return nil
+}
+
+func updateGrantScopesTx(tx *sql.Tx, oauthConnectionID int64, scopes []string) error {
+	if len(scopes) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(
+		`UPDATE oauth_connections SET granted_scopes = $2, scopes = $2, updated_at = NOW() WHERE id = $1`,
+		oauthConnectionID, pq.Array(scopes),
+	); err != nil {
+		return fmt.Errorf("failed to update OAuth grant scopes: %w", err)
+	}
+	return nil
+}
+
+func updateGrantScopesTxContext(ctx context.Context, tx *sql.Tx, oauthConnectionID int64, scopes []string) error {
+	if len(scopes) == 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE oauth_connections SET granted_scopes = $2, scopes = $2, updated_at = NOW() WHERE id = $1`,
+		oauthConnectionID, pq.Array(scopes),
+	); err != nil {
+		return fmt.Errorf("failed to update OAuth grant scopes (tx): %w", err)
+	}
+	return nil
+}
+
+func accessCiphertext(token *models.Token) []byte {
+	if len(token.EncryptedAccessToken) > 0 {
+		return token.EncryptedAccessToken
+	}
+	return token.EncryptedToken
+}
+
+func nullableCiphertext(ciphertext []byte) []byte {
+	if len(ciphertext) == 0 {
+		return nil
+	}
+	return ciphertext
+}
+
+func accessExpiresAt(token *models.Token) *time.Time {
+	if token.AccessTokenExpiresAt != nil {
+		return token.AccessTokenExpiresAt
+	}
+	return token.ExpiresAt
+}
+
+func grantedScopes(token *models.Token) []string {
+	if len(token.GrantedScopes) > 0 {
+		return token.GrantedScopes
+	}
+	return token.Scopes
+}
+
+func normalizeTokenAliases(token *models.Token) {
+	if len(token.EncryptedAccessToken) == 0 {
+		token.EncryptedAccessToken = token.EncryptedToken
+	}
+	if len(token.EncryptedToken) == 0 {
+		token.EncryptedToken = token.EncryptedAccessToken
+	}
+	if token.AccessTokenExpiresAt == nil {
+		token.AccessTokenExpiresAt = token.ExpiresAt
+	}
+	if token.ExpiresAt == nil {
+		token.ExpiresAt = token.AccessTokenExpiresAt
+	}
+	if len(token.Scopes) == 0 {
+		token.Scopes = append([]string(nil), token.GrantedScopes...)
+	}
+	if len(token.GrantedScopes) == 0 {
+		token.GrantedScopes = append([]string(nil), token.Scopes...)
+	}
 }

@@ -225,11 +225,12 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
 	}
 
 	tokenData := &models.TokenData{
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		TokenType:    models.TokenTypeBearer,
-		ExpiresIn:    tokenResp.ExpiresIn,
-		Scopes:       strings.Split(tokenResp.Scope, " "),
+		AccessToken:           tokenResp.AccessToken,
+		RefreshToken:          tokenResp.RefreshToken,
+		TokenType:             models.TokenTypeBearer,
+		ExpiresIn:             tokenResp.ExpiresIn,
+		RefreshTokenExpiresIn: tokenResp.RefreshTokenExpiresIn,
+		Scopes:                nonEmptyScopes(tokenResp.Scope),
 	}
 
 	return profile, tokenData, nil
@@ -301,11 +302,12 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 		refresh = refreshToken
 	}
 	return &models.TokenData{
-		AccessToken:  tr.AccessToken,
-		RefreshToken: refresh,
-		TokenType:    models.TokenTypeBearer,
-		ExpiresIn:    tr.ExpiresIn,
-		Scopes:       strings.Split(tr.Scope, " "),
+		AccessToken:           tr.AccessToken,
+		RefreshToken:          refresh,
+		TokenType:             models.TokenTypeBearer,
+		ExpiresIn:             tr.ExpiresIn,
+		RefreshTokenExpiresIn: tr.RefreshTokenExpiresIn,
+		Scopes:                nonEmptyScopes(tr.Scope),
 	}, nil
 }
 
@@ -479,11 +481,12 @@ type youtubeVideoProcessingDetails struct {
 // --- Private ---
 
 type youtubeTokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int64  `json:"expires_in"`
-	Scope        string `json:"scope"`
-	RefreshToken string `json:"refresh_token"`
+	AccessToken           string `json:"access_token"`
+	TokenType             string `json:"token_type"`
+	ExpiresIn             int64  `json:"expires_in"`
+	Scope                 string `json:"scope"`
+	RefreshToken          string `json:"refresh_token"`
+	RefreshTokenExpiresIn int64  `json:"refresh_token_expires_in"`
 }
 
 func (s *YouTubeOAuthService) exchangeCodeForToken(ctx context.Context, code string) (*youtubeTokenResponse, error) {

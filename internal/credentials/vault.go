@@ -83,6 +83,13 @@ type TokenStore interface {
 	SaveTokenTx(ctx context.Context, tx *sql.Tx, token *models.Token) error
 }
 
+// GrantStatusStore is implemented by stores that persist OAuth-grant health.
+// It is optional so in-memory/test stores and older integrations remain
+// source-compatible while migration 083 rolls out.
+type GrantStatusStore interface {
+	UpdateOAuthConnectionStatus(ctx context.Context, oauthConnectionID int64, status, lastError string) error
+}
+
 // VaultAPI is the narrow contract the HTTP router and publish worker use
 // to talk to the credential layer. It is implemented by *CredentialVault
 // in production and by test mocks in pkg/api and internal/worker.
@@ -235,8 +242,21 @@ func (v *CredentialVault) saveForOAuthConnection(ctx context.Context, oauthConne
 				}
 				tokenData.RefreshToken = refresh
 			}
-			if len(tokenData.Scopes) == 0 && len(existing.Scopes) > 0 {
-				tokenData.Scopes = append([]string(nil), existing.Scopes...)
+			if len(tokenData.Scopes) == 0 {
+				scopes := existing.GrantedScopes
+				if len(scopes) == 0 {
+					scopes = existing.Scopes
+				}
+				tokenData.Scopes = append([]string(nil), scopes...)
+			}
+			if tokenData.RefreshTokenExpiresIn <= 0 && existing.RefreshTokenExpiresAt != nil {
+				remaining := existing.RefreshTokenExpiresAt.Sub(v.clock())
+				if remaining > 0 {
+					tokenData.RefreshTokenExpiresIn = int64(remaining / time.Second)
+					if tokenData.RefreshTokenExpiresIn < 1 {
+						tokenData.RefreshTokenExpiresIn = 1
+					}
+				}
 			}
 		}
 	}
@@ -252,14 +272,22 @@ func (v *CredentialVault) saveForOAuthConnection(ctx context.Context, oauthConne
 		}
 	}
 	expiresAt := v.clock().Add(time.Duration(tokenData.ExpiresIn) * time.Second)
+	var refreshExpiresAt *time.Time
+	if tokenData.RefreshTokenExpiresIn > 0 {
+		expires := v.clock().Add(time.Duration(tokenData.RefreshTokenExpiresIn) * time.Second)
+		refreshExpiresAt = &expires
+	}
 	token := &models.Token{
 		PlatformAccountID:     platformAccountID,
 		OAuthConnectionID:     oauthConnectionID,
 		TokenType:             tokenData.TokenType,
+		EncryptedAccessToken:  encrypted,
 		EncryptedToken:        encrypted,
 		EncryptedRefreshToken: encryptedRefresh,
+		AccessTokenExpiresAt:  &expiresAt,
 		ExpiresAt:             &expiresAt,
-		Scopes:                tokenData.Scopes,
+		RefreshTokenExpiresAt: refreshExpiresAt,
+		Scopes:                tokenData.Scopes, GrantedScopes: tokenData.Scopes,
 	}
 	if err := v.store.SaveToken(token); err != nil {
 		return fmt.Errorf("vault: failed to persist token: %w", err)
@@ -319,22 +347,30 @@ func (v *CredentialVault) Get(ctx context.Context, platformAccountID int64, toke
 	if stored == nil {
 		return nil, fmt.Errorf("vault: no token for account %d (type: %s)", platformAccountID, tokenType)
 	}
-	if stored.ExpiresAt != nil && v.clock().After(*stored.ExpiresAt) {
-		return nil, fmt.Errorf("vault: token expired at %s", stored.ExpiresAt.Format(time.RFC3339))
+	accessExpiresAt := stored.AccessTokenExpiresAt
+	if accessExpiresAt == nil {
+		accessExpiresAt = stored.ExpiresAt
 	}
-	decrypted, err := v.encryptor.Decrypt(stored.EncryptedToken)
+	if accessExpiresAt != nil && v.clock().After(*accessExpiresAt) {
+		return nil, fmt.Errorf("vault: token expired at %s", accessExpiresAt.Format(time.RFC3339))
+	}
+	accessCiphertext := stored.EncryptedAccessToken
+	if len(accessCiphertext) == 0 {
+		accessCiphertext = stored.EncryptedToken
+	}
+	decrypted, err := v.encryptor.Decrypt(accessCiphertext)
 	if err != nil {
 		return nil, fmt.Errorf("vault: failed to decrypt access token: %w", err)
 	}
 	// Lazy re-encrypt: idempotent + race-safe (see godoc).
-	if v.encryptor.NeedsRotation(stored.EncryptedToken) {
+	if v.encryptor.NeedsRotation(accessCiphertext) {
 		newCiphertext, reencErr := v.encryptor.Encrypt(decrypted)
 		if reencErr != nil {
 			// Best-effort: log and continue. The read still
 			// succeeds; a future read will retry the re-encrypt.
 			slog.Warn("vault: lazy re-encrypt failed (will retry on next read)",
 				"token_id", stored.ID, "error", reencErr)
-		} else if err := v.store.UpdateCiphertexts(stored.ID, stored.EncryptedToken, newCiphertext); err != nil {
+		} else if err := v.store.UpdateCiphertexts(stored.ID, accessCiphertext, newCiphertext); err != nil {
 			// Log-level split (Blocco #2.2 follow-up):
 			//   - "ciphertext stale" is the EXPECTED race-loser
 			//     case (concurrent workers, only one wins the
@@ -355,11 +391,15 @@ func (v *CredentialVault) Get(ctx context.Context, platformAccountID int64, toke
 			}
 		}
 	}
+	scopes := stored.GrantedScopes
+	if len(scopes) == 0 {
+		scopes = stored.Scopes
+	}
 	return &models.OAuthToken{
 		AccessToken: decrypted,
 		TokenType:   stored.TokenType,
-		ExpiresAt:   stored.ExpiresAt,
-		Scopes:      stored.Scopes,
+		ExpiresAt:   accessExpiresAt,
+		Scopes:      scopes,
 	}, nil
 }
 
@@ -484,12 +524,23 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 
 	newTokenData, err := refresher(ctx, refreshToken)
 	if err != nil {
+		status, code := classifyRefreshFailure(err)
+		_ = lockTx.Rollback()
+		committed = true
+		if statusErr := v.updateGrantStatus(ctx, oauthConnectionID, status, code); statusErr != nil {
+			return nil, fmt.Errorf("vault: refresh failed: %w (grant status update failed: %v)", err, statusErr)
+		}
 		return nil, fmt.Errorf("vault: refresh failed: %w", err)
 	}
 
 	// Save via the lookup-free sibling — the resolved oid is the
 	// canonical key for this row.
 	if err := v.saveForOAuthConnection(ctx, oauthConnectionID, platformAccountID, newTokenData, false); err != nil {
+		_ = lockTx.Rollback()
+		committed = true
+		if statusErr := v.updateGrantStatus(ctx, oauthConnectionID, "error", "persist_failed"); statusErr != nil {
+			return nil, fmt.Errorf("vault: persist refreshed token: %w (grant status update failed: %v)", err, statusErr)
+		}
 		return nil, fmt.Errorf("vault: persist refreshed token: %w", err)
 	}
 
@@ -497,6 +548,9 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 		return nil, fmt.Errorf("vault: commit lock tx: %w", err)
 	}
 	committed = true
+	if err := v.updateGrantStatus(ctx, oauthConnectionID, models.AccountStatusActive, ""); err != nil {
+		return nil, fmt.Errorf("vault: refreshed token committed but grant status update failed: %w", err)
+	}
 
 	// Final read — fresh ciphertext was just persisted; the stored row
 	// is now the latest write by THIS transaction. Pass the just-written
@@ -532,15 +586,27 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 // extra resolver lookup) or explicitly extend the godoc with the
 // additional invariant.
 func (v *CredentialVault) toOAuthToken(stored *models.Token) (*models.OAuthToken, error) {
-	decrypted, err := v.encryptor.Decrypt(stored.EncryptedToken)
+	accessCiphertext := stored.EncryptedAccessToken
+	if len(accessCiphertext) == 0 {
+		accessCiphertext = stored.EncryptedToken
+	}
+	decrypted, err := v.encryptor.Decrypt(accessCiphertext)
 	if err != nil {
 		return nil, fmt.Errorf("vault: decrypt stored token inside lock: %w", err)
+	}
+	accessExpiresAt := stored.AccessTokenExpiresAt
+	if accessExpiresAt == nil {
+		accessExpiresAt = stored.ExpiresAt
+	}
+	scopes := stored.GrantedScopes
+	if len(scopes) == 0 {
+		scopes = stored.Scopes
 	}
 	return &models.OAuthToken{
 		AccessToken: decrypted,
 		TokenType:   stored.TokenType,
-		ExpiresAt:   stored.ExpiresAt,
-		Scopes:      stored.Scopes,
+		ExpiresAt:   accessExpiresAt,
+		Scopes:      scopes,
 	}, nil
 }
 
@@ -596,13 +662,32 @@ func (v *CredentialVault) extractRefreshMaterial(stored *models.Token, tokenType
 	if tokenType == models.TokenTypeLongLived {
 		// Meta fallback: the long-lived access token itself serves as
 		// the "refresh token" for fb_exchange_token.
-		decrypted, err := v.encryptor.Decrypt(stored.EncryptedToken)
+		accessCiphertext := stored.EncryptedAccessToken
+		if len(accessCiphertext) == 0 {
+			accessCiphertext = stored.EncryptedToken
+		}
+		decrypted, err := v.encryptor.Decrypt(accessCiphertext)
 		if err != nil {
 			return "", fmt.Errorf("vault: decrypt access for meta re-exchange: %w", err)
 		}
 		return decrypted, nil
 	}
 	return "", fmt.Errorf("vault: token expired and no refresh token available for account %d (type %s)", stored.PlatformAccountID, tokenType)
+}
+
+func (v *CredentialVault) updateGrantStatus(ctx context.Context, oauthConnectionID int64, status, lastError string) error {
+	store, ok := v.store.(GrantStatusStore)
+	if !ok {
+		return nil
+	}
+	return store.UpdateOAuthConnectionStatus(ctx, oauthConnectionID, status, lastError)
+}
+
+func classifyRefreshFailure(err error) (status, code string) {
+	if strings.Contains(strings.ToLower(err.Error()), "invalid_grant") {
+		return models.AccountStatusReauthRequired, "invalid_grant"
+	}
+	return "error", "refresh_failed"
 }
 
 func isExpiryError(err error) bool {

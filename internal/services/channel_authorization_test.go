@@ -24,6 +24,15 @@ import (
 // the actual value is not asserted.
 var serviceTime = time.Date(2026, 7, 20, 18, 0, 0, 0, time.UTC)
 
+const expectTokenInsertSQL = `INSERT INTO tokens (
+                platform_account_id, oauth_connection_id, token_type,
+                encrypted_access_token, encrypted_token, encrypted_refresh_token,
+                access_token_expires_at, expires_at, refresh_token_expires_at)
+         VALUES ($1::BIGINT, $2::BIGINT, $3::VARCHAR, $4::BYTEA, $4::BYTEA,
+                 COALESCE($5::BYTEA, (SELECT encrypted_refresh_token FROM tokens WHERE oauth_connection_id = $2::BIGINT AND token_type = $3::VARCHAR ORDER BY created_at DESC LIMIT 1)),
+                 $6::TIMESTAMPTZ, $6::TIMESTAMPTZ,
+                 COALESCE($7::TIMESTAMPTZ, (SELECT refresh_token_expires_at FROM tokens WHERE oauth_connection_id = $2::BIGINT AND token_type = $3::VARCHAR ORDER BY created_at DESC LIMIT 1))) RETURNING id, created_at`
+
 // ---- helpers --------------------------------------------------------------
 
 // fakeBinder captures the (accessToken, expectedChannelID) pair the
@@ -86,10 +95,11 @@ func expectLoadAccount(mock sqlmock.Sqlmock, id, userID int64, platform, platfor
 // oauth_connections.
 func expectUpsertOCR(mock sqlmock.Sqlmock, userID int64, provider, puID string, scopes []string, returnsID int64) {
 	mock.ExpectQuery(
-		`INSERT INTO oauth_connections (user_id, provider, provider_resource_id, scopes, last_validated_at)
-		 VALUES ($1, $2, $3, $4, NOW())
+		`INSERT INTO oauth_connections (user_id, provider, provider_resource_id, scopes, granted_scopes, last_validated_at)
+		 VALUES ($1, $2, $3, $4, $4, NOW())
 		 ON CONFLICT (user_id, provider, provider_resource_id)
 		 DO UPDATE SET scopes = EXCLUDED.scopes,
+		               granted_scopes = EXCLUDED.granted_scopes,
 		               last_validated_at = NOW(),
 		               updated_at = NOW()
 		 RETURNING id`,
@@ -102,15 +112,19 @@ func expectUpsertOCR(mock sqlmock.Sqlmock, userID int64, provider, puID string, 
 // It returns an empty id from RETURNING because the service does NOT
 // require the inserted id to be propagated back to the Token row (the
 // flow stamps ID but the service ignores it after).
-func expectInsertTokenTx(mock sqlmock.Sqlmock) {
-	mock.ExpectQuery(`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`).
+func expectInsertTokenTx(mock sqlmock.Sqlmock, expectScopes bool) {
+	mock.ExpectQuery(expectTokenInsertSQL).
 		WithArgs(
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(1), serviceTime))
+	if expectScopes {
+		mock.ExpectExec(`UPDATE oauth_connections SET granted_scopes = $2, scopes = $2, updated_at = NOW() WHERE id = $1`).
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
 	// Pruner (DELETE older rows same oauth_connection_id + token_type).
 	mock.ExpectExec(`DELETE FROM tokens WHERE oauth_connection_id = $1 AND token_type = $2 AND id <> $3`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
@@ -149,7 +163,7 @@ func TestAuthorizeChannel_HappyPath(t *testing.T) {
 	mock.ExpectBegin()
 	expectLoadAccount(mock, accountID, userID, "youtube", "UCabcdefghijklmnopqrstuv", models.AccountStatusPendingAuthorization)
 	expectUpsertOCR(mock, userID, "youtube", "UCabcdefghijklmnopqrstuv", []string{"https://www.googleapis.com/auth/youtube.upload"}, oauthConnID)
-	expectInsertTokenTx(mock)
+	expectInsertTokenTx(mock, true)
 	expectPromoteAccount(mock, oauthConnID, accountID)
 	mock.ExpectCommit()
 
@@ -204,8 +218,7 @@ func TestAcceptance_VaultFailureRollsBackAndStatusNotFlipped(t *testing.T) {
 	// platform_accounts follows — sqlmock's lack of an
 	// ExpectExec for the UPDATE + ExpectCommit would catch a
 	// regression where the service issues them anyway.
-	mock.ExpectQuery(`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`).
+	mock.ExpectQuery(expectTokenInsertSQL).
 		WithArgs(
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
@@ -261,8 +274,7 @@ func TestAcceptance_VaultFailureWithNilBinder(t *testing.T) {
 	mock.ExpectBegin()
 	expectLoadAccount(mock, 11, 123, "facebook", "1234567890", models.AccountStatusPendingAuthorization)
 	expectUpsertOCR(mock, 123, "facebook", "1234567890", []string{"pages_show_list"}, 888)
-	mock.ExpectQuery(`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`).
+	mock.ExpectQuery(expectTokenInsertSQL).
 		WithArgs(
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
@@ -485,8 +497,8 @@ func TestAuthorizeChannel_MultiTokenAtomicallyPersisted(t *testing.T) {
 	mock.ExpectBegin()
 	expectLoadAccount(mock, accountID, userID, "facebook", "1234567890", models.AccountStatusPendingAuthorization)
 	expectUpsertOCR(mock, userID, "facebook", "1234567890", []string{"pages_show_list"}, oauthConnID)
-	expectInsertTokenTx(mock)
-	expectInsertTokenTx(mock)
+	expectInsertTokenTx(mock, false)
+	expectInsertTokenTx(mock, false)
 	expectPromoteAccount(mock, oauthConnID, accountID)
 	mock.ExpectCommit()
 
@@ -530,10 +542,9 @@ func TestAuthorizeChannel_SecondTokenFailureRollsBackFirstAndOCR(t *testing.T) {
 	expectLoadAccount(mock, accountID, userID, "facebook", "1234567890", models.AccountStatusPendingAuthorization)
 	expectUpsertOCR(mock, userID, "facebook", "1234567890", []string{"pages_show_list"}, 1111)
 	// First token: succeeds.
-	expectInsertTokenTx(mock)
+	expectInsertTokenTx(mock, false)
 	// Second token's INSERT: fails.
-	mock.ExpectQuery(`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`).
+	mock.ExpectQuery(expectTokenInsertSQL).
 		WithArgs(
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
@@ -598,7 +609,7 @@ func TestAuthorizeChannel_ReauthKeepsSameOAuthConnection(t *testing.T) {
 	mock.ExpectBegin()
 	expectLoadAccount(mock, accountID, userID, "youtube", "UCabcdefghijklmnopqrstuv", models.AccountStatusPendingAuthorization)
 	expectUpsertOCR(mock, userID, "youtube", "UCabcdefghijklmnopqrstuv", scopes, oauthConnID)
-	expectInsertTokenTx(mock)
+	expectInsertTokenTx(mock, true)
 	expectPromoteAccount(mock, oauthConnID, accountID)
 	mock.ExpectCommit()
 
@@ -609,7 +620,7 @@ func TestAuthorizeChannel_ReauthKeepsSameOAuthConnection(t *testing.T) {
 	mock.ExpectBegin()
 	expectLoadAccount(mock, accountID, userID, "youtube", "UCabcdefghijklmnopqrstuv", models.AccountStatusActive)
 	expectUpsertOCR(mock, userID, "youtube", "UCabcdefghijklmnopqrstuv", scopes, oauthConnID)
-	expectInsertTokenTx(mock) // includes pruner DELETE
+	expectInsertTokenTx(mock, true) // includes pruner DELETE
 	expectPromoteAccount(mock, oauthConnID, accountID)
 	mock.ExpectCommit()
 

@@ -230,12 +230,21 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 			exp := time.Now().Add(time.Duration(td.ExpiresIn) * time.Second)
 			expiresAt = &exp
 		}
+		var refreshExpiresAt *time.Time
+		if td.RefreshTokenExpiresIn > 0 {
+			exp := time.Now().Add(time.Duration(td.RefreshTokenExpiresIn) * time.Second)
+			refreshExpiresAt = &exp
+		}
 		encrypted[i] = &models.Token{
 			PlatformAccountID:     accountID,
 			TokenType:             td.TokenType,
+			EncryptedAccessToken:  encAccess,
 			EncryptedToken:        encAccess,
 			EncryptedRefreshToken: encRefresh,
+			AccessTokenExpiresAt:  expiresAt,
 			ExpiresAt:             expiresAt,
+			RefreshTokenExpiresAt: refreshExpiresAt,
+			GrantedScopes:         td.Scopes,
 			Scopes:                td.Scopes,
 		}
 	}
@@ -305,10 +314,11 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 	// "converting argument $4 type: unsupported type []string"
 	// driver error.
 	if upsertErr := tx.QueryRowContext(ctx,
-		`INSERT INTO oauth_connections (user_id, provider, provider_resource_id, scopes, last_validated_at)
-		 VALUES ($1, $2, $3, $4, NOW())
+		`INSERT INTO oauth_connections (user_id, provider, provider_resource_id, scopes, granted_scopes, last_validated_at)
+		 VALUES ($1, $2, $3, $4, $4, NOW())
 		 ON CONFLICT (user_id, provider, provider_resource_id)
 		 DO UPDATE SET scopes = EXCLUDED.scopes,
+		               granted_scopes = EXCLUDED.granted_scopes,
 		               last_validated_at = NOW(),
 		               updated_at = NOW()
 		 RETURNING id`,

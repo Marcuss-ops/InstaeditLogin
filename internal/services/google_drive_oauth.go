@@ -225,11 +225,12 @@ func (s *GoogleDriveOAuthService) HandleCallback(ctx context.Context, state, cod
 		return nil, nil, fmt.Errorf("google drive user info: %w", err)
 	}
 	return profile, &models.TokenData{
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		TokenType:    models.TokenTypeBearer,
-		ExpiresIn:    tokenResp.ExpiresIn,
-		Scopes:       strings.Split(tokenResp.Scope, " "),
+		AccessToken:           tokenResp.AccessToken,
+		RefreshToken:          tokenResp.RefreshToken,
+		TokenType:             models.TokenTypeBearer,
+		ExpiresIn:             tokenResp.ExpiresIn,
+		RefreshTokenExpiresIn: tokenResp.RefreshTokenExpiresIn,
+		Scopes:                nonEmptyScopes(tokenResp.Scope),
 	}, nil
 }
 
@@ -268,11 +269,12 @@ func (s *GoogleDriveOAuthService) RefreshOAuthToken(ctx context.Context, refresh
 		tr.RefreshToken = refreshToken
 	}
 	return &models.TokenData{
-		AccessToken:  tr.AccessToken,
-		RefreshToken: tr.RefreshToken,
-		TokenType:    models.TokenTypeBearer,
-		ExpiresIn:    tr.ExpiresIn,
-		Scopes:       strings.Split(tr.Scope, " "),
+		AccessToken:           tr.AccessToken,
+		RefreshToken:          tr.RefreshToken,
+		TokenType:             models.TokenTypeBearer,
+		ExpiresIn:             tr.ExpiresIn,
+		RefreshTokenExpiresIn: tr.RefreshTokenExpiresIn,
+		Scopes:                nonEmptyScopes(tr.Scope),
 	}, nil
 }
 
@@ -409,11 +411,12 @@ func (s *GoogleDriveOAuthService) getUserInfo(ctx context.Context, accessToken s
 }
 
 type googleDriveTokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int64  `json:"expires_in"`
-	Scope        string `json:"scope"`
-	RefreshToken string `json:"refresh_token"`
+	AccessToken           string `json:"access_token"`
+	TokenType             string `json:"token_type"`
+	ExpiresIn             int64  `json:"expires_in"`
+	Scope                 string `json:"scope"`
+	RefreshToken          string `json:"refresh_token"`
+	RefreshTokenExpiresIn int64  `json:"refresh_token_expires_in"`
 }
 
 // GoogleDriveFile is the subset of the Drive v3 file resource the

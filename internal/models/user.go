@@ -103,25 +103,49 @@ type PlatformAccount struct {
 // Metadata is a generic JSONB container for platform-specific account data.
 type Metadata map[string]interface{}
 
-// Token represents an encrypted OAuth token stored in the database.
+// Token represents an encrypted OAuth token stored for an OAuth grant.
+//
+// EncryptedAccessToken, AccessTokenExpiresAt and GrantedScopes are the
+// canonical names introduced by migration 083. EncryptedToken, ExpiresAt
+// and Scopes remain deprecated compatibility aliases while existing
+// installations and migrations are being retired.
 type Token struct {
 	ID                int64 `json:"id"`
 	PlatformAccountID int64 `json:"platform_account_id,omitempty"`
-	// OAuthConnectionID (P0#3 — migration 053) is the vault's PRIMARY
-	// storage key. The vault resolves it from platform_account_id via
-	// platform_accounts.oauth_connection_id on every Save/Get/Renew/Revoke
-	// (the lookup is a single indexed SELECT — the resolver is internal to
-	// internal/credentials/vault.go so caller signatures stay
-	// backwards-compatible on platformAccountID). Set after migration 053
-	// has applied; pre-053 rows have it populated by the migration's
-	// backfill, NOT NULL.
-	OAuthConnectionID     int64      `json:"-"`
-	TokenType             string     `json:"token_type"`
-	EncryptedToken        []byte     `json:"-"`
+	// OAuthConnectionID is the canonical grant lineage key (migration 053).
+	OAuthConnectionID int64  `json:"-"`
+	TokenType         string `json:"token_type"`
+
+	EncryptedAccessToken  []byte     `json:"-"`
 	EncryptedRefreshToken []byte     `json:"-"`
-	ExpiresAt             *time.Time `json:"expires_at,omitempty"`
-	Scopes                []string   `json:"scopes"`
-	CreatedAt             time.Time  `json:"created_at"`
+	AccessTokenExpiresAt  *time.Time `json:"access_token_expires_at,omitempty"`
+	RefreshTokenExpiresAt *time.Time `json:"refresh_token_expires_at,omitempty"`
+	GrantedScopes         []string   `json:"granted_scopes,omitempty"`
+
+	// Deprecated: use EncryptedAccessToken, AccessTokenExpiresAt and
+	// GrantedScopes. These fields mirror the legacy database columns and
+	// are kept for compatibility with older callers and fixtures.
+	EncryptedToken []byte     `json:"-"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	Scopes         []string   `json:"scopes,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
+// OAuthConnection represents the lifecycle state of one provider OAuth grant.
+// Channel-specific identity belongs to PlatformAccount; these fields are
+// shared by every account linked to the same grant.
+type OAuthConnection struct {
+	ID                 int64      `json:"id"`
+	UserID             int64      `json:"user_id"`
+	Provider           string     `json:"provider"`
+	ProviderSubjectID  string     `json:"provider_subject_id"`
+	ProviderResourceID string     `json:"provider_resource_id"`
+	Status             string     `json:"status"`
+	GrantedScopes      []string   `json:"granted_scopes,omitempty"`
+	LastRefreshAt      *time.Time `json:"last_refresh_at,omitempty"`
+	LastRefreshError   string     `json:"last_refresh_error,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // Token types
@@ -152,11 +176,12 @@ type PlatformProfile struct {
 // RefreshToken is populated when the platform issues one (YouTube, Twitter, TikTok).
 // Meta long-lived tokens do not produce a refresh token.
 type TokenData struct {
-	AccessToken  string
-	RefreshToken string
-	TokenType    string
-	ExpiresIn    int64
-	Scopes       []string
+	AccessToken           string
+	RefreshToken          string
+	TokenType             string
+	ExpiresIn             int64
+	RefreshTokenExpiresIn int64
+	Scopes                []string
 }
 
 // PublishPayload is the content to publish on a platform.
