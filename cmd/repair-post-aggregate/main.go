@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,19 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
+var errYouTubePublicationNotFound = errors.New("youtube publication not found")
+var errPostTargetAssociationNotFound = errors.New("post target association not found")
+
+func repairOutcome(err error) string {
+	if errors.Is(err, errYouTubePublicationNotFound) || errors.Is(err, errPostTargetAssociationNotFound) {
+		return "not_found"
+	}
+	if err != nil {
+		return "operation_failed"
+	}
+	return "repaired"
+}
+
 func main() {
 	videoID := flag.String("youtube-video-id", "", "YouTube video ID whose parent aggregate should be repaired (required)")
 	flag.Parse()
@@ -25,10 +39,17 @@ func main() {
 	}
 
 	if err := run(*videoID); err != nil {
+		if repairOutcome(err) == "not_found" {
+			// A missing association is a safe, successful no-op: there is
+			// no post target to repair. Keep the outcome explicit without
+			// logging wrapped DB/configuration details.
+			slog.Info("post aggregate repair skipped", "outcome", "not_found")
+			return
+		}
 		// Never log the wrapped error: config/database errors can contain
 		// deployment-specific connection details. The operator gets a
 		// stable, secret-free outcome while the process still exits non-zero.
-		slog.Error("post aggregate repair failed", "error_class", "operation_failed")
+		slog.Error("post aggregate repair failed", "error_class", repairOutcome(err))
 		os.Exit(1)
 	}
 }
@@ -54,7 +75,7 @@ func run(videoID string) error {
 		return fmt.Errorf("lookup YouTube publication: %w", err)
 	}
 	if pub == nil {
-		return fmt.Errorf("YouTube publication not found")
+		return errYouTubePublicationNotFound
 	}
 
 	postTargets := repository.NewPostRepository(db)
@@ -63,7 +84,7 @@ func run(videoID string) error {
 		return fmt.Errorf("lookup post target: %w", err)
 	}
 	if target == nil {
-		return fmt.Errorf("post target not found")
+		return errPostTargetAssociationNotFound
 	}
 
 	oldStatus, newStatus, changed, err := postTargets.RepairAggregateStatusForPost(target.PostID)
