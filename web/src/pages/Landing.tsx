@@ -6,6 +6,7 @@ import { Features } from "./landing/Features";
 import { EarningsEstimates } from "./landing/EarningsEstimates";
 import { ResultsSection } from "./landing/ResultsSection";
 import { FounderStory } from "./landing/FounderStory";
+import { Testimonials } from "./landing/Testimonials";
 import { FAQ } from "./landing/FAQ";
 import { FinalCTA } from "./landing/FinalCTA";
 import { Footer } from "./landing/Footer";
@@ -25,6 +26,7 @@ export function Landing() {
       <Features />
       <ResultsSection />
       <FounderStory />
+      <Testimonials />
       <FAQ />
       <FinalCTA />
       <Footer />

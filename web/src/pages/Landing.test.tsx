@@ -51,4 +51,32 @@ describe("Landing", () => {
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
+
+  it("renders the testimonials section between the founder story and the FAQ", () => {
+    render(
+      <MemoryRouter>
+        <BookingProvider>
+          <Landing />
+        </BookingProvider>
+      </MemoryRouter>,
+    );
+
+    const testimonialsSection = screen
+      .getByRole("heading", { name: /own words\./i })
+      .closest("section");
+    const founderSection = screen
+      .getByRole("heading", { name: /How InstaEdit/i })
+      .closest("section");
+    const faqHeading = screen.getByRole("heading", { name: /Questions\?/i });
+
+    expect(testimonialsSection).not.toBeNull();
+    // Testimonials come after the founder story…
+    expect(founderSection?.compareDocumentPosition(testimonialsSection!)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // …and before the FAQ.
+    expect(testimonialsSection?.compareDocumentPosition(faqHeading)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
 });
