@@ -21,5 +21,13 @@
  *     pointing at the deployed Go API host.
  *
  */
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+const publicHost =
+  typeof window !== "undefined" && window.location.hostname.endsWith("instaedit.org");
+
+// Never let a production/dev-host bundle call the browser's localhost. The
+// explicit VITE value remains the deployment override; this host-aware
+// fallback keeps a manually built public bundle usable even when the build
+// environment forgot to provide it.
 export const API_BASE_URL: string =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+  configuredApiBaseUrl || (publicHost ? "https://dev.instaedit.org" : "http://localhost:8080");
