@@ -4,33 +4,33 @@
 // /api/v1/accounts/{platform_account_id}/performance endpoint
 // enforces:
 //
-//   1. workspace + user ownership of the platform account
-//      (no cross-tenant leak: 404 covers both missing and
-//      wrong-workspace probes);
+//  1. workspace + user ownership of the platform account
+//     (no cross-tenant leak: 404 covers both missing and
+//     wrong-workspace probes);
 //
-//   2. platform-type gate (the endpoint is YouTube-only today;
-//      Instagram / TikTok / etc. resolve the same package's
-//      channels later);
+//  2. platform-type gate (the endpoint is YouTube-only today;
+//     Instagram / TikTok / etc. resolve the same package's
+//     channels later);
 //
-//   3. YouTube channel id resolution
-//      (account.Metadata["channel_id"] must be populated; missing
-//      → 422 re-link required);
+//  3. YouTube channel id resolution
+//     (account.Metadata["channel_id"] must be populated; missing
+//     → 422 re-link required);
 //
-//   4. period resolution (7 | 14 | 28, UTC);
+//  4. period resolution (7 | 14 | 28, UTC);
 //
-//   5. history fetch covering BOTH [previous_start, end] windows
-//      in a single repository call (avoids in-flight drift);
+//  5. history fetch covering BOTH [previous_start, end] windows
+//     in a single repository call (avoids in-flight drift);
 //
-//   6. video retrieval via VideoMetricsLister (the per-video
-//      metrics source — concrete impl lands in a follow-up
-//      commit; the no-op default today returns empty ranking so
-//      the rest of the pipeline stays green);
+//  6. video retrieval via VideoMetricsLister (the per-video
+//     metrics source — concrete impl lands in a follow-up
+//     commit; the no-op default today returns empty ranking so
+//     the rest of the pipeline stays green);
 //
-//   7. trending rank via analytics.ScoreGrowing +
-//      analytics.RankMostViewed (Step 5 scorer, locked in by
-//      contract);
+//  7. trending rank via analytics.ScoreGrowing +
+//     analytics.RankMostViewed (Step 5 scorer, locked in by
+//     contract);
 //
-//   8. DTO assembly via assembleChannelPerformance.
+//  8. DTO assembly via assembleChannelPerformance.
 //
 // The handler stays thin: it parses ?days=, parses path id, reads
 // identity from ctx, then calls GetChannelPerformance. Error
@@ -47,6 +47,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
@@ -134,6 +135,7 @@ type ChannelAnalyticsService struct {
 	accountStore AccountStore
 	historyStore MetricHistoryStore
 	videoLister  VideoMetricsLister
+	clock        analytics.Clock
 }
 
 // NewChannelAnalyticsService constructs a service with the
@@ -149,6 +151,7 @@ func NewChannelAnalyticsService(
 		accountStore: accountStore,
 		historyStore: historyStore,
 		videoLister:  NoOpVideoMetricsLister{},
+		clock:        analytics.RealClock{},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -160,6 +163,30 @@ func NewChannelAnalyticsService(
 // constructor accepts. Keeps NewChannelAnalyticsService's
 // positional signature stable across dependency additions.
 type ChannelAnalyticsServiceOption func(*ChannelAnalyticsService)
+
+// WithAnalyticsClock injects the clock used for both period resolution and
+// generated-at/freshness calculations. Production defaults to RealClock;
+// tests should pass FixedClock.
+func WithAnalyticsClock(clock analytics.Clock) ChannelAnalyticsServiceOption {
+	return func(s *ChannelAnalyticsService) {
+		if !isNilAnalyticsClock(clock) {
+			s.clock = clock
+		}
+	}
+}
+
+func isNilAnalyticsClock(clock analytics.Clock) bool {
+	if clock == nil {
+		return true
+	}
+	value := reflect.ValueOf(clock)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
 
 // WithVideoLister replaces the default NoOpVideoMetricsLister.
 // Production wiring will be WithVideoLister(&youtubeVideoLister{...}).
@@ -236,9 +263,14 @@ func (s *ChannelAnalyticsService) GetChannelPerformance(
 		return analytics.ChannelPerformanceResponse{}, ErrYouTubeChannelIDMissing
 	}
 
-	// 4. Period resolution. Rejects values outside the closed
-	//    {7,14,28} set with analytics.ErrInvalidPeriod.
-	period, err := analytics.Resolve(days)
+	// 4. Period resolution. Anchor the entire request to one instant so
+	// period boundaries and generated_at cannot drift across midnight.
+	clock := s.clock
+	if isNilAnalyticsClock(clock) {
+		clock = analytics.RealClock{}
+	}
+	anchoredNow := clock.Now().UTC()
+	period, err := analytics.NewResolver().WithClock(analytics.NewFixedClock(anchoredNow)).Resolve(days)
 	if err != nil {
 		return analytics.ChannelPerformanceResponse{}, err
 	}
@@ -260,7 +292,11 @@ func (s *ChannelAnalyticsService) GetChannelPerformance(
 	//    factor. The NoOpVideoMetricsLister today returns an
 	//    empty slice; the production YouTube-backed
 	//    implementation lands in a follow-up commit.
-	videos, err := s.videoLister.ListRecentVideos(
+	videoLister := s.videoLister
+	if videoLister == nil {
+		videoLister = NoOpVideoMetricsLister{}
+	}
+	videos, err := videoLister.ListRecentVideos(
 		ctx,
 		channelID,
 		period.PreviousStartDate,

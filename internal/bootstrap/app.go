@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
@@ -323,6 +324,7 @@ func Wire(ctx context.Context) (*App, error) {
 
 	rateLimitRepo := repository.NewRateLimitRepository(db)
 	rateLimitSvc := services.NewRateLimitServiceWithMemory(rateLimitRepo, memoryLimiter)
+	analyticsClock := analytics.RealClock{}
 
 	webhookRepo := repository.NewWebhookRepository(db)
 
@@ -427,8 +429,10 @@ func Wire(ctx context.Context) (*App, error) {
 			api.NewChannelAnalyticsService(
 				userRepo,
 				repository.NewAccountMetricsRepository(db),
+				api.WithAnalyticsClock(analyticsClock),
 			),
 		),
+		api.WithRouterAnalyticsClock(analyticsClock),
 		api.WithYouTubeVideoEditStore(youtubeVideoEditRepo),
 		api.WithContentPipelineStore(contentPipelineRepo),
 		api.WithEditorURL(cfg.HTTP.EditorURL),

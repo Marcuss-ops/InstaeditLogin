@@ -3,6 +3,7 @@ package analytics
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 )
 
@@ -23,17 +24,19 @@ var ErrInvalidPeriod = errors.New("analytics: days must be one of 7, 14, 28")
 // boundary tests can pin month-end, year-end and leap-day
 // arithmetic. Production code uses DefaultResolver.
 type Resolver struct {
-	// Now returns the "current instant" the resolver anchors end_date
-	// to. The resolver normalises whatever Now returns to UTC midnight,
-	// so callers may pass any time-zone-aware time.Time and the wire
-	// shape stays consistent.
+	clock Clock
+
+	// Now is retained for source compatibility with older consumers that
+	// constructed Resolver{Now: func() time.Time { ... }} directly.
+	// New code should inject a Clock with WithClock.
+	//
+	// Deprecated: use WithClock(Clock) instead.
 	Now func() time.Time
 }
 
-// NewResolver returns a Resolver anchored to time.Now().UTC(). Use
-// Resolver.WithClock in tests that need deterministic boundaries.
+// NewResolver returns a Resolver using RealClock in production.
 func NewResolver() *Resolver {
-	return &Resolver{Now: func() time.Time { return time.Now().UTC() }}
+	return &Resolver{clock: RealClock{}, Now: RealClock{}.Now}
 }
 
 // DefaultResolver is the process-wide resolver. Production code
@@ -41,12 +44,39 @@ func NewResolver() *Resolver {
 // own Resolver via WithClock to keep boundaries deterministic.
 var DefaultResolver = NewResolver()
 
-// WithClock returns a copy of r whose Now function is replaced.
-// The original receiver is untouched, so concurrent readers of r
-// continue to see the production clock.
-func (r *Resolver) WithClock(now func() time.Time) *Resolver {
-	cp := *r
-	cp.Now = now
+// WithClock returns a copy of r using clock. The original receiver is
+// untouched, so concurrent readers of r continue to see the production clock.
+// New code should pass RealClock{} or NewFixedClock(...).
+func (r *Resolver) WithClock(clock Clock) *Resolver {
+	cp := Resolver{clock: RealClock{}, Now: RealClock{}.Now}
+	if r != nil {
+		cp = *r
+	}
+	if isNilClock(clock) {
+		cp.clock = RealClock{}
+		cp.Now = RealClock{}.Now
+		return &cp
+	}
+	cp.clock = clock
+	cp.Now = nil
+	return &cp
+}
+
+// WithLegacyClock adapts the pre-Clock function-shaped injection API.
+//
+// Deprecated: use WithClock(Clock) instead.
+func (r *Resolver) WithLegacyClock(now func() time.Time) *Resolver {
+	cp := Resolver{clock: RealClock{}, Now: RealClock{}.Now}
+	if r != nil {
+		cp = *r
+	}
+	if now == nil {
+		cp.clock = RealClock{}
+		cp.Now = RealClock{}.Now
+		return &cp
+	}
+	cp.clock = clockFunc(now)
+	cp.Now = nil
 	return &cp
 }
 
@@ -86,16 +116,37 @@ func (r *Resolver) Resolve(days int) (Period, error) {
 	}, nil
 }
 
-// normalisedNow returns r.Now() interpreted as a UTC instant. It
-// deliberately DOES NOT truncate to midnight: Resolve itself drops
-// time-of-day via time.Date so any clock value is fine here. The
-// truncated midnight is a downstream concern. This split keeps the
-// "what does Resolve anchor to" question readable in tests.
-func (r *Resolver) normalisedNow() time.Time {
-	if r == nil || r.Now == nil {
-		return time.Now().UTC()
+// clockFunc adapts the legacy function-shaped clock to Clock.
+type clockFunc func() time.Time
+
+func (f clockFunc) Now() time.Time { return f() }
+
+func isNilClock(clock Clock) bool {
+	if clock == nil {
+		return true
 	}
-	return r.Now().UTC()
+	value := reflect.ValueOf(clock)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+// normalisedNow returns the injected instant as UTC. Resolve itself drops
+// time-of-day via time.Date so any clock value is fine here.
+func (r *Resolver) normalisedNow() time.Time {
+	if r == nil {
+		return RealClock{}.Now()
+	}
+	if !isNilClock(r.clock) {
+		return r.clock.Now().UTC()
+	}
+	if r.Now != nil {
+		return r.Now().UTC()
+	}
+	return RealClock{}.Now()
 }
 
 // Resolve is shorthand for DefaultResolver.Resolve(days int). It is

@@ -160,7 +160,7 @@ func wireAnalyticsServiceForTest(r *Router) {
 	if r.userRepo == nil || r.metricHistoryStore == nil {
 		return
 	}
-	r.channelAnalyticsService = NewChannelAnalyticsService(r.userRepo, r.metricHistoryStore)
+	r.channelAnalyticsService = newAnalyticsTestService(r.userRepo, r.metricHistoryStore)
 }
 
 // ---------------------------------------------------------------------------
@@ -250,15 +250,10 @@ func TestHandle_GetAccountPerformance_InvalidDays(t *testing.T) {
 		// test-driver URL parser.
 		{"or_decoy", "7%20OR%201%3D1"},
 	}
-	// The handler's gating order is: parsePathIDAsInt64 →
-	// loadOwnAccountByID → parseAnalyticsDays → analytics.Resolve →
-	// GetHistory. So 400 from a bad ?days= fires AFTER the ownership
-	// check has SUCCEEDED, NOT before. The mock must return a valid
-	// owned account so the handler reaches parseAnalyticsDays; the
-	// contract being pinned is "validation gate fires before the DB
-	// history call", not "validation fires before identity check".
-	// The case-counter assertions below pin BOTH invariants in one
-	// place: identity check runs once, history runs never.
+	// The handler validates the path and ?days= query before delegating
+	// to the service. Invalid input must fail fast: no account lookup
+	// and no history query are allowed.
+	// The case-counter assertion below pins the no-lookup invariant.
 	findCalls := 0
 	store := &fakeMetricHistoryStore{
 		getFn: func(int64, time.Time, time.Time) ([]repository.AccountMetricPoint, error) {
@@ -283,8 +278,8 @@ func TestHandle_GetAccountPerformance_InvalidDays(t *testing.T) {
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("?days=%q: want 400, got %d (%s)", tc.qs, w.Code, w.Body.String())
 			}
-			if findCalls != before+1 {
-				t.Errorf("FindPlatformAccountByID expected 1 call before validation gate, got delta=%d",
+			if findCalls != before {
+				t.Errorf("FindPlatformAccountByID MUST NOT be called for invalid days, got delta=%d",
 					findCalls-before)
 			}
 		})
@@ -589,8 +584,11 @@ func TestHandle_GetAccountPerformance_CacheFreshnessTable(t *testing.T) {
 	}
 	cases := []harness{
 		{
-			name:       "fresh_recent_history",
-			ageFromEnd: 1 * time.Second,
+			name: "fresh_recent_history",
+			// History dates are calendar dates in the assembler. A
+			// one-second subtraction from midnight crosses into the
+			// previous calendar day and is therefore a stale row.
+			ageFromEnd: 0,
 			wantStale:  false,
 		},
 		{
@@ -631,7 +629,7 @@ func TestHandle_GetAccountPerformance_CacheFreshnessTable(t *testing.T) {
 			if resp.DataFreshness.IsStale != tc.wantStale {
 				t.Errorf("IsStale: want %v, got %v", tc.wantStale, resp.DataFreshness.IsStale)
 			}
-				if store.getCallCount != 1 {
+			if store.getCallCount != 1 {
 				t.Errorf("expected exactly 1 GetHistory call (no upstream refresh), got %d", store.getCallCount)
 			}
 		})

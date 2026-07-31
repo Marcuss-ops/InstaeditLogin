@@ -9,15 +9,15 @@
 // to the same code path exercised here).
 //
 // Test surface coverage (mirrors the Step-4 spec checklist):
-//   1. cross-tenant access (account.UserID != identity.UserID) → 404
-//   2. account.Store returns error → bubble-up error (no sentinel)
-//   3. non-YouTube platform → ErrNotYouTubePlatform (422)
-//   4. YouTube channel id missing → ErrYouTubeChannelIDMissing (422)
-//   5. invalid days → analytics.ErrInvalidPeriod (400)
-//   6. video lister error → bubble-up error
-//   7. happy path 7-day empty history → valid DTO, empty ranking
-//   8. happy path 28-day populated history → populated ranking
-//   9. video lister returning nil coerced to empty ([]TopVideo{})
+//  1. cross-tenant access (account.UserID != identity.UserID) → 404
+//  2. account.Store returns error → bubble-up error (no sentinel)
+//  3. non-YouTube platform → ErrNotYouTubePlatform (422)
+//  4. YouTube channel id missing → ErrYouTubeChannelIDMissing (422)
+//  5. invalid days → analytics.ErrInvalidPeriod (400)
+//  6. video lister error → bubble-up error
+//  7. happy path 7-day empty history → valid DTO, empty ranking
+//  8. happy path 28-day populated history → populated ranking
+//  9. video lister returning nil coerced to empty ([]TopVideo{})
 package api
 
 import (
@@ -108,6 +108,14 @@ var _ AccountStore = (*fakeAccountStore)(nil)
 // VideoMetricsLister.
 var _ VideoMetricsLister = (*fakeVideoLister)(nil)
 
+// nilAnalyticsClock is a typed-nil Clock fixture. Its Now method must
+// never be reached: WithAnalyticsClock must fall back to RealClock.
+type nilAnalyticsClock struct{}
+
+func (*nilAnalyticsClock) Now() time.Time {
+	panic("typed-nil analytics clock was used")
+}
+
 // ------------------------------------------------------------------
 // Tests
 // ------------------------------------------------------------------
@@ -117,7 +125,7 @@ var _ VideoMetricsLister = (*fakeVideoLister)(nil)
 // with ErrAccountNotVisible so a hostile probe cannot distinguish
 // "no such row" from "row exists but not yours".
 func TestChannelAnalyticsService_CrossTenantAccess_NilAccount(t *testing.T) {
-	svc := NewChannelAnalyticsService(
+	svc := newAnalyticsTestService(
 		&fakeAccountStore{account: nil, err: nil},
 		&fakeMetricHistoryStore{},
 	)
@@ -133,7 +141,7 @@ func TestChannelAnalyticsService_CrossTenantAccess_NilAccount(t *testing.T) {
 func TestChannelAnalyticsService_CrossTenantAccess_WrongUser(t *testing.T) {
 	acct := makeServiceYTChannelAccount()
 	acct.UserID = 99 // not the caller's user (=42)
-	svc := NewChannelAnalyticsService(
+	svc := newAnalyticsTestService(
 		&fakeAccountStore{account: acct, err: nil},
 		&fakeMetricHistoryStore{},
 	)
@@ -148,7 +156,7 @@ func TestChannelAnalyticsService_CrossTenantAccess_WrongUser(t *testing.T) {
 // 500. The service MUST NOT mask it as ErrAccountNotVisible.
 func TestChannelAnalyticsService_AccountStoreError(t *testing.T) {
 	storeErr := errors.New("db connection reset")
-	svc := NewChannelAnalyticsService(
+	svc := newAnalyticsTestService(
 		&fakeAccountStore{account: nil, err: storeErr},
 		&fakeMetricHistoryStore{},
 	)
@@ -173,7 +181,7 @@ func TestChannelAnalyticsService_NotYouTubePlatform(t *testing.T) {
 		t.Run(platform, func(t *testing.T) {
 			acct := makeServiceYTChannelAccount()
 			acct.Platform = platform
-			svc := NewChannelAnalyticsService(
+			svc := newAnalyticsTestService(
 				&fakeAccountStore{account: acct},
 				&fakeMetricHistoryStore{},
 			)
@@ -192,7 +200,7 @@ func TestChannelAnalyticsService_NotYouTubePlatform(t *testing.T) {
 func TestChannelAnalyticsService_YouTubeChannelIDMissing(t *testing.T) {
 	acct := makeServiceYTChannelAccount()
 	acct.Metadata = models.Metadata{} // empty metadata, no channel_id
-	svc := NewChannelAnalyticsService(
+	svc := newAnalyticsTestService(
 		&fakeAccountStore{account: acct},
 		&fakeMetricHistoryStore{},
 	)
@@ -210,7 +218,7 @@ func TestChannelAnalyticsService_YouTubeChannelIDMissing(t *testing.T) {
 func TestChannelAnalyticsService_InvalidDays(t *testing.T) {
 	for _, days := range []int{0, 1, 6, 8, 13, 15, 30, 365, -7} {
 		t.Run("days="+strconv.Itoa(days), func(t *testing.T) {
-			svc := NewChannelAnalyticsService(
+			svc := newAnalyticsTestService(
 				&fakeAccountStore{account: makeServiceYTChannelAccount()},
 				&fakeMetricHistoryStore{},
 			)
@@ -229,7 +237,7 @@ func TestChannelAnalyticsService_InvalidDays(t *testing.T) {
 func TestChannelAnalyticsService_VideoListerError(t *testing.T) {
 	listerErr := errors.New("youtube data api quota exceeded")
 	var since, until time.Time
-	svc := NewChannelAnalyticsService(
+	svc := newAnalyticsTestService(
 		&fakeAccountStore{account: makeServiceYTChannelAccount()},
 		&fakeMetricHistoryStore{getFn: func(_ int64, _, _ time.Time) ([]repository.AccountMetricPoint, error) {
 			return nil, nil
@@ -249,11 +257,31 @@ func TestChannelAnalyticsService_VideoListerError(t *testing.T) {
 	}
 }
 
+// TestChannelAnalyticsService_TypedNilClockFallsBack verifies that a
+// typed-nil Clock option cannot cause a panic in manually wired services.
+func TestChannelAnalyticsService_TypedNilClockFallsBack(t *testing.T) {
+	var clock *nilAnalyticsClock
+	svc := NewChannelAnalyticsService(
+		&fakeAccountStore{account: makeServiceYTChannelAccount()},
+		&fakeMetricHistoryStore{getFn: func(_ int64, _, _ time.Time) ([]repository.AccountMetricPoint, error) {
+			return []repository.AccountMetricPoint{}, nil
+		}},
+		WithAnalyticsClock(clock),
+	)
+	resp, err := svc.GetChannelPerformance(context.Background(), 42, 12, 381, 7)
+	if err != nil {
+		t.Fatalf("typed-nil clock should fall back to RealClock: %v", err)
+	}
+	if resp.Period.Days != 7 {
+		t.Errorf("Period.Days: want 7, got %d", resp.Period.Days)
+	}
+}
+
 // TestChannelAnalyticsService_HappyPath_7d_NoVideos: the NoneOpLister
 // returns empty ranking; the rest of the pipeline emits a valid DTO
 // with TopVideos as never-nil empty arrays.
 func TestChannelAnalyticsService_HappyPath_7d_NoVideos(t *testing.T) {
-	svc := NewChannelAnalyticsService(
+	svc := newAnalyticsTestService(
 		&fakeAccountStore{account: makeServiceYTChannelAccount()},
 		&fakeMetricHistoryStore{getFn: func(_ int64, _, _ time.Time) ([]repository.AccountMetricPoint, error) {
 			return []repository.AccountMetricPoint{}, nil
@@ -286,6 +314,50 @@ func TestChannelAnalyticsService_HappyPath_7d_NoVideos(t *testing.T) {
 	}
 }
 
+// TestChannelAnalyticsService_ClockAnchorsPeriodAndGeneratedAt verifies
+// that a non-midnight fixed instant produces one deterministic UTC
+// calendar boundary for both the period and generated_at. This guards
+// against reintroducing time.Now() or passing the untruncated instant
+// into freshness calculations.
+func TestChannelAnalyticsService_ClockAnchorsPeriodAndGeneratedAt(t *testing.T) {
+	clockInstant := time.Date(2026, 7, 30, 23, 45, 12, 0, time.FixedZone("test", 5*3600))
+	svc := NewChannelAnalyticsService(
+		&fakeAccountStore{account: makeServiceYTChannelAccount()},
+		&fakeMetricHistoryStore{getFn: func(_ int64, _, _ time.Time) ([]repository.AccountMetricPoint, error) {
+			return []repository.AccountMetricPoint{{
+				Date:        time.Date(2026, 7, 24, 16, 45, 0, 0, time.FixedZone("repository", -4*3600)),
+				Views:       100,
+				Subscribers: 1000,
+				Videos:      1,
+			}}, nil
+		}},
+		WithAnalyticsClock(analytics.NewFixedClock(clockInstant)),
+	)
+
+	resp, err := svc.GetChannelPerformance(context.Background(), 42, 12, 381, 7)
+	if err != nil {
+		t.Fatalf("clock-anchored performance: %v", err)
+	}
+
+	wantEnd := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	if !resp.Period.EndDate.Equal(wantEnd) {
+		t.Errorf("Period.EndDate: want %v, got %v", wantEnd, resp.Period.EndDate)
+	}
+	if !resp.GeneratedAt.Equal(wantEnd) {
+		t.Errorf("GeneratedAt: want %v, got %v", wantEnd, resp.GeneratedAt)
+	}
+	if resp.GeneratedAt.Location() != time.UTC {
+		t.Errorf("GeneratedAt location: want UTC, got %v", resp.GeneratedAt.Location())
+	}
+	wantLastSynced := time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC)
+	if !resp.DataFreshness.LastSyncedAt.Equal(wantLastSynced) {
+		t.Errorf("LastSyncedAt: want %v, got %v", wantLastSynced, resp.DataFreshness.LastSyncedAt)
+	}
+	if !resp.DataFreshness.IsStale {
+		t.Errorf("DataFreshness.IsStale: want true for a six-day-old row, got false")
+	}
+}
+
 // TestChannelAnalyticsService_HappyPath_28d_VideosRanked: when the
 // VideoLister returns entries, both MostViewed (views_in_period)
 // and Growing (trend_score) arrays are populated by the analytics
@@ -294,17 +366,17 @@ func TestChannelAnalyticsService_HappyPath_28d_VideosRanked(t *testing.T) {
 	now := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
 	videos := []analytics.TopVideo{
 		{VideoID: "v_old", Title: "old popular",
-			PublishedAt:    now.AddDate(0, 0, -10),
-			ViewsInPeriod:  50000, WatchTimeInPeriod: 6000},
+			PublishedAt:   now.AddDate(0, 0, -10),
+			ViewsInPeriod: 50000, WatchTimeInPeriod: 6000},
 		{VideoID: "v_new", Title: "fresh 20k in 2 days",
-			PublishedAt:  now.AddDate(0, 0, -2),
+			PublishedAt:   now.AddDate(0, 0, -2),
 			ViewsInPeriod: 20000, WatchTimeInPeriod: 3000},
 		{VideoID: "v_mid", Title: "mid video",
-			PublishedAt:  now.AddDate(0, 0, -20),
+			PublishedAt:   now.AddDate(0, 0, -20),
 			ViewsInPeriod: 30000, WatchTimeInPeriod: 4500},
 	}
 	lister := &fakeVideoLister{videos: videos}
-	svc := NewChannelAnalyticsService(
+	svc := newAnalyticsTestService(
 		&fakeAccountStore{account: makeServiceYTChannelAccount()},
 		&fakeMetricHistoryStore{getFn: func(_ int64, _, _ time.Time) ([]repository.AccountMetricPoint, error) {
 			return []repository.AccountMetricPoint{}, nil
@@ -345,7 +417,7 @@ func TestChannelAnalyticsService_HappyPath_28d_VideosRanked(t *testing.T) {
 // MUST be coerced by the service so the contract's never-nil
 // invariant holds for the wire shape.
 func TestChannelAnalyticsService_NilVideoListerReturnsCoercedEmpty(t *testing.T) {
-	svc := NewChannelAnalyticsService(
+	svc := newAnalyticsTestService(
 		&fakeAccountStore{account: makeServiceYTChannelAccount()},
 		&fakeMetricHistoryStore{getFn: func(_ int64, _, _ time.Time) ([]repository.AccountMetricPoint, error) {
 			return []repository.AccountMetricPoint{}, nil
@@ -371,7 +443,7 @@ func TestChannelAnalyticsService_NilVideoListerReturnsCoercedEmpty(t *testing.T)
 // WorkspaceChannel-aware lookup, so a workspaceID=0 input MUST
 // still pass when account.UserID matches.
 func TestChannelAnalyticsService_WorkspaceIDForwardCompat(t *testing.T) {
-	svc := NewChannelAnalyticsService(
+	svc := newAnalyticsTestService(
 		&fakeAccountStore{account: makeServiceYTChannelAccount()},
 		&fakeMetricHistoryStore{getFn: func(_ int64, _, _ time.Time) ([]repository.AccountMetricPoint, error) {
 			return []repository.AccountMetricPoint{}, nil
@@ -382,4 +454,3 @@ func TestChannelAnalyticsService_WorkspaceIDForwardCompat(t *testing.T) {
 		t.Fatalf("workspaceID=0 should pass when userID matches: %v", err)
 	}
 }
-

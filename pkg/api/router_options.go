@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -274,6 +275,18 @@ func WithSnapshotStore(s SnapshotStore) RouterOption {
 // GET /accounts/{id}/performance returns 501.
 func WithMetricHistoryStore(s MetricHistoryStore) RouterOption {
 	return func(r *Router) { r.metricHistoryStore = s }
+}
+
+// WithRouterAnalyticsClock wires the shared clock used by analytics
+// handlers outside ChannelAnalyticsService, including the aggregate
+// summary route. Production passes analytics.RealClock{}; tests pass
+// analytics.FixedClock.
+func WithRouterAnalyticsClock(clock analytics.Clock) RouterOption {
+	return func(r *Router) {
+		if !isNilAnalyticsClock(clock) {
+			r.analyticsClock = clock
+		}
+	}
 }
 
 // WithChannelAnalyticsService wires the Step-4 extracted business

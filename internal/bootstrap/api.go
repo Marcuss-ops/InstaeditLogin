@@ -7,6 +7,7 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -63,6 +64,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 
 	rateLimitRepo := repository.NewRateLimitRepository(core.DB)
 	rateLimitSvc := services.NewRateLimitServiceWithMemory(rateLimitRepo, core.MemoryLimiter)
+	analyticsClock := analytics.RealClock{}
 	opts := []api.RouterOption{
 		api.WithCredentialVault(core.Vault),
 		api.WithChannelAuthorizer(channelAuthorizer),
@@ -109,8 +111,10 @@ func WireAPI(core *Core) (http.Handler, error) {
 			api.NewChannelAnalyticsService(
 				core.userRepo,
 				repository.NewAccountMetricsRepository(core.DB),
+				api.WithAnalyticsClock(analyticsClock),
 			),
 		),
+		api.WithRouterAnalyticsClock(analyticsClock),
 		api.WithEditorURL(cfg.HTTP.EditorURL),
 	}
 

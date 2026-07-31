@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
@@ -117,7 +118,11 @@ func (r *Router) handleGetAccountsPerformanceSummary(w http.ResponseWriter, req 
 	// filters, so the list can be used directly.
 	youtubeAccounts := accounts
 
-	to := time.Now().UTC()
+	clock := r.analyticsClock
+	if isNilAnalyticsClock(clock) {
+		clock = analytics.RealClock{}
+	}
+	to := clock.Now().UTC()
 	from := to.AddDate(0, 0, -days+1)
 
 	enrichedList := make([]enrichedChannel, 0, len(youtubeAccounts))

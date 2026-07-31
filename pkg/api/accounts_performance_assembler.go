@@ -80,6 +80,13 @@ func assembleChannelPerformance(
 	generatedAt time.Time,
 	topVideos analytics.TopVideosRanking,
 ) analytics.ChannelPerformanceResponse {
+	if topVideos.MostViewed == nil {
+		topVideos.MostViewed = []analytics.TopVideo{}
+	}
+	if topVideos.Growing == nil {
+		topVideos.Growing = []analytics.TopVideo{}
+	}
+
 	current, previous := splitHistoryByPeriod(history, period)
 	currentSum := sumWindow(current)
 	previousSum := sumWindow(previous)
@@ -118,16 +125,16 @@ func assembleChannelPerformance(
 // nil when no row surface them, so the JSON contract's optional
 // fields never surface a deceptive zero.
 type windowRowStats struct {
-	viewsSum                int64
-	watchTimeMinutesSum     int64
-	subscribersEnd          int64
-	subscribersStart        int64
-	videosPublished         int64
-	estimatedRevenueCents   *int64
-	impressions             *int64
-	ctr                     *float64
-	lastDate                time.Time
-	hasData                 bool
+	viewsSum              int64
+	watchTimeMinutesSum   int64
+	subscribersEnd        int64
+	subscribersStart      int64
+	videosPublished       int64
+	estimatedRevenueCents *int64
+	impressions           *int64
+	ctr                   *float64
+	lastDate              time.Time
+	hasData               bool
 }
 
 // splitHistoryByPeriod slices a single GetHistory result into the
@@ -142,7 +149,7 @@ func splitHistoryByPeriod(
 	period analytics.Period,
 ) (current, previous []repository.AccountMetricPoint) {
 	for _, row := range history {
-		date := row.Date.UTC()
+		date := utcCalendarDate(row.Date)
 		switch {
 		case !date.Before(period.PreviousStartDate) && !date.After(period.PreviousEndDate):
 			previous = append(previous, row)
@@ -166,7 +173,7 @@ func sumWindow(rows []repository.AccountMetricPoint) windowRowStats {
 	stats := windowRowStats{
 		subscribersStart: rows[0].Subscribers,
 		videosPublished:  rows[len(rows)-1].Videos - rows[0].Videos,
-		lastDate:         rows[len(rows)-1].Date,
+		lastDate:         utcCalendarDate(rows[len(rows)-1].Date),
 		hasData:          true,
 	}
 	if stats.videosPublished < 0 {
@@ -248,7 +255,7 @@ func buildSummary(s windowRowStats) analytics.Summary {
 // had no comparison available).
 func buildComparison(current, previous windowRowStats) analytics.Comparison {
 	return analytics.Comparison{
-		Views:    metricComparisonFloat(float64(current.viewsSum), float64(previous.viewsSum)),
+		Views: metricComparisonFloat(float64(current.viewsSum), float64(previous.viewsSum)),
 		WatchTimeMinutes: metricComparisonFloat(
 			float64(current.watchTimeMinutesSum), float64(previous.watchTimeMinutesSum)),
 		// SubscribersNet comparison: CURRENT-WINDOW net growth vs
@@ -405,8 +412,6 @@ func buildDailySeries(
 	return out
 }
 
-
-
 // avatarURLFromMetadata reads the account.Metadata JSONB blob for
 // the avatar_url key. Returns empty string (which omitempty will
 // drop from the JSON) when the key is missing OR not a string.
@@ -420,6 +425,14 @@ func avatarURLFromMetadata(account *models.PlatformAccount) string {
 		return v
 	}
 	return ""
+}
+
+// utcCalendarDate converts a repository timestamp to its UTC calendar
+// date. Freshness compares calendar windows, not host-local clock hours,
+// so non-UTC repository locations cannot change the result.
+func utcCalendarDate(value time.Time) time.Time {
+	value = value.UTC()
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 // buildDataFreshness stamps the data_freshness section. last_synced_at

@@ -12,6 +12,7 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/channelimport"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
@@ -200,6 +201,10 @@ type Router struct {
 	// Wired via WithChannelAnalyticsService; when nil, the handler
 	// returns 501 ("channel analytics service not configured").
 	channelAnalyticsService *ChannelAnalyticsService
+	// analyticsClock anchors summary-handler windows. The per-channel
+	// service owns its own injected clock; both are explicitly wired
+	// from the same RealClock in production and FixedClock in tests.
+	analyticsClock analytics.Clock
 
 	// bookingEventStore persists the anonymous lead-capture events
 	// from the marketing strategy-call modal (POST
@@ -986,6 +991,7 @@ func NewRouter(
 
 		frontendURL:               frontendURL,
 		allowedOrigin:             allowedOrigins,
+		analyticsClock:            analytics.RealClock{},
 		rateLimiter:               newRateLimiter(nil), // FASE 1.2: per-IP token bucket (trusted proxies wired via option below)
 		publishingInFlightTimeout: DefaultPublishingInFlightTimeout,
 		thumbnailDownloadClient: &http.Client{

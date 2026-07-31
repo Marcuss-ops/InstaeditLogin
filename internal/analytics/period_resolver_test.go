@@ -11,8 +11,8 @@ import (
 // instant. Tests use it to anchor boundary math (month-end, leap day,
 // year-end) so day arithmetic is deterministic regardless of when
 // "now" actually runs.
-func fixedClock(t time.Time) func() time.Time {
-	return func() time.Time { return t }
+func fixedClock(t time.Time) Clock {
+	return NewFixedClock(t)
 }
 
 // subName formats a period-days value as a stable, readable subtest
@@ -297,8 +297,8 @@ func TestResolver_PeriodCoverage(t *testing.T) {
 	}
 }
 
-// TestResolver_TimezoneIndependence forces r.Now() to return
-// non-UTC time-zones; the resolver MUST normalise every output
+// TestResolver_TimezoneIndependence supplies non-UTC clock values;
+// the resolver MUST normalise every output
 // field to UTC so two clients in different zones see identical
 // period boundaries.
 func TestResolver_TimezoneIndependence(t *testing.T) {
@@ -367,10 +367,8 @@ func TestResolver_MidnightTruncation(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestResolver_NilSafe verifies a nil Resolver (or one with nil
-// Now) does not panic and falls back to time.Now().UTC(). This is
+} // TestResolver_NilSafe verifies a nil Resolver (or one with no
+// injected clock) does not panic and falls back to RealClock. This is
 // defence-in-depth against a future regression in handler wiring.
 func TestResolver_NilSafe(t *testing.T) {
 	var r *Resolver
@@ -387,13 +385,37 @@ func TestResolver_NilSafe(t *testing.T) {
 		t.Errorf("nil Resolver.Resolve(7) Days: want 7, got %d", got.Days)
 	}
 
-	emptyNow := &Resolver{}
-	got, err = emptyNow.Resolve(14)
+	emptyClock := &Resolver{}
+	got, err = emptyClock.Resolve(14)
 	if err != nil {
-		t.Fatalf("Resolver{nil Now}.Resolve(14): %v", err)
+		t.Fatalf("Resolver{nil clock}.Resolve(14): %v", err)
 	}
 	if got.Days != 14 {
 		t.Errorf("empty Resolver.Resolve(14) Days: want 14, got %d", got.Days)
+	}
+}
+
+// TestResolver_LegacyClockCompatibility keeps the pre-Clock function
+// injection path working while callers migrate to FixedClock.
+func TestResolver_LegacyClockCompatibility(t *testing.T) {
+	at := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	legacy := func() time.Time { return at }
+
+	fromField, err := (&Resolver{Now: legacy}).Resolve(7)
+	if err != nil {
+		t.Fatalf("Resolver{Now: legacy}: %v", err)
+	}
+	fromMethod, err := NewResolver().WithLegacyClock(legacy).Resolve(7)
+	if err != nil {
+		t.Fatalf("WithLegacyClock(legacy): %v", err)
+	}
+	want := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	if !fromField.EndDate.Equal(want) || !fromMethod.EndDate.Equal(want) {
+		t.Errorf("legacy clock end date: want %v, field=%v method=%v", want, fromField.EndDate, fromMethod.EndDate)
+	}
+
+	if got, err := (*Resolver)(nil).WithClock(NewFixedClock(at)).Resolve(7); err != nil || !got.EndDate.Equal(want) {
+		t.Errorf("nil Resolver.WithClock(FixedClock): got period=%+v err=%v", got, err)
 	}
 }
 

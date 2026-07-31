@@ -85,7 +85,7 @@ func intTestPtr(v int64) *int64 { return &v }
 // top-level keys match the contract and ChannelInfo pulls from the
 // account.
 func TestAssembleChannelPerformance_CanonicalShape(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -148,7 +148,7 @@ func TestAssembleChannelPerformance_CanonicalShape(t *testing.T) {
 // representing the CURRENT window only; previous-window rows MUST
 // NOT leak in.
 func TestAssembleChannelPerformance_DailySeriesIgnoresPreviousWindow(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -180,7 +180,7 @@ func TestAssembleChannelPerformance_DailySeriesIgnoresPreviousWindow(t *testing.
 // days render as zero for all deltas. This is the contract test
 // the chart consumer relies on.
 func TestAssembleChannelPerformance_DailySeriesGapFill(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -210,7 +210,7 @@ func TestAssembleChannelPerformance_DailySeriesGapFill(t *testing.T) {
 // the views KPI (no Infinity, no `null` literal). The contract test
 // fixture on the analytics package asserts the same rule.
 func TestAssembleChannelPerformance_ComparisonPreviousZeroOmitted(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -259,7 +259,7 @@ func TestAssembleChannelPerformance_ComparisonPreviousZeroOmitted(t *testing.T) 
 // when current < previous AND previous != 0. Matches the
 // analytics package's contract_test.go fixture assertion.
 func TestAssembleChannelPerformance_ComparisonNegativeDeltaPresent(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -295,7 +295,7 @@ func TestAssembleChannelPerformance_ComparisonNegativeDeltaPresent(t *testing.T)
 // Impressions / Revenue MUST be omitted in JSON when no row supplies
 // them. The contract doc requires "no silent zero".
 func TestAssembleChannelPerformance_OptionalFieldsOmitted(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -317,6 +317,33 @@ func TestAssembleChannelPerformance_OptionalFieldsOmitted(t *testing.T) {
 	}
 }
 
+// TestAssembleChannelPerformance_FreshnessNormalizesRepositoryTimezone
+// ensures a non-UTC repository timestamp cannot affect last_synced_at
+// or freshness calculations. Analytics windows use UTC calendar dates,
+// not the host or database session timezone.
+func TestAssembleChannelPerformance_FreshnessNormalizesRepositoryTimezone(t *testing.T) {
+	period, err := resolveAnalyticsPeriod(7)
+	if err != nil {
+		t.Fatalf("Resolve(7): %v", err)
+	}
+	account := makeAccount()
+	localZone := time.FixedZone("repository-local", -4*60*60)
+	history := []repository.AccountMetricPoint{{
+		Date:        time.Date(2026, 7, 24, 16, 45, 0, 0, localZone),
+		Views:       100,
+		Subscribers: 1000,
+		Videos:      1,
+	}}
+	resp := assembleChannelPerformance(account, "UCabc", history, period, period.EndDate, analytics.TopVideosRanking{})
+	want := period.StartDate
+	if !resp.DataFreshness.LastSyncedAt.Equal(want) {
+		t.Errorf("LastSyncedAt: want UTC midnight %v, got %v", want, resp.DataFreshness.LastSyncedAt)
+	}
+	if resp.DataFreshness.LastSyncedAt.Location() != time.UTC {
+		t.Errorf("LastSyncedAt location: want UTC, got %v", resp.DataFreshness.LastSyncedAt.Location())
+	}
+}
+
 // TestAssembleChannelPerformance_DataFreshnessTTLTable asserts the
 // period-aware TTL thresholds: 7d = 10m, 14d = 20m, 28d = 30m.
 // generatedAt-(last_synced_at) within TTL → fresh; past TTL → stale.
@@ -331,7 +358,7 @@ func TestAssembleChannelPerformance_DataFreshnessTTLTable(t *testing.T) {
 		{28, 30 * time.Minute},
 	}
 	for _, tc := range cases {
-		period, err := analytics.Resolve(tc.days)
+		period, err := resolveAnalyticsPeriod(tc.days)
 		if err != nil {
 			t.Errorf("Resolve(%d): %v", tc.days, err)
 			continue
@@ -375,7 +402,7 @@ func TestAssembleChannelPerformance_DataFreshnessTTLTable(t *testing.T) {
 // boundary with a non-zero subscribers delta so otherwise-correct
 // math still maps to the tightened clamp.
 func TestAssembleChannelPerformance_VideosPublishedDeltaNet(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -399,7 +426,7 @@ func TestAssembleChannelPerformance_VideosPublishedDeltaNet(t *testing.T) {
 // preserved: positive delta → gained=delta, lost=0; negative delta
 // → lost=|delta|, gained=0.
 func TestAssembleChannelPerformance_SubscribersGainedLostSignedDelta(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -434,7 +461,7 @@ func TestAssembleChannelPerformance_SubscribersGainedLostSignedDelta(t *testing.
 // downstream consumers (data_freshness.last_synced_at); this test
 // surface as a failure the day that decision flips.
 func TestAssembleChannelPerformance_LastDateInvariant(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -465,7 +492,7 @@ func TestAssembleChannelPerformance_LastDateInvariant(t *testing.T) {
 // OPPOSITE mathematical meaning (subscribers is a delta, revenue
 // is a cumulative snapshot).
 func TestAssembleChannelPerformance_DailySeriesRevenueCarryForwardOnGap(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -515,7 +542,7 @@ func TestAssembleChannelPerformance_DailySeriesRevenueCarryForwardOnGap(t *testi
 // line on day 2+ (carry-forward), which is the same visual signal
 // but with a different truth meaning.
 func TestAssembleChannelPerformance_DailySeriesRevenueOmittedOnFirstGap(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -554,7 +581,7 @@ func TestAssembleChannelPerformance_DailySeriesRevenueOmittedOnFirstGap(t *testi
 //     (current-prev / prev) — when prev=0, this yields +Inf.
 //   - comparing videos counts directly instead of average per video.
 func TestAssembleChannelPerformance_ComparisonPrevVideosZeroOmittedPercentage(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
@@ -575,7 +602,7 @@ func TestAssembleChannelPerformance_ComparisonPrevVideosZeroOmittedPercentage(t 
 	previous := []repository.AccountMetricPoint{}
 	for i := 0; i < 7; i++ {
 		previous = append(previous, ptRow{
-			date: period.PreviousStartDate.AddDate(0, 0, i),
+			date:  period.PreviousStartDate.AddDate(0, 0, i),
 			views: 0, subscribers: 0, videos: 0,
 		}.toPoint())
 	}
@@ -622,7 +649,7 @@ func TestAssembleChannelPerformance_ComparisonPrevVideosZeroOmittedPercentage(t 
 // this is the production wire shape we're emitting on every
 // instance until then.
 func TestAssembleChannelPerformance_TopVideosExplicitSlices(t *testing.T) {
-	period, err := analytics.Resolve(7)
+	period, err := resolveAnalyticsPeriod(7)
 	if err != nil {
 		t.Fatalf("Resolve(7): %v", err)
 	}
