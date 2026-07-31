@@ -44,6 +44,15 @@ import (
 // Every call site was updated in the same commit; the
 // free-function form is removed.
 func (r *Router) setSessionCookie(w http.ResponseWriter, res *services.StartSessionResult) {
+	// Older dev deployments issued host-only cookies on dev.instaedit.org.
+	// When COOKIE_DOMAIN is later enabled, browsers can retain both the old
+	// host-only cookie and the new parent-domain cookie with the same name;
+	// depending on ordering, the API may then read the stale token first.
+	// Expire the legacy host-only variants before issuing the canonical shared
+	// cookies. This makes the migration self-healing for existing browsers.
+	if r.cookieDomain != "" {
+		r.clearLegacyHostOnlySessionCookies(w)
+	}
 	cfg := r.csrfConfig()
 	secure := r.cookieSecure
 	// Access JWT cookie (HttpOnly, short TTL).
@@ -75,6 +84,20 @@ func (r *Router) setSessionCookie(w http.ResponseWriter, res *services.StartSess
 	_, _ = auth.SetCSRFToken(w, cfg)
 }
 
+func (r *Router) clearLegacyHostOnlySessionCookies(w http.ResponseWriter) {
+	for _, name := range []string{auth.SessionCookieName, auth.RefreshCookieName} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   r.cookieSecure,
+			SameSite: http.SameSiteNoneMode,
+			MaxAge:   -1,
+		})
+	}
+}
+
 // clearSessionCookie clears the same 3 cookies and removes the
 // CSRF token cookie. Called from /auth/logout, /auth/logout-all,
 // /auth/refresh on session-reuse-detected, and the workspace
@@ -84,6 +107,9 @@ func (r *Router) setSessionCookie(w http.ResponseWriter, res *services.StartSess
 // Now a method on *Router; same parity rationale as
 // setSessionCookie.
 func (r *Router) clearSessionCookie(w http.ResponseWriter) {
+	if r.cookieDomain != "" {
+		r.clearLegacyHostOnlySessionCookies(w)
+	}
 	cfg := r.csrfConfig()
 	for _, name := range []string{auth.SessionCookieName, auth.RefreshCookieName} {
 		http.SetCookie(w, &http.Cookie{
