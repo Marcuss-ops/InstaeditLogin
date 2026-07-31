@@ -15,11 +15,7 @@ import { Programs } from "./pages/Programs";
 import { Mentoring } from "./pages/Mentoring";
 import { InternalDashboard } from "./pages/internal/Dashboard";
 import { InternalLinking } from "./pages/internal/Linking";
-// AccountDetailsPage is no longer mounted on /app/accounts/:accountId
-// — that slug now redirects to /app/dashboard-channels/:accountId via
-// the RedirectAccount helper below. The .tsx file is kept (with its
-// tests) for now so the analytics scaffolding + any future per-account
-// drill-down page can reuse it without re-creating from scratch.
+// Keep the account performance route separate from the dashboard redirect.
 import { AccountPerformancePage } from "./pages/internal/AccountPerformance";
 import { ChannelsPerformancePage } from "./pages/internal/ChannelsPerformance";
 import { InternalPosts } from "./pages/internal/Posts";
@@ -46,29 +42,9 @@ const PlatformPage = lazy(() =>
   })),
 );
 
-/**
- * (DashboardChannelsRedirect wrapper removed at e51430c → now replaced
- * by the real <DashboardChannelsPage /> that consumes the
- * ChannelHeader / ChannelVideoFilters / ChannelVideoCard components
- * + useChannelAccount + useChannelContent hooks from the channels
- * feature. The page itself owns the URL state (useSearchParams for
- * ?privacy= + ?video=).)
- *
- * Taglio 5.1 step 3 — /app/accounts/:accountId now redirects (one-shot,
- * `replace`) to /app/dashboard-channels/:accountId. The legacy
- * AccountDetailsPage mount is demoted to redirect source so incoming
- * partners / deep-linked URLs land on the channel-page without a
- * double-mount hop. The `/performance` sub-route on /accounts/* is
- * intentionally left untouched (no perf page on the new dashboard
- * yet; redirecting it would break the analytics flow until the new
- * surface ships).
- */
+/** Redirect legacy account URLs to the current channel dashboard. */
 function RedirectAccount() {
-  // React Router v6 Navigate doesn't auto-interpolate route params;
-  // a small wrapper that reads `accountId` from useParams and
-  // composes the destination via template-literal keeps the redirect
-  // type-safe + 1-shot (the `replace` flag rewrites history so the
-  // back button doesn't loop).
+  // Build the destination from the captured parameter so history is replaced.
   const { accountId } = useParams<{ accountId: string }>();
   return <Navigate to={`dashboard-channels/${accountId}`} replace />;
 }
@@ -78,14 +54,11 @@ function App() {
     <ToastProvider>
       <ErrorBoundary>
         <BookingProvider>
-        <BrowserRouter>
+          <BrowserRouter>
           <CookieBanner />
           <Routes>
             <Route path="/" element={<Landing />} />
-            {/* /editor is a sibling marketing route (NOT inside /app/*) —
-                intentionally placed BEFORE the /:slug catch-all so React
-                Router matches it explicitly instead of treating the literal
-                "editor" as a platform slug and dispatching PlatformPage. */}
+            {/* Keep this marketing route before the platform-slug fallback. */}
             <Route path="/editor" element={<Editor />} />
             <Route path="/login" element={<Login />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
@@ -121,52 +94,38 @@ function App() {
               }
             >
               <Route index element={<Navigate to="dashboard" replace />} />
-              <Route path="dashboard" element={<InternalDashboard />} />                {/* /app/uploads hosts the inline form that imports a
-                  Google Drive folder in a single round-trip — the
-                  /uploads/batch/by-folder endpoint handles server-side
-                  pagination. /app/uploads/calendar and /app/calendar
-                  both render the FullCalendar-backed CalendarPage so
-                  the "Pending uploads" stat card and the "Open
-                  calendar" CTA land on the same drag-to-reschedule
-                  surface. */}
-                <Route path="uploads" element={<InternalUploads />} />
-                <Route path="youtube/studio" element={<InternalYouTubeStudio />} />
-                <Route path="youtube-studio" element={<Navigate to="youtube/studio" replace />} />
-                <Route path="linking" element={<InternalLinking />} />
-                {/* /app/accounts/:accountId → /app/dashboard-channels/:accountId
-                    (Taglio 5.1 step 3; ReplaceAccount wrapper above). The
-                    legacy AccountDetailsPage is no longer mounted here —
-                    incoming deep-links land on the Blocco #2 channel-page. */}
-                <Route path="accounts/:accountId" element={<RedirectAccount />} />
-                <Route path="accounts/:accountId/performance" element={<AccountPerformancePage />} />
-                <Route path="performance" element={<ChannelsPerformancePage />} />
-                <Route path="posts" element={<InternalPosts />} />
-                <Route path="compose" element={<InternalCompose />} />
-                <Route path="content/new" element={<ContentNew />} />
+              <Route path="dashboard" element={<InternalDashboard />} />
+              <Route path="uploads" element={<InternalUploads />} />
+              <Route path="youtube/studio" element={<InternalYouTubeStudio />} />
+              <Route
+                path="youtube-studio"
+                element={<Navigate to="youtube/studio" replace />}
+              />
+              <Route path="linking" element={<InternalLinking />} />
+              <Route path="accounts/:accountId" element={<RedirectAccount />} />
+              <Route
+                path="accounts/:accountId/performance"
+                element={<AccountPerformancePage />}
+              />
+              <Route path="performance" element={<ChannelsPerformancePage />} />
+              <Route path="posts" element={<InternalPosts />} />
+              <Route path="compose" element={<InternalCompose />} />
+              <Route path="content/new" element={<ContentNew />} />
                 <Route
                   path="content/:postId/publish"
                   element={<ContentPublish />}
                 />
-                {/* /app/dashboard-channels/:accountId?video=… — spec URL.
-                    Blocco #2 page: mounts the channel-page primitives
-                    (ChannelHeader + ChannelVideoFilters +
-                    ChannelVideoCard) on top of useChannelAccount +
-                    useChannelContent. URL state is owned by the page
-                    (useSearchParams for ?privacy= + ?video=). The legacy
-                    /app/accounts/:accountId flow now redirects here via
-                    <RedirectAccount /> (Taglio 5.1 step 3). */}
+                {/* Channel dashboard route; query parameters are owned by the page. */}
                 <Route
                   path="dashboard-channels/:accountId"
                   element={<DashboardChannelsPage />}
                 />
-                <Route path="calendar" element={<CalendarPage />} />
-                <Route path="groups" element={<GroupsPage />} />                <Route path="uploads/calendar"
-                  element={<CalendarPage />}
-                />
+              <Route path="calendar" element={<CalendarPage />} />
+              <Route path="groups" element={<GroupsPage />} />
+              <Route path="uploads/calendar" element={<CalendarPage />} />
             </Route>
 
-            {/* Admin area — gated by AdminProtectedRoute and rendered
-                inside InternalLayout so the sidebar stays visible. */}
+            {/* Admin routes use the same protected layout as the internal app. */}
             <Route
               path="/admin/dashboard"
               element={
@@ -180,7 +139,7 @@ function App() {
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </BrowserRouter>
+          </BrowserRouter>
         </BookingProvider>
       </ErrorBoundary>
     </ToastProvider>

@@ -26,7 +26,7 @@ export function GroupsPage() {
     selectedAccount,
   } = useGroupsData();
 
-return (
+  return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8 bg-[#030308] text-[#e8e8ef]">
       <div className="max-w-7xl mx-auto">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
@@ -53,13 +53,11 @@ return (
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Tree */}
           <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-[14px] font-bold text-white uppercase tracking-wider">Folders</h2>
             </div>
 
-            {/* New group (root) */}
             <div className="flex items-center gap-2 mb-4">
               <input
                 type="text"
@@ -117,7 +115,6 @@ return (
             )}
           </div>
 
-          {/* Right pane: selected node detail (group OR account). */}
           <div className="lg:col-span-2 surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5 min-h-[300px]">
             {selectedAccount ? (
               <AccountDetailPanel
