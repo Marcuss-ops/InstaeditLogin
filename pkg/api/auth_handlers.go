@@ -137,7 +137,7 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		expectedChannelID = claims.ExpectedChannelID
 		fromConnectLinkState = true
 	} else {
-		expectedChannelID, stateErr = verifyOAuthState(w, req, provider, state)
+		expectedChannelID, stateErr = verifyOAuthState(w, req, provider, state, r.cookieDomain)
 		if stateErr != nil {
 			writeError(w, http.StatusBadRequest, "invalid state: "+stateErr.Error())
 			return
@@ -844,7 +844,7 @@ func generateOAuthState(w http.ResponseWriter, provider, expectedChannelID, cook
 	state := base64.RawURLEncoding.EncodeToString(b)
 	http.SetCookie(w, &http.Cookie{
 		Name: OAuthStateCookieName(provider), Value: state, Path: "/",
-		Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+		Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
 		MaxAge: int(oauthStateMaxAge.Seconds()),
 	})
 	if expectedChannelID != "" {
@@ -862,7 +862,7 @@ func generateOAuthState(w http.ResponseWriter, provider, expectedChannelID, cook
 		// ?expected_channel_id= after a previous abandoned flow).
 		http.SetCookie(w, &http.Cookie{
 			Name: OAuthStateExpectedChannelCookieName(provider), Value: state + ":" + expectedChannelID, Path: "/",
-			Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+			Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
 			MaxAge: int(oauthStateMaxAge.Seconds()),
 		})
 	}
@@ -875,17 +875,28 @@ func generateOAuthState(w http.ResponseWriter, provider, expectedChannelID, cook
 // expectedChannelID is "" when no hint was set; a non-empty value means
 // the operator told us which channel/resource the OAuth grant must
 // bind to.
-func verifyOAuthState(w http.ResponseWriter, req *http.Request, provider, stateParam string) (string, error) {
-	c, err := req.Cookie(OAuthStateCookieName(provider))
-	if err != nil {
-		return "", fmt.Errorf("oauth state cookie missing for provider %q", provider)
+
+func verifyOAuthState(w http.ResponseWriter, req *http.Request, provider, stateParam, cookieDomain string) (string, error) {
+	// During the domain migration browsers can temporarily send both the
+	// legacy parent-domain cookie and the current host/domain cookie. Search
+	// all same-name cookies for the exact nonce instead of trusting whichever
+	// one net/http returns first.
+	found := false
+	for _, c := range req.Cookies() {
+		if c.Name == OAuthStateCookieName(provider) && subtle.ConstantTimeCompare([]byte(c.Value), []byte(stateParam)) == 1 {
+			found = true
+			break
+		}
 	}
-	if subtle.ConstantTimeCompare([]byte(c.Value), []byte(stateParam)) != 1 {
+	if !found {
+		if _, err := req.Cookie(OAuthStateCookieName(provider)); err != nil {
+			return "", fmt.Errorf("oauth state cookie missing for provider %q", provider)
+		}
 		return "", fmt.Errorf("oauth state mismatch for provider %q (CSRF protection)", provider)
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: OAuthStateCookieName(provider), Value: "", Path: "/",
-		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+		Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
 		MaxAge: -1, Expires: time.Unix(1, 0),
 	})
 	expectedChannelID := ""
@@ -907,7 +918,7 @@ func verifyOAuthState(w http.ResponseWriter, req *http.Request, provider, stateP
 		}
 		http.SetCookie(w, &http.Cookie{
 			Name: OAuthStateExpectedChannelCookieName(provider), Value: "", Path: "/",
-			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+			Domain: cookieDomain, HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode,
 			MaxAge: -1, Expires: time.Unix(1, 0),
 		})
 	}

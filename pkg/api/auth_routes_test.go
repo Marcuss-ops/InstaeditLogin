@@ -69,8 +69,8 @@ func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
 	if !cookie.Secure {
 		t.Error("oauth state cookie must be Secure (HTTPS-only)")
 	}
-	if cookie.SameSite != http.SameSiteLaxMode {
-		t.Errorf("oauth state cookie SameSite: want Lax, got %v", cookie.SameSite)
+	if cookie.SameSite != http.SameSiteNoneMode {
+		t.Errorf("oauth state cookie SameSite: want None, got %v", cookie.SameSite)
 	}
 	if cookie.MaxAge != int(oauthStateMaxAge.Seconds()) {
 		t.Errorf("oauth state cookie MaxAge: want %d, got %d (must match oauthStateMaxAge)", int(oauthStateMaxAge.Seconds()), cookie.MaxAge)
@@ -618,8 +618,8 @@ func TestHandleLogin_YouTube_ExpectedChannelID_SetsSiblingCookie(t *testing.T) {
 	if !sib.Secure {
 		t.Error("sibling cookie must be Secure (HTTPS-only)")
 	}
-	if sib.SameSite != http.SameSiteLaxMode {
-		t.Errorf("sibling cookie SameSite: want Lax, got %v", sib.SameSite)
+	if sib.SameSite != http.SameSiteNoneMode {
+		t.Errorf("sibling cookie SameSite: want None, got %v", sib.SameSite)
 	}
 }
 
