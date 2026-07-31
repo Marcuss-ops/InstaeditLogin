@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -752,6 +753,121 @@ func TestVault_Save_EmptyRefreshToken_PreservesExistingCiphertext(t *testing.T) 
 	}
 	if gotRefresh != "existing-refresh-token" {
 		t.Errorf("preserved refresh token: want existing value, got %q", gotRefresh)
+	}
+}
+
+// TestVault_PrepareToken_ScopeAndExpiryMerge verifies the grant metadata
+// merge performed for provider refresh responses. An omitted scope or
+// refresh-token expiry is not an instruction to clear the persisted grant;
+// an explicitly returned scope set replaces the previous set, while the
+// access-token expiry is always recomputed from a positive expires_in.
+func TestVault_PrepareToken_ScopeAndExpiryMerge(t *testing.T) {
+	v, _, _ := newTestVault(t)
+	const (
+		oauthConnectionID int64 = 701
+		platformAccountID int64 = 702
+	)
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	v.SetClock(func() time.Time { return now })
+	previousAccessExpiry := now.Add(45 * time.Minute)
+	previousRefreshExpiry := now.Add(30 * 24 * time.Hour)
+
+	oldRefresh, err := v.encryptor.Encrypt("existing-refresh")
+	if err != nil {
+		t.Fatalf("encrypt existing refresh token: %v", err)
+	}
+	input := &models.TokenData{
+		AccessToken: "refreshed-without-scope",
+		TokenType:   models.TokenTypeBearer,
+		ExpiresIn:   3600,
+	}
+	originalScopes := append([]string(nil), input.Scopes...)
+	originalRefresh := input.RefreshToken
+
+	existing := &models.Token{
+		OAuthConnectionID:     oauthConnectionID,
+		TokenType:             models.TokenTypeBearer,
+		EncryptedRefreshToken: oldRefresh,
+		AccessTokenExpiresAt:  &previousAccessExpiry,
+		ExpiresAt:             &previousAccessExpiry,
+		RefreshTokenExpiresAt: &previousRefreshExpiry,
+		GrantedScopes:         []string{"scope.read", "scope.write"},
+	}
+
+	withoutScope, err := v.prepareTokenForOAuthConnection(
+		context.Background(), oauthConnectionID, platformAccountID,
+		input, false, existing,
+	)
+	if err != nil {
+		t.Fatalf("prepare token without scope: %v", err)
+	}
+	if got, want := strings.Join(withoutScope.GrantedScopes, ","), "scope.read,scope.write"; got != want {
+		t.Fatalf("omitted scope: want %q preserved, got %q", want, got)
+	}
+	if !withoutScope.AccessTokenExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("access expiry: want %s from expires_in, got %s", now.Add(time.Hour), withoutScope.AccessTokenExpiresAt)
+	}
+	if !withoutScope.RefreshTokenExpiresAt.Equal(previousRefreshExpiry) {
+		t.Fatalf("omitted refresh expiry: want %s preserved, got %s", previousRefreshExpiry, withoutScope.RefreshTokenExpiresAt)
+	}
+	if !bytes.Equal(withoutScope.EncryptedRefreshToken, oldRefresh) {
+		t.Fatal("omitted refresh token must preserve the existing encrypted grant")
+	}
+	if !reflect.DeepEqual(input.Scopes, originalScopes) || input.RefreshToken != originalRefresh {
+		t.Fatalf("prepare must not mutate input TokenData: scopes=%v refresh=%q", input.Scopes, input.RefreshToken)
+	}
+
+	withNewScope, err := v.prepareTokenForOAuthConnection(
+		context.Background(), oauthConnectionID, platformAccountID,
+		&models.TokenData{
+			AccessToken:           "refreshed-with-new-scope",
+			TokenType:             models.TokenTypeBearer,
+			ExpiresIn:             1200,
+			RefreshTokenExpiresIn: 7200,
+			Scopes:                []string{"scope.read"},
+		}, false, existing,
+	)
+	if err != nil {
+		t.Fatalf("prepare token with new scope: %v", err)
+	}
+	if got, want := strings.Join(withNewScope.GrantedScopes, ","), "scope.read"; got != want {
+		t.Fatalf("returned scope set: want replacement %q, got %q", want, got)
+	}
+	if !withNewScope.AccessTokenExpiresAt.Equal(now.Add(1200 * time.Second)) {
+		t.Fatalf("new access expiry: want %s, got %s", now.Add(1200*time.Second), withNewScope.AccessTokenExpiresAt)
+	}
+	if !withNewScope.RefreshTokenExpiresAt.Equal(now.Add(7200 * time.Second)) {
+		t.Fatalf("new refresh expiry: want %s, got %s", now.Add(7200*time.Second), withNewScope.RefreshTokenExpiresAt)
+	}
+
+	withoutBlankScope, err := v.prepareTokenForOAuthConnection(
+		context.Background(), oauthConnectionID, platformAccountID,
+		&models.TokenData{
+			AccessToken: "refreshed-with-blank-scope",
+			TokenType:   models.TokenTypeBearer,
+			ExpiresIn:   1800,
+			Scopes:      []string{" ", "\t"},
+		}, false, existing,
+	)
+	if err != nil {
+		t.Fatalf("prepare token with blank scopes: %v", err)
+	}
+	if got, want := strings.Join(withoutBlankScope.GrantedScopes, ","), "scope.read,scope.write"; got != want {
+		t.Fatalf("blank scope values: want %q preserved, got %q", want, got)
+	}
+
+	withoutAccessExpiry, err := v.prepareTokenForOAuthConnection(
+		context.Background(), oauthConnectionID, platformAccountID,
+		&models.TokenData{
+			AccessToken: "refresh-without-expires-in",
+			TokenType:   models.TokenTypeBearer,
+		}, false, existing,
+	)
+	if err != nil {
+		t.Fatalf("prepare token without access expiry: %v", err)
+	}
+	if !withoutAccessExpiry.AccessTokenExpiresAt.Equal(previousAccessExpiry) {
+		t.Fatalf("omitted access expiry: want %s preserved, got %s", previousAccessExpiry, withoutAccessExpiry.AccessTokenExpiresAt)
 	}
 }
 

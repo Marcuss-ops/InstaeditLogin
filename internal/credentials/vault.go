@@ -263,9 +263,18 @@ func (v *CredentialVault) prepareTokenForOAuthConnection(ctx context.Context, oa
 	// Google commonly omits refresh_token on subsequent authorizations.
 	// Read the existing grant before pruning the previous row so a normal
 	// reconnect can never replace a valid refresh token with NULL. Scopes
-	// and refresh expiry are preserved for the same reason.
+	// and refresh expiry are preserved for the same reason. Work on a
+	// local copy: merging provider omissions must not mutate the
+	// TokenData owned by the callback or refresh caller.
+	merged := *tokenData
+	tokenData = &merged
+	// Treat only non-blank scope values as authoritative; malformed
+	// empty entries from a provider must not erase a valid grant.
+	tokenData.Scopes = nonEmptyScopeValues(tokenData.Scopes)
 	incomingRefreshTokenEmpty := tokenData.RefreshToken == ""
 	var preservedEncryptedRefresh []byte
+	var preservedAccessExpiresAt *time.Time
+	var preservedRefreshExpiresAt *time.Time
 	if preserveExisting || existingOverride != nil {
 		existing := existingOverride
 		if existing == nil {
@@ -276,6 +285,16 @@ func (v *CredentialVault) prepareTokenForOAuthConnection(ctx context.Context, oa
 			}
 		}
 		if existing != nil {
+			if tokenData.ExpiresIn <= 0 {
+				if existingAccessExpiresAt := existing.AccessTokenExpiresAt; existingAccessExpiresAt != nil {
+					preservedAccessExpiresAt = cloneTime(existingAccessExpiresAt)
+				} else if existing.ExpiresAt != nil {
+					preservedAccessExpiresAt = cloneTime(existing.ExpiresAt)
+				}
+			}
+			if tokenData.RefreshTokenExpiresIn <= 0 {
+				preservedRefreshExpiresAt = cloneTime(existing.RefreshTokenExpiresAt)
+			}
 			if tokenData.RefreshToken == "" && len(existing.EncryptedRefreshToken) > 0 {
 				// Keep the original ciphertext as the source of truth. The
 				// decrypted value is copied only so downstream metadata and
@@ -294,7 +313,7 @@ func (v *CredentialVault) prepareTokenForOAuthConnection(ctx context.Context, oa
 				if len(scopes) == 0 {
 					scopes = existing.Scopes
 				}
-				tokenData.Scopes = append([]string(nil), scopes...)
+				tokenData.Scopes = nonEmptyScopeValues(scopes)
 			}
 			if tokenData.RefreshTokenExpiresIn <= 0 && existing.RefreshTokenExpiresAt != nil {
 				remaining := existing.RefreshTokenExpiresAt.Sub(v.clock())
@@ -328,11 +347,22 @@ func (v *CredentialVault) prepareTokenForOAuthConnection(ctx context.Context, oa
 		// merely because Google omitted refresh_token in this response.
 		encryptedRefresh = preservedEncryptedRefresh
 	}
-	expiresAt := v.clock().Add(time.Duration(tokenData.ExpiresIn) * time.Second)
+	var expiresAt time.Time
+	if tokenData.ExpiresIn > 0 {
+		expiresAt = v.clock().Add(time.Duration(tokenData.ExpiresIn) * time.Second)
+	} else if preservedAccessExpiresAt != nil {
+		expiresAt = *preservedAccessExpiresAt
+	} else {
+		// Keep the historical fallback for a token without an expiry,
+		// but never replace a known persisted expiry with "now".
+		expiresAt = v.clock()
+	}
 	var refreshExpiresAt *time.Time
 	if tokenData.RefreshTokenExpiresIn > 0 {
 		expires := v.clock().Add(time.Duration(tokenData.RefreshTokenExpiresIn) * time.Second)
 		refreshExpiresAt = &expires
+	} else {
+		refreshExpiresAt = preservedRefreshExpiresAt
 	}
 	// Modern subject-keyed grants are shared across resources, so they
 	// do not persist a channel id. Legacy providers retain the resource
@@ -760,6 +790,24 @@ func classifyRefreshFailure(err error) (status, code string) {
 		return models.AccountStatusReauthRequired, "invalid_grant"
 	}
 	return "error", "refresh_failed"
+}
+
+func nonEmptyScopeValues(scopes []string) []string {
+	filtered := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		if scope = strings.TrimSpace(scope); scope != "" {
+			filtered = append(filtered, scope)
+		}
+	}
+	return filtered
+}
+
+func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func isExpiryError(err error) bool {
