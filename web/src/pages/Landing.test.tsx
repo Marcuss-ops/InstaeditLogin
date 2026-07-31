@@ -79,4 +79,33 @@ describe("Landing", () => {
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
+
+  it("renders the six video testimonials inside the testimonials section", () => {
+    render(
+      <MemoryRouter>
+        <BookingProvider>
+          <Landing />
+        </BookingProvider>
+      </MemoryRouter>,
+    );
+
+    const testimonialsSection = screen
+      .getByRole("heading", { name: /own words\./i })
+      .closest("section");
+    expect(testimonialsSection).not.toBeNull();
+    const ids = [
+      "W15j3auVUcM",
+      "FiTk9bAzfh4",
+      "-NzSe0k-P-A",
+      "Ddb5mFngqcQ",
+      "IvBkOutk0-Q",
+      "DBuIP0vur8U",
+    ];
+    for (const id of ids) {
+      const iframe = testimonialsSection?.querySelector(
+        `iframe[src*="youtube.com/embed/${id}"]`,
+      );
+      expect(iframe, `missing iframe for ${id}`).not.toBeNull();
+    }
+  });
 });
