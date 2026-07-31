@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   PenSquare,
@@ -13,6 +13,7 @@ import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
 import { Skeleton, ErrorState } from "../../components/feedback";
 import { getProvider } from "../../lib/providers";
 import { cn } from "../../lib/utils";
+import { useUploadMedia } from "../../features/publishing/hooks/useUploadMedia";
 
 type Workspace = {
   id: number;
@@ -135,10 +136,15 @@ export function InternalCompose() {
   const [status, setStatus] = useState<"draft" | "queued" | "publish">("draft");
   const [selectedAccounts, setSelectedAccounts] = useState<Set<number>>(new Set());
 
-  const [mediaAssetId, setMediaAssetId] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const { state: uploadState, start: startUpload, reset: resetUpload } =
+    useUploadMedia();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploading =
+    uploadState.kind === "hashing" || uploadState.kind === "uploading";
+  const uploadError =
+    uploadState.kind === "error" ? uploadState.message : null;
+  const mediaAssetId =
+    uploadState.kind === "done" ? uploadState.asset.id : null;
 
   const loadData = useCallback(async () => {
     abortRef.current?.abort();
@@ -202,49 +208,22 @@ export function InternalCompose() {
     });
   };
 
-  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setUploadError(null);
-    setUploading(true);
     try {
-      const presign = await authedFetch("/api/v1/media/presign", {
-        method: "POST",
-        body: JSON.stringify({
-          filename: file.name,
-          content_type: file.type || "video/mp4",
-          size_bytes: file.size,
-        }),
-      });
-      if (!presign.ok) throw new Error("presign failed");
-      const grant = (await presign.json()) as {
-        asset_id: string;
-        upload_url: string;
-        upload_headers: Record<string, string>;
-      };
-      const putRes = await fetch(grant.upload_url, {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "video/mp4" },
-        body: file,
-      });
-      if (!putRes.ok) throw new Error("upload failed");
-      const complete = await authedFetch(`/api/v1/media/${grant.asset_id}/complete`, {
-        method: "POST",
-      });
-      if (!complete.ok) throw new Error("upload verification failed");
-      setMediaAssetId(grant.asset_id);
+      await startUpload(file);
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Upload failed");
-      setMediaAssetId(null);
+      if (err instanceof AuthError) {
+        navigate("/login", { replace: true });
+      }
     } finally {
-      setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
   const clearMedia = () => {
-    setMediaAssetId(null);
-    setUploadError(null);
+    resetUpload();
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -431,7 +410,7 @@ export function InternalCompose() {
                   id="media"
                   ref={fileInputRef}
                   type="file"
-                  accept="video/mp4,video/quicktime"
+                  accept="video/mp4,video/quicktime,.mp4,.mov,.m4v"
                   onChange={handleFileChange}
                   disabled={uploading}
                   className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-xl text-[14px] text-white file:mr-3 file:px-3 file:py-1 file:rounded-lg file:border-0 file:bg-white/[0.10] file:text-white file:cursor-pointer disabled:opacity-50"
