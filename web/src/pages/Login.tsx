@@ -167,7 +167,7 @@ export function Login() {
                   type="button"
                   onClick={() =>
                     setError(
-                      `Sign in to InstaEdit first, then connect ${p.name} from the Connections section.`,
+                      `Sign in to InstaEdit first, then connect ${p.name} from the Linking page.`,
                     )
                   }
                   className="group flex items-center justify-center gap-2 h-11 px-3 rounded-xl bg-white/[0.04] border border-white/[0.10] text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:border-white/[0.20] hover:text-white transition-all focus:outline-none focus:border-[#0A84FF]/50 focus:ring-2 focus:ring-[#0A84FF]/20"
