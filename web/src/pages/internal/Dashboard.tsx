@@ -16,6 +16,7 @@ import {
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
 import { getProvider, type ProviderId } from "../../lib/providers";
 import { Skeleton, ErrorState } from "../../components/feedback";
+import { listChannelContent } from "../../features/channels/api/channelContentApi";
 
 type PlatformAccount = {
   id: number;
@@ -46,6 +47,7 @@ type DashboardData = {
   // GET /api/v1/uploads/counts. The dashboard widget renders from
   // this map; the calendar page hits /uploads/by-account separately.
   countMap: Map<number, AccountProgrammatoCount>;
+  privateCountMap: Map<number, number>;
 };
 
 type FetchState =
@@ -132,6 +134,26 @@ export function InternalDashboard() {
         }>;
         total_uploads: number;
       };
+      const privateCountEntries = await Promise.all(
+        (accountsData.accounts ?? [])
+          .filter((account) => account.platform === "youtube")
+          .map(async (account) => {
+            let count = 0;
+            let cursor: string | undefined;
+            do {
+              const page = await listChannelContent({
+                accountId: account.id,
+                privacy: "private",
+                limit: 50,
+                cursor,
+                signal: controller.signal,
+              });
+              count += page.items.length;
+              cursor = page.next_cursor;
+            } while (cursor);
+            return [account.id, count] as const;
+          }),
+      );
       // Project the count-rollup into a Map<account_id, count + nextAt>
       // so the per-account widget can O(1)-look-up instead of doing an
       // inner N×M loop on a fetched upload list.
@@ -151,6 +173,7 @@ export function InternalDashboard() {
           accounts: accountsData.accounts ?? [],
           posts: postsData.posts ?? [],
           countMap,
+          privateCountMap: new Map(privateCountEntries),
           totalUploads: countsData.total_uploads ?? 0,
         },
       });
@@ -205,6 +228,7 @@ export function InternalDashboard() {
       account: PlatformAccount;
       count: number;
       nextAt: string | null;
+      privateCount: number;
     }>;
     return state.data.accounts
       .filter((a) => PUBLISHABLE_PLATFORMS.has(a.platform))
@@ -216,14 +240,10 @@ export function InternalDashboard() {
           account: a,
           count: bucket.count,
           nextAt: bucket.nextAt,
+          privateCount: state.data.privateCountMap.get(a.id) ?? 0,
         };
       })
       .sort((a, b) => b.count - a.count || a.account.id - b.account.id);
-  }, [state]);
-
-  const privateAccounts = useMemo(() => {
-    if (state.kind !== "ready") return [];
-    return state.data.accounts.filter((account) => account.platform === "youtube");
   }, [state]);
 
   return (
@@ -288,12 +308,11 @@ export function InternalDashboard() {
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <h2 className="text-[18px] font-extrabold tracking-tight text-white flex items-center gap-2">
-                      <CalendarClock size={20} className="text-white/60" />
-                      Programmati
+                      <Video size={20} className="text-white/60" />
+                      Canali YouTube
                     </h2>
                     <p className="text-[13px] text-[#9aa0aa] mt-0.5">
-                      Scheduled uploads per account. Click an account to open
-                      its calendar and reschedule by drag-and-drop.
+                      Apri il calendario o i video privati del canale.
                     </p>
                   </div>
                 </div>
@@ -305,24 +324,6 @@ export function InternalDashboard() {
               </section>
             )}
 
-            {privateAccounts.length > 0 && (
-              <section className="mb-8">
-                <div className="mb-4">
-                  <h2 className="text-[18px] font-extrabold tracking-tight text-white flex items-center gap-2">
-                    <LockKeyhole size={20} className="text-white/60" />
-                    Privati
-                  </h2>
-                  <p className="text-[13px] text-[#9aa0aa] mt-0.5">
-                    Apri i video privati del canale per controllarli o modificarne la copertina.
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {privateAccounts.map((account) => (
-                    <AccountPrivatiCard key={account.id} account={account} />
-                  ))}
-                </div>
-              </section>
-            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-2 surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6">
@@ -394,22 +395,8 @@ export function InternalDashboard() {
   );
 }
 
-// AccountProgrammatoCard is the per-account "high bar" card on the
-// dashboard. Visually:
-//   ┌─────────────────────────────────────────┐
-//   │ ╔═════════════════════════════════════╗ │   ← gradient high-bar
-//   │ ║  N programmati                       ║ │     (purple/emerald)
-//   │ ╚═════════════════════════════════════╝ │
-//   │ [icon] Facebook                         │
-//   │         @username                       │
-//   │                                         │
-//   │ Next: Wed 17 Apr, 14:30                 │
-//   │ Apri calendario →                        │
-//   └─────────────────────────────────────────┘
-//
-// The high-bar color shifts based on count: 0 = neutral, 1-3 = soft
-// amber, 4+ = vivid emerald — gives at-a-glance reading of queue
-// density without needing to read numbers.
+// AccountProgrammatoCard keeps the two channel actions together so a
+// dashboard channel never needs two separate cards for its two views.
 function AccountProgrammatoCard({
   entry,
 }: {
@@ -417,45 +404,16 @@ function AccountProgrammatoCard({
     account: PlatformAccount;
     count: number;
     nextAt: string | null;
+    privateCount: number;
   };
 }) {
   const provider = getProvider(entry.account.platform);
-  const barClasses =
-    entry.count === 0
-      ? "bg-white/[0.04] text-[#9aa0aa]"
-      : entry.count < 4
-        ? "bg-amber-500/[0.10] text-amber-300 border-b border-amber-500/[0.25]"
-        : "bg-gradient-to-r from-emerald-500/[0.16] via-violet-500/[0.12] to-blue-500/[0.10] text-white border-b border-emerald-500/[0.30]";
-
-  const nextLabel = useMemo(() => {
-    if (!entry.nextAt) return null;
-    const d = new Date(entry.nextAt);
-    if (Number.isNaN(d.getTime())) return null;
-    return d.toLocaleString(undefined, {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }, [entry.nextAt]);
 
   return (
-    <Link
-      to={`/app/uploads/calendar?account_id=${entry.account.id}`}
-      className="group block surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl overflow-hidden hover:border-white/[0.30] hover:shadow-[0_8px_32px_rgba(0,0,0,0.4)] transition-all no-underline"
+    <div
+      className="group surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl overflow-hidden hover:border-white/[0.30] hover:shadow-[0_8px_32px_rgba(0,0,0,0.4)] transition-all"
       data-testid={`dash-programmati-card-${entry.account.id}`}
     >
-      <div className={barClasses + " px-5 py-3"}>
-        <div className="flex items-center justify-between">
-          <span className="text-[12px] font-bold uppercase tracking-wider">
-            Programmati
-          </span>
-          <span className="text-[20px] font-extrabold tabular-nums">
-            {entry.count}
-          </span>
-        </div>
-      </div>
       <div className="px-5 py-4">
         <div className="flex items-center gap-3 mb-3">
           {provider ? (
@@ -478,57 +436,23 @@ function AccountProgrammatoCard({
             </p>
           </div>
         </div>
-        {nextLabel ? (
-          <div className="flex items-center gap-1.5 text-[12px] text-[#9aa0aa] mb-3">
-            <Clock size={11} />
-            <span>Next: {nextLabel}</span>
-          </div>
-        ) : null}
-        <div className="flex items-center justify-between text-[12px] text-[#9aa0aa] group-hover:text-white transition-colors">
-          <span>Apri calendario →</span>
-          <ArrowRight size={14} />
+        <div className="grid grid-cols-2 gap-2">
+          <Link
+            to={`/app/uploads/calendar?account_id=${entry.account.id}`}
+            className="flex items-center justify-between gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-[12px] font-semibold text-[#c8cbd4] hover:bg-white/[0.09] hover:text-white transition-colors no-underline"
+          >
+            <span className="inline-flex items-center gap-1.5"><CalendarClock size={14} /> Programmati</span>
+            <span className="text-white tabular-nums">{entry.count}</span>
+          </Link>
+          <Link
+            to={`/app/dashboard-channels/${entry.account.id}?privacy=private`}
+            className="flex items-center justify-between gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-[12px] font-semibold text-[#c8cbd4] hover:bg-white/[0.09] hover:text-white transition-colors no-underline"
+          >
+            <span className="inline-flex items-center gap-1.5"><LockKeyhole size={14} /> Privati</span>
+            <span className="text-white tabular-nums">{entry.privateCount}</span>
+          </Link>
         </div>
       </div>
-    </Link>
-  );
-}
-
-function AccountPrivatiCard({ account }: { account: PlatformAccount }) {
-  const provider = getProvider(account.platform);
-
-  return (
-    <Link
-      to={`/app/dashboard-channels/${account.id}?privacy=private`}
-      className="group block surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl overflow-hidden hover:border-white/[0.30] hover:shadow-[0_8px_32px_rgba(0,0,0,0.4)] transition-all no-underline"
-      data-testid={`dash-privati-card-${account.id}`}
-    >
-      <div className="bg-white/[0.04] text-[#9aa0aa] px-5 py-3 border-b border-white/[0.08]">
-        <div className="flex items-center justify-between">
-          <span className="text-[12px] font-bold uppercase tracking-wider">Privati</span>
-          <LockKeyhole size={16} />
-        </div>
-      </div>
-      <div className="px-5 py-4">
-        <div className="flex items-center gap-3 mb-3">
-          {provider ? (
-            <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${provider.color} flex items-center justify-center text-white shrink-0`}>
-              {provider.icon}
-            </div>
-          ) : (
-            <div className="w-10 h-10 rounded-xl bg-white/[0.06] flex items-center justify-center text-white/40 shrink-0">
-              <Video size={18} />
-            </div>
-          )}
-          <div className="min-w-0">
-            <p className="text-[14px] font-bold text-white truncate">{provider?.name ?? account.platform}</p>
-            <p className="text-[12px] text-[#9aa0aa] truncate">@{account.username || "—"}</p>
-          </div>
-        </div>
-        <div className="flex items-center justify-between text-[12px] text-[#9aa0aa] group-hover:text-white transition-colors">
-          <span>Apri video privati →</span>
-          <ArrowRight size={14} />
-        </div>
-      </div>
-    </Link>
+    </div>
   );
 }
