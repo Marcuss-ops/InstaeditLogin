@@ -73,19 +73,16 @@ type assetsAdapter struct {
 	repo *repository.MediaAssetRepository
 }
 
-func (a assetsAdapter) FindByID(ctx context.Context, id string) (*models.MediaAsset, error) {
-	_ = ctx
-	return a.repo.FindByID(id)
+func (a assetsAdapter) FindForPost(ctx context.Context, workspaceID int64, assetID, bucket, key string) (*models.MediaAsset, error) {
+	return a.repo.FindForPost(ctx, workspaceID, assetID, bucket, key)
 }
 
-// FindByUploadKey is the bridge for the resolver's legacy-URL fallback
-// branch (post.media_url → upload_key parse → media_assets row). The
-// repo method is ctx-aware (QueryRowContext); the adapter forwards
-// ctx so worker-shutdown cancellation propagates through to the DB
-// driver (this DOES fix the BUG-CLASS #2 from the prior review for
-// the resolution path — only the FindByID branch passed ctx.TODO).
-func (a assetsAdapter) FindByUploadKey(ctx context.Context, key string) (*models.MediaAsset, error) {
-	return a.repo.FindByUploadKey(ctx, key)
+// FindByUploadKey is the bridge for the resolver's legacy URL fallback.
+// The repository applies the same workspace ownership predicate as the
+// canonical asset-id path, so legacy media_url rows cannot bypass tenant
+// isolation.
+func (a assetsAdapter) FindByUploadKey(ctx context.Context, workspaceID int64, key string) (*models.MediaAsset, error) {
+	return a.repo.FindByUploadKey(ctx, workspaceID, key)
 }
 
 type App struct {
@@ -670,12 +667,9 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			// MediaDownloadResolver (migration 080 followup): wire the
 			// fresh-presigned-URL sign path here so executePublish mints
 			// per-call signatures immediately before the platform API call.
-			// assetsAdapter wraps *repository.MediaAssetRepository so the resolver
-			// interface (MediaAssetStore.FindByID takes a ctx) is satisfied even
-			// though the repo's FindByID is a simple sync lookup. ctx is accepted
-			// for forward-compat (when the repo upgrades to ctx-aware queries) but
-			// ignored today. Adapter is function-local: zero blast radius outside
-			// RunWorkers. (P3 — migration 080 followup.)
+			// assetsAdapter wraps *repository.MediaAssetRepository and applies
+			// workspace-scoped ownership before the resolver mints a URL. The
+			// adapter is function-local to keep the wiring change contained.
 			mediaAssetRepoForResolver := repository.NewMediaAssetRepository(a.DB)
 			resolver := services.NewMediaDownloadResolver(
 				a.StorageProvider,
@@ -911,6 +905,12 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			// pattern keeps the constructor signature stable across
 			// wires (production + tests).
 			uw.SetYouTubeTargetPublishStore(repository.NewYouTubeTargetPublicationRepository(a.DB))
+			mediaAssetRepoForResolver := repository.NewMediaAssetRepository(a.DB)
+			uw.SetMediaDownloadResolver(services.NewMediaDownloadResolver(
+				a.StorageProvider,
+				assetsAdapter{repo: mediaAssetRepoForResolver},
+				slog.Default(),
+			))
 			return uw.Run(ctx)
 		},
 	})

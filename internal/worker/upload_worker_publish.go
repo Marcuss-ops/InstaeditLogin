@@ -24,11 +24,14 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 	mediaURL := w.storage.AssetURL(key)
 
 	post := &models.Post{
-		WorkspaceID: job.WorkspaceID,
-		Title:       job.Title,
-		Caption:     job.Caption,
-		MediaURL:    mediaURL,
-		Status:      models.PostStatusQueued,
+		WorkspaceID:      job.WorkspaceID,
+		Title:            job.Title,
+		Caption:          job.Caption,
+		MediaURL:         mediaURL,
+		MediaAssetID:     strPtr(assetID),
+		StorageObjectKey: strPtr(key),
+		Bucket:           strPtr(storageBucket(w.storage)),
+		Status:           models.PostStatusQueued,
 		// P1#4 — IngestAfter is server-side DEFAULT NOW() at SQL
 		// level; we pass job.IngestAfter through so a queued
 		// ingest-after-future row preserves its ingest schedule.
@@ -266,6 +269,16 @@ func (w *UploadWorker) uploadVideoAsPrivateForTarget(
 	uploader, ok := provider.(services.UploadChannelUploader)
 	if !ok {
 		return fmt.Errorf("provider for %s does not implement UploadChannelUploader (YouTubeOAuthService implements it; bootstrap must register the capability)", account.Platform)
+	}
+	if w.resolver == nil {
+		return fmt.Errorf("resolve media asset for private YouTube upload: media download resolver is not configured")
+	}
+	mediaURL, err = w.resolver.ResolveForUpload(ctx, post, time.Hour)
+	if err != nil {
+		if errors.Is(err, services.ErrAssetExpired) {
+			return fmt.Errorf("resolve media asset for private YouTube upload: media asset expired; re-upload required")
+		}
+		return fmt.Errorf("resolve media asset for private YouTube upload: %w", err)
 	}
 	videoID, err := uploader.UploadVideoAsPrivate(ctx, oauthToken.AccessToken, post, mediaURL)
 	if err != nil {

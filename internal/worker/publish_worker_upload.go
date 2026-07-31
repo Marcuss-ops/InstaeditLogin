@@ -10,11 +10,30 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
+// resolveFreshMediaPayload replaces any cached/legacy media URL with a
+// just-in-time URL from the shared resolver. The nil-resolver fallback is
+// retained only for legacy test fixtures; production wiring always provides
+// the resolver.
+func (w *PublishWorker) resolveFreshMediaPayload(ctx context.Context, target *models.PostTarget, post *models.Post, payload models.PublishPayload) (models.PublishPayload, error) {
+	if w.resolver == nil {
+		return payload, w.markFailed(target, "media download resolver is not configured")
+	}
+	freshURL, err := w.resolver.ResolveForUpload(ctx, post, time.Hour)
+	if err != nil {
+		if errors.Is(err, services.ErrAssetExpired) {
+			return payload, w.markFailed(target, "media asset expired at time of publish; re-upload required")
+		}
+		return payload, w.markFailed(target, "resolve fresh media upload URL: "+err.Error())
+	}
+	payload.VideoURL = freshURL
+	return payload, nil
+}
+
 // executePublish performs the actual platform publish call and finalizes
-// the target state. It waits for the per-platform throttle, calls
-// Publisher.Publish, and handles both synchronous and asynchronous
-// outcomes. After a successful sync publish it also fires the optional
-// post-completion delivery hook.
+// the target state. It waits for the per-platform throttle, resolves media
+// immediately before Publisher.Publish, and handles both synchronous and
+// asynchronous outcomes. After a successful sync publish it also fires the
+// optional post-completion delivery hook.
 func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostTarget, account *models.PlatformAccount, post *models.Post, oauthToken *models.OAuthToken, payload models.PublishPayload, publisher services.Publisher) error {
 	// FASE 1.3: throttle per-platform API calls to avoid rate-limit
 	// bans. If the throttle is nil (test mode), skip. If the platform's
@@ -26,26 +45,9 @@ func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostT
 		}
 	}
 
-	// MediaDownloadResolver (migration 080 + followup): mint a FRESH
-	// presigned GET URL just-in-time so the platform API sees a valid
-	// signature regardless of how long the post has been queued. A nil
-	// resolver falls back to the cached post.MediaURL (legacy path);
-	// production main always wires a real resolver.
-	if w.resolver != nil {
-		freshURL, err := w.resolver.ResolveForUpload(ctx, post, 1*time.Hour)
-		if err != nil {
-			// ErrAssetExpired (services.ErrAssetExpired) — the resolved
-			// media_assets row has expires_at < NOW(). Mark this target
-			// 'failed' with an operator-friendly message so the dashboard
-			// surfaces "re-upload required" instead of a generic resolver
-			// error. Any other error remains wrapped with the original
-			// resolver context.
-			if errors.Is(err, services.ErrAssetExpired) {
-				return w.markFailed(target, "media asset expired at time of publish; re-upload required")
-			}
-			return fmt.Errorf("resolve fresh media upload URL: %w", err)
-		}
-		payload.VideoURL = freshURL
+	payload, err := w.resolveFreshMediaPayload(ctx, target, post, payload)
+	if err != nil {
+		return err
 	}
 	result, err := publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
 	if err != nil {
@@ -91,10 +93,18 @@ func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostT
 	// (doesn't re-publish) so the asset is decoration only; Drive
 	// + Velox are stubs and the registry's nil-asset path returns
 	// ErrDeliveryProviderNotImplemented which the helper swallows.
-	// The Drive exporter needs the actual staged media URL and its size;
-	// post.MediaURL is the canonical object URL produced by ingest.
+	// The delivery hook receives the same fresh URL that reached the
+	// publisher; it must never be handed the expired compatibility URL.
 	w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
-		ID: post.MediaURL, UploadKey: post.MediaURL, ContentType: "video/mp4",
-	}, post.MediaURL)
+		ID: mediaReferenceValue(post.MediaAssetID), UploadKey: mediaReferenceValue(post.StorageObjectKey),
+		Bucket: mediaReferenceValue(post.Bucket), ContentType: "video/mp4",
+	}, payload.VideoURL)
 	return nil
+}
+
+func mediaReferenceValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

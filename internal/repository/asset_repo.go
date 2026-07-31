@@ -68,15 +68,9 @@ func (r *MediaAssetRepository) Create(asset *models.MediaAsset) error {
 
 // FindByID returns the asset for the given UUID. Matches the codebase
 // convention: (nil, nil) on not-found, no sql.ErrNoRows leaking out.
-func (r *MediaAssetRepository) FindByID(id string) (*models.MediaAsset, error) {
+func scanMediaAsset(row interface{ Scan(...any) error }) (*models.MediaAsset, error) {
 	asset := &models.MediaAsset{}
-	err := r.db.QueryRow(
-		`SELECT id, user_id, upload_key, bucket, content_type, size_bytes, status,
-		        COALESCE(sha256, '') AS sha256,
-		        COALESCE(error_message, '') AS error_message,
-		        expires_at, created_at, updated_at
-		 FROM media_assets WHERE id = $1`, id,
-	).Scan(
+	err := row.Scan(
 		&asset.ID, &asset.UserID, &asset.UploadKey, &asset.Bucket, &asset.ContentType,
 		&asset.SizeBytes, &asset.Status, &asset.SHA256, &asset.ErrorMessage,
 		&asset.ExpiresAt, &asset.CreatedAt, &asset.UpdatedAt,
@@ -84,46 +78,88 @@ func (r *MediaAssetRepository) FindByID(id string) (*models.MediaAsset, error) {
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	return asset, nil
+}
+
+func (r *MediaAssetRepository) FindByID(id string) (*models.MediaAsset, error) {
+	asset, err := scanMediaAsset(r.db.QueryRow(
+		`SELECT id, user_id, upload_key, bucket, content_type, size_bytes, status,
+		        COALESCE(sha256, '') AS sha256,
+		        COALESCE(error_message, '') AS error_message,
+		        expires_at, created_at, updated_at
+		 FROM media_assets WHERE id = $1`, id,
+	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to find media asset by id: %w", err)
 	}
 	return asset, nil
 }
 
-// FindByUploadKey returns the asset for the given upload_key. Used by
-// the publish_path's legacy-URL fallback: posts that pre-date migration
-// 080 only have media_url set (no media_asset_id); the resolver parses
-// media_url to recover the upload_key, then joins back to the canonical
-// media_assets row.
-//
-// resource causal link (post-create flow in 2026-Q1): the presign handler
-// builds the upload_key as services.BuildUploadKey(userID, filename),
-// then stamps it onto BOTH the media_assets.upload_key (UNIQUE) AND
-// derives the path-style signed URL that gets stored on post.media_url.
-// Given the upload_key is UNIQUE in media_assets, this query yields at
-// most 1 row — a LIMIT 1 is implicit via QueryRow's single-row semantics
-// but spelled out here for code reviewers who grep for explicit LIMITs.
-//
-// (nil, nil) on not-found, no sql.ErrNoRows leaking out (matches
-// FindByID's convention).
-func (r *MediaAssetRepository) FindByUploadKey(ctx context.Context, key string) (*models.MediaAsset, error) {
-	asset := &models.MediaAsset{}
-	err := r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, upload_key, bucket, content_type, size_bytes, status,
-		        COALESCE(sha256, '') AS sha256,
-		        COALESCE(error_message, '') AS error_message,
-		        expires_at, created_at, updated_at
-		 FROM media_assets WHERE upload_key = $1 LIMIT 1`, key,
-	).Scan(
-		&asset.ID, &asset.UserID, &asset.UploadKey, &asset.Bucket, &asset.ContentType,
-		&asset.SizeBytes, &asset.Status, &asset.SHA256, &asset.ErrorMessage,
-		&asset.ExpiresAt, &asset.CreatedAt, &asset.UpdatedAt,
-	)
-	if err == sql.ErrNoRows {
+// FindForPost resolves a media asset only when it belongs to the post's
+// workspace. The caller may provide the canonical asset id and/or the
+// persisted bucket/object key mirror; when mirrors are present they must
+// agree with the row, preventing stale or hand-edited post fields from
+// selecting a different object. Membership is used rather than a user id
+// on Post because posts are workspace-owned and may be published by any
+// workspace member.
+func (r *MediaAssetRepository) FindForPost(ctx context.Context, workspaceID int64, assetID, bucket, key string) (*models.MediaAsset, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("find media asset for post: invalid workspace id %d", workspaceID)
+	}
+	asset, err := scanMediaAsset(r.db.QueryRowContext(ctx,
+		`SELECT ma.id, ma.user_id, ma.upload_key, ma.bucket, ma.content_type, ma.size_bytes, ma.status,
+		        COALESCE(ma.sha256, ''), COALESCE(ma.error_message, ''), ma.expires_at, ma.created_at, ma.updated_at
+		 FROM media_assets ma
+		 WHERE (
+			($2 <> '' AND ma.id = NULLIF($2, '')::uuid)
+			OR ($2 = '' AND $3 <> '' AND ma.upload_key = $3)
+		 )
+		 AND ($4 = '' OR ma.bucket = $4)
+		 AND ($3 = '' OR ma.upload_key = $3)
+		 AND EXISTS (
+			SELECT 1 FROM workspaces w
+			WHERE w.id = $1 AND (
+				w.owner_id = ma.user_id OR EXISTS (
+					SELECT 1 FROM workspace_members wm
+					WHERE wm.workspace_id = w.id AND wm.user_id = ma.user_id
+				)
+			)
+		 )`,
+		workspaceID, assetID, key, bucket,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to find owned media asset for post: %w", err)
+	}
+	return asset, nil
+}
+
+// FindByUploadKey is the legacy URL fallback, scoped to workspace
+// membership so a legacy URL cannot become an IDOR publishing path.
+func (r *MediaAssetRepository) FindByUploadKey(ctx context.Context, workspaceID int64, key string) (*models.MediaAsset, error) {
+	if workspaceID <= 0 || key == "" {
 		return nil, nil
 	}
+	asset, err := scanMediaAsset(r.db.QueryRowContext(ctx,
+		`SELECT ma.id, ma.user_id, ma.upload_key, ma.bucket, ma.content_type, ma.size_bytes, ma.status,
+		        COALESCE(ma.sha256, ''), COALESCE(ma.error_message, ''), ma.expires_at, ma.created_at, ma.updated_at
+		 FROM media_assets ma
+		 WHERE ma.upload_key = $2
+		 AND EXISTS (
+			SELECT 1 FROM workspaces w
+			WHERE w.id = $1 AND (
+				w.owner_id = ma.user_id OR EXISTS (
+					SELECT 1 FROM workspace_members wm
+					WHERE wm.workspace_id = w.id AND wm.user_id = ma.user_id
+				)
+			)
+		 ) LIMIT 1`,
+		workspaceID, key,
+	))
 	if err != nil {
-		return nil, fmt.Errorf("failed to find media asset by upload_key: %w", err)
+		return nil, fmt.Errorf("failed to find owned media asset by upload_key: %w", err)
 	}
 	return asset, nil
 }

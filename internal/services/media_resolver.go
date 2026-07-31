@@ -27,14 +27,9 @@ import (
 //
 // Two entry points:
 //
-//   - ResolveForUpload(ctx, post, ttl): canonical path. Inspects
-//     post.MediaAssetID first → falls back to (post.Bucket,
-//     post.StorageObjectKey) when the asset-id reference is missing
-//     (legacy backfill scenario).
-//
-//   - ResolveForKey(ctx, bucket, key, ttl): direct (bucket, key) pair
-//     lookup. Useful for recovery paths that already know the storage
-//     coordinates (e.g. reconciler replaying a failed publish).
+//   - ResolveForUpload(ctx, post, ttl): canonical path. Resolves the
+//     post's asset id or persisted bucket/object-key mirror through an
+//     ownership-scoped media_assets query, then checks readiness and expiry.
 //
 // Default TTL: 1 hour. Long enough to bridge the platform's accept
 // window for video metadata + thumbnail upload (YouTube typically
@@ -42,7 +37,6 @@ import (
 // don't linger.
 type MediaDownloadResolver interface {
 	ResolveForUpload(ctx context.Context, post *models.Post, ttl time.Duration) (string, error)
-	ResolveForKey(ctx context.Context, bucket, key string, ttl time.Duration) (string, error)
 }
 
 // ObjectGetter is the narrow subset of StorageProvider the resolver
@@ -64,16 +58,15 @@ type BucketAwareObjectGetter interface {
 // the asset-id branch of ResolveForUpload. Same narrowness rationale
 // as ObjectGetter above.
 type MediaAssetStore interface {
-	FindByID(ctx context.Context, id string) (*models.MediaAsset, error)
-	// FindByUploadKey is the legacy-fallback lookup: for posts that
-	// pre-date migration 080 (and therefore have ONLY post.media_url
-	// set, no media_asset_id / storage_object_key), the resolver
-	// parses post.media_url to recover the upload_key path segment
-	// then joins back to the canonical media_assets row via
-	// media_assets.upload_key. The match is UNIQUE (upload_key has
-	// a UNIQUE constraint), so at most 1 row is returned.
-	// (nil, nil) when no row matches.
-	FindByUploadKey(ctx context.Context, key string) (*models.MediaAsset, error)
+	// FindForPost resolves either a canonical asset id or a persisted
+	// (bucket, object key) pair while enforcing that the asset uploader
+	// belongs to the post workspace. It also returns the full asset row
+	// so readiness and expiry are checked against database state.
+	FindForPost(ctx context.Context, workspaceID int64, assetID, bucket, key string) (*models.MediaAsset, error)
+	// FindByUploadKey is the legacy-fallback lookup for posts that only
+	// have media_url. Implementations MUST apply the same workspace
+	// ownership predicate as FindForPost.
+	FindByUploadKey(ctx context.Context, workspaceID int64, key string) (*models.MediaAsset, error)
 }
 
 // ErrPostMissingMediaReference is the typed sentinel returned by
@@ -215,46 +208,47 @@ func NewMediaDownloadResolver(storage ObjectGetter, store MediaAssetStore, logge
 // defaultResolverTTL is the fallback TTL when callers pass <= 0.
 const defaultResolverTTL = 1 * time.Hour
 
-// resolveAssetByID performs the canonical branch.
-func (r *mediaDownloadResolver) resolveAssetByID(ctx context.Context, assetID string, ttl time.Duration) (string, *models.MediaAsset, error) {
-	if assetID == "" {
-		return "", nil, errors.New("media resolver: empty asset id")
-	}
-	if r.store == nil {
-		return "", nil, errors.New("media resolver: MediaAssetStore not wired")
-	}
-	asset, err := r.store.FindByID(ctx, assetID)
-	if err != nil {
-		return "", nil, fmt.Errorf("media resolver: load asset %q: %w", assetID, err)
-	}
+// resolveAsset validates the database row after an ownership-scoped lookup.
+// The row, not post.MediaURL or caller-provided storage coordinates, is the
+// source of truth for readiness, expiry, bucket, and object key.
+func (r *mediaDownloadResolver) resolveAsset(ctx context.Context, asset *models.MediaAsset, ttl time.Duration) (string, *models.MediaAsset, error) {
 	if asset == nil {
-		return "", nil, fmt.Errorf("media resolver: asset %q not found", assetID)
+		return "", nil, errors.New("media resolver: media asset not found or not owned by post workspace")
 	}
 	if asset.Status != models.MediaAssetStatusReady {
-		return "", asset, fmt.Errorf("media resolver: asset %q not ready (status=%s); the worker should NOT have scheduled a publish on a non-ready asset", assetID, asset.Status)
+		return "", asset, fmt.Errorf("media resolver: media asset not ready (status=%s)", asset.Status)
 	}
-	// Expiry gate (immediately before publishing): a status='ready' row can
-	// still have expires_at in the past if the row's TTL was breached and
-	// the MarkExpired cleanup pass hasn't swept it yet. Return a typed
-	// sentinel so the worker can write a clearer operator message instead
-	// of the generic "not ready" error.
 	if !asset.ExpiresAt.IsZero() && time.Now().After(asset.ExpiresAt) {
-		return "", asset, fmt.Errorf("%w (asset_id=%q expires_at=%s now=%s)", ErrAssetExpired, assetID, asset.ExpiresAt.UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+		return "", asset, fmt.Errorf("%w (asset_id=%q expires_at=%s)", ErrAssetExpired, asset.ID, asset.ExpiresAt.UTC().Format(time.RFC3339))
 	}
-	key := asset.UploadKey
-	if key == "" {
-		return "", asset, fmt.Errorf("media resolver: asset %q has empty upload_key (corrupted row)", assetID)
+	if asset.UploadKey == "" {
+		return "", asset, errors.New("media resolver: media asset has empty upload_key (corrupted row)")
 	}
 	if ttl <= 0 {
 		ttl = defaultResolverTTL
 	}
-	url, err := r.getObjectURL(ctx, asset.Bucket, key, ttl)
+	url, err := r.getObjectURL(ctx, asset.Bucket, asset.UploadKey, ttl)
 	if err != nil {
-		return "", asset, fmt.Errorf("media resolver: sign GET URL for key %q: %w", key, err)
+		return "", asset, fmt.Errorf("media resolver: sign GET URL for key %q: %w", asset.UploadKey, err)
 	}
-	r.logger.Debug("media resolver: fresh presigned GET URL minted (asset branch)",
-		"asset_id", assetID, "key", key, "ttl_sec", int(ttl.Seconds()))
+	r.logger.Debug("media resolver: fresh presigned GET URL minted",
+		"asset_id", asset.ID, "key", asset.UploadKey, "ttl_sec", int(ttl.Seconds()))
 	return url, asset, nil
+}
+
+func (r *mediaDownloadResolver) resolveAssetForPost(ctx context.Context, post *models.Post, assetID, bucket, key string, ttl time.Duration) (string, error) {
+	if r.store == nil {
+		return "", errors.New("media resolver: MediaAssetStore not wired")
+	}
+	if post.WorkspaceID <= 0 {
+		return "", errors.New("media resolver: post has no workspace ownership context")
+	}
+	asset, err := r.store.FindForPost(ctx, post.WorkspaceID, assetID, bucket, key)
+	if err != nil {
+		return "", fmt.Errorf("media resolver: load owned asset: %w", err)
+	}
+	url, _, err := r.resolveAsset(ctx, asset, ttl)
+	return url, err
 }
 
 func (r *mediaDownloadResolver) getObjectURL(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
@@ -268,32 +262,15 @@ func (r *mediaDownloadResolver) getObjectURL(ctx context.Context, bucket, key st
 	return r.storage.GetObject(ctx, key, ttl)
 }
 
-// resolveByKey performs the legacy / direct branch.
-func (r *mediaDownloadResolver) resolveByKey(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
-	if key == "" {
-		return "", errors.New("media resolver: empty key")
-	}
-	if ttl <= 0 {
-		ttl = defaultResolverTTL
-	}
-	url, err := r.getObjectURL(ctx, bucket, key, ttl)
-	if err != nil {
-		return "", fmt.Errorf("media resolver: sign GET URL for key %q: %w", key, err)
-	}
-	r.logger.Debug("media resolver: fresh presigned GET URL minted (key branch)",
-		"bucket", bucket, "key", key, "ttl_sec", int(ttl.Seconds()))
-	return url, nil
-}
-
 // ResolveForUpload is the canonical entry point.
 //
 // Decision tree:
 //
-//  1. If post.MediaAssetID is set: load the asset row via
-//     MediaAssetStore.FindByID → mint URL via asset's UploadKey +
-//     bucket.
-//  2. Else if post.StorageObjectKey is set: mint URL directly via
-//     (post.Bucket, post.StorageObjectKey).
+//  1. If post.MediaAssetID is set: resolve the asset through
+//     MediaAssetStore.FindForPost using the post workspace and the
+//     persisted bucket/object-key mirrors.
+//  2. Else if post.StorageObjectKey is set: resolve that key through
+//     the same ownership-scoped media_assets query; never sign it directly.
 //  3. Else if post.MediaURL is set: parse the URL to extract upload_key,
 //     then MediaAssetStore.FindByUploadKey — this is the LEGACY
 //     fallback for posts created before migration 080 (which is the
@@ -308,15 +285,23 @@ func (r *mediaDownloadResolver) ResolveForUpload(ctx context.Context, post *mode
 		return "", errors.New("media resolver: post is nil")
 	}
 	if post.MediaAssetID != nil && *post.MediaAssetID != "" {
-		url, _, err := r.resolveAssetByID(ctx, *post.MediaAssetID, ttl)
-		return url, err
+		bucket, key := "", ""
+		if post.Bucket != nil {
+			bucket = *post.Bucket
+		}
+		if post.StorageObjectKey != nil {
+			key = *post.StorageObjectKey
+		}
+		return r.resolveAssetForPost(ctx, post, *post.MediaAssetID, bucket, key, ttl)
 	}
 	if post.StorageObjectKey != nil && *post.StorageObjectKey != "" {
 		bucket := ""
 		if post.Bucket != nil {
 			bucket = *post.Bucket
 		}
-		return r.resolveByKey(ctx, bucket, *post.StorageObjectKey, ttl)
+		// Even the key-only compatibility path must resolve a ready,
+		// owned media_assets row; it may not mint from arbitrary input.
+		return r.resolveAssetForPost(ctx, post, "", bucket, *post.StorageObjectKey, ttl)
 	}
 	// Legacy fallback: parse media_url to recover the upload_key, then
 	// look it up in media_assets via FindByUploadKey. Runs once per
@@ -326,14 +311,15 @@ func (r *mediaDownloadResolver) ResolveForUpload(ctx context.Context, post *mode
 	if post.MediaURL != "" {
 		uploadKey := extractUploadKeyFromMediaURL(post.MediaURL)
 		if uploadKey != "" {
-			asset, err := r.store.FindByUploadKey(ctx, uploadKey)
+			if r.store == nil {
+				return "", errors.New("media resolver: MediaAssetStore not wired")
+			}
+			asset, err := r.store.FindByUploadKey(ctx, post.WorkspaceID, uploadKey)
 			if err != nil {
 				return "", fmt.Errorf("media resolver: legacy fallback lookup by upload_key %q: %w", uploadKey, err)
 			}
 			if asset != nil {
-				// Recurse through resolveAssetByID so the same
-				// status=ready + expires_at gate logic applies.
-				url, _, err := r.resolveAssetByID(ctx, asset.ID, ttl)
+				url, _, err := r.resolveAsset(ctx, asset, ttl)
 				return url, err
 			}
 			// Legacy row whose upload_key isn't in media_assets
@@ -341,7 +327,7 @@ func (r *mediaDownloadResolver) ResolveForUpload(ctx context.Context, post *mode
 			// media_url, OR media_url path was never canonical). Map
 			// to a typed sentinel so the worker can write a clear
 			// operator message.
-			return "", fmt.Errorf("%w (parsed_key=%q media_url=%q)", ErrMediaURLNoMatchingAsset, uploadKey, post.MediaURL)
+			return "", fmt.Errorf("%w (parsed_key=%q)", ErrMediaURLNoMatchingAsset, uploadKey)
 		}
 		// Can't parse anything meaningful from media_url. Fall through
 		// to ErrPostMissingMediaReference — same path the canonical
@@ -349,11 +335,6 @@ func (r *mediaDownloadResolver) ResolveForUpload(ctx context.Context, post *mode
 		// consistent error message.
 	}
 	return "", ErrPostMissingMediaReference
-}
-
-// ResolveForKey is the explicit-direct branch.
-func (r *mediaDownloadResolver) ResolveForKey(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
-	return r.resolveByKey(ctx, bucket, key, ttl)
 }
 
 // Compile-time check: *mediaDownloadResolver must implement

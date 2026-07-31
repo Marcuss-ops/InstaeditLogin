@@ -194,6 +194,7 @@ type UploadWorker struct {
 	sourceRegistry   *ArtifactSourceRegistry
 	deliveryVerifier ExternalDeliveryVerifier
 	ytPubStore       UploadYouTubeTargetPubStore
+	resolver         services.MediaDownloadResolver
 	interval         time.Duration
 	logger           *slog.Logger
 	uploadTimeout    time.Duration
@@ -254,6 +255,13 @@ func NewUploadWorker(
 // optional-stage contract.
 func (w *UploadWorker) SetYouTubeTargetPublishStore(store UploadYouTubeTargetPubStore) {
 	w.ytPubStore = store
+}
+
+// SetMediaDownloadResolver wires the shared just-in-time media resolver.
+// The setter keeps the existing constructor stable for test fixtures while
+// production ensures every publisher signs from the owned, ready asset.
+func (w *UploadWorker) SetMediaDownloadResolver(resolver services.MediaDownloadResolver) {
+	w.resolver = resolver
 }
 
 // YouTubeTargetPublishStore returns the wired per-target publication

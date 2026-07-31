@@ -69,12 +69,34 @@ func (f *fakeMediaAssetStore) FindByID(_ context.Context, id string) (*models.Me
 // returns the first match on asset.UploadKey (the production repo is
 // a UNIQUE constraint query so at most 1 row exists; the fake is a
 // map so an explicit scan is the only sensible shape).
-func (f *fakeMediaAssetStore) FindByUploadKey(_ context.Context, key string) (*models.MediaAsset, error) {
+func (f *fakeMediaAssetStore) FindForPost(_ context.Context, workspaceID int64, assetID, bucket, key string) (*models.MediaAsset, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	for _, asset := range f.assets {
-		if asset != nil && asset.UploadKey == key {
+		if asset == nil || asset.UserID != workspaceID {
+			continue
+		}
+		if assetID != "" && asset.ID != assetID {
+			continue
+		}
+		if assetID == "" && key != "" && asset.UploadKey != key {
+			continue
+		}
+		if bucket != "" && asset.Bucket != bucket {
+			continue
+		}
+		return asset, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeMediaAssetStore) FindByUploadKey(_ context.Context, workspaceID int64, key string) (*models.MediaAsset, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	for _, asset := range f.assets {
+		if asset != nil && asset.UserID == workspaceID && asset.UploadKey == key {
 			return asset, nil
 		}
 	}
@@ -91,6 +113,7 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetIDSuccess(t *testing.T) {
 		assets: map[string]*models.MediaAsset{
 			"asset-001": {
 				ID:        "asset-001",
+				UserID:    1,
 				UploadKey: "uploads/1/uuid.mp4",
 				Bucket:    "instaedit-media",
 				Status:    models.MediaAssetStatusReady,
@@ -101,6 +124,7 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetIDSuccess(t *testing.T) {
 	resolver := NewMediaDownloadResolver(getter, store, nil)
 
 	post := &models.Post{
+		WorkspaceID:  1,
 		MediaAssetID: ptrToString("asset-001"),
 	}
 	url, err := resolver.ResolveForUpload(context.Background(), post, 30*time.Minute)
@@ -133,6 +157,7 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetNotReady(t *testing.T) {
 		assets: map[string]*models.MediaAsset{
 			"asset-pending": {
 				ID:        "asset-pending",
+				UserID:    1,
 				UploadKey: "uploads/2/x.mp4",
 				Status:    models.MediaAssetStatusPending,
 			},
@@ -141,7 +166,7 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetNotReady(t *testing.T) {
 	getter := &fakeObjectGetter{nextURL: "https://example.com/x"}
 	resolver := NewMediaDownloadResolver(getter, store, nil)
 
-	post := &models.Post{MediaAssetID: ptrToString("asset-pending")}
+	post := &models.Post{WorkspaceID: 1, MediaAssetID: ptrToString("asset-pending")}
 	_, err := resolver.ResolveForUpload(context.Background(), post, time.Minute)
 	if err == nil {
 		t.Fatal("expected error for non-ready asset, got nil")
@@ -161,7 +186,7 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetMissing(t *testing.T) {
 	getter := &fakeObjectGetter{nextURL: "https://example.com/x"}
 	resolver := NewMediaDownloadResolver(getter, store, nil)
 
-	post := &models.Post{MediaAssetID: ptrToString("asset-does-not-exist")}
+	post := &models.Post{WorkspaceID: 1, MediaAssetID: ptrToString("asset-does-not-exist")}
 	_, err := resolver.ResolveForUpload(context.Background(), post, time.Minute)
 	if err == nil {
 		t.Fatal("expected error for missing asset, got nil")
@@ -184,6 +209,7 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetExpired(t *testing.T) {
 		assets: map[string]*models.MediaAsset{
 			"asset-expired": {
 				ID:        "asset-expired",
+				UserID:    1,
 				UploadKey: "uploads/7/x.mp4",
 				// status=ready is what an asset row that never got swept
 				// by MarkExpired looks like at the resolver. The resolver
@@ -201,7 +227,7 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetExpired(t *testing.T) {
 	getter := &fakeObjectGetter{nextURL: "https://example.com/x"}
 	resolver := NewMediaDownloadResolver(getter, store, nil)
 
-	post := &models.Post{MediaAssetID: ptrToString("asset-expired")}
+	post := &models.Post{WorkspaceID: 1, MediaAssetID: ptrToString("asset-expired")}
 	_, err := resolver.ResolveForUpload(context.Background(), post, time.Minute)
 	if !errors.Is(err, ErrAssetExpired) {
 		t.Fatalf("err = %v, want errors.Is(err, ErrAssetExpired)", err)
@@ -216,15 +242,16 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetExpired(t *testing.T) {
 // (post.Bucket, post.StorageObjectKey) are set, the resolver falls back
 // to ResolveByKey without consulting MediaAssetStore.
 func TestMediaDownloadResolver_ResolveForUpload_StorageObjectKey(t *testing.T) {
-	// store configured but NOT expected to be queried.
 	store := &fakeMediaAssetStore{
-		assets: map[string]*models.MediaAsset{},
-		err:    errors.New("store should not be called"),
+		assets: map[string]*models.MediaAsset{
+			"asset-key": {ID: "asset-key", UserID: 1, UploadKey: "uploads/1/legacy-x.mp4", Bucket: "instaedit-local", Status: models.MediaAssetStatusReady},
+		},
 	}
 	getter := &fakeObjectGetter{nextURL: "https://presigned.example.com/legacy.mp4"}
 	resolver := NewMediaDownloadResolver(getter, store, nil)
 
 	post := &models.Post{
+		WorkspaceID:      1,
 		Bucket:           ptrToString("instaedit-local"),
 		StorageObjectKey: ptrToString("uploads/1/legacy-x.mp4"),
 	}
@@ -257,6 +284,7 @@ func TestMediaDownloadResolver_ResolveForUpload_LegacyMediaURLFallback(t *testin
 		assets: map[string]*models.MediaAsset{
 			"asset-legacy": {
 				ID:        "asset-legacy",
+				UserID:    1,
 				UploadKey: "uploads/1/legacy.mp4",
 				Status:    models.MediaAssetStatusReady,
 				ExpiresAt: time.Now().Add(1 * time.Hour),
@@ -271,7 +299,8 @@ func TestMediaDownloadResolver_ResolveForUpload_LegacyMediaURLFallback(t *testin
 	// strips the FIRST path component (the bucket name); the residual
 	// is the upload_key.
 	post := &models.Post{
-		MediaURL: "https://minio.example.com/instaedit-local/uploads/1/legacy.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256",
+		WorkspaceID: 1,
+		MediaURL:    "https://minio.example.com/instaedit-local/uploads/1/legacy.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256",
 		// MediaAssetID is nil (legacy).
 		// StorageObjectKey is nil (legacy).
 	}
@@ -329,6 +358,7 @@ func TestMediaDownloadResolver_ResolveForUpload_LegacyMediaURLExpired(t *testing
 		assets: map[string]*models.MediaAsset{
 			"asset-leg-expired": {
 				ID:        "asset-leg-expired",
+				UserID:    1,
 				UploadKey: "uploads/2/x.mp4",
 				Status:    models.MediaAssetStatusReady,
 				ExpiresAt: time.Now().Add(-1 * time.Minute), // past TTL
@@ -339,7 +369,8 @@ func TestMediaDownloadResolver_ResolveForUpload_LegacyMediaURLExpired(t *testing
 	resolver := NewMediaDownloadResolver(getter, store, nil)
 
 	post := &models.Post{
-		MediaURL: "https://minio.example.com/instaedit-local/uploads/2/x.mp4",
+		WorkspaceID: 1,
+		MediaURL:    "https://minio.example.com/instaedit-local/uploads/2/x.mp4",
 	}
 	_, err := resolver.ResolveForUpload(context.Background(), post, time.Minute)
 	if !errors.Is(err, ErrAssetExpired) {
@@ -366,26 +397,6 @@ func TestMediaDownloadResolver_ResolveForUpload_NoReference(t *testing.T) {
 	}
 	if len(getter.calls) != 0 {
 		t.Errorf("ObjectGetter.GetObject must not be called when post has no reference; got %d call(s)", len(getter.calls))
-	}
-}
-
-// TestMediaDownloadResolver_ResolveForKey verifies the direct entry
-// point: caller supplies (bucket, key) explicitly. Resolver forwards to
-// ObjectGetter.GetObject without consulting MediaAssetStore.
-func TestMediaDownloadResolver_ResolveForKey(t *testing.T) {
-	store := &fakeMediaAssetStore{err: errors.New("store should not be called")}
-	getter := &fakeObjectGetter{nextURL: "https://presigned.example.com/direct.mp4"}
-	resolver := NewMediaDownloadResolver(getter, store, nil)
-
-	url, err := resolver.ResolveForKey(context.Background(), "instaedit-local", "uploads/1/direct.mp4", 2*time.Hour)
-	if err != nil {
-		t.Fatalf("ResolveForKey returned unexpected error: %v", err)
-	}
-	if url != "https://presigned.example.com/direct.mp4" {
-		t.Errorf("returned URL = %q, want %q", url, "https://presigned.example.com/direct.mp4")
-	}
-	if len(getter.calls) != 1 || getter.calls[0].Key != "uploads/1/direct.mp4" || getter.calls[0].TTL != 2*time.Hour {
-		t.Errorf("ObjectGetter.GetObject invoked wrong: %+v", getter.calls)
 	}
 }
 

@@ -172,11 +172,10 @@ type PublishWorker struct {
 	logger        *slog.Logger
 	// resolver (migration 080 + MediaDownloadResolver followup) mints
 	// a fresh presigned GET URL just-in-time at publish time so the
-	// per-platform API call sees a valid signature. May be nil in
-	// legacy / test wiring: executePublish falls back to the cached
-	// post.MediaURL when resolver is nil. Production main wires
-	// services.NewMediaDownloadResolver(
-	//     storageProvider, repository.NewMediaAssetRepository(db), log).
+	// per-platform API call sees a valid signature. Production wiring
+	// supplies services.NewMediaDownloadResolver(
+	//     storageProvider, repository.NewMediaAssetRepository(db), log);
+	// operational paths fail closed when it is absent.
 	resolver services.MediaDownloadResolver
 	// deliveryRegistry (Task 7/10) — post-completion dispatch hook.
 	// Optional: nil means dispatch is a no-op (pre-existing test
@@ -378,13 +377,20 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	// after claiming the target so Drive never falls through the YouTube
 	// publish contract.
 	if account.Platform == models.PlatformGoogleDrive && w.deliveryRegistry != nil {
+		if w.resolver == nil {
+			return w.markFailed(target, "media download resolver is not configured")
+		}
+		deliveryURL, err := w.resolver.ResolveForUpload(ctx, post, time.Hour)
+		if err != nil {
+			return w.markFailed(target, "resolve fresh media URL for Drive delivery: "+err.Error())
+		}
 		target.Status = models.PostStatusPublished
 		now := time.Now()
 		target.PublishedAt = &now
 		if err := w.postRepo.UpdateStatus(target); err != nil {
 			return fmt.Errorf("mark Drive export target published: %w", err)
 		}
-		w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{ContentType: "video/mp4"}, post.MediaURL)
+		w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{ContentType: "video/mp4"}, deliveryURL)
 		return nil
 	}
 
@@ -753,17 +759,21 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 						if err := w.postRepo.UpdateStatus(target); err != nil {
 							return fmt.Errorf("publish worker: update target after YouTube reuse: %w", err)
 						}
-						// Post-completion dispatch is a best-effort
-						// forward; for YouTube Phase-2 reuse it would
-						// re-emit the same webhook we'd otherwise emit
-						// on the fresh-publish path. The DeliveryRegistry
-						// YouTube adapter is a no-op forward (no
-						// re-publish) so the dispatch is a cheap memo
-						// to subscribers — kept for parity with the
-						// SYNC-PUBLISH branch.
-						w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
-							ID: post.MediaURL, UploadKey: post.MediaURL, ContentType: "video/mp4",
-						}, post.MediaURL)
+						// Post-completion dispatch is best-effort. Resolve a fresh
+						// URL for the delivery hook too; never re-emit the
+						// persisted signed URL after Phase-2 reuse.
+						if w.resolver != nil {
+							deliveryURL, resolveErr := w.resolver.ResolveForUpload(ctx, post, time.Hour)
+							if resolveErr != nil {
+								w.logger.Warn("publish worker: skipping Phase-2 completion delivery because fresh media URL resolution failed",
+									"target_id", target.ID, "post_id", target.PostID, "error", resolveErr)
+							} else {
+								w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
+									ID: mediaReferenceValue(post.MediaAssetID), UploadKey: mediaReferenceValue(post.StorageObjectKey),
+									Bucket: mediaReferenceValue(post.Bucket), ContentType: "video/mp4",
+								}, deliveryURL)
+							}
+						}
 						return nil
 					}
 				}
@@ -775,66 +785,10 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		}
 	}
 
-	// FASE 1.3: throttle per-platform API calls to avoid rate-limit
-	// bans. If the throttle is nil (test mode), skip. If the platform's
-	// bucket is empty, Wait() blocks until a token is available or
-	// ctx is cancelled (graceful shutdown).
-	if w.throttle != nil {
-		if err := w.throttle.Wait(ctx, account.Platform); err != nil {
-			return fmt.Errorf("throttle wait for %s: %w", account.Platform, err)
-		}
-	}
-
-	result, err := publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
-	if err != nil {
-		return w.markFailed(target, err.Error())
-	}
-
-	// 7. ASYNC PUBLISH (Taglio 4.2): if the platform has the
-	// AsyncPublisher capability, the Publish() call returned a
-	// publish_id (in result.PlatformMediaID) but did NOT complete
-	// the publish — the platform is still processing. We store the
-	// publish_id on the target and KEEP status='publishing' (the
-	// claim already wrote 'publishing' to the DB; we just need to
-	// ensure UpdateStatus doesn't revert it back to the in-memory
-	// 'queued' value the target struct carries from ListPending).
-	// The ReconcileWorker goroutine will pick this target up on
-	// subsequent ticks and drive the state machine to completion.
-	if _, isAsync := w.router.AsyncPublisher(account.Platform); isAsync && result.PlatformMediaID != "" {
-		target.PlatformPostID = result.PlatformMediaID
-		target.Status = models.PostStatusPublishing // preserve the claim's status transition
-		w.logger.Info("async publish initiated, reconciler will poll",
-			"target_id", target.ID, "platform", account.Platform,
-			"publish_id", result.PlatformMediaID)
-		if err := w.postRepo.UpdateStatus(target); err != nil {
-			return fmt.Errorf("update status for async publish: %w", err)
-		}
-		return nil
-	}
-
-	// 8. SYNC PUBLISH: transition publishing → published.
-	target.Status = models.PostStatusPublished
-	target.PlatformPostID = result.PlatformMediaID
-	now := time.Now()
-	target.PublishedAt = &now
-	if err := w.postRepo.UpdateStatus(target); err != nil {
-		return fmt.Errorf("transition to published: %w", err)
-	}
-	// Post-completion dispatch (Task 7/10): fire DeliveryRegistry
-	// for the platform_account.Platform key. Best-effort: a missing
-	// provider OR a Deliver error is warn-logged and NOT propagated
-	// (the publish row is already in 'published' state; a rollback
-	// would cause a retry that double-uploads). Asset is a zero-
-	// value placeholder: the YouTube adapter is a no-op forward
-	// (doesn't re-publish) so the asset is decoration only; Drive
-	// + Velox are stubs and the registry's nil-asset path returns
-	// ErrDeliveryProviderNotImplemented which the helper swallows.
-	// The Drive exporter needs the actual staged media URL and its size;
-	// post.MediaURL is the canonical object URL produced by ingest.
-	w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{
-		ID: post.MediaURL, UploadKey: post.MediaURL, ContentType: "video/mp4",
-	}, post.MediaURL)
-	return nil
+	// All platform uploads are finalized by executePublish. It throttles,
+	// resolves the canonical media asset immediately before Publisher.Publish,
+	// and owns the sync/async target transition plus completion dispatch.
+	return w.executePublish(ctx, target, account, post, oauthToken, payload, publisher)
 }
 
 // canonicalCanaryUploader (Task 7/10) is the YouTube canary pre-flight

@@ -424,6 +424,19 @@ func (m *mockCredentialVault) Rotate(ctx context.Context, platformAccountID int6
 	return m.Save(ctx, platformAccountID, tokenData)
 }
 
+// testMediaDownloadResolver is the compatibility resolver for legacy
+// publish-worker fixtures. Production wiring always supplies the real
+// ownership/readiness resolver; this fake preserves the historical unit-test
+// payload shape without reintroducing a production URL fallback.
+type testMediaDownloadResolver struct{}
+
+func (testMediaDownloadResolver) ResolveForUpload(_ context.Context, post *models.Post, _ time.Duration) (string, error) {
+	if post != nil && post.MediaURL != "" {
+		return post.MediaURL, nil
+	}
+	return "https://test.invalid/media.mp4", nil
+}
+
 // ------------------------------------------------------------------
 // Constructor helpers — one per goroutine type.
 // ------------------------------------------------------------------
@@ -444,6 +457,7 @@ func newTestWorker(posts PublisherPostStore, users *mockUserStore, name string, 
 		users,
 		router,
 		vault,
+		testMediaDownloadResolver{},
 		"test-worker-id",
 		nil, // no MemoryLimiter needed in unit tests
 		10*time.Millisecond,
