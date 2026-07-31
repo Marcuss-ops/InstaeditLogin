@@ -13,7 +13,7 @@ import {
   Video,
   LockKeyhole,
 } from "lucide-react";
-import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
+import { authedFetch, ApiError, AuthError, fetchSession } from "../../lib/auth";
 import { getProvider, type ProviderId } from "../../lib/providers";
 import { Skeleton, ErrorState } from "../../components/feedback";
 import { listChannelContent } from "../../features/channels/api/channelContentApi";
@@ -138,20 +138,28 @@ export function InternalDashboard() {
         (accountsData.accounts ?? [])
           .filter((account) => account.platform === "youtube")
           .map(async (account) => {
-            let count = 0;
-            let cursor: string | undefined;
-            do {
-              const page = await listChannelContent({
-                accountId: account.id,
-                privacy: "private",
-                limit: 50,
-                cursor,
-                signal: controller.signal,
-              });
-              count += page.items.length;
-              cursor = page.next_cursor;
-            } while (cursor);
-            return [account.id, count] as const;
+            try {
+              let count = 0;
+              let cursor: string | undefined;
+              do {
+                const page = await listChannelContent({
+                  accountId: account.id,
+                  privacy: "private",
+                  limit: 50,
+                  cursor,
+                  signal: controller.signal,
+                });
+                count += page.items.length;
+                cursor = page.next_cursor;
+              } while (cursor);
+              return [account.id, count] as const;
+            } catch (err) {
+              // A missing/expired provider token must not log the user out
+              // of InstaEdit or prevent the rest of the dashboard loading.
+              if (err instanceof AuthError) throw err;
+              if (err instanceof ApiError) return [account.id, 0] as const;
+              throw err;
+            }
           }),
       );
       // Project the count-rollup into a Map<account_id, count + nextAt>

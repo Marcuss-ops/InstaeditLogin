@@ -397,7 +397,11 @@ func (r *Router) handleAccountContent(w http.ResponseWriter, req *http.Request) 
 		if err != nil {
 			token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
 			if err != nil {
-				writeError(w, http.StatusUnauthorized, "no valid token found for this account")
+				// The InstaEdit session is valid; only the provider credential
+				// for this account is missing or expired. Do not return 401,
+				// otherwise the SPA treats a YouTube token problem as a global
+				// logout and sends the user back to /login.
+				writeError(w, http.StatusFailedDependency, "no valid token found for this account")
 				return
 			}
 		}
