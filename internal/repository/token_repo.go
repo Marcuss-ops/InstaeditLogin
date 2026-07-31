@@ -44,7 +44,10 @@ func (r *TokenRepository) SaveToken(token *models.Token) error {
 
 	err = tx.QueryRow(
 		`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`,
+			 VALUES ($1, $2, $3, $4,
+			         COALESCE($5, (SELECT encrypted_refresh_token FROM tokens WHERE oauth_connection_id = $2 AND token_type = $3 ORDER BY created_at DESC LIMIT 1)),
+			         $6,
+			         COALESCE($7, (SELECT scopes FROM tokens WHERE oauth_connection_id = $2 AND token_type = $3 ORDER BY created_at DESC LIMIT 1))) RETURNING id, created_at`,
 		token.PlatformAccountID, token.OAuthConnectionID, token.TokenType, token.EncryptedToken,
 		token.EncryptedRefreshToken, token.ExpiresAt, pq.Array(token.Scopes),
 	).Scan(&token.ID, &token.CreatedAt)
@@ -87,7 +90,10 @@ func (r *TokenRepository) SaveTokenTx(ctx context.Context, tx *sql.Tx, token *mo
 
 	scanErr := tx.QueryRowContext(ctx,
 		`INSERT INTO tokens (platform_account_id, oauth_connection_id, token_type, encrypted_token, encrypted_refresh_token, expires_at, scopes)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at`,
+			 VALUES ($1, $2, $3, $4,
+			         COALESCE($5, (SELECT encrypted_refresh_token FROM tokens WHERE oauth_connection_id = $2 AND token_type = $3 ORDER BY created_at DESC LIMIT 1)),
+			         $6,
+			         COALESCE($7, (SELECT scopes FROM tokens WHERE oauth_connection_id = $2 AND token_type = $3 ORDER BY created_at DESC LIMIT 1))) RETURNING id, created_at`,
 		token.PlatformAccountID, token.OAuthConnectionID, token.TokenType, token.EncryptedToken,
 		token.EncryptedRefreshToken, token.ExpiresAt, pq.Array(token.Scopes),
 	).Scan(&token.ID, &token.CreatedAt)

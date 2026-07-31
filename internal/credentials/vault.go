@@ -207,7 +207,7 @@ func (v *CredentialVault) Save(ctx context.Context, platformAccountID int64, tok
 	if err != nil {
 		return err
 	}
-	return v.saveForOAuthConnection(ctx, oauthConnectionID, platformAccountID, tokenData)
+	return v.saveForOAuthConnection(ctx, oauthConnectionID, platformAccountID, tokenData, true)
 }
 
 // saveForOAuthConnection is the lookup-free sibling of Save. The
@@ -216,9 +216,29 @@ func (v *CredentialVault) Save(ctx context.Context, platformAccountID int64, tok
 // on platform_accounts); a redundant lookup here would only slow the
 // slow path. Public callers should use Save; internal callers (Renew
 // after the lock) use this directly.
-func (v *CredentialVault) saveForOAuthConnection(ctx context.Context, oauthConnectionID, platformAccountID int64, tokenData *models.TokenData) error {
+func (v *CredentialVault) saveForOAuthConnection(ctx context.Context, oauthConnectionID, platformAccountID int64, tokenData *models.TokenData, preserveExisting bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// Google commonly omits refresh_token on subsequent authorizations.
+	// Read the existing grant before pruning the previous row so a normal
+	// reconnect can never replace a valid refresh token with NULL. Scopes
+	// are preserved for the same reason: some token responses omit scope.
+	if preserveExisting {
+		if existing, findErr := v.store.FindLatestToken(oauthConnectionID, tokenData.TokenType); findErr != nil {
+			return fmt.Errorf("vault: find existing token for grant: %w", findErr)
+		} else if existing != nil {
+			if tokenData.RefreshToken == "" && len(existing.EncryptedRefreshToken) > 0 {
+				refresh, decryptErr := v.encryptor.Decrypt(existing.EncryptedRefreshToken)
+				if decryptErr != nil {
+					return fmt.Errorf("vault: preserve existing refresh token: %w", decryptErr)
+				}
+				tokenData.RefreshToken = refresh
+			}
+			if len(tokenData.Scopes) == 0 && len(existing.Scopes) > 0 {
+				tokenData.Scopes = append([]string(nil), existing.Scopes...)
+			}
+		}
 	}
 	encrypted, err := v.encryptor.Encrypt(tokenData.AccessToken)
 	if err != nil {
@@ -469,7 +489,7 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 
 	// Save via the lookup-free sibling — the resolved oid is the
 	// canonical key for this row.
-	if err := v.saveForOAuthConnection(ctx, oauthConnectionID, platformAccountID, newTokenData); err != nil {
+	if err := v.saveForOAuthConnection(ctx, oauthConnectionID, platformAccountID, newTokenData, false); err != nil {
 		return nil, fmt.Errorf("vault: persist refreshed token: %w", err)
 	}
 
