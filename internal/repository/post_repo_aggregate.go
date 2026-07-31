@@ -289,6 +289,52 @@ func (r *PostRepository) updateStatusWithAggregate(target *models.PostTarget) (e
 	return nil
 }
 
+// RepairAggregateStatusForPost repairs one parent aggregate in a transaction.
+// The target set is always resolved by PostAggregateStatusResolver; this
+// method never infers or assigns a target status. It is used by the targeted
+// operational repair command for a known YouTube publication and is also
+// safe to call repeatedly.
+func (r *PostRepository) RepairAggregateStatusForPost(postID int64) (oldStatus, newStatus models.PostStatus, changed bool, err error) {
+	if postID <= 0 {
+		return "", "", false, fmt.Errorf("repair aggregate status: postID must be positive (got %d)", postID)
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return "", "", false, fmt.Errorf("begin targeted aggregate repair for post %d: %w", postID, err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = lockTargetsForPostTx(tx, postID); err != nil {
+		return "", "", false, fmt.Errorf("lock targeted aggregate targets for post %d: %w", postID, err)
+	}
+	if err = tx.QueryRow(qLockPostStatusForAggregate, postID).Scan(&oldStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", false, fmt.Errorf("%w: id=%d", ErrPostNotFound, postID)
+		}
+		return "", "", false, fmt.Errorf("lock targeted aggregate post %d: %w", postID, err)
+	}
+
+	newStatus, err = resolvePostStatusLockedTx(tx, postID)
+	if err != nil {
+		return "", "", false, fmt.Errorf("resolve targeted aggregate status for post %d: %w", postID, err)
+	}
+	changed = oldStatus != newStatus
+	if changed {
+		if _, err = tx.Exec(qUpdatePostAggregateStatus, newStatus, postID); err != nil {
+			return "", "", false, fmt.Errorf("persist targeted aggregate status for post %d: %w", postID, err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return "", "", false, fmt.Errorf("commit targeted aggregate repair for post %d: %w", postID, err)
+	}
+	return oldStatus, newStatus, changed, nil
+}
+
 // RepairAggregateStatuses is an idempotent safety sweep. It locks targets
 // before parents, matching every target transition path, includes zero-target
 // posts, and writes the parent only when drift exists.
