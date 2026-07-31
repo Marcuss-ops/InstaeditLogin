@@ -202,7 +202,7 @@ const qUpdateTargetStatus = `UPDATE post_targets
  SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
      provider_state = $6, container_id = $7
  WHERE id = $5
-   AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq', 'dead_letter', 'blocked_auth'))`
+   AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq'))`
 
 const qDeletePost = `DELETE FROM posts WHERE id = $1`
 
@@ -219,7 +219,7 @@ const qPublishPostTargetsReset = `UPDATE post_targets SET status = 'queued', err
 const qCancelPostTargetsReset = `UPDATE post_targets
  SET status = 'draft', error_message = ''
  WHERE post_id = $1
-   AND status NOT IN ('published', 'partially_published', 'failed', 'dlq', 'dead_letter', 'blocked_auth')`
+   AND status NOT IN ('published', 'partially_published', 'failed', 'dlq')`
 
 const qRetryPostResetFailedTargets = `UPDATE post_targets SET status = 'queued', error_message = '' WHERE post_id = $1 AND status = 'failed'`
 

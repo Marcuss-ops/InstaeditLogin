@@ -323,7 +323,7 @@ func TestPostUpdateStatus_Happy(t *testing.T) {
 		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
 		     provider_state = $6, container_id = $7
 		 WHERE id = $5
-		   AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq', 'dead_letter', 'blocked_auth'))`,
+		   AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq'))`,
 	).WithArgs(models.PostStatusPublished, "remote-123", "", &now, int64(200), "", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).WithArgs(int64(100)).
@@ -1168,7 +1168,7 @@ func TestPostRepository_UpdateStatus_RejectsTerminalRegression(t *testing.T) {
 				 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
 				     provider_state = $6, container_id = $7
 				 WHERE id = $5
-				   AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq', 'dead_letter', 'blocked_auth'))`,
+				   AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq'))`,
 			).WithArgs(models.PostStatusPublishing, "", "", (*time.Time)(nil), int64(200), "", "").
 				WillReturnResult(sqlmock.NewResult(0, 0))
 			mock.ExpectQuery(`SELECT status FROM post_targets WHERE id = $1`).WithArgs(int64(200)).
