@@ -66,11 +66,15 @@ func TestYouTubeLoginURL_IncludesRequiredScopes(t *testing.T) {
 	if params.Get("include_granted_scopes") != "true" {
 		t.Errorf("include_granted_scopes: want true, got %q", params.Get("include_granted_scopes"))
 	}
+	if prompt := params.Get("prompt"); prompt != "" {
+		t.Errorf("normal login must not force prompt=consent, got %q", prompt)
+	}
 }
 
-// TestYouTubeLoginURL_AddModeForcesConsent verifies that the add mode
-// forces consent and account selection prompts.
-func TestYouTubeLoginURL_AddModeForcesConsent(t *testing.T) {
+// TestYouTubeLoginURL_ExplicitConsentAndAccountSelection verifies that
+// explicitly requested OAuth options are encoded as the expected Google
+// prompt values. The API routing test covers when add/reconnect select them.
+func TestYouTubeLoginURL_ExplicitConsentAndAccountSelection(t *testing.T) {
 	srv := httptest.NewServer(http.NewServeMux())
 	defer srv.Close()
 	svc := newTestYouTubeService(srv)

@@ -743,6 +743,9 @@ func TestVault_Save_EmptyRefreshToken_PreservesExistingCiphertext(t *testing.T) 
 	if stored == nil || len(stored.EncryptedRefreshToken) == 0 {
 		t.Fatal("reconnect must retain a non-empty encrypted refresh token")
 	}
+	if !bytes.Equal(stored.EncryptedRefreshToken, oldRefreshCiphertext) {
+		t.Fatal("reconnect must preserve the existing refresh-token ciphertext exactly")
+	}
 	gotRefresh, err := v.encryptor.Decrypt(stored.EncryptedRefreshToken)
 	if err != nil {
 		t.Fatalf("decrypt preserved refresh token: %v", err)

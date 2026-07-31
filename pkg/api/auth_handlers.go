@@ -36,8 +36,11 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	var options services.OAuthLoginOptions
 	switch mode {
 	case "add":
+		// Account selection is sufficient for a normal add flow. Do not
+		// force consent here: repeatedly issuing refresh tokens can
+		// invalidate older grants. A YouTube add flow that binds a
+		// specific channel sets ForceConsent below via expectedChannelID.
 		options.SelectAccount = true
-		options.ForceConsent = true
 	case "reconnect":
 		options.ForceConsent = true
 	}
@@ -183,11 +186,11 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 				return
 			}
 			if errors.Is(err, services.ErrOAuthRefreshTokenRequired) {
-				if account != nil && r.userRepo != nil {
-					if flagErr := r.userRepo.MarkReauthRequired(req.Context(), account.ID, "refresh_token_required", "YouTube did not return an offline refresh token; reconnect with consent"); flagErr != nil {
-						slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",
-							"platform_account_id", account.ID, "error", flagErr)
-					}
+				if flagErr := r.markOAuthRefreshTokenRequired(req.Context(), account); flagErr != nil {
+					slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",
+						"platform_account_id", platformAccountIDForLog(account), "error", flagErr)
+					logAndError(w, req, "failed to persist YouTube reauthorization state", flagErr)
+					return
 				}
 				writeError(w, http.StatusUnprocessableEntity, "YouTube reconnection required: grant offline access and retry")
 				return
@@ -277,11 +280,11 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		}
 		if _, err := r.authorizer.AuthorizeChannel(req.Context(), account.ID, "", tokenData.Scopes, tokenData); err != nil {
 			if errors.Is(err, services.ErrOAuthRefreshTokenRequired) {
-				if r.userRepo != nil {
-					if flagErr := r.userRepo.MarkReauthRequired(req.Context(), account.ID, "refresh_token_required", "YouTube did not return an offline refresh token; reconnect with consent"); flagErr != nil {
-						slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",
-							"platform_account_id", account.ID, "error", flagErr)
-					}
+				if flagErr := r.markOAuthRefreshTokenRequired(req.Context(), account); flagErr != nil {
+					slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",
+						"platform_account_id", platformAccountIDForLog(account), "error", flagErr)
+					logAndError(w, req, "failed to persist YouTube reauthorization state", flagErr)
+					return
 				}
 				writeError(w, http.StatusUnprocessableEntity, "YouTube reconnection required: grant offline access and retry")
 				return
@@ -323,6 +326,30 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 // This is a test seam — NOT part of the production public API.
 // Production auth gating goes through r.oauthSessionRedirect
 // (handlers.go:1034)
+// markOAuthRefreshTokenRequired is the single callback-side transition for
+// an authorization that produced an access token but no offline refresh grant.
+// AuthorizeChannel deliberately rolls back the first pending authorization so
+// no unusable token row is committed; this method then makes the recovery state
+// durable and lets the reconnect CTA request prompt=consent. Reconnects from an
+// already-authorized account never take this path because the existing grant is
+// preserved by the vault/repository layers.
+func (r *Router) markOAuthRefreshTokenRequired(ctx context.Context, account *models.PlatformAccount) error {
+	if account == nil {
+		return fmt.Errorf("missing platform account while marking refresh token reauthorization")
+	}
+	if r.userRepo == nil {
+		return fmt.Errorf("user repository not configured while marking refresh token reauthorization")
+	}
+	return r.userRepo.MarkReauthRequired(ctx, account.ID, "refresh_token_required", "YouTube did not return an offline refresh token; reconnect with consent")
+}
+
+func platformAccountIDForLog(account *models.PlatformAccount) int64 {
+	if account == nil {
+		return 0
+	}
+	return account.ID
+}
+
 func (r *Router) HandleOAuthCallbackRouteForTest() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		// The production route is registered by chi as

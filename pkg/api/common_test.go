@@ -30,11 +30,12 @@ import (
 // Taglio 2.2: token persistence moved to the central CredentialVault.
 // The mock is unchanged by Taglio 2.2.
 type mockProvider struct {
-	platform       string
-	loginURL       string
-	handleCallback func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error)
-	publishFn      func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
-	refreshFn      func(ctx context.Context, refreshToken string) (*models.TokenData, error)
+	platform           string
+	loginURL           string
+	loginWithOptionsFn func(state string, options services.OAuthLoginOptions) string
+	handleCallback     func(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error)
+	publishFn          func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error)
+	refreshFn          func(ctx context.Context, refreshToken string) (*models.TokenData, error)
 
 	handleCallbackCalls int
 	publishCalls        int
@@ -44,7 +45,10 @@ func (m *mockProvider) Name() string { return m.platform }
 func (m *mockProvider) GetLoginURL(state string) string {
 	return m.loginURL + "?state=" + state
 }
-func (m *mockProvider) GetLoginURLWithOptions(state string, _ services.OAuthLoginOptions) string {
+func (m *mockProvider) GetLoginURLWithOptions(state string, options services.OAuthLoginOptions) string {
+	if m.loginWithOptionsFn != nil {
+		return m.loginWithOptionsFn(state, options)
+	}
 	return m.GetLoginURL(state)
 }
 func (m *mockProvider) HandleCallback(ctx context.Context, state, code string) (*models.PlatformProfile, *models.TokenData, error) {
@@ -427,14 +431,14 @@ type mockPostStore struct {
 	// Taglio 5.1 step 2 polling endpoint suite (closes the
 	// empty-array handleGetPostTargets gap and adds the single
 	// target GET).
-	listByPostFn      func(postID int64) ([]models.PostTarget, error)
-	findTargetByIDFn  func(id int64) (*models.PostTarget, error)
-	deleteFn          func(id int64) error
-	saveTargetFn      func(*models.PostTarget) error
-	publishPostFn     func(id int64) error
-	cancelPostFn      func(id int64) error
-	retryPostFn       func(id int64) error
-	retryTargetFn     func(id int64) error
+	listByPostFn     func(postID int64) ([]models.PostTarget, error)
+	findTargetByIDFn func(id int64) (*models.PostTarget, error)
+	deleteFn         func(id int64) error
+	saveTargetFn     func(*models.PostTarget) error
+	publishPostFn    func(id int64) error
+	cancelPostFn     func(id int64) error
+	retryPostFn      func(id int64) error
+	retryTargetFn    func(id int64) error
 }
 
 func (m *mockPostStore) Create(post *models.Post, targets []*models.PostTarget) error {

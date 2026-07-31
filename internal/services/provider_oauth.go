@@ -12,7 +12,8 @@ import (
 // and translates them into these options.
 type OAuthLoginOptions struct {
 	// ForceConsent forces Google to show the consent screen again.
-	// Used when reconnecting or adding another channel.
+	// Use for explicit reconnects or channel-binding flows that must
+	// obtain a fresh offline grant; normal add flows only select an account.
 	ForceConsent bool
 
 	// SelectAccount forces the Google account picker.

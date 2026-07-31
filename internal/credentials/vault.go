@@ -264,6 +264,8 @@ func (v *CredentialVault) prepareTokenForOAuthConnection(ctx context.Context, oa
 	// Read the existing grant before pruning the previous row so a normal
 	// reconnect can never replace a valid refresh token with NULL. Scopes
 	// and refresh expiry are preserved for the same reason.
+	incomingRefreshTokenEmpty := tokenData.RefreshToken == ""
+	var preservedEncryptedRefresh []byte
 	if preserveExisting || existingOverride != nil {
 		existing := existingOverride
 		if existing == nil {
@@ -275,6 +277,12 @@ func (v *CredentialVault) prepareTokenForOAuthConnection(ctx context.Context, oa
 		}
 		if existing != nil {
 			if tokenData.RefreshToken == "" && len(existing.EncryptedRefreshToken) > 0 {
+				// Keep the original ciphertext as the source of truth. The
+				// decrypted value is copied only so downstream metadata and
+				// callers see the same grant; retaining the bytes directly
+				// also guarantees that even an unusual empty plaintext can
+				// never turn a valid stored ciphertext into NULL.
+				preservedEncryptedRefresh = append([]byte(nil), existing.EncryptedRefreshToken...)
 				refresh, decryptErr := v.encryptor.Decrypt(existing.EncryptedRefreshToken)
 				if decryptErr != nil {
 					return nil, fmt.Errorf("vault: preserve existing refresh token: %w", decryptErr)
@@ -304,11 +312,21 @@ func (v *CredentialVault) prepareTokenForOAuthConnection(ctx context.Context, oa
 		return nil, fmt.Errorf("vault: failed to encrypt access token: %w", err)
 	}
 	var encryptedRefresh []byte
-	if tokenData.RefreshToken != "" {
+	if incomingRefreshTokenEmpty && len(preservedEncryptedRefresh) > 0 {
+		// Preserve the exact existing envelope when the provider omitted
+		// refresh_token. This avoids needless ciphertext rotation and,
+		// more importantly, makes an empty callback value unable to clear
+		// a valid encrypted grant.
+		encryptedRefresh = preservedEncryptedRefresh
+	} else if tokenData.RefreshToken != "" {
 		encryptedRefresh, err = v.encryptor.Encrypt(tokenData.RefreshToken)
 		if err != nil {
 			return nil, fmt.Errorf("vault: failed to encrypt refresh token: %w", err)
 		}
+	} else if len(preservedEncryptedRefresh) > 0 {
+		// Never replace an existing encrypted refresh grant with NULL
+		// merely because Google omitted refresh_token in this response.
+		encryptedRefresh = preservedEncryptedRefresh
 	}
 	expiresAt := v.clock().Add(time.Duration(tokenData.ExpiresIn) * time.Second)
 	var refreshExpiresAt *time.Time

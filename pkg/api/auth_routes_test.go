@@ -77,6 +77,45 @@ func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
 	}
 }
 
+func TestHandleLogin_ConsentIsLimitedToReconnect(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		query       string
+		wantConsent bool
+		wantSelect  bool
+	}{
+		{name: "add selects account without consent", query: "mode=add", wantSelect: true},
+		{name: "reconnect forces consent", query: "mode=reconnect", wantConsent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got services.OAuthLoginOptions
+			svc := &mockProvider{
+				platform: "youtube",
+				loginURL: "https://auth.example.com/oauth",
+				loginWithOptionsFn: func(state string, options services.OAuthLoginOptions) string {
+					got = options
+					return "https://auth.example.com/oauth?state=" + state
+				},
+			}
+			r := newTestRouter(svc, &mockUserStore{}, "")
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/login?"+tc.query, nil)
+			withBearerJWT(t, req, 1)
+			w := httptest.NewRecorder()
+			r.Setup().ServeHTTP(w, req)
+
+			if w.Code != http.StatusFound {
+				t.Fatalf("want 302, got %d: %s", w.Code, w.Body.String())
+			}
+			if got.ForceConsent != tc.wantConsent {
+				t.Errorf("ForceConsent: want %v, got %v", tc.wantConsent, got.ForceConsent)
+			}
+			if got.SelectAccount != tc.wantSelect {
+				t.Errorf("SelectAccount: want %v, got %v", tc.wantSelect, got.SelectAccount)
+			}
+		})
+	}
+}
+
 func TestHandleLogin_UnsupportedProvider(t *testing.T) {
 	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com"}
 	store := &mockUserStore{}
@@ -397,6 +436,150 @@ func TestHandleCallback_FirstYouTubeAuthorizationWithoutRefreshTokenMarksReauth(
 	}
 	if authorizer.authorizeCalls.Load() != 1 {
 		t.Errorf("AuthorizeChannel calls: want 1, got %d", authorizer.authorizeCalls.Load())
+	}
+}
+
+// TestHandleCallback_FirstYouTubeDiscovererWithoutRefreshTokenMarksReauth
+// covers the AccountDiscoverer branch separately from the single-account
+// callback test above. A missing offline grant must not promote the newly
+// attached channel or record a token write; it must leave the operator a
+// durable reauth_required signal.
+func TestHandleCallback_FirstYouTubeAuthorization_ReauthPersistenceFailureIsServerError(t *testing.T) {
+	svc := &mockProvider{
+		platform: "youtube",
+		handleCallback: func(context.Context, string, string) (*models.PlatformProfile, *models.TokenData, error) {
+			return &models.PlatformProfile{PlatformUserID: "UCabcdefghijklmnopqrstuv", Username: "YouTube Channel"}, &models.TokenData{
+				AccessToken: "youtube-access",
+				TokenType:   models.TokenTypeBearer,
+				ExpiresIn:   3600,
+			}, nil
+		},
+	}
+	store := &mockUserStore{
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 10, UserID: userID, Platform: platform, PlatformUserID: profile.PlatformUserID}, nil
+		},
+		markReauthRequiredFn: func(context.Context, int64, string, string) error {
+			return fmt.Errorf("reauth state database unavailable")
+		},
+	}
+	authorizer := &fakeChannelAuthorizer{authorizeErr: services.ErrOAuthRefreshTokenRequired}
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "youtube", "test-state")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("reauth persistence failure: want 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if authorizer.tokenWriteCount() != 0 {
+		t.Fatalf("reauth persistence failure must not report a successful credential write; got %d", authorizer.tokenWriteCount())
+	}
+}
+
+func TestHandleCallback_FirstYouTubeDiscoverer_ReauthPersistenceFailureIsServerError(t *testing.T) {
+	svc := &mockDiscoverableProvider{
+		mockProvider: mockProvider{
+			platform: "youtube",
+			handleCallback: func(context.Context, string, string) (*models.PlatformProfile, *models.TokenData, error) {
+				return &models.PlatformProfile{PlatformUserID: "google-subject", Username: "Google Account"}, &models.TokenData{
+					AccessToken: "youtube-access",
+					TokenType:   models.TokenTypeBearer,
+					ExpiresIn:   3600,
+				}, nil
+			},
+		},
+		discoverFn: func(context.Context, string, string) ([]*services.DiscoveredAccount, error) {
+			return []*services.DiscoveredAccount{{
+				Profile: models.PlatformProfile{PlatformUserID: "UCfirstconnect", Username: "First Channel"},
+			}}, nil
+		},
+	}
+	store := &mockUserStore{
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{ID: 41, UserID: userID, Platform: platform, PlatformUserID: profile.PlatformUserID}, nil
+		},
+		markReauthRequiredFn: func(context.Context, int64, string, string) error {
+			return fmt.Errorf("reauth state database unavailable")
+		},
+	}
+	authorizer := &fakeChannelAuthorizer{authorizeErr: services.ErrOAuthRefreshTokenRequired}
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "youtube", "test-state")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("discoverer reauth persistence failure: want 500, got %d: %s", w.Code, w.Body.String())
+	}
+	if authorizer.tokenWriteCount() != 0 {
+		t.Fatalf("discoverer reauth persistence failure must not report a successful credential write; got %d", authorizer.tokenWriteCount())
+	}
+}
+
+func TestHandleCallback_FirstYouTubeDiscovererWithoutRefreshTokenMarksReauth(t *testing.T) {
+	svc := &mockDiscoverableProvider{
+		mockProvider: mockProvider{
+			platform: "youtube",
+			handleCallback: func(context.Context, string, string) (*models.PlatformProfile, *models.TokenData, error) {
+				return &models.PlatformProfile{PlatformUserID: "google-subject", Username: "Google Account"}, &models.TokenData{
+					AccessToken: "youtube-access",
+					TokenType:   models.TokenTypeBearer,
+					ExpiresIn:   3600,
+				}, nil
+			},
+		},
+		discoverFn: func(context.Context, string, string) ([]*services.DiscoveredAccount, error) {
+			return []*services.DiscoveredAccount{{
+				Profile: models.PlatformProfile{PlatformUserID: "UCfirstconnect", Username: "First Channel"},
+			}}, nil
+		},
+	}
+	var marked struct {
+		calls   int
+		account int64
+		code    string
+	}
+	store := &mockUserStore{
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{
+				ID: 41, UserID: userID, Platform: platform,
+				PlatformUserID: profile.PlatformUserID, Status: models.AccountStatusPendingAuthorization,
+			}, nil
+		},
+		markReauthRequiredFn: func(_ context.Context, accountID int64, code, _ string) error {
+			marked.calls++
+			marked.account = accountID
+			marked.code = code
+			return nil
+		},
+	}
+	authorizer := &fakeChannelAuthorizer{authorizeErr: services.ErrOAuthRefreshTokenRequired}
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "youtube", "test-state")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("discoverer first connection without refresh token: want 422, got %d: %s", w.Code, w.Body.String())
+	}
+	if marked.calls != 1 || marked.account != 41 || marked.code != "refresh_token_required" {
+		t.Fatalf("MarkReauthRequired: want one refresh_token_required call for account 41, got %+v", marked)
+	}
+	if authorizer.authorizeCalls.Load() != 1 {
+		t.Fatalf("AuthorizeChannel calls: want 1, got %d", authorizer.authorizeCalls.Load())
+	}
+	if authorizer.tokenWriteCount() != 0 {
+		t.Fatalf("missing first-connect refresh token must not write unusable credentials; got %d", authorizer.tokenWriteCount())
 	}
 }
 
