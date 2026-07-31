@@ -60,6 +60,7 @@ export function FounderStory() {
                   title="The founder explains how InstaEdit started — from zero to a 7-platform publishing tool"
                   className="absolute inset-0 w-full h-full"
                   loading="lazy"
+                  referrerPolicy="strict-origin-when-cross-origin"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                   allowFullScreen
                 />
