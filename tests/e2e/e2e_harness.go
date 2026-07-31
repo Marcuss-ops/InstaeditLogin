@@ -35,7 +35,13 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/runtime"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/stores"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/vault"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 )
 
 // statusResumeIncomplete is the YouTube resumable-upload protocol's
@@ -57,6 +63,48 @@ const statusResumeIncomplete = 308
 // verify-policy + internal/services/storage_test.go cover the S3
 // write/read path; only ~10 lines of additional test plumbing
 // are pending once we decide to add MinIO + aws-sdk-v2.
+// buildE2ERouter centralizes the mandatory test dependencies required by
+// api.MustNewRouter. Test-specific options are appended after the defaults so
+// a test can replace any dependency without rebuilding the full option list.
+func buildE2ERouter(
+	capRouter *services.CapabilityRouter,
+	userStore api.UserStore,
+	authMgr *auth.Manager,
+	opts ...api.RouterOption,
+) *api.Router {
+	defaults := []api.RouterOption{
+		api.WithCredentialVault(vault.NewFakeVault()),
+		api.WithChannelAuthorizer(&e2EDefaultChannelAuthorizer{}),
+		api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60 * time.Second)),
+		api.WithIdempotencyStore(stores.NewFakeIdempotencyStore()),
+		api.WithConnectLinkNonceStore(stores.NewFakeConnectLinkNonceStore()),
+	}
+
+	return api.MustNewRouter(
+		capRouter,
+		userStore,
+		authMgr,
+		"https://app.example.com",
+		[]string{"https://app.example.com"},
+		append(defaults, opts...)...,
+	)
+}
+
+// e2EDefaultChannelAuthorizer is a safe no-op default for E2E routes that do
+// not exercise OAuth finalization. OAuth-focused tests provide an explicit
+// authorizer override to retain their assertions and persistence behavior.
+type e2EDefaultChannelAuthorizer struct{}
+
+func (*e2EDefaultChannelAuthorizer) AuthorizeChannel(
+	context.Context,
+	int64,
+	string,
+	[]string,
+	...*models.TokenData,
+) (int64, error) {
+	return 0, nil
+}
+
 type E2EHarness struct {
 	t *testing.T
 

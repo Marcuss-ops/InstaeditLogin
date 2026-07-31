@@ -251,11 +251,12 @@ func buildValidateRouterHarness(t *testing.T, h *E2EHarness) *validateRouterHarn
 	capRouter := services.NewCapabilityRouter()
 	authzr := &countingChannelAcceptingAuthorizer{} // unused on /validate; safe stub
 
-	router := api.MustNewRouter(
-		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
+	router := buildE2ERouter(
+		capRouter, store, authMgr,
 		api.WithYouTubeService(ytSvc),
 		api.WithCredentialVault(vault),
-		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
+		api.WithChannelAuthorizer(authzr),
+	)
 	return &validateRouterHarness{
 		router:    router,
 		pgDB:      h.pgDB,
@@ -508,9 +509,10 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 	store := &mockUserStore{markReauth: markReauth}
 	authzr := &countingChannelAuthorizer{} // panic-on-call assertion for OAuthCallback
 
-	router := api.MustNewRouter(
-		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
-		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
+	router := buildE2ERouter(
+		capRouter, store, authMgr,
+		api.WithChannelAuthorizer(authzr),
+	)
 
 	// Step A — Fire OAuthCallback with connect-link state JWT naming channel A
 	// but mockYouTubeDisco returns ONLY channel B.
@@ -553,11 +555,12 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 		// Models after the production CredentialVault's no-token error path.
 		return nil, fmt.Errorf("oauth: no token row for platform_account_id")
 	}
-	router2 := api.MustNewRouter(
-		capRouter, store, authMgr, "https://app.example.com", []string{"https://app.example.com"},
+	router2 := buildE2ERouter(
+		capRouter, store, authMgr,
 		api.WithYouTubeService(vhYT),
 		api.WithCredentialVault(vhVault),
-		api.WithChannelAuthorizer(authzr), api.WithOneTimeCodeStore(api.NewInMemoryOneTimeCodeStore(60*time.Second)))
+		api.WithChannelAuthorizer(authzr),
+	)
 
 	validateReq := httptest.NewRequest(http.MethodPost,
 		fmt.Sprintf("/api/v1/accounts/%d/validate", accountAID), nil)
