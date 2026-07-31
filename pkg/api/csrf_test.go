@@ -346,18 +346,11 @@ func TestWriteSessionCookies_AlsoSetsCsrfCookie(t *testing.T) {
 	}
 }
 
-// TestCookieDomain_AppliesOnlyToCsrfCookie (Blocco #2.4) — when
-// the router carries cookieDomain=".instaedit.org", setSessionCookie
-// must attach Domain ONLY to the csrf_token cookie. Session and
-// refresh cookies stay host-only on the API origin.
-//
-// This is the asymmetry the cross-origin deploy requires: the SPA
-// on app.instaedit.org must be able to read the csrf_token via
-// document.cookie against the api.instaedit.org response (the
-// browser's cookie-share rules require a parent-domain match),
-// while HttpOnly session/refresh cookies have no business being
-// cross-subdomain anyway (JS can't read them no matter what).
-func TestCookieDomain_AppliesOnlyToCsrfCookie(t *testing.T) {
+// TestCookieDomain_AppliesToSessionCookies — when the router carries
+// cookieDomain=".instaedit.org", all session cookies must be shared by
+// the app, dev and api subdomains. OAuth starts on dev and completes on api,
+// so a host-only session cookie would make the callback lose the session.
+func TestCookieDomain_AppliesToSessionCookies(t *testing.T) {
 	h := csrfHarnessNew(t)
 	h.Router.cookieSecure = true
 	h.Router.cookieDomain = ".instaedit.org"
@@ -393,11 +386,11 @@ func TestCookieDomain_AppliesOnlyToCsrfCookie(t *testing.T) {
 	if session == nil || refresh == nil || csrf == nil {
 		t.Fatalf("missing one of session/refresh/csrf cookies: session=%v refresh=%v csrf=%v", session != nil, refresh != nil, csrf != nil)
 	}
-	if session.Domain != "" {
-		t.Errorf("session cookie MUST stay host-only (Domain attr widens CSRF attack surface with no read-side benefit since cookie is HttpOnly); got Domain=%q", session.Domain)
+	if session.Domain != "instaedit.org" {
+		t.Errorf("session cookie must be shared across InstaEdit subdomains; got Domain=%q", session.Domain)
 	}
-	if refresh.Domain != "" {
-		t.Errorf("refresh cookie MUST stay host-only (HttpOnly, same threat-model as session); got Domain=%q", refresh.Domain)
+	if refresh.Domain != "instaedit.org" {
+		t.Errorf("refresh cookie must be shared across InstaEdit subdomains; got Domain=%q", refresh.Domain)
 	}
 	// Note on the leading dot: Go's net/http cookie PARSER strips
 	// it per RFC 6265 §5.2.3 ("if the first character is '.',
