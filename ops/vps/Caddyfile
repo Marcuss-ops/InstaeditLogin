@@ -23,6 +23,12 @@ dev.instaedit.org {
 	encode gzip
 	log
 
+	# The SPA shell must be revalidated after every deployment. Without this,
+	# a remote browser can keep an old route bundle in its HTTP cache and call
+	# protected endpoints with a stale session flow.
+	@spa_shell path / /index.html /login* /app* /connections* /groups*
+	header @spa_shell Cache-Control "no-store, no-cache, must-revalidate"
+
 	# Never expose internal Velox routes through the public proxy.
 	handle /internal/* {
 		abort
