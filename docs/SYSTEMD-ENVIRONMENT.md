@@ -12,12 +12,19 @@ The non-secret template is
 [`ops/systemd/instaeditlogin-youtube.env.example`](../ops/systemd/instaeditlogin-youtube.env.example).
 The populated file is intentionally not part of Git.
 
-> **Current host note:** the live unit also loads `.env.dev` and
-> `/etc/instaeditlogin-overrides.env` for general runtime and storage
-> settings. Those files remain separate secret sources and must be protected
-> independently; this change moves the YouTube/encryption-related unit
-> overrides into the dedicated root-only file, but does not claim that every
-> existing environment source has been consolidated.
+> **Current host note:** the live unit loads these files in this order:
+> `.env.dev`, `/etc/instaeditlogin-overrides.env`, and finally
+> `/etc/instaeditlogin-youtube.env`. The dedicated file is therefore the
+> last-file-wins source for the variables it owns. The first two files remain
+> separate runtime/legacy secret sources and must be protected independently;
+> they are not repository artifacts.
+>
+> The host migration removes YouTube/provider credentials and other sensitive
+> `Environment=` assignments from the unit itself. The populated
+> `/etc/instaeditlogin-youtube.env` remains host-only; its values are copied
+> from the existing protected source without ever being printed. During the
+> gradual migration, `ENCRYPTION_KEY` may still be duplicated in `.env.dev` so
+> existing deployments continue to boot; the dedicated file takes precedence.
 >
 > The current host has empty `YOUTUBE_CLIENT_ID` and
 > `YOUTUBE_CLIENT_SECRET` values, so YouTube remains disabled until real OAuth
@@ -81,14 +88,35 @@ curl -fsS http://127.0.0.1:8080/ready
 ```
 
 A successful `systemctl is-active` is insufficient if another process already
-owns `:8080`; the systemd journal must also be free of
-`listen tcp :8080: bind: address already in use`. Do not change the port or
-stop the Docker API as part of secret persistence without a separate deployment
- decision.
+owns `:8080`; the systemd journal must also be free of a **current**
+`listen tcp :8080: bind: address already in use` failure. Compare the timestamp
+of any bind message with:
+
+```bash
+systemctl show instaeditlogin.service -p ActiveEnterTimestamp
+journalctl -u instaeditlogin.service -b --no-pager | grep -Ei 'bind:|address already in use'
+```
+
+A message from an earlier failed/restarted process is historical only; verify
+that the current `MainPID` is running and that the expected listener/health
+probe responds. Do not change the port or stop the Docker API as part of secret
+persistence without a separate deployment decision.
 
 If values are already present in the existing unit, migrate them using a
 root-only procedure and then remove the corresponding `Environment=` entries
-from the unit. Do not manually copy secrets into a terminal transcript.
+from the unit. The same applies to `ADMIN_INVITE_TOKEN`,
+`METRICS_BASIC_AUTH_PASS`, provider client IDs/secrets, and encryption keys:
+only variable names belong in documentation; values belong in the protected
+host file. Do not manually copy secrets into a terminal transcript.
+
+After migration, verify names rather than values:
+
+```bash
+systemctl cat instaeditlogin.service \
+  | grep -E '^Environment=' \
+  | grep -E 'YOUTUBE_|ENCRYPTION_|ADMIN_INVITE_TOKEN|CLIENT_SECRET|METRICS_BASIC_AUTH_PASS' \
+  && echo 'unexpected direct secret assignment' || true
+```
 
 ## Verification without secret disclosure
 
@@ -109,11 +137,14 @@ journalctl -u instaeditlogin.service -b --no-pager \
 
 The log check is only a heuristic. Review startup logs for successful vault /
 encryption initialization and YouTube registration, but do not expect the
-health endpoint to prove that an OAuth refresh token is usable. A real upload requires an authorized sandbox channel, non-empty YouTube OAuth
-credentials, a valid stored OAuth grant, and an explicit operator-approved E2E.
+health endpoint to prove that an OAuth refresh token is usable. A real upload
+requires an authorized sandbox channel, non-empty YouTube OAuth credentials,
+a valid stored OAuth grant, and an explicit operator-approved E2E.
 With empty `YOUTUBE_CLIENT_ID`/`YOUTUBE_CLIENT_SECRET`, the expected health
 response is `platforms: []` and an upload cannot be used to validate this
-configuration.
+configuration. Treat historical bind errors before the latest
+`ActiveEnterTimestamp` separately from failures emitted by the current process;
+do not declare the service healthy solely because systemd reports `active`.
 
 ## Rollback
 
