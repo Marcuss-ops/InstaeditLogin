@@ -3,7 +3,6 @@ import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Link2,
-  FolderInput,
   Calendar,
   FolderTree,
   BarChart3,
@@ -18,7 +17,6 @@ import { fetchSession, logout } from "../../lib/auth";
 const baseNavItems = [
   { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/app/performance", label: "Performance", icon: BarChart3 },
-  { to: "/app/uploads", label: "Imports", icon: FolderInput },
   { to: "/app/calendar", label: "Calendar", icon: Calendar },
   { to: "/app/groups", label: "Groups", icon: FolderTree },
   { to: "/app/linking", label: "Linking", icon: Link2 },
