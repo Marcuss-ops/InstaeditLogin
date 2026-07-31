@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-export type ProviderId = "instagram" | "facebook" | "threads" | "tiktok" | "twitter" | "youtube" | "linkedin";
+export type ProviderId = "instagram" | "facebook" | "threads" | "tiktok" | "twitter" | "youtube" | "linkedin" | "google-drive";
 
 export type ProviderMeta = {
   id: ProviderId;
@@ -81,6 +81,12 @@ const LINKEDIN_SVG = (
   </svg>
 );
 
+const GOOGLE_DRIVE_SVG = (
+  <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
+    <path d="M7.2 3h5.1l6.5 11.2h-5.1L7.2 3zM5.1 6.6L2.5 11l3.7 6.4h5.1L7.6 11l2.6-4.4H5.1zM7.2 19h10.2l2.1-3.6h-10.2L7.2 19z" />
+  </svg>
+);
+
 export const PROVIDERS: ProviderMeta[] = ([
   {
     id: "instagram",
@@ -151,6 +157,16 @@ export const PROVIDERS: ProviderMeta[] = ([
     glowColor: "rgba(10,102,194,0.35)",
     nameGradient: "linear-gradient(135deg, #0A66C2, #6aa8e0)",
     icon: LINKEDIN_SVG,
+  },
+  {
+    id: "google-drive",
+    name: "Google Drive",
+    description: "Import videos from your Google Drive",
+    color: "from-[#34A853] to-[#0F9D58]",
+    iconBg: "from-[#34A853] to-[#0F9D58]",
+    glowColor: "rgba(52,168,83,0.35)",
+    nameGradient: "linear-gradient(135deg, #34A853, #0F9D58)",
+    icon: GOOGLE_DRIVE_SVG,
   },
 ] satisfies ProviderMeta[]).map((p) => ({
   ...p,

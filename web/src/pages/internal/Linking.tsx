@@ -35,6 +35,7 @@ const LINKABLE_IDS: ProviderId[] = [
   "facebook",
   "instagram",
   "threads",
+  "google-drive",
 ];
 
 export function InternalLinking() {
