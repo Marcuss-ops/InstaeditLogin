@@ -142,7 +142,9 @@ func scenario1_DriveIngest(t *testing.T, h *E2EHarness) {
 	if gainedCalls < 2 {
 		t.Errorf("scenario_1: expected >=2 list calls (page1 + page2), observed +%d", gainedCalls)
 	}
-	t.Logf("scenario_1 PASS: 201 distinct file ids across 2 pages; %d list calls observed", gainedCalls)
+	if !t.Failed() {
+		t.Logf("scenario_1 PASS: 201 distinct file ids across 2 pages; %d list calls observed", gainedCalls)
+	}
 }
 
 // ---- Scenario 2: Crawl crash mid page-1 → resume from page-2.
@@ -186,7 +188,9 @@ func scenario2_CrashMidCrawl(t *testing.T, h *E2EHarness) {
 	if len(all) != 201 {
 		t.Errorf("scenario_2: want 201 union after crash+resume, got %d", len(all))
 	}
-	t.Logf("scenario_2 PASS: crash after page-1 + resume from page-2 = 201 unique ingestions")
+	if !t.Failed() {
+		t.Logf("scenario_2 PASS: crash after page-1 + resume from page-2 = 201 unique ingestions")
+	}
 }
 
 // ---- Scenario 3: Velox INGEST idempotency.

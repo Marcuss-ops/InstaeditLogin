@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -334,6 +335,10 @@ func (f *fakeDriveServer) handleList(w http.ResponseWriter, r *http.Request) {
 	for id := range f.files {
 		allIDs = append(allIDs, id)
 	}
+	// Map iteration order is deliberately randomized in Go. Sort before
+	// slicing so page-1 and page-2 are stable, disjoint portions of the
+	// 201-file fixture rather than overlapping random subsets.
+	sort.Strings(allIDs)
 
 	type fileEntry struct {
 		ID          string `json:"id"`
