@@ -20,7 +20,6 @@
  *   Settings → Environment Variables → add VITE_API_BASE_URL
  *     pointing at the deployed Go API host.
  *
- * Taglio 3.1: storage is exclusively S3-compatible and wired server-side.
  */
 export const API_BASE_URL: string =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";

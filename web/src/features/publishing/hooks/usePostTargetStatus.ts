@@ -9,9 +9,8 @@
  *
  * The hook does NOT stop polling when all targets become terminal —
  * the wizard UI exits the status page explicitly via navigation. The
- * audit's broadcast-channel unification is a separate concern owned
- * by `useYouTubePublishLiveUpdate` (future work, see
- * `docs/PUBLISH-FLOW-AUDIT.md` §"Order of work → step 8").
+ * Cross-tab publish invalidation is a separate concern owned by
+ * `useYouTubePublishLiveUpdate`.
  *
  * State machine surfaced to consumers:
  *   - `idle`      → no postId yet; no fetches fired
@@ -31,12 +30,9 @@
  *     yet.
  *   - Overlapping fetches are coalesced via an in-flight ref. The
  *     setInterval timer never starts a second concurrent call.
- *   - The server gap on `GET /api/v1/post_targets/{id}` (single,
- *     blueprint) is irrelevant here — the hook uses the parent endpoint
- *     `GET /api/v1/posts/{id}/targets` which already exists. The parent
- *     endpoint currently returns an empty `targets` array (audit §"Gap
- *     /post_targets/{id} non esiste") — the hook treats that as
- *     transient ('polling' or 'terminal' based on empty-set behaviour).
+ *   - The hook uses the parent endpoint
+ *     `GET /api/v1/posts/{id}/targets`; an empty target list remains
+ *     `polling` because the post may not have fanned out yet.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -63,8 +59,7 @@ const POLL_INTERVAL_MS = 3_000;
  * other states (`queued`, `publishing`, `retrying`,
  * `waiting_provider`, plus unknown ledger values) leave the hook
  * in `polling` — we only gate on the terminal-set because an
- * unexpected status (e.g. a Pre-Taglio 5.0 row with legacy
- * `draft`) is conservatively treated as still-mutating.
+ * unexpected status is conservatively treated as still-mutating.
  *
  * The complementary ACTIVE set is intentionally NOT defined:
  * classifyTargets returns `polling` for everything except the

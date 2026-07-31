@@ -1,7 +1,7 @@
 /**
  * VideoUploadStep — Step 1 of the /app/content/new wizard.
  *
- * Responsibilities (per Blocco #1 spec):
+ * Responsibilities:
  *   - File picker for a single video
  *   - Internal title input ("titolo interno") — goes into
  *     postsApi.createPost later as `content.title`

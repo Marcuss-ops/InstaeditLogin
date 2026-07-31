@@ -9,7 +9,7 @@
  * URL via {@link buildPrivacyParam}).
  *
  * Defaults:
- *   • `limit=20` — matches the spec for the channel page (Blocco #2).
+ *   • `limit=20` — matches the channel page default.
  *     Callers may override (the existing AccountDetails page uses
  *     the same default for its private-only video list).
  *   • No `privacy` value when the filter is `"all"`.

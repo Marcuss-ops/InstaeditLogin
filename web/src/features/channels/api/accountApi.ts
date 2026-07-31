@@ -6,7 +6,7 @@
  * avatar/banner/handle/metrics). Companion to `channelsApi.ts`
  * which handles the LIST manifest.
  *
- * Used by the channel page (Blocco #2) to render the `ChannelHeader`.
+ * Used by the channel page to render the `ChannelHeader`.
  * AuthError (401) is thrown so callers can navigate to /login; other
  * 4xx/5xx surface as `ApiError`.
  *

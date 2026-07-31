@@ -45,7 +45,7 @@ export interface PresignMediaRequest {
   /**
    * Optional RFC3339 timestamp. When set, the server derives the
    * asset's `expires_at` as `publish_at + VIDEO_RETENTION_BUFFER_DAYS`
-   * (Blocco #2 P0 in media_handlers.go). Leave undefined for publish-now
+   * Leave undefined for publish-now
    * flows; the server falls through to `now + PUBLISH_HORIZON_DAYS`.
    */
   publish_at?: string;
@@ -111,8 +111,8 @@ export interface PostContent {
 }
 
 /**
- * YouTube-specific target settings. This is the BLOCCHI #1 / Taglio 3.2
- * contract — the wizard constructs this object and the server's
+ * YouTube-specific target settings. The wizard constructs this object
+ * and the server's
  * `resolveFirstMediaURL` + per-platform settings engine translates
  * it into the right YouTube Data API update call.
  *
@@ -195,14 +195,8 @@ export interface Post {
 }
 
 /**
- * Detailed single-target state, returned by GET /api/v1/post_targets/{id}.
- *
- * SERVER GAP 2026-07-30: this endpoint is NOT mounted yet (audit
- * tracked). The SDK is built against the blueprint contract so it
- * compiles, typechecks, and will start returning real data the moment
- * the handler lands. Live tests should expect a 404 today — use
- * `getPostTargets(parentId)` for the parent endpoint while the gap
- * is open.
+ * Detailed single-target state, returned by
+ * GET /api/v1/post-targets/{id}.
  */
 export interface PostTargetDetail extends PostTarget {
   /** Lock bookkeeping for the worker's claim runtime (migrations 035). */

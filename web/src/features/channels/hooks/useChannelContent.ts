@@ -43,7 +43,7 @@
  *   - Cleanup on unmount aborts the in-flight fetch to prevent
  *     zombie setState.
  *
- * ─── Refresh options (Blocco #2 spec) ─────────────────────────────────
+ * ─── Refresh options ───────────────────────────────────────────────────
  *
  * `refetchOnWindowFocus` — fires the same refetch code path that
  * `refetch` exposes whenever the browser tab regains focus. Useful
@@ -99,8 +99,7 @@ export interface UseChannelContentOptions {
    */
   privacy: PrivacyFilter;
   /**
-   * Page size. Defaults to 20 (matches the Blocco #2 spec +
-   * AccountDetails precedent).
+   * Page size. Defaults to 20 (matching the AccountDetails precedent).
    */
   limit?: number;
   /**

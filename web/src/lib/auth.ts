@@ -1,5 +1,5 @@
 /**
- * Auth helpers for the InstaEdit SPA (Taglio 1.2 / Taglio 5a / Blocco #2.4 CSRF).
+ * Auth helpers for the InstaEdit SPA.
  *
  *   - authedFetch attaches credentials: 'include' so the browser sends the
  *     session cookie, AND auto-injects X-CSRF-Token on unsafe methods

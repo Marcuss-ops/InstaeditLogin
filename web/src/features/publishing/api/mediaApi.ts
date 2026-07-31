@@ -131,7 +131,7 @@ export interface UploadMediaAssetOptions {
   contentType?: MediaAssetContentType;
   /** Client-computed SHA-256 hex digest (Task 6/10 enforcement). */
   sha256?: string;
-  /** Optional publish cursor used by the server's TTL heuristic (Blocco #2 P0). */
+  /** Optional publish cursor used by the server's TTL heuristic. */
   publish_at?: string;
   /** Forwarded to presign + complete calls (NOT to the raw PUT — S3 has its own idempotency). */
   signal?: AbortSignal;

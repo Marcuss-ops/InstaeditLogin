@@ -11,22 +11,9 @@
  *   - GET  /api/v1/posts/{id}/targets       → { targets[] }     (PARENT)
  *   - POST /api/v1/post-targets/{id}/retry  → { status: "queued" }
  *
- * Known server-side gaps (audit 2026-07-30, see
- * `InstaeditLogin/docs/PUBLISH-FLOW-AUDIT.md`):
- *   - The single endpoint `GET /api/v1/post_targets/{id}` is NOT
- *     mounted on the current router. The SDK is built against the
- *     blueprint contract so it typechecks and will start returning
- *     real data the moment the handler lands.
- *   - The parent endpoint `GET /api/v1/posts/{id}/targets` exists
- *     but the underlying `postStore.ListByPost` is not yet wired,
- *     so today it returns `{ targets: [] }`. Tests should expect
- *     an empty array until the repo wiring lands.
- *
- * Both backends ship via the same SDK shapes; consumers do NOT
- * need to distinguish gap vs ready because the wizard UI degrades
- * gracefully when `getPostTargets` returns [] (falls back to a
- * generic "publishing…" state).
- */
+ * Both endpoints use the same typed target shapes. The parent list
+ * returns the targets attached to the post, including an empty array
+ * when the post has no targets. */
 
 import { authedFetch } from "../../../lib/auth";
 import type { PostTarget, PostTargetDetail } from "./types";
@@ -37,12 +24,7 @@ const TARGET_PATH = (id: number): string =>
   `/api/v1/post_targets/${encodeURIComponent(String(id))}`;
 
 /**
- * GET /api/v1/post_targets/{id}.
- *
- * SERVER GAP today: returns 404. Built against the blueprint contract
- * defined in `api/openapi.yaml → /post_targets/{id}` and
- * `internal/models/post.go → PostTarget`. Will start returning real
- * data as soon as the handler lands.
+ * GET /api/v1/post-targets/{id}.
  */
 export async function getPostTarget(
   postTargetId: number,
@@ -55,10 +37,7 @@ export async function getPostTarget(
 /**
  * GET /api/v1/posts/{postId}/targets.
  *
- * Parent endpoint; returns the targets attached to a post. Today
- * the handler returns `{ targets: [] }` because the repo query
- * isn't wired — see audit gap tracker.
- *
+ * Parent endpoint; returns the targets attached to a post.
  * The wizard's status page polls this endpoint every 2-5 seconds
  * while at least one target is in `queued`/`publishing`/`retrying`.
  * Once every target is `published`/`failed`/`dlq`, the polling

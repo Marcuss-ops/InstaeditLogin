@@ -82,9 +82,8 @@ export interface CreateYouTubeEditorSessionRequest {
 /**
  * Response from POST /api/v1/youtube/editor-sessions.
  *
- * Server returns this exact shape (NOT just `{ editor_url }` as a
- * couple of pre-refactor callers assumed — see the audit headline
- * at the top of this file).
+ * Server returns this exact shape, including the resolved project and
+ * session identifiers needed by downstream editor flows.
  */
 export interface CreateYouTubeEditorSessionResponse {
   session_id: string;
@@ -228,10 +227,8 @@ export function openEditorInNewTab(editorUrl: string): void {
  * Single-call helper for the common "Modifica copertina" flow:
  * create a session for a video, then open it in a new tab.
  *
- * Replaces the previously hand-rolled `if (resp.ok) window.open(...)`
- * blocks in three pages with one canonical entry point. Returns
- * the created session response so callers can chain post-open UI
- * state updates (e.g. YouTubeStudio's `void handleRefresh()`).
+ * Returns the created session response so callers can chain post-open
+ * UI state updates (for example, refreshing the studio session list).
  *
  * The `workspaces` callback supplies the workspace_id for the
  * request; AccountDetails and Calendar both pre-fetched a workspaces

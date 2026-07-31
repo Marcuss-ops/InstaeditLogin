@@ -1,7 +1,7 @@
 /**
  * ChannelMetadataStep — Step 2 of the /app/content/new wizard.
  *
- * Form fields (per Blocco #1 spec):
+ * Form fields:
  *   - canale YouTube              (single-select, filtered on
  *                                  `platform === "youtube"` from
  *                                  GET /api/v1/accounts)
@@ -356,8 +356,7 @@ export function ChannelMetadataStep({
 
 // ─────────────────────────────────────────────────────────────────
 // Helpers (kept local — not exported; if a future step reuses any
-// of these, promote to `components/forms/inputs.tsx` per the audit
-// recommendation).
+// of these, promote them to a shared form module.
 // ─────────────────────────────────────────────────────────────────
 
 const selectCls = cn(

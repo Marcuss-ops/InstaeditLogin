@@ -31,7 +31,7 @@
  *
  * Mocking strategy: file-level static `vi.mock(...)` factories (no
  * dynamic-imports + `vi.spyOn` — that pattern broke under some
- * vitest ESM loader configurations per the audit doc). All mocks
+ * vitest ESM loader configurations). All mocks
  * are hoisted via `vi.hoisted` so the `vi.mock` factories can close
  * over the same references used in tests.
  */

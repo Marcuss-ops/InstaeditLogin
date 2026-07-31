@@ -10,12 +10,8 @@ import { useBooking } from "../../components/booking/BookingProvider";
  * with a 3-question qualification form). The funnel moves visitors
  * through qualification before any human contact.
  *
- * Layout history:
- *   - Previously a 12-col split with the YT Studio Monetization panel
- *     on the right (YouTubeStudioMockup). The right-column card was
- *     dropped in chore(landing): center the title; the visual proof of
- *     revenue is now carried by the ResultsSection further down the page,
- *     keeping first-7-sec attention uncluttered and on the promise copy.
+ * Layout: centered hero copy keeps the first viewport focused on the
+ * promise, while revenue proof appears in the ResultsSection below.
  * -------------------------------------------------------------------------- */
 
 export function Hero() {

@@ -1,6 +1,6 @@
 /**
  * ChannelVideoFilters — chip-row filter above the video grid on the
- * channel page (Blocco #2).
+ * channel page.
  *
  * Spec chips (Italian): Tutti / Privati / Non in elenco / Pubblici.
  *

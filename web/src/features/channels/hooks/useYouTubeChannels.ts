@@ -3,8 +3,8 @@
  *
  * Calls `GET /api/v1/accounts` + `GET /api/v1/workspaces` in
  * parallel (shared AbortSignal). The accounts response is filtered
- * client-side to YouTube channels only because the server doesn't
- * support `?platform=youtube` filtering today (audit gap entry).
+ * client-side to YouTube channels only because the endpoint returns
+ * accounts for multiple platforms.
  *
  * State machine (mirrors `useUploads`' LoadState union so callers
  * share the same mental model):

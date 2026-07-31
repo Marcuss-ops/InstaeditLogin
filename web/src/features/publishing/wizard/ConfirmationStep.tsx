@@ -1,7 +1,7 @@
 /**
  * ConfirmationStep — Step 3 of the /app/content/new wizard.
  *
- * Responsibilities (per Blocco #1 spec):
+ * Responsibilities:
  *   1. Render a read-only summary of the consolidated payload the
  *      user has assembled in Steps 1 + 2 (video, internal title,
  *      channel, YT title, description, tag count, made-for-kids,

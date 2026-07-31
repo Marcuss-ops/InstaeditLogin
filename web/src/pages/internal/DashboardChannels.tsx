@@ -2,8 +2,8 @@
 /**
  * DashboardChannelsPage — single-channel page at /app/dashboard-channels/:accountId.
  *
- * Blocco #2 of the vertical-slice spec. Wires together the primitives
- * already shipped in earlier commits:
+ * Composes the channel header, filters, content list, and editor
+ * entrypoint into the single-account channel page:
  *
  *   • <ChannelHeader>       — avatar/banner/handle/status/refresh/back
  *   • <ChannelVideoFilters> — Tutti/Privati/Non in elenco/Pubblici

@@ -22,12 +22,6 @@
  *     N BCs in lockstep. One BC + one fan-out is the natural
  *     mapping for "one event, N independent queries invalidated".
  *
- *   - The audit doc (docs/PUBLISH-FLOW-AUDIT.md §"Order of work,
- *     step 8") explicitly profiled this as "Cross-tab BroadcastChannel
- *     unificato: 1 solo listener che invalida SIA channel content
- *     cache SIA groupYouTubeVideosQueryKey" before naming a
- *     non-existent `useYouTubePublishLiveUpdate` — this file is
- *     that hook.
  *
  * Same-tab vs cross-tab:
  *
@@ -112,11 +106,9 @@ type RefetchFn = () => void | Promise<void>;
 /**
  * The shape of the dispatch payload. `status` and `actual_privacy`
  * are intentionally typed as `string` (not a strict enum) so the
- * client doesn't crash on a server-side lexicon change — the audit
- * doc tracks `draft/queued/publishing/published/failed/retrying/
- * waiting_provider/dlq/partially_published` plus a couple more in
- * the YouTube branch. The listener never BRANCHES on these values,
- * only forwards them — so the relaxed type is fine.
+ * client doesn't crash on a server-side lexicon change. The listener
+ * never branches on these values; it only forwards them, so the
+ * relaxed type is intentional.
  */
 export interface PublishUpdateMessage {
   readonly type: "youtube-publish-changed";

@@ -1,6 +1,5 @@
 /**
- * Thumbnail cache-buster for the channel feature (Blocco #2 vertical
- * slice + legacy groups grid parity).
+ * Thumbnail cache-buster for the channel feature and shared video grids.
  *
  * Why this exists: The browser caches <img> URLs by their src string.
  * After the Dark Editor flips a thumbnail, the server MAY return the

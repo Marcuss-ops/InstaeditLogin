@@ -3,9 +3,9 @@
  *
  * `GET /api/v1/accounts` returns the full list of connected
  * accounts across all platforms (YouTube, Google Drive, TikTok,
- * Instagram, …). Server-side filtering by `?platform=youtube` is
- * NOT supported today (the audit doc flagged it as a gap), so we
- * filter client-side. This is fine for the wizard scope: a user
+ * Instagram, …). We filter the returned list client-side so the
+ * wizard receives only YouTube channels. This is fine for the wizard
+ * scope: a user
  * has at most a few dozen accounts and the filter runs in memory.
  *
  * `GET /api/v1/workspaces` returns the workspace manifests the

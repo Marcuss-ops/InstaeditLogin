@@ -1,8 +1,8 @@
 /**
  * Shared types for the channel feature.
  *
- * The channel page (Blocco #2 in the vertical-slice spec) renders a
- * header for a single YouTube account + the list of videos on it,
+ * The channel page renders a header for a single YouTube account + the
+ * list of videos on it,
  * with privacy-chip filters and a highlight band for the just-uploaded
  * video (the `?video=…` query string). This file centralizes the
  * shapes the feature passes around so the page, the components, and

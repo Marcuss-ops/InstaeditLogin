@@ -75,8 +75,8 @@ export interface CreatePostOptions {
  * `targets[0].settings.youtube = { title, description, privacy_status: "private",
  * made_for_kids, tags }` per the vertical slice spec.
  *
- * Status code note (audit-flagged):
- *   - openapi spec says 202 Accepted,
+ * Status codes:
+ *   - the OpenAPI spec says 202 Accepted,
  *   - current Go handler returns 201 Created (handleCreatePost writes
  *     `http.StatusCreated`),
  *   - authedFetch treats both as success — wizard doesn't care which

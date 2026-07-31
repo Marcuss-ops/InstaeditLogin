@@ -2,7 +2,7 @@
  * Vitest coverage for `useChannelContent`.
  *
  * Goal: lock the public contract that DashboardChannelsPage
- * (Blocco #2) depends on — state-machine kind names, the
+ * depends on — state-machine kind names, the
  * auto-refetch-on-prop-change behavior, the loadMore-append
  * flow, and the AuthError re-throw / ApiError surface split.
  *
@@ -329,7 +329,7 @@ describe("useChannelContent", () => {
   });
 });
 
-// ─── refresh options (Blocco #2 spec extension) ──────────────────────
+// ─── refresh options ─────────────────────────────────────────────────
 describe("useChannelContent — refresh options", () => {
   beforeEach(() => {
     listChannelContentMock.mockReset();
