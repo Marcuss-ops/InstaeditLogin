@@ -1,13 +1,11 @@
-import { Quote, PlayCircle } from "lucide-react";
+import { PlayCircle } from "lucide-react";
 
 /* ----------------------------------------------------------------------------
- * Testimonials — student quotes + video stories, placed after the founder
- * story and before the FAQ.
+ * Testimonials — student video stories, placed after the founder story and
+ * before the FAQ.
  *
- * The video grid embeds student YouTube Shorts in 9:16 phone-style frames
- * (same treatment as the FounderStory video). Quotes mirror the verified
- * student voices on the Mentoring page (keep them in sync with Mentoring.tsx
- * when copy changes).
+ * The grid embeds student YouTube Shorts in 9:16 phone-style frames (same
+ * treatment as the FounderStory video).
  * -------------------------------------------------------------------------- */
 
 const VIDEO_TESTIMONIALS = [
@@ -17,27 +15,6 @@ const VIDEO_TESTIMONIALS = [
   "Ddb5mFngqcQ",
   "IvBkOutk0-Q",
   "DBuIP0vur8U",
-];
-
-const TESTIMONIALS = [
-  {
-    quote:
-      "In three months I went from 2 to 12 posts per week without hiring anyone. Mentoring gave me the right workflow.",
-    author: "Sara M.",
-    role: "Tech creator",
-  },
-  {
-    quote:
-      "My team no longer loses hours to uploads and reformatting. The path saved us dozens of hours per month.",
-    author: "Marco B.",
-    role: "Content Strategist",
-  },
-  {
-    quote:
-      "I learned how to use AI not to replace me, but to amplify my style. View results grew steadily.",
-    author: "Giulia T.",
-    role: "Lifestyle creator",
-  },
 ];
 
 export function Testimonials() {
@@ -58,7 +35,7 @@ export function Testimonials() {
         </div>
 
         {/* Video testimonials — 6 student Shorts in 9:16 phone frames */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 mb-16">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {VIDEO_TESTIMONIALS.map((id, i) => (
             <div
               key={id}
@@ -85,30 +62,6 @@ export function Testimonials() {
           ))}
         </div>
 
-        {/* Written quotes */}
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {TESTIMONIALS.map((t, i) => (
-            <div
-              key={t.author}
-              className={`surface-card p-6 relative overflow-hidden animate-fade-up hover:border-violet-400/30 hover:shadow-[0_8px_32px_rgba(139,92,246,0.12)] transition-all duration-300 ${["", "animation-delay-100", "animation-delay-200"][i]}`}
-            >
-              <div aria-hidden="true" className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-violet-500/60 to-cyan-400/60" />
-              <Quote className="w-5 h-5 text-violet-300 mb-4" />
-              <p className="text-sm text-zinc-300 leading-relaxed mb-5">
-                &ldquo;{t.quote}&rdquo;
-              </p>
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center text-white text-sm font-semibold">
-                  {t.author.charAt(0)}
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-white">{t.author}</div>
-                  <div className="text-xs text-zinc-500">{t.role}</div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
     </section>
   );
