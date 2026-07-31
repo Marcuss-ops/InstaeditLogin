@@ -70,6 +70,10 @@ func (s *YouTubeOAuthService) updateVideoWithExtendedSnippet(ctx context.Context
 	if opts.Description != "" {
 		snippet["description"] = opts.Description
 	}
+	// YouTube requires categoryId whenever the snippet part is sent.
+	// Thumbnail editing must not fail with invalidCategoryId when the
+	// editor changes title/description/tags on an existing video.
+	snippet["categoryId"] = "22" // People & Blogs; valid neutral default.
 	if len(opts.Tags) > 0 {
 		// Defensive copy so a calling test that re-uses opts
 		// after the call still sees consistent state.
@@ -245,6 +249,11 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 	}
 	if description != "" {
 		snippet["description"] = description
+	}
+	// The YouTube API requires a valid categoryId whenever the snippet
+	// part is sent. Keep privacy-only updates snippet-free.
+	if len(snippet) > 0 {
+		snippet["categoryId"] = "22" // People & Blogs; valid neutral default.
 	}
 
 	payload := map[string]interface{}{
