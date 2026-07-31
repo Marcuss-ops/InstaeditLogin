@@ -11,6 +11,7 @@ import {
   Clock,
   CalendarClock,
   Video,
+  LockKeyhole,
 } from "lucide-react";
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
 import { getProvider, type ProviderId } from "../../lib/providers";
@@ -220,6 +221,11 @@ export function InternalDashboard() {
       .sort((a, b) => b.count - a.count || a.account.id - b.account.id);
   }, [state]);
 
+  const privateAccounts = useMemo(() => {
+    if (state.kind !== "ready") return [];
+    return state.data.accounts.filter((account) => account.platform === "youtube");
+  }, [state]);
+
   return (
     <div className="min-h-full p-8 bg-[#030308] text-[#e8e8ef]">
       <div className="max-w-6xl mx-auto">
@@ -294,6 +300,25 @@ export function InternalDashboard() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {programByAccount.map((entry) => (
                     <AccountProgrammatoCard key={entry.account.id} entry={entry} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {privateAccounts.length > 0 && (
+              <section className="mb-8">
+                <div className="mb-4">
+                  <h2 className="text-[18px] font-extrabold tracking-tight text-white flex items-center gap-2">
+                    <LockKeyhole size={20} className="text-white/60" />
+                    Privati
+                  </h2>
+                  <p className="text-[13px] text-[#9aa0aa] mt-0.5">
+                    Apri i video privati del canale per controllarli o modificarne la copertina.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {privateAccounts.map((account) => (
+                    <AccountPrivatiCard key={account.id} account={account} />
                   ))}
                 </div>
               </section>
@@ -458,17 +483,49 @@ function AccountProgrammatoCard({
             <Clock size={11} />
             <span>Next: {nextLabel}</span>
           </div>
-        ) : (
-          <div className="text-[12px] text-[#9aa0aa] italic mb-3">
-            Nothing scheduled yet.
-          </div>
-        )}
+        ) : null}
         <div className="flex items-center justify-between text-[12px] text-[#9aa0aa] group-hover:text-white transition-colors">
-          <span>
-            {entry.count === 0
-              ? "Apri calendario →"
-              : `${entry.count === 1 ? "1 video" : `${entry.count} videos`} in coda`}
-          </span>
+          <span>Apri calendario →</span>
+          <ArrowRight size={14} />
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function AccountPrivatiCard({ account }: { account: PlatformAccount }) {
+  const provider = getProvider(account.platform);
+
+  return (
+    <Link
+      to={`/app/dashboard-channels/${account.id}?privacy=private`}
+      className="group block surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl overflow-hidden hover:border-white/[0.30] hover:shadow-[0_8px_32px_rgba(0,0,0,0.4)] transition-all no-underline"
+      data-testid={`dash-privati-card-${account.id}`}
+    >
+      <div className="bg-white/[0.04] text-[#9aa0aa] px-5 py-3 border-b border-white/[0.08]">
+        <div className="flex items-center justify-between">
+          <span className="text-[12px] font-bold uppercase tracking-wider">Privati</span>
+          <LockKeyhole size={16} />
+        </div>
+      </div>
+      <div className="px-5 py-4">
+        <div className="flex items-center gap-3 mb-3">
+          {provider ? (
+            <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${provider.color} flex items-center justify-center text-white shrink-0`}>
+              {provider.icon}
+            </div>
+          ) : (
+            <div className="w-10 h-10 rounded-xl bg-white/[0.06] flex items-center justify-center text-white/40 shrink-0">
+              <Video size={18} />
+            </div>
+          )}
+          <div className="min-w-0">
+            <p className="text-[14px] font-bold text-white truncate">{provider?.name ?? account.platform}</p>
+            <p className="text-[12px] text-[#9aa0aa] truncate">@{account.username || "—"}</p>
+          </div>
+        </div>
+        <div className="flex items-center justify-between text-[12px] text-[#9aa0aa] group-hover:text-white transition-colors">
+          <span>Apri video privati →</span>
           <ArrowRight size={14} />
         </div>
       </div>
