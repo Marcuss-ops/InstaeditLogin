@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { authedFetch, AuthError } from "../../lib/auth";
 import { useToast } from "../../components/toast";
-import { PROVIDERS, type ProviderId } from "../../lib/providers";
+import { PROVIDERS } from "../../lib/providers";
 import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
 import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
@@ -21,55 +21,13 @@ import {
   AccountDetailsVideoCard,
   type ContentItem,
 } from "./AccountDetailsVideoCard";
-
-type AccountMetric = {
-  key: string;
-  label: string;
-  value: number;
-  display_value: string;
-};
-
-type AccountResource = {
-  resource_type: string;
-  external_id: string;
-  display_name: string;
-  handle?: string;
-  description?: string;
-  avatar_url?: string;
-  banner_url?: string;
-  public_url?: string;
-  metrics?: AccountMetric[];
-  properties?: Record<string, unknown>;
-  fetched_at?: string;
-};
-
-type AccountDetail = {
-  id: number;
-  platform: ProviderId;
-  platform_user_id: string;
-  username: string;
-  status: string;
-  created_at: string;
-  resource?: AccountResource;
-};
-
-type ContentPage = {
-  items: ContentItem[];
-  next_cursor?: string;
-};
+import {
+  useAccountDetailsData,
+  type AccountMetric,
+} from "./useAccountDetailsData";
+import { useAccountContentData } from "./useAccountContentData";
 
 type TabId = "overview" | "videos" | "connection";
-
-type FetchState =
-  | { kind: "loading" }
-  | { kind: "ready"; account: AccountDetail }
-  | { kind: "error"; message: string };
-
-type ContentState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ready"; items: ContentItem[]; nextCursor?: string; isLoadingMore?: boolean; loadMoreError?: string }
-  | { kind: "error"; message: string };
 
 function MetricCard({ metric }: { metric: AccountMetric }) {
   return (
@@ -85,104 +43,13 @@ function MetricCard({ metric }: { metric: AccountMetric }) {
 export function AccountDetailsPage() {
   const { accountId } = useParams<{ accountId: string }>();
   const navigate = useNavigate();
-  const abortRef = useRef<AbortController | null>(null);
   const toast = useToast();
-
-  const [state, setState] = useState<FetchState>({ kind: "loading" });
   const [activeTab, setActiveTab] = useState<TabId>("overview");
-  const [contentState, setContentState] = useState<ContentState>({ kind: "idle" });
-  const [syncing, setSyncing] = useState(false);
-  // Per-fetch cache-bust key for the legacy Videos-tab thumbnails.
-  // Bumped inside `loadContent` on every successful fetch (refresh
-  // / append). Same pattern as the new channel page's
-  // useChannelContent().cacheBust — see utils/thumbnailUrl.ts.
-  const [contentCacheBust, setContentCacheBust] = useState(0);
-
-  const loadAccount = useCallback(async () => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setState({ kind: "loading" });
-
-    try {
-      const response = await authedFetch(`/api/v1/accounts/${accountId}`, {
-        signal: controller.signal,
-      });
-      if (controller.signal.aborted) return;
-      const data = (await response.json()) as AccountDetail;
-      setState({ kind: "ready", account: data });
-    } catch (err) {
-      if (controller.signal.aborted) return;
-      if (err instanceof AuthError) {
-        navigate("/login", { replace: true });
-        return;
-      }
-      const message = err instanceof Error ? err.message : "Unable to load account.";
-      setState({ kind: "error", message });
-    }
-  }, [accountId, navigate]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      // Session check is handled by ProtectedRoute; just load.
-      if (!cancelled) void loadAccount();
-    })();
-    return () => {
-      cancelled = true;
-      abortRef.current?.abort();
-    };
-  }, [loadAccount]);
-
+  const { state, loadAccount, syncing, handleSync } =
+    useAccountDetailsData(accountId);
   const currentPlatform = state.kind === "ready" ? state.account.platform : undefined;
-
-  const loadContent = useCallback(
-    async (cursor?: string) => {
-      const isAppend = !!cursor;
-      if (isAppend) {
-        setContentState((prev) =>
-          prev.kind === "ready"
-            ? { ...prev, isLoadingMore: true, loadMoreError: undefined }
-            : { kind: "loading" }
-        );
-      } else {
-        setContentState({ kind: "loading" });
-      }
-      try {
-        // YouTube content is filtered to private videos only so the user can
-        // pick a video to edit the thumbnail before publishing.
-        const privacy = currentPlatform === "youtube" ? "private" : "";
-        const url = `/api/v1/accounts/${accountId}/content?limit=20${cursor ? `&cursor=${cursor}` : ""}${privacy ? `&privacy=${privacy}` : ""}`;
-        const response = await authedFetch(url);
-        const data = (await response.json()) as ContentPage;
-        setContentState((prev) => ({
-          kind: "ready",
-          items:
-            isAppend && prev.kind === "ready"
-              ? [...prev.items, ...data.items]
-              : data.items,
-          nextCursor: data.next_cursor,
-          isLoadingMore: false,
-          loadMoreError: undefined,
-        }));
-        // Bump the cache-bust key AFTER the contentState commit
-        // (POST-setState, not pre) — keeps the bust semantically
-        // linked to a successful items update. The state setter +
-        // Date.now() keep the bumped value stable across renders
-        // until the next fetch.
-        setContentCacheBust(Date.now());
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unable to load content.";
-        setContentState((prev) => {
-          if (isAppend && prev.kind === "ready") {
-            return { ...prev, isLoadingMore: false, loadMoreError: message };
-          }
-          return { kind: "error", message };
-        });
-      }
-    },
-    [accountId, currentPlatform],
-  );
+  const { contentState, loadContent, contentCacheBust } =
+    useAccountContentData(accountId, currentPlatform);
 
   const handleEditThumbnail = useCallback(async (item: ContentItem) => {
     if (!accountId) return;
@@ -219,18 +86,6 @@ export function AccountDetailsPage() {
       void loadContent();
     }
   }, [activeTab, contentState, loadContent]);
-
-  const handleSync = useCallback(async () => {
-    setSyncing(true);
-    try {
-      await authedFetch(`/api/v1/accounts/${accountId}/sync`, { method: "POST" });
-      await loadAccount();
-    } catch {
-      // sync errors are non-fatal; the stale data remains visible
-    } finally {
-      setSyncing(false);
-    }
-  }, [accountId, loadAccount]);
 
   // Cross-tab invalidation for the legacy "Videos" tab (group-
   // videos cache). NUMERIC id only — bogus URL values short-
