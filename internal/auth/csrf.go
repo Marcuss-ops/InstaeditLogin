@@ -41,6 +41,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -99,6 +100,15 @@ func NewCSRF(cfg CSRFConfig, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// The SPA and API may be on sibling InstaEdit subdomains. A
+		// browser can legitimately send the request Origin while a
+		// domain-scoped CSRF cookie is temporarily unavailable during
+		// migration. Accept only our own HTTPS subdomains here; arbitrary
+		// cross-site origins still require the double-submit token.
+		if trustedInstaEditOrigin(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Cookie callers: cookie value must equal header value.
 		// SPRINT 7.2 belt-and-suspenders: distinguish "no csrf cookie"
 		// (the browser never saw one set) from "csrf cookie present
@@ -149,6 +159,19 @@ func NewCSRF(cfg CSRFConfig, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func trustedInstaEditOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	return host == "instaedit.org" || strings.HasSuffix(host, ".instaedit.org")
 }
 
 // SetCSRFToken ensures the response sets a fresh csrf_token cookie
