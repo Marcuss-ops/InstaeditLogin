@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { SHORT_DEMOS, LONGFORM_DEMOS, PLATFORM_REGISTRY } from "./shared";
+import { SHORT_DEMOS, LONGFORM_DEMOS } from "./shared";
+import { PLATFORM_REGISTRY } from "../brand/PlatformLogos";
 
 export interface EditorState {
   /** Demo / marketing data used by the editor page. */

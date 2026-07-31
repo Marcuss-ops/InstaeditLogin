@@ -1,4 +1,4 @@
-import { type LogoProps, PLATFORM_REGISTRY } from "./shared";
+import { type LogoProps, PLATFORM_REGISTRY } from "../brand/PlatformLogos";
 
 function OutputCard({
   Logo,

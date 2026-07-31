@@ -1,6 +1,4 @@
-import type { SVGProps } from "react";
-
-export type LogoProps = SVGProps<SVGSVGElement> & { className?: string };
+export type { LogoProps } from "../brand/PlatformLogos";
 
 export type RowPlatform =
   | "instagram"

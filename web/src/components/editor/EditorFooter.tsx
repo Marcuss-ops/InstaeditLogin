@@ -2,9 +2,7 @@ import { Link } from "react-router-dom";
 import {
   Zap
 } from "lucide-react";
-import {
-  PLATFORM_REGISTRY
-} from "./shared";
+import { PLATFORM_REGISTRY } from "../brand/PlatformLogos";
 
 export function EditorFooter() {
   return (

@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Zap } from "lucide-react";
-import { PLATFORM_REGISTRY } from "../marketing/PlatformLogos";
+import { PLATFORM_REGISTRY } from "../brand/PlatformLogos";
 
 const COLS: Array<{ heading: string; links: Array<{ l: string; to?: string; href?: string }> }> = [
   {

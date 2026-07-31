@@ -1,5 +1,5 @@
 import { Bot, Globe, DollarSign } from "lucide-react";
-import { IconSchedule } from "./shared";
+import { IconSchedule } from "../../components/landing/icons";
 
 /* ----------------------------------------------------------------------------
  * Features — semi-automated pipeline, maximum income (gain-focused)

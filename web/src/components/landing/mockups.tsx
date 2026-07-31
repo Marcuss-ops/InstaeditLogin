@@ -1,5 +1,5 @@
 import { Plus } from "lucide-react";
-import { PLATFORM_REGISTRY } from "./constants";
+import { PLATFORM_REGISTRY } from "../brand/PlatformLogos";
 import type { RowPlatform } from "./types";
 
 /* ----------------------------------------------------------------------------

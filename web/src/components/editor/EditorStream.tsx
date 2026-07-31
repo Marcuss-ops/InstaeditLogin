@@ -1,9 +1,7 @@
 import {
   CheckCircle2, Radio
 } from "lucide-react";
-import {
-  PLATFORM_REGISTRY
-} from "./shared";
+import { PLATFORM_REGISTRY } from "../brand/PlatformLogos";
 
 export function EditorStream() {
   type ChannelTile = {
