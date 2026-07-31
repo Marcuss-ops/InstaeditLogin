@@ -87,14 +87,10 @@ type PlatformAccount struct {
 	LastErrorCode    string     `json:"last_error_code,omitempty"`
 	LastErrorMessage string     `json:"last_error_message,omitempty"`
 	Metadata         Metadata   `json:"metadata,omitempty"`
-	// OAuthConnectionID is the FK to oauth_connections.id (migration
-	// 043). Populated by the backfill for historical rows (one
-	// oauth_connection per (user, platform, platform_user_id)
-	// tuple, provider_subject_id left empty until the next
-	// callback re-stores the token under the lineage). For rows
-	// created AFTER migration 043, the handler / repo must INSERT
-	// into oauth_connections at attach time AND link this FK in
-	// the same statement (a follow-up commit wires that lifecycle).
+	// OAuthConnectionID is the FK to oauth_connections.id. Multiple
+	// resource rows (for example YouTube channels) may intentionally
+	// point to the same OAuth grant; grant identity lives on
+	// oauth_connections.provider_subject_id.
 	OAuthConnectionID *int64    `json:"oauth_connection_id,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
@@ -110,7 +106,9 @@ type Metadata map[string]interface{}
 // and Scopes remain deprecated compatibility aliases while existing
 // installations and migrations are being retired.
 type Token struct {
-	ID                int64 `json:"id"`
+	ID int64 `json:"id"`
+	// Deprecated resource hint. Modern grant-scoped tokens leave this
+	// zero; the canonical credential identity is OAuthConnectionID.
 	PlatformAccountID int64 `json:"platform_account_id,omitempty"`
 	// OAuthConnectionID is the canonical grant lineage key (migration 053).
 	OAuthConnectionID int64  `json:"-"`
@@ -166,12 +164,15 @@ type OAuthToken struct {
 	Scopes      []string   `json:"scopes,omitempty"`
 }
 
-// PlatformProfile is returned by HandleCallback with user and account info.
+// PlatformProfile is returned by HandleCallback with user, resource and
+// grant-owner identity. ProviderSubjectID is populated for providers that
+// expose a stable OAuth subject (Google/YouTube).
 type PlatformProfile struct {
-	PlatformUserID string
-	Username       string
-	Email          string
-	Name           string
+	PlatformUserID    string
+	ProviderSubjectID string
+	Username          string
+	Email             string
+	Name              string
 }
 
 // TokenData is the encrypted token returned by HandleCallback.
@@ -180,8 +181,12 @@ type PlatformProfile struct {
 type TokenData struct {
 	// These are decrypted runtime credentials and must never cross an
 	// HTTP/JSON boundary. The vault consumes them in memory only.
-	AccessToken           string `json:"-"`
-	RefreshToken          string `json:"-"`
+	AccessToken  string `json:"-"`
+	RefreshToken string `json:"-"`
+	// ProviderSubjectID identifies the OAuth grant owner (Google `sub` for
+	// YouTube). It is grant metadata, not a channel/resource identifier, and
+	// is used to share one oauth_connection across multiple channels.
+	ProviderSubjectID     string `json:"-"`
 	TokenType             string
 	ExpiresIn             int64
 	RefreshTokenExpiresIn int64

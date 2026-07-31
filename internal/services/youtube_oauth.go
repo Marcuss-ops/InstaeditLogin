@@ -227,6 +227,7 @@ func (s *YouTubeOAuthService) HandleCallback(ctx context.Context, state, code st
 	tokenData := &models.TokenData{
 		AccessToken:           tokenResp.AccessToken,
 		RefreshToken:          tokenResp.RefreshToken,
+		ProviderSubjectID:     profile.ProviderSubjectID,
 		TokenType:             models.TokenTypeBearer,
 		ExpiresIn:             tokenResp.ExpiresIn,
 		RefreshTokenExpiresIn: tokenResp.RefreshTokenExpiresIn,
@@ -551,10 +552,11 @@ func (s *YouTubeOAuthService) getUserInfo(ctx context.Context, accessToken strin
 	}
 
 	return &models.PlatformProfile{
-		PlatformUserID: result.ID,
-		Username:       result.Name,
-		Name:           result.Name,
-		Email:          result.Email,
+		PlatformUserID:    result.ID,
+		ProviderSubjectID: result.ID,
+		Username:          result.Name,
+		Name:              result.Name,
+		Email:             result.Email,
 	}, nil
 }
 

@@ -34,7 +34,9 @@
 //     abort BEFORE BEGIN, never touching the DB.
 //  3. BEGIN tx.
 //  4. UPSERT oauth_connections keyed on (user_id, provider,
-//     provider_resource_id) — returns oauth_connection_id.
+//     provider_subject_id) when the provider supplies a stable grant
+//     subject (Google `sub` for YouTube); legacy providers continue to
+//     use provider_resource_id — returns oauth_connection_id.
 //  5. INSERT one row into tokens per encrypted TokenData (via
 //     credentials.TokenStore.SaveTokenTx, a tx-aware variant that
 //     also prunes older rows inside the same tx).
@@ -50,10 +52,10 @@
 //   - migration 043 created oauth_connections + the FK from
 //     platform_accounts; oauth_connection_id is the canonical
 //     OAuth-grant lineage key.
-//   - migration 053 retargeted the tokens table to FK oauth_connection_id
-//     and SET NOT NULL on that column. Do NOT relax the NOT NULL
-//     without revisiting this service — the atomic flow assumes
-//     every token row carries an oauth_connection_id.
+//   - migration 053 retargeted the tokens table to FK oauth_connection_id;
+//     migration 085 made the legacy channel reference nullable. Every token
+//     row still carries oauth_connection_id; modern grant tokens intentionally
+//     leave platform_account_id NULL.
 //
 // Invariants enforced by this service:
 //
@@ -242,6 +244,10 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 			exp := time.Now().Add(time.Duration(td.RefreshTokenExpiresIn) * time.Second)
 			refreshExpiresAt = &exp
 		}
+		// Keep the resource hint for legacy providers. Modern YouTube
+		// grants are adjusted to NULL after the platform row is loaded
+		// below, because their credential identity is the shared OAuth
+		// connection rather than one discovered channel.
 		encrypted[i] = &models.Token{
 			PlatformAccountID:     accountID,
 			TokenType:             td.TokenType,
@@ -268,9 +274,10 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 		}
 	}()
 
-	// Load platform + provider_resource_id + user_id + current
-	// status — the keys for the oauth_connections UPSERT AND
-	// the eligibility gate below.
+	// Load platform + provider resource id + user id + current status.
+	// The token's ProviderSubjectID is the grant identity for modern
+	// YouTube authorizations; providerResourceID remains the channel/resource
+	// hint stored for legacy compatibility and observability.
 	var (
 		platform           string
 		providerResourceID string
@@ -324,25 +331,43 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 		return 0, ErrOAuthRefreshTokenRequired
 	}
 
-	// (4) UPSERT oauth_connections. Idempotent on (user_id,
-	// provider, provider_resource_id). On conflict refreshes
-	// scopes + last_validated_at. Returns oauth_connection_id.
+	// (4) UPSERT oauth_connections. Modern YouTube callbacks use the
+	// stable Google subject so every channel from the same grant reuses
+	// one oauth_connection row. Other/legacy providers retain the
+	// resource-keyed compatibility path. Returns oauth_connection_id.
 	// scopes is wrapped in pq.Array because oauth_connections.scopes
 	// is a TEXT[] column — lib/pq serialises the slice correctly,
 	// whereas the bare []string would surface a
 	// "converting argument $4 type: unsupported type []string"
 	// driver error.
-	if upsertErr := tx.QueryRowContext(ctx,
-		`INSERT INTO oauth_connections (user_id, provider, provider_resource_id, scopes, granted_scopes, last_validated_at)
-		 VALUES ($1, $2, $3, $4, $4, NOW())
-		 ON CONFLICT (user_id, provider, provider_resource_id)
-		 DO UPDATE SET scopes = EXCLUDED.scopes,
-		               granted_scopes = EXCLUDED.granted_scopes,
-		               last_validated_at = NOW(),
-		               updated_at = NOW()
-		 RETURNING id`,
-		userID, platform, providerResourceID, pq.Array(scopes),
-	).Scan(&oauthConnectionID); upsertErr != nil {
+	var upsertErr error
+	if platform == models.PlatformYouTube && tokens[0].ProviderSubjectID != "" {
+		upsertErr = tx.QueryRowContext(ctx,
+			`INSERT INTO oauth_connections (user_id, provider, provider_subject_id, provider_resource_id, scopes, granted_scopes, last_validated_at)
+			 VALUES ($1, $2, $3, $4, $5, $5, NOW())
+			 ON CONFLICT (user_id, provider, provider_subject_id) WHERE provider_subject_id <> ''
+			 DO UPDATE SET provider_resource_id = EXCLUDED.provider_resource_id,
+			               scopes = EXCLUDED.scopes,
+			               granted_scopes = EXCLUDED.granted_scopes,
+			               last_validated_at = NOW(),
+			               updated_at = NOW()
+			 RETURNING id`,
+			userID, platform, tokens[0].ProviderSubjectID, providerResourceID, pq.Array(scopes),
+		).Scan(&oauthConnectionID)
+	} else {
+		upsertErr = tx.QueryRowContext(ctx,
+			`INSERT INTO oauth_connections (user_id, provider, provider_resource_id, scopes, granted_scopes, last_validated_at)
+			 VALUES ($1, $2, $3, $4, $4, NOW())
+			 ON CONFLICT (user_id, provider, provider_resource_id) WHERE provider_subject_id = ''
+			 DO UPDATE SET scopes = EXCLUDED.scopes,
+			               granted_scopes = EXCLUDED.granted_scopes,
+			               last_validated_at = NOW(),
+			               updated_at = NOW()
+			 RETURNING id`,
+			userID, platform, providerResourceID, pq.Array(scopes),
+		).Scan(&oauthConnectionID)
+	}
+	if upsertErr != nil {
 		return 0, fmt.Errorf("channel authorization: upsert oauth_connections: %w", upsertErr)
 	}
 
@@ -355,6 +380,12 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 	// pruned older rows together.
 	for i, t := range encrypted {
 		t.OAuthConnectionID = oauthConnectionID
+		if platform == models.PlatformYouTube && tokens[i].ProviderSubjectID != "" {
+			// The channel remains linked through
+			// platform_accounts.oauth_connection_id; do not make a
+			// shared grant appear owned by this one channel.
+			t.PlatformAccountID = 0
+		}
 		if saveErr := s.store.SaveTokenTx(ctx, tx, t); saveErr != nil {
 			return 0, fmt.Errorf("channel authorization: save token %d: %w", i, saveErr)
 		}

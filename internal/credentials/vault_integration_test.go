@@ -121,7 +121,7 @@ func integrationDB(t *testing.T) *sql.DB {
 		)`,
 		`CREATE TABLE IF NOT EXISTS tokens (
 			id BIGSERIAL PRIMARY KEY,
-			platform_account_id BIGINT NOT NULL REFERENCES platform_accounts(id) ON DELETE CASCADE,
+			platform_account_id BIGINT REFERENCES platform_accounts(id) ON DELETE CASCADE,
 			oauth_connection_id BIGINT NOT NULL REFERENCES oauth_connections(id) ON DELETE CASCADE,
 			token_type VARCHAR(50) NOT NULL,
 			encrypted_access_token BYTEA,

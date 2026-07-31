@@ -19,7 +19,7 @@
 // CredentialVault fixes both: the refresher is now a plain function
 // (TokenRefresher) the vault knows nothing about beyond its signature,
 // and Renew acquires a Postgres `pg_advisory_xact_lock` keyed by the
-// platform_account_id so concurrent refreshes serialise at the DB level.
+// oauth_connection_id so concurrent refreshes serialise at the DB level.
 package credentials
 
 import (
@@ -316,8 +316,16 @@ func (v *CredentialVault) prepareTokenForOAuthConnection(ctx context.Context, oa
 		expires := v.clock().Add(time.Duration(tokenData.RefreshTokenExpiresIn) * time.Second)
 		refreshExpiresAt = &expires
 	}
+	// Modern subject-keyed grants are shared across resources, so they
+	// do not persist a channel id. Legacy providers retain the resource
+	// hint for compatibility; the canonical credential identity remains
+	// oauth_connection_id in both cases.
+	platformAccountHint := platformAccountID
+	if tokenData.ProviderSubjectID != "" {
+		platformAccountHint = 0
+	}
 	return &models.Token{
-		PlatformAccountID:     platformAccountID,
+		PlatformAccountID:     platformAccountHint,
 		OAuthConnectionID:     oauthConnectionID,
 		TokenType:             tokenData.TokenType,
 		EncryptedAccessToken:  encrypted,

@@ -28,10 +28,19 @@ const expectTokenInsertSQL = `INSERT INTO tokens (
                 platform_account_id, oauth_connection_id, token_type,
                 encrypted_access_token, encrypted_token, encrypted_refresh_token,
                 access_token_expires_at, expires_at, refresh_token_expires_at)
-         VALUES ($1::BIGINT, $2::BIGINT, $3::VARCHAR, $4::BYTEA, $4::BYTEA,
+         VALUES (NULLIF($1::BIGINT, 0), $2::BIGINT, $3::VARCHAR, $4::BYTEA, $4::BYTEA,
                  COALESCE($5::BYTEA, (SELECT encrypted_refresh_token FROM tokens WHERE oauth_connection_id = $2::BIGINT AND token_type = $3::VARCHAR ORDER BY created_at DESC LIMIT 1)),
                  $6::TIMESTAMPTZ, $6::TIMESTAMPTZ,
-                 COALESCE($7::TIMESTAMPTZ, (SELECT refresh_token_expires_at FROM tokens WHERE oauth_connection_id = $2::BIGINT AND token_type = $3::VARCHAR ORDER BY created_at DESC LIMIT 1))) RETURNING id, created_at`
+                 COALESCE($7::TIMESTAMPTZ, (SELECT refresh_token_expires_at FROM tokens WHERE oauth_connection_id = $2::BIGINT AND token_type = $3::VARCHAR ORDER BY created_at DESC LIMIT 1)))
+         ON CONFLICT (oauth_connection_id, token_type) DO UPDATE SET
+                 platform_account_id = EXCLUDED.platform_account_id,
+                 encrypted_access_token = EXCLUDED.encrypted_access_token,
+                 encrypted_token = EXCLUDED.encrypted_token,
+                 encrypted_refresh_token = COALESCE(EXCLUDED.encrypted_refresh_token, tokens.encrypted_refresh_token),
+                 access_token_expires_at = EXCLUDED.access_token_expires_at,
+                 expires_at = EXCLUDED.expires_at,
+                 refresh_token_expires_at = COALESCE(EXCLUDED.refresh_token_expires_at, tokens.refresh_token_expires_at)
+         RETURNING id, created_at`
 
 // ---- helpers --------------------------------------------------------------
 
@@ -97,7 +106,7 @@ func expectUpsertOCR(mock sqlmock.Sqlmock, userID int64, provider, puID string, 
 	mock.ExpectQuery(
 		`INSERT INTO oauth_connections (user_id, provider, provider_resource_id, scopes, granted_scopes, last_validated_at)
 		 VALUES ($1, $2, $3, $4, $4, NOW())
-		 ON CONFLICT (user_id, provider, provider_resource_id)
+		 ON CONFLICT (user_id, provider, provider_resource_id) WHERE provider_subject_id = ''
 		 DO UPDATE SET scopes = EXCLUDED.scopes,
 		               granted_scopes = EXCLUDED.granted_scopes,
 		               last_validated_at = NOW(),
@@ -108,8 +117,26 @@ func expectUpsertOCR(mock sqlmock.Sqlmock, userID int64, provider, puID string, 
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(returnsID))
 }
 
+func expectSubjectUpsertOCR(mock sqlmock.Sqlmock, userID int64, provider, subject, resource string, scopes []string, returnsID int64) {
+	mock.ExpectQuery(
+		`INSERT INTO oauth_connections (user_id, provider, provider_subject_id, provider_resource_id, scopes, granted_scopes, last_validated_at)
+		 VALUES ($1, $2, $3, $4, $5, $5, NOW())
+		 ON CONFLICT (user_id, provider, provider_subject_id) WHERE provider_subject_id <> ''
+		 DO UPDATE SET provider_resource_id = EXCLUDED.provider_resource_id,
+		               scopes = EXCLUDED.scopes,
+		               granted_scopes = EXCLUDED.granted_scopes,
+		               last_validated_at = NOW(),
+		               updated_at = NOW()
+		 RETURNING id`,
+	).
+		WithArgs(userID, provider, subject, resource, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(returnsID))
+}
+
 // expectInsertTokenTx is the real INSERT inside TokenRepository.SaveTokenTx.
-// It returns an empty id from RETURNING because the service does NOT
+// Grant-scoped tokens pass platform_account_id=0, which the repository
+// converts to SQL NULL via NULLIF. It returns an empty id from RETURNING
+// because the service does NOT
 // require the inserted id to be propagated back to the Token row (the
 // flow stamps ID but the service ignores it after).
 func expectInsertTokenTx(mock sqlmock.Sqlmock, expectScopes bool) {
@@ -196,6 +223,51 @@ func TestAuthorizeChannel_HappyPath(t *testing.T) {
 	}
 	if got, want := binder.lastAccessToken.Load().(string), "fresh-access"; got != want {
 		t.Errorf("binder received access token: want %q, got %q", want, got)
+	}
+}
+
+// TestAuthorizeChannel_YouTubeSubjectSharesGrantAcrossChannels pins the
+// modern YouTube path: different platform-account resources use the same
+// stable Google subject and therefore execute a subject-keyed OAuth upsert.
+func TestAuthorizeChannel_YouTubeSubjectSharesGrantAcrossChannels(t *testing.T) {
+	svc, mock, _, cleanup := newSvcHarness(t)
+	defer cleanup()
+
+	const userID, oauthConnID int64 = 99, 555
+	scopes := []string{"https://www.googleapis.com/auth/youtube.upload"}
+
+	for _, account := range []struct {
+		id      int64
+		channel string
+		status  string
+	}{
+		{7, "UCchannelA", models.AccountStatusPendingAuthorization},
+		{8, "UCchannelB", models.AccountStatusPendingAuthorization},
+	} {
+		mock.ExpectBegin()
+		expectLoadAccount(mock, account.id, userID, models.PlatformYouTube, account.channel, account.status)
+		expectSubjectUpsertOCR(mock, userID, models.PlatformYouTube, "google-subject-1", account.channel, scopes, oauthConnID)
+		expectInsertTokenTx(mock, true)
+		expectPromoteAccount(mock, oauthConnID, account.id)
+		mock.ExpectCommit()
+
+		got, err := svc.AuthorizeChannel(context.Background(), account.id, account.channel, scopes, &models.TokenData{
+			AccessToken:       "fresh-access-" + account.channel,
+			RefreshToken:      "fresh-refresh",
+			ProviderSubjectID: "google-subject-1",
+			TokenType:         models.TokenTypeBearer,
+			ExpiresIn:         3600,
+			Scopes:            scopes,
+		})
+		if err != nil {
+			t.Fatalf("AuthorizeChannel(%s): %v", account.channel, err)
+		}
+		if got != oauthConnID {
+			t.Fatalf("AuthorizeChannel(%s) returned oauth_connection_id=%d want %d", account.channel, got, oauthConnID)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v", err)
 	}
 }
 

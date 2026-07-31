@@ -752,6 +752,74 @@ func TestVault_Save_EmptyRefreshToken_PreservesExistingCiphertext(t *testing.T) 
 	}
 }
 
+// TestVault_Save_LegacyProviderRetainsPlatformAccountHint verifies that
+// making the token channel reference nullable for modern YouTube grants does
+// not disconnect legacy provider tokens from their resource metadata.
+func TestVault_Save_LegacyProviderRetainsPlatformAccountHint(t *testing.T) {
+	v, mock, store := newTestVault(t)
+	const accountID, oauthConnectionID int64 = 17, 900
+	var saved *models.Token
+	store.saveTokenFn = func(token *models.Token) error {
+		saved = token
+		return nil
+	}
+
+	expectOauthConnLookup(mock, accountID, oauthConnectionID)
+	if err := v.Save(context.Background(), accountID, &models.TokenData{
+		AccessToken: "legacy-access",
+		TokenType:   models.TokenTypeLongLived,
+		ExpiresIn:   3600,
+	}); err != nil {
+		t.Fatalf("Save legacy provider token: %v", err)
+	}
+	if saved == nil {
+		t.Fatal("Save did not pass a token to the store")
+	}
+	if saved.PlatformAccountID != accountID {
+		t.Fatalf("legacy token platform_account_id: got %d want %d", saved.PlatformAccountID, accountID)
+	}
+	if saved.OAuthConnectionID != oauthConnectionID {
+		t.Fatalf("legacy token oauth_connection_id: got %d want %d", saved.OAuthConnectionID, oauthConnectionID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v", err)
+	}
+}
+
+// TestVault_Save_ModernSubjectLeavesPlatformAccountHintNull verifies that a
+// subject-keyed grant token is resource-independent at the vault boundary.
+func TestVault_Save_ModernSubjectLeavesPlatformAccountHintNull(t *testing.T) {
+	v, mock, store := newTestVault(t)
+	const accountID, oauthConnectionID int64 = 18, 901
+	var saved *models.Token
+	store.saveTokenFn = func(token *models.Token) error {
+		saved = token
+		return nil
+	}
+
+	expectOauthConnLookup(mock, accountID, oauthConnectionID)
+	if err := v.Save(context.Background(), accountID, &models.TokenData{
+		AccessToken:       "youtube-access",
+		TokenType:         models.TokenTypeBearer,
+		ProviderSubjectID: "google-subject",
+		ExpiresIn:         3600,
+	}); err != nil {
+		t.Fatalf("Save modern YouTube token: %v", err)
+	}
+	if saved == nil {
+		t.Fatal("Save did not pass a token to the store")
+	}
+	if saved.PlatformAccountID != 0 {
+		t.Fatalf("modern grant token platform_account_id: got %d want 0/SQL NULL", saved.PlatformAccountID)
+	}
+	if saved.OAuthConnectionID != oauthConnectionID {
+		t.Fatalf("modern grant token oauth_connection_id: got %d want %d", saved.OAuthConnectionID, oauthConnectionID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v", err)
+	}
+}
+
 // TestVault_Revoke_NotFound_TreatedAsSuccess proves Revoke is
 // idempotent: deleting from an account that has no tokens must
 // return nil (not propagate the "not found" error from the store).

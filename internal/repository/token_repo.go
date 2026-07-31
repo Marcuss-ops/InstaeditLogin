@@ -25,10 +25,19 @@ const insertTokenSQL = `INSERT INTO tokens (
                 platform_account_id, oauth_connection_id, token_type,
                 encrypted_access_token, encrypted_token, encrypted_refresh_token,
                 access_token_expires_at, expires_at, refresh_token_expires_at)
-         VALUES ($1::BIGINT, $2::BIGINT, $3::VARCHAR, $4::BYTEA, $4::BYTEA,
+         VALUES (NULLIF($1::BIGINT, 0), $2::BIGINT, $3::VARCHAR, $4::BYTEA, $4::BYTEA,
                  COALESCE($5::BYTEA, (SELECT encrypted_refresh_token FROM tokens WHERE oauth_connection_id = $2::BIGINT AND token_type = $3::VARCHAR ORDER BY created_at DESC LIMIT 1)),
                  $6::TIMESTAMPTZ, $6::TIMESTAMPTZ,
-                 COALESCE($7::TIMESTAMPTZ, (SELECT refresh_token_expires_at FROM tokens WHERE oauth_connection_id = $2::BIGINT AND token_type = $3::VARCHAR ORDER BY created_at DESC LIMIT 1))) RETURNING id, created_at`
+                 COALESCE($7::TIMESTAMPTZ, (SELECT refresh_token_expires_at FROM tokens WHERE oauth_connection_id = $2::BIGINT AND token_type = $3::VARCHAR ORDER BY created_at DESC LIMIT 1)))
+         ON CONFLICT (oauth_connection_id, token_type) DO UPDATE SET
+                 platform_account_id = EXCLUDED.platform_account_id,
+                 encrypted_access_token = EXCLUDED.encrypted_access_token,
+                 encrypted_token = EXCLUDED.encrypted_token,
+                 encrypted_refresh_token = COALESCE(EXCLUDED.encrypted_refresh_token, tokens.encrypted_refresh_token),
+                 access_token_expires_at = EXCLUDED.access_token_expires_at,
+                 expires_at = EXCLUDED.expires_at,
+                 refresh_token_expires_at = COALESCE(EXCLUDED.refresh_token_expires_at, tokens.refresh_token_expires_at)
+         RETURNING id, created_at`
 
 func (r *TokenRepository) SaveToken(token *models.Token) error {
 	tx, err := r.db.Begin()
@@ -136,6 +145,7 @@ func (r *TokenRepository) UpdateOAuthConnectionStatusTx(ctx context.Context, tx 
 // callers that still use the pre-083 model fields.
 func (r *TokenRepository) FindLatestToken(oauthConnectionID int64, tokenType string) (*models.Token, error) {
 	token := &models.Token{}
+	var platformAccountID sql.NullInt64
 	err := r.db.QueryRow(
 		`SELECT t.id, t.oauth_connection_id, t.platform_account_id, t.token_type,
 		        t.encrypted_access_token, t.encrypted_token, t.encrypted_refresh_token,
@@ -146,7 +156,7 @@ func (r *TokenRepository) FindLatestToken(oauthConnectionID int64, tokenType str
 		  WHERE t.oauth_connection_id = $1 AND t.token_type = $2
 		  ORDER BY t.created_at DESC LIMIT 1`,
 		oauthConnectionID, tokenType,
-	).Scan(&token.ID, &token.OAuthConnectionID, &token.PlatformAccountID, &token.TokenType,
+	).Scan(&token.ID, &token.OAuthConnectionID, &platformAccountID, &token.TokenType,
 		&token.EncryptedAccessToken, &token.EncryptedToken, &token.EncryptedRefreshToken,
 		&token.AccessTokenExpiresAt, &token.ExpiresAt, &token.RefreshTokenExpiresAt,
 		pq.Array(&token.GrantedScopes), &token.CreatedAt)
@@ -155,6 +165,9 @@ func (r *TokenRepository) FindLatestToken(oauthConnectionID int64, tokenType str
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to find latest token: %w", err)
+	}
+	if platformAccountID.Valid {
+		token.PlatformAccountID = platformAccountID.Int64
 	}
 	normalizeTokenAliases(token)
 	return token, nil
