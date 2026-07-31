@@ -57,6 +57,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	testcredentials "github.com/Marcuss-ops/InstaeditLogin/internal/testutil/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 )
 
@@ -238,7 +239,7 @@ func buildValidateRouterHarness(t *testing.T, h *E2EHarness) *validateRouterHarn
 	// (the success-path tests rely on this; the negative path tests
 	// that row + honor the user-strict invariant of 'no token persisted').
 	accountID := seedBindingE2EAccount(t, h.pgDB, userID, workspaceID, "youtube", channelA, "pending_authorization")
-	seedRefreshTokenRowForValidateE2E(t, h.pgDB, accountID)
+	testcredentials.SeedRefreshableBearerToken(t, h.pgDB, accountID)
 
 	authMgr := auth.NewManager(testJWTSecret, 24)
 	markReauth := &markReauthCounter{}
@@ -294,59 +295,6 @@ func sendValidateRequest(h *validateRouterHarness, body string) *httptest.Respon
 	w := httptest.NewRecorder()
 	h.router.Setup().ServeHTTP(w, req)
 	return w
-}
-
-// seedRefreshTokenRowForValidateE2E inserts a minimal oauth_token row
-// (the production vault iterates token types; a bearer-refresh row
-// keeps the happy-path vault.Renew from returning "not found"). The
-// row lives only in the per-test connection so it does not bleed
-// into other tests.
-func seedRefreshTokenRowForValidateE2E(t *testing.T, db *sql.DB, accountID int64) {
-	t.Helper()
-	// Use a large-but-not-ridiculous expires_at so vault's freshness
-	// probe takes the fast path (no slow-path lock acquisition).
-	// Insert must HARD-FAIL at suite-start: a schema drift between
-	// migration waves would quietly route the /validate happy path
-	// through the slow-path lock acquisition, producing misleading
-	// 5xx failures inside the test body. Hard failing here means
-	// the operator sees the actual SQL/schema error directly.
-	_, err := db.Exec(`INSERT INTO oauth_tokens (platform_account_id, access_token, refresh_token, token_type, expires_at, scopes, created_at, updated_at)
-		SELECT $1, encode(gen_random_bytes(8), 'hex'), encode(gen_random_bytes(32), 'hex'), 'bearer', NOW() + INTERVAL '5 minutes',
-		       ARRAY['https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.readonly','https://www.googleapis.com/auth/youtube.force-ssl'],
-		       NOW(), NOW()
-		WHERE NOT EXISTS (SELECT 1 FROM oauth_tokens WHERE platform_account_id = $1)`,
-		accountID)
-	if err != nil {
-		t.Fatalf("seedRefreshTokenRowForValidateE2E: schema mismatch — /validate happy path requires an oauth_tokens row for the seeded platform_account (fix the SQL above against the current migration state): %v", err)
-	}
-}
-
-// assertCredentialCount asserts the count of token rows for the
-// supplied platform_account_id. Centralised so negative-run + happy-
-// path tests can pin the zero-token-rows invariant.
-func assertCredentialCount(t *testing.T, db *sql.DB, accountID int64, want int) {
-	t.Helper()
-	// The credentials schema can name the table differently across
-	// migration waves (`oauth_tokens` vs `credentials`). Probe both
-	// and OR the result — for the negative-run test we only care that
-	// NO rows exist that target the rejected channel.
-	tables := []string{"oauth_tokens", "credentials"}
-	total := 0
-	for _, tbl := range tables {
-		var n int
-		if err := db.QueryRow(
-			fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE platform_account_id = $1", tbl),
-			accountID,
-		).Scan(&n); err != nil {
-			// Table not present in this schema → not a failure.
-			continue
-		}
-		total += n
-	}
-	if total != want {
-		t.Errorf("token-row count for platform_account_id=%d: want %d across oauth_tokens+credentials, got %d",
-			accountID, want, total)
-	}
 }
 
 // =============================================================================
@@ -581,11 +529,13 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 	assertOAuthConnectionCount(t, h.pgDB, channelA, 0)
 	assertOAuthConnectionCount(t, h.pgDB, channelB, 0)
 
-	// M2: Zero credentials rows for channel A's platform_account.
-	// (The success-path helper isn't called, so no refresh-token row
-	// exists anywhere. The downstream /validate remap to reauth_required
-	// must NOT have written an oauth_token row either.)
-	assertCredentialCount(t, h.pgDB, accountAID, 0)
+	// M2: Zero production credential rows for channel A's platform account.
+	// The shared fixture queries the canonical tokens table through the
+	// platform_accounts -> oauth_connections lineage and fails loudly on
+	// schema drift instead of treating a missing table as zero rows.
+	if got := testcredentials.CountTokensForAccount(t, h.pgDB, accountAID); got != 0 {
+		t.Errorf("token-row count for platform_account_id=%d: want 0, got %d", accountAID, got)
+	}
 
 	// M3: platform_account[channelA].status stays 'pending_authorization'.
 	// Per the user spec: "status='pending_authorization' + no oauth_connection

@@ -1006,6 +1006,7 @@ func applyE2ESchema(db *sql.DB) error {
 			platform_user_id TEXT NOT NULL,
 			username TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending_authorization',
+			oauth_connection_id BIGINT,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
@@ -1072,12 +1073,46 @@ func applyE2ESchema(db *sql.DB) error {
 			id BIGSERIAL PRIMARY KEY,
 			user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			provider TEXT NOT NULL,
+			provider_subject_id TEXT NOT NULL DEFAULT '',
 			provider_resource_id TEXT NOT NULL,
+			login_hint TEXT NULL,
+			status TEXT NOT NULL DEFAULT 'active',
 			scopes TEXT[] NOT NULL DEFAULT '{}',
+			expires_at TIMESTAMPTZ NULL,
 			last_validated_at TIMESTAMPTZ NULL,
+			last_refresh_at TIMESTAMPTZ NULL,
+			reauth_required_at TIMESTAMPTZ NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (user_id, provider, provider_resource_id)
 		)`,
+		`DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint
+				WHERE conname = 'e2e_platform_accounts_oauth_connection_id_fkey'
+			) THEN
+				ALTER TABLE platform_accounts
+					ADD CONSTRAINT e2e_platform_accounts_oauth_connection_id_fkey
+					FOREIGN KEY (oauth_connection_id) REFERENCES oauth_connections(id) ON DELETE SET NULL;
+			END IF;
+		END $$`,
+		// tokens mirrors the current production credential lineage:
+		// platform_accounts.oauth_connection_id -> oauth_connections.id
+		// -> tokens.oauth_connection_id. Fixtures must use this table,
+		// never the retired oauth_tokens/credentials names.
+		`CREATE TABLE IF NOT EXISTS tokens (
+			id BIGSERIAL PRIMARY KEY,
+			platform_account_id BIGINT NOT NULL REFERENCES platform_accounts(id) ON DELETE CASCADE,
+			oauth_connection_id BIGINT NOT NULL REFERENCES oauth_connections(id) ON DELETE CASCADE,
+			token_type TEXT NOT NULL,
+			encrypted_token BYTEA NOT NULL,
+			encrypted_refresh_token BYTEA,
+			expires_at TIMESTAMPTZ,
+			scopes TEXT[],
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_e2e_tokens_oauth_connection_id ON tokens (oauth_connection_id)`,
 		// upload_jobs: counter-ASSERTed by the bind-test's
 		// assertUploadJobCount helper (account_id SELECT).
 		// Production migration 045/046 define a richer shape;
