@@ -108,13 +108,23 @@ func NewCSRF(cfg CSRFConfig, next http.Handler) http.Handler {
 		// usually signals a third-party middleware that strips cookie
 		// values, NOT a CSRF attack. Bundling them under
 		// "missing_csrf_cookie" hides the signal.
-		c, err := r.Cookie(CSRFTokenCookieName)
-		if err != nil {
-			rejectCSRF(w, "missing_csrf_cookie")
-			return
+		cookies := r.Cookies()
+		csrfValues := make([]string, 0, 2)
+		csrfCookieSeen := false
+		for _, c := range cookies {
+			if c.Name == CSRFTokenCookieName {
+				csrfCookieSeen = true
+				if c.Value != "" {
+					csrfValues = append(csrfValues, c.Value)
+				}
+			}
 		}
-		if c.Value == "" {
-			rejectCSRF(w, "empty_csrf_cookie_value")
+		if len(csrfValues) == 0 {
+			if csrfCookieSeen {
+				rejectCSRF(w, "empty_csrf_cookie_value")
+				return
+			}
+			rejectCSRF(w, "missing_csrf_cookie")
 			return
 		}
 		hdr := r.Header.Get(CSRFHeader)
@@ -122,8 +132,18 @@ func NewCSRF(cfg CSRFConfig, next http.Handler) http.Handler {
 			rejectCSRF(w, "missing_csrf_header")
 			return
 		}
-		// constant-time compare
-		if !secureEqual(c.Value, hdr) {
+		// A browser can temporarily send two same-name cookies while a
+		// cookie Domain is being migrated. Accept the header when it
+		// matches any non-empty cookie value; never fall back to a plain
+		// first-cookie lookup because that can select the stale value.
+		matched := false
+		for _, value := range csrfValues {
+			if secureEqual(value, hdr) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			rejectCSRF(w, "csrf_mismatch")
 			return
 		}
