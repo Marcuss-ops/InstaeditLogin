@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Zap, Mail, Lock, ArrowRight, Calendar } from "lucide-react";
 import { fetchSession } from "../lib/auth";
 import { API_BASE_URL } from "../lib/api";
@@ -13,7 +13,17 @@ export function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { open: openBooking } = useBooking();
+
+  // OAuth connection is available only after an InstaEdit session exists.
+  // Keep the internal destination when the API sends an anonymous visitor
+  // back here, but never allow an external redirect.
+  const requestedNext = searchParams.get("next");
+  const nextPath =
+    requestedNext && requestedNext.startsWith("/") && !requestedNext.startsWith("//")
+      ? requestedNext
+      : "/app/dashboard";
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -22,7 +32,7 @@ export function Login() {
 
     if (isDemoMode()) {
       await fetchSession();
-      navigate("/app/dashboard");
+      navigate(nextPath);
       return;
     }
 
@@ -40,7 +50,7 @@ export function Login() {
       }
 
       await fetchSession();
-      navigate("/app/dashboard");
+      navigate(nextPath);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -146,32 +156,22 @@ export function Login() {
             </button>
           </form>
 
-          {/*
-           * OAuth provider buttons. The same pattern is used in
-           * web/src/pages/internal/Linking.tsx (Connect account flow): the
-           * redirect middleware (oauthSessionRedirect in
-           * pkg/api/oauth_session_redirect.go) gates the path behind an
-           * InstaEdit session cookie so anonymous visitors from /login are
-           * first minted one and then continue to the provider's OAuth
-           * dance. The /api/v1/auth/{provider}/login endpoint is shared
-           * between sign-in and connect-account flows; payment / checkout
-           * does not use OAuth (it goes through /api/v1/billing/*).
-           *
-           * Some providers (YouTube, Threads) are also publishing
-           * destinations — the same OAuth URL works for both sign-up and
-           * subsequent publish-channel linking.
-           */}
           <div className="mt-6 pt-6 border-t border-white/[0.08]">
             <p className="text-xs text-center text-[#9aa0aa] mb-4">
-              New to InstaEdit? Connect an account to start
+              After login, connect your publishing accounts from the app
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {PROVIDERS.map((p) => (
-                <a
+                <button
                   key={p.id}
-                  href={`${API_BASE_URL}/api/v1/auth/${p.id}/login`}
+                  type="button"
+                  onClick={() =>
+                    setError(
+                      `Sign in to InstaEdit first, then connect ${p.name} from the Connections section.`,
+                    )
+                  }
                   className="group flex items-center justify-center gap-2 h-11 px-3 rounded-xl bg-white/[0.04] border border-white/[0.10] text-xs font-medium text-zinc-300 hover:bg-white/[0.08] hover:border-white/[0.20] hover:text-white transition-all focus:outline-none focus:border-[#0A84FF]/50 focus:ring-2 focus:ring-[#0A84FF]/20"
-                  aria-label={`Continue with ${p.name}`}
+                  aria-label={`Connect ${p.name} after signing in`}
                 >
                   <span
                     aria-hidden="true"
@@ -181,7 +181,7 @@ export function Login() {
                     {p.icon}
                   </span>
                   <span className="truncate">{p.name}</span>
-                </a>
+                </button>
               ))}
             </div>
             <p className="text-xs text-center text-[#9aa0aa]/70 mt-4">
