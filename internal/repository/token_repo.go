@@ -93,14 +93,19 @@ func (r *TokenRepository) SaveTokenTx(ctx context.Context, tx *sql.Tx, token *mo
 
 // UpdateOAuthConnectionStatus records grant-level refresh health. lastError is
 // an application classification, never a provider response or token value.
-func (r *TokenRepository) UpdateOAuthConnectionStatus(ctx context.Context, oauthConnectionID int64, status, lastError string) error {
-	result, err := r.db.ExecContext(ctx,
-		`UPDATE oauth_connections
-		    SET status = $2,
-		        last_refresh_error = NULLIF($3, ''),
-		        last_refresh_at = CASE WHEN $2 = 'active' THEN NOW() ELSE last_refresh_at END,
-		        updated_at = NOW()
-		  WHERE id = $1`,
+const updateOAuthConnectionStatusSQL = `UPDATE oauth_connections
+	    SET status = $2,
+	        last_refresh_error = NULLIF($3, ''),
+	        last_refresh_at = CASE WHEN $2 = 'active' THEN NOW() ELSE last_refresh_at END,
+	        updated_at = NOW()
+	  WHERE id = $1`
+
+type contextExecutor interface {
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+}
+
+func updateOAuthConnectionStatusExec(ctx context.Context, exec contextExecutor, oauthConnectionID int64, status, lastError string) error {
+	result, err := exec.ExecContext(ctx, updateOAuthConnectionStatusSQL,
 		oauthConnectionID, status, lastError,
 	)
 	if err != nil {
@@ -112,6 +117,19 @@ func (r *TokenRepository) UpdateOAuthConnectionStatus(ctx context.Context, oauth
 		return fmt.Errorf("OAuth connection %d not found", oauthConnectionID)
 	}
 	return nil
+}
+
+func (r *TokenRepository) UpdateOAuthConnectionStatus(ctx context.Context, oauthConnectionID int64, status, lastError string) error {
+	return updateOAuthConnectionStatusExec(ctx, r.db, oauthConnectionID, status, lastError)
+}
+
+// UpdateOAuthConnectionStatusTx records grant health in a caller-owned
+// transaction so token persistence and grant state share one commit boundary.
+func (r *TokenRepository) UpdateOAuthConnectionStatusTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64, status, lastError string) error {
+	if tx == nil {
+		return fmt.Errorf("update OAuth connection status: nil tx")
+	}
+	return updateOAuthConnectionStatusExec(ctx, tx, oauthConnectionID, status, lastError)
 }
 
 // FindLatestToken reads canonical columns and normalizes legacy aliases for

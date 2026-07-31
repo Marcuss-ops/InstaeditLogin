@@ -7,15 +7,20 @@
 package database
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/lib/pq"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/testutil/postgres"
 )
 
@@ -54,6 +59,7 @@ var migrationsToTest = []string{
 	// or vice versa.
 	"043_oauth_connections.sql",
 	"053_oauth_tokens_retargeted.sql",
+	"083_oauth_token_field_normalization.sql",
 }
 
 // expectedPostStatusActive is the documented active enum set
@@ -88,7 +94,9 @@ var requiredColumns = []struct{ Table, Column string }{
 	{"platform_accounts", "id"}, {"platform_accounts", "user_id"}, {"platform_accounts", "platform"}, {"platform_accounts", "platform_user_id"},
 	{"platform_accounts", "username"}, {"platform_accounts", "created_at"}, {"platform_accounts", "updated_at"},
 	{"tokens", "id"}, {"tokens", "platform_account_id"}, {"tokens", "token_type"}, {"tokens", "encrypted_token"},
+	{"tokens", "encrypted_access_token"}, {"tokens", "access_token_expires_at"}, {"tokens", "refresh_token_expires_at"},
 	{"tokens", "expires_at"}, {"tokens", "scopes"}, {"tokens", "created_at"}, {"tokens", "oauth_connection_id"},
+	{"oauth_connections", "status"}, {"oauth_connections", "granted_scopes"}, {"oauth_connections", "last_refresh_error"},
 	// 002_add_refresh_token
 	{"tokens", "encrypted_refresh_token"},
 	// 003_posts_workspaces
@@ -287,6 +295,101 @@ func TestMigrations_OrderIndependent(t *testing.T) {
 		t.Errorf("schema drifted on reverse-order re-run:\ncanonical: %s\nreverse:   %s", canonical, got)
 	} else {
 		t.Logf("✓ reverse-order re-run idempotent (sha256 %s)", first16(canonical))
+	}
+}
+
+// TestMigration083_BackfillsCanonicalOAuthFieldsAndIsIdempotent verifies
+// the additive rollout against real PostgreSQL. It deliberately seeds only
+// legacy token/grant fields before 083, then checks byte-for-byte ciphertext
+// preservation, expiry backfill, grant scope backfill, defaults, and a direct
+// second execution of the embedded SQL body.
+func TestMigration083_BackfillsCanonicalOAuthFieldsAndIsIdempotent(t *testing.T) {
+	db, cleanup := postgres.StartTestPostgres(t)
+	defer cleanup()
+
+	if err := RunMigrationsUpTo(db, 82); err != nil {
+		t.Fatalf("RunMigrationsUpTo(82): %v", err)
+	}
+
+	var userID, connectionID, accountID int64
+	if err := db.QueryRow(`
+		INSERT INTO users (email, name)
+		VALUES ('migration-083@example.invalid', 'Migration 083')
+		RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.QueryRow(`
+		INSERT INTO oauth_connections (user_id, provider, provider_subject_id, provider_resource_id, scopes)
+		VALUES ($1, 'youtube', 'subject-083', 'channel-083', $2)
+		RETURNING id`, userID, "{youtube.upload,youtube.readonly}").Scan(&connectionID); err != nil {
+		t.Fatalf("insert oauth connection: %v", err)
+	}
+	if err := db.QueryRow(`
+		INSERT INTO platform_accounts (user_id, platform, platform_user_id, username, oauth_connection_id)
+		VALUES ($1, 'youtube', 'channel-083', 'Migration 083', $2)
+		RETURNING id`, userID, connectionID).Scan(&accountID); err != nil {
+		t.Fatalf("insert platform account: %v", err)
+	}
+
+	legacyCiphertext := []byte("legacy-ciphertext-083")
+	legacyExpiry := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := db.Exec(`
+		INSERT INTO tokens (
+			platform_account_id, oauth_connection_id, token_type,
+			encrypted_token, encrypted_refresh_token, expires_at, scopes
+		) VALUES ($1, $2, 'bearer', $3, $4, $5, $6)`,
+		accountID, connectionID, legacyCiphertext, []byte("legacy-refresh-083"), legacyExpiry,
+		"{youtube.upload,youtube.readonly}"); err != nil {
+		t.Fatalf("insert legacy token: %v", err)
+	}
+
+	if err := RunMigrationsUpTo(db, 83); err != nil {
+		t.Fatalf("RunMigrationsUpTo(83): %v", err)
+	}
+
+	var (
+		canonicalCiphertext []byte
+		canonicalExpiry     time.Time
+		refreshExpiry       sql.NullTime
+		grantedScopes       []string
+		status              string
+		lastRefreshError    sql.NullString
+	)
+	if err := db.QueryRow(`
+		SELECT t.encrypted_access_token, t.access_token_expires_at,
+		       t.refresh_token_expires_at, oc.granted_scopes,
+		       oc.status, oc.last_refresh_error
+		  FROM tokens t
+		  JOIN oauth_connections oc ON oc.id = t.oauth_connection_id
+		 WHERE t.oauth_connection_id = $1 AND t.token_type = 'bearer'`, connectionID).
+		Scan(&canonicalCiphertext, &canonicalExpiry, &refreshExpiry, pq.Array(&grantedScopes), &status, &lastRefreshError); err != nil {
+		t.Fatalf("read canonical fields: %v", err)
+	}
+	if !bytes.Equal(canonicalCiphertext, legacyCiphertext) {
+		t.Fatalf("encrypted_access_token changed during backfill: got %q want %q", canonicalCiphertext, legacyCiphertext)
+	}
+	if !canonicalExpiry.Equal(legacyExpiry) {
+		t.Fatalf("access_token_expires_at: got %s want %s", canonicalExpiry, legacyExpiry)
+	}
+	if refreshExpiry.Valid {
+		t.Fatalf("refresh_token_expires_at should remain NULL for legacy rows without provider TTL: got %s", refreshExpiry.Time)
+	}
+	if status != models.AccountStatusActive {
+		t.Fatalf("oauth connection status: got %q want %q", status, models.AccountStatusActive)
+	}
+	if lastRefreshError.Valid {
+		t.Fatalf("last_refresh_error should default NULL, got %q", lastRefreshError.String)
+	}
+	if !reflect.DeepEqual(grantedScopes, []string{"youtube.upload", "youtube.readonly"}) {
+		t.Fatalf("granted_scopes: got %#v", grantedScopes)
+	}
+
+	body, err := migrationFiles.ReadFile("migrations/083_oauth_token_field_normalization.sql")
+	if err != nil {
+		t.Fatalf("read migration 083: %v", err)
+	}
+	if _, err := db.Exec(string(body)); err != nil {
+		t.Fatalf("direct idempotent execution of migration 083: %v", err)
 	}
 }
 

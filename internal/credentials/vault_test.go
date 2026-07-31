@@ -375,7 +375,7 @@ func TestVault_Renew_SlowPath_ExpiredToken_AcquiresLockAndCommits(t *testing.T) 
 	//   SELECT pg_advisory_xact_lock(42)
 	//   COMMIT
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL`).
+	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`).
 		WithArgs(accountID).
 		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(accountID))
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
@@ -437,7 +437,7 @@ func TestVault_Renew_SlowPath_WithinGraceWindow_AcquiresLock(t *testing.T) {
 	store.seedToken(soonExpiring)
 	expectOauthConnLookup(mock, accountID, accountID)
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL`).
+	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`).
 		WithArgs(accountID).
 		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(accountID))
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
@@ -473,7 +473,7 @@ func TestVault_Renew_LockAcquisitionFails_RollsBack(t *testing.T) {
 	expectOauthConnLookup(mock, accountID, accountID)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL`).
+	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`).
 		WithArgs(accountID).
 		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(accountID))
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
@@ -510,7 +510,7 @@ func TestVault_Renew_RefresherFails_PropagatesAndRollsBack(t *testing.T) {
 
 	refresherErr := errors.New("simulated platform 500")
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL`).
+	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`).
 		WithArgs(accountID).
 		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(accountID))
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
@@ -553,7 +553,7 @@ func TestVault_Renew_LongLivedToken_UsesAccessTokenAsRefreshMaterial(t *testing.
 	expectOauthConnLookup(mock, accountID, accountID)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL`).
+	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`).
 		WithArgs(accountID).
 		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(accountID))
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
@@ -600,7 +600,7 @@ func TestVault_Renew_NonLongLivedToken_NoRefreshToken_Errors(t *testing.T) {
 	expectOauthConnLookup(mock, accountID, accountID)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL`).
+	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`).
 		WithArgs(accountID).
 		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(accountID))
 	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").

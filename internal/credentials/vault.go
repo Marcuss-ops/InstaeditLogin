@@ -51,7 +51,8 @@ type TokenRefresher func(ctx context.Context, refreshToken string) (*models.Toke
 // TokenStore is the storage-layer interface the vault depends on. It is
 // intentionally narrower than repository.TokenRepository: the vault only
 // needs Save / Read / UpdateCiphertexts (Blocco #2.2 lazy re-encrypt) /
-// DeleteAll-for-connection, not the per-id delete used by admin tooling.
+// DeleteAll-for-connection and the tx-aware save primitive, not the per-id
+// delete used by admin tooling.
 // Defining the interface here (alongside the consumer) lets the vault
 // stay decoupled from the concrete repository package — tests inject an
 // in-memory mock, and the production wiring in main.go adapts
@@ -88,6 +89,13 @@ type TokenStore interface {
 // source-compatible while migration 083 rolls out.
 type GrantStatusStore interface {
 	UpdateOAuthConnectionStatus(ctx context.Context, oauthConnectionID int64, status, lastError string) error
+}
+
+// GrantStatusTxStore persists grant health in a caller-owned transaction.
+// Production uses this during Renew so the refreshed token and active/error
+// state commit or roll back together; older test stores may omit it.
+type GrantStatusTxStore interface {
+	UpdateOAuthConnectionStatusTx(ctx context.Context, tx *sql.Tx, oauthConnectionID int64, status, lastError string) error
 }
 
 // VaultAPI is the narrow contract the HTTP router and publish worker use
@@ -224,21 +232,52 @@ func (v *CredentialVault) Save(ctx context.Context, platformAccountID int64, tok
 // slow path. Public callers should use Save; internal callers (Renew
 // after the lock) use this directly.
 func (v *CredentialVault) saveForOAuthConnection(ctx context.Context, oauthConnectionID, platformAccountID int64, tokenData *models.TokenData, preserveExisting bool) error {
-	if err := ctx.Err(); err != nil {
+	token, err := v.prepareTokenForOAuthConnection(ctx, oauthConnectionID, platformAccountID, tokenData, preserveExisting, nil)
+	if err != nil {
 		return err
+	}
+	if err := v.store.SaveToken(token); err != nil {
+		return fmt.Errorf("vault: failed to persist token: %w", err)
+	}
+	return nil
+}
+
+// saveForOAuthConnectionTx is the Renew variant of saveForOAuthConnection.
+// It deliberately uses the lock transaction so token insertion, pruning and
+// the optional grant-status update share one commit boundary.
+func (v *CredentialVault) saveForOAuthConnectionTx(ctx context.Context, tx *sql.Tx, oauthConnectionID, platformAccountID int64, tokenData *models.TokenData, preserveExisting bool, existing *models.Token) error {
+	token, err := v.prepareTokenForOAuthConnection(ctx, oauthConnectionID, platformAccountID, tokenData, preserveExisting, existing)
+	if err != nil {
+		return err
+	}
+	if err := v.store.SaveTokenTx(ctx, tx, token); err != nil {
+		return fmt.Errorf("vault: failed to persist token in lock tx: %w", err)
+	}
+	return nil
+}
+
+func (v *CredentialVault) prepareTokenForOAuthConnection(ctx context.Context, oauthConnectionID, platformAccountID int64, tokenData *models.TokenData, preserveExisting bool, existingOverride *models.Token) (*models.Token, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	// Google commonly omits refresh_token on subsequent authorizations.
 	// Read the existing grant before pruning the previous row so a normal
 	// reconnect can never replace a valid refresh token with NULL. Scopes
-	// are preserved for the same reason: some token responses omit scope.
-	if preserveExisting {
-		if existing, findErr := v.store.FindLatestToken(oauthConnectionID, tokenData.TokenType); findErr != nil {
-			return fmt.Errorf("vault: find existing token for grant: %w", findErr)
-		} else if existing != nil {
+	// and refresh expiry are preserved for the same reason.
+	if preserveExisting || existingOverride != nil {
+		existing := existingOverride
+		if existing == nil {
+			var findErr error
+			existing, findErr = v.store.FindLatestToken(oauthConnectionID, tokenData.TokenType)
+			if findErr != nil {
+				return nil, fmt.Errorf("vault: find existing token for grant: %w", findErr)
+			}
+		}
+		if existing != nil {
 			if tokenData.RefreshToken == "" && len(existing.EncryptedRefreshToken) > 0 {
 				refresh, decryptErr := v.encryptor.Decrypt(existing.EncryptedRefreshToken)
 				if decryptErr != nil {
-					return fmt.Errorf("vault: preserve existing refresh token: %w", decryptErr)
+					return nil, fmt.Errorf("vault: preserve existing refresh token: %w", decryptErr)
 				}
 				tokenData.RefreshToken = refresh
 			}
@@ -262,13 +301,13 @@ func (v *CredentialVault) saveForOAuthConnection(ctx context.Context, oauthConne
 	}
 	encrypted, err := v.encryptor.Encrypt(tokenData.AccessToken)
 	if err != nil {
-		return fmt.Errorf("vault: failed to encrypt access token: %w", err)
+		return nil, fmt.Errorf("vault: failed to encrypt access token: %w", err)
 	}
 	var encryptedRefresh []byte
 	if tokenData.RefreshToken != "" {
 		encryptedRefresh, err = v.encryptor.Encrypt(tokenData.RefreshToken)
 		if err != nil {
-			return fmt.Errorf("vault: failed to encrypt refresh token: %w", err)
+			return nil, fmt.Errorf("vault: failed to encrypt refresh token: %w", err)
 		}
 	}
 	expiresAt := v.clock().Add(time.Duration(tokenData.ExpiresIn) * time.Second)
@@ -277,7 +316,7 @@ func (v *CredentialVault) saveForOAuthConnection(ctx context.Context, oauthConne
 		expires := v.clock().Add(time.Duration(tokenData.RefreshTokenExpiresIn) * time.Second)
 		refreshExpiresAt = &expires
 	}
-	token := &models.Token{
+	return &models.Token{
 		PlatformAccountID:     platformAccountID,
 		OAuthConnectionID:     oauthConnectionID,
 		TokenType:             tokenData.TokenType,
@@ -288,11 +327,7 @@ func (v *CredentialVault) saveForOAuthConnection(ctx context.Context, oauthConne
 		ExpiresAt:             &expiresAt,
 		RefreshTokenExpiresAt: refreshExpiresAt,
 		Scopes:                tokenData.Scopes, GrantedScopes: tokenData.Scopes,
-	}
-	if err := v.store.SaveToken(token); err != nil {
-		return fmt.Errorf("vault: failed to persist token: %w", err)
-	}
-	return nil
+	}, nil
 }
 
 // Rotate is a semantic alias for Save. The caller's intent differs
@@ -488,7 +523,7 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 	}()
 	var oauthConnectionID int64
 	if err := lockTx.QueryRowContext(ctx,
-		`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL`,
+		`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`,
 		platformAccountID,
 	).Scan(&oauthConnectionID); err != nil {
 		return nil, fmt.Errorf("vault: resolve oauth_connection_id for renew: %w", err)
@@ -535,7 +570,7 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 
 	// Save via the lookup-free sibling — the resolved oid is the
 	// canonical key for this row.
-	if err := v.saveForOAuthConnection(ctx, oauthConnectionID, platformAccountID, newTokenData, false); err != nil {
+	if err := v.saveForOAuthConnectionTx(ctx, lockTx, oauthConnectionID, platformAccountID, newTokenData, false, stored); err != nil {
 		_ = lockTx.Rollback()
 		committed = true
 		if statusErr := v.updateGrantStatus(ctx, oauthConnectionID, "error", "persist_failed"); statusErr != nil {
@@ -544,12 +579,23 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 		return nil, fmt.Errorf("vault: persist refreshed token: %w", err)
 	}
 
+	statusInTx := false
+	if statusStore, ok := v.store.(GrantStatusTxStore); ok {
+		if err := statusStore.UpdateOAuthConnectionStatusTx(ctx, lockTx, oauthConnectionID, models.AccountStatusActive, ""); err != nil {
+			_ = lockTx.Rollback()
+			committed = true
+			return nil, fmt.Errorf("vault: update refresh status in lock tx: %w", err)
+		}
+		statusInTx = true
+	}
 	if err := lockTx.Commit(); err != nil {
 		return nil, fmt.Errorf("vault: commit lock tx: %w", err)
 	}
 	committed = true
-	if err := v.updateGrantStatus(ctx, oauthConnectionID, models.AccountStatusActive, ""); err != nil {
-		return nil, fmt.Errorf("vault: refreshed token committed but grant status update failed: %w", err)
+	if !statusInTx {
+		if err := v.updateGrantStatus(ctx, oauthConnectionID, models.AccountStatusActive, ""); err != nil {
+			return nil, fmt.Errorf("vault: refreshed token committed but grant status update failed: %w", err)
+		}
 	}
 
 	// Final read — fresh ciphertext was just persisted; the stored row

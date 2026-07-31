@@ -257,8 +257,12 @@ CREATE TABLE IF NOT EXISTS oauth_connections (
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     provider TEXT NOT NULL,
     provider_resource_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
     scopes TEXT[] NOT NULL DEFAULT '{}',
+    granted_scopes TEXT[] NOT NULL DEFAULT '{}',
     last_validated_at TIMESTAMPTZ,
+    last_refresh_at TIMESTAMPTZ,
+    last_refresh_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (user_id, provider, provider_resource_id)
 );
