@@ -843,8 +843,11 @@ func TestValidate_TransientPlatformAccountLookupError(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("transient PA lookup error: want 500, got %d (body=%q)", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "platform_account") {
-		t.Errorf("body should mention platform_account for operator triage; got %q", w.Body.String())
+	// The handler intentionally redacts lookup details from the HTTP
+	// response; operator diagnostics belong in server logs, not in
+	// a client-visible body.
+	if !strings.Contains(w.Body.String(), "validation failed") {
+		t.Errorf("body should use the redacted validation error; got %q", w.Body.String())
 	}
 }
 

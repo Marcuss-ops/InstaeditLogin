@@ -47,11 +47,11 @@ import (
 func nvidiaMetadataPublishPayload(t *testing.T) []byte {
 	t.Helper()
 	payload := map[string]any{
-		"title":                 "Come automatizzare la pubblicazione YouTube nel 2026",
-		"description":           "In questo video vediamo come creare, modificare e pubblicare contenuti YouTube attraverso un flusso automatizzato con InstaEdit e NVIDIA AI.",
-		"privacy_status":        "unlisted",
-		"tags":                  []string{"youtube automation", "video editing", "instaedit", "content creation"},
-		"default_language":      "it",
+		"title":                  "Come automatizzare la pubblicazione YouTube nel 2026",
+		"description":            "In questo video vediamo come creare, modificare e pubblicare contenuti YouTube attraverso un flusso automatizzato con InstaEdit e NVIDIA AI.",
+		"privacy_status":         "unlisted",
+		"tags":                   []string{"youtube automation", "video editing", "instaedit", "content creation"},
+		"default_language":       "it",
 		"default_audio_language": "it",
 		"translations": map[string]models.YouTubeTranslation{
 			"en":    {Title: "How to Automate YouTube Publishing in 2026", Description: "This video explains how to create, edit and publish YouTube content through an automated workflow with InstaEdit and NVIDIA AI."},
@@ -323,7 +323,9 @@ func TestNVIDIAMetadataPublish_ScheduledPublishing_PrivacyForcedToPrivate(t *tes
 
 	router := customBackboneForNegative(t, youTubeSvc, editStore)
 
-	scheduledTime := time.Date(2026, 7, 30, 16, 0, 0, 0, time.UTC)
+	// Keep this test independent of the calendar date on which the
+	// suite runs: the endpoint correctly rejects past schedules.
+	scheduledTime := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Second)
 	futureISO := scheduledTime.Format(time.RFC3339)
 
 	payload := []byte(`{

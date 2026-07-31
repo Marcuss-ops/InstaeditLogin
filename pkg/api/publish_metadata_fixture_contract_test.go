@@ -93,7 +93,7 @@ func TestPublishMetadataFixture_GoDTO(t *testing.T) {
 	}
 	if dto.PublishAt == nil {
 		t.Error("publish_at is nil, expected non-nil")
-	} else if dto.PublishAt.Format(time.RFC3339) != "2026-07-30T16:00:00Z" {
+	} else if dto.PublishAt.Format(time.RFC3339) != "2030-07-30T16:00:00Z" {
 		t.Errorf("publish_at mismatch: got %v", dto.PublishAt)
 	}
 	if len(dto.Tags) != 4 {

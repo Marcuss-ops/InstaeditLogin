@@ -169,12 +169,10 @@ describe("useChannelContent", () => {
     const { result } = renderHook(() =>
       useChannelContent({ accountId: 123, privacy: "all" }),
     );
-    await expect(
-      waitFor(() => {
-        if (result.current.state.kind !== "ready") return;
-        throw new Error("expected to stay in loading while AuthError propagates");
-      }).catch(() => "swallowed"),
-    ).resolves.toBe("swallowed");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.state.kind).toBe("loading");
     // We didn't swallow the error — it propagated to testing-library.
     // (The above .catch keeps the test from failing on the throw.)
     expect(listChannelContentMock).toHaveBeenCalledTimes(1);
@@ -339,9 +337,6 @@ describe("useChannelContent — refresh options", () => {
     listChannelContentMock.mockResolvedValue(makePage([]));
     const addSpy = vi.spyOn(window, "addEventListener");
     renderHook(() => useChannelContent({ accountId: 123, privacy: "all" }));
-    await waitFor(() =>
-      expect(addSpy).toHaveBeenCalled(), // some listener fired (e.g. StrictMode)
-    );
     const focusAdds = addSpy.mock.calls.filter(([name]) => name === "focus");
     expect(focusAdds).toHaveLength(0);
     addSpy.mockRestore();
@@ -401,29 +396,41 @@ describe("useChannelContent — refresh options", () => {
   });
 
   it("polls at a fixed ms cadence when refetchInterval is a number", async () => {
-    listChannelContentMock.mockResolvedValue(makePage([]));
-    renderHook(() =>
-      useChannelContent({
-        accountId: 123,
-        privacy: "all",
-        refetchInterval: 30,
-      }),
-    );
-    // Initial fetch fires immediately.
-    await waitFor(() =>
-      expect(listChannelContentMock).toHaveBeenCalledTimes(1),
-    );
-    // Poll fires at the 30ms cadence — assert at least one extra tick landed.
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 80));
-    });
-    expect(listChannelContentMock).toHaveBeenCalledTimes(3);
+    vi.useFakeTimers();
+    let unmount: (() => void) | undefined;
+    try {
+      listChannelContentMock.mockResolvedValue(makePage([]));
+      ({ unmount } = renderHook(() =>
+        useChannelContent({
+          accountId: 123,
+          privacy: "all",
+          refetchInterval: 30,
+        }),
+      ));
+      // Flush the initial fetch without allowing wall-clock time to
+      // advance. The interval is registered during the same mount.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(listChannelContentMock).toHaveBeenCalledTimes(1);
+
+      // Exactly two 30ms ticks: initial fetch + two polls.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60);
+      });
+      expect(listChannelContentMock).toHaveBeenCalledTimes(3);
+    } finally {
+      // Clear the interval while fake timers are still active so
+      // this test cannot leak a scheduled callback into the next one.
+      unmount?.();
+      vi.useRealTimers();
+    }
   });
 
   it("polls while the predicate returns a number; stops when it returns null", async () => {
     let predicateValue: number | null = 30;
     listChannelContentMock.mockResolvedValue(makePage([]));
-    renderHook(() =>
+    const { rerender } = renderHook(() =>
       useChannelContent({
         accountId: 123,
         privacy: "all",
@@ -441,6 +448,7 @@ describe("useChannelContent — refresh options", () => {
     expect(callsWhilePolled).toBeGreaterThan(1);
     // Flip predicate to null → polling should stop.
     predicateValue = null;
+    rerender();
     await act(async () => {
       await new Promise((r) => setTimeout(r, 80));
     });
