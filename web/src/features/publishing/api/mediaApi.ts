@@ -72,10 +72,19 @@ export async function uploadToPresignedUrl(
   url: string,
   file: Blob,
   contentType: MediaAssetContentType,
+  uploadHeaders: Record<string, string> = {},
 ): Promise<{ ok: true }> {
+  // The signature can cover more than Content-Type (for example a
+  // storage checksum or provider-specific x-* header). Forward the
+  // server-provided set verbatim and only supply Content-Type for
+  // older presign responses that omit it.
+  const headers: Record<string, string> = { ...uploadHeaders };
+  if (!Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
+    headers["Content-Type"] = contentType;
+  }
   const resp = await fetch(url, {
     method: "PUT",
-    headers: { "Content-Type": contentType },
+    headers,
     body: file,
   });
   if (!resp.ok) {
@@ -187,7 +196,12 @@ export async function uploadMediaAsset(
   );
 
   onProgress?.({ phase: "upload", loaded: 0, total: file.size });
-  await uploadToPresignedUrl(grant.upload_url, file, contentType);
+  await uploadToPresignedUrl(
+    grant.upload_url,
+    file,
+    contentType,
+    grant.upload_headers,
+  );
 
   onProgress?.({ phase: "complete", loaded: file.size, total: file.size });
   return completeMediaAsset(grant.asset_id, options.signal);

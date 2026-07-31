@@ -190,7 +190,7 @@ describe("ContentPublish — RETRIABLE_STATUSES gating", () => {
   it("renders retry button ONLY for the three retriable statuses", () => {
     const s: MockState = {
       targets: [
-        ...RETRIABLE.map((status) => makeTarget(1, status)),
+        ...RETRIABLE.map((status, i) => makeTarget(i + 1, status)),
         ...NON_RETRIABLE.map((status, i) => makeTarget(10 + i, status)),
       ],
       status: "ready",
@@ -367,17 +367,13 @@ describe("ContentPublish — retryingId lifecycle", () => {
       status: "ready",
       error: null,
     });
+    let resolveRetry: () => void = () => {};
+    retryPostTargetMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveRetry = resolve; }),
+    );
     // Manually-deferred promise so we can assert the in-flight label
     // BEFORE the await resolves. We resolve in the same act() block
     // via .then().
-    let resolveRetry: () => void = () => {};
-    retryPostTargetMock.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveRetry = resolve;
-        }),
-    );
-
     renderAtPostIdPath(999);
     const btn = screen.getByTestId("retry-button-1") as HTMLButtonElement;
 
@@ -454,14 +450,6 @@ describe("ContentPublish — retryErrorById isolation", () => {
       error: null,
     });
 
-    let resolveRetry: () => void = () => {};
-    retryPostTargetMock.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveRetry = resolve;
-        }),
-    );
-
     renderAtPostIdPath(999);
 
     // 1st retry → ApiError.
@@ -479,6 +467,7 @@ describe("ContentPublish — retryErrorById isolation", () => {
     // Re-arm retry for a 2nd attempt. The previous error slot is
     // cleared immediately (before await resolves) per the source's
     // pre-clear in handleRetry.
+    let resolveRetry: () => void = () => {};
     retryPostTargetMock.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
@@ -588,7 +577,7 @@ describe("ContentPublish — invalid postId path", () => {
     setMockState({ targets: [], status: "ready", error: null });
     // Empty path:
     render(
-      <MemoryRouter initialEntries={["/app/content//publish"]}>
+      <MemoryRouter initialEntries={["/app/content/empty/publish"]}>
         <Routes>
           <Route
             path="/app/content/:postId/publish"

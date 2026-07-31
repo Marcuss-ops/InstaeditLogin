@@ -259,6 +259,7 @@ func runWorkerPair(rig *rig) *workerPair {
 
 	pubWorker := NewPublishWorker(
 		rig.PostRepo, rig.UserRepo, rig.Router, rig.Vault,
+		nil, // no resolver in integration tests; executePublish falls back to MediaURL
 		"test-worker-id",
 		nil, // no MemoryLimiter needed in integration tests
 		time.Duration(rig.CFG.Worker.PublishWorkerIntervalSeconds)*time.Second,

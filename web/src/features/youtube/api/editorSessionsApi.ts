@@ -2,16 +2,10 @@
  * YouTube editor-sessions client.
  *
  * Single canonical client for the `/api/v1/youtube/editor-sessions`
- * resource. Previous this call lived in THREE separate pages
- * (`AccountDetails.tsx → handleEditThumbnail`, `YouTubeStudio.tsx →
- * handleCreateSession / handleAttachThumbnail / handlePublishNow /
- * handleSchedule`, `Calendar.tsx → handleEditThumbnail`), each with
- * its own inline `authedFetch` + response-shape cast + `window.open`
- * ceremony. The duplication drifted out of sync twice (AccountDetails
- * and Calendar typed the response as `{ editor_url: string }` while
- * YouTubeStudio typed it as `{ session_id, velox_project_id,
- * editor_url }` — the server returns the latter). Centralizing here
- * locks the contract.
+ * resource. It owns the request/response shapes and the shared editor
+ * opening helper used by the account, calendar, and studio surfaces.
+ * Keeping those shapes here ensures every caller receives the complete
+ * `{ session_id, velox_project_id, editor_url }` response.
  *
  * Server contract map:
  *

@@ -197,11 +197,17 @@ func (w *UploadWorker) uploadVideoAsPrivateForTarget(
 	refresher := credentials.TokenRefresher(func(c context.Context, refreshToken string) (*models.TokenData, error) {
 		return oauthProvider.RefreshOAuthToken(c, refreshToken)
 	})
-	oauthToken, err := w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+	var oauthToken *models.OAuthToken
+	if account.Platform == models.PlatformYouTube {
+		oauthToken, err = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
+	} else {
+		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+	}
 	if err != nil {
 		// Same transient-classify as publish_worker::prepareCredentials:
-		// retry via outer MarkRetry.
-		return fmt.Errorf("token refresh for platform_account=%d: %w", account.ID, err)
+		// retry via outer MarkRetry. The helper deliberately returns a
+		// token-free generic error for YouTube.
+		return fmt.Errorf("token refresh for platform_account=%d", account.ID)
 	}
 
 	// Channel-binding check (channels.list mine=true verify) — same

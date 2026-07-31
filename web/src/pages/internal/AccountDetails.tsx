@@ -63,12 +63,9 @@ export function AccountDetailsPage() {
         toast.error("No workspaces found. Create one first.");
         return;
       }
-      // createEditorSessionAndOpen is the canonical ”Modifica
-      // copertina” entrypoint: bundles the POST + the popup-window
-      // dance so AccountDetails and Calendar stay in sync with the
-      // server contract (full `{ session_id, velox_project_id,
-      // editor_url }` response, not just `{ editor_url }` as a stale
-      // type cast assumed pre-refactor).
+      // createEditorSessionAndOpen bundles the POST and popup-window
+      // handling while preserving the full editor-session response
+      // contract for AccountDetails and Calendar.
       await createEditorSessionAndOpen({
         workspace_id: workspaces[0].id,
         platform_account_id: Number(accountId),

@@ -7,7 +7,7 @@
  * status page (`/content/:postId/publish` equivalent in `/app/*`).
  *
  * Server contract map:
- *   - GET  /api/v1/post_targets/{id}        → PostTargetDetail  (SINGLE)
+ *   - GET  /api/v1/post-targets/{id}        → PostTargetDetail  (SINGLE)
  *   - GET  /api/v1/posts/{id}/targets       → { targets[] }     (PARENT)
  *   - POST /api/v1/post-targets/{id}/retry  → { status: "queued" }
  *
@@ -21,7 +21,7 @@ import type { PostTarget, PostTargetDetail } from "./types";
 const POSTS_PATH = "/api/v1/posts";
 /** Path templates — `id` is the numeric post_target.id. */
 const TARGET_PATH = (id: number): string =>
-  `/api/v1/post_targets/${encodeURIComponent(String(id))}`;
+  `/api/v1/post-targets/${encodeURIComponent(String(id))}`;
 
 /**
  * GET /api/v1/post-targets/{id}.

@@ -29,12 +29,6 @@ type Post = {
   scheduled_at?: string | null;
 };
 
-// UploadJob was once used by /uploads?status=pending&limit=200 fetch.
-// After the rollout to /uploads/counts the dashboard reads per-account
-// aggregates from `countMap` and never needs the row list. Removed the
-// type to keep noUnusedLocals clean; reintroduce alongside any future
-// "list pending uploads" surface.
-
 type AccountProgrammatoCount = {
   count: number;
   nextAt: string | null;

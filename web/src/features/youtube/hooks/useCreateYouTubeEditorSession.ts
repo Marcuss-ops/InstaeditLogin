@@ -98,6 +98,7 @@ export function useCreateYouTubeEditorSession(): UseCreateYouTubeEditorSessionRe
           // to /login). We re-throw to keep the existing convention
           // — caller pages already wrap their useCreatePost calls
           // the same way.
+          setState({ kind: "idle" });
           throw err;
         }
         if (ctrl.signal.aborted) return null;

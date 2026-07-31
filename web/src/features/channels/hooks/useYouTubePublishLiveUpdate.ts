@@ -88,8 +88,7 @@ import { useEffect, useRef } from "react";
 /**
  * BroadcastChannel name. Hardcoded once here so any future rename
  * goes through a single find-and-replace. Matches the test
- * comments in `pkg/api/youtube_publish_pipeline_test.go:99` that
- * imply a single shared channel for the SPA's Publish path.
+ * publish path.
  */
 const CHANNEL_NAME = "instaedit-publish";
 
@@ -129,6 +128,7 @@ const groupVideosListeners: Map<number, Set<RefetchFn>> = new Map();
 let bcSingleton: BroadcastChannel | null = null;
 let listenerInstalled = false;
 let bcUnsupported = false;
+let windowMessageHandler: ((event: Event) => void) | null = null;
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
@@ -211,12 +211,13 @@ function installListenersOnce(): boolean {
   // 1. Same-tab forwarder (CustomEvent on window). Always available
   //    when `window` is; runs even when BC is unavailable so we
   //    never lose the same-tab case.
-  window.addEventListener(WINDOW_EVENT_NAME, (evt) => {
+  windowMessageHandler = (evt) => {
     const detail = (evt as CustomEvent<PublishUpdateMessage>).detail;
     if (!isPublishMessage(detail)) return;
     fanOut(channelContentListeners, detail.account_id);
     fanOut(groupVideosListeners, detail.account_id);
-  });
+  };
+  window.addEventListener(WINDOW_EVENT_NAME, windowMessageHandler);
 
   // 2. Cross-tab forwarder (BroadcastChannel). Optional — if BC
   //    refuses, the app still works for the single-tab case.
@@ -353,6 +354,10 @@ export const __test = {
     groupVideosListeners.clear();
     bcSingleton?.close();
     bcSingleton = null;
+    if (windowMessageHandler && typeof window !== "undefined") {
+      window.removeEventListener(WINDOW_EVENT_NAME, windowMessageHandler);
+    }
+    windowMessageHandler = null;
     listenerInstalled = false;
     bcUnsupported = false;
   },

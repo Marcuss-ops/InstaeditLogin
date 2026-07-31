@@ -91,7 +91,7 @@ export function useYouTubeChannels(): UseYouTubeChannelsResult {
   useEffect(() => {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    void runFetch(ctrl.signal);
+    void runFetch(ctrl.signal).catch(() => {});
     return () => {
       ctrl.abort();
     };

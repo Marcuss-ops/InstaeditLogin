@@ -58,7 +58,7 @@ afterEach(() => {
 
 describe("listChannelContent", () => {
   it("calls GET /api/v1/accounts/{id}/content with limit=20 by default", async () => {
-    authedFetchMock.mockResolvedValueOnce(VIEW);
+    authedFetchMock.mockResolvedValue(VIEW);
     await listChannelContent({ accountId: 123 });
     expect(authedFetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = authedFetchMock.mock.calls[0]!;
@@ -68,7 +68,7 @@ describe("listChannelContent", () => {
   });
 
   it("overrides the limit when provided", async () => {
-    authedFetchMock.mockResolvedValueOnce(VIEW);
+    authedFetchMock.mockResolvedValue(VIEW);
     await listChannelContent({ accountId: 123, limit: 50 });
     expect(authedFetchMock.mock.calls[0]![0]).toBe(
       "/api/v1/accounts/123/content?limit=50",
@@ -152,7 +152,7 @@ describe("listChannelContent", () => {
   });
 
   it("supports a tri-privacy filter union without coercion failures", async () => {
-    authedFetchMock.mockResolvedValueOnce(VIEW);
+    authedFetchMock.mockResolvedValue(VIEW);
     await listChannelContent({ accountId: 123, privacy: "public" });
     await listChannelContent({ accountId: 123, privacy: "unlisted" });
     await listChannelContent({ accountId: 123, privacy: "private" });

@@ -175,7 +175,6 @@ export interface UseChannelContentResult {
 
 function deriveErrorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message;
-  if (err instanceof Error) return err.message;
   return "Unable to load channel content.";
 }
 
@@ -190,6 +189,7 @@ export function useChannelContent({
     kind: "loading",
   });
   const abortRef = useRef<AbortController | null>(null);
+  const loadMoreInFlightRef = useRef(false);
   // Latest props are read inside runFetch/loadMore/refetch so
   // callers don't need to wrap actions in useCallback deps manually.
   const propsRef = useRef({ accountId, privacy, limit });
@@ -238,13 +238,13 @@ export function useChannelContent({
           mode === "append" && latest.kind === "ready"
             ? latest.nextCursor
             : undefined;
-        const result = await listChannelContent({
+        const result = (await listChannelContent({
           accountId: id,
           privacy: p,
           limit: l ?? 20,
           ...(cursor != null ? { cursor } : {}),
           signal,
-        });
+        })) ?? { items: [] };
         if (signal.aborted) return;
         // Bump the cache-bust timestamp on every successful fetch.
         // Single epoch-millis value shared by all consumers of the
@@ -321,10 +321,16 @@ export function useChannelContent({
     if (latest.kind !== "ready") return;
     if (latest.isLoadingMore) return;
     if (!latest.nextCursor) return;
+    if (loadMoreInFlightRef.current) return;
+    loadMoreInFlightRef.current = true;
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    await runFetch(ctrl.signal, "append");
+    try {
+      await runFetch(ctrl.signal, "append");
+    } finally {
+      loadMoreInFlightRef.current = false;
+    }
   }, [runFetch]);
 
   // Always-fresh refetch handle for window-focus + interval
@@ -351,7 +357,7 @@ export function useChannelContent({
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setState({ kind: "loading" });
-    void runFetch(ctrl.signal, "refresh");
+    void runFetch(ctrl.signal, "refresh").catch(() => {});
   }, [accountId, privacy, runFetch]);
 
   // ─── refetchOnWindowFocus ──────────────────────────────────────────

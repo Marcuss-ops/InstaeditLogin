@@ -52,13 +52,14 @@ import {
 import { cn } from "../../../lib/utils";
 import { AuthError } from "../../../lib/auth";
 import { useCreatePost } from "../hooks/useCreatePost";
+import { newIdempotencyKey } from "../api/postsApi";
 import type { CreatePostRequest } from "../api/types";
 import type { MediaAsset } from "../api/mediaApi";
 import type { ChannelMetadata } from "./ChannelMetadataStep";
 
 /**
- * Privacy is locked at "private" for the vertical slice — the Dark
- * Editor applies the final visibility AFTER the publish commits.
+ * Privacy is locked at "private" for the initial publish flow — the
+ * Dark Editor applies the final visibility AFTER the publish commits.
  * Sourced as a local constant (NOT a prop) so a future PR widening
  * the user's choice must explicitly opt-in here.
  */
@@ -75,6 +76,9 @@ export interface ConfirmationStepProps {
   asset: MediaAsset;
   /** Internal title (collected in Step 1's text input). */
   internalTitle: string;
+  /** Original local file metadata, retained because the media API returns no filename. */
+  fileName?: string;
+  fileSize?: number;
   /** Channel + metadata from Step 2 (channelId, workspaceId, ytTitle, etc.). */
   channel: ChannelMetadata;
   /** Back button → Step 2. */
@@ -112,6 +116,8 @@ function PreviewCode({
 export function ConfirmationStep({
   asset,
   internalTitle,
+  fileName,
+  fileSize,
   channel,
   onBack,
   onJumpToStep,
@@ -122,6 +128,10 @@ export function ConfirmationStep({
   // (e.g. fast-refresh, dev-only StrictMode double-invoke) doesn't
   // re-fire the onComplete and double-navigate.
   const lastFiredPostIdRef = useRef<number | null>(null);
+  // One logical wizard submission must keep one key. This makes a
+  // browser retry safe even when the first response was lost after
+  // the server created the post.
+  const idempotencyKeyRef = useRef(newIdempotencyKey());
 
   const isSubmitting = state.kind === "submitting";
   // canSubmit is unconditional by Step 3 — see module docstring.
@@ -177,7 +187,7 @@ export function ConfirmationStep({
   const runSubmit = async (): Promise<void> => {
     if (!canSubmit) return;
     try {
-      await submit(buildPayload());
+      await submit(buildPayload(), { idempotencyKey: idempotencyKeyRef.current });
     } catch (err) {
       if (err instanceof AuthError) {
         // 401 → log out. useCreatePost raised AuthError unhandled;
@@ -227,10 +237,10 @@ export function ConfirmationStep({
           editTestId="edit-step-1"
         >
           <div className="text-white font-medium truncate" data-testid="summary-asset-name">
-            {asset.content_type}
+            {fileName ?? asset.content_type}
           </div>
           <div className="text-xs text-[#9aa0aa] mt-0.5 font-mono break-all">
-            asset_id: {asset.id}
+            {fileSize != null ? `${formatSize(fileSize)} · ` : ""}asset_id: {asset.id}
           </div>
         </SummaryRow>
 

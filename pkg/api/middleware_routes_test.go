@@ -42,7 +42,7 @@ func TestCorsMiddleware_AllowHeadersIncludesCSRFToken(t *testing.T) {
 	}
 
 	allowed := w.Header().Get("Access-Control-Allow-Headers")
-	for _, want := range []string{"Content-Type", "X-CSRF-Token"} {
+	for _, want := range []string{"Content-Type", "X-CSRF-Token", "Idempotency-Key"} {
 		if !strings.Contains(strings.ToLower(allowed), strings.ToLower(want)) {
 			t.Errorf("Access-Control-Allow-Headers %q missing %q (browser preflight for mutative requests will fail in production)", allowed, want)
 		}

@@ -192,7 +192,7 @@ export function ContentPublish() {
 
   // Per-failed-target retry state. We key by target.id so multiple
   // failed targets can each show their own retry button + spinner.
-  const [retryingId, setRetryingId] = useState<number | null>(null);
+  const [retryingIds, setRetryingIds] = useState<Set<number>>(() => new Set());
   const [retryErrorById, setRetryErrorById] = useState<Record<number, string>>({});
 
   // Cross-tab DISPATCH on terminal+published. Fires ONCE per post
@@ -225,7 +225,7 @@ export function ContentPublish() {
   }, [numericId, targets]);
 
   const handleRetry = async (target: PostTarget): Promise<void> => {
-    setRetryingId(target.id);
+    setRetryingIds((prev) => new Set(prev).add(target.id));
     setRetryErrorById((prev) => {
       const next = { ...prev };
       delete next[target.id];
@@ -249,14 +249,21 @@ export function ContentPublish() {
               : "Riprova non riuscito.",
       }));
     } finally {
-      setRetryingId(null);
+    setRetryingIds((prev) => {
+      const next = new Set(prev);
+      next.delete(target.id);
+      return next;
+    });
     }
   };
 
   // ── Render: invalid postId param fast-path ──
   if (numericId == null) {
     return (
-      <div className="px-4 md:px-8 py-8 max-w-3xl mx-auto">
+      <div
+        className="px-4 md:px-8 py-8 max-w-3xl mx-auto"
+        data-testid="content-publish-error"
+      >
         <ErrorState
           title="postId non valido"
           message={`L'URL contiene un postId che non è un numero intero valido: ${postId ?? "(vuoto)"}`}
@@ -335,7 +342,7 @@ export function ContentPublish() {
             <TargetRow
               key={t.id}
               target={t}
-              isRetrying={retryingId === t.id}
+              isRetrying={retryingIds.has(t.id)}
               retryError={retryErrorById[t.id] ?? null}
               onRetry={() => void handleRetry(t)}
             />
@@ -444,7 +451,7 @@ function TargetRow({
   retryError: string | null;
   onRetry: () => void;
 }) {
-  const v = STATUS_VISUAL[target.status];
+  const v = STATUS_VISUAL[target.status] ?? STATUS_VISUAL.failed;
   const isRetriable = RETRIABLE_STATUSES.has(target.status);
   const Icon = v.Icon;
   return (
@@ -571,6 +578,14 @@ function SuccessTargetRow({ target }: { target: PostTarget }) {
       <div className="text-xs text-[#9aa0aa] font-mono break-all mb-2">
         target_id={target.id} · video_id={videoId ?? "(sconosciuto)"}
       </div>
+      <div className="flex flex-wrap gap-2 mb-3 text-xs">
+        <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[#cdd2da]">
+          Privacy effettiva: {target.actual_privacy ?? target.privacy_status ?? "in verifica"}
+        </span>
+        <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-[#cdd2da]">
+          YouTube sync: {target.youtube_sync_status ?? "in verifica"}
+        </span>
+      </div>
       <div className="flex flex-col sm:flex-row gap-2">
         <Link
           to={channelUrl}
@@ -605,4 +620,3 @@ function parsePostId(raw: string | undefined): number | null {
   if (!Number.isFinite(id) || id <= 0) return null;
   return id;
 }
-

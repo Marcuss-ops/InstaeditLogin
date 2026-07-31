@@ -36,11 +36,11 @@ func TestPostCreate_NoUploadJobID_FreshInsertPath(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(
-		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	 ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
 	 RETURNING id, created_at, upload_job_id`,
-	).WithArgs(int64(1), "http-path", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+	).WithArgs(int64(1), "http-path", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(100, now, nil))
 	// Fresh-insert path: insert each post_target then each outbox row.
 	mock.ExpectQuery(
@@ -68,10 +68,10 @@ func TestPostCreate_NoUploadJobID_FreshInsertPath(t *testing.T) {
 	mock.ExpectCommit()
 
 	post := &models.Post{
-		WorkspaceID:         1,
-		Title:               "http-path",
-		Status:              models.PostStatusDraft,
-		UploadJobID:         nil, // HTTP /api/v1/posts path
+		WorkspaceID: 1,
+		Title:       "http-path",
+		Status:      models.PostStatusDraft,
+		UploadJobID: nil, // HTTP /api/v1/posts path
 		// DefaultPrivacyLevel is intentionally left as the zero-value
 		// (empty string) so the test's `WithArgs(... 5th empty ...)`
 		// and the production's `post.DefaultPrivacyLevel = ""` both
@@ -142,15 +142,15 @@ func TestPostCreate_WithUploadJobID_OnConflictReusesExistingPost(t *testing.T) {
 	// ON CONFLICT DO NOTHING: INSERT lands 0 rows → RETURNING
 	// returns ErrNoRows.
 	mock.ExpectQuery(
-		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	 ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
 	 RETURNING id, created_at, upload_job_id`,
-	).WithArgs(int64(1), "video", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "unlisted", "", models.PostStatusDraft, uploadJobID).
+	).WithArgs(int64(1), "video", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "unlisted", "", models.PostStatusDraft, uploadJobID, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 		WillReturnError(sql.ErrNoRows)
 	// Re-fetch existing post by upload_job_id.
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
  FROM posts
  WHERE upload_job_id = $1`,
 	).WithArgs(uploadJobID).
@@ -160,9 +160,9 @@ func TestPostCreate_WithUploadJobID_OnConflictReusesExistingPost(t *testing.T) {
 					"id", "workspace_id", "title", "caption", "media_url",
 					"ingest_after", "publish_at", "status",
 					"privacy_level", "default_privacy_level",
-					"created_at", "upload_job_id",
+					"created_at", "upload_job_id", "media_asset_id", "storage_object_key", "bucket",
 				},
-			).AddRow(int64(100), int64(1), "video", "", "", now, nil, models.PostStatusQueued, "", "unlisted", now, uploadJobID),
+			).AddRow(int64(100), int64(1), "video", "", "", now, nil, models.PostStatusQueued, "", "unlisted", now, uploadJobID, nil, nil, nil),
 		)
 	// Re-fetch existing post_targets fan-out.
 	mock.ExpectQuery(
@@ -237,14 +237,14 @@ func TestPostCreate_WithUploadJobID_FanoutMismatch_Error(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(
-		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	 ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
 	 RETURNING id, created_at, upload_job_id`,
-	).WithArgs(int64(1), "video", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "unlisted", "", models.PostStatusDraft, uploadJobID).
+	).WithArgs(int64(1), "video", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "unlisted", "", models.PostStatusDraft, uploadJobID, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
  FROM posts
  WHERE upload_job_id = $1`,
 	).WithArgs(uploadJobID).
@@ -254,9 +254,9 @@ func TestPostCreate_WithUploadJobID_FanoutMismatch_Error(t *testing.T) {
 					"id", "workspace_id", "title", "caption", "media_url",
 					"ingest_after", "publish_at", "status",
 					"privacy_level", "default_privacy_level",
-					"created_at", "upload_job_id",
+					"created_at", "upload_job_id", "media_asset_id", "storage_object_key", "bucket",
 				},
-			).AddRow(int64(100), int64(1), "video", "", "", now, nil, models.PostStatusQueued, "", "unlisted", now, uploadJobID),
+			).AddRow(int64(100), int64(1), "video", "", "", now, nil, models.PostStatusQueued, "", "unlisted", now, uploadJobID, nil, nil, nil),
 		)
 	// Only 1 existing target, but caller is passing 3 → mismatch
 	// detected + tx rolls back.
@@ -319,11 +319,11 @@ func TestPostCreate_WithUploadJobID_NoConflict_InsertsFresh(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(
-		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	 ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
 	 RETURNING id, created_at, upload_job_id`,
-	).WithArgs(int64(1), "fresh", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "unlisted", "", models.PostStatusDraft, uploadJobID).
+	).WithArgs(int64(1), "fresh", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "unlisted", "", models.PostStatusDraft, uploadJobID, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(100, now, uploadJobID))
 	// Fresh-insert path with upload_job_id set: 2 targets + 2 outbox.
 	mock.ExpectQuery(
@@ -394,14 +394,14 @@ func TestPostCreate_ConflictPath_DBStampsAreAuthoritative(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(
-		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	 ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
 	 RETURNING id, created_at, upload_job_id`,
-	).WithArgs(int64(1), "video", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "unlisted", "", models.PostStatusDraft, uploadJobID).
+	).WithArgs(int64(1), "video", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "unlisted", "", models.PostStatusDraft, uploadJobID, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
  FROM posts
  WHERE upload_job_id = $1`,
 	).WithArgs(uploadJobID).
@@ -411,9 +411,9 @@ func TestPostCreate_ConflictPath_DBStampsAreAuthoritative(t *testing.T) {
 					"id", "workspace_id", "title", "caption", "media_url",
 					"ingest_after", "publish_at", "status",
 					"privacy_level", "default_privacy_level",
-					"created_at", "upload_job_id",
+					"created_at", "upload_job_id", "media_asset_id", "storage_object_key", "bucket",
 				},
-			).AddRow(int64(100), int64(7), "canonical-title", "", "", now, nil, models.PostStatusQueued, "", "unlisted", now, uploadJobID),
+			).AddRow(int64(100), int64(7), "canonical-title", "", "", now, nil, models.PostStatusQueued, "", "unlisted", now, uploadJobID, nil, nil, nil),
 		)
 	mock.ExpectQuery(
 		`SELECT id, post_id, platform_account_id, status,

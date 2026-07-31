@@ -10,11 +10,8 @@ import { BookingProvider } from "../components/booking/BookingProvider";
  * Goal: a single cheap assertion block that fails the moment any of:
  *   - the hero h1 copy is rewritten or the core promise drops
  *
- * The previous revision also asserted the YT Studio monetization
- * mockup window-chrome text. That component has been removed in
- * chore(landing): center the title (the YT Studio card was dropped
- * from the Hero composition); the Revenue panel is now carried by
- * the ResultsSection further down the page.
+ * The Hero's visual proof is rendered by the ResultsSection; this
+ * smoke test therefore focuses on the current centered hero promise.
  */
 describe("Landing", () => {
   it("renders the centered hero copy", () => {
@@ -30,5 +27,28 @@ describe("Landing", () => {
     const h1 = screen.getByRole("heading", { level: 1 });
     expect(h1).toHaveTextContent(/Your First/i);
     expect(h1).toHaveTextContent(/Video/i);
+  });
+
+  it("renders the founder video before the FAQ", () => {
+    render(
+      <MemoryRouter>
+        <BookingProvider>
+          <Landing />
+        </BookingProvider>
+      </MemoryRouter>,
+    );
+
+    const founderSection = screen.getByText(/How InstaEdit/i).closest("section");
+    const faqHeading = screen.getByRole("heading", { name: /Questions\?/i });
+    const iframe = founderSection?.querySelector(
+      'iframe[src*="youtube.com/embed/mB0NHhVMrKQ"]',
+    );
+
+    expect(founderSection).not.toBeNull();
+    expect(iframe).not.toBeNull();
+    // The founder section must come before the FAQ in the DOM order.
+    expect(founderSection?.compareDocumentPosition(faqHeading)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 });

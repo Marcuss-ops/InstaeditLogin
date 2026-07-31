@@ -38,7 +38,11 @@ export interface VideoUploadStepProps {
   /** Pre-fill the internal title (e.g. resumed session draft). */
   initialTitle?: string;
   /** Fires once the asset is `ready` and locked into wizard state. */
-  onComplete: (asset: MediaAsset, internalTitle: string) => void;
+  onComplete: (
+    asset: MediaAsset,
+    internalTitle: string,
+    fileInfo?: { name: string; size: number },
+  ) => void;
 }
 
 /** Human-readable byte size string (KB / MB / GB). */
@@ -57,7 +61,7 @@ const PHASE_LABEL: Record<LabeledPhase, string> = {
   complete: "Finalizzazione…",
 };
 
-const ACCEPT = "video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm,.mkv,.avi";
+const ACCEPT = "video/mp4,video/quicktime,.mp4,.mov,.m4v";
 
 export function VideoUploadStep({ initialTitle, onComplete }: VideoUploadStepProps) {
   const navigate = useNavigate();
@@ -80,8 +84,8 @@ export function VideoUploadStep({ initialTitle, onComplete }: VideoUploadStepPro
     if (state.kind !== "done") return;
     if (lastFireRef.current === state.asset.id) return;
     lastFireRef.current = state.asset.id;
-    onComplete(state.asset, title.trim());
-  }, [state, title, onComplete]);
+    onComplete(state.asset, title.trim(), file ? { name: file.name, size: file.size } : undefined);
+  }, [state, title, file, onComplete]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const next = e.target.files?.[0];
@@ -197,7 +201,7 @@ export function VideoUploadStep({ initialTitle, onComplete }: VideoUploadStepPro
               Trascina o seleziona un video
             </div>
             <div className="text-xs text-[#9aa0aa]">
-              MP4, MOV, M4V, WebM, MKV, AVI · fino a ~5 GB consigliati
+              MP4, MOV, M4V · fino a ~5 GB consigliati
             </div>
           </div>
         )}
@@ -290,7 +294,7 @@ export function VideoUploadStep({ initialTitle, onComplete }: VideoUploadStepPro
             </div>
             <button
               type="button"
-              onClick={void handleUpload}
+              onClick={() => void handleUpload()}
               disabled={!file}
               className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-red-200 hover:text-red-100 underline underline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="upload-retry"
@@ -315,7 +319,7 @@ export function VideoUploadStep({ initialTitle, onComplete }: VideoUploadStepPro
         </button>
         <button
           type="button"
-          onClick={void handleUpload}
+          onClick={() => void handleUpload()}
           disabled={!canUpload}
           className="inline-flex items-center gap-2 rounded-xl bg-white text-[#030308] px-4 py-2.5 text-sm font-semibold hover:bg-[#e8ecf2] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           data-testid="upload-submit"
@@ -332,7 +336,7 @@ export function VideoUploadStep({ initialTitle, onComplete }: VideoUploadStepPro
 
 /** Local file-type gate mirrored inside the hook (UX-first check). */
 function isVideoFile(file: File): boolean {
-  if (file.type.startsWith("video/")) return true;
+  if (file.type === "video/mp4" || file.type === "video/quicktime") return true;
   if (!file.name) return false;
-  return /\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(file.name);
+  return /\.(mp4|mov|m4v)$/i.test(file.name);
 }

@@ -36,12 +36,18 @@ func (w *PublishWorker) prepareCredentials(ctx context.Context, target *models.P
 		return oauth.RefreshOAuthToken(ctx, refreshToken)
 	})
 
-	oauthToken, err := w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
-	if err != nil {
-		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher)
+	var oauthToken *models.OAuthToken
+	var err error
+	if account.Platform == models.PlatformYouTube {
+		oauthToken, err = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
+	} else {
+		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
 		if err != nil {
-			return nil, fmt.Errorf("token refresh failed: %w", err)
+			oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher)
 		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("token refresh failed")
 	}
 
 	// For providers that publish via a page-scoped token (Facebook
@@ -82,9 +88,14 @@ func (w *PublishWorker) prepareCredentials(ctx context.Context, target *models.P
 
 	// 5c. Optional canary pre-flight (Task 7/10).
 	if w.isCanaryEnabled(ctx, post) {
-		oauthToken, renewErr := w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+		var renewErr error
+		if account.Platform == models.PlatformYouTube {
+			oauthToken, renewErr = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
+		} else {
+			oauthToken, renewErr = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+		}
 		if renewErr != nil {
-			return nil, &blockedAuthError{reason: "canary pre-flight: renew failed: " + renewErr.Error()}
+			return nil, &blockedAuthError{reason: "canary pre-flight: renew failed"}
 		}
 		uploader := w.canonicalCanaryUploader
 		if uploader == nil {

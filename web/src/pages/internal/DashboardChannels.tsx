@@ -37,8 +37,8 @@
  *   • AuthError re-thrown by both hooks is caught by the
  *     ProtectedRoute wrapper at the route level — the page itself
  *     does NOT redirect on auth errors.
- *   • The page deliberately does NOT render analytics 7/14/28 —
- *     that's the work slated for the next iteration (per spec).
+ *   • Analytics are intentionally rendered on the dedicated
+ *     performance page rather than this content-focused surface.
  */
 
 import { useCallback, useRef, useState } from "react";
@@ -253,8 +253,8 @@ export function DashboardChannelsPage() {
           cacheBust={contentState.cacheBust}
           highlightVideoId={highlightVideoId}
           onEditThumbnail={handleEditThumbnail}
-          onLoadMore={() => void contentState.loadMore()}
-          onRetry={() => void contentState.refetch()}
+          onLoadMore={() => contentState.loadMore()}
+          onRetry={() => contentState.refetch()}
         />
       </div>
     </div>

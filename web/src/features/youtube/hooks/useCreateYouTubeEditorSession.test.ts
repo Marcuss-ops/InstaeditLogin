@@ -181,8 +181,8 @@ describe("useCreateYouTubeEditorSession — error classification", () => {
 
 describe("useCreateYouTubeEditorSession — abort lifecycle", () => {
   it("a NEW submit aborts the prior in-flight create; the prior never lands as success", async () => {
-    const resolveFirst: (resp: Response) => void = () => {};
-    const resolveSecond: (resp: Response) => void = () => {};
+    let resolveFirst: (resp: Response) => void = () => {};
+    let resolveSecond: (resp: Response) => void = () => {};
     let callN = 0;
     authedFetchMock.mockImplementation(
       () =>
@@ -208,12 +208,17 @@ describe("useCreateYouTubeEditorSession — abort lifecycle", () => {
 
     // Kick off the SECOND submit BEFORE the first resolves. The
     // hook should abort the first and continue creating for the second.
-    await act(async () => {
-      await result.current.create({
+    let secondCall: Promise<unknown>;
+    act(() => {
+      secondCall = result.current.create({
         workspace_id: 1,
         platform_account_id: 2,
         youtube_video_id: "second",
       });
+    });
+    resolveSecond(jsonResponse({ ...SESSION, session_id: "second" }));
+    await act(async () => {
+      await secondCall;
     });
 
     // First fetch resolves with success AFTER the second submit landed
@@ -229,8 +234,6 @@ describe("useCreateYouTubeEditorSession — abort lifecycle", () => {
       session: { ...SESSION, session_id: "second" },
     });
 
-    // Resolve second for completeness (already done above).
-    resolveSecond(jsonResponse({ ...SESSION, session_id: "second" }));
   });
 
   it("reset() drops the hook back to idle and aborts any in-flight submit", async () => {

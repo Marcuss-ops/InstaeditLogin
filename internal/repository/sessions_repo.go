@@ -1,4 +1,4 @@
-// SPRINT 2.1 — sessions repository.
+// Sessions repository.
 //
 // One row per active session. Refresh tokens are stored as SHA-256
 // hashes; the plaintext lives only in the cookie. Rotation produces

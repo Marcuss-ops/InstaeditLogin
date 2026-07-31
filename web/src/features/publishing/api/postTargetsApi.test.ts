@@ -24,7 +24,7 @@ beforeEach(() => {
 });
 
 describe("getPostTarget", () => {
-  it("GETs /api/v1/post_targets/{id} and returns the parsed detail", async () => {
+  it("GETs /api/v1/post-targets/{id} and returns the parsed detail", async () => {
     authedFetchMock.mockResolvedValueOnce(
       okResponse({
         id: 5,
@@ -38,7 +38,7 @@ describe("getPostTarget", () => {
     const t = await getPostTarget(5);
     expect(t.id).toBe(5);
     expect(t.status).toBe("publishing");
-    expect(authedFetchMock.mock.calls[0][0]).toBe("/api/v1/post_targets/5");
+    expect(authedFetchMock.mock.calls[0][0]).toBe("/api/v1/post-targets/5");
   });
 });
 
@@ -71,12 +71,12 @@ describe("getPostTargets", () => {
 });
 
 describe("retryPostTarget", () => {
-  it("POSTs /api/v1/post_targets/{id}/retry without a query string by default", async () => {
+  it("POSTs /api/v1/post-targets/{id}/retry without a query string by default", async () => {
     authedFetchMock.mockResolvedValueOnce(okResponse({ status: "queued" }));
     const out = await retryPostTarget(5);
     expect(out.status).toBe("queued");
     const [url, init] = authedFetchMock.mock.calls[0];
-    expect(url).toBe("/api/v1/post_targets/5/retry");
+    expect(url).toBe("/api/v1/post-targets/5/retry");
     expect(init.method).toBe("POST");
   });
 
@@ -84,7 +84,7 @@ describe("retryPostTarget", () => {
     authedFetchMock.mockResolvedValueOnce(okResponse({ status: "queued" }));
     await retryPostTarget(5, { force: true });
     expect(authedFetchMock.mock.calls[0][0]).toBe(
-      "/api/v1/post_targets/5/retry?force=true",
+      "/api/v1/post-targets/5/retry?force=true",
     );
   });
 });

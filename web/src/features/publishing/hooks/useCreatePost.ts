@@ -59,7 +59,7 @@ export interface UseCreatePostResult {
    * treat it as dropped on the floor if the request actually reached
    * the server before the abort landed).
    */
-  submit: (body: CreatePostRequest) => Promise<void>;
+  submit: (body: CreatePostRequest, options?: { idempotencyKey?: string }) => Promise<void>;
   /**
    * Reset to idle. Cancels any in-flight submit.
    */
@@ -81,7 +81,10 @@ export function useCreatePost(): UseCreatePostResult {
   }, []);
 
   const submit = useCallback(
-    async (body: CreatePostRequest): Promise<void> => {
+    async (
+      body: CreatePostRequest,
+      options: { idempotencyKey?: string } = {},
+    ): Promise<void> => {
       // Cancel the previous in-flight submit (its UUID is no longer
       // associated with a user intent). If it never sent a single
       // byte to the server we just lose local state; if it already
@@ -93,7 +96,7 @@ export function useCreatePost(): UseCreatePostResult {
       setState({ kind: "submitting" });
 
       try {
-        const key = newIdempotencyKey();
+        const key = options.idempotencyKey ?? newIdempotencyKey();
         const post = await createPost(body, {
           idempotencyKey: key,
           signal: ctrl.signal,

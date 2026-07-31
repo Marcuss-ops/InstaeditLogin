@@ -149,18 +149,18 @@ describe("useYouTubeChannels", () => {
     });
     expect(result.current.state.kind).toBe("ready");
 
-    await expect(
-      act(async () => {
-        await result.current.refetch();
-      }),
-    ).rejects.toBeInstanceOf(AuthError);
+    await act(async () => {
+      await result.current.refetch().catch((err) => {
+        expect(err).toBeInstanceOf(AuthError);
+      });
+    });
 
     // AuthError short-circuits BEFORE setState({kind:'error'}); the
     // refetch() function sets state to 'loading' BEFORE awaiting
     // runFetch, so the final kind after a re-throw is 'loading' —
     // caller owns the auth redirect (router-level ProtectedRoute).
     expect(result.current.state.kind).not.toBe("error");
-    expect(result.current.state.kind).not.toBe("ready");
+    expect(result.current.state.kind).toBe("loading");
   });
 
   it("refetch() aborts prior controller and reloads", async () => {

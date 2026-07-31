@@ -2,9 +2,8 @@
  * ChannelVideoCard — single video tile on the channel page
  * (/app/dashboard-channels/:accountId).
  *
- * Layout (mirrors ContentVideoCard in AccountDetails for visual
- * consistency; variants in tone color and "Modifica copertina"
- * affordance for the channel-page vertical slice):
+ * Layout mirrors ContentVideoCard in AccountDetails for visual
+ * consistency, with the channel page's thumbnail-edit affordance:
  *
  *   ┌─────────────────────────────────────────────────────────────┐
  *   │ [thumbnail w/ duration] [title + handle]   [privacy chip]    │
@@ -193,7 +192,8 @@ export function ChannelVideoCard({
   const isHighlighted = highlightVideoId === video.external_id;
   const normalizedPrivacy = normalizePrivacy(video.privacy);
   const privacyStyle = PRIVACY_CHIP[normalizedPrivacy]!;
-  const normalizedStatus = (video.status ?? "unknown").toLowerCase();
+  const rawStatus = (video.status ?? "unknown").toLowerCase();
+  const normalizedStatus = STATUS_CHIP[rawStatus] ? rawStatus : "unknown";
   const statusStyle = STATUS_CHIP[normalizedStatus] ?? STATUS_CHIP["unknown"]!;
   const durationLabel = formatDuration(video.duration);
   const viewsDisplay = getViewsDisplay(video.metrics);

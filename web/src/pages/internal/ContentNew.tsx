@@ -52,6 +52,8 @@ export function ContentNew() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [asset, setAsset] = useState<MediaAsset | null>(null);
   const [internalTitle, setInternalTitle] = useState("");
+  const [fileName, setFileName] = useState<string | undefined>();
+  const [fileSize, setFileSize] = useState<number | undefined>();
   const [youtubeTarget, setYoutubeTarget] = useState<ChannelMetadata | null>(
     null,
   );
@@ -89,9 +91,14 @@ export function ContentNew() {
       {step === 1 && (
         <VideoUploadStep
           initialTitle={internalTitle}
-          onComplete={(next, title) => {
+          onComplete={(next, title, fileInfo) => {
             setAsset(next);
+            // MediaAsset intentionally contains server-controlled
+            // metadata only; retain local filename/size for the
+            // confirmation summary.
             setInternalTitle(title);
+            setFileName(fileInfo?.name);
+            setFileSize(fileInfo?.size);
             setStep(2);
           }}
         />
@@ -112,6 +119,8 @@ export function ContentNew() {
         <ConfirmationStep
           asset={asset}
           internalTitle={internalTitle}
+          fileName={fileName}
+          fileSize={fileSize}
           channel={youtubeTarget}
           onBack={() => setStep(2)}
           onJumpToStep={(jumpTo) => setStep(jumpTo)}

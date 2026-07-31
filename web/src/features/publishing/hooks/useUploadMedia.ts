@@ -100,9 +100,9 @@ export type UploadMediaOptions = Omit<
 
 /** True for any browser-detected video/* MIME OR a known video extension. */
 function isVideoFile(file: File): boolean {
-  if (file.type.startsWith("video/")) return true;
+  if (file.type === "video/mp4" || file.type === "video/quicktime") return true;
   if (!file.name) return false;
-  return /\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(file.name);
+  return /\.(mp4|mov|m4v)$/i.test(file.name);
 }
 
 async function sha256Hex(file: File | Blob): Promise<string> {

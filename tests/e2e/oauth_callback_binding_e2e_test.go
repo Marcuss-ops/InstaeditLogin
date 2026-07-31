@@ -77,6 +77,15 @@ type mockYouTubeDiscoveryProvider struct {
 }
 
 func (m *mockYouTubeDiscoveryProvider) Name() string { return "youtube" }
+func (m *mockYouTubeDiscoveryProvider) GetLoginURL(state string) string {
+	return "https://youtube.example.test/oauth?state=" + state
+}
+func (m *mockYouTubeDiscoveryProvider) GetLoginURLWithOptions(state string, _ services.OAuthLoginOptions) string {
+	return m.GetLoginURL(state)
+}
+func (m *mockYouTubeDiscoveryProvider) RefreshOAuthToken(_ context.Context, refreshToken string) (*models.TokenData, error) {
+	return &models.TokenData{AccessToken: refreshToken, TokenType: models.TokenTypeBearer, ExpiresIn: 3600}, nil
+}
 
 func (m *mockYouTubeDiscoveryProvider) HandleCallback(_ context.Context, _, _ string) (*models.PlatformProfile, *models.TokenData, error) {
 	return &models.PlatformProfile{PlatformUserID: "g-acc", Username: "Manager Google Acct"},
@@ -145,10 +154,16 @@ func (m *markReauthCounter) record(code string) {
 // ---------------------------------------------------------------------------
 
 type mockUserStore struct {
-	markReauth *markReauthCounter
+	markReauth              *markReauthCounter
+	attachPlatformAccountFn func(int64, *models.PlatformProfile, string) (*models.PlatformAccount, error)
+	findPlatformAccountFn   func(int64) (*models.PlatformAccount, error)
+	updatePlatformAccountFn func(*models.PlatformAccount) error
 }
 
-func (s *mockUserStore) AttachPlatformAccount(int64, *models.PlatformProfile, string) (*models.PlatformAccount, error) {
+func (s *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+	if s.attachPlatformAccountFn != nil {
+		return s.attachPlatformAccountFn(userID, profile, platform)
+	}
 	panic("mockUserStore.AttachPlatformAccount MUST NOT be called on negative-bind path")
 }
 func (s *mockUserStore) ListPlatformAccountsByUser(int64, string) ([]*models.PlatformAccount, error) {
@@ -157,13 +172,19 @@ func (s *mockUserStore) ListPlatformAccountsByUser(int64, string) ([]*models.Pla
 func (s *mockUserStore) ListFilteredYouTubeAccounts(userID int64, workspaceID *int64, group, language, manager string) ([]*models.PlatformAccount, error) {
 	return nil, nil
 }
-func (s *mockUserStore) FindPlatformAccountByID(int64) (*models.PlatformAccount, error) {
+func (s *mockUserStore) FindPlatformAccountByID(id int64) (*models.PlatformAccount, error) {
+	if s.findPlatformAccountFn != nil {
+		return s.findPlatformAccountFn(id)
+	}
 	return nil, nil
 }
 func (s *mockUserStore) FindPlatformAccount(string, string) (*models.PlatformAccount, error) {
 	return nil, nil
 }
-func (s *mockUserStore) UpdatePlatformAccount(*models.PlatformAccount) error {
+func (s *mockUserStore) UpdatePlatformAccount(account *models.PlatformAccount) error {
+	if s.updatePlatformAccountFn != nil {
+		return s.updatePlatformAccountFn(account)
+	}
 	return nil
 }
 func (s *mockUserStore) DeletePlatformAccount(int64) error {
@@ -182,8 +203,8 @@ func (s *mockUserStore) MarkReauthRequired(_ context.Context, _ int64, code, _ s
 
 // ---------------------------------------------------------------------------
 // jwtIssuer — minimal HS256 JWT signer. Mirrors what
-// auth.Manager's connect-link verifier expects: claims { state_type
-// "connect_link", expected_channel_id UC..., iat, exp } signed
+// auth.Manager's connect-link verifier expects: compact claims { stp:
+// "connect_link", ech: UC..., iss, aud, jti, iat, exp } signed
 // with HMAC-SHA256 using auth.Manager.signingKey. handleCallback
 // detects the 2-dot state shape at line 1356 and routes through
 // r.auth.VerifyConnectLinkState.
@@ -210,10 +231,13 @@ func (j *jwtIssuer) issue(stateType string, claims map[string]any) string {
 func (j *jwtIssuer) issueConnectLinkState(expectedChannelID string, ttl time.Duration) string {
 	now := time.Now().UTC()
 	payload := map[string]any{
-		"state_type":          "connect_link",
-		"expected_channel_id": expectedChannelID,
-		"iat":                 now.Unix(),
-		"exp":                 now.Add(ttl).Unix(),
+		"stp": "connect_link",
+		"ech": expectedChannelID,
+		"iss": "instaeditlogin",
+		"aud": "api",
+		"jti": fmt.Sprintf("e2e-connect-link-jti-%d", now.UnixNano()),
+		"iat": now.Unix(),
+		"exp": now.Add(ttl).Unix(),
 	}
 	return j.issue("connect_link", payload)
 }
@@ -562,7 +586,19 @@ func TestOAuthCallback_HappyPath_ConnectLinkBindsExpectedChannel(t *testing.T) {
 	capRouter.Register(mockYouTube.Name(), mockYouTube)
 
 	authMgr := auth.NewManager(testJWTSecret, 24)
-	store := &mockUserStore{markReauth: &markReauthCounter{}}
+	store := &mockUserStore{
+		markReauth: &markReauthCounter{},
+		attachPlatformAccountFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{
+				ID:             1,
+				UserID:         userID,
+				Platform:       platform,
+				PlatformUserID: profile.PlatformUserID,
+				Username:       profile.Username,
+				Status:         models.AccountStatusPendingAuthorization,
+			}, nil
+		},
+	}
 	authzr := &countingChannelAcceptingAuthorizer{}
 
 	router := buildE2ERouter(
@@ -595,6 +631,15 @@ func TestOAuthCallback_HappyPath_ConnectLinkBindsExpectedChannel(t *testing.T) {
 type mockYouTubeHappyPath struct{}
 
 func (m *mockYouTubeHappyPath) Name() string { return "youtube" }
+func (m *mockYouTubeHappyPath) GetLoginURL(state string) string {
+	return "https://youtube.example.test/oauth?state=" + state
+}
+func (m *mockYouTubeHappyPath) GetLoginURLWithOptions(state string, _ services.OAuthLoginOptions) string {
+	return m.GetLoginURL(state)
+}
+func (m *mockYouTubeHappyPath) RefreshOAuthToken(_ context.Context, refreshToken string) (*models.TokenData, error) {
+	return &models.TokenData{AccessToken: refreshToken, TokenType: models.TokenTypeBearer, ExpiresIn: 3600}, nil
+}
 func (m *mockYouTubeHappyPath) HandleCallback(_ context.Context, _, _ string) (*models.PlatformProfile, *models.TokenData, error) {
 	return &models.PlatformProfile{PlatformUserID: "g-acc", Username: "Manager Google Acct"},
 		&models.TokenData{AccessToken: "yt-bearer-mock", TokenType: models.TokenTypeBearer, ExpiresIn: 3600}, nil

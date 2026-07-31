@@ -405,17 +405,23 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 
 	// 5. Refresh token via the CredentialVault. The provider's
 	// RefreshOAuthToken method is adapted to a credentials.TokenRefresher
-	// closure so the vault only knows the function signature. Try Bearer
-	// first (refresh-capable), then LongLived (Meta-style re-exchange).
+	// closure so the vault only knows the function signature. YouTube
+	// uses the canonical bearer type first and keeps long_lived only as
+	// a temporary compatibility fallback for pre-normalization rows.
 	refresher := credentials.TokenRefresher(func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
 		return oauth.RefreshOAuthToken(ctx, refreshToken)
 	})
-	oauthToken, err := w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
-	if err != nil {
-		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher)
+	var oauthToken *models.OAuthToken
+	if account.Platform == models.PlatformYouTube {
+		oauthToken, err = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
+	} else {
+		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
 		if err != nil {
-			return w.markFailed(target, "token refresh failed: "+err.Error())
+			oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher)
 		}
+	}
+	if err != nil {
+		return w.markFailed(target, "token refresh failed")
 	}
 
 	// For providers that publish via a page-scoped token (Facebook
@@ -514,9 +520,14 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	// the existing markPublishBlockedAuth helper) and the real Publish must NOT
 	// run. Documented in docs/OAUTH-PRODUCTION.md (canary pre-flight).
 	if w.isCanaryEnabled(ctx, post) {
-		oauthToken, renewErr := w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+		var renewErr error
+		if account.Platform == models.PlatformYouTube {
+			oauthToken, renewErr = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
+		} else {
+			oauthToken, renewErr = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+		}
 		if renewErr != nil {
-			return w.markPublishBlockedAuth(target, "canary pre-flight: renew failed: "+renewErr.Error())
+			return w.markPublishBlockedAuth(target, "canary pre-flight: renew failed")
 		}
 		uploader := w.canonicalCanaryUploader
 		if uploader == nil {

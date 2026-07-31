@@ -97,7 +97,10 @@ export function useChannelAccount({
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setState({ kind: "loading" });
-    void runFetch(ctrl.signal);
+    // Effects cannot propagate a rejected promise to the router. Keep
+    // the state in loading on auth expiry and let the protected route /
+    // auth boundary handle the redirect without an unhandled rejection.
+    void runFetch(ctrl.signal).catch(() => {});
   }, [accountId, runFetch]);
 
   // Unmount cleanup.

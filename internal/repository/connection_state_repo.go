@@ -1,4 +1,4 @@
-// SPRINT 1.2 — connection_states repository.
+// Connection states repository.
 //
 // Persists per-platform OAuth connection state for the
 // POST /api/v1/connections/{platform}/start + GET /api/v1/connections/

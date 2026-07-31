@@ -15,7 +15,7 @@ const { authedFetchMock, fetchSpy } = vi.hoisted(() => ({
 vi.mock("../../../lib/auth", () => {
   class ApiError extends Error {
     status: number;
-    constructor(m: string, s: number) {
+    constructor(s: number, m: string) {
       super(m);
       this.name = "ApiError";
       this.status = s;

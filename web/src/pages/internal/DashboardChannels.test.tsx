@@ -64,7 +64,17 @@ const ROUTE_PATH = "/app/dashboard-channels/:accountId";
 
 function setAccountEndpoint() {
   authedFetchMock.mockImplementation(async (url: string) => {
-    if (url.includes("/api/v1/accounts/123")) {
+    if (url.includes("/api/v1/accounts/123/content")) {
+      return {
+        json: async () => ({
+          items: [
+            { external_id: "yt_AAA", title: "Alpha", privacy: "private", status: "live", thumbnail_url: "https://i.ytimg.com/vi/yt_AAA/maxresdefault.jpg" },
+            { external_id: "yt_BBB", title: "Beta", privacy: "public", status: "live" },
+          ],
+        }),
+      } as Response;
+    }
+    if (url === "/api/v1/accounts/123" || url.endsWith("/api/v1/accounts/123")) {
       return {
         json: async () => ({
           id: 123,
@@ -74,27 +84,6 @@ function setAccountEndpoint() {
           status: "active",
           created_at: "2026-01-01T00:00:00.000Z",
           resource: { display_name: "Demo Channel", handle: "@demo" },
-        }),
-      } as Response;
-    }
-    if (url.includes("/api/v1/accounts/123/content")) {
-      return {
-        json: async () => ({
-          items: [
-            {
-              external_id: "yt_AAA",
-              title: "Alpha",
-              privacy: "private",
-              status: "live",
-              thumbnail_url: "https://i.ytimg.com/vi/yt_AAA/maxresdefault.jpg",
-            },
-            {
-              external_id: "yt_BBB",
-              title: "Beta",
-              privacy: "public",
-              status: "live",
-            },
-          ],
         }),
       } as Response;
     }
@@ -229,7 +218,10 @@ describe("DashboardChannelsPage", () => {
     // The MemoryRouter + setSearchParams push is observable through
     // window.location (MemoryRouter uses history.pushState).
     await waitFor(() => {
-      expect(window.location.search).toContain("privacy=private");
+      expect(screen.getByTestId("channel-video-filter-private")).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
     });
   });
 
@@ -277,10 +269,11 @@ describe("DashboardChannelsPage", () => {
 
   it("Modifica copertina surfaces a toast when no workspaces are configured", async () => {
     setWorkspacesMissing();
-    renderAt("/app/dashboard-channels/123");
+    const firstRender = renderAt("/app/dashboard-channels/123");
     await waitFor(() => {
-      expect(screen.getAllByTestId("channel-video-card")).toHaveLength(0);
+      expect(screen.queryAllByTestId("channel-video-card")).toHaveLength(0);
     });
+    firstRender.unmount();
     // With empty content we render EmptyState and no edit button.
     // We trigger the handler directly through state items = []
     // so this branch is exercised by the EmptyState path \u2014 the
@@ -289,7 +282,7 @@ describe("DashboardChannelsPage", () => {
     // Re-mount with a video in the list and no workspaces:
     authedFetchMock.mockReset();
     authedFetchMock.mockImplementation(async (url: string) => {
-      if (url.includes("/api/v1/accounts/123") && !url.includes("/content")) {
+      if (url === "/api/v1/accounts/123") {
         return {
           json: async () => ({
             id: 123,
@@ -335,7 +328,7 @@ describe("DashboardChannelsPage", () => {
 
   it("shows a Load more button when nextCursor is present", async () => {
     authedFetchMock.mockImplementation(async (url: string) => {
-      if (url.includes("/api/v1/accounts/123") && !url.includes("/content")) {
+      if (url === "/api/v1/accounts/123") {
         return {
           json: async () => ({
             id: 123,

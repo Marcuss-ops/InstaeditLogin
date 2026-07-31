@@ -333,12 +333,9 @@ describe("ConfirmationStep — error / auth / submit-state UX", () => {
         name: "ApiError",
       }),
     );
-    useCreatePostMock.mockImplementation(() => ({
-      state: { kind: "error", message: "idempotency_key_conflict" },
-      submit: mockSubmit,
-      reset: mockReset,
-    }));
-    renderStep();
+    renderStep({
+      initial: { kind: "error", message: "idempotency_key_conflict" },
+    });
 
     expect(screen.getByTestId("submit-error")).toBeTruthy();
     expect(screen.getByTestId("submit-error").textContent).toContain(
@@ -348,12 +345,7 @@ describe("ConfirmationStep — error / auth / submit-state UX", () => {
   });
 
   it("renders the submitting indicator + disables the submit button during in-flight", () => {
-    useCreatePostMock.mockImplementation(() => ({
-      state: { kind: "submitting" },
-      submit: mockSubmit,
-      reset: mockReset,
-    }));
-    renderStep();
+    renderStep({ initial: { kind: "submitting" } });
 
     expect(screen.getByTestId("submit-progress")).toBeTruthy();
     const btn = screen.getByTestId("submit-button") as HTMLButtonElement;

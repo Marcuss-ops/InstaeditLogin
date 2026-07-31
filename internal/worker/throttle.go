@@ -46,9 +46,9 @@ const defaultBurst = 1
 // PlatformThrottle is a per-platform rate limiter that spaces out
 // API calls to avoid triggering third-party rate limit bans.
 //
-// FASE 1.3: the PublishWorker calls Wait() before each publishTarget
-// call. If the platform's bucket is empty, Wait() blocks until a
-// token is available. This guarantees that even if 100 posts are all
+// The PublishWorker calls Wait() before each publishTarget call. If
+// the platform's bucket is empty, Wait() blocks until a token is
+// available. This guarantees that even if 100 posts are all
 // scheduled for the same second (e.g., 09:00), they'll be spaced out
 // at the platform's permissible rate instead of blasting all 100 at
 // once and getting the app banned.

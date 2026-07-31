@@ -90,7 +90,7 @@ export function ChannelHeader({
               data-testid="channel-header-avatar-fallback"
               aria-hidden="true"
             >
-              {account!.username?.charAt(0).toUpperCase() ?? "?"}
+              {(resource?.display_name ?? account!.username)?.charAt(0).toUpperCase() ?? "?"}
             </div>
           ) : (
             <div

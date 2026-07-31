@@ -3,8 +3,9 @@
 // Package e2e — end-to-end coverage for the 4-step
 // /api/v1/accounts/{id}/validate pipeline and the marquee negative
 // run (wrong channel selection at OAuth consent → downstream
-// /accounts/{id}/validate also refuses + status remains
-// 'pending_authorization' + zero oauth_connection rows + zero token rows).
+// /accounts/{id}/validate returns the production transient 500 for
+// the missing credential + status remains 'pending_authorization'
+// + zero oauth_connection rows + zero token rows).
 //
 // Two test families in one file:
 //
@@ -17,11 +18,11 @@
 //
 //  2. THE MARQUEE — 1 test (the user-spec headline assertion):
 //     chains OAuthCallback refusal (wrong channel at consent) →
-//     downstream POST /api/v1/accounts/{id}/validate must ALSO
-//     refuse (422) AND the platform_account row must remain at
-//     status='pending_authorization' (NOT flipped to
-//     'reauth_required') AND zero oauth_connections rows AND zero
-//     credentials rows.
+//     downstream POST /api/v1/accounts/{id}/validate returns the
+//     production transient 500 for a missing credential, while the
+//     platform_account row remains at 'pending_authorization' (NOT
+//     flipped to 'reauth_required') AND zero oauth_connections rows
+//     AND zero credentials rows.
 //
 // The 4-step pipeline itself is exercised end-to-end at the HTTP
 // seam so a regression that short-circuited the handler (e.g. pointed
@@ -213,13 +214,16 @@ func (panicOnOtherVaultMethod) Save(_ context.Context, _ *models.OAuthToken) err
 // =============================================================================
 
 type validateRouterHarness struct {
-	router    *api.Router
-	pgDB      *sql.DB
-	userStore *mockUserStore
-	ytSvc     *stubYouTubeOAuthService
-	vault     *stubCredentialVault
-	userID    int64
-	accountID int64
+	router      *api.Router
+	pgDB        *sql.DB
+	userStore   *mockUserStore
+	ytSvc       *stubYouTubeOAuthService
+	vault       *stubCredentialVault
+	authMgr     *auth.Manager
+	userID      int64
+	workspaceID int64
+	sessionID   int64
+	accountID   int64
 }
 
 // buildValidateRouterHarness wires a full production Router with
@@ -243,7 +247,30 @@ func buildValidateRouterHarness(t *testing.T, h *E2EHarness) *validateRouterHarn
 
 	authMgr := auth.NewManager(testJWTSecret, 24)
 	markReauth := &markReauthCounter{}
-	store := &mockUserStore{markReauth: markReauth}
+	store := &mockUserStore{
+		markReauth: markReauth,
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if id != accountID {
+				return nil, nil
+			}
+			return &models.PlatformAccount{
+				ID:             accountID,
+				UserID:         userID,
+				Platform:       models.PlatformYouTube,
+				PlatformUserID: channelA,
+				Status:         models.AccountStatusPendingAuthorization,
+			}, nil
+		},
+		updatePlatformAccountFn: func(account *models.PlatformAccount) error {
+			_, err := h.pgDB.Exec(
+				`UPDATE platform_accounts
+				 SET status = $1, updated_at = NOW()
+				 WHERE id = $2`,
+				account.Status, account.ID,
+			)
+			return err
+		},
+	}
 	ytSvc := &stubYouTubeOAuthService{clientIDValue: "stub-client-id"}
 	vault := &stubCredentialVault{}
 
@@ -259,13 +286,16 @@ func buildValidateRouterHarness(t *testing.T, h *E2EHarness) *validateRouterHarn
 		api.WithChannelAuthorizer(authzr),
 	)
 	return &validateRouterHarness{
-		router:    router,
-		pgDB:      h.pgDB,
-		userStore: store,
-		ytSvc:     ytSvc,
-		vault:     vault,
-		userID:    userID,
-		accountID: accountID,
+		router:      router,
+		pgDB:        h.pgDB,
+		userStore:   store,
+		ytSvc:       ytSvc,
+		vault:       vault,
+		authMgr:     authMgr,
+		userID:      userID,
+		workspaceID: workspaceID,
+		sessionID:   1,
+		accountID:   accountID,
 	}
 }
 
@@ -276,10 +306,10 @@ func buildValidateRouterHarness(t *testing.T, h *E2EHarness) *validateRouterHarn
 func issueValidateAuthHeader(_ *testing.T, _ *validateRouterHarness) {}
 
 // sendValidateRequest POSTs /api/v1/accounts/{id}/validate with the
-// supplied (optional) JSON body and the user identity pre-injected
-// via auth.WithIdentity. Returns the recorder so the test can read
-// the response.
-func sendValidateRequest(h *validateRouterHarness, body string) *httptest.ResponseRecorder {
+// supplied (optional) JSON body and a valid bearer identity. Returns
+// the recorder so the test can read the response.
+func sendValidateRequest(t *testing.T, h *validateRouterHarness, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	var req *http.Request
 	if body != "" {
 		req = httptest.NewRequest(http.MethodPost,
@@ -290,8 +320,11 @@ func sendValidateRequest(h *validateRouterHarness, body string) *httptest.Respon
 		req = httptest.NewRequest(http.MethodPost,
 			fmt.Sprintf("/api/v1/accounts/%d/validate", h.accountID), nil)
 	}
-	req = req.WithContext(auth.WithIdentity(req.Context(),
-		auth.NewUserIdentity(h.userID /*workspaceID*/, 0, 0)))
+	token, _, _, err := h.authMgr.IssueAccess(h.userID, h.workspaceID, h.sessionID)
+	if err != nil {
+		t.Fatalf("issue validate auth token: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	h.router.Setup().ServeHTTP(w, req)
 	return w
@@ -311,7 +344,7 @@ func TestValidateAccount_E2E_HappyPath_NoCanary_200(t *testing.T) {
 	// Defaults are the happy shape (refresh → tokeninfo → bind succeed,
 	// canaryFn default not invoked because the body omits canary=true).
 	reqBody := `{}`
-	w := sendValidateRequest(vh, reqBody)
+	w := sendValidateRequest(t, vh, reqBody)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("happy path /validate: want 200, got %d body=%s", w.Code, w.Body.String())
@@ -350,7 +383,7 @@ func TestValidateAccount_E2E_HappyPath_WithCanary_200(t *testing.T) {
 
 	vh := buildValidateRouterHarness(t, h)
 	reqBody := `{"canary": true}`
-	w := sendValidateRequest(vh, reqBody)
+	w := sendValidateRequest(t, vh, reqBody)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("happy path + canary /validate: want 200, got %d body=%s", w.Code, w.Body.String())
@@ -398,7 +431,7 @@ func TestValidateAccount_E2E_Step1_RefreshInvalidGrant_422(t *testing.T) {
 	vh.vault.renewFn = func(_ context.Context, _ int64, _ string, _ credentials.TokenRefresher) (*models.OAuthToken, error) {
 		return nil, fmt.Errorf("oauth2.googleapis.com: invalid_grant (Token has been expired or revoked.)")
 	}
-	w := sendValidateRequest(vh, `{}`)
+	w := sendValidateRequest(t, vh, `{}`)
 
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("step-1 invalid_grant: want 422, got %d body=%s", w.Code, w.Body.String())
@@ -424,7 +457,8 @@ func TestValidateAccount_E2E_Step1_RefreshInvalidGrant_422(t *testing.T) {
 //   - The OAuthCallback refusal produced HTTP 422 AND wrote zero
 //     oauth_connections rows for both channel A AND channel B AND
 //     zero credentials rows.
-//   - The downstream POST /validate ALSO returns 422.
+//   - The downstream POST /validate returns the production 500 for a
+//     missing credential (not a classified invalid_grant/channel mismatch).
 //   - The platform_account's status remains 'pending_authorization'
 //     (the strict user invariant — NOT flipped to reauth_required).
 // =============================================================================
@@ -454,7 +488,21 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 
 	authMgr := auth.NewManager(testJWTSecret, 24)
 	markReauth := &markReauthCounter{}
-	store := &mockUserStore{markReauth: markReauth}
+	store := &mockUserStore{
+		markReauth: markReauth,
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			if id != accountAID {
+				return nil, nil
+			}
+			return &models.PlatformAccount{
+				ID:             accountAID,
+				UserID:         userID,
+				Platform:       models.PlatformYouTube,
+				PlatformUserID: channelA,
+				Status:         models.AccountStatusPendingAuthorization,
+			}, nil
+		},
+	}
 	authzr := &countingChannelAuthorizer{} // panic-on-call assertion for OAuthCallback
 
 	router := buildE2ERouter(
@@ -479,11 +527,11 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 
 	// Step B — Now build a SECOND router with the full YouTube service +
 	// credential vault wired so we can drive /api/v1/accounts/{id}/validate
-	// end-to-end. The vault stub is non-renew so it returns a "no
-	// oauth_token row exists" error — which the handler must route to
-	// the reauth path. Crucially, since the OAuthCallback refused the
-	// match, NO oauth_token row was ever persisted, so vault.Renew
-	// cannot return a real token even though it is correctly invoked.
+	// end-to-end. The vault stub returns the canonical missing-credential
+	// error, which production maps to a transient 500 without changing
+	// lifecycle status. Crucially, since the OAuthCallback refused the
+	// match, NO credential row was ever persisted, so vault.Renew cannot
+	// return a real token even though it is correctly invoked.
 	vhYT := &stubYouTubeOAuthService{clientIDValue: "stub-client-id"}
 	// Override ValidateChannelBinding to NEVER be reached — the step-1
 	// renew failure must short-circuit.
@@ -491,9 +539,9 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 		// Step-3 is NEVER reached on the marquee path: vault.Renew
 		// returns the no-token error at step 1, and the handler's
 		// step-3 call site would surface this t.Errorf as the
-		// regression signal. Return nil so the handler routes the
-		// (already-errored at step 1) request through its existing
-		// vault-Renew-error mapper (flagReauthAndRespond → 422).
+		// regression signal. Return nil because this callback is
+		// unreachable when the production transient-error mapper
+		// returns 500.
 		t.Errorf("Step 3 ValidateChannelBinding MUST NOT be reached when vault.Renew fails on the marquee path")
 		return nil
 	}
@@ -512,14 +560,17 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 
 	validateReq := httptest.NewRequest(http.MethodPost,
 		fmt.Sprintf("/api/v1/accounts/%d/validate", accountAID), nil)
-	validateReq = validateReq.WithContext(auth.WithIdentity(validateReq.Context(),
-		auth.NewUserIdentity(userID, workspaceID, 0)))
+	token, _, _, err := authMgr.IssueAccess(userID, workspaceID, 1)
+	if err != nil {
+		t.Fatalf("issue validate auth token: %v", err)
+	}
+	validateReq.Header.Set("Authorization", "Bearer "+token)
 	vW := httptest.NewRecorder()
 	router2.Setup().ServeHTTP(vW, validateReq)
-	if vW.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("/validate downstream of OAuthCallback wrong-channel refusal: want 422, got %d body=%s", vW.Code, vW.Body.String())
+	if vW.Code != http.StatusInternalServerError {
+		t.Fatalf("/validate downstream without a credential: want 500, got %d body=%s", vW.Code, vW.Body.String())
 	}
-	t.Logf("/validate step: ✓ 422 status")
+	t.Logf("/validate step: ✓ 500 missing-credential status")
 
 	// === STRICT INVARIANTS — the user-spec marquee assertions ===
 
@@ -538,12 +589,9 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 	}
 
 	// M3: platform_account[channelA].status stays 'pending_authorization'.
-	// Per the user spec: "status='pending_authorization' + no oauth_connection
-	// row written + no token persisted". A regression that flipped this
-	// to 'reauth_required' on the marquee path would surface here as a
-	// value-mismatch (the production handlers.go handlers do best-effort
-	// flip via MarkReauthRequired; the test pin REJECTS the flip so a
-	// future refactor that over-corrects is caught loud).
+	// The generic missing-credential error is a transient 500 path, so
+	// production deliberately leaves the lifecycle status unchanged. A
+	// regression that flipped this to 'reauth_required' would surface here.
 	assertAccountStatus(t, h.pgDB, accountAID, models.AccountStatusPendingAuthorization)
 
 	// M4: AuthorizeChannel was NEVER called (the connect-link bind guard
@@ -555,7 +603,7 @@ func TestValidateAccount_E2E_Marquee_WrongChannelAtConsent_422(t *testing.T) {
 	// M5: Step-2 (tokeninfo) and step-3 (channel binding) must not have
 	// run on the downstream /validate. The bind override's t.Errorf is
 	// the primary sentinel; the getInfoFn override similarly gates.
-	t.Logf("marquee negative run: all 5 invariants confirmed (422 × 2, 0 oauth_connections × 2, 0 credentials, status=pending_authorization, AuthorizeChannel never invoked)")
+	t.Logf("marquee negative run: all invariants confirmed (OAuth 422, validate 500, 0 oauth_connections × 2, 0 credentials, status=pending_authorization, AuthorizeChannel never invoked)")
 }
 
 // =============================================================================

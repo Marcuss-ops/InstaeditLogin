@@ -111,14 +111,10 @@ describe("useChannelAccount", () => {
     const { result } = renderHook(() =>
       useChannelAccount({ accountId: 123 }),
     );
-    await expect(
-      waitFor(() => {
-        if (result.current.state.kind !== "ready") return;
-        throw new Error(
-          "expected to stay in loading while AuthError propagates",
-        );
-      }).catch(() => "swallowed"),
-    ).resolves.toBe("swallowed");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.state.kind).toBe("loading");
     expect(getChannelAccountMock).toHaveBeenCalledTimes(1);
   });
 

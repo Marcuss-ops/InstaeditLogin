@@ -130,8 +130,7 @@ export interface YouTubeTargetSettings {
 }
 
 /**
- * A single entry in `targets[]`. The vertical slice ships with only
- * the YouTube discriminator; the field is explicitly typed as
+ * A single entry in `targets[]`. The field is explicitly typed as
  * `youtube`-only for now so tsc blocks accidental cross-platform
  * additions without an extension point.
  */

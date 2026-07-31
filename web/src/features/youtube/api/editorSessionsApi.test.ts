@@ -4,9 +4,8 @@
  * Locks down:
  *  - URL paths match the OpenAPI route prefix
  *  - Payload shapes (camelCase canonical keys, NOT the legacy aliases)
- *  - Response shape returned to the caller (the full
- *    `{ session_id, velox_project_id, editor_url }` — pre-refactor
- *    drift had callers casting only `{ editor_url }`)
+ *  - Response shape returned to the caller, including
+ *    `{ session_id, velox_project_id, editor_url }`
  *  - Error classification: AuthError re-thrown, ApiError surfaces
  *    with the message verbatim
  *  - window.open call signature (target blank + noopener+noreferrer)
