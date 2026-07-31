@@ -232,9 +232,10 @@ func TestAcceptance_VaultFailureRollsBackAndStatusNotFlipped(t *testing.T) {
 		"UCabcdefghijklmnopqrstuv",
 		[]string{"https://www.googleapis.com/auth/youtube.upload"},
 		&models.TokenData{
-			AccessToken: "fresh-access",
-			TokenType:   models.TokenTypeBearer,
-			ExpiresIn:   3600,
+			AccessToken:  "fresh-access",
+			RefreshToken: "fresh-refresh",
+			TokenType:    models.TokenTypeBearer,
+			ExpiresIn:    3600,
 		},
 	)
 	if err == nil {
@@ -479,6 +480,67 @@ func TestAuthorizeChannel_ReauthFromExpiredStatusRejected(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sqlmock expectations: %v (BEGIN then load('expired') then ROLLBACK — NO upsert / INSERT / UPDATE / COMMIT after the load)", err)
+	}
+}
+
+// TestAuthorizeChannel_FirstYouTubeAuthorizationWithoutRefreshTokenRequiresReauth
+// proves a new YouTube row cannot be promoted to active without an offline
+// refresh grant. The rejection occurs after loading the pending row but before
+// the oauth_connections upsert, token insert, or active status update.
+func TestAuthorizeChannel_FirstYouTubeAuthorizationWithoutRefreshTokenRequiresReauth(t *testing.T) {
+	svc, mock, _, cleanup := newSvcHarness(t)
+	defer cleanup()
+
+	const accountID, userID int64 = 37, 900
+	mock.ExpectBegin()
+	expectLoadAccount(mock, accountID, userID, models.PlatformYouTube, "UCabcdefghijklmnopqrstuv", models.AccountStatusPendingAuthorization)
+	mock.ExpectRollback()
+
+	_, err := svc.AuthorizeChannel(context.Background(), accountID, "", nil, &models.TokenData{
+		AccessToken: "youtube-access",
+		TokenType:   models.TokenTypeBearer,
+		ExpiresIn:   3600,
+	})
+	if !errors.Is(err, ErrOAuthRefreshTokenRequired) {
+		t.Fatalf("missing first-connection refresh token: want ErrOAuthRefreshTokenRequired, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v (missing refresh must rollback before upsert/insert/active update)", err)
+	}
+}
+
+// TestAuthorizeChannel_ReconnectWithoutRefreshTokenKeepsExistingGrant verifies
+// that a reconnect is not rejected merely because Google omits refresh_token.
+// The repository INSERT uses COALESCE to preserve the existing ciphertext.
+func TestAuthorizeChannel_ReconnectWithoutRefreshTokenKeepsExistingGrant(t *testing.T) {
+	svc, mock, _, cleanup := newSvcHarness(t)
+	defer cleanup()
+
+	const accountID, userID, oauthConnID int64 = 38, 901, 556
+	scopes := []string{"youtube.upload"}
+	mock.ExpectBegin()
+	expectLoadAccount(mock, accountID, userID, models.PlatformYouTube, "UCabcdefghijklmnopqrstuv", models.AccountStatusReauthRequired)
+	expectUpsertOCR(mock, userID, models.PlatformYouTube, "UCabcdefghijklmnopqrstuv", scopes, oauthConnID)
+	expectInsertTokenTx(mock, true)
+	expectPromoteAccount(mock, oauthConnID, accountID)
+	mock.ExpectCommit()
+
+	got, err := svc.AuthorizeChannel(context.Background(), accountID, "", scopes, &models.TokenData{
+		AccessToken: "youtube-reconnected-access",
+		TokenType:   models.TokenTypeBearer,
+		ExpiresIn:   3600,
+		Scopes:      scopes,
+		// Google omitted RefreshToken. SaveTokenTx must preserve the
+		// existing encrypted refresh token through SQL COALESCE.
+	})
+	if err != nil {
+		t.Fatalf("reconnect without refresh token: %v", err)
+	}
+	if got != oauthConnID {
+		t.Fatalf("oauth_connection_id: want %d, got %d", oauthConnID, got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sqlmock expectations: %v", err)
 	}
 }
 

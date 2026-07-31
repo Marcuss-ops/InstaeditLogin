@@ -706,6 +706,52 @@ func TestVault_Save_Get_Revoke_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestVault_Save_EmptyRefreshToken_PreservesExistingCiphertext proves the
+// reconnect invariant at the vault boundary: when Google omits refresh_token,
+// Save must decrypt and carry forward the existing encrypted grant before the
+// old row is pruned. The persisted refresh ciphertext must remain decryptable
+// to the original plaintext and must never be replaced with NULL.
+func TestVault_Save_EmptyRefreshToken_PreservesExistingCiphertext(t *testing.T) {
+	v, mock, store := newTestVault(t)
+	const accountID int64 = 61
+
+	oldRefreshCiphertext, err := v.encryptor.Encrypt("existing-refresh-token")
+	if err != nil {
+		t.Fatalf("encrypt existing refresh token: %v", err)
+	}
+	store.seedToken(&models.Token{
+		PlatformAccountID:     accountID,
+		OAuthConnectionID:     accountID,
+		TokenType:             models.TokenTypeBearer,
+		EncryptedRefreshToken: oldRefreshCiphertext,
+	})
+
+	expectOauthConnLookup(mock, accountID, accountID)
+	if err := v.Save(context.Background(), accountID, &models.TokenData{
+		AccessToken: "reconnected-access",
+		TokenType:   models.TokenTypeBearer,
+		ExpiresIn:   3600,
+		// RefreshToken intentionally omitted by the provider.
+	}); err != nil {
+		t.Fatalf("Save reconnect: %v", err)
+	}
+
+	stored, err := store.FindLatestToken(accountID, models.TokenTypeBearer)
+	if err != nil {
+		t.Fatalf("find persisted reconnect token: %v", err)
+	}
+	if stored == nil || len(stored.EncryptedRefreshToken) == 0 {
+		t.Fatal("reconnect must retain a non-empty encrypted refresh token")
+	}
+	gotRefresh, err := v.encryptor.Decrypt(stored.EncryptedRefreshToken)
+	if err != nil {
+		t.Fatalf("decrypt preserved refresh token: %v", err)
+	}
+	if gotRefresh != "existing-refresh-token" {
+		t.Errorf("preserved refresh token: want existing value, got %q", gotRefresh)
+	}
+}
+
 // TestVault_Revoke_NotFound_TreatedAsSuccess proves Revoke is
 // idempotent: deleting from an account that has no tokens must
 // return nil (not propagate the "not found" error from the store).

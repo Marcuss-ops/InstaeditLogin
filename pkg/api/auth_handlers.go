@@ -182,6 +182,16 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 				writeError(w, http.StatusConflict, err.Error())
 				return
 			}
+			if errors.Is(err, services.ErrOAuthRefreshTokenRequired) {
+				if account != nil && r.userRepo != nil {
+					if flagErr := r.userRepo.MarkReauthRequired(req.Context(), account.ID, "refresh_token_required", "YouTube did not return an offline refresh token; reconnect with consent"); flagErr != nil {
+						slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",
+							"platform_account_id", account.ID, "error", flagErr)
+					}
+				}
+				writeError(w, http.StatusUnprocessableEntity, "YouTube reconnection required: grant offline access and retry")
+				return
+			}
 			if errors.Is(err, ErrYouTubeChannelMismatch) {
 				// Task 2/10: best-effort flip
 				// platform_account.status to 'reauth_required'
@@ -266,6 +276,16 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		if _, err := r.authorizer.AuthorizeChannel(req.Context(), account.ID, "", tokenData.Scopes, tokenData); err != nil {
+			if errors.Is(err, services.ErrOAuthRefreshTokenRequired) {
+				if r.userRepo != nil {
+					if flagErr := r.userRepo.MarkReauthRequired(req.Context(), account.ID, "refresh_token_required", "YouTube did not return an offline refresh token; reconnect with consent"); flagErr != nil {
+						slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",
+							"platform_account_id", account.ID, "error", flagErr)
+					}
+				}
+				writeError(w, http.StatusUnprocessableEntity, "YouTube reconnection required: grant offline access and retry")
+				return
+			}
 			logAndError(w, req, "failed to authorize channel", err, "provider", provider)
 			return
 		}
@@ -515,7 +535,12 @@ func (r *Router) attachDiscoveredAccounts(ctx context.Context, userID int64, pro
 			return nil, errors.New("channel authorizer not configured")
 		}
 		if _, err := r.authorizer.AuthorizeChannel(ctx, created.ID, expectedChannelID, tokenData.Scopes, channelTokens...); err != nil {
-			return nil, fmt.Errorf("authorize channel for account %d: %w", created.ID, err)
+			// Return the account alongside authorization errors so the
+			// callback can persist reauth_required for failures that are
+			// specific to this newly attached row (notably a missing
+			// first-connection refresh token). The account is still not
+			// active because AuthorizeChannel failed before its promotion.
+			return first, fmt.Errorf("authorize channel for account %d: %w", created.ID, err)
 		}
 	}
 

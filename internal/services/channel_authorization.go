@@ -70,6 +70,7 @@ package services
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -112,6 +113,12 @@ func NewChannelAuthorizationService(
 		binder:    binder,
 	}
 }
+
+// ErrOAuthRefreshTokenRequired indicates that a first YouTube authorization
+// did not produce the offline refresh grant required for background publishing.
+// The callback layer maps this sentinel to reauth_required instead of allowing
+// AuthorizeChannel to promote the account to active.
+var ErrOAuthRefreshTokenRequired = errors.New("oauth refresh token required for first YouTube authorization")
 
 // ChannelAuthorizer is the narrow interface the HTTP router uses to
 // invoke the atomic-flip primitive. Defined here (alongside the
@@ -303,6 +310,18 @@ func (s *ChannelAuthorizationService) AuthorizeChannel(
 	if !eligibilityGate(currentStatus) {
 		return 0, fmt.Errorf("channel authorization: account %d is in status %q which is not eligible for active promotion (allowed: pending_authorization, active, reauth_required)",
 			accountID, currentStatus)
+	}
+	// A new YouTube row must have an offline refresh grant before it can
+	// become active. Google may return an access token without
+	// refresh_token when offline consent was not granted; treating that
+	// response as active would create an account that cannot publish after
+	// the access token expires. Reconnects from active/reauth_required are
+	// intentionally allowed here: TokenRepository.SaveTokenTx uses COALESCE
+	// to retain the existing encrypted refresh token when Google omits it.
+	if platform == models.PlatformYouTube &&
+		currentStatus == models.AccountStatusPendingAuthorization &&
+		tokens[0].RefreshToken == "" {
+		return 0, ErrOAuthRefreshTokenRequired
 	}
 
 	// (4) UPSERT oauth_connections. Idempotent on (user_id,

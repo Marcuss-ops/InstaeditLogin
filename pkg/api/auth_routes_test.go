@@ -332,6 +332,74 @@ func TestHandleCallback_AuthorizeChannelError(t *testing.T) {
 	}
 }
 
+// TestHandleCallback_FirstYouTubeAuthorizationWithoutRefreshTokenMarksReauth
+// verifies the callback-level policy: a newly attached YouTube account whose
+// Google response omitted refresh_token gets reauth_required and a 422, rather
+// than a connected response or an active promotion.
+func TestHandleCallback_FirstYouTubeAuthorizationWithoutRefreshTokenMarksReauth(t *testing.T) {
+	svc := &mockProvider{
+		platform: "youtube",
+		handleCallback: func(context.Context, string, string) (*models.PlatformProfile, *models.TokenData, error) {
+			return &models.PlatformProfile{
+					PlatformUserID: "UCabcdefghijklmnopqrstuv",
+					Username:       "New YouTube Channel",
+				}, &models.TokenData{
+					AccessToken: "youtube-access",
+					TokenType:   models.TokenTypeBearer,
+					ExpiresIn:   3600,
+					// RefreshToken intentionally omitted: this is the
+					// first-authorization regression case.
+				}, nil
+		},
+	}
+	var marked struct {
+		calls   int
+		account int64
+		code    string
+		message string
+	}
+	store := &mockUserStore{
+		attachFn: func(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{
+				ID: 10, UserID: userID, Platform: platform,
+				PlatformUserID: profile.PlatformUserID, Username: profile.Username,
+				Status: models.AccountStatusPendingAuthorization,
+			}, nil
+		},
+		markReauthRequiredFn: func(_ context.Context, accountID int64, code, message string) error {
+			marked.calls++
+			marked.account = accountID
+			marked.code = code
+			marked.message = message
+			return nil
+		},
+	}
+	authorizer := &fakeChannelAuthorizer{authorizeErr: services.ErrOAuthRefreshTokenRequired}
+	r := newTestRouter(svc, store, "", WithChannelAuthorizer(authorizer))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=abc&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "youtube", "test-state")
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing first-connection refresh token: want 422, got %d: %s", w.Code, w.Body.String())
+	}
+	if marked.calls != 1 || marked.account != 10 {
+		t.Fatalf("MarkReauthRequired: want one call for account 10, got calls=%d account=%d", marked.calls, marked.account)
+	}
+	if marked.code != "refresh_token_required" {
+		t.Errorf("reauth code: want refresh_token_required, got %q", marked.code)
+	}
+	if !strings.Contains(marked.message, "offline refresh token") {
+		t.Errorf("reauth message should explain offline consent, got %q", marked.message)
+	}
+	if authorizer.authorizeCalls.Load() != 1 {
+		t.Errorf("AuthorizeChannel calls: want 1, got %d", authorizer.authorizeCalls.Load())
+	}
+}
+
 // TestAcceptance_NonDiscovererUsesAtomicAuthorizer is the regression-closure
 // acceptance test for Task 1/10. It proves that the OAuth callback's
 // non-discoverer branch (the legacy r.vault.Save path before the
