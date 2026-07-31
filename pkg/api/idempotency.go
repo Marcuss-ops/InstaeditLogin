@@ -16,26 +16,21 @@
 // snapshot), and (c) drift between the cached body and the live
 // schema when fields change.
 //
-// Helper shape (Taglio 4.7 try 2): idempotencyReadBody + idempotencyLookup
-// are split into two helpers so the handler can interleave body
-// hashing, JSON decoding, workspace resolution, and the cache lookup
-// in the right order. Specifically: body bytes are read once, the
-// hash computed once, then JSON-unmarshalled into the request struct
-// (workspace id available), then the workspace resolved, then the
-// idempotency lookup keyed on (workspace_id, idempotency_key) hits
-// the cache. This avoids passing a placeholder workspace_id=0 (which
-// would silently allow cross-workspace cache collisions if a bug
-// later forgot to pass the real id) and ensures the workspace
-// ownership check runs BEFORE the cache can return a resource the
-// caller does not own.
+// idempotencyReadBody and idempotencyLookup are split so the handler
+// can interleave body hashing, JSON decoding, workspace resolution,
+// and the cache lookup in the right order. Body bytes are read once,
+// hashed once, then decoded into the request struct (workspace id
+// available), followed by workspace resolution and the lookup keyed
+// on (workspace_id, idempotency_key). This avoids passing a
+// placeholder workspace_id=0, which could allow cross-workspace
+// cache collisions if a future caller forgot the real id, and keeps
+// the workspace ownership check ahead of any cached response.
 //
-// drive_batch (Taglio 4.7 try 3): drive_batch creates up to N=200
-// upload_jobs in one POST. There is no single source-of-truth row
-// the replay path can re-fetch (cf. resource_type="post", which
-// re-fetches the post by id). drive_batch replays therefore read
-// the cached response JSON from a side table
-// (idempotency_batch_replays, migration 039) keyed on the parent
-// idempotency_records.id. The replay path is wired through the
+// drive_batch creates up to N=200 upload_jobs in one POST. There is no
+// single source-of-truth row the replay path can re-fetch, so batch
+// replays read cached response JSON from the
+// idempotency_batch_replays side table (migration 039), keyed on the
+// parent idempotency_records.id. The replay path is wired through the
 // drive_batch branch of replayIdempotentResource below.
 
 package api

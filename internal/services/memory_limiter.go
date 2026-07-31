@@ -9,9 +9,8 @@
 // goroutine reaps entries that haven't been accessed within
 // entryTTL to bound memory growth.
 //
-// SPRINT 2.2: introduced alongside RateLimitService. The
-// MemoryLimiter is a deliberately small surface — only the methods
-// the service needs. Tests construct a MemoryLimiter directly
+// The MemoryLimiter is a deliberately small surface — only the
+// methods the service needs. Tests construct a MemoryLimiter directly
 // (NewMemoryLimiter) and pre-seed scopes via the exported
 // getOrCreate path or by calling Allow() once with a known scope.
 package services
@@ -40,21 +39,14 @@ const (
 // created on first access and evicted after entryTTL of
 // inactivity.
 //
-// Commit DI refactor: the stopOnce sync.Once field was removed —
-// the user's bootstrap DI refactor asked to drop "i sync.Once
-// sparsi (... memory limiter)". atomic.Bool.CompareAndSwap gives
-// the same exactly-once guarantee on close(stopCh) without
-// pulling in the sync primitive. Note the distinction: this is
-// not a process-wide lazy-init singleton (compare to pkg/metrics/
-// metrics.go's `metricsHandlerOnce`, which IS one and will be
-// dropped in commit 2 of this refactor); the CAS guard here is
-// an instance-level one-shot-close guard, equivalent to the
-// pattern used by pkg/api/onetimecode.go's stopCh lifecycle.
+// Shutdown uses atomic.Bool.CompareAndSwap to guarantee that close(stopCh)
+// happens exactly once. This is an instance-level one-shot-close guard,
+// not a process-wide lazy-init singleton.
 type MemoryLimiter struct {
 	mu      sync.Mutex
 	entries map[string]*memoryLimiterEntry
 	stopCh  chan struct{}
-	closed  atomic.Bool // commit DI refactor: replaces stopOnce sync.Once
+	closed  atomic.Bool
 }
 
 type memoryLimiterEntry struct {
@@ -75,8 +67,7 @@ func NewMemoryLimiter() *MemoryLimiter {
 
 // Shutdown stops the background reaper. Idempotent — atomic
 // CompareAndSwap guarantees the underlying close happens exactly
-// once across all callers (replaces the previous sync.Once field;
-// commit DI refactor).
+// once across all callers.
 func (ml *MemoryLimiter) Shutdown() {
 	if ml.closed.CompareAndSwap(false, true) {
 		close(ml.stopCh)
