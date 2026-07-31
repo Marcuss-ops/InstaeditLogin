@@ -78,6 +78,16 @@ func (a assetsAdapter) FindByID(ctx context.Context, id string) (*models.MediaAs
 	return a.repo.FindByID(id)
 }
 
+// FindByUploadKey is the bridge for the resolver's legacy-URL fallback
+// branch (post.media_url → upload_key parse → media_assets row). The
+// repo method is ctx-aware (QueryRowContext); the adapter forwards
+// ctx so worker-shutdown cancellation propagates through to the DB
+// driver (this DOES fix the BUG-CLASS #2 from the prior review for
+// the resolution path — only the FindByID branch passed ctx.TODO).
+func (a assetsAdapter) FindByUploadKey(ctx context.Context, key string) (*models.MediaAsset, error) {
+	return a.repo.FindByUploadKey(ctx, key)
+}
+
 type App struct {
 	Cfg         *config.Config
 	DB          *sql.DB

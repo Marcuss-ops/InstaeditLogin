@@ -85,7 +85,45 @@ func (r *MediaAssetRepository) FindByID(id string) (*models.MediaAsset, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to find media asset: %w", err)
+		return nil, fmt.Errorf("failed to find media asset by id: %w", err)
+	}
+	return asset, nil
+}
+
+// FindByUploadKey returns the asset for the given upload_key. Used by
+// the publish_path's legacy-URL fallback: posts that pre-date migration
+// 080 only have media_url set (no media_asset_id); the resolver parses
+// media_url to recover the upload_key, then joins back to the canonical
+// media_assets row.
+//
+// resource causal link (post-create flow in 2026-Q1): the presign handler
+// builds the upload_key as services.BuildUploadKey(userID, filename),
+// then stamps it onto BOTH the media_assets.upload_key (UNIQUE) AND
+// derives the path-style signed URL that gets stored on post.media_url.
+// Given the upload_key is UNIQUE in media_assets, this query yields at
+// most 1 row — a LIMIT 1 is implicit via QueryRow's single-row semantics
+// but spelled out here for code reviewers who grep for explicit LIMITs.
+//
+// (nil, nil) on not-found, no sql.ErrNoRows leaking out (matches
+// FindByID's convention).
+func (r *MediaAssetRepository) FindByUploadKey(ctx context.Context, key string) (*models.MediaAsset, error) {
+	asset := &models.MediaAsset{}
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id, user_id, upload_key, content_type, size_bytes, status,
+		        COALESCE(sha256, '') AS sha256,
+		        COALESCE(error_message, '') AS error_message,
+		        expires_at, created_at, updated_at
+		 FROM media_assets WHERE upload_key = $1 LIMIT 1`, key,
+	).Scan(
+		&asset.ID, &asset.UserID, &asset.UploadKey, &asset.ContentType,
+		&asset.SizeBytes, &asset.Status, &asset.SHA256, &asset.ErrorMessage,
+		&asset.ExpiresAt, &asset.CreatedAt, &asset.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to find media asset by upload_key: %w", err)
 	}
 	return asset, nil
 }

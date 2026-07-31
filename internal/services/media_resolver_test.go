@@ -56,6 +56,22 @@ func (f *fakeMediaAssetStore) FindByID(_ context.Context, id string) (*models.Me
 	return asset, nil
 }
 
+// FindByUploadKey iterates through the configured assets map and
+// returns the first match on asset.UploadKey (the production repo is
+// a UNIQUE constraint query so at most 1 row exists; the fake is a
+// map so an explicit scan is the only sensible shape).
+func (f *fakeMediaAssetStore) FindByUploadKey(_ context.Context, key string) (*models.MediaAsset, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	for _, asset := range f.assets {
+		if asset != nil && asset.UploadKey == key {
+			return asset, nil
+		}
+	}
+	return nil, nil
+}
+
 // TestMediaDownloadResolver_ResolveForUpload_AssetIDSuccess verifies
 // the canonical branch: when post.MediaAssetID is set AND the asset
 // exists in the store AND the asset is in `ready` status, the
@@ -212,6 +228,112 @@ func TestMediaDownloadResolver_ResolveForUpload_StorageObjectKey(t *testing.T) {
 	}
 	if getter.calls[0].Key != "uploads/1/legacy-x.mp4" {
 		t.Errorf("ObjectGetter.GetObject key = %q, want %q", getter.calls[0].Key, "uploads/1/legacy-x.mp4")
+	}
+}
+
+// TestMediaDownloadResolver_ResolveForUpload_LegacyMediaURLFallback
+// verifies the LEGACY branch: posts that pre-date migration 080 have
+// ONLY post.MediaURL set (no MediaAssetID, no StorageObjectKey). The
+// resolver MUST parse post.MediaURL to recover the upload_key, then
+// call MediaAssetStore.FindByUploadKey to load the canonical asset
+// row, then run the same status=ready + expires_at gates applied to
+// the asset-id branch. No fresh presigned URL may be minted without
+// confirming the row exists AND is ready AND not expired.
+func TestMediaDownloadResolver_ResolveForUpload_LegacyMediaURLFallback(t *testing.T) {
+	store := &fakeMediaAssetStore{
+		assets: map[string]*models.MediaAsset{
+			"asset-legacy": {
+				ID:        "asset-legacy",
+				UploadKey: "uploads/1/legacy.mp4",
+				Status:    models.MediaAssetStatusReady,
+				ExpiresAt: time.Now().Add(1 * time.Hour),
+			},
+		},
+	}
+	getter := &fakeObjectGetter{nextURL: "https://presigned.example.com/legacy.mp4"}
+	resolver := NewMediaDownloadResolver(getter, store, nil)
+
+	// The media_url embeds the upload_key AFTER the bucket segment.
+	// Resolver.extractUploadKeyFromMediaURL splits scheme://host/ then
+	// strips the FIRST path component (the bucket name); the residual
+	// is the upload_key.
+	post := &models.Post{
+		MediaURL: "https://minio.example.com/instaedit-local/uploads/1/legacy.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256",
+		// MediaAssetID is nil (legacy).
+		// StorageObjectKey is nil (legacy).
+	}
+	url, err := resolver.ResolveForUpload(context.Background(), post, time.Minute)
+	if err != nil {
+		t.Fatalf("ResolveForUpload returned unexpected error: %v", err)
+	}
+	if url != "https://presigned.example.com/legacy.mp4" {
+		t.Errorf("url = %q, want %q", url, "https://presigned.example.com/legacy.mp4")
+	}
+	if len(getter.calls) != 1 {
+		t.Fatalf("ObjectGetter.GetObject call count = %d, want 1", len(getter.calls))
+	}
+	if getter.calls[0].Key != "uploads/1/legacy.mp4" {
+		t.Errorf("ObjectGetter.GetObject key = %q, want %q", getter.calls[0].Key, "uploads/1/legacy.mp4")
+	}
+	if getter.calls[0].TTL != time.Minute {
+		t.Errorf("ObjectGetter.GetObject ttl = %v, want 1m", getter.calls[0].TTL)
+	}
+}
+
+// TestMediaDownloadResolver_ResolveForUpload_LegacyMediaURLNoMatchingAsset
+// verifies the legacy URL fallback returns ErrMediaURLNoMatchingAsset
+// when the parsed upload_key does not correspond to any media_assets
+// row (e.g. cleanup pass hard-deleted, operator hand-edited the URL,
+// or media_url was never canonical). No presigned URL may be minted
+// in this branch — defending against the bug class where the worker
+// would otherwise pass a bogus URL to YouTube and receive a 403
+// mid-upload.
+func TestMediaDownloadResolver_ResolveForUpload_LegacyMediaURLNoMatchingAsset(t *testing.T) {
+	store := &fakeMediaAssetStore{assets: map[string]*models.MediaAsset{}}
+	getter := &fakeObjectGetter{nextURL: "https://example.com/never-called"}
+	resolver := NewMediaDownloadResolver(getter, store, nil)
+
+	post := &models.Post{
+		MediaURL: "https://minio.example.com/instaedit-local/uploads/999/orphan.mp4",
+	}
+	_, err := resolver.ResolveForUpload(context.Background(), post, time.Minute)
+	if !errors.Is(err, ErrMediaURLNoMatchingAsset) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrMediaURLNoMatchingAsset)", err)
+	}
+	if len(getter.calls) != 0 {
+		t.Errorf("ObjectGetter.GetObject must not be called when no matching asset; got %d call(s)", len(getter.calls))
+	}
+}
+
+// TestMediaDownloadResolver_ResolveForUpload_LegacyMediaURLExpired
+// verifies the legacy branch also honours the expires_at gate after
+// the FindByUploadKey lookup (defense for the scenario where the
+// asset row is status=ready but expires_at is past — the cleanup
+// pass only sweeps status='pending' rows so a ready row whose TTL
+// lapsed slips past MarkExpired).
+func TestMediaDownloadResolver_ResolveForUpload_LegacyMediaURLExpired(t *testing.T) {
+	store := &fakeMediaAssetStore{
+		assets: map[string]*models.MediaAsset{
+			"asset-leg-expired": {
+				ID:        "asset-leg-expired",
+				UploadKey: "uploads/2/x.mp4",
+				Status:    models.MediaAssetStatusReady,
+				ExpiresAt: time.Now().Add(-1 * time.Minute), // past TTL
+			},
+		},
+	}
+	getter := &fakeObjectGetter{nextURL: "https://example.com/x"}
+	resolver := NewMediaDownloadResolver(getter, store, nil)
+
+	post := &models.Post{
+		MediaURL: "https://minio.example.com/instaedit-local/uploads/2/x.mp4",
+	}
+	_, err := resolver.ResolveForUpload(context.Background(), post, time.Minute)
+	if !errors.Is(err, ErrAssetExpired) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrAssetExpired)", err)
+	}
+	if len(getter.calls) != 0 {
+		t.Errorf("ObjectGetter.GetObject must not be called on expired asset; got %d call(s)", len(getter.calls))
 	}
 }
 
