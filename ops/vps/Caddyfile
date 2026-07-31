@@ -23,6 +23,12 @@ dev.instaedit.org {
 	encode gzip
 	log
 
+	# The public landing belongs to app.instaedit.org. Keep the dev host on
+	# the authenticated application entry point instead of rendering the
+	# marketing Landing route from the shared SPA bundle.
+	@dev_root path /
+	redir @dev_root /login 302
+
 	# The SPA shell must be revalidated after every deployment. Without this,
 	# a remote browser can keep an old route bundle in its HTTP cache and call
 	# protected endpoints with a stale session flow.
