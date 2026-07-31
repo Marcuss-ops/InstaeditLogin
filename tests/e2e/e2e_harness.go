@@ -976,7 +976,9 @@ func updateTargetStatus(h *E2EHarness, targetID int64, fromStatus, toStatus, err
 		    SET status=$1,
 		        last_error_message=CASE WHEN $2 = '' THEN last_error_message ELSE $2 END,
 		        updated_at=NOW()
-		  WHERE id=$3 AND status=$4`,
+		  WHERE id=$3
+		    AND status=$4
+		    AND (status=$1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq', 'dead_letter', 'blocked_auth'))`,
 		toStatus, errMsg, targetID, fromStatus,
 	)
 	if err != nil {
@@ -985,6 +987,28 @@ func updateTargetStatus(h *E2EHarness, targetID int64, fromStatus, toStatus, err
 	rows, _ := res.RowsAffected()
 	if rows == 0 {
 		return fmt.Errorf("UPDATE matched 0 rows (terminal=%s→%s refused or stale state)", fromStatus, toStatus)
+	}
+	return nil
+}
+
+// recordRetryAttempt mirrors the production retry bookkeeping: once a
+// target enters retry_wait, subsequent failed attempts update the retry
+// metadata without inventing a retry_wait → retry_wait FSM edge.
+func recordRetryAttempt(h *E2EHarness, targetID int64, errMsg string) error {
+	res, err := h.pgDB.Exec(
+		`UPDATE post_targets
+		    SET attempt_count = attempt_count + 1,
+		        last_error_message = $1,
+		        updated_at = NOW()
+		  WHERE id = $2 AND status = 'retry_wait'`,
+		errMsg, targetID,
+	)
+	if err != nil {
+		return err
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("retry attempt matched 0 rows for target %d", targetID)
 	}
 	return nil
 }

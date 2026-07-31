@@ -551,24 +551,22 @@ func scenario9_RetryBudgetExhaustion(t *testing.T, h *E2EHarness) {
 
 	// Walk N transient failures through the FSM until the budget
 	// flips status to 'dead_letter' on the N+1 attempt.
-	prev := "queued"
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		next := "retry_wait"
-		if attempt >= maxAttempts {
-			// Final retry exhausts the budget; the FSM moves the
-			// row past failed and the releaser flips to dead_letter.
-			next = "failed"
+	// Enter retry_wait once; subsequent failures update retry metadata
+	// while the row remains in the same state. This mirrors production
+	// bookkeeping without inventing a retry_wait → retry_wait transition.
+	if err := updateTargetStatus(h, targetID, "queued", "retry_wait", transientErrMsg(1)); err != nil {
+		t.Fatalf("attempt 1 flip queued → retry_wait: %v", err)
+	}
+	for attempt := 2; attempt <= maxAttempts; attempt++ {
+		if err := recordRetryAttempt(h, targetID, transientErrMsg(attempt)); err != nil {
+			t.Fatalf("attempt %d retry metadata: %v", attempt, err)
 		}
-		if err := updateTargetStatus(h, targetID, prev, next, transientErrMsg(attempt)); err != nil {
-			t.Fatalf("attempt %d flip %s → %s: %v", attempt, prev, next, err)
-		}
-		prev = next
 	}
 
 	// After exhausting retries, the production worker would call
 	// `ToDeadLetter(ctx, id, retry_wait)`. We simulate the same
 	// terminal transition here.
-	if err := updateTargetStatus(h, targetID, prev, "dead_letter", "max_attempts=3 budget exhausted"); err != nil {
+	if err := updateTargetStatus(h, targetID, "retry_wait", "dead_letter", "max_attempts=3 budget exhausted"); err != nil {
 		t.Fatalf("dead_letter flip: %v", err)
 	}
 
@@ -622,7 +620,29 @@ func scenario10_DeadLetterTerminal(t *testing.T, h *E2EHarness) {
 		t.Errorf("scenario_10: row status should remain dead_letter after rejected UPDATE; got %q", gotStatus)
 	}
 
-	t.Logf("scenario_10 PASS: dead_letter refuses retry_wait transition; row stays terminal")
+	// Production stores this terminal publish-target state as `dlq`.
+	// Keep the legacy E2E alias covered as well so the helper cannot
+	// accidentally permit a retry from either representation.
+	dlqID, err := insertPublishTarget(h, "dlq")
+	if err != nil {
+		t.Fatalf("insertPublishTarget (dlq): %v", err)
+	}
+	if err := updateTargetStatus(h, dlqID, "dlq", "retry_wait", "should be rejected by WHERE-clause"); err == nil {
+		t.Errorf("scenario_10: dlq → retry_wait must be REJECTED; UPDATE unexpectedly succeeded")
+	}
+	var gotDLQStatus string
+	if err := h.pgDB.QueryRowContext(context.Background(),
+		`SELECT status FROM post_targets WHERE id=$1`, dlqID,
+	).Scan(&gotDLQStatus); err != nil {
+		t.Fatalf("read dlq status: %v", err)
+	}
+	if gotDLQStatus != "dlq" {
+		t.Errorf("scenario_10: dlq row should remain terminal; got %q", gotDLQStatus)
+	}
+
+	if !t.Failed() {
+		t.Logf("scenario_10 PASS: dead_letter and production dlq both refuse retry_wait transitions")
+	}
 }
 
 // ─── Scenario 11: Velox callback HMAC verify ──────────────────────────────
