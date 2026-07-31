@@ -9,21 +9,23 @@
 
 ## ⏱️ Quick wins (15 min totali)
 
-### 1. [5 min] **Salva i 3 secret in 1Password**
-Sono ancora in chiaro sul tuo filesystem. Catturali ADESSO prima di
-perderli (chiudi il terminale = li perdi).
+### 1. [5 min] **Verifica e ruota i secret in 1Password**
+I valori reali non devono comparire in questo documento, nella chat, nei
+log o nel repository. Se un secret è già stato committato o condiviso,
+consideralo compromesso e ruotalo prima di riutilizzarlo.
+
+Salva i valori soltanto nel secret manager con record separati per
+`JWT_SECRET`, `ENCRYPTION_KEYS`, `ACTIVE_ENCRYPTION_KEY_ID` e
+`ADMIN_INVITE_TOKEN`. Non stampare i valori nel terminale: usa input
+protetto o l'iniezione diretta del secret manager.
+
+Per generare nuovi valori locali:
 
 ```bash
-cat /tmp/tmp.f5JXPZCgvy
-shred -u /tmp/tmp.f5JXPZCgvy
+openssl rand -hex 32       # JWT_SECRET
+openssl rand -base64 32    # ENCRYPTION_KEYS=1:<base64-key>
+openssl rand -hex 32       # ADMIN_INVITE_TOKEN
 ```
-
-| Variabile | Dove salvarla |
-|---|---|
-| `JWT_SECRET=aa4706fd8c215aecd52a708ad046fe03c87f1e78895da93802ba4c1733ea8c7a` | 1Password → `instaedit-login/jwt-secret/production` |
-| `ENCRYPTION_KEYS=1:JqNrXo7KlhfZTGt8lRtxnhe0MNekPZQCtgP2qDvnmyo=` | 1Password → `instaedit-login/encryption-key-1/production` |
-| `ACTIVE_ENCRYPTION_KEY_ID=1` | 1Password → `instaedit-login/active-encryption-key-id/production` |
-| `ADMIN_INVITE_TOKEN=d94c3b3784f67c7cde4479171935529f0fe14d0ac7000365a426fc36bd4ea9f0` | 1Password → `instaedit-login/admin-invite-token/production` |
 
 ### 2. [2 min] **Ruota la chiave Tigris leakata**
 Sì, lo so, "non me ne frega" — ma la chat history è persistente e
@@ -90,7 +92,7 @@ L'idea: €30/mese su Hetzner CCX13, Docker Compose con Go API + worker
 ```bash
 # 1. Genera (se non l'hai già fatto) i 3 secret locali
 openssl rand -hex 32   # JWT_SECRET
-openssl rand -base64 32 # ENCRYPTION_KEYS=1:<questo>
+openssl rand -base64 32 # valore da iniettare nel secret manager come ENCRYPTION_KEYS=1:<base64-key>
 openssl rand -hex 32   # ADMIN_INVITE_TOKEN
 
 # 2. Crea l'app Fly
