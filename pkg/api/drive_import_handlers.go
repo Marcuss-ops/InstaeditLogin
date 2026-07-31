@@ -283,6 +283,7 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	asset := &models.MediaAsset{
 		UserID:      userID,
 		UploadKey:   key,
+		Bucket:      storageBucket(r.storageProvider),
 		ContentType: fileMeta.MimeType,
 		SizeBytes:   sizeBytes,
 		Status:      models.MediaAssetStatusPending,

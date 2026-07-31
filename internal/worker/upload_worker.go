@@ -32,6 +32,14 @@ import (
 //     (5-min heartbeat grace window) back to 'pending'. Called both
 //     synchronously on startup (ReclaimOnStart) and on a background
 //     ticker cadence.
+func storageBucket(provider services.StorageProvider) string {
+	bucketProvider, ok := provider.(services.BucketProvider)
+	if !ok {
+		return ""
+	}
+	return bucketProvider.Bucket()
+}
+
 type UploadJobStore interface {
 	ClaimBatch(ctx context.Context, workerID string, limit int, lease time.Duration) ([]*models.UploadJob, error)
 	ClaimBatchForPublish(ctx context.Context, workerID string, limit int, lease time.Duration) ([]*models.UploadJob, error)
@@ -820,6 +828,7 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	asset := &models.MediaAsset{
 		UserID:      job.UserID,
 		UploadKey:   key,
+		Bucket:      storageBucket(w.storage),
 		ContentType: contentType,
 		SizeBytes:   sizeBytes,
 		Status:      models.MediaAssetStatusPending,

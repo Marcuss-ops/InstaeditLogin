@@ -54,10 +54,10 @@ func (r *MediaAssetRepository) Create(asset *models.MediaAsset) error {
 	}
 	err := r.db.QueryRow(
 		`INSERT INTO media_assets
-		   (user_id, upload_key, content_type, size_bytes, status, sha256, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		   (user_id, upload_key, bucket, content_type, size_bytes, status, sha256, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING id, created_at, updated_at`,
-		asset.UserID, asset.UploadKey, asset.ContentType, asset.SizeBytes,
+		asset.UserID, asset.UploadKey, asset.Bucket, asset.ContentType, asset.SizeBytes,
 		string(asset.Status), asset.SHA256, asset.ExpiresAt,
 	).Scan(&asset.ID, &asset.CreatedAt, &asset.UpdatedAt)
 	if err != nil {
@@ -71,13 +71,13 @@ func (r *MediaAssetRepository) Create(asset *models.MediaAsset) error {
 func (r *MediaAssetRepository) FindByID(id string) (*models.MediaAsset, error) {
 	asset := &models.MediaAsset{}
 	err := r.db.QueryRow(
-		`SELECT id, user_id, upload_key, content_type, size_bytes, status,
+		`SELECT id, user_id, upload_key, bucket, content_type, size_bytes, status,
 		        COALESCE(sha256, '') AS sha256,
 		        COALESCE(error_message, '') AS error_message,
 		        expires_at, created_at, updated_at
 		 FROM media_assets WHERE id = $1`, id,
 	).Scan(
-		&asset.ID, &asset.UserID, &asset.UploadKey, &asset.ContentType,
+		&asset.ID, &asset.UserID, &asset.UploadKey, &asset.Bucket, &asset.ContentType,
 		&asset.SizeBytes, &asset.Status, &asset.SHA256, &asset.ErrorMessage,
 		&asset.ExpiresAt, &asset.CreatedAt, &asset.UpdatedAt,
 	)
@@ -109,13 +109,13 @@ func (r *MediaAssetRepository) FindByID(id string) (*models.MediaAsset, error) {
 func (r *MediaAssetRepository) FindByUploadKey(ctx context.Context, key string) (*models.MediaAsset, error) {
 	asset := &models.MediaAsset{}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, upload_key, content_type, size_bytes, status,
+		`SELECT id, user_id, upload_key, bucket, content_type, size_bytes, status,
 		        COALESCE(sha256, '') AS sha256,
 		        COALESCE(error_message, '') AS error_message,
 		        expires_at, created_at, updated_at
 		 FROM media_assets WHERE upload_key = $1 LIMIT 1`, key,
 	).Scan(
-		&asset.ID, &asset.UserID, &asset.UploadKey, &asset.ContentType,
+		&asset.ID, &asset.UserID, &asset.UploadKey, &asset.Bucket, &asset.ContentType,
 		&asset.SizeBytes, &asset.Status, &asset.SHA256, &asset.ErrorMessage,
 		&asset.ExpiresAt, &asset.CreatedAt, &asset.UpdatedAt,
 	)

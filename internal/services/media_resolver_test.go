@@ -20,8 +20,9 @@ type fakeObjectGetter struct {
 }
 
 type fakeGetObjectCall struct {
-	Key string
-	TTL time.Duration
+	Bucket string
+	Key    string
+	TTL    time.Duration
 }
 
 // noopMu is a stand-in mutex to satisfy the conventional sync.Mutex
@@ -31,6 +32,14 @@ type noopMu struct{}
 
 func (f *fakeObjectGetter) GetObject(_ context.Context, key string, ttl time.Duration) (string, error) {
 	f.calls = append(f.calls, fakeGetObjectCall{Key: key, TTL: ttl})
+	if f.nextErr != nil {
+		return "", f.nextErr
+	}
+	return f.nextURL, nil
+}
+
+func (f *fakeObjectGetter) GetObjectWithBucket(_ context.Context, bucket, key string, ttl time.Duration) (string, error) {
+	f.calls = append(f.calls, fakeGetObjectCall{Bucket: bucket, Key: key, TTL: ttl})
 	if f.nextErr != nil {
 		return "", f.nextErr
 	}
@@ -83,6 +92,7 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetIDSuccess(t *testing.T) {
 			"asset-001": {
 				ID:        "asset-001",
 				UploadKey: "uploads/1/uuid.mp4",
+				Bucket:    "instaedit-media",
 				Status:    models.MediaAssetStatusReady,
 			},
 		},
@@ -105,6 +115,9 @@ func TestMediaDownloadResolver_ResolveForUpload_AssetIDSuccess(t *testing.T) {
 	}
 	if getter.calls[0].Key != "uploads/1/uuid.mp4" {
 		t.Errorf("ObjectGetter.GetObject key = %q, want %q", getter.calls[0].Key, "uploads/1/uuid.mp4")
+	}
+	if getter.calls[0].Bucket != "instaedit-media" {
+		t.Errorf("ObjectGetter.GetObject bucket = %q, want %q", getter.calls[0].Bucket, "instaedit-media")
 	}
 	if getter.calls[0].TTL != 30*time.Minute {
 		t.Errorf("ObjectGetter.GetObject ttl = %v, want 30m", getter.calls[0].TTL)

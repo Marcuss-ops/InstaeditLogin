@@ -406,11 +406,11 @@ func (r *ContentPipelineRepository) findMediaAsset(
 		return nil, nil
 	}
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, upload_key, content_type, size_bytes, status, sha256,
+		`SELECT id, user_id, upload_key, bucket, content_type, size_bytes, status, sha256,
 		        COALESCE(error_message, ''), expires_at, created_at, updated_at
 		 FROM media_assets
 		 WHERE id = $1`, assetID).Scan(
-		&a.ID, &a.UserID, &a.UploadKey, &a.ContentType, &a.SizeBytes, &a.Status, &a.SHA256,
+		&a.ID, &a.UserID, &a.UploadKey, &a.Bucket, &a.ContentType, &a.SizeBytes, &a.Status, &a.SHA256,
 		&a.ErrorMessage, &a.ExpiresAt, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {

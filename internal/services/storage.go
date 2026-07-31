@@ -54,6 +54,13 @@ type UploadGrant struct {
 
 // StorageProvider generates UploadGrants for client uploads. The
 // handler stays provider-agnostic — it only knows the interface.
+// BucketProvider exposes the bucket bound to a storage provider. It is
+// optional so existing test doubles and single-bucket providers remain
+// compatible with StorageProvider.
+type BucketProvider interface {
+	Bucket() string
+}
+
 type StorageProvider interface {
 	// Provider returns the implementation tag ("s3"). Useful for logging
 	// + the /health endpoint so operators can see which backend is
@@ -224,6 +231,27 @@ func (p *S3Provider) objectKey(key string) string {
 // Provider implements StorageProvider.
 func (p *S3Provider) Provider() string { return "s3" }
 
+// Bucket implements BucketProvider. The value is the default bucket used
+// for new assets; published asset rows persist this value explicitly.
+func (p *S3Provider) Bucket() string { return p.bucket }
+
+func (p *S3Provider) hostForBucket(bucket string) string {
+	if bucket == "" || bucket == p.bucket {
+		return p.baseHost
+	}
+	if p.pathStyle {
+		return strings.TrimPrefix(p.endpoint, p.scheme+"://")
+	}
+	return bucket + "." + strings.TrimPrefix(p.endpoint, p.scheme+"://")
+}
+
+func (p *S3Provider) objectKeyForBucket(bucket, key string) string {
+	if p.pathStyle {
+		return bucket + "/" + key
+	}
+	return key
+}
+
 // Upload (P1 Velox integration) streams body directly into the bucket
 // at key. See the StorageProvider.Upload interface comment for the
 // full contract. Implementation choices:
@@ -341,16 +369,28 @@ func (p *S3Provider) VerifyUpload(ctx context.Context, key string) (contentType 
 	return resp.Header.Get("Content-Type"), resp.ContentLength, nil
 }
 
-// GetObject returns a presigned GET URL for the object at key, valid
-// for the requested TTL. The URL can be fetched by any HTTP client to
-// retrieve the object's bytes without requiring public bucket access.
+// GetObject returns a presigned GET URL for the default bucket object.
 func (p *S3Provider) GetObject(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	return p.GetObjectWithBucket(ctx, p.bucket, key, ttl)
+}
+
+// GetObjectWithBucket returns a fresh presigned GET URL for the explicit
+// bucket/object pair persisted on a media asset. The provider still uses
+// the same credentials and endpoint, but does not silently substitute its
+// default bucket when a canonical asset names another bucket.
+func (p *S3Provider) GetObjectWithBucket(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
+	if bucket == "" {
+		return "", errors.New("storage: bucket is required")
+	}
+	if key == "" {
+		return "", errors.New("storage: object key is required")
+	}
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
 	return signS3V4URL(
-		p.scheme, p.baseHost, p.region, "s3",
-		p.objectKey(key), ttl, http.MethodGet,
+		p.scheme, p.hostForBucket(bucket), p.region, "s3",
+		p.objectKeyForBucket(bucket, key), ttl, http.MethodGet,
 		p.accessKey, p.secretKey,
 		time.Now(),
 	)

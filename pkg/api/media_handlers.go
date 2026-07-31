@@ -162,6 +162,7 @@ func (r *Router) handlePresignMedia(w http.ResponseWriter, req *http.Request) {
 	asset := &models.MediaAsset{
 		UserID:      userID,
 		UploadKey:   key,
+		Bucket:      storageBucket(r.storageProvider),
 		ContentType: body.ContentType,
 		SizeBytes:   body.SizeBytes,
 		SHA256:      body.SHA256,
@@ -293,6 +294,14 @@ func (r *Router) handleCompleteMedia(w http.ResponseWriter, req *http.Request) {
 // publish payload uses asset_id (NOT media_url) so the only URL the
 // platform API ever receives is the trusted internal S3 URL built
 // from asset_id by the handler.
+func storageBucket(provider StorageProvider) string {
+	bucketProvider, ok := provider.(services.BucketProvider)
+	if !ok {
+		return ""
+	}
+	return bucketProvider.Bucket()
+}
+
 type MediaRef struct {
 	AssetID string `json:"asset_id"`
 }

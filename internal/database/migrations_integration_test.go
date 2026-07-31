@@ -108,7 +108,7 @@ var requiredColumns = []struct{ Table, Column string }{
 	{"audit_logs", "ip_hash"}, {"audit_logs", "metadata"}, {"audit_logs", "created_at"},
 	// 006_media_assets
 	{"media_assets", "id"}, {"media_assets", "user_id"}, {"media_assets", "upload_key"},
-	{"media_assets", "content_type"}, {"media_assets", "size_bytes"}, {"media_assets", "status"},
+	{"media_assets", "bucket"}, {"media_assets", "content_type"}, {"media_assets", "size_bytes"}, {"media_assets", "status"},
 	{"media_assets", "sha256"}, {"media_assets", "error_message"},
 	{"media_assets", "expires_at"}, {"media_assets", "created_at"}, {"media_assets", "updated_at"},
 	// 011_target_provider_state (canonical 011 after consolidation;

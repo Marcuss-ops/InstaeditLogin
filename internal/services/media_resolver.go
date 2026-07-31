@@ -53,6 +53,13 @@ type ObjectGetter interface {
 	GetObject(ctx context.Context, key string, ttl time.Duration) (string, error)
 }
 
+// BucketAwareObjectGetter is implemented by storage providers that can sign
+// an object in the bucket recorded on the media asset. ObjectGetter remains
+// the compatibility fallback for legacy single-bucket providers.
+type BucketAwareObjectGetter interface {
+	GetObjectWithBucket(ctx context.Context, bucket, key string, ttl time.Duration) (string, error)
+}
+
 // MediaAssetStore is the narrow subset of MediaAssetRepository used by
 // the asset-id branch of ResolveForUpload. Same narrowness rationale
 // as ObjectGetter above.
@@ -104,6 +111,10 @@ var ErrAssetExpired = errors.New("media resolver: media asset expired at time of
 // 081 (the SQL backfill companion) prevents the first case from
 // happening at the production migration cutover point.
 var ErrMediaURLNoMatchingAsset = errors.New("media resolver: post media_url does not map to any media_assets row (legacy row; re-upload required)")
+
+// ErrBucketAwareStorageRequired prevents a persisted bucket from being
+// silently replaced by the provider's runtime default bucket.
+var ErrBucketAwareStorageRequired = errors.New("media resolver: storage provider does not support explicit bucket resolution")
 
 // extractUploadKeyFromMediaURL parses a posts.media_url value (a
 // presigned URL the server stored at post-create time) and returns
@@ -237,13 +248,24 @@ func (r *mediaDownloadResolver) resolveAssetByID(ctx context.Context, assetID st
 	if ttl <= 0 {
 		ttl = defaultResolverTTL
 	}
-	url, err := r.storage.GetObject(ctx, key, ttl)
+	url, err := r.getObjectURL(ctx, asset.Bucket, key, ttl)
 	if err != nil {
 		return "", asset, fmt.Errorf("media resolver: sign GET URL for key %q: %w", key, err)
 	}
 	r.logger.Debug("media resolver: fresh presigned GET URL minted (asset branch)",
 		"asset_id", assetID, "key", key, "ttl_sec", int(ttl.Seconds()))
 	return url, asset, nil
+}
+
+func (r *mediaDownloadResolver) getObjectURL(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
+	if bucket != "" {
+		getter, ok := r.storage.(BucketAwareObjectGetter)
+		if !ok {
+			return "", fmt.Errorf("%w (bucket=%q key=%q)", ErrBucketAwareStorageRequired, bucket, key)
+		}
+		return getter.GetObjectWithBucket(ctx, bucket, key, ttl)
+	}
+	return r.storage.GetObject(ctx, key, ttl)
 }
 
 // resolveByKey performs the legacy / direct branch.
@@ -254,7 +276,7 @@ func (r *mediaDownloadResolver) resolveByKey(ctx context.Context, bucket, key st
 	if ttl <= 0 {
 		ttl = defaultResolverTTL
 	}
-	url, err := r.storage.GetObject(ctx, key, ttl)
+	url, err := r.getObjectURL(ctx, bucket, key, ttl)
 	if err != nil {
 		return "", fmt.Errorf("media resolver: sign GET URL for key %q: %w", key, err)
 	}
