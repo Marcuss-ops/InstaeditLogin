@@ -838,6 +838,7 @@ func (r *YouTubeVideoEditRepository) ListByWorkspace(ctx context.Context, filter
 			&edit.ID, &edit.WorkspaceID, &edit.PlatformAccountID, &edit.YouTubeVideoID,
 			&edit.VeloxProjectID, &edit.SourceThumbnailURL, &edit.ThumbnailMediaID,
 			&edit.DesiredPrivacy, &edit.PublishAt, &edit.Status, &edit.LastError,
+			&edit.ActualPrivacy, &edit.YouTubeSyncStatus,
 			&edit.CreatedAt, &edit.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("youtube video edit ListByWorkspace scan: %w", err)

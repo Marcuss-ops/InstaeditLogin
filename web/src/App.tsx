@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import {
   BrowserRouter,
   Navigate,
@@ -50,6 +50,20 @@ function RedirectAccount() {
 }
 
 function App() {
+  useEffect(() => {
+    // The public app host is reserved for the marketing site. Internal
+    // routes belong to the dev application/backend host; redirect legacy
+    // bookmarks so users never get the stale Vercel internal shell.
+    if (
+      window.location.hostname === "app.instaedit.org" &&
+      window.location.pathname.startsWith("/app")
+    ) {
+      window.location.replace(
+        `https://dev.instaedit.org${window.location.pathname}${window.location.search}${window.location.hash}`,
+      );
+    }
+  }, []);
+
   return (
     <ToastProvider>
       <ErrorBoundary>
