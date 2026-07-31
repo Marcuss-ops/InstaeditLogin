@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -429,15 +430,25 @@ func (f *fakeDriveServer) listCallCount() int64 {
 
 type fakeYouTubeServer struct {
 	*httptest.Server
-	mu        sync.Mutex
-	crashAt   int64 // 0 = never crash; >0 = crash every request
-	chunkHits int64 // atomic counter for chunk PUT calls
+	mu         sync.Mutex
+	crashAt    int64 // 0 = never crash; >0 = close after accepting this offset
+	chunkHits  int64 // atomic counter for chunk PUT calls
+	sessionSeq uint64
+	sessions   map[string]resumableSession
+}
+
+type resumableSession struct {
+	offset     int64
+	totalBytes int64
 }
 
 func newFakeYouTubeServer() *fakeYouTubeServer {
-	y := &fakeYouTubeServer{}
+	y := &fakeYouTubeServer{
+		sessions: make(map[string]resumableSession),
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/upload/youtube/v3/videos", y.handleResumableUpload)
+	mux.HandleFunc("/session/", y.handleSessionPut)
 	mux.HandleFunc("/youtube/v3/videos", y.handleVideoList)
 	y.Server = httptest.NewServer(mux)
 	return y
@@ -446,25 +457,121 @@ func newFakeYouTubeServer() *fakeYouTubeServer {
 func (y *fakeYouTubeServer) Reset() {
 	atomic.StoreInt64(&y.crashAt, 0)
 	atomic.StoreInt64(&y.chunkHits, 0)
+	atomic.StoreUint64(&y.sessionSeq, 0)
 	y.mu.Lock()
+	y.sessions = make(map[string]resumableSession)
 	y.mu.Unlock()
 }
 
 func (y *fakeYouTubeServer) handleResumableUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		w.Header().Set("Location", y.URL+"/session-xyz")
-		w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	sessionPath := fmt.Sprintf("/session/%d", atomic.AddUint64(&y.sessionSeq, 1))
+	y.mu.Lock()
+	y.sessions[sessionPath] = resumableSession{}
+	y.mu.Unlock()
+
+	// The session URI is unique per initiation and remains valid after
+	// a simulated transport crash. Only this session's state changes.
+	w.Header().Set("Location", y.URL+sessionPath)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (y *fakeYouTubeServer) handleSessionPut(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt64(&y.chunkHits, 1)
-	rangeHdr := r.Header.Get("Content-Range")
-	if rangeHdr == "" {
+
+	rangeHeader := r.Header.Get("Content-Range")
+	if rangeHeader == "" {
 		http.Error(w, "missing Content-Range", http.StatusBadRequest)
 		return
 	}
-	if crash := atomic.LoadInt64(&y.crashAt); crash > 0 {
-		// Simulate a mid-upload crash: hijack the connection and
-		// close it so the client sees EOF on read.
+
+	// Serialize the complete session operation. This prevents two
+	// concurrent PUTs from validating the same offset and then racing
+	// their state updates, which could otherwise regress or skip the
+	// persisted resumable boundary.
+	y.mu.Lock()
+	defer y.mu.Unlock()
+	session, ok := y.sessions[r.URL.Path]
+	if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	// A resumable client can query the server's current boundary
+	// without sending a body. Validate the requested total once a
+	// chunk has established the session's canonical total.
+	if statusTotalText, ok := strings.CutPrefix(rangeHeader, "bytes */"); ok {
+		statusTotal, err := strconv.ParseInt(statusTotalText, 10, 64)
+		if err != nil || statusTotal <= 0 {
+			http.Error(w, "invalid Content-Range status query", http.StatusBadRequest)
+			return
+		}
+		if session.totalBytes != 0 && statusTotal != session.totalBytes {
+			http.Error(w, fmt.Sprintf("expected total %d, got %d", session.totalBytes, statusTotal), http.StatusBadRequest)
+			return
+		}
+		if session.offset > 0 {
+			w.Header().Set("Range", fmt.Sprintf("bytes=0-%d", session.offset-1))
+		}
+		w.WriteHeader(statusResumeIncomplete)
+		return
+	}
+
+	rangeSpec, ok := strings.CutPrefix(rangeHeader, "bytes ")
+	if !ok {
+		http.Error(w, "invalid Content-Range", http.StatusBadRequest)
+		return
+	}
+	bounds, totalText, ok := strings.Cut(rangeSpec, "/")
+	if !ok || strings.Contains(totalText, "/") {
+		http.Error(w, "invalid Content-Range", http.StatusBadRequest)
+		return
+	}
+	startText, endText, ok := strings.Cut(bounds, "-")
+	if !ok || strings.Contains(endText, "-") {
+		http.Error(w, "invalid Content-Range", http.StatusBadRequest)
+		return
+	}
+	start, startErr := strconv.ParseInt(startText, 10, 64)
+	end, endErr := strconv.ParseInt(endText, 10, 64)
+	total, totalErr := strconv.ParseInt(totalText, 10, 64)
+	if startErr != nil || endErr != nil || totalErr != nil || start < 0 || end < start || total <= end {
+		http.Error(w, "invalid Content-Range", http.StatusBadRequest)
+		return
+	}
+	if start != session.offset {
+		http.Error(w, fmt.Sprintf("expected offset %d, got %d", session.offset, start), http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+	if session.totalBytes != 0 && total != session.totalBytes {
+		http.Error(w, fmt.Sprintf("expected total %d, got %d", session.totalBytes, total), http.StatusBadRequest)
+		return
+	}
+
+	chunk, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read upload chunk", http.StatusBadRequest)
+		return
+	}
+	expectedChunkLength := end - start + 1
+	if int64(len(chunk)) != expectedChunkLength {
+		http.Error(w, fmt.Sprintf("expected chunk length %d, got %d", expectedChunkLength, len(chunk)), http.StatusBadRequest)
+		return
+	}
+
+	newOffset := end + 1
+	session.offset = newOffset
+	session.totalBytes = total
+	y.sessions[r.URL.Path] = session
+
+	if crash := atomic.LoadInt64(&y.crashAt); crash > 0 && newOffset >= crash {
+		// The server accepted the chunk before the transport died. Keep
+		// the session URI and committed offset so a new worker can issue
+		// the next range against the same resumable session.
 		if hj, ok := w.(http.Hijacker); ok {
 			conn, _, err := hj.Hijack()
 			if err == nil && conn != nil {
@@ -475,7 +582,8 @@ func (y *fakeYouTubeServer) handleResumableUpload(w http.ResponseWriter, r *http
 		http.Error(w, "crash", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Range", rangeHdr)
+
+	w.Header().Set("Range", fmt.Sprintf("bytes=0-%d", newOffset-1))
 	w.WriteHeader(statusResumeIncomplete)
 }
 

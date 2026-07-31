@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -313,6 +314,65 @@ func scenario5_PostScheduling(t *testing.T, h *E2EHarness) {
 }
 
 // ---- Scenario 6: YouTube resumable upload crash + recovery.
+func TestFakeYouTubeResumableSession_RejectsInvalidRanges(t *testing.T) {
+	y := newFakeYouTubeServer()
+	defer y.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sessionURI, err := y.openResumableSession(ctx)
+	if err != nil {
+		t.Fatalf("openResumableSession: %v", err)
+	}
+
+	doPut := func(contentRange, body string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, sessionURI, strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("new PUT request: %v", err)
+		}
+		req.Header.Set("Content-Range", contentRange)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT %q: %v", contentRange, err)
+		}
+		return resp
+	}
+
+	resp := doPut("bytes malformed", "data")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("malformed Content-Range: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doPut("bytes 0-3/8", "abc")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("short chunk body: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doPut("bytes 0-3/8", "data")
+	if resp.StatusCode != statusResumeIncomplete {
+		t.Fatalf("valid first chunk: want %d, got %d", statusResumeIncomplete, resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doPut("bytes */9", "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("inconsistent status-query total: want 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = doPut("bytes */8", "")
+	if resp.StatusCode != statusResumeIncomplete {
+		t.Fatalf("consistent status query: want %d, got %d", statusResumeIncomplete, resp.StatusCode)
+	}
+	if got, want := resp.Header.Get("Range"), "bytes=0-3"; got != want {
+		t.Errorf("status-query Range: want %q, got %q", want, got)
+	}
+	resp.Body.Close()
+}
+
 func scenario6_YouTubeCrash(t *testing.T, h *E2EHarness) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -337,10 +397,31 @@ func scenario6_YouTubeCrash(t *testing.T, h *E2EHarness) {
 	}
 	t.Logf("attempt 1 crashed as expected after byte %d", len(chunk))
 
-	// Reload: the next worker re-uses the persisted session +
-	// offset (encrypted in production) and sends the next chunk.
+	// Reload: query the same session URI before sending the next
+	// chunk. The fake must report the committed first-chunk boundary;
+	// a 404 or a different Range means the simulated crash incorrectly
+	// discarded the resumable session or offset.
 	atomic.StoreInt64(&h.youTubeFake.crashAt, 0)
+	resumeReq, err := http.NewRequestWithContext(ctx, http.MethodPut, sessionURI, nil)
+	if err != nil {
+		t.Fatalf("resume status request: %v", err)
+	}
+	resumeReq.Header.Set("Content-Range", fmt.Sprintf("bytes */%d", int64(2*len(chunk))))
+	resumeResp, err := h.HTTPClient.Do(resumeReq)
+	if err != nil {
+		t.Fatalf("resume status request: %v", err)
+	}
+	defer resumeResp.Body.Close()
+	if resumeResp.StatusCode != statusResumeIncomplete {
+		t.Fatalf("resume status request: want %d, got %d", statusResumeIncomplete, resumeResp.StatusCode)
+	}
+	wantRange := fmt.Sprintf("bytes=0-%d", len(chunk)-1)
+	if gotRange := resumeResp.Header.Get("Range"); gotRange != wantRange {
+		t.Fatalf("resume offset: want %q, got %q", wantRange, gotRange)
+	}
 
+	// The next worker re-uses the same session URI and sends the next
+	// chunk at the preserved offset.
 	err = h.youTubeFake.putChunk(ctx, sessionURI, chunk, int64(len(chunk)), int64(2*len(chunk))-1, int64(2*len(chunk)))
 	if err != nil {
 		t.Fatalf("attempt 2 chunk PUT: %v", err)
