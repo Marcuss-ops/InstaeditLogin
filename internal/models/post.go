@@ -167,6 +167,23 @@ type Post struct {
 	Title       string `json:"title,omitempty"`
 	Caption     string `json:"caption,omitempty"`
 	MediaURL    string `json:"media_url,omitempty"`
+	// MediaDownloadResolver source-of-truth fields (migration 080).
+	// media_url is now a DERIVED/cache column for legacy clients only;
+	// the canonical S3 pointer for a publish-worker upload lives in
+	// MediaAssetID + StorageObjectKey + Bucket. Pointer-typed so
+	// NULL ↔ omitempty maps cleanly through the API JSON contract.
+	//
+	//   MediaAssetID     FK to media_assets.id (UUID). NULL on posts
+	//                    created from a legacy media_url that hasn't
+	//                    been backfilled yet.
+	//   StorageObjectKey Mirror of media_assets.upload_key at insert
+	//                    time. Lets the resolver mint a fresh presigned
+	//                    GET URL without parsing the URL back to a key.
+	//   Bucket          Mirror of media_assets.bucket at insert time.
+	//                    Same rationale as StorageObjectKey.
+	MediaAssetID     *string `json:"media_asset_id,omitempty"`
+	StorageObjectKey *string `json:"storage_object_key,omitempty"`
+	Bucket           *string `json:"bucket,omitempty"`
 	// P1 (migration 053) — PrivacyLevel is the per-post override set by
 	// the API endpoints (POST /posts and PATCH /posts/:id). Highest
 	// precedence term in the publish_worker cascade:

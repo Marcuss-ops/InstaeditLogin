@@ -333,6 +333,36 @@ func (r *Router) resolveMediaURLs(_ context.Context, userID int64, refs []MediaR
 	return urls, nil
 }
 
+func (r *Router) resolveMediaAssets(userID int64, refs []MediaRef) ([]*models.MediaAsset, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	if r.mediaStore == nil || r.storageProvider == nil {
+		return nil, fmt.Errorf("media not configured on this server")
+	}
+	assets := make([]*models.MediaAsset, 0, len(refs))
+	for _, ref := range refs {
+		asset, err := r.mediaStore.FindByID(ref.AssetID)
+		if err != nil {
+			return nil, fmt.Errorf("lookup asset %s: %w", ref.AssetID, err)
+		}
+		if asset == nil {
+			return nil, fmt.Errorf("media asset %s not found", ref.AssetID)
+		}
+		if asset.UserID != userID {
+			return nil, fmt.Errorf("media asset %s not owned by this user", ref.AssetID)
+		}
+		if asset.Status != models.MediaAssetStatusReady {
+			return nil, fmt.Errorf("media asset %s is not ready (status=%s)", ref.AssetID, asset.Status)
+		}
+		if time.Now().After(asset.ExpiresAt) {
+			return nil, fmt.Errorf("media asset %s expired", ref.AssetID)
+		}
+		assets = append(assets, asset)
+	}
+	return assets, nil
+}
+
 // resolveFirstMediaURL is the single-asset variant used by
 // handleCreatePost. Returns the first media URL (or "" when the
 // request has no media). The Post struct's MediaURL is populated
@@ -340,12 +370,16 @@ func (r *Router) resolveMediaURLs(_ context.Context, userID int64, refs []MediaR
 // post.MediaURL → PublishPayload.{ImageURL,VideoURL} flow without
 // per-platform service changes.
 func (r *Router) resolveFirstMediaURL(userID int64, refs []MediaRef) (string, error) {
-	urls, err := r.resolveMediaURLs(context.Background(), userID, refs)
+	assets, err := r.resolveMediaAssets(userID, refs)
 	if err != nil {
 		return "", err
 	}
-	if len(urls) == 0 {
+	if len(assets) == 0 {
 		return "", nil
 	}
-	return urls[0], nil
+	// Posts are processed asynchronously. AssetURL is an unsigned internal
+	// object URL and therefore returns 403 from a private MinIO bucket. Store
+	// a presigned GET URL for the publish worker so YouTube can read the asset
+	// after the browser request has completed.
+	return r.storageProvider.GetObject(context.Background(), assets[0].UploadKey, 24*time.Hour)
 }

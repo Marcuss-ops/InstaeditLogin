@@ -25,6 +25,18 @@ func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostT
 		}
 	}
 
+	// MediaDownloadResolver (migration 080 + followup): mint a FRESH
+	// presigned GET URL just-in-time so the platform API sees a valid
+	// signature regardless of how long the post has been queued. A nil
+	// resolver falls back to the cached post.MediaURL (legacy path);
+	// production main always wires a real resolver.
+	if w.resolver != nil {
+		freshURL, err := w.resolver.ResolveForUpload(ctx, post, 1*time.Hour)
+		if err != nil {
+			return fmt.Errorf("resolve fresh media upload URL: %w", err)
+		}
+		payload.VideoURL = freshURL
+	}
 	result, err := publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
 	if err != nil {
 		return w.markFailed(target, err.Error())

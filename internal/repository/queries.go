@@ -41,8 +41,8 @@ package repository
 // its own uncommitted state). Skipping the target/outbox INSERTs on
 // the conflict path is essential: those would 23505 on
 // UNIQUE(post_id, platform_account_id).
-const qInsertPost = `INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+const qInsertPost = `INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
  ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
  RETURNING id, created_at, upload_job_id`
 
@@ -68,7 +68,7 @@ const qInsertOutboxEvent = `INSERT INTO outbox_events (aggregate_type, aggregate
 // arity in post_repo.go matches exactly. Whatever order the caller
 // reads the row via Scan, the same ORDER BY must stay in sync here —
 // post_repo_test.go's mock assertions live here.
-const qSelectPostByID = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
+const qSelectPostByID = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
  FROM posts
  WHERE id = $1`
 
@@ -83,16 +83,16 @@ const qSelectPostByID = `SELECT id, workspace_id, title, caption, media_url, ing
 // appended at the end). The caller re-reads the row that already
 // exists on disk and stamps the canonical id/created_at back onto the
 // caller's pointer.
-const qSelectPostByUploadJobID = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
+const qSelectPostByUploadJobID = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
  FROM posts
  WHERE upload_job_id = $1`
 
-const qSelectPostsByWorkspace = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
+const qSelectPostsByWorkspace = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
  FROM posts
  WHERE workspace_id = $1
  ORDER BY created_at DESC`
 
-const qSelectQueuedPosts = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
+const qSelectQueuedPosts = `SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
  FROM posts
  WHERE status = 'queued' AND (publish_at IS NULL OR publish_at <= $1)
  ORDER BY publish_at ASC NULLS FIRST`
@@ -153,8 +153,8 @@ const qSelectTargetByID = `SELECT id, post_id, platform_account_id, status,
 // the editor endpoint can persist a per-post privacy_level override in
 // the same atomic UPDATE. order matches insertion above.
 const qUpdatePost = `UPDATE posts
- SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7
- WHERE id = $8 AND workspace_id = $9`
+ SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7, media_asset_id = $8, storage_object_key = $9, bucket = $10
+ WHERE id = $11 AND workspace_id = $12`
 
 const qUpdateTargetProviderIdempotencyKey = `UPDATE post_targets
  SET provider_idempotency_key = $1

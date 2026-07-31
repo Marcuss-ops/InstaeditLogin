@@ -170,6 +170,14 @@ type PublishWorker struct {
 	memoryLimiter *services.MemoryLimiter // explicit DI; nil-safe in tests
 	interval      time.Duration
 	logger        *slog.Logger
+	// resolver (migration 080 + MediaDownloadResolver followup) mints
+	// a fresh presigned GET URL just-in-time at publish time so the
+	// per-platform API call sees a valid signature. May be nil in
+	// legacy / test wiring: executePublish falls back to the cached
+	// post.MediaURL when resolver is nil. Production main wires
+	// services.NewMediaDownloadResolver(
+	//     storageProvider, repository.NewMediaAssetRepository(db), log).
+	resolver services.MediaDownloadResolver
 	// deliveryRegistry (Task 7/10) — post-completion dispatch hook.
 	// Optional: nil means dispatch is a no-op (pre-existing test
 	// rigidity). Wires through WithDeliveryRegistry, never through
@@ -213,6 +221,7 @@ func NewPublishWorker(
 	userRepo PublisherUserStore,
 	router *services.CapabilityRouter,
 	vault credentials.VaultAPI,
+	resolver services.MediaDownloadResolver,
 	workerID string,
 	memoryLimiter *services.MemoryLimiter,
 	interval time.Duration,
@@ -237,6 +246,7 @@ func NewPublishWorker(
 		memoryLimiter: memoryLimiter,
 		interval:      interval,
 		logger:        logger,
+		resolver:      resolver,
 	}
 }
 

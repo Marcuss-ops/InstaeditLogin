@@ -32,6 +32,21 @@ type PostRepository struct {
 	db *sql.DB
 }
 
+// ns converts a *string Post field to sql.NullString for nullable column
+// binding. nil pointer -> sql NULL; non-nil pointer -> the dereferenced
+// value (empty string preserved as empty, NOT NULL). This preserves the
+// SQL distinction between "no value" (NULL) and "explicitly empty"
+// (""), required after migration 080 added media_asset_id,
+// storage_object_key, bucket to posts. Package-level so both
+// PostRepository.Create (qInsertPost) and PostRepository.Update
+// (qUpdatePost) reuse it without copy-paste.
+func ns(s *string) sql.NullString {
+	if s == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *s, Valid: true}
+}
+
 // NewPostRepository creates a new PostRepository.
 func NewPostRepository(db *sql.DB) *PostRepository {
 	return &PostRepository{
@@ -145,6 +160,8 @@ func (r *PostRepository) Create(post *models.Post, targets []*models.PostTarget)
 		post.DefaultPrivacyLevel, post.PrivacyLevel,
 		post.Status,
 		post.UploadJobID,
+		// migration 080: 3 nullable canonical-source-of-truth columns.
+		ns(post.MediaAssetID), ns(post.StorageObjectKey), ns(post.Bucket),
 	).Scan(&post.ID, &post.CreatedAt, &post.UploadJobID)
 	if err == sql.ErrNoRows {
 		// P1 (migration 077) — ON CONFLICT (upload_job_id) WHERE
@@ -285,6 +302,7 @@ func (r *PostRepository) fetchExistingByUploadJobID(tx *sql.Tx, uploadJobID int6
 		&post.IngestAfter, &post.PublishAt, &post.Status,
 		&post.PrivacyLevel, &post.DefaultPrivacyLevel,
 		&post.CreatedAt, &post.UploadJobID,
+		&post.MediaAssetID, &post.StorageObjectKey, &post.Bucket,
 	)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("post create: ON CONFLICT fired but no post row found for upload_job_id=%d (race detected — row deleted between CONFLICT and re-fetch): %w", uploadJobID, err)
@@ -359,6 +377,8 @@ func (r *PostRepository) Update(post *models.Post) error {
 		post.Title, post.Caption, post.MediaURL, post.PublishAt,
 		post.PrivacyLevel, post.DefaultPrivacyLevel,
 		post.Status,
+		// migration 080: bind the 3 canonical-source-of-truth columns too.
+		ns(post.MediaAssetID), ns(post.StorageObjectKey), ns(post.Bucket),
 		post.ID, post.WorkspaceID,
 	)
 	if err != nil {
@@ -394,7 +414,7 @@ const contentPipelineSelectColumns = `
 	id, workspace_id, title, caption, media_url,
 	ingest_after, publish_at, status,
 	privacy_level, default_privacy_level,
-	created_at, upload_job_id`
+	created_at, upload_job_id, media_asset_id, storage_object_key, bucket`
 
 // FindByIDForWorkspace (Blocco Carosello content-pipeline endpoint):
 // returns the post with the given id SCOPED to the given workspace.
@@ -419,7 +439,8 @@ func (r *PostRepository) FindByIDForWorkspace(workspaceID, postID int64) (*model
 	).Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
 		&p.IngestAfter, &p.PublishAt, &p.Status,
 		&p.PrivacyLevel, &p.DefaultPrivacyLevel,
-		&p.CreatedAt, &p.UploadJobID)
+		&p.CreatedAt, &p.UploadJobID,
+		&p.MediaAssetID, &p.StorageObjectKey, &p.Bucket)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -450,7 +471,8 @@ func (r *PostRepository) ListByWorkspace(workspaceID int64) ([]models.Post, erro
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
 			&p.IngestAfter, &p.PublishAt, &p.Status,
 			&p.PrivacyLevel, &p.DefaultPrivacyLevel,
-			&p.CreatedAt, &p.UploadJobID); err != nil {
+			&p.CreatedAt, &p.UploadJobID,
+			&p.MediaAssetID, &p.StorageObjectKey, &p.Bucket); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, p)
@@ -481,7 +503,8 @@ func (r *PostRepository) ListQueued(before time.Time) ([]models.Post, error) {
 		if err := rows.Scan(&p.ID, &p.WorkspaceID, &p.Title, &p.Caption, &p.MediaURL,
 			&p.IngestAfter, &p.PublishAt, &p.Status,
 			&p.PrivacyLevel, &p.DefaultPrivacyLevel,
-			&p.CreatedAt, &p.UploadJobID); err != nil {
+			&p.CreatedAt, &p.UploadJobID,
+			&p.MediaAssetID, &p.StorageObjectKey, &p.Bucket); err != nil {
 			return nil, fmt.Errorf("failed to scan post: %w", err)
 		}
 		posts = append(posts, p)

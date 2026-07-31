@@ -139,6 +139,7 @@ type StorageProvider interface {
 // upfront. This is the canonical approach for client-side uploads.
 type S3Provider struct {
 	endpoint  string // e.g. "https://s3.us-east-1.amazonaws.com" (no trailing slash, no bucket)
+	scheme    string // endpoint scheme; local MinIO commonly uses "http"
 	bucket    string
 	region    string // SigV4 credential-scope component; default "us-east-1"
 	accessKey string
@@ -197,6 +198,7 @@ func NewS3Provider(endpoint, bucket, region, accessKey, secretKey string, pathSt
 	}
 	return &S3Provider{
 		endpoint:  host,
+		scheme:    u.Scheme,
 		bucket:    bucket,
 		region:    region,
 		accessKey: accessKey,
@@ -259,7 +261,7 @@ func (p *S3Provider) Upload(ctx context.Context, body io.Reader, key, contentTyp
 		return 0, fmt.Errorf("storage: Upload: sizeBytes must be > 0 (got %d)", sizeBytes)
 	}
 	signedURL, signErr := signS3V4URL(
-		p.baseHost, p.region, "s3",
+		p.scheme, p.baseHost, p.region, "s3",
 		p.objectKey(key), 5*time.Minute, http.MethodPut,
 		p.accessKey, p.secretKey,
 		time.Now(),
@@ -296,7 +298,7 @@ func (p *S3Provider) Upload(ctx context.Context, body io.Reader, key, contentTyp
 // new field on the publish payload cannot accidentally introduce SSRF
 // because there is no public API surface for user-controlled URLs.
 func (p *S3Provider) AssetURL(key string) string {
-	return fmt.Sprintf("https://%s/%s", p.baseHost, p.objectKey(key))
+	return fmt.Sprintf("%s://%s/%s", p.scheme, p.baseHost, p.objectKey(key))
 }
 
 // VerifyUpload (Taglio 3.2) performs a SigV4-signed HEAD against the
@@ -313,7 +315,7 @@ func (p *S3Provider) AssetURL(key string) string {
 // SigV4 algorithm.
 func (p *S3Provider) VerifyUpload(ctx context.Context, key string) (contentType string, sizeBytes int64, err error) {
 	signedURL, signErr := signS3V4URL(
-		p.baseHost, p.region, "s3",
+		p.scheme, p.baseHost, p.region, "s3",
 		p.objectKey(key), 5*time.Minute, http.MethodHead,
 		p.accessKey, p.secretKey,
 		time.Now(),
@@ -347,7 +349,7 @@ func (p *S3Provider) GetObject(ctx context.Context, key string, ttl time.Duratio
 		ttl = 5 * time.Minute
 	}
 	return signS3V4URL(
-		p.baseHost, p.region, "s3",
+		p.scheme, p.baseHost, p.region, "s3",
 		p.objectKey(key), ttl, http.MethodGet,
 		p.accessKey, p.secretKey,
 		time.Now(),
@@ -375,7 +377,7 @@ func (p *S3Provider) SignUpload(ctx context.Context, userID int64, key, contentT
 	_ = contentType
 	_ = sizeBytes
 	uploadURL, err := signS3V4URL(
-		p.baseHost, p.region, "s3",
+		p.scheme, p.baseHost, p.region, "s3",
 		p.objectKey(key), ttl, http.MethodPut,
 		p.accessKey, p.secretKey,
 		time.Now(),
@@ -384,7 +386,7 @@ func (p *S3Provider) SignUpload(ctx context.Context, userID int64, key, contentT
 		return nil, fmt.Errorf("failed to sign S3 URL: %w", err)
 	}
 
-	mediaURL := fmt.Sprintf("https://%s/%s", p.baseHost, p.objectKey(key))
+	mediaURL := fmt.Sprintf("%s://%s/%s", p.scheme, p.baseHost, p.objectKey(key))
 	return &UploadGrant{
 		UploadURL: uploadURL,
 		MediaURL:  mediaURL,
@@ -413,7 +415,7 @@ func (p *S3Provider) SignUpload(ctx context.Context, userID int64, key, contentT
 // the query string of the returned URL — they MUST be identical for the
 // signature to validate server-side. The signature is appended as
 // &X-Amz-Signature={hex}.
-func signS3V4URL(host, region, service, key string, ttl time.Duration, method, accessKeyID, secretAccessKey string, now time.Time) (string, error) {
+func signS3V4URL(scheme, host, region, service, key string, ttl time.Duration, method, accessKeyID, secretAccessKey string, now time.Time) (string, error) {
 	const algorithm = "AWS4-HMAC-SHA256"
 
 	amzDate := now.UTC().Format("20060102T150405Z")
@@ -465,7 +467,7 @@ func signS3V4URL(host, region, service, key string, ttl time.Duration, method, a
 	// so the signature validates.
 	finalQuery := canonicalQuery + "&X-Amz-Signature=" + signature
 
-	return fmt.Sprintf("https://%s%s?%s", host, canonicalURIPath, finalQuery), nil
+	return fmt.Sprintf("%s://%s%s?%s", scheme, host, canonicalURIPath, finalQuery), nil
 }
 
 // canonicalURI returns the path component of a SigV4 request, RFC 3986-

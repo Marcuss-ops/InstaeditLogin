@@ -61,6 +61,23 @@ var _ api.YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)
 // PORT); cmd/worker reads App.DB / App.Vault / App.CapRouter /
 // App.WebhookRepo to construct + supervise the 7 goroutines; cmd/server
 // (the wrapper) reads both halves.
+
+// assetsAdapter bridges *repository.MediaAssetRepository to the
+// resolver's services.MediaAssetStore interface (which takes a ctx
+// first arg). The repo's FindByID is a sync lookup that doesn't
+// take a ctx; the adapter accepts the ctx to keep the resolver API
+// future-proof (when the repo upgrades to ctx-aware queries the
+// adapter can forward ctx without changing the wiring site).
+// (P3 — migration 080 followup; touch only RunWorkers + this type.)
+type assetsAdapter struct {
+	repo *repository.MediaAssetRepository
+}
+
+func (a assetsAdapter) FindByID(ctx context.Context, id string) (*models.MediaAsset, error) {
+	_ = ctx
+	return a.repo.FindByID(id)
+}
+
 type App struct {
 	Cfg         *config.Config
 	DB          *sql.DB
@@ -640,11 +657,27 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		Name:     "publish",
 		Critical: true,
 		Run: func(ctx context.Context) error {
+			// MediaDownloadResolver (migration 080 followup): wire the
+			// fresh-presigned-URL sign path here so executePublish mints
+			// per-call signatures immediately before the platform API call.
+			// assetsAdapter wraps *repository.MediaAssetRepository so the resolver
+			// interface (MediaAssetStore.FindByID takes a ctx) is satisfied even
+			// though the repo's FindByID is a simple sync lookup. ctx is accepted
+			// for forward-compat (when the repo upgrades to ctx-aware queries) but
+			// ignored today. Adapter is function-local: zero blast radius outside
+			// RunWorkers. (P3 — migration 080 followup.)
+			mediaAssetRepoForResolver := repository.NewMediaAssetRepository(a.DB)
+			resolver := services.NewMediaDownloadResolver(
+				a.StorageProvider,
+				assetsAdapter{repo: mediaAssetRepoForResolver},
+				slog.Default(),
+			)
 			pw := worker.NewPublishWorker(
 				repository.NewPostRepository(a.DB),
 				repository.NewUserRepository(a.DB),
 				a.CapRouter,
 				a.Vault,
+				resolver,
 				a.WorkerID,
 				a.MemoryLimiter,
 				time.Duration(a.Cfg.Worker.PublishWorkerIntervalSeconds)*time.Second,

@@ -76,9 +76,14 @@ func (s *MediaAssetStatus) Scan(src any) error {
 // always an internal S3 URL pointing at our own bucket — no
 // user-controlled URL can ever reach the platform API.
 type MediaAsset struct {
-	ID           string           `json:"id"`
-	UserID       int64            `json:"user_id"`
-	UploadKey    string           `json:"upload_key"`
+	ID        string `json:"id"`
+	UserID    int64  `json:"user_id"`
+	UploadKey string `json:"upload_key"`
+	// Bucket (migration 079) — the S3 bucket the upload_key lives in.
+	// Nullable to avoid a full-table rewrite on the existing rows;
+	// the publish_worker's MediaDownloadResolver falls back to the
+	// runtime-configured bucket when this column is empty.
+	Bucket       string           `json:"bucket,omitempty"`
 	ContentType  string           `json:"content_type"`
 	SizeBytes    int64            `json:"size_bytes"`
 	Status       MediaAssetStatus `json:"status"`
