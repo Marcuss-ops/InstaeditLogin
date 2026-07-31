@@ -35,6 +35,7 @@ type youTubeEditorSessionDetail struct {
 	ID                 string     `json:"id"`
 	WorkspaceID        int64      `json:"workspace_id"`
 	PlatformAccountID  int64      `json:"platform_account_id"`
+	ChannelID          string     `json:"channel_id,omitempty"`
 	YouTubeVideoID     string     `json:"youtube_video_id"`
 	VeloxProjectID     string     `json:"velox_project_id"`
 	SourceThumbnailURL string     `json:"source_thumbnail_url,omitempty"`
@@ -138,7 +139,17 @@ func (r *Router) handleGetYouTubeEditorSessionByProject(w http.ResponseWriter, r
 		return
 	}
 
-	writeJSON(w, http.StatusOK, toYouTubeEditorSessionDetail(edit))
+	detail := toYouTubeEditorSessionDetail(edit)
+	if r.userRepo != nil {
+		if account, accountErr := r.userRepo.FindPlatformAccountByID(edit.PlatformAccountID); accountErr == nil && account != nil {
+		if channelID, ok := account.Metadata["channel_id"].(string); ok && channelID != "" {
+			detail.ChannelID = channelID
+			} else {
+				detail.ChannelID = account.PlatformUserID
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, detail)
 }
 
 // handlePublishYouTubeEditorSessionByProject is the HTTP entry point

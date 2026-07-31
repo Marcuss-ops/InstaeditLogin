@@ -12,6 +12,7 @@ import {
   listYouTubeEditorSessions,
   attachYouTubeEditorSessionThumbnail,
   publishYouTubeEditorSession,
+  getYouTubeEditorSession,
   openEditorInNewTab,
 } from "../../features/youtube/api/editorSessionsApi";
 import { useToast } from "../../components/toast";
@@ -19,10 +20,16 @@ import { EmptyState, ErrorState, Skeleton } from "../../components/feedback";
 import { cn } from "../../lib/utils";
 import { FormField, FormSelect } from "./YouTubeStudioFormElements";
 import { SessionRow } from "./YouTubeStudioSessionRow";
+import { YouTubePublishCard } from "./YouTubePublishCard";
 import { StudioShell } from "./YouTubeStudioShell";
 import { isScheduleInPast, localToUTC } from "./youtubeStudioTime";
 import type { ActionState, ContentItem, LoadState } from "./youtubeStudioTypes";
-import type { EditorSession, PlatformAccount, Workspace } from "../../types/uploads";
+import type {
+  EditorSession,
+  PlatformAccount,
+  Workspace,
+  YouTubePublishResult,
+} from "../../types/uploads";
 
 export function InternalYouTubeStudio() {
   const toast = useToast();
@@ -42,6 +49,12 @@ export function InternalYouTubeStudio() {
   const [privateVideos, setPrivateVideos] = useState<ContentItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(false);
   const privateVideosAbortRef = useRef<AbortController | null>(null);
+  const verificationRunRef = useRef(0);
+  const [publishResult, setPublishResult] = useState<{
+    sessionId: string;
+    result: YouTubePublishResult;
+    checking: boolean;
+  } | null>(null);
 
   const fetchPrivateVideos = useCallback(
     async (accountId: number, signal?: AbortSignal) => {
@@ -76,6 +89,7 @@ export function InternalYouTubeStudio() {
       return listYouTubeEditorSessions({
         workspace_id: workspaceId === "" ? undefined : workspaceId,
         account_id: accountId === "" ? undefined : accountId,
+        include_terminal: true,
         signal,
       });
     },
@@ -174,6 +188,12 @@ export function InternalYouTubeStudio() {
       }
     })();
   }, [fetchSessions, loadState.kind, selectedChannelId, selectedWorkspaceId]);
+
+  useEffect(() => {
+    return () => {
+      verificationRunRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     privateVideosAbortRef.current?.abort();
@@ -276,22 +296,89 @@ export function InternalYouTubeStudio() {
     [handleRefresh, thumbnailMediaId, toast],
   );
 
+  const verifyPublishedSession = useCallback(
+    async (sessionId: string, initial: YouTubePublishResult) => {
+      const run = ++verificationRunRef.current;
+      setPublishResult({ sessionId, result: initial, checking: true });
+
+      // The backend already performs a videos.list read-back. This short
+      // follow-up is only for the rare `pending` case, when the reconciler
+      // still needs to confirm YouTube's final privacy asynchronously.
+      if (initial.youtube_sync_status !== "pending") {
+        setPublishResult({ sessionId, result: initial, checking: false });
+        return;
+      }
+
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 5_000));
+        if (verificationRunRef.current !== run) return;
+        try {
+          const detail = await getYouTubeEditorSession(sessionId);
+          const next: YouTubePublishResult = {
+            ...initial,
+            status: detail.status,
+            privacy_status: detail.desired_privacy as YouTubePublishResult["privacy_status"],
+            actual_privacy: detail.actual_privacy ?? undefined,
+            youtube_sync_status: detail.youtube_sync_status ?? undefined,
+          };
+          setPublishResult({
+            sessionId,
+            result: next,
+            checking: next.youtube_sync_status === "pending",
+          });
+          setLoadState((prev) => {
+            if (prev.kind !== "ready") return prev;
+            return {
+              ...prev,
+              sessions: prev.sessions.map((session) =>
+                session.id === sessionId
+                  ? {
+                      ...session,
+                      status: detail.status,
+                      desired_privacy: detail.desired_privacy,
+                      publish_at: detail.publish_at,
+                      actual_privacy: detail.actual_privacy,
+                      youtube_sync_status: detail.youtube_sync_status,
+                    }
+                  : session,
+              ),
+            };
+          });
+          if (next.youtube_sync_status !== "pending") return;
+        } catch {
+          // Keep the successful publish card visible. The backend
+          // reconciler remains the source of truth if this read fails.
+        }
+      }
+
+      if (verificationRunRef.current === run) {
+        setPublishResult((current) =>
+          current?.sessionId === sessionId
+            ? { ...current, checking: false }
+            : current,
+        );
+      }
+    },
+    [],
+  );
+
   const handlePublishNow = useCallback(
     async (sessionId: string) => {
       setAction({ kind: "publishing", sessionId });
       try {
-        await publishYouTubeEditorSession(sessionId, {
+        const result = await publishYouTubeEditorSession(sessionId, {
           privacy_status: "public",
         });
-        toast.success("Video published.");
+        toast.success("Video published — verifying YouTube status…");
         void handleRefresh();
+        void verifyPublishedSession(sessionId, result);
       } catch {
         // toast surfaced by authedFetch
       } finally {
         setAction({ kind: "idle" });
       }
     },
-    [handleRefresh, toast],
+    [handleRefresh, toast, verifyPublishedSession],
   );
 
   const handleSchedule = useCallback(
@@ -309,21 +396,22 @@ export function InternalYouTubeStudio() {
       const utcISO = localToUTC(scheduleAt);
       setAction({ kind: "publishing", sessionId });
       try {
-        await publishYouTubeEditorSession(sessionId, {
+        const result = await publishYouTubeEditorSession(sessionId, {
           privacy_status: "private",
           publish_at: utcISO,
         });
-        toast.success("Publication scheduled.");
+        toast.success("Publication scheduled — verifying YouTube status…");
         setScheduleAt("");
         setActiveSessionId(null);
         void handleRefresh();
+        void verifyPublishedSession(sessionId, result);
       } catch {
         // toast surfaced by authedFetch
       } finally {
         setAction({ kind: "idle" });
       }
     },
-    [handleRefresh, scheduleAt, toast],
+    [handleRefresh, scheduleAt, toast, verifyPublishedSession],
   );
 
   const canCreate =
@@ -362,6 +450,9 @@ export function InternalYouTubeStudio() {
 
   const { workspaces, youtubeChannels, sessions } = loadState;
   const noChannels = youtubeChannels.length === 0;
+  const publishSession = publishResult
+    ? sessions.find((session) => session.id === publishResult.sessionId)
+    : undefined;
 
   return (
     <StudioShell>
@@ -515,6 +606,15 @@ export function InternalYouTubeStudio() {
             </div>
           )}
         </section>
+      )}
+
+      {publishResult && (
+        <YouTubePublishCard
+          result={publishResult.result}
+          session={publishSession}
+          checking={publishResult.checking}
+          onDismiss={() => setPublishResult(null)}
+        />
       )}
 
       <section className="bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6 space-y-4 shadow-[0_8px_32px_rgba(0,0,0,0.4)]">

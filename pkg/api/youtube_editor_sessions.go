@@ -750,14 +750,16 @@ func truncateError(s string) string {
 // the ?workspace_id query and a multi-row response in which every
 // row shares the same filter would just add bytes without semantics.
 type listYouTubeEditorSessionEntry struct {
-	ID               string     `json:"id"`
-	YouTubeVideoID   string     `json:"youtube_video_id"`
-	VeloxProjectID   string     `json:"velox_project_id"`
-	EditorURL        string     `json:"editor_url"`
-	Status           string     `json:"status"`
-	ThumbnailMediaID *string    `json:"thumbnail_media_id,omitempty"`
-	DesiredPrivacy   string     `json:"desired_privacy"`
-	PublishAt        *time.Time `json:"publish_at,omitempty"`
+	ID                 string     `json:"id"`
+	YouTubeVideoID     string     `json:"youtube_video_id"`
+	VeloxProjectID     string     `json:"velox_project_id"`
+	EditorURL          string     `json:"editor_url"`
+	Status             string     `json:"status"`
+	ThumbnailMediaID   *string    `json:"thumbnail_media_id,omitempty"`
+	DesiredPrivacy     string     `json:"desired_privacy"`
+	PublishAt          *time.Time `json:"publish_at,omitempty"`
+	ActualPrivacy      *string    `json:"actual_privacy,omitempty"`
+	YouTubeSyncStatus  *string    `json:"youtube_sync_status,omitempty"`
 }
 
 // listYouTubeEditorSessionsResponse is the envelope. `sessions: []`
@@ -894,15 +896,17 @@ func (r *Router) handleListYouTubeEditorSessions(w http.ResponseWriter, req *htt
 
 	entries := make([]listYouTubeEditorSessionEntry, 0, len(rows))
 	for _, edit := range rows {
-		entries = append(entries, listYouTubeEditorSessionEntry{
-			ID:               edit.ID,
-			YouTubeVideoID:   edit.YouTubeVideoID,
-			VeloxProjectID:   edit.VeloxProjectID,
-			EditorURL:        r.editorURLForProject(edit.VeloxProjectID),
-			Status:           edit.Status,
-			ThumbnailMediaID: edit.ThumbnailMediaID,
-			DesiredPrivacy:   edit.DesiredPrivacy,
-			PublishAt:        edit.PublishAt,
+			entries = append(entries, listYouTubeEditorSessionEntry{
+			ID:                edit.ID,
+			YouTubeVideoID:    edit.YouTubeVideoID,
+			VeloxProjectID:    edit.VeloxProjectID,
+			EditorURL:         r.editorURLForProject(edit.VeloxProjectID),
+			Status:            edit.Status,
+			ThumbnailMediaID:  edit.ThumbnailMediaID,
+			DesiredPrivacy:    edit.DesiredPrivacy,
+			PublishAt:         edit.PublishAt,
+			ActualPrivacy:     edit.ActualPrivacy,
+			YouTubeSyncStatus: edit.YouTubeSyncStatus,
 		})
 	}
 	writeJSON(w, http.StatusOK, listYouTubeEditorSessionsResponse{Sessions: entries})

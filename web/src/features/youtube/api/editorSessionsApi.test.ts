@@ -44,6 +44,7 @@ import {
   createEditorSessionAndOpen,
   createYouTubeEditorSession,
   listYouTubeEditorSessions,
+  getYouTubeEditorSession,
   openEditorInNewTab,
   publishYouTubeEditorSession,
 } from "./editorSessionsApi";
@@ -184,6 +185,36 @@ describe("listYouTubeEditorSessions", () => {
     const [path] = authedFetchMock.mock.calls[0] as [string];
     expect(path).toBe("/api/v1/youtube/editor-sessions");
   });
+
+  it("requests terminal sessions when the Studio needs post-publish state", async () => {
+    authedFetchMock.mockResolvedValue(jsonResponse({ sessions: [FULL_SESSION] }));
+    await listYouTubeEditorSessions({ workspace_id: 7, include_terminal: true });
+    const [path] = authedFetchMock.mock.calls[0] as [string];
+    expect(path).toBe(
+      "/api/v1/youtube/editor-sessions?workspace_id=7&include_terminal=true",
+    );
+  });
+});
+
+describe("getYouTubeEditorSession", () => {
+  it("reads the detail projection used to verify actual YouTube privacy", async () => {
+    const detail = {
+      ...FULL_SESSION,
+      status: "published",
+      actual_privacy: "public",
+      youtube_sync_status: "confirmed",
+      workspace_id: 7,
+      platform_account_id: 99,
+      created_at: "2030-01-01T00:00:00Z",
+      updated_at: "2030-01-01T00:00:01Z",
+    };
+    authedFetchMock.mockResolvedValue(jsonResponse(detail));
+    const result = await getYouTubeEditorSession("ytedit_42");
+    const [path] = authedFetchMock.mock.calls[0] as [string];
+    expect(path).toBe("/api/v1/youtube/editor-sessions/ytedit_42");
+    expect(result.actual_privacy).toBe("public");
+    expect(result.youtube_sync_status).toBe("confirmed");
+  });
 });
 
 // ────────────────────────────────────────────────────────────────
@@ -250,6 +281,21 @@ describe("publishYouTubeEditorSession", () => {
     });
     const [, init] = authedFetchMock.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toEqual({ privacy_status: "public" });
+  });
+
+  it("returns the YouTube verification projection from the publish response", async () => {
+    const result = {
+      status: "published",
+      public_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      video_id: "dQw4w9WgXcQ",
+      privacy_status: "public",
+      actual_privacy: "public",
+      youtube_sync_status: "confirmed",
+    };
+    authedFetchMock.mockResolvedValue(jsonResponse(result));
+    await expect(
+      publishYouTubeEditorSession("ytedit_42", { privacy_status: "public" }),
+    ).resolves.toEqual(result);
   });
 });
 

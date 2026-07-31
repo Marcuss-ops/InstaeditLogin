@@ -795,6 +795,13 @@ func (r *YouTubeVideoEditRepository) ListByWorkspace(ctx context.Context, filter
 	statuses := filter.Statuses
 	if len(statuses) == 0 {
 		statuses = YouTubeVideoEditNonTerminalStatuses
+		if filter.IncludeTerminal {
+			// The dashboard uses IncludeTerminal for the post-publish
+			// confirmation card. Keep the default editable statuses and
+			// append published rows so a completed session does not
+			// disappear immediately after the publish response.
+			statuses = append(append([]string(nil), statuses...), "published")
+		}
 	}
 	for _, s := range statuses {
 		if _, ok := YouTubeEditorSessionListStatusAllowList[s]; !ok {

@@ -38,7 +38,8 @@ export function SessionRow({
   onSchedule: () => void;
 }) {
   const hasThumbnail = !!session.thumbnail_media_id;
-  const canAttach = !isActive && thumbnailMediaId.trim().length > 0;
+  const isPublished = session.status === "published";
+  const canAttach = !isActive && !isPublished && thumbnailMediaId.trim().length > 0;
   const scheduleInPast = isScheduleInPast(scheduleAt);
   const hasValidSchedule = scheduleAt.length > 0 && !scheduleInPast;
   const canSchedule = !isPublishing && hasValidSchedule;
@@ -79,6 +80,15 @@ export function SessionRow({
                 <span className="font-mono">{session.publish_at}</span>
               </>
             )}
+            {session.actual_privacy && (
+              <>
+                {" · "}
+                actual privacy:{" "}
+                <span className="font-semibold text-emerald-200">
+                  {session.actual_privacy}
+                </span>
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -107,17 +117,33 @@ export function SessionRow({
             ? `thumbnail · ${session.thumbnail_media_id}`
             : "thumbnail: not set"}
         </span>
-        <button
-          type="button"
-          onClick={onToggle}
-          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.10] text-[12px] font-semibold text-white hover:bg-white/[0.10] transition-colors"
-          data-testid="yt-studio-attach-toggle"
-        >
-          {hasThumbnail ? "Replace thumbnail" : "Allega copertina"}
-        </button>
+        {session.youtube_sync_status && (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold border",
+              session.youtube_sync_status === "confirmed"
+                ? "border-emerald-500/30 bg-emerald-500/[0.10] text-emerald-300"
+                : session.youtube_sync_status === "drift"
+                  ? "border-amber-500/30 bg-amber-500/[0.10] text-amber-300"
+                  : "border-blue-500/30 bg-blue-500/[0.10] text-blue-200",
+            )}
+          >
+            YouTube: {session.youtube_sync_status}
+          </span>
+        )}
+        {!isPublished && (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.10] text-[12px] font-semibold text-white hover:bg-white/[0.10] transition-colors"
+            data-testid="yt-studio-attach-toggle"
+          >
+            {hasThumbnail ? "Replace thumbnail" : "Allega copertina"}
+          </button>
+        )}
 
         {/* Smart publish/schedule button */}
-        {isScheduling ? (
+        {!isPublished && (isScheduling ? (
           <button
             type="button"
             onClick={onSchedule}
@@ -147,19 +173,36 @@ export function SessionRow({
             )}
             Pubblica ora
           </button>
-        )}
+        ))}
 
-        <button
-          type="button"
-          onClick={onToggle}
-          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.10] text-[12px] font-semibold text-white hover:bg-white/[0.10] transition-colors"
-          data-testid="yt-studio-schedule-toggle"
-        >
-          {isScheduling ? "Modifica programmazione" : "Programma pubblicazione"}
-        </button>
+        {!isPublished && (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.10] text-[12px] font-semibold text-white hover:bg-white/[0.10] transition-colors"
+            data-testid="yt-studio-schedule-toggle"
+          >
+            {isScheduling ? "Modifica programmazione" : "Programma pubblicazione"}
+          </button>
+        )}
       </div>
 
-      {isExpanded && (
+      {isPublished && (
+        <div className="flex flex-wrap items-center gap-3 text-[12px] text-emerald-200/80">
+          <span>Pubblicato: verifica completata.</span>
+          <a
+            href={`https://www.youtube.com/watch?v=${encodeURIComponent(session.youtube_video_id)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-white hover:text-emerald-200 underline underline-offset-2"
+            data-testid="yt-studio-published-link"
+          >
+            Apri video su YouTube <ExternalLink size={12} aria-hidden="true" />
+          </a>
+        </div>
+      )}
+
+      {isExpanded && !isPublished && (
         <div className="space-y-3 pt-2 border-t border-white/[0.06]">
           <FormField
             id={`yt-studio-thumb-${session.id}`}

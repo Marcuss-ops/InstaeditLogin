@@ -50,15 +50,32 @@ export type BatchStatusResponse = {
   completed_at: string | null;
 };
 
+export type YouTubePrivacy = "public" | "unlisted" | "private";
+export type YouTubeSyncStatus = "pending" | "confirmed" | "drift" | "failed";
+
 export type EditorSession = {
   id: string;
   youtube_video_id: string;
   velox_project_id: string;
+  /** Present on list responses; absent on the project detail DTO. */
   editor_url: string;
   status: string;
   thumbnail_media_id: string | null;
   desired_privacy: string;
   publish_at: string | null;
+  /** YouTube-side read-back, populated after publish. */
+  actual_privacy?: YouTubePrivacy | null;
+  youtube_sync_status?: YouTubeSyncStatus | null;
+};
+
+export type YouTubePublishResult = {
+  status: string;
+  public_url: string;
+  video_id: string;
+  privacy_status: YouTubePrivacy;
+  actual_privacy?: YouTubePrivacy;
+  youtube_sync_status?: YouTubeSyncStatus;
+  published_at?: string | null;
 };
 
 export type SubmitState =

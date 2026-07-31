@@ -55,7 +55,10 @@
  */
 
 import { authedFetch } from "../../../lib/auth";
-import type { EditorSession } from "../../../types/uploads";
+import type {
+  EditorSession,
+  YouTubePublishResult,
+} from "../../../types/uploads";
 
 const SESSIONS_PATH = "/api/v1/youtube/editor-sessions";
 
@@ -94,6 +97,8 @@ export interface CreateYouTubeEditorSessionResponse {
 export interface ListYouTubeEditorSessionsOptions {
   workspace_id?: number;
   account_id?: number;
+  /** Include published/terminal sessions so the UI can show the final state. */
+  include_terminal?: boolean;
   signal?: AbortSignal;
 }
 
@@ -115,6 +120,23 @@ export interface PublishYouTubeEditorSessionRequest {
   privacy_status?: "public" | "unlisted" | "private";
   /** RFC3339 timestamp. `null` clears any pending scheduled publish. */
   publish_at?: string | null;
+}
+
+/**
+ * GET /api/v1/youtube/editor-sessions/{id}.
+ * This is the read-back used to verify the YouTube-side privacy after
+ * the publish call returns `youtube_sync_status: "pending"`.
+ */
+export interface YouTubeEditorSessionDetail
+  extends Omit<EditorSession, "editor_url"> {
+  workspace_id: number;
+  platform_account_id: number;
+  channel_id?: string;
+  source_thumbnail_url?: string;
+  last_error?: string;
+  draft_title?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 // ─── Public API functions ───────────────────────────────────────
@@ -154,6 +176,9 @@ export async function listYouTubeEditorSessions(
   if (opts.account_id !== undefined) {
     params.set("account_id", String(opts.account_id));
   }
+  if (opts.include_terminal) {
+    params.set("include_terminal", "true");
+  }
   const qs = params.toString();
   const url = qs ? `${SESSIONS_PATH}?${qs}` : SESSIONS_PATH;
   const resp = await authedFetch(url, { signal: opts.signal });
@@ -167,6 +192,14 @@ export async function listYouTubeEditorSessions(
  * Returns the post-attach editor session (fields like
  * `thumbnail_media_id` now reflect the attach).
  */
+export async function getYouTubeEditorSession(
+  sessionId: string,
+  init: RequestInit = {},
+): Promise<YouTubeEditorSessionDetail> {
+  const resp = await authedFetch(sessionPath(sessionId), init);
+  return (await resp.json()) as YouTubeEditorSessionDetail;
+}
+
 export async function attachYouTubeEditorSessionThumbnail(
   sessionId: string,
   body: AttachYouTubeEditorSessionThumbnailRequest,
@@ -190,13 +223,13 @@ export async function publishYouTubeEditorSession(
   sessionId: string,
   body: PublishYouTubeEditorSessionRequest,
   init: RequestInit = {},
-): Promise<EditorSession> {
+): Promise<YouTubePublishResult> {
   const resp = await authedFetch(`${sessionPath(sessionId)}/publish`, {
     method: "POST",
     body: JSON.stringify(body),
     ...init,
   });
-  return (await resp.json()) as EditorSession;
+  return (await resp.json()) as YouTubePublishResult;
 }
 
 // ─── Single-purpose helpers (UI-agnostic on purpose) ─────────────
