@@ -491,7 +491,7 @@ function FormStep({
           type="submit"
           disabled={!complete}
           aria-disabled={!complete}
-          className="group relative inline-flex items-center justify-center gap-2 px-7 py-4 rounded-xl bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white font-semibold text-base transition-all disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:shadow-[0_0_50px_-8px_rgba(239,68,68,0.55)] enabled:hover:scale-[1.02] enabled:active:scale-100"
+          className="group relative inline-flex items-center justify-center gap-2 px-7 py-4 rounded-xl bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white font-semibold text-base transition-all disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:shadow-[0_0_50px_-8px_rgba(239,68,68,0.55)] enabled:hover:scale-[1.02] enabled:active:scale-100 [text-shadow:0_1px_2px_rgba(0,0,0,0.45),0_0_12px_rgba(0,0,0,0.25)]"
         >
           <Calendar className="w-5 h-5" />
           Schedule your free strategy call

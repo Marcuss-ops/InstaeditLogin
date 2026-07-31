@@ -135,7 +135,7 @@ export function Nav() {
                 close();
                 openBooking();
               }}
-              className="group inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white text-sm font-semibold shadow-[0_4px_20px_-6px_rgba(239,68,68,0.55)] hover:shadow-[0_0_40px_-6px_rgba(239,68,68,0.7)] hover:scale-[1.02] active:scale-100 transition-all"
+              className="group inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white text-sm font-semibold shadow-[0_4px_20px_-6px_rgba(239,68,68,0.55)] hover:shadow-[0_0_40px_-6px_rgba(239,68,68,0.55)] hover:scale-[1.02] active:scale-100 transition-all [text-shadow:0_1px_2px_rgba(0,0,0,0.45),0_0_12px_rgba(0,0,0,0.25)]"
             >
               <Calendar className="w-3.5 h-3.5" />
               Schedule a Call
@@ -200,7 +200,7 @@ export function Nav() {
                   close();
                   openBooking();
                 }}
-                className="w-full block py-3 text-sm font-semibold text-center text-white bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 rounded-xl shadow-[0_4px_20px_-6px_rgba(239,68,68,0.55)] hover:shadow-[0_0_40px_-6px_rgba(239,68,68,0.7)] hover:scale-[1.02] active:scale-100 transition-all"
+                className="w-full block py-3 text-sm font-semibold text-center text-white bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 rounded-xl shadow-[0_4px_20px_-6px_rgba(239,68,68,0.55)] hover:shadow-[0_0_40px_-6px_rgba(239,68,68,0.55)] hover:scale-[1.02] active:scale-100 transition-all [text-shadow:0_1px_2px_rgba(0,0,0,0.45),0_0_12px_rgba(0,0,0,0.25)]"
               >
                 <span className="inline-flex items-center justify-center gap-2">
                   <Calendar className="w-4 h-4" />

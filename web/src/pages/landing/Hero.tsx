@@ -56,7 +56,7 @@ export function Hero() {
           <button
             type="button"
             onClick={() => openBooking()}
-            className="group inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white font-semibold text-sm shadow-[0_4px_24px_-8px_rgba(239,68,68,0.6)] hover:shadow-[0_0_50px_-8px_rgba(239,68,68,0.75)] hover:scale-[1.02] active:scale-100 transition-all"
+            className="group inline-flex items-center gap-2 px-7 py-3.5 rounded-xl bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white font-semibold text-sm shadow-[0_4px_24px_-8px_rgba(239,68,68,0.6)] hover:shadow-[0_0_50px_-8px_rgba(239,68,68,0.55)] hover:scale-[1.02] active:scale-100 transition-all [text-shadow:0_1px_2px_rgba(0,0,0,0.45),0_0_12px_rgba(0,0,0,0.25)]"
           >
             <Calendar className="w-4 h-4" />
             Schedule Your Free Strategy Call
