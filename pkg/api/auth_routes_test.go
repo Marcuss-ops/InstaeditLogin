@@ -135,6 +135,55 @@ func TestHandleCallback_MissingCode(t *testing.T) {
 	}
 }
 
+// TestHandleCallbackRouteForTest_YouTubeBindsProvider verifies that the
+// direct callback seam reproduces the {provider} route value that chi adds
+// in production. Without this binding, /api/v1/auth/youtube/callback reaches
+// handleCallback with provider="" and incorrectly returns unsupported provider.
+func TestHandleCallbackRouteForTest_YouTubeBindsProvider(t *testing.T) {
+	svc := &mockProvider{platform: "youtube"}
+	store := &mockUserStore{}
+	r := newTestRouter(svc, store, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback", nil)
+	w := httptest.NewRecorder()
+	r.HandleOAuthCallbackRouteForTest().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("/api/v1/auth/youtube/callback via test seam: want 400 missing code, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "unsupported provider") {
+		t.Fatalf("test seam failed to bind provider from callback path: %s", w.Body.String())
+	}
+}
+
+// TestHandleCallbackRouteForTest_YouTubeDispatchesProvider verifies that the
+// seam does more than avoid the empty-provider 404: a callback with a code and
+// valid state reaches the registered YouTube provider.
+func TestHandleCallbackRouteForTest_YouTubeDispatchesProvider(t *testing.T) {
+	svc := &mockProvider{
+		platform: "youtube",
+		handleCallback: func(context.Context, string, string) (*models.PlatformProfile, *models.TokenData, error) {
+			return nil, nil, fmt.Errorf("youtube callback sentinel")
+		},
+	}
+	r := newTestRouter(svc, &mockUserStore{}, "")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/callback?code=mock-code&state=test-state", nil)
+	setOAuthStateCookieForTest(req, "youtube", "test-state")
+	w := httptest.NewRecorder()
+	r.HandleOAuthCallbackRouteForTest().ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("YouTube callback via test seam: want 500 from provider sentinel, got %d: %s", w.Code, w.Body.String())
+	}
+	if svc.handleCallbackCalls != 1 {
+		t.Fatalf("YouTube provider HandleCallback calls: want 1, got %d", svc.handleCallbackCalls)
+	}
+	if strings.Contains(w.Body.String(), "unsupported provider") {
+		t.Fatalf("test seam did not dispatch YouTube provider: %s", w.Body.String())
+	}
+}
+
 func TestHandleCallback_UnsupportedProvider(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
 	store := &mockUserStore{}

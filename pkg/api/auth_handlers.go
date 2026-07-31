@@ -304,7 +304,29 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 // Production auth gating goes through r.oauthSessionRedirect
 // (handlers.go:1034)
 func (r *Router) HandleOAuthCallbackRouteForTest() http.Handler {
-	return http.HandlerFunc(r.handleCallback)
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// The production route is registered by chi as
+		// /api/v1/auth/{provider}/callback, which populates
+		// req.PathValue("provider") before invoking handleCallback.
+		// This seam intentionally bypasses that middleware/route stack,
+		// so reproduce only the route-param binding needed by the handler.
+		// Preserve an explicitly supplied path value for tests that want
+		// to exercise a custom route context.
+		if req.PathValue("provider") == "" {
+			const (
+				prefix = "/api/v1/auth/"
+				suffix = "/callback"
+			)
+			requestPath := req.URL.Path
+			if strings.HasPrefix(requestPath, prefix) && strings.HasSuffix(requestPath, suffix) {
+				provider := strings.TrimSuffix(strings.TrimPrefix(requestPath, prefix), suffix)
+				if provider != "" && !strings.Contains(provider, "/") {
+					req.SetPathValue("provider", provider)
+				}
+			}
+		}
+		r.handleCallback(w, req)
+	})
 }
 
 // attachDiscoveredAccounts is used by handleCallback for providers that
