@@ -3,8 +3,6 @@ import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Link2,
-  FileText,
-  PenSquare,
   FolderInput,
   Calendar,
   FolderTree,
@@ -13,8 +11,6 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
-  Video,
-  PlusCircle,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { fetchSession, logout } from "../../lib/auth";
@@ -23,13 +19,9 @@ const baseNavItems = [
   { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/app/performance", label: "Performance", icon: BarChart3 },
   { to: "/app/uploads", label: "Imports", icon: FolderInput },
-  { to: "/app/content/new", label: "Nuovo post", icon: PlusCircle },
-  { to: "/app/youtube/studio", label: "YouTube Studio", icon: Video },
   { to: "/app/calendar", label: "Calendar", icon: Calendar },
   { to: "/app/groups", label: "Groups", icon: FolderTree },
   { to: "/app/linking", label: "Linking", icon: Link2 },
-  { to: "/app/posts", label: "Posts", icon: FileText },
-  { to: "/app/compose", label: "Editor", icon: PenSquare },
 ];
 
 const adminNavItem = { to: "/admin/dashboard", label: "Admin", icon: Shield };
