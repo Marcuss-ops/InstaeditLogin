@@ -147,6 +147,44 @@ const qSelectTargetByID = `SELECT id, post_id, platform_account_id, status,
 	 FROM post_targets
 	 WHERE id = $1`
 
+// Aggregate-status queries are kept together so the target transition and
+// the reconciler repair sweep use the same locking and projection contract.
+const qSelectPostIDByTarget = `SELECT post_id FROM post_targets WHERE id = $1`
+
+const qLockTargetForAggregate = `SELECT id FROM post_targets WHERE id = $1 FOR UPDATE`
+
+const qLockPostForAggregate = `SELECT id FROM posts WHERE id = $1 FOR UPDATE`
+
+const qLockPostStatusForAggregate = `SELECT status FROM posts WHERE id = $1 FOR UPDATE`
+
+const qSelectTargetStatusesByPost = `SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`
+
+const qSelectTargetStatusByID = `SELECT status FROM post_targets WHERE id = $1`
+
+const qSelectTargetIDsByPost = `SELECT id FROM post_targets WHERE post_id = $1 ORDER BY id ASC FOR UPDATE`
+
+const qSelectExpiredLeaseTargets = `SELECT id, post_id FROM post_targets
+ WHERE leased_until IS NOT NULL
+   AND leased_until <= NOW()
+   AND lease_owner_id IS NOT NULL
+   AND lease_owner_id <> $1
+   AND status IN ('publishing', 'queued')
+ ORDER BY id ASC
+ FOR UPDATE SKIP LOCKED`
+
+const qReclaimExpiredLeaseByID = `UPDATE post_targets
+ SET status = 'queued',
+     lease_owner_id = NULL,
+     leased_until = NULL,
+     heartbeat_at = NULL,
+     next_retry_at = NOW()
+ WHERE id = $1
+   AND lease_owner_id IS NOT NULL
+   AND lease_owner_id <> $2
+   AND status IN ('publishing', 'queued')`
+
+const qUpdatePostAggregateStatus = `UPDATE posts SET status = $1 WHERE id = $2`
+
 // --- post_update.go ---
 
 // P1 (migration 053) — qUpdatePost now writes the two privacy columns so
@@ -163,7 +201,8 @@ const qUpdateTargetProviderIdempotencyKey = `UPDATE post_targets
 const qUpdateTargetStatus = `UPDATE post_targets
  SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
      provider_state = $6, container_id = $7
- WHERE id = $5`
+ WHERE id = $5
+   AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq', 'dead_letter', 'blocked_auth'))`
 
 const qDeletePost = `DELETE FROM posts WHERE id = $1`
 
@@ -173,11 +212,18 @@ const qPublishPostUpdateStatus = `UPDATE posts SET status = 'queued' WHERE id = 
 
 const qPublishPostTargetsReset = `UPDATE post_targets SET status = 'queued', error_message = '' WHERE post_id = $1`
 
-const qCancelPost = `UPDATE posts SET status = 'draft' WHERE id = $1`
+// Cancelling resets only non-terminal targets. Terminal targets are preserved
+// so a parent cannot be made draft while a destination is already published,
+// failed, DLQ'd, or blocked on authentication; the shared aggregate resolver
+// derives the resulting posts.status in the same transaction.
+const qCancelPostTargetsReset = `UPDATE post_targets
+ SET status = 'draft', error_message = ''
+ WHERE post_id = $1
+   AND status NOT IN ('published', 'partially_published', 'failed', 'dlq', 'dead_letter', 'blocked_auth')`
 
 const qRetryPostResetFailedTargets = `UPDATE post_targets SET status = 'queued', error_message = '' WHERE post_id = $1 AND status = 'failed'`
 
-const qRetryTargetResetTarget = `UPDATE post_targets SET status = 'queued', error_message = '' WHERE id = $1`
+const qRetryTargetResetTarget = `UPDATE post_targets SET status = 'queued', error_message = '' WHERE id = $1 AND status = 'failed'`
 
 const qRetryTargetUpdateParent = `UPDATE posts SET status = 'queued' WHERE id = (SELECT post_id FROM post_targets WHERE id = $1)`
 
@@ -224,7 +270,8 @@ const qMarkDeadLetter = `UPDATE post_targets
  WHERE id = $1 AND lease_owner_id = $2`
 
 const qMarkRetrying = `UPDATE post_targets
- SET attempt_count = attempt_count + 1,
+ SET status = 'retrying',
+     attempt_count = attempt_count + 1,
      next_retry_at = $3,
      lease_owner_id = NULL,
      leased_until = NULL,
@@ -233,7 +280,8 @@ const qMarkRetrying = `UPDATE post_targets
  WHERE id = $1 AND lease_owner_id = $2`
 
 const qMarkRateLimited = `UPDATE post_targets
- SET next_retry_at = $3,
+ SET status = 'queued',
+     next_retry_at = $3,
      rate_limit_reset_at = $3,
      lease_owner_id = NULL,
      leased_until = NULL,
@@ -251,7 +299,8 @@ const qReclaimExpiredLeases = `UPDATE post_targets
    AND leased_until <= NOW()
    AND lease_owner_id IS NOT NULL
    AND lease_owner_id <> $1
-   AND status IN ('publishing', 'queued')`
+   AND status IN ('publishing', 'queued')
+ RETURNING post_id`
 
 const qClaimPublishingTargetSelect = `SELECT id FROM post_targets
  WHERE id = $1 AND status = 'publishing' AND platform_post_id IS NOT NULL AND platform_post_id <> ''

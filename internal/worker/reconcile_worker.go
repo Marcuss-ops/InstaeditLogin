@@ -1,8 +1,7 @@
-// Package worker — reconcile_worker.go is the SECOND background
-// goroutine alongside PublishWorker. Taglio 5.x splits the
-// reconciler out of PublishWorker (where it was a tickReconcile
-// method called inside runOnce) into its own type + Run loop,
-// mirroring the outbox dispatcher shape (internal/outbox/dispatcher.go).
+// Package worker — reconcile_worker.go is the second background
+// goroutine alongside PublishWorker. The reconciler is a separate
+// type with its own Run loop, mirroring the outbox dispatcher shape
+// (internal/outbox/dispatcher.go).
 //
 // Why a separate goroutine:
 //
@@ -64,8 +63,8 @@ const DefaultReconcileInterval = 5 * time.Second
 // reconciler never accidentally writes the publish path (no
 // payload load, no idempotency-key stamp).
 //
-// FASE 1.1 — SKIP LOCKED: ClaimPublishingTarget is the reconciler's
-// atomic row-ownership check. Before calling AsyncPublisher.Reconcile,
+// SKIP LOCKED: ClaimPublishingTarget is the reconciler's atomic
+// row-ownership check. Before calling AsyncPublisher.Reconcile,
 // the reconciler claims the row so two reconciler replicas racing
 // the same publishing target don't both spend an API call.
 type ReconcilePostStore interface {
@@ -82,13 +81,12 @@ type ReconcilePostStore interface {
 	// row stays in 'publishing'. Status transitions are still
 	// done by UpdateStatus after Reconcile returns.
 	ClaimPublishingTarget(id int64) (bool, error)
-	// UpdateStatus persists the publishing→published|failed
-	// transitions the reconciler writes. Idempotent on terminal
-	// states (two reconcilers racing the same row will both write
-	// the same terminal state — the second UPDATE is a no-op).
-	// The target's ProviderState is also written atomically by
-	// UpdateStatus on terminal transitions.
+	// UpdateStatus persists a target transition and recomputes its parent
+	// aggregate status in the same transaction.
 	UpdateStatus(target *models.PostTarget) error
+	// RepairAggregateStatuses is an idempotent safety net for parent rows
+	// whose stored status drifted from their target set.
+	RepairAggregateStatuses() (int, error)
 }
 
 // ReconcileUserStore is the reconciler's narrow view of the user /
@@ -116,12 +114,11 @@ type ReconcileUserStore = PublisherUserStore
 //     queued→publishing via ClaimQueuedTarget and is no longer the
 //     row's writer.
 //
-// Taglio 5.x: split out from PublishWorker. The dispatcher's
-// outbox-based retry path is the platform-decoupled equivalent
-// for failures; the per-target retry state machine (next_attempt_at
-// / attempt_count columns, migration 018) is an option for async
-// platforms that want at-most-N-attempts-per-row semantics inside
-// the row itself.
+// The dispatcher's outbox-based retry path is the
+// platform-decoupled equivalent for failures; the per-target retry
+// state machine (next_attempt_at / attempt_count columns, migration
+// 018) is an option for async platforms that want
+// at-most-N-attempts-per-row semantics inside the row itself.
 type ReconcileWorker struct {
 	postRepo      ReconcilePostStore
 	userRepo      ReconcileUserStore
@@ -210,6 +207,11 @@ func (w *ReconcileWorker) Run(ctx context.Context) error {
 // Per-tick errors are logged at WARN and the worker keeps ticking
 // on the next interval — same shape as PublishWorker.runOnce.
 func (w *ReconcileWorker) runOnce(ctx context.Context) {
+	if repaired, err := w.postRepo.RepairAggregateStatuses(); err != nil {
+		w.logger.Warn("reconcile aggregate repair failed", "error", err)
+	} else if repaired > 0 {
+		w.logger.Info("reconcile aggregate repair done", "repaired", repaired)
+	}
 	if reconciled, failed, err := w.tickReconcile(ctx); err != nil {
 		w.logger.Warn("reconcile worker tick failed", "error", err)
 	} else if reconciled > 0 || failed > 0 {
@@ -228,8 +230,8 @@ func (w *ReconcileWorker) runOnce(ctx context.Context) {
 // in-flight state it leaves the target alone for the next tick.
 //
 // Safety: this goroutine claims each row via ClaimPublishingTarget
-// before reading it (FASE 1.1 — SKIP LOCKED). If another reconciler
-// replica already claimed the row, we skip it. The winner has
+// before reading it (SKIP LOCKED). If another reconciler replica
+// already claimed the row, we skip it. The winner has
 // exclusive ownership for the duration of the reconcileTarget call.
 // On terminal transitions (published|failed), UpdateStatus is
 // idempotent — if two reconcilers somehow both claim the same row
@@ -268,8 +270,8 @@ func (w *ReconcileWorker) tickReconcile(ctx context.Context) (reconciled, failed
 	return reconciled, failed, nil
 }
 
-// reconcileTarget (Taglio 5.x — canonical async-publisher
-// transition). Drives the per-target async state machine by
+// reconcileTarget drives the per-target async-publisher state
+// machine by
 // delegating to AsyncPublisher.Reconcile, which returns one of
 // three terminal-stable outcomes per its interface contract:
 //
@@ -282,13 +284,11 @@ func (w *ReconcileWorker) tickReconcile(ctx context.Context) (reconciled, failed
 //	                            jitter backoff on outbox_events is the retry
 //	                            mechanism at the platform-decoupled level;
 //	                            per-target retry on this row is via the
-//	                            post_targets.next_attempt_at / attempt_count
-//	                            columns (Taglio 4.7 state machine).
+//	                            post_targets.next_attempt_at / attempt_count//                            columns.
 //	(nil, nil)               — in-flight → leave alone, retry next tick.
 //
 // Per-capability setup (account/oauth lookup, vault.Renew) is
-// unchanged from the previous Taglio 4.2 implementation. The
-// state-string switch (`switch state { case "PUBLISH_COMPLETE":
+// The state-string switch (`switch state { case "PUBLISH_COMPLETE":
 // ... }`) is gone — Reconcile owns the transition decision; the
 // worker just records it.
 //
@@ -303,8 +303,8 @@ func (w *ReconcileWorker) tickReconcile(ctx context.Context) (reconciled, failed
 // wasFailed let the caller increment per-tick counters without
 // parsing the error.
 func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.PostTarget) (reconciled bool, wasFailed bool, err error) {
-	// FASE 1.1 — SKIP LOCKED: claim the publishing row before
-	// doing any work. If another reconciler replica already claimed
+	// SKIP LOCKED: claim the publishing row before doing any work.
+	// If another reconciler replica already claimed
 	// this row, we skip it — the winner will drive the state
 	// machine to completion. This prevents two replicas from
 	// spending duplicate API calls on the same publish_id.
@@ -357,13 +357,17 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 	refresher := credentials.TokenRefresher(func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
 		return oauth.RefreshOAuthToken(ctx, refreshToken)
 	})
-	oauthToken, err := w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
-	if err != nil {
-		w.logger.Warn("bearer token renew failed, falling back to long_lived",
-			"account_id", account.ID, "error", err)
-		if oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher); err != nil {
-			return w.markFailedAndReturn(target, "token refresh failed: "+err.Error())
+	var oauthToken *models.OAuthToken
+	if account.Platform == models.PlatformYouTube {
+		oauthToken, err = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
+	} else {
+		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+		if err != nil {
+			oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher)
 		}
+	}
+	if err != nil {
+		return w.markFailedAndReturn(target, "token refresh failed")
 	}
 
 	// 4. Delegate to platform's Reconcile (single GET + transition decision).

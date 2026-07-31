@@ -45,9 +45,11 @@ type mockReconcilePostStore struct {
 	updateCalls          int
 
 	// Function fields — each test overrides only what it exercises.
-	listPublishingFn  func() ([]models.PostTarget, error)
-	claimPublishingFn func(id int64) (bool, error)
-	updateStatusFn    func(*models.PostTarget) error
+	listPublishingFn          func() ([]models.PostTarget, error)
+	claimPublishingFn         func(id int64) (bool, error)
+	updateStatusFn            func(*models.PostTarget) error
+	repairAggregateStatusesFn func() (int, error)
+	repairCalls               int
 
 	// Captured targets from UpdateStatus — lets tests inspect the
 	// final status (published vs failed) and assert on the worker
@@ -86,6 +88,16 @@ func (m *mockReconcilePostStore) UpdateStatus(target *models.PostTarget) error {
 		return nil
 	}
 	return m.updateStatusFn(target)
+}
+
+func (m *mockReconcilePostStore) RepairAggregateStatuses() (int, error) {
+	m.mu.Lock()
+	m.repairCalls++
+	m.mu.Unlock()
+	if m.repairAggregateStatusesFn == nil {
+		return 0, nil
+	}
+	return m.repairAggregateStatusesFn()
 }
 
 // ------------------------------------------------------------------
@@ -699,6 +711,33 @@ func TestReconcileWorker_Run_GracefulShutdown_DrainsInFlight(t *testing.T) {
 	}
 	if len(posts.updateTargets) < 1 || posts.updateTargets[0].Status != models.PostStatusPublished {
 		t.Errorf("final status: want published, got %+v", posts.updateTargets)
+	}
+}
+
+func TestReconcileWorker_RunOnce_RepairsAggregateStatuses(t *testing.T) {
+	posts := &mockReconcilePostStore{
+		repairAggregateStatusesFn: func() (int, error) {
+			return 1, nil
+		},
+	}
+	w := NewReconcileWorker(
+		posts,
+		nil,
+		services.NewCapabilityRouter(),
+		nil,
+		"test-worker-id",
+		nil,
+		time.Hour,
+		nil,
+	)
+
+	w.runOnce(context.Background())
+
+	posts.mu.Lock()
+	repairCalls := posts.repairCalls
+	posts.mu.Unlock()
+	if repairCalls != 1 {
+		t.Fatalf("RepairAggregateStatuses calls = %d, want 1", repairCalls)
 	}
 }
 

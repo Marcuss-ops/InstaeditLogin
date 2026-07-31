@@ -51,6 +51,10 @@ var (
 	// updates from the pending queue.
 	ErrPostTargetNotFound = errors.New("post_target not found")
 
+	// ErrPostTargetTransitionStale is returned when a late worker attempts
+	// to overwrite a target that has already reached a terminal state.
+	ErrPostTargetTransitionStale = errors.New("post_target transition stale")
+
 	// ErrUserNotFound is returned by UserRepository.Update when zero rows
 	// match — the user id does not exist. Unlike PostRepository.Update,
 	// UserRepository.Update is NOT tenant-scoped (no workspace_id clause),

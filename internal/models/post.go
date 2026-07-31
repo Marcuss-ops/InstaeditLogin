@@ -103,11 +103,18 @@ func (s PostStatus) IsValid() bool {
 }
 
 // IsTerminal reports whether s is a terminal state (no further transitions).
-// PostStatusDLQ (SPRINT 5.2) is terminal — no automatic transition out.
+// PostStatusDLQ (SPRINT 5.2) is the production value for the dead-letter
+// queue. The literal "dead_letter" is retained as a read-side compatibility
+// alias for older fixtures/rows; neither representation may be retried.
 // PostStatusPublished / PostStatusPartiallyPublished / PostStatusFailed
 // remain terminal as before.
 func (s PostStatus) IsTerminal() bool {
-	return s == PostStatusPublished || s == PostStatusPartiallyPublished || s == PostStatusFailed || s == PostStatusDLQ
+	return s == PostStatusPublished ||
+		s == PostStatusPartiallyPublished ||
+		s == PostStatusFailed ||
+		s == PostStatusDLQ ||
+		s == PostStatus("dead_letter") ||
+		s == PostStatusBlockedAuth
 }
 
 // String returns the underlying string value.

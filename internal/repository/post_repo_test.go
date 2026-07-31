@@ -81,11 +81,11 @@ func TestPostCreate_AtomicTx_Happy(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(
-		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
  ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
  RETURNING id, created_at, upload_job_id`,
-	).WithArgs(int64(1), "hello", "world", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+	).WithArgs(int64(1), "hello", "world", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(100, now, nil))
 	// Target A: id=200 from RETURNING (first iteration of targets loop).
 	mock.ExpectQuery(
@@ -156,11 +156,11 @@ func TestPostCreate_EmptyTargets_OKSkipsTargetInserts(t *testing.T) {
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
  ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
  RETURNING id, created_at, upload_job_id`).
-		WithArgs(int64(1), "draft", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+		WithArgs(int64(1), "draft", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(100, now, nil))
 	// No target insert expectations — we pass nil/empty targets.
 	// No outbox insert expectations either — no targets means no outbox events.
@@ -185,11 +185,11 @@ func TestPostRepository_Create_TxRollback(t *testing.T) {
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	mock.ExpectQuery(`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
  ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
  RETURNING id, created_at, upload_job_id`).
-		WithArgs(int64(1), "hello", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+		WithArgs(int64(1), "hello", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(100, now, nil))
 	mock.ExpectQuery(`INSERT INTO post_targets (post_id, platform_account_id, status)
 		 VALUES ($1, $2, $3)
@@ -243,9 +243,9 @@ func TestPostRepository_Update_Success(t *testing.T) {
 
 	mock.ExpectExec(
 		`UPDATE posts
-		 SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7
-		 WHERE id = $8 AND workspace_id = $9`,
-	).WithArgs("new", "cap", "url", &now, "", "", models.PostStatusScheduled, int64(100), int64(1)).
+		 SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7, media_asset_id = $8, storage_object_key = $9, bucket = $10
+		 WHERE id = $11 AND workspace_id = $12`,
+	).WithArgs("new", "cap", "url", &now, "", "", models.PostStatusScheduled, sql.NullString{}, sql.NullString{}, sql.NullString{}, int64(100), int64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	post := &models.Post{
@@ -266,9 +266,9 @@ func TestPostRepository_Update_NotFound(t *testing.T) {
 
 	mock.ExpectExec(
 		`UPDATE posts
-	 SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7
-	 WHERE id = $8 AND workspace_id = $9`,
-	).WithArgs("x", "", "", (*time.Time)(nil), "", "", models.PostStatusDraft, int64(999), int64(7)).
+	 SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7, media_asset_id = $8, storage_object_key = $9, bucket = $10
+	 WHERE id = $11 AND workspace_id = $12`,
+	).WithArgs("x", "", "", (*time.Time)(nil), "", "", models.PostStatusDraft, sql.NullString{}, sql.NullString{}, sql.NullString{}, int64(999), int64(7)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err := repo.Update(&models.Post{
@@ -291,9 +291,8 @@ func TestPostUpdate_ExecErrorPropagates(t *testing.T) {
 
 	mock.ExpectExec(
 		`UPDATE posts
-		 SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7
-		 WHERE id = $8 AND workspace_id = $9`,
-	).WithArgs("x", "", "", (*time.Time)(nil), "", "", models.PostStatusDraft, int64(100), int64(7)).
+		 SET title = $1, caption = $2, media_url = $3, publish_at = $4, privacy_level = $5, default_privacy_level = $6, status = $7, media_asset_id = $8, storage_object_key = $9, bucket = $10
+		 WHERE id = $11 AND workspace_id = $12`).WithArgs("x", "", "", (*time.Time)(nil), "", "", models.PostStatusDraft, sql.NullString{}, sql.NullString{}, sql.NullString{}, int64(100), int64(7)).
 		WillReturnError(errors.New("db down"))
 
 	err := repo.Update(&models.Post{
@@ -312,13 +311,26 @@ func TestPostUpdateStatus_Happy(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
 
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT post_id FROM post_targets WHERE id = $1`).WithArgs(int64(200)).
+		WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(100))
+	mock.ExpectQuery(`SELECT id FROM post_targets WHERE id = $1 FOR UPDATE`).WithArgs(int64(200)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
+	mock.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(100))
 	mock.ExpectExec(
 		`UPDATE post_targets
 		 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
 		     provider_state = $6, container_id = $7
-		 WHERE id = $5`,
+		 WHERE id = $5
+		   AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq', 'dead_letter', 'blocked_auth'))`,
 	).WithArgs(models.PostStatusPublished, "remote-123", "", &now, int64(200), "", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusPublished))
+	mock.ExpectExec(`UPDATE posts SET status = $1 WHERE id = $2`).WithArgs(models.PostStatusPublished, int64(100)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	tgt := &models.PostTarget{
 		ID: 200, Status: models.PostStatusPublished,
@@ -336,13 +348,10 @@ func TestPostRepository_UpdateStatus_StaleTarget(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
-	mock.ExpectExec(
-		`UPDATE post_targets
-	 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
-	     provider_state = $6, container_id = $7
-	 WHERE id = $5`,
-	).WithArgs(models.PostStatusFailed, "", "publish error", (*time.Time)(nil), int64(999), "", "").
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT post_id FROM post_targets WHERE id = $1`).WithArgs(int64(999)).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
 
 	err := repo.UpdateStatus(&models.PostTarget{
 		ID: 999, Status: models.PostStatusFailed, ErrorMessage: "publish error",
@@ -421,13 +430,13 @@ func TestPostFindByID_FoundWithNullableTime(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
-	 FROM posts
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
+ FROM posts
 	 WHERE ($1::bigint = 0 OR workspace_id = $1) AND id = $2`,
 	).WithArgs(int64(0), int64(100)).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id"},
-		).AddRow(100, 1, "scheduled", "cap", "url", now, now, models.PostStatusScheduled, "", "", time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC), nil))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id", "media_asset_id", "storage_object_key", "bucket"},
+		).AddRow(100, 1, "scheduled", "cap", "url", now, now, models.PostStatusScheduled, "", "", time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC), nil, nil, nil, nil))
 
 	p, err := repo.FindByID(100)
 	if err != nil {
@@ -449,13 +458,13 @@ func TestPostFindByID_NilScheduledAt_RoundTripsClean(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 	now := time.Now()
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
-	 FROM posts
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
+ FROM posts
 	 WHERE ($1::bigint = 0 OR workspace_id = $1) AND id = $2`,
 	).WithArgs(int64(0), int64(1)).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id"},
-		).AddRow(1, 1, "draft", "", "", now, nil, models.PostStatusDraft, "", "", now, nil))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id", "media_asset_id", "storage_object_key", "bucket"},
+		).AddRow(1, 1, "draft", "", "", now, nil, models.PostStatusDraft, "", "", now, nil, nil, nil, nil))
 
 	p, err := repo.FindByID(1)
 	if err != nil {
@@ -473,8 +482,8 @@ func TestPostFindByID_NotFoundReturnsNilNil(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
-	 FROM posts
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
+ FROM posts
 	 WHERE ($1::bigint = 0 OR workspace_id = $1) AND id = $2`,
 	).WithArgs(int64(0), int64(999)).
 		WillReturnError(sql.ErrNoRows)
@@ -493,15 +502,15 @@ func TestPostListByWorkspace_OK(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
-	 FROM posts
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
+ FROM posts
 	 WHERE workspace_id = $1
 	 ORDER BY created_at DESC`,
 	).WithArgs(int64(1)).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id"},
-		).AddRow(2, 1, "B", "", "", now, nil, models.PostStatusDraft, "", "", now, nil).
-			AddRow(1, 1, "A", "", "", now, nil, models.PostStatusDraft, "", "", now, nil))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id", "media_asset_id", "storage_object_key", "bucket"},
+		).AddRow(2, 1, "B", "", "", now, nil, models.PostStatusDraft, "", "", now, nil, nil, nil, nil).
+			AddRow(1, 1, "A", "", "", now, nil, models.PostStatusDraft, "", "", now, nil, nil, nil, nil))
 
 	got, err := repo.ListByWorkspace(1)
 	if err != nil {
@@ -562,14 +571,14 @@ func TestPostListQueued_BeforeTimeFilterApplied(t *testing.T) {
 	repo := repository.NewPostRepository(db)
 	cutoff := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(
-		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id
-	 FROM posts
+		`SELECT id, workspace_id, title, caption, media_url, ingest_after, publish_at, status, privacy_level, default_privacy_level, created_at, upload_job_id, media_asset_id, storage_object_key, bucket
+ FROM posts
 	 WHERE status = 'queued' AND (publish_at IS NULL OR publish_at <= $1)
 	 ORDER BY publish_at ASC NULLS FIRST`,
 	).WithArgs(cutoff).
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id"},
-		).AddRow(1, 1, "due", "", "", cutoff, cutoff, models.PostStatusScheduled, "", "", cutoff, nil))
+			[]string{"id", "workspace_id", "title", "caption", "media_url", "ingest_after", "publish_at", "status", "privacy_level", "default_privacy_level", "created_at", "upload_job_id", "media_asset_id", "storage_object_key", "bucket"},
+		).AddRow(1, 1, "due", "", "", cutoff, cutoff, models.PostStatusScheduled, "", "", cutoff, nil, nil, nil, nil))
 
 	posts, err := repo.ListQueued(cutoff)
 	if err != nil {
@@ -648,8 +657,8 @@ func TestPostCreate_ZeroIngestAfter_AutoStampsBeforeBind(t *testing.T) {
 
 		mock.ExpectBegin()
 		mock.ExpectQuery(
-			`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
  ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
  RETURNING id, created_at, upload_job_id`,
 		// sqlmock.AnyArg at position $5 is sufficient for the auto-stamp
@@ -660,7 +669,7 @@ func TestPostCreate_ZeroIngestAfter_AutoStampsBeforeBind(t *testing.T) {
 		// would still slip past AnyArg; the type assertion in the
 		// post-call bracket (post.IngestAfter, Location, etc.) catches
 		// that too because the bind result is whatever the gate stamped.
-		).WithArgs(int64(1), "auto-stamp", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+		).WithArgs(int64(1), "auto-stamp", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(100, now, nil))
 		mock.ExpectCommit()
 
@@ -707,11 +716,11 @@ func TestPostCreate_ZeroIngestAfter_AutoStampsBeforeBind(t *testing.T) {
 
 		mock.ExpectBegin()
 		mock.ExpectQuery(
-			`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
  ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
  RETURNING id, created_at, upload_job_id`,
-		).WithArgs(int64(2), "override", "", "", explicitTime, (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+		).WithArgs(int64(2), "override", "", "", explicitTime, (*time.Time)(nil), "", "", models.PostStatusDraft, nil, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(200, now, nil))
 		mock.ExpectCommit()
 
@@ -766,11 +775,11 @@ func TestPostCreate_ConcurrentGoroutines_NoSharedState(t *testing.T) {
 
 			mock.ExpectBegin()
 			mock.ExpectQuery(
-				`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+				`INSERT INTO posts (workspace_id, title, caption, media_url, ingest_after, publish_at, default_privacy_level, privacy_level, status, upload_job_id, media_asset_id, storage_object_key, bucket)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
  ON CONFLICT (upload_job_id) WHERE upload_job_id IS NOT NULL DO NOTHING
  RETURNING id, created_at, upload_job_id`,
-			).WithArgs(int64(1), "title", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil).
+			).WithArgs(int64(1), "title", "", "", sqlmock.AnyArg(), (*time.Time)(nil), "", "", models.PostStatusDraft, nil, sql.NullString{}, sql.NullString{}, sql.NullString{}).
 				WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "upload_job_id"}).AddRow(postID, now, nil))
 			// Taglio 5.0 STEP 1: BOTH post_targets INSERT first (so the
 			// RETURNING ids fill target.ID for both rows), THEN BOTH
@@ -831,8 +840,8 @@ func TestPostClaimQueuedTarget_Success(t *testing.T) {
 	db, mock := newMockPostDBExact(t)
 	repo := repository.NewPostRepository(db)
 
-	// FASE 1.1: claim is now a tx: BEGIN → SELECT FOR UPDATE SKIP
-	// LOCKED → UPDATE → COMMIT.
+	// FASE 1.1: claim is one transaction: BEGIN → SELECT FOR UPDATE
+	// SKIP LOCKED → parent lookup/locks → target update → aggregate → COMMIT.
 	mock.ExpectBegin()
 	mock.ExpectQuery(
 		`SELECT id FROM post_targets
@@ -840,9 +849,16 @@ func TestPostClaimQueuedTarget_Success(t *testing.T) {
 		 FOR UPDATE SKIP LOCKED`,
 	).WithArgs(int64(200)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
-	mock.ExpectExec(
-		`UPDATE post_targets SET status = 'publishing' WHERE id = $1`,
-	).WithArgs(int64(200)).
+	mock.ExpectQuery(`SELECT post_id FROM post_targets WHERE id = $1`).WithArgs(int64(200)).
+		WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(100))
+	mock.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(100))
+	mock.ExpectExec(`UPDATE post_targets SET status = 'publishing' WHERE id = $1`).
+		WithArgs(int64(200)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusPublishing))
+	mock.ExpectExec(`UPDATE posts SET status = $1 WHERE id = $2`).WithArgs(models.PostStatusPublishing, int64(100)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -926,9 +942,16 @@ func TestPostClaimQueuedTarget_CommitError(t *testing.T) {
 		 FOR UPDATE SKIP LOCKED`,
 	).WithArgs(int64(200)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
-	mock.ExpectExec(
-		`UPDATE post_targets SET status = 'publishing' WHERE id = $1`,
-	).WithArgs(int64(200)).
+	mock.ExpectQuery(`SELECT post_id FROM post_targets WHERE id = $1`).WithArgs(int64(200)).
+		WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(100))
+	mock.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(100))
+	mock.ExpectExec(`UPDATE post_targets SET status = 'publishing' WHERE id = $1`).
+		WithArgs(int64(200)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusPublishing))
+	mock.ExpectExec(`UPDATE posts SET status = $1 WHERE id = $2`).WithArgs(models.PostStatusPublishing, int64(100)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
 
@@ -1027,9 +1050,16 @@ func TestPostClaimQueuedTarget_ConcurrentRace_TwoGoroutines_OneWinner(t *testing
 		 FOR UPDATE SKIP LOCKED`,
 	).WithArgs(int64(200)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
-	mockA.ExpectExec(
-		`UPDATE post_targets SET status = 'publishing' WHERE id = $1`,
-	).WithArgs(int64(200)).
+	mockA.ExpectQuery(`SELECT post_id FROM post_targets WHERE id = $1`).WithArgs(int64(200)).
+		WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(100))
+	mockA.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(100))
+	mockA.ExpectExec(`UPDATE post_targets SET status = 'publishing' WHERE id = $1`).
+		WithArgs(int64(200)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mockA.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).WithArgs(int64(100)).
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusPublishing))
+	mockA.ExpectExec(`UPDATE posts SET status = $1 WHERE id = $2`).WithArgs(models.PostStatusPublishing, int64(100)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mockA.ExpectCommit()
 
@@ -1113,5 +1143,141 @@ func TestPostClaimQueuedTarget_ConcurrentRace_TwoGoroutines_OneWinner(t *testing
 	}
 	if err := mockB.ExpectationsWereMet(); err != nil {
 		t.Errorf("Worker B unmet expectations: %v", err)
+	}
+}
+
+func TestPostRepository_UpdateStatus_RejectsTerminalRegression(t *testing.T) {
+	for _, terminal := range []models.PostStatus{
+		models.PostStatusPublished,
+		models.PostStatusDLQ,
+		models.PostStatus("dead_letter"),
+	} {
+		t.Run(string(terminal), func(t *testing.T) {
+			db, mock := newMockPostDBExact(t)
+			repo := repository.NewPostRepository(db)
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT post_id FROM post_targets WHERE id = $1`).WithArgs(int64(200)).
+				WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(100))
+			mock.ExpectQuery(`SELECT id FROM post_targets WHERE id = $1 FOR UPDATE`).WithArgs(int64(200)).
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
+			mock.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).WithArgs(int64(100)).
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(100))
+			mock.ExpectExec(
+				`UPDATE post_targets
+				 SET status = $1, platform_post_id = $2, error_message = $3, published_at = $4,
+				     provider_state = $6, container_id = $7
+				 WHERE id = $5
+				   AND (status = $1 OR status NOT IN ('published', 'partially_published', 'failed', 'dlq', 'dead_letter', 'blocked_auth'))`,
+			).WithArgs(models.PostStatusPublishing, "", "", (*time.Time)(nil), int64(200), "", "").
+				WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectQuery(`SELECT status FROM post_targets WHERE id = $1`).WithArgs(int64(200)).
+				WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(terminal))
+			mock.ExpectRollback()
+
+			err := repo.UpdateStatus(&models.PostTarget{ID: 200, Status: models.PostStatusPublishing})
+			if err == nil {
+				t.Fatal("expected stale terminal transition error, got nil")
+			}
+			if !errors.Is(err, repository.ErrPostTargetTransitionStale) {
+				t.Fatalf("error must wrap ErrPostTargetTransitionStale, got %v", err)
+			}
+			if errors.Is(err, repository.ErrPostTargetNotFound) {
+				t.Fatalf("stale terminal transition must not be reported as not found: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
+func TestPostRepository_RetryTarget_OnlyFailedTargetsCanBeReset(t *testing.T) {
+	for _, terminal := range []string{"dead_letter", "dlq"} {
+		t.Run(terminal, func(t *testing.T) {
+			db, mock := newMockPostDBExact(t)
+			repo := repository.NewPostRepository(db)
+
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT post_id FROM post_targets WHERE id = $1`).WithArgs(int64(200)).
+				WillReturnRows(sqlmock.NewRows([]string{"post_id"}).AddRow(100))
+			mock.ExpectQuery(`SELECT id FROM post_targets WHERE id = $1 FOR UPDATE`).WithArgs(int64(200)).
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
+			mock.ExpectQuery(`SELECT id FROM posts WHERE id = $1 FOR UPDATE`).WithArgs(int64(100)).
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(100))
+			mock.ExpectExec(`UPDATE post_targets SET status = 'queued', error_message = '' WHERE id = $1 AND status = 'failed'`).
+				WithArgs(int64(200)).
+				WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectQuery(`SELECT status FROM post_targets WHERE id = $1`).WithArgs(int64(200)).
+				WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(terminal))
+			mock.ExpectRollback()
+
+			err := repo.RetryTarget(200)
+			if err == nil {
+				t.Fatal("expected terminal retry to be rejected")
+			}
+			if !errors.Is(err, repository.ErrPostTargetTransitionStale) {
+				t.Fatalf("terminal retry must wrap ErrPostTargetTransitionStale, got %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
+func TestPostRepository_RepairAggregateStatuses_IsIdempotent(t *testing.T) {
+	db, mock := newMockPostDBExact(t)
+	repo := repository.NewPostRepository(db)
+
+	// Candidate snapshot contains one drifted parent. The first repair fixes
+	// it; the second repair sees the same post already consistent and does not
+	// issue a parent UPDATE.
+	for i := 0; i < 2; i++ {
+		mock.ExpectQuery(`SELECT id, status FROM posts ORDER BY id ASC`).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "status"}).AddRow(100, models.PostStatusQueued))
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id FROM post_targets WHERE post_id = $1 ORDER BY id ASC FOR UPDATE`).
+			WithArgs(int64(100)).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(200))
+		mock.ExpectQuery(`SELECT status FROM posts WHERE id = $1 FOR UPDATE`).
+			WithArgs(int64(100)).
+			WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(func() models.PostStatus {
+				if i == 0 {
+					return models.PostStatusQueued
+				}
+				return models.PostStatusPublished
+			}()))
+		if i == 0 {
+			mock.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).
+				WithArgs(int64(100)).
+				WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusPublished))
+			mock.ExpectExec(`UPDATE posts SET status = $1 WHERE id = $2`).
+				WithArgs(models.PostStatusPublished, int64(100)).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+		} else {
+			mock.ExpectQuery(`SELECT status FROM post_targets WHERE post_id = $1 ORDER BY id ASC`).
+				WithArgs(int64(100)).
+				WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(models.PostStatusPublished))
+		}
+		mock.ExpectCommit()
+	}
+
+	repaired, err := repo.RepairAggregateStatuses()
+	if err != nil {
+		t.Fatalf("first repair: %v", err)
+	}
+	if repaired != 1 {
+		t.Fatalf("first repair count = %d, want 1", repaired)
+	}
+	repaired, err = repo.RepairAggregateStatuses()
+	if err != nil {
+		t.Fatalf("second repair: %v", err)
+	}
+	if repaired != 0 {
+		t.Fatalf("second repair count = %d, want 0", repaired)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }

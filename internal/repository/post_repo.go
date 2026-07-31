@@ -599,26 +599,7 @@ func (r *PostRepository) SetProviderIdempotencyKey(id int64, key string) error {
 // Persists status, platform_post_id, error_message, published_at atomically
 // (single UPDATE).
 func (r *PostRepository) UpdateStatus(target *models.PostTarget) error {
-	result, err := r.db.Exec(
-		qUpdateTargetStatus,
-		target.Status, target.PlatformPostID, target.ErrorMessage,
-		target.PublishedAt, target.ID, target.ProviderState, target.ContainerID,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update post_target status: %w", err)
-	}
-	// RowsAffected = 0 means the post_target id is stale or invalid. The
-	// worker would otherwise see nil error and assume the transition
-	// happened, leaving a ghost target in the pending queue. Sentinel
-	// (ErrPostTargetNotFound) lets the worker drop the phantom attempt.
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to read rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, target.ID)
-	}
-	return nil
+	return r.updateStatusWithAggregate(target)
 }
 
 // ClaimQueuedTarget atomically transitions a post_target from
@@ -672,12 +653,9 @@ func (r *PostRepository) ClaimQueuedTarget(id int64) (bool, error) {
 		return false, fmt.Errorf("failed to select for update: %w", err)
 	}
 
-	// Row locked — we own it. Transition status.
-	_, err = tx.Exec(
-		qClaimQueuedTargetUpdate,
-		id,
-	)
-	if err != nil {
+	// Row locked — we own it. Lock the parent, transition the target, and
+	// recompute the aggregate before releasing the transaction.
+	if err = claimTargetTx(tx, id, qClaimQueuedTargetUpdate, id); err != nil {
 		return false, fmt.Errorf("failed to update claimed target: %w", err)
 	}
 
@@ -746,11 +724,8 @@ func (r *PostRepository) ClaimQueuedTargetWithLease(id int64, ownerID string, le
 
 	// Atomic claim + lease stamp. leased_until = NOW() + leaseTTL
 	// (computed in seconds; works for TTLs from 1s to ~68 years).
-	_, err = tx.Exec(
-		qClaimQueuedTargetWithLeaseUpdate,
-		id, ownerID, fmt.Sprintf("%d", leaseSeconds),
-	)
-	if err != nil {
+	if err = claimTargetTx(tx, id, qClaimQueuedTargetWithLeaseUpdate,
+		id, ownerID, fmt.Sprintf("%d", leaseSeconds)); err != nil {
 		return false, fmt.Errorf("failed to update claimed target with lease: %w", err)
 	}
 
@@ -840,23 +815,7 @@ func (r *PostRepository) MarkDeadLetter(id int64, ownerID string, lastError stri
 	if ownerID == "" {
 		return fmt.Errorf("MarkDeadLetter: ownerID is empty")
 	}
-	res, err := r.db.Exec(
-		qMarkDeadLetter,
-		id, ownerID, lastError,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to mark dead letter: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to read rows affected: %w", err)
-	}
-	if n == 0 {
-		// Either id is stale, lease_owner_id changed, or the row
-		// is already DLQ'd. Idempotent: not an error.
-		return nil
-	}
-	return nil
+	return r.mutateLeasedTarget(id, ownerID, qMarkDeadLetter, lastError)
 }
 
 // MarkRetrying (SPRINT 5.2) increments attempt_count + stamps
@@ -873,21 +832,7 @@ func (r *PostRepository) MarkRetrying(id int64, ownerID string, lastError string
 	if ownerID == "" {
 		return fmt.Errorf("MarkRetrying: ownerID is empty")
 	}
-	res, err := r.db.Exec(
-		qMarkRetrying,
-		id, ownerID, nextAttemptAt, lastError,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to mark retrying: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to read rows affected: %w", err)
-	}
-	if n == 0 {
-		return nil
-	}
-	return nil
+	return r.mutateLeasedTarget(id, ownerID, qMarkRetrying, nextAttemptAt, lastError)
 }
 
 // MarkRateLimited (SPRINT 5.2) handles the platform's 429/Retry-After
@@ -907,21 +852,7 @@ func (r *PostRepository) MarkRateLimited(id int64, ownerID string, retryAfter ti
 	if ownerID == "" {
 		return fmt.Errorf("MarkRateLimited: ownerID is empty")
 	}
-	res, err := r.db.Exec(
-		qMarkRateLimited,
-		id, ownerID, retryAfter,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to mark rate limited: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to read rows affected: %w", err)
-	}
-	if n == 0 {
-		return nil
-	}
-	return nil
+	return r.mutateLeasedTarget(id, ownerID, qMarkRateLimited, retryAfter)
 }
 
 // ReclaimExpiredLeases (SPRINT 5.2) takes over rows whose lease
@@ -953,18 +884,67 @@ func (r *PostRepository) MarkRateLimited(id int64, ownerID string, retryAfter ti
 // (the second replica's reclaim finds lease_owner_id = NULL
 // already and is a no-op).
 func (r *PostRepository) ReclaimExpiredLeases(myWorkerID string) (int64, error) {
-	res, err := r.db.Exec(
-		qReclaimExpiredLeases,
-		myWorkerID,
-	)
+	tx, err := r.db.Begin()
 	if err != nil {
-		return 0, fmt.Errorf("failed to reclaim expired leases: %w", err)
+		return 0, fmt.Errorf("failed to begin reclaim leases tx: %w", err)
 	}
-	n, err := res.RowsAffected()
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	rows, err := tx.Query(qSelectExpiredLeaseTargets, myWorkerID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to read rows affected: %w", err)
+		return 0, fmt.Errorf("failed to select expired leases: %w", err)
 	}
-	return n, nil
+	var targets []struct {
+		id     int64
+		postID int64
+	}
+	for rows.Next() {
+		var target struct {
+			id     int64
+			postID int64
+		}
+		if err = rows.Scan(&target.id, &target.postID); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("failed to scan expired lease: %w", err)
+		}
+		targets = append(targets, target)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("failed to read expired leases: %w", err)
+	}
+	rows.Close()
+
+	var reclaimed int64
+	for _, target := range targets {
+		if err = lockPostTx(tx, target.postID); err != nil {
+			return 0, err
+		}
+		result, execErr := tx.Exec(qReclaimExpiredLeaseByID, target.id, myWorkerID)
+		if execErr != nil {
+			return 0, fmt.Errorf("failed to reclaim lease %d: %w", target.id, execErr)
+		}
+		var affected int64
+		affected, err = result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("failed to read reclaimed lease %d rows affected: %w", target.id, err)
+		}
+		if affected == 0 {
+			continue
+		}
+		if err = persistAggregatePostStatusLockedTx(tx, target.postID); err != nil {
+			return 0, err
+		}
+		reclaimed += affected
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit reclaim leases: %w", err)
+	}
+	return reclaimed, nil
 }
 
 // ClaimWaitingProviderTarget atomically transitions a post_target from
@@ -996,11 +976,7 @@ func (r *PostRepository) ClaimWaitingProviderTarget(id int64) (bool, error) {
 		return false, fmt.Errorf("failed to select for update (waiting): %w", err)
 	}
 
-	_, err = tx.Exec(
-		qClaimQueuedTargetUpdate,
-		id,
-	)
-	if err != nil {
+	if err = claimTargetTx(tx, id, qClaimQueuedTargetUpdate, id); err != nil {
 		return false, fmt.Errorf("failed to update claimed waiting target: %w", err)
 	}
 
@@ -1230,25 +1206,31 @@ func (r *PostRepository) PublishPost(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-
-	_, err = tx.Exec(qPublishPostUpdateStatus, id)
-	if err != nil {
+	if err = resetPostTargetsAndAggregateTx(tx, id, qPublishPostTargetsReset); err != nil {
 		return err
 	}
-
-	_, err = tx.Exec(qPublishPostTargetsReset, id)
-	if err != nil {
-		return err
-	}
-
 	return tx.Commit()
 }
 
-// CancelPost updates status to draft.
+// CancelPost resets non-terminal targets to draft and derives the parent
+// status from the complete target set in the same transaction. Terminal
+// targets are preserved so cancellation cannot erase a published or failed
+// destination, nor can it bypass the aggregate resolver.
 func (r *PostRepository) CancelPost(id int64) error {
-	_, err := r.db.Exec(qCancelPost, id)
+	tx, err := r.db.Begin()
 	if err != nil {
+		return fmt.Errorf("failed to begin cancel-post tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if err = resetPostTargetsAndAggregateTx(tx, id, qCancelPostTargetsReset); err != nil {
 		return fmt.Errorf("failed to cancel post: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit cancel-post tx: %w", err)
 	}
 	return nil
 }
@@ -1260,17 +1242,9 @@ func (r *PostRepository) RetryPost(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-
-	_, err = tx.Exec(qPublishPostUpdateStatus, id)
-	if err != nil {
+	if err = resetPostTargetsAndAggregateTx(tx, id, qRetryPostResetFailedTargets); err != nil {
 		return err
 	}
-
-	_, err = tx.Exec(qRetryPostResetFailedTargets, id)
-	if err != nil {
-		return err
-	}
-
 	return tx.Commit()
 }
 
@@ -1281,17 +1255,9 @@ func (r *PostRepository) RetryTarget(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-
-	_, err = tx.Exec(qRetryTargetResetTarget, id)
-	if err != nil {
+	if err = resetTargetAndAggregateTx(tx, id); err != nil {
 		return err
 	}
-
-	_, err = tx.Exec(qRetryTargetUpdateParent, id)
-	if err != nil {
-		return err
-	}
-
 	return tx.Commit()
 }
 
@@ -1368,24 +1334,5 @@ func (r *PostRepository) SetTargetStatus(ctx context.Context, targetID int64, st
 	if !status.IsValid() {
 		return fmt.Errorf("post target SetTargetStatus: status %q is not a valid PostStatus", status)
 	}
-	result, err := r.db.ExecContext(ctx,
-		`UPDATE post_targets
-		 SET status = $2,
-		     error_message = COALESCE(NULLIF($3, ''), error_message),
-		     version = version + 1,
-		     updated_at = NOW()
-		 WHERE id = $1`,
-		targetID, string(status), errorMessage,
-	)
-	if err != nil {
-		return fmt.Errorf("post target SetTargetStatus: %w", err)
-	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("post target SetTargetStatus rows affected: %w", err)
-	}
-	if n == 0 {
-		return fmt.Errorf("%w: id=%d", ErrPostTargetNotFound, targetID)
-	}
-	return nil
+	return r.setTargetStatusWithAggregate(ctx, targetID, status, errorMessage)
 }
