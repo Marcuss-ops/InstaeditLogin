@@ -124,7 +124,7 @@ func (s *YouTubeOAuthService) updateVideoWithExtendedSnippet(ctx context.Context
 		return nil
 	}
 
-	rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	_, _ = io.Copy(io.Discard, resp.Body)
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
 		return &YouTubeAPIError{StatusCode: http.StatusUnauthorized, Category: "auth", Message: "youtube update video: unauthorized (status 401)"}
@@ -137,7 +137,7 @@ func (s *YouTubeOAuthService) updateVideoWithExtendedSnippet(ctx context.Context
 	case resp.StatusCode >= 500:
 		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube update video: server error (status %d)", resp.StatusCode)}
 	default:
-		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube update video: unexpected status %d: %s", resp.StatusCode, string(rbody))}
+		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube update video: unexpected status %d", resp.StatusCode)}
 	}
 }
 
@@ -188,7 +188,7 @@ func (s *YouTubeOAuthService) UpsertLocalizations(ctx context.Context, accessTok
 			_, _ = io.Copy(io.Discard, resp.Body)
 			return nil
 		}
-		rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		_, _ = io.Copy(io.Discard, resp.Body)
 		switch {
 		case resp.StatusCode == http.StatusUnauthorized:
 			return &YouTubeAPIError{StatusCode: http.StatusUnauthorized, Category: "auth", Message: fmt.Sprintf("youtube upsert localizations %s: unauthorized (status 401)", lang)}
@@ -201,7 +201,7 @@ func (s *YouTubeOAuthService) UpsertLocalizations(ctx context.Context, accessTok
 		case resp.StatusCode >= 500:
 			return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube upsert localizations %s: server error (status %d)", lang, resp.StatusCode)}
 		default:
-			return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube upsert localizations %s: unexpected status %d: %s", lang, resp.StatusCode, string(rbody))}
+			return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube upsert localizations %s: unexpected status %d", lang, resp.StatusCode)}
 		}
 	})
 }
@@ -292,7 +292,7 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 		return nil
 	}
 
-	rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	_, _ = io.Copy(io.Discard, resp.Body)
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
 		return &YouTubeAPIError{StatusCode: http.StatusUnauthorized, Category: "auth", Message: "youtube update video: unauthorized (status 401)"}
@@ -316,7 +316,7 @@ func (s *YouTubeOAuthService) UpdateVideoPrivacy(ctx context.Context, accessToke
 	case resp.StatusCode >= 500:
 		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube update video: server error (status %d)", resp.StatusCode)}
 	default:
-		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube update video: unexpected status %d: %s", resp.StatusCode, string(rbody))}
+		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube update video: unexpected status %d", resp.StatusCode)}
 	}
 }
 

@@ -411,8 +411,8 @@ func (s *YouTubeOAuthService) initiateResumableSession(ctx context.Context, acce
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("init session failed (status %d): %s", resp.StatusCode, string(body))
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return "", fmt.Errorf("init session failed (status %d)", resp.StatusCode)
 	}
 
 	uploadURL := resp.Header.Get("Location")
@@ -632,7 +632,7 @@ func (s *YouTubeOAuthService) putChunk(ctx context.Context, uploadURL string, da
 		// won't fix themselves on retry. Bubble up so the outer
 		// upload-job worker can MarkDeadLetter on attempt 1 with
 		// error_code = 'youtube_error'.
-		return "", 0, false, fmt.Errorf("unexpected PUT response (status %d): %s", resp.StatusCode, string(body))
+		return "", 0, false, fmt.Errorf("unexpected PUT response (status %d)", resp.StatusCode)
 	}
 }
 

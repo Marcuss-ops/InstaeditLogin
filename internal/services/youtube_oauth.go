@@ -256,8 +256,7 @@ func (s *YouTubeOAuthService) Revoke(ctx context.Context, accessToken string) er
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("youtube revoke returned status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("youtube revoke returned status %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -290,7 +289,7 @@ func (s *YouTubeOAuthService) RefreshOAuthToken(ctx context.Context, refreshToke
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("youtube refresh failed (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("youtube refresh failed (status %d)", resp.StatusCode)
 	}
 
 	var tr youtubeTokenResponse
@@ -512,7 +511,7 @@ func (s *YouTubeOAuthService) exchangeCodeForToken(ctx context.Context, code str
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token exchange failed (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("token exchange failed (status %d)", resp.StatusCode)
 	}
 
 	var tr youtubeTokenResponse
@@ -538,7 +537,7 @@ func (s *YouTubeOAuthService) getUserInfo(ctx context.Context, accessToken strin
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("user info failed (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("user info failed (status %d)", resp.StatusCode)
 	}
 
 	var result struct {

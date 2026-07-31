@@ -111,9 +111,9 @@ func (s *YouTubeOAuthService) ValidateChannelBinding(ctx context.Context, access
 
 		var result youtubeChannelsResponse
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
-			return fmt.Errorf("youtube channel binding: channels.list returned %d: %s", resp.StatusCode, string(body))
+			return fmt.Errorf("youtube channel binding: channels.list returned %d", resp.StatusCode)
 		}
 		if jerr := json.NewDecoder(resp.Body).Decode(&result); jerr != nil {
 			resp.Body.Close()
@@ -337,9 +337,9 @@ func (s *YouTubeOAuthService) DiscoverAccounts(ctx context.Context, accessToken,
 
 		var result youtubeChannelsResponse
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
-			return nil, fmt.Errorf("youtube channel discovery returned %d: %s", resp.StatusCode, string(body))
+			return nil, fmt.Errorf("youtube channel discovery returned %d", resp.StatusCode)
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			resp.Body.Close()

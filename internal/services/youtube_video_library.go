@@ -185,7 +185,7 @@ func (s *YouTubeOAuthService) getYouTubeLibraryJSON(ctx context.Context, accessT
 		return err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("status %d", resp.StatusCode)
 	}
 	if err := json.Unmarshal(body, destination); err != nil {
 		return fmt.Errorf("decode response: %w", err)

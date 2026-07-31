@@ -64,8 +64,7 @@ func (s *YouTubeOAuthService) Validate(ctx context.Context, accessToken, platfor
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("youtube validate returned status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("youtube validate returned status %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -189,7 +188,7 @@ func (s *YouTubeOAuthService) GetTokenInfo(ctx context.Context, accessToken stri
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("youtube tokeninfo returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("youtube tokeninfo returned %d", resp.StatusCode)
 	}
 
 	var r youtubeTokenInfoResponse

@@ -51,7 +51,7 @@ func (s *YouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken, vid
 		return nil
 	}
 
-	rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	_, _ = io.Copy(io.Discard, resp.Body)
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
 		return &YouTubeAPIError{StatusCode: http.StatusUnauthorized, Category: "auth", Message: "youtube set thumbnail: unauthorized (status 401)"}
@@ -64,7 +64,7 @@ func (s *YouTubeOAuthService) SetThumbnail(ctx context.Context, accessToken, vid
 	case resp.StatusCode >= 500:
 		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "server_error", Message: fmt.Sprintf("youtube set thumbnail: server error (status %d)", resp.StatusCode)}
 	default:
-		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube set thumbnail: unexpected status %d: %s", resp.StatusCode, string(rbody))}
+		return &YouTubeAPIError{StatusCode: resp.StatusCode, Category: "unexpected", Message: fmt.Sprintf("youtube set thumbnail: unexpected status %d", resp.StatusCode)}
 	}
 }
 

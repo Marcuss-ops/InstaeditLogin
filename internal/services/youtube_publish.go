@@ -243,8 +243,8 @@ func (s *YouTubeOAuthService) fetchVideoStatus(ctx context.Context, accessToken,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return nil, fmt.Errorf("youtube video status returned %d: %s", resp.StatusCode, string(body))
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("youtube video status returned %d", resp.StatusCode)
 	}
 
 	var result youtubeVideosResponse

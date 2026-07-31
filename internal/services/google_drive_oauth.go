@@ -259,7 +259,7 @@ func (s *GoogleDriveOAuthService) RefreshOAuthToken(ctx context.Context, refresh
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("google drive refresh failed (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("google drive refresh failed (status %d)", resp.StatusCode)
 	}
 	var tr googleDriveTokenResponse
 	if err := json.Unmarshal(respBody, &tr); err != nil {
@@ -305,7 +305,7 @@ func (s *GoogleDriveOAuthService) GetFileMetadata(ctx context.Context, accessTok
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("google drive file metadata failed (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("google drive file metadata failed (status %d)", resp.StatusCode)
 	}
 	var file GoogleDriveFile
 	if err := json.Unmarshal(body, &file); err != nil {
@@ -369,7 +369,7 @@ func (s *GoogleDriveOAuthService) exchangeCodeForToken(ctx context.Context, code
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token exchange failed (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("token exchange failed (status %d)", resp.StatusCode)
 	}
 	var tr googleDriveTokenResponse
 	if err := json.Unmarshal(respBody, &tr); err != nil {
@@ -391,7 +391,7 @@ func (s *GoogleDriveOAuthService) getUserInfo(ctx context.Context, accessToken s
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("user info failed (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("user info failed (status %d)", resp.StatusCode)
 	}
 	var result struct {
 		ID      string `json:"id"`
@@ -556,7 +556,7 @@ func (s *GoogleDriveOAuthService) VerifyDriveTokenIsReadonly(ctx context.Context
 	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("drive tokeninfo failed (status %d): %s", resp.StatusCode, string(body))
+		return fmt.Errorf("drive tokeninfo failed (status %d)", resp.StatusCode)
 	}
 	var parsed struct {
 		Scope string `json:"scope"`
@@ -803,7 +803,7 @@ func (s *GoogleDriveOAuthService) ListFolder(ctx context.Context, folderID, driv
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("google drive list failed (status %d): %s", resp.StatusCode, truncateForLog(string(body), 300))
+		return nil, "", fmt.Errorf("google drive list failed (status %d)", resp.StatusCode)
 	}
 
 	var parsed struct {

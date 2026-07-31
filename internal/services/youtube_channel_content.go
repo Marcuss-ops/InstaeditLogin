@@ -57,8 +57,8 @@ func (s *YouTubeOAuthService) GetAccountDetails(ctx context.Context, accessToken
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return nil, fmt.Errorf("youtube channel details returned %d: %s", resp.StatusCode, string(body))
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("youtube channel details returned %d", resp.StatusCode)
 	}
 
 	var result youtubeChannelsResponse
@@ -229,8 +229,8 @@ func (s *YouTubeOAuthService) getUploadsPlaylistID(ctx context.Context, accessTo
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return "", fmt.Errorf("channels.list returned %d: %s", resp.StatusCode, string(body))
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return "", fmt.Errorf("channels.list returned %d", resp.StatusCode)
 	}
 
 	var result youtubeChannelsResponse
@@ -268,8 +268,8 @@ func (s *YouTubeOAuthService) listPlaylistItems(ctx context.Context, accessToken
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return nil, "", fmt.Errorf("playlistItems.list returned %d: %s", resp.StatusCode, string(body))
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, "", fmt.Errorf("playlistItems.list returned %d", resp.StatusCode)
 	}
 
 	var result youtubePlaylistItemsResponse
@@ -306,8 +306,8 @@ func (s *YouTubeOAuthService) getVideoDetails(ctx context.Context, accessToken s
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return nil, fmt.Errorf("videos.list returned %d: %s", resp.StatusCode, string(body))
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("videos.list returned %d", resp.StatusCode)
 	}
 
 	var result youtubeVideosResponse
@@ -402,8 +402,8 @@ func (s *YouTubeOAuthService) GetYouTubeVideo(ctx context.Context, accessToken, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return nil, fmt.Errorf("youtube video details: videos.list returned %d: %s", resp.StatusCode, string(body))
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("youtube video details: videos.list returned %d", resp.StatusCode)
 	}
 
 	var result youtubeVideosResponse

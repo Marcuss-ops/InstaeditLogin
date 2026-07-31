@@ -88,10 +88,10 @@ func (s *YouTubeOAuthService) FetchEarnings(
 		// channel without monetization does not break the whole sync flow.
 		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusBadRequest {
 			return nil, &ErrYouTubeEarningsNotAvailable{
-				Reason: fmt.Sprintf("analytics returned %d: %s", resp.StatusCode, string(body)),
+				Reason: fmt.Sprintf("analytics returned %d", resp.StatusCode),
 			}
 		}
-		return nil, fmt.Errorf("youtube analytics earnings returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("youtube analytics earnings returned %d", resp.StatusCode)
 	}
 
 	var report youtubeAnalyticsReportResponse

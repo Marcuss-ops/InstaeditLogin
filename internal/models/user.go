@@ -158,7 +158,9 @@ const (
 
 // OAuthToken represents a decrypted token ready for API use.
 type OAuthToken struct {
-	AccessToken string     `json:"access_token"`
+	// AccessToken is decrypted runtime material and must never cross an
+	// HTTP/JSON boundary. Providers receive it in memory only.
+	AccessToken string     `json:"-"`
 	TokenType   string     `json:"token_type"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	Scopes      []string   `json:"scopes,omitempty"`
@@ -176,8 +178,10 @@ type PlatformProfile struct {
 // RefreshToken is populated when the platform issues one (YouTube, Twitter, TikTok).
 // Meta long-lived tokens do not produce a refresh token.
 type TokenData struct {
-	AccessToken           string
-	RefreshToken          string
+	// These are decrypted runtime credentials and must never cross an
+	// HTTP/JSON boundary. The vault consumes them in memory only.
+	AccessToken           string `json:"-"`
+	RefreshToken          string `json:"-"`
 	TokenType             string
 	ExpiresIn             int64
 	RefreshTokenExpiresIn int64

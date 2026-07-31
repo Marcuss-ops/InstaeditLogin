@@ -3,8 +3,8 @@ services:
     ports:
       - "127.0.0.1:19000:9000"
     environment:
-      MINIO_ROOT_USER: instaedit
-      MINIO_ROOT_PASSWORD: change-this-local-secret
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
   api:
     ports:
       - "127.0.0.1:8081:8080"

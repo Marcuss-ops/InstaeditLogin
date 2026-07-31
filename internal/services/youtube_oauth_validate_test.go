@@ -98,8 +98,8 @@ func TestYouTubeGetTokenInfo_SurfaceAllContractShapes(t *testing.T) {
 		if !strings.Contains(err.Error(), "400") {
 			t.Errorf("error message must contain the literal status code 400 (handler reads it for 422 mapping); got %v", err)
 		}
-		if !strings.Contains(err.Error(), "invalid_token") {
-			t.Errorf("error message must contain Google's invalid_token payload for the audit log; got %v", err)
+		if strings.Contains(err.Error(), "invalid_token") || strings.Contains(err.Error(), "Token expired or revoked") {
+			t.Errorf("error message must not expose Google's response body; got %v", err)
 		}
 	})
 

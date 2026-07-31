@@ -8,7 +8,10 @@
 #
 # Usage:
 #   cp .env.dev.example .env.dev
-#   docker compose up --build
+#   docker compose --env-file .env.dev up --build
+#
+# Compose credentials are required at runtime. Never add them to this file;
+# use the ignored .env.dev file or an external secret injector.
 #
 # Migration ordering: db is the dependency for migrate. migrate is the
 # dependency for api + worker (depends_on with service_completed_successfully).
@@ -20,15 +23,15 @@ services:
     image: postgres:15-alpine
     container_name: instaedit-db
     environment:
-      POSTGRES_USER: instaedit
-      POSTGRES_PASSWORD: dev_password
-      POSTGRES_DB: instaedit_login
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-instaedit_login}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - instaedit_pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U instaedit -d instaedit_login"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -41,7 +44,7 @@ services:
     env_file:
       - .env.dev
     environment:
-      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
     depends_on:
       db:
         condition: service_healthy
@@ -58,7 +61,7 @@ services:
     env_file:
       - .env.dev
     environment:
-      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
       - PORT=8080
       # NVIDIA AI metadata generation (server-side only — NEVER exposed
       # to the frontend bundle, logs, or localStorage). Empty = AI
@@ -105,7 +108,7 @@ services:
     env_file:
       - .env.dev
     environment:
-      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
       # NVIDIA AI metadata generation (mirrors the api service).
       - NVIDIA_API_KEY=${NVIDIA_API_KEY}
       # Velox integration (mirrors the api service). The worker reads
@@ -145,7 +148,7 @@ services:
     env_file:
       - .env.dev
     environment:
-      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
       - PORT=8080
       # NVIDIA AI metadata generation (mirrors the api + worker services).
       - NVIDIA_API_KEY=${NVIDIA_API_KEY}
@@ -172,11 +175,10 @@ services:
     container_name: instaedit-minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: instaedit
-      # Local-dev password only. Operators shipping this file
-      # externally MUST change it; the value matches S3_SECRET_KEY
-      # in `.env.dev`.
-      MINIO_ROOT_PASSWORD: change-this-local-secret
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      # Supplied at runtime from the ignored .env.dev file or a secret
+      # injector; never commit the value to this Compose definition.
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
     volumes:
       - instaedit_minio_data:/data
     # Host port mapping lives in docker-compose.local.yml so the
@@ -210,13 +212,18 @@ services:
     # production/mirrored registries.
     image: minio/mc:latest
     container_name: instaedit-minio-init
+    env_file:
+      - .env.dev
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
     depends_on:
       minio:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
       set -e;
-      until mc alias set local http://minio:9000 instaedit change-this-local-secret; do
+      until mc alias set local http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\"; do
         echo 'minio alias set failed, retrying in 2s';
         sleep 2;
       done;

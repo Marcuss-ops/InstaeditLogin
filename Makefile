@@ -15,7 +15,7 @@
 # For the legacy single-process shape, use `make run-server` (local)
 # or `docker compose --profile legacy up` (container).
 dev:
-	docker compose up --build
+	docker compose --env-file .env.dev up --build
 
 # Stop the development stack
 stop:

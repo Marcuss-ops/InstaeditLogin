@@ -247,8 +247,7 @@ func ParseThrottleHeaders(h http.Header) time.Duration {
 //
 // body is typically the result of io.ReadAll(resp.Body); the
 // constructor reads it to extract structured fields but does NOT
-// include any of it in the returned error's Error() output
-// (SafeMessage is what callers see).
+// retain or include any of it in the returned error chain/output.
 func NewProviderError(platform string, status int, body string, headers http.Header, cause error) *ProviderError {
 	code := MapHTTPStatus(status)
 	var providerCode, requestID string
@@ -280,15 +279,13 @@ func NewProviderError(platform string, status int, body string, headers http.Hea
 		code = ErrorCodeRateLimited
 	}
 
-	// Preserve the raw body in Cause for debug logs when caller
-	// passes nil cause. The body is NOT leaked via Error() (that uses
-	// SafeMessage); it's only accessible via errors.Unwrap + debug
-	// log lines, which is the documented behavior. When the caller
-	// passes a non-nil cause, that cause is preserved VERBATIM —
-	// the body wrapping is suppressed so the caller can attach their
-	// own richer context (e.g. "twitter 2/tweets: body=...").
+	// Never retain the provider body in the error chain. Even though
+	// Error() uses SafeMessage, callers may log or inspect Unwrap() and
+	// the upstream body can contain tokens, PII, or user content.
+	// Preserve only a non-sensitive diagnostic cause when the caller
+	// did not provide one. A caller-supplied cause remains unchanged.
 	if cause == nil && body != "" {
-		cause = fmt.Errorf("provider body (truncated): %s", truncateForLog(body, 256))
+		cause = errors.New("provider response body redacted")
 	}
 
 	retryAfter := ParseThrottleHeaders(headers)
