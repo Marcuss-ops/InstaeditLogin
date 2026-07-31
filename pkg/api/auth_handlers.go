@@ -596,6 +596,18 @@ func (r *Router) handleMe(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusUnauthorized, "missing identity")
 		return
 	}
+	// Existing sessions created before the CSRF cookie was introduced (or
+	// after a browser cleared only that cookie) must be repaired on the next
+	// authenticated bootstrap request. Do not rotate an existing value: the
+	// SPA may issue several requests concurrently after /auth/me.
+	if _, err := req.Cookie(auth.CSRFTokenCookieName); err != nil {
+		_, _ = auth.SetCSRFToken(w, auth.CSRFConfig{
+			Secure:       r.cookieSecure,
+			Path:         "/",
+			CookieDomain: r.cookieDomain,
+			SameSite:     http.SameSiteNoneMode,
+		})
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"user_id":      id.UserID(),
 		"workspace_id": id.WorkspaceID(),
