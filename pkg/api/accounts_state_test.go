@@ -62,6 +62,17 @@ func TestAccountListItemFromAccountIncludesStableState(t *testing.T) {
 	}
 }
 
+func TestAccountListItemFromAccountExposesLanguageWithoutMetadata(t *testing.T) {
+	item := accountListItemFromAccount(&models.PlatformAccount{
+		Status:   models.AccountStatusActive,
+		Metadata: models.Metadata{"language": " pl ", "manager": "private"},
+	})
+
+	if item.Language != "pl" {
+		t.Fatalf("language: got %q, want %q", item.Language, "pl")
+	}
+}
+
 func TestHandleListAccounts_ExposesStableStateAndPublishability(t *testing.T) {
 	accounts := []*models.PlatformAccount{
 		{ID: 1, UserID: 7, Platform: models.PlatformYouTube, PlatformUserID: "UC-valid", Username: "valid", Status: models.AccountStatusActive},

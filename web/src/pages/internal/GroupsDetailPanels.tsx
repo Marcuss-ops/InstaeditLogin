@@ -47,15 +47,48 @@ export function GroupDetailPanel({
   onSaved: () => void | Promise<void>;
 }) {
   const [subName, setSubName] = useState("");
-  const [languages, setLanguages] = useState<Record<number, string>>(() => Object.fromEntries(group.accounts.map((account) => [account.id, String(account.metadata?.language ?? "")])));
+  const [languages, setLanguages] = useState<Record<number, string>>(() => Object.fromEntries(group.accounts.map((account) => [account.id, account.language ?? ""])));
+  const [savingLanguageId, setSavingLanguageId] = useState<number | null>(null);
+  const [languageError, setLanguageError] = useState<Record<number, string>>({});
   const [removedAccountIds, setRemovedAccountIds] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   useEffect(() => {
-    setLanguages(Object.fromEntries(group.accounts.map((account) => [account.id, String(account.metadata?.language ?? "")])));
+    setLanguages((current) => {
+      const next = { ...current };
+      for (const account of group.accounts) {
+        if (!(account.id in next)) next[account.id] = account.language ?? "";
+      }
+      return next;
+    });
     setRemovedAccountIds(new Set());
     setSaveError(null);
   }, [group.id, group.accounts]);
+
+  const saveLanguage = async (accountId: number, language: string) => {
+    const previous = languages[accountId] ?? "";
+    setLanguages((current) => ({ ...current, [accountId]: language }));
+    setLanguageError((current) => {
+      const next = { ...current };
+      delete next[accountId];
+      return next;
+    });
+    setSavingLanguageId(accountId);
+    try {
+      await authedFetch(`/api/v1/accounts/${accountId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ metadata: { language } }),
+      });
+    } catch (error) {
+      setLanguages((current) => ({ ...current, [accountId]: previous }));
+      setLanguageError((current) => ({
+        ...current,
+        [accountId]: error instanceof Error ? error.message : "Unable to save language",
+      }));
+    } finally {
+      setSavingLanguageId((current) => (current === accountId ? null : current));
+    }
+  };
 
   const visibleAccounts = group.accounts.filter((account) => !removedAccountIds.has(account.id));
   const saveSettings = async () => {
@@ -151,10 +184,11 @@ export function GroupDetailPanel({
                   <span className="text-[13px]">{languageMeta(languages[a.id])?.flag ?? "🌍"}</span>
                   <button type="button" onClick={() => onPickAccount(a.id)} className="truncate text-left text-[12px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username}`}>{a.username || a.platform_user_id}</button>
                 </div>
-                <select value={languages[a.id] ?? ""} onChange={(event) => { const language = event.target.value; setLanguages((current) => ({ ...current, [a.id]: language })); }} className="max-w-[90px] rounded bg-black/30 border border-white/[0.10] px-1 py-1 text-[10px] text-[#c8cbd4]" aria-label={`Language for ${a.username}`}>
+                <select value={languages[a.id] ?? ""} disabled={savingLanguageId === a.id} onChange={(event) => void saveLanguage(a.id, event.target.value)} className="max-w-[120px] rounded bg-black/30 border border-white/[0.10] px-1 py-1 text-[10px] text-[#c8cbd4] disabled:opacity-60" aria-label={`Language for ${a.username}`}>
                   <option value="">Lingua</option>
                   {LANGUAGE_OPTIONS.map(({ code, flag, name }) => <option key={code} value={code}>{flag} {name}</option>)}
                 </select>
+                {languageError[a.id] ? <span className="text-[10px] text-red-300" title={languageError[a.id]}>!</span> : null}
                 <button type="button" onClick={() => setRemovedAccountIds((current) => new Set(current).add(a.id))} className="rounded-md p-2 text-[#9aa0aa] hover:bg-red-500/15 hover:text-red-300" aria-label={`Remove ${a.username} from group`} title="Rimuovi dal gruppo"><Trash2 size={14} /></button>
               </div>
             ))}

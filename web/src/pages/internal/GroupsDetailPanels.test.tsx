@@ -16,7 +16,7 @@ const group: TreeNode = {
       username: "channel-one",
       platform_user_id: "UC-one",
       status: "active",
-      metadata: { language: "en" },
+      language: "en",
       created_at: "2026-01-01T00:00:00Z",
     },
     {
@@ -25,7 +25,7 @@ const group: TreeNode = {
       username: "channel-two",
       platform_user_id: "UC-two",
       status: "active",
-      metadata: { language: "fr" },
+      language: "fr",
       created_at: "2026-01-01T00:00:00Z",
     },
   ],
@@ -36,7 +36,7 @@ describe("GroupDetailPanel batch settings", () => {
     vi.restoreAllMocks();
   });
 
-  it("sends one PATCH containing the changed language and remaining membership", async () => {
+  it("saves language immediately and sends remaining membership settings", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
     vi.stubGlobal("fetch", fetchMock);
     const onSaved = vi.fn();
@@ -57,7 +57,17 @@ describe("GroupDetailPanel batch settings", () => {
     fireEvent.click(screen.getByRole("button", { name: /Remove channel-two from group/i }));
     fireEvent.click(screen.getByRole("button", { name: /Save changes/i }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/accounts/101"),
+      expect.objectContaining({ method: "PATCH" }),
+    ));
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/accounts/101"),
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ metadata: { language: "it" } }),
+      }),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/groups/7/settings"),
       expect.objectContaining({

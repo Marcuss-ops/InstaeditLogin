@@ -15,6 +15,7 @@ export type PlatformAccount = {
   platform: string;
   username: string;
   platform_user_id: string;
+  language?: string;
   status: string;
   account_state?: "valid" | "reconnect_required" | "suspended" | "deleted";
   is_publishable?: boolean;

@@ -26,8 +26,9 @@ const (
 	AccountStateDeleted           AccountState = "deleted"
 )
 
-// classifyAccountStatus normalizes persisted lifecycle values into the four
-// states the UI needs. Unknown values fail closed and cannot be published.
+// classifyAccountStatus normalizes the persisted lifecycle values into the
+// four states the UI needs. The deleted aliases cover old rows and the
+// existing soft-disconnect path without changing stored data.
 func classifyAccountStatus(status string) (AccountState, bool) {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case models.AccountStatusActive, "connected":
@@ -39,17 +40,22 @@ func classifyAccountStatus(status string) (AccountState, bool) {
 	case models.AccountStatusExpired, models.AccountStatusReauthRequired, models.AccountStatusPendingAuthorization, models.AccountStatusError, "":
 		return AccountStateReconnectRequired, false
 	default:
+		// Unknown lifecycle values are fail-closed: they need attention
+		// before they can be used as a publishing target.
 		return AccountStateReconnectRequired, false
 	}
 }
 
 // accountListItem is the wire shape returned by account read endpoints.
-// Internal ownership, error and metadata columns are intentionally omitted.
+// We deliberately do NOT return PlatformAccount directly because it leaks
+// internal ownership, error and metadata columns.
 type accountListItem struct {
 	ID             int64        `json:"id"`
 	Platform       string       `json:"platform"`
 	PlatformUserID string       `json:"platform_user_id"`
 	Username       string       `json:"username"`
+	AvatarURL      string       `json:"avatar_url,omitempty"`
+	Language       string       `json:"language,omitempty"`
 	Status         string       `json:"status"`
 	AccountState   AccountState `json:"account_state"`
 	IsPublishable  bool         `json:"is_publishable"`
@@ -63,11 +69,26 @@ func accountListItemFromAccount(account *models.PlatformAccount) accountListItem
 		Platform:       account.Platform,
 		PlatformUserID: account.PlatformUserID,
 		Username:       account.Username,
+		AvatarURL:      avatarURLFromMetadata(account),
+		Language:       accountLanguage(account),
 		Status:         account.Status,
 		AccountState:   state,
 		IsPublishable:  publishable,
 		CreatedAt:      account.CreatedAt,
 	}
+}
+
+// accountLanguage exposes the user-editable language preference through a
+// dedicated response field. The rest of the provider metadata stays private.
+func accountLanguage(account *models.PlatformAccount) string {
+	if account == nil || account.Metadata == nil {
+		return ""
+	}
+	language, ok := account.Metadata["language"].(string)
+	if !ok || strings.TrimSpace(language) == "" {
+		return ""
+	}
+	return strings.TrimSpace(language)
 }
 
 // handleListAccounts returns the authenticated user's connected
