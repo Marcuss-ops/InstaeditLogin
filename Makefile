@@ -1,4 +1,5 @@
 .PHONY: dev stop seed lint lint-check backend-test test-integration \
+        verify-entrypoint-topology \
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
@@ -6,14 +7,15 @@
         verify-log-redaction
 
 # Start the full local development stack modeled on Blocco #2.1's
-# production-true topology: 3 services (api + worker + migrate) plus
-# the legacy `server` profile for users who still want the single-process
-# shape. See docker-compose.yml for the service definitions.
+# production-true topology: 3 services (api + worker + migrate).
+# The legacy `server` profile remains available only for recovery and
+# compatibility; see docker-compose.yml for the service definitions.
 #
 # Blocco #2.1 NOTE: `make dev` no longer starts the pre-split single-bundle
 # dev shape. The 3-service production topology IS the new dev default.
-# For the legacy single-process shape, use `make run-server` (local)
-# or `docker compose --profile legacy up` (container).
+# Do not use the legacy wrapper for production. If compatibility testing
+# is required, use `make run-server` or `docker compose --profile legacy up`
+# deliberately and plan its removal using `make verify-entrypoint-topology`.
 dev:
 	docker compose --env-file .env.dev up --build
 
@@ -46,6 +48,10 @@ run-api:
 # 9090 on dev laptops — see cmd/worker/health_listener.go.
 run-worker:
 	go run ./cmd/worker
+
+# Verify the canonical split entrypoints and production references.
+verify-entrypoint-topology:
+	./scripts/verify-entrypoint-topology.sh
 
 # Legacy single-bundle wrapper (cmd/server). RUN_WORKERS=false disables
 # workers for HTTP-only debugging. Default true (matches docker-compose

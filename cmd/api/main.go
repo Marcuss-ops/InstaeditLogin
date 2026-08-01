@@ -11,7 +11,8 @@
 // more cmd/api pods behind a load balancer. cmd/worker pods run
 // independent of cmd/api pods.
 //
-// dev: cmd/server (wrapper) launches BOTH api + worker in one process.
+// dev: `make dev` launches cmd/api and cmd/worker as separate services.
+// cmd/server remains only as a deprecated local recovery wrapper.
 package main
 
 import (

@@ -18,7 +18,8 @@
 // Production deploy: cmd/migrate as a one-shot pre-deploy, then one or
 // more cmd/worker pods (independent of cmd/api pods).
 //
-// dev: cmd/server (wrapper) launches BOTH api + worker in one process.
+// dev: `make dev` launches cmd/api and cmd/worker as separate services.
+// cmd/server remains only as a deprecated local recovery wrapper.
 package main
 
 import (

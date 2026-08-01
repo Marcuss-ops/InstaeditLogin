@@ -14,11 +14,10 @@
 // descriptive log line. A successful migration log line is the
 // canonical signal the deploy pipeline unblocks on.
 //
-// Note: `cmd/migrate` also re-runs idempotently under the dev wrapper
-// `cmd/server` (which calls Migrate inside the same process before
-// starting api + workers). The dev wrapper assumes it's the only
-// process touching the DB just now; production deploys MUST use
-// `cmd/migrate` as a one-shot job to avoid that race.
+// Note: the deprecated `cmd/server` wrapper also calls Migrate for
+// local recovery compatibility. The wrapper assumes exclusive DB access;
+// production and standard development MUST use this binary as the
+// one-shot migration step to avoid that race.
 package main
 
 import (

@@ -35,6 +35,7 @@ import (
 
 func main() {
 	_, _ = fmt.Fprintln(os.Stdout, "Starting InstaEditLogin dev wrapper (api + workers + migrate)")
+	slog.Warn("cmd/server is deprecated; use cmd/migrate + cmd/api + cmd/worker (or make dev)", "scope", "development/recovery")
 
 	app, err := bootstrap.Wire(context.Background())
 	if err != nil {

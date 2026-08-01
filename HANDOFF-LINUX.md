@@ -81,7 +81,7 @@ echo "ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
 # dal .env, lasciando solo le nuove.
 ```
 
-**Validator attivo** — se uno qualsiasi di questi è mancante/sbagliato, `go run cmd/server/main.go` rifiuta di partire con un messaggio specifico:
+**Validator attivo** — se uno qualsiasi di questi è mancante/sbagliato, l'entrypoint avviato (`cmd/api`, `cmd/worker` o `cmd/migrate`) rifiuta di partire con un messaggio specifico:
 - `JWT_SECRET < 32 byte` → "got X; expected 32"
 - `ENCRYPTION_KEY` non 32 byte decodificati → "got X; expected 32"
 - `META_APP_SECRET < 32 char` → "got X; must be at least 32"
@@ -106,15 +106,17 @@ echo "ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
 
 ```bash
 # Le migrations sono embedded nel binary Go (go:embed di internal/database/migrations/*.sql)
-# e applicate automaticamente al boot dal server tramite db.Migrate (vedi cmd/server/main.go).
+# e applicate dal job one-shot cmd/migrate prima di avviare API e worker.
 # I file canonici vivono in internal/database/migrations/ — NON eseguire psql -f direttamente:
 # il runner tiene traccia dell'ordine + degli errori idempotenti (CREATE TABLE IF NOT EXISTS,
 # ADD COLUMN IF NOT EXISTS, ecc.) e un replay manuale può sfasare lo stato atteso.
-# Se devi applicare migrations SENZA avviare il server, lancialo lo stesso — anche solo un boot
-# breve è sufficiente perché la fase migrate è idratata prima del listener HTTP.
+# Avvia la topologia separata in tre terminali (oppure usa `make dev`):
+make run-migrate
+make run-api
+make run-worker
 
-# Avvia
-go run cmd/server/main.go
+# Il wrapper cmd/server resta disponibile solo per recovery locale compatibile;
+# non usarlo in produzione.
 ```
 
 Output atteso:
@@ -239,9 +241,10 @@ cp .env.example .env.dev
 cp .env.example .env.prod
 # modifica .env.prod con i valori prod (Supabase prod, dominio pubblico CORS, APP_ENV=production)
 
-# swap in base a cosa vuoi lanciare:
-ln -sf .env.dev .env && go run cmd/server/main.go   # ora gira in dev
-ln -sf .env.prod .env && go run cmd/server/main.go  # ora gira in prod
+# swap in base a cosa vuoi lanciare; la topologia standard resta separata:
+ln -sf .env.dev .env && make run-migrate && make run-api   # dev (worker in un altro terminale)
+ln -sf .env.prod .env && make run-migrate && make run-api  # verifica locale prod-shaped
+# cmd/server è solo il wrapper legacy di recovery e non è un percorso di deploy.
 ```
 
 **Opzione B — env vars sul servizio di deploy**:
@@ -302,9 +305,9 @@ curl -sI -H "Origin: https://app.example.com" https://api.example.com/api/v1/hea
 psql "$DATABASE_URL" -c "SELECT current_database();"
 # Atteso: il db name contiene "prod" (NON "dev" / NON "instaedit_login" usato in locale)
 
-# (5) Fail-fast non scatta (prova con APP_ENV=production)
-APP_ENV=production DATABASE_URL=... JWT_SECRET=$(openssl rand -hex 32) go run cmd/server/main.go
-# Atteso: il server parte (Taglio 1.1: nessun guard legacy)
+# (5) Verifica la topologia degli entrypoint senza avviare servizi
+make verify-entrypoint-topology
+# Atteso: api + worker + migrate canonical; cmd/server legacy-only
 ```
 
 ### `.env.example` aggiornato
@@ -408,7 +411,8 @@ Se devi cambiare la response shape, aggiorna **entrambi** i test file + il docst
 - `pkg/api/workspaces.go` — `/api/v1/workspaces` CRUD handlers; 422 vs 400 contract (§13.1); lenient-auth fallback (§13.2)
 - `pkg/api/posts.go` — `/api/v1/posts` CRUD handlers; 422 vs 400 contract (§13.1); lenient-auth fallback (§13.2); `createPostResponse` dual-shape (§13.3)
 - `pkg/api/storage.go` — `/api/v1/storage/upload-url` handler
-- `cmd/server/main.go` — auto-migrate on boot (rimosso fail-fast guard legacy in Taglio 1.1)
+- `cmd/api/main.go`, `cmd/worker/main.go`, `cmd/migrate/main.go` — entrypoint canonici separati
+- `cmd/server/main.go` — wrapper legacy deprecato, solo sviluppo/recovery; da rimuovere dopo l'audit degli usi
 - `web/src/lib/auth.ts` — `authedFetch()`, `probeBackend()`, JWT helpers
 - `web/src/lib/probe-cache.ts` — cache 5min per /health + force-clear
 - `web/src/lib/probe-display.ts` — banner copy per ogni `ProbeFailureReason`; hint uses `window.location.origin`

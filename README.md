@@ -46,28 +46,35 @@ git clone https://github.com/Marcuss-ops/InstaeditLogin.git
 cd InstaeditLogin
 
 # 2. Configura le variabili d'ambiente
-cp .env.example .env
-# Modifica .env con le tue credenziali reali
+cp .env.example .env.dev
+# Modifica .env.dev con le tue credenziali reali
 # Scommenta le piattaforme che vuoi attivare
 
-# 3. Avvia il server
-go run cmd/server/main.go
+# 3. Avvia la topologia canonica (migrate + API + worker)
+make dev
 ```
 
 ### Worker di background
 
-`cmd/server/main.go` è un wrapper di sviluppo che avvia **otto goroutine di
-background** oltre al server HTTP: publish, reconcile, outbox, webhook,
-metrics, sessions_cleanup, upload e drive_batch_crawler. In produzione si
-usano i binari separati `cmd/api` (HTTP), `cmd/worker` (background) e
-`cmd/migrate` (migrazioni one-shot) per scalare i componenti in modo
-indipendente.
+La topologia supportata usa processi separati: `cmd/migrate` applica le
+migrazioni come job one-shot, `cmd/api` espone solo HTTP e `cmd/worker` esegue
+i worker in background. `make dev` avvia questa stessa topologia tramite
+Docker Compose e mantiene la parità con production.
+
+`cmd/server/main.go` è ancora disponibile esclusivamente come wrapper legacy
+per sviluppo locale e recovery. Non usarlo in production: esegue la migration
+nel processo applicativo e unisce API e worker, impedendo scaling e rollout
+indipendenti. La sua rimozione è pianificata dopo la verifica degli ultimi usi
+legacy; vedere `docs/BINARIES.md` e `make verify-entrypoint-topology`.
 
 ## Architettura
 
 ```
 instaedit-login/
-├── cmd/server/main.go          # Entry point con wiring multi-provider
+├── cmd/api/main.go             # HTTP entrypoint canonico
+├── cmd/worker/main.go          # Background-worker entrypoint canonico
+├── cmd/migrate/main.go         # Migration entrypoint one-shot
+├── cmd/server/main.go          # Legacy wrapper deprecato, solo dev/recovery
 ├── internal/
 │   ├── auth/                   # JWT + API key middleware (Taglio 1.1)
 │   ├── config/                 # Configurazioni e .env (multi-platform)
@@ -229,64 +236,76 @@ msg="Router configured" jwt_access_ttl_minutes=15 jwt_refresh_ttl_days=30
 
 ## Deployment
 
-Quando fai deploy del frontend React su Vercel (o piattaforma analoga),
-`VITE_API_BASE_URL` deve puntare al backend Go **live** — non più a
-localhost. I tre pitfall operativi che provocano il 404
-`DEPLOYMENT_NOT_FOUND` al primo click OAuth li riassumo qui di seguito.
+La piattaforma production è ibrida e controllata direttamente:
 
-### 1. Puntare a un deployment Vercel defunto
+- Vercel serve il frontend React su `https://app.instaedit.org`.
+- Il server proprietario esegue API, worker, PostgreSQL e MinIO con Docker Compose.
+- Caddy sul server espone `https://dev.instaedit.org` verso l'API e blocca `/internal/*`.
+- Fly.io, Railway, Render e Kubernetes non fanno parte del percorso supportato.
 
-L'antipattern più frequente: lasciare `VITE_API_BASE_URL` impostato su un
-vecchio alias frontend Vercel (es. `https://vecchio-progetto.vercel.app`)
-pensando che quello sia il backend. In realtà è un alias dello **stesso
-frontend** ormai rimosso/cancellato/scaduto — Vercel risponde con la pagina
-HTML standard `DEPLOYMENT_NOT_FOUND` invece di fare da proxy API.
+### Secret del backend self-hosted
 
-**Sintomo**: `/status` col probe banner rosso che cita "Vercel stale
-deployment" (motivo `vercel_stale_deploy`). Cliccando un bottone OAuth il
-browser naviga alla URL ma riceve una pagina di errore invece del redirect
-verso Meta/TikTok/etc.
+Sul server crea `/opt/instaedit/secrets/.env.production`, proprietario root e
+con permessi 600, partendo da [.env.production.example](.env.production.example).
+Non committare mai il file reale e non inserirlo nei log o nei backup Git.
 
-**Fix**: `VITE_API_BASE_URL` deve essere l'URL diretto del backend
-Go su VPS (es. `https://api.instaedit.org`) o, in subordine, un custom
-domain che punti alla stessa VPS. MAI un sottodominio `*.vercel.app`.
+I valori OAuth production devono essere:
 
-### 2. Dimenticare di redeploy dopo aver cambiato l'env
+```env
+FRONTEND_URL=https://app.instaedit.org
+YOUTUBE_REDIRECT_URI=https://dev.instaedit.org/api/v1/auth/youtube/callback
+CORS_ALLOWED_ORIGINS=https://app.instaedit.org,https://dev.instaedit.org
+COOKIE_DOMAIN=.instaedit.org
+```
 
-Le env var `VITE_*` vengono **baked dentro il bundle JS** al momento del
-`vite build`. Cambiare `VITE_API_BASE_URL` (o qualsiasi altra `VITE_*`) nel
-dashboard Vercel **NON** aggiorna il deployment corrente — serve un rebuild
-esplicito.
+### Backend: avvio self-hosted
 
-**Sintomo**: la modifica env è stata salvata (la vedi nella tab
-Environment Variables), ma la pagina `/login` mostra ancora il banner rosso
-con la URL vecchia. Il probe torna green solo dopo il redeploy.
+```bash
+cd /opt/instaedit/app
+INSTAEDIT_ENV_FILE=/opt/instaedit/secrets/.env.production \
+  docker compose \
+    --env-file /opt/instaedit/secrets/.env.production \
+    -f docker-compose.yml \
+    -f docker-compose.production.yml \
+    up -d --build
+```
 
-**Fix**: dopo ogni cambio di `VITE_API_BASE_URL` (o altra `VITE_*`),
-Vercel → **Deployments** → menu `⋯` sul corrente → **Redeploy**. Spunta
-anche **Clear Build Cache** se vuoi essere sicuro che il bundle JS
-precedente non sia riusato da qualche cache CDN.
+Compose attende PostgreSQL healthy, esegue `instaedit-migrate` e avvia API e
+worker solo dopo il completamento delle migrazioni. L'API resta su
+`127.0.0.1:8080`; database e MinIO non sono pubblicati sull'host.
+Usa [ops/production/Caddyfile](ops/production/Caddyfile) come riferimento per
+il reverse proxy API. Il frontend e le sue route web restano su Vercel.
 
-### 3. Confondere frontend origin con backend origin
+### Frontend: Vercel
 
-Domanda frequente: "Vercel mi ha dato `https://instaedit-xyz.vercel.app`
-come URL del frontend. Posso usare quello come `VITE_API_BASE_URL`?".
-**No** — quel URL serve **il tuo stesso frontend** (asset statici), non
-il backend. Vercel restituisce 404 per ogni `/api/v1/auth/.../*` perché
-non c'è nessun run-time che risponde a quei path.
+Il progetto Vercel usa la root `web/` e il workflow
+`.github/workflows/deploy.yml`. Per una build locale equivalente:
 
-**Sintomo**: `VITE_API_BASE_URL` finisce in `https://*.vercel.app/api/v1/...`
-e ogni probe restituisce 404 — sia `/health` che `/auth/{provider}/login`.
+```bash
+VITE_API_BASE_URL=https://dev.instaedit.org npm --prefix web ci
+VITE_API_BASE_URL=https://dev.instaedit.org npm --prefix web run build
+```
 
-**Fix**: i due URL vivono su host **diversi**. Il frontend è Vercel (asset
-statici, `vercel.json` → `dist/`), il backend è un servizio long-running separato (Go + Postgres, deployato su VPS — singolo host, Caddy + Docker Compose, vedi `docs/DEPLOY.md`). Esempio:
-frontend su `https://instaedit.vercel.app` (asset statici, ancora su Vercel), backend su
-`https://api.instaedit.org` (VPS — Caddy + Docker Compose). Metti il secondo in `VITE_API_BASE_URL`.
+Il bundle deve contenere `https://dev.instaedit.org`, mai `api.instaedit.org`,
+`fly.dev`, `vercel.app` come API o `localhost`.
 
-> 📖 La pagina `/status` linka a questa sezione dal banner rosso di
-> degraded — se la probe fallisce con uno qualsiasi dei tre pitfall sopra,
-> vieni direttamente qui dopo un click.
+### Verifica dopo il deploy
 
+```bash
+curl -fsS https://dev.instaedit.org/api/v1/health
+curl -fsS https://dev.instaedit.org/ready
+INSTAEDIT_ENV_FILE=/opt/instaedit/secrets/.env.production \
+  docker compose --env-file /opt/instaedit/secrets/.env.production \
+    -f docker-compose.yml -f docker-compose.production.yml ps
+```
+
+Durante un nuovo collegamento Google l'URL deve contenere esclusivamente:
+`redirect_uri=https://dev.instaedit.org/api/v1/auth/youtube/callback`.
+
+### Note storiche sui deploy non supportati
+
+Le vecchie istruzioni su Fly, Railway e altri provider sono mantenute solo
+come storico e non descrivono il percorso operativo corrente.
 ## Sicurezza
 
 - Token OAuth **mai** salvati in chiaro (AES-256-GCM)

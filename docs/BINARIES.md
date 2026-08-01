@@ -1,9 +1,11 @@
 # InstaEditLogin — Binary Topology (Blocco #2.1)
 
-This document describes the post-Blocco #2.1 binary split.
-cmd/server/main.go (the pre-Blocco #2.1 monolith) is broken into four
-single-purpose binaries, each consuming the same shared wiring layer
-(`internal/bootstrap.Wire`) but starting only the components it needs.
+This document describes the post-Blocco #2.1 binary split and the controlled
+deprecation of the old single-process wrapper. The production and standard
+development topology uses three single-purpose binaries, each consuming the
+same shared wiring layer (`internal/bootstrap.Wire`) but starting only the
+components it needs. `cmd/server` is retained temporarily for local recovery
+and compatibility only; it is not a production entrypoint.
 
 ## Binaries
 
@@ -12,7 +14,7 @@ single-purpose binaries, each consuming the same shared wiring layer
 | `cmd/api`     | `cmd/api/main.go`     | HTTP server only. NO workers. Listens on $PORT (default 8080). |
 | `cmd/worker`  | `cmd/worker/main.go`  | 5 background goroutines only. NO HTTP. (publish, reconcile, outbox dispatcher, webhook, metrics collector) |
 | `cmd/migrate` | `cmd/migrate/main.go` | One-shot pre-deploy job. Connect + apply migrations + exit 0. NO HTTP. NO workers. |
-| `cmd/server`  | `cmd/server/main.go`  | **Legacy / dev wrapper.** Runs `cmd/api` + (optionally) `cmd/worker` + `cmd/migrate` all in ONE process. Survives for local-dev convenience and Railway single-process deploy compatibility. |
+| `cmd/server`  | `cmd/server/main.go`  | **Deprecated legacy / recovery wrapper.** Runs migration, HTTP and optionally workers in ONE process. Not production-supported; retained only until the remaining local recovery uses are retired. |
 
 ## Topologies
 
@@ -58,10 +60,10 @@ single-purpose binaries, each consuming the same shared wiring layer
 └─────────────┘                  └─────────────┘
 ```
 
-`docker-compose.yml` (Blocco #2.1 default) models this with 4 services:
-`db` + `migrate` + `api` + `worker`. The legacy `server` profile
-(`docker compose --profile legacy up`) keeps the old single-process
-shape for users who want it.
+`docker-compose.yml` (Blocco #2.1 default) models this with `db` +
+`migrate` + `api` + `worker`. The legacy `server` profile
+(`docker compose --profile legacy up`) is retained only for deliberate
+recovery or compatibility testing and is not part of the supported topology.
 
 ### Legacy Single-Bundle (`cmd/server` wrapper)
 
@@ -90,16 +92,20 @@ must be drained in parallel on SIGTERM:
 2. 5 worker goroutines (`app.RunWorkers`, 15s drain budget per leaf).
 3. DB connection (`defer app.DB.Close()` on graceful exit).
 
-The wrapper serves as a backward-compat path for users on Railway / Render
-single-process deploys who haven't migrated to the separate-pod topology
-yet. New deploys SHOULD use `cmd/api` + `cmd/worker` + `cmd/migrate` so
-per-service scaling works correctly.
+The wrapper remains a backward-compatibility path for local recovery and
+unmigrated historical single-process users. It must not be used for new
+deployments: its in-process migration assumes exclusive database access and
+its combined lifecycle prevents independent API/worker scaling. New deploys
+MUST use `cmd/migrate` + `cmd/api` + `cmd/worker`. Run
+`make verify-entrypoint-topology` to check this invariant.
 
 ## Dockerfile Targets
 
-The `Dockerfile` defines 4 final stages, one per binary. Each stage copies
-only its binary from the shared builder stage (multi-stage build, single
-builder compile run).
+The `Dockerfile` defines the three canonical final stages plus a temporary
+legacy `server` stage. Each stage copies only its binary from the shared
+builder stage (multi-stage build, single builder compile run). The legacy
+stage must remain excluded from production Compose and deployment workflows
+until the wrapper is removed.
 
 ```dockerfile
 FROM golang:1.23-alpine AS builder
@@ -131,15 +137,18 @@ Multi-stage build keeps the final image free of the Go toolchain.
 
 ## Makefile Targets
 
-The `Makefile` adds `run-api` / `run-worker` / `run-migrate` / `run-server`
-targets. Each runs the corresponding binary directly via `go run`.
+The `Makefile` adds `run-api` / `run-worker` / `run-migrate` targets for the
+canonical split. `run-server` and `run-server-api-only` are explicitly
+deprecated compatibility targets. Each runs the corresponding binary directly
+via `go run`; `make dev` is the normal local entrypoint.
 
 ```
 make run-migrate             # one-shot: connect + apply migrations + exit
 make run-api                 # HTTP server only (no workers)
 make run-worker              # 5 background goroutines only
-make run-server              # legacy wrapper (RUN_WORKERS=true)
-make run-server-api-only     # legacy wrapper (RUN_WORKERS=false)
+make run-server              # DEPRECATED: legacy wrapper (recovery only)
+make run-server-api-only     # DEPRECATED: legacy wrapper (recovery only)
+make verify-entrypoint-topology # production-reference regression check
 
 make dev                     # docker compose up --build (3-service topology)
 make backend-test            # go test -race ./...
@@ -274,6 +283,24 @@ Risks:
 - **Schema drift in dev**: if a developer hot-reloads `cmd/server` against
   a partly-migrated DB, the bootstrap path can fail at Wire time. Always
   run `make run-migrate` first when iterating on schema migrations locally.
+
+## Removal Gate for `cmd/server`
+
+`cmd/server/main.go` is not removed until all of the following are true:
+
+1. `make verify-entrypoint-topology` passes in CI and on the deployment host.
+2. A repository and operator audit confirms no development or production
+   workflow still invokes `run-server`, the Compose `legacy` profile, or the
+   Docker `server` target.
+3. The local recovery instructions use `make dev` or the split commands and
+   the deprecation warning has no observed users for a full compatibility
+   window.
+4. The wrapper is removed together with its Docker stage, Compose profile,
+   Makefile compatibility targets, and legacy documentation references in one
+   reviewed change.
+
+Until then, a runtime warning in the wrapper and this document make every
+intentional use visible without breaking recovery.
 
 ## See Also
 
