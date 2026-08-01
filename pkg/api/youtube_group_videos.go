@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +37,44 @@ const groupYouTubeVideosPerAccountTimeout = 15 * time.Second
 // in one click. Adjustable via future config; sized to the largest
 // observed customer group (≈80 channels).
 const groupYouTubeVideosMaxAccounts = 200
+
+// YouTubeGroupVideosConfig controls the group-video read projection.
+// Zero values use the safe defaults below, which keeps test routers and
+// older callers compatible while production wiring can tune the limits
+// from environment-backed configuration.
+type YouTubeGroupVideosConfig struct {
+	MaxAccounts     int
+	MaxVideos       int
+	CacheTTL        time.Duration
+	DefaultPageSize int
+}
+
+func (c YouTubeGroupVideosConfig) normalized() YouTubeGroupVideosConfig {
+	if c.MaxAccounts <= 0 {
+		c.MaxAccounts = groupYouTubeVideosMaxAccounts
+	}
+	if c.MaxVideos <= 0 {
+		c.MaxVideos = groupYouTubeVideosMaxTotalVideos
+	}
+	if c.CacheTTL < 0 {
+		c.CacheTTL = 0
+	}
+	if c.CacheTTL == 0 {
+		c.CacheTTL = 30 * time.Second
+	}
+	if c.DefaultPageSize <= 0 {
+		c.DefaultPageSize = 50
+	}
+	if c.DefaultPageSize > c.MaxVideos {
+		c.DefaultPageSize = c.MaxVideos
+	}
+	return c
+}
+
+type youtubeGroupVideosCacheEntry struct {
+	items     []models.YouTubeVideoDetails
+	expiresAt time.Time
+}
 
 // groupYouTubeVideosMaxTotalVideos caps the aggregated response size
 // across all channels. The SPA renders the result as a card grid;
@@ -128,9 +169,21 @@ type groupYouTubeVideoEntry struct {
 // as an error. `warnings: []` surfaces per-account fetch failures
 // so the operator can debug stale-token issues from the UI without
 // inspecting server logs.
+type groupYouTubeVideosSummary struct {
+	TotalVideos          int     `json:"total_videos"`
+	Accounts             int     `json:"accounts"`
+	AccountsWithVideos   int     `json:"accounts_with_videos"`
+	FailedAccounts       int     `json:"failed_accounts"`
+	InvalidTokenAccounts []int64 `json:"invalid_token_accounts,omitempty"`
+}
+
 type groupYouTubeVideosResponse struct {
-	Videos   []groupYouTubeVideoEntry `json:"videos"`
-	Warnings []string                 `json:"warnings,omitempty"`
+	Videos     []groupYouTubeVideoEntry  `json:"videos"`
+	Summary    groupYouTubeVideosSummary `json:"summary"`
+	Warnings   []string                  `json:"warnings,omitempty"`
+	Error      string                    `json:"error,omitempty"`
+	HasMore    bool                      `json:"has_more,omitempty"`
+	NextOffset int                       `json:"next_offset,omitempty"`
 }
 
 // handleListGroupYouTubeVideos is the HTTP entry point for
@@ -186,6 +239,12 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 	// ("yes", "1", "True" in capitals) still defaults to the
 	// expected behaviour.
 	includeSubgroups := strings.EqualFold(strings.TrimSpace(req.URL.Query().Get("include_subgroups")), "true")
+	cfg := r.youtubeGroupVideosConfig.normalized()
+	offset, limit, err := parseGroupVideosPagination(req, cfg)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if r.groupStore == nil {
 		writeError(w, http.StatusNotImplemented, "groups not configured on this server")
@@ -266,7 +325,10 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 		}
 	}
 	if len(accountLookup) == 0 {
-		writeJSON(w, http.StatusOK, groupYouTubeVideosResponse{Videos: []groupYouTubeVideoEntry{}})
+		writeJSON(w, http.StatusOK, groupYouTubeVideosResponse{
+			Videos:  []groupYouTubeVideoEntry{},
+			Summary: groupYouTubeVideosSummary{},
+		})
 		return
 	}
 
@@ -290,13 +352,16 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 		accountIDs = append(accountIDs, aid)
 	}
 	if len(accountLookup) == 0 {
-		writeJSON(w, http.StatusOK, groupYouTubeVideosResponse{Videos: []groupYouTubeVideoEntry{}})
+		writeJSON(w, http.StatusOK, groupYouTubeVideosResponse{
+			Videos:  []groupYouTubeVideoEntry{},
+			Summary: groupYouTubeVideosSummary{},
+		})
 		return
 	}
-	if len(accountLookup) > groupYouTubeVideosMaxAccounts {
+	if len(accountLookup) > cfg.MaxAccounts {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(
 			"group resolves to %d accounts (max %d) — narrow the group or split subfolders",
-			len(accountLookup), groupYouTubeVideosMaxAccounts,
+			len(accountLookup), cfg.MaxAccounts,
 		))
 		return
 	}
@@ -337,14 +402,21 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 	// via semaphore on a buffered channel; bounded per-account
 	// timeout so a stuck channel doesn't stall the request.
 	type fetchResult struct {
-		accountID int64
-		items     []models.YouTubeVideoDetails
-		warning   string
+		accountID    int64
+		items        []models.YouTubeVideoDetails
+		warning      string
+		invalidToken bool
 	}
+	accountIDs = accountIDs[:0]
+	for aid := range accountLookup {
+		accountIDs = append(accountIDs, aid)
+	}
+	sort.Slice(accountIDs, func(i, j int) bool { return accountIDs[i] < accountIDs[j] })
 	sem := make(chan struct{}, groupYouTubeVideosFanoutConcurrency)
 	results := make(chan fetchResult, len(accountLookup))
 	var wg sync.WaitGroup
-	for aid, entry := range accountLookup {
+	for _, aid := range accountIDs {
+		entry := accountLookup[aid]
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(aid int64, acc *models.PlatformAccount) {
@@ -352,11 +424,12 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 			defer func() { <-sem }()
 			ctx, cancel := context.WithTimeout(req.Context(), groupYouTubeVideosPerAccountTimeout)
 			defer cancel()
-			items, ferr := r.fetchAccountEditableVideos(ctx, acc)
+			items, ferr := r.fetchCachedAccountEditableVideos(ctx, acc, cfg)
 			if ferr != nil {
 				results <- fetchResult{
-					accountID: aid,
-					warning:   fmt.Sprintf("account %d: %s", aid, ferr.Error()),
+					accountID:    aid,
+					warning:      fmt.Sprintf("account %d: %s", aid, ferr.Error()),
+					invalidToken: isInvalidYouTubeTokenError(ferr),
 				}
 				return
 			}
@@ -369,6 +442,10 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 	// 7. Aggregate. Each YouTube row joins with the existing session
 	// map by (account_id, youtube_video_id) — O(1) per row.
 	entries := make([]groupYouTubeVideoEntry, 0, 64)
+	resultsByAccount := make(map[int64]fetchResult, len(accountLookup))
+	for res := range results {
+		resultsByAccount[res.accountID] = res
+	}
 	// emittedKeys tracks (account_id, youtube_video_id) tuples
 	// that the fan-out already emitted, so the phantom pass below
 	// does not double-emit when a race surfaces a public video in
@@ -377,10 +454,23 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 	// aggregation).
 	emittedKeys := make(map[string]struct{}, 64)
 	warnings := make([]string, 0)
-	for res := range results {
+	invalidTokenAccounts := make([]int64, 0)
+	accountsWithVideos := 0
+	for _, aid := range accountIDs {
+		res := resultsByAccount[aid]
 		if res.warning != "" {
 			warnings = append(warnings, res.warning)
+			if res.invalidToken {
+				invalidTokenAccounts = append(invalidTokenAccounts, res.accountID)
+				if markErr := r.userRepo.MarkReauthRequired(req.Context(), res.accountID, "youtube_token_invalid", res.warning); markErr != nil {
+					// Reauth marking is deliberately best-effort: a transient DB
+					// failure must not hide the upstream token diagnosis.
+				}
+			}
 			continue
+		}
+		if len(res.items) > 0 {
+			accountsWithVideos++
 		}
 		lookup := accountLookup[res.accountID]
 		chName := strings.TrimSpace(lookup.account.Username)
@@ -519,22 +609,44 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 		})
 	}
 
-	// Hard cap on response size. The slice is already in
-	// per-channel newest-first order (post-fan-out concatenation
-	// preserves each channel's order), so the cap truncates the
-	// tail conservatively.
-	if len(entries) > groupYouTubeVideosMaxTotalVideos {
-		entries = entries[:groupYouTubeVideosMaxTotalVideos]
+	// Apply the aggregate page after the account fan-out. Authorization
+	// and YouTube reads therefore happen before slicing, while callers
+	// receive a bounded response independent of group size.
+	totalVideos := len(entries)
+	if totalVideos > cfg.MaxVideos {
+		totalVideos = cfg.MaxVideos
+		entries = entries[:cfg.MaxVideos]
 	}
-
-	resp := groupYouTubeVideosResponse{Videos: entries}
+	if offset > totalVideos {
+		offset = totalVideos
+	}
+	end := offset + limit
+	if end > totalVideos {
+		end = totalVideos
+	}
+	pagedEntries := entries[offset:end]
+	hasMore := end < totalVideos
+	resp := groupYouTubeVideosResponse{
+		Videos: pagedEntries,
+		Summary: groupYouTubeVideosSummary{
+			TotalVideos:          totalVideos,
+			Accounts:             len(accountLookup),
+			AccountsWithVideos:   accountsWithVideos,
+			FailedAccounts:       len(warnings),
+			InvalidTokenAccounts: invalidTokenAccounts,
+		},
+		HasMore: hasMore,
+	}
+	if hasMore {
+		resp.NextOffset = end
+	}
 	if len(warnings) == len(accountLookup) && len(accountLookup) > 0 {
-		// Every per-account fetch failed → propagate as 502 so the
-		// SPA surfaces a hard error toast instead of an empty grid
-		// (which the operator would otherwise mis-read as "no
-		// videos left").
-		writeError(w, http.StatusBadGateway,
-			"youtube list failed for every account in the group ("+strings.Join(warnings, "; ")+")")
+		// Every per-account fetch failed → propagate as 502, while
+		// retaining the structured summary so the UI can distinguish
+		// accounts requiring reconnection from a general outage.
+		resp.Error = "youtube list failed for every account in the group"
+		resp.Warnings = warnings
+		writeJSON(w, http.StatusBadGateway, resp)
 		return
 	}
 	if len(warnings) > 0 {
@@ -581,19 +693,51 @@ func collectDescendantGroups(all []models.Group, rootGroupID int64) []*models.Gr
 	return out
 }
 
-// fetchAccountEditableVideos resolves a valid access token for the
-// YouTube account (Bearer → LongLived → ShortLived fallback chain,
-// identical to the editor-session create flow) and returns the
+// fetchAccountEditableVideos renews the canonical YouTube bearer grant
+// and returns the
 // first page of private/unlisted/processed videos. Error semantics:
 // (nil, err) for any failure mode (no token / channel mismatches /
 // transport) — the handler skips the account and surfaces the err
 // in the warnings[] / 502 envelope.
-func (r *Router) fetchAccountEditableVideos(ctx context.Context, acc *models.PlatformAccount) ([]models.YouTubeVideoDetails, error) {
+func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *models.PlatformAccount, cfg YouTubeGroupVideosConfig) ([]models.YouTubeVideoDetails, error) {
+	key := fmt.Sprintf("%d:%s", acc.ID, acc.PlatformUserID)
+	now := time.Now()
+	r.youtubeGroupVideosCacheMu.Lock()
+	cached, ok := r.youtubeGroupVideosCache[key]
+	if ok && cached.expiresAt.After(now) {
+		items := append([]models.YouTubeVideoDetails(nil), cached.items...)
+		r.youtubeGroupVideosCacheMu.Unlock()
+		return items, nil
+	}
+	r.youtubeGroupVideosCacheMu.Unlock()
+
+	items, err := r.fetchAccountEditableVideos(ctx, acc, cfg.MaxVideos)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.CacheTTL > 0 {
+		r.youtubeGroupVideosCacheMu.Lock()
+		if r.youtubeGroupVideosCache == nil {
+			r.youtubeGroupVideosCache = make(map[string]youtubeGroupVideosCacheEntry)
+		}
+		r.youtubeGroupVideosCache[key] = youtubeGroupVideosCacheEntry{
+			items:     append([]models.YouTubeVideoDetails(nil), items...),
+			expiresAt: time.Now().Add(cfg.CacheTTL),
+		}
+		r.youtubeGroupVideosCacheMu.Unlock()
+	}
+	return items, nil
+}
+
+func (r *Router) fetchAccountEditableVideos(ctx context.Context, acc *models.PlatformAccount, maxItems int) ([]models.YouTubeVideoDetails, error) {
 	if r.vault == nil {
 		return nil, fmt.Errorf("vault not configured")
 	}
 	if r.youTubeSvc == nil {
 		return nil, fmt.Errorf("youtube service not configured")
+	}
+	if maxItems <= 0 {
+		maxItems = groupYouTubeVideosMaxTotalVideos
 	}
 	token, err := r.vault.Get(ctx, acc.ID, models.TokenTypeBearer)
 	if err != nil {
@@ -605,9 +749,64 @@ func (r *Router) fetchAccountEditableVideos(ctx context.Context, acc *models.Pla
 			}
 		}
 	}
-	page, err := r.youTubeSvc.ListEditableVideos(ctx, token.AccessToken, acc.PlatformUserID, "")
-	if err != nil {
-		return nil, fmt.Errorf("youtube list: %w", err)
+	items := make([]models.YouTubeVideoDetails, 0, maxItems)
+	pageToken := ""
+	for len(items) < maxItems {
+		page, listErr := r.youTubeSvc.ListEditableVideos(ctx, token.AccessToken, acc.PlatformUserID, pageToken)
+		if listErr != nil {
+			return nil, fmt.Errorf("youtube list: %w", listErr)
+		}
+		if page == nil {
+			return nil, errors.New("youtube list: empty page")
+		}
+		remaining := maxItems - len(items)
+		if len(page.Items) > remaining {
+			items = append(items, page.Items[:remaining]...)
+		} else {
+			items = append(items, page.Items...)
+		}
+		next := strings.TrimSpace(page.NextPageToken)
+		if next == "" || next == pageToken || len(items) >= maxItems {
+			break
+		}
+		pageToken = next
 	}
-	return page.Items, nil
+	return items, nil
+}
+
+func parseGroupVideosPagination(req *http.Request, cfg YouTubeGroupVideosConfig) (int, int, error) {
+	q := req.URL.Query()
+	offset := 0
+	if raw := strings.TrimSpace(q.Get("offset")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return 0, 0, fmt.Errorf("offset must be a non-negative integer")
+		}
+		offset = value
+	}
+	limit := cfg.DefaultPageSize
+	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			return 0, 0, fmt.Errorf("limit must be a positive integer")
+		}
+		limit = value
+	}
+	if limit > cfg.MaxVideos {
+		limit = cfg.MaxVideos
+	}
+	return offset, limit, nil
+}
+
+func isInvalidYouTubeTokenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{"invalid_grant", "unauthorized", "status 401", "token expired", "token revoked", "no valid token"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }

@@ -149,6 +149,21 @@ func (c *Config) validate() error {
 	// immediately and the chunk-loop would poll as fast as the worker can
 	// count.
 	if c.Auth.YouTubeClientID != "" {
+		if c.Worker.YouTubeGroupVideosMaxAccounts <= 0 {
+			return fmt.Errorf("YOUTUBE_GROUP_VIDEOS_MAX_ACCOUNTS must be positive (got %d)", c.Worker.YouTubeGroupVideosMaxAccounts)
+		}
+		if c.Worker.YouTubeGroupVideosMaxVideos <= 0 {
+			return fmt.Errorf("YOUTUBE_GROUP_VIDEOS_MAX_VIDEOS must be positive (got %d)", c.Worker.YouTubeGroupVideosMaxVideos)
+		}
+		if c.Worker.YouTubeGroupVideosDefaultPageSize <= 0 {
+			return fmt.Errorf("YOUTUBE_GROUP_VIDEOS_DEFAULT_PAGE_SIZE must be positive (got %d)", c.Worker.YouTubeGroupVideosDefaultPageSize)
+		}
+		if c.Worker.YouTubeGroupVideosDefaultPageSize > c.Worker.YouTubeGroupVideosMaxVideos {
+			return fmt.Errorf("YOUTUBE_GROUP_VIDEOS_DEFAULT_PAGE_SIZE (%d) must be <= YOUTUBE_GROUP_VIDEOS_MAX_VIDEOS (%d)", c.Worker.YouTubeGroupVideosDefaultPageSize, c.Worker.YouTubeGroupVideosMaxVideos)
+		}
+		if c.Worker.YouTubeGroupVideosCacheTTLSeconds < 0 {
+			return fmt.Errorf("YOUTUBE_GROUP_VIDEOS_CACHE_TTL_SECONDS must not be negative (got %d)", c.Worker.YouTubeGroupVideosCacheTTLSeconds)
+		}
 		if c.Worker.YouTubeUploadChunkBytes <= 0 || c.Worker.YouTubeUploadChunkBytes%262144 != 0 {
 			return fmt.Errorf("YOUTUBE_UPLOAD_CHUNK_BYTES must be a positive multiple of 256 KB (262144 bytes); got %d (default 16777216 = 16 MB)", c.Worker.YouTubeUploadChunkBytes)
 		}

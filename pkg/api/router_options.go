@@ -413,3 +413,13 @@ func WithNvidiaMetadataService(svc *services.MetadataGenerator) RouterOption {
 		r.nvidiaMetadataSvc = svc
 	}
 }
+
+// WithYouTubeGroupVideosConfig wires the limits and short-lived cache
+// used by GET /groups/{group_id}/youtube/videos. The option is applied
+// at router construction time so tests and production share the same
+// handler behavior without reading environment variables per request.
+func WithYouTubeGroupVideosConfig(cfg YouTubeGroupVideosConfig) RouterOption {
+	return func(r *Router) {
+		r.youtubeGroupVideosConfig = cfg.normalized()
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
@@ -156,6 +157,12 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		api.WithScheduleLimits(api.ScheduleLimits{
 			PublishHorizonDays:       s.cfg.Worker.PublishHorizonDays,
 			VideoRetentionBufferDays: s.cfg.Worker.VideoRetentionBufferDays,
+		}),
+		api.WithYouTubeGroupVideosConfig(api.YouTubeGroupVideosConfig{
+			MaxAccounts:     s.cfg.Worker.YouTubeGroupVideosMaxAccounts,
+			MaxVideos:       s.cfg.Worker.YouTubeGroupVideosMaxVideos,
+			CacheTTL:        time.Duration(s.cfg.Worker.YouTubeGroupVideosCacheTTLSeconds) * time.Second,
+			DefaultPageSize: s.cfg.Worker.YouTubeGroupVideosDefaultPageSize,
 		}),
 		// P1#7 — export the importBatchRepo on App so the
 		// command-line crawler (cmd/worker) can wire it directly.

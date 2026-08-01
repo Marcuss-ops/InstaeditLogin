@@ -269,6 +269,14 @@ type WorkerConfig struct {
 	YouTubeUploadBackoffCapMs int
 	// YouTubeDailyQuotaLimit is the daily videos.insert quota cap.
 	YouTubeDailyQuotaLimit int
+	// YouTubeGroupVideosMaxAccounts caps group-video fan-out size.
+	YouTubeGroupVideosMaxAccounts int
+	// YouTubeGroupVideosMaxVideos caps the aggregate group-video projection.
+	YouTubeGroupVideosMaxVideos int
+	// YouTubeGroupVideosCacheTTLSeconds controls the short-lived per-account cache.
+	YouTubeGroupVideosCacheTTLSeconds int
+	// YouTubeGroupVideosDefaultPageSize is the default response page size.
+	YouTubeGroupVideosDefaultPageSize int
 	// PublishHorizonDays (Blocco #2 P0) caps how far in the future a
 	// user/operator can schedule a publish. Used by:
 	//   - uploads_handlers.go::handleRescheduleUpload (drag-drop reject

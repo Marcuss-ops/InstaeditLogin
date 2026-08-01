@@ -84,11 +84,15 @@ func Load() (*Config, error) {
 			// valutazione doc spec (16 MB chunks, 5 per-chunk retries, 1 s/5 min
 			// backoff). Validation runs unconditionally (so an operator typo
 			// surfaces at boot, not first upload).
-			YouTubeUploadChunkBytes:    getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
-			YouTubeUploadMaxRetries:    getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
-			YouTubeUploadBackoffBaseMs: getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
-			YouTubeUploadBackoffCapMs:  getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
-			YouTubeDailyQuotaLimit:     getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
+			YouTubeUploadChunkBytes:           getEnvInt64("YOUTUBE_UPLOAD_CHUNK_BYTES", 16*1024*1024),
+			YouTubeUploadMaxRetries:           getEnvInt("YOUTUBE_UPLOAD_MAX_RETRIES", 5),
+			YouTubeUploadBackoffBaseMs:        getEnvInt("YOUTUBE_UPLOAD_BACKOFF_BASE_MS", 1000),
+			YouTubeUploadBackoffCapMs:         getEnvInt("YOUTUBE_UPLOAD_BACKOFF_CAP_MS", 300000),
+			YouTubeDailyQuotaLimit:            getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
+			YouTubeGroupVideosMaxAccounts:     getEnvInt("YOUTUBE_GROUP_VIDEOS_MAX_ACCOUNTS", 200),
+			YouTubeGroupVideosMaxVideos:       getEnvInt("YOUTUBE_GROUP_VIDEOS_MAX_VIDEOS", 500),
+			YouTubeGroupVideosCacheTTLSeconds: getEnvInt("YOUTUBE_GROUP_VIDEOS_CACHE_TTL_SECONDS", 30),
+			YouTubeGroupVideosDefaultPageSize: getEnvInt("YOUTUBE_GROUP_VIDEOS_DEFAULT_PAGE_SIZE", 50),
 			// Blocco #2 P0 — publish horizon + retention buffer are
 			// env-driven. Defaults (30 days / 7 days) match the user-facing
 			// spec; surface them via the Worker's struct fields so the HTTP

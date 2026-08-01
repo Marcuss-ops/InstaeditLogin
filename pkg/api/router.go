@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -319,6 +320,14 @@ type Router struct {
 	// 503 and the manual metadata flow remains fully functional.
 	// Wired via WithNvidiaMetadataService in internal/bootstrap/app.go.
 	nvidiaMetadataSvc *services.MetadataGenerator
+
+	// youtubeGroupVideosConfig controls the group-video read projection.
+	// It is immutable after construction; youtubeGroupVideosCache is
+	// protected by youtubeGroupVideosCacheMu because group fan-out runs
+	// concurrently.
+	youtubeGroupVideosConfig  YouTubeGroupVideosConfig
+	youtubeGroupVideosCacheMu sync.Mutex
+	youtubeGroupVideosCache   map[string]youtubeGroupVideosCacheEntry
 
 	// youtubeVideoEditStore persists thumbnail editor sessions for
 	// YouTube videos. Wired via WithYouTubeVideoEditStore.
