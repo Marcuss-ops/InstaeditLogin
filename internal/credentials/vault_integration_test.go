@@ -47,6 +47,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -162,6 +163,58 @@ func integrationDB(t *testing.T) *sql.DB {
 // oauth_connection_id — the platform_accounts → oauth_connections
 // lineage is populated, and tokens.oauth_connection_id is NOT NULL
 // per migration 053's SET NOT NULL invariant.
+// TestVault_Lifecycle_PersistedTokenSurvivesVaultRestart verifies the
+// restart boundary against a real PostgreSQL-backed TokenRepository. The
+// first vault instance reads a token persisted before the simulated restart;
+// the second instance uses a fresh repository and vault but the same durable
+// database and encryption key. This test is skipped unless
+// INSTAEDIT_TEST_PG_URL points to PostgreSQL.
+func TestVault_Lifecycle_PersistedTokenSurvivesVaultRestart(t *testing.T) {
+	db := integrationDB(t)
+	enc, err := crypto.NewEncryptor(1, map[uint32]string{1: "kP5jF8aL2nQ7rT3vX6yB9cE1dG4hJ0mN5oS8uV2wY4zA="})
+	if err != nil {
+		t.Fatalf("NewEncryptor: %v", err)
+	}
+	accountID := seedAccountAndExpiredToken(t, db, enc, "persisted-refresh")
+	var connectionID int64
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1`, accountID,
+	).Scan(&connectionID); err != nil {
+		t.Fatalf("resolve persisted oauth connection: %v", err)
+	}
+
+	firstRepo := repository.NewTokenRepository(db)
+	firstVault := NewCredentialVault(enc, db, firstRepo)
+	if got, err := firstVault.Get(context.Background(), accountID, models.TokenTypeBearer); err == nil || got != nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("expired persisted token must return an expiry error: token=%v err=%v", got, err)
+	}
+
+	// Simulate a process restart: both repository and vault instances are
+	// reconstructed, while only PostgreSQL and the encryption key survive.
+	secondRepo := repository.NewTokenRepository(db)
+	secondVault := NewCredentialVault(enc, db, secondRepo)
+	stored, err := secondRepo.FindLatestToken(connectionID, models.TokenTypeBearer)
+	if err != nil {
+		t.Fatalf("read persisted token row after restart: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("persisted token row missing after restart")
+	}
+	refresh, err := enc.Decrypt(stored.EncryptedRefreshToken)
+	if err != nil {
+		t.Fatalf("decrypt persisted refresh token after restart: %v", err)
+	}
+	if refresh != "persisted-refresh" {
+		t.Fatalf("persisted refresh token: want persisted-refresh, got %q", refresh)
+	}
+
+	// The second vault can still observe the same durable row (it returns
+	// the expected expiry error rather than a missing-token/decryption error).
+	if got, err := secondVault.Get(context.Background(), accountID, models.TokenTypeBearer); err == nil || got != nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("second vault must read the persisted expired row: token=%v err=%v", got, err)
+	}
+}
+
 func seedAccountAndExpiredToken(t *testing.T, db *sql.DB, enc *crypto.Encryptor, refreshPlaintext string) int64 {
 	t.Helper()
 	ctx := context.Background()

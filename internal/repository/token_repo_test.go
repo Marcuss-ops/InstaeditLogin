@@ -1,6 +1,7 @@
 package repository_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -106,5 +107,25 @@ func TestTokenRepository_DeleteAllTokensForOAuthConnection_NotFound(t *testing.T
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// TestTokenRepository_UpdateOAuthConnectionStatus_InvalidGrant persists only
+// the application classification used by the reconnect UI. The provider's
+// response text must never be passed as last_refresh_error.
+func TestTokenRepository_UpdateOAuthConnectionStatus_InvalidGrant(t *testing.T) {
+	db, mock := newMockTokenDB(t)
+	repo := repository.NewTokenRepository(db)
+
+	const statusSQL = "UPDATE oauth_connections SET status = $2, last_refresh_error = NULLIF($3, ''), last_refresh_at = CASE WHEN $2 = 'active' THEN NOW() ELSE last_refresh_at END, updated_at = NOW() WHERE id = $1"
+	mock.ExpectExec(statusSQL).
+		WithArgs(int64(700), "reauth_required", "invalid_grant").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := repo.UpdateOAuthConnectionStatus(context.Background(), 700, "reauth_required", "invalid_grant"); err != nil {
+		t.Fatalf("UpdateOAuthConnectionStatus: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
