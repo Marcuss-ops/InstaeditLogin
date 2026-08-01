@@ -5,6 +5,10 @@ export type Group = {
   name: string;
 };
 
+export type GroupAccountSummary = Group & {
+  account_ids: number[];
+};
+
 export type PlatformAccount = {
   id: number;
   workspace_id?: number;
@@ -12,6 +16,9 @@ export type PlatformAccount = {
   username: string;
   platform_user_id: string;
   status: string;
+  account_state?: "valid" | "reconnect_required" | "suspended" | "deleted";
+  is_publishable?: boolean;
+  metadata?: Record<string, unknown>;
   created_at: string;
 };
 

@@ -14,6 +14,10 @@ import { PROVIDERS, type ProviderId } from "../../lib/providers";
 import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
 import { DriveBatchImportDialog } from "./DriveBatchImportDialog";
+import {
+  accountStateLabel,
+  isPublishableAccount,
+} from "../../types/uploads";
 
 type PlatformAccount = {
   id: number;
@@ -21,6 +25,8 @@ type PlatformAccount = {
   platform_user_id: string;
   username: string;
   status: string;
+  account_state?: "valid" | "reconnect_required" | "suspended" | "deleted";
+  is_publishable?: boolean;
   created_at: string;
 };
 
@@ -158,6 +164,7 @@ export function InternalLinking() {
             {linkableProviders.map((provider) => {
               const accounts = groupedAccounts[provider.id] ?? [];
               const isConnected = accounts.length > 0;
+              const hasPublishableAccount = accounts.some(isPublishableAccount);
               const isExpanded = expandedProvider === provider.id;
               return (
                 <div
@@ -200,9 +207,14 @@ export function InternalLinking() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {isConnected && (
+                        {isConnected && hasPublishableAccount && (
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-500/[0.08] border border-emerald-500/[0.15] text-emerald-400 text-[11px] font-semibold">
                             <CheckCircle2 size={11} /> Connected
+                          </span>
+                        )}
+                        {isConnected && !hasPublishableAccount && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/[0.08] border border-amber-400/[0.18] text-amber-300 text-[11px] font-semibold">
+                            Attention required
                           </span>
                         )}
                         <ChevronDown
@@ -236,7 +248,7 @@ export function InternalLinking() {
                                       @{account.username}
                                     </p>
                                     <p className="text-[11px] text-[#9aa0aa]">
-                                      Linked on {new Date(account.created_at).toLocaleDateString()}
+                                      {accountStateLabel(account)} · Linked on {new Date(account.created_at).toLocaleDateString()}
                                     </p>
                                   </div>
                                 </div>

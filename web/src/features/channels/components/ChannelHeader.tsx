@@ -26,6 +26,7 @@ import { ArrowLeft, ExternalLink, RefreshCw, Loader2, Video } from "lucide-react
 import { cn } from "../../../lib/utils";
 import type { ChannelAccount } from "../types";
 import { getStatusTone } from "../types";
+import { accountStateLabel } from "../../../types/uploads";
 
 export interface ChannelHeaderProps {
   /** Undefined while the parent page is loading the channel. */
@@ -118,7 +119,7 @@ export function ChannelHeader({
                   )}
                   data-testid="channel-header-status"
                 >
-                  {account!.status.toUpperCase()}
+                  {accountStateLabel(account!)}
                 </span>
               )}
             </div>

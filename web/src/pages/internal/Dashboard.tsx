@@ -13,6 +13,7 @@ import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
 import { type ProviderId } from "../../lib/providers";
 import { Skeleton, ErrorState } from "../../components/feedback";
 import type { Group } from "./groupsTypes";
+import { isPublishableAccount } from "../../types/uploads";
 
 type PlatformAccount = {
   id: number;
@@ -160,7 +161,7 @@ export function InternalDashboard() {
           .filter((group) => group.parent_group_id == null)
           .map((group) => {
             const accountIds = collect(group);
-            const groupAccounts = accountIds.map((id) => accountIndex.get(id)).filter((account): account is PlatformAccount => account != null && account.status === "active");
+            const groupAccounts = accountIds.map((id) => accountIndex.get(id)).filter((account): account is PlatformAccount => account != null && isPublishableAccount(account));
             return {
               group,
               accountIds,
@@ -373,7 +374,7 @@ export function InternalDashboard() {
 
             {(() => {
               const groupedIds = new Set(state.data.groupSummaries.flatMap((summary) => summary.accountIds));
-              const availableAccounts = state.data.accounts.filter((account) => account.status === "active" && account.platform !== "google-drive" && !groupedIds.has(account.id));
+              const availableAccounts = state.data.accounts.filter((account) => isPublishableAccount(account) && account.platform !== "google-drive" && !groupedIds.has(account.id));
               return (
                 <section className="mb-8" data-testid="dashboard-available-accounts">
                   <div className="flex items-center justify-between mb-4">

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
@@ -12,19 +13,61 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 )
 
-// accountListItem is the wire shape returned by handleListAccounts.
-// We deliberately do NOT return the PlatformAccount struct directly:
-// it leaks user_id, last_error_code/message, metadata blob, and
-// every internal audit column the SPA does not need. The 6 fields
-// below are the SPEC'd response contract: id, platform,
-// platform_user_id, username, status, created_at.
+// AccountState is the stable lifecycle vocabulary exposed to clients.
+// Status remains in the response for backward compatibility; clients that
+// need to decide whether publishing is safe should use AccountState and
+// IsPublishable instead of interpreting provider-specific status strings.
+type AccountState string
+
+const (
+	AccountStateValid             AccountState = "valid"
+	AccountStateReconnectRequired AccountState = "reconnect_required"
+	AccountStateSuspended         AccountState = "suspended"
+	AccountStateDeleted           AccountState = "deleted"
+)
+
+// classifyAccountStatus normalizes persisted lifecycle values into the four
+// states the UI needs. Unknown values fail closed and cannot be published.
+func classifyAccountStatus(status string) (AccountState, bool) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case models.AccountStatusActive, "connected":
+		return AccountStateValid, true
+	case models.AccountStatusSuspended:
+		return AccountStateSuspended, false
+	case models.AccountStatusDisconnected, models.AccountStatusRevoked, "deleted", "cancelled", "canceled":
+		return AccountStateDeleted, false
+	case models.AccountStatusExpired, models.AccountStatusReauthRequired, models.AccountStatusPendingAuthorization, models.AccountStatusError, "":
+		return AccountStateReconnectRequired, false
+	default:
+		return AccountStateReconnectRequired, false
+	}
+}
+
+// accountListItem is the wire shape returned by account read endpoints.
+// Internal ownership, error and metadata columns are intentionally omitted.
 type accountListItem struct {
-	ID             int64     `json:"id"`
-	Platform       string    `json:"platform"`
-	PlatformUserID string    `json:"platform_user_id"`
-	Username       string    `json:"username"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             int64        `json:"id"`
+	Platform       string       `json:"platform"`
+	PlatformUserID string       `json:"platform_user_id"`
+	Username       string       `json:"username"`
+	Status         string       `json:"status"`
+	AccountState   AccountState `json:"account_state"`
+	IsPublishable  bool         `json:"is_publishable"`
+	CreatedAt      time.Time    `json:"created_at"`
+}
+
+func accountListItemFromAccount(account *models.PlatformAccount) accountListItem {
+	state, publishable := classifyAccountStatus(account.Status)
+	return accountListItem{
+		ID:             account.ID,
+		Platform:       account.Platform,
+		PlatformUserID: account.PlatformUserID,
+		Username:       account.Username,
+		Status:         account.Status,
+		AccountState:   state,
+		IsPublishable:  publishable,
+		CreatedAt:      account.CreatedAt,
+	}
 }
 
 // handleListAccounts returns the authenticated user's connected
@@ -59,14 +102,7 @@ func (r *Router) handleListAccounts(w http.ResponseWriter, req *http.Request) {
 	}
 	items := make([]accountListItem, 0, len(accounts))
 	for _, a := range accounts {
-		items = append(items, accountListItem{
-			ID:             a.ID,
-			Platform:       a.Platform,
-			PlatformUserID: a.PlatformUserID,
-			Username:       a.Username,
-			Status:         a.Status,
-			CreatedAt:      a.CreatedAt,
-		})
+		items = append(items, accountListItemFromAccount(a))
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"accounts": items})
 }
@@ -137,14 +173,7 @@ func (r *Router) handleGetAccount(w http.ResponseWriter, req *http.Request) {
 	}
 
 	resp := accountDetailResponse{
-		accountListItem: accountListItem{
-			ID:             account.ID,
-			Platform:       account.Platform,
-			PlatformUserID: account.PlatformUserID,
-			Username:       account.Username,
-			Status:         account.Status,
-			CreatedAt:      account.CreatedAt,
-		},
+		accountListItem: accountListItemFromAccount(account),
 	}
 
 	const snapshotMaxAge = 10 * time.Minute

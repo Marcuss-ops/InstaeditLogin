@@ -3,14 +3,53 @@ export type Workspace = {
   name: string;
 };
 
+export type AccountState =
+  | "valid"
+  | "reconnect_required"
+  | "suspended"
+  | "deleted";
+
 export type PlatformAccount = {
   id: number;
   platform: string;
   platform_user_id: string;
   username: string;
+  /** Legacy provider/database status retained for compatibility. */
   status: string;
+  /** Stable lifecycle state exposed by GET /api/v1/accounts. */
+  account_state?: AccountState;
+  /** False accounts must never be offered as publishing targets. */
+  is_publishable?: boolean;
   created_at: string;
 };
+
+/**
+ * Fail closed for the new API contract while accepting legacy fixtures and
+ * older deployments that have not started returning is_publishable yet.
+ */
+export function isPublishableAccount(
+  account: Pick<PlatformAccount, "is_publishable" | "status">,
+): boolean {
+  if (account.is_publishable !== undefined) return account.is_publishable;
+  return account.status === "active" || account.status === "connected";
+}
+
+export function accountStateLabel(
+  account: Pick<PlatformAccount, "account_state" | "status">,
+): string {
+  switch (account.account_state) {
+    case "valid":
+      return "Valid";
+    case "reconnect_required":
+      return "Reconnect required";
+    case "suspended":
+      return "Suspended";
+    case "deleted":
+      return "Deleted";
+    default:
+      return account.status.replace(/_/g, " ");
+  }
+}
 
 export type LoadState =
   | { kind: "loading" }

@@ -15,6 +15,7 @@ import { useToast } from "../../components/toast";
 import { PROVIDERS } from "../../lib/providers";
 import { ErrorState } from "../../components/feedback";
 import { cn } from "../../lib/utils";
+import { accountStateLabel } from "../../types/uploads";
 import { createEditorSessionAndOpen } from "../../features/youtube/api/editorSessionsApi";
 import { useGroupVideosLiveUpdate } from "../../features/channels/hooks/useYouTubePublishLiveUpdate";
 import {
@@ -191,7 +192,7 @@ export function AccountDetailsPage() {
                         : "bg-amber-500/[0.08] border-amber-500/[0.15] text-amber-400",
                     )}
                   >
-                    {account.status.toUpperCase()}
+                    {accountStateLabel(account)}
                   </span>
                 </div>
                 {resource?.handle && (
@@ -410,7 +411,7 @@ export function AccountDetailsPage() {
             <h2 className="text-[15px] font-bold text-white mb-4">Connection</h2>
             <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-[13px]">
               <dt className="text-[#9aa0aa]">Status</dt>
-              <dd className="text-white capitalize">{account.status.replace("_", " ")}</dd>
+              <dd className="text-white">{accountStateLabel(account)}</dd>
               <dt className="text-[#9aa0aa]">Platform</dt>
               <dd className="text-white">{provider?.name ?? account.platform}</dd>
               <dt className="text-[#9aa0aa]">Connected</dt>

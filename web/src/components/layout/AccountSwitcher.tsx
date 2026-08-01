@@ -4,11 +4,19 @@ import { ChevronDown, User, Check } from "lucide-react";
 import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
 import { getProvider, type ProviderId } from "../../lib/providers";
 import { cn } from "../../lib/utils";
+import {
+  accountStateLabel,
+  isPublishableAccount,
+  type AccountState,
+} from "../../types/uploads";
 
 type PlatformAccount = {
   id: number;
   platform: ProviderId;
   username: string;
+  status: string;
+  account_state?: AccountState;
+  is_publishable?: boolean;
   created_at: string;
 };
 
@@ -28,8 +36,9 @@ export function AccountSwitcher() {
       const response = await authedFetch("/api/v1/accounts");
       const data = (await response.json()) as { accounts: PlatformAccount[] };
       setState({ kind: "ready", accounts: data.accounts ?? [] });
-      if (data.accounts.length > 0) {
-        setSelectedId((prev) => (prev === null ? data.accounts[0].id : prev));
+      const firstPublishable = data.accounts.find(isPublishableAccount);
+      if (firstPublishable) {
+        setSelectedId((prev) => (prev === null ? firstPublishable.id : prev));
       }
     } catch (err) {
       if (err instanceof AuthError) {
@@ -73,9 +82,14 @@ export function AccountSwitcher() {
   }, [isOpen]);
 
   const activeAccount =
-    state.kind === "ready" ? state.accounts.find((a) => a.id === selectedId) ?? state.accounts[0] : null;
+    state.kind === "ready"
+      ? state.accounts.find((a) => a.id === selectedId && isPublishableAccount(a)) ??
+        state.accounts.find(isPublishableAccount) ??
+        null
+      : null;
 
   const handleSelect = (account: PlatformAccount) => {
+    if (!isPublishableAccount(account)) return;
     setSelectedId(account.id);
     setIsOpen(false);
   };
@@ -156,17 +170,21 @@ export function AccountSwitcher() {
                   {state.accounts.map((account) => {
                     const provider = getProvider(account.platform);
                     const isSelected = account.id === selectedId;
+                    const publishable = isPublishableAccount(account);
                     return (
                       <button
                         key={account.id}
                         role="menuitem"
                         type="button"
                         onClick={() => handleSelect(account)}
+                        disabled={!publishable}
+                        aria-disabled={!publishable}
                         className={cn(
                           "flex items-center gap-3 w-full p-2.5 rounded-xl transition-colors text-left",
                           isSelected
                             ? "bg-white/[0.08]"
                             : "hover:bg-white/[0.04]",
+                          !publishable && "cursor-not-allowed opacity-60",
                         )}
                       >
                         <div
@@ -182,7 +200,7 @@ export function AccountSwitcher() {
                             @{account.username}
                           </p>
                           <p className="text-[11px] text-[#9aa0aa] truncate">
-                            {provider?.name ?? account.platform}
+                            {provider?.name ?? account.platform} · {accountStateLabel(account)}
                           </p>
                         </div>
                         {isSelected && <Check size={14} className="text-emerald-400 shrink-0" />}

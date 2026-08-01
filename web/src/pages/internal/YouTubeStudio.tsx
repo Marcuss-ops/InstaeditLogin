@@ -18,6 +18,7 @@ import {
 import { useToast } from "../../components/toast";
 import { EmptyState, ErrorState, Skeleton } from "../../components/feedback";
 import { cn } from "../../lib/utils";
+import { isPublishableAccount } from "../../types/uploads";
 import { FormField, FormSelect } from "./YouTubeStudioFormElements";
 import { SessionRow } from "./YouTubeStudioSessionRow";
 import { YouTubePublishCard } from "./YouTubePublishCard";
@@ -113,7 +114,9 @@ export function InternalYouTubeStudio() {
       const accts =
         ((await acctsR.json()) as { accounts: PlatformAccount[] }).accounts ??
         [];
-      const youtubeChannels = accts.filter((a) => a.platform === "youtube");
+      const youtubeChannels = accts.filter(
+        (a) => a.platform === "youtube" && isPublishableAccount(a),
+      );
 
       const resolvedWorkspaceId =
         ws.length === 1 ? ws[0].id : "";

@@ -206,14 +206,7 @@ func (r *Router) handleValidateAccount(w http.ResponseWriter, req *http.Request)
 	}
 
 	resp := validateAccountResponse{
-		accountListItem: accountListItem{
-			ID:             account.ID,
-			Platform:       account.Platform,
-			PlatformUserID: account.PlatformUserID,
-			Username:       account.Username,
-			Status:         account.Status,
-			CreatedAt:      account.CreatedAt,
-		},
+		accountListItem: accountListItemFromAccount(account),
 	}
 	if canary != nil {
 		resp.CanaryVideoID = canary.VideoID
@@ -262,14 +255,7 @@ func (r *Router) handleValidateAccountLegacy(w http.ResponseWriter, req *http.Re
 		writeError(w, http.StatusInternalServerError, "failed to update account: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, accountListItem{
-		ID:             account.ID,
-		Platform:       account.Platform,
-		PlatformUserID: account.PlatformUserID,
-		Username:       account.Username,
-		Status:         account.Status,
-		CreatedAt:      account.CreatedAt,
-	})
+	writeJSON(w, http.StatusOK, accountListItemFromAccount(account))
 }
 
 // flagReauthAndRespond is the 422-mapping helper for every 4-step failure.
@@ -360,14 +346,7 @@ func (r *Router) handleReconnectAccount(w http.ResponseWriter, req *http.Request
 		return
 	}
 	r.auditAccountEvent(req.Context(), "account.reauth_required", identity, account)
-	writeJSON(w, http.StatusOK, accountListItem{
-		ID:             account.ID,
-		Platform:       account.Platform,
-		PlatformUserID: account.PlatformUserID,
-		Username:       account.Username,
-		Status:         account.Status,
-		CreatedAt:      account.CreatedAt,
-	})
+	writeJSON(w, http.StatusOK, accountListItemFromAccount(account))
 }
 
 // handleDeleteAccount soft-disconnects a platform account. Steps:

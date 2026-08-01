@@ -30,6 +30,8 @@ export type AccountDetail = {
   platform_user_id: string;
   username: string;
   status: string;
+  account_state?: "valid" | "reconnect_required" | "suspended" | "deleted";
+  is_publishable?: boolean;
   created_at: string;
   resource?: AccountResource;
 };

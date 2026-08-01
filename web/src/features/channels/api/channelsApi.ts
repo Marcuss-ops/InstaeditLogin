@@ -17,7 +17,11 @@
  * hook-owned controller so unmount cancels mid-flight.
  */
 import { authedFetch } from "../../../lib/auth";
-import type { PlatformAccount, Workspace } from "../../../types/uploads";
+import {
+  isPublishableAccount,
+  type PlatformAccount,
+  type Workspace,
+} from "../../../types/uploads";
 
 interface AccountsResponse {
   accounts?: PlatformAccount[];
@@ -44,7 +48,9 @@ const ACCOUNTS_PATH = "/api/v1/accounts";
 const WORKSPACES_PATH = "/api/v1/workspaces";
 
 export function filterYouTube(accounts: PlatformAccount[]): PlatformAccount[] {
-  return accounts.filter((a) => a.platform === "youtube");
+  return accounts.filter(
+    (account) => account.platform === "youtube" && isPublishableAccount(account),
+  );
 }
 
 /**

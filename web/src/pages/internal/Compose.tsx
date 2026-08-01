@@ -14,6 +14,7 @@ import { Skeleton, ErrorState } from "../../components/feedback";
 import { getProvider } from "../../lib/providers";
 import { cn } from "../../lib/utils";
 import { useUploadMedia } from "../../features/publishing/hooks/useUploadMedia";
+import { isPublishableAccount } from "../../types/uploads";
 
 type Workspace = {
   id: number;
@@ -24,6 +25,9 @@ type PlatformAccount = {
   id: number;
   platform: string;
   username: string;
+  status: string;
+  account_state?: "valid" | "reconnect_required" | "suspended" | "deleted";
+  is_publishable?: boolean;
 };
 
 type FetchState =
@@ -162,7 +166,7 @@ export function InternalCompose() {
       const wsData = (await wsResp.json()) as { workspaces: Workspace[] };
       const accData = (await accResp.json()) as { accounts: PlatformAccount[] };
       const workspaces = wsData.workspaces ?? [];
-      const accounts = accData.accounts ?? [];
+      const accounts = (accData.accounts ?? []).filter(isPublishableAccount);
 
       setState({ kind: "ready", workspaces, accounts });
       if (workspaces.length === 1) {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { authedFetch, AuthError, ApiError, fetchSession } from "../../lib/auth";
+import { isPublishableAccount } from "../../types/uploads";
 import {
   buildTree,
   type FetchState,
@@ -49,7 +50,7 @@ export function useGroupsData() {
         // The groups UI is an operational publishing view: accounts that are
         // not active (revoked, suspended or requiring re-auth) must not be
         // selectable or displayed as usable channels.
-        const activeAccounts = (accountsData.accounts ?? []).filter((account) => account.status === "active");
+        const activeAccounts = (accountsData.accounts ?? []).filter(isPublishableAccount);
         // The aggregate endpoint returns groups and direct memberships in
         // one workspace-scoped response. Resolve account IDs locally so the
         // tree never fans out into one request per group.

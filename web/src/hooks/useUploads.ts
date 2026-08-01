@@ -17,6 +17,7 @@ import {
   FOLDER_ID_PATTERN,
   MAX_JITTER_SEC,
   MIN_JITTER_SEC,
+  isPublishableAccount,
 } from "../types/uploads";
 
 const POLL_INTERVAL_MS = 5_000;
@@ -69,10 +70,13 @@ export function useUploads() {
         const accts =
           ((await acctsR.json()) as { accounts: PlatformAccount[] }).accounts ??
           [];
-        const youtubeChannels = accts.filter(
+        const publishableAccounts = accts.filter(isPublishableAccount);
+        const youtubeChannels = publishableAccounts.filter(
           (a) => a.platform === "youtube",
         );
-        const driveAccounts = accts.filter((a) => a.platform === "google-drive");
+        const driveAccounts = publishableAccounts.filter(
+          (a) => a.platform === "google-drive",
+        );
 
         setLoadState({
           kind: "ready",
