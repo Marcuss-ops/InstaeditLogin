@@ -3,7 +3,11 @@
 > This checklist is retained for historical audit only. Do not execute its
 > commands or use it as a current operational path.
 
-# scripts/ops/PASTE-BACK-FLY-DESTROY.md
+# docs/archive/legacy-fly/PASTE-BACK-FLY-DESTROY.md
+
+> Archived from the former operations checklist; retained for audit history
+> only. The canonical operational path is the VPS Docker Compose stack
+> documented in `docs/DEPLOY.md`, with MinIO as the object store.
 
 > Operator-side paste-back checklist for the irreversible Fly destroy step
 > at the end of the VPS-first cutover. **Cannot be run from sandbox** —
