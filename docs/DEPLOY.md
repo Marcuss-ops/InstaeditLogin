@@ -201,11 +201,39 @@ review it, push to `main`, then pull the reviewed commit on the host.
 ## 3. Production secrets and environment
 
 Create the production environment file with mode `0600` and ownership limited
-to the deployment operator:
+to the deployment operator. The atomic no-clobber step is safe to repeat and
+safe under concurrent invocations: it creates the file only when absent and
+never truncates existing secrets.
 
 ```bash
-sudo install -m 0600 -o instaedit -g instaedit \
-  /dev/null /opt/instaedit/secrets/.env.production
+sudo install -d -m 750 -o instaedit -g instaedit /opt/instaedit/secrets
+sudo sh -c '
+  set -eu
+  target=/opt/instaedit/secrets/.env.production
+  expected_owner=$(id -u instaedit):$(id -g instaedit)
+  if test -e "$target" || test -L "$target"; then
+    test -f "$target"
+    test ! -L "$target"
+    test "$(stat -c %a "$target")" = 600
+    test "$(stat -c %u:%g "$target")" = "$expected_owner"
+  else
+    tmp=$(mktemp "$target.tmp.XXXXXX")
+    trap '\''rm -f -- "$tmp"'\'' EXIT HUP INT TERM
+    chmod 0600 "$tmp"
+    chown "$expected_owner" "$tmp"
+    if ! ln -T "$tmp" "$target" 2>/dev/null; then
+      if test -e "$target" || test -L "$target"; then
+        test -f "$target"
+        test ! -L "$target"
+        test "$(stat -c %a "$target")" = 600
+        test "$(stat -c %u:%g "$target")" = "$expected_owner"
+      else
+        echo "cannot create $target" >&2
+        exit 1
+      fi
+    fi
+  fi
+'
 sudoedit /opt/instaedit/secrets/.env.production
 # Populate it from the approved secret manager and the variable groups below;
 # do not copy a local or untracked example file to production.
@@ -449,7 +477,8 @@ docker compose --env-file "$INSTAEDIT_ENV_FILE" \
   '
 
 chmod -R go-rwx "$DEST"
-find "$DEST" -type f -print0 | sort -z | xargs -0 sha256sum > "$DEST.sha256"
+find "$DEST" -type f -print0 | sort -z | xargs -0 -r sha256sum > "$DEST.sha256"
+chmod 600 "$DEST.sha256"
 ```
 
 Store the backup and checksum outside the VPS as well. Record the timestamp,
