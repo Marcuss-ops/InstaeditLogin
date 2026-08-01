@@ -243,6 +243,23 @@ export function AccountDetailsPage() {
           </div>
         </div>
 
+        {account.status === "reauth_required" && account.platform === "youtube" && (
+          <div className="mb-6 flex items-center justify-between gap-4 rounded-2xl border border-amber-400/20 bg-amber-400/[0.08] px-5 py-4">
+            <div>
+              <p className="text-[13px] font-semibold text-amber-200">Autorizzazione YouTube richiesta</p>
+              <p className="mt-1 text-[12px] text-amber-100/70">
+                Il collegamento Google non è più valido. Ricollega YouTube per riattivare le pubblicazioni.
+              </p>
+            </div>
+            <a
+              href={`/api/v1/auth/${account.platform}/login?mode=reconnect`}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-amber-300 px-4 py-2 text-[13px] font-semibold text-black transition-colors hover:bg-amber-200"
+            >
+              <RefreshCw size={14} /> Ricollega YouTube
+            </a>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex items-center gap-1 mb-4 border-b border-white/[0.08]">
           {tabs.map((tab) => (

@@ -47,6 +47,10 @@ func (w *PublishWorker) prepareCredentials(ctx context.Context, target *models.P
 		}
 	}
 	if err != nil {
+		if account.Platform == models.PlatformYouTube && errors.Is(err, credentials.ErrYouTubeInvalidGrant) {
+			w.markYouTubeGrantReauth(ctx, account)
+			return nil, &blockedAuthError{reason: youtubeReauthReason()}
+		}
 		return nil, fmt.Errorf("token refresh failed")
 	}
 

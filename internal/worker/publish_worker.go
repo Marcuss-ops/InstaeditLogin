@@ -371,6 +371,14 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	if err != nil {
 		return w.markFailed(target, err.Error())
 	}
+	// A YouTube grant marked for reauthorization is not eligible for
+	// publishing. Block already-queued targets before capability lookup or
+	// token refresh; invalid_grant fan-out can otherwise leave a sibling
+	// target attempting to publish until its own token expires.
+	if account.Platform == models.PlatformYouTube &&
+		(account.Status == models.AccountStatusReauthRequired || account.ReauthRequiredAt != nil) {
+		return w.markPublishBlockedAuth(target, youtubeReauthReason())
+	}
 	// Google Drive is an exporter, not a social Publisher. It has an
 	// OAuth credential and a DeliveryRegistry provider but deliberately
 	// no CapabilityRouter Publisher implementation. Dispatch it directly
@@ -421,6 +429,10 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		}
 	}
 	if err != nil {
+		if account.Platform == models.PlatformYouTube && errors.Is(err, credentials.ErrYouTubeInvalidGrant) {
+			w.markYouTubeGrantReauth(ctx, account)
+			return w.markPublishBlockedAuth(target, youtubeReauthReason())
+		}
 		return w.markFailed(target, "token refresh failed")
 	}
 

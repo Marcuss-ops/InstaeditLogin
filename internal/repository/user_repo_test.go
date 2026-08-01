@@ -1,6 +1,7 @@
 package repository_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -22,6 +23,30 @@ func newMockUserDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db, mock
+}
+
+func TestUserRepository_MarkOAuthConnectionAccountsReauthRequired_UsesGrantID(t *testing.T) {
+	db, mock := newMockUserDB(t)
+	repo := repository.NewUserRepository(db)
+
+	mock.ExpectExec(
+		`UPDATE platform_accounts
+		 SET status = 'reauth_required',
+		     reauth_required_at = NOW(),
+		     last_error_code = $1,
+		     last_error_message = $2,
+		     updated_at = NOW()
+		 WHERE platform = 'youtube'
+		   AND oauth_connection_id = $3`,
+	).WithArgs("invalid_grant", "Ricollega YouTube", int64(45)).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+
+	if err := repo.MarkOAuthConnectionAccountsReauthRequired(context.Background(), 45, "invalid_grant", "Ricollega YouTube"); err != nil {
+		t.Fatalf("MarkOAuthConnectionAccountsReauthRequired: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
 }
 
 // TestUserRepository_Update_Success locks in the happy path: 1 row

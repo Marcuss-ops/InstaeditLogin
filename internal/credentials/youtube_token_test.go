@@ -92,6 +92,31 @@ func TestRenewYouTubeToken_LegacyFallbackIsTemporaryAndRedacted(t *testing.T) {
 	}
 }
 
+func TestRenewYouTubeToken_LegacyInvalidGrantIsClassified(t *testing.T) {
+	var types []string
+	vault := &youtubeTokenVaultStub{
+		renewFn: func(_ context.Context, _ int64, tokenType string, _ TokenRefresher) (*models.OAuthToken, error) {
+			types = append(types, tokenType)
+			if tokenType == models.TokenTypeBearer {
+				return nil, errors.New("no token for account 42")
+			}
+			return nil, errors.New("oauth provider: invalid_grant")
+		},
+	}
+
+	_, err := RenewYouTubeToken(context.Background(), vault, 42, nil, nil)
+	if !errors.Is(err, ErrYouTubeInvalidGrant) {
+		t.Fatalf("error: want ErrYouTubeInvalidGrant, got %v", err)
+	}
+	wantTypes := []string{models.TokenTypeBearer, models.TokenTypeLongLived}
+	if len(types) != len(wantTypes) || types[0] != wantTypes[0] || types[1] != wantTypes[1] {
+		t.Fatalf("renew types: want %v, got %v", wantTypes, types)
+	}
+	if strings.Contains(err.Error(), "invalid_grant") {
+		t.Fatalf("redacted classification must not expose provider error text: %v", err)
+	}
+}
+
 func TestRenewYouTubeToken_DoesNotFallbackOnNonMissingCanonicalError(t *testing.T) {
 	const upstreamSecret = "provider-secret-value"
 	var types []string

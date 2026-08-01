@@ -30,6 +30,12 @@ func RenewYouTubeToken(
 		return canonical, nil
 	}
 
+	if strings.Contains(strings.ToLower(canonicalErr.Error()), "invalid_grant") {
+		// Preserve only a typed, redacted classification for callers. The
+		// provider response may contain credential-adjacent material and
+		// must not cross the credential package boundary.
+		return nil, ErrYouTubeInvalidGrant
+	}
 	if !isMissingYouTubeCanonicalToken(canonicalErr) {
 		return nil, ErrYouTubeTokenRenewal
 	}
@@ -45,6 +51,12 @@ func RenewYouTubeToken(
 	legacy, legacyErr := vault.Renew(ctx, accountID, models.TokenTypeLongLived, refresher)
 	if legacyErr == nil {
 		return legacy, nil
+	}
+	if strings.Contains(strings.ToLower(legacyErr.Error()), "invalid_grant") {
+		// The legacy compatibility row is still the same Google grant;
+		// preserve the reauthorization signal instead of hiding it behind
+		// the generic renewal error.
+		return nil, ErrYouTubeInvalidGrant
 	}
 	return nil, fmt.Errorf("youtube token renewal failed for canonical and temporary legacy credentials: %w", ErrYouTubeTokenRenewal)
 }
@@ -65,3 +77,8 @@ func isMissingYouTubeCanonicalToken(err error) bool {
 // ErrYouTubeTokenRenewal is intentionally generic. Callers may use
 // errors.Is without logging provider response bodies or token material.
 var ErrYouTubeTokenRenewal = errors.New("youtube token renewal failed")
+
+// ErrYouTubeInvalidGrant is a redacted classification for Google's
+// invalid_grant response. It intentionally contains no upstream body,
+// token, email, or authorization details.
+var ErrYouTubeInvalidGrant = errors.New("youtube OAuth grant requires reauthorization")

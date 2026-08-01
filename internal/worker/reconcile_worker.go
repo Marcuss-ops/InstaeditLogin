@@ -34,6 +34,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -327,6 +328,13 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 		// Orphan target — mark failed so it doesn't loop forever.
 		return w.markFailedAndReturn(target, fmt.Sprintf("platform_account %d not found", target.PlatformAccountID))
 	}
+	// A grant-wide invalid_grant transition can affect publishing rows that
+	// were already in flight. Stop them before OAuth refresh or provider I/O;
+	// reconnecting the shared grant is the only recovery path.
+	if account.Platform == models.PlatformYouTube &&
+		(account.Status == models.AccountStatusReauthRequired || account.ReauthRequiredAt != nil) {
+		return w.markBlockedAuthAndReturn(target, youtubeReauthReason())
+	}
 
 	// 2. Look up AsyncPublisher capability.
 	ap, ok := w.router.AsyncPublisher(account.Platform)
@@ -367,6 +375,10 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 		}
 	}
 	if err != nil {
+		if account.Platform == models.PlatformYouTube && errors.Is(err, credentials.ErrYouTubeInvalidGrant) {
+			w.markYouTubeGrantReauth(ctx, account)
+			return w.markBlockedAuthAndReturn(target, youtubeReauthReason())
+		}
 		return w.markFailedAndReturn(target, "token refresh failed")
 	}
 
@@ -422,6 +434,19 @@ func (w *ReconcileWorker) reconcileTarget(ctx context.Context, target *models.Po
 // returns the bookkeeping so the reconciler can increment its
 // counters. The (true, true, nil) return values signal "yes, this
 // target was reconciled (to failed), yes it failed, no error".
+func (w *ReconcileWorker) markBlockedAuthAndReturn(target *models.PostTarget, reason string) (reconciled bool, wasFailed bool, err error) {
+	blockedTarget := *target
+	blockedTarget.Status = models.PostStatusBlockedAuth
+	blockedTarget.ProviderState = "REAUTH_REQUIRED"
+	blockedTarget.LastErrorCode = "blocked_auth"
+	blockedTarget.ErrorMessage = reason
+	if updateErr := w.postRepo.UpdateStatus(&blockedTarget); updateErr != nil {
+		return false, false, fmt.Errorf("transition to blocked_auth: %w", updateErr)
+	}
+	*target = blockedTarget
+	return true, true, nil
+}
+
 func (w *ReconcileWorker) markFailedAndReturn(target *models.PostTarget, reason string) (reconciled bool, wasFailed bool, err error) {
 	w.logger.Warn("reconcile target marked failed",
 		"target_id", target.ID,

@@ -107,6 +107,52 @@ func TestPublishTarget_PrivacyLevel(t *testing.T) {
 	}
 }
 
+func TestPublishTarget_YouTube_ReauthRequiredBlocksBeforeRenew(t *testing.T) {
+	posts := &mockPostStore{
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) {
+			return &models.Post{ID: 100, Caption: "blocked", MediaURL: "https://cdn.example.com/video.mp4"}, nil
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return &models.PlatformAccount{
+				ID:             10,
+				Platform:       models.PlatformYouTube,
+				PlatformUserID: "UCreauth",
+				Status:         models.AccountStatusReauthRequired,
+			}, nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: models.PlatformYouTube},
+		publishFn: func(context.Context, string, string, models.PublishPayload) (*models.PublishResult, error) {
+			t.Fatal("Publish must not run for a reauth_required account")
+			return nil, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(context.Context, int64, string, credentials.TokenRefresher) (*models.OAuthToken, error) {
+			t.Fatal("Renew must not run for a reauth_required account")
+			return nil, nil
+		},
+	}
+	w := newTestWorker(posts, users, models.PlatformYouTube, svc, vault)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err == nil {
+		t.Fatal("publishTarget must return a blocked-auth error")
+	}
+	if vault.ensureCalls != 0 {
+		t.Errorf("Renew calls: want 0, got %d", vault.ensureCalls)
+	}
+	if svc.publishCalls != 0 {
+		t.Errorf("Publish calls: want 0, got %d", svc.publishCalls)
+	}
+	if posts.updateCalls != 1 || posts.updateTargets[0].Status != models.PostStatusBlockedAuth {
+		t.Fatalf("target transition: want one blocked_auth update, got calls=%d targets=%v", posts.updateCalls, posts.updateTargets)
+	}
+}
+
 // TestPublishTarget_YouTube_ChannelMatch_PublishesNormally verifies
 // the happy path: when the YouTube channel binding check returns nil,
 // the worker proceeds through Publish → target.Status='published',

@@ -365,6 +365,38 @@ func (r *UserRepository) MarkReauthRequired(ctx context.Context, id int64, code,
 	return nil
 }
 
+// MarkOAuthConnectionAccountsReauthRequired marks every YouTube channel
+// attached to the supplied OAuth grant. The caller passes the canonical
+// oauth_connections.id directly; no platform-account lookup is needed and
+// the fan-out happens in one UPDATE so a shared grant cannot leave sibling
+// channels publishable after invalid_grant.
+func (r *UserRepository) MarkOAuthConnectionAccountsReauthRequired(ctx context.Context, oauthConnectionID int64, code, message string) error {
+	if oauthConnectionID <= 0 {
+		return fmt.Errorf("mark OAuth connection reauth required: invalid OAuth connection id %d", oauthConnectionID)
+	}
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE platform_accounts
+		 SET status = 'reauth_required',
+		     reauth_required_at = NOW(),
+		     last_error_code = $1,
+		     last_error_message = $2,
+		     updated_at = NOW()
+		 WHERE platform = 'youtube'
+		   AND oauth_connection_id = $3`,
+		code, message, oauthConnectionID)
+	if err != nil {
+		return fmt.Errorf("mark OAuth connection reauth required: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("mark OAuth connection reauth required: read rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("mark OAuth connection reauth required: no linked YouTube accounts for OAuth connection %d", oauthConnectionID)
+	}
+	return nil
+}
+
 // ListFilteredYouTubeAccounts returns the YouTube platform accounts for a user,
 // optionally filtered by workspace, group_name (from workspace_channels),
 // and language/manager values stored in the account metadata JSONB.
