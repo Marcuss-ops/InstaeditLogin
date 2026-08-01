@@ -159,16 +159,17 @@ docker-build-local-worker:
 # `make verify-log-redaction` wraps `./scripts/obs/verify-log-redaction.sh --apply`
 # which sshes to the VPS (instaedit@$VPS_IP, default 51.91.11.36 per
 # docs/OPERATIONS.md §1.1) and runs `docker compose logs --since 1h
-# api worker` into a chmod-700 tempdir, then greps against the 7
+# api worker` into a chmod-700 tempdir, then greps against the 10
 # canonical privacy-contract patterns documented in docs/OPERATIONS.md
-# §4.3 + docs/DEPLOY.md §7.6. Use this (a) after every VPS deploy
+# §4.3 + docs/DEPLOY.md §7.6, including Google ya29./1// and Bearer
+# credential patterns. Use this (a) after every VPS deploy
 # (`git pull && docker compose up -d --build`) to confirm a fresh
 # rollout hasn't regressed the redaction discipline, and (b) weekly
 # as a regression tripwire. Exit codes propagate: 0 = clean /
-# 1 = hit / 2 = missing tool (ssh/docker/grep/awk) / 3 = VPS
+# 1 = hit / 2 = missing tool (ssh/docker/grep) / 3 = VPS
 # unreachable via ssh OR compose stack down / 4 = bad args. The
-# script MUST NEVER print actual matched secrets to stdout -- only
-# sanitized 80-char prefixes + ***redacted***.
+# script MUST NEVER print matched log content or actual secrets to stdout --
+# only pattern names and hit counts.
 #
 # Override env vars: VPS_IP, VERIFY_LOG_SERVICES (default "api worker"),
 # COMPOSE_DIR (default /opt/instaedit/InstaeditLogin). Override args:

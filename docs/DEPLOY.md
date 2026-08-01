@@ -939,8 +939,6 @@ Pass criteria: PASS > 0 AND FAIL = 0; WARNs are advisory.
 
 ### 10.8 Open items (tracked, not blockers)
 
-- `verify-log-redaction` currently reads from a non-VPS log source;
-  scoped to a follow-up re-pointing at `docker compose logs`.
 - Sandbox-only handlers (e.g. `cmd/sandbox-probe`) are documented in
   `cmd/<probe>/main.go` and wired by `pkg/api/<probe>.go`. Re-confirm
   their handler contract on each deploy if you depend on them.

@@ -283,6 +283,13 @@ would 403 mid-stream.
 
 ### 3.1 Postgres backup + restore drill — VPS procedure
 
+The automated `internal/crypto/restore_isolation_test.go` verifies the
+cryptographic backup invariant: encrypted token data is unreadable without
+its historical keyring, and keyring data alone cannot restore a missing row.
+It intentionally does not exercise PostgreSQL dump/restore I/O. The
+`production-restore-drill.sh` procedure below is the operational end-to-end
+PostgreSQL restore verification and must be run separately.
+
 This subsection expands the one-line row from §3 (`production-restore-drill.sh`)
 into the operator-side choreography. **The script itself still needs a parallel rewrite for the VPS pg_dump → throwaway flow — see the §3.1.0 note below.** This section is the HUMAN-side procedure the operator follows until the script rewrite lands.
 
@@ -544,7 +551,7 @@ initialises the bucket via the Compose `init` lifecycle):
   `SELECT count(*) FROM publish_jobs WHERE status='dlq'` > 0 → alert.
 - [ ] **Refresh-token-failure alert** (Sentry capture event tag `auth.refresh.failed`).
 - [ ] **Compose stack always-on alert**: cron `docker compose -f /opt/instaedit/InstaeditLogin/docker-compose.yml ps --services --filter "status=exited"` returns non-empty → alert. Same cron fires when any of `api`, `worker`, `caddy`, `postgres`, `minio` is not `running`.
-- [ ] **Log privacy assertion**: `make verify-log-redaction` runs cleanly on the live docker compose logs in the last 1h (catches runtime leaks that the static CI grep cannot — see §5.3). Recommended cadence: after every VPS deploy (`git pull && docker compose up -d --build`) + weekly cron. *NOTE: `verify-log-redaction` should source from `docker compose logs --since 1h api worker` on the VPS — re-point the underlying script as a follow-up (DEPLOY.md §11).*
+- [ ] **Log privacy assertion**: `make verify-log-redaction` runs cleanly on the live Docker Compose logs in the last 1h (catches runtime leaks that the static CI grep cannot — see §5.3). Recommended cadence: after every VPS deploy (`git pull && docker compose up -d --build`) + weekly cron.
 
 ### 5.2 DNS / email hygiene
 
@@ -574,11 +581,9 @@ Automated guard: `grep -RnE '(refresh_token|jwt_secret|encryption_key|access_tok
 > ./scripts/obs/verify-log-redaction.sh --apply --since 24h
 > ```
 >
-> The script streams recent service logs into a chmod-700 tmpdir (trap-cleaned on EXIT), greps against the canonical 7-pattern list (env var names + values, Resend `re_*` tokens, AWS `AKIA*` access keys, embedded DB URI passwords, literal `password=...`, `csrf_token=<hex>` URL params, `?token=<base64url>` magic-link tokens). It pipes each `grep` hit DIRECTLY into `awk` so the FULL secret-bearing line never enters a shell var; awk truncates to the first 80 chars + appends `***redacted***` so the operator NEVER sees actual captured secrets. Exit 0 if clean / exit 1 with sanitized snippet list + remediation pointers if any pattern hit.
+> The script streams recent service logs into a chmod-700 tmpdir (trap-cleaned on EXIT), greps against the canonical 10-pattern list (token assignments, Resend `re_*` keys, AWS `AKIA*` access keys, embedded DB URI passwords, literal `password=...`, `csrf_token=<hex>` URL params, `?token=<base64url>` magic-link tokens, Google `ya29.*` access tokens, Google `1//*` refresh tokens, and `Bearer` credentials). It counts matches without placing matching log lines in shell variables or output. Exit 0 if clean / exit 1 with pattern names and counts only, plus remediation pointers if any pattern hits.
 >
-> **Open item (per DEPLOY.md §11)**: the script's log source must be re-pointed at `docker compose logs --since <window> api worker` before this Makefile target is reliable on the VPS. Track: re-point script to `docker compose logs --tail=2000 api worker`, then `make verify-log-redaction` works on the VPS-native stack.
->
-> Wire into a weekly cron on the operator laptop so a future regression gets caught without a manual prompt. Cadence: after every VPS deploy + weekly cron + on any `slog.Warn`/`slog.Info` regression PR.
+> The verifier reads `docker compose logs --since <window> api worker` on the VPS and withholds all matching log content from its output. Wire it into a weekly cron on the operator laptop so a future regression gets caught without a manual prompt. Cadence: after every VPS deploy + weekly cron + on any `slog.Warn`/`slog.Info` regression PR.
 
 ---
 

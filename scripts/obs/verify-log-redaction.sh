@@ -19,9 +19,10 @@
 #     ssh+docker compose command it *would* run + the planned log window.
 #   - --apply: runs `ssh instaedit@$VPS_IP 'docker compose logs --since ...'`
 #     into a temp file, greps against canonical privacy-contract patterns.
-#   - CRITICAL (Privacy Contract): NEVER prints matched secret values to
-#     the operator's terminal. Output ONLY counts + a sanitized 80-char
-#     prefix + `***redacted***`. The actual secret-bearing tail is dropped.
+#   - CRITICAL (Privacy Contract): NEVER prints matched log lines or secret
+#     values to the operator's terminal. Output only pattern names and counts.
+#     The captured log file remains in a chmod-700 temporary directory and is
+#     removed on exit.
 #
 # USAGE:
 #   ./scripts/obs/verify-log-redaction.sh                       # Dry run (default)
@@ -37,7 +38,7 @@
 # EXIT CODES:
 #   0  All clean (no secret patterns in scanned window)
 #   1  One or more secret patterns found (FAIL) — see Summary + Action items
-#   2  Required tool missing (ssh / docker / grep / awk missing)
+#   2  Required tool missing (ssh / docker / grep missing)
 #   3  Cannot reach VPS via SSH OR compose stack has no running services
 #   4  Bad CLI arguments (e.g. --since value Docker's duration parser rejects)
 #
@@ -48,6 +49,10 @@
 #   pkg/metrics/workerid.go — log-rewriter canonical reference (already in code)
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=log-secret-patterns.sh
+source "$SCRIPT_DIR/log-secret-patterns.sh"
 
 VPS_IP="${VPS_IP:-51.91.11.36}"
 COMPOSE_DIR="${COMPOSE_DIR:-/opt/instaedit/InstaeditLogin}"
@@ -84,8 +89,9 @@ if [[ "$SINCE" =~ ^([0-9]+)d$ ]]; then
   SINCE="$((DAYS * 24))h"
 fi
 
+if [ "${MODE:-dry}" = "apply" ]; then
 # ─── Pre-flight: required tools ─────────────────────────────────────────
-for tool in ssh docker grep awk; do
+for tool in ssh docker grep; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "❌ required tool missing: $tool" >&2
     exit 2
@@ -116,6 +122,7 @@ if [[ -z "$PROBE_OUT" ]]; then
   echo "    Run: ssh instaedit@${VPS_IP} 'cd $COMPOSE_DIR && docker compose ps'   to diagnose." >&2
   echo "    Set VERIFY_LOG_SERVICES to a different service (e.g. 'worker') if meaning to scan a non-default one." >&2
   exit 3
+fi
 fi
 
 # ─── Canonical Privacy-Contract Patterns ─────────────────────────────────
@@ -159,25 +166,8 @@ fi
 #   match — magic-link tokens are the auth primitive; they MUST NOT appear
 #   in logs.
 
-PATTERNS=(
-  "(?i)(jwt[_-]?secret|access[_-]?token|refresh[_-]?token).{0,16}[a-f0-9]{20,}"
-  "re_[a-zA-Z0-9]{20,}"
-  "AKIA[0-9A-Z]{16,}"
-  "://[a-z]+:[^@/]{6,}@"
-  "(?i)password[[:space:]]*=[[:space:]]*[^[:space:]]{6,}"
-  "[?&]csrf_token=[a-f0-9]{32,}"
-  "[?&]token=[A-Za-z0-9_-]{20,}"
-)
-
-PATTERN_NAMES=(
-  "JWT / Access / Refresh Tokens"
-  "Resend API Keys (re_* prefix)"
-  "AWS Access Keys (AKIA prefix)"
-  "Postgres / DB URI passwords"
-  "Literal password assignments"
-  "CSRF token query params"
-  "Magic-link token query params"
-)
+# PATTERNS and PATTERN_NAMES are sourced from log-secret-patterns.sh so
+# the live verifier and its local regression test share one contract.
 
 # ─── Dry-run / preview (default) ─────────────────────────────────────────
 if [ "${MODE:-dry}" != "apply" ]; then
@@ -199,8 +189,8 @@ if [ "${MODE:-dry}" != "apply" ]; then
   done
   echo ""
   echo "Privacy contract on script output itself:"
-  echo "  - Matched lines are TRUNCATED at 80 chars + '***redacted***' suffix."
-  echo "  - The full secret-bearing portion is NEVER printed to the terminal."
+  echo "  - Matched log lines are never printed, truncated, or stored in output variables."
+  echo "  - Output contains only pattern names and hit counts."
   echo ""
   echo "Pass --apply to execute the live scan."
   exit 0
@@ -261,21 +251,22 @@ for i in "${!PATTERNS[@]}"; do
   NAME="${PATTERN_NAMES[$i]}"
   PATTERN="${PATTERNS[$i]}"
 
-  # Privacy contract: pipe grep directly into awk so the FULL secret-bearing
-  # line never enters a shell var before awk's truncate+redact. A future
-  # maintainer who echoes $SHELL_VAR or pipes it to `cat` will leak; this
-  # subprocess pipeline protects against that footgun AND keeps $SECRETS
-  # off the bash process address space entirely.
-  HIT_COUNT=$(grep -acP "$PATTERN" "$LOG_FILE" 2>/dev/null || echo 0)
+  # Privacy contract: count matching lines only. Never pipe matching log
+  # lines into a shell variable or output formatter: even a truncated line
+  # can contain a credential prefix or identifying request data. grep exits
+  # 1 for no matches; any other non-zero status is a real scan failure.
+  GREP_STATUS=0
+  HIT_COUNT=$(grep -acP "$PATTERN" "$LOG_FILE" 2>/dev/null) || GREP_STATUS=$?
+  if [ "$GREP_STATUS" -gt 1 ]; then
+    echo "❌ log scan failed for pattern: $NAME" >&2
+    exit 2
+  fi
   HIT_COUNT="${HIT_COUNT:-0}"
 
   if [ "$HIT_COUNT" -gt 0 ]; then
-    echo "  ✗ FAIL  $NAME  ($HIT_COUNT hit(s))"
+    echo "  ✗ FAIL  $NAME  ($HIT_COUNT hit(s); log content withheld)"
     FAIL=$((FAIL+1))
-    SNIPPETS=$(grep -aP "$PATTERN" "$LOG_FILE" 2>/dev/null \
-      | awk '{ printf "    %-80s... ***redacted***\n", substr($0,1,80) }' \
-      | head -n 5)
-    FAIL_LIST="${FAIL_LIST}\n  ${NAME} (${HIT_COUNT} hits):\n${SNIPPETS}\n"
+    FAIL_LIST="${FAIL_LIST}\n  ${NAME} (${HIT_COUNT} hits; content withheld)\n"
   else
     echo "  ✓ PASS  $NAME"
     PASS=$((PASS+1))
@@ -289,7 +280,7 @@ echo "════════════════════════�
 echo ""
 
 if [ "$FAIL" -gt 0 ]; then
-  printf "VIOLATIONS (first 5 sanitized snippets per pattern):\n%b\n" "$FAIL_LIST"
+  printf "VIOLATIONS (pattern names and counts only; log content withheld):\n%b\n" "$FAIL_LIST"
   echo ""
   echo "ACTION REQUIRED:"
   echo ""
