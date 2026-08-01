@@ -38,7 +38,7 @@ type SetGroupAccountsRequest struct {
 	AccountIDs []int64 `json:"account_ids"`
 }
 
-// --- Error mapping// UpdateGroupSettingsRequest is the JSON body for PATCH
+// UpdateGroupSettingsRequest is the JSON body for PATCH
 // /api/v1/groups/{id}/settings. Membership and account language metadata
 // are persisted together by one repository transaction.
 type UpdateGroupSettingsRequest struct {
@@ -59,8 +59,6 @@ func mapGroupError(err error) (int, string) {
 		return http.StatusUnprocessableEntity, err.Error()
 	case errors.Is(err, repository.ErrGroupDuplicate):
 		return http.StatusConflict, err.Error()
-	default:
-		return http.StatusInternalServerError, "failed to process group: " + err.Error()
 	case errors.Is(err, repository.ErrGroupAccountOwnership):
 		return http.StatusForbidden, err.Error()
 	default:
@@ -395,7 +393,7 @@ func (r *Router) handleListGroupAccounts(w http.ResponseWriter, req *http.Reques
 	writeJSON(w, http.StatusOK, map[string]interface{}{"account_ids": accounts})
 }
 
-// handleSetGroupAccounts replaces// handleUpdateGroupSettings atomically saves the group's membership and
+// handleUpdateGroupSettings atomically saves the group's membership and
 // each member's language metadata. The repository owns the SQL transaction;
 // this handler only performs request parsing and workspace authentication.
 //

@@ -216,6 +216,9 @@ func (r *GroupRepository) ListAccountsInGroup(groupID int64) ([]int64, error) {
 		}
 		out = append(out, id)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate group accounts: %w", err)
+	}
 	return out, nil
 }
 
@@ -275,7 +278,7 @@ func (r *GroupRepository) ListByWorkspaceWithAccounts(workspaceID int64) ([]mode
 	return groups, nil
 }
 
-// AddAccount adds a platform_account to a group.// UpdateSettings atomically replaces a group's memberships and updates each
+// UpdateSettings atomically replaces a group's memberships and updates each
 // member's language metadata. The transaction locks the group, validates all
 // accounts belong to the authenticated user before deleting any membership,
 // then performs the membership and metadata writes together.
@@ -363,7 +366,7 @@ func (r *GroupRepository) UpdateSettings(ctx context.Context, groupID, workspace
 	return nil
 }
 
- ON CONFLICT DO NOTHING
+// AddAccount adds a platform_account to a group. ON CONFLICT DO NOTHING
 // makes the operation idempotent — adding an already-attached account
 // is a no-op and returns nil.
 func (r *GroupRepository) AddAccount(groupID, accountID int64) error {
