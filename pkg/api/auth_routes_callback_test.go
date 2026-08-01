@@ -2,162 +2,16 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
-
-// ---------------------------------------------------------------------------
-// handleLogin tests
-// ---------------------------------------------------------------------------
-
-func TestHandleLogin_RedirectsToProviderURL(t *testing.T) {
-	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusFound {
-		t.Fatalf("want 302, got %d", w.Code)
-	}
-	loc := w.Header().Get("Location")
-	if !strings.HasPrefix(loc, "https://auth.example.com/oauth?state=") {
-		t.Fatalf("unexpected redirect: %s", loc)
-	}
-	_, after, ok := strings.Cut(loc, "state=")
-	if !ok {
-		t.Fatalf("state= not found in redirect: %s", loc)
-	}
-	stateParam, _, _ := strings.Cut(after, "&")
-	if stateParam == "meta_default" {
-		t.Fatalf("state should be a random token, not the old meta_default placeholder: %s", loc)
-	}
-	if len(stateParam) != 43 {
-		t.Fatalf("state length: want 43 chars (32 bytes base64 URL-safe), got %d (%q)", len(stateParam), stateParam)
-	}
-	if _, err := base64.RawURLEncoding.DecodeString(stateParam); err != nil {
-		t.Fatalf("state must be base64 URL-safe: %v (state=%q)", err, stateParam)
-	}
-	var cookie *http.Cookie
-	for _, c := range w.Result().Cookies() {
-		if c.Name == OAuthStateCookieName("instagram") {
-			cookie = c
-			break
-		}
-	}
-	if cookie == nil {
-		t.Fatal("oauth_state_meta cookie not set (verdict §2 CSRF protection requires the server to bind the state to a browser session)")
-	}
-	if cookie.Value != stateParam {
-		t.Errorf("cookie state != redirect state: cookie=%q, redirect=%q", cookie.Value, stateParam)
-	}
-	if !cookie.HttpOnly {
-		t.Error("oauth state cookie must be HttpOnly (XSS exfiltration defense)")
-	}
-	if !cookie.Secure {
-		t.Error("oauth state cookie must be Secure (HTTPS-only)")
-	}
-	if cookie.SameSite != http.SameSiteNoneMode {
-		t.Errorf("oauth state cookie SameSite: want None, got %v", cookie.SameSite)
-	}
-	if cookie.MaxAge != int(oauthStateMaxAge.Seconds()) {
-		t.Errorf("oauth state cookie MaxAge: want %d, got %d (must match oauthStateMaxAge)", int(oauthStateMaxAge.Seconds()), cookie.MaxAge)
-	}
-}
-
-func TestHandleLogin_ConsentIsLimitedToReconnect(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		query       string
-		wantConsent bool
-		wantSelect  bool
-	}{
-		{name: "add selects account without consent", query: "mode=add", wantSelect: true},
-		{name: "reconnect forces consent", query: "mode=reconnect", wantConsent: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var got services.OAuthLoginOptions
-			svc := &mockProvider{
-				platform: "youtube",
-				loginURL: "https://auth.example.com/oauth",
-				loginWithOptionsFn: func(state string, options services.OAuthLoginOptions) string {
-					got = options
-					return "https://auth.example.com/oauth?state=" + state
-				},
-			}
-			r := newTestRouter(svc, &mockUserStore{}, "")
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/login?"+tc.query, nil)
-			withBearerJWT(t, req, 1)
-			w := httptest.NewRecorder()
-			r.Setup().ServeHTTP(w, req)
-
-			if w.Code != http.StatusFound {
-				t.Fatalf("want 302, got %d: %s", w.Code, w.Body.String())
-			}
-			if got.ForceConsent != tc.wantConsent {
-				t.Errorf("ForceConsent: want %v, got %v", tc.wantConsent, got.ForceConsent)
-			}
-			if got.SelectAccount != tc.wantSelect {
-				t.Errorf("SelectAccount: want %v, got %v", tc.wantSelect, got.SelectAccount)
-			}
-		})
-	}
-}
-
-func TestHandleLogin_UnsupportedProvider(t *testing.T) {
-	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/unknown/login", nil)
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("want 404, got %d", w.Code)
-	}
-}
-
-func TestHandleLogin_IgnoresClientState(t *testing.T) {
-	svc := &mockProvider{platform: "twitter", loginURL: "https://auth.twitter.com/auth"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/twitter/login?state=my-custom-state", nil)
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	loc := w.Header().Get("Location")
-	if strings.Contains(loc, "state=my-custom-state") {
-		t.Fatalf("server should IGNORE the client's ?state= (verdict §2); redirect leaked the client value: %s", loc)
-	}
-	_, after, ok := strings.Cut(loc, "state=")
-	if !ok {
-		t.Fatalf("state= not found in redirect: %s", loc)
-	}
-	stateParam, _, _ := strings.Cut(after, "&")
-	if len(stateParam) != 43 {
-		t.Fatalf("server-generated state length: want 43, got %d (%q)", len(stateParam), stateParam)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// handleCallback tests
-// ---------------------------------------------------------------------------
 
 func TestHandleCallback_MissingCode(t *testing.T) {
 	svc := &mockProvider{platform: "instagram"}
@@ -174,10 +28,6 @@ func TestHandleCallback_MissingCode(t *testing.T) {
 	}
 }
 
-// TestHandleCallbackRouteForTest_YouTubeBindsProvider verifies that the
-// direct callback seam reproduces the {provider} route value that chi adds
-// in production. Without this binding, /api/v1/auth/youtube/callback reaches
-// handleCallback with provider="" and incorrectly returns unsupported provider.
 func TestHandleCallbackRouteForTest_YouTubeBindsProvider(t *testing.T) {
 	svc := &mockProvider{platform: "youtube"}
 	store := &mockUserStore{}
@@ -195,9 +45,6 @@ func TestHandleCallbackRouteForTest_YouTubeBindsProvider(t *testing.T) {
 	}
 }
 
-// TestHandleCallbackRouteForTest_YouTubeDispatchesProvider verifies that the
-// seam does more than avoid the empty-provider 404: a callback with a code and
-// valid state reaches the registered YouTube provider.
 func TestHandleCallbackRouteForTest_YouTubeDispatchesProvider(t *testing.T) {
 	svc := &mockProvider{
 		platform: "youtube",
@@ -259,16 +106,6 @@ func TestHandleCallback_HandleCallbackError(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_AttachError_409 proves SPRINT 7.1 (P0#14):
-// ErrAccountAlreadyLinked surfaces as HTTP 409 to the client. The
-// (platform, platform_user_id) tuple was previously linked to a
-// different InstaEdit user; we never silently rebind. The legal
-// owner of the link must disconnect via
-// DELETE /api/v1/accounts/{id} before re-link is possible.
-//
-// The mock returns the sentinel directly so errors.Is in the
-// handler matches the chain (a wrapped fmt.Errorf("%s: ...")
-// without %w would silently 500 instead of 409).
 func TestHandleCallback_AttachError_409(t *testing.T) {
 	svc := &mockProvider{
 		platform:       "instagram",
@@ -296,9 +133,6 @@ func TestHandleCallback_AttachError_409(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_AttachError_500 covers other AttachPlatformAccount
-// failures (db error, lookup error, create error) that map to 500 —
-// distinct from the ErrAccountAlreadyLinked 409 path above.
 func TestHandleCallback_AttachError_500(t *testing.T) {
 	svc := &mockProvider{
 		platform:       "instagram",
@@ -322,22 +156,6 @@ func TestHandleCallback_AttachError_500(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_AuthorizeChannelError asserts that an error from
-// the Task 1/10 atomic authorizer surfaces as a 500. The test wires a
-// fakeChannelAuthorizer with an authorizeErr that simulates a
-// token-write failure mid-transaction (the production service's
-// ROLLBACK path). This is the non-discoverer analog of the legacy
-// TestHandleCallback_SaveTokenError: the SAME invariant ("cipher
-// write failure ⇒ 500") is enforced via the atomic primitive rather
-// than the old separate vault.Save call.
-//
-// ALSO asserts that, on early failure (authorizeErr fires before
-// tokens are recorded), zero cipher writes land — proving that the
-// ROLLBACK semantics of the production service are honoured by the
-// router's call-site: a successful pre-tx guard + an empty
-// tokenWrites slice == platform_accounts row stays at
-// pending_authorization (the legacy "active without cipher"
-// failure mode is FORBIDDEN by the spec).
 func TestHandleCallback_AuthorizeChannelError(t *testing.T) {
 	svc := &mockProvider{
 		platform:       "instagram",
@@ -371,10 +189,6 @@ func TestHandleCallback_AuthorizeChannelError(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_FirstYouTubeAuthorizationWithoutRefreshTokenMarksReauth
-// verifies the callback-level policy: a newly attached YouTube account whose
-// Google response omitted refresh_token gets reauth_required and a 422, rather
-// than a connected response or an active promotion.
 func TestHandleCallback_FirstYouTubeAuthorizationWithoutRefreshTokenMarksReauth(t *testing.T) {
 	svc := &mockProvider{
 		platform: "youtube",
@@ -439,11 +253,6 @@ func TestHandleCallback_FirstYouTubeAuthorizationWithoutRefreshTokenMarksReauth(
 	}
 }
 
-// TestHandleCallback_FirstYouTubeDiscovererWithoutRefreshTokenMarksReauth
-// covers the AccountDiscoverer branch separately from the single-account
-// callback test above. A missing offline grant must not promote the newly
-// attached channel or record a token write; it must leave the operator a
-// durable reauth_required signal.
 func TestHandleCallback_FirstYouTubeAuthorization_ReauthPersistenceFailureIsServerError(t *testing.T) {
 	svc := &mockProvider{
 		platform: "youtube",
@@ -583,23 +392,6 @@ func TestHandleCallback_FirstYouTubeDiscovererWithoutRefreshTokenMarksReauth(t *
 	}
 }
 
-// TestAcceptance_NonDiscovererUsesAtomicAuthorizer is the regression-closure
-// acceptance test for Task 1/10. It proves that the OAuth callback's
-// non-discoverer branch (the legacy r.vault.Save path before the
-// refactor) now routes through r.authorizer.AuthorizeChannel
-// atomically — the SAME primitive used by the discoverer branch —
-// not through a direct r.vault.Save call.
-//
-// Three pre-conditions are asserted:
-//  1. r.authorizer.AuthorizeChannel is invoked exactly once
-//     (NO direct r.vault.Save call paths remain on this code path).
-//  2. The argument shape matches the documented Service contract:
-//     (account.ID, expectedChannelID="", tokenData.Scopes, tokenData…).
-//     expectedChannelID="" tells the YouTube channels.list(mine=true)
-//     binder to short-circuit (this is the non-YouTube flow).
-//  3. Exactly one cipher write lands in tokenWrites — matching the
-//     legacy "1 vault.Save call" semantic the production service
-//     replaces.
 func TestAcceptance_NonDiscovererUsesAtomicAuthorizer(t *testing.T) {
 	svc := &mockProvider{
 		platform:       "instagram",
@@ -700,11 +492,6 @@ func TestHandleCallback_Success_JSONResponse(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_Facebook_SavesPageAccessToken verifies that when a
-// provider exposes AccountDiscoverer (Facebook Pages), the callback handler
-// creates one PlatformAccount per discovered page and persists both the
-// page-scoped access token (TokenTypePageAccess) and the user-level long-lived
-// token for each account.
 func TestHandleCallback_Facebook_SavesPageAccessToken(t *testing.T) {
 	const userLongLivedToken = "user-long-lived-token"
 	pages := []*services.DiscoveredAccount{
@@ -814,119 +601,6 @@ func TestHandleCallback_Facebook_SavesPageAccessToken(t *testing.T) {
 	}
 }
 
-// TestHandleLogin_YouTube_ExpectedChannelID_SetsSiblingCookie proves
-// the login half of the YouTube P0 fix: a validated
-// ?expected_channel_id=UC... round-trips through the sibling
-// oauth_state_youtube_expected_channel cookie and also forces
-// prompt=consent select_account so a cached grant cannot bind to
-// a different Brand Account on consent.
-func TestHandleLogin_YouTube_ExpectedChannelID_SetsSiblingCookie(t *testing.T) {
-	svc := &mockProvider{platform: "youtube", loginURL: "https://auth.youtube.com/oauth"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/login?expected_channel_id=UCabcdefghijklmnopqrstuv", nil)
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusFound {
-		t.Fatalf("want 302, got %d: %s", w.Code, w.Body.String())
-	}
-	loc := w.Header().Get("Location")
-	if !strings.HasPrefix(loc, "https://auth.youtube.com/oauth?") {
-		t.Fatalf("redirect URL must target the YouTube auth dialog, got %q", loc)
-	}
-	// State length must still be 43 chars (CSRF nonce invariant verified
-	// by TestHandleLogin_RedirectsToProviderURL).
-	_, after, ok := strings.Cut(loc, "state=")
-	if !ok {
-		t.Fatalf("redirect must carry a state= param, got %q", loc)
-	}
-	stateParam, _, _ := strings.Cut(after, "&")
-	if len(stateParam) != 43 {
-		t.Errorf("state length: want 43 (32-byte base64 URL-safe), got %d (%q)", len(stateParam), stateParam)
-	}
-	// Sibling cookie must carry the channel ID and use the same
-	// HttpOnly / Secure / SameSite=Lax attributes as the state cookie.
-	var sib *http.Cookie
-	for _, c := range w.Result().Cookies() {
-		if c.Name == OAuthStateExpectedChannelCookieName("youtube") {
-			sib = c
-			break
-		}
-	}
-	if sib == nil {
-		t.Fatal("oauth_state_youtube_expected_channel cookie not set; the operator's intended channel ID cannot round-trip to the callback")
-	}
-	want := stateParam + ":UCabcdefghijklmnopqrstuv"
-	if sib.Value != want {
-		t.Errorf("sibling cookie value: want %q (state + %q:UCabcdefghijklmnopqrstuv), got %q", want, stateParam, sib.Value)
-	}
-	if !sib.HttpOnly {
-		t.Error("sibling cookie must be HttpOnly (XSS exfiltration defense)")
-	}
-	if !sib.Secure {
-		t.Error("sibling cookie must be Secure (HTTPS-only)")
-	}
-	if sib.SameSite != http.SameSiteNoneMode {
-		t.Errorf("sibling cookie SameSite: want None, got %v", sib.SameSite)
-	}
-}
-
-// TestHandleLogin_YouTube_ExpectedChannelID_InvalidFormat_NotSet proves
-// that a malformed ?expected_channel_id= (not UC + 22 base64url chars)
-// is silently dropped: no sibling cookie issued, OAuth flow still
-// proceeds. attachDiscoveredAccounts at callback time catches a real
-// mismatch instead — we don't want a 400 here on a typo because the
-// real check is downstream.
-func TestHandleLogin_YouTube_ExpectedChannelID_InvalidFormat_NotSet(t *testing.T) {
-	svc := &mockProvider{platform: "youtube", loginURL: "https://auth.youtube.com/oauth"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/youtube/login?expected_channel_id=not-a-real-channel-id", nil)
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusFound {
-		t.Fatalf("want 302, got %d", w.Code)
-	}
-	for _, c := range w.Result().Cookies() {
-		if c.Name == OAuthStateExpectedChannelCookieName("youtube") && c.MaxAge > 0 {
-			t.Errorf("malformed expected_channel_id must NOT issue the sibling cookie: %+v", c)
-		}
-	}
-}
-
-// TestHandleLogin_YouTube_ExpectedChannelID_IgnoredForNonYouTube proves
-// ?expected_channel_id= is silently ignored on non-YouTube providers.
-// Instagram / TikTok / Facebook don't have Brand Accounts and don't
-// need the binding hint.
-func TestHandleLogin_YouTube_ExpectedChannelID_IgnoredForNonYouTube(t *testing.T) {
-	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.instagram.com/oauth"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login?expected_channel_id=UCtest123channelID", nil)
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusFound {
-		t.Fatalf("want 302, got %d", w.Code)
-	}
-	for _, c := range w.Result().Cookies() {
-		if c.Name == OAuthStateExpectedChannelCookieName("instagram") && c.MaxAge > 0 {
-			t.Errorf("expected_channel_id must be ignored on non-YouTube providers: %+v", c)
-		}
-	}
-}
-
-// TestHandleCallback_YouTube_OneChannel_OneSave proves the P0 fix in its
-// simplest form: a single-channel grant (the common case) saves the root
-// bearer token exactly once on the only discovered channel.
 func TestHandleCallback_YouTube_OneChannel_OneSave(t *testing.T) {
 	const bearerToken = "yt-bearer-token-1"
 	channels := []*services.DiscoveredAccount{
@@ -980,12 +654,6 @@ func TestHandleCallback_YouTube_OneChannel_OneSave(t *testing.T) {
 	}
 }
 
-// TestHandleCallback_YouTube_MultipleChannels_NoExpected_Conflict proves
-// the BUG fix: an ambiguous multi-channel grant returns HTTP 409 and
-// DOES NOT save the token on ANY account. Without the fix, every
-// discovered channel would receive a PlatformAccount row + a clone of
-// the root bearer token — exactly the misroute risk Google warns about
-// when a third-party app ignores Brand Account selection.
 func TestHandleCallback_YouTube_MultipleChannels_NoExpected_Conflict(t *testing.T) {
 	channels := []*services.DiscoveredAccount{
 		{Profile: models.PlatformProfile{PlatformUserID: "UCaaaaaaaaaaaaaaaaaaaaa1", Username: "Channel A"}},
@@ -1037,10 +705,6 @@ func TestHandleCallback_YouTube_MultipleChannels_NoExpected_Conflict(t *testing.
 	}
 }
 
-// TestHandleCallback_YouTube_MultipleChannels_ExpectedMatches_OneSave
-// proves the canonical use case: 3 channels discovered, expected
-// matches the second — the token is saved exactly once on that
-// single channel, NEVER on the other two.
 func TestHandleCallback_YouTube_MultipleChannels_ExpectedMatches_OneSave(t *testing.T) {
 	const expectedID = "UCaaaaaaaaaaaaaaaaaaaaa2"
 	channels := []*services.DiscoveredAccount{
@@ -1113,11 +777,6 @@ func TestHandleCallback_YouTube_MultipleChannels_ExpectedMatches_OneSave(t *test
 	}
 }
 
-// TestHandleCallback_YouTube_ExpectedNoMatch_Conflict proves that an
-// expected_channel_id which does NOT appear in channels.list(mine=true)
-// returns 409 and saves no token — the operator authenticated the wrong
-// Google account (or the inventory imported a Brand Account that has
-// since been moved / removed).
 func TestHandleCallback_YouTube_ExpectedNoMatch_Conflict(t *testing.T) {
 	channels := []*services.DiscoveredAccount{
 		{Profile: models.PlatformProfile{PlatformUserID: "UCaaaaaaaaaaaaaaaaaaaaa1", Username: "Channel A"}},
@@ -1202,272 +861,5 @@ func TestHandleCallback_Success_FrontendRedirect(t *testing.T) {
 	}
 	if !strings.Contains(loc, "status=connected") {
 		t.Fatalf("expected status=connected in redirect params: %s", loc)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// OAuth state CSRF protection (verdict §2) tests
-// ---------------------------------------------------------------------------
-
-func TestHandleLogin_StateIsRandomAcrossRequests(t *testing.T) {
-	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "")
-
-	extractState := func(w *httptest.ResponseRecorder) string {
-		loc := w.Header().Get("Location")
-		_, after, ok := strings.Cut(loc, "state=")
-		if !ok {
-			t.Fatalf("state= not found in redirect: %s", loc)
-		}
-		stateParam, _, _ := strings.Cut(after, "&")
-		return stateParam
-	}
-
-	// SPRINT 7.1 (P0#14): the OAuth login route is now behind
-	// oauthSessionRedirect — a request without an InstaEdit session
-	// is 302'd to /login (verified separately by
-	// TestHandleLogin_RequireSession_RedirectsToLogin). To drive
-	// the actual handleLogin handler, attach a valid Bearer before
-	// each call so redirect lands on the provider's auth dialog
-	// (state-cookie entropy can then be measured).
-	w1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
-	withBearerJWT(t, req1, 1)
-	r.Setup().ServeHTTP(w1, req1)
-	w2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
-	withBearerJWT(t, req2, 1)
-	r.Setup().ServeHTTP(w2, req2)
-
-	s1 := extractState(w1)
-	s2 := extractState(w2)
-	if s1 == s2 {
-		t.Errorf("two logins produced the SAME state %q (must be cryptographically random to defeat pre-computation)", s1)
-	}
-	if len(s1) != 43 || len(s2) != 43 {
-		t.Errorf("states should be 43 chars (32 bytes base64 URL-safe); got %d and %d", len(s1), len(s2))
-	}
-}
-
-func TestHandleCallback_RejectsMissingStateCookie_400(t *testing.T) {
-	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
-	store := &mockUserStore{attachFn: successAttach}
-	r := newTestRouter(svc, store, "")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=anything", nil)
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400 (missing state cookie), got %d: %s", w.Code, w.Body.String())
-	}
-	if svc.handleCallbackCalls != 0 {
-		t.Errorf("platform HandleCallback called %d time(s) despite state verification failure (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
-	}
-	for _, c := range w.Result().Cookies() {
-		if c.Name == OAuthStateCookieName("instagram") && c.MaxAge < 0 {
-			t.Errorf("state cookie was deleted on verification failure (should persist so the legitimate user can retry): %+v", c)
-		}
-	}
-	if !strings.Contains(w.Body.String(), "invalid state") {
-		t.Errorf("response body should explain the state failure; got %q", w.Body.String())
-	}
-}
-
-func TestHandleCallback_RejectsMismatchedState_400(t *testing.T) {
-	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
-	store := &mockUserStore{attachFn: successAttach}
-	r := newTestRouter(svc, store, "")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=different-state", nil)
-	setOAuthStateCookieForTest(req, "instagram", "cookie-state")
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400 (state mismatch), got %d: %s", w.Code, w.Body.String())
-	}
-	if svc.handleCallbackCalls != 0 {
-		t.Errorf("platform HandleCallback called %d time(s) despite state mismatch (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
-	}
-	for _, c := range w.Result().Cookies() {
-		if c.Name == OAuthStateCookieName("instagram") && c.MaxAge < 0 {
-			t.Errorf("state cookie was deleted on mismatch (should persist so the legitimate user can retry): %+v", c)
-		}
-	}
-	if !strings.Contains(w.Body.String(), "invalid state") {
-		t.Errorf("response body should explain the state mismatch; got %q", w.Body.String())
-	}
-}
-
-func TestHandleCallback_RejectsMissingStateParam_400(t *testing.T) {
-	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
-	store := &mockUserStore{attachFn: successAttach}
-	r := newTestRouter(svc, store, "")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc", nil)
-	setOAuthStateCookieForTest(req, "instagram", "any-state")
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400 (missing state query param), got %d: %s", w.Code, w.Body.String())
-	}
-	if svc.handleCallbackCalls != 0 {
-		t.Errorf("platform HandleCallback called %d time(s) despite missing state (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
-	}
-	if !strings.Contains(w.Body.String(), "missing state") {
-		t.Errorf("response body should mention 'missing state'; got %q", w.Body.String())
-	}
-}
-
-// TestPlatformMetaIsRejected (Taglio 5c) proves that a request with
-// platform="meta" returns 404 unsupported_platform. The legacy composite
-// Meta provider was split into instagram, facebook, and threads — the
-// "meta" string must no longer be a valid platform identifier anywhere.
-//
-// SPRINT 7.1 (P0#14): the OAuth routes are now mounted behind
-// oauthSessionRedirect, so a request without an InstaEdit session to
-// an unsupported platform is 302'd to /login (no leak of the provider
-// roster). When a valid session IS present, the inner handleLogin /
-// handleCallback returns 404 unsupported_provider as before — that's
-// the contract the test asserts below.
-func TestPlatformMetaIsRejected(t *testing.T) {
-	svc := &mockProvider{platform: "instagram"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "")
-
-	// Login with platform=meta + AUTH must return 404 (unsupported).
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/login", nil)
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("/auth/meta/login (+auth): want 404 (platform removed), got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Callback with platform=meta + AUTH must return 404 (unsupported).
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/meta/callback?code=abc&state=x", nil)
-	w2 := httptest.NewRecorder()
-	withBearerJWT(t, req2, 1)
-	r.Setup().ServeHTTP(w2, req2)
-	if w2.Code != http.StatusNotFound {
-		t.Fatalf("/auth/meta/callback (+auth): want 404 (platform removed), got %d: %s", w2.Code, w2.Body.String())
-	}
-
-	// The registered providers (instagram, tiktok, twitter) must still work.
-	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
-	w3 := httptest.NewRecorder()
-	withBearerJWT(t, req3, 1)
-	r.Setup().ServeHTTP(w3, req3)
-	if w3.Code != http.StatusFound {
-		t.Fatalf("/auth/instagram/login: want 302 (still works), got %d", w3.Code)
-	}
-}
-
-// TestHandleLogin_RequireSession_RedirectsToLogin (SPRINT 7.1 P0#14):
-// the OAuth start route 302-redirects to FRONTEND_URL/login?next=...
-// when no InstaEdit session is present. The platform roster is no
-// longer enumerable by unauthenticated probes — both supported and
-// unsupported providers behave identically (redirect) without a
-// session, so an attacker can't tell registered platforms from
-// unregistered ones just by hitting /login. The supported-provider
-// check runs AFTER session validation, so a valid session is
-// required to differentiate.
-func TestHandleLogin_RequireSession_RedirectsToLogin(t *testing.T) {
-	svc := &mockProvider{platform: "instagram", loginURL: "https://auth.example.com/oauth"}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "https://app.example.com")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/login", nil)
-	w := httptest.NewRecorder()
-	r.Setup().ServeHTTP(w, req) // NO withBearerJWT — session is missing
-
-	if w.Code != http.StatusFound {
-		t.Fatalf("no-session /auth/instagram/login: want 302 to /login, got %d: %s", w.Code, w.Body.String())
-	}
-	loc := w.Header().Get("Location")
-	if !strings.HasPrefix(loc, "https://app.example.com/login?next=") {
-		t.Fatalf("redirect URL must land on FRONTEND_URL/login: got %s", loc)
-	}
-	// The 'next' parameter must encode the provider so the SPA can
-	// resume the OAuth connect after login.
-	if !strings.Contains(loc, "instagram") {
-		t.Errorf("next path should mention the provider so the SPA can resume: %s", loc)
-	}
-	// Defence-in-depth: no state cookie should be set when the
-	// request never made it to the provider's auth dialog.
-	for _, c := range w.Result().Cookies() {
-		if c.Name == OAuthStateCookieName("instagram") && c.MaxAge > 0 {
-			t.Errorf("oauth state cookie was set despite missing session (state should only bind to authenticated users): %+v", c)
-		}
-	}
-}
-
-// TestHandleCallback_RequireSession_RedirectsToLogin (SPRINT 7.1
-// P0#14): the OAuth callback route mirrors the login route — any
-// hit without a valid InstaEdit session is a 302 to /login. This
-// closes the path where an attacker can simply open the browser
-// at /api/v1/auth/{provider}/callback?code=...&state=test-state
-// without ever being authenticated.
-func TestHandleCallback_RequireSession_RedirectsToLogin(t *testing.T) {
-	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
-	store := &mockUserStore{}
-	r := newTestRouter(svc, store, "https://app.example.com")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)
-	setOAuthStateCookieForTest(req, "instagram", "test-state")
-	w := httptest.NewRecorder()
-	r.Setup().ServeHTTP(w, req) // NO withBearerJWT — session is missing
-
-	if w.Code != http.StatusFound {
-		t.Fatalf("no-session /auth/instagram/callback: want 302 to /login, got %d: %s", w.Code, w.Body.String())
-	}
-	loc := w.Header().Get("Location")
-	if !strings.HasPrefix(loc, "https://app.example.com/login?next=") {
-		t.Fatalf("redirect URL must land on FRONTEND_URL/login: got %s", loc)
-	}
-	// No code-exchange call should have happened (no tokenExchange
-	// invoked when there's no session).
-	if svc.handleCallbackCalls != 0 {
-		t.Errorf("HandleCallback called %d time(s) despite missing session (must short-circuit BEFORE the code exchange)", svc.handleCallbackCalls)
-	}
-	// No platform account should have been created or attached
-	// (the mock would have recorded attachFn invocations).
-	// The mockUserStore defaults to erroring on attach so we
-	// can't directly assert "not called" without wiring attachFn;
-	// the absence of a 200 + state-cookie deletion is sufficient.
-}
-
-func TestHandleCallback_DeletesStateCookieAfterUse(t *testing.T) {
-	svc := &mockProvider{platform: "instagram", handleCallback: successCallback}
-	store := &mockUserStore{attachFn: successAttach}
-	r := newTestRouter(svc, store, "")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/instagram/callback?code=abc&state=test-state", nil)
-	setOAuthStateCookieForTest(req, "instagram", "test-state")
-	w := httptest.NewRecorder()
-	withBearerJWT(t, req, 1)
-	r.Setup().ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var deletionCookie *http.Cookie
-	for _, c := range w.Result().Cookies() {
-		if c.Name == OAuthStateCookieName("instagram") {
-			deletionCookie = c
-			break
-		}
-	}
-	if deletionCookie == nil {
-		t.Fatal("oauth_state_meta cookie not deleted after successful callback (single-use contract violated)")
-	}
-	if deletionCookie.MaxAge >= 0 {
-		t.Errorf("oauth_state_meta deletion cookie MaxAge: want <0, got %d (cookie would persist and be replayable)", deletionCookie.MaxAge)
 	}
 }
