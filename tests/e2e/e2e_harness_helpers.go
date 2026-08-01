@@ -7,9 +7,11 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -468,4 +470,73 @@ func trimForError(s string) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// artifactVerifyOK mirrors the artifactVerifyReader's behavior
+// (Task 4/10). The real policy lives in
+// internal/services; this stub lets the suite lock the shape
+// without dragging in the full binary surface.
+func artifactVerifyOK(body []byte, sha string, size int64, mime string) error {
+	if len(body) != int(size) {
+		return errors.New("size mismatch")
+	}
+	if sha256Hex(body) != sha {
+		return errors.New("sha mismatch")
+	}
+	if mime != "video/mp4" && mime != "application/octet-stream" {
+		return errors.New("mime unsupported")
+	}
+	return nil
+}
+
+// transientErrMsg formats a per-attempt transient-failure message so
+// scenario_9's last_error_message column records exactly which
+// retry attempt ultimately exhausted the budget.
+func transientErrMsg(attempt int) string {
+	return "transient_5xx_attempt_" + strconv.Itoa(attempt)
+}
+
+// insertScheduledPost inserts a scheduled post with publish_at in the
+// future. Returns the inserted post ID.
+func insertScheduledPost(h *E2EHarness, publishAt time.Time) (postID int64, err error) {
+	tx, err := h.pgDB.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := tx.QueryRow(
+		`INSERT INTO posts (user_id, workspace_id, title, caption, media_url, status, publish_at, created_at, updated_at)
+		 VALUES ($1, $2, $3, '', 'https://example.com/video.mp4', 'scheduled', $4, NOW(), NOW())
+		 RETURNING id`,
+		1, 1, "e2e-post",
+		publishAt,
+	).Scan(&postID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO post_targets (post_id, platform_account_id, status, created_at, updated_at)
+		 VALUES ($1, 1, 'pending', NOW(), NOW())`,
+		postID,
+	); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return postID, nil
+}
+
+// runPublishClaimGate runs the publish-pool's claim SQL and returns
+// the count of rows that would be claimed with the time-gate applied.
+// Mirrors the production `ClaimBatchForPublish` filter shape.
+func runPublishClaimGate(h *E2EHarness, now time.Time) (int, error) {
+	var count int
+	if err := h.pgDB.QueryRow(
+		`SELECT COUNT(*) FROM posts
+		  WHERE status = 'scheduled'
+		    AND publish_at <= $1`, now,
+	).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
