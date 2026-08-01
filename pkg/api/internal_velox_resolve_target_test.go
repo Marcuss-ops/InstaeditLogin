@@ -59,6 +59,9 @@ func (a *groupStoreAdapter) Delete(_ int64) error         { return nil }
 func (a *groupStoreAdapter) ListByWorkspace(_ int64) ([]models.Group, error) {
 	return nil, nil
 }
+func (a *groupStoreAdapter) ListByWorkspaceWithAccounts(_ int64) ([]models.GroupWithAccounts, error) {
+	return nil, nil
+}
 func (a *groupStoreAdapter) ValidateAccountOwnership(_ int64, _ int64, _ []int64) ([]int64, error) {
 	return nil, nil
 }

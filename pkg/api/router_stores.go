@@ -174,6 +174,7 @@ type GroupStore interface {
 	Update(g *models.Group) error
 	Delete(id int64) error
 	ListByWorkspace(workspaceID int64) ([]models.Group, error)
+	ListByWorkspaceWithAccounts(workspaceID int64) ([]models.GroupWithAccounts, error)
 	ListAccountsInGroup(groupID int64) ([]int64, error)
 	// ValidateAccountOwnership returns the subset of supplied
 	// accountIDs that are visible to (userID, workspaceID). The

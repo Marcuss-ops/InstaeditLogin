@@ -149,6 +149,49 @@ func (r *Router) handleListGroups(w http.ResponseWriter, req *http.Request) {
 // 409 for duplicate root names; 404 for missing parent.
 //
 // POST /api/v1/groups
+// handleListGroupsWithAccounts returns all groups and their direct account
+// memberships for one owned workspace. Unlike the legacy list endpoint,
+// this read model is assembled by the repository in one query, avoiding
+// the frontend's per-group /accounts fan-out.
+//
+// GET /api/v1/groups/aggregate?workspace_id=…
+// GET /api/v1/groups/aggregate (uses the workspace in the auth identity)
+func (r *Router) handleListGroupsWithAccounts(w http.ResponseWriter, req *http.Request) {
+	if r.groupStore == nil {
+		writeError(w, http.StatusNotImplemented, "groups not configured on this server")
+		return
+	}
+	wsIDStr := req.URL.Query().Get("workspace_id")
+	var workspaceID int64
+	if wsIDStr != "" {
+		parsed, err := strconv.ParseInt(wsIDStr, 10, 64)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid workspace_id")
+			return
+		}
+		workspaceID = parsed
+	} else if identity := auth.IdentityFromContext(req.Context()); identity != nil {
+		workspaceID = identity.WorkspaceID()
+	}
+	if workspaceID <= 0 {
+		writeError(w, http.StatusBadRequest, "workspace_id query parameter is required")
+		return
+	}
+	if ok, _ := r.requireWorkspaceOwnership(w, req, workspaceID); !ok {
+		return
+	}
+	groups, err := r.groupStore.ListByWorkspaceWithAccounts(workspaceID)
+	if err != nil {
+		status, msg := mapGroupError(err)
+		writeError(w, status, msg)
+		return
+	}
+	if groups == nil {
+		groups = []models.GroupWithAccounts{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"groups": groups})
+}
+
 func (r *Router) handleCreateGroup(w http.ResponseWriter, req *http.Request) {
 	if r.groupStore == nil {
 		writeError(w, http.StatusNotImplemented, "groups not configured on this server")

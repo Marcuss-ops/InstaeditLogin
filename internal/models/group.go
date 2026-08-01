@@ -20,3 +20,11 @@ type Group struct {
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
+
+// GroupWithAccounts is the workspace-scoped read model used by the
+// aggregate groups endpoint. Account IDs are loaded in the same query as
+// the groups so dashboard consumers do not need one request per group.
+type GroupWithAccounts struct {
+	Group
+	AccountIDs []int64 `json:"account_ids"`
+}

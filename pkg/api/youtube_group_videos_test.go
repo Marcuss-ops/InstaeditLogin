@@ -31,6 +31,7 @@ import (
 type mockGroupStore struct {
 	findByIDFn                 func(id int64) (*models.Group, error)
 	listByWorkspaceFn          func(workspaceID int64) ([]models.Group, error)
+	listByWorkspaceWithAccountsFn func(workspaceID int64) ([]models.GroupWithAccounts, error)
 	listAccountsInGroupFn      func(groupID int64) ([]int64, error)
 	validateAccountOwnershipFn func(userID, workspaceID int64, accountIDs []int64) ([]int64, error)
 	createFn                   func(g *models.Group) error
@@ -48,6 +49,12 @@ func (m *mockGroupStore) FindByID(id int64) (*models.Group, error) {
 func (m *mockGroupStore) ListByWorkspace(workspaceID int64) ([]models.Group, error) {
 	if m.listByWorkspaceFn != nil {
 		return m.listByWorkspaceFn(workspaceID)
+	}
+	return nil, nil
+}
+func (m *mockGroupStore) ListByWorkspaceWithAccounts(workspaceID int64) ([]models.GroupWithAccounts, error) {
+	if m.listByWorkspaceWithAccountsFn != nil {
+		return m.listByWorkspaceWithAccountsFn(workspaceID)
 	}
 	return nil, nil
 }

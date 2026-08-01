@@ -117,6 +117,7 @@ func (r *Router) Setup() http.Handler {
 			UpdateWorkspaceChannel:        r.handleUpdateWorkspaceChannel,
 			DetachWorkspaceChannel:        r.handleDetachWorkspaceChannel,
 			ListGroups:                    r.handleListGroups,
+			ListGroupsWithAccounts:        r.handleListGroupsWithAccounts,
 			CreateGroup:                   r.handleCreateGroup,
 			GetGroup:                      r.handleGetGroup,
 			UpdateGroup:                   r.handleUpdateGroup,

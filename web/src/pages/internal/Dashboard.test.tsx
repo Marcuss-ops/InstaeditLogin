@@ -66,7 +66,7 @@ describe("InternalDashboard", () => {
       expect(screen.getByRole("heading", { name: /Dashboard/i })).toBeInTheDocument();
     });
 
-    expect(screen.getByRole("heading", { name: "Connected accounts" })).toBeInTheDocument();
+    expect(screen.getByText("Connected accounts")).toBeInTheDocument();
     expect(screen.getByText("Total posts")).toBeInTheDocument();
     expect(screen.getByText("Published")).toBeInTheDocument();
     expect(screen.getByText("Pending uploads")).toBeInTheDocument();
@@ -89,6 +89,53 @@ describe("InternalDashboard", () => {
     await waitFor(() => {
       expect(screen.getByText("Couldn't load dashboard")).toBeInTheDocument();
     });
+  });
+
+  it("loads group memberships from one aggregate response without per-group fan-out", async () => {
+    const requestedUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo) => {
+        const url = typeof input === "string" ? input : input.url;
+        requestedUrls.push(url);
+        if (url.endsWith("/api/v1/auth/me")) {
+          return mockJsonResponse({ user_id: 1, workspace_id: 7 });
+        }
+        if (url.endsWith("/api/v1/accounts")) {
+          return mockJsonResponse({
+            accounts: [
+              { id: 101, platform: "youtube", username: "channel-1", status: "active", created_at: new Date().toISOString() },
+              { id: 102, platform: "youtube", username: "channel-2", status: "active", created_at: new Date().toISOString() },
+            ],
+          });
+        }
+        if (url.endsWith("/api/v1/posts")) {
+          return mockJsonResponse({ posts: [] });
+        }
+        if (url.endsWith("/api/v1/uploads/counts")) {
+          return mockJsonResponse({ counts: [], total_uploads: 0, total_targets: 0 });
+        }
+        if (url.endsWith("/api/v1/groups/aggregate")) {
+          return mockJsonResponse({
+            groups: [
+              { id: 1, workspace_id: 7, name: "Editorial", account_ids: [101, 102] },
+            ],
+          });
+        }
+        if (/\/api\/v1\/groups\/\d+\/accounts$/.test(url)) {
+          throw new Error(`unexpected per-group membership request: ${url}`);
+        }
+        return mockJsonResponse({}, false, 404);
+      }),
+    );
+
+    renderDashboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("Editorial")).toBeInTheDocument();
+    });
+    expect(requestedUrls.filter((url) => url.endsWith("/api/v1/groups/aggregate"))).toHaveLength(1);
+    expect(requestedUrls.some((url) => /\/api\/v1\/groups\/\d+\/accounts$/.test(url))).toBe(false);
   });
 
   it("renders zero stats and empty accounts when no data exists", async () => {
@@ -123,6 +170,6 @@ describe("InternalDashboard", () => {
     });
 
     expect(screen.getAllByText("0")).toHaveLength(4);
-    expect(screen.getByText("No accounts connected yet.")).toBeInTheDocument();
+    expect(screen.getByTestId("dashboard-groups")).toBeInTheDocument();
   });
 });

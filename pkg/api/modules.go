@@ -499,6 +499,7 @@ type AuthHandlers struct {
 	UpdateWorkspaceChannel        http.HandlerFunc
 	DetachWorkspaceChannel        http.HandlerFunc
 	ListGroups                    http.HandlerFunc
+	ListGroupsWithAccounts        http.HandlerFunc
 	CreateGroup                   http.HandlerFunc
 	GetGroup                      http.HandlerFunc
 	UpdateGroup                   http.HandlerFunc
@@ -612,6 +613,7 @@ func (m *AuthModule) Register(mux chi.Router) {
 	if m.deps.GroupStore != nil {
 		mux.Route("/api/v1/groups", func(sr chi.Router) {
 			sr.Get("/", m.deps.Protected(m.deps.Handlers.ListGroups))
+			sr.Get("/aggregate", m.deps.Protected(m.deps.Handlers.ListGroupsWithAccounts))
 			sr.Post("/", m.deps.Protected(m.deps.Handlers.CreateGroup))
 			sr.Get("/{id}", m.deps.Protected(m.deps.Handlers.GetGroup))
 			sr.Patch("/{id}", m.deps.Protected(m.deps.Handlers.UpdateGroup))

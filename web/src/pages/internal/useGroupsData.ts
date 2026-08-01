@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { authedFetch, AuthError, ApiError, fetchSession } from "../../lib/auth";
 import {
   buildTree,
@@ -9,38 +9,10 @@ import {
   type TreeNode,
 } from "./groupsTypes";
 
-async function loadAccountsByGroup(
-  groups: Group[],
-  allAccounts: PlatformAccount[],
-  signal: AbortSignal,
-): Promise<Map<number, PlatformAccount[]>> {
-  if (groups.length === 0) {
-    return new Map();
-  }
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const accountIndex = new Map(allAccounts.map((a) => [a.id, a]));
-  const respLists = await Promise.all(
-    groups.map(async (g) => {
-      try {
-        const r = await authedFetch(`/api/v1/groups/${g.id}/accounts`, { signal });
-        const d = (await r.json()) as { account_ids: number[] };
-        const mapped: PlatformAccount[] = [];
-        for (const id of d.account_ids ?? []) {
-          const acc = accountIndex.get(id);
-          if (acc) mapped.push(acc);
-        }
-        return [g.id, mapped] as const;
-      } catch {
-        return [g.id, [] as PlatformAccount[]] as const;
-      }
-    }),
-  );
-  return new Map(respLists);
-}
-
 export function useGroupsData() {
   
     const navigate = useNavigate();
+    const { groupId: routeGroupId } = useParams<{ groupId?: string }>();
     const abortRef = useRef<AbortController | null>(null);
     const [state, setState] = useState<FetchState>({ kind: "loading" });
     const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
@@ -66,28 +38,42 @@ export function useGroupsData() {
         const meData = (await meResp.json()) as { workspace_id: number };
         const workspaceId = meData.workspace_id;
         const [groupsResp, accountsResp] = await Promise.all([
-          authedFetch(`/api/v1/groups/?workspace_id=${workspaceId}`, { signal: controller.signal }),
+          authedFetch("/api/v1/groups/aggregate", { signal: controller.signal }),
           authedFetch("/api/v1/accounts", { signal: controller.signal }),
         ]);
         if (controller.signal.aborted) return;
-        const groupsData = (await groupsResp.json()) as { groups: Group[] };
+        const groupsData = (await groupsResp.json()) as {
+          groups: Array<Group & { account_ids?: number[] }>;
+        };
         const accountsData = (await accountsResp.json()) as { accounts: PlatformAccount[] };
-        // Bulk-load group accounts in parallel so the tree can render
-        // each node's chip list without an extra fetch on group-click.
-        // Returned as a Map<groupID, PlatformAccount[]> — passed to
-        // buildTree so TreeNode.accounts is populated for every node.
-        const accountsByGroup = await loadAccountsByGroup(
-          groupsData.groups ?? [],
-          accountsData.accounts ?? [],
-          controller.signal,
+        // The groups UI is an operational publishing view: accounts that are
+        // not active (revoked, suspended or requiring re-auth) must not be
+        // selectable or displayed as usable channels.
+        const activeAccounts = (accountsData.accounts ?? []).filter((account) => account.status === "active");
+        // The aggregate endpoint returns groups and direct memberships in
+        // one workspace-scoped response. Resolve account IDs locally so the
+        // tree never fans out into one request per group.
+        const accountIndex = new Map(activeAccounts.map((account) => [account.id, account]));
+        const accountsByGroup = new Map(
+          (groupsData.groups ?? []).map((group) => [
+            group.id,
+            (group.account_ids ?? [])
+              .map((accountId) => accountIndex.get(accountId))
+              .filter((account): account is PlatformAccount => account != null),
+          ] as const),
         );
+        const groups = (groupsData.groups ?? []).map(({ account_ids: _accountIDs, ...group }) => group);
         setState({
           kind: "ready",
-          groups: groupsData.groups ?? [],
-          accounts: accountsData.accounts ?? [],
+          groups,
+          accounts: activeAccounts,
           workspaceId,
           accountsByGroup,
         });
+        const requestedGroupId = Number(routeGroupId);
+        if (Number.isFinite(requestedGroupId) && groups.some((g) => g.id === requestedGroupId)) {
+          setSelectedGroupId(requestedGroupId);
+        }
       } catch (err) {
         if (controller.signal.aborted) return;
         if (err instanceof AuthError) {
@@ -97,7 +83,7 @@ export function useGroupsData() {
         const message = err instanceof ApiError ? err.message : "Unable to load groups.";
         setState({ kind: "error", message });
       }
-    }, [navigate]);
+    }, [navigate, routeGroupId]);
   
     useEffect(() => {
       void load();

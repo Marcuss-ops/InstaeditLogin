@@ -1,28 +1,33 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   FileText,
   Link2,
-  Sparkles,
   ArrowRight,
-  RefreshCw,
   CheckCircle2,
   Clock,
-  CalendarClock,
-  Video,
-  LockKeyhole,
+  Folder,
 } from "lucide-react";
-import { authedFetch, ApiError, AuthError, fetchSession } from "../../lib/auth";
-import { getProvider, type ProviderId } from "../../lib/providers";
+import { authedFetch, AuthError, fetchSession } from "../../lib/auth";
+import { type ProviderId } from "../../lib/providers";
 import { Skeleton, ErrorState } from "../../components/feedback";
-import { listChannelContent } from "../../features/channels/api/channelContentApi";
+import type { Group } from "./groupsTypes";
 
 type PlatformAccount = {
   id: number;
   platform: ProviderId;
   username: string;
   created_at: string;
+  status: string;
+  metadata?: Record<string, unknown>;
+};
+
+type GroupSummary = {
+  group: Group;
+  accountIds: number[];
+  accounts: PlatformAccount[];
+  scheduled: number;
 };
 
 type Post = {
@@ -47,27 +52,13 @@ type DashboardData = {
   // GET /api/v1/uploads/counts. The dashboard widget renders from
   // this map; the calendar page hits /uploads/by-account separately.
   countMap: Map<number, AccountProgrammatoCount>;
-  privateCountMap: Map<number, number>;
+  groupSummaries: GroupSummary[];
 };
 
 type FetchState =
   | { kind: "loading" }
   | { kind: "ready"; data: DashboardData }
   | { kind: "error"; message: string };
-
-// Platforms whose accounts can RECEIVE posts. google-drive is excluded:
-// it's a SOURCE (we read from it), not a destination. Showing it on the
-// "Programmati" widget would surface an empty calendar because Drive
-// accounts never appear in upload_jobs.targets.
-const PUBLISHABLE_PLATFORMS = new Set<ProviderId>([
-  "facebook",
-  "instagram",
-  "threads",
-  "tiktok",
-  "twitter",
-  "youtube",
-  "linkedin",
-]);
 
 function StatCard({
   label,
@@ -102,6 +93,11 @@ export function InternalDashboard() {
   const navigate = useNavigate();
   const [state, setState] = useState<FetchState>({ kind: "loading" });
   const abortRef = useRef<AbortController | null>(null);
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [draggedAccountId, setDraggedAccountId] = useState<number | null>(null);
+  const [savingDrop, setSavingDrop] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     abortRef.current?.abort();
@@ -134,34 +130,47 @@ export function InternalDashboard() {
         }>;
         total_uploads: number;
       };
-      const privateCountEntries = await Promise.all(
-        (accountsData.accounts ?? [])
-          .filter((account) => account.platform === "youtube")
-          .map(async (account) => {
-            try {
-              let count = 0;
-              let cursor: string | undefined;
-              do {
-                const page = await listChannelContent({
-                  accountId: account.id,
-                  privacy: "private",
-                  limit: 50,
-                  cursor,
-                  signal: controller.signal,
-                });
-                count += page.items.length;
-                cursor = page.next_cursor;
-              } while (cursor);
-              return [account.id, count] as const;
-            } catch (err) {
-              // A missing/expired provider token must not log the user out
-              // of InstaEdit or prevent the rest of the dashboard loading.
-              if (err instanceof AuthError) throw err;
-              if (err instanceof ApiError) return [account.id, 0] as const;
-              throw err;
-            }
-          }),
-      );
+      let groupSummaries: GroupSummary[] = [];
+      try {
+        // The aggregate endpoint resolves the active workspace from the
+        // authenticated identity, so the dashboard does not need a separate
+        // workspace lookup before loading groups and memberships.
+        const groupsResp = await authedFetch("/api/v1/groups/aggregate", { signal: controller.signal });
+        const groupsData = (await groupsResp.json()) as {
+          groups: Array<Group & { account_ids?: number[] }>;
+        };
+        const accountIndex = new Map((accountsData.accounts ?? []).map((account) => [account.id, account]));
+        const directMemberships = new Map(
+          (groupsData.groups ?? []).map((group) => [group.id, group.account_ids ?? []] as const),
+        );
+        const children = new Map<number, Group[]>();
+        for (const group of groupsData.groups ?? []) {
+          if (group.parent_group_id != null) {
+            const list = children.get(group.parent_group_id) ?? [];
+            list.push(group);
+            children.set(group.parent_group_id, list);
+          }
+        }
+        const collect = (group: Group): number[] => {
+          const ids = new Set(directMemberships.get(group.id) ?? []);
+          for (const child of children.get(group.id) ?? []) collect(child).forEach((id) => ids.add(id));
+          return [...ids];
+        };
+        groupSummaries = (groupsData.groups ?? [])
+          .filter((group) => group.parent_group_id == null)
+          .map((group) => {
+            const accountIds = collect(group);
+            const groupAccounts = accountIds.map((id) => accountIndex.get(id)).filter((account): account is PlatformAccount => account != null && account.status === "active");
+            return {
+              group,
+              accountIds,
+              accounts: groupAccounts,
+              scheduled: accountIds.reduce((sum, id) => sum + (countsData.counts?.find((count) => count.account_id === id)?.count ?? 0), 0),
+            };
+          });
+      } catch {
+        // Groups are an optional dashboard projection; account cards still work if unavailable.
+      }
       // Project the count-rollup into a Map<account_id, count + nextAt>
       // so the per-account widget can O(1)-look-up instead of doing an
       // inner N×M loop on a fetched upload list.
@@ -181,8 +190,8 @@ export function InternalDashboard() {
           accounts: accountsData.accounts ?? [],
           posts: postsData.posts ?? [],
           countMap,
-          privateCountMap: new Map(privateCountEntries),
           totalUploads: countsData.total_uploads ?? 0,
+          groupSummaries,
         },
       });
     } catch (err) {
@@ -227,32 +236,42 @@ export function InternalDashboard() {
         }
       : null;
 
-  // Filter to publishable accounts (excludes google-drive) and sort by
-  // pending count DESC so the most-active account surfaces first. The
-  // countMap (sourced from /uploads/counts) is already an O(1) lookup,
-  // so no nested loop — unlike the previous /uploads?limit=200 path.
-  const programByAccount = useMemo(() => {
-    if (state.kind !== "ready") return [] as Array<{
-      account: PlatformAccount;
-      count: number;
-      nextAt: string | null;
-      privateCount: number;
-    }>;
-    return state.data.accounts
-      .filter((a) => PUBLISHABLE_PLATFORMS.has(a.platform))
-      .map((a) => {
-        const bucket = state.kind === "ready"
-          ? (state.data.countMap.get(a.id) ?? { count: 0, nextAt: null })
-          : { count: 0, nextAt: null };
-        return {
-          account: a,
-          count: bucket.count,
-          nextAt: bucket.nextAt,
-          privateCount: state.data.privateCountMap.get(a.id) ?? 0,
-        };
-      })
-      .sort((a, b) => b.count - a.count || a.account.id - b.account.id);
-  }, [state]);
+  const createGroup = async () => {
+    if (!newGroupName.trim() || creatingGroup) return;
+    setCreatingGroup(true);
+    try {
+      const me = await authedFetch("/api/v1/auth/me");
+      const { workspace_id: workspaceId } = await me.json() as { workspace_id: number };
+      const response = await authedFetch("/api/v1/groups/", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, name: newGroupName.trim() }) });
+      const group = await response.json() as { id: number };
+      setCreateGroupOpen(false);
+      setNewGroupName("");
+      navigate(`/app/groups/${group.id}`);
+    } finally {
+      setCreatingGroup(false);
+    }
+  };
+
+  const addAccountToGroup = async (accountId: number, groupId: number) => {
+    if (savingDrop != null || state.kind !== "ready") return;
+    const summary = state.data.groupSummaries.find((item) => item.group.id === groupId);
+    if (!summary || summary.accountIds.includes(accountId)) return;
+    setSavingDrop(groupId);
+    try {
+      const currentResponse = await authedFetch(`/api/v1/groups/${groupId}/accounts`);
+      const current = await currentResponse.json() as { account_ids?: number[] };
+      const currentIds = current.account_ids ?? [];
+      if (currentIds.includes(accountId)) return;
+      await authedFetch(`/api/v1/groups/${groupId}/accounts`, {
+        method: "PUT",
+        body: JSON.stringify({ account_ids: [...currentIds, accountId] }),
+      });
+      await load();
+    } finally {
+      setSavingDrop(null);
+      setDraggedAccountId(null);
+    }
+  };
 
   return (
     <div className="min-h-full p-8 bg-[#030308] text-[#e8e8ef]">
@@ -266,21 +285,6 @@ export function InternalDashboard() {
             <p className="text-[15px] text-[#9aa0aa] mt-1">
               Overview of your connected accounts and publishing activity.
             </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-semibold text-white hover:bg-white/[0.08] transition-colors"
-            >
-              <RefreshCw size={14} /> Refresh
-            </button>
-            <Link
-              to="/app/compose"
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-black text-[13px] font-semibold hover:bg-white/90 transition-colors no-underline"
-            >
-              <Sparkles size={14} /> New post
-            </Link>
           </div>
         </div>
 
@@ -311,155 +315,104 @@ export function InternalDashboard() {
               <StatCard label="Pending uploads" value={stats.queuedUploads} icon={Clock} to="/app/uploads/calendar" />
             </div>
 
-            {programByAccount.length > 0 && (
-              <section className="mb-8">
+            {(
+              <section className="mb-8" data-testid="dashboard-groups">
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <h2 className="text-[18px] font-extrabold tracking-tight text-white flex items-center gap-2">
-                      <Video size={20} className="text-white/60" />
-                      Canali YouTube
+                      <Folder size={20} className="text-amber-300/80" />
+                      Groups
                     </h2>
-                    <p className="text-[13px] text-[#9aa0aa] mt-0.5">
-                      Apri il calendario o i video privati del canale.
-                    </p>
+                    <p className="text-[13px] text-[#9aa0aa] mt-0.5">Apri un gruppo per vedere e gestire i canali che contiene.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => setCreateGroupOpen(true)} className="rounded-xl bg-violet-500 px-3 py-2 text-[12px] font-semibold text-white hover:bg-violet-400">+ Crea gruppo</button>
+                    <Link to="/app/groups" className="text-[13px] font-medium text-[#9aa0aa] hover:text-white no-underline">Gestisci <ArrowRight size={14} className="inline" /></Link>
                   </div>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {programByAccount.map((entry) => (
-                    <AccountProgrammatoCard key={entry.account.id} entry={entry} />
+                {createGroupOpen && (
+                  <div className="mb-4 flex flex-col sm:flex-row gap-2 rounded-xl border border-violet-400/30 bg-violet-500/[0.08] p-3">
+                    <input autoFocus value={newGroupName} onChange={(event) => setNewGroupName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createGroup(); }} placeholder="Nome gruppo, es. WWE" className="flex-1 rounded-lg border border-white/[0.10] bg-black/20 px-3 py-2 text-[13px] text-white outline-none" />
+                    <button type="button" disabled={!newGroupName.trim() || creatingGroup} onClick={() => void createGroup()} className="rounded-lg bg-white px-3 py-2 text-[12px] font-semibold text-black disabled:opacity-50">Crea e scegli canali</button>
+                    <button type="button" onClick={() => setCreateGroupOpen(false)} className="rounded-lg border border-white/[0.10] px-3 py-2 text-[12px] text-[#c8cbd4]">Annulla</button>
+                  </div>
+                )}
+                {state.data.groupSummaries.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.02] p-8 text-center text-[13px] text-[#9aa0aa]">
+                    Nessun gruppo creato. Premi “Crea gruppo” per iniziare a organizzare i canali validi.
+                  </div>
+                ) : <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {state.data.groupSummaries.map((summary) => (
+                    <Link
+                      key={summary.group.id}
+                      to={`/app/groups/${summary.group.id}`}
+                      onDragOver={(event) => {
+                        if (draggedAccountId != null) {
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = "copy";
+                        }
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const accountId = Number(event.dataTransfer.getData("application/x-instaedit-account"));
+                        if (Number.isFinite(accountId) && accountId > 0) void addAccountToGroup(accountId, summary.group.id);
+                      }}
+                      className={`surface-card bg-[#1f1f2e] border rounded-2xl p-5 hover:border-violet-400/50 hover:bg-[#252538] transition-all no-underline ${draggedAccountId != null ? "border-dashed border-violet-400/60 ring-1 ring-violet-400/20" : "border-white/[0.12]"}`}
+                    >
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="w-10 h-10 rounded-xl bg-amber-400/15 text-amber-300 flex items-center justify-center"><Folder size={19} /></div>
+                        <div className="min-w-0"><p className="text-[15px] font-bold text-white truncate">{summary.group.name}</p><p className="text-[12px] text-[#9aa0aa]">{summary.accounts.length} canali{savingDrop === summary.group.id ? " · salvataggio…" : " · trascina qui"}</p></div>
+                        <ArrowRight size={16} className="ml-auto text-[#9aa0aa]" />
+                      </div>
+                      <div className="rounded-lg bg-white/[0.04] px-3 py-2 text-[12px] text-[#c8cbd4]">Programmati <b className="text-white">{summary.scheduled}</b></div>
+                    </Link>
                   ))}
-                </div>
+                </div>}
               </section>
             )}
 
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-[16px] font-bold text-white">Connected accounts</h2>
-                  <Link
-                    to="/app/linking"
-                    className="inline-flex items-center gap-1 text-[13px] font-medium text-[#9aa0aa] hover:text-white transition-colors no-underline"
-                  >
-                    Manage <ArrowRight size={14} />
-                  </Link>
-                </div>
-                {state.data.accounts.length === 0 ? (
-                  <p className="text-[14px] text-[#9aa0aa]">No accounts connected yet.</p>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {state.data.accounts.map((account) => {
-                      const provider = getProvider(account.platform);
-                      if (!provider) return null;
-                      return (
-                        <div
-                          key={account.id}
-                          className="flex items-center gap-3 p-3 rounded-xl border border-white/[0.08] bg-white/[0.02]"
-                        >
-                          <div
-                            className={`w-10 h-10 rounded-xl bg-gradient-to-br ${provider.color} flex items-center justify-center text-white shrink-0`}
-                          >
-                            {provider.icon}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-[13px] font-semibold text-white truncate">
-                              {provider.name}
-                            </p>
-                            <p className="text-[12px] text-[#9aa0aa] truncate">
-                              @{account.username || "—"}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
+            {(() => {
+              const groupedIds = new Set(state.data.groupSummaries.flatMap((summary) => summary.accountIds));
+              const availableAccounts = state.data.accounts.filter((account) => account.status === "active" && account.platform !== "google-drive" && !groupedIds.has(account.id));
+              return (
+                <section className="mb-8" data-testid="dashboard-available-accounts">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h2 className="text-[18px] font-extrabold tracking-tight text-white">Account disponibili</h2>
+                      <p className="text-[13px] text-[#9aa0aa] mt-0.5">Canali attivi non ancora assegnati a un gruppo.</p>
+                    </div>
+                    <Link to="/app/groups" className="text-[13px] font-medium text-violet-300 hover:text-white no-underline">Gestisci gruppi <ArrowRight size={14} className="inline" /></Link>
                   </div>
-                )}
-              </div>
+                  {availableAccounts.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.02] p-6 text-center text-[13px] text-[#9aa0aa]">Tutti i canali attivi sono già organizzati in un gruppo.</div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {availableAccounts.map((account) => (
+                        <Link
+                          key={account.id}
+                          to={`/app/dashboard-channels/${account.id}`}
+                          draggable
+                          onDragStart={(event) => {
+                            event.dataTransfer.setData("application/x-instaedit-account", String(account.id));
+                            event.dataTransfer.effectAllowed = "copy";
+                            setDraggedAccountId(account.id);
+                          }}
+                          onDragEnd={() => setDraggedAccountId(null)}
+                          className="flex cursor-grab items-center gap-3 rounded-xl border border-white/[0.10] bg-white/[0.03] p-3 no-underline hover:border-violet-400/50 hover:bg-white/[0.06] active:cursor-grabbing transition-colors"
+                        >
+                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-500/15 text-[12px] font-bold text-violet-200">{account.platform.slice(0, 1).toUpperCase()}</div>
+                          <div className="min-w-0"><p className="truncate text-[13px] font-semibold text-white">{account.username || `Account ${account.id}`}</p><p className="text-[11px] text-[#9aa0aa]">{account.platform} · trascina nel gruppo</p></div>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              );
+            })()}
 
-              <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6">
-                <h2 className="text-[16px] font-bold text-white mb-4">Quick actions</h2>
-                <div className="space-y-2">
-                  <Link
-                    to="/app/compose"
-                    className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] transition-colors no-underline text-white"
-                  >
-                    <Sparkles size={18} className="text-[#9aa0aa]" />
-                    <span className="text-[14px] font-medium">Create a post</span>
-                  </Link>
-                  <Link
-                    to="/app/linking"
-                    className="flex items-center gap-3 p-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] transition-colors no-underline text-white"
-                  >
-                    <Link2 size={18} className="text-[#9aa0aa]" />
-                    <span className="text-[14px] font-medium">Connect accounts</span>
-                  </Link>
-                </div>
-              </div>
-            </div>
+            <div className="h-4" />
           </>
         )}
-      </div>
-    </div>
-  );
-}
-
-// AccountProgrammatoCard keeps the two channel actions together so a
-// dashboard channel never needs two separate cards for its two views.
-function AccountProgrammatoCard({
-  entry,
-}: {
-  entry: {
-    account: PlatformAccount;
-    count: number;
-    nextAt: string | null;
-    privateCount: number;
-  };
-}) {
-  const provider = getProvider(entry.account.platform);
-
-  return (
-    <div
-      className="group surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl overflow-hidden hover:border-white/[0.30] hover:shadow-[0_8px_32px_rgba(0,0,0,0.4)] transition-all"
-      data-testid={`dash-programmati-card-${entry.account.id}`}
-    >
-      <div className="px-5 py-4">
-        <div className="flex items-center gap-3 mb-3">
-          {provider ? (
-            <div
-              className={`w-10 h-10 rounded-xl bg-gradient-to-br ${provider.color} flex items-center justify-center text-white shrink-0`}
-            >
-              {provider.icon}
-            </div>
-          ) : (
-            <div className="w-10 h-10 rounded-xl bg-white/[0.06] flex items-center justify-center text-white/40 shrink-0">
-              <Video size={18} />
-            </div>
-          )}
-          <div className="min-w-0">
-            <p className="text-[14px] font-bold text-white truncate">
-              {provider?.name ?? entry.account.platform}
-            </p>
-            <p className="text-[12px] text-[#9aa0aa] truncate">
-              @{entry.account.username || "—"}
-            </p>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <Link
-            to={`/app/uploads/calendar?account_id=${entry.account.id}`}
-            className="flex items-center justify-between gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-[12px] font-semibold text-[#c8cbd4] hover:bg-white/[0.09] hover:text-white transition-colors no-underline"
-          >
-            <span className="inline-flex items-center gap-1.5"><CalendarClock size={14} /> Programmati</span>
-            <span className="text-white tabular-nums">{entry.count}</span>
-          </Link>
-          <Link
-            to={`/app/dashboard-channels/${entry.account.id}?privacy=private`}
-            className="flex items-center justify-between gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-[12px] font-semibold text-[#c8cbd4] hover:bg-white/[0.09] hover:text-white transition-colors no-underline"
-          >
-            <span className="inline-flex items-center gap-1.5"><LockKeyhole size={14} /> Privati</span>
-            <span className="text-white tabular-nums">{entry.privateCount}</span>
-          </Link>
-        </div>
       </div>
     </div>
   );

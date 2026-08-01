@@ -218,6 +218,62 @@ func (r *GroupRepository) ListAccountsInGroup(groupID int64) ([]int64, error) {
 	return out, nil
 }
 
+// ListByWorkspaceWithAccounts returns every group and its direct account
+// memberships in one workspace-scoped query. The LEFT JOIN preserves
+// empty groups, while the deterministic group/account ordering keeps the
+// response stable for pagination and client rendering.
+func (r *GroupRepository) ListByWorkspaceWithAccounts(workspaceID int64) ([]models.GroupWithAccounts, error) {
+	rows, err := r.db.Query(
+		`SELECT g.id, g.workspace_id, g.parent_group_id, g.name, g.created_at, g.updated_at,
+			ga.account_id
+		 FROM groups g
+		 LEFT JOIN group_accounts ga ON ga.group_id = g.id
+		 WHERE g.workspace_id = $1
+		 ORDER BY g.name ASC, g.id ASC, ga.account_id ASC`,
+		workspaceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list groups with accounts by workspace: %w", err)
+	}
+	defer rows.Close()
+
+	groups := make([]models.GroupWithAccounts, 0)
+	indexByID := make(map[int64]int)
+	for rows.Next() {
+		var (
+			group   models.Group
+			parent  sql.NullInt64
+			account sql.NullInt64
+		)
+		if err := rows.Scan(
+			&group.ID, &group.WorkspaceID, &parent, &group.Name,
+			&group.CreatedAt, &group.UpdatedAt, &account,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan group with accounts: %w", err)
+		}
+		if parent.Valid {
+			value := parent.Int64
+			group.ParentGroupID = &value
+		}
+		index, ok := indexByID[group.ID]
+		if !ok {
+			index = len(groups)
+			indexByID[group.ID] = index
+			groups = append(groups, models.GroupWithAccounts{
+				Group:      group,
+				AccountIDs: []int64{},
+			})
+		}
+		if account.Valid {
+			groups[index].AccountIDs = append(groups[index].AccountIDs, account.Int64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate groups with accounts: %w", err)
+	}
+	return groups, nil
+}
+
 // AddAccount adds a platform_account to a group. ON CONFLICT DO NOTHING
 // makes the operation idempotent — adding an already-attached account
 // is a no-op and returns nil.
