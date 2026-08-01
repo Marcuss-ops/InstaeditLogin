@@ -28,6 +28,9 @@
 #      testcontainers-go pass (`make test-integration`). Covers
 #      TestMigrations_OrderIndependent without a bash migrate step.
 #  11. Envfile parser regression test (Python, fast).
+#  12. Source-file size regression gate (`make loc-check`): fails when a
+#      tracked go/ts/tsx file GROWS past 800 lines vs. origin/main.
+#      Diff-based: pre-existing large files don't block; new growth does.
 #
 # NOT in this file (lives in integration-slow.yml):
 #   - `make test-e2e` — full E2E suite with testcontainers-go
@@ -81,7 +84,12 @@ jobs:
 
     steps:
       # ─── 1. Checkout ──────────────────────────────────────────────
+      # fetch-depth: 0 so `make loc-check` can resolve origin/main as
+      # the diff base for the size-regression gate (a shallow checkout
+      # would not have the base ref available).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # ─── 2. Validate GitHub Actions workflow YAML syntax ────────
       # Loads every workflow file with PyYAML so a malformed YAML
@@ -165,6 +173,16 @@ jobs:
       # deprecated single-process wrapper remains explicit for local recovery.
       - name: Verify entrypoint topology
         run: make verify-entrypoint-topology
+
+      # ─── 4.6. Source-file size regression gate ────────────────────
+      # `make loc-check` fails when a tracked go/ts/tsx file GROWS past
+      # 800 lines relative to origin/main. Diff-based: files already over
+      # the threshold are reported but do not block, so the existing
+      # backlog (see scripts/loc-report.sh) doesn't break CI while any
+      # NEW size regression hard-fails. Local: `make loc-check`;
+      # strict full-tree: `make loc-check LOC_AGAINST=none`.
+      - name: Check source-file size regressions (loc-check)
+        run: make loc-check
 
       # ─── 5. Go test -race (full unit suite) ───────────────────────
       # Equivalent to `make backend-test`. Runs WITHOUT the integration
@@ -267,9 +285,11 @@ jobs:
           echo "  - Migration added a column Go model expects (must add to requiredColumns in internal/database/migrations_integration_test.go)"
           echo "  - Migration lost idempotency (a non-IF NOT EXISTS ALTER on re-run)"
           echo "  - Worker integration test hung — check the per-leaf 15s parallel-drain ceiling"
+          echo "  - loc-check: a tracked file grew past 800 lines vs origin/main — refactor or revert"
           echo
           echo "Run locally:"
           echo "  make lint-check"
+          echo "  make loc-check"
           echo "  make test-integration"
           echo "  cd web && npm ci && npm run lint && npm run test && npm run build"
 

@@ -4,7 +4,7 @@
         docker-build-migrate-only \
         docker-build-local-api docker-build-local-worker \
         ops-smoke ops-isolation ops-isolation-dry-run \
-        verify-log-redaction
+        verify-log-redaction loc-check
 
 # Start the full local development stack modeled on Blocco #2.1's
 # production-true topology: 3 services (api + worker + migrate).
@@ -146,6 +146,28 @@ lint-check:
 	fi
 	@echo "✓ gofmt clean"
 	go vet ./...
+
+# ──────────────────────────────────────────────────────────────────
+# Source-file size regression gate.
+#
+# `make loc-check` fails when a tracked source file GROWS past the
+# configured threshold relative to origin/main (default threshold:
+# 800 lines, extensions go/ts/tsx). This is a DIFF-based gate: files
+# that are already above the threshold are reported but do NOT block,
+# so pre-existing large files don't break CI while any new size
+# regression hard-fails. Complements scripts/loc-report.sh (the
+# informational top-20 / over-threshold report).
+#
+# CI-friendly shape (matches .github/workflows/integration-fast.yml):
+# exit 0 = no new regression, 1 = regression, 2 = usage error.
+#
+# Options (override via env or flags):
+#   make loc-check LOC_THRESHOLD=1000   # raise the bar
+#   make loc-check LOC_AGAINST=none     # strict full-tree check
+#   scripts/loc-check.sh -t 800 -a origin/main
+# ──────────────────────────────────────────────────────────────────
+loc-check:
+	./scripts/loc-check.sh -t "$${LOC_THRESHOLD:-800}" -a "$${LOC_AGAINST:-origin/main}"
 
 # Build the migrate-only stage (one-shot pre-deploy; also baked into
 # the production stage above so release_command resolves ./migrate).
