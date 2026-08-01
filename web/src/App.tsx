@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import {
   BrowserRouter,
   Navigate,
@@ -16,17 +16,12 @@ import { Mentoring } from "./pages/Mentoring";
 import { InternalDashboard } from "./pages/internal/Dashboard";
 import { InternalLinking } from "./pages/internal/Linking";
 // Keep the account performance route separate from the dashboard redirect.
-import { AccountPerformancePage } from "./pages/internal/AccountPerformance";
-import { ChannelsPerformancePage } from "./pages/internal/ChannelsPerformance";
+
 import { InternalPosts } from "./pages/internal/Posts";
-import { InternalCompose } from "./pages/internal/Compose";
-import { CalendarPage } from "./pages/internal/Calendar";
 import { ContentNew } from "./pages/internal/ContentNew";
 import { ContentPublish } from "./pages/internal/ContentPublish";
 import { DashboardChannelsPage } from "./pages/internal/DashboardChannels";
 import { InternalUploads } from "./pages/internal/Uploads";
-import { InternalYouTubeStudio } from "./pages/internal/YouTubeStudio";
-import { GroupsPage } from "./pages/internal/Groups";
 import { CookieBanner } from "./components/CookieBanner";
 import { ErrorBoundary } from "./components/feedback/ErrorBoundary";
 import { ToastProvider } from "./components/toast";
@@ -34,13 +29,67 @@ import { BookingProvider } from "./components/booking/BookingProvider";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
 import { AdminProtectedRoute } from "./components/auth/AdminProtectedRoute";
 import { InternalLayout } from "./components/layout/InternalLayout";
-import { AdminDashboardPage } from "./pages/internal/AdminDashboard";
 
 const PlatformPage = lazy(() =>
   import("./pages/platforms/PlatformPage").then((m) => ({
     default: m.PlatformPage,
   })),
 );
+const InternalYouTubeStudio = lazy(() =>
+  import("./pages/internal/YouTubeStudio").then((m) => ({
+    default: m.InternalYouTubeStudio,
+  })),
+);
+const InternalCompose = lazy(() =>
+  import("./pages/internal/Compose").then((m) => ({
+    default: m.InternalCompose,
+  })),
+);
+const CalendarPage = lazy(() =>
+  import("./pages/internal/Calendar").then((m) => ({
+    default: m.CalendarPage,
+  })),
+);
+const GroupsPage = lazy(() =>
+  import("./pages/internal/Groups").then((m) => ({
+    default: m.GroupsPage,
+  })),
+);
+const ChannelsPerformancePage = lazy(() =>
+  import("./pages/internal/ChannelsPerformance").then((m) => ({
+    default: m.ChannelsPerformancePage,
+  })),
+);
+const AccountPerformancePage = lazy(() =>
+  import("./pages/internal/AccountPerformance").then((m) => ({
+    default: m.AccountPerformancePage,
+  })),
+);
+const AdminDashboardPage = lazy(() =>
+  import("./pages/internal/AdminDashboard").then((m) => ({
+    default: m.AdminDashboardPage,
+  })),
+);
+
+function RouteLoadingFallback() {
+  return (
+    <div
+      className="min-h-full p-8 bg-[#030308]"
+      role="status"
+      aria-label="Loading page"
+    >
+      <div className="mx-auto max-w-7xl animate-pulse space-y-4">
+        <div className="h-8 w-56 rounded-lg bg-white/[0.08]" />
+        <div className="h-4 w-96 max-w-full rounded bg-white/[0.05]" />
+        <div className="h-64 rounded-2xl border border-white/[0.08] bg-white/[0.03]" />
+      </div>
+    </div>
+  );
+}
+
+function LazyRoute({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<RouteLoadingFallback />}>{children}</Suspense>;
+}
 
 /** Redirect legacy account URLs to the current channel dashboard. */
 function RedirectAccount() {
@@ -110,7 +159,14 @@ function App() {
               <Route index element={<Navigate to="dashboard" replace />} />
               <Route path="dashboard" element={<InternalDashboard />} />
               <Route path="uploads" element={<InternalUploads />} />
-              <Route path="youtube/studio" element={<InternalYouTubeStudio />} />
+              <Route
+                path="youtube/studio"
+                element={
+                  <LazyRoute>
+                    <InternalYouTubeStudio />
+                  </LazyRoute>
+                }
+              />
               <Route
                 path="youtube-studio"
                 element={<Navigate to="youtube/studio" replace />}
