@@ -1,6 +1,7 @@
 # `cmd/server` Removal Audit
 
 **Audit date:** 2026-08-01
+**Verified commit:** `859361cbdbfd6f48f9d56b88077f60b05995546a`
 **Scope:** `cmd/server/main.go` versus the canonical `cmd/api`, `cmd/worker`, and `cmd/migrate` entrypoints.
 **Status:** **BLOCKED — retain the wrapper for development/recovery compatibility.**
 
@@ -50,7 +51,51 @@ For normal development and all production-shaped execution, use:
 
 `make dev` and the default Docker Compose topology already use this split.
 
+## Verification record
+
+The audit was rechecked on `main` on 2026-08-01 with repository-wide searches
+and the following entrypoint surfaces:
+
+- Development compatibility remains explicit in `Makefile` (`run-server` and
+  `run-server-api-only`) and in the Compose `legacy` profile.
+- The canonical Compose services still select Docker targets `migrate`, `api`,
+  and `worker`; the production overlay contains no `server` service or target.
+- The Dockerfile still exposes the legacy target only as a separately named
+  compatibility stage, not as the production default.
+- Deployment and CI files contain no `cmd/server`, `go run ./cmd/server`, or
+  `/out/server` invocation.
+- `scripts/verify-entrypoint-topology.sh` is the automated guard: it asserts
+  the three canonical entrypoints and rejects legacy references in production
+  files while requiring the deliberate legacy surfaces to remain documented.
+- The verification commands passed on this checkout: `./scripts/verify-entrypoint-topology.sh`,
+  `go test -race ./...`, `go vet ./...`, and `go build ./...`.
+
+This evidence confirms that removal is **not yet safe**: the wrapper is absent
+from production but still has active, documented recovery/development callers.
+
 ## Removal gate
+
+A future removal change may delete the wrapper and all compatibility surfaces
+only after all of the following are recorded in a new audit or an update to
+this one:
+
+1. No repository search finds invocations of `run-server`,
+   `run-server-api-only`, or `docker compose --profile legacy up` in active
+   development/recovery instructions or automation.
+2. Operators confirm that no deployed or maintained environment depends on the
+   single-process wrapper, including historical recovery procedures.
+3. The compatibility window has ended with no observed wrapper use.
+4. The replacement instructions have been validated with `make dev`,
+   `make run-migrate`, `make run-api`, and `make run-worker`.
+5. One reviewed change removes, together, `cmd/server/main.go`, the Docker
+   `server` build/final stage, the Compose `legacy` service, the two Makefile
+   compatibility targets, and obsolete documentation references.
+6. `make verify-entrypoint-topology`, `go test -race ./...`, `go vet ./...`,
+   and `go build ./...` pass after the removal.
+
+Until this gate is satisfied, the topology check must continue to assert both
+that the canonical production path is clean and that the deliberate legacy
+surfaces remain explicit.
 
 A future removal change may delete the wrapper and all compatibility surfaces
 only after all of the following are recorded in a new audit or an update to
