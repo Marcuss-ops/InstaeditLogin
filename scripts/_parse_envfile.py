@@ -17,10 +17,11 @@ INTERFACE:
     mode:        "apply" (emit KEY=VAL on stdout for flyctl pipe) or
                  "dry-run" (no stdout; only stderr preview)
     app_name:    Fly app name (for the preview header)
-    script_dir:  directory holding the envfile fixture directory and
-                 disabled-fly-secrets-prefixes.txt (so this file is
-                 self-contained — the bash wrapper passes its own
-                 `$(dirname "$0")` so PYTHONPATH / cwd don't matter)
+    script_dir:  directory holding disabled-fly-secrets-prefixes.txt
+                 or a test fixture directory containing both key lists.
+                 The production fixture is archived under
+                 docs/archive/legacy-fly/; the bash wrapper passes its
+                 own `$(dirname "$0")` so PYTHONPATH / cwd don't matter)
 
 OUTPUT CONTRACT:
     stderr:  redacted preview table (always, in both modes)
@@ -207,7 +208,19 @@ def main() -> int:
         print(f"❌ env file not found: {env_file}", file=sys.stderr)
         return 1
 
-    required_file = os.path.join(script_dir, "required-fly-secrets.txt")
+    # The Fly contract is archived and is retained only for the CI
+    # regression test. Keep an explicit fixture-directory override so
+    # tests can exercise fail-closed behavior without touching the repo.
+    fixture_required_file = os.path.join(script_dir, "required-fly-secrets.txt")
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    archived_required_file = os.path.join(
+        repo_root, "docs", "archive", "legacy-fly", "required-fly-secrets.txt"
+    )
+    required_file = (
+        fixture_required_file
+        if os.path.isfile(fixture_required_file)
+        else archived_required_file
+    )
     disabled_file = os.path.join(script_dir, "disabled-fly-secrets-prefixes.txt")
     if not os.path.isfile(required_file):
         print(f"❌ required-keys list not found: {required_file}", file=sys.stderr)

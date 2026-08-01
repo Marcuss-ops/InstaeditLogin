@@ -42,7 +42,7 @@
 
 name: integration-slow
 
-# Contents: read    → checkout repo + read scripts/test_parse_envfile.py
+# Contents: read    → checkout repo + read the archived parser regression fixture
 # Issues: write    → on:failure() github-script step auto-creates
 #                    an issue; needs the explicit scope because the
 #                    default GITHUB_TOKEN has read-only issue scope.

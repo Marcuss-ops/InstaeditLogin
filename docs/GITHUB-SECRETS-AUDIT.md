@@ -41,7 +41,7 @@ variables** that were used by `cmd/oauth-scope-canary`'s now-removed
 
 | Variable                                | Why it can go                                              | Workflow ref grep |
 | --------------------------------------- | ---------------------------------------------------------- | ----------------- |
-| `INSTAEDIT_REQUIRED_SECRETS_PATH`       | Was `scripts/required-fly-secrets.txt`; logic removed      | 0 matches         |
+| `INSTAEDIT_REQUIRED_SECRETS_PATH`       | Was `docs/archive/legacy-fly/required-fly-secrets.txt`; legacy logic removed | 0 matches         |
 | `INSTAEDIT_DISABLED_SECRETS_PATH`       | Was `scripts/disabled-fly-secrets-prefixes.txt`; same      | 0 matches         |
 
 Confirmed via ripgrep across `.github/workflows/`:
@@ -54,10 +54,11 @@ grep -rnE 'secrets\.FLY_|FLY_API_TOKEN|FLY_ACCESS_TOKEN|FLY_APP_NAME' \
 
 If the user previously also staged `INSTAEDIT_REQUIRED_SECRETS_PATH` /
 `INSTAEDIT_DISABLED_SECRETS_PATH` as **GitHub repository variables**
-(pointing to `scripts/required-fly-secrets.txt` and
-`scripts/disabled-fly-secrets-prefixes.txt` respectively), they can be
-removed too — those files are slated for `git rm` in §3 and the
-`integration.yml` step that read them was already gone; the legacy file itself retired at this commit.
+(pointing to the archived Fly fixtures under
+`docs/archive/legacy-fly/` and the legacy disabled-prefix list respectively),
+they can be removed too — no current deploy or runtime reads them. The
+compatibility parser regression in `integration-fast.yml` is the only
+remaining automated reader.
 
 ---
 
@@ -82,12 +83,11 @@ for S in FLY_API_TOKEN FLY_ACCESS_TOKEN FLY_APP_NAME; do
 done
 
 # Step B′ — delete each Fly-coupled repository variable. The 2 vars
-# formerly pointed to scripts/required-fly-secrets.txt and
-# scripts/disabled-fly-secrets-prefixes.txt — both currently slated
-# for `git rm` in the §3 follow-up commits; until then the vars are
-# runtime-dead-but-still-pinned on disk — so we surface "already
-# gone" instead of a silent green (keeps idempotent re-runs debuggable
-# and surfaces auth / network blips as named output).
+# formerly pointed to the archived Fly fixture and the legacy disabled
+# prefix list. Both are runtime-dead; the compatibility regression is
+# the only remaining automated reader, so we surface "already gone"
+# instead of a silent green (keeps idempotent re-runs debuggable and
+# surfaces auth / network blips as named output).
 for V in INSTAEDIT_REQUIRED_SECRETS_PATH INSTAEDIT_DISABLED_SECRETS_PATH; do
   gh variable delete "$V" --repo "$SLUG" \
     || echo "  (already gone, or auth-flaky: $V)"
@@ -121,9 +121,9 @@ in separate commits after §1/§2.
 | `scripts/db/production-restore-drill.sh`                     | 3 `flyctl postgres destroy` references                            | Disaster-recovery drill for Fly Postgres. Rewrite for local Postgres.                          |
 | `scripts/clean-gh-fly-secrets.sh`                            | 8 references to the three FLY secrets (this is the helper that automates §2's *Secret* half) | **Preferred path for §2's Secret half**: `./scripts/clean-gh-fly-secrets.sh --apply` once instead of the manual `gh secret delete` loop. The script defaults to list-only dry-run; `--apply` enables the actual deletes. **Scope**: it handles ONLY the 3 FLY_* secrets — the 2 INSTAEDIT_*_PATH variables still need the §2 manual `gh variable delete` loop (the helper does not touch Variables). Delete this helper after running. |
 | `scripts/s3/provision-tigris.sh`                             | 2 `flyctl auth login` comments                                    | Tigris bucket provisioning. **OUT OF SCOPE** of this audit per cutover plan.                  |
-| `scripts/_parse_envfile.py`                                  | 5 refs to `disabled-fly-secrets-prefixes.txt` / `required-fly-secrets.txt` | Parser for the deleted Fly .env contract. Zero callers after legacy `integration.yml` step (and its parent workflow file, now retired) were removed at this commit. `git rm`. |
-| `scripts/test_parse_envfile.py`                              | Same                                                              | Parser test. `git rm`.                                                                          |
-| `scripts/required-fly-secrets.txt`                           | Fly-secrets contract spec                                         | Char-set/list of expected Fly secrets. `git rm`.                                                |
+| `scripts/_parse_envfile.py`                                  | Reads the archived Fly fixture as a compatibility fallback | Historical parser retained only for the CI regression; no deploy/runtime caller. |
+| `scripts/test_parse_envfile.py`                              | Reads the archived fixture in CI                               | Compatibility regression test; not an operational secret push.                |
+| `docs/archive/legacy-fly/required-fly-secrets.txt`            | Archived Fly-secrets contract spec                             | Historical, frozen fixture; no current deployment or runtime use.              |
 | `scripts/disabled-fly-secrets-prefixes.txt`                  | Fly disabled-provider prefix list                                | Reject-list contract. `git rm`.                                                                 |
 | `scripts/ops/post_deploy_smoke.sh`                           | 3 `flyctl logs --app instaedit-login` references (lines 98, 302, 334) | Smoke test references flyctl. **Rewrite** to use `docker compose logs api worker` (same pattern as `scripts/obs/verify-log-redaction.sh`). |
 | `docs/ENDPOINTS.md` line 105                                 | "Production (Fly): var is a secret; set via `flyctl secrets set`" | Documents a Fly-specific rotation path. Update to "Production (VPS): secret managed via `/etc/instaedit/api.env`; rotation = edit + `docker compose restart api`". |
@@ -134,10 +134,11 @@ in separate commits after §1/§2.
 > After other commits land, refs may drift — re-run ripgrep against each
 > file (e.g. `grep -nE 'flyctl' TOMORROW.md`) to confirm current counts.
 
-**Net `git rm` candidates** (one commit, 6 files):
-`scripts/_parse_envfile.py`, `scripts/test_parse_envfile.py`,
-`scripts/required-fly-secrets.txt`, `scripts/disabled-fly-secrets-prefixes.txt`,
-plus optionally `scripts/clean-gh-fly-secrets.sh` after its one-shot use; the destroy orchestrator is already archived as non-operational.
+The required Fly-secrets contract is now archived at
+`docs/archive/legacy-fly/required-fly-secrets.txt`. The parser and its test
+remain only as a compatibility regression until the legacy Fly contract is
+fully retired; neither is an operational deployment path. The disabled
+prefix list and other Fly helpers remain separate follow-up cleanup items.
 
 ---
 

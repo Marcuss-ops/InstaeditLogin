@@ -25,11 +25,16 @@ import subprocess
 import sys
 import tempfile
 
-# Resolve sibling paths relative to THIS file so the test works no
-# matter what the cwd is when invoked (Makefile, CI, manual run).
+# Resolve paths relative to THIS file so the test works no matter what
+# the cwd is when invoked (CI or manual run). The required Fly contract
+# is historical and now lives in the archive; the disabled-prefix list
+# remains beside the legacy parser for fixture compatibility.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 PARSER = os.path.join(SCRIPT_DIR, "_parse_envfile.py")
-REQUIRED_FILE = os.path.join(SCRIPT_DIR, "required-fly-secrets.txt")
+REQUIRED_FILE = os.path.join(
+    REPO_ROOT, "docs", "archive", "legacy-fly", "required-fly-secrets.txt"
+)
 DISABLED_FILE = os.path.join(SCRIPT_DIR, "disabled-fly-secrets-prefixes.txt")
 
 # Sanity-check the layout up front so a missing file gives a clear

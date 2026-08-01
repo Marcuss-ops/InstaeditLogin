@@ -274,12 +274,11 @@ jobs:
           echo "  cd web && npm ci && npm run lint && npm run test && npm run build"
 
   # ─── envfile parser regression test (formerly integrated in legacy integration.yml step 8.5; that workflow was retired at the CI-split commit and the test was lifted into this file) ───
-  # The .env parser in scripts/_parse_envfile.py is the security
-  # boundary of the deploy — a bug here could push a malformed value
-  # (panic at boot) or a shell-expanded value (silently mutate a
-  # secret). The `python3 scripts/test_parse_envfile.py` Makefile target was retired
-  # alongside the Fly cutover (commit 1ab88ef), so this test now
-  # runs directly via `python3 scripts/test_parse_envfile.py`.
+  # The archived Fly .env parser in scripts/_parse_envfile.py remains
+  # a historical regression fixture only; it is not a deploy/runtime
+  # path. The `python3 scripts/test_parse_envfile.py` Makefile target
+  # was retired alongside the Fly cutover, so CI runs the compatibility
+  # regression directly.
   # Fast (<1s) pure-python — no Docker / no external services needed.
   # Mirrors the `integration.yml::test-parse-envfile` shape (legacy file retired at the CI-split commit; the test now lives in this file).
   test-parse-envfile:
@@ -298,8 +297,8 @@ jobs:
         with:
           python-version: '3.13'
 
-      # The test_parse_envfile.py script is a pure-python regression
-      # test that exercises 15 cases on _parse_envfile.py. Exit 0 on
-      # all-pass, non-zero on first failure.
+      # The test_parse_envfile.py script is a pure-Python regression
+      # test for the archived Fly contract and _parse_envfile.py. Exit
+      # 0 on all-pass, non-zero on first failure.
       - name: Run envfile parser regression test
         run: python3 scripts/test_parse_envfile.py
