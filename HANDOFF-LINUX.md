@@ -204,7 +204,7 @@ Vai su `/status` e leggi la ragione (es. `vercel_stale_deploy` vs `unreachable` 
 > **Email DNS check (read-only)**: `./scripts/email/check-email-deliverability.sh` (idempotent, non muta DNS) — verifica i 3 record Resend (`_spf.resend.com` include + DKIM CNAME + `_dmarc` TXT) prima di invitare utenti. Backend wiring di Resend è deferred (vedi [docs/OPERATIONS.md §7.5](./docs/OPERATIONS.md#75-email_provider_key-capture-protocol)): il `EMAIL_PROVIDER_KEY` vive SOLO nel password manager (`instaedit-login/email/EMAIL_PROVIDER_KEY`, scope = `Sending Access` ONLY) finché `internal/services/email_sender.go` non viene aggiunto. Non pusharlo ancora in `/srv/instaedit/.env.production` (zero readers finché `internal/services/email_sender.go` non viene aggiunto).
 
 Dopo che il flow locale funziona, per andare in produzione:
-- **Database Postgres**: VPS Compose `postgres` service (image `postgres:17-alpine`, env block in `docker-compose.yml` + bind-mount under `/srv/instaedit/pgdata/`); provisioning flag lockati in `scripts/db/provision-postgres-runbook.sh`.
+- **Database Postgres**: VPS Compose `postgres` service (image `postgres:17-alpine`, env block in `docker-compose.yml` + bind-mount under `/srv/instaedit/pgdata/`); the historical Fly provisioning flags are archived in `docs/archive/legacy-fly/provision-postgres-runbook.sh`; current provisioning is defined by Docker Compose and `docs/DEPLOY.md`.
 - **Backend**: deploy su VPS via `git pull && docker compose up -d --build` (il container `migrate` applica migrations prima dell'api/worker rollout).
 - **Frontend**: deploy su Vercel (già configurato via `web/vercel.json`).
 - **Vercel env**: `VITE_API_BASE_URL` deve puntare all'URL pubblica del backend.
