@@ -48,26 +48,25 @@ jobs:
           cache: "npm"
           cache-dependency-path: web/package-lock.json
 
-      - name: Install dependencies
-        working-directory: web
-        run: npm ci
+      - name: Install dependencies from repository root
+        run: npm --prefix web ci
 
-      - name: Build with demo mode
-        working-directory: web
+      - name: Build with demo mode from repository root
         env:
           VITE_DEMO_MODE: "true"
           VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || 'https://api.instaedit.org' }}
-        # Pinned Vercel CLI version (keep in sync with deploy.yml).
-        run: npx vercel@39.2.0 build
+        # Run from the repository root so the root vercel.json and canonical
+        # root-linked Vercel project are used.
+        run: npx vercel@57.0.0 build
 
-      - name: Deploy to Vercel (preview)
-        working-directory: web
+      - name: Deploy to Vercel (preview) from repository root
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        # Pinned Vercel CLI version (keep in sync with deploy.yml).
+        # Run from the repository root so the root vercel.json and canonical
+        # root-linked Vercel project are used.
         run: |
-          DEPLOY_URL=$(npx vercel@39.2.0 deploy --prebuilt --yes)
+          DEPLOY_URL=$(npx vercel@57.0.0 deploy --prebuilt --yes)
           echo "PREVIEW_URL=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
           echo "Preview URL: $DEPLOY_URL"

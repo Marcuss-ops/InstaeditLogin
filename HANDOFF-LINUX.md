@@ -71,14 +71,14 @@ Poi modifica `.env` e riempi **3 campi obbligatori**:
 | `META_APP_ID` | (vedi punto 5) |
 | `META_APP_SECRET` | (vedi punto 5) |
 
-I due secret locali (`JWT_SECRET` ed `ENCRYPTION_KEY`) sono già stati generati da Windows e scritti in `.env`. Se vuoi rigenerarli su Linux (consigliato — i secret Windows non sono nel repo):
+I due secret locali (`JWT_SECRET` ed `ENCRYPTION_KEY`) devono essere generati e scritti in `.env.dev`. Se vuoi rigenerarli su Linux (consigliato — i secret Windows non sono nel repo):
 
 ```bash
 # Genera nuovi secret
-echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
-echo "ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env
+echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env.dev
+echo "ENCRYPTION_KEY=$(openssl rand -base64 32)" >> .env.dev
 # Poi rimuovi le righe JWT_SECRET=... e ENCRYPTION_KEY=... esistenti
-# dal .env, lasciando solo le nuove.
+# da .env.dev, lasciando solo le nuove.
 ```
 
 **Validator attivo** — se uno qualsiasi di questi è mancante/sbagliato, l'entrypoint avviato (`cmd/api`, `cmd/worker` o `cmd/migrate`) rifiuta di partire con un messaggio specifico:

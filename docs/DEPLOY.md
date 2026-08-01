@@ -17,7 +17,7 @@ the VPS and Compose network.
 
 > **Source of truth:** keep this runbook aligned with `docker-compose.yml`,
 > `docker-compose.production.yml`, `Dockerfile`, the production secret-manager
-> record, `ops/vps/Caddyfile`, `web/vercel.json`, and
+> record, `ops/vps/Caddyfile`, root `vercel.json`, and
 > `.github/workflows/deploy.yml`.
 
 ## 1. Production topology and DNS
@@ -500,19 +500,20 @@ storage-native snapshot supplied by the VPS operator.
 
 ## 7. Vercel frontend deployment
 
-Vercel hosts only the `web/` Vite application. The repository configuration is
-`web/vercel.json`:
+Vercel hosts only the `web/` Vite application. The repository-root
+`vercel.json` is the single tracked Vercel configuration:
 
-- install command: `npm ci`;
-- build command: `npm run build`;
-- output directory: `dist`;
+- install command: `npm --prefix web ci`;
+- build command: `npm --prefix web run build`;
+- output directory: `web/dist`;
 - SPA fallback: rewrite to `/index.html`;
 - apex and `www` redirects: redirect to `app.instaedit.org`.
 
 ### 7.1 Vercel project configuration
 
-Set the Vercel project's Root Directory to `web`. Configure the production
-frontend variable:
+Set the Vercel project's Root Directory to the repository root (leave it
+empty/default in the dashboard). The root `vercel.json` points commands and
+output at `web/`. Configure the production frontend variable:
 
 ```text
 VITE_API_BASE_URL=https://api.instaedit.org
@@ -529,7 +530,7 @@ The supported deploy workflow is `.github/workflows/deploy.yml`:
 1. push the reviewed commit to `main`;
 2. `integration-fast` must complete successfully;
 3. the deploy workflow checks out the tested commit;
-4. Vercel runs `npm ci`, `npm run build`, and publishes the production alias.
+4. Vercel runs `npm --prefix web ci`, `npm --prefix web run build`, and publishes `web/dist` to the production alias.
 
 Required GitHub/Vercel project credentials are configured as repository
 secrets, not committed to this repository. A manual workflow dispatch is an
@@ -745,7 +746,7 @@ window has ended.
 - the production secret-manager record — required environment variable surface;
   keep the real file outside the Git checkout.
 - `ops/vps/Caddyfile` — tracked production VPS reverse-proxy source.
-- `web/vercel.json` — frontend build, rewrite, and domain configuration.
+- `vercel.json` — root-level frontend build, rewrite, and domain configuration.
 - `.github/workflows/deploy.yml` — CI-gated Vercel production deployment.
 - `docs/OPERATIONS.md` — ongoing DNS, TLS, monitoring, and recovery procedures.
 - `scripts/verify-entrypoint-topology.sh` — regression check for canonical

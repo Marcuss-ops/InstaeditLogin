@@ -86,7 +86,7 @@
 name: deploy
 
 # Minimum-needed scopes.
-#   - contents: read       → checkout repo + read vercel.json
+#   - contents: read       → checkout repo + read root vercel.json
 #   - actions: read        → workflow_run trigger needs to read sibling
 #                            workflow conclusions to gate on success
 #                            (without it some runners say: "GitHub Actions
@@ -168,9 +168,10 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       # ─── 2. Deploy ───────────────────────────────────────────────
-      # amondnet/vercel-action reads ./web/vercel.json and runs:
-      #   install  →  npm ci
-      #   build    →  npm run build  (tsc -b && vite build)
+      # amondnet/vercel-action runs from the repository root and reads
+      # ./vercel.json:
+      #   install  →  npm --prefix web ci
+      #   build    →  npm --prefix web run build  (tsc -b && vite build)
       #   upload   →  ./web/dist/ → Vercel production CDN
       #
       # We do NOT need a local Node setup step here — the Vercel action
@@ -181,7 +182,7 @@ jobs:
       - name: Deploy web/app to Vercel (production)
         # Pinned to amondnet/vercel-action v42.3.0 (commit SHA) to avoid
         # silent breaking changes from floating tags. The action reads
-        # ./web/vercel.json for build/install/output configuration.
+        # ./vercel.json for build/install/output configuration.
         #
         # Pin history:
         #   - v25.1.1 (@f1452eb59d0b1aa6af4c60d5f1b11e0c2d6d8e7) — 26 Jul,
@@ -221,16 +222,8 @@ jobs:
           vercel-args: '--prod'
           # working-directory intentionally omitted.
           #
-          # The Vercel project's Root Directory is configured in the
-          # dashboard to `web` (see the project's `Root Directory`
-          # setting in https://vercel.com/marcuss-ops-projects/instaedit-login-267l/settings).
-          # When `working-directory: ./web` is set HERE, Vercel CLI
-          # composes the deploy path as `<runner_cwd>/<root_directory>/`,
-          # which produces `.../web/web` and fails with:
-          #
-          #   Error: The provided path "~/work/<repo>/<repo>/web/web"
-          #          does not exist.
-          #
-          # Letting the action default its cwd to GITHUB_WORKSPACE means
-          # Vercel CLI applies the dashboard Root Directory (`web`) only
-          # ONCE → resolves to `~/work/<repo>/<repo>/web/`, which exists.
+          # The Vercel project's Root Directory must remain empty (repository root).
+          # The root `vercel.json` explicitly targets the `web/` workspace.
+          # Keep this action at the checkout root and do not add
+          # `working-directory: ./web`: doing so would bypass the canonical
+          # root config and can select a different linked project.

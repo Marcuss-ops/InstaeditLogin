@@ -1,4 +1,8 @@
-# InstaEdit — Correct workflow for changes, push and Vercel deploy
+# Vercel frontend workflow
+
+Vercel resta il servizio supportato per il frontend React. Il backend,
+PostgreSQL, MinIO e i worker restano self-hosted e non vengono deployati da
+Vercel.
 
 This guide describes the standard flow for editing InstaEdit and making sure
 Vercel publishes UI updates correctly. Keep all copy, docs and commit messages
@@ -9,7 +13,7 @@ in English.
 - Public landing: `https://app.instaedit.org`
 - `https://instaedit.org` and `https://www.instaedit.org`: redirect to the
   canonical landing.
-- Public API: `https://api.instaedit.org`
+- Backend API used by the frontend: `https://dev.instaedit.org`
 
 Never use the server IP address in application links or Vercel variables. The
 IP is only useful for local host diagnostics.
@@ -18,7 +22,7 @@ IP is only useful for local host diagnostics.
 
 - `web/src/`: UI pages, components and logic.
 - `web/public/`: static assets.
-- `web/vercel.json`: Vercel config, SPA rewrite and domain redirects.
+- `vercel.json`: root-level Vercel config, SPA rewrite and domain redirects.
 - `internal/`, `pkg/`, `cmd/`: Go backend.
 - `docs/`: documentation.
 
@@ -31,7 +35,7 @@ If the landing must call the API, the frontend variable must use the public
 API domain:
 
 ```text
-VITE_API_BASE_URL=https://api.instaedit.org
+VITE_API_BASE_URL=https://dev.instaedit.org
 ```
 
 Set it at least for the `Production` environment. Do not use:
@@ -43,19 +47,18 @@ Set it at least for the `Production` environment. Do not use:
 `VITE_*` variables are baked in during the build. After changing one of them
 a new deploy or redeploy is mandatory.
 
-## Important: which Vercel project owns the public domain
+## Important: the single canonical Vercel project
 
-There are **two** Vercel projects linked in this repo — they are different:
+The public frontend has one canonical Vercel project: `instaedit-login-267l`,
+which owns `app.instaedit.org`, `instaedit.org`, and `www.instaedit.org`.
+The local `.vercel/` link is ignored metadata and must live only at the
+repository root. The obsolete `web/.vercel/` link was removed because it
+pointed at a secondary project.
 
-| Link location | Project | Serves | Root directory |
-|---------------|---------|--------|----------------|
-| repo root (`.vercel`) | `instaedit-login-267l` | `app.instaedit.org`, `instaedit.org`, `www.instaedit.org` | `web` |
-| `web/.vercel` | `instaedit-login` | `instaedit-login.vercel.app` (NOT the public domain) | — |
-
-**Deploy the UI from the repo root** so the deploy targets
-`instaedit-login-267l` (the project that owns `app.instaedit.org`). Deploying
-from `web/` targets the other project and the public domain keeps serving the
-old bundle.
+**Deploy the UI from the repository root only.** The Vercel project's Root
+Directory must be empty/default (repository root); root `vercel.json` invokes
+`npm --prefix web ...` and publishes `web/dist`. Never run `vercel` from
+`web/`, and never recreate `web/.vercel/`.
 
 ## Before committing
 
@@ -119,13 +122,13 @@ the directory contains local files or secrets not intended for the repository
 
 ## How Vercel publishes updates
 
-The Vercel project must have:
+The canonical Vercel project must have:
 
-- Root Directory: `web`;
+- Root Directory: repository root (empty/default);
 - Framework Preset: `Vite`;
-- Install Command: `npm ci`;
-- Build Command: `npm run build`;
-- Output Directory: `dist`;
+- Install Command: `npm --prefix web ci`;
+- Build Command: `npm --prefix web run build`;
+- Output Directory: `web/dist`;
 - Production Branch: `main`.
 
 With the GitHub connection active on the correct project

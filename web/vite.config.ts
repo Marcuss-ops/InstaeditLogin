@@ -76,7 +76,7 @@ export default defineConfig({
     // Cloudflare quick tunnels rotate their trycloudflare.com subdomain
     // on every restart, so we can't pin the hostname. `allowedHosts: true`
     // accepts any Host header. DEV-ONLY: production is served from
-    // Vercel (`web/vercel.json`), not this file.
+    // Vercel (root `vercel.json`), not this file.
     allowedHosts: true,
     proxy: {
       '/api': {

@@ -278,8 +278,9 @@ il reverse proxy API. Il frontend e le sue route web restano su Vercel.
 
 ### Frontend: Vercel
 
-Il progetto Vercel usa la root `web/` e il workflow
-`.github/workflows/deploy.yml`. Per una build locale equivalente:
+Il progetto Vercel usa la root del repository, il file `vercel.json` e il workflow
+`.github/workflows/deploy.yml`; i comandi del file root puntano alla workspace `web/`.
+Per una build locale equivalente:
 
 ```bash
 VITE_API_BASE_URL=https://dev.instaedit.org npm --prefix web ci

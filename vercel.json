@@ -1,8 +1,8 @@
 {
   "framework": "vite",
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "installCommand": "npm ci",
+  "installCommand": "npm --prefix web ci",
+  "buildCommand": "npm --prefix web run build",
+  "outputDirectory": "web/dist",
   "redirects": [
     {
       "source": "/(.*)",
@@ -12,14 +12,10 @@
     },
     {
       "source": "/(.*)",
-      "has": [
-        { "type": "host", "value": "www.instaedit.org" }
-      ],
+      "has": [{ "type": "host", "value": "www.instaedit.org" }],
       "destination": "https://app.instaedit.org/$1",
       "permanent": true
     }
   ],
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
-  ]
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }
