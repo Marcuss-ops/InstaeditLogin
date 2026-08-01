@@ -2,12 +2,12 @@
 # scripts/ops/post_deploy_smoke.sh
 #
 # Comprehensive post-deploy smoke test for the InstaeditLogin production
-# Fly deployment (https://api.instaedit.org). Verifies:
+# VPS + Docker Compose deployment (https://api.instaedit.org). Verifies:
 #   - Phase 5  : lightweight health/readiness probes
 #   - Phase 9.1: Authentication — magic-link round-trip (adaptive)
 #   - Phase 9.2: Cookie/CSRF cross-subdomain contract (Blocco #2.4)
 #   - Phase 9.3: Account list endpoint
-#   - Phase 9.4: Media presigned URL round-trip (Tigris)
+#   - Phase 9.4: Media presigned URL round-trip (MinIO)
 #   - Phase 9.5: Publishing state transitions (queue → publish → terminal)
 #   - Phase 9.7: Worker resiliency probe (best-effort metric inspect)
 #
@@ -36,14 +36,14 @@
 #   docs/OPERATIONS.md §3   (recovery drills — `Publishing state` row references this script)
 #   docs/OPERATIONS.md §5   (go-live gate — section 6 of this script = one of the 9 boxes)
 #
-# Reliance on Tigris lifecycle (scripts/s3/provision-tigris.sh):
-#   This script §B.5 issues real PUTs to a Tigris bucket; each run writes at
-#   least ONE small object as a presign round-trip. Because §B.5 is read-only
-#   by default (no DELETE), the bucket MUST have the lifecycle rules
-#   documented in docs/OPERATIONS.md §4.2 — incomplete multipart uploads aborted
-#   after 24h, expired objects after 1 day. Without those rules, repeated runs
-#   accumulate smoke-test debris. (Future work could add an env-gated DELETE
-#   after PUT; out of scope for this commit.)
+# MinIO lifecycle contract:
+#   This script's §B.5 issues a real PUT to the VPS Compose MinIO bucket; each
+#   run writes at least ONE small object as a presign round-trip. Because §B.5
+#   is read-only by default (no DELETE), the MinIO bucket MUST have the
+#   lifecycle rules documented in docs/OPERATIONS.md §4.2 and configured via
+#   the current Compose/MinIO procedure. Without those rules, repeated runs
+#   accumulate smoke-test debris. The archived Tigris provisioning helper is
+#   historical only and is not part of this smoke path.
 #   This script also assumes §B.6 already-in-flight publish posts are operator-
 #   garbage-collected (the orphan post id is printed but not auto-deleted here).
 
@@ -95,7 +95,7 @@ if [ "$HTTP" = "200" ]; then
     fail "/api/v1/health: 200 but JSON status='$STATUS' (expected 'ok'). See pkg/api/handlers.go::handleHealth."
   fi
 else
-  fail "/api/v1/health: HTTP $HTTP (expected 200). Backend may be down — check \`flyctl logs --app instaedit-login\`."
+  fail "/api/v1/health: HTTP $HTTP (expected 200). Backend may be down — check \`docker compose logs api worker\`."
 fi
 
 HTTP=$(curl -sS -o "$TMP_DIR/ready.json" -w '%{http_code}' "$BASE_URL/ready" 2>/dev/null || echo 000)
@@ -299,10 +299,10 @@ if [ "$HTTP" = "200" ]; then
     pass "/api/v1/metrics: live; worker counters observed (first 5):"
     echo "$WORKER_METRICS" | sed 's/^/    /'
     echo "  → for full kill+restart drill on operator laptop:"
-    echo "    flyctl ssh console --app instaedit-login --region iad --machine <WORKER-MACHINE-ID> --command 'kill -TERM 1'"
+    echo "    docker compose restart worker"
     echo "    # Reconciler (default 5s tick) should pick up any orphaned publish_jobs in 'pending' state"
   else
-    warn "/api/v1/metrics: 200 OK but no instaedit_*_worker counters visible. Workers may not be running — check fly.io dashboard for the worker process group's health."
+    warn "/api/v1/metrics: 200 OK but no instaedit_*_worker counters visible. Workers may not be running — check \`docker compose logs worker\`."
   fi
 else
   warn "/api/v1/metrics: HTTP $HTTP (expected 200). Metrics may not be exposed by this build — see pkg/metrics/observability.go."
@@ -331,7 +331,7 @@ else
   echo "  ✗ $FAIL assertion(s) failed — see ↑"
   echo ""
   echo "  Remediation pointers:"
-  echo "    /api/v1/health FAIL        → backend down — \`flyctl logs --app instaedit-login\`"
+    echo "    /api/v1/health FAIL        → backend down — \`docker compose logs api worker\`"
   echo "    /ready FAIL                → worker loops or DB ping issue — pkg/api/ready.go + pkg/api/worker_status.go"
   echo "    /auth/magic-link/start FAIL → handler not mounted — pkg/api/handlers.go:1409"
   echo "    /auth/magic-link/verify FAIL → token issue or sessionsSvc unwired"

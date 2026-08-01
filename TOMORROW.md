@@ -411,8 +411,8 @@ curl -X POST http://localhost:8080/api/v1/booking_events \
 - `internal/worker/upload_worker.go` — nessun riferimento a `t3.storage.dev` o `FLY_STORAGE` trovato.
 
 **Riferimenti Tigris rimasti (intenzionali):**
-- `scripts/s3/provision-tigris.sh` — script di provisioning del bucket
-  `instaedit-prod-media` (default endpoint `https://t3.storage.dev`).
+- `docs/archive/legacy-fly/provision-tigris.sh` — materiale storico di provisioning
+  Tigris, archiviato e non operativo; il percorso canonico è MinIO su Docker Compose/VPS.
 - `scripts/ops/post_deploy_smoke.sh:10,40,206` — Phase 9.4 Tigris presigned-PUT
   smoke test (§B.5).
 - `docs/DEPLOY.md:373,471-498,817` (§10) — playbook di ritiro Tigris (la
@@ -872,8 +872,8 @@ docker compose exec minio mc encrypt set sse-s3 minio/instaedit-local
 > automaticamente da `fly apps destroy` anche se i nostri script
 > sono OUT-OF-SCOPE in spirit.
 
-**Problema:** `scripts/s3/provision-tigris.sh:10` documenta una
-variante **Fly-managed**:
+**Contesto storico:** `docs/archive/legacy-fly/provision-tigris.sh` documentava una
+variante **Fly-managed**; il file è archiviato e non operativo:
 
 ```
 # For Fly.io's managed Tigris (regional),

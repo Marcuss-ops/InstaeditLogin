@@ -360,4 +360,4 @@ Fly-attached vs Fly-attached-with-§3-backup).
 - `docs/GITHUB-SECRETS-AUDIT.md` — GitHub-side cleanup checklist
 - `TOMORROW.md` §6 — Tigris-vs-MinIO parity audit (run BEFORE this destroy)
 - `docs/archive/legacy-fly/destroy-fly-app.sh` — archived historical material; non-operational
-- `scripts/s3/provision-tigris.sh` — Tigris provisioning (post-cutover; may be redundant after destroy)
+- `docs/archive/legacy-fly/provision-tigris.sh` — historical Tigris provisioning material; non-operational after the MinIO/VPS cutover
