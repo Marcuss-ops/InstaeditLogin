@@ -47,8 +47,10 @@ for file in docs/DEPLOY.md .github/workflows/deploy.yml .github/workflows/integr
 done
 
 # Keep the deliberate legacy surfaces explicit and easy to audit.
+test -f docs/CMD-SERVER-REMOVAL-AUDIT.md || fail "cmd/server removal audit is missing"
+grep -q '\*\*Status:\*\* \*\*BLOCKED' docs/CMD-SERVER-REMOVAL-AUDIT.md || fail "removal audit status is not blocked"
 grep -q 'profiles: \["legacy"\]' docker-compose.yml || fail "compose legacy profile is not explicit"
 grep -q 'run-server' Makefile || fail "legacy Makefile compatibility target disappeared"
 grep -q 'cmd/server is deprecated' cmd/server/main.go || fail "runtime deprecation warning is missing"
 
-echo "entrypoint topology check: PASS (api + worker + migrate canonical; cmd/server legacy-only)"
+echo "entrypoint topology check: PASS (api + worker + migrate canonical; cmd/server legacy-only; removal audit blocked)"

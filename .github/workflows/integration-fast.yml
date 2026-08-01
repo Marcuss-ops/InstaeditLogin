@@ -160,6 +160,12 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
+      # ─── 4.5. Entrypoint topology regression check ───────────────
+      # Confirms production uses api + worker + migrate only while the
+      # deprecated single-process wrapper remains explicit for local recovery.
+      - name: Verify entrypoint topology
+        run: make verify-entrypoint-topology
+
       # ─── 5. Go test -race (full unit suite) ───────────────────────
       # Equivalent to `make backend-test`. Runs WITHOUT the integration
       # build tag so a Docker absence on the runner does NOT block
