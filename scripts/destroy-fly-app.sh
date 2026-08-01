@@ -382,7 +382,7 @@ if [[ "$mode" == "apply" ]]; then
 
     # ─── Step 0 — Tigris disambiguation + conditional backup ───
     # Integrated into --apply so the operator has a single-shot workflow.
-    # Mirrors docs/FLY-DESTROY-RUNBOOK.md §2-§3 (jq disambiguation + mc
+    # Mirrors docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md §2-§3 (jq disambiguation + mc
     # version enable + Path A local mirror); uses the bare-value jq
     # recursive-descent so $ATTACHED is a clean app id (no field name,
     # no surrounding quotes). Bypasses the step() helper so the existing
@@ -412,7 +412,7 @@ if [[ "$mode" == "apply" ]]; then
           echo "     install mc: brew install minio/stable/mc (or apt install mc)" >&2
         elif ! mc alias list 2>/dev/null | grep -q '^tigris '; then
           echo "  ⚠️  tigris alias not configured — SKIPPING §3 backup" >&2
-          echo "     (silent backup loss would be worse; run docs/FLY-DESTROY-RUNBOOK.md §3.1 first)" >&2
+          echo "     (silent backup loss would be worse; run docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md §3.1 first)" >&2
         else
           echo "  · running §3 backup (mc version enable + Path A)"
           mc version enable tigris/instaedit-prod-media 2>/dev/null || true

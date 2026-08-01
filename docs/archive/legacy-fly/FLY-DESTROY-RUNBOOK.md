@@ -1,4 +1,4 @@
-# docs/FLY-DESTROY-RUNBOOK.md
+# docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md
 
 ## 0. Purpose
 

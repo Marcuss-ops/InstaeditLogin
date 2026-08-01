@@ -4,7 +4,7 @@
 > at the end of the VPS-first cutover. **Cannot be run from sandbox** —
 > the actual SSH + flyctl + mc execution is operator-only.
 
-Mirrors `docs/FLY-DESTROY-RUNBOOK.md` §1-§6 one-for-one. Use this file
+Mirrors `docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md` §1-§6 one-for-one. Use this file
 side-by-side with the runbook on the operator's laptop. Paste back the
 filled-in sections (everything between the `==>` arrows) into the
 operator prompt after each section completes.
@@ -208,7 +208,7 @@ Once the green probe-log row is committed on main:
 | 2 | `git rm scripts/destroy-fly-app.sh` — the operator-side destroy orchestrator is no longer needed; the canonical VPS stack ships in docker-compose | `[ ]` |
 | 3 | Update §3 of `docs/GITHUB-SECRETS-AUDIT.md` to mark `scripts/destroy-fly-app.sh` as `deleted` | `[ ]` |
 | 4 | Mark §6 of `docs/VPS-DEPLOY-STATUS.md` FINAL row as the cutover-closing stamp (commit message adds `closes-the-cutover` tag) | `[ ]` |
-| 5 | (Optional, deferred) Update §7 of `docs/FLY-DESTROY-RUNBOOK.md` to redirect to VPS-commit `git log --grep=fly-destroy` | `[ ]` |
+| 5 | (Optional, deferred) Update §7 of `docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md` to redirect to VPS-commit `git log --grep=fly-destroy` | `[ ]` |
 
 Once §7 is complete, the cutover record is closed.
 
@@ -218,7 +218,7 @@ Once §7 is complete, the cutover record is closed.
 
 While running the chain, keep these pages open:
 
-1. `docs/FLY-DESTROY-RUNBOOK.md` — operator protocol
+1. `docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md` — operator protocol
 2. `https://fly.io/apps/instaedit-login` — Fly dashboard for the live app
 3. `https://fly.io/apps/instaedit-production` — Fly dashboard for the postgres cluster
 4. `https://console.storage.dev/` — Tigris bucket dashboard (only if §3 runs)
