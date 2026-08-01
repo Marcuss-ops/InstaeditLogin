@@ -3,14 +3,16 @@
 # scripts/loc-report.sh — Non-blocking source-file length report
 #
 # Scans tracked source files, reports any file whose line count is above
-# the configured threshold, and writes a Markdown report. Always exits 0
-# so it can be used in CI without blocking the build.
+# the configured threshold (marked with ⚠️), lists the top-N largest
+# files, and writes a Markdown report. Always exits 0 so it can be used
+# in CI without blocking the build.
 #
 # Usage:
 #   scripts/loc-report.sh [options]
 #
 # Options:
-#   -t, --threshold <n>    Line count threshold (default: 800)
+#   -t, --threshold <n>    Line count threshold (default: 500)
+#   -n, --top <n>          Number of largest files to list (default: 20)
 #   -e, --extensions       Comma-separated list of extensions (default: go,ts,tsx)
 #   -o, --output <file>    Write Markdown report to file (default: stdout only)
 #   -h, --help             Show this help text
@@ -18,12 +20,13 @@
 set -euo pipefail
 
 # Defaults
-THRESHOLD=800
+THRESHOLD=500
+TOP_N=20
 EXTENSIONS="go,ts,tsx"
 OUTPUT=""
 
 usage() {
-  sed -n '2,12p' "$0" | sed 's/^# //; s/^#//'
+  sed -n '2,18p' "$0" | sed 's/^# //; s/^#//'
   exit 0
 }
 
@@ -32,6 +35,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--threshold)
       THRESHOLD="$2"
+      shift 2
+      ;;
+    -n|--top)
+      TOP_N="$2"
       shift 2
       ;;
     -e|--extensions)
@@ -73,9 +80,8 @@ else
 fi
 cd "$REPO_ROOT"
 
-# Collect files and counts
-REPORT=""
-OVER_COUNT=0
+# Collect files and counts ("lines|file"), then sort descending by line count
+ALL_ROWS=()
 TOTAL_COUNT=0
 
 while IFS= read -r file; do
@@ -85,48 +91,80 @@ while IFS= read -r file; do
   fi
   TOTAL_COUNT=$((TOTAL_COUNT + 1))
   lines=$(wc -l < "$file")
-  if [[ "$lines" -gt "$THRESHOLD" ]]; then
-    REPORT+="| $file | $lines |\n"
-    OVER_COUNT=$((OVER_COUNT + 1))
-  fi
+  ALL_ROWS+=("$lines|$file")
 done < <(git ls-files | grep -E "$EXT_REGEX" | sort)
 
+SORTED="$(printf '%s\n' "${ALL_ROWS[@]}" | sort -t'|' -k1,1 -rn)"
+
+# Top-N largest files (⚠️ marks those above the threshold)
+TOP_REPORT=""
+ROW_NUM=0
+while IFS='|' read -r lines file; do
+  [[ -n "$lines" ]] || continue
+  ROW_NUM=$((ROW_NUM + 1))
+  if [[ "$ROW_NUM" -gt "$TOP_N" ]]; then
+    break
+  fi
+  marker=""
+  if [[ "$lines" -gt "$THRESHOLD" ]]; then
+    marker=" ⚠️"
+  fi
+  TOP_REPORT+="| $ROW_NUM | $file | $lines |$marker |\n"
+done <<< "$SORTED"
+
+# Files above threshold
+OVER_COUNT=0
+OVER_REPORT=""
+while IFS='|' read -r lines file; do
+  [[ -n "$lines" ]] || continue
+  if [[ "$lines" -gt "$THRESHOLD" ]]; then
+    OVER_REPORT+="| $file | $lines |\n"
+    OVER_COUNT=$((OVER_COUNT + 1))
+  fi
+done <<< "$SORTED"
+
 # Compose Markdown report
-cat <<EOF
+emit_report() {
+  cat <<EOF
 # Source File Length Report
 
-- Threshold: **$THRESHOLD lines**
+- Threshold: **$THRESHOLD lines** (⚠️ = above threshold)
 - Extensions: **$EXTENSIONS**
+- Files scanned: **$TOTAL_COUNT**
 - Files above threshold: **$OVER_COUNT**
+- Top-N: **$TOP_N**
+
+## Top $TOP_N largest files
+
+| # | File | Lines | ⚠️ |
+|---|------|-------|----|
+EOF
+
+  if [[ -n "$TOP_REPORT" ]]; then
+    printf '%b\n' "$TOP_REPORT"
+  else
+    echo "_No source files match the requested extensions._"
+  fi
+
+  cat <<EOF
+
+## Files above threshold (> $THRESHOLD lines)
 
 | File | Lines |
 |------|-------|
 EOF
 
-if [[ "$OVER_COUNT" -gt 0 ]]; then
-  printf '%b\n' "$REPORT"
-else
-  echo "_No files exceed the threshold. Great job!_"
-fi
+  if [[ "$OVER_COUNT" -gt 0 ]]; then
+    printf '%b\n' "$OVER_REPORT"
+  else
+    echo "_No files exceed the threshold. Great job!_"
+  fi
+}
+
+emit_report
 
 if [[ -n "$OUTPUT" ]]; then
-  {
-    cat <<EOF
-# Source File Length Report
-
-- Threshold: **$THRESHOLD lines**
-- Extensions: **$EXTENSIONS**
-- Files above threshold: **$OVER_COUNT**
-
-| File | Lines |
-|------|-------|
-EOF
-    if [[ "$OVER_COUNT" -gt 0 ]]; then
-      printf '%b\n' "$REPORT"
-    else
-      echo "_No files exceed the threshold. Great job!_"
-    fi
-  } > "$OUTPUT"
+  emit_report > "$OUTPUT"
   echo "Report written to: $OUTPUT" >&2
 fi
 
