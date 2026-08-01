@@ -10,9 +10,9 @@ This document captures the **operational state** of the InstaeditLogin
 production deploy (DNS, TLS, monitoring, recovery drills). It is
 referenced from:
 
-- `docs/DEPLOY.md` §1.5 — DNS records (quick-reference table — apex/app/api → `51.91.11.36` + email-deliverability records)
-- `docs/DEPLOY.md` §2-§7 — deploy pipeline (host setup + secret collection + first deploy + post-deploy verification + rotation + Sandbox/operator boundary)
-- `docs/DEPLOY.md` §11 — open items (verify-log-redaction → docker compose logs; orphan `docker-build-production` Makefile target; legacy `integration.yml` retired at this commit — split into `integration-fast.yml` (deploy-gating) + `integration-slow.yml` (e2e, alert-only))
+- `docs/DEPLOY.md` §1 — production topology and DNS records
+- `docs/DEPLOY.md` §§2–10 — deploy pipeline (host setup, secrets, Compose rollout, verification, backups, rollback, and rotation)
+- `docs/DEPLOY.md` §11 — release checklist and final deployment gates
 - `HANDOFF-LINUX.md` §11 — local dev workflow
 - `docs/OPERATIONS.md` §7 — email sender (`no-reply@instaedit.org`) deliverability runbook (Resend)
 
@@ -27,7 +27,7 @@ mode `OPERATIONS.md` exists to prevent.
 
 ## 1. DNS records (`instaedit.org`)
 
-For the canonical table see `docs/DEPLOY.md` §1.5. This section covers
+For the canonical topology and DNS table see `docs/DEPLOY.md` §1. This section covers
 the **why** behind each record + the failure modes that trigger a
 reissue.
 
@@ -35,30 +35,28 @@ reissue.
 
 | Apex registrar | Domain controller | Notes |
 |----------------|-------------------|-------|
-| Cloudflare (preferred) | NS `anna.ns.cloudflare.com`, `bob.ns.cloudflare.com`, … | Proxied (orange cloud) is **forbidden** for `api.`, `app.`, and `instaedit.org` apex itself — disable proxy per record. Caddy terminates TLS via LE HTTP-01 against `http://51.91.11.36/.well-known/acme-challenge/...`; orange-cloud would intercept the challenge. |
-| Namecheap (fallback) | domain basicDNS | Plain A records for apex + app + api → `51.91.11.36`. No ALIAS-flattening needed. |
-| Route 53 (fallback) | A records for apex + app + api → `51.91.11.36` | Plain A (not ALIAS). The DNS spec disallows CNAME at apex; with a single A record this is unambiguous and registrar-portable. |
+| Cloudflare (preferred) | NS `anna.ns.cloudflare.com`, `bob.ns.cloudflare.com`, … | Keep `api.instaedit.org` DNS-only so Caddy can complete the LE HTTP-01 challenge against the VPS. Manage `app.`, apex, and `www.` exactly as shown by the Vercel project; their TLS terminates at Vercel. |
+| Namecheap (fallback) | domain basicDNS | Point only `api.instaedit.org` at `51.91.11.36`; configure apex, `app.`, and `www.` with the Vercel-managed records supplied by the project. |
+| Route 53 (fallback) | provider-managed records | Use the Vercel project targets for apex, `app.`, and `www.`; use the VPS address for `api.instaedit.org`. Do not replace a Vercel-managed record with a VPS A record. |
 
 ### 1.2 Failure recovery — Caddy / Let's Encrypt HTTP-01
 
-**Symptoms:** `curl -sI https://api.instaedit.org/health` returns `server:` other than `Caddy`, OR returns a Caddy error page mentioning `acme`, OR the cert is older than the expected auto-renew window (60 days).
+**Symptoms:** `curl -sI https://api.instaedit.org/api/v1/health` returns `server:` other than `Caddy`, OR returns a Caddy error page mentioning `acme`, OR the cert is older than the expected auto-renew window (60 days).
 
 **Root cause:** LE HTTP-01 challenge could not reach the VPS on port 80 + path `/`.well-known/acme-challenge/...`.
 
 Triage checklist (from the operator laptop):
 
 ```bash
-# 1. Confirm DNS resolves to the VPS
-dig +short instaedit.org      A    # expect: 51.91.11.36
-dig +short app.instaedit.org   A    # expect: 51.91.11.36
-dig +short api.instaedit.org   A    # expect: 51.91.11.36
+# 1. Confirm the backend DNS resolves to the VPS
+dig +short api.instaedit.org A  # expect: 51.91.11.36
 
-# 2. Confirm the Caddy docker container is up + listening
-ssh instaedit@$VPS_IP 'docker compose -f /opt/instaedit/InstaeditLogin/docker-compose.yml ps caddy'
-#   expect: status=running, ports 0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp
+# 2. Confirm host-managed Caddy is up + listening
+ssh instaedit@$VPS_IP 'sudo systemctl is-active --quiet caddy'
+#   expect: exit 0; Caddy is host-managed and owns ports 80/443
 
 # 3. Confirm Caddy can serve the LE challenge path from the public IP
-ssh instaedit@$VPS_IP 'docker compose logs --tail=200 caddy | grep -i "acme\|certificate\|renew"'
+ssh instaedit@$VPS_IP 'sudo journalctl -u caddy --since "1 hour ago" --no-pager | grep -iE "acme|certificate|renew"'
 
 # 4. From external internet (operator laptop), confirm a known 200 path
 curl -fsS https://api.instaedit.org/api/v1/health | jq
@@ -68,33 +66,34 @@ curl -fsS https://api.instaedit.org/api/v1/health | jq
 **Common fixes** (all commands run via `ssh instaedit@$VPS_IP` unless noted):
 
 - The previous (wrong) A record was cached downstream → lower TTL to 60s globally, wait one old-TTL window before retrying. Caddy renews nightly; the next renewal cycle catches the corrected target.
-- Cloudflare proxy was turned on for the affected name → set to DNS-only (grey cloud). Check `/etc/caddy/Caddyfile` for the apex name and which Cloudflare proxy records cover it.
+- Cloudflare proxy was turned on for `api.instaedit.org` → set that backend record to DNS-only (grey cloud). Do not change the Vercel-managed frontend records to point at the VPS.
 - Firewall on the VPS blocks TCP/80 or TCP/443 → `sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw reload`. Confirm with `sudo ufw status`.
-- Caddy's `/data` (caddy_data volume) is full or corrupt → `docker compose stop caddy && rm -rf /srv/instaedit/caddy_data/{acme,caddy} && docker compose up -d caddy` triggers a fresh LE issuance on the next start.
+- Caddy's certificate storage is full or corrupt → inspect `sudo journalctl -u caddy`, preserve the existing certificate data, and follow the host-level Caddy recovery procedure before considering re-issuance.
 - **Storm recovery:** LE has a hard limit of 5 failed validations per account per hostname per hour. Wait at least 60 minutes between retries if the failure count is the limiter.
 
 Workaround if the VPS is unreachable beyond quick repair: temporarily
-flip the A record at the registrar to a known-good Caddy origin (e.g.
-an emergency standby host) — Caddy will renew against the new target
-on the next cycle.
+point only the `api.instaedit.org` record at a known-good Caddy origin (e.g.
+an emergency standby host). Leave the Vercel-managed apex, `app.`, and `www.`
+records unchanged; Caddy will renew against the new API target on the next
+cycle.
 
 ### 1.3 Cert renewal — proactive (was: "Vercel TXT validation")
 
 **Symptoms:** nothing — Caddy renews silently ~30 days before expiry.
-We watch the cert state via `docker compose logs caddy | grep cert`.
+We watch the cert state via `sudo journalctl -u caddy --since 168h --no-pager | grep -iE "renew|certificate|expir"`.
 
 Triage (operator-on-call cadence: weekly 5-minute check):
 
 ```bash
-ssh instaedit@$VPS_IP 'docker compose logs --since 168h caddy | grep -iE "renew|certificate|expir"'
+ssh instaedit@$VPS_IP 'sudo journalctl -u caddy --since 168h --no-pager | grep -iE "renew|certificate|expir"'
 #   expect: "certificate obtained successfully" OR "renewing certificate"
 #   failure: no renewal lines in the last 7 days → Caddy rejected renewal
 ```
 
 Common causes:
 
-- An IP-cycle happened (e.g. VPS redeployed) and the A record is stale → fix DNS and let Caddy re-discover.
-- The Caddyfile lost a previously listened name → compare against `git log main -- ops/vps/Caddyfile` and re-add the missing `instaedit.org` / `*.instaedit.org` SNI block.
+- The VPS IP changed and the `api.instaedit.org` record is stale → update only the backend record, validate it externally, and let Caddy re-discover the API certificate. Frontend DNS remains Vercel-managed.
+- The API hostname was removed from the Caddyfile → compare against `git log main -- ops/vps/Caddyfile` and restore only the reviewed `api.instaedit.org` route. Frontend hostnames are configured in Vercel, not Caddy.
 - The VPS port 80 (LE HTTP-01) was blocked mid-renewal → see §1.2 step "firewall".
 
 ### 1.4 Apex CNAME-flattening breaks
@@ -102,67 +101,51 @@ Common causes:
 CNAME at apex is illegal per RFC. ALIAS / ANAME / CNAME-flattening is
 registrar-specific and fragile. We deliberately use:
 
-- Apex `A` → `51.91.11.36` (Caddy terminates and 301-redirects to `app.`)
-- Apex `AAAA` (IPv6) — leave empty until validators report IPv6 missing.
+- Apex, `app.`, and `www.` → the Vercel-managed records supplied by the project (Vercel redirects apex/www to `app.`).
+- `api.instaedit.org` → the VPS address `51.91.11.36` (or the current `$VPS_IP`).
+- Do not add an apex A/AAAA record pointing the frontend at the VPS unless the Vercel project explicitly requires it.
 
-If you ever need to migrate registrars (Namecheap → Cloudflare), the
-existing records + apex A copy across verbatim. No ALIAS-flattening
-magic to replicate.
+If you ever need to migrate registrars (Namecheap → Cloudflare), copy the
+Vercel-managed frontend records from the project dashboard and the API record
+to the new provider. Do not introduce apex A/ALIAS-flattening records pointing
+the frontend at the VPS.
 
 ---
 
 ## 2. TLS certificate lifecycle
 
-Caddy on the VPS issues a single LE cert for `instaedit.org`,
-`app.instaedit.org`, `api.instaedit.org` (SNI selects). Renewal windows
-are 30 days before expiry; Caddy auto-renews every ~60 days. Failure
-modes:
+Vercel terminates TLS for the apex, `app.`, and `www.` frontend hosts. Caddy
+on the VPS obtains and renews the LE certificate for `api.instaedit.org`
+(and the compatibility-only `dev.instaedit.org` block when it is enabled).
+Renewal windows are 30 days before expiry; Caddy auto-renews every ~60 days.
+Failure modes:
 
 | Symptom | Fire alarm | Runbook |
 |---------|------------|---------|
-| `curl -sI https://api.instaedit.org/api/v1/health` returns `Server:` other than `Caddy` | Sentry `tls.origin` capture OR uptime monitor | Re-check §1.2 — DNS + firewall + caddy_data state |
-| Browser shows `NET::ERR_CERT_AUTHORITY_INVALID` for `app.` or `api.` | Sentry capture + manual verification | Caddy renewal drifted to a provider that's not LE — inspect `docker compose logs caddy | grep issuer`; CA bundle missing from Caddy image (rebuild `docker build`); or DNS CAA excludes LE |
+| `curl -sI https://api.instaedit.org/api/v1/health` returns `Server:` other than `Caddy` | Sentry `tls.origin` capture OR uptime monitor | Re-check §1.2 — DNS + firewall + the host-managed Caddy service and journal |
+| Browser shows `NET::ERR_CERT_AUTHORITY_INVALID` for `app.` or `api.` | Sentry capture + manual verification | For `app.`/apex/`www.`, inspect the Vercel domain and certificate status. For `api.`, inspect `sudo journalctl -u caddy | grep -i issuer`, Caddy validation, and DNS CAA records. |
 | Browser shows `NET::ERR_CERT_DATE_INVALID` | Uptime monitor ping fails | Check upstream — REGRESSION-class bug, file incident |
 | Caddy logs show `failed to obtain certificate: acme: error: ... rateLimited` | Sentry capture within an hour of the failure | LE rate-limit hit. See §1.2 storm-recovery hint. |
 
 ### 2.1 Reload Caddy (after editing `ops/vps/Caddyfile`)
 
-**Caddy is NOT part of the docker-compose stack.** Verified: there is no top-level `caddy:` service in `docker-compose.yml`. On the VPS Caddy runs as ONE of the following — the operator must know which deployment was used at first-boot (the recipe lives in the boot section of `ops/legacy/Caddyfile`). The Caddyfile source-of-truth is **`ops/vps/Caddyfile`** on the operator laptop — edit there, sync to the VPS, then reload via the path that matches the live deployment.
+**Caddy is NOT part of the Docker Compose stack.** It is a host-managed
+systemd service. The tracked `ops/vps/Caddyfile` is the source of truth on the
+operator laptop; edit it there, sync it to the VPS, then validate and reload
+with `sudo caddy validate` and `sudo systemctl reload caddy`.
 
-**Path A — standalone Docker container** (canonical install per `ops/legacy/Caddyfile`'s `docker run --network host` recipe; the container name is `instaedit-caddy`, configured at first-boot):
+**Systemd service** (install Caddy from the distribution or official Caddy
+APT repository; manage it through `caddy.service`):
 
 ```bash
-# 1. Edit the Caddyfile on the operator laptop + commit + push
+# 1. Edit the tracked source, commit it, and fast-forward the VPS checkout.
 $EDITOR ops/vps/Caddyfile
 git add ops/vps/Caddyfile && git commit -m 'caddy: <change>' && git push origin main
-
-# 2. Sync to the VPS via the canonical deploy path (git pull)
 ssh instaedit@$VPS_IP \
-  'cd /srv/instaedit/InstaeditLogin && git pull origin main'
+  'cd /opt/instaedit/InstaeditLogin && git pull --ff-only origin main'
 
-# 3. Validate before reload (dry-run; catches syntax errors)
-ssh instaedit@$VPS_IP \
-  'docker exec instaedit-caddy caddy validate --config /etc/caddy/Caddyfile'
-#  expect: "valid configuration" + exit 0. Any error → fix the source,
-#  do NOT reload.
-
-# 4. Hot-reload (no connection drop)
-ssh instaedit@$VPS_IP \
-  'docker exec instaedit-caddy caddy reload --config /etc/caddy/Caddyfile'
-#  expect: "reload scheduled in <N>s" + exit 0.
-
-# 5. Verify the new config is live
-ssh instaedit@$VPS_IP 'curl -sI https://api.instaedit.org/api/v1/health | head -1'
-#  expect: HTTP/2 200
-```
-
-**Path B — systemd service** (alternative install via `apt install caddy` or the official Caddy APT repo; managed by `caddy.service` under systemd):
-
-```bash
-# 1. Edit + sync (same as Path A)
-
-# 2. Copy the new Caddyfile into /etc/caddy/Caddyfile on the VPS
-ssh instaedit@$VPS_IP 'sudo install -m 0644 /srv/instaedit/Caddyfile /etc/caddy/Caddyfile'
+# 2. Copy the reviewed Caddyfile into /etc/caddy/Caddyfile on the VPS
+ssh instaedit@$VPS_IP 'sudo install -m 0644 /opt/instaedit/InstaeditLogin/ops/vps/Caddyfile /etc/caddy/Caddyfile'
 
 # 3. Validate before reload
 ssh instaedit@$VPS_IP 'sudo caddy validate --config /etc/caddy/Caddyfile'
@@ -175,9 +158,10 @@ ssh instaedit@$VPS_IP 'sudo systemctl status caddy'
 #  expect: Active: active (running)
 ```
 
-**Cross-reference**: `ops/vps/Caddyfile` is the source-of-truth. Do NOT edit `/etc/caddy/Caddyfile` on the VPS directly — the next `git pull` would clobber your edit (Path A) or a future `apt reinstall` (Path B). Always edit the laptop source, commit on `main`, then sync + reload.
-
-> **Note on `ctr`:** the original directive said `caddy reload via ctr`, but `ctr` is a containerd CLI binary used for containerd-managed runtimes. The InstaeditLogin VPS uses Docker (daemon under systemd), NOT containerd — `ctr` does not apply here. The canonical invocations are `docker exec instaedit-caddy` (Path A) or `systemctl reload caddy` (Path B).
+**Cross-reference**: `ops/vps/Caddyfile` is the source of truth. Do not edit
+`/etc/caddy/Caddyfile` on the VPS directly; always edit the tracked source,
+commit it, fast-forward the VPS checkout, validate, and reload through systemd.
+The containerd `ctr` command is not part of this deployment.
 
 ---
 
@@ -187,11 +171,11 @@ Cross-references to the existing recovery scripts:
 
 | Drill | Script / doc | Cadence |
 |-------|--------------|---------|
-| **Postgres backup + restore** | [`scripts/db/production-restore-drill.sh`](../scripts/db/production-restore-drill.sh) — *still follows the pre-cutover managed-Postgres pattern; rewrite required for VPS pg_dump → throwaway (§3.1 below; tracked in DEPLOY.md §11)* | First drill within 24h of first migration; then quarterly |
+| **Postgres backup + restore** | [`scripts/db/production-restore-drill.sh`](../scripts/db/production-restore-drill.sh) — *still follows the pre-cutover managed-Postgres pattern; rewrite required for VPS pg_dump → throwaway (§3.1 below; tracked in the current deployment runbook)* | First drill within 24h of first migration; then quarterly |
 | **Postgres health check** | [`scripts/db/check-postgres-health.sh`](../scripts/db/check-postgres-health.sh) | Pre-deploy + post-deploy + on incident |
-| **MinIO bucket provisioning** | (was Tigris `scripts/s3/provision-tigris.sh`) — covered by the Compose service + MinIO admin console at `https://127.0.0.1:9001` (loopback only) | One-time at provisioning; re-run on key rotation |
+| **MinIO bucket provisioning** | Compose `minio-init` service; inspect with the MinIO console through a loopback-only tunnel when required | First deployment; repeat after an intentional credential rotation |
 | **Stack always-on contract** | `docker compose -f /opt/instaedit/InstaeditLogin/docker-compose.yml ps` | Uptime monitor alerts if `/health` or `/ready` down > 2x consecutive ticks |
-| **SPA-reachable check** | (was Vercel `curl -I https://app.instaedit.org/connections`) — now `curl -fsSI https://app.instaedit.org/` returns `server: Caddy` | On VPS deploy + on incident |
+| **SPA-reachable check** | `curl -fsSI https://app.instaedit.org/` returns the expected Vercel response (HTTP 200 or configured redirect) | After a Vercel deploy + on incident |
 | **Post-deploy E2E smoke** (Phase 9 sub-1-5+7) | [`scripts/ops/post_deploy_smoke.sh`](../scripts/ops/post_deploy_smoke.sh) | After every `git pull && docker compose up -d --build` on the VPS; weekly cron once stable |
 | **Workspace isolation test** (Phase 9 sub-6) | [`scripts/ops/workspace_isolation_test.sh`](../scripts/ops/workspace_isolation_test.sh) | Before opening beta to external users + on any cross-workspace query refactor |
 
@@ -201,11 +185,9 @@ Per-drill record-keeping paths (now on the VPS, not central 1Password):
 - `ops/smoke-<UTC>.log` — manual smoke captures
 - Sentry issue `INFRA-CADDY-CERT-*` / `INFRA-COMPOSE-DOWN-*` / `INFRA-PG-RESTORE-DRILL-*` — automated captures
 
-> **Note on `scripts/s3/provision-tigris.sh`** — the script is a
-> git-tracked historic. It is NOT used by the VPS production stack.
-> If migrating historical Tigris data into MinIO, see
-> `docs/DEPLOY.md` §10 (Tigris retirement). The Tigris retirement
-> path is optional — the production stack is MinIO from day one.
+> **Storage contract:** MinIO is the only production object store. Follow
+> `docs/DEPLOY.md` §6 for bucket initialization, object backups, and recovery;
+> no external storage cutover is part of the supported deploy path.
 
 ### 3.2 Google Drive import — `capabilities.canDownload=false` runbook
 
@@ -257,7 +239,7 @@ The most common operational causes (in order of frequency):
 # 1. Confirm the import's HTTP error body / worker error chain
 #    mentions capabilities.canDownload=false (NOT a generic 403):
 ssh instaedit@$VPS_IP \
-  'docker compose --env-file /srv/instaedit/.env.production logs --tail=500 worker | grep -i "canDownload\|NotDownloadable"'
+  'docker compose --env-file /opt/instaedit/secrets/.env.production logs --tail=500 worker | grep -i "canDownload\|NotDownloadable"'
 # If absent, this is NOT Task 5/10 — diagnose via the import endpoint's
 # raw error path instead.
 
@@ -299,7 +281,7 @@ into the operator-side choreography. **The script itself still needs a parallel 
 accompanies) post-date the cutover. They document the legacy managed-Postgres tooling pipeline (cluster
 fork, secrets-pool file name, internal-cluster URI shape). They are
 NOT wired into the live VPS stack — re-pointing them is a separate
-follow-up commit (§3.1.0 open item in DEPLOY.md §11 tracks this).
+follow-up commit (§3.1.0 open item in the current deployment runbook tracks this).
 The procedure below is the operator's authoritative flow today until
 the script rewrite merges.
 
@@ -308,7 +290,7 @@ the script rewrite merges.
 | Trigger | Frequency |
 |---------|-----------|
 | **First drill** | Within 24h of the first migration deploy (after `docker compose up -d --build` exits 0 + `scripts/db/check-postgres-health.sh` shows `9 canary tables present`). |
-| **Baseline** | Quarterly (every 90 days). Track schedule in `ops/restore-drill-cadence.json` (operator-maintained on the VPS under `/srv/instaedit/ops/`). |
+| **Baseline** | Quarterly (every 90 days). Track schedule in `ops/restore-drill-cadence.json` (operator-maintained on the VPS under `/opt/instaedit/ops/`). |
 | **On incident** | Within 48h of any operational incident that touched the cluster (container restart storm, OOM, lock timeouts > 30s, manual `docker compose down`). The drill proves the recovery path STILL works after the incident. |
 | **Pre-audit** | 7 days before any external security review (SOC2, ISO27001, etc.) — auditors expect a recent restore drill on file. |
 
@@ -324,11 +306,11 @@ command -v openssl      # for password generation if re-provisioning
 # 2. Confirm the stack is up + the canonical db name is right
 ssh instaedit@$VPS_IP \
   'docker compose -f /opt/instaedit/InstaeditLogin/docker-compose.yml ps'
-#   expect: api/worker/caddy/postgres/minio all `running`
-#   TERRIBLE if: postgres is `exited` or `restarting`
+#   expect: api/worker/db/minio all `running`; Caddy is checked separately with systemd
+#   TERRIBLE if: db is `exited` or `restarting`
 
 ssh instaedit@$VPS_IP \
-  'docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"'
+  'docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"'
 #   expected: instaedit_login
 #   TERRIBLE if: instaedit_login_test, postgres, template1, instaedit_login_dev
 
@@ -343,7 +325,7 @@ ssh instaedit@$VPS_IP \
 #    NOTE: must mirror internal/database/migrate_check.go::CanaryTables —
 #    update BOTH together if the slice grows.
 ssh instaedit@$VPS_IP \
-  'docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c "
+  'docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c "
     SELECT count(*)
       FROM unnest(ARRAY[\"users\",\"tokens\",\"workspaces\",\"posts\",
                         \"post_targets\",\"webhook_deliveries\"]) t(tbl)
@@ -363,16 +345,16 @@ curl -i https://api.instaedit.org/api/v1/health
 # ─── STEP 1: take a fresh backup on the VPS ────────────────────────────
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 ssh instaedit@$VPS_IP \
-  "mkdir -p /srv/instaedit/backups && docker compose exec -T postgres pg_dump -U instaedit -d instaedit_login \
+  "mkdir -p /opt/instaedit/backups && docker compose exec -T db pg_dump -U instaedit -d instaedit_login \
      --format=custom --no-owner --no-acl \
-     > /srv/instaedit/backups/instaedit-restore-drill-$TS.dump"
+     > /opt/instaedit/backups/instaedit-restore-drill-$TS.dump"
 # Expected: ~10-300 MB file (depends on tenant data volume). Exit 0.
 # Use --format=custom (pg_dump's binary format) so pg_restore on the
 # drill target can apply without re-parsing.
 
 # ─── STEP 2: pull the dump back to the operator laptop ────────────────
 mkdir -p ~/drill-cache
-scp "instaedit@$VPS_IP:/srv/instaedit/backups/instaedit-restore-drill-$TS.dump" \
+scp "instaedit@$VPS_IP:/opt/instaedit/backups/instaedit-restore-drill-$TS.dump" \
     ~/drill-cache/
 
 # ─── STEP 3: stand up a throwaway Postgres container identical to prod ─
@@ -396,7 +378,7 @@ docker exec -i drill-restore-target-$TS \
 
 # ─── STEP 5: assert schema fingerprint parity ─────────────────────────
 PROD_FP=$(ssh instaedit@$VPS_IP \
-  'docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c "
+  'docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c "
     WITH f AS (
       SELECT enumtypid::regtype AS e FROM pg_type WHERE typtype = '"'"'e'"'"'
       UNION ALL
@@ -427,7 +409,7 @@ docker exec drill-restore-target-$TS \
 # ─── STEP 7: compare row-count spot checks ────────────────────────────
 for tbl in users workspaces posts post_targets; do
   PROD_COUNT=$(ssh instaedit@$VPS_IP \
-    "docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c \
+    "docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c \
      \"SELECT count(*) FROM $tbl;\"")
   DRILL_COUNT=$(docker exec drill-restore-target-$TS \
     psql -U instaedit -d instaedit_login -tA -c "SELECT count(*) FROM $tbl;")
@@ -451,7 +433,7 @@ cat > ~/drill-cache/reports/restore-drill-$TS.md <<EOF
 
 ### Cleanup
 The throwaway container $DRILL_TARGET_NAME was removed (STEP 8).
-Backup file lives at /srv/instaedit/backups/instaedit-restore-drill-$TS.dump
+Backup file lives at /opt/instaedit/backups/instaedit-restore-drill-$TS.dump
 on the VPS; compress + cold-store as needed per retention policy.
 EOF
 
@@ -466,7 +448,7 @@ EOF
 
 | Symptom | Root cause | Fix |
 |---------|------------|-----|
-| `pg_dump` exits with `permission denied for table …` | The `instaedit` role in /srv/instaedit/.env.production's POSTGRES_PASSWORD was rotated but `instaedit_login` ownership was not migrated. | `docker compose exec -T postgres psql -U instaedit -d instaedit_login -c "ALTER TABLE public.X OWNER TO instaedit;"` per missing table. Or rebuild the role inheritance from `scripts/db/provision-postgres-runbook.sh` step 6. |
+| `pg_dump` exits with `permission denied for table …` | The `instaedit` role in /opt/instaedit/secrets/.env.production's POSTGRES_PASSWORD was rotated but `instaedit_login` ownership was not migrated. | `docker compose exec -T db psql -U instaedit -d instaedit_login -c "ALTER TABLE public.X OWNER TO instaedit;"` per missing table. Or rebuild the role inheritance from `scripts/db/provision-postgres-runbook.sh` step 6. |
 | `pg_restore` exits with `role "instaedit" does not exist` | The throwaway Postgres container was started without the matching `POSTGRES_USER=instaedit`. | Re-run STEP 3 with `-e POSTGRES_USER=instaedit -e POSTGRES_PASSWORD=instaedit_drill_pw`. The script must mirror prod's role + db name exactly. |
 | Schema fingerprint MISMATCH | (a) throwaway container started on a different `postgres:` image tag than prod (e.g. `postgres:16-alpine` vs `postgres:17-alpine`); (b) migrations are mid-flight on prod — defer until /health=200; (c) dump used `--no-acl` and the role ownership stripped from the dump. | (a) Re-run STEP 3 with the exact `postgres:17-alpine` image. (b) Wait for /health=200 + canary tables PASS, then re-run. (c) Re-dump with `--no-owner --no-acl` (the flags are correct — issue is the throwaway's pg_user differing). |
 | Canary tables post-restore: `> 0 missing` | (a) the dump filtered out non-public schemas; (b) the drill container's `public` schema was dropped on init (default Postgres behaviour, but `POSTGRES_DB=instaedit_login` should NOT drop `public`). | Recreate the drill container with `POSTGRES_DB=instaedit_login` explicitly; rerun STEP 4 with `--clean --if-exists` to drop existing objects first. |
@@ -479,8 +461,8 @@ After the drill completes (PASS or FAIL):
 
 - `~/drill-cache/reports/restore-drill-<UTC>.md` contains the schema fingerprint + canary + row-count summary (above).
 - A Sentry issue `INFRA-PG-RESTORE-DRILL-*` is filed MANUALLY by the operator ONLY on FAIL — the drill is pure bash + psql + docker; PASS drills don't generate Sentry noise.
-- `/srv/instaedit/ops/restore-drill-cadence.json` (operator-maintained on the VPS) gains a new entry documenting the timestamp + verdict + drill_target_destroyed flag.
-- The backup file `instaedit-restore-drill-<UTC>.dump` stays on the VPS under `/srv/instaedit/backups/`. Compress + cold-store per retention policy (default: keep latest 4 quarterly drills, off-host-rsync weekly).
+- `/opt/instaedit/ops/restore-drill-cadence.json` (operator-maintained on the VPS) gains a new entry documenting the timestamp + verdict + drill_target_destroyed flag.
+- The backup file `instaedit-restore-drill-<UTC>.dump` stays on the VPS under `/opt/instaedit/backups/`. Compress + cold-store per retention policy (default: keep latest 4 quarterly drills, off-host-rsync weekly).
 
 #### 3.1.6 DB-name discipline (production convention)
 
@@ -490,7 +472,7 @@ The canonical production DB name is **`instaedit_login`** — NOT
 enforced at THREE layers:
 
 1. **At provisioning** (`docker-compose.yml`): the `postgres` service's `POSTGRES_DB` env var is hard-coded to `instaedit_login`. The Compose stack creates the DB at first boot AND the `instaedit_login` ownership rolls out to the role.
-2. **At smoke check** (`scripts/db/check-postgres-health.sh`): asserts the canary tables post-migration exist + the db name is exactly `instaedit_login`. Run `docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"` and confirm the output.
+2. **At smoke check** (`scripts/db/check-postgres-health.sh`): asserts the canary tables post-migration exist + the db name is exactly `instaedit_login`. Run `docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"` and confirm the output.
 3. **At restore drill** (this section §3.1.3 STEP 5): the schema fingerprint is `MD5(enum-oids ∪ public-schema-table-oids)` — a misconfigured dev cluster would produce a DIFFERENT fingerprint and the drill would FAIL with SCHEMA MISMATCH before any semantic check.
 
 **Anti-pattern**: pointing at `localhost:5432/instaedit_login_dev` (a
@@ -510,7 +492,7 @@ initialises the bucket via the Compose `init` lifecycle):
 
 - **Endpoint (inside Compose network):** `http://minio:9000` (NOT exposed publicly; the Go API connects via the compose DNS name).
 - **Endpoint (operator localhost on VPS):** `https://127.0.0.1:9001` — admin console (loopback only; NEVER publicly bound).
-- **Default bucket:** `instaedit-prod-media` (matches `S3_BUCKET` in `/srv/instaedit/.env.production`).
+- **Default bucket:** `instaedit-prod-media` (matches `S3_BUCKET` in `/opt/instaedit/secrets/.env.production`).
 - **Root credential pair:** `MINIO_ROOT_USER` + `MINIO_ROOT_PASSWORD` baked into the Compose service env block (re-used as `S3_ACCESS_KEY` + `S3_SECRET_KEY` for the Go API — the SigV4 signer is endpoint-agnostic).
 - **CORS:** single-origin `https://app.instaedit.org`, methods PUT-GET-HEAD, Expose ETag, MaxAge 3600. Console: MinIO → Settings → CORS.
 - **Lifecycle:** AbortIncompleteMultipartUpload after 1 day (no orphan parts).
@@ -518,13 +500,10 @@ initialises the bucket via the Compose `init` lifecycle):
 - **TLS-only policy:** bucket policy Denies `s3:*` when `aws:SecureTransport=false` (defense-in-depth).
 - **Max object size:** 200 MB enforced twice — bucket policy Denies `PutObject` if `s3:content-length > 209715200`, AND the application clamps the presigned URL `Content-Length` via `STORAGE_MAX_UPLOAD_BYTES = 200 * 1024 * 1024` in `internal/config/config.go`.
 
-> **Migration from Tigris.** If historical data lives in the
-> `instaedit-prod-media` Tigris bucket, see `docs/DEPLOY.md` §10
-> (Tigris retirement) for the one-shot bucket-to-bucket copy
-> procedure. It is optional and does NOT block the production cutover
-> — `S3_ENDPOINT=http://minio:9000` on the VPS-side env var flips
-> the API away from Tigris; flipping back to `S3_ENDPOINT=https://t3.storage.dev`
-> re-points at Tigris for the rollback window.
+> **Storage contract:** MinIO is the only production object store. Follow
+> `docs/DEPLOY.md` §6 for the supported endpoint, bucket, backup, and recovery
+> procedures. Storage rollback is handled through the verified MinIO backup,
+> not by switching providers.
 
 ### 4.0 Storage recovery drills (MinIO)
 
@@ -534,7 +513,7 @@ initialises the bucket via the Compose `init` lifecycle):
 | Browser console: `413 Request Entity Too Large` from MinIO | Media upload metric spike | Verify `pkg/api/storage.go` `STORAGE_MAX_UPLOAD_BYTES = 200 MB`; if a user device is bypassing the presigned clamp (e.g. direct CORS upload from presign URL), the bucket-policy defense-in-depth statement catches it. |
 | `mc admin info` reports N stale multipart uploads | (manual) Lifecycle rule is too lenient or unused parts piling up | Lower `AbortIncompleteMultipartUpload.DaysAfterInitiation` from 1 → 0.25 days via the MinIO lifecycle UI (or `mc ilm import` from the operator laptop). Confirm the new state with `mc ilm ls instaedit-prod-media`. |
 | Sentry `storage.policy.deny` capture blocks legitimate uploads | CORS / TLS-only / size policy mismatch | The SDK misconfigured — ad-hoc curl on `:80` of minio from a non-prod dev machine, OR the SigV4 signer passed `aws:SecureTransport=false` (impossible via the legitimate Go SDK; debug the caller stack). |
-| MinIO container `exited` after `docker compose up -d` | `docker compose logs minio` shows volume permission denied | The bind-mount `/srv/instaedit/miniostore` is owned by a UID that the container's `minio` process doesn't match. Fix: `chown -R 1000:1000 /srv/instaedit/miniostore` (the default MinIO image UID), then `docker compose up -d minio`. |
+| MinIO container `exited` after `docker compose up -d` | `docker compose logs minio` shows volume permission denied | The bind-mount the MinIO named volume is owned by a UID that the container's `minio` process doesn't match. Inspect the actual volume with `docker volume inspect` and repair ownership only during an approved maintenance window; then run `docker compose up -d minio`. |
 
 ---
 
@@ -545,12 +524,12 @@ initialises the bucket via the Compose `init` lifecycle):
 - [ ] **Sentry** with `SENTRY_DSN`, `SENTRY_ENVIRONMENT=production`, `SENTRY_RELEASE=$(git rev-parse HEAD)`. Captured at panic + 5xx emission. Empty == no init (per Blocco #5.3 opt-in).
 - [ ] **Uptime monitor** on `https://api.instaedit.org/api/v1/health` (30s cron, alert via email after 2 consecutive failures).
 - [ ] **Readiness monitor** on `https://api.instaedit.org/ready` (operator shoulder-check on incident — Caddy does not check this; the API's own goroutines do).
-- [ ] **Postgres queue-lag alert** (cron query, run via `docker compose exec -T postgres psql`):
+- [ ] **Postgres queue-lag alert** (cron query, run via `docker compose exec -T db psql`):
   `SELECT count(*) FROM webhook_deliveries WHERE status='queued' AND created_at < NOW() - interval '1 hour'` > 100 → alert.
 - [ ] **Dead-letter-queue alert**:
   `SELECT count(*) FROM publish_jobs WHERE status='dlq'` > 0 → alert.
 - [ ] **Refresh-token-failure alert** (Sentry capture event tag `auth.refresh.failed`).
-- [ ] **Compose stack always-on alert**: cron `docker compose -f /opt/instaedit/InstaeditLogin/docker-compose.yml ps --services --filter "status=exited"` returns non-empty → alert. Same cron fires when any of `api`, `worker`, `caddy`, `postgres`, `minio` is not `running`.
+- [ ] **Compose stack always-on alert**: cron `docker compose -f /opt/instaedit/InstaeditLogin/docker-compose.yml ps --services --filter "status=exited"` returns non-empty → alert. Same cron fires when any of `api`, `worker`, `db`, or `minio` is not `running`; Caddy is checked separately with systemd.
 - [ ] **Log privacy assertion**: `make verify-log-redaction` runs cleanly on the live Docker Compose logs in the last 1h (catches runtime leaks that the static CI grep cannot — see §5.3). Recommended cadence: after every VPS deploy (`git pull && docker compose up -d --build`) + weekly cron.
 
 ### 5.2 DNS / email hygiene
@@ -561,9 +540,18 @@ initialises the bucket via the Compose `init` lifecycle):
 - [ ] CAA per RFC 8659 + this file §1.
 - [ ] Gmail inbox deliverability test (using Resend `curl` API + operator's own Gmail address) — exact protocol in **§7.3**.
 - [ ] Tracking verification (open + click) — magic-link emails MUST NOT carry Resend's tracking rewrite; protocol in **§7.4**.
-- [ ] EMAIL_PROVIDER_KEY captured to password manager (`instaedit-login/email/EMAIL_PROVIDER_KEY`, scope = Sending Access ONLY) — and explicitly NOT pushed to `/srv/instaedit/.env.production` until backend wires Resend. Capture protocol in **§7.5**.
+- [ ] EMAIL_PROVIDER_KEY captured to password manager (`instaedit-login/email/EMAIL_PROVIDER_KEY`, scope = Sending Access ONLY) — and explicitly NOT pushed to `/opt/instaedit/secrets/.env.production` until backend wires Resend. Capture protocol in **§7.5**.
 
 ### 5.3 Log discipline (security)
+
+**Frontend dependency audit note (2026-08):** the web app pins
+`react-router-dom` to `7.18.2` and uses only Vite client-side
+`BrowserRouter`/`MemoryRouter`; it does not enable React Server Components,
+SSR, or framework mode. `npm audit` may still report the upstream RSC-only
+advisory `GHSA-qwww-vcr4-c8h2` for the v7 dependency range. Do not force an
+incompatible `react-router@8` override: `react-router-dom` v8 is not published
+as a compatible package. Re-evaluate this exception when a compatible DOM
+release containing the upstream fix is available.
 
 Backend logs MUST NOT include:
 
@@ -594,17 +582,17 @@ Tick all of these before opening the app to real users:
 - [ ] Sentry captures a real test panic (then cleared)
 - [ ] Uptime monitor on `/api/v1/health` alerts are wired correctly (deliberate downtime test)
 - [ ] `/ready` returns 200 within 30s of VPS `docker compose up -d --build` finishing
-- [ ] `docker compose ps` shows api/worker/caddy/postgres/minio all `running`
+- [ ] `docker compose ps` shows api/worker/postgres/minio healthy and `systemctl is-active caddy` succeeds
 - [ ] Queue-lag + DLQ alerts firing on synthetic backlog (then cleared)
 - [ ] No `<access_token|refresh_token|password>.*` in `docker compose logs --since 1h` output (privacy check)
 - [ ] SPF/DKIM/DMARC all pass `dig +short` for `instaedit.org` ✔
 - [ ] Restore drill completed + signed off (see §3 + full procedure in §3.1)
-- [ ] DB-name discipline assertion: `docker compose exec -T postgres psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"` returns `instaedit_login` (NOT `instaedit_login_test` test). Confirmed at provisioning ([§3.1.6](#316-db-name-discipline-production-convention) layer 1) AND at smoke check ([§3.1.6](#316-db-name-discipline-production-convention) layer 2). Full 3-layer enforcement story (provisioning + smoke check + restore drill fingerprint) — see [§3.1.6](#316-db-name-discipline-production-convention).
+- [ ] DB-name discipline assertion: `docker compose exec -T db psql -U instaedit -d instaedit_login -tA -c "SELECT current_database();"` returns `instaedit_login` (NOT `instaedit_login_test` test). Confirmed at provisioning ([§3.1.6](#316-db-name-discipline-production-convention) layer 1) AND at smoke check ([§3.1.6](#316-db-name-discipline-production-convention) layer 2). Full 3-layer enforcement story (provisioning + smoke check + restore drill fingerprint) — see [§3.1.6](#316-db-name-discipline-production-convention).
 - [ ] Privacy policy + ToS + data-deletion page reachable (`https://app.instaedit.org/privacy`, `/tos`, `/data-deletion`)
 - [ ] Support email `security@instaedit.org` (or whatever was registered) auto-responds in <60s
 
 After all boxes ticked the operator flips `APP_ENV=production` env
-var in `/srv/instaedit/.env.production` (already `production` from
+var in `/opt/instaedit/secrets/.env.production` (already `production` from
 §2.3 first-boot in DEPLOY.md but audit the canary) + closes the gate.
 
 ---
@@ -613,7 +601,7 @@ var in `/srv/instaedit/.env.production` (already `production` from
 
 Canonical reference for the Resend-based transactional email sender. Companion to `scripts/email/check-email-deliverability.sh` (read-only DNS verification). **NO app code commits in this section** — the backend does not yet wire Resend (see §7.5 for the deferred wiring plan).
 
-[Section §7 verbatim from the previous runbook — Resend wiring is platform-agnostic: SPF apex TXT, DKIM CNAME, DMARC ramp, Gmail inbox test, tracking verification, EMAIL_PROVIDER_KEY capture protocol. References in §7.5 are sourced from `/srv/instaedit/.env.production` edits in the new VPS context.]
+[Section §7 verbatim from the previous runbook — Resend wiring is platform-agnostic: SPF apex TXT, DKIM CNAME, DMARC ramp, Gmail inbox test, tracking verification, EMAIL_PROVIDER_KEY capture protocol. References in §7.5 are sourced from `/opt/instaedit/secrets/.env.production` edits in the new VPS context.]
 
 ### 7.0 State assertion
 
@@ -624,7 +612,7 @@ After this runbook runs:
 - [ ] DMARC TXT at `_dmarc.instaedit.org`: `v=DMARC1; p=none; rua=mailto:security@instaedit.org; ruf=mailto:security@instaedit.org; pct=100` (warm-up `p=none`)
 - [ ] Resend dashboard → Domains → `instaedit.org` shows green Verified badge
 - [ ] Gmail inbox test passed (Authentication-Results: dkim=pass + spf=pass + dmarc=pass on a real Gmail address; email landed in INBOX not SPAM)
-- [ ] `EMAIL_PROVIDER_KEY` captured in password manager `instaedit-login/email/EMAIL_PROVIDER_KEY` (scope = Sending Access ONLY). NOT yet pushed to `/srv/instaedit/.env.production` because the backend does not wire Resend yet.
+- [ ] `EMAIL_PROVIDER_KEY` captured in password manager `instaedit-login/email/EMAIL_PROVIDER_KEY` (scope = Sending Access ONLY). NOT yet pushed to `/opt/instaedit/secrets/.env.production` because the backend does not wire Resend yet.
 
 ### 7.1 DNS records (canonical Resend values, 2026)
 
@@ -735,13 +723,13 @@ Operational summary of the §7.3 step 6 protocol — what "tracking is off" actu
 
 ### 7.5 EMAIL_PROVIDER_KEY capture protocol
 
-The provider key has different capture semantics than the rest of the `/srv/instaedit/.env.production` secrets:
+The provider key has different capture semantics than the rest of the `/opt/instaedit/secrets/.env.production` secrets:
 
 1. **Capture NOW** from Resend dashboard → API Keys → Create API Key.
 2. **Scope = `Sending Access` ONLY** (= just `POST /emails`). Do NOT select `Full Access` (= includes domain + webhook management) — minimise blast radius if the key ever leaks.
 3. **Save in password manager** under the entry `instaedit-login/email/EMAIL_PROVIDER_KEY`. Format: starts with `re_` (≈ 40 chars).
-4. **Do NOT add to `/srv/instaedit/.env.production` yet**. As of (post-commit 58742bf Resend unification), `internal/config/config.go` has no `EmailProvider*` fields; `pkg/api/magic_link.go::handleMagicLinkStart` returns the plaintext token in the response body (marked `// dev-only; production drops via Mailgun/SES`); and `pkg/api/auth_email.go::handleForgotPassword` has `// TODO(FASE 2.2): Send reset token via email` markers. The backend does NOT yet wire Resend — pushing the key into `.env.production` would be a secret that has zero readers, which is worse than no secret (rotation burden without value).
-5. **When the backend wires Resend** (separate future task): add `EmailProvider`, `EmailFrom`, `EmailFromName`, `EmailProviderKey` fields to `Config`; wire `internal/services/email_sender.go` (a new file) to dispatch the magic-link / password-reset emails with `track_opens: false`, `track_links: false` defaults baked in. THEN push to `/srv/instaedit/.env.production` + redeploy via `docker compose up -d --force-recreate api worker`.
+4. **Do NOT add to `/opt/instaedit/secrets/.env.production` yet**. As of (post-commit 58742bf Resend unification), `internal/config/config.go` has no `EmailProvider*` fields; `pkg/api/magic_link.go::handleMagicLinkStart` returns the plaintext token in the response body (marked `// dev-only; production drops via Mailgun/SES`); and `pkg/api/auth_email.go::handleForgotPassword` has `// TODO(FASE 2.2): Send reset token via email` markers. The backend does NOT yet wire Resend — pushing the key into `.env.production` would be a secret that has zero readers, which is worse than no secret (rotation burden without value).
+5. **When the backend wires Resend** (separate future task): add `EmailProvider`, `EmailFrom`, `EmailFromName`, `EmailProviderKey` fields to `Config`; wire `internal/services/email_sender.go` (a new file) to dispatch the magic-link / password-reset emails with `track_opens: false`, `track_links: false` defaults baked in. THEN push to `/opt/instaedit/secrets/.env.production` + redeploy via `docker compose up -d --force-recreate api worker`.
 
 > Do NOT paste the key into shell history. `read -rs` + `export` is the safe pattern. Do NOT commit to `.env.production` until step 5 fires.
 
@@ -763,13 +751,12 @@ The provider key has different capture semantics than the rest of the `/srv/inst
 
 | Concern | Reference |
 |---------|-----------|
-| VPS host setup (ssh + Docker + firewall + /srv/instaedit/ tree) | [`docs/DEPLOY.md` §2](./DEPLOY.md#2-docker-compose) |
-| DNS records (canonical: apex + app + api → 51.91.11.36 + email-deliverability) | [`docs/DEPLOY.md` §1.5](./DEPLOY.md#7-dns) |
+| VPS host setup (SSH + Docker + firewall + `/opt/instaedit/` tree) | [`docs/DEPLOY.md` §2](./DEPLOY.md#2-vps-provisioning) |
+| DNS records (canonical: apex + app + api) | [`docs/DEPLOY.md` §1](./DEPLOY.md#1-production-topology-and-dns) |
 | Postgres smoke check | [`scripts/db/check-postgres-health.sh`](../scripts/db/check-postgres-health.sh) |
-| Postgres backup + restore drill (operatorside choreography) | This file §3.1 (VPS pg_dump → throwaway container). **Script rewrite needed** for `scripts/db/production-restore-drill.sh` — tracked in DEPLOY.md §11. |
+| Postgres backup + restore drill (operatorside choreography) | This file §3.1 (VPS pg_dump → throwaway container). **Script rewrite needed** for `scripts/db/production-restore-drill.sh` — tracked in the current deployment runbook. |
 | MinIO bucket provisioning (loopback admin console) | VPS MinIO admin console at `https://127.0.0.1:9001`; env block in `docker-compose.yml` |
 | MinIO storage recovery drills | This file §4.0 |
-| Tigris (legacy) → MinIO migration path | [`docs/DEPLOY.md` §10](./DEPLOY.md#63-storage-backup-tigris-minio-one-time) |
 | Post-deploy E2E smoke (Phase 9 sub-1-5+7) | [`scripts/ops/post_deploy_smoke.sh`](../scripts/ops/post_deploy_smoke.sh) |
 | Workspace isolation test (Phase 9 sub-6) | [`scripts/ops/workspace_isolation_test.sh`](../scripts/ops/workspace_isolation_test.sh) |
 | Email sender DNS records + Gmail inbox test + tracking verification + provider-key capture | This file §7 |
@@ -802,7 +789,7 @@ A row appears in this list ONLY when `MarkDeadLetter` runs, which itself fires f
 
 ```bash
 ssh instaedit@$VPS_IP \
-  'docker compose --env-file /srv/instaedit/.env.production logs --tail=2000 worker | grep -iE "dead_letter\|capabilities.canDownload\|NotDownloadable"'
+  'docker compose --env-file /opt/instaedit/secrets/.env.production logs --tail=2000 worker | grep -iE "dead_letter\|capabilities.canDownload\|NotDownloadable"'
 # Expected on a healthy rotate: a few dead-letter hits from past weeks, but no fresh
 # canDownload / NotDownloadable lines (those map to "stop the import" failures, not
 # "the worker is broken" failures).
@@ -830,11 +817,11 @@ Each test fails in CI if the protection under test is removed — the runbook an
 
 ---
 
-## §11 Open items (tracked from DEPLOY.md §11)
+## §11 Open items
 
 These are surgically tracked followup commits, NOT documentation gaps:
 
-1. `make verify-log-redaction` + `scripts/obs/verify-log-redaction.sh` must source from `docker compose logs --since <window> api worker` to make the live redactor work on the VPS-native stack (§5.3 above references this; DEPLOY.md §11 owns it).
-2. `scripts/db/production-restore-drill.sh` still follows the pre-cutover managed-Postgres pattern. Rewrite for VPS pg_dump → throwaway container (§3.1.0 above flags this; sub-task of DEPLOY.md §11).
+1. `make verify-log-redaction` + `scripts/obs/verify-log-redaction.sh` must source from `docker compose logs --since <window> api worker` to make the live redactor work on the VPS-native stack (§5.3 above references this; the current deployment runbook owns it).
+2. `scripts/db/production-restore-drill.sh` still follows the pre-cutover managed-Postgres pattern. Rewrite for VPS pg_dump → throwaway container (§3.1.0 above flags this; sub-task of the current deployment runbook).
 3. **(RESOLVED at this commit.)** Legacy `.github/workflows/integration.yml` USED to host the stale secrets-parser step; the underlying make-target and .py parsers were dropped at commit `1ab88ef`. The legacy workflow file itself is now retired (deleted alongside this scrub) and coverage lives in `integration-fast.yml` (gate) + `integration-slow.yml` (e2e, alert-only).
-4. `docker-build-production` Makefile target was orphaned post-cutover. **Dropped at commit `4382ae8`** (target removed from `.PHONY` and recipe block); residue cleanup, if any, tracked in DEPLOY.md §11.
+4. `docker-build-production` Makefile target was orphaned post-cutover. **Dropped at commit `4382ae8`** (target removed from `.PHONY` and recipe block); residue cleanup, if any, tracked in the current deployment runbook.
