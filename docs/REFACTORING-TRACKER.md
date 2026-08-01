@@ -11,7 +11,7 @@ refactoring status. Kept in sync with the tooling:
   `make loc-check LOC_AGAINST=none`).
 
 Scan: tracked `go` / `ts` / `tsx` files only (docs, SQL, JSON, YAML excluded).
-84 files are currently above 500 lines; 42 more sit in the 450–500 watchlist.
+83 files are currently above 500 lines; 42 more sit in the 450–500 watchlist.
 
 _Snapshot: 2026-08-01._
 
@@ -40,13 +40,12 @@ gh issue create \
 
 ---
 
-## > 800 lines (9 files) — current `loc-check` strict offenders
+## > 800 lines (8 files) — current `loc-check` strict offenders
 
 These are the files that make `make loc-check LOC_AGAINST=none` exit 1 today.
 
 | File | Righe | Stato | Issue |
 |------|------:|-------|-------|
-| `pkg/api/youtube_publish_pipeline_test.go` | 1157 | da fare | #NNN |
 | `pkg/api/nvidia_metadata_publish_e2e_test.go` | 928 | da fare | #NNN |
 | `tests/e2e/youtube_oauth_browser_e2e_test.go` | 926 | da fare | #NNN |
 | `pkg/api/internal_velox_get_delivery_test.go` | 923 | da fare | #NNN |
@@ -203,12 +202,13 @@ helper file dello split del crawler, anch'esso sotto soglia ma in watchlist.
 ## Completati in questa sessione (stato: `fatto`)
 
 Files split below the threshold during this session's refactoring campaign
-(commit range `802d31f` → `7cc2e4c`). All follow the split-by-concern pattern:
+(ongoing on `main`). All follow the split-by-concern pattern:
 extract helpers/types into `*_helpers` / `*_types` files, then split tests per
 feature/scenario.
 
 | File | Prima | Dopo | Split in |
 |------|------:|-----:|----------|
+| `pkg/api/youtube_publish_pipeline_test.go` | 1157 | 139 | `youtube_publish_pipeline_test.go` (139) + `_shared_test.go` (132) + `_thumbnail_test.go` (264) + `_assetsize_test.go` (144) + `_localization_test.go` (166) + `_cas_test.go` (418) |
 | `internal/services/tiktok_publish_test.go` | 937 | 491 | `tiktok_publish_test.go` + `tiktok_publish_mock_test.go` (197) + `tiktok_publish_pullfromfile_test.go` (280) |
 | `internal/worker/drive_batch_crawler_test.go` | 1014 | 326 | `drive_batch_crawler_test.go` (326) + `drive_batch_crawler_test_helpers_test.go` (465) + `drive_batch_crawler_e2e_test.go` (260) |
 | `pkg/api/drive_batch_import_test.go` | 1142 | 159 | `drive_batch_import_test.go` + `_errors_test.go` (139) + `_pagination_test.go` (246) + `_shareddrive_test.go` (151) + `_idempotency_test.go` (340) + `_e2e_test.go` (177) |
