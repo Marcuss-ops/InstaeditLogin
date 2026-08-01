@@ -116,7 +116,7 @@ in separate commits after §1/§2.
 | ------------------------------------------------------------ | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `TOMORROW.md`                                                | 6 `flyctl` references (lines 97, 98, 99, 101, 108, 744, 760)       | Working doc with historical Fly cutover notes. Either `git rm` or annotate as ARCHIVED.        |
 | `internal/config/config.go`                                  | 2 doc-comments (lines 134, 464) saying "rotate via flyctl secrets import" | In-code documentation that points to a tool no longer in use. Update to "edit VPS .env + restart container". |
-| `scripts/destroy-fly-app.sh`                                 | 22 `flyctl` invocations                                           | One-shot orchestration: run after §1/§2 to tear down Fly, then `git rm`.                       |
+| `docs/archive/legacy-fly/destroy-fly-app.sh`                                 | 22 `flyctl` invocations                                           | Historical archive only; non-executable after the VPS cutover. No current deployment invokes it.                       |
 | `scripts/db/provision-postgres-runbook.sh`                   | 12 `flyctl postgres` invocations                                  | Fly Postgres provisioning runbook. VPS uses local Postgres; `git rm` or rewrite.              |
 | `scripts/db/production-restore-drill.sh`                     | 3 `flyctl postgres destroy` references                            | Disaster-recovery drill for Fly Postgres. Rewrite for local Postgres.                          |
 | `scripts/clean-gh-fly-secrets.sh`                            | 8 references to the three FLY secrets (this is the helper that automates §2's *Secret* half) | **Preferred path for §2's Secret half**: `./scripts/clean-gh-fly-secrets.sh --apply` once instead of the manual `gh secret delete` loop. The script defaults to list-only dry-run; `--apply` enables the actual deletes. **Scope**: it handles ONLY the 3 FLY_* secrets — the 2 INSTAEDIT_*_PATH variables still need the §2 manual `gh variable delete` loop (the helper does not touch Variables). Delete this helper after running. |
@@ -137,8 +137,7 @@ in separate commits after §1/§2.
 **Net `git rm` candidates** (one commit, 6 files):
 `scripts/_parse_envfile.py`, `scripts/test_parse_envfile.py`,
 `scripts/required-fly-secrets.txt`, `scripts/disabled-fly-secrets-prefixes.txt`,
-plus optionally `scripts/destroy-fly-app.sh` and `scripts/clean-gh-fly-secrets.sh`
-after their one-shot use.
+plus optionally `scripts/clean-gh-fly-secrets.sh` after its one-shot use; the destroy orchestrator is already archived as non-operational.
 
 ---
 

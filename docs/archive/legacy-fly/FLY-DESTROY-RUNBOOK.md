@@ -1,3 +1,8 @@
+# HISTORICAL ARCHIVE — NON-OPERATIONAL
+
+This runbook is retained for historical audit only. Do not execute the archived
+script or treat this document as a current operational procedure.
+
 # docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md
 
 ## 0. Purpose
@@ -11,12 +16,12 @@ command is `flyctl storage list --app instaedit-login`.
 `instaedit-login` app + its machines + `instaedit-production` Postgres +
 Fly-managed cert (`api.instaedit.org`) + Fly Vault secrets + Fly volumes.
 Tigris bucket lifecycle is a separate code path (VPS MinIO is the canonical
-store post-cutover); `scripts/destroy-fly-app.sh` declares Tigris
+store post-cutover); `docs/archive/legacy-fly/destroy-fly-app.sh` declares Tigris
 **explicitly OUT-OF-SCOPE** (lines 27, 69, 148-149, 312).
 
 The sandbox **cannot** run `flyctl`, `ssh root@51.91.11.36`, or interact
-with Tigris accounts — so this file is a copy-pasteable protocol, not an
-executed test. The actual destruction is gated on the operator's laptop
+with Tigris accounts — so this file is a historical protocol transcript, not an executable
+procedure or test; its command blocks are intentionally disabled. The actual destruction is gated on the operator's laptop
 plus the VPS-side gate verifications.
 
 ---
@@ -42,10 +47,12 @@ first (`docs/OPERATIONS.md` for booking flow, `docs/DEPLOY.md` VPS sections).
 
 ### 2.1 The disambiguation command
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```bash
 flyctl auth login                                    # one-time per laptop
 flyctl storage list --app instaedit-login --json > /tmp/fly-storage.json
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 The JSON response describes Fly Storage volumes attached to
 `instaedit-login`. Decoding:
@@ -85,6 +92,7 @@ Per `[6, 9, 10]` canon, every `mc ... <bucket>` call requires a configured
 alias. Set up `minio` as the VPS-side alias and `tigris` as the
 Fly-attached bucket alias.
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```bash
 # VPS-side MinIO (already serves the live bucket in production; the
 # `mc alias` here is the OPERATOR-LAPTOP alias, pointing at the VPS
@@ -96,9 +104,11 @@ mc alias set tigris https://t3.storage.dev $TIGRIS_KEY $TIGRIS_SECRET
 # (or `https://fly.storage.tigris.dev` for Fly-managed storage; pick
 #  the endpoint Fly reported.)
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 ### 3.2. Version enable + version-list
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```bash
 # 3.2.1 Enable versioning (idempotent; safe to re-run on already-enabled).
 mc version enable tigris/instaedit-prod-media   # (or whatever name §2 returned)
@@ -110,11 +120,13 @@ mc version info tigris/instaedit-prod-media     # expect "Status: ENABLED"
 mc ls --versions tigris/instaedit-prod-media > /tmp/tigris-versions-pre-destroy.txt
 echo "captured $(wc -l < /tmp/tigris-versions-pre-destroy.txt) version records"
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 ### 3.3. Snapshot — copy current state (Path A local; Path B optional)
 
 `mc cp` needs the destination to exist. Two paths:
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```bash
 SNAP=$(date -u +%Y%m%dT%H%M%SZ)
 
@@ -135,6 +147,7 @@ fi
 # versioned-listing IS the forensic snapshot. Path A (/tmp/tigris-snapshot-$SNAP/)
 # remains as the lifeboat.
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 After §3 completes, **leave the snapshot where it is** (Tigris-stored,
 separate from Fly's app-scoped storage). When VPS MinIO parity is confirmed
@@ -143,12 +156,17 @@ snapshot can be `mc mirror`d back into VPS MinIO if needed.
 
 ---
 
-## 4. scripts/destroy-fly-app.sh — the canonical destruction path
+## 4. Archived destroy orchestrator — historical reference only
 
-The repo's `scripts/destroy-fly-app.sh` already implements the full
-6-step destruction pipeline + safety gating + audit logging. **Read its
-header (lines 1-50) before first use** — that's the authoritative
-reference. This § is a digest with the operational primitives.
+The archived `docs/archive/legacy-fly/destroy-fly-app.sh` is retained for
+audit/history only. It is
+non-executable and exits immediately if invoked; **do not execute it or use
+this section as an operational procedure**. The VPS + Docker Compose stack is
+the canonical runtime, and any future infrastructure action requires a new,
+reviewed operator procedure.
+
+The details below are retained to explain the historical cutover design, not
+to provide runnable commands.
 
 ### 4.1 Modes & exit codes (verbatim from script)
 
@@ -175,10 +193,12 @@ Exit codes:
 
 ### 4.2 Safety gate
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```bash
 # curl https://api.instaedit.org/api/v1/health must return 200 BEFORE
 # any destruction. --apply refuses unless this is green.
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 `--audit` reports the safety-gate verdict. `--apply` exits 1 if non-green.
 Reproduce manually with: `curl -sL -m 5 -o /dev/null -w "%{http_code}" \
@@ -190,28 +210,32 @@ Reproduce manually with: `curl -sL -m 5 -o /dev/null -w "%{http_code}" \
 SHA-256 hash at completion. Partial-failure runs still leave a verifiable
 log on disk. The hash is bindable to this repo via:
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```bash
 sha256sum /tmp/fly_destroy_*.log > /tmp/fly-destroy-evidence.txt
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 ### 4.4 Out-of-scope explicitly
 
 The script prints (at line 148-149 / 312):
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```
 Note: Tigris (t3.storage.dev) is OUT-OF-SCOPE — external S3 service,
 untouched by Fly app destruction.
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
-This means `scripts/destroy-fly-app.sh --apply` will NOT touch Tigris
-buckets. If §2 reports Fly-attached, §3 backup is REQUIRED before the
-`--apply` step. Without §3 first, an attached bucket's objects will be
-lost when the app-level destroy cascades.
+Historically, the former destroy orchestrator did not touch Tigris buckets.
+This statement is retained for audit context only; the archived orchestrator
+must not be run, and no current Fly destruction path is provided here.
 
 ---
 
 ## 5. Full sequence (copy-paste executed on operator laptop)
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```bash
 set -euo pipefail
 
@@ -250,16 +274,8 @@ else
 fi
 
 # === §4 destroy ===
-scripts/destroy-fly-app.sh --audit
-# (Operator: read the audit output; if any of the 6 steps look wrong,
-#  do NOT proceed with --apply.)
-
-# TTY required by --apply (exit 6 if non-interactive).
-[[ -t 0 ]] || { echo "no TTY — re-run from a real shell"; exit 1; }
-scripts/destroy-fly-app.sh --apply
-# (--apply will: detect TTY; if absent, exit 6 → re-run from a real
-#  shell; otherwise print detected inventory + ask "Confirm: destroy
-#  the above on Fly? Type 'yes' to continue:")
+# Historical commands intentionally omitted: the archived destroy
+# orchestrator is non-operational and must not be executed.
 
 # === §5 post-destroy verification ===
 curl -fsSL -m 5 https://api.instaedit.org/api/v1/health \
@@ -267,17 +283,18 @@ curl -fsSL -m 5 https://api.instaedit.org/api/v1/health \
 curl -sI https://api.instaedit.org/api/v1/health | grep -i '^server:'
 dig +short api.instaedit.org A
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 ### 5.1 UI fallback path (laptop without flyctl)
 
 If `flyctl` is not installable on the operator's laptop:
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```bash
-scripts/destroy-fly-app.sh --ui-fallback
-# (Prints: https://fly.io/apps/instaedit-login → Settings → Delete App
-#          https://fly.io/apps/instaedit-production → Destroy Cluster
-#          https://fly.io/apps/instaedit-login/certificates etc.)
+# Historical UI fallback details retained in this archive only.
+# No current Fly destruction procedure is provided.
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 The `--ui-fallback` works entirely from the script's hard-coded step list
 (nothing dynamic) so it's safe to read the URL list aloud if needed.
@@ -314,9 +331,11 @@ row at §6 — the 503/workers_pending signature is benign on first boot.
 
 **Worked example** (paste-back format ready to copy to VPS-DEPLOY-STATUS.md):
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```
 | 2026-07-25 HH:MM:SS | `51.91.11.36` | Caddy | 200 | Fly destroy complete; 6 audit-gate assets cleared; VPS canonical; Tigris was standalone (no §3 backup needed). |
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 Replace `HH:MM:SS` with the operator's commit-push timestamp; tune the
 `Notes` field to reflect the actual disambiguation (standalone vs
@@ -340,5 +359,5 @@ Fly-attached vs Fly-attached-with-§3-backup).
 - `docs/VPS-DEPLOY-STATUS.md` §6 — probe-log table; append the post-destroy row here
 - `docs/GITHUB-SECRETS-AUDIT.md` — GitHub-side cleanup checklist
 - `TOMORROW.md` §6 — Tigris-vs-MinIO parity audit (run BEFORE this destroy)
-- `scripts/destroy-fly-app.sh` — the canonical destruction path
+- `docs/archive/legacy-fly/destroy-fly-app.sh` — archived historical material; non-operational
 - `scripts/s3/provision-tigris.sh` — Tigris provisioning (post-cutover; may be redundant after destroy)

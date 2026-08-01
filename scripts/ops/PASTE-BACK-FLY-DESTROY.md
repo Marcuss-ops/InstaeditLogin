@@ -1,11 +1,16 @@
+# HISTORICAL ARCHIVE — NON-OPERATIONAL
+
+> This checklist is retained for historical audit only. Do not execute its
+> commands or use it as a current operational path.
+
 # scripts/ops/PASTE-BACK-FLY-DESTROY.md
 
 > Operator-side paste-back checklist for the irreversible Fly destroy step
 > at the end of the VPS-first cutover. **Cannot be run from sandbox** —
 > the actual SSH + flyctl + mc execution is operator-only.
 
-Mirrors `docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md` §1-§6 one-for-one. Use this file
-side-by-side with the runbook on the operator's laptop. Paste back the
+Mirrors `docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md` §1-§6 one-for-one. This historical checklist is retained for audit only; do not use it as an
+operational procedure or paste its commands into a terminal. The
 filled-in sections (everything between the `==>` arrows) into the
 operator prompt after each section completes.
 
@@ -31,6 +36,7 @@ operator prompt after each section completes.
 
 ## §1 Pre-conditions (all 5 must be green)
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```text
 # Command                          # Expected pass criterion          # Paste here
 command -v flyctl                  → exits 0                         ⇒ [ paste ]  # §1.1 flyctl installed
@@ -42,6 +48,7 @@ dig +short api.instaedit.org A     → "51.91.11.36"                    ⇒ [ pa
 curl -fsS https://api.instaedit.org/api/v1/health
                                   → JSON with "status":"ok"          ⇒ [ paste ]  # §1.7 VPS health
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 **GATE.** If any line is red, STOP. Do not proceed to §2.
 
@@ -49,6 +56,7 @@ curl -fsS https://api.instaedit.org/api/v1/health
 
 ## §2 Tigris disambiguation
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```text
 flyctl auth login                      # one-time per laptop
 flyctl storage list --app instaedit-login --json > /tmp/fly-storage.json
@@ -69,6 +77,7 @@ if [[ -z "$ATTACHED" && -s /tmp/fly-storage.json ]]; then
 fi
 echo "ATTACHED='$ATTACHED'"          # ⇒ [ paste the echo line ]
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 **Decision rule** (paste the chosen branch):
 
@@ -82,6 +91,7 @@ echo "ATTACHED='$ATTACHED'"          # ⇒ [ paste the echo line ]
 
 ## §3 Fly-attached pre-destroy backup (only if §2 says attached)
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```text
 # 3.1 Configure mc aliases.
 mc alias set minio http://localhost:9000 $S3_ACCESS_KEY $S3_SECRET_KEY
@@ -116,38 +126,31 @@ mc ls --versions tigris/instaedit-prod-media > /tmp/tigris-versions-pre-destroy.
 wc -l /tmp/tigris-versions-pre-destroy.txt
                                          ⇒ [ paste ]
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 ---
 
-## §4 scripts/destroy-fly-app.sh — the canonical destruction
+## §4 Archived destroy orchestrator — historical reference only
 
+The archived `docs/archive/legacy-fly/destroy-fly-app.sh` is retained for
+audit/history only. It is
+non-executable and exits immediately if invoked. **Do not execute the archived
+file or use this checklist as a current operational path.**
+
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```text
-# 4.0 TTY required for --apply (exit 6 if non-interactive).
-test -t 0 || { echo "no TTY — re-run from a real shell"; exit 1; }
-echo "TTY=$?"                       ⇒ [ paste ]  # expect 0
-
-# 4.1 Audit: inventory + safety-gate verdict; no mutations.
-scripts/destroy-fly-app.sh --audit
-                                     ⇒ [ paste ]  # expect "Audit gate: PASS"
-
-# 4.2 Apply: real destruction; TTY confirmation gate.
-scripts/destroy-fly-app.sh --apply
-                                     ⇒ [ paste ]  # expect confirmation prompt + per-step progress
-
-# 4.3 Audit log path (chain-of-custody).
-ls -la /tmp/fly_destroy_*.log
-sha256sum /tmp/fly_destroy_*.log    ⇒ [ paste ]
+# Historical command execution intentionally omitted.
+# The former --audit/--apply flow is retained only in repository history.
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
-**GATE.** If `--apply` returns non-zero (exit 5): the script writes partial
-results + the audit log nonetheless. Run `cat /tmp/fly_destroy_*.log`,
-evaluate the per-step failures (`failed_steps[]` line), and re-run with
-`--apply` to retry the missing steps. Idempotent on partial state.
+No current Fly destruction procedure or retry path is provided here.
 
 ---
 
 ## §5 Post-destroy verification (all 5 must be green)
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```text
 curl -fsS https://api.instaedit.org/api/v1/health
                                           ⇒ [ paste ]  # expect `"status":"ok"`
@@ -162,6 +165,7 @@ curl -fsS https://api.instaedit.org/ready | jq .
 workers_ready:
                                           ⇒ [ paste ]  # expect `true`
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 **Workers footnote**: if `workers_ready` stays `false` for more than 5
 minutes post-destroy, ssh the VPS and `docker compose restart worker`
@@ -176,21 +180,27 @@ Fill in the placeholder based on the §5 verification + the §2 disambiguation
 result. Commit on main as `docs(vps-deploy-status): fly destroy
 complete (post-applied @ <UTC>)`.
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```text
 | <UTC timestamp> | `51.91.11.36` | Caddy | 200 | Fly destroy complete; 6 audit-gate assets cleared; VPS canonical; Tigris was <standalone | fly-attached-with-Path-A-backup> (snapshot at /tmp/tigris-snapshot-<UTC>/). |
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 Replace the `<…>` placeholders with your actuals:
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```text
 | YYYY-MM-DD HH:MM:SS | `51.91.11.36` | Caddy | 200 | Fly destroy complete; 6 audit-gate assets cleared; VPS canonical; Tigris was <…> (snapshot at /tmp/tigris-snapshot-<…>/). |
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 The final version (paste-back as one line):
 
+<!-- HISTORICAL COMMAND BLOCK — NON-OPERATIONAL; DO NOT COPY OR EXECUTE -->
 ```
 [ single-line row ready to copy into docs/VPS-DEPLOY-STATUS.md §6 ]
 ```
+<!-- END HISTORICAL COMMAND BLOCK -->
 
 **Copy the `| YYYY-MM-DD | …` line itself, NOT the surrounding `[ ]`
 brackets or the code-block fences**, into `docs/VPS-DEPLOY-STATUS.md`
@@ -205,8 +215,8 @@ Once the green probe-log row is committed on main:
 | # | Action | Paste-back |
 | --- | --- | --- |
 | 1 | `git log --diff-filter=D --name-only --since="1 day ago"` — confirm no accidental Fly file deletions | `[ ]` |
-| 2 | `git rm scripts/destroy-fly-app.sh` — the operator-side destroy orchestrator is no longer needed; the canonical VPS stack ships in docker-compose | `[ ]` |
-| 3 | Update §3 of `docs/GITHUB-SECRETS-AUDIT.md` to mark `scripts/destroy-fly-app.sh` as `deleted` | `[ ]` |
+| 2 | Confirm `docs/archive/legacy-fly/destroy-fly-app.sh` remains `0644` and non-operational; the canonical VPS stack ships in Docker Compose | `[ ]` |
+| 3 | Keep §3 of `docs/GITHUB-SECRETS-AUDIT.md` marked as historical/non-operational | `[ ]` |
 | 4 | Mark §6 of `docs/VPS-DEPLOY-STATUS.md` FINAL row as the cutover-closing stamp (commit message adds `closes-the-cutover` tag) | `[ ]` |
 | 5 | (Optional, deferred) Update §7 of `docs/archive/legacy-fly/FLY-DESTROY-RUNBOOK.md` to redirect to VPS-commit `git log --grep=fly-destroy` | `[ ]` |
 

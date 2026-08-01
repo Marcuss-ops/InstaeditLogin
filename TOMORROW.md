@@ -459,16 +459,17 @@ bash scripts/ops/post_deploy_smoke.sh
 
 ### Perché questo blocco è pre-destroy
 
-`scripts/destroy-fly-app.sh` ha Tigris marcato come **OUT-OF-SCOPE**
-intenzionalmente (riga 27, 69): tocca solo l'app `instaedit-login` su
-Fly, non bucket esterni. Quindi **distruggere Fly NON rompe Tigris** —
-la domanda "Tigris è ancora necessario?" è ortogonale al Fly cutover
-ed è un'operazione di igiene storage separata.
+L'archivio storico `docs/archive/legacy-fly/destroy-fly-app.sh` descriveva
+Tigris come **OUT-OF-SCOPE** rispetto alla distruzione dell'app Fly. Questo
+materiale non è operativo: il runtime canonico è VPS + Docker Compose e ogni
+azione infrastrutturale futura richiede una procedura operativa nuova e
+revisionata. La domanda "Tigris è ancora necessario?" resta ortogonale al Fly
+cutover ed è un'operazione di igiene storage separata.
 
 ### Riferimenti interni
 
 - Manuale migrazione: `docs/DEPLOY.md` §10 (Tigris retirement)
-- Audit log destroy: `scripts/destroy-fly-app.sh --apply` (NON tocca Tigris)
+- Storico destroy: `docs/archive/legacy-fly/destroy-fly-app.sh` (non-operativo; NON eseguire)
 - Runbook smoke test: `scripts/ops/post_deploy_smoke.sh` §B.5
 
 ---
@@ -885,9 +886,10 @@ dashboard t3.storage.dev), ALLORA `fly apps destroy --app
 instaedit-login` **potrebbe cascade-rimuovere il bucket Tigris**
 tramite teardown dei volumi Fly-attached.
 
-`scripts/destroy-fly-app.sh` NON chiama esplicitamente `fly storage
-...` quindi è out-of-scope in **codice**. Ma il teardown Fly potrebbe
-comunque rimuovere il bucket come side-effect.
+Lo script archiviato non chiamava esplicitamente `fly storage ...`, quindi
+il riferimento è out-of-scope in **codice storico**. Un teardown Fly avrebbe
+comunque potuto rimuovere il bucket come side-effect; questa nota non è una
+procedura operativa corrente.
 
 **Pre-destroy disambiguation obbligatoria:**
 
@@ -910,13 +912,13 @@ flyctl storage list --app instaedit-login
 #    c) Solo DOPO backup-and-confirmed: proceed destroy.
 ```
 
-**Perché questo blocco è pre-destroy:** questo controllo **NON** è
-coperto da `destroy-fly-app.sh` (che è giustamente out-of-scope). È
-una decisione operator-side che va presa PRIMA di lanciare
-`destroy-fly-app.sh --apply`.
+**Perché questo blocco era pre-destroy:** questo controllo **NON** era
+coperto dal precedente orchestratore Fly (giustamente out-of-scope). È una
+nota storica sull'operazione operator-side; l'orchestratore è oggi archiviato
+e non-operativo, quindi non esiste un comando `--apply` corrente da lanciare.
 
 ### Riferimenti interni
 
 - Manuale migrazione: `docs/DEPLOY.md` §10 (Tigris retirement)
-- Audit log destroy: `scripts/destroy-fly-app.sh --apply` (NON tocca Tigris)
+- Storico destroy: `docs/archive/legacy-fly/destroy-fly-app.sh` (non-operativo; NON eseguire)
 - Runbook smoke test: `scripts/ops/post_deploy_smoke.sh` §B.5

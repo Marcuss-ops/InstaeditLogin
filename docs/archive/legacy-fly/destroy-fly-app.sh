@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-# scripts/destroy-fly-app.sh — destroy all Fly.io resources tied
+# HISTORICAL ARCHIVE — NON-OPERATIONAL
+#
+# This file is retained for audit/history only. DO NOT EXECUTE it or use it
+# as an operational Fly destruction path. The canonical runtime is the VPS +
+# Docker Compose stack; any future infrastructure action requires a separately
+# reviewed operator procedure.
+printf '%s\n' 'Archived historical material; destroy-fly-app.sh is non-operational.' >&2
+exit 1
+# docs/archive/legacy-fly/destroy-fly-app.sh — destroy all Fly.io resources tied
 # to the Instaedit-login app instance. The VPS + Docker Compose stack
 # is now the canonical runtime; api.instaedit.org already responds
 # from the VPS. This script zaps the Fly side, in the user-listed
@@ -26,12 +34,9 @@
 #   - Single TTY confirmation gate prevents mid-run abandonment.
 #   - Tigris (t3.storage.dev) is intentionally OUT-OF-SCOPE.
 #
-# Usage:
-#   scripts/destroy-fly-app.sh             # default: --dry-run
-#   scripts/destroy-fly-app.sh --audit     # safety gate + resource inventory
-#   scripts/destroy-fly-app.sh --apply     # actual destruction (one-shot confirm)
-#   scripts/destroy-fly-app.sh --ui-fallback
-#       # print manual Fly dashboard URLs for each step
+# Historical command surface (retained for audit context only; do not invoke):
+#   former modes: default audit, --dry-run, --audit, --apply, --ui-fallback
+# The archived file exits before reaching this historical implementation.
 #
 # Pre-requisites (run BEFORE this script):
 #   1. DNS A-record for api.instaedit.org points at the VPS (NOT Fly).
