@@ -51,13 +51,11 @@ var migrationsToTest = []string{
 	"011_target_provider_state.sql",
 	"012_add_post_status_enum.sql",
 	"012_async_threads_support.sql",
-	// 043 + 053 — oauth_connections lineage + tokens oauth_connection_id FK
-	// (P0#3 vault retarget). Migration 053 is guarded by a DO block that
-	// only backfills/SET NOT NULL if platform_accounts.oauth_connection_id
-	// already exists, so the order-independence test against this set
-	// stays stable whether the migration runner applies 043 before 053
-	// or vice versa.
-	"043_oauth_connections.sql",
+	// 053 + 083..085 — OAuth lineage and the current grant/token model.
+	// Migration 043 is intentionally excluded: migration 084 replaces its
+	// resource-level unique constraint with partial indexes, so replaying
+	// 043 after the current schema is not a valid idempotency assertion.
+	// The canonical RunMigrations pass still exercises 043 on a fresh DB.
 	"053_oauth_tokens_retargeted.sql",
 	"083_oauth_token_field_normalization.sql",
 	"084_oauth_subject_shared_connections.sql",

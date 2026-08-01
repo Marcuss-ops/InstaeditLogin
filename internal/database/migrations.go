@@ -206,7 +206,10 @@ func applyMigration(ctx context.Context, conn *sql.Conn, file migrationFile) err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, file.body); err != nil {
+	// The runner owns the transaction boundary. A legacy migration may still
+	// contain standalone BEGIN;/COMMIT; lines; remove those wrappers before
+	// executing it so PostgreSQL does not commit the runner transaction early.
+	if _, err := tx.ExecContext(ctx, migrationSQLForTransaction(file.body)); err != nil {
 		return fmt.Errorf("migration %s failed: %w", file.name, err)
 	}
 
@@ -222,6 +225,36 @@ func applyMigration(ctx context.Context, conn *sql.Conn, file migrationFile) err
 	}
 
 	return nil
+}
+
+// migrationSQLForTransaction removes only outer standalone transaction
+// wrappers from a migration body. RunMigrations already wraps every
+// migration, so an outer BEGIN/COMMIT pair would otherwise leave the *sql.Tx
+// idle before the runner records the migration. Inner BEGIN/COMMIT lines,
+// including those inside procedural SQL, are preserved.
+func migrationSQLForTransaction(body string) string {
+	lines := strings.Split(body, "\n")
+	first := 0
+	for first < len(lines) {
+		trimmed := strings.TrimSpace(lines[first])
+		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+			first++
+			continue
+		}
+		break
+	}
+	if first < len(lines) && strings.TrimSpace(lines[first]) == "BEGIN;" {
+		lines = append(lines[:first], lines[first+1:]...)
+	}
+
+	last := len(lines) - 1
+	for last >= 0 && (strings.TrimSpace(lines[last]) == "" || strings.HasPrefix(strings.TrimSpace(lines[last]), "--")) {
+		last--
+	}
+	if last >= 0 && strings.TrimSpace(lines[last]) == "COMMIT;" {
+		lines = append(lines[:last], lines[last+1:]...)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // extractMigrationSeq parses the leading digits from a filename like

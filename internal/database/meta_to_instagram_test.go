@@ -49,7 +49,8 @@ func insertToken(t *testing.T, db *sql.DB, accountID int64, tokenType, tokenValu
 		`WITH pa AS (SELECT user_id, platform, platform_user_id FROM platform_accounts WHERE id = $1)
 		 INSERT INTO oauth_connections (user_id, provider, provider_resource_id)
 		 SELECT user_id, platform, platform_user_id FROM pa
-		 ON CONFLICT (user_id, provider, provider_resource_id) DO UPDATE SET provider = EXCLUDED.provider
+		 ON CONFLICT (user_id, provider, provider_resource_id) WHERE provider_subject_id = ''
+		 DO UPDATE SET provider = EXCLUDED.provider
 		 RETURNING id`,
 		accountID,
 	).Scan(&oauthConnID); err != nil {
