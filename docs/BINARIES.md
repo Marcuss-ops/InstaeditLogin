@@ -1,311 +1,240 @@
-# InstaEditLogin — Binary Topology (Blocco #2.1)
+# InstaEditLogin — Binary Topology
 
-This document describes the post-Blocco #2.1 binary split and the controlled
-deprecation of the old single-process wrapper. The production and standard
-development topology uses three single-purpose binaries, each consuming the
-same shared wiring layer (`internal/bootstrap.Wire`) but starting only the
-components it needs. `cmd/server` is retained temporarily for local recovery
-and compatibility only; it is not a production entrypoint.
+This document describes the supported process split for InstaEditLogin. The
+backend runs on a VPS with Docker Compose; Vercel hosts the frontend only.
+PostgreSQL and MinIO remain private to the VPS and Compose network, while
+Caddy on the host is the public backend entry point.
 
-## Binaries
+The canonical runtime uses three single-purpose binaries. They share the
+wiring layer in `internal/bootstrap.Wire`, but each process starts only the
+components it owns:
 
-| Binary | Source | Purpose |
+| Binary | Source | Responsibility |
 | --- | --- | --- |
-| `cmd/api`     | `cmd/api/main.go`     | HTTP server only. NO workers. Listens on $PORT (default 8080). |
-| `cmd/worker`  | `cmd/worker/main.go`  | 5 background goroutines only. NO HTTP. (publish, reconcile, outbox dispatcher, webhook, metrics collector) |
-| `cmd/migrate` | `cmd/migrate/main.go` | One-shot pre-deploy job. Connect + apply migrations + exit 0. NO HTTP. NO workers. |
-| `cmd/server`  | `cmd/server/main.go`  | **Deprecated legacy / recovery wrapper.** Runs migration, HTTP and optionally workers in ONE process. Not production-supported; retained only until the remaining local recovery uses are retired. |
+| `cmd/migrate` | [`cmd/migrate/main.go`](../cmd/migrate/main.go) | One-shot database migration job; exits successfully only after migrations complete. |
+| `cmd/api` | [`cmd/api/main.go`](../cmd/api/main.go) | HTTP API and readiness endpoints; no background worker runtime. |
+| `cmd/worker` | [`cmd/worker/main.go`](../cmd/worker/main.go) | Background publishing, reconciliation, outbox, webhook, metrics, cleanup, and related worker loops; no public HTTP listener. |
 
-## Topologies
+`cmd/server` remains a deprecated compatibility wrapper for deliberate local
+recovery only. It combines migration, HTTP, and workers in one process and is
+not part of the supported VPS deployment. See the
+[`cmd/server` removal audit](CMD-SERVER-REMOVAL-AUDIT.md) before changing or
+removing its compatibility surfaces.
 
-### Production (recommended)
+## Canonical production topology
 
-```
-                ┌─────────────┐
-                │ cmd/migrate │ ← one-shot Job (k8s / Railway pre-deploy)
-                │ exit 0/1    │
-                └──────┬──────┘
-                       │ (success: schema up-to-date)
-       ┌───────────────┴────────────────┐
-       ▼                                ▼
-┌─────────────┐                  ┌─────────────┐
-│  cmd/api     │ ×N replicas     │ cmd/worker   │ ×M replicas
-│  HTTP only   │ (HPA on         │ 5 goroutines │ (independent
-│  port 8080   │  RPS/Latency)   │              │  cadence)
-└─────────────┘                  └─────────────┘
-```
-
-- Migration runs as a one-shot job. Production deploy pipelines MUST
-  block the rollout on its success exit code.
-- `cmd/api` and `cmd/worker` run in separate pods. Each auto-scales
-  independently — `cmd/api` on request rate, `cmd/worker` on
-  pending publish/backlog. No process coupling.
-- `cmd/api` and `cmd/worker` share the SAME environment configuration
-  (databases, secrets, OAuth client credentials). The split is process-
-  level only; the configuration surface is identical.
-
-### Local Dev
-
-```
-                ┌─────────────┐
-                │ cmd/migrate │ ← invoked via Dockerfile `migrate` target
-                │ exit 0      │   in docker-compose.yml (Blocco #2.1 default)
-                └──────┬──────┘
-                       │
-       ┌───────────────┴────────────────┐
-       ▼                                ▼
-┌─────────────┐                  ┌─────────────┐
-│  cmd/api     │   http :8080    │ cmd/worker   │ 5 goroutines
-│  HTTP only   │                  │              │
-└─────────────┘                  └─────────────┘
+```text
+                         Internet
+                             |
+              +--------------+--------------+
+              |                             |
+       app.instaedit.org             api.instaedit.org
+              |                             |
+           Vercel                    VPS :80/:443
+       React/Vite frontend                |
+                                  host-managed Caddy
+                                          |
+                                  127.0.0.1:8080
+                                          |
+                              Docker Compose application
+                                          |
+       +------------+-----------+---------+-----------+
+       |            |           |                     |
+   PostgreSQL    migrate      api                  worker
+    private      one-shot   HTTP only          background loops
+                                          |
+                                         MinIO
+                                  private S3-compatible store
 ```
 
-`docker-compose.yml` (Blocco #2.1 default) models this with `db` +
-`migrate` + `api` + `worker`. The legacy `server` profile
-(`docker compose --profile legacy up`) is retained only for deliberate
-recovery or compatibility testing and is not part of the supported topology.
+Deployment responsibilities are intentionally separated:
 
-### Legacy Single-Bundle (`cmd/server` wrapper)
+1. `migrate` waits for a healthy PostgreSQL service, applies migrations, and
+   exits. Compose releases `api` and `worker` only after it succeeds.
+2. `api` serves HTTP through Caddy. Its container binding remains private to
+   the VPS host.
+3. `worker` processes asynchronous jobs independently from the API process.
+4. MinIO stores media and artifacts through the internal Compose network; its
+   API and console are not public endpoints.
+5. Vercel builds and serves `web/`; it does not run backend binaries or access
+   PostgreSQL/MinIO directly.
 
-```
-                ┌─────────────────────────┐
-                │      cmd/server          │
-                │ ┌───────────────────┐  │
-                │ │ HTTP server (:8080) │  │
-                │ └───────────────────┘  │
-                │ ┌───────────────────┐  │
-                │ │ 5 workers          │  │ ← only if RUN_WORKERS=true
-                │ │ (publish, etc.)    │  │   (default)
-                │ └───────────────────┘  │
-                │ ┌───────────────────┐  │
-                │ │ database.Migrate   │  │ ← dev-only; runs once
-                │ │                    │  │   before serve
-                │ └───────────────────┘  │
-                └─────────────────────────┘
-```
+The authoritative deployment procedure is [`docs/DEPLOY.md`](DEPLOY.md).
 
-`cmd/server` is the wrapper around `cmd/api` and (optionally) `cmd/worker`,
-with `database.Migrate` baked into the same process. Three shutdown paths
-must be drained in parallel on SIGTERM:
+## Local development topology
 
-1. HTTP server (`srv.Shutdown`, 30s drain budget).
-2. 5 worker goroutines (`app.RunWorkers`, 15s drain budget per leaf).
-3. DB connection (`defer app.DB.Close()` on graceful exit).
+The default local workflow uses the same split as production:
 
-The wrapper remains a backward-compatibility path for local recovery and
-unmigrated historical single-process users. It must not be used for new
-deployments: its in-process migration assumes exclusive database access and
-its combined lifecycle prevents independent API/worker scaling. New deploys
-MUST use `cmd/migrate` + `cmd/api` + `cmd/worker`. Run
-`make verify-entrypoint-topology` to check this invariant.
-
-## Dockerfile Targets
-
-The `Dockerfile` defines the three canonical final stages plus a temporary
-legacy `server` stage. Each stage copies only its binary from the shared
-builder stage (multi-stage build, single builder compile run). The legacy
-stage must remain excluded from production Compose and deployment workflows
-until the wrapper is removed.
-
-```dockerfile
-FROM golang:1.23-alpine AS builder
-RUN go build -o /out/api     ./cmd/api
-RUN go build -o /out/worker  ./cmd/worker
-RUN go build -o /out/migrate ./cmd/migrate
-RUN go build -o /out/server  ./cmd/server
-
-FROM alpine:3.21 AS base     # ca-certificates + non-root appuser
-FROM base AS api             # COPY --from=builder /out/api + EXPOSE 8080
-FROM base AS worker          # COPY --from=builder /out/worker (no port)
-FROM base AS migrate         # COPY --from=builder /out/migrate (one-shot)
-FROM base AS server          # COPY --from=builder /out/server + EXPOSE 8080
+```text
+PostgreSQL + MinIO
+        |
+     migrate  -- completes successfully
+       /  \
+     api  worker
 ```
 
-Build per target:
+Run the complete local stack with:
 
-```
-docker build --target api     -t instaedit-api      .
-docker build --target worker  -t instaedit-worker   .
-docker build --target migrate -t instaedit-migrate  .
-docker build --target server  -t instaedit-server   .  # dev / backward-compat
+```bash
+make dev
 ```
 
-Default target (no `--target` flag): `api`.
+The default Compose graph starts `db`, `minio`, `minio-init`, `migrate`, `api`,
+and `worker`. `minio-init` creates the application bucket idempotently before
+storage-backed API requests are served. The individual processes can also be
+run against a configured environment after the migration step:
 
-Each stage is < 20 MB compressed (alpine + ~12 MB Go binary + ca-certs).
-Multi-stage build keeps the final image free of the Go toolchain.
-
-## Makefile Targets
-
-The `Makefile` adds `run-api` / `run-worker` / `run-migrate` targets for the
-canonical split. `run-server` and `run-server-api-only` are explicitly
-deprecated compatibility targets. Each runs the corresponding binary directly
-via `go run`; `make dev` is the normal local entrypoint.
-
-```
-make run-migrate             # one-shot: connect + apply migrations + exit
-make run-api                 # HTTP server only (no workers)
-make run-worker              # 5 background goroutines only
-make run-server              # DEPRECATED: legacy wrapper (recovery only)
-make run-server-api-only     # DEPRECATED: legacy wrapper (recovery only)
-make verify-entrypoint-topology # production-reference regression check
-
-make dev                     # docker compose up --build (3-service topology)
-make backend-test            # go test -race ./...
-make test-integration        # testcontainers-backed integration tests
+```bash
+make run-migrate
+make run-api
+make run-worker
 ```
 
-`make run-api` against a remote database (e.g. staging) is the canonical
-way to debug HTTP-only behavior without the worker-noise of staging
-itself. `make run-migrate` against staging before deploying a schema
-change is the canonical pre-deploy ritual.
+The `server` Compose profile and the `run-server*` Makefile targets remain
+available only for explicit recovery or compatibility testing:
 
-## Runtime Ordering (within a single binary)
-
-`internal/bootstrap.Wire(ctx)` runs in a fixed order:
-
-1. **`config.Load`** — env-based config; fails fast on schema mismatches.
-2. **S3 storage check** — `cfg.S3Endpoint / Bucket / AccessKey / SecretKey`
-   must all be set; bail with a descriptive error otherwise.
-3. **logger setup** — `slog.SetDefault(logger)`.
-4. **`database.Connect`** — opens the pooled connection.
-5. **`crypto.NewEncryptor`** — AES-256-GCM with key envelope (kek id 1
-   initially; supports rotation via the key_version column).
-6. **Repository construction** — `userRepo / tokenRepo / teamRepo /
-   workspaceRepo / apiKeyRepo / idempotencyRepo / webhookRepo /
-   sessionRepo`.
-7. **Service construction** — `vault / authMgr / rateLimitSvc /
-   sessionsSvc / authEmailSvc` (the auth email svc is an adapter over
-   `*services.AuthService`).
-8. **Provider registry** — `providers.BuildRegistry(cfg)` returns the
-   per-platform capability router.
-9. **Router setup** — `api.NewRouter(...)` + 13 `RouterOption`s wiring
-   every middleware / store. Idle: `router.Setup()` produces the
-   `http.Handler` exposed on `App.HTTPHandler`.
-10. **`metrics.InitWorkerID`** — process-local worker_id singleton, set
-    BEFORE any goroutine comes up so log lines from each worker tick
-    carry the canonical id.
-
-`Wire` does NOT run migrations and does NOT spawn any goroutine. Each
-binary decides what to run after Wire returns.
-
-### Migrate (cmd/migrate)
-
-```
-bootstrap.Wire (steps 1–10)
-  → database.Migrate(app.DB)
-  → exit 0  (or exit 1 on migration failure)
+```bash
+docker compose --profile legacy up
+make run-server
+make run-server-api-only
 ```
 
-### API (cmd/api)
+Do not use those legacy paths for a new deployment. They are retained until
+the documented removal gate is satisfied.
 
-```
-bootstrap.Wire (steps 1–10)
-  → http.Server.ListenAndServe (1 goroutine, default port 8080)
-  → on SIGTERM: srv.Shutdown(30s) → exit
-```
+## Dockerfile targets
 
-### Worker (cmd/worker)
+[`Dockerfile`](../Dockerfile) uses one Go builder stage and separate final
+stages:
 
-```
-bootstrap.Wire (steps 1–10)
-  → app.RunWorkers (5 goroutines, parallel ctx-managed drains)
-  → on SIGTERM: cancel ctx → 5× (run_drain_or_15s_timeout)
-```
+| Target | Binary | Use |
+| --- | --- | --- |
+| `api` | `/app/api` | Canonical HTTP service. |
+| `worker` | `/app/worker` | Canonical background-worker service. |
+| `migrate` | `/app/migrate` | Canonical one-shot migration service. |
+| `server` | `/app/server` | Deprecated local recovery compatibility stage only. |
 
-### Server wrapper (cmd/server)
+Build the canonical images with:
 
-```
-bootstrap.Wire (steps 1–10)
-  → database.Migrate (dev-only assumption: exclusive DB access)
-  → if RUN_WORKERS=true: app.RunWorkers (5 goroutines)
-  → http.Server.ListenAndServe (1 goroutine)
-  → on SIGTERM:
-      - workersCancel() (triggers 15s drain per leaf)
-      - srv.Shutdown(30s)
-      - wg.Wait (workers + http both drained)
-      - exit
+```bash
+docker build --target migrate -t instaedit-migrate .
+docker build --target api     -t instaedit-api .
+docker build --target worker  -t instaedit-worker .
 ```
 
-## Environment Variable Parity
+The `server` target is intentionally excluded from the production Compose
+overlay. The complete service graph and migration dependency are defined in
+[`docker-compose.yml`](../docker-compose.yml) and hardened for the VPS by
+[`docker-compose.production.yml`](../docker-compose.production.yml).
 
-`cmd/api`, `cmd/worker`, `cmd/migrate`, and `cmd/server` (wrapper) all
-read from the SAME `.env` surface. The split is process-level only —
-no new env vars were introduced, no existing env vars moved.
+## Startup and shutdown contracts
 
-Variables that MUST be present (config validation rejects otherwise):
+All three canonical binaries call `bootstrap.Wire` first. `Wire` loads and
+validates configuration, connects to PostgreSQL, builds repositories and
+providers, and prepares the API handler. It does not apply migrations or start
+long-running workers by itself.
 
-- `DATABASE_URL` / Postgres DSN components (user, password, host, port, db)
-- `JWT_SECRET` — shared between api (signs access tokens) and worker (validates session-row ownership via the SessionsService.Start path)
-- `ENCRYPTION_KEY` — wraps OAuth refresh tokens at rest in the vaults table
-- `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` — media presign + asset reads
-- `FRONTEND_URL` — OAuth callback redirect target
-- `CORS_ALLOWED_ORIGINS` — cross-origin SPA allowlist
+### `cmd/migrate`
 
-Variables that ONLY `cmd/worker` reads (no-op if absent on api):
+```text
+bootstrap.Wire
+  -> database.Migrate(app.DB)
+  -> exit 0 on success, exit 1 on failure
+```
 
-- `PUBLISH_WORKER_INTERVAL_SECONDS` (default 30)
-- `RECONCILE_WORKER_INTERVAL_SECONDS` (default 5)
-- `WEBHOOK_WORKER_INTERVAL_SECONDS` (default 5)
+### `cmd/api`
 
-Variables that ONLY the `cmd/server` wrapper reads:
+```text
+bootstrap.Wire
+  -> HTTP listener on PORT (default 8080)
+  -> graceful HTTP and metrics shutdown on SIGTERM
+```
 
-- `RUN_WORKERS` — default true; false disables the 5 background goroutines
+### `cmd/worker`
 
-## Migration Lifecycle
+```text
+bootstrap.Wire
+  -> worker health/metrics setup
+  -> app.RunWorkers(ctx)
+  -> context cancellation and graceful worker drain on SIGTERM
+```
 
-Production deploy pattern:
+### `cmd/server` legacy wrapper
 
-1. **`cmd/migrate` runs as a one-shot job** (k8s `Job`, Railway pre-deploy
-   hook, helm `pre-install` hook). Blocks the rollout on its success exit
-   code (`exit 0` → safe to proceed, `exit 1` → abort).
-2. **`cmd/api` Pods roll out** — auto-scaling group ready to serve on
-   `:8080`. The new HTTP server starts against the migrated schema.
-3. **`cmd/worker` Pods roll out** — independent auto-scaling group
-   (typically 1–2 replicas; not request-driven).
-4. **(optional) Old replicas drain** — `kubectl rollout` finishes old pods
-   gracefully; production drain budget is 75s (matches the pre-Blocco #2.1
-   staggered worker + HTTP shutdown).
+```text
+bootstrap.Wire
+  -> database.Migrate(app.DB)
+  -> optional app.RunWorkers(ctx) controlled by RUN_WORKERS
+  -> HTTP listener
+  -> graceful shutdown
+```
 
-Local dev lifecycle (docker-compose):
+The wrapper's in-process migration assumes exclusive database access and its
+combined lifecycle prevents independent API/worker scaling. It must remain a
+local recovery path, not a production entrypoint.
 
-1. `db` container starts; healthy on pg_isready.
-2. `migrate` container starts, runs migrations, exits.
-3. `api` + `worker` containers start in parallel after `migrate` succeeds.
-4. SIGTERM drains both with their respective budgets.
+## Environment and storage parity
 
-Risks:
+`cmd/api`, `cmd/worker`, and `cmd/migrate` consume the same application
+configuration surface. Required production values include the database
+connection, JWT and encryption settings, OAuth configuration as enabled, CORS
+and frontend URLs, and the S3-compatible storage settings:
 
-- **Race on migration**: deploy pipelines MUST block `cmd/api` rollout on
-  `cmd/migrate` exiting 0. `service_completed_successfully` in
-  docker-compose.yml enforces this locally; the same rule applies to k8s
-  via `Job` ordering and to Railway via pre-deploy hook sequencing.
-- **Schema drift in dev**: if a developer hot-reloads `cmd/server` against
-  a partly-migrated DB, the bootstrap path can fail at Wire time. Always
-  run `make run-migrate` first when iterating on schema migrations locally.
+- `S3_ENDPOINT` points to the internal MinIO service (`http://minio:9000`) from
+  Compose containers;
+- `S3_BUCKET`, `S3_ACCESS_KEY`, and `S3_SECRET_KEY` identify the application
+  bucket and credentials;
+- `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` are used by MinIO and the
+  idempotent `minio-init` sidecar;
+- MinIO credentials never belong in `VITE_*` variables or the browser bundle.
 
-## Removal Gate for `cmd/server`
+The exact production secret contract is maintained in the
+[`deployment runbook`](DEPLOY.md#3-production-secrets-and-environment).
 
-`cmd/server/main.go` is not removed until all of the following are true:
+## Verification commands
 
-1. `make verify-entrypoint-topology` passes in CI and on the deployment host.
-2. A repository and operator audit confirms no development or production
-   workflow still invokes `run-server`, the Compose `legacy` profile, or the
-   Docker `server` target.
-3. The local recovery instructions use `make dev` or the split commands and
-   the deprecation warning has no observed users for a full compatibility
-   window.
-4. The wrapper is removed together with its Docker stage, Compose profile,
-   Makefile compatibility targets, and legacy documentation references in one
-   reviewed change.
+Use these checks when changing entrypoint wiring or deployment topology:
 
-Until then, a runtime warning in the wrapper and this document make every
-intentional use visible without breaking recovery.
+```bash
+make verify-entrypoint-topology
+make backend-test
 
-## See Also
+go vet ./...
+go build ./...
+```
 
-- `docs/ARCHITECTURE.md` — the high-level architecture incl. async
-  publishing pipeline, transactional outbox, and security model.
-- `Makefile` — concrete commands for local iteration.
-- `Dockerfile` — multi-target build shapes for each binary.
-- `docker-compose.yml` — the 4-service local-dev topology.
+The topology check confirms that `migrate`, `api`, and `worker` remain the
+canonical production targets, that production files do not select `server`,
+and that the deliberate legacy compatibility surfaces remain explicit.
+
+## Removal gate for `cmd/server`
+
+Do not remove `cmd/server/main.go` until all of the following are confirmed:
+
+1. No active development or recovery workflow invokes `run-server`,
+   `run-server-api-only`, the Compose `legacy` profile, or the Docker `server`
+   target.
+2. Operators confirm that no maintained environment depends on the wrapper.
+3. The compatibility window ends with no observed wrapper use.
+4. The replacement workflow is validated with `make dev`,
+   `make run-migrate`, `make run-api`, and `make run-worker`.
+5. One reviewed change removes the Go wrapper, Docker stage, Compose profile,
+   Makefile targets, and obsolete documentation together.
+6. The topology check, race-enabled tests, vet, and build pass after removal.
+
+Until then, the wrapper's deprecation warning and the
+[`removal audit`](CMD-SERVER-REMOVAL-AUDIT.md) keep intentional use visible.
+
+## See also
+
+- [`docs/DEPLOY.md`](DEPLOY.md) — canonical Docker Compose, MinIO, VPS, and
+  Vercel deployment runbook.
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — application and worker
+  architecture.
+- [`docker-compose.yml`](../docker-compose.yml) — canonical service graph.
+- [`docker-compose.production.yml`](../docker-compose.production.yml) — VPS
+  hardening overlay.
+- [`Dockerfile`](../Dockerfile) — binary build targets.
+- [`Makefile`](../Makefile) — local development and verification commands.
+- [`verify-entrypoint-topology.sh`](../scripts/verify-entrypoint-topology.sh)
+  — canonical entrypoint regression check.
