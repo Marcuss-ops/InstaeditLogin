@@ -2,6 +2,9 @@ package api
 
 import (
 	"database/sql"
+	"net"
+	"net/http"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/analytics"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
@@ -302,4 +305,111 @@ func WithRouterAnalyticsClock(clock analytics.Clock) RouterOption {
 // decorator — can be injected without touching the bootstrap.
 func WithChannelAnalyticsService(s *ChannelAnalyticsService) RouterOption {
 	return func(r *Router) { r.channelAnalyticsService = s }
+}
+
+type RouterOption func(*Router)
+
+// WithConnectLinkNonceStore wires the store used to persist and
+// atomically consume connect-link nonces. When nil, replay
+// protection is disabled (tests and legacy deployments).
+func WithConnectLinkNonceStore(store ConnectLinkNonceStore) RouterOption {
+	return func(r *Router) {
+		r.connectLinkNonceStore = store
+	}
+}
+
+// WithConnectLinkNonceStore wires the store used to persist and
+// atomically consume connect-link nonces. When nil, replay
+// protection is disabled (tests and legacy deployments).
+func WithConnectLinkNonceStore(store ConnectLinkNonceStore) RouterOption {
+	return func(r *Router) {
+		r.connectLinkNonceStore = store
+	}
+}
+
+// WithTrustedProxies configures the list of networks (IP or CIDR)
+// that are allowed to supply X-Forwarded-For / X-Real-IP headers.
+// When empty (the default), clientIP extraction falls back to the
+// direct peer address.
+func WithTrustedProxies(proxies []*net.IPNet) RouterOption {
+	return func(r *Router) {
+		r.trustedProxies = proxies
+	}
+}
+
+// WithMetricsAuth wires the basic-auth credentials used by
+// /api/v1/metrics. If either value is empty the endpoint is
+// fail-closed (503 Service Unavailable).
+func WithMetricsAuth(user, pass string) RouterOption {
+	return func(r *Router) {
+		r.metricsUser = user
+		r.metricsPass = pass
+	}
+}
+
+// WithYouTubeVideoEditStore wires the repository used to persist
+// YouTube thumbnail editor sessions. When nil, the
+// /api/v1/youtube/editor-sessions endpoint returns 503.
+func WithYouTubeVideoEditStore(store YouTubeVideoEditStore) RouterOption {
+	return func(r *Router) {
+		r.youtubeVideoEditStore = store
+	}
+}
+
+// WithContentPipelineStore wires the consolidated read-side repo
+// used by GET /api/v1/content/{id}/pipeline. When nil, the route
+// returns 503 (matches the rest of the nil-store feature flags).
+// Production wiring in internal/bootstrap/app.go passes
+// repository.NewContentPipelineRepository(app.DB).
+func WithContentPipelineStore(store ContentPipelineStore) RouterOption {
+	return func(r *Router) {
+		r.contentPipelineStore = store
+	}
+}
+
+// WithEditorURL wires the base URL of the dark editor SPA. When
+// empty, frontendURL is used as a fallback when building editor_url.
+func WithEditorURL(url string) RouterOption {
+	return func(r *Router) {
+		r.editorURL = url
+	}
+}
+
+// WithPublishingInFlightTimeout configures the guard window used by the
+// YouTube thumbnail publish handler to treat a session with
+// status='publishing' as still in-flight. The default is 5 minutes;
+// non-positive values are ignored and the default is used instead.
+func WithPublishingInFlightTimeout(d time.Duration) RouterOption {
+	return func(r *Router) {
+		if d > 0 {
+			r.publishingInFlightTimeout = d
+		}
+	}
+}
+
+// WithThumbnailDownloadClient wires the HTTP client used to download
+// thumbnail bytes from storage before publishing to YouTube. When
+// nil, NewRouter installs a default client with a 30s timeout.
+func WithThumbnailDownloadClient(client *http.Client) RouterOption {
+	return func(r *Router) {
+		r.thumbnailDownloadClient = client
+	}
+}
+
+// WithBookingEventStore wires the repository used to persist the
+// strategy-call marketing events. Optional (nil → route not
+// registered) — matches the webhookStore / uploadJobStore pattern.
+func WithBookingEventStore(store BookingEventStore) RouterOption {
+	return func(r *Router) { r.bookingEventStore = store }
+}
+
+// WithNvidiaMetadataService wires the NVIDIA AI metadata generator
+// used by the /generate-metadata endpoint. When nil (the default),
+// the endpoint returns 503 and manual metadata entry still works.
+// Production wiring in internal/bootstrap/app.go passes
+// services.NewMetadataGenerator(cfg.AI.NVIDIAAPIKey).
+func WithNvidiaMetadataService(svc *services.MetadataGenerator) RouterOption {
+	return func(r *Router) {
+		r.nvidiaMetadataSvc = svc
+	}
 }
