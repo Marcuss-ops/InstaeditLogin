@@ -12,11 +12,6 @@ The production client must be moved to **Production** only after the required
 brand/scope verification is complete; a staging client should remain in
 **Testing** while it is used for controlled test accounts.
 
-Step-by-step procedure for pushing the InstaEdit **YouTube** and
-**Google Drive** OAuth clients out of **Testing mode** (the default
-for newly created apps) into **Production mode** (required for the
-200-channel operator rollout and for Drive folder-batch imports).
-
 This document is scoped to the **YouTube Data API v3** and **Google
 Drive API v3** clients. InstaEdit uses **two separate OAuth grants**:
 one for YouTube and one for Google Drive. The operator's flow is
@@ -25,6 +20,22 @@ is authorized independently through its own consent screen and its own
 set of scopes. The same shape applies to Meta /
 LinkedIn / TikTok clients — those flows are covered by `docs/DEPLOY.md`
 and the `META_*` / `TIKTOK_*` sections of `.env.production.example`.
+
+## Documentation map
+
+This file is the **index** for the Google OAuth documentation set. The
+detailed procedures live in the linked documents below; this page keeps
+the TL;DR checklist, the canonical scope table (Step 3 — linted by the
+`TestOAuthScopes_DocsMatchCanonical` canary), and the operational
+checklist.
+
+| Document | Contents |
+| --- | --- |
+| [oauth-google-setup.md](oauth-google-setup.md) | Console walkthrough: prerequisites, consent screen, brand verification (Step 4), production publish (Step 5), quota increase (Step 6), rollout verification (Step 7), channel distribution (Step 8) |
+| [oauth-google-limits.md](oauth-google-limits.md) | Capacity limits: 50–100 refresh tokens per pair, 100 channels per account, `channels.list` pagination cap, 2026 Video Uploads quota model |
+| [oauth-google-monitoring.md](oauth-google-monitoring.md) | Refresh-token TTL monitoring, verify-mode scripts, `APP_MODE` + clock-injection test coverage |
+| [oauth-google-rollout.md](oauth-google-rollout.md) | Operator Workflow for 200-Channel Rollout: the `distribute_channels_to_managers` CLI runbook |
+| [oauth-google-troubleshooting.md](oauth-google-troubleshooting.md) | Testing-mode trap, failure-mode quick reference |
 
 ## TL;DR — the Testing→Production checklist
 
@@ -37,7 +48,9 @@ list can use the app for more than 7 days at a time.
    domain, authorized domain, home page, privacy policy, ToS,
    developer contact).
 3. [ ] **YouTube OAuth grant scopes** declared exactly as requested by
-   `internal/services/youtube_oauth.go`:
+   `internal/services/youtube_oauth.go` (see the
+   [canonical scope table](#step-3--declare-the-scopes-minimum-set)
+   below):
    - `youtube.upload` (videos.insert)
    - `youtube.readonly` (channels.list for P0#3 binding check +
       processing-status poll)
@@ -56,300 +69,26 @@ list can use the app for more than 7 days at a time.
 6. [ ] **Brand verification** approved by Google (typically 4+ weeks
    for sensitive scopes).
 7. [ ] **Consent screens published** (one-way switch from Testing to
-   Production; see Step 5).
+   Production; see Step 5 in the
+   [setup walkthrough](oauth-google-setup.md#step-5--move-from-needs-verification-to-production)).
 8. [ ] **Refresh-token TTL monitoring** wired up so the 7-day Testing
    trap and the user-revocation case both produce alerts (see
-   "Monitoring refresh-token TTL" below).
+   [oauth-google-monitoring.md](oauth-google-monitoring.md)).
 9. [ ] **7-day reconnect test** passes on a fresh non-tester Google
    Account (refresh token still valid after a week).
 10. [ ] **Quota increase** approved by Google (recommended **300–400
-    videos.insert/day** in the dedicated "Video Uploads" bucket; default
-    today is 100/day at 1 bucket unit per call — bucket units are spent
-    1-to-1 with daily upload capacity, so the legacy `units ÷ 1600` math no
-    longer applies anywhere in this pipeline).
+    videos.insert/day** in the dedicated "Video Uploads" bucket; see
+    [the 2026 quota model](oauth-google-limits.md#youtube-data-api-v3--video-uploads-bucket-2026-model)).
 11. [ ] **Manager Google Accounts** created + OAuth dance complete for
-    each (4–5 accounts × ≤ 50 channels each, see "Distribute the 200
-    channels").
-
-## Why this matters (the Testing-mode trap)
-
-In **Testing mode**:
-
-* Refresh tokens **expire after 7 days** for any external (non-Google
-  employee) test user. Every operator who connects a channel must
-  re-authorize weekly. This silently breaks Drive imports, scheduled
-  publishes, and the channel-binding check from P0#3 — all of which
-  read the long-lived refresh token.
-* The "Add users" tester list caps at **100 test users**. The 200
-  channels the operator wants to roll out exceed this cap.
-* Sensitive scopes actually requested by the app — `youtube.upload`
-  and `youtube.readonly` — require explicit Google verification
-  before they can be requested by any user outside the test list.
-  (`yt-analytics.readonly` is intentionally NEVER requested by the
-  InstaEdit publish pipeline — see Step 3 below.)
-* The Drive folder-batch crawler uses the **restricted**
-  `drive.readonly` scope — the importer walks arbitrary folders, so
-  `drive.file` (per-file access only, opened via the Google Picker
-  API) cannot satisfy the flow. `drive.readonly` requires a Google
-  security review before the app can publish it externally; that
-  review is precisely what this document drives you through (see
-  "Step 4 — submit for verification").
-
-Production mode fixes all of the above: refresh tokens normally remain
-usable until revoked or otherwise invalidated by Google (for example, by
-inactivity or token limits; see the official expiration guidance), the
-Testing-user restriction no longer applies, and verified scopes can be
-requested by consenting Google accounts.
-
-## Repository/runtime configuration contract
-
-The backend reads these environment variables at startup:
-
-| Environment | `APP_ENV` | `APP_MODE` | YouTube callback URL |
-| --- | --- | --- | --- |
-| Local development | `dev` | `dev` (local client only) | `http://localhost:8080/api/v1/auth/youtube/callback` |
-| Staging / Google Testing | `staging` | `testing` | `https://<staging-api-host>/api/v1/auth/youtube/callback` |
-| Production | `production` | `production` | `https://api.instaedit.org/api/v1/auth/youtube/callback` |
-
-`APP_MODE` accepts only `dev`, `testing`, or `production`; unknown values
-fail startup. `APP_MODE=testing` is a deployment declaration that the
-configured Google consent screen is still in Testing, so operators should
-expect Google's seven-day refresh-token behavior. It does not change Google
-Console state by itself. `APP_MODE=production` must only be used with a
-client whose Google publishing status is actually Production.
-
-For every environment, `YOUTUBE_REDIRECT_URI` must match character-for-
-character in all three places: the environment, the authorization URL, and
-the Google Cloud Console web-client's authorized redirect URI. Do not use a
-staging callback with a production client or vice versa; protocol, host,
-port, path, and trailing slash must agree.
-
-The authorization URL intentionally always includes `access_type=offline`
-and `include_granted_scopes=true`. It adds `prompt=consent` only for an
-explicit reconnect/consent flow; normal login does not force consent. This
-avoids unnecessary refresh-token issuance/rotation while still allowing a
-first connection or recovery flow to obtain a refresh token. OAuth client
-IDs and secrets are server-side only; store them in the deployment secret
-manager or protected environment file, not in Git, Docker images, the
-frontend, URLs, or logs.
-
-## Google Cloud Console checks (operator-only)
-
-These values cannot be verified from Git:
-
-1. **Audience:** choose `Internal` only when every user belongs to the same
-   Google Workspace organization. Use `External` for SaaS users outside one
-   organization.
-2. **Publishing status:** keep staging/Test clients in **Testing** and publish
-   the verified production client as **Production**. Verify the badge in the
-   current Google Auth Platform console; `APP_MODE` is only a local guardrail.
-3. **Authorized domains and redirects:** verify the domain first, then add the
-   exact environment-specific callback URL to the matching Web application
-   client. Never copy a production redirect into a staging client by habit.
-4. **Scopes:** compare the consent-screen declaration and a real token's
-   granted scopes with the canonical YouTube set in Step 3. A token may have
-   fewer scopes than requested; treat missing required scopes as a reconnect
-   condition.
-5. **Offline grant:** perform one fresh consent with the intended client and
-   confirm the server stores both encrypted token fields. Do not paste tokens
-   into tickets or command history.
-
-## Limits we have to plan around
-
-### 50–100 refresh tokens per OAuth client + Google Account pair
-
-Each combination of (OAuth client_id, Google Account) holds at most
-**50–100 active refresh tokens** at any time. When the cap is hit,
-**Google silently invalidates the oldest token** without notifying
-the app. (Google's official OAuth 2.0 documentation cites 50; some
-2024+ third-party write-ups cite 100; the conservative 50 figure
-gives the operator more headroom.)
-
-For the 200-channel rollout, this means:
-
-* One Google Account can directly manage ≤ 50 channels through a
-  single OAuth client without triggering silent eviction.
-* For 200 channels, **distribute the channels across 4–5 manager
-  Google Accounts** — for example 40–50 channels per manager — to
-  leave headroom for re-auths and rotations. Targeting 50 exactly
-  leaves no buffer for connection-state churn.
-* Each manager account performs its own OAuth flow; the resulting
-  refresh tokens are stored per `platform_accounts.platform_user_id`
-  on the corresponding `youtube` row.
-
-The token-count limit is documented at Google's official OAuth 2.0
-guide
-([developers.google.com/identity/protocols/oauth2 — Expiration](https://developers.google.com/identity/protocols/oauth2#expiration))
-and cross-referenced at
-[Google Support](https://support.google.com/youtube/answer/3046356);
-it is enforced server-side.
-
-### 100 channels per Google Account
-
-A single Google Account can manage up to **100 YouTube channels**
-(each with its own `UC…` channel id). Beyond that, the extra channels
-cannot be transferred into the account. For the 200-channel
-deployment, distribute channels across 4–5 manager accounts as
-detailed in Step 8 below.
-
-### `channels.list?mine=true` pagination + 40–50 channels per manager
-
-A single Google Account can be granted access to up to **100 YouTube
-channels**, all managed under the same OAuth grant. The pre-2024
-InstaEdit code path calls `channels.list?mine=true&maxResults=50`
-without following `nextPageToken`, so it can only see the first 50
-channels of any manager. As soon as a manager exceeds 50 channels the
-remaining ones are invisible to the channel-binding check and the
-publisher will silently act on a wrong channel.
-
-**Hard cap per manager: 40–50 channels.** Picking the floor (40 +
-margin) keeps `channels.list` responses to a single page (no
-`nextPageToken` chasing needed for the pre-upload binding check) and
-keeps every manager comfortably under both Google's 100-channels-per-
-Account cap and the 50–100 refresh-tokens-cap-per-`(Google Account,OAuth client)` cap. **Operators MUST NOT exceed 50 channels per
-manager.** To exceed this hard cap, BOTH preconditions below MUST
-be verified live on a test account first:
-
-1. The YouTube service has been upgraded to follow `nextPageToken`,
-   loop until the response returns an empty `nextPageToken`, and
-   tolerate up to 200 channels in a single grant (the server-side
-   `mine=true` maximum the API exposes today).
-2. The operator has confirmed the manager's refresh-token count
-   stays below the 50-100 silent-invalidation cap (see the limit
-   above).
-
-**The failure mode the cap prevents.** Going past 50 channels per
-manager HARD-BLOCKS every channel beyond the 50th in that manager's
-set. `channels.list?mine=true&maxResults=50` returns only the first
-50, so any expected `UC…` past position 50 is INVISIBLE to
-`ValidateChannelBinding` in `internal/services/youtube_oauth.go`. The
-function returns the typed `ErrYouTubeChannelMismatch` sentinel; the
-publish worker (around `internal/worker/publish_worker.go:434`) treats
-that sentinel as terminal and calls `MarkReauthRequired` on the
-platform_account — flipping `status='reauth_required'` and stamping
-`reauth_required_at=NOW()`. The channel is then BRICKED: the
-post_target is marked `'failed'`, the publish queue stops retrying,
-and the operator must complete a full new OAuth dance against Google
-(consent click → new refresh_token grant) to recover the channel.
-There is no in-app bypass — no admin "flips the flag back" route,
-no auto-retry that escapes the cap, no 5th-manager overflow lane.
-
-Per the actual code path, the failure is therefore STRICTLY WORSE
-than a wrong-target upload: a wrong-target upload would still show
-up in the Step 7 `snippet.channelId` reconciliation check and the
-PostGreSQL row would survive with the correct status. A
-maxResults=50 truncation flips the platform_account to a state
-where every publish for the affected channel is permanently
-rejected until full re-consent. Operators MUST honor the 50-channel
-cap exactly because every channel past it becomes unactionable
-from the publisher. Until the `nextPageToken` pagination ships
-(see Step 8 follow-up), the cap is a single-page response
-guarantee — no exceptions, no over-the-cap routing on a 5th manager.
-
-For the 200-channel rollout: **4–5 managers, ≤50 channels each,
-single-page `channels.list` today**. Distribute by **rotating secondary
-channels across managers** so no single manager gets all of its
-channels revoked at once if an OAuth grant is later revoked from
-[Google's third-party apps page](https://myaccount.google.com/permissions).
-
-> **Aggiornamento 2026**: il sistema ora gestisce fino a **200 canali per grant** con paginazione attiva (vedi Step 3.3). La regola "max 40-50 canali per manager" indicata in Step 8 resta valida come **budget operativo consigliato** (UI saturation threshold), NON come hard limit tecnico. Operatori con >50 canali per manager devono: (a) verificare che il refresh-token count resti sotto il cap 50-100 per la coppia `(Google Account, OAuth client)`, e (b) confermare che il loro `channels.list?mine=true` con paginazione copra l`intero channel set del manager.
-
-### YouTube Data API v3 — Video Uploads bucket (2026 model)
-
-Since **1° giugno 2026**, YouTube charges `videos.insert` against its
-own dedicated "Video Uploads" bucket instead of the older shared
-"units" budget that mixed read + write calls under one number. The math
-this doc used to print (`10,000 units/day default ÷ 1,600 units per call
-= ~6 videos.insert/day (LEGACY pre-2026 / 1600 math; current 2026 model: 1 video = 1 bucket unit, default 100/day)`) is **obsolete as of 2026-06-01**.
-
-* **Cost per call**: `1` bucket unit per `videos.insert`.
-* **Default daily cap**: `100` `videos.insert` per Google Cloud project
-  per day (≈ 1 upload every 15 minutes — fine for a single-channel dev
-  app, way too tight for a 200-channel operator fleet).
-* **Multiplier**: bucket units are spent 1-to-1 against `videos.insert`.
-  Adding `N` bucket units to the daily cap buys exactly `N` more daily
-  `videos.insert` calls. The legacy `units [×*] 1600` / `[/÷] 1600` arithmetic (pre-2026-06-01); current 2026 model: 1 video = 1 bucket unit
-  you may see elsewhere in the Google docs does NOT apply to this
-  bucket.
-* **Scope (very important)**: this bucket is **per Google Cloud project**,
-  NOT per manager and NOT per Google Account. InstaEdit uses ONE Google
-  Cloud project, so all 4–5 manager accounts draw from the SAME daily
-  budget. The 300–400 /day request below is the **total fleet budget**
-  — not per-manager. An operator who interprets it as per-manager will
-  plan around 1,200–2,000 /day instead of 300–400 /day and submit a
-  quota request that Google will reject out of hand.
-
-For the 200-channel daily target (200 calls/day steady-state + retries +
-canary private uploads + test traffic + margin) request **at least 300
-bucket units/day**; ideally **400** so the rollout keeps a 50–100% buffer.
-The Google-published, cross-verified quota increase URL is
-[Quota Calculator](https://developers.google.com/youtube/v3/determine_quota_cost).
-
-## Step 0 — prerequisites
-
-Before opening the Google Cloud Console:
-
-* Operator has a Google Workspace identity with billing enabled on the
-  Cloud project.
-* The OAuth client id + secret in `.env.production` matches the one
-  used in development (rotation requires re-consent from every
-  connected user).
-
-### Step 0.1 — verify the app domain (Search Console)
-
-Google requires that the **top private domain** of every URL
-referenced in the consent screen be verified. For InstaEdit:
-
-1. Open [search.google.com/search-console](https://search.google.com/search-console).
-2. Add property → **URL prefix** → `https://app.instaedit.org/`.
-3. Verify via **DNS TXT record** (recommended for non-Google-hosted
-   properties) — the Search Console UI shows the exact record name +
-   value to add to the `instaedit.org` DNS zone.
-4. Repeat for the privacy policy host (`app.instaedit.org`) and the
-   ToS host. They share the same top private domain so a single
-   verification covers all three.
-5. Confirm the **Verified** badge appears next to the property in
-   Search Console before continuing. The OAuth consent screen will
-   reject unverified domains at publish time.
-
-### Step 0.2 — host the required URLs
-
-* **Privacy policy** at `https://app.instaedit.org/privacy.html`
-  (already deployed per the `web/public/privacy.html` repo file).
-* **Terms of service** at `https://app.instaedit.org/tos.html`
-  (already deployed per `web/public/tos.html`).
-* **Application home page** at `https://app.instaedit.org/`
-  reachable + serves the SPA.
-
-All three must return HTTP 200 + a non-empty body. Google's crawler
-visits them during verification.
-
-## Step 1 — open the Google Cloud Console
-
-1. Go to
-   [console.cloud.google.com](https://console.cloud.google.com/)
-   and select the **InstaEdit** project.
-2. Sidebar → **APIs & Services → OAuth consent screen**.
-3. Confirm the **User type** is set to **External** (it cannot be
-   Internal unless the project belongs to a Google Workspace org and
-   every user is in that org; we want External for SaaS onboarding).
-
-## Step 2 — fill the OAuth consent screen
-
-| Field                         | Value                                                                  |
-| ---                           | ---                                                                    |
-| App name                      | `InstaEdit`                                                            |
-| User support email           | `support@instaedit.org`                                                |
-| App logo                      | 256×256 PNG, served at `https://app.instaedit.org/logo.png`             |
-| App domain                    | `app.instaedit.org`                                                    |
-| Authorized domains           | `instaedit.org`                                                        |
-| Application home page        | `https://app.instaedit.org/`                                           |
-| Application privacy policy   | `https://app.instaedit.org/privacy.html`                               |
-| Application terms of service | `https://app.instaedit.org/tos.html`                                   |
-| Developer contact email      | `dev@instaedit.org`                                                    |
-| Brand status                 | **Ready to publish** (the required pre-condition for verification)    |
+    each (4–5 accounts × ≤ 50 channels each, see
+    [Step 8](oauth-google-setup.md#step-8--distribute-the-200-channels-across-manager-accounts)
+    and the [rollout workflow](oauth-google-rollout.md)).
 
 ## Step 3 — declare the scopes (minimum set)
+
+> This is the **canonical scope table**: `cmd/oauth-scope-canary/main.go`
+> mirrors it and `TestOAuthScopes_DocsMatchCanonical` lints this file at
+> test-time, so a docs-edit that drops one of these scopes fails CI.
 
 Under **Scopes for Google APIs**, add only what the app exercises
 in production. The principle of least privilege matters here:
@@ -454,517 +193,119 @@ for verification.
   operator identity — display name + avatar in the dashboard,
   email for security notifications."
 
-## Step 4 — submit for verification (the brand verification step)
-
-> The current (2025) Google terminology is **brand verification** —
-> it used to be called "OAuth verification" or "scope verification"
-> and the forms have moved around, but the procedure is the same.
-> Google's guide:
-> [App Verification to use Google Authorization APIs (Brand Verification)](https://developers.google.com/identity/protocols/oauth2/production-readiness/brand-verification).
-
-1. Back on the **OAuth consent screen** page, click **Save and
-   continue** until you reach the final **Summary** step.
-2. Confirm the **brand status** shows "**Ready to publish**" —
-   this is the pre-condition for sensitive-scope verification. If
-   it does not, fill in any missing app-store links / homepage /
-   privacy policy first.
-3. Click **Submit for verification**. The form asks for:
-   * The justification text from Step 3 (paste verbatim).
-   * A demo video showing the operator flow end-to-end (record once,
-     store on a private YouTube link or as an unlisted Google Drive
-     file; reference the URL in the form).
-   * Screenshots of the dashboard, the OAuth consent screen as the
-   end-user sees it, and the upload success state.
-4. Google does not publish a fixed SLA. The typical turnaround is
-   **3–7 business days** for non-sensitive scopes, but sensitive
-   scopes (youtube.upload, youtube.readonly) routinely take **4+
-   weeks**. Plan for **4+ weeks of slack**; budget for longer if
-   Google requests additional review artifacts.
-5. While verification is pending, the app is **still in Testing
-   mode**. You can keep iterating, but refresh tokens still expire
-   after 7 days for non-tester users. Run
-   `scripts/verify-google-oauth-mode.sh` (YouTube grant) and
-   `scripts/verify-drive-oauth-mode.sh` (Drive grant) against
-   sample access tokens to confirm the current mode before any
-   operator rollout.
-
-## Step 5 — move from "Needs verification" to "Production"
-
-Once Google approves the verification:
-
-1. Back on **OAuth consent screen** → **Publishing status** → click
-   **Publish app**.
-2. A modal asks to confirm: "Publishing moves the app to
-   Production. Sensitive scopes become available to all users."
-   Click **Confirm**.
-3. The status badge flips to **In production**. This is a
-   **one-way switch** — once published, you cannot move back to
-   Testing mode without creating a new OAuth client.
-4. Run `scripts/verify-google-oauth-mode.sh` (YouTube grant) and
-   `scripts/verify-drive-oauth-mode.sh` (Drive grant) against access
-   tokens issued to the published client. Each script prints the
-   `aud` (= client_id) and `expires_in` (the access-token's
-   remaining TTL in seconds, normally ~3,600 for a 1-hour access
-   token). The fact that the tokens were issued at all by the
-   published client is a strong signal Production mode is live;
-   pairing this with the refresh-token TTL monitor below catches
-   the rare "verification approved but not yet published" window.
-
-## Step 6 — request a YouTube Data API v3 quota increase
-
-The default **100 videos.insert/day** in the dedicated Video Uploads
-bucket is below the 200-channel operator requirement. Even at
-1 video/channel/day you need 200 calls; the operational target — 200
-channels daily + retries + private canary uploads + test traffic +
-margin — calls for **300–400 videos.insert/day** in the bucket.
-Submit a quota-increase request on the **Video Uploads bucket row**
-(not on a generic "units" field — Google now exposes the bucket as
-a labelled row in the Quotas tab):
-
-1. Sidebar → **APIs & Services → Library**.
-2. Search **YouTube Data API v3** → click → **Manage**.
-3. Tab **Quotas** → on the **Video Uploads bucket** row, click
-   **Edit quota** (top-right). The bucket may appear as a labelled
-   row named "Video Uploads" or under whatever row Google currently
-   uses for the dedicated `videos.insert` quota — pick the row whose
-   unit of measure is "videos.insert per day", NEVER the project's
-   overall unit-based quota (the old shape still exists in the Quotas
-   tab for OTHER read endpoints but does NOT control `videos.insert`
-   any more).
-4. Form asks for:
-   * **New quota value**: `400` bucket units/day (= 400
-     `videos.insert` calls per day; 2× buffer over the steady-state
-     200-channel, 1-per-day target). If Google pushes back on 400,
-     drop to `300` — that still leaves a 50% buffer above the
-     200-call steady state.
-   * **Justification**: paste the same scopes justification from
-     Step 3 plus:
-       "InstaEdit is a multi-tenant SaaS used by content operators
-       to publish to several YouTube channels from one dashboard.
-       One operator manages up to 200 channels, each requiring
-       at minimum one videos.insert per upload. 200 channels × 1
-       upload/day = 200 bucket-unit calls/day. Requesting 400
-       bucket units/day (= 400 videos.insert/day) to leave headroom
-       for the full schedule + retries + private canary uploads +
-       occasional backfills. Bucket units are 1-to-1 with
-       videos.insert under the 2026 quota model."
-   * **Link to the verified app** (paste the OAuth consent screen
-     URL).
-   * **Demo video** (same one as Step 4).
-5. SLA: Google officially states that quota requests can take
-   **up to 10 business days** (often faster for verified apps).
-   Until the increase is approved, the default 100-videos.insert/day
-   cap stands.
-
-## Step 7 — verify the rollout works end-to-end
-
-After all three approvals are in (Verification, Production publish,
-Quota increase):
-
-1. **Disconnect** an existing channel from the dashboard (so the
-   refresh token is invalidated).
-2. **Reconnect** through the normal OAuth flow as a fresh
-   non-tester Google Account. Confirm:
-   * Both consent screens (YouTube and Drive) show the InstaEdit
-     app name + logo (not "Unverified app").
-   * Scopes list matches Step 3 exactly (no extras, no missing).
-   * Refresh token is persisted on the platform_accounts row.
-3. **Wait 7 days**. Re-check the dashboard — the channel must still
-   show as connected (refresh token is still valid). This is the
-   smoke test for "Production mode refresh tokens don't expire
-   after 7 days". If the channel flipped to `reauth_required`
-   within the 7-day window, the app is **still in Testing mode**
-   and Step 5 was not actually completed.
-4. **Trigger an upload** through the worker. Confirm the upload
-   succeeds against the new quota (the existing P0#3 channel
-   binding check should pass on the first try).
-5. **Hit the API** directly to confirm the new quota is live:
-
-   ```bash
-   curl -sS \
-     "https://www.googleapis.com/youtube/v3/videos?part=id&mine=true" \
-     -H "Authorization: Bearer ${OAUTH_ACCESS_TOKEN}" | jq .
-   # → expect HTTP 200 with the operator's videos, no quotaExceeded error
-   ```
-
-6. **Run `scripts/verify-google-oauth-mode.sh`** (YouTube grant)
-   and **`scripts/verify-drive-oauth-mode.sh`** (Drive grant)
-   against the same access tokens. Each script prints `aud` (= the
-   production OAuth client_id) and `expires_in` (the access-token
-   TTL). Sanity-check that `aud` matches `YOUTUBE_CLIENT_ID` or
-   `GOOGLE_DRIVE_CLIENT_ID` respectively in `.env.production`.
-
-## Step 8 — distribute the 200 channels across manager accounts
-
-Per the **50–100 refresh tokens / `(Google Account, OAuth client)` pair** and
-**100 channels / Google Account** limits, the 200 channels must be
-distributed across **4–5 manager Google Accounts**, each operating as a
-self-contained OAuth dance with the manager's own identity:
-
-| Manager Google Account | Channel id range         | Channel count |
-| ---                    | ---                      | ---           |
-| `mgr-a@instaedit.org`  | `UCaaaaaa…` – `UCaaaaao` | ~50           |
-| `mgr-b@instaedit.org`  | `UCbbbbbb…` – `UCbbbbbo` | ~50           |
-| `mgr-c@instaedit.org`  | `UCcccccc…` – `UCccccco` | ~50           |
-| `mgr-d@instaedit.org`  | `UCdddddd…` – `UCdddddo` | ~50           |
-
-(See the rotation-reserve footnote below for how the 5th manager slot
-is used; the team's productive total stays at ≤ 200 channels regardless
-of how the 4–5 lanes are populated.)
-
-Each manager performs the **full, separate OAuth dance with their own
-Google identity** (their own consent screen click, their own
-`code → refresh_token` exchange, their own token vault entry). Each
-manager's paired `(Google Account, OAuth client)` therefore starts at
-zero refresh tokens — never inheriting tokens from a different
-manager's account — so the **50-token silent-invalidation cap per
-pair is enforced from install time**, not retro-fit later. The
-resulting refresh tokens live on separate
-`platform_accounts.platform_user_id` rows (the operator-side channel
-ID, e.g. `UC…`). The InstaEdit **workspace_channels** table
-(P0#4 migration 044) tracks which workspaces each manager's channels
-are attached to.
-
-Hard counts per manager at install time:
-
-| Manager Google Account | Refresh tokens (start) | Channels bound |
-| ---                    | ---                    | ---            |
-| `mgr-a@instaedit.org`  | 0                      | ≤ 50           |
-| `mgr-b@instaedit.org`  | 0                      | ≤ 50           |
-| `mgr-c@instaedit.org`  | 0                      | ≤ 50           |
-| `mgr-d@instaedit.org`  | 0                      | ≤ 50           |
-| `mgr-e@instaedit.org`  | 0                      | ≤ 50 (rotation reserve — see footnote) |
-
-> **Footnote — 5th manager.** The 5th manager is a **rotation
-> reserve**, NOT a 5th productive slot. Total active channel fleet
-> stays **≤ 200 channels** at all times (the operator's 200-channel
-> scope). The 5th slot exists so that if any single manager's grant
-> is revoked from Google's
-> [third-party apps page](https://myaccount.google.com/permissions),
-> the affected channels can be re-bound under the 5th manager's
-> identity without planning around 50+ channels per manager on a
-> single account. Operators MUST NOT add a 201st productive channel
-> just because the 5th slot is empty.
-
-Adding a new channel under a manager already at 50 active channels
-is a **blocking** action — it forces a new manager rotation, which
-would silently invalidate the next channel on the existing manager's
-refresh-token budget per
-[Google's OAuth 2.0 Expiration doc](https://developers.google.com/identity/protocols/oauth2#expiration).
-
-Distribute by **putting the operator's primary account in the pool**
-so the operator still has ≤ 50 refresh tokens on their own account
-even after a channel migration, and by **rotating secondary channels
-across accounts** so that no single account gets all of its channels
-revoked at once if an OAuth grant is revoked from
-[Google's third-party apps page](https://myaccount.google.com/permissions).
-
-## Operator Workflow for 200-Channel Rollout
-
-This is the **offline CLI workflow** that produces the per-manager
-CSV files needed to execute Step 8 above without the operator
-having to hand-split 200 rows by hand. The script is dependency-
-free (pure stdlib), reads a flat inventory CSV, and writes one
-`manager_<slug>.csv` per manager — or `_part2.csv`, `_part3.csv`,
-… files when a single manager exceeds the per-file cap.
-
-### When to use this workflow
-
-* You have ~200 channels (or any number) but ≤ 50 per manager
-  on the inventory CSV (per the Google 2026 cap discussed in
-  **Limits we have to plan around** above).
-* You have 4–5 manager Google Accounts already created (per
-  Step 2 + Step 8).
-* You want each manager to receive a CSV they can `POST` to
-  `/admin/channels/import-csv` after their OAuth dance completes
-  so the per-channel import is done by the canonical
-  `internal/channelimport.Parse` path — no manual re-mapping.
-
-### How to run
-
-The CLI ships at `scripts/distribute_channels_to_managers/`:
-
-```bash
-go run ./scripts/distribute_channels_to_managers \
-    -input inventory.csv \
-    -output-dir ./out/managers \
-    -buckets 4 \
-    -cap 50
-```
-
-Flags:
-
-| Flag           | Default             | Purpose                                                                                                       |
-| ---            | ---                 | ---                                                                                                           |
-| `-input`       | *(required)*        | Input inventory CSV. Header row MUST contain at minimum `channel_id`, `channel_name`, `manager_email_hint`.   |
-| `-output-dir`  | `./out/managers`    | Output directory for per-manager CSVs. Created if missing.                                                    |
-| `-buckets`     | `4`                 | Target bucket count. Matches the 4–5 manager rollout in Step 8 above; the script round-robins managers into buckets when `len(managers) > buckets`. |
-| `-cap`         | `50`                | Hard cap per output file. The YouTube 2026 silent-invalidation limit per `(Google Account, OAuth client)` pair (see **Limits we have to plan around**). |
-
-The bucket assignment is **deterministic** over SORTED manager
-emails, so a re-run on the same inventory yields byte-for-byte
-identical output — important when the operator wants to spot-
-check a regression. Managers with more than `-cap` channels get
-chunked into `manager_<slug>_part1.csv` + `_part2.csv` + …
-files; the `cap` is enforced strictly per output file (a single
-oversized file is never produced). The output CSVs include the
-full `internal/channelimport.CSVHeaderColumns` header so a
-follow-up import via `internal/channelimport.Parse` (or
-`POST /admin/channels/import-csv`, or `scripts/import_channels_csv.go`)
-accepts them without any column re-mapping.
-
-### Per-manager summary line format
-
-For each output file the script prints a summary line so the
-operator can confirm the split before kicking off OAuth dances:
-
-```
-Bucket B | NN channels | manager=<email>      | UC...first .. UC...last | <output-file-name>
-```
-
-* **`Bucket B`** — the deterministic bucket index assigned by
-  the round-robin over sorted manager emails. Identical across
-  re-runs on the same inventory.
-* **`NN channels`** — the row count in this file. NEVER exceeds
-  `-cap`. A line with `NN > -cap` is a bug; report it as a
-  regression on the script.
-* **`manager=<email>`** — the manager Google Workspace email
-  that owns this file's channels. Slugified to `<slug>` in the
-  filename.
-* **`UC...first .. UC...last`** — the first and last
-  `channel_id` in this file (input order). Useful for spot-
-  checking channel sorting.
-* **`<output-file-name>`** — the file the script just wrote.
-  The format is `manager_<slug>.csv` (single file) or
-  `manager_<slug>_partN.csv` (overflow).
-
-A trailing `=== Wrote N files ===` block lists every file by full
-path so the operator can confirm exactly what landed on disk.
-
-### Operator checklist (after the split)
-
-1. **Run the script** against the master inventory CSV.
-2. **Verify the summary** — confirm every line shows ≤
-   `-cap` channels (50 by default). Any line over `-cap` is a
-   bug; re-check the `manager_email_hint` distribution in the
-   source sheet.
-3. **Verify zero overlap** — open two of the per-manager CSVs
-   side-by-side and confirm every `channel_id` appears exactly
-   once across the fleet. The script guarantees this because
-   keys are partitioned by `manager_email_hint`, but a manual
-   spot-check before 50 OAuth dances is cheap insurance.
-4. **Verify determinism** — a second run with the same input
-   must produce identical file names + identical contents. The
-   script is deterministic; a divergence is a regression.
-5. **Hand each manager their CSV** along with a one-pager
-   showing their steps in Step 8 above.
-6. **Hand off to the import path** — once each manager completes
-   their OAuth dance, the operator feeds the manager's CSV back
-   through the canonical `POST /admin/channels/import-csv`
-   endpoint (or `scripts/import_channels_csv.go`). The script's
-   output uses the full CSVHeaderColumns shape, so the import
-   path accepts it directly without any column re-mapping —
-   `workspace`, `group`, `language`, `timezone`, and
-   `expected_upload_frequency` columns are pre-populated with
-   empty strings for the operator to fill in if relevant.
-
-### Failure modes the script guards against
-
-| Failure                                  | Detection                                                                |
-| ---                                      | ---                                                                      |
-| Missing required header column           | Hard error from `readInventoryCSV` naming the missing column.            |
-| Empty `channel_id` on a data row         | Hard error from `readInventoryCSV` naming the offending row number.      |
-| Single manager with > `-cap` channels    | `_partN` files emitted automatically; never a single oversized file.     |
-| Identical `channel_id` across managers   | NOT currently detected — operator spot-checks (see Operator Checklist #3). Future: companion `verify-distributed` script. |
-| Output directory missing                 | `os.MkdirAll` creates it; owner is the running user.                     |
-| Re-run produces different output         | A regression — file an issue with the `inventory_<git-sha>.csv` checked into `out/`. |
-
-See `scripts/distribute_channels_to_managers/main_test.go` for
-the full test surface (eight unit tests cover the round-robin
-assignment, the 50-channel cap, the `_partN` overflow split, the
-deterministic re-run guarantee, the manager-email sort key, the
-inventory header validation, the empty-`channel_id` rejection,
-the slug helper, and the round-trip write back to disk).
-
-## Monitoring refresh-token TTL
-
-This is the part most operators skip — until Production mode silently
-appears to work, then breaks six months later when an unused channel
-gets garbage-collected.
-
-### The two TTL regimes
-
-| Mode               | Refresh-token behaviour                                                                                              |
-| ---                | ---                                                                                                                  |
-| **Testing**        | Expires **7 days** after consent for every non-test user. The dashboard must re-prompt weekly.                       |
-| **Production**     | **Indefinite** — until (a) the user revokes the grant via [myaccount.google.com/permissions](https://myaccount.google.com/permissions), (b) the user changes their Google Account password (which may invalidate grants that touch Gmail scopes — InstaEdit does not request Gmail scopes today, so this is not currently a risk), or (c) the refresh token is unused for ~6 months (Google may garbage-collect; conservative number, not formally documented). |
-
-### What to monitor
-
-1. **`oauth_connections.reauth_required_at IS NOT NULL` (HIGH alert)**
-   Any row where this column flips from NULL → a timestamp means
-   the next `vault.Renew` for that connection failed. This is the
-   primary "this channel needs re-authorization" signal. The
-   dashboard surfaces it; ops needs a paging alert.
-2. **`oauth_connections.last_validated_at` older than 14 days (MEDIUM alert)**
-   Even when refresh tokens are indefinite, the **vault's lazy
-   re-encrypt path** (Blocco #2.2) and the **channel-binding check
-   in `youtube_oauth.go::Publish`** should each touch the connection
-   at least once a fortnight. A 14-day-stale `last_validated_at`
-   is a strong "this channel is dormant and may have been
-   garbage-collected" signal.
-3. **`oauth_connections.expires_at IS NULL` for Production connections (INFO)**
-   In Testing mode, `expires_at` is set to `now + 7 days` when the
-   grant happens. In Production mode, the column stays NULL because
-   the token has no fixed expiry. Spot-check this column via the
-   `oauth_health` admin dashboard widget: any row with
-   `app_mode = 'production'` (set by the publish verifier) but a
-   non-NULL `expires_at` is a leftover from a Testing-mode grant and
-   should be flagged for rotation.
-4. **HTTP 400 `invalid_grant` from `videos.insert` (HIGH alert)**
-   This is the **terminal** failure mode — the refresh token is
-   already invalid. The vault must (a) flip `reauth_required_at`
-   to NOW(), (b) emit the `youtube_publish_channel_mismatch_total`
-   counter (P0#2, sibling of the channel-mismatch metric), and
-   (c) surface a banner in the operator dashboard with a
-   "Reconnect this channel" CTA. The fix is operator-driven: they
-   click the CTA, get redirected through the OAuth flow, and the
-   new refresh token overwrites the dead one.
-
-### How to verify the current mode quickly
-
-The `scripts/verify-google-oauth-mode.sh` (YouTube grant) and
-`scripts/verify-drive-oauth-mode.sh` (Drive grant) helpers call
-`GET https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=...`
-and print:
-
-* `aud` — the OAuth client_id the token was issued to. If this
-  matches `YOUTUBE_CLIENT_ID` or `GOOGLE_DRIVE_CLIENT_ID` in
-  `.env.production`, the token is signed by the production client.
-* `expires_in` — the access-token's remaining TTL in seconds.
-  Roughly 3,600 (1 hour) at issuance, decreasing. This does **not**
-  reflect the refresh token's TTL (which is held server-side by
-  Google), but a working `tokeninfo` response confirms the token
-  has not yet expired and the client is in Google's good graces.
-* `scope` — the space-delimited list of scopes the token was
-  granted. Cross-check against Step 3.
-* `azp` — the authorized party (the client that requested the
-  token). For web-server-flow InstaEdit tokens, `azp == aud`. A
-  mismatch is suspicious and worth investigating.
-
-Use them as quick "is the published app actually serving tokens?"
-checks after every consent-screen republish.
-
-```bash
-./scripts/verify-google-oauth-mode.sh "$YOUTUBE_OAUTH_ACCESS_TOKEN"
-./scripts/verify-drive-oauth-mode.sh "$DRIVE_OAUTH_ACCESS_TOKEN"
-```
-
-### AppMode flag + real clock injection for TTL coverage
-
-The InstaEdit backend plumbs through an `APP_MODE` env var that
-pins the deployment to Google's OAuth-consent-screen publishing
-status:
-
-```bash
-APP_MODE=production   # default; durable refresh tokens
-APP_MODE=testing      # mirrors Google's 7-day Testing-mode TTL
-```
-
-The flag lives in `internal/config/config.go` as
-`Config.AppMode string`. In production wiring it is read by the
-`TokenRefresher` closure built in `cmd/server/main.go`; production
-forwards calls to Google's real `oauth2/v3/token` endpoint and
-returns the response verbatim.
-
-In CI the flag is paired with a **real clock injection** on the
-vault itself so TTL math is fully deterministic without pinging
-real Google. The injection wires through vault.go:
-
-* A `clock func() time.Time` field on `*CredentialVault`,
-  initialised to `time.Now` in the production constructor.
-* A `(*CredentialVault).SetClock(clock func() time.Time)` setter,
-  reserved for tests (production callers should leave the default).
-* All four `time.Now()` / `time.Until()` sites in vault.go (token
-  persistence, `Get`, and the `Renew` fast + slow paths) read
-  `v.clock()` instead. A regression that re-introduces `time.Now()`
-  inside vault.go would be detected by failing the
-  `ExpiresAt.Equal(want)` assertion below.
-
-`internal/credentials/vault_ttl_test.go` injects a
-`fakeClock{ t time.Time }` with a `Set(t time.Time)` driver +
-duplicates the production wiring exactly:
-
-* `TestVault_Renew_ProductionMode_T8d_RefreshSucceeds` --
-  fakeClock set to T0; oauth_connection + expired access token
-  seeded at T0; fakeClock.Set(T0 + 8 * 24h) advances the
-  simulated time; production-mode closure emits a fresh token
-  pair; `vault.Renew` must succeed AND the persisted `ExpiresAt`
-  must equal `fc.t.Add(3600s)` (proving the clock injection
-  flows through `saveForOAuthConnection`). A regression that
-  reverted vault.go to `time.Now()` would fail this assert
-  sharply without waiting 8 real-world days.
-* `TestVault_Renew_ProductionMode_T7d_StillSucceeds` --
-  belt-and-braces boundary case: fakeClock.Set(T0 + 7 * 24h)
-  under AppMode=production. Production must STILL succeed at the
-  exact day-7 boundary (the durable refresh-token invariant).
-* `TestVault_Renew_TestingMode_T7d_FailsInvalidGrant` --
-  fakeClock.Set(T0 + 7 * 24h) under AppMode=testing. The
-  `ttlAwareClosure` (driven by `fc.Now() - baseTime`) emits
-  Google's documented `invalid_grant` envelope. `vault.Renew` must
-  propagate the error envelope containing BOTH `invalid_grant` AND
-  `(status 400)` so `internal/services/youtube_oauth.go::isHardRejection4xxStatus`
-  routes to the reauth branch (not the transient-retry branch).
-* `TestVault_Renew_TestingMode_T7dMinus1h_StillWorks` --
-  T+7d-1h regression guard: inside the grace window under testing,
-  refresh must still succeed. Catches closure mis-cutoffs that
-  would flip the boundary one hour early.
-* `TestConfig_AppModeDefaultIsProduction` --
-  `config.Load()` defaults `AppMode` to `"production"` so operators
-  who forget to set the env var inherit the durable refresh-token
-  bucket. `config.go::getEnv` uses `os.LookupEnv` so a literally
-  empty `APP_MODE=""` env-var would still register as "value
-  present"; the test therefore uses `os.Unsetenv("APP_MODE")`
-  (not `t.Setenv("APP_MODE", "")`) to exercise the default path.
-
-The two invariants the suite pins:
-
-1. **I-1 — clock source is injectable.** vault.Renew reads the
-   "now" through `v.clock()`, not `time.Now()`. Future tickets
-   that add new TTL math (e.g. a 24h refresh-token inactivity
-   garbage-collection check) are required to read `v.clock()` too;
-   the existing assertions catch a regression with sub-second
-   resolution.
-2. **I-2 — the 7-day Testing-mode boundary lives ONLY in
-   AppMode=testing.** AppMode=production is durable past day 7
-   (and day 8, etc). The boundary cannot leak across modes; the
-   `T+7dMinus1h` guard catches a regression that flipped the
-   closure cutoff to <7d.
-
-Trade-off vs. hitting real Google: the closed-form closure
-deterministically emits the production-vs-testing branching
-based on `fc.Now() - baseTime`. CI does not need to wait 7-8 real
-days. The test pins OUR policy semantics (AppMode + clock
-injection) but does NOT validate Google's actual
-`oauth2/v3/token` response shape at T+7d. Operators verify the
-latter on a per-channel cadence via `private_canary_ok` /
-`canary_channel_match_ok` from `/admin/health.csv` (Step 10).
+## Repository/runtime configuration contract
+
+The backend reads these environment variables at startup:
+
+| Environment | `APP_ENV` | `APP_MODE` | YouTube callback URL |
+| --- | --- | --- | --- |
+| Local development | `dev` | `dev` (local client only) | `http://localhost:8080/api/v1/auth/youtube/callback` |
+| Staging / Google Testing | `staging` | `testing` | `https://<staging-api-host>/api/v1/auth/youtube/callback` |
+| Production | `production` | `production` | `https://api.instaedit.org/api/v1/auth/youtube/callback` |
+
+`APP_MODE` accepts only `dev`, `testing`, or `production`; unknown values
+fail startup. `APP_MODE=testing` is a deployment declaration that the
+configured Google consent screen is still in Testing, so operators should
+expect Google's seven-day refresh-token behavior. It does not change Google
+Console state by itself. `APP_MODE=production` must only be used with a
+client whose Google publishing status is actually Production.
+
+For every environment, `YOUTUBE_REDIRECT_URI` must match character-for-
+character in all three places: the environment, the authorization URL, and
+the Google Cloud Console web-client's authorized redirect URI. Do not use a
+staging callback with a production client or vice versa; protocol, host,
+port, path, and trailing slash must agree.
+
+The authorization URL intentionally always includes `access_type=offline`
+and `include_granted_scopes=true`. It adds `prompt=consent` only for an
+explicit reconnect/consent flow; normal login does not force consent. This
+avoids unnecessary refresh-token issuance/rotation while still allowing a
+first connection or recovery flow to obtain a refresh token. OAuth client
+IDs and secrets are server-side only; store them in the deployment secret
+manager or protected environment file, not in Git, Docker images, the
+frontend, URLs, or logs.
+
+## Step anchors (linked from code comments)
+
+The sections below moved to dedicated documents; the anchors remain here so
+references in code comments and scripts (e.g. "docs/OAUTH-PRODUCTION.md
+Step 7") keep resolving.
+
+### Step 0 — prerequisites / Step 1 / Step 2
+
+Prerequisites (billing, `.env.production` client match), app-domain
+verification (Step 0.1), required URLs (Step 0.2), opening the console
+(Step 1), and filling the consent screen (Step 2) → see
+[oauth-google-setup.md](oauth-google-setup.md#step-0--prerequisites).
+
+### Step 4 — submit for verification (the brand verification step)
+
+Timeline, form artifacts, and the demo video → see
+[oauth-google-setup.md](oauth-google-setup.md#step-4--submit-for-verification-the-brand-verification-step).
+
+### Step 5 — move from "Needs verification" to "Production"
+
+The one-way publish switch → see
+[oauth-google-setup.md](oauth-google-setup.md#step-5--move-from-needs-verification-to-production).
+
+### Step 6 — request a YouTube Data API v3 quota increase
+
+The Video Uploads bucket request walkthrough → see
+[oauth-google-setup.md](oauth-google-setup.md#step-6--request-a-youtube-data-api-v3-quota-increase)
+and the [quota model](oauth-google-limits.md#youtube-data-api-v3--video-uploads-bucket-2026-model).
+
+### Step 7 — verify the rollout works end-to-end
+
+Disconnect/reconnect, 7-day wait, upload trigger, `tokeninfo` checks → see
+[oauth-google-setup.md](oauth-google-setup.md#step-7--verify-the-rollout-works-end-to-end).
+
+### Step 8 — distribute the 200 channels across manager accounts
+
+Manager layout, refresh-token start counts, 5th-manager rotation reserve → see
+[oauth-google-setup.md](oauth-google-setup.md#step-8--distribute-the-200-channels-across-manager-accounts).
+
+### Limits we have to plan around
+
+50–100 refresh tokens per pair, 100 channels per account, `channels.list`
+pagination cap, and the 2026 Video Uploads bucket model → see
+[oauth-google-limits.md](oauth-google-limits.md).
+
+### Operator Workflow for 200-Channel Rollout
+
+The `scripts/distribute_channels_to_managers` CLI runbook (when to use,
+flags, summary format, operator checklist, failure modes) → see
+[oauth-google-rollout.md](oauth-google-rollout.md).
+
+### Monitoring refresh-token TTL
+
+The two TTL regimes, alert signals, verify-mode scripts, and the
+`APP_MODE` + clock-injection test coverage → see
+[oauth-google-monitoring.md](oauth-google-monitoring.md).
+
+### Why this matters (the Testing-mode trap)
+
+The 7-day refresh-token trap and its failure modes → see
+[oauth-google-troubleshooting.md](oauth-google-troubleshooting.md).
 
 ## Operational checklist
 
 The operator's deployment runbook should include these steps in
 order:
 
-1. ✅ Domain verified in Search Console (Step 0.1).
-2. ✅ OAuth app **brand verification** approved (Step 4).
-3. ✅ OAuth app moved to **Production** (Step 5).
-4. ✅ **Quota increase** approved (Step 6).
+1. ✅ Domain verified in Search Console (Step 0.1 of the
+   [setup walkthrough](oauth-google-setup.md#step-01--verify-the-app-domain-search-console)).
+2. ✅ OAuth app **brand verification** approved (Step 4 of the
+   [setup walkthrough](oauth-google-setup.md#step-4--submit-for-verification-the-brand-verification-step)).
+3. ✅ OAuth app moved to **Production** (Step 5 of the
+   [setup walkthrough](oauth-google-setup.md#step-5--move-from-needs-verification-to-production)).
+4. ✅ **Quota increase** approved (Step 6 of the
+   [setup walkthrough](oauth-google-setup.md#step-6--request-a-youtube-data-api-v3-quota-increase)).
 5. ✅ 7-day reconnect test passes on a fresh Google Account
-   (Step 7).
+   (Step 7 of the [setup walkthrough](oauth-google-setup.md#step-7--verify-the-rollout-works-end-to-end)).
 6. ✅ Refresh-token TTL monitoring alerts wired up
-   ("Monitoring refresh-token TTL").
+   ([oauth-google-monitoring.md](oauth-google-monitoring.md)).
 7. ✅ Manager Google Accounts created + OAuth dance complete for
-   each (Step 8).
+   each (Step 8 of the [setup walkthrough](oauth-google-setup.md#step-8--distribute-the-200-channels-across-manager-accounts)).
 8. ✅ Drive batch import tested on a non-tester manager account
    (cross-checks P0#1 single-channel binding + P0#3 pre-upload
    check on Production credentials).
