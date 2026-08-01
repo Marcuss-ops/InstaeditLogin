@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# HISTORICAL ARCHIVE — NON-OPERATIONAL
+#
+# This file is retained for audit/history only. Do not execute it, even via
+# `bash`; the former GitHub secrets cleanup helper was retired after the Fly
+# cutover. The canonical runtime is VPS + Docker Compose + MinIO.
+echo "Archived historical material; clean-gh-fly-secrets.sh is non-operational." >&2
+exit 1
+
 # scripts/clean-gh-fly-secrets.sh — remove the orphan hosted-platform
 # secrets that were registered on the GitHub repo back when the
 # `flyctl` deploy pipeline was the production surface. Post-cutover
@@ -18,12 +26,11 @@
 #   - The script is single-shot intent-driven, easier to audit than a
 #     reusable GitHub Action.
 #
-# Usage:
-#   scripts/clean-gh-fly-secrets.sh            # default: list-only (no deletes)
-#   scripts/clean-gh-fly-secrets.sh --apply    # actually delete the 3 secrets
-#   scripts/clean-gh-fly-secrets.sh --check    # assert NONE of the 3 are registered
-#   scripts/clean-gh-fly-secrets.sh --ui-fallback
-#       # print manual Settings → Secrets and variables → Actions steps
+# Historical reference only:
+# The former list-only, --apply, --check, and --ui-fallback modes are retained
+# below as audit material but are intentionally not documented as runnable
+# commands. Use the operator instructions in docs/GITHUB-SECRETS-AUDIT.md
+# after independent confirmation; do not invoke this archived file.
 #
 # Manual UI fallback (when the gh PAT lacks `secrets:write` scope):
 #   1. Open https://github.com/Marcuss-ops/InstaeditLogin/settings/secrets/actions
