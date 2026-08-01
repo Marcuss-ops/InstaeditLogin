@@ -28,3 +28,10 @@ type GroupWithAccounts struct {
 	Group
 	AccountIDs []int64 `json:"account_ids"`
 }
+
+// GroupAccountLanguageUpdate is one account setting in the batch group
+// settings update. The group is supplied by the endpoint path.
+type GroupAccountLanguageUpdate struct {
+	AccountID int64  `json:"account_id"`
+	Language  string `json:"language"`
+}

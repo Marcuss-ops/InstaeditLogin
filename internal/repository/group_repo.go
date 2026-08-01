@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -274,7 +275,95 @@ func (r *GroupRepository) ListByWorkspaceWithAccounts(workspaceID int64) ([]mode
 	return groups, nil
 }
 
-// AddAccount adds a platform_account to a group. ON CONFLICT DO NOTHING
+// AddAccount adds a platform_account to a group.// UpdateSettings atomically replaces a group's memberships and updates each
+// member's language metadata. The transaction locks the group, validates all
+// accounts belong to the authenticated user before deleting any membership,
+// then performs the membership and metadata writes together.
+func (r *GroupRepository) UpdateSettings(ctx context.Context, groupID, workspaceID, userID int64, updates []models.GroupAccountLanguageUpdate) error {
+	if groupID <= 0 || workspaceID <= 0 || userID <= 0 {
+		return fmt.Errorf("update group settings: invalid identifiers")
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("update group settings: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var lockedGroupID int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM groups WHERE id = $1 AND workspace_id = $2 FOR UPDATE`,
+		groupID, workspaceID,
+	).Scan(&lockedGroupID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("%w: id=%d", ErrGroupNotFound, groupID)
+		}
+		return fmt.Errorf("update group settings: lock group: %w", err)
+	}
+
+	accountIDs := make([]int64, 0, len(updates))
+	for _, update := range updates {
+		if update.AccountID <= 0 {
+			return fmt.Errorf("update group settings: invalid account_id %d", update.AccountID)
+		}
+		accountIDs = append(accountIDs, update.AccountID)
+	}
+	if len(accountIDs) > 0 {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT id FROM platform_accounts WHERE user_id = $1 AND id = ANY($2)`,
+			userID, pq.Array(accountIDs),
+		)
+		if err != nil {
+			return fmt.Errorf("update group settings: validate accounts: %w", err)
+		}
+		valid := make(map[int64]struct{}, len(accountIDs))
+		for rows.Next() {
+			var accountID int64
+			if err := rows.Scan(&accountID); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("update group settings: scan account: %w", err)
+			}
+			valid[accountID] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("update group settings: iterate accounts: %w", err)
+		}
+		_ = rows.Close()
+		for _, accountID := range accountIDs {
+			if _, ok := valid[accountID]; !ok {
+				return fmt.Errorf("%w: one or more accounts are not owned by the caller", ErrGroupAccountOwnership)
+			}
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM group_accounts WHERE group_id = $1`, groupID); err != nil {
+		return fmt.Errorf("update group settings: clear memberships: %w", err)
+	}
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO group_accounts (group_id, account_id) VALUES ($1, $2)`,
+			groupID, update.AccountID,
+		); err != nil {
+			return fmt.Errorf("update group settings: insert membership %d: %w", update.AccountID, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE platform_accounts
+			 SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('language', $1::text),
+			     updated_at = NOW()
+			 WHERE id = $2 AND user_id = $3`,
+			update.Language, update.AccountID, userID,
+		); err != nil {
+			return fmt.Errorf("update group settings: update language %d: %w", update.AccountID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("update group settings: commit: %w", err)
+	}
+	return nil
+}
+
+ ON CONFLICT DO NOTHING
 // makes the operation idempotent — adding an already-attached account
 // is a no-op and returns nil.
 func (r *GroupRepository) AddAccount(groupID, accountID int64) error {

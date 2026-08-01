@@ -124,6 +124,7 @@ func (r *Router) Setup() http.Handler {
 			DeleteGroup:                   r.handleDeleteGroup,
 			ListGroupAccounts:             r.handleListGroupAccounts,
 			SetGroupAccounts:              r.handleSetGroupAccounts,
+			UpdateGroupSettings:           r.handleUpdateGroupSettings,
 			CreateApiKey:                  r.handleCreateApiKey,
 			ListApiKeys:                   r.handleListApiKeys,
 			GetApiKey:                     r.handleGetApiKey,

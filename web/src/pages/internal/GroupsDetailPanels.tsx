@@ -6,8 +6,8 @@ import {
   Folder,
   Link2,
   PauseCircle,
-  Pencil,
   Plus,
+  Pencil,
   RefreshCw,
   Trash2,
 } from "lucide-react";
@@ -15,24 +15,69 @@ import { authedFetch } from "../../lib/auth";
 import { cn } from "../../lib/utils";
 import { PLATFORM_GRADIENT, type PlatformAccount, type TreeNode } from "./groupsTypes";
 
+const LANGUAGE_OPTIONS = [
+  { code: "it", flag: "🇮🇹", name: "Italiano" },
+  { code: "en", flag: "🇬🇧", name: "English" },
+  { code: "es", flag: "🇪🇸", name: "Español" },
+  { code: "fr", flag: "🇫🇷", name: "Français" },
+  { code: "de", flag: "🇩🇪", name: "Deutsch" },
+  { code: "pl", flag: "🇵🇱", name: "Polski" },
+  { code: "ru", flag: "🇷🇺", name: "Русский" },
+  { code: "tr", flag: "🇹🇷", name: "Türkçe" },
+  { code: "hi", flag: "🇮🇳", name: "हिन्दी" },
+  { code: "id", flag: "🇮🇩", name: "Bahasa Indonesia" },
+] as const;
+
+function languageMeta(language: unknown) {
+  return LANGUAGE_OPTIONS.find((option) => option.code === String(language ?? ""));
+}
+
 export function GroupDetailPanel({
   group,
-  accounts,
   onPickAccount,
   onCreateSubgroup,
   onDeleteGroup,
-  onSetGroupAccounts,
+  onSaved,
 }: {
   group: TreeNode;
-  accounts: PlatformAccount[];
   onPickAccount: (id: number) => void;
   onCreateSubgroup: (name: string) => void;
   onDeleteGroup: () => void;
-  onSetGroupAccounts: (ids: number[]) => void;
+  onSaved: () => void | Promise<void>;
 }) {
   const [subName, setSubName] = useState("");
-  const [draggingAccountId, setDraggingAccountId] = useState<number | null>(null);
-  const availableAccounts = accounts.filter((a) => !group.accounts.find((ga) => ga.id === a.id));
+  const [languages, setLanguages] = useState<Record<number, string>>(() => Object.fromEntries(group.accounts.map((account) => [account.id, String(account.metadata?.language ?? "")])));
+  const [removedAccountIds, setRemovedAccountIds] = useState<Set<number>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  useEffect(() => {
+    setLanguages(Object.fromEntries(group.accounts.map((account) => [account.id, String(account.metadata?.language ?? "")])));
+    setRemovedAccountIds(new Set());
+    setSaveError(null);
+  }, [group.id, group.accounts]);
+
+  const visibleAccounts = group.accounts.filter((account) => !removedAccountIds.has(account.id));
+  const saveSettings = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const response = await authedFetch(`/api/v1/groups/${group.id}/settings`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          accounts: visibleAccounts.map((account) => ({
+            account_id: account.id,
+            language: languages[account.id] ?? "",
+          })),
+        }),
+      });
+      if (!response.ok) throw new Error("Unable to save group settings");
+      await onSaved();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Unable to save group settings");
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <div>
       <div className="flex items-start justify-between gap-3 mb-5">
@@ -42,10 +87,20 @@ export function GroupDetailPanel({
             {group.name}
           </h2>
           <p className="text-[12px] text-[#9aa0aa] mt-0.5">
-            {group.accounts.length} accounts · {group.children.length} sub-folders
+            {visibleAccounts.length} accounts · {group.children.length} sub-folders
           </p>
+          {saveError ? <p className="mt-2 text-[12px] text-red-300" role="alert">{saveError}</p> : null}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void saveSettings()}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-black text-[12px] font-semibold disabled:opacity-50 disabled:cursor-progress hover:bg-zinc-100 transition-colors"
+          >
+            {saving ? <RefreshCw size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+            {saving ? "Saving..." : "Save changes"}
+          </button>
           <button
             type="button"
             onClick={onDeleteGroup}
@@ -83,118 +138,29 @@ export function GroupDetailPanel({
       {/* Current accounts in this group */}
       <div className="mb-6">
         <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa] mb-2">
-          Accounts in this folder ({group.accounts.length})
+          Accounts in this folder ({visibleAccounts.length})
         </h3>
-        {group.accounts.length === 0 ? (
+        {visibleAccounts.length === 0 ? (
           <p className="text-[12px] text-[#9aa0aa] italic">No accounts yet. Drag one in from below.</p>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {group.accounts.map((a) => (
-              <AccountChip key={a.id} account={a} onClick={() => onPickAccount(a.id)} />
+            {visibleAccounts.map((a) => (
+              <div key={a.id} className="flex items-center gap-1 rounded-lg border border-white/[0.10] bg-white/[0.04] p-1.5">
+                <div className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1">
+                  <span className="text-[13px]">{languageMeta(languages[a.id])?.flag ?? "🌍"}</span>
+                  <button type="button" onClick={() => onPickAccount(a.id)} className="truncate text-left text-[12px] font-semibold text-white hover:text-violet-200" title={`Apri ${a.username}`}>{a.username || a.platform_user_id}</button>
+                </div>
+                <select value={languages[a.id] ?? ""} onChange={(event) => { const language = event.target.value; setLanguages((current) => ({ ...current, [a.id]: language })); }} className="max-w-[90px] rounded bg-black/30 border border-white/[0.10] px-1 py-1 text-[10px] text-[#c8cbd4]" aria-label={`Language for ${a.username}`}>
+                  <option value="">Lingua</option>
+                  {LANGUAGE_OPTIONS.map(({ code, flag, name }) => <option key={code} value={code}>{flag} {name}</option>)}
+                </select>
+                <button type="button" onClick={() => setRemovedAccountIds((current) => new Set(current).add(a.id))} className="rounded-md p-2 text-[#9aa0aa] hover:bg-red-500/15 hover:text-red-300" aria-label={`Remove ${a.username} from group`} title="Rimuovi dal gruppo"><Trash2 size={14} /></button>
+              </div>
             ))}
           </div>
         )}
       </div>
-
-      {/* Available accounts (drag-into-this-group) */}
-      <div>
-        <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa] mb-2">
-          Available accounts ({availableAccounts.length})
-        </h3>
-        <div
-          className={cn(
-            "min-h-[80px] p-2 rounded-xl border border-dashed border-white/[0.12] bg-white/[0.02]",
-            draggingAccountId != null && "ring-2 ring-emerald-500/40 bg-emerald-500/[0.04]",
-          )}
-          onDragOver={(e) => {
-            if (e.dataTransfer.types.includes("text/plain")) {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-            }
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            const id = Number(e.dataTransfer.getData("text/plain"));
-            setDraggingAccountId(null);
-            if (!Number.isFinite(id) || id <= 0) return;
-            if (group.accounts.find((ga) => ga.id === id)) return;
-            onSetGroupAccounts([...group.accounts.map((a) => a.id), id]);
-          }}
-        >
-          {availableAccounts.length === 0 ? (
-            <p className="text-[12px] text-center text-[#9aa0aa] italic">
-              Every account is already in this folder. Connect more from the Linking page.
-            </p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {availableAccounts.map((a) => (
-                <div
-                  key={a.id}
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData("text/plain", String(a.id));
-                    e.dataTransfer.effectAllowed = "move";
-                    setDraggingAccountId(a.id);
-                  }}
-                  onDragEnd={() => setDraggingAccountId(null)}
-                  className="cursor-grab active:cursor-grabbing"
-                >
-                  <AccountChip account={a} onClick={() => onPickAccount(a.id)} subtle />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
     </div>
-  );
-}
-
-function AccountChip({
-  account,
-  onClick,
-  subtle,
-}: {
-  account: PlatformAccount;
-  onClick: () => void;
-  subtle?: boolean;
-}) {
-  const grad = PLATFORM_GRADIENT[account.platform] ?? "from-zinc-500 to-zinc-700";
-  const StatusIcon =
-    account.status === "active" ? CheckCircle2 :
-    account.status === "reauth_required" ? PauseCircle :
-    PauseCircle;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex items-center gap-2 px-2.5 py-2 rounded-lg border text-left transition-colors w-full",
-        subtle
-          ? "bg-white/[0.04] border-white/[0.08] text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white"
-          : "bg-white/[0.06] border-white/[0.16] text-white hover:bg-white/[0.10]",
-      )}
-    >
-      <div
-        className={cn(
-          "w-8 h-8 rounded-lg bg-gradient-to-br flex items-center justify-center text-white text-[11px] font-bold shrink-0",
-          grad,
-        )}
-      >
-        {(account.platform[0] ?? "?").toUpperCase()}
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-[12px] font-semibold truncate">{account.username || account.platform_user_id}</p>
-        <p className="text-[10px] text-[#9aa0aa] truncate">{account.platform}</p>
-      </div>
-      <StatusIcon
-        size={14}
-        className={cn(
-          "shrink-0",
-          account.status === "active" ? "text-emerald-400" : "text-amber-400",
-        )}
-      />
-    </button>
   );
 }
 
@@ -330,6 +296,8 @@ export function AccountDetailPanel({
       <div className="mt-6 flex items-center gap-2 text-[12px] text-[#9aa0aa]">
         <Link2 size={14} />
         Quick jump:
+        <Link className="text-white underline hover:no-underline" to="/app/dashboard">Home InstaEditLogin</Link>
+        <span className="opacity-50">·</span>
         <Link className="text-white underline hover:no-underline" to="/app/posts">All posts</Link>
         <span className="opacity-50">·</span>
         <Link className="text-white underline hover:no-underline" to="/app/compose">Compose new post</Link>

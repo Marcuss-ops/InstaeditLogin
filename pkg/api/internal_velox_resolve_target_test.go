@@ -66,6 +66,9 @@ func (a *groupStoreAdapter) ValidateAccountOwnership(_ int64, _ int64, _ []int64
 	return nil, nil
 }
 func (a *groupStoreAdapter) SetAccounts(_ int64, _ []int64) error { return nil }
+func (a *groupStoreAdapter) UpdateSettings(_ context.Context, _ int64, _ int64, _ int64, _ []models.GroupAccountLanguageUpdate) error {
+	return nil
+}
 
 func wrapGroupLookup(m *mockGroupLookup) GroupStore {
 	return &groupStoreAdapter{m: m}

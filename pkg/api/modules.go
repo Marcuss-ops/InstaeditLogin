@@ -506,6 +506,7 @@ type AuthHandlers struct {
 	DeleteGroup                   http.HandlerFunc
 	ListGroupAccounts             http.HandlerFunc
 	SetGroupAccounts              http.HandlerFunc
+	UpdateGroupSettings           http.HandlerFunc
 	CreateApiKey                  http.HandlerFunc
 	ListApiKeys                   http.HandlerFunc
 	GetApiKey                     http.HandlerFunc
@@ -620,6 +621,8 @@ func (m *AuthModule) Register(mux chi.Router) {
 			sr.Delete("/{id}", m.deps.Protected(m.deps.Handlers.DeleteGroup))
 			sr.Get("/{id}/accounts", m.deps.Protected(m.deps.Handlers.ListGroupAccounts))
 			sr.Put("/{id}/accounts", m.deps.Protected(m.deps.Handlers.SetGroupAccounts))
+		sr.Put("/{id}/accounts", m.deps.Protected(m.deps.Handlers.SetGroupAccounts))
+		sr.Patch("/{id}/settings", m.deps.Protected(m.deps.Handlers.UpdateGroupSettings))
 		})
 	}
 

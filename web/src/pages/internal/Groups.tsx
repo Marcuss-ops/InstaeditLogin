@@ -125,7 +125,6 @@ export function GroupsPage() {
             ) : selectedGroup ? (
               <GroupDetailPanel
                 group={selectedGroup}
-                accounts={state.kind === "ready" ? state.accounts : []}
                 onPickAccount={(id) => setSelectedAccountId(id)}
                 onCreateSubgroup={(name) => {
                   if (!name.trim()) return;
@@ -142,17 +141,7 @@ export function GroupsPage() {
                     /* toasted by authedFetch */
                   }
                 }}
-                onSetGroupAccounts={async (accountIds) => {
-                  try {
-                    await authedFetch(`/api/v1/groups/${selectedGroup.id}/accounts`, {
-                      method: "PUT",
-                      body: JSON.stringify({ account_ids: accountIds }),
-                    });
-                    await load();
-                  } catch {
-                    /* toasted by authedFetch */
-                  }
-                }}
+                onSaved={() => load()}
               />
             ) : (
               <div className="flex h-full min-h-[260px] items-center justify-center text-center text-[#9aa0aa] text-[14px]">

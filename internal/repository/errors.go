@@ -145,6 +145,10 @@ var (
 	// uniqueness via their parent chain. Maps to HTTP 409.
 	ErrGroupDuplicate = errors.New("group with this name already exists at this level")
 
+	// ErrGroupAccountOwnership is returned when a batch settings update
+	// includes an account that is not owned by the authenticated user.
+	ErrGroupAccountOwnership = errors.New("group account is not owned by caller")
+
 	// ErrYouTubeVideoEditNotFound is returned by
 	// YouTubeVideoEditRepository.Update when no row matches the
 	// supplied id. Maps to HTTP 404 at the API layer.
