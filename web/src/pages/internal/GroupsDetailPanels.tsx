@@ -14,6 +14,7 @@ import {
 import { authedFetch } from "../../lib/auth";
 import { cn } from "../../lib/utils";
 import { PLATFORM_GRADIENT, type PlatformAccount, type TreeNode } from "./groupsTypes";
+import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 
 const LANGUAGE_OPTIONS = [
   { code: "it", flag: "🇮🇹", name: "Italiano" },
@@ -160,6 +161,8 @@ export function GroupDetailPanel({
           </div>
         )}
       </div>
+
+      <GroupYouTubeVideos groupId={group.id} />
     </div>
   );
 }

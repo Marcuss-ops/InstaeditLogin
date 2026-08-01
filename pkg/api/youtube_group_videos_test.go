@@ -29,16 +29,16 @@ import (
 // code uses *repository.GroupRepository. The interface itself
 // lives in pkg/api/router.go.
 type mockGroupStore struct {
-	findByIDFn                 func(id int64) (*models.Group, error)
-	listByWorkspaceFn          func(workspaceID int64) ([]models.Group, error)
+	findByIDFn                    func(id int64) (*models.Group, error)
+	listByWorkspaceFn             func(workspaceID int64) ([]models.Group, error)
 	listByWorkspaceWithAccountsFn func(workspaceID int64) ([]models.GroupWithAccounts, error)
-	listAccountsInGroupFn      func(groupID int64) ([]int64, error)
-	validateAccountOwnershipFn func(userID, workspaceID int64, accountIDs []int64) ([]int64, error)
-	createFn                   func(g *models.Group) error
-	updateFn                   func(g *models.Group) error
-	deleteFn                   func(id int64) error
-	setAccountsFn              func(groupID int64, accountIDs []int64) error
-	updateSettingsFn           func(ctx context.Context, groupID, workspaceID, userID int64, updates []models.GroupAccountLanguageUpdate) error
+	listAccountsInGroupFn         func(groupID int64) ([]int64, error)
+	validateAccountOwnershipFn    func(userID, workspaceID int64, accountIDs []int64) ([]int64, error)
+	createFn                      func(g *models.Group) error
+	updateFn                      func(g *models.Group) error
+	deleteFn                      func(id int64) error
+	setAccountsFn                 func(groupID int64, accountIDs []int64) error
+	updateSettingsFn              func(ctx context.Context, groupID, workspaceID, userID int64, updates []models.GroupAccountLanguageUpdate) error
 }
 
 func (m *mockGroupStore) FindByID(id int64) (*models.Group, error) {
@@ -180,7 +180,7 @@ func stringPtr(s string) *string {
 //     ListByWorkspaceAccountIDs);
 //  3. fill editor_session_id / velox_project_id / editor_url /
 //     editor_status / desired_privacy on the response;
-//  4. derive actual_privacy = desired_privacy placeholder;
+//  4. leave actual_privacy unset until a YouTube read-back;
 //  5. set editor_status = "editing" (mirroring the row state);
 //  6. channel_name = account.Username.
 func TestListGroupYouTubeVideos_HappyPath(t *testing.T) {
@@ -300,12 +300,8 @@ func TestListGroupYouTubeVideos_HappyPath(t *testing.T) {
 	if got.DesiredPrivacy != "unlisted" {
 		t.Errorf("desired_privacy: want unlisted, got %q", got.DesiredPrivacy)
 	}
-	if got.ActualPrivacy == nil || *got.ActualPrivacy != "unlisted" {
-		val := ""
-		if got.ActualPrivacy != nil {
-			val = *got.ActualPrivacy
-		}
-		t.Errorf("actual_privacy placeholder must mirror desired until reconciler lands, want unlisted, got %q", val)
+	if got.ActualPrivacy != nil {
+		t.Errorf("actual_privacy must remain nil until YouTube read-back, got %q", *got.ActualPrivacy)
 	}
 	if got.YouTubeSyncStatus == nil || *got.YouTubeSyncStatus != "unconfirmed" {
 		val := ""
@@ -1372,6 +1368,7 @@ func TestListGroupYouTubeVideos_JoinSessionMapKeepsNewest(t *testing.T) {
 		t.Errorf("ActualPrivacy must be 'public' (the newer session's), got %v", v.ActualPrivacy)
 	}
 }
+
 func TestFetchAccountEditableVideos_PaginatesUntilConfiguredLimit(t *testing.T) {
 	account := &models.PlatformAccount{ID: 42, Platform: models.PlatformYouTube, PlatformUserID: "UC123"}
 	var pageTokens []string
@@ -1442,6 +1439,54 @@ func TestFetchCachedAccountEditableVideos_UsesShortLivedCache(t *testing.T) {
 	}
 	if len(first) != 1 || len(second) != 1 || first[0].ID != second[0].ID {
 		t.Fatalf("cached results differ: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestFetchCachedAccountEditableVideos_SharesConcurrentMiss(t *testing.T) {
+	account := &models.PlatformAccount{ID: 43, Platform: models.PlatformYouTube, PlatformUserID: "UC-concurrent"}
+	var listCalls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ytSvc := &mockYouTubeOAuthServiceForEditor{
+		listEditableVideosFn: func(context.Context, string, string, string) (*services.YouTubeVideoPage, error) {
+			listCalls.Add(1)
+			close(started)
+			<-release
+			return &services.YouTubeVideoPage{Items: []models.YouTubeVideoDetails{{ID: "single-flight"}}}, nil
+		},
+	}
+	r := &Router{
+		vault: &mockCredentialVault{getFn: func(context.Context, int64, string) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "access-token"}, nil
+		}},
+		youTubeSvc: ytSvc,
+	}
+	cfg := YouTubeGroupVideosConfig{MaxVideos: 10, CacheTTL: time.Minute}.normalized()
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := r.fetchCachedAccountEditableVideos(context.Background(), account, cfg)
+			results <- err
+		}()
+	}
+	<-started
+	close(release)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent fetch: %v", err)
+		}
+	}
+	if got := listCalls.Load(); got != 1 {
+		t.Fatalf("YouTube list calls: got %d, want 1", got)
+	}
+}
+
+func TestIsInvalidYouTubeTokenError_DoesNotClassifyVaultOutage(t *testing.T) {
+	if isInvalidYouTubeTokenError(errors.New("vault: database unavailable")) {
+		t.Fatal("database outage must not mark an account for reauthentication")
+	}
+	if !isInvalidYouTubeTokenError(errors.New("oauth2: invalid_grant (token revoked)")) {
+		t.Fatal("invalid_grant must mark an account for reauthentication")
 	}
 }
 

@@ -76,6 +76,21 @@ type youtubeGroupVideosCacheEntry struct {
 	expiresAt time.Time
 }
 
+type youtubeGroupVideosInflightEntry struct {
+	done  chan struct{}
+	items []models.YouTubeVideoDetails
+	err   error
+}
+
+// The per-router cache protects completed results. This short-lived
+// single-flight map protects cache misses as well, so concurrent dashboard
+// requests for the same account share one upstream YouTube fetch instead of
+// multiplying quota usage.
+var youtubeGroupVideosInflight = struct {
+	sync.Mutex
+	entries map[string]*youtubeGroupVideosInflightEntry
+}{entries: make(map[string]*youtubeGroupVideosInflightEntry)}
+
 // groupYouTubeVideosMaxTotalVideos caps the aggregated response size
 // across all channels. The SPA renders the result as a card grid;
 // more than 500 cards exceeds the first-paint budget so the cap
@@ -139,6 +154,11 @@ type groupYouTubeVideoEntry struct {
 	// DesiredPrivacy: what the operator chose on the editor's "Pubblica"
 	// panel (publish flow will use it). Empty when no session exists.
 	DesiredPrivacy string `json:"desired_privacy,omitempty"`
+	// PublishAt: scheduled time selected by the operator. Keeping it
+	// in the group projection lets the UI distinguish an intentionally
+	// private scheduled video from a private video that was never
+	// published.
+	PublishAt *time.Time `json:"publish_at,omitempty"`
 	// ActualPrivacy: what YouTube's videos.list confirmed right after
 	// our publish call, projected by the P0#7 read-back
 	// (MarkPublishedWithActualPrivacy). Pointer-to-string so the
@@ -170,7 +190,12 @@ type groupYouTubeVideoEntry struct {
 // so the operator can debug stale-token issues from the UI without
 // inspecting server logs.
 type groupYouTubeVideosSummary struct {
+	// TotalVideos is the number of entries in the bounded aggregate
+	// window. Truncated is true when MaxVideos clipped the complete
+	// fan-out result; callers must not interpret TotalVideos as an
+	// unbounded database/provider total in that case.
 	TotalVideos          int     `json:"total_videos"`
+	Truncated            bool    `json:"truncated"`
 	Accounts             int     `json:"accounts"`
 	AccountsWithVideos   int     `json:"accounts_with_videos"`
 	FailedAccounts       int     `json:"failed_accounts"`
@@ -500,16 +525,13 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 				entry.EditorURL = &u
 				entry.EditorStatus = s.Status
 				entry.DesiredPrivacy = s.DesiredPrivacy
-				// Placeholder: mirror desired_privacy into actual_privacy
-				// until the FIRST successful publish completes. This
-				// lets the SPA render the privacy badge immediately
-				// instead of showing "syncing with YouTube…" for every
-				// freshly-opened session.
+				entry.PublishAt = s.PublishAt
+				// ActualPrivacy is exclusively the value read back from
+				// YouTube. DesiredPrivacy must never be copied here:
+				// doing so would make a newly-opened or pending session
+				// look confirmed before YouTube has been queried.
 				if s.ActualPrivacy != nil {
 					entry.ActualPrivacy = s.ActualPrivacy
-				} else if s.DesiredPrivacy != "" {
-					dp := s.DesiredPrivacy
-					entry.ActualPrivacy = &dp
 				}
 				if s.YouTubeSyncStatus != nil {
 					entry.YouTubeSyncStatus = s.YouTubeSyncStatus
@@ -571,11 +593,12 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 		if title == "" {
 			title = "(Titolo sconosciuto \u2014 Pubblicato)"
 		}
-		// Resolve privacy: actual_privacy (preferred) → desired_privacy
-		// → public fallback (a published session with no privacy
-		// resolved yet is virtually always public since we only
-		// synthesize phantoms for sessions that are no longer in
-		// ListEditableVideos = privacy != private AND != unlisted).
+		// Resolve the displayed privacy from YouTube's read-back when
+		// available. A phantom has already disappeared from the editable
+		// listing, so public is the conservative fallback for a terminal
+		// public publish whose read-back omitted the field. This value is
+		// kept separate from ActualPrivacy: the latter remains nil until
+		// YouTube explicitly confirms it.
 		privacy := s.ActualPrivacy
 		if privacy == nil || *privacy == "" {
 			if s.DesiredPrivacy != "" {
@@ -603,6 +626,7 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 			EditorURL:         &u,
 			EditorStatus:      "published",
 			DesiredPrivacy:    s.DesiredPrivacy,
+			PublishAt:         s.PublishAt,
 			ActualPrivacy:     s.ActualPrivacy,
 			YouTubeSyncStatus: s.YouTubeSyncStatus,
 			Phantom:           true,
@@ -612,7 +636,8 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 	// Apply the aggregate page after the account fan-out. Authorization
 	// and YouTube reads therefore happen before slicing, while callers
 	// receive a bounded response independent of group size.
-	totalVideos := len(entries)
+	lenEntriesBeforeCap := len(entries)
+	totalVideos := lenEntriesBeforeCap
 	if totalVideos > cfg.MaxVideos {
 		totalVideos = cfg.MaxVideos
 		entries = entries[:cfg.MaxVideos]
@@ -630,6 +655,7 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 		Videos: pagedEntries,
 		Summary: groupYouTubeVideosSummary{
 			TotalVideos:          totalVideos,
+			Truncated:            len(entries) < lenEntriesBeforeCap,
 			Accounts:             len(accountLookup),
 			AccountsWithVideos:   accountsWithVideos,
 			FailedAccounts:       len(warnings),
@@ -700,9 +726,14 @@ func collectDescendantGroups(all []models.Group, rootGroupID int64) []*models.Gr
 // transport) — the handler skips the account and surfaces the err
 // in the warnings[] / 502 envelope.
 func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *models.PlatformAccount, cfg YouTubeGroupVideosConfig) ([]models.YouTubeVideoDetails, error) {
-	key := fmt.Sprintf("%d:%s", acc.ID, acc.PlatformUserID)
+	key := fmt.Sprintf("%p:%d:%s:%d", r, acc.ID, acc.PlatformUserID, cfg.MaxVideos)
 	now := time.Now()
 	r.youtubeGroupVideosCacheMu.Lock()
+	for cacheKey, entry := range r.youtubeGroupVideosCache {
+		if !entry.expiresAt.After(now) {
+			delete(r.youtubeGroupVideosCache, cacheKey)
+		}
+	}
 	cached, ok := r.youtubeGroupVideosCache[key]
 	if ok && cached.expiresAt.After(now) {
 		items := append([]models.YouTubeVideoDetails(nil), cached.items...)
@@ -711,11 +742,37 @@ func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *mode
 	}
 	r.youtubeGroupVideosCacheMu.Unlock()
 
-	items, err := r.fetchAccountEditableVideos(ctx, acc, cfg.MaxVideos)
-	if err != nil {
-		return nil, err
+	youtubeGroupVideosInflight.Lock()
+	if pending, exists := youtubeGroupVideosInflight.entries[key]; exists {
+		youtubeGroupVideosInflight.Unlock()
+		select {
+		case <-pending.done:
+			return append([]models.YouTubeVideoDetails(nil), pending.items...), pending.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	if cfg.CacheTTL > 0 {
+	pending := &youtubeGroupVideosInflightEntry{done: make(chan struct{})}
+	youtubeGroupVideosInflight.entries[key] = pending
+	youtubeGroupVideosInflight.Unlock()
+	defer func() {
+		youtubeGroupVideosInflight.Lock()
+		delete(youtubeGroupVideosInflight.entries, key)
+		close(pending.done)
+		youtubeGroupVideosInflight.Unlock()
+	}()
+
+	items, err := func() (items []models.YouTubeVideoDetails, err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("youtube fetch panic: %v", recovered)
+			}
+		}()
+		return r.fetchAccountEditableVideos(ctx, acc, cfg.MaxVideos)
+	}()
+	pending.items = append([]models.YouTubeVideoDetails(nil), items...)
+	pending.err = err
+	if err == nil && cfg.CacheTTL > 0 {
 		r.youtubeGroupVideosCacheMu.Lock()
 		if r.youtubeGroupVideosCache == nil {
 			r.youtubeGroupVideosCache = make(map[string]youtubeGroupVideosCacheEntry)
@@ -726,7 +783,7 @@ func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *mode
 		}
 		r.youtubeGroupVideosCacheMu.Unlock()
 	}
-	return items, nil
+	return items, err
 }
 
 func (r *Router) fetchAccountEditableVideos(ctx context.Context, acc *models.PlatformAccount, maxItems int) ([]models.YouTubeVideoDetails, error) {
@@ -739,15 +796,9 @@ func (r *Router) fetchAccountEditableVideos(ctx context.Context, acc *models.Pla
 	if maxItems <= 0 {
 		maxItems = groupYouTubeVideosMaxTotalVideos
 	}
-	token, err := r.vault.Get(ctx, acc.ID, models.TokenTypeBearer)
+	token, err := r.vault.Renew(ctx, acc.ID, models.TokenTypeBearer, r.youTubeSvc.RefreshOAuthToken)
 	if err != nil {
-		token, err = r.vault.Get(ctx, acc.ID, models.TokenTypeLongLived)
-		if err != nil {
-			token, err = r.vault.Get(ctx, acc.ID, models.TokenTypeShortLived)
-			if err != nil {
-				return nil, fmt.Errorf("no valid token: %w", err)
-			}
-		}
+		return nil, fmt.Errorf("no valid token: %w", err)
 	}
 	items := make([]models.YouTubeVideoDetails, 0, maxItems)
 	pageToken := ""
@@ -803,7 +854,7 @@ func isInvalidYouTubeTokenError(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"invalid_grant", "unauthorized", "status 401", "token expired", "token revoked", "no valid token"} {
+	for _, marker := range []string{"invalid_grant", "status 401", "token expired", "token revoked"} {
 		if strings.Contains(message, marker) {
 			return true
 		}
