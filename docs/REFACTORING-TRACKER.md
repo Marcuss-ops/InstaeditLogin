@@ -11,7 +11,7 @@ refactoring status. Kept in sync with the tooling:
   `make loc-check LOC_AGAINST=none`).
 
 Scan: tracked `go` / `ts` / `tsx` files only (docs, SQL, JSON, YAML excluded).
-85 files are currently above 500 lines; 41 more sit in the 450–500 watchlist.
+84 files are currently above 500 lines; 42 more sit in the 450–500 watchlist.
 
 _Snapshot: 2026-08-01._
 
@@ -40,14 +40,13 @@ gh issue create \
 
 ---
 
-## > 800 lines (10 files) — current `loc-check` strict offenders
+## > 800 lines (9 files) — current `loc-check` strict offenders
 
 These are the files that make `make loc-check LOC_AGAINST=none` exit 1 today.
 
 | File | Righe | Stato | Issue |
 |------|------:|-------|-------|
 | `pkg/api/youtube_publish_pipeline_test.go` | 1157 | da fare | #NNN |
-| `internal/worker/drive_batch_crawler_test.go` | 1014 | da fare | #NNN |
 | `pkg/api/nvidia_metadata_publish_e2e_test.go` | 928 | da fare | #NNN |
 | `tests/e2e/youtube_oauth_browser_e2e_test.go` | 926 | da fare | #NNN |
 | `pkg/api/internal_velox_get_delivery_test.go` | 923 | da fare | #NNN |
@@ -175,6 +174,7 @@ can push them over. No GitHub issues planned for these yet.
 | `pkg/api/accounts_read_handlers.go` | 480 |
 | `internal/credentials/vault_integration_test.go` | 479 |
 | `internal/services/youtube_validate.go` | 478 |
+| `internal/worker/drive_batch_crawler_test_helpers_test.go` | 465 |
 | `pkg/api/youtube_editor_sessions_metadata_test.go` | 476 |
 | `pkg/api/drive_import_handlers.go` | 476 |
 | `pkg/api/drive_batch_v2_handlers.go` | 472 |
@@ -195,19 +195,22 @@ can push them over. No GitHub issues planned for these yet.
 **Nota:** `pkg/api/youtube_group_videos.go` (500) e
 `internal/services/tiktok_publish_test.go` (491) sono file già refactoring in
 questa sessione, appena sotto soglia — monitorarli per non farli risalire.
+`internal/worker/drive_batch_crawler_test_helpers_test.go` (465) è il nuovo
+helper file dello split del crawler, anch'esso sotto soglia ma in watchlist.
 
 ---
 
 ## Completati in questa sessione (stato: `fatto`)
 
 Files split below the threshold during this session's refactoring campaign
-(commit range `802d31f` → `afee37f`). All follow the split-by-concern pattern:
+(commit range `802d31f` → `7cc2e4c`). All follow the split-by-concern pattern:
 extract helpers/types into `*_helpers` / `*_types` files, then split tests per
 feature/scenario.
 
 | File | Prima | Dopo | Split in |
 |------|------:|-----:|----------|
 | `internal/services/tiktok_publish_test.go` | 937 | 491 | `tiktok_publish_test.go` + `tiktok_publish_mock_test.go` (197) + `tiktok_publish_pullfromfile_test.go` (280) |
+| `internal/worker/drive_batch_crawler_test.go` | 1014 | 326 | `drive_batch_crawler_test.go` (326) + `drive_batch_crawler_test_helpers_test.go` (465) + `drive_batch_crawler_e2e_test.go` (260) |
 | `pkg/api/drive_batch_import_test.go` | 1142 | 159 | `drive_batch_import_test.go` + `_errors_test.go` (139) + `_pagination_test.go` (246) + `_shareddrive_test.go` (151) + `_idempotency_test.go` (340) + `_e2e_test.go` (177) |
 | `tests/e2e/pipeline_e2e_test.go` | 954 | 104 | per scenario + helper in `e2e_harness` |
 | `internal/outbox/dispatcher_test.go` | 976 | 174 | `dispatcher_{dispatch,retry,errors,concurrency}_test.go` |
