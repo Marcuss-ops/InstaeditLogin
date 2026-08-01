@@ -717,6 +717,25 @@ func (c *Config) validate() error {
 		return fmt.Errorf("APP_ENV must be one of dev|staging|production (got %q)", c.HTTP.AppEnv)
 	}
 
+	// APP_MODE is the explicit mirror of Google's OAuth consent-screen
+	// publishing status used by the refresh-token policy and test seams.
+	// Keep "dev" valid for existing local environments, but reject
+	// misspellings so a deployment cannot silently select an unintended
+	// refresh-token policy. Only "testing" models Google's seven-day
+	// Testing-mode refresh-token expiry; "production" is the durable mode.
+	switch mode := strings.ToLower(strings.TrimSpace(c.AppMode)); mode {
+	case "":
+		// Config values assembled directly by older tests/callers may omit
+		// AppMode. Preserve the Load() default rather than rejecting an
+		// otherwise valid configuration; an explicitly unknown value still
+		// fails closed below.
+		c.AppMode = "production"
+	case "dev", "testing", "production":
+		c.AppMode = mode
+	default:
+		return fmt.Errorf("APP_MODE must be one of dev|testing|production (got %q)", c.AppMode)
+	}
+
 	// Database: DATABASE_URL takes precedence; individual params fallback.
 	if c.Database.DatabaseURL == "" {
 		if c.Database.DBPassword == "" {

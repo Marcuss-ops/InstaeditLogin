@@ -1,4 +1,16 @@
-# Google OAuth Production Setup — YouTube and Drive
+# Google OAuth Testing and Production Setup — YouTube and Drive
+
+Step-by-step procedure for configuring InstaEdit's separate Google OAuth
+clients in **Testing** and **Production**. The repository can validate the
+runtime mode and request parameters, but only the Google Cloud Console can
+confirm the live audience, publishing status, verification state, and the
+client IDs registered for each environment.
+
+Use a separate Google OAuth client/project for staging and production. Never
+reuse a production client secret in staging, and never commit either secret.
+The production client must be moved to **Production** only after the required
+brand/scope verification is complete; a staging client should remain in
+**Testing** while it is used for controlled test accounts.
 
 Step-by-step procedure for pushing the InstaEdit **YouTube** and
 **Google Drive** OAuth clients out of **Testing mode** (the default
@@ -23,13 +35,18 @@ list can use the app for more than 7 days at a time.
    `instaedit.org` (TXT or CNAME record).
 2. [ ] **OAuth consent screen** filled (app name, support email, app
    domain, authorized domain, home page, privacy policy, ToS,
-   developer contact).3. [ ] **YouTube OAuth grant scopes** declared:
+   developer contact).
+3. [ ] **YouTube OAuth grant scopes** declared exactly as requested by
+   `internal/services/youtube_oauth.go`:
    - `youtube.upload` (videos.insert)
    - `youtube.readonly` (channels.list for P0#3 binding check +
       processing-status poll)
-   - `yt-analytics-monetary.readonly` (revenue/RPM/CPM for
-      monetized channels)
+   - `youtube.force-ssl` (thumbnail and metadata updates)
    - `userinfo.email`, `userinfo.profile`, `openid` (operator identity)
+
+   Do **not** add `yt-analytics.readonly` or
+   `yt-analytics-monetary.readonly`: the current publish flow does not use
+   those scopes.
 4. [ ] **Google Drive OAuth grant scopes** declared:
    - `drive.readonly` (Drive folder import; restricted scope —
      folder-level listing required for the production batch-crawler)
@@ -78,11 +95,64 @@ In **Testing mode**:
   review is precisely what this document drives you through (see
   "Step 4 — submit for verification").
 
-Production mode fixes all of the above: refresh tokens last indefinitely
-(until revoked by the user, by us, or by 6 months of inactivity —
-see "Monitoring refresh-token TTL" below), the 100-user cap is
-removed, and verified scopes can be requested by any Google account
-that grants consent.
+Production mode fixes all of the above: refresh tokens normally remain
+usable until revoked or otherwise invalidated by Google (for example, by
+inactivity or token limits; see the official expiration guidance), the
+Testing-user restriction no longer applies, and verified scopes can be
+requested by consenting Google accounts.
+
+## Repository/runtime configuration contract
+
+The backend reads these environment variables at startup:
+
+| Environment | `APP_ENV` | `APP_MODE` | YouTube callback URL |
+| --- | --- | --- | --- |
+| Local development | `dev` | `dev` (local client only) | `http://localhost:8080/api/v1/auth/youtube/callback` |
+| Staging / Google Testing | `staging` | `testing` | `https://<staging-api-host>/api/v1/auth/youtube/callback` |
+| Production | `production` | `production` | `https://api.instaedit.org/api/v1/auth/youtube/callback` |
+
+`APP_MODE` accepts only `dev`, `testing`, or `production`; unknown values
+fail startup. `APP_MODE=testing` is a deployment declaration that the
+configured Google consent screen is still in Testing, so operators should
+expect Google's seven-day refresh-token behavior. It does not change Google
+Console state by itself. `APP_MODE=production` must only be used with a
+client whose Google publishing status is actually Production.
+
+For every environment, `YOUTUBE_REDIRECT_URI` must match character-for-
+character in all three places: the environment, the authorization URL, and
+the Google Cloud Console web-client's authorized redirect URI. Do not use a
+staging callback with a production client or vice versa; protocol, host,
+port, path, and trailing slash must agree.
+
+The authorization URL intentionally always includes `access_type=offline`
+and `include_granted_scopes=true`. It adds `prompt=consent` only for an
+explicit reconnect/consent flow; normal login does not force consent. This
+avoids unnecessary refresh-token issuance/rotation while still allowing a
+first connection or recovery flow to obtain a refresh token. OAuth client
+IDs and secrets are server-side only; store them in the deployment secret
+manager or protected environment file, not in Git, Docker images, the
+frontend, URLs, or logs.
+
+## Google Cloud Console checks (operator-only)
+
+These values cannot be verified from Git:
+
+1. **Audience:** choose `Internal` only when every user belongs to the same
+   Google Workspace organization. Use `External` for SaaS users outside one
+   organization.
+2. **Publishing status:** keep staging/Test clients in **Testing** and publish
+   the verified production client as **Production**. Verify the badge in the
+   current Google Auth Platform console; `APP_MODE` is only a local guardrail.
+3. **Authorized domains and redirects:** verify the domain first, then add the
+   exact environment-specific callback URL to the matching Web application
+   client. Never copy a production redirect into a staging client by habit.
+4. **Scopes:** compare the consent-screen declaration and a real token's
+   granted scopes with the canonical YouTube set in Step 3. A token may have
+   fewer scopes than requested; treat missing required scopes as a reconnect
+   condition.
+5. **Offline grant:** perform one fresh consent with the intended client and
+   confirm the server stores both encrypted token fields. Do not paste tokens
+   into tickets or command history.
 
 ## Limits we have to plan around
 
@@ -298,7 +368,6 @@ requires.
 | YouTube | `https://www.googleapis.com/auth/youtube.upload`                 | Sensitive      | `videos.insert` (upload a video) — required for the entire publish path                                   |
 | YouTube | `https://www.googleapis.com/auth/youtube.readonly`              | Sensitive      | `channels.list?mine=true` (P0#3 channel binding check), `videos.list` (processing-status poll)             |
 | YouTube | `https://www.googleapis.com/auth/youtube.force-ssl`             | Sensitive      | Required to set video thumbnails via `thumbnails.set` — ensures the thumbnail upload is sent over HTTPS    |
-| YouTube | `https://www.googleapis.com/auth/yt-analytics-monetary.readonly` | Sensitive      | YouTube Analytics earnings report for revenue, RPM and CPM on monetized channels |
 | Drive | `https://www.googleapis.com/auth/drive.readonly`                | Restricted     | Drive folder import — folder-level listing for the batch crawler (the production batch-import flow walks arbitrary folder contents at install time) |
 | Identity | `https://www.googleapis.com/auth/userinfo.email`                 | Non-sensitive  | Identify the operator's Google Account during OAuth                                                       |
 | Identity | `https://www.googleapis.com/auth/userinfo.profile`               | Non-sensitive  | Display name + avatar for the dashboard                                                                   |

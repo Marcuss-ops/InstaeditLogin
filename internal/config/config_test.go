@@ -365,6 +365,34 @@ func TestValidateOptionalPlatform_AllPlatforms(t *testing.T) {
 	}
 }
 
+func TestLoad_AppModeRejectsUnknownValue(t *testing.T) {
+	t.Setenv("APP_MODE", "prod")
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() with APP_MODE=prod: want validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "APP_MODE must be one of dev|testing|production") {
+		t.Fatalf("error should identify the accepted APP_MODE values; got %v", err)
+	}
+}
+
+func TestLoad_AppModeNormalizesWhitespaceAndCase(t *testing.T) {
+	t.Setenv("APP_MODE", " TESTING ")
+	t.Setenv("JWT_SECRET", "this_is_a_test_secret_at_least_32_bytes_long_xx")
+	t.Setenv("ENCRYPTION_KEY", dummpyBase64Key32)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with normalized APP_MODE: want nil, got %v", err)
+	}
+	if cfg.AppMode != "testing" {
+		t.Fatalf("AppMode: want testing, got %q", cfg.AppMode)
+	}
+}
+
 func TestLoad_Production_RequiresMetricsBasicAuth(t *testing.T) {
 	// Provide the minimum required env vars so the only failure path
 	// under test is the production metrics-auth check.
