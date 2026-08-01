@@ -23,14 +23,13 @@ _Snapshot: 2026-08-01._
 
 ---
 
-## > 800 lines (11 files) — current `loc-check` strict offenders
+## > 800 lines (10 files) — current `loc-check` strict offenders
 
 These are the files that make `make loc-check LOC_AGAINST=none` exit 1 today.
 
 | File | Righe | Stato |
 |------|------:|-------|
 | `pkg/api/youtube_publish_pipeline_test.go` | 1157 | da fare |
-| `pkg/api/drive_batch_import_test.go` | 1142 | da fare |
 | `internal/worker/drive_batch_crawler_test.go` | 1014 | da fare |
 | `pkg/api/nvidia_metadata_publish_e2e_test.go` | 928 | da fare |
 | `tests/e2e/youtube_oauth_browser_e2e_test.go` | 926 | da fare |
@@ -138,6 +137,7 @@ feature/scenario.
 | File | Prima | Dopo | Split in |
 |------|------:|-----:|----------|
 | `internal/services/tiktok_publish_test.go` | 937 | 491 | `tiktok_publish_test.go` + `tiktok_publish_mock_test.go` (197) + `tiktok_publish_pullfromfile_test.go` (280) |
+| `pkg/api/drive_batch_import_test.go` | 1142 | 159 | `drive_batch_import_test.go` + `_errors_test.go` (139) + `_pagination_test.go` (246) + `_shareddrive_test.go` (151) + `_idempotency_test.go` (340) + `_e2e_test.go` (177) |
 | `tests/e2e/pipeline_e2e_test.go` | 954 | 104 | per scenario + helper in `e2e_harness` |
 | `internal/outbox/dispatcher_test.go` | 976 | 174 | `dispatcher_{dispatch,retry,errors,concurrency}_test.go` |
 | `docs/OAUTH-PRODUCTION.md` | 979 | 321 | `oauth-google-{setup,limits,rollout,monitoring,troubleshooting}.md` |
