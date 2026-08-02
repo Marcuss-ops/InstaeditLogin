@@ -299,6 +299,30 @@ func (r *Router) scheduleDriveBatchFiles(
 	return entries, cursor, true
 }
 
+// resolveBatchScheduleCursor resolves the schedule start cursor for a
+// single-page batch import. Only forward-looking cursors are honoured;
+// a cursor in the past (previous buggy operator script, stale value)
+// would start publishing backdated posts that fire immediately, so it
+// is clamped to NOW with clamped=true surfaced in the response so the
+// caller can self-correct.
+func resolveBatchScheduleCursor(supplied *time.Time, now time.Time, userID int64, p driveBatchCommonParams) (cursor time.Time, clamped bool) {
+	cursor = now
+	if supplied == nil {
+		return cursor, false
+	}
+	if supplied.After(now.Add(-1 * time.Minute)) {
+		return *supplied, false
+	}
+	slog.Warn("drive batch import: cursor_scheduled_at was too far in the past, clamped to NOW",
+		"user_id", userID,
+		"folder_id", p.FolderID,
+		"workspace_id", p.WorkspaceID,
+		"supplied_cursor", supplied.Format(time.RFC3339),
+		"now", now.Format(time.RFC3339),
+	)
+	return now, true
+}
+
 // writeBatchResponseMarshalOnce marshals the batch response ONCE so
 // the SAME bytes are both written to the wire (the SPA receives them)
 // and returned for the idempotency replay cache

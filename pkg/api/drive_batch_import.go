@@ -11,6 +11,57 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
+// listDriveBatchFolderPage lists one Drive folder page for the
+// single-page endpoint and handles its three non-continue outcomes:
+//
+//   - ErrDriveListRequiresAPIKey → HTTP 200 with structured CTA flags
+//     (missing API key is a deploy configuration gap, operator-fixable,
+//     NOT a transient upstream failure — the SPA renders "configure
+//     API key or link a Drive account" instead of a fatal error).
+//   - upstream error → 502 with a generic body (Drive's raw error
+//     stays in server logs — no echo to the client).
+//   - empty/non-existent folder → 200 with a productive "no videos
+//     found" note.
+//
+// resolvedDriveID is "" for My Drive folders (no driveId scoping) and
+// a Shared Drive's id for Shared Drive folders (corpora=drive).
+func (r *Router) listDriveBatchFolderPage(
+	w http.ResponseWriter,
+	req *http.Request,
+	folderLister services.DriveFolderLister,
+	folderID, resolvedDriveID, listingAccessToken, pageToken string,
+	needsDriveAccount bool,
+) ([]services.GoogleDriveFile, string, bool) {
+	files, nextPageToken, err := folderLister.ListFolder(req.Context(), folderID, resolvedDriveID, listingAccessToken, pageToken)
+	if err != nil {
+		if errors.Is(err, services.ErrDriveListRequiresAPIKey) {
+			writeJSON(w, http.StatusOK, DriveBatchImportResponse{
+				FolderID:               folderID,
+				ScheduledCount:         0,
+				Entries:                []DriveBatchImportItem{},
+				NeedsDriveAccount:      needsDriveAccount,
+				NeedsGoogleDriveAPIKey: true,
+				Note:                   "Server is missing GOOGLE_DRIVE_API_KEY (or link a Google Drive account for authenticated listing). Either set GOOGLE_DRIVE_API_KEY in the server env, OR pass drive_account_id in this request body to use your linked Drive account.",
+			})
+			return nil, "", false
+		}
+		slog.Warn("drive batch import: upstream folder list failed", "folder_id", folderID, "error", err)
+		writeError(w, http.StatusBadGateway, "drive folder list failed (see server logs for details)")
+		return nil, "", false
+	}
+	if len(files) == 0 {
+		writeJSON(w, http.StatusOK, DriveBatchImportResponse{
+			FolderID:          folderID,
+			ScheduledCount:    0,
+			Entries:           []DriveBatchImportItem{},
+			Note:              "no videos found in the folder (or folder is empty / has zero video files)",
+			NeedsDriveAccount: needsDriveAccount,
+		})
+		return nil, "", false
+	}
+	return files, nextPageToken, true
+}
+
 // handleDriveBatchImport implements POST /api/v1/media/import/drive/folder.
 // See DriveBatchImportRequest for the body shape. The response is 202
 // Accepted with a DriveBatchImportResponse describing every queued job.
@@ -145,44 +196,10 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 
 	// List folder contents — page_token (when present) makes Drive
 	// continue from the previous page instead of returning page 1.
-	// resolvedDriveID is "" for My Drive folders (no driveId scoping)
-	// and a Shared Drive's id for Shared Drive folders (corpora=drive).
-	files, nextPageToken, err := folderLister.ListFolder(req.Context(), params.FolderID, resolvedDriveID, listingAccessToken, body.PageToken)
-	if err != nil {
-		// Typed sentinel: missing API key on the server is a deploy
-		// configuration gap (operator-fixable), NOT a transient
-		// upstream failure. We return HTTP 200 with structured flags
-		// so the SPA can render a clear CTA (configure API key or
-		// link a Drive account) instead of treating it as a fatal
-		// error. Networking / upstream Drive errors still 502.
-		// Generic message in the body — upstream error details stay in
-		// server logs (don't echo Drive's raw error to the client).
-		if errors.Is(err, services.ErrDriveListRequiresAPIKey) {
-			writeJSON(w, http.StatusOK, DriveBatchImportResponse{
-				FolderID:               params.FolderID,
-				ScheduledCount:         0,
-				Entries:                []DriveBatchImportItem{},
-				NeedsDriveAccount:      needsDriveAccount,
-				NeedsGoogleDriveAPIKey: true,
-				Note:                   "Server is missing GOOGLE_DRIVE_API_KEY (or link a Google Drive account for authenticated listing). Either set GOOGLE_DRIVE_API_KEY in the server env, OR pass drive_account_id in this request body to use your linked Drive account.",
-			})
-			return
-		}
-		slog.Warn("drive batch import: upstream folder list failed", "folder_id", params.FolderID, "error", err)
-		writeError(w, http.StatusBadGateway, "drive folder list failed (see server logs for details)")
-		return
-	}
-
-	if len(files) == 0 {
-		// Empty or non-existent folder. 200 OK so the SPA renders a
-		// productive "no videos found" message instead of an error.
-		writeJSON(w, http.StatusOK, DriveBatchImportResponse{
-			FolderID:          params.FolderID,
-			ScheduledCount:    0,
-			Entries:           []DriveBatchImportItem{},
-			Note:              "no videos found in the folder (or folder is empty / has zero video files)",
-			NeedsDriveAccount: needsDriveAccount,
-		})
+	// The config-gap 200 (missing API key CTA), empty-folder 200 and
+	// upstream 502 branches live in listDriveBatchFolderPage.
+	files, nextPageToken, ok := r.listDriveBatchFolderPage(w, req, folderLister, params.FolderID, resolvedDriveID, listingAccessToken, body.PageToken, needsDriveAccount)
+	if !ok {
 		return
 	}
 
@@ -192,28 +209,7 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 	// each job is `previous + rand(min,max)` — across-page continuity is
 	// what cursor_scheduled_at preserves.
 	now := time.Now()
-	cursor := now
-	var cursorClampedToNow bool
-	if body.CursorScheduledAt != nil {
-		// Only honour the cursor for forward-looking schedules; if the
-		// user (or a previous buggy operator script) sends a cursor in the
-		// past, we'd start publishing backdated posts and they'd fire
-		// immediately. Clamp to max(now, cursor) AND surface the clamp
-		// in the response so the caller can self-correct.
-		if body.CursorScheduledAt.After(now.Add(-1 * time.Minute)) {
-			cursor = *body.CursorScheduledAt
-		} else {
-			cursor = now
-			cursorClampedToNow = true
-			slog.Warn("drive batch import: cursor_scheduled_at was too far in the past, clamped to NOW",
-				"user_id", userID,
-				"folder_id", params.FolderID,
-				"workspace_id", params.WorkspaceID,
-				"supplied_cursor", body.CursorScheduledAt.Format(time.RFC3339),
-				"now", now.Format(time.RFC3339),
-			)
-		}
-	}
+	cursor, cursorClampedToNow := resolveBatchScheduleCursor(body.CursorScheduledAt, now, userID, params)
 	entries, cursor, ok := r.scheduleDriveBatchFiles(w, userID, params, files, cursor, now, 0)
 	if !ok {
 		return
