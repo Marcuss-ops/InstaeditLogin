@@ -37,6 +37,12 @@ import (
 // two workers running in parallel won't redundantly write 'failed' to
 // the same row (the loser would have already returned with
 // claimed=false).
+//
+// The body is decomposed into phase methods so each transition is
+// independently testable; each phase either returns its result or
+// performs the terminal target transition itself and signals the
+// orchestrator to stop (stop=true — the accompanying error, possibly
+// nil, is publishTarget's return value).
 func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTarget) error {
 	// 1. ATOMIC CLAIM: queued → publishing. If another worker
 	// already claimed this target, claim returns false and we skip.
@@ -67,21 +73,7 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	// after claiming the target so Drive never falls through the YouTube
 	// publish contract.
 	if account.Platform == models.PlatformGoogleDrive && w.deliveryRegistry != nil {
-		if w.resolver == nil {
-			return w.markFailed(target, "media download resolver is not configured")
-		}
-		deliveryURL, err := w.resolver.ResolveForUpload(ctx, post, time.Hour)
-		if err != nil {
-			return w.markFailed(target, "resolve fresh media URL for Drive delivery: "+err.Error())
-		}
-		target.Status = models.PostStatusPublished
-		now := time.Now()
-		target.PublishedAt = &now
-		if err := w.postRepo.UpdateStatus(target); err != nil {
-			return fmt.Errorf("mark Drive export target published: %w", err)
-		}
-		w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{ContentType: "video/mp4"}, deliveryURL)
-		return nil
+		return w.publishDriveExport(ctx, target, account, post)
 	}
 
 	// 4. Resolve platform capabilities. We need the OAuthProvider (for
@@ -93,212 +85,30 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 		return w.markFailed(target, fmt.Sprintf("platform %q missing capability (oauth=%v publish=%v)", account.Platform, oauthOK, pubOK))
 	}
 
-	// 5. Refresh token via the CredentialVault. The provider's
-	// RefreshOAuthToken method is adapted to a credentials.TokenRefresher
-	// closure so the vault only knows the function signature. YouTube
-	// uses the canonical bearer type first and keeps long_lived only as
-	// a temporary compatibility fallback for pre-normalization rows.
-	refresher := credentials.TokenRefresher(func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
-		return oauth.RefreshOAuthToken(ctx, refreshToken)
-	})
-	var oauthToken *models.OAuthToken
-	if account.Platform == models.PlatformYouTube {
-		oauthToken, err = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
-	} else {
-		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
-		if err != nil {
-			oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher)
-		}
-	}
-	if err != nil {
-		if account.Platform == models.PlatformYouTube && errors.Is(err, credentials.ErrYouTubeInvalidGrant) {
-			w.markYouTubeGrantReauth(ctx, account)
-			return w.markPublishBlockedAuth(target, youtubeReauthReason())
-		}
-		return w.markFailed(target, "token refresh failed")
-	}
-
-	// For providers that publish via a page-scoped token (Facebook
-	// Pages), prefer the page access token stored for the account.
-	// Page Access Tokens do not need refresh; the vault Get path
-	// returns them as long as the grant is valid.
-	if pageToken, err := w.vault.Get(ctx, account.ID, models.TokenTypePageAccess); err == nil && pageToken.AccessToken != "" {
-		oauthToken = pageToken
+	// 5. Refresh the OAuth token (with the Facebook page-token
+	// override) via the CredentialVault.
+	oauthToken, refresher, stop, err := w.resolvePublishToken(ctx, target, account, oauth)
+	if stop {
+		return err
 	}
 
 	// 5b. YOUTUBE ONLY — P0#3 server-side channel binding check.
-	//
-	// The OAuth grant we just refreshed MUST be bound to the SAME
-	// channel as platform_account.platform_user_id. The refresh above
-	// doesn't tell us; only channels.list?mine=true can confirm.
-	// Without this check, a grant that was silently re-bound to a
-	// different channel (Google rotation, operator migration, fraud)
-	// would happily upload the video to the wrong channel.
-	//
-	// Placement rationale:
-	//   - AFTER refresh + page-token override so oauthToken is the
-	//     final access token we will pass to Publish (the check uses
-	//     it AND the publish uses it; no double-refresh).
-	//   - BEFORE the idempotency-key stamp so a flag-failed upload
-	//     does NOT stamp a key (the post_target is going to
-	//     'failed', not 'publishing'; no future retries should
-	//     dedup against it).
-	//
-	// On ErrYouTubeChannelMismatch (channel id NOT in the grant's
-	// channel set): flag the platform_account reauth_required (so
-	// the dashboard prompts the operator to reconnect) AND mark
-	// this post_target failed (so the worker stops trying).
-	//
-	// On any other error (5xx, network, decode): treat as transient
-	// — DO NOT flag reauth — and let the next tick retry.
-	if account.Platform == models.PlatformYouTube {
-		raw, hasRaw := w.router.Get(account.Platform)
-		if hasRaw {
-			if binder, ok := raw.(services.YouTubeChannelBinder); ok {
-				if bindErr := binder.ValidateChannelBinding(ctx, oauthToken.AccessToken, account.PlatformUserID); bindErr != nil {
-					if errors.Is(bindErr, services.ErrYouTubeChannelMismatch) {
-						if flagErr := w.userRepo.MarkReauthRequired(ctx, account.ID, "youtube_channel_mismatch", bindErr.Error()); flagErr != nil {
-							// Soft error — the post_target still goes
-							// to 'blocked_auth' below; we just couldn't
-							// stamp the platform_account's flag. Log
-							// so the operator sees both signals.
-							w.logger.Warn("could not flag platform_account reauth_required after youtube channel mismatch",
-								"platform_account_id", account.ID, "post_id", target.PostID, "flag_error", flagErr)
-						}
-						// P0 #2: increment the operator-facing /
-						// dashboard signal alongside the DB-side
-						// flag. Drift up means Google silently
-						// re-bound the OAuth grant to a different
-						// Brand Account — the operator must
-						// investigate before reconnecting.
-						// Increment is UNCONDITIONAL on mismatch
-						// detection (not on DB-write success) so a
-						// transient MarkReauthRequired blip cannot
-						// hide reauth rates from the dashboard.
-						w.recordChannelMismatch(account.Platform)
-						w.logger.Warn("youtube channel binding mismatch; refusing upload",
-							"target_id", target.ID, "post_id", target.PostID,
-							"platform_account_id", account.ID,
-							"expected_channel_id", account.PlatformUserID,
-							"error", bindErr)
-						// Task 2/10: route the post_target to
-						// PostStatusBlockedAuth (distinct from the
-						// generic PostStatusFailed so dashboards
-						// can answer "what's pending reauth?").
-						// The operator reconnects the channel,
-						// platform_account.status flips back to
-						// active, and the NEXT tick (driven by
-						// resume) rewrites the row to queued.
-						return w.markPublishBlockedAuth(target, "youtube channel binding check: "+bindErr.Error())
-					}
-					w.logger.Warn("youtube channel binding check failed (transient); will retry",
-						"target_id", target.ID, "post_id", target.PostID,
-						"platform_account_id", account.ID, "error", bindErr)
-					return w.markFailed(target, "youtube channel binding check: "+bindErr.Error())
-				}
-			}
-			// If the registered provider doesn't implement the
-			// binder (older test fixtures, future non-YouTube
-			// provider that accidentally registers under the
-			// youtube name), the check is skipped — the existing
-			// publish path proceeds. New YouTubeOAuthService
-			// implementations MUST satisfy the compile-time
-			// assertion in services/youtube_oauth.go.
-		}
+	if stop, err := w.validateYouTubeChannelBinding(ctx, target, account, oauthToken); stop {
+		return err
 	}
 
-	// 5c. Optional canary pre-flight (Task 7/10). When the post carries
-	// metadata.canary_upload=true, upload a 5-10s/<5MB/privacy=private canary
-	// video to the same channel and confirm the binding matches BEFORE the real
-	// publish. On mismatch the post_target is marked PostStatusBlockedAuth (via
-	// the existing markPublishBlockedAuth helper) and the real Publish must NOT
-	// run. Documented in docs/OAUTH-PRODUCTION.md (canary pre-flight).
-	if w.isCanaryEnabled(ctx, post) {
-		var renewErr error
-		if account.Platform == models.PlatformYouTube {
-			oauthToken, renewErr = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
-		} else {
-			oauthToken, renewErr = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
-		}
-		if renewErr != nil {
-			return w.markPublishBlockedAuth(target, "canary pre-flight: renew failed")
-		}
-		uploader := w.canonicalCanaryUploader
-		if uploader == nil {
-			w.logger.Warn("publish worker: canary capability absent — skipping pre-flight",
-				"platform_account_id", account.ID)
-			return w.markPublishBlockedAuth(target, "canary pre-flight: capability absent")
-		}
-		res, canErr := uploader.CanaryUpload(ctx, oauthToken.AccessToken, account.PlatformUserID)
-		if canErr != nil || res == nil || res.UploadedChannelID != account.PlatformUserID {
-			w.logger.Warn("canary channel mismatch; flagging target blocked_auth",
-				"target_id", target.ID, "platform_account_id", account.ID)
-			return w.markPublishBlockedAuth(target, "canary pre-flight: channel mismatch")
-		}
-		if err := w.postRepo.SetTargetCanaryVideoID(target.ID, res.VideoID); err != nil {
-			w.logger.Warn("canary_video_id persistence failed (non-fatal)",
-				"target_id", target.ID, "video_id", res.VideoID, "error", err)
-		}
+	// 5c. Optional canary pre-flight (Task 7/10).
+	oauthToken, stop, err = w.runCanaryPreflight(ctx, target, account, post, refresher, oauthToken)
+	if stop {
+		return err
 	}
 
 	// 6. Build payload + publish. MediaURL goes through as VideoURL (the
 	// payload's ImageURL branch is reserved for image-only posts that
 	// don't have a content_type column — future enhancement).
-	//
-	// Taglio 4.7 LEVEL 2 (migration 022): ensure the post_target has
-	// the deterministic provider_idempotency_key stamped onto it BEFORE
-	// publishing. The key is computed from (post.ID, account.ID) so it
-	// is stable across retries — the platform's native API dedup
-	// catches the duplicate publish on its end. Forward it on the
-	// payload so providers that support per-call idempotency keys
-	// (LinkedIn "X-Restli-Idempotency-Key", Twitter v2 "request_id",
-	// TikTok "idempotent" query param) drive the upstream API to
-	// dedup; providers without native support ignore the field, but
-	// the DB-level UNIQUE(platform_account_id, provider_idempotency_key)
-	// constraint is the catch-all safety net.
-	var key string
-	if target.ProviderIdempotencyKey != nil && *target.ProviderIdempotencyKey != "" {
-		key = *target.ProviderIdempotencyKey
-	} else {
-		key = computeProviderIdempotencyKey(target.PostID, account.ID)
-		// Mirror the stamped key onto the in-memory struct so any
-		// SUBSEQUENT path that reads target.ProviderIdempotencyKey
-		// (UpdateStatus captures, future debug-log wires) sees the
-		// stamped value, not the pre-stamp nil. Without this mirror
-		// we trust ListPending's SELECT to include the column on
-		// every re-fetch (the case today) — setting it locally
-		// removes that implicit coupling.
-		target.ProviderIdempotencyKey = &key
-		if err := w.postRepo.SetProviderIdempotencyKey(target.ID, key); err != nil {
-			if errors.Is(err, repository.ErrProviderIdempotencyConflict) {
-				// Degenerate: another row on the same account already
-				// has this key (collision with extremely low probability
-				// for SHA-256 prefix, OR a stale key from a prior failed
-				// attempt). Do NOT leave the row in 'publishing' — it
-				// would be polled forever by the reconciler and never
-				// re-picked by the driver either. Promote to 'failed'
-				// so the row drops out of BOTH filter sets and the
-				// operator can see + reconcile it.
-				w.logger.Warn("provider idempotency key conflict on stamp; promoting target to failed",
-					"target_id", target.ID, "post_id", target.PostID,
-					"platform_account_id", account.ID, "key", key, "error", err)
-				target.Status = models.PostStatusFailed
-				target.ErrorMessage = "provider idempotency key conflict: " + err.Error()
-				if updateErr := w.postRepo.UpdateStatus(target); updateErr != nil {
-					// Surface both errors so the tick counter increments
-					// AND the operator sees the underlying failure mode.
-					return fmt.Errorf("provider idempotency key conflict (also failed to mark failed: %v): %w",
-						updateErr, err)
-				}
-				return fmt.Errorf("provider idempotency key conflict: %w", err)
-			}
-			if errors.Is(err, repository.ErrPostTargetNotFound) {
-				// Stale id — another worker or a manual op touched the row.
-				// Don't double-publish; treat as a failed tick entry.
-				return fmt.Errorf("provider idempotency key stamp on missing target: %w", err)
-			}
-			return fmt.Errorf("ensure provider idempotency key: %w", err)
-		}
+	key, err := w.ensureProviderIdempotencyKey(target, account)
+	if err != nil {
+		return err
 	}
 	// Build the publish payload, applying the privacy-level cascade
 	// and platform-specific defaults in the process phase.
@@ -314,4 +124,261 @@ func (w *PublishWorker) publishTarget(ctx context.Context, target *models.PostTa
 	// resolves the canonical media asset immediately before Publisher.Publish,
 	// and owns the sync/async target transition plus completion dispatch.
 	return w.executePublish(ctx, target, account, post, oauthToken, payload, publisher)
+}
+
+// publishDriveExport is the Google Drive branch of publishTarget: Drive
+// is an exporter, not a social Publisher, so after the claim we resolve
+// a fresh media URL, mark the target published and hand the delivery to
+// dispatchPostCompletion. Callers must have verified the platform is
+// Google Drive and that the DeliveryRegistry is configured.
+func (w *PublishWorker) publishDriveExport(ctx context.Context, target *models.PostTarget, account *models.PlatformAccount, post *models.Post) error {
+	if w.resolver == nil {
+		return w.markFailed(target, "media download resolver is not configured")
+	}
+	deliveryURL, err := w.resolver.ResolveForUpload(ctx, post, time.Hour)
+	if err != nil {
+		return w.markFailed(target, "resolve fresh media URL for Drive delivery: "+err.Error())
+	}
+	target.Status = models.PostStatusPublished
+	now := time.Now()
+	target.PublishedAt = &now
+	if err := w.postRepo.UpdateStatus(target); err != nil {
+		return fmt.Errorf("mark Drive export target published: %w", err)
+	}
+	w.dispatchPostCompletion(ctx, target, account, &models.MediaAsset{ContentType: "video/mp4"}, deliveryURL)
+	return nil
+}
+
+// resolvePublishToken is phase 5 of publishTarget: refresh the OAuth
+// token via the CredentialVault and apply the Facebook page-token
+// override. The returned refresher is reused by the canary pre-flight.
+// On failure it performs the terminal target transition itself and
+// returns stop=true with publishTarget's return value.
+func (w *PublishWorker) resolvePublishToken(ctx context.Context, target *models.PostTarget, account *models.PlatformAccount, oauth services.OAuthProvider) (*models.OAuthToken, credentials.TokenRefresher, bool, error) {
+	// Refresh token via the CredentialVault. The provider's
+	// RefreshOAuthToken method is adapted to a credentials.TokenRefresher
+	// closure so the vault only knows the function signature. YouTube
+	// uses the canonical bearer type first and keeps long_lived only as
+	// a temporary compatibility fallback for pre-normalization rows.
+	refresher := credentials.TokenRefresher(func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+		return oauth.RefreshOAuthToken(ctx, refreshToken)
+	})
+	var oauthToken *models.OAuthToken
+	var err error
+	if account.Platform == models.PlatformYouTube {
+		oauthToken, err = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
+	} else {
+		oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+		if err != nil {
+			oauthToken, err = w.vault.Renew(ctx, account.ID, models.TokenTypeLongLived, refresher)
+		}
+	}
+	if err != nil {
+		if account.Platform == models.PlatformYouTube && errors.Is(err, credentials.ErrYouTubeInvalidGrant) {
+			w.markYouTubeGrantReauth(ctx, account)
+			return nil, nil, true, w.markPublishBlockedAuth(target, youtubeReauthReason())
+		}
+		return nil, nil, true, w.markFailed(target, "token refresh failed")
+	}
+
+	// For providers that publish via a page-scoped token (Facebook
+	// Pages), prefer the page access token stored for the account.
+	// Page Access Tokens do not need refresh; the vault Get path
+	// returns them as long as the grant is valid.
+	if pageToken, err := w.vault.Get(ctx, account.ID, models.TokenTypePageAccess); err == nil && pageToken.AccessToken != "" {
+		oauthToken = pageToken
+	}
+	return oauthToken, refresher, false, nil
+}
+
+// validateYouTubeChannelBinding is phase 5b of publishTarget — the P0#3
+// server-side channel binding check. No-op (stop=false) for non-YouTube
+// platforms and for providers that don't implement the binder.
+//
+// The OAuth grant we just refreshed MUST be bound to the SAME
+// channel as platform_account.platform_user_id. The refresh above
+// doesn't tell us; only channels.list?mine=true can confirm.
+// Without this check, a grant that was silently re-bound to a
+// different channel (Google rotation, operator migration, fraud)
+// would happily upload the video to the wrong channel.
+//
+// Placement rationale:
+//   - AFTER refresh + page-token override so oauthToken is the
+//     final access token we will pass to Publish (the check uses
+//     it AND the publish uses it; no double-refresh).
+//   - BEFORE the idempotency-key stamp so a flag-failed upload
+//     does NOT stamp a key (the post_target is going to
+//     'failed', not 'publishing'; no future retries should
+//     dedup against it).
+//
+// On ErrYouTubeChannelMismatch (channel id NOT in the grant's
+// channel set): flag the platform_account reauth_required (so
+// the dashboard prompts the operator to reconnect) AND mark
+// this post_target failed (so the worker stops trying).
+//
+// On any other error (5xx, network, decode): treat as transient
+// — DO NOT flag reauth — and let the next tick retry.
+func (w *PublishWorker) validateYouTubeChannelBinding(ctx context.Context, target *models.PostTarget, account *models.PlatformAccount, oauthToken *models.OAuthToken) (bool, error) {
+	if account.Platform != models.PlatformYouTube {
+		return false, nil
+	}
+	raw, hasRaw := w.router.Get(account.Platform)
+	if !hasRaw {
+		return false, nil
+	}
+	binder, ok := raw.(services.YouTubeChannelBinder)
+	if !ok {
+		// If the registered provider doesn't implement the
+		// binder (older test fixtures, future non-YouTube
+		// provider that accidentally registers under the
+		// youtube name), the check is skipped — the existing
+		// publish path proceeds. New YouTubeOAuthService
+		// implementations MUST satisfy the compile-time
+		// assertion in services/youtube_oauth.go.
+		return false, nil
+	}
+	bindErr := binder.ValidateChannelBinding(ctx, oauthToken.AccessToken, account.PlatformUserID)
+	if bindErr == nil {
+		return false, nil
+	}
+	if errors.Is(bindErr, services.ErrYouTubeChannelMismatch) {
+		if flagErr := w.userRepo.MarkReauthRequired(ctx, account.ID, "youtube_channel_mismatch", bindErr.Error()); flagErr != nil {
+			// Soft error — the post_target still goes
+			// to 'blocked_auth' below; we just couldn't
+			// stamp the platform_account's flag. Log
+			// so the operator sees both signals.
+			w.logger.Warn("could not flag platform_account reauth_required after youtube channel mismatch",
+				"platform_account_id", account.ID, "post_id", target.PostID, "flag_error", flagErr)
+		}
+		// P0 #2: increment the operator-facing /
+		// dashboard signal alongside the DB-side
+		// flag. Drift up means Google silently
+		// re-bound the OAuth grant to a different
+		// Brand Account — the operator must
+		// investigate before reconnecting.
+		// Increment is UNCONDITIONAL on mismatch
+		// detection (not on DB-write success) so a
+		// transient MarkReauthRequired blip cannot
+		// hide reauth rates from the dashboard.
+		w.recordChannelMismatch(account.Platform)
+		w.logger.Warn("youtube channel binding mismatch; refusing upload",
+			"target_id", target.ID, "post_id", target.PostID,
+			"platform_account_id", account.ID,
+			"expected_channel_id", account.PlatformUserID,
+			"error", bindErr)
+		// Task 2/10: route the post_target to
+		// PostStatusBlockedAuth (distinct from the
+		// generic PostStatusFailed so dashboards
+		// can answer "what's pending reauth?").
+		// The operator reconnects the channel,
+		// platform_account.status flips back to
+		// active, and the NEXT tick (driven by
+		// resume) rewrites the row to queued.
+		return true, w.markPublishBlockedAuth(target, "youtube channel binding check: "+bindErr.Error())
+	}
+	w.logger.Warn("youtube channel binding check failed (transient); will retry",
+		"target_id", target.ID, "post_id", target.PostID,
+		"platform_account_id", account.ID, "error", bindErr)
+	return true, w.markFailed(target, "youtube channel binding check: "+bindErr.Error())
+}
+
+// runCanaryPreflight is phase 5c of publishTarget — the optional canary
+// pre-flight (Task 7/10). When the post carries
+// metadata.canary_upload=true, upload a 5-10s/<5MB/privacy=private canary
+// video to the same channel and confirm the binding matches BEFORE the real
+// publish. On mismatch the post_target is marked PostStatusBlockedAuth (via
+// the existing markPublishBlockedAuth helper) and the real Publish must NOT
+// run. Documented in docs/OAUTH-PRODUCTION.md (canary pre-flight).
+//
+// Returns the (possibly re-renewed) token to use for the real publish.
+func (w *PublishWorker) runCanaryPreflight(ctx context.Context, target *models.PostTarget, account *models.PlatformAccount, post *models.Post, refresher credentials.TokenRefresher, oauthToken *models.OAuthToken) (*models.OAuthToken, bool, error) {
+	if !w.isCanaryEnabled(ctx, post) {
+		return oauthToken, false, nil
+	}
+	var renewErr error
+	if account.Platform == models.PlatformYouTube {
+		oauthToken, renewErr = credentials.RenewYouTubeToken(ctx, w.vault, account.ID, refresher, w.logger)
+	} else {
+		oauthToken, renewErr = w.vault.Renew(ctx, account.ID, models.TokenTypeBearer, refresher)
+	}
+	if renewErr != nil {
+		return oauthToken, true, w.markPublishBlockedAuth(target, "canary pre-flight: renew failed")
+	}
+	uploader := w.canonicalCanaryUploader
+	if uploader == nil {
+		w.logger.Warn("publish worker: canary capability absent — skipping pre-flight",
+			"platform_account_id", account.ID)
+		return oauthToken, true, w.markPublishBlockedAuth(target, "canary pre-flight: capability absent")
+	}
+	res, canErr := uploader.CanaryUpload(ctx, oauthToken.AccessToken, account.PlatformUserID)
+	if canErr != nil || res == nil || res.UploadedChannelID != account.PlatformUserID {
+		w.logger.Warn("canary channel mismatch; flagging target blocked_auth",
+			"target_id", target.ID, "platform_account_id", account.ID)
+		return oauthToken, true, w.markPublishBlockedAuth(target, "canary pre-flight: channel mismatch")
+	}
+	if err := w.postRepo.SetTargetCanaryVideoID(target.ID, res.VideoID); err != nil {
+		w.logger.Warn("canary_video_id persistence failed (non-fatal)",
+			"target_id", target.ID, "video_id", res.VideoID, "error", err)
+	}
+	return oauthToken, false, nil
+}
+
+// ensureProviderIdempotencyKey stamps (or reuses) the deterministic
+// provider_idempotency_key for the target.
+//
+// Taglio 4.7 LEVEL 2 (migration 022): ensure the post_target has
+// the deterministic provider_idempotency_key stamped onto it BEFORE
+// publishing. The key is computed from (post.ID, account.ID) so it
+// is stable across retries — the platform's native API dedup
+// catches the duplicate publish on its end. Forward it on the
+// payload so providers that support per-call idempotency keys
+// (LinkedIn "X-Restli-Idempotency-Key", Twitter v2 "request_id",
+// TikTok "idempotent" query param) drive the upstream API to
+// dedup; providers without native support ignore the field, but
+// the DB-level UNIQUE(platform_account_id, provider_idempotency_key)
+// constraint is the catch-all safety net.
+func (w *PublishWorker) ensureProviderIdempotencyKey(target *models.PostTarget, account *models.PlatformAccount) (string, error) {
+	if target.ProviderIdempotencyKey != nil && *target.ProviderIdempotencyKey != "" {
+		return *target.ProviderIdempotencyKey, nil
+	}
+	key := computeProviderIdempotencyKey(target.PostID, account.ID)
+	// Mirror the stamped key onto the in-memory struct so any
+	// SUBSEQUENT path that reads target.ProviderIdempotencyKey
+	// (UpdateStatus captures, future debug-log wires) sees the
+	// stamped value, not the pre-stamp nil. Without this mirror
+	// we trust ListPending's SELECT to include the column on
+	// every re-fetch (the case today) — setting it locally
+	// removes that implicit coupling.
+	target.ProviderIdempotencyKey = &key
+	if err := w.postRepo.SetProviderIdempotencyKey(target.ID, key); err != nil {
+		if errors.Is(err, repository.ErrProviderIdempotencyConflict) {
+			// Degenerate: another row on the same account already
+			// has this key (collision with extremely low probability
+			// for SHA-256 prefix, OR a stale key from a prior failed
+			// attempt). Do NOT leave the row in 'publishing' — it
+			// would be polled forever by the reconciler and never
+			// re-picked by the driver either. Promote to 'failed'
+			// so the row drops out of BOTH filter sets and the
+			// operator can see + reconcile it.
+			w.logger.Warn("provider idempotency key conflict on stamp; promoting target to failed",
+				"target_id", target.ID, "post_id", target.PostID,
+				"platform_account_id", account.ID, "key", key, "error", err)
+			target.Status = models.PostStatusFailed
+			target.ErrorMessage = "provider idempotency key conflict: " + err.Error()
+			if updateErr := w.postRepo.UpdateStatus(target); updateErr != nil {
+				// Surface both errors so the tick counter increments
+				// AND the operator sees the underlying failure mode.
+				return "", fmt.Errorf("provider idempotency key conflict (also failed to mark failed: %v): %w",
+					updateErr, err)
+			}
+			return "", fmt.Errorf("provider idempotency key conflict: %w", err)
+		}
+		if errors.Is(err, repository.ErrPostTargetNotFound) {
+			// Stale id — another worker or a manual op touched the row.
+			// Don't double-publish; treat as a failed tick entry.
+			return "", fmt.Errorf("provider idempotency key stamp on missing target: %w", err)
+		}
+		return "", fmt.Errorf("ensure provider idempotency key: %w", err)
+	}
+	return key, nil
 }
