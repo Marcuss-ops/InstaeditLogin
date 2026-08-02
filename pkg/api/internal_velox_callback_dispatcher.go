@@ -48,17 +48,24 @@
 //	artifact_verified, queued, publishing, published,
 //	blocked_auth, failed, dead_letter
 //
-// Adding a new event type is a 2-step change: add the const
-// here + emit from the appropriate worker hook.
+// Adding a new event type is a 2-step change: add the const in
+// internal_velox_callback_dispatcher_types.go + emit from the
+// appropriate worker hook.
+//
+// File layout (split per concern, 2026-08):
+//
+//	internal_velox_callback_dispatcher.go         — dispatcher struct +
+//	                                                constructor + Dispatch (this file)
+//	internal_velox_callback_dispatcher_types.go   — VeloxCallbackEvent enum,
+//	                                                payload, audit store, tuning consts
+//	internal_velox_callback_dispatcher_helpers.go — sleep / signBody /
+//	                                                emitAudit / derefString /
+//	                                                defaultVeloxEventID
 package api
 
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,124 +77,6 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
-)
-
-// VeloxCallbackEvent is the 7-value enum on the InstaEdit→Velox
-// callback surface. The string values match the
-// external_deliveries.status column names that trigger
-// callbacks so a one-to-one mapping between status field on
-// the row and the X-Velox-Event-ID header value holds (workers
-// dispatch by status, no transform layer).
-type VeloxCallbackEvent string
-
-const (
-	// VeloxCallbackArtifactVerified fires after the worker has
-	// streamed the artifact through the Velox download_url
-	// (size + SHA pass) and the asset is ready to be staged
-	// into the InstaEdit ingest pipeline.
-	VeloxCallbackArtifactVerified VeloxCallbackEvent = "artifact_verified"
-	// VeloxCallbackQueued fires when the post has been created
-	// in InstaEdit's posts table + is awaiting the publish_at
-	// window.
-	VeloxCallbackQueued VeloxCallbackEvent = "queued"
-	// VeloxCallbackPublishing fires immediately before the
-	// platform publish call (videos.insert / etc) is invoked.
-	VeloxCallbackPublishing VeloxCallbackEvent = "publishing"
-	// VeloxCallbackPublished fires when the platform publish
-	// call returns 2xx + a platform-side media id/url is known.
-	VeloxCallbackPublished VeloxCallbackEvent = "published"
-	// VeloxCallbackBlockedAuth fires when the platform_account
-	// transitions to reauth_required mid-pipeline; the
-	// publish halts until the user re-links their account.
-	VeloxCallbackBlockedAuth VeloxCallbackEvent = "blocked_auth"
-	// VeloxCallbackFailed fires when an attempt exhausted its
-	// retries with a retryable error (network, 5xx within
-	// budget). Distinct from dead_letter: a failed callback
-	// hasn't exhausted the dispatcher's retry budget — the
-	// audit row says so deterministically.
-	VeloxCallbackFailed VeloxCallbackEvent = "failed"
-	// VeloxCallbackDeadLetter fires after the dispatcher's
-	// max_attempts has been exhausted (default 5). The audit
-	// row carries attempts_used + last_status for forensics.
-	VeloxCallbackDeadLetter VeloxCallbackEvent = "dead_letter"
-)
-
-// IsTerminalSuccess returns true for the 4 events that
-// represent progress-or-completion. Used by the audit log
-// decision tree (success → AuditActionVeloxCallbackSent,
-// failure → AuditActionVeloxCallbackFailed).
-func (e VeloxCallbackEvent) IsTerminalSuccess() bool {
-	switch e {
-	case VeloxCallbackArtifactVerified,
-		VeloxCallbackQueued,
-		VeloxCallbackPublishing,
-		VeloxCallbackPublished:
-		return true
-	}
-	return false
-}
-
-// VeloxCallbackPayload is the canonical JSON body posted to
-// the Velox callback_url. Field names match the architectural
-// doc verbatim (lowercase snake_case, no camelCase aliases).
-// Pointer-typed fields are nil when the transition doesn't
-// carry that data — e.g. artifact_verified has no
-// platform_media_id yet.
-type VeloxCallbackPayload struct {
-	EventID            string     `json:"event_id"`
-	SocialDeliveryID   string     `json:"social_delivery_id"`
-	ExternalDeliveryID string     `json:"external_delivery_id"`
-	Status             string     `json:"status"`
-	PlatformMediaID    *string    `json:"platform_media_id,omitempty"`
-	PlatformURL        *string    `json:"platform_url,omitempty"`
-	PublishedAt        *time.Time `json:"published_at,omitempty"`
-	ErrorCode          *string    `json:"error_code,omitempty"`
-	ErrorMessage       *string    `json:"error_message,omitempty"`
-}
-
-// VeloxCallbackAuditStore is the narrow audit-log slot the
-// dispatcher uses to persist its outcome. The real impl is
-// *repository.AuditLogRepository (Append method), wired via
-// internal/bootstrap/wire. Deferring the concrete wiring to
-// bootstrap keeps pkg/api off an internal/repository import —
-// the test fakes satisfy this interface inline.
-type VeloxCallbackAuditStore interface {
-	Append(ctx context.Context, entry *models.AuditLog) error
-}
-
-// Dispatcher tuning constants — overridable in
-// NewVeloxCallbackDispatcher (test-injectable). Doc strings
-// spell out the rationale so a future operator-chosen env
-// config (VELOX_CALLBACK_MAX_ATTEMPTS, etc.) just maps these
-// to env keys.
-const (
-	// DefaultVeloxCallbackMaxAttempts caps the POST-attempt
-	// budget. 5 was the operator-chosen default per the
-	// architectural doc and matches the dead-letter budget
-	// used by the legacy webhook_dispatcher. Operators can
-	// raise it for receivers with longer recovery windows.
-	DefaultVeloxCallbackMaxAttempts = 5
-	// DefaultVeloxCallbackBaseDelay is the per-attempt base
-	// interval; exponential doubling arrives at attempt N as
-	// (BaseDelay * 2^(N-1)). 1s base + doubling yields a
-	// cumulative delay budget of ~31s for 5 attempts + ~2s
-	// of jitter across all attempts — the dispatcher's
-	// tail-latency budget from first-attempt failure to
-	// dead-letter is well under a minute.
-	DefaultVeloxCallbackBaseDelay = 1 * time.Second
-	// DefaultVeloxCallbackJitterMin + Max shape the uniform
-	// jitter range applied to each backoff. The narrow 100-500ms
-	// range decorrelates retries across the dispatcher fleet
-	// without delaying audit emission too long. Wider jitter
-	// is unnecessary here (5xx retries on the same receiver
-	// are unlikely to recover within seconds of recovery time).
-	DefaultVeloxCallbackJitterMin = 100 * time.Millisecond
-	DefaultVeloxCallbackJitterMax = 500 * time.Millisecond
-	// DefaultVeloxCallbackRequestTimeout caps a single POST.
-	// 15s is generous for an HMAC-signed JSON POST even on a
-	// slow link. Combine with the per-attempt retry budget
-	// (5 * 15s = 75s upper bound for worst-case exhaustion).
-	DefaultVeloxCallbackRequestTimeout = 15 * time.Second
 )
 
 // VeloxCallbackDispatcher fans a signed POST to
@@ -430,148 +319,4 @@ func (d *VeloxCallbackDispatcher) Dispatch(
 		return nil
 	}
 	return fmt.Errorf("velox callback: %s after %d attempt(s): %w", event, attempts, lastErr)
-}
-
-// sleep applies the exponential-backoff + jitter delay for
-// the given attempt (1-based). The per-attempt delay is:
-//
-//	delay = baseDelay * 2^(attempt-1) + uniform(jitterMin, jitterMax)
-//
-// attempt N delay totals (with defaults):
-//
-//	1 → 1s + jitter[100ms..500ms)
-//	2 → 2s + jitter
-//	3 → 4s + jitter
-//	4 → 8s + jitter
-//	5 → 16s + jitter (final: no sleep, just emit audit)
-//
-// ctx-cancellable. A cancelled ctx during sleep surfaces as
-// context.Canceled / context.DeadlineExceeded via the
-// returned error — the caller treats that as terminal failure.
-func (d *VeloxCallbackDispatcher) sleep(ctx context.Context, attempt int) error {
-	exp := d.baseDelay
-	for i := 1; i < attempt; i++ {
-		exp *= 2
-	}
-	span := int64(d.jitterMax - d.jitterMin)
-	if span <= 0 {
-		span = int64(d.jitterMax)
-	}
-	jitter := time.Duration(d.randSrc.Int63n(span))
-	delay := exp + d.jitterMin + jitter
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(delay):
-		return nil
-	}
-}
-
-// signBody computes HMAC-SHA256 over "<unix_ts>.<body>" using
-// the dispatcher's secret. Returns the lowercase hex digest
-// WITHOUT the "sha256=" prefix — that's added when the header
-// is rendered so the canonical hex form stays comparable with
-// test expectations.
-func (d *VeloxCallbackDispatcher) signBody(ts int64, body []byte) string {
-	mac := hmac.New(sha256.New, d.secret)
-	mac.Write([]byte(strconv.FormatInt(ts, 10)))
-	mac.Write([]byte{'.'})
-	mac.Write(body)
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// emitAudit persists a single AuditLog row per Dispatch
-// invocation regardless of retry count. Success → action
-// AuditActionVeloxCallbackSent + result=success. Failure →
-// AuditActionVeloxCallbackFailed + result=failure + metadata
-// capturing last_status + attempts_used + event_id.
-//
-// auditStore nil → no-op + Warn log (the underlying POST
-// outcome is unaffected — a missing audit row is recoverable
-// from the worker's external_deliveries.status + last_error_*
-// columns).
-func (d *VeloxCallbackDispatcher) emitAudit(
-	ctx context.Context,
-	delivery *models.ExternalDelivery,
-	event VeloxCallbackEvent,
-	eventID string,
-	attempts int,
-	lastStatus int,
-	lastErr error,
-) {
-	if d.auditStore == nil {
-		d.logger.Warn("velox callback: auditStore nil; skipping audit emission",
-			"event", event, "event_id", eventID, "attempts", attempts,
-		)
-		return
-	}
-
-	action := models.AuditActionVeloxCallbackSent
-	result := models.AuditResultSuccess
-	if lastErr != nil {
-		action = models.AuditActionVeloxCallbackFailed
-		result = models.AuditResultFailure
-	}
-
-	// Metadata is a models.Metadata map (map[string]any per
-	// internal/models/user.go) — constructed directly with
-	// string values so an audit_log_repo scan lands the
-	// fields in their expected shape without a JSON
-	// round-trip error masking any type mismatch.
-	meta := models.Metadata{
-		"external_delivery_id": delivery.ExternalDeliveryID,
-		"callback_url":         derefString(delivery.CallbackURL),
-		"event":                string(event),
-		"event_id":             eventID,
-		"attempts":             strconv.Itoa(attempts),
-		"max_attempts":         strconv.Itoa(d.maxAttempts),
-		"last_status":          strconv.Itoa(lastStatus),
-	}
-	if lastErr != nil {
-		meta["error"] = lastErr.Error()
-	}
-
-	entry := &models.AuditLog{
-		Action:       action,
-		Result:       result,
-		ResourceType: "external_delivery",
-		// ResourceID stays 0 — ExternalDelivery.ID is a TEXT
-		// PRIMARY KEY (ULID-shaped) and doesn't fit the int64
-		// ResourceID column. The string id lives in metadata.
-		Metadata: meta,
-	}
-	if err := d.auditStore.Append(ctx, entry); err != nil {
-		d.logger.Error("velox callback: audit append failed (postmortem gap)",
-			"event", event, "event_id", eventID, "attempts", attempts,
-			"audit_error", err.Error(),
-		)
-	}
-}
-
-// derefString returns "" for nil pointers (the audit metadata
-// column is non-null).
-func derefString(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-// defaultVeloxEventID generates evt_<32-hex> for the
-// X-Velox-Event-ID header. 16 random bytes from
-// crypto/rand (sufficient for the dedup window; the id is
-// NOT a security boundary).
-func defaultVeloxEventID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		// crypto/rand failure is essentially impossible on
-		// real hardware. Fall back to a deterministic nonce
-		// so we don't panic — id uniqueness degrades but the
-		// field is non-critical.
-		for i := range b {
-			b[i] = byte(i)
-		}
-	}
-	return "evt_" + hex.EncodeToString(b)
 }
