@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strconv"
 
-	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
+	veloxapi "github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
 )
 
 // ListJobs implements veloxapi.Client.ListJobs. The workspace scope

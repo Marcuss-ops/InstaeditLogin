@@ -1,5 +1,5 @@
 // Package veloxclient is the concrete implementation of the
-// veloxapi.Client interface (pkg/api/velox/routes.go). It signs a
+// veloxapi.Client interface (internal/veloxcontract). It signs a
 // short-lived HS256 JWT with VELOX_CONTROL_JWT_SECRET (the
 // InstaEdit→Velox internal control secret, distinct from the
 // reverse-direction VELOX_API_TOKEN) and calls the Velox master at
@@ -43,7 +43,7 @@ import (
 )
 
 // jobResponse is the Velox master's representation of a job. The
-// client converts it to veloxapi.Job (defined in pkg/api/velox) before
+// client converts it to veloxapi.Job (defined in internal/veloxcontract) before
 // returning to the BFF handler. WorkspaceID is included so the BFF
 // can verify ownership (defense-in-depth on top of the signed JWT).
 type jobResponse struct {

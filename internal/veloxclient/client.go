@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
+	veloxapi "github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
 )
 
 // Compile-time assertion that *Client satisfies veloxapi.Client.
@@ -24,34 +24,8 @@ var _ veloxapi.Client = (*Client)(nil)
 // requires a valid InstaEdit control JWT.
 const veloxAPIPrefix = "/api/v1/instaedit"
 
-// allScopesSuperset is the fallback scope set the Client uses when
-// the caller does not declare its own. Two cases:
-//  1. The BFF EditorBFFModule calls Proxy(path) without a per-operation
-//     scope yet — Proxy falls back to the superset so the routed
-//     editor UI keeps working during the cutover window.
-//  2. Tests / fixtures that exercise the Client without wiring scope
-//     per-call.
-//
-// TODO(EditorBFFModule wiring): remove this fallback once every
-// EditorBFFModule call site supplies an explicit []string{...} per
-// the per-method scope table (the verdicts documented in
-// InstaeditLogin/internal/veloxclient/auth.go). The fallback is
-// safe during the cutover but the eventual goal is operation-grained
-// tokens.
-//
-// Until removed, the JWT always carries the union of the four editor
-// scopes. Velox's per-route middleware accepts "exact OR superset"
-// (HasAllScopes), so the superset never widens the privilege — it
-// only relaxes the audit-trail granularity on the Velox side.
-var allScopesSuperset = []string{
-	ScopeEditorProjectRead,
-	ScopeEditorProjectWrite,
-	ScopeEditorAssetUpload,
-	ScopeYouTubeSessionPublish,
-}
-
 // Client calls the Velox master with a per-request signed JWT. It
-// implements veloxapi.Client (pkg/api/velox/routes.go). Construct
+// implements veloxapi.Client (internal/veloxcontract). Construct
 // once at bootstrap via New() and inject via api.WithVeloxBFFClient.
 //
 // The base URL MUST NOT have a trailing slash — do() joins paths

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/url"
 
-	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
+	veloxapi "github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
 )
 
 // GetAsset implements veloxapi.Client.GetAsset.

@@ -13,7 +13,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
+	veloxapi "github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
 )
 
 // testSecret is a 32-byte test secret (matches the Velox verifier's

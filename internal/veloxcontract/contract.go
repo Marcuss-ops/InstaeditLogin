@@ -1,0 +1,180 @@
+// Package veloxcontract holds the shared InstaEdit⇄Velox BFF contract:
+// the wire DTOs, the Client interface, the sentinel errors, and the
+// control-JWT scope taxonomy.
+//
+// It exists to break the layering inversion where the concrete client
+// implementation (internal/veloxclient) imported the HTTP layer
+// (pkg/api/velox) just to reach these types. The package is a strict
+// LEAF: standard library only. Both sides depend on it:
+//
+//	pkg/api/velox        (BFF handlers)  ──┐
+//	                                       ├──▶ internal/veloxcontract
+//	internal/veloxclient (implementation) ─┘
+//
+// pkg/api/velox re-exports every name below via type/const/var
+// aliases so its existing consumers (pkg/api router + modules) keep
+// compiling unchanged; new code may import either package, but code
+// under internal/ MUST import this one (never pkg/api/velox) to keep
+// the dependency arrow pointing inward.
+package veloxcontract
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"time"
+)
+
+// --- Wire types -----------------------------------------------------------
+//
+// These mirror the architectural spec's response shapes. WorkspaceID
+// is tagged `json:"-"` so it is never serialized to the browser; it is
+// only used server-side for the ownership check.
+
+// Job is the BFF view of a Velox rendering job.
+type Job struct {
+	ID           string    `json:"id"`
+	WorkspaceID  int64     `json:"-"`
+	ProjectID    string    `json:"project_id,omitempty"`
+	RenderStatus string    `json:"render_status"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// Delivery is the BFF view of a social delivery associated with a job.
+// It merges Velox's delivery row with the InstaEdit social_delivery
+// state so the frontend renders one unified status.
+type Delivery struct {
+	ExternalDestinationID string `json:"external_destination_id"`
+	SocialDeliveryID      string `json:"social_delivery_id"`
+	Status                string `json:"status"`
+	PlatformMediaID       string `json:"platform_media_id,omitempty"`
+	PlatformURL           string `json:"platform_url,omitempty"`
+}
+
+// JobDetail is the aggregated response for GET /api/v1/velox/jobs/{id}.
+// It pairs the Velox job with its deliveries so the frontend shows
+// rendering + publishing status as a single view.
+type JobDetail struct {
+	Job        Job        `json:"job"`
+	Deliveries []Delivery `json:"deliveries"`
+}
+
+// Worker is the BFF view of a Velox compute worker.
+type Worker struct {
+	ID          string `json:"id"`
+	WorkspaceID int64  `json:"-"`
+	Status      string `json:"status"`
+	CPU         int    `json:"cpu,omitempty"`
+	RAMMB       int    `json:"ram_mb,omitempty"`
+	GPU         string `json:"gpu,omitempty"`
+	DiskGB      int    `json:"disk_gb,omitempty"`
+}
+
+// Asset is the BFF view of a Velox artifact.
+type Asset struct {
+	ID          string `json:"id"`
+	WorkspaceID int64  `json:"-"`
+	SHA256      string `json:"sha256"`
+	SizeBytes   int64  `json:"size_bytes"`
+	MimeType    string `json:"mime_type"`
+	DownloadURL string `json:"download_url,omitempty"`
+}
+
+// CreateJobRequest is the body for POST /api/v1/velox/jobs. The
+// workspace_id and user_id are NOT in this body; the handler reads
+// them from the session identity.
+type CreateJobRequest struct {
+	ProjectID    string          `json:"project_id"`
+	RenderSpec   json.RawMessage `json:"render_spec"`
+	DeliveryPlan DeliveryPlan    `json:"delivery_plan"`
+}
+
+// DeliveryPlan is the nested delivery_plan block of CreateJobRequest.
+type DeliveryPlan struct {
+	Destinations []DeliveryDestination `json:"destinations"`
+}
+
+// DeliveryDestination references an InstaEdit-managed destination by
+// its opaque external_destination_id plus per-delivery metadata.
+type DeliveryDestination struct {
+	ExternalDestinationID string          `json:"external_destination_id"`
+	Metadata              json.RawMessage `json:"metadata"`
+}
+
+// ListJobsFilter carries optional query parameters for GET /api/v1/velox/jobs.
+type ListJobsFilter struct {
+	Status string
+	Limit  int
+}
+
+// --- Client interface -----------------------------------------------------
+//
+// Client abstracts the Velox master call. The concrete implementation
+// (internal/veloxclient) signs a short-lived JWT with
+// VELOX_CONTROL_JWT_SECRET and forwards workspace_id + user_id from
+// the session. Implementations MUST scope every call by workspaceID
+// so a signed-JWT tampering cannot cross tenants.
+
+// Client is the contract the BFF handlers depend on. Every method
+// takes workspaceID so the implementation can sign it into the
+// outbound JWT; the returned rows carry WorkspaceID so the handler
+// can double-check ownership (defense-in-depth).
+type Client interface {
+	ListJobs(ctx context.Context, workspaceID, userID int64, filter ListJobsFilter) ([]Job, error)
+	CreateJob(ctx context.Context, workspaceID, userID int64, req CreateJobRequest) (*Job, error)
+	GetJob(ctx context.Context, workspaceID, userID int64, jobID string) (*JobDetail, error)
+	CancelJob(ctx context.Context, workspaceID, userID int64, jobID string) error
+	ListJobDeliveries(ctx context.Context, workspaceID, userID int64, jobID string) ([]Delivery, error)
+	ListWorkers(ctx context.Context, workspaceID, userID int64) ([]Worker, error)
+	GetWorker(ctx context.Context, workspaceID, userID int64, workerID string) (*Worker, error)
+	GetAsset(ctx context.Context, workspaceID, userID int64, assetID string) (*Asset, error)
+}
+
+// --- Sentinel errors ------------------------------------------------------
+//
+// Mapped to HTTP status codes by the handlers. Implementations of
+// Client should wrap these via %w so errors.Is works.
+
+var (
+	// ErrNotFound is returned by the Client when the upstream Velox
+	// resource does not exist. It is used for jobs, workers, and
+	// assets so the BFF maps every 404 to the same 404 response
+	// without leaking which resource type was requested.
+	ErrNotFound = errors.New("velox: not found")
+	// ErrWorkspaceMismatch is returned when the upstream Velox
+	// response belongs to a different workspace than the one signed
+	// into the control JWT.
+	ErrWorkspaceMismatch = errors.New("velox: workspace mismatch")
+)
+
+// --- Control-JWT scope taxonomy --------------------------------------------
+//
+// Each BFF API call signs a JWT containing ONLY the scope(s) that the
+// operation needs (per-call, not all-scopes): the Velox middleware
+// MUST see exactly the scope it requires on the route being called;
+// extra scopes are accepted but a missing scope is a hard 403
+// ("insufficient scope").
+//
+// Naming matches VeloxEditiingg/internal/instaeditauth/scopes.go
+// (declared as the authoritative source on the Velox side). The
+// values are duplicated here so a drift between the two repos
+// surfaces as a 403 at the first call, not at deploy time.
+//
+//	editor.project.read      : read a dark-editor project (Velox
+//	                           GET /internal/v1/editor/projects/*,
+//	                           list-jobs, list-deliveries, list-workers,
+//	                           get-asset)
+//	editor.project.write     : mutate a dark-editor project (Velox
+//	                           POST/PATCH/DELETE on projects/cancel)
+//	editor.asset.upload      : upload a render asset (Velox
+//	                           PUT/POST /internal/v1/editor/assets/*)
+//	youtube.session.publish  : publish a thumbnail update to YouTube
+//	                           (Velox POST
+//	                           /internal/v1/editor/sessions/.../publish)
+const (
+	ScopeEditorProjectRead     = "editor.project.read"
+	ScopeEditorProjectWrite    = "editor.project.write"
+	ScopeEditorAssetUpload     = "editor.asset.upload"
+	ScopeYouTubeSessionPublish = "youtube.session.publish"
+)

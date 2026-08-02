@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
 )
 
 // ExpectedIssuer/Audience mirror the constants in VeloxEditiingg's
@@ -47,11 +49,15 @@ const (
 //	youtube.session.publish  : publish a thumbnail update to YouTube
 //	                           (Velox POST
 //	                           /internal/v1/editor/sessions/.../publish)
+// The canonical definitions moved to internal/veloxcontract (the
+// shared InstaEdit⇄Velox BFF contract package); the aliases below
+// keep this package's existing references compiling and guarantee
+// the client and the BFF handlers can never drift apart.
 const (
-	ScopeEditorProjectRead     = "editor.project.read"
-	ScopeEditorProjectWrite    = "editor.project.write"
-	ScopeEditorAssetUpload     = "editor.asset.upload"
-	ScopeYouTubeSessionPublish = "youtube.session.publish"
+	ScopeEditorProjectRead     = veloxcontract.ScopeEditorProjectRead
+	ScopeEditorProjectWrite    = veloxcontract.ScopeEditorProjectWrite
+	ScopeEditorAssetUpload     = veloxcontract.ScopeEditorAssetUpload
+	ScopeYouTubeSessionPublish = veloxcontract.ScopeYouTubeSessionPublish
 )
 
 // signControlToken issues a short-lived HS256 JWT for the InstaEdit→

@@ -35,7 +35,7 @@ The JWT carries:
 
 ## Files
 
-- `client.go` – `Client` implementation of `pkg/api/velox.Client`.
+- `client.go` – `Client` implementation of `internal/veloxcontract.Client`.
 - `auth.go` – JWT signing (`signControlToken`).
 - `types.go` – Internal wire types mapping Velox JSON responses to BFF types.
 - `jobs.go` – Job operations (list, create, get, cancel, deliveries).
@@ -46,7 +46,7 @@ The JWT carries:
 
 ### Methods
 
-`Client` implements the `pkg/api/velox.Client` interface:
+`Client` implements the `internal/veloxcontract.Client` interface:
 
 - `ListJobs(ctx, workspaceID, filter) []Job`
 - `CreateJob(ctx, workspaceID, userID, req) *Job`
