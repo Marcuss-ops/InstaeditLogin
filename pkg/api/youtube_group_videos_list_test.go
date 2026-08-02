@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -402,6 +404,15 @@ func TestListGroupYouTubeVideos_AllAccountsFailReturns502(t *testing.T) {
 	}
 	r := newGroupVideosRouter(t, workspace, groupStore, userStore, editStore, ytSvc, vault)
 
+	// The 502 path must emit a diagnostic log line with the per-account
+	// warnings: the SPA swallows the response body into a generic
+	// "YouTube non risponde temporaneamente" toast, so the log is the
+	// only place where the upstream reasons remain observable.
+	var logBuf bytes.Buffer
+	oldDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(oldDefault)
+
 	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/groups/%d/youtube/videos", group.ID), nil)
 	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
@@ -412,6 +423,16 @@ func TestListGroupYouTubeVideos_AllAccountsFailReturns502(t *testing.T) {
 	}
 	if atomic.LoadInt32(&listCalls) == 0 {
 		t.Errorf("expected at least one YouTube.ListEditableVideos call, got 0")
+	}
+	logged := logBuf.String()
+	if !strings.Contains(logged, "group youtube videos: every account failed (502)") {
+		t.Errorf("expected 502 diagnostic log line, got:\n%s", logged)
+	}
+	if !strings.Contains(logged, "simulated youtube outage") {
+		t.Errorf("expected per-account warnings in the 502 log, got:\n%s", logged)
+	}
+	if !strings.Contains(logged, "group_id=3") {
+		t.Errorf("expected group_id in the 502 log, got:\n%s", logged)
 	}
 }
 

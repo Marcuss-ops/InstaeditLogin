@@ -2,10 +2,13 @@ package api
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -366,6 +369,17 @@ func (r *Router) writeGroupVideosOK(
 		// accounts requiring reconnection from a general outage.
 		resp.Error = "youtube list failed for every account in the group"
 		resp.Warnings = warnings
+		// The SPA swallows the response body into a generic "YouTube non
+		// risponde temporaneamente" toast, so the per-account reasons
+		// (quota, token, transport) are only observable here. Log them so
+		// a total-failure episode is diagnosable from the API logs alone.
+		slog.Warn("group youtube videos: every account failed (502)",
+			"group_id", chi.URLParam(req, "group_id"),
+			"total_accounts", len(accountLookup),
+			"invalid_token_accounts", invalidTokenAccounts,
+			"warnings", warnings,
+			"path", req.URL.Path,
+		)
 		writeJSON(w, http.StatusBadGateway, resp)
 		return false
 	}

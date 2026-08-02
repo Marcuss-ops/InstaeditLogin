@@ -89,6 +89,66 @@ Dead-letter endpoint, recovery metrics, explicit-protection tests.
 Tracked followup commits (log-redaction VPS sourcing, restore-drill
 script rewrite, resolved workflow retirement, dropped Makefile target).
 
+### §12 YouTube read-side quota + "YouTube non risponde temporaneamente"
+
+The SPA shows **"YouTube non risponde temporaneamente. Riprova tra
+poco."** when `GET /api/v1/groups/{group_id}/youtube/videos` answers
+**502**. The handler (`pkg/api/youtube_group_videos_helpers.go` →
+`writeGroupVideosOK`) returns 502 only when **every** per-account YouTube
+fetch in the group failed. The response body carries the per-account
+`warnings[]` plus a `summary` with `failed_accounts` /
+`invalid_token_accounts`, and the 502 path emits a diagnostic log line:
+
+```
+level=WARN msg="group youtube videos: every account failed (502)" group_id=… total_accounts=… invalid_token_accounts=[…] warnings=[…]
+```
+
+(available in the current checkout; rebuild the `api` container to make
+it live). **Read the warnings before declaring an outage** — the toast
+is a generic "all fetches failed" signal and is frequently NOT a YouTube
+outage.
+
+#### §12.1 Root-cause decision tree
+
+| Warning pattern in `warnings[]` / log | Cause | Action |
+|---|---|---|
+| `status 403 … quotaExceeded` | **Read-side quota exhausted** (see §12.2) | Verify quota in Google Cloud Console; requests succeed again after the 07:00 UTC reset |
+| `vault: decrypt refresh token: … cipher: message authentication failed` | **Vault `ENCRYPTION_KEY` mismatch** — tokens were encrypted with a different key than the running API | Restore the key that encrypted the stored tokens (`ENCRYPTION_KEY` or multi-key `ENCRYPTION_KEYS`, see 2026-08-02 incident below) |
+| `invalid_grant` / `status 401` / `token expired` | OAuth token revoked/expired → account flagged `reauth_required` | Complete a fresh OAuth dance for the account |
+| `status 429` / timeout / transport error | Transient upstream failure | Retry; escalate if persistent |
+
+#### §12.2 YouTube Data API read-side quota verification
+
+* **Budget**: 10,000 units/day shared read pool **per Google Cloud
+  project** (`videos.list` = 1 unit; `search.list` = 100 units/call).
+  Uploads draw from the separate 2026 "Video Uploads" bucket — see
+  [oauth-google-limits.md](oauth-google-limits.md) — NOT from this pool.
+* **Reset**: every day at **07:00 UTC** (midnight Pacific during PDT,
+  March–November; 08:00 UTC during PST). Quota does not roll over.
+* **Verify (Google Cloud Console)**:
+  1. https://console.cloud.google.com → select the project → **APIs &
+     Services** → **YouTube Data API v3** → **Quotas**.
+  2. Check today's usage against the 10,000-unit daily limit. When
+     exhausted, every read call answers `403 quotaExceeded` until the
+     next reset.
+  3. To raise the cap, request a quota increase (Step 6 of
+     [oauth-google-setup.md](oauth-google-setup.md)).
+* **On-call shortcut**: `docker logs instaedit-api --since 2h | grep -E
+  'every account failed|quotaExceeded'` shows whether the last episode
+  was quota vs token vs vault.
+
+> **Incident log — 2026-08-02**: the toast appeared on `/app/groups/1`
+> with `vault: decrypt refresh token: cipher: message authentication
+> failed` on every account. Root cause: the `api` container was rebuilt
+> (image `cert-4669`, manual `docker run`) with the `.env` (root)
+> `ENCRYPTION_KEY` while the stored YouTube tokens were encrypted with
+> the `.env.dev` key. NOT quota, NOT a YouTube outage. Fix: run the API
+> with the key that encrypted the tokens (single `ENCRYPTION_KEY` or
+> multi-key `ENCRYPTION_KEYS=1:<old>,2:<new>` +
+> `ACTIVE_ENCRYPTION_KEY_ID`). Note: `ENCRYPTION_KEY_HISTORY` is not
+> read by any Go code — the only supported rotation mechanism is
+> `ENCRYPTION_KEYS`.
+
 ---
 
 ## 8. Cross-references
@@ -113,3 +173,4 @@ script rewrite, resolved workflow retirement, dropped Makefile target).
 | Cookie / CSRF cross-subdomain semantic | `internal/auth/csrf.go` + `internal/config/config.go` Blocco #2.4 |
 | Free-tier provider matrix (TikTok/X/YouTube/LinkedIn/Stripe disabled in beta) | [`docs/PROVIDER_MATRIX.md`](./PROVIDER_MATRIX.md) |
 | Platform cutover origin (deleted hosted-platform config, dropped hosted-platform Makefile targets, deleted hosted-platform secrets scripts) | commits `7e8beec`, `615314b`, `5ac159c` |
+| YouTube read-side quota verification + "YouTube non risponde temporaneamente" (502) troubleshooting | §12 in this file |
