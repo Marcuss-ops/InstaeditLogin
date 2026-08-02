@@ -116,19 +116,10 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// Workspace ownership check.
-	ws, err := r.workspaceStore.FindByID(body.WorkspaceID)
-	if err != nil {
-		code, msg := mapWorkspaceError(err)
-		writeError(w, code, "workspace lookup: "+msg)
-		return
-	}
-	if ws == nil {
-		writeError(w, http.StatusNotFound, "workspace not found")
-		return
-	}
-	if ws.OwnerID != userID {
-		writeError(w, http.StatusForbidden, "workspace not owned by this user")
+	// Workspace ownership check (shared helper — see
+	// requireOwnedWorkspaceByID for the ordering rationale).
+	ws, ok := r.requireOwnedWorkspaceByID(w, body.WorkspaceID, userID)
+	if !ok {
 		return
 	}
 
@@ -138,26 +129,8 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// wrapped in a DriveImportResponse so the response shape matches
 	// the first-request contract.
 	idemKey := strings.TrimSpace(req.Header.Get("Idempotency-Key"))
-	idemOutcome, idemRec, idemErr := idempotencyLookup(r, ws.ID, idemKey, hash, "drive_import")
-	if idemErr != nil {
-		if strings.Contains(idemErr.Error(), "exceeds") {
-			writeError(w, http.StatusBadRequest, idemErr.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "idempotency lookup: "+idemErr.Error())
+	if !r.runIdempotencyGate(w, ws.ID, idemKey, hash, "drive_import") {
 		return
-	}
-	switch idemOutcome {
-	case idempotencyConflict:
-		writeError(w, http.StatusConflict, "idempotency_key_conflict")
-		return
-	case idempotencyReplay:
-		if replayErr := replayIdempotentResource(r, w, idemRec, idemRec.ResponseStatus); replayErr != nil {
-			writeError(w, http.StatusInternalServerError, "idempotency replay: "+replayErr.Error())
-		}
-		return
-	case idempotencyContinue:
-		// Fall through to the rest of the handler.
 	}
 
 	// Verify the Drive account belongs to the user and is a google-drive account.
@@ -211,207 +184,18 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Fetch Drive file metadata.
-	fileMeta, err := driveSvc.GetFileMetadata(req.Context(), oauthToken.AccessToken, body.DriveFileID)
-	if err != nil {
-		// Note: ErrDriveDownloadTooLarge is only returned by the
-		// limitReadCloser wrapping DownloadFile's body, NOT by
-		// GetFileMetadata (which uses io.ReadAll on the small JSON
-		// metadata payload). We still keep this defensive check in
-		// case a future refactor extends the limit to metadata too.
-		if errors.Is(err, services.ErrDriveDownloadTooLarge) {
-			writeError(w, http.StatusUnprocessableEntity,
-				"drive file exceeds the 10 GiB download cap; split the file or contact support")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "failed to fetch drive file metadata: "+err.Error())
+	// Steps 4-7: fetch metadata, validate, create the pending asset,
+	// stream Drive → S3 with the verification policy, and mark the
+	// asset ready. Extracted to importDriveFileToAsset so this handler
+	// stays focused on the HTTP contract (authz + idempotency + post
+	// creation + publish trigger).
+	asset, ok := r.importDriveFileToAsset(w, req, driveSvc, oauthToken.AccessToken, userID, body.DriveFileID)
+	if !ok {
 		return
 	}
-	if !isDriveVideoMimeType(fileMeta.MimeType, fileMeta.Name) {
-		writeError(w, http.StatusUnprocessableEntity,
-			fmt.Sprintf("drive file is not a supported video type (got %s)", fileMeta.MimeType))
-		return
-	}
-	// P0 hardening refactor: fail-fast on Drive's capabilities
-	// block when it explicitly says canDownload=false (the file
-	// is shared read-only OR is a shortcut whose target isn't
-	// downloadable, etc.). ABSENT capabilities field is NOT a
-	// rejection — legacy Drive files omit the field entirely
-	// and we don't want to break those imports.
-	//
-	// Task 5/10: errors.Is(ErrDriveNotDownloadable) dispatch keeps
-	// the HTTP-layer mapping consistent with the worker pull-path
-	// guard added in AuthenticatedDriveSource.Inspect. Today the
-	// inline check below can never fire the sentinel (the field
-	// access + comparison is the same path), but a future refactor
-	// that turns GetFileMetadata's error wrapping into something
-	// that surfaces the sentinel via errors.Is is now wired-up.
-	if fileMeta.Capabilities != nil && !fileMeta.Capabilities.CanDownload {
-		writeError(w, http.StatusUnprocessableEntity,
-			"drive file is not downloadable (capabilities.canDownload=false); check the file's sharing settings / DLP / IRM")
-		return
-	}
-
-	// Parse size; Drive may return an empty size for some formats.
-	var sizeBytes int64
-	if fileMeta.Size != "" {
-		if n, err := strconv.ParseInt(fileMeta.Size, 10, 64); err == nil {
-			sizeBytes = n
-		}
-	}
-	if sizeBytes <= 0 {
-		writeError(w, http.StatusUnprocessableEntity, "drive file size is unknown or zero; cannot import")
-		return
-	}
-
-	maxBytes := r.maxUploadBytes
-	if maxBytes <= 0 {
-		maxBytes = defaultMaxUploadBytes
-	}
-	if sizeBytes > maxBytes {
-		writeError(w, http.StatusUnprocessableEntity,
-			fmt.Sprintf("drive file size %d exceeds upload limit %d", sizeBytes, maxBytes))
-		return
-	}
-
-	// Build the S3 key and create a pending media asset.
-	// Blocco #2 P0 — TTL is buffer-aware now. Drive-import doesn't
-	// know the publish_at at THIS call site (the import handler
-	// publishes immediately via PublishPost); pass nil so the
-	// helper uses the now + horizon formula (default 30d).
-	key := services.BuildUploadKey(userID, fileMeta.Name)
-	asset := &models.MediaAsset{
-		UserID:      userID,
-		UploadKey:   key,
-		Bucket:      storageBucket(r.storageProvider),
-		ContentType: fileMeta.MimeType,
-		SizeBytes:   sizeBytes,
-		Status:      models.MediaAssetStatusPending,
-		ExpiresAt:   r.computeMediaAssetLifetime(nil),
-	}
-	if err := r.mediaStore.Create(asset); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create media asset: "+err.Error())
-		return
-	}
-
-	// Presign an S3 PUT for the key.
-	grant, err := r.storageProvider.SignUpload(req.Context(), userID, key, fileMeta.MimeType, sizeBytes, mediaPresignTTL)
-	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
-		writeError(w, http.StatusInternalServerError, "failed to sign s3 upload: "+err.Error())
-		return
-	}
-
-	// Stream the file from Drive to S3.
-	downloadResp, err := driveSvc.DownloadFile(req.Context(), oauthToken.AccessToken, body.DriveFileID)
-	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
-		// P0 hardening refactor: ErrDriveDownloadTooLarge is the
-		// reader-layer cap firing on a > 10 GiB file. Map it to
-		// 422 (operator can split the file) instead of the generic
-		// 502 (which would suggest a transient upstream outage).
-		if errors.Is(err, services.ErrDriveDownloadTooLarge) {
-			writeError(w, http.StatusUnprocessableEntity,
-				"drive file exceeds the 10 GiB download cap; split the file or contact support")
-			return
-		}
-		writeError(w, http.StatusBadGateway, "failed to download drive file: "+err.Error())
-		return
-	}
-	defer downloadResp.Body.Close()
-
-	// Task 4/10: wrap the Drive download body in the GENERIC
-	// ArtifactVerificationPolicy reader so the API path enforces
-	// the same size + SHA + MIME invariants as the worker pull-path.
-	// Drive files with sha256Checksum in metadata → RequireSHA=true;
-	// without → RequireSHA=false (compute-and-persist local SHA).
-	policy := models.ArtifactVerificationPolicy{
-		ExpectedSize:   sizeBytes,
-		ExpectedSHA256: fileMeta.SHA256Checksum,
-		ExpectedMIME:   fileMeta.MimeType,
-		RequireSHA:     fileMeta.SHA256Checksum != "",
-	}
-	verifyReader, err := worker.NewArtifactVerifyReader(downloadResp.Body, policy)
-	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
-		writeError(w, http.StatusInternalServerError, "failed to wrap drive body for verification: "+err.Error())
-		return
-	}
-
-	uploadReq, err := http.NewRequestWithContext(req.Context(), http.MethodPut, grant.UploadURL, verifyReader)
-	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
-		writeError(w, http.StatusInternalServerError, "failed to build s3 upload request: "+err.Error())
-		return
-	}
-	uploadReq.Header.Set("Content-Type", fileMeta.MimeType)
-	if sizeBytes > 0 {
-		uploadReq.ContentLength = sizeBytes
-	}
-
-	s3Client := &http.Client{Timeout: driveImportS3UploadTimeout}
-	uploadResp, err := s3Client.Do(uploadReq)
-	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
-		writeError(w, http.StatusBadGateway, "failed to upload to s3: "+err.Error())
-		return
-	}
-	uploadResp.Body.Close()
-	// verifyReader.Close() is covered by `defer downloadResp.Body.Close()`
-	// (the wrapped readcloser's Close chains through to the underlying).
-	// We dropped the redundant explicit Close call to keep the defer as
-	// the single source of truth.
-	if uploadResp.StatusCode >= 300 {
-		reason := fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode)
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, reason, errors.New(reason))
-		writeError(w, http.StatusBadGateway, reason)
-		return
-	}
-
-	// POST-stream artifact verification (Task 4/10). Same gate
-	// as the worker pull-path enforces; surfacing a PermanentError
-	// 422 lets the operator-triage dashboard catch Drive-side
-	// SHA drift / corruption instead of marking a broken asset ready.
-	if vErr := verifyReader.Verify(); vErr != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, vErr.Error(), vErr)
-		writeError(w, http.StatusUnprocessableEntity, "drive file verification failed: "+vErr.Error())
-		return
-	}
-
-	// Verify the upload and mark the asset ready.
-	verifiedContentType, verifiedSize, err := r.storageProvider.VerifyUpload(req.Context(), key)
-	if err != nil {
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
-		writeError(w, http.StatusBadGateway, "failed to verify s3 upload: "+err.Error())
-		return
-	}
-	// Boundary MIME check: S3-reported content_type must match the
-	// policy's ExpectedMIME (the Drive-declared mime). A mismatch
-	// means the upstream lied about the bytes — fail loud instead of
-	// marking the asset ready so the operator-triage dashboard can
-	// surface the upstream-side regression.
-	if policy.ExpectedMIME != "" && verifiedContentType != policy.ExpectedMIME {
-		reason := fmt.Sprintf("mime mismatch (expected %q, S3 returned %q)", policy.ExpectedMIME, verifiedContentType)
-		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, reason, errors.New(reason))
-		writeError(w, http.StatusUnprocessableEntity, reason)
-		return
-	}
-	// MarkReady now receives the LOCALLY-COMPUTED SHA — always,
-	// even when RequireSHA=false — so media_assets.sha256 stores the
-	// authoritative hash for downstream re-verification. The repo
-	// already handles "COALESCE(NULLIF($2, ''), sha256)" so a
-	// non-empty local SHA always overwrites the prior row's empty
-	// sha256 with the truth source.
-	if err := r.mediaStore.MarkReady(asset.ID, verifyReader.ActualSHA256Hex(), verifiedSize, verifiedContentType); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to mark media asset ready: "+err.Error())
-		return
-	}
-	asset.Status = models.MediaAssetStatusReady
-	asset.SizeBytes = verifiedSize
-	asset.ContentType = verifiedContentType
 
 	// Create the post with the internal S3 URL.
-	mediaURL := r.storageProvider.AssetURL(key)
+	mediaURL := r.storageProvider.AssetURL(asset.UploadKey)
 	post := &models.Post{
 		WorkspaceID: body.WorkspaceID,
 		Title:       body.Title,
@@ -454,6 +238,221 @@ func (r *Router) handleDriveImport(w http.ResponseWriter, req *http.Request) {
 	// but omit the asset; clients can fetch the asset separately if
 	// they need it.
 	writeJSON(w, http.StatusCreated, DriveImportResponse{Post: post, Asset: asset})
+}
+
+// importDriveFileToAsset performs steps 4-7 of the Drive import: fetch
+// + validate the Drive file metadata, create the pending media_assets
+// row, stream Drive → S3 through the ArtifactVerificationPolicy
+// reader, verify, and mark the asset ready. On failure the error
+// response is written (and the asset, when already created, is marked
+// failed via safeMarkFailed) and ok=false is returned.
+func (r *Router) importDriveFileToAsset(
+	w http.ResponseWriter,
+	req *http.Request,
+	driveSvc services.DriveImporter,
+	accessToken string,
+	userID int64,
+	driveFileID string,
+) (*models.MediaAsset, bool) {
+	// Fetch Drive file metadata.
+	fileMeta, err := driveSvc.GetFileMetadata(req.Context(), accessToken, driveFileID)
+	if err != nil {
+		// Note: ErrDriveDownloadTooLarge is only returned by the
+		// limitReadCloser wrapping DownloadFile's body, NOT by
+		// GetFileMetadata (which uses io.ReadAll on the small JSON
+		// metadata payload). We still keep this defensive check in
+		// case a future refactor extends the limit to metadata too.
+		if errors.Is(err, services.ErrDriveDownloadTooLarge) {
+			writeError(w, http.StatusUnprocessableEntity,
+				"drive file exceeds the 10 GiB download cap; split the file or contact support")
+			return nil, false
+		}
+		writeError(w, http.StatusBadRequest, "failed to fetch drive file metadata: "+err.Error())
+		return nil, false
+	}
+	if !isDriveVideoMimeType(fileMeta.MimeType, fileMeta.Name) {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("drive file is not a supported video type (got %s)", fileMeta.MimeType))
+		return nil, false
+	}
+	// P0 hardening refactor: fail-fast on Drive's capabilities
+	// block when it explicitly says canDownload=false (the file
+	// is shared read-only OR is a shortcut whose target isn't
+	// downloadable, etc.). ABSENT capabilities field is NOT a
+	// rejection — legacy Drive files omit the field entirely
+	// and we don't want to break those imports.
+	//
+	// Task 5/10: errors.Is(ErrDriveNotDownloadable) dispatch keeps
+	// the HTTP-layer mapping consistent with the worker pull-path
+	// guard added in AuthenticatedDriveSource.Inspect. Today the
+	// inline check below can never fire the sentinel (the field
+	// access + comparison is the same path), but a future refactor
+	// that turns GetFileMetadata's error wrapping into something
+	// that surfaces the sentinel via errors.Is is now wired-up.
+	if fileMeta.Capabilities != nil && !fileMeta.Capabilities.CanDownload {
+		writeError(w, http.StatusUnprocessableEntity,
+			"drive file is not downloadable (capabilities.canDownload=false); check the file's sharing settings / DLP / IRM")
+		return nil, false
+	}
+
+	// Parse size; Drive may return an empty size for some formats.
+	var sizeBytes int64
+	if fileMeta.Size != "" {
+		if n, err := strconv.ParseInt(fileMeta.Size, 10, 64); err == nil {
+			sizeBytes = n
+		}
+	}
+	if sizeBytes <= 0 {
+		writeError(w, http.StatusUnprocessableEntity, "drive file size is unknown or zero; cannot import")
+		return nil, false
+	}
+
+	maxBytes := r.maxUploadBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxUploadBytes
+	}
+	if sizeBytes > maxBytes {
+		writeError(w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("drive file size %d exceeds upload limit %d", sizeBytes, maxBytes))
+		return nil, false
+	}
+
+	// Build the S3 key and create a pending media asset.
+	// Blocco #2 P0 — TTL is buffer-aware now. Drive-import doesn't
+	// know the publish_at at THIS call site (the import handler
+	// publishes immediately via PublishPost); pass nil so the
+	// helper uses the now + horizon formula (default 30d).
+	key := services.BuildUploadKey(userID, fileMeta.Name)
+	asset := &models.MediaAsset{
+		UserID:      userID,
+		UploadKey:   key,
+		Bucket:      storageBucket(r.storageProvider),
+		ContentType: fileMeta.MimeType,
+		SizeBytes:   sizeBytes,
+		Status:      models.MediaAssetStatusPending,
+		ExpiresAt:   r.computeMediaAssetLifetime(nil),
+	}
+	if err := r.mediaStore.Create(asset); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create media asset: "+err.Error())
+		return nil, false
+	}
+
+	// Presign an S3 PUT for the key.
+	grant, err := r.storageProvider.SignUpload(req.Context(), userID, key, fileMeta.MimeType, sizeBytes, mediaPresignTTL)
+	if err != nil {
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		writeError(w, http.StatusInternalServerError, "failed to sign s3 upload: "+err.Error())
+		return nil, false
+	}
+
+	// Stream the file from Drive to S3.
+	downloadResp, err := driveSvc.DownloadFile(req.Context(), accessToken, driveFileID)
+	if err != nil {
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		// P0 hardening refactor: ErrDriveDownloadTooLarge is the
+		// reader-layer cap firing on a > 10 GiB file. Map it to
+		// 422 (operator can split the file) instead of the generic
+		// 502 (which would suggest a transient upstream outage).
+		if errors.Is(err, services.ErrDriveDownloadTooLarge) {
+			writeError(w, http.StatusUnprocessableEntity,
+				"drive file exceeds the 10 GiB download cap; split the file or contact support")
+			return nil, false
+		}
+		writeError(w, http.StatusBadGateway, "failed to download drive file: "+err.Error())
+		return nil, false
+	}
+	defer downloadResp.Body.Close()
+
+	// Task 4/10: wrap the Drive download body in the GENERIC
+	// ArtifactVerificationPolicy reader so the API path enforces
+	// the same size + SHA + MIME invariants as the worker pull-path.
+	// Drive files with sha256Checksum in metadata → RequireSHA=true;
+	// without → RequireSHA=false (compute-and-persist local SHA).
+	policy := models.ArtifactVerificationPolicy{
+		ExpectedSize:   sizeBytes,
+		ExpectedSHA256: fileMeta.SHA256Checksum,
+		ExpectedMIME:   fileMeta.MimeType,
+		RequireSHA:     fileMeta.SHA256Checksum != "",
+	}
+	verifyReader, err := worker.NewArtifactVerifyReader(downloadResp.Body, policy)
+	if err != nil {
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		writeError(w, http.StatusInternalServerError, "failed to wrap drive body for verification: "+err.Error())
+		return nil, false
+	}
+
+	uploadReq, err := http.NewRequestWithContext(req.Context(), http.MethodPut, grant.UploadURL, verifyReader)
+	if err != nil {
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		writeError(w, http.StatusInternalServerError, "failed to build s3 upload request: "+err.Error())
+		return nil, false
+	}
+	uploadReq.Header.Set("Content-Type", fileMeta.MimeType)
+	if sizeBytes > 0 {
+		uploadReq.ContentLength = sizeBytes
+	}
+
+	s3Client := &http.Client{Timeout: driveImportS3UploadTimeout}
+	uploadResp, err := s3Client.Do(uploadReq)
+	if err != nil {
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		writeError(w, http.StatusBadGateway, "failed to upload to s3: "+err.Error())
+		return nil, false
+	}
+	uploadResp.Body.Close()
+	// verifyReader.Close() is covered by `defer downloadResp.Body.Close()`
+	// (the wrapped readcloser's Close chains through to the underlying).
+	// We dropped the redundant explicit Close call to keep the defer as
+	// the single source of truth.
+	if uploadResp.StatusCode >= 300 {
+		reason := fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, reason, errors.New(reason))
+		writeError(w, http.StatusBadGateway, reason)
+		return nil, false
+	}
+
+	// POST-stream artifact verification (Task 4/10). Same gate
+	// as the worker pull-path enforces; surfacing a PermanentError
+	// 422 lets the operator-triage dashboard catch Drive-side
+	// SHA drift / corruption instead of marking a broken asset ready.
+	if vErr := verifyReader.Verify(); vErr != nil {
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, vErr.Error(), vErr)
+		writeError(w, http.StatusUnprocessableEntity, "drive file verification failed: "+vErr.Error())
+		return nil, false
+	}
+
+	// Verify the upload and mark the asset ready.
+	verifiedContentType, verifiedSize, err := r.storageProvider.VerifyUpload(req.Context(), key)
+	if err != nil {
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, err.Error(), err)
+		writeError(w, http.StatusBadGateway, "failed to verify s3 upload: "+err.Error())
+		return nil, false
+	}
+	// Boundary MIME check: S3-reported content_type must match the
+	// policy's ExpectedMIME (the Drive-declared mime). A mismatch
+	// means the upstream lied about the bytes — fail loud instead of
+	// marking the asset ready so the operator-triage dashboard can
+	// surface the upstream-side regression.
+	if policy.ExpectedMIME != "" && verifiedContentType != policy.ExpectedMIME {
+		reason := fmt.Sprintf("mime mismatch (expected %q, S3 returned %q)", policy.ExpectedMIME, verifiedContentType)
+		safeMarkFailed(req.Context(), slog.Default(), r.mediaStore, asset.ID, reason, errors.New(reason))
+		writeError(w, http.StatusUnprocessableEntity, reason)
+		return nil, false
+	}
+	// MarkReady now receives the LOCALLY-COMPUTED SHA — always,
+	// even when RequireSHA=false — so media_assets.sha256 stores the
+	// authoritative hash for downstream re-verification. The repo
+	// already handles "COALESCE(NULLIF($2, ''), sha256)" so a
+	// non-empty local SHA always overwrites the prior row's empty
+	// sha256 with the truth source.
+	if err := r.mediaStore.MarkReady(asset.ID, verifyReader.ActualSHA256Hex(), verifiedSize, verifiedContentType); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to mark media asset ready: "+err.Error())
+		return nil, false
+	}
+	asset.Status = models.MediaAssetStatusReady
+	asset.SizeBytes = verifiedSize
+	asset.ContentType = verifiedContentType
+	return asset, true
 }
 
 // isDriveVideoMimeType returns true for the video MIME types we accept.
