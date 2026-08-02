@@ -287,6 +287,9 @@ type Router struct {
 	// youtubeVideoEditStore persists thumbnail editor sessions for
 	// YouTube videos. Wired via WithYouTubeVideoEditStore.
 	youtubeVideoEditStore YouTubeVideoEditStore
+	// youtubeThumbnailBatchStore persists idempotent batch thumbnail
+	// applications and their progress.
+	youtubeThumbnailBatchStore YouTubeThumbnailBatchStore
 
 	// contentPipelineStore (Blocco Carosello) backs the unified
 	// GET /api/v1/content/{id}/pipeline endpoint. Single workspace-

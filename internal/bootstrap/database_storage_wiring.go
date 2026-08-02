@@ -18,40 +18,41 @@ import (
 )
 
 type wireState struct {
-	cfg                     *config.Config
-	logger                  *slog.Logger
-	db                      *sql.DB
-	workerID                string
-	memoryLimiter           *services.MemoryLimiter
-	enc                     *crypto.Encryptor
-	userRepo                *repository.UserRepository
-	tokenRepo               *repository.TokenRepository
-	teamRepo                *repository.TeamRepository
-	groupRepo               *repository.GroupRepository
-	workspaceRepo           *repository.WorkspaceRepository
-	apiKeyRepo              *repository.ApiKeyRepository
-	apiKeyAuth              *auth.Authenticator
-	idempotencyRepo         *repository.IdempotencyRepository
-	postRepo                *repository.PostRepository
-	mediaRepo               *repository.MediaAssetRepository
-	uploadJobRepo           *repository.UploadJobRepository
-	importBatchRepo         *repository.ImportBatchRepository
-	connectionStateRepo     *repository.ConnectionStateRepository
-	auditLogRepo            *repository.AuditLogRepository
-	externalDestinationRepo *repository.ExternalDestinationRepository
-	externalDeliveryRepo    *repository.ExternalDeliveryRepository
-	connectLinkNonceRepo    *repository.ConnectLinkNonceRepository
-	youtubeVideoEditRepo    *repository.YouTubeVideoEditRepository
-	contentPipelineRepo     *repository.ContentPipelineRepository
-	vault                   credentials.VaultAPI
-	capRouter               *services.CapabilityRouter
-	authMgr                 *auth.Manager
-	oneTimeCodes            api.OneTimeCodeStore
-	storageProvider         services.StorageProvider
-	sessionsSvc             *services.SessionsService
-	webhookRepo             *repository.WebhookRepository
-	bookingEventRepo        *repository.BookingEventRepository
-	channelAuthorizer       services.ChannelAuthorizer
+	cfg                       *config.Config
+	logger                    *slog.Logger
+	db                        *sql.DB
+	workerID                  string
+	memoryLimiter             *services.MemoryLimiter
+	enc                       *crypto.Encryptor
+	userRepo                  *repository.UserRepository
+	tokenRepo                 *repository.TokenRepository
+	teamRepo                  *repository.TeamRepository
+	groupRepo                 *repository.GroupRepository
+	workspaceRepo             *repository.WorkspaceRepository
+	apiKeyRepo                *repository.ApiKeyRepository
+	apiKeyAuth                *auth.Authenticator
+	idempotencyRepo           *repository.IdempotencyRepository
+	postRepo                  *repository.PostRepository
+	mediaRepo                 *repository.MediaAssetRepository
+	uploadJobRepo             *repository.UploadJobRepository
+	importBatchRepo           *repository.ImportBatchRepository
+	connectionStateRepo       *repository.ConnectionStateRepository
+	auditLogRepo              *repository.AuditLogRepository
+	externalDestinationRepo   *repository.ExternalDestinationRepository
+	externalDeliveryRepo      *repository.ExternalDeliveryRepository
+	connectLinkNonceRepo      *repository.ConnectLinkNonceRepository
+	youtubeVideoEditRepo      *repository.YouTubeVideoEditRepository
+	youtubeThumbnailBatchRepo *repository.YouTubeThumbnailBatchRepository
+	contentPipelineRepo       *repository.ContentPipelineRepository
+	vault                     credentials.VaultAPI
+	capRouter                 *services.CapabilityRouter
+	authMgr                   *auth.Manager
+	oneTimeCodes              api.OneTimeCodeStore
+	storageProvider           services.StorageProvider
+	sessionsSvc               *services.SessionsService
+	webhookRepo               *repository.WebhookRepository
+	bookingEventRepo          *repository.BookingEventRepository
+	channelAuthorizer         services.ChannelAuthorizer
 }
 
 func buildDatabaseStorage(cfg *config.Config) (*wireState, error) {
@@ -125,6 +126,7 @@ func buildDatabaseStorage(cfg *config.Config) (*wireState, error) {
 	s.externalDeliveryRepo = repository.NewExternalDeliveryRepository(s.db)
 	s.connectLinkNonceRepo = repository.NewConnectLinkNonceRepository(s.db)
 	s.youtubeVideoEditRepo = repository.NewYouTubeVideoEditRepository(s.db)
+	s.youtubeThumbnailBatchRepo = repository.NewYouTubeThumbnailBatchRepository(s.db)
 	// Blocco Carosello — consolidated read-side fan-out for
 	// GET /api/v1/content/{id}/pipeline (4 round-trips regardless of
 	// target fan-out size). Wired via WithContentPipelineStore.

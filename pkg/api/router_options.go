@@ -347,6 +347,14 @@ func WithYouTubeVideoEditStore(store YouTubeVideoEditStore) RouterOption {
 	}
 }
 
+// WithYouTubeThumbnailBatchStore wires durable YouTube thumbnail batch
+// persistence. When nil, the batch endpoints return 503.
+func WithYouTubeThumbnailBatchStore(store YouTubeThumbnailBatchStore) RouterOption {
+	return func(r *Router) {
+		r.youtubeThumbnailBatchStore = store
+	}
+}
+
 // WithContentPipelineStore wires the consolidated read-side repo
 // used by GET /api/v1/content/{id}/pipeline. When nil, the route
 // returns 503 (matches the rest of the nil-store feature flags).

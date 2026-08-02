@@ -273,6 +273,15 @@ func (r *Router) Setup() http.Handler {
 	var listGroupYouTubeVideosHandler http.Handler = http.HandlerFunc(r.handleListGroupYouTubeVideos)
 	r.mux.Method(http.MethodGet, "/api/v1/groups/{group_id}/youtube/videos", r.protected(listGroupYouTubeVideosHandler.ServeHTTP))
 
+	// Durable, idempotent batch application for private YouTube thumbnails.
+	var createYouTubeThumbnailBatchHandler http.Handler = http.HandlerFunc(r.handleCreateYouTubeThumbnailBatch)
+	if r.csrfMiddleware != nil {
+		createYouTubeThumbnailBatchHandler = r.csrfMiddleware(createYouTubeThumbnailBatchHandler)
+	}
+	r.mux.Method(http.MethodPost, "/api/v1/youtube/thumbnail-batches", r.protected(createYouTubeThumbnailBatchHandler.ServeHTTP))
+	var getYouTubeThumbnailBatchHandler http.Handler = http.HandlerFunc(r.handleGetYouTubeThumbnailBatch)
+	r.mux.Method(http.MethodGet, "/api/v1/youtube/thumbnail-batches/{batch_id}", r.protected(getYouTubeThumbnailBatchHandler.ServeHTTP))
+
 	// Blocco Carosello — unified pipeline view endpoint. Aggregates
 	// Drive + storage + per-target YouTube publish + Velox editor
 	// state into a single response that the SPA timeline UI consumes

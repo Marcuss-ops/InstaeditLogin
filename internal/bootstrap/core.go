@@ -39,22 +39,23 @@ type Core struct {
 	sessionsSvc *services.SessionsService
 
 	// Repositories shared between API and worker paths.
-	userRepo                *repository.UserRepository
-	tokenRepo               *repository.TokenRepository
-	teamRepo                *repository.TeamRepository
-	workspaceRepo           *repository.WorkspaceRepository
-	apiKeyRepo              *repository.ApiKeyRepository
-	idempotencyRepo         *repository.IdempotencyRepository
-	postRepo                *repository.PostRepository
-	mediaRepo               *repository.MediaAssetRepository
-	uploadJobRepo           *repository.UploadJobRepository
-	importBatchRepo         *repository.ImportBatchRepository
-	connectionStateRepo     *repository.ConnectionStateRepository
-	auditLogRepo            *repository.AuditLogRepository
-	externalDestinationRepo *repository.ExternalDestinationRepository
-	externalDeliveryRepo    *repository.ExternalDeliveryRepository
-	connectLinkNonceRepo    *repository.ConnectLinkNonceRepository
-	youtubeVideoEditRepo    *repository.YouTubeVideoEditRepository
+	userRepo                  *repository.UserRepository
+	tokenRepo                 *repository.TokenRepository
+	teamRepo                  *repository.TeamRepository
+	workspaceRepo             *repository.WorkspaceRepository
+	apiKeyRepo                *repository.ApiKeyRepository
+	idempotencyRepo           *repository.IdempotencyRepository
+	postRepo                  *repository.PostRepository
+	mediaRepo                 *repository.MediaAssetRepository
+	uploadJobRepo             *repository.UploadJobRepository
+	importBatchRepo           *repository.ImportBatchRepository
+	connectionStateRepo       *repository.ConnectionStateRepository
+	auditLogRepo              *repository.AuditLogRepository
+	externalDestinationRepo   *repository.ExternalDestinationRepository
+	externalDeliveryRepo      *repository.ExternalDeliveryRepository
+	connectLinkNonceRepo      *repository.ConnectLinkNonceRepository
+	youtubeVideoEditRepo      *repository.YouTubeVideoEditRepository
+	youtubeThumbnailBatchRepo *repository.YouTubeThumbnailBatchRepository
 }
 
 // WireCore builds the shared runtime dependencies used by every binary.
@@ -116,6 +117,7 @@ func WireCore(ctx context.Context) (*Core, error) {
 	externalDeliveryRepo := repository.NewExternalDeliveryRepository(db)
 	connectLinkNonceRepo := repository.NewConnectLinkNonceRepository(db)
 	youtubeVideoEditRepo := repository.NewYouTubeVideoEditRepository(db)
+	youtubeThumbnailBatchRepo := repository.NewYouTubeThumbnailBatchRepository(db)
 
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
 
@@ -146,34 +148,35 @@ func WireCore(ctx context.Context) (*Core, error) {
 		"endpoint", cfg.Storage.S3Endpoint, "bucket", cfg.Storage.S3Bucket, "region", cfg.Storage.S3Region)
 
 	return &Core{
-		Cfg:                     cfg,
-		DB:                      db,
-		Logger:                  logger,
-		Vault:                   vault,
-		CapRouter:               capRouter,
-		Storage:                 storageProvider,
-		Encryptor:               enc,
-		MemoryLimiter:           memoryLimiter,
-		WorkerID:                workerID,
-		WebhookRepo:             repository.NewWebhookRepository(db),
-		OneTimeCodes:            oneTimeCodes,
-		authMgr:                 authMgr,
-		sessionsSvc:             sessionsSvc,
-		userRepo:                userRepo,
-		tokenRepo:               tokenRepo,
-		teamRepo:                teamRepo,
-		workspaceRepo:           workspaceRepo,
-		apiKeyRepo:              apiKeyRepo,
-		idempotencyRepo:         idempotencyRepo,
-		postRepo:                postRepo,
-		mediaRepo:               mediaRepo,
-		uploadJobRepo:           uploadJobRepo,
-		importBatchRepo:         importBatchRepo,
-		connectionStateRepo:     connectionStateRepo,
-		auditLogRepo:            auditLogRepo,
-		externalDestinationRepo: externalDestinationRepo,
-		externalDeliveryRepo:    externalDeliveryRepo,
-		connectLinkNonceRepo:    connectLinkNonceRepo,
-		youtubeVideoEditRepo:    youtubeVideoEditRepo,
+		Cfg:                       cfg,
+		DB:                        db,
+		Logger:                    logger,
+		Vault:                     vault,
+		CapRouter:                 capRouter,
+		Storage:                   storageProvider,
+		Encryptor:                 enc,
+		MemoryLimiter:             memoryLimiter,
+		WorkerID:                  workerID,
+		WebhookRepo:               repository.NewWebhookRepository(db),
+		OneTimeCodes:              oneTimeCodes,
+		authMgr:                   authMgr,
+		sessionsSvc:               sessionsSvc,
+		userRepo:                  userRepo,
+		tokenRepo:                 tokenRepo,
+		teamRepo:                  teamRepo,
+		workspaceRepo:             workspaceRepo,
+		apiKeyRepo:                apiKeyRepo,
+		idempotencyRepo:           idempotencyRepo,
+		postRepo:                  postRepo,
+		mediaRepo:                 mediaRepo,
+		uploadJobRepo:             uploadJobRepo,
+		importBatchRepo:           importBatchRepo,
+		connectionStateRepo:       connectionStateRepo,
+		auditLogRepo:              auditLogRepo,
+		externalDestinationRepo:   externalDestinationRepo,
+		externalDeliveryRepo:      externalDeliveryRepo,
+		connectLinkNonceRepo:      connectLinkNonceRepo,
+		youtubeVideoEditRepo:      youtubeVideoEditRepo,
+		youtubeThumbnailBatchRepo: youtubeThumbnailBatchRepo,
 	}, nil
 }

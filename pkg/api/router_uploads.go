@@ -123,3 +123,17 @@ type YouTubeVideoEditStore interface {
 	// youtube_sync_status.
 	MarkPublishedWithActualPrivacy(ctx context.Context, id string, actualPrivacy string, syncStatus string) (*models.YouTubeVideoEdit, error)
 }
+
+// YouTubeThumbnailBatchStore persists the durable batch envelope and its
+// per-video progress. The API keeps this contract local so handler tests can
+// use an in-memory fake while production wires the SQL repository.
+type YouTubeThumbnailBatchStore interface {
+	Create(ctx context.Context, batch *models.YouTubeThumbnailBatch, items []models.YouTubeThumbnailBatchItem) error
+	FindByID(ctx context.Context, id string) (*models.YouTubeThumbnailBatch, error)
+	FindByKey(ctx context.Context, workspaceID int64, key string) (*models.YouTubeThumbnailBatch, error)
+	ListItems(ctx context.Context, batchID string) ([]models.YouTubeThumbnailBatchItem, error)
+	ClaimBatch(ctx context.Context, batchID string, staleBefore time.Time) (bool, error)
+	ClaimItem(ctx context.Context, itemID int64, staleBefore time.Time) (bool, error)
+	UpdateItem(ctx context.Context, item *models.YouTubeThumbnailBatchItem) error
+	Recompute(ctx context.Context, batchID string) (*models.YouTubeThumbnailBatch, error)
+}

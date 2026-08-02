@@ -82,6 +82,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 		api.WithMediaStore(core.mediaRepo),
 		api.WithUploadJobStore(core.uploadJobRepo),
 		api.WithYouTubeVideoEditStore(core.youtubeVideoEditRepo),
+		api.WithYouTubeThumbnailBatchStore(core.youtubeThumbnailBatchRepo),
 		api.WithAdminStore(repository.NewAdminRepository(core.DB)),
 		api.WithImportBatchStore(core.importBatchRepo),
 		api.WithConnectionStateStore(&connectionStateStoreWrapper{core.connectionStateRepo}),
