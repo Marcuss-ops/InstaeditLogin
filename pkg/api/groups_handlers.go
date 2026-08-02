@@ -1,3 +1,14 @@
+// Package-level note: the /api/v1/groups handlers are split per domain
+// (split-by-concern, 2026-08):
+//
+//	groups_handlers.go — this file: shared types + error mapping +
+//	                     requireWorkspaceOwnership + the 6 CRUD/list
+//	                     handlers (List / ListWithAccounts / Create /
+//	                     Update / Delete / Get)
+//	groups_accounts.go — handleListGroupAccounts + handleSetGroupAccounts
+//	                     + SetGroupAccountsRequest (membership domain)
+//	groups_settings.go — handleUpdateGroupSettings +
+//	                     UpdateGroupSettingsRequest (settings domain)
 package api
 
 import (
@@ -29,20 +40,6 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name          string `json:"name,omitempty"`
 	ParentGroupID *int64 `json:"parent_group_id,omitempty"`
-}
-
-// SetGroupAccountsRequest is the JSON body for PUT
-// /api/v1/groups/{id}/accounts. The "set" semantics mirror the repo:
-// wipe + re-insert in one tx.
-type SetGroupAccountsRequest struct {
-	AccountIDs []int64 `json:"account_ids"`
-}
-
-// UpdateGroupSettingsRequest is the JSON body for PATCH
-// /api/v1/groups/{id}/settings. Membership and account language metadata
-// are persisted together by one repository transaction.
-type UpdateGroupSettingsRequest struct {
-	Accounts []models.GroupAccountLanguageUpdate `json:"accounts"`
 }
 
 // --- Error mapping ----------------------------------------------------------
@@ -152,12 +149,6 @@ func (r *Router) handleListGroups(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"groups": groups})
 }
 
-// handleCreateGroup creates a new group in the supplied workspace. The
-// parent_group_id is validated against cycles + workspace ownership by
-// the repository before the INSERT. 422 for cycle / cross-workspace;
-// 409 for duplicate root names; 404 for missing parent.
-//
-// POST /api/v1/groups
 // handleListGroupsWithAccounts returns all groups and their direct account
 // memberships for one owned workspace. Unlike the legacy list endpoint,
 // this read model is assembled by the repository in one query, avoiding
@@ -201,6 +192,12 @@ func (r *Router) handleListGroupsWithAccounts(w http.ResponseWriter, req *http.R
 	writeJSON(w, http.StatusOK, map[string]interface{}{"groups": groups})
 }
 
+// handleCreateGroup creates a new group in the supplied workspace. The
+// parent_group_id is validated against cycles + workspace ownership by
+// the repository before the INSERT. 422 for cycle / cross-workspace;
+// 409 for duplicate root names; 404 for missing parent.
+//
+// POST /api/v1/groups
 func (r *Router) handleCreateGroup(w http.ResponseWriter, req *http.Request) {
 	if r.groupStore == nil {
 		writeError(w, http.StatusNotImplemented, "groups not configured on this server")
@@ -351,191 +348,4 @@ func (r *Router) handleGetGroup(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, existing)
-}
-
-// handleListGroupAccounts returns the account ids attached directly to
-// a group (NOT recursive through subgroups — the join table is
-// per-row). 404 on cross-tenant or missing.
-//
-// GET /api/v1/groups/{id}/accounts
-func (r *Router) handleListGroupAccounts(w http.ResponseWriter, req *http.Request) {
-	if r.groupStore == nil {
-		writeError(w, http.StatusNotImplemented, "groups not configured on this server")
-		return
-	}
-	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid group id: "+err.Error())
-		return
-	}
-	existing, err := r.groupStore.FindByID(id)
-	if err != nil {
-		status, msg := mapGroupError(err)
-		writeError(w, status, msg)
-		return
-	}
-	if existing == nil {
-		writeError(w, http.StatusNotFound, "group not found")
-		return
-	}
-	if ok, _ := r.requireWorkspaceOwnership(w, req, existing.WorkspaceID); !ok {
-		return
-	}
-	accounts, err := r.groupStore.ListAccountsInGroup(id)
-	if err != nil {
-		status, msg := mapGroupError(err)
-		writeError(w, status, msg)
-		return
-	}
-	if accounts == nil {
-		accounts = []int64{}
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"account_ids": accounts})
-}
-
-// handleUpdateGroupSettings atomically saves the group's membership and
-// each member's language metadata. The repository owns the SQL transaction;
-// this handler only performs request parsing and workspace authentication.
-//
-// PATCH /api/v1/groups/{id}/settings
-func (r *Router) handleUpdateGroupSettings(w http.ResponseWriter, req *http.Request) {
-	if r.groupStore == nil {
-		writeError(w, http.StatusNotImplemented, "groups not configured on this server")
-		return
-	}
-	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid group id")
-		return
-	}
-	existing, err := r.groupStore.FindByID(id)
-	if err != nil {
-		status, msg := mapGroupError(err)
-		writeError(w, status, msg)
-		return
-	}
-	if existing == nil {
-		writeError(w, http.StatusNotFound, "group not found")
-		return
-	}
-	if ok, _ := r.requireWorkspaceOwnership(w, req, existing.WorkspaceID); !ok {
-		return
-	}
-	callerID, ok := requireUserID(w, req, r)
-	if !ok {
-		return
-	}
-	var body UpdateGroupSettingsRequest
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-	seen := make(map[int64]struct{}, len(body.Accounts))
-	for _, account := range body.Accounts {
-		if account.AccountID <= 0 {
-			writeError(w, http.StatusBadRequest, "account_id must be positive")
-			return
-		}
-		if _, duplicate := seen[account.AccountID]; duplicate {
-			writeError(w, http.StatusBadRequest, "duplicate account_id")
-			return
-		}
-		seen[account.AccountID] = struct{}{}
-	}
-	if err := r.groupStore.UpdateSettings(req.Context(), id, existing.WorkspaceID, callerID, body.Accounts); err != nil {
-		status, msg := mapGroupError(err)
-		writeError(w, status, msg)
-		return
-	}
-	// Group membership is also a publishable workspace binding. Keep the
-	// two projections in sync so the editor and Velox can resolve every
-	// channel selected in the group.
-	if r.workspaceStore != nil {
-		for _, account := range body.Accounts {
-			if _, err := r.workspaceStore.AttachChannel(req.Context(), existing.WorkspaceID, account.AccountID, existing.Name); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to bind group channel: "+err.Error())
-				return
-			}
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"group_id": id,
-		"accounts": body.Accounts,
-	})
-}
-
-// handleSetGroupAccounts replaces the membership list for a group.
-// "Set" semantics (delete + insert in one tx) match the repo. The
-// caller ID comes from the JWT (deposited by r.protected →
-// r.auth.Middleware); account_ids are intersected against the
-// caller's owned accounts via ValidateAccountOwnership before the
-// INSERT so a hostile caller cannot attach an account they do not
-// own to a foreign group — 403 on any disallowed id.
-//
-// PUT /api/v1/groups/{id}/accounts
-func (r *Router) handleSetGroupAccounts(w http.ResponseWriter, req *http.Request) {
-	if r.groupStore == nil {
-		writeError(w, http.StatusNotImplemented, "groups not configured on this server")
-		return
-	}
-	id, err := strconv.ParseInt(chi.URLParam(req, "id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid group id: "+err.Error())
-		return
-	}
-	existing, err := r.groupStore.FindByID(id)
-	if err != nil {
-		status, msg := mapGroupError(err)
-		writeError(w, status, msg)
-		return
-	}
-	if existing == nil {
-		writeError(w, http.StatusNotFound, "group not found")
-		return
-	}
-	if ok, _ := r.requireWorkspaceOwnership(w, req, existing.WorkspaceID); !ok {
-		return
-	}
-	var body SetGroupAccountsRequest
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-	callerID, ok := requireUserID(w, req, r)
-	if !ok {
-		return
-	}
-	// Cross-tenant guard: intersect the caller-supplied list against
-	// accounts the caller actually owns before persisting. Refuse the
-	// whole request with 403 if any id is foreign (the SPA can then
-	// re-submit with the correct list). Without this check, a hostile
-	// caller could attach arbitrary account_ids to a foreign group.
-	validated, err := r.groupStore.ValidateAccountOwnership(callerID, existing.WorkspaceID, body.AccountIDs)
-	if err != nil {
-		status, msg := mapGroupError(err)
-		writeError(w, status, msg)
-		return
-	}
-	if len(validated) != len(body.AccountIDs) {
-		writeError(w, http.StatusForbidden, "one or more account_ids are not owned by the caller")
-		return
-	}
-	if err := r.groupStore.SetAccounts(id, validated); err != nil {
-		status, msg := mapGroupError(err)
-		writeError(w, status, msg)
-		return
-	}
-	if r.workspaceStore != nil {
-		for _, accountID := range validated {
-			if _, err := r.workspaceStore.AttachChannel(req.Context(), existing.WorkspaceID, accountID, existing.Name); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to bind group channel: "+err.Error())
-				return
-			}
-		}
-	}
-	out := validated
-	if out == nil {
-		out = []int64{}
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"account_ids": out})
 }
