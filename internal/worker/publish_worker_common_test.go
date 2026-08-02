@@ -51,6 +51,9 @@ type mockPostStore struct {
 	// from the repository's SetProviderIdempotencyKey call. Default
 	// (nil) returns nil — the worker's happy path.
 	setKeyFn func(id int64, key string) error
+	// markRateLimitedRetryFn lets a test simulate a DB failure on the
+	// rate-limited requeue path. Default (nil) returns nil.
+	markRateLimitedRetryFn func(id int64, nextAttemptAt time.Time, lastError string) error
 
 	// Captured targets from UpdateStatus — lets tests inspect the
 	// final status (published vs failed) and assert on the worker
@@ -65,6 +68,23 @@ type mockPostStore struct {
 	// (post, account) pair on the last attempt.
 	setKeyIDs  []int64
 	setKeyVals []string
+
+	// Captured MarkRateLimitedRetry calls — the OPEN GAP requeue
+	// path. Tests assert on the count, the scheduled next-attempt
+	// timestamp and the persisted error string.
+	markRateLimitedRetryCalls int
+	markRateLimitedRetryAts   []time.Time
+	markRateLimitedRetryErrs  []string
+}
+
+func (m *mockPostStore) MarkRateLimitedRetry(id int64, nextAttemptAt time.Time, lastError string) error {
+	m.markRateLimitedRetryCalls++
+	m.markRateLimitedRetryAts = append(m.markRateLimitedRetryAts, nextAttemptAt)
+	m.markRateLimitedRetryErrs = append(m.markRateLimitedRetryErrs, lastError)
+	if m.markRateLimitedRetryFn == nil {
+		return nil
+	}
+	return m.markRateLimitedRetryFn(id, nextAttemptAt, lastError)
 }
 
 func (m *mockPostStore) ListPending(before time.Time) ([]models.PostTarget, error) {

@@ -260,20 +260,30 @@ The transactional outbox table is the audit-only appendix to `post_targets.statu
 
 `internal/worker/webhook_worker.go` (seventh goroutine in the **Authoritative goroutine list** subsection above) has its own retry curve for outbound webhooks to operator-configured HTTP sinks. Status codes `5xx / 408 / 425 / 429 / timeout` are rescheduled up to `MaxAttempts`; `2xx` is success; other `4xx` (non-408/425/429) is dead. This is a separate domain from platform publishing and is fully documented in `webhook_worker.go`.
 
-#### (d) **OPEN GAP — retry on 429/Retry-After/5xx at the final publish-platform call**
+#### (d) Retry on 429/Retry-After at the final publish-platform call (CLOSED for 429; 5xx still terminal)
 
-The publish worker's call to `publisher.Publish(ctx, ...)` does **not** retry on platform backpressure today. The call's error path in `internal/worker/publish_worker.go::publishTarget` immediately routes through `markFailed`:
+**Status: the 429 half of this gap is CLOSED.** The publish worker's final `publisher.Publish(ctx, ...)` error path in `internal/worker/publish_worker_upload.go::executePublish` now branches on `services.IsRateLimitError`:
 
 ```go
 result, err := publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
 if err != nil {
-    return w.markFailed(target, err.Error()) // terminal — no attempt_count bump, no next_attempt_at re-stamp
+    if services.IsRateLimitError(err) {
+        return w.markRateLimited(target, err) // requeue: status='queued', attempt_count++, next_attempt_at = NOW()+Retry-After
+    }
+    return w.markFailed(target, err.Error()) // terminal for everything else (incl. 5xx — see below)
 }
 ```
 
-The `post_targets` table has an `attempt_count` / `next_attempt_at` column (introduced by migration 018 — the per-target retry state machine), but no code path on the publish worker today bumps those columns on a transient platform error. The typed detection helper already exists — `internal/services/provider.go::IsRateLimitError` recognises both `*services.RateLimitError{RetryAfter: …}` and `*services.ProviderError{Code: ErrorCodeRateLimited}`, and `ParseRetryAfter` understands RFC 7231 `Retry-After` headers plus the de-facto `X-RateLimit-Reset` epoch-seconds convention. The per-process throttle in (a) already smooths steady-state rate such that `429`s should be rare in practice, but when they DO happen they currently surface as terminal `failed` rows that the operator must requeue.
+Mechanics of the requeue path (`internal/worker/publish_worker_retry.go::markRateLimited` + `internal/repository/post_repo_retry.go::MarkRateLimitedRetry`):
 
-**Closing the gap** would mean wiring the rate-limit detection into the worker as: on `*services.RateLimitError`, stamp `next_attempt_at = NOW() + RetryAfter`, bump `attempt_count`, leave `status='queued'`, and skip the publish call this tick so a future tick picks it up. The columns and helpers are ready; the worker-side branch is the missing glue. Until that lands, treat any `429` row as operator-requeue rather than expect automatic retry.
+- The Retry-After hint is extracted via `services.RetryAfterFromError` (handles BOTH `*RateLimitError` and `*ProviderError{Code: rate_limited}`). A missing/zero hint falls back to a 60s default backoff (`defaultRateLimitBackoff`) so a misbehaving provider cannot busy-loop the driver.
+- The repo-side UPDATE flips `status` back to `'queued'`, bumps `attempt_count`, stamps `next_attempt_at` + `rate_limit_reset_at`, and sets `last_error_code='RATE_LIMITED'`. It is guarded by `WHERE status='publishing'` — the driver's lease-less claim ownership — NOT by the SPRINT 5.2 lease CAS (the `ClaimQueuedTarget` path stamps no lease, so a lease-CAS would match zero rows and strand the row).
+- `ListPending` (`qSelectPendingTargets`) was extended with `AND (pt.next_attempt_at IS NULL OR pt.next_attempt_at <= NOW())` so requeued rows stay invisible to the driver until the platform's window opens.
+- A rescheduled rate-limit is NOT counted as a tick error; a FAILED reschedule (DB error) is surfaced so the tick counter and operators see the stall.
+
+Covered by `internal/worker/publish_worker_ratelimit_test.go` (Retry-After honoured for both error shapes, zero-hint default backoff, in-memory mirror, reschedule-failure surfacing, non-rate-limit errors still terminal).
+
+**Still open — transient 5xx at the final publish call.** Non-429 transient platform errors (5xx, network timeouts) continue to route through the terminal `markFailed`. Extending the same requeue mechanics to a retryable-5xx classification (bounded by `max_attempts` → DLQ) is the natural follow-up; until then treat 5xx-failed rows as operator-requeue.
 
 ### Seven-way shutdown
 

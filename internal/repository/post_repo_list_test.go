@@ -119,6 +119,7 @@ func TestPostListPending_JoinWithPostsAppliesPredicate(t *testing.T) {
 		 JOIN posts p ON p.id = pt.post_id
 		 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider')
 		   AND (p.publish_at IS NULL OR p.publish_at <= $1)
+		   AND (pt.next_attempt_at IS NULL OR pt.next_attempt_at <= NOW())
 		 ORDER BY p.publish_at ASC NULLS FIRST`,
 	).WithArgs(cutoff).
 		WillReturnRows(sqlmock.NewRows(

@@ -51,6 +51,13 @@ func (w *PublishWorker) executePublish(ctx context.Context, target *models.PostT
 	}
 	result, err := publisher.Publish(ctx, oauthToken.AccessToken, account.PlatformUserID, payload)
 	if err != nil {
+		// OPEN GAP closure (ARCHITECTURE.md §Rate limiting (d)): a
+		// 429/Retry-After from the platform is NOT a fault — requeue
+		// with next_attempt_at = the platform's hint instead of the
+		// terminal markFailed. Everything else stays terminal.
+		if services.IsRateLimitError(err) {
+			return w.markRateLimited(target, err)
+		}
 		return w.markFailed(target, err.Error())
 	}
 

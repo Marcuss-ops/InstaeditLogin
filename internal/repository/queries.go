@@ -121,6 +121,7 @@ const qSelectPendingTargets = `SELECT pt.id, pt.post_id, pt.platform_account_id,
 	 JOIN posts p ON p.id = pt.post_id
 	 WHERE (pt.status = 'queued' OR pt.status = 'waiting_provider')
 	   AND (p.publish_at IS NULL OR p.publish_at <= $1)
+	   AND (pt.next_attempt_at IS NULL OR pt.next_attempt_at <= NOW())
 	 ORDER BY p.publish_at ASC NULLS FIRST`
 
 // qSelectTargetByID — single post_target lookup for the GET
@@ -268,6 +269,28 @@ const qMarkDeadLetter = `UPDATE post_targets
      last_error_code = 'DLQ',
      completed_at = NOW()
  WHERE id = $1 AND lease_owner_id = $2`
+
+// qMarkRateLimitedRetry (OPEN GAP closure — see ARCHITECTURE.md §Rate
+// limiting (d)) requeues a claimed target after the platform answered
+// the FINAL publish call with 429/Retry-After. Unlike qMarkRetrying /
+// qMarkRateLimited this does NOT CAS on lease_owner_id: the publish
+// driver claims via ClaimQueuedTarget (no lease stamp), so a
+// lease-CAS UPDATE would silently match zero rows and strand the row
+// in 'publishing'. The `status = 'publishing'` guard plays the same
+// ownership role — only the claim winner's row is in 'publishing'.
+//
+// status returns to 'queued' so the existing ListPending /
+// ClaimQueuedTarget pickup path re-picks it once next_attempt_at
+// elapses (ListPending filters next_attempt_at <= NOW()).
+// attempt_count is bumped so the retry budget stays bounded.
+const qMarkRateLimitedRetry = `UPDATE post_targets
+ SET status = 'queued',
+     attempt_count = attempt_count + 1,
+     next_attempt_at = $2,
+     rate_limit_reset_at = $2,
+     error_message = $3,
+     last_error_code = 'RATE_LIMITED'
+ WHERE id = $1 AND status = 'publishing'`
 
 const qMarkRetrying = `UPDATE post_targets
  SET status = 'retrying',

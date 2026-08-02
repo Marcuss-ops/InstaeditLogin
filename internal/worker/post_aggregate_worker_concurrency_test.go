@@ -42,6 +42,10 @@ func (s *aggregateWorkerStore) ListPending(time.Time) ([]models.PostTarget, erro
 	return out, nil
 }
 
+func (s *aggregateWorkerStore) MarkRateLimitedRetry(int64, time.Time, string) error {
+	return nil
+}
+
 func (s *aggregateWorkerStore) FindByID(int64) (*models.Post, error) {
 	return &models.Post{ID: 100, Caption: "aggregate test", MediaURL: "https://cdn.example/video.mp4"}, nil
 }

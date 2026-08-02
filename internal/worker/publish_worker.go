@@ -115,6 +115,15 @@ type PublisherPostStore interface {
 	GetMetadata(id int64) (json.RawMessage, error)
 	// SetTargetCanaryVideoID (Task 7/10) — stamps canary upload video id.
 	SetTargetCanaryVideoID(targetID int64, videoID string) error
+
+	// MarkRateLimitedRetry (OPEN GAP closure — ARCHITECTURE.md §Rate
+	// limiting (d)) requeues a claimed target after the platform's
+	// final publish call answered 429/Retry-After: status → 'queued',
+	// attempt_count++, next_attempt_at = the platform hint so
+	// ListPending skips the row until the window opens. Guarded by
+	// `WHERE status='publishing'` (the driver's lease-less claim
+	// ownership), NOT by the SPRINT 5.2 lease CAS.
+	MarkRateLimitedRetry(id int64, nextAttemptAt time.Time, lastError string) error
 }
 
 // PublisherUserStore is the narrow slice of the user /

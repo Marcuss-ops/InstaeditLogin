@@ -2,9 +2,57 @@ package worker
 
 import (
 	"errors"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
+
+// defaultRateLimitBackoff is the fallback delay when the platform's
+// rate-limit error carries no usable Retry-After hint (RetryAfter=0 is
+// documented as "caller uses default backoff" in both RateLimitError
+// and ProviderError). 60s is one publish-worker tick beyond the 30s
+// default interval — long enough to let a per-minute window reset,
+// short enough that a queued post isn't visibly delayed on dashboards.
+const defaultRateLimitBackoff = 60 * time.Second
+
+// markRateLimited (OPEN GAP closure — ARCHITECTURE.md §Rate limiting
+// (d)) handles a rate-limit error from the FINAL platform publish
+// call. Instead of the terminal markFailed path, the target is
+// requeued with next_attempt_at = NOW() + the platform's Retry-After
+// hint (or defaultRateLimitBackoff when the hint is missing), and
+// attempt_count is bumped so the retry budget stays bounded.
+//
+// Same claim-ownership contract as markFailed: only legal AFTER a
+// successful ClaimQueuedTarget (the repo-side UPDATE is additionally
+// guarded by WHERE status='publishing').
+//
+// Returns nil — a rescheduled rate-limit is NOT a tick error: the
+// row will be re-picked by ListPending once the window opens, and
+// counting it as a failure would pollute the tick error metrics.
+// A failed reschedule (DB error) IS returned so the tick counter
+// sees it and the row is recovered later (still 'publishing' — an
+// operator-visible stall rather than a silent drop).
+func (w *PublishWorker) markRateLimited(target *models.PostTarget, pubErr error) error {
+	retryAfter := services.RetryAfterFromError(pubErr)
+	if retryAfter <= 0 {
+		retryAfter = defaultRateLimitBackoff
+	}
+	nextAttempt := time.Now().Add(retryAfter)
+	if err := w.postRepo.MarkRateLimitedRetry(target.ID, nextAttempt, pubErr.Error()); err != nil {
+		return errors.Join(errors.New("reschedule rate-limited target: "+err.Error()), pubErr)
+	}
+	target.Status = models.PostStatusQueued
+	target.AttemptCount++
+	target.NextAttemptAt = &nextAttempt
+	target.LastErrorCode = "RATE_LIMITED"
+	target.ErrorMessage = pubErr.Error()
+	w.logger.Warn("platform rate limited publish; target rescheduled",
+		"target_id", target.ID, "post_id", target.PostID,
+		"retry_after", retryAfter, "next_attempt_at", nextAttempt,
+		"attempt_count", target.AttemptCount, "error", pubErr)
+	return nil
+}
 
 // markFailed transitions the target to status='failed' with the given
 // reason and returns a wrapped error. The caller is expected to have

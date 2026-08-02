@@ -160,6 +160,28 @@ func IsRateLimitError(err error) bool {
 	return false
 }
 
+// RetryAfterFromError extracts the platform-supplied Retry-After hint
+// from a rate-limit error detected by IsRateLimitError. Supports BOTH
+// the legacy *RateLimitError (SPRINT 5.2 contract) and the canonical
+// *ProviderError with Code == rate_limited (SPRINT 5.1). Returns 0
+// when the error carries no hint (or is not a rate-limit error at
+// all) — the caller falls back to its default backoff in that case,
+// mirroring the ParseRetryAfter zero-value contract.
+func RetryAfterFromError(err error) time.Duration {
+	if err == nil {
+		return 0
+	}
+	var rle *RateLimitError
+	if errors.As(err, &rle) {
+		return rle.RetryAfter
+	}
+	var pe *ProviderError
+	if errors.As(err, &pe) && pe.Code == ErrorCodeRateLimited {
+		return pe.RetryAfter
+	}
+	return 0
+}
+
 // ParseRetryAfter parses the value of an HTTP Retry-After response
 // header (RFC 7231 §7.1.3) OR an X-RateLimit-Reset unix-epoch-seconds
 // value (the de-facto convention used by Twitter, GitHub, Stripe, etc.)
