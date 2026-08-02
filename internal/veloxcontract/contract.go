@@ -85,9 +85,11 @@ type Asset struct {
 // workspace_id and user_id are NOT in this body; the handler reads
 // them from the session identity.
 type CreateJobRequest struct {
-	ProjectID    string          `json:"project_id"`
-	RenderSpec   json.RawMessage `json:"render_spec"`
-	DeliveryPlan DeliveryPlan    `json:"delivery_plan"`
+	ContractVersion string          `json:"contract_version"`
+	IdempotencyKey  string          `json:"idempotency_key"`
+	ProjectID       string          `json:"project_id"`
+	RenderSpec      json.RawMessage `json:"render_spec"`
+	DeliveryPlan    DeliveryPlan    `json:"delivery_plan"`
 }
 
 // DeliveryPlan is the nested delivery_plan block of CreateJobRequest.

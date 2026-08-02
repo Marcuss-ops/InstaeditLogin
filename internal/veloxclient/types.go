@@ -119,11 +119,13 @@ type listDeliveriesResponse struct {
 // JWT claims and as explicit body fields so Velox can log/audit the
 // request without needing to parse the JWT.
 type createJobRequest struct {
-	ProjectID    string          `json:"project_id" validate:"required,min=1"`
-	WorkspaceID  int64           `json:"workspace_id" validate:"required,gte=1"`
-	UserID       int64           `json:"user_id" validate:"required,gte=1"`
-	RenderSpec   json.RawMessage `json:"render_spec" validate:"required"`
-	DeliveryPlan deliveryPlanReq `json:"delivery_plan" validate:"required"`
+	ContractVersion string          `json:"contract_version" validate:"required"`
+	IdempotencyKey  string          `json:"idempotency_key" validate:"required"`
+	ProjectID       string          `json:"project_id" validate:"required,min=1"`
+	WorkspaceID     int64           `json:"workspace_id" validate:"required,gte=1"`
+	UserID          int64           `json:"user_id" validate:"required,gte=1"`
+	RenderSpec      json.RawMessage `json:"render_spec" validate:"required"`
+	DeliveryPlan    deliveryPlanReq `json:"delivery_plan" validate:"required"`
 }
 
 // deliveryPlanReq mirrors veloxapi.DeliveryPlan for the outbound body.

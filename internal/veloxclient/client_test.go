@@ -204,6 +204,12 @@ func TestCreateJob(t *testing.T) {
 		if body.ProjectID != "project_123" {
 			t.Errorf("project_id = %q; want project_123", body.ProjectID)
 		}
+		if body.ContractVersion != "velox.job.v1" {
+			t.Errorf("contract_version = %q; want velox.job.v1", body.ContractVersion)
+		}
+		if body.IdempotencyKey != "cert-idem-1" {
+			t.Errorf("idempotency_key = %q; want cert-idem-1", body.IdempotencyKey)
+		}
 		if body.WorkspaceID != 42 {
 			t.Errorf("workspace_id = %d; want 42", body.WorkspaceID)
 		}
@@ -228,8 +234,10 @@ func TestCreateJob(t *testing.T) {
 
 	c := newTestClient(t, srv)
 	job, err := c.CreateJob(context.Background(), 42, 99, veloxapi.CreateJobRequest{
-		ProjectID:  "project_123",
-		RenderSpec: json.RawMessage(`{"template":"news"}`),
+		ContractVersion: "velox.job.v1",
+		IdempotencyKey:  "cert-idem-1",
+		ProjectID:       "project_123",
+		RenderSpec:      json.RawMessage(`{"template":"news"}`),
 		DeliveryPlan: veloxapi.DeliveryPlan{
 			Destinations: []veloxapi.DeliveryDestination{
 				{ExternalDestinationID: "extdst_01J", Metadata: json.RawMessage(`{"title":"Hi"}`)},

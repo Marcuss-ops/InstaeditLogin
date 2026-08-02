@@ -50,17 +50,19 @@ func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter
 	return jobs, nil
 }
 
-// CreateJob implements veloxapi.Client.CreateJob. The body carries
-// project_id, render_spec, delivery_plan only; workspace_id and
-// user_id are signed into the JWT, never in the body.
+// CreateJob implements veloxapi.Client.CreateJob. The body carries the
+// canonical Velox job contract plus workspace_id and user_id added from
+// the session identity; the latter are also signed into the JWT.
 //
 // Permission: editor.project.write.
 func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req veloxapi.CreateJobRequest) (*veloxapi.Job, error) {
 	body := createJobRequest{
-		ProjectID:   req.ProjectID,
-		WorkspaceID: workspaceID,
-		UserID:      userID,
-		RenderSpec:  json.RawMessage(req.RenderSpec),
+		ContractVersion: req.ContractVersion,
+		IdempotencyKey:  req.IdempotencyKey,
+		ProjectID:       req.ProjectID,
+		WorkspaceID:     workspaceID,
+		UserID:          userID,
+		RenderSpec:      json.RawMessage(req.RenderSpec),
 		DeliveryPlan: deliveryPlanReq{
 			Destinations: make([]deliveryDestinationReq, 0, len(req.DeliveryPlan.Destinations)),
 		},
