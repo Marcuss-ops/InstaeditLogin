@@ -99,20 +99,6 @@ function RedirectAccount() {
 }
 
 function App() {
-  useEffect(() => {
-    // The public app host is reserved for the marketing site. Internal
-    // routes belong to the dev application/backend host; redirect legacy
-    // bookmarks so users never get the stale Vercel internal shell.
-    if (
-      window.location.hostname === "app.instaedit.org" &&
-      window.location.pathname.startsWith("/app")
-    ) {
-      window.location.replace(
-        `https://dev.instaedit.org${window.location.pathname}${window.location.search}${window.location.hash}`,
-      );
-    }
-  }, []);
-
   return (
     <ToastProvider>
       <ErrorBoundary>
@@ -175,11 +161,29 @@ function App() {
               <Route path="accounts/:accountId" element={<RedirectAccount />} />
               <Route
                 path="accounts/:accountId/performance"
-                element={<AccountPerformancePage />}
+                element={
+                  <LazyRoute>
+                    <AccountPerformancePage />
+                  </LazyRoute>
+                }
               />
-              <Route path="performance" element={<ChannelsPerformancePage />} />
+              <Route
+                path="performance"
+                element={
+                  <LazyRoute>
+                    <ChannelsPerformancePage />
+                  </LazyRoute>
+                }
+              />
               <Route path="posts" element={<InternalPosts />} />
-              <Route path="compose" element={<InternalCompose />} />
+              <Route
+                path="compose"
+                element={
+                  <LazyRoute>
+                    <InternalCompose />
+                  </LazyRoute>
+                }
+              />
               <Route path="content/new" element={<ContentNew />} />
                 <Route
                   path="content/:postId/publish"
@@ -190,9 +194,38 @@ function App() {
                   path="dashboard-channels/:accountId"
                   element={<DashboardChannelsPage />}
                 />
-              <Route path="calendar" element={<CalendarPage />} />
-              <Route path="groups" element={<GroupsPage />} />
-              <Route path="uploads/calendar" element={<CalendarPage />} />
+              <Route
+                path="calendar"
+                element={
+                  <LazyRoute>
+                    <CalendarPage />
+                  </LazyRoute>
+                }
+              />
+              <Route
+                path="groups"
+                element={
+                  <LazyRoute>
+                    <GroupsPage />
+                  </LazyRoute>
+                }
+              />
+              <Route
+                path="groups/:groupId"
+                element={
+                  <LazyRoute>
+                    <GroupsPage />
+                  </LazyRoute>
+                }
+              />
+              <Route
+                path="uploads/calendar"
+                element={
+                  <LazyRoute>
+                    <CalendarPage />
+                  </LazyRoute>
+                }
+              />
             </Route>
 
             {/* Admin routes use the same protected layout as the internal app. */}
@@ -201,7 +234,9 @@ function App() {
               element={
                 <AdminProtectedRoute>
                   <InternalLayout>
-                    <AdminDashboardPage />
+                    <LazyRoute>
+                      <AdminDashboardPage />
+                    </LazyRoute>
                   </InternalLayout>
                 </AdminProtectedRoute>
               }

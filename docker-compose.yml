@@ -1,4 +1,4 @@
-# InstaEditLogin — Local Development Stack (Blocco #2.1)
+# InstaEditLogin — Canonical Self-Hosted Stack (Blocco #2.1)
 #
 # Three services modeled on the production deploy topology:
 #   db       — Postgres 15 (unchanged)
@@ -6,17 +6,23 @@
 #   api      — runs cmd/api indefinitely (HTTP server only)
 #   worker   — runs cmd/worker indefinitely (5 background goroutines)
 #
-# Usage:
-#   cp .env.dev.example .env.dev
-#   docker compose --env-file .env.dev up --build
+# Production usage:
+#   INSTAEDIT_ENV_FILE=/opt/instaedit/secrets/.env.production \
+#     docker compose --env-file /opt/instaedit/secrets/.env.production up -d --build
+#
+# Local usage is kept in docker-compose.local.yml:
+#   INSTAEDIT_ENV_FILE=.env.dev \
+#     docker compose --env-file .env.dev -f docker-compose.yml \
+#       -f docker-compose.local.yml up --build
 #
 # Compose credentials are required at runtime. Never add them to this file;
-# use the ignored .env.dev file or an external secret injector.
+# use the ignored .env.dev file created from .env.dev.example, or an external
+# secret injector.
 #
 # Migration ordering: db is the dependency for migrate. migrate is the
 # dependency for api + worker (depends_on with service_completed_successfully).
-# This mirrors the production contract (Railway pre-deploy job / k8s
-# initContainer / helm pre-install hook).
+# This is the canonical self-hosted migration contract. The migrate service
+# completes before api and worker are allowed to start.
 
 services:
   db:
@@ -42,7 +48,7 @@ services:
       target: migrate
     container_name: instaedit-migrate
     env_file:
-      - .env.dev
+      - ${INSTAEDIT_ENV_FILE:-.env.production}
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
     depends_on:
@@ -59,10 +65,19 @@ services:
       target: api
     container_name: instaedit-api
     env_file:
-      - .env.dev
+      - ${INSTAEDIT_ENV_FILE:-.env.production}
+      # Keep the worker's provider registry aligned with the host API.
+      - /etc/instaeditlogin-youtube.env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
       - PORT=8080
+      - S3_PATH_STYLE=true
+      # Keep the runtime S3 credentials aligned with the selected env file;
+      # these explicit entries intentionally win over host integration env.
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
       # NVIDIA AI metadata generation (server-side only — NEVER exposed
       # to the frontend bundle, logs, or localStorage). Empty = AI
       # metadata generation unavailable; manual entry still works.
@@ -84,7 +99,7 @@ services:
       - VELOX_DOWNLOAD_TIMEOUT_SECONDS=1800
       - VELOX_MAX_ARTIFACT_BYTES=2147483648
     ports:
-      - "0.0.0.0:8080:8080"
+      - "127.0.0.1:8080:8080"
     # Sit on the default bridge for db/minio/s3 DNS AND on the internal
     # media-backend network for Velox handoff. Listing both keeps the
     # api reachable on `:8080` from the host while restricting Velox
@@ -106,9 +121,16 @@ services:
       target: worker
     container_name: instaedit-worker
     env_file:
-      - .env.dev
+      - ${INSTAEDIT_ENV_FILE:-.env.production}
+      # Keep the worker's provider registry aligned with the host API.
+      - /etc/instaeditlogin-youtube.env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
+      - S3_PATH_STYLE=true
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
       # NVIDIA AI metadata generation (mirrors the api service).
       - NVIDIA_API_KEY=${NVIDIA_API_KEY}
       # Velox integration (mirrors the api service). The worker reads
@@ -146,7 +168,7 @@ services:
       target: server
     container_name: instaedit-server
     env_file:
-      - .env.dev
+      - ${INSTAEDIT_ENV_FILE:-.env.production}
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-instaedit_login}?sslmode=disable
       - PORT=8080
@@ -213,7 +235,7 @@ services:
     image: minio/mc:latest
     container_name: instaedit-minio-init
     env_file:
-      - .env.dev
+      - ${INSTAEDIT_ENV_FILE:-.env.production}
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}

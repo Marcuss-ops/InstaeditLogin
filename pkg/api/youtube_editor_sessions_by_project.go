@@ -294,14 +294,14 @@ func (r *Router) executePublishYouTubeEditorSession(
 		return
 	}
 
-	// Resolve privacy status: payload override → session default → public.
+	// Resolve privacy status: payload override → session default → private.
 	privacyStatus := payload.PrivacyStatus
 	if privacyStatus == "" {
 		privacyStatus = edit.DesiredPrivacy
 	}
 	privacyStatus = strings.ToLower(strings.TrimSpace(privacyStatus))
 	if privacyStatus == "" {
-		privacyStatus = "public"
+		privacyStatus = "private"
 	}
 	if privacyStatus != "public" && privacyStatus != "unlisted" && privacyStatus != "private" {
 		writeError(w, http.StatusBadRequest, "privacy_status must be public, unlisted, or private")

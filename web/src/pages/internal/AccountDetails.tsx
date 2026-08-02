@@ -71,6 +71,7 @@ export function AccountDetailsPage() {
         workspace_id: workspaces[0].id,
         platform_account_id: Number(accountId),
         youtube_video_id: item.external_id,
+        ...(item.thumbnail_url ? { source_thumbnail_url: item.thumbnail_url } : {}),
       });
       toast.success("Editor session created — opening Velox…");
     } catch (err) {

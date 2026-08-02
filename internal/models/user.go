@@ -200,10 +200,11 @@ type TokenData struct {
 // fields are TikTok-specific at the moment but live here so the router
 // doesn't need to know which platform supports what.
 type PublishPayload struct {
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"`
-	VideoURL string `json:"video_url,omitempty"`
-	Title    string `json:"title,omitempty"`
+	Text     string   `json:"text,omitempty"`
+	ImageURL string   `json:"image_url,omitempty"`
+	VideoURL string   `json:"video_url,omitempty"`
+	Title    string   `json:"title,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
 
 	// PrivacyLevel controls who can view the post. Required by TikTok
 	// (PUBLIC_TO_EVERYONE, MUTUAL_FOLLOW_FRIENDS, SELF_ONLY), YouTube

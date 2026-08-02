@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/deliveries"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -82,16 +83,16 @@ func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *h
 		// Synthesise legacy row fields from the contract body so
 		// the existing Insert path is reused unchanged.
 		metadata := map[string]any{
-			"title":             contractReq.Publication.Title,
-			"description":       contractReq.Publication.Description,
-			"privacy_status":    contractReq.Publication.InitialPrivacy,
-			"final_privacy":     contractReq.Publication.FinalPrivacy,
-			"require_thumbnail": contractReq.Publication.RequireThumbnail,
+			"title":              contractReq.Publication.Title,
+			"description":        contractReq.Publication.Description,
+			"privacy_status":     contractReq.Publication.InitialPrivacy,
+			"final_privacy":      contractReq.Publication.FinalPrivacy,
+			"require_thumbnail":  contractReq.Publication.RequireThumbnail,
 			"target_account_ids": []int64{},
-			"language":          "",
-			"duration_seconds":  contractReq.Media.DurationSeconds,
-			"platform":          contractReq.Destination.Platform,
-			"target_type":       contractReq.Destination.TargetType,
+			"language":           "",
+			"duration_seconds":   contractReq.Media.DurationSeconds,
+			"platform":           contractReq.Destination.Platform,
+			"target_type":        contractReq.Destination.TargetType,
 		}
 		if len(contractReq.Publication.Tags) > 0 {
 			metadata["tags"] = contractReq.Publication.Tags
@@ -122,6 +123,28 @@ func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *h
 			},
 			Metadata:  metaBytes,
 			PublishAt: contractReq.Publication.PublishAt,
+		}
+		// The versioned contract has no opaque destination ID in its wire
+		// shape, so validate its direct target before accepting the durable
+		// delivery. This keeps the contract path fail-closed just like the
+		// legacy opaque-destination path below.
+		if m.deps.WorkspaceStore != nil && m.deps.UserStore != nil {
+			resolved, resolveErr := m.resolver().Resolve(ctx, deliveries.ResolveRequest{
+				WorkspaceID: contractReq.Destination.WorkspaceID,
+				Platform:    contractReq.Destination.Platform,
+				Target: deliveries.TargetDescriptor{
+					Type:              contractReq.Destination.TargetType,
+					PlatformAccountID: contractReq.Destination.PlatformAccountID,
+					GroupID:           contractReq.Destination.GroupID,
+				},
+			})
+			if resolveErr != nil || resolved == nil || !resolved.Valid {
+				if resolveErr != nil {
+					slog.Error("velox deliver contract: destination validation failed", "err", resolveErr)
+				}
+				writeError(w, http.StatusUnprocessableEntity, "validation: destination is not publishable")
+				return
+			}
 		}
 		m.persistInternalDelivery(w, ctx, body, veloxReq, true /* isContractPath */)
 		return
@@ -193,6 +216,22 @@ func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *h
 	if dest == nil {
 		writeError(w, http.StatusNotFound, veloxDestinationNotFoundBody)
 		return
+	}
+
+	// Re-resolve the opaque destination at acceptance time.  Discovery and
+	// job-submit checks can be minutes old by the time rendering finishes;
+	// this closes the window where an operator disables a channel after job
+	// creation but before the resulting artifact is accepted for publishing.
+	if m.deps.WorkspaceStore != nil && m.deps.UserStore != nil {
+		resolved, resolveErr := m.resolver().Resolve(ctx, deliveries.ResolveRequest{DestID: veloxReq.ExternalDestinationID})
+		if resolveErr != nil || resolved == nil || !resolved.Valid {
+			if resolveErr != nil {
+				slog.Error("velox deliver: destination validation failed",
+					"external_destination_id", veloxReq.ExternalDestinationID, "err", resolveErr)
+			}
+			writeError(w, http.StatusUnprocessableEntity, "validation: destination is not publishable")
+			return
+		}
 	}
 	veloxReq.Metadata = services.MergeVeloxDestinationMetadata(dest, veloxReq.Metadata)
 

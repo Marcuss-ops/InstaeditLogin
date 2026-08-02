@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authedFetch, AuthError } from "../../lib/auth";
-import type { FetchState, SummaryData, WorkspaceOption } from "./channelsPerformanceTypes";
+import type { FetchState, SummaryData, GroupOption } from "./channelsPerformanceTypes";
 
 export function useChannelsPerformance() {
 
@@ -15,44 +15,31 @@ export function useChannelsPerformance() {
   // to the API call) when the user presses Apply. This avoids a
   // re-fetch on every keystroke and keeps the form usable.
   const [localFilters, setLocalFilters] = useState({
-    workspace: searchParams.get("workspace") || "",
     group: searchParams.get("group") || "",
-    language: searchParams.get("language") || "",
-    manager: searchParams.get("manager") || "",
   });
-  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
-  const [workspacesLoading, setWorkspacesLoading] = useState(false);
-  const [workspacesError, setWorkspacesError] = useState(false);
+  const [groups, setGroups] = useState<GroupOption[]>([]);
 
   // Keep local inputs in sync with the URL when it changes externally
   // (initial load, back/forward navigation, clear filters).
   useEffect(() => {
     setLocalFilters({
-      workspace: searchParams.get("workspace") || "",
       group: searchParams.get("group") || "",
-      language: searchParams.get("language") || "",
-      manager: searchParams.get("manager") || "",
     });
   }, [searchParams]);
 
-  // Load available workspaces once so the workspace filter can be a
-  // dropdown instead of a free-form text field.
+  // Load the groups once so Performance can be scoped without exposing
+  // the internal workspace/manager filters.
   useEffect(() => {
-    async function loadWorkspaces() {
-      setWorkspacesLoading(true);
-      setWorkspacesError(false);
+    async function loadGroups() {
       try {
-        const response = await authedFetch("/api/v1/workspaces");
-        const data = (await response.json()) as { workspaces: WorkspaceOption[] };
-        setWorkspaces(data.workspaces ?? []);
+        const response = await authedFetch("/api/v1/groups/aggregate");
+        const data = (await response.json()) as { groups?: GroupOption[] };
+        setGroups(data.groups ?? []);
       } catch (err) {
-        setWorkspacesError(true);
-        console.error("Failed to load workspaces", err);
-      } finally {
-        setWorkspacesLoading(false);
+        console.error("Failed to load groups", err);
       }
     }
-    void loadWorkspaces();
+    void loadGroups();
   }, []);
 
   const setPeriod = useCallback(
@@ -66,25 +53,10 @@ export function useChannelsPerformance() {
 
   const applyFilters = useCallback(() => {
     const next = new URLSearchParams(searchParams);
-    if (localFilters.workspace) {
-      next.set("workspace", localFilters.workspace);
-    } else {
-      next.delete("workspace");
-    }
     if (localFilters.group) {
       next.set("group", localFilters.group);
     } else {
       next.delete("group");
-    }
-    if (localFilters.language) {
-      next.set("language", localFilters.language);
-    } else {
-      next.delete("language");
-    }
-    if (localFilters.manager) {
-      next.set("manager", localFilters.manager);
-    } else {
-      next.delete("manager");
     }
     setSearchParams(next, { replace: true });
   }, [localFilters, searchParams, setSearchParams]);
@@ -120,14 +92,5 @@ export function useChannelsPerformance() {
     void load();
   }, [load]);
 
-  const topSubscribers =
-    state.kind === "ready" && state.data.rankings
-      ? state.data.rankings.by_subscribers?.slice(0, 5).map((item) => ({
-          name: item.username,
-          value: item.value,
-        })) ?? []
-      : [];
-
-
-  return { state, period, localFilters, setLocalFilters, workspaces, workspacesLoading, workspacesError, setPeriod, applyFilters, clearFilters, load, topSubscribers };
+  return { state, period, localFilters, setLocalFilters, groups, setPeriod, applyFilters, clearFilters, load };
 }

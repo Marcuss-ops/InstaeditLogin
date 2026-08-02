@@ -56,21 +56,21 @@ func TestClaimBatch_Happy(t *testing.T) {
 		"progress_bytes", "total_bytes", "error_code", "priority",
 		"started_at", "completed_at",
 		"youtube_session_uri", "youtube_session_offset", "youtube_session_expires_at", "youtube_chunk_size", "youtube_last_chunk_at",
-		"default_privacy_level",
+		"default_privacy_level", "metadata",
 	}).
 		AddRow(101, 1, 1, "public_drive", "drive-file-1",
 			nil, nil, "t1", "c1", []byte("[1,2]"), "leased", nil, nil, nil,
 			time.Now(), nil, time.Now(), time.Now(),
 			1, 8, nil, workerID, leaseUntil, time.Now(),
 			0, nil, nil, 100, time.Now(), nil,
-			nil, nil, nil, nil, nil, "",
+			nil, nil, nil, nil, nil, "", []byte(`{}`),
 		).
 		AddRow(102, 1, 1, "public_drive", "drive-file-2",
 			nil, nil, "t2", "c2", []byte("[3,4]"), "leased", nil, nil, nil,
 			time.Now(), nil, time.Now(), time.Now(),
 			1, 8, nil, workerID, leaseUntil, time.Now(),
 			0, nil, nil, 100, time.Now(), nil,
-			nil, nil, nil, nil, nil, "",
+			nil, nil, nil, nil, nil, "", []byte(`{}`),
 		)
 
 	// Regex matches the distinguishing 'pending'|'retry_wait' filter so a
@@ -603,14 +603,14 @@ func TestClaimBatchForPublish_Happy(t *testing.T) {
 		"progress_bytes", "total_bytes", "error_code", "priority",
 		"started_at", "completed_at",
 		"youtube_session_uri", "youtube_session_offset", "youtube_session_expires_at", "youtube_chunk_size", "youtube_last_chunk_at",
-		"default_privacy_level",
+		"default_privacy_level", "metadata",
 	}).
 		AddRow(201, 1, 1, "public_drive", "drive-file-201",
 			nil, nil, "t201", "c201", []byte("[1,2]"), "leased", nil, nil, "asset-201",
 			time.Now(), nil, time.Now(), time.Now(),
 			3, 8, nil, workerID, leaseUntil, time.Now(),
 			100, 100, nil, 100, time.Now(), nil,
-			nil, nil, nil, nil, nil, "",
+			nil, nil, nil, nil, nil, "", []byte(`{}`),
 		)
 
 	// Regex matches the distinguishing ready_to_publish filter so a

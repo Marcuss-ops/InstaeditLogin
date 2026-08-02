@@ -1,0 +1,284 @@
+# InstaEditLogin — Local Development Stack (Blocco #2.1)
+#
+# Three services modeled on the production deploy topology:
+#   db       — Postgres 15 (unchanged)
+#   migrate  — runs cmd/migrate once, then exits 0 on success
+#   api      — runs cmd/api indefinitely (HTTP server only)
+#   worker   — runs cmd/worker indefinitely (5 background goroutines)
+#
+# Usage:
+#   cp .env.dev.example .env.dev
+#   docker compose up --build
+#
+# Migration ordering: db is the dependency for migrate. migrate is the
+# dependency for api + worker (depends_on with service_completed_successfully).
+# This mirrors the production contract (Railway pre-deploy job / k8s
+# initContainer / helm pre-install hook).
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: instaedit-db
+    environment:
+      POSTGRES_USER: instaedit
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_DB: instaedit_login
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - instaedit_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U instaedit -d instaedit_login"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build:
+      context: .
+      target: migrate
+    container_name: instaedit-migrate
+    env_file:
+      - .env.dev
+    environment:
+      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    # cmd/migrate exits 0 on success, 1 on failure. The
+    # service_completed_successfully condition below keeps api + worker
+    # blocked until the migration succeeds.
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      target: api
+    container_name: instaedit-api
+    env_file:
+      - .env.dev
+    environment:
+      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      - PORT=8080
+      # NVIDIA AI metadata generation (server-side only — NEVER exposed
+      # to the frontend bundle, logs, or localStorage). Empty = AI
+      # metadata generation unavailable; manual entry still works.
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+      # Velox integration (Phase 1 — destination + handoff). When
+      # VELOX_INTEGRATION_ENABLED=false the /internal/v1/* router hides
+      # every Velox-facing route AND the artifact_source_registry refuses
+      # to register UploadJobSourceVeloxArtifact — i.e. zero behavioural
+      # change for the default fleet. Token + webhook secret are read
+      # from .env.dev (via the ${VAR} interpolation below) so they
+      # never appear in the committed file. The download timeout +
+      # max-bytes cap match the values documented in
+      # docs/ARCHITECTURE.md §Velox integration limits.
+      - VELOX_INTEGRATION_ENABLED=true
+      - VELOX_API_TOKEN=${VELOX_API_TOKEN}
+      - VELOX_WEBHOOK_SECRET=${VELOX_WEBHOOK_SECRET}
+      - VELOX_CONTROL_URL=${VELOX_CONTROL_URL}
+      - VELOX_CONTROL_JWT_SECRET=${VELOX_CONTROL_JWT_SECRET}
+      - VELOX_DOWNLOAD_TIMEOUT_SECONDS=1800
+      - VELOX_MAX_ARTIFACT_BYTES=2147483648
+    ports:
+      - "0.0.0.0:8080:8080"
+    # Sit on the default bridge for db/minio/s3 DNS AND on the internal
+    # media-backend network for Velox handoff. Listing both keeps the
+    # api reachable on `:8080` from the host while restricting Velox
+    # traffic to the internal bridge (no Internet egress).
+    networks:
+      - default
+      - media-backend
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      target: worker
+    container_name: instaedit-worker
+    env_file:
+      - .env.dev
+    environment:
+      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      # NVIDIA AI metadata generation (mirrors the api service).
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+      # Velox integration (mirrors the api service). The worker reads
+      # Velox-resumable YouTube sessions + velox_artifact upload_jobs
+      # from the same env block — having the same VELOX_* keys on
+      # both processes means a single .env.dev update flips the
+      # feature on for the whole fleet.
+      - VELOX_INTEGRATION_ENABLED=true
+      - VELOX_API_TOKEN=${VELOX_API_TOKEN}
+      - VELOX_WEBHOOK_SECRET=${VELOX_WEBHOOK_SECRET}
+      - VELOX_CONTROL_URL=${VELOX_CONTROL_URL}
+      - VELOX_CONTROL_JWT_SECRET=${VELOX_CONTROL_JWT_SECRET}
+      - VELOX_DOWNLOAD_TIMEOUT_SECONDS=1800
+      - VELOX_MAX_ARTIFACT_BYTES=2147483648
+    # Worker lives ONLY on the internal bridge — does NOT need the
+    # default network because it speaks to Postgres over its service
+    # name (`db`) via the same Compose-wide service DNS regardless.
+    networks:
+      - default
+      - media-backend
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Legacy dev-only convenience service for users who want the single-process
+  # shape. Not started by default; `docker compose --profile legacy up`
+  # to start it. Disables the api/worker services above so PORT 8080
+  # isn't double-bound.
+  server:
+    profiles: ["legacy"]
+    build:
+      context: .
+      target: server
+    container_name: instaedit-server
+    env_file:
+      - .env.dev
+    environment:
+      - DATABASE_URL=postgresql://instaedit:dev_password@db:5432/instaedit_login?sslmode=disable
+      - PORT=8080
+      # NVIDIA AI metadata generation (mirrors the api + worker services).
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY}
+    ports:
+      - "0.0.0.0:8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+# MinIO — local S3-compatible object store. The credentials below
+  # MUST match S3_ACCESS_KEY / S3_SECRET_KEY in `.env.dev` (referenced
+  # via env_file). `minio-init` is a one-shot sidecar that creates the
+  # `instaedit-local` bucket on first boot so the api's first S3 PUT
+  # does not race against bucket creation. Pinned to a stable tag
+  # (`RELEASE.2024-09-13T16-55-53Z`) — the `latest` tag is not safe
+  # because MinIO's release cadence occasionally breaks the mc↔server
+  # compatibility contract.
+  minio:
+    # Pinned to a stable tag when possible, but MinIO prunes older
+    # RELEASE tags from Docker Hub. `latest` is used here for local
+    # dev resilience; update to a specific release tag when one is
+    # reliably available in your registry mirror.
+    image: minio/minio:latest
+    container_name: instaedit-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: instaedit
+      # Local-dev password only. Operators shipping this file
+      # externally MUST change it; the value matches S3_SECRET_KEY
+      # in `.env.dev`.
+      MINIO_ROOT_PASSWORD: change-this-local-secret
+    volumes:
+      - instaedit_minio_data:/data
+    # Host port mapping lives in docker-compose.local.yml so the
+    # base stack can be used without binding to :9000 (which is
+    # often occupied by other local services).
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Same dual-network reasoning as api/worker: default for the
+    # host-published port (path-style uploads from the SPA arrive at
+    # 127.0.0.1:9000 → host port forward → minio container on default
+    # bridge), media-backend for any future internal-only bucket that
+    # the Velox handoff might use as a staging area before promotion
+    # into `instaedit-local`.
+    networks:
+      - default
+      - media-backend
+
+  # One-shot sidecar: blocks api startup until the bucket exists.
+  # `mc alias set` retries until MinIO accepts the credentials (the
+  # short window between MinIO listening and its healthcheck being
+  # observed by Docker is bridged by the `until` loop). `mc mb
+  # --ignore-existing` is idempotent — re-runs are no-ops, so the
+  # container can be safely re-created on every boot.
+  minio-init:
+    # Pinned to the matching mc release for the minio server above.
+    # MinIO prunes older mc RELEASE tags, so `latest` is used here
+    # to keep local dev working; pin to a specific release in
+    # production/mirrored registries.
+    image: minio/mc:latest
+    container_name: instaedit-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      set -e;
+      until mc alias set local http://minio:9000 instaedit change-this-local-secret; do
+        echo 'minio alias set failed, retrying in 2s';
+        sleep 2;
+      done;
+      mc mb --ignore-existing local/instaedit-local;
+      echo 'minio bucket instaedit-local ready';
+      exit 0;
+      "
+
+volumes:
+  instaedit_pg_data:
+  instaedit_minio_data:
+
+# Velox internal bridge — see docs/ARCHITECTURE.md §Velox integration.
+#
+# `internal: true` disables the default gateway for every container
+# attached to this network. The implication is hard: a compromised
+# api/worker cannot egress to the public Internet (no apt-get, no
+# curl-to-attacker, no DNS leak). The only paths outbound are the
+# Velox master node on its service port and Postgres/MinIO on the
+# default bridge (which has its OWN gateway and is documented
+# separately).
+#
+# The InstaEdit-side /internal/v1/* endpoints (destinations/validate,
+# deliveries POST + GET) are guarded by the VELOX_API_TOKEN
+# constant-time Bearer check (pkg/api/internal_auth.go). The public
+# Caddyfile (ops/legacy/Caddyfile + ops/local/Caddyfile) explicitly
+# aborts requests for /internal/* before any reverse-proxy pass.
+#
+# velox-master placeholder — when the Velox image lands in a
+# registry, UNCOMMENT the stub below to spin up the full Phase 1
+# pipeline locally (api worker → velox artifact)
+#
+#  velox-master:
+#    image: ghcr.io/velox/master:dev
+#    container_name: instaedit-velox
+#    networks:
+#      - media-backend
+#    profiles: ["velox"]
+networks:
+  media-backend:
+    internal: true
+
+# ──────────────────────────────────────────────────────────────────
+# (Kept separate from the api/worker/migrate block above so a frontend
+#  refresh doesn't require rediscovering the wire-up.)
+#
+#   frontend:
+#     image: node:20-alpine
+#     container_name: instaedit-frontend
+#     working_dir: /app/web
+#     volumes:
+#       - ./web:/app/web
+#     ports:
+#       - "5173:5173"
+#     env_file:
+#       - .env.dev
+#     environment:
+#       - VITE_API_BASE_URL=http://localhost:8080
+#     depends_on:
+#       - api
+#     command: >
+#       sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+#
+# Uncomment the frontend block above if you also want the SPA auto-reload
+# in dev. The api/worker/migrate shape above is the Blocco #2.1 default.

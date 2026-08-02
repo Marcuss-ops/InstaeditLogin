@@ -65,6 +65,7 @@ type ExternalDestinationLookup interface {
 // for a delivery. Production wiring uses *repository.WorkspaceRepository.
 type ExternalDeliveryWorkspaceLookup interface {
 	FindByID(id int64) (*models.Workspace, error)
+	FindChannel(ctx context.Context, workspaceID, platformAccountID int64) (*models.WorkspaceChannel, error)
 }
 
 // ExternalDeliveryUploadCreator is the atomic "create upload_job +
@@ -213,6 +214,9 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, delivery *mode
 	if dest == nil {
 		return terminalError{err: fmt.Errorf("external destination %s not found", delivery.ExternalDestinationID)}
 	}
+	if !dest.Enabled {
+		return terminalError{err: fmt.Errorf("external destination %s is disabled", delivery.ExternalDestinationID)}
+	}
 
 	ws, err := d.workspaceStore.FindByID(dest.WorkspaceID)
 	if err != nil {
@@ -220,6 +224,14 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, delivery *mode
 	}
 	if ws == nil {
 		return terminalError{err: fmt.Errorf("workspace %d not found", dest.WorkspaceID)}
+	}
+
+	binding, err := d.workspaceStore.FindChannel(ctx, dest.WorkspaceID, dest.PlatformAccountID)
+	if err != nil {
+		return transientError{err: err}
+	}
+	if binding == nil || !binding.Enabled {
+		return terminalError{err: fmt.Errorf("platform account %d is not enabled in workspace %d", dest.PlatformAccountID, dest.WorkspaceID)}
 	}
 
 	meta, err := models.ParseVeloxDeliveryMetadata(delivery.Metadata)
@@ -238,6 +250,7 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, delivery *mode
 		Status:              models.UploadJobStatusPending,
 		Title:               meta.Title,
 		Caption:             meta.Description,
+		Metadata:            append([]byte(nil), delivery.Metadata...),
 		DefaultPrivacyLevel: meta.PrivacyStatus,
 		PublishAt:           delivery.PublishAt,
 		Targets:             meta.TargetAccountIDs,

@@ -16,8 +16,6 @@
 // build in pkg/api/accounts_performance_summary_handlers.go.
 package api
 
-import "time"
-
 // accountPerformanceSummary is the per-channel aggregate wire shape
 // the summary endpoint returns inside `channels[].metrics`. Distinct
 // from analytics.Summary (per-channel endpoint) — kept separate so
@@ -94,4 +92,3 @@ func publicationFrequency(firstVideos, latestVideos int64, days int) float64 {
 
 // _ pins the time package as in-use for future readers scanning
 // imports — keep here until the file can shrink to types-only.
-var _ = time.Time{}

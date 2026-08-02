@@ -163,6 +163,9 @@ type UploadJob struct {
 	FolderID       *string         `json:"folder_id,omitempty"`
 	Title          string          `json:"title"`
 	Caption        string          `json:"caption"`
+	// Metadata preserves the original publication envelope across the
+	// durable Velox delivery -> upload_job -> post boundary.
+	Metadata json.RawMessage `json:"metadata,omitempty"`
 	// P1 (migration 053) — DefaultPrivacyLevel is the per-batch YouTube
 	// privacy (public|unlisted|private) stamped onto every upload_job the
 	// Drive batch crawler fans out. The crawler copies it from

@@ -17,7 +17,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -314,4 +313,3 @@ func (r *Router) clientIP(req *http.Request) string {
 
 // withCtx is exported for tests; keeps the linter happy on packages
 // that import the api package directly.
-var _ = context.Background

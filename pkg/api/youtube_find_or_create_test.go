@@ -189,6 +189,45 @@ func TestCreateEditorSession_FindOrCreate_StampsSourceThumbnailOnCreateOnly(t *t
 	}
 }
 
+func TestCreateEditorSession_FindOrCreate_RepairsStaleSourceThumbnailFromYouTube(t *testing.T) {
+	t.Parallel()
+	const workspaceID, accountID int64 = 11, 22
+	const videoID = "yt-thumbnail-repair"
+	const channelID = "channel-thumbnail-repair"
+	const canonicalURL = "https://i.ytimg.com/vi/yt-thumbnail-repair/maxresdefault.jpg"
+
+	row := fakeEditableRow(workspaceID, accountID, videoID, "sess-repair", "vp-repair")
+	row.SourceThumbnailURL = "https://old.invalid/grey-placeholder.jpg"
+
+	router := buildFindOrCreateRouter(t,
+		&models.Workspace{ID: workspaceID, OwnerID: 1}, accountID, channelID,
+		func(ctx context.Context, wsID, aID int64, vid, _, _ string) (*models.YouTubeVideoEdit, error) {
+			return row, nil
+		},
+	)
+	// The URL returned by YouTube must win over the stale persisted URL
+	// and over a potentially stale browser hint.
+	router.youTubeSvc.(*mockYouTubeOAuthServiceForEditor).getVideoFn = func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
+		return &models.YouTubeVideoDetails{
+			ID: videoID, ChannelID: channelID, ThumbnailURL: canonicalURL,
+			Privacy: "private", UploadStatus: "processed",
+		}, nil
+	}
+
+	got, err := router.CreateEditorSession(context.Background(), CreateEditorSessionInput{
+		WorkspaceID:        workspaceID,
+		PlatformAccountID:  accountID,
+		YouTubeVideoID:     videoID,
+		SourceThumbnailURL: "https://browser-hint.invalid/wrong.jpg",
+	})
+	if err != nil {
+		t.Fatalf("CreateEditorSession: %v", err)
+	}
+	if got.SourceThumbnailURL != canonicalURL {
+		t.Fatalf("stale source thumbnail was not repaired: got %q want %q", got.SourceThumbnailURL, canonicalURL)
+	}
+}
+
 // TestCreateEditorSession_FindOrCreate_ConcurrentRaceModelsPartialUnique
 // models the partial-UNIQUE race: N goroutines call FindOrCreate for the
 // same triple simultaneously. The helper must converge on a single

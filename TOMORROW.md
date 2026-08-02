@@ -103,7 +103,7 @@ flyctl postgres create --name instaedit-production --region iad \
 flyctl postgres attach instaedit-production --app instaedit-login
 
 # 3. Crea .env.production (NON committare)
-cp .env.example .env.production
+cp .env.production.example .env.production
 # Riempi TUTTI i 27 secret, tra cui:
 #   - JWT_SECRET, ENCRYPTION_KEYS, ACTIVE_ENCRYPTION_KEY_ID, ADMIN_INVITE_TOKEN
 #   - S3_ACCESS_KEY, S3_SECRET_KEY (la NUOVA, post-rotazione)

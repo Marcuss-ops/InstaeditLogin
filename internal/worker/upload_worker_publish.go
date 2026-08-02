@@ -27,6 +27,7 @@ func (w *UploadWorker) processPublishJob(ctx context.Context, job *models.Upload
 		WorkspaceID:      job.WorkspaceID,
 		Title:            job.Title,
 		Caption:          job.Caption,
+		Metadata:         append([]byte(nil), job.Metadata...),
 		MediaURL:         mediaURL,
 		MediaAssetID:     strPtr(assetID),
 		StorageObjectKey: strPtr(key),

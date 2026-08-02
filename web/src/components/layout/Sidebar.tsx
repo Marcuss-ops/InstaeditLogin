@@ -33,6 +33,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const location = useLocation();
   const gradientId = useId();
   const [isAdmin, setIsAdmin] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const visualCollapsed = collapsed && !hovered;
 
   useEffect(() => {
     let mounted = true;
@@ -51,9 +53,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   return (
     <aside
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       className={cn(
         "h-screen flex flex-col bg-[#030308] border-r border-white/[0.08] transition-[width] duration-300 ease-in-out shrink-0",
-        collapsed ? "w-16" : "w-64",
+        visualCollapsed ? "w-16" : "w-64",
       )}
     >
       <div className="h-16 flex items-center justify-between px-4 border-b border-white/[0.08]">
@@ -61,7 +65,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           to="/app/dashboard"
           className={cn(
             "flex items-center gap-2.5 font-bold text-[17px] tracking-[-0.3px] text-white no-underline transition-opacity overflow-hidden",
-            collapsed && "opacity-0 pointer-events-none w-0",
+            visualCollapsed && "opacity-0 pointer-events-none w-0",
           )}
         >
           <svg width="26" height="26" viewBox="0 0 28 28" fill="none" className="shrink-0" aria-hidden="true">
@@ -79,11 +83,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
         <button
           type="button"
-          onClick={onToggle}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={() => {
+            setHovered(false);
+            onToggle();
+          }}
+          aria-label={visualCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           className="p-1.5 rounded-lg text-[#9aa0aa] hover:text-white hover:bg-white/[0.06] transition-colors"
         >
-          {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+          {visualCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
         </button>
       </div>
 
@@ -100,12 +107,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 active
                   ? "bg-white/[0.08] text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.1)] border-white/[0.08]"
                   : "text-[#9aa0aa] hover:text-white hover:bg-white/[0.04] border-transparent",
-                collapsed && "justify-center",
+                visualCollapsed && "justify-center",
               )}
-              title={collapsed ? item.label : undefined}
+              title={visualCollapsed ? item.label : undefined}
             >
               <Icon size={20} className="shrink-0" />
-              {!collapsed && <span className="truncate">{item.label}</span>}
+              {!visualCollapsed && <span className="truncate">{item.label}</span>}
             </Link>
           );
         })}
@@ -117,12 +124,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           onClick={() => logout("/login")}
           className={cn(
             "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-[#9aa0aa] hover:text-red-400 hover:bg-red-500/[0.08] transition-colors w-full",
-            collapsed && "justify-center",
+            visualCollapsed && "justify-center",
           )}
-          title={collapsed ? "Log out" : undefined}
+          title={visualCollapsed ? "Log out" : undefined}
         >
           <LogOut size={20} className="shrink-0" />
-          {!collapsed && <span className="truncate">Log out</span>}
+          {!visualCollapsed && <span className="truncate">Log out</span>}
         </button>
       </div>
     </aside>

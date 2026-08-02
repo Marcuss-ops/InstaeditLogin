@@ -35,6 +35,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 
@@ -56,11 +57,12 @@ import (
 // --- Config ----------------------------------------------------------------
 
 type e2eConfig struct {
-	UserID       int64
-	WorkspaceID  int64
-	AccountID    int64
-	TestVideoURL string
-	Privacy      string
+	UserID        int64
+	WorkspaceID   int64
+	AccountID     int64
+	TestVideoURL  string
+	VerifyVideoID string
+	Privacy       string
 
 	// Polling
 	PollInterval time.Duration
@@ -73,17 +75,21 @@ func loadE2EConfig() (e2eConfig, error) {
 	}
 
 	cfg := e2eConfig{
-		UserID:       requiredInt64("INSTAEDIT_USER_ID"),
-		WorkspaceID:  requiredInt64("INSTAEDIT_WORKSPACE_ID"),
-		AccountID:    requiredInt64("YOUTUBE_PLATFORM_ACCOUNT_ID"),
-		TestVideoURL: requiredString("YOUTUBE_TEST_VIDEO_URL"),
-		Privacy:      optionalString("YOUTUBE_TEST_PRIVACY", "private"),
-		PollInterval: 5 * time.Second,
-		PollTimeout:  5 * time.Minute,
+		UserID:        requiredInt64("INSTAEDIT_USER_ID"),
+		WorkspaceID:   requiredInt64("INSTAEDIT_WORKSPACE_ID"),
+		AccountID:     requiredInt64("YOUTUBE_PLATFORM_ACCOUNT_ID"),
+		TestVideoURL:  optionalString("YOUTUBE_TEST_VIDEO_URL", ""),
+		VerifyVideoID: optionalString("YOUTUBE_VERIFY_VIDEO_ID", ""),
+		Privacy:       optionalString("YOUTUBE_TEST_PRIVACY", "private"),
+		PollInterval:  5 * time.Second,
+		PollTimeout:   5 * time.Minute,
 	}
 
 	if cfg.Privacy != "private" && cfg.Privacy != "unlisted" && cfg.Privacy != "public" {
 		return e2eConfig{}, fmt.Errorf("YOUTUBE_TEST_PRIVACY must be private, unlisted, or public (got %q)", cfg.Privacy)
+	}
+	if cfg.TestVideoURL == "" && cfg.VerifyVideoID == "" {
+		return e2eConfig{}, fmt.Errorf("set YOUTUBE_TEST_VIDEO_URL for upload or YOUTUBE_VERIFY_VIDEO_ID for verification")
 	}
 
 	return cfg, nil
@@ -206,6 +212,62 @@ func main() {
 	fmt.Printf("  channel_title=%s subscriber_count=%d view_count=%d video_count=%d\n",
 		chInfo.Snippet.Title, chInfo.Statistics.SubscriberCount,
 		chInfo.Statistics.ViewCount, chInfo.Statistics.VideoCount)
+
+	if cfg.VerifyVideoID != "" {
+		fmt.Printf("[5/5] Verifying existing video (videos.list id=%s) ...\n", cfg.VerifyVideoID)
+		videoInfo, err := getVideoInfo(ctx, accessToken, cfg.VerifyVideoID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "videos.list failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("  video_title=%s channel_id=%s privacy=%s upload_status=%s\n",
+			videoInfo.Snippet.Title, videoInfo.Snippet.ChannelID,
+			videoInfo.Status.PrivacyStatus, videoInfo.Status.UploadStatus)
+		fmt.Printf("  thumbnails: default=%s medium=%s high=%s standard=%s maxres=%s\n",
+			videoInfo.Snippet.Thumbnails.Default.URL,
+			videoInfo.Snippet.Thumbnails.Medium.URL,
+			videoInfo.Snippet.Thumbnails.High.URL,
+			videoInfo.Snippet.Thumbnails.Standard.URL,
+			videoInfo.Snippet.Thumbnails.Maxres.URL)
+		if videoInfo.Snippet.ChannelID != account.PlatformUserID {
+			fmt.Fprintf(os.Stderr, "FAIL: video channel mismatch: expected %s, got %s\n", account.PlatformUserID, videoInfo.Snippet.ChannelID)
+			os.Exit(1)
+		}
+		if videoInfo.Snippet.Thumbnails.Default.URL == "" {
+			fmt.Fprintln(os.Stderr, "FAIL: YouTube returned no thumbnail")
+			os.Exit(1)
+		}
+		fmt.Println("VERIFY PASSED: channel binding and thumbnail are present ✓")
+		return
+	}
+
+	if os.Getenv("YOUTUBE_LIST_LIBRARY") == "1" {
+		fmt.Println("[5/5] Listing existing editable YouTube videos ...")
+		page, err := youtubeSvc.ListEditableVideos(ctx, accessToken, account.PlatformUserID, "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "youtube library failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("  returned=%d\n", len(page.Items))
+		for _, item := range page.Items {
+			published := "unknown"
+			if item.PublishedAt != nil {
+				published = item.PublishedAt.Format(time.RFC3339)
+			}
+			fmt.Printf("  %s privacy=%s published_at=%s title=%q\n", item.ID, item.Privacy, published, item.Title)
+		}
+		return
+	}
+
+	if videoID := strings.TrimSpace(os.Getenv("YOUTUBE_SET_PRIVATE_VIDEO_ID")); videoID != "" {
+		fmt.Printf("[5/5] Setting existing video private (id=%s) ...\n", videoID)
+		if err := setVideoPrivate(ctx, accessToken, videoID); err != nil {
+			fmt.Fprintf(os.Stderr, "videos.update failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("  privacy=private")
+		return
+	}
 
 	// --- Create Post --------------------------------------------------------
 	fmt.Println("[5/7] Creating Post + PostTarget (queued) ...")
@@ -335,7 +397,10 @@ type channelStatistics struct {
 
 func getChannelInfo(ctx context.Context, accessToken, channelID string) (*channelInfo, error) {
 	params := url.Values{}
-	params.Set("part", "snippet,statistics")
+	// Statistics values are returned by YouTube as JSON strings and are not
+	// needed for this ownership/upload smoke test. Request only the channel
+	// snippet so a formatting change in count fields cannot block the upload.
+	params.Set("part", "snippet")
 	params.Set("id", channelID)
 
 	reqURL := "https://www.googleapis.com/youtube/v3/channels?" + params.Encode()
@@ -377,8 +442,21 @@ type videoInfo struct {
 }
 
 type videoSnippet struct {
-	Title     string `json:"title"`
-	ChannelID string `json:"channelId"`
+	Title      string          `json:"title"`
+	ChannelID  string          `json:"channelId"`
+	Thumbnails videoThumbnails `json:"thumbnails"`
+}
+
+type videoThumbnails struct {
+	Default  videoThumbnail `json:"default"`
+	Medium   videoThumbnail `json:"medium"`
+	High     videoThumbnail `json:"high"`
+	Standard videoThumbnail `json:"standard"`
+	Maxres   videoThumbnail `json:"maxres"`
+}
+
+type videoThumbnail struct {
+	URL string `json:"url"`
 }
 
 type videoStatus struct {
@@ -421,6 +499,34 @@ func getVideoInfo(ctx context.Context, accessToken, videoID string) (*videoInfo,
 	}
 
 	return &result.Items[0], nil
+}
+
+func setVideoPrivate(ctx context.Context, accessToken, videoID string) error {
+	body, err := json.Marshal(map[string]any{
+		"id":     videoID,
+		"status": map[string]string{"privacyStatus": "private"},
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		"https://www.googleapis.com/youtube/v3/videos?part=status",
+		bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("videos.update returned %d: %s", resp.StatusCode, string(responseBody))
+	}
+	return nil
 }
 
 // --- Compile-time safety net -----------------------------------------------

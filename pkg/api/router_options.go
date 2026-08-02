@@ -318,15 +318,6 @@ func WithConnectLinkNonceStore(store ConnectLinkNonceStore) RouterOption {
 	}
 }
 
-// WithConnectLinkNonceStore wires the store used to persist and
-// atomically consume connect-link nonces. When nil, replay
-// protection is disabled (tests and legacy deployments).
-func WithConnectLinkNonceStore(store ConnectLinkNonceStore) RouterOption {
-	return func(r *Router) {
-		r.connectLinkNonceStore = store
-	}
-}
-
 // WithTrustedProxies configures the list of networks (IP or CIDR)
 // that are allowed to supply X-Forwarded-For / X-Real-IP headers.
 // When empty (the default), clientIP extraction falls back to the

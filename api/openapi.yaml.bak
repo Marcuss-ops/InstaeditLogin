@@ -1,0 +1,2377 @@
+openapi: 3.1.0
+
+info:
+  title: InstaEditLogin API
+  version: 1.0.0
+  summary: Multi-platform OAuth + publishing REST API.
+  description: |
+    Single source of truth for SDK generation, reference docs, and QA tests.
+    Universal payload (`targets[]` + per-platform `settings`) and an 8-state
+    async publish state machine drive the public surface.
+
+    Sections in this file:
+    • Auth    — `/api/v1/auth/*` + `/api/v1/api-keys`  (C1)
+    • Posts   — `/api/v1/posts`  (universal target settings) — (C2, this commit)
+    • Targets — `/api/v1/post_targets/{id}`  (async state per target)
+  contact:
+    name: InstaEditLogin Engineering
+    url: https://example.com/support
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.instaeditlogin.example/v1
+    description: Production
+  - url: https://api-staging.instaeditlogin.example/v1
+    description: Staging
+  - url: http://localhost:8080/v1
+    description: Local development
+
+# Taglio 4.6: every protected endpoint accepts EITHER `Bearer sk_test_…` /
+# `Bearer sk_live_…` (server-to-server) or the HttpOnly session cookie
+# set by `POST /api/v1/auth/exchange` (browser).
+security:
+  - ApiKeyAuth: []
+  - JwtCookie: []
+
+tags:
+  - name: Auth
+    description: OAuth hosted flow + API-key management.
+  - name: Posts
+    description: Universal-publishing API (`targets[]` discriminated union).
+  - name: PostTargets
+    description: Async state of a single post target.
+  - name: Velox Internal
+    description: |
+      Service-to-service API for Velox handoff. Requires
+      `Authorization: Bearer <VELOX_API_TOKEN>` (server-shared
+      secret). NOT exposed to the public Caddyfile — only
+      reachable from peers on the `media-backend` internal Docker
+      network. Constant-time token compare via
+      `crypto/subtle.ConstantTimeCompare`; 401 (missing/malformed
+      header), 403 (token mismatch), 503 (token not configured)
+      per RFC 7235 + the Velox retry contract.
+  - name: YouTube
+    description: |
+      YouTube thumbnail-editor session endpoints (the dark-editor
+      SPA integrates against these). Pair with the Velox BFF module
+      for the actual rendering work; this tag covers the
+      InstaEdit-side session lifecycle (create / link thumbnail /
+      publish).
+
+paths:
+
+  # ───────────── Auth ───────────────────────────────────────────────────────
+
+  /auth/{provider}/login:
+    get:
+      tags: [Auth]
+      operationId: authGetLoginUrl
+      summary: Start OAuth flow for the given provider.
+      description: |
+        302 redirect to the provider's authorization URL. The server
+        sets a one-shot `oauth_state_{provider}` HttpOnly cookie for
+        CSRF protection; the `state` query param on the callback is
+        matched against this cookie.
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [meta, tiktok, twitter, youtube, linkedin]
+      responses:
+        '302':
+          description: Redirect to provider authorization URL (`Location` header).
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+              description: Provider's `/authorize` URL.
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/{provider}/start:
+    get:
+      tags: [Auth]
+      operationId: authGetLoginUrlStart
+      deprecated: true
+      summary: Alias of /auth/{provider}/login (backwards-compat).
+      description: |
+        Backwards-compat alias of `/auth/{provider}/login`. Some older
+        scripts and docs reference `start` as the OAuth initiation URL;
+        this entry serves those. The `/login` and `/start` paths are
+        functionally identical (same handler, same middleware chain,
+        same response). Canonical URL is `/auth/{provider}/login`; new
+        integrations should prefer that path. Added in commit c9e760d.
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [meta, tiktok, twitter, youtube, linkedin]
+      responses:
+        '302':
+          description: Redirect to provider authorization URL (`Location` header).
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+              description: Provider's `/authorize` URL.
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/{provider}/callback:
+    get:
+      tags: [Auth]
+      operationId: authHandleCallback
+      summary: OAuth callback (issues a one-time exchange code).
+      description: |
+        Browser is redirected here from the provider after consent. The
+        server exchanges `code` + verified `state` for an access/refresh
+        token pair (stored encrypted in the vault), creates or refreshes
+        the `platform_accounts` row, then issues a single-use 60s code.
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [meta, tiktok, twitter, youtube, linkedin]
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '302':
+          description: Redirect to `${FRONTEND_URL}/auth/callback?code=...&provider=...`.
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+        '200':
+          description: 'Headless mode (no FRONTEND_URL): the exchange code is returned in the body so a CLI caller can POST it to /api/v1/auth/exchange.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthCallbackHeadlessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/exchange:
+    post:
+      tags: [Auth]
+      operationId: authExchangeCode
+      summary: Exchange one-time code for HttpOnly session cookie.
+      description: |
+        Browser SPA posts the `code` from the callback URL; the server
+        validates + consumes the code (single-use, 60s TTL) and replies
+        with `204` plus a `Set-Cookie: iel_session=…; HttpOnly; Secure;
+        SameSite=None`. The SPA never sees the JWT.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthExchangeRequest'
+      responses:
+        '204':
+          description: Session cookie set.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              description: '`iel_session=<jwt>; HttpOnly; Secure; SameSite=None; Path=/`.'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: authGetMe
+      summary: Return the authenticated user identity.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Identity of the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMeResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: authLogout
+      summary: Clear the HttpOnly session cookie.
+      security:
+        - JwtCookie: []
+      responses:
+        '204':
+          description: Cookie cleared.
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+
+  # ───────────── API keys (Taglio 4.6) ─────────────────────────────────────
+
+  /api-keys:
+    get:
+      tags: [Auth]
+      operationId: apiKeysList
+      summary: List API keys in the authenticated workspace.
+      description: |
+        Returns only the visible `key_prefix` (e.g. `sk_TEST_aB3xY9_K2_DoNotUse`).
+        The plaintext secret is never re-fetchable after creation.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: API keys for the caller's workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+    post:
+      tags: [Auth]
+      operationId: apiKeysCreate
+      summary: Create a new API key.
+      description: |
+        The plaintext `secret` is returned EXACTLY ONCE on creation.
+        Persist it in your secrets manager immediately; the server
+        stores only the SHA-256 hash.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyCreateRequest'
+      responses:
+        '201':
+          description: Key created. `secret` is shown only in this response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityError'
+
+  /api-keys/{id}:
+    get:
+      tags: [Auth]
+      operationId: apiKeysGet
+      summary: Fetch a single API key by id.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: Key metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKey'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    delete:
+      tags: [Auth]
+      operationId: apiKeysRevoke
+      summary: Revoke an API key (immediate).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '204':
+          description: Key revoked. Subsequent Bearer requests with this secret will get 401.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /api-keys/{id}/rotate:
+    post:
+      tags: [Auth]
+      operationId: apiKeysRotate
+      summary: Rotate a key (new secret, new prefix; old is revoked).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '201':
+          description: New key issued. Old `id` is now revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreateResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  # ───────────── Posts (C2 — universal payload) ────────────────────────────
+
+  /posts:
+    get:
+      tags: [Posts]
+      operationId: postsList
+      summary: List posts across the caller's workspaces.
+      description: |
+        Returns posts in the caller's workspaces. Optional filter by
+        `workspace_id` (callers must own that workspace). Order: most
+        recently created first.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: workspace_id
+          in: query
+          description: 'Restrict to a single workspace. Must be owned by the caller.'
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: status
+          in: query
+          description: Filter by post status.
+          schema:
+            $ref: '#/components/schemas/PostStatus'
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor.
+          schema: { type: string }
+      responses:
+        '200':
+          description: A page of posts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+    post:
+      tags: [Posts]
+      operationId: postsCreate
+      summary: Create a post with one or more targets (universal publish).
+      description: |
+        Universal payload. The body has one `targets[]` array; each
+        element specifies a `platform_account_id` and a `settings`
+        block that is **discriminated by platform key**: the JSON key
+        is the platform name and the value is its settings shape.
+
+        Returns **202 Accepted** per platform contract. Each target
+        lands in the async state machine (PostStatusQueued initially).
+        The SDK should follow up via
+        `GET /api/v1/post_targets/{id}` (C3) or subscribe to the
+        `post.target.published` / `post.target.failed` webhooks.
+
+        Idempotency: send `Idempotency-Key: <uuid>` on `live`. Same
+        key + same body → same response; same key + different body →
+        409 conflict.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: |
+            Idempotency token (UUID recommended). Required in `live`
+            mode; optional in `test` mode. Optional duration: 24h.
+          schema: { type: string, maxLength: 255 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostCreateRequest'
+      responses:
+        '202':
+          description: Post + targets accepted; execution is async.
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+              description: '`/api/v1/posts/{id}` for polling/thumb-link.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostWithTargetsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          description: Idempotency-Key conflict (same key, different request body).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /posts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Posts]
+      operationId: postsGet
+      summary: Fetch a post by id.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: The post with current state and (optionally) targets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostWithTargetsResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    patch:
+      tags: [Posts]
+      operationId: postsPatch
+      summary: Edit a post's content / scheduled_at / status.
+      description: |
+        Only the immediately editable fields are honoured while the
+        post is `draft` or `queued`. Once a target is in `publishing`,
+        the only legal patch is `cancel` (POST /{id}/cancel).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostPatchRequest'
+      responses:
+        '200':
+          description: Updated post.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityError'
+    delete:
+      tags: [Posts]
+      operationId: postsDelete
+      summary: Delete a post and cascade its targets.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: 'Deleted (kept returning 200 with `{status:"deleted"}` for symmetry with current handlers).'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [deleted] }
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /posts/workspace/{wid}:
+    get:
+      tags: [Posts]
+      operationId: postsListByWorkspace
+      summary: List posts in a single workspace.
+      parameters:
+        - name: wid
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Posts in the given workspace, ordered newest-first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /posts/{id}/publish:
+    post:
+      tags: [Posts]
+      operationId: postsPublish
+      summary: Manually trigger publish for all currently `queued` targets.
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Targets transitioned to `publishing`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [publishing] }
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /posts/{id}/schedule:
+    post:
+      tags: [Posts]
+      operationId: postsSchedule
+      summary: Set `scheduled_at` and flip status to `queued`.
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostScheduleRequest'
+      responses:
+        '200':
+          description: Updated post.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /posts/{id}/cancel:
+    post:
+      tags: [Posts]
+      operationId: postsCancel
+      summary: Cancel a queued post (back to `draft`).
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Post moved to `draft`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [draft] }
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /posts/{id}/retry:
+    post:
+      tags: [Posts]
+      operationId: postsRetry
+      summary: Re-queue a `failed` post (per-target handled separately).
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Post moved to `queued`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [queued] }
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /posts/{id}/targets:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Posts]
+      operationId: postsListTargets
+      summary: List all targets for a post (parent endpoints).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: List of post targets for the post.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  targets:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PostTargetResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    post:
+      tags: [Posts]
+      operationId: postsAddTarget
+      summary: Append a target to an existing post.
+      description: |
+        The new target uses the same settings language as
+        `POST /api/v1/posts`. The `scheduled_at` is inherited from
+        the parent post.
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostTargetAddRequest'
+      responses:
+        '201':
+          description: Target created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostTargetResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  # ───────────── Post Targets (C3 — async state machine) ─────────────
+
+  /post_targets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [PostTargets]
+      operationId: postTargetsGet
+      summary: Fetch a single post target with full async state.
+      description: |
+        Returns the canonical async state machine values for one
+        target. Use this to poll after a 202 Accepted create, or to
+        resolve a webhook back into the canonical row.
+
+        Status machine (per-target):
+          draft → queued → publishing → (published | failed |
+          waiting_provider | retrying)
+        Indirect transition `retrying → publishing` happens when the
+        worker tick re-claims (ListPending) the row whose
+        `next_attempt_at <= now`.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Target's current state, including provider_state + retry bookkeeping.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostTargetDetail'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+  /post_targets/{id}/retry:
+    post:
+      tags: [PostTargets]
+      operationId: postTargetsRetry
+      summary: Manually re-queue a `failed` or `partially_published` target.
+      description: |
+        Transitions the target back to `queued` (next worker tick will
+        re-claim via `ClaimQueuedTarget`). Pass `force: true` to allow
+        retrying from `partially_published` or `waiting_provider`
+        (default behavior allows `failed` only).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostTargetRetryRequest'
+      responses:
+        '200':
+          description: Target accepted for re-publish (next worker tick).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [queued]
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '422':
+          description: Target can't be retried from its current state without `force`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+# ─────────────────────────────────────────────────────────────────────────────
+  /internal/v1/destinations/{id}/validate:
+    post:
+      tags: [Velox Internal]
+      operationId: postInternalVeloxDestinationValidate
+      summary: Validate that a Velox destination is ready.
+      description: |
+        Velox calls this BEFORE every `/internal/v1/deliveries`
+        request to verify the destination + workspace +
+        platform_account are all in the canonical active shape.
+        Default returns 204 No Content (Velox consumes only
+        the status code). Diagnostic JSON opt-in via
+        `?diagnostic=true` OR `X-Velox-Diagnostic: true`.
+        Per-destination rate limit: 60/minute default.
+      security:
+        - VeloxServiceAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: |
+            External destination opaque id (`extdst_01J...`,
+            base32, no padding).
+      responses:
+        '204':
+          $ref: '#/components/responses/VeloxDestinationValid'
+        '200':
+          $ref: '#/components/responses/VeloxDestinationDiagnostic'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/VeloxServiceAuthMissing'
+        '403':
+          $ref: '#/components/responses/VeloxServiceAuthMismatch'
+        '404':
+          $ref: '#/components/responses/VeloxResourceNotFound'
+        '429':
+          $ref: '#/components/responses/VeloxRateLimit'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/VeloxServiceAuthUnconfigured'
+  /internal/v1/deliveries:
+    post:
+      tags: [Velox Internal]
+      operationId: postInternalVeloxDelivery
+      summary: Accept a Velox-handoff artifact for ingest + publish.
+      description: |
+        Producer-side correlation-keyed accept. SLA target 500ms p99.
+        IDEMPOTENCY: `request_sha256 = sha256(raw_body)` is computed
+        inside the INSERT transaction; same-key same-SHA replays
+        reuse the original row (returns 202 + already_exists=true);
+        same-key different-SHA returns 409. INSERT path holds a
+        `pg_advisory_xact_lock` so concurrent replays serialise.
+        Async enqueue into the worker download channel is
+        non-blocking (warn + drop on overflow).
+      security:
+        - VeloxServiceAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VeloxDeliverArtifactRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/VeloxDeliveryAccepted'
+        '401':
+          $ref: '#/components/responses/VeloxServiceAuthMissing'
+        '403':
+          $ref: '#/components/responses/VeloxServiceAuthMismatch'
+        '404':
+          $ref: '#/components/responses/VeloxResourceNotFound'
+        '409':
+          $ref: '#/components/responses/VeloxIdempotencyConflict'
+        '413':
+          $ref: '#/components/responses/EntityTooLargeError'
+        '422':
+          $ref: '#/components/responses/VeloxValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/VeloxServiceAuthUnconfigured'
+  /internal/v1/deliveries/{id}:
+    get:
+      tags: [Velox Internal]
+      operationId: getInternalVeloxDelivery
+      summary: Poll a Velox delivery's authoritative state.
+      description: |
+        Reconciliation/poll path. Velox uses this when its
+        outbound callback channel drops a packet (network blip,
+        peer restart, 502 storm). The `id` path parameter is
+        the `social_delivery_id` minted by POST `/internal/v1/deliveries`.
+        404 deliberately collapses "id never accepted" with
+        "we accepted then lost it" — closes an enumeration
+        oracle a malicious peer could otherwise use.
+      security:
+        - VeloxServiceAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Social delivery opaque id (`sdel_01J...`, base32, no padding).
+      responses:
+        '200':
+          $ref: '#/components/responses/VeloxDeliveryPolled'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/VeloxServiceAuthMissing'
+        '403':
+          $ref: '#/components/responses/VeloxServiceAuthMismatch'
+        '404':
+          $ref: '#/components/responses/VeloxResourceNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/VeloxServiceAuthUnconfigured'
+
+  # ──────────── YouTube editor sessions ──────────────────────────────────────
+  #
+  # Direct handoff endpoint (Blocco #5 P0 #4): callers (typically the
+  # dark editor SPA after uploading the rendered thumbnail to InstaEdit
+  # storage) supply a verified media_assets.id and the handler
+  # atomically links it to the session in a single UPDATE statement
+  # with a CAS predicate `status IN ('editing','failed')`. Coexists
+  # with the PATCH-by-project flow that goes through Velox; the direct
+  # handoff path skips the Velox roundtrip for the "thumbnail already
+  # uploaded" case.
+  #
+  # 4 error branches + 1 happy path (per the action-plan spec):
+  #   - missing thumbnail_media_id payload              → 400
+  #   - asset not found                                  → 404
+  #   - asset exists but Status != ready                 → 409
+  #   - workspace not accessible by the caller           → 403
+  #   - session not found                                → 404
+  #   - CAS-loss (session in 'publishing' / 'published') → 409
+    /api/v1/youtube/editor-sessions/by-project/{velox_project_id}:
+      get:
+        tags: [YouTube]
+        summary: Get editor session by velox_project_id
+        description: |
+          Returns the full editor session row for the given Velox project.
+          Lets the Dark Editor hydrate its form from the URL alone, without
+          first POSTing /editor-sessions to learn the session_id.
+        operationId: getYouTubeEditorSessionByProject
+        security:
+          - ApiKeyAuth: []
+          - JwtCookie: []
+        parameters:
+          - name: velox_project_id
+            in: path
+            required: true
+            schema: { type: string }
+        responses:
+          '200':
+            description: Session row.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/YouTubeEditorSessionDetail'
+          '400':
+            description: Bad request.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+          '401':
+            description: Unauthorized.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+          '404':
+            description: Not found.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+          '500':
+            description: Internal server error.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+          '503':
+            description: Service unavailable.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+
+    /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish:
+      post:
+        tags: [YouTube]
+        summary: Publish editor session by velox_project_id
+        description: |
+          Publishes the editor session identified by velox_project_id. Body
+          + response shapes match POST /api/v1/youtube/editor-sessions/{id}/publish;
+          the handler delegates to the shared executePublishYouTubeEditorSession
+          helper so the two publish endpoints cannot drift.
+        operationId: publishYouTubeEditorSessionByProject
+        security:
+          - ApiKeyAuth: []
+          - JwtCookie: []
+        parameters:
+          - name: velox_project_id
+            in: path
+            required: true
+            schema: { type: string }
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishYouTubeEditorSessionRequest'
+        responses:
+          '200':
+            description: Publish succeeded or idempotently replayed.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/PublishYouTubeEditorSessionResponse'
+          '400':
+            description: Bad request.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+          '401':
+            description: Unauthorized.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+          '404':
+            description: Not found.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+          '409':
+            description: Conflict (publish in progress or terminal state).
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+          '500':
+            description: Internal server error.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+          '502':
+            description: Bad gateway (YouTube API failure).
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+          '503':
+            description: Service unavailable.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Error'
+
+      /api/v1/youtube/editor-sessions/{id}/thumbnail:
+    post:
+      tags: [YouTube]
+      summary: Attach a verified thumbnail asset to an editor session.
+      description: |
+        Direct handoff for the thumbnail-media link. The handler
+        validates the supplied media asset (existence, readiness,
+        ownership) + the caller's workspace access on the session,
+        then atomically stamps `thumbnail_media_id` on the
+        `youtube_video_edits` row in a single UPDATE statement with
+        a CAS predicate (`status IN ('editing','failed')`). A
+        concurrent publish request that already moved the session
+        into `publishing` or `published` state will cause the CAS
+        to fail (0-rows match) and the handler returns 409.
+
+        Coexists with PATCH
+        `/api/v1/youtube/editor-sessions/by-project/{velox_project_id}`
+        which goes through Velox; the direct handoff path skips that
+        roundtrip for callers who already uploaded the rendered
+        thumbnail to InstaEdit storage.
+      operationId: attachThumbnailToEditorSession
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: |
+            Editor session id (UUID, the `id` returned by
+            `POST /api/v1/youtube/editor-sessions`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [thumbnail_media_id]
+              properties:
+                thumbnail_media_id:
+                  type: string
+                  description: |
+                    The verified media asset id from
+                    `POST /api/v1/media/presign` + the subsequent
+                    `POST /api/v1/media/{id}/complete`. The asset
+                    must exist, be in `status='ready'`, and belong
+                    to the calling user.
+      responses:
+        '200':
+          description: Thumbnail attached to session.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id, thumbnail_media_id, thumbnail_status]
+                properties:
+                  session_id:
+                    type: string
+                  thumbnail_media_id:
+                    type: string
+                  thumbnail_status:
+                    type: string
+                    description: |
+                      Current editor-session status
+                      (`editing`, `failed`, `publishing`,
+                      `published`).
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: |
+            Cross-tenant attempt: the caller does not own the
+            workspace the session belongs to, or the supplied asset
+            is owned by a different user.
+        '404':
+          description: |
+            Editor session not found OR the supplied
+            `thumbnail_media_id` does not resolve to a media asset.
+        '409':
+          description: |
+            Asset exists but is not in `status='ready'`, OR the
+            session is in a state that does not match the CAS
+            predicate (`status IN ('editing','failed')`) — i.e. a
+            concurrent publish already moved the session into
+            `publishing` or `published`.
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '501':
+          description: Media store not configured on this server.
+        '503':
+          description: YouTube video edit store not configured.
+
+  # ──────────── YouTube groups (P0 group videos endpoint) ───────
+  #
+  # Aggregates the YouTube-listing per channel for every account in
+  # the group (and its sub-groups when ?include_subgroups=true),
+  # joined with the existing editor_sessions for each (account,
+  # video) tuple. Powers the SPA's Group → Click-to-edit video
+  # card-grid. Read-only GET; no body, no CSRF.
+  /api/v1/groups/{group_id}/youtube/videos:
+    get:
+      tags: [YouTube]
+      operationId: listGroupYouTubeVideos
+      summary: List the YouTube private/unlisted videos in a group.
+      description: |
+        Aggregates YouTube's per-channel `videos.list` (filtered to
+        private/unlisted/processed uploads) for every account that
+        belongs to the requested group. When `include_subgroups=true`
+        the parent_group_id tree is traversed in O(N) and accounts
+        from sub-groups are added (deduped) to the fan-out.
+
+        Each YouTube row is joined with the existing
+        `youtube_video_edits` row for the (account, video) tuple —
+        the join happens in a single SQL query (the repository
+        method `ListByWorkspaceAccountIDs`).
+
+        Concurrency: a bounded per-request semaphore (4 concurrent
+        YouTube chains) keeps upstream pressure at a fraction of
+        quota while still aggregating groups with ~16 channels
+        well under the 5s SLA.
+
+        Behaviour matrix:
+          - 401 — no JWT identity on context.
+          - 400 — `group_id` is non-numeric / non-positive; OR
+            `?include_subgroups=true` and the resolved group's
+            account count exceeds 200.
+          - 404 — group is unknown OR caller does not own the
+            workspace (collapsed into the same response for
+            enumeration-oracle safety).
+          - 502 — every per-account YouTube fetch failed (graceful
+            degradation per-account: partial success is 200 +
+            warnings[]).
+          - 200 — `videos[]` in per-channel newest-first order,
+            capped at 500 cards (spa render budget).
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - in: path
+          name: group_id
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - in: query
+          name: include_subgroups
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: |
+            When true, the handler walks the parent_group_id tree
+            and aggregates accounts from sub-groups (deduped).
+      responses:
+        '200':
+          description: Video cards aggregated across the group's channels.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupYouTubeVideosResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '502':
+          description: |
+            Every per-account YouTube fetch failed for this group.
+            The response body is the canonical `Error` envelope
+            listing the joined warning strings for diagnostics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: |
+            YouTube service OR vault not configured on this server.
+components:
+
+  # NOTE: `GroupYouTubeVideoEntry` + `GroupYouTubeVideosResponse`
+  # schemas were removed together with the `/api/v1/groups/{group_id}/youtube/videos`
+  # path on 2026-07-27 (per the OpenAPI trim to the inter-service
+  # keep-list; see docs/OPENAPI_MIGRATION.md). The Go handler
+  # `listGroupYouTubeVideosHandler` remains in `pkg/api/routes.go`
+  # and keeps serving the SPA until a follow-up ADR either folds
+  # this path back into the public spec or moves it to a private
+  # BFF route.
+
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: sk_test_<52-char-base32> | sk_live_<52-char-base32>
+      description: |
+        Server-to-server API key. Prefix determines sandbox vs live:
+        `sk_test_…` is sandbox (no quota burn, separate bucket);
+        `sk_live_…` is production (real quota + real account
+        connections). The literal secret value is generated by
+        `internal/auth/apikey.go:Generate(env)` from 32 bytes of
+        `crypto/rand` entropy.
+    JwtCookie:
+      type: apiKey
+      in: cookie
+      name: iel_session
+      description: |
+        HttpOnly JWT session cookie set by `POST /api/v1/auth/exchange`.
+        SameSite=None; Secure. Browser SPA flow only.
+    VeloxServiceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: 32+ char opaque hex token (VELOX_API_TOKEN)
+      description: |
+        Service-to-service Bearer auth for `/internal/v1/*`.
+        Token loaded from `VELOX_API_TOKEN` env var at boot
+        (roll via `set-fly-secrets.sh`). Compared constant-time
+        via `crypto/subtle.ConstantTimeCompare`. Distinct from
+        `JwtCookie` (user) and `ApiKeyAuth` (machine user):
+        this scheme is for trusted peer systems, NOT for SPA
+        or third-party API consumers.
+
+  parameters:
+    PathId:
+      name: id
+      in: path
+      required: true
+      description: Numeric resource id.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+
+  responses:
+    BadRequestError:
+      description: Malformed request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnauthorizedError:
+      description: Missing or invalid credentials.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ForbiddenError:
+      description: Resource exists but is not owned by the caller.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFoundError:
+      description: Resource not found or not visible to the caller.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ConflictError:
+      description: Idempotency-Key conflict.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnprocessableEntityError:
+      description: Semantic validation error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    MethodNotAllowed:
+      description: HTTP method not allowed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Server-side error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    VeloxResourceNotFound:
+      description: |
+        Cross-handler-uniform 404 body used by:
+        - POST `/internal/v1/destinations/{id}/validate` when id unknown /
+          disabled / reauth-required / cancelled
+        - POST `/internal/v1/deliveries` when `external_destination_id`
+          is unknown
+        - GET `/internal/v1/deliveries/{id}` when social_delivery_id
+          is unknown
+        Body deliberately bare (no resource id echoed back) to avoid
+        turning the 404 status into an enumeration oracle for a
+        probe against random ids. The URL carries the id; reading
+        it back in the body would widen the oracle surface for no
+        diagnostic gain.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxResourceNotFound'
+    VeloxIdempotencyConflict:
+      description: |
+        409 returned when the same `idempotency_key` was replayed
+        with a different body SHA-256. Structured body so callers
+        can pattern-match reliably without parsing the message prose.
+        The INSERT path is wired under a `pg_advisory_xact_lock`
+        so concurrent replays serialise; a different-SHA replay
+        deterministically lands here per the consumer contract.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxIdempotencyConflict'
+    VeloxServiceAuthMissing:
+      description: |
+        401 returned by the internal_velox auth middleware when the
+        `Authorization` header is absent or malformed (not the
+        `Bearer <token>` shape). Distinct from `VeloxServiceAuthMismatch`
+        (403) per RFC 7235: the peer has not yet authenticated, so
+        a 401 hint tells them to wire their client before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    VeloxServiceAuthMismatch:
+      description: |
+        403 returned when the Bearer token does NOT match the
+        deployed `VELOX_API_TOKEN` (constant-time compared).
+        Operator-actionable: pages on a 403 spike.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    VeloxServiceAuthUnconfigured:
+      description: |
+        503 returned when `VELOX_API_TOKEN` was empty at boot.
+        Operator must set the env var + restart the process.
+        Distinct from 401/403 because the failure is a misconfiguration,
+        not a per-request client error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    EntityTooLargeError:
+      description: |
+        413 returned by POST /internal/v1/deliveries when the body
+        exceeds the producer-side 8 MB cap.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/EntityTooLargeError'
+    
+    VeloxValidationError:
+      description: 422 returned by the producer-side validation chain (fast-fail order in handler doc-comment).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxValidationError'
+    VeloxTransientError:
+      description: |
+        503 returned for transient workspace lookups. Per the Velox
+        retry contract: 5xx = retry, so Velox backs off and re-issues.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    VeloxDeliveryAccepted:
+      description: |
+        202 returned by POST `/internal/v1/deliveries` on both
+        fresh-insert AND same-SHA replay. The `already_exists`
+        boolean tells the caller which path fired.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxDeliverArtifactResponse'
+    VeloxDeliveryPolled:
+      description: |
+        200 returned by GET `/internal/v1/deliveries/{id}` with
+        the row's authoritative state. Retry-wait fields surface
+        only when `status == retry_wait`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxGetDeliveryResponse'
+    VeloxDestinationValid:
+      description: |
+        204 happy path returned by POST `/internal/v1/destinations/{id}/validate`.
+        Velox consumes only the status code; the body is empty.
+        Diagnostic JSON is opt-in via `?diagnostic=true` or
+        `X-Velox-Diagnostic: true` and uses the 200 + body shape below.
+    VeloxDestinationDiagnostic:
+      description: |
+        200 returned by the `?diagnostic=true` / `X-Velox-Diagnostic: true`
+        opt-in path on POST `/internal/v1/destinations/{id}/validate`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/VeloxValidateDestinationResponse'
+    VeloxRateLimit:
+      description: |
+        429 returned when a per-destination sliding window exceeds
+        the limit (>60 validations/minute default). The `Retry-After`
+        header carries the integer seconds the peer should wait.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    YouTubeEditorSessionDetail:
+      type: object
+      description: |
+        Full editor session row returned by
+        GET /api/v1/youtube/editor-sessions/by-project/{velox_project_id}.
+      properties:
+        id:                   { type: string, format: uuid }
+        workspace_id:         { type: integer, format: int64 }
+        platform_account_id:  { type: integer, format: int64 }
+        youtube_video_id:     { type: string }
+        velox_project_id:     { type: string }
+        source_thumbnail_url: { type: string }
+        thumbnail_media_id:
+          type: string
+          nullable: true
+        desired_privacy:     { type: string, enum: [public, unlisted, private] }
+        publish_at:
+          type: string
+          format: date-time
+          nullable: true
+        status:               { type: string, enum: [editing, ready, publishing, published, failed] }
+        last_error:           { type: string, description: Internal diagnostic hint. }
+        created_at:           { type: string, format: date-time }
+        updated_at:           { type: string, format: date-time }
+      required: [id, workspace_id, platform_account_id, youtube_video_id, velox_project_id, status, created_at, updated_at]
+
+    PublishYouTubeEditorSessionRequest:
+      type: object
+      description: |
+        Body for POST /api/v1/youtube/editor-sessions/{id}/publish AND
+        POST /api/v1/youtube/editor-sessions/by-project/{velox_project_id}/publish.
+      properties:
+        title:          { type: string, maxLength: 100 }
+        description:    { type: string, maxLength: 5000 }
+        privacy_status: { type: string, enum: [public, unlisted, private] }
+        publish_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    PublishYouTubeEditorSessionResponse:
+      type: object
+      properties:
+        public_url:     { type: string, format: uri }
+        video_id:       { type: string }
+        privacy_status: { type: string, enum: [public, unlisted, private] }
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+      required: [public_url, video_id, privacy_status]
+
+
+    # ────── Errors (canonical envelope, Taglio 5.x design) ──────────
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+      example:
+        error:
+          code: authentication_error
+          message: Invalid API key.
+          retryable: false
+          request_id: req_01J8X…
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - authentication_error
+            - authorization_error
+            - validation_error
+            - rate_limited
+            - media_invalid
+            - provider_unavailable
+            - provider_rejected
+            - reauthentication_required
+            - quota_exceeded
+            - internal_error
+            - idempotency_key_conflict
+        message: { type: string }
+        platform:
+          type: string
+          nullable: true
+        retryable:
+          type: boolean
+          default: false
+        request_id: { type: string }
+        details:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    # ────── Auth flow ───────────────────────────────────────────────
+    AuthCallbackHeadlessResponse:
+      type: object
+      required: [status, provider, code, user_id, account_id]
+      properties:
+        status: { type: string, enum: [code_issued] }
+        provider: { type: string }
+        code: { type: string }
+        user_id: { type: integer, format: int64 }
+        name: { type: string }
+        account_id: { type: integer, format: int64 }
+    AuthExchangeRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string }
+    AuthMeResponse:
+      type: object
+      required: [user_id]
+      properties:
+        user_id: { type: integer, format: int64 }
+        workspaces:
+          type: array
+          items: { type: integer, format: int64 }
+
+    # ────── API keys (C1 — see PLACEHOLDER POLICY in Api key schemas) ─
+    ApiKey:
+      type: object
+      required: [id, name, environment, key_prefix, created_at]
+      properties:
+        id: { type: string, example: ak_01HXY_DoNotUse }
+        name: { type: string }
+        environment: { type: string, enum: [test, live] }
+        key_prefix:
+          type: string
+          description: 'Visible prefix `sk_<env>_<8-char-secret>` (placeholder-safe form used in examples).'
+          example: sk_TEST_aB3xY9_K2_DoNotUse
+        scopes:
+          type: array
+          items: { type: string }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+    ApiKeyCreateRequest:
+      type: object
+      required: [name, environment]
+      properties:
+        name: { type: string, maxLength: 80 }
+        environment: { type: string, enum: [test, live] }
+        scopes:
+          type: array
+          items: { type: string }
+    ApiKeyCreateResponse:
+      type: object
+      description: |
+        Returned EXACTLY ONCE on `POST /api/v1/api-keys` (create) and
+        `POST /api/v1/api-keys/{id}/rotate` (rotate).
+      required: [id, name, environment, key_prefix, secret, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        environment: { type: string, enum: [test, live] }
+        key_prefix: { type: string }
+        secret:
+          type: string
+          description: 'Full plaintext `sk_test_<52-char-base32>` or `sk_live_<52-char-base32>` — STORE NOW.'
+          example: sk_LIVE_PLACEHOLDER_DO_NOT_USE_DoNotUse
+        scopes:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+    ApiKeyListResponse:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items: { $ref: '#/components/schemas/ApiKey' }
+
+    # ────── Posts (C2) ─────────────────────────────────────────────
+
+    MediaAssetRef:
+      type: object
+      description: |
+        Reference to a media asset that has already been uploaded via
+        the 3-step presigned flow (`POST /media/presign`, PUT to
+        `upload_url`, `POST /media/{asset_id}/complete`). Assets in
+        `ready` state are the only valid input here.
+      required: [asset_id]
+      properties:
+        asset_id:
+          type: string
+          example: ma_01HXY…
+        alt_text:
+          type: string
+          description: 'Optional. Per-asset alt text for screen readers.'
+
+    PostCreateContent:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 200
+        caption:
+          type: string
+          maxLength: 5000
+        media:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { $ref: '#/components/schemas/MediaAssetRef' }
+
+    PostCreateRequest:
+      type: object
+      description: |
+        Universal payload. The single `targets[]` array carries one
+        entry per platform account, each with a settings block
+        **discriminated by the platform key** (`tiktok`, `youtube`,
+        …). Exactly one platform key per target.
+      required: [workspace_id, targets]
+      properties:
+        workspace_id:
+          type: integer
+          format: int64
+          minimum: 1
+        scheduled_at:
+          type: string
+          format: date-time
+          description: |
+            Target publish time. If omitted AND `status` is omitted,
+            the post is created as `draft`. If omitted AND
+            `status=queued`, the post queues immediately.
+        status:
+          $ref: '#/components/schemas/PostStatus'
+        content: { $ref: '#/components/schemas/PostCreateContent' }
+        targets:
+          type: array
+          minItems: 1
+          maxItems: 25
+          items: { $ref: '#/components/schemas/PostCreateTarget' }
+      example:
+        workspace_id: 1
+        scheduled_at: "2026-07-12T15:00:00Z"
+        content:
+          title: "Reel estivo 2026"
+          caption: "Primo teaser della stagione"
+          media: [{ asset_id: ma_01J8X_DoNotUse }]
+        targets:
+          - platform_account_id: 101
+            settings:
+              tiktok:
+                privacy_level: public
+                allow_comments: true
+                allow_duet: true
+                allow_stitch: false
+                auto_add_music: false
+          - platform_account_id: 102
+            settings:
+              youtube:
+                title: "Reel estivo 2026 — InstaEditLogin demo"
+                privacy_status: unlisted
+                made_for_kids: false
+                category_id: 22
+
+    PostCreateTarget:
+      type: object
+      description: One platform-account publish instruction.
+      required: [platform_account_id, settings]
+      properties:
+        platform_account_id:
+          type: integer
+          format: int64
+          minimum: 1
+        settings:
+          $ref: '#/components/schemas/TargetSettings'
+
+    TargetSettings:
+      type: object
+      description: |
+        Per-platform settings. The **JSON key IS the platform name**;
+        the value is the platform-specific settings shape. Exactly
+        one key MUST be present per target.
+      minProperties: 1
+      maxProperties: 1
+      additionalProperties: false
+      properties:
+        tiktok:  { $ref: '#/components/schemas/TikTokTargetSettings' }
+        youtube: { $ref: '#/components/schemas/YouTubeTargetSettings' }
+        instagram: { $ref: '#/components/schemas/InstagramTargetSettings' }
+        facebook:  { $ref: '#/components/schemas/FacebookTargetSettings' }
+        threads:   { $ref: '#/components/schemas/ThreadsTargetSettings' }
+        twitter:   { $ref: '#/components/schemas/TwitterTargetSettings' }
+        linkedin:  { $ref: '#/components/schemas/LinkedInTargetSettings' }
+      example:
+        tiktok:
+          privacy_level: public
+          allow_comments: true
+
+    TikTokTargetSettings:
+      type: object
+      properties:
+        privacy_level:
+          type: string
+          enum: [public, friends, private]
+          default: public
+        allow_comments:
+          type: boolean
+          default: true
+        allow_duet:
+          type: boolean
+          default: true
+        allow_stitch:
+          type: boolean
+          default: true
+        auto_add_music:
+          type: boolean
+          default: false
+
+    YouTubeTargetSettings:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, maxLength: 100 }
+        description: { type: string, maxLength: 5000 }
+        privacy_status:
+          type: string
+          enum: [public, unlisted, private]
+          default: unlisted
+        made_for_kids:
+          type: boolean
+          default: false
+          description: 'Legally required under COPPA.'
+        category_id:
+          type: integer
+          description: 'YouTube category id (e.g. 22 = People & Blogs).'
+        tags:
+          type: array
+          items: { type: string }
+          maxItems: 500
+
+    InstagramTargetSettings:
+      type: object
+      properties:
+        alt_text:
+          type: string
+          maxLength: 1000
+        location_id:
+          type: string
+          description: 'Facebook page-scoped location id.'
+        collaborators:
+          type: array
+          items: { type: string }
+          maxItems: 3
+        cover_asset_id:
+          type: string
+          description: 'ma_… asset already in `ready` state for use as Reel cover.'
+
+    FacebookTargetSettings:
+      type: object
+      properties:
+        page_id:
+          type: string
+          description: 'Page-scoped id (numeric, returned as string per Meta).'
+        scheduled_publish:
+          type: boolean
+          default: false
+        backdated_time:
+          type: string
+          format: date-time
+        call_to_action:
+          type: object
+          description: 'Structured CTA attached to the post.'
+          properties:
+            type:
+              type: string
+              enum: [LIKE_PAGE, SHOP_NOW, SIGN_UP, LEARN_MORE, BOOK_NOW, WATCH_MORE]
+            value:
+              type: object
+              properties:
+                link: { type: string, format: uri }
+
+    ThreadsTargetSettings:
+      type: object
+      properties:
+        reply_control:
+          type: string
+          enum: [everyone, accounts_you_follow]
+          default: everyone
+        topic_tag:
+          type: string
+        location_id:
+          type: string
+
+    TwitterTargetSettings:
+      type: object
+      properties:
+        reply_settings:
+          type: string
+          enum: [everyone, mentioned_users, followers]
+          default: everyone
+        quote_tweet_id:
+          type: string
+          description: 'Numeric id of an existing tweet to quote (as string per X API v2).'
+        media_alt_text:
+          type: object
+          description: '`<asset_id>` → alt text mapping.'
+          additionalProperties: { type: string }
+
+    LinkedInTargetSettings:
+      type: object
+      properties:
+        visibility:
+          type: string
+          enum: [PUBLIC, CONNECTIONS]
+          default: PUBLIC
+        article_url:
+          type: string
+          format: uri
+          description: 'Article URL to share (vs native text post).'
+        media_category:
+          type: string
+          enum: [IMAGE, VIDEO, NONE]
+          default: NONE
+
+    PostStatus:
+      type: string
+      description: Post-level state. Per-target state is `PostTargetStatus`.
+      enum:
+        - draft
+        - queued
+        - publishing
+        - published
+        - partially_published
+        - failed
+        - waiting_provider
+        - retrying
+
+    PostResponse:
+      type: object
+      required: [id, workspace_id, status]
+      properties:
+        id: { type: string, example: post_01HXY_DoNotUse }
+        workspace_id: { type: integer, format: int64 }
+        title: { type: string }
+        caption: { type: string }
+        media_url: { type: string, format: uri, description: 'Resolved internal S3 URL (server-controlled, NEVER user input).' }
+        scheduled_at: { type: string, format: date-time, nullable: true }
+        status: { $ref: '#/components/schemas/PostStatus' }
+        idempotency_key: { type: string, nullable: true }
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PostTargetResponse:
+      type: object
+      description: |
+        A single target row (per-platform publish attempt). Async state
+        machine modeled separately as `PostTargetStatus`. Detailed
+        fields are documented in `PostTargetDetail` (C3).
+      required: [id, post_id, platform_account_id, status]
+      properties:
+        id: { type: string, example: pt_01HXY_DoNotUse }
+        post_id: { type: string }
+        platform:
+          type: string
+          enum: [meta, tiktok, twitter, youtube, linkedin]
+          description: 'Resolved from `platform_account_id`.'
+        platform_account_id: { type: integer, format: int64 }
+        status: { type: string, enum: [draft, queued, publishing, published, failed, waiting_provider, retrying] }
+        settings_echo:
+          $ref: '#/components/schemas/TargetSettings'
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PostWithTargetsResponse:
+      type: object
+      description: |
+        Standard 202/200 envelope used by `POST /api/v1/posts`,
+        `GET /api/v1/posts/{id}`, and (in C3) by `GET
+        /api/v1/post_targets/{id}/parent`.
+      required: [id, workspace_id, status, targets]
+      properties:
+        id: { type: string }
+        workspace_id: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/PostStatus' }
+        scheduled_at: { type: string, format: date-time, nullable: true }
+        idempotency_key: { type: string, nullable: true }
+        targets:
+          type: array
+          items: { $ref: '#/components/schemas/PostTargetResponse' }
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PostListResponse:
+      type: object
+      required: [posts]
+      properties:
+        posts:
+          type: array
+          items: { $ref: '#/components/schemas/PostResponse' }
+        next_cursor:
+          type: string
+          nullable: true
+          description: 'Opaque cursor for the next page; null when exhausted.'
+
+    PostPatchRequest:
+      type: object
+      description: |
+        At least one of `title`, `caption`, `media`, `status` MUST
+        be present. Setting `media` resolves asset_ids server-side;
+        user-controlled `media_url` is NOT accepted.
+      properties:
+        title: { type: string, maxLength: 200 }
+        caption: { type: string, maxLength: 5000 }
+        media:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items: { $ref: '#/components/schemas/MediaAssetRef' }
+        status:
+          $ref: '#/components/schemas/PostStatus'
+
+    PostScheduleRequest:
+      type: object
+      required: [scheduled_at]
+      properties:
+        scheduled_at:
+          type: string
+          format: date-time
+
+    PostTargetAddRequest:
+      type: object
+      required: [platform_account_id, settings]
+      properties:
+        platform_account_id: { type: integer, format: int64, minimum: 1 }
+        settings: { $ref: '#/components/schemas/TargetSettings' }
+
+    # ────── Post Targets (C3) — async state + retry ────────────────
+
+    PostTargetDetail:
+      type: object
+      description: |
+        Canonical async state of a single target. The `status` field
+        is the authoritative state-machine value; `provider_state`
+        carries the platform-specific sub-state on async platforms
+        (TikTok: PROCESSING_UPLOAD / PENDING_PUBLISH / IN_REVIEW /
+        PUBLISH_COMPLETE; Meta: PUBLISHED / REJECTED); `attempt_count`
+        + `next_attempt_at` carry retry bookkeeping; `last_error_code`
+        is the stable short code (RATE_LIMITED / INVALID_TOKEN / etc.).
+      required: [id, post_id, platform_account_id, status, attempt_count, version, created_at, updated_at]
+      properties:
+        id: { type: string, example: pt_01HXY_DoNotUse }
+        post_id:
+          type: string
+          description: 'Parent post id (use /posts/{id} for content).'
+        platform:
+          type: string
+          enum: [meta, tiktok, twitter, youtube, linkedin]
+          description: 'Resolved from platform_account_id.'
+        platform_account_id: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/PostTargetState' }
+        attempt_count:
+          type: integer
+          minimum: 0
+          default: 0
+          description: 'Monotonically increasing retry counter (migration 018).'
+        next_attempt_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 'Earliest time the worker will re-try a row in `retrying` state.'
+        provider_state:
+          type: string
+          nullable: true
+          description: 'Opaque per-platform state string (TikTok async flow uses this).'
+        container_id:
+          type: string
+          nullable: true
+          description: 'TikTok `container_id` for PULL_FROM_FILE chunked upload.'
+        platform_post_id:
+          type: string
+          nullable: true
+          description: |
+            INTERNAL publish id the platform exposes (TikTok
+            `publish_id`, sync platform equivalent). Set at claim for
+            async flows; set at successful-publish for sync flows.
+        remote_post_id:
+          type: string
+          nullable: true
+          description: 'Public-facing post id from the platform.'
+        remote_post_url:
+          type: string
+          format: uri
+          nullable: true
+          description: 'Public-facing URL on the platform.'
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_error_code:
+          type: string
+          nullable: true
+          description: 'Stable short code: RATE_LIMITED / INVALID_TOKEN / MEDIA_UNREACHABLE / CONTAINER_NOT_READY.'
+        error_message:
+          type: string
+          nullable: true
+        settings_echo:
+          $ref: '#/components/schemas/TargetSettings'
+          description: 'The settings block as persisted on this target row (for diagnostics).'
+        provider_idempotency_key:
+          type: string
+          nullable: true
+          description: 'Per-target deterministic key forwarded to the platform as `idempotency_key` (migration 022).'
+        version: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      example:
+        id: pt_01HXY_DoNotUse
+        post_id: post_01HXY_DoNotUse
+        platform: tiktok
+        platform_account_id: 101
+        status: publishing
+        attempt_count: 1
+        next_attempt_at: null
+        provider_state: PROCESSING_UPLOAD
+        container_id: tiktok_container_DoNotUse
+        platform_post_id: tiktok_publish_DoNotUse
+        last_error_code: null
+        error_message: null
+        settings_echo:
+          tiktok:
+            privacy_level: public
+            allow_duet: true
+        provider_idempotency_key: 'taglio:pt:01HXY_DoNotUse:v1'
+        version: 1
+        created_at: '2026-07-12T15:00:00Z'
+        updated_at: '2026-07-12T15:00:05Z'
+
+    PostTargetState:
+      type: string
+      description: |
+        Per-target state machine. Note that the post-level
+        `PostStatus` collapses sibling targets into a single
+        maximum-reduction value (e.g. one `failed` + one `published`
+        ⇒ `partially_published`).
+      enum:
+        - draft
+        - queued
+        - publishing
+        - published
+        - failed
+        - waiting_provider
+        - retrying
+
+    PostTargetRetryRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          default: false
+          description: |
+            When `true`, allows retrying from `partially_published`
+            or `waiting_provider` states. Default retry is `failed`
+            only.
+
+    # ────── YouTube group videos (P0 group-videos endpoint) ────────
+    GroupYouTubeVideoEntry:
+      type: object
+      description: |
+        One row of the GET /api/v1/groups/{group_id}/youtube/videos
+        response. YouTube-fresh listing joined with the existing
+        per-video editor_session row, if any. `editor_session_id` /
+        `velox_project_id` / `editor_url` are omitted when no
+        youtube_video_edits row exists yet for this (account, video)
+        tuple — the SPA routes the click to POST /editor-sessions.
+        `actual_privacy` and `youtube_sync_status` are placeholders
+        for now (mirror desired_privacy + always "unconfirmed" —
+        see the handler godoc for the two follow-up commits that
+        flip them into live values).
+      required:
+        - youtube_video_id
+        - title
+        - thumbnail_url
+        - privacy_status
+        - processing_status
+        - platform_account_id
+        - channel_name
+        - editor_status
+      properties:
+        youtube_video_id: { type: string }
+        title: { type: string }
+        thumbnail_url: { type: string, format: uri }
+        privacy_status:
+          type: string
+          enum: [private, unlisted, public]
+          description: YouTube-side status as returned by videos.list.
+        processing_status: { type: string, enum: [processed, uploading, failed, deleted] }
+        platform_account_id: { type: integer, format: int64 }
+        channel_name:
+          type: string
+          description: |
+            PlatformAccount.Username when set, otherwise the YouTube
+            channel id (PlatformAccount.PlatformUserID).
+        editor_session_id: { type: string, nullable: true }
+        velox_project_id: { type: string, nullable: true }
+        editor_url:
+          type: string
+          format: uri
+          nullable: true
+        editor_status:
+          type: string
+          enum: [ready, editing, failed, publishing, published]
+        desired_privacy: { type: string, nullable: true }
+        actual_privacy: { type: string, nullable: true }
+        youtube_sync_status: { type: string, nullable: true }
+
+    GroupYouTubeVideosResponse:
+      type: object
+      required: [videos]
+      properties:
+        videos:
+          type: array
+          items: { $ref: '#/components/schemas/GroupYouTubeVideoEntry' }
+        warnings:
+          type: array
+          items: { type: string }
+          description: |
+            Per-account fetch failure messages. The 200 + videos[]
+            path returns warnings inline so the SPA can surface a
+            soft "some channels couldn't be read, click here to
+            reconnect" hint. The 502 path is the SAME warnings[]
+            surfaced as the canonical Error.message.
+
+    VeloxArtifactRef:
+      type: object
+      required: [artifact_id, sha256, size_bytes, mime_type]
+      properties:
+        artifact_id:
+          type: string
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+          description: Lowercase hex; uppercase hex is rejected (handlers enforce).
+        size_bytes:
+          type: integer
+          minimum: 1
+        mime_type:
+          type: string
+          enum:
+            - video/mp4
+            - video/quicktime
+            - video/webm
+            - video/x-matroska
+        download_url:
+          type: string
+          format: uri
+    VeloxDeliverArtifactRequest:
+      type: object
+      required:
+        - external_delivery_id
+        - idempotency_key
+        - external_destination_id
+        - artifact
+        - metadata
+      properties:
+        external_delivery_id:
+          type: string
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 256
+        external_destination_id:
+          type: string
+          description: Opaque ULID-shaped id `extdst_01J...` (base32, no padding).
+        artifact:
+          $ref: '#/components/schemas/VeloxArtifactRef'
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Non-empty JSON object; the worker reads `title`, `description`, `privacy_status` from here.
+        publish_at:
+          type: string
+          format: date-time
+          description: Optional; null = publish immediately.
+        callback_url:
+          type: string
+          format: uri
+      description: |
+        Producer-side envelope from Velox. Field naming is byte-for-byte
+        aligned with the upstream JSON so `encoding/json.Marshal`
+        round-trips cleanly. Request body is capped at 8 MB (handler
+        enforces via `http.MaxBytesReader`).
+    VeloxDeliverArtifactResponse:
+      type: object
+      required: [social_delivery_id, status, already_exists]
+      properties:
+        social_delivery_id:
+          type: string
+          description: Opaque ULID-shaped id `sdel_01J...`.
+        status:
+          type: string
+          enum: [accepted]
+        already_exists:
+          type: boolean
+          description: |
+            True when the prior row matched this idempotency_key+
+            SHA combo; false on a fresh insert. Always 202; the
+            boolean tells the caller which branch fired.
+    VeloxGetDeliveryResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          description: Mirrors the URL path id (sdel_01J...); surrendered so Velox correlates responses without remembering the queried path.
+        status:
+          type: string
+          enum:
+            - accepted
+            - downloading
+            - artifact_verified
+            - ingest_completed
+            - queued
+            - publishing
+            - published
+            - retry_wait
+            - blocked_auth
+            - failed
+            - dead_letter
+        retry_wait_reason:
+          type: string
+          description: Set ONLY when `status == retry_wait`. Mirrors `last_error_code`. Empty string in any other state.
+        last_error_code:
+          type: string
+        last_error_message:
+          type: string
+        platform_media_id:
+          type: string
+          description: e.g. `dQw4w9WgXcQ` on YouTube; set on terminal publish.
+        platform_url:
+          type: string
+          format: uri
+        published_at:
+          type: string
+          format: date-time
+          description: Set ONLY when `status == published`; carves the success timestamp off `completed_at`.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    VeloxValidateDestinationResponse:
+      type: object
+      required: [valid, destination_id, status, platform]
+      properties:
+        valid:
+          type: boolean
+          enum: [true]
+          description: Always true on 200 — the 404/410 paths are separate.
+        destination_id:
+          type: string
+        status:
+          type: string
+          enum: [active]
+        platform:
+          type: string
+      description: |
+        Diagnostic-mode body returned when the `?diagnostic=true`
+        query parameter OR `X-Velox-Diagnostic: true` request
+        header is present. The default behaviour is 204 No Content.
+    VeloxResourceNotFound:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum:
+            - destination not found
+            - workspace not found
+            - platform_account not found
+            - destination requires reauth
+            - destination cancelled
+            - delivery not found
+      description: |
+        Cross-handler 404 body. The `error` strings map to the
+        `veloxDestinationNotFoundBody` constant in
+        `pkg/api/internal_velox.go` + analogous consts for
+        delivery / workspace / platform_account / reauth.
+    VeloxIdempotencyConflict:
+      type: object
+      required: [error, code, idempotency_key]
+      properties:
+        error:
+          type: string
+          enum: [idempotency_key_conflict]
+        code:
+          type: string
+          enum: [idempotency_key_conflict]
+        idempotency_key:
+          type: string
+      description: |
+        Maps to `VeloxDeliverArtifactConflictResponse` in
+        `pkg/api/internal_velox.go`. Both `error` and `code`
+        carry the same string so a peer can pattern-match on
+        either key without coupling to the message prose.

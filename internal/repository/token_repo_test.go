@@ -117,7 +117,7 @@ func TestTokenRepository_UpdateOAuthConnectionStatus_InvalidGrant(t *testing.T) 
 	db, mock := newMockTokenDB(t)
 	repo := repository.NewTokenRepository(db)
 
-	const statusSQL = "UPDATE oauth_connections SET status = $2, last_refresh_error = NULLIF($3, ''), last_refresh_at = CASE WHEN $2 = 'active' THEN NOW() ELSE last_refresh_at END, updated_at = NOW() WHERE id = $1"
+	const statusSQL = "UPDATE oauth_connections SET status = $2::text, last_refresh_error = NULLIF($3::text, ''), last_refresh_at = CASE WHEN $2::text = 'active' THEN NOW() ELSE last_refresh_at END, updated_at = NOW() WHERE id = $1"
 	mock.ExpectExec(statusSQL).
 		WithArgs(int64(700), "reauth_required", "invalid_grant").
 		WillReturnResult(sqlmock.NewResult(0, 1))

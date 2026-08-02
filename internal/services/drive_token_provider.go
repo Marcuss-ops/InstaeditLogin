@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
 // DriveAccessTokenProvider is the narrow contract
@@ -143,4 +141,3 @@ var _ DriveAccessTokenProvider = (*DriveVaultTokenProvider)(nil)
 // the destination reads account.Profile.PlatformUserID); today
 // the marker is unused but drives `go vet` to flag a future refactor
 // that drops the import incorrectly.
-var _ = models.PlatformGoogleDrive

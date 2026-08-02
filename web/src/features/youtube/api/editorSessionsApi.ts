@@ -74,6 +74,7 @@ export interface CreateYouTubeEditorSessionRequest {
   workspace_id: number;
   platform_account_id: number;
   youtube_video_id: string;
+  source_thumbnail_url?: string;
 }
 
 /**
@@ -86,6 +87,15 @@ export interface CreateYouTubeEditorSessionResponse {
   session_id: string;
   velox_project_id: string;
   editor_url: string;
+}
+
+export interface GeneratedYouTubeMetadata {
+  title: string;
+  description: string;
+  tags: string[];
+  default_language: string;
+  default_audio_language: string;
+  translations: Record<string, { title: string; description: string }>;
 }
 
 /**
@@ -158,6 +168,23 @@ export async function createYouTubeEditorSession(
     ...init,
   });
   return (await resp.json()) as CreateYouTubeEditorSessionResponse;
+}
+
+/** Generate reviewable NVIDIA metadata without publishing anything. */
+export async function generateYouTubeMetadata(
+  veloxProjectID: string,
+  prompt: string,
+  init: RequestInit = {},
+): Promise<GeneratedYouTubeMetadata> {
+  const resp = await authedFetch(
+    `${SESSIONS_PATH}/by-project/${encodeURIComponent(veloxProjectID)}/generate-metadata`,
+    {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+      ...init,
+    },
+  );
+  return (await resp.json()) as GeneratedYouTubeMetadata;
 }
 
 /**

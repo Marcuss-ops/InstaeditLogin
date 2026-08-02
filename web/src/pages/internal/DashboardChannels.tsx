@@ -189,6 +189,7 @@ export function DashboardChannelsPage() {
           workspace_id: workspaces[0]!.id,
           platform_account_id: accountId,
           youtube_video_id: video.external_id,
+          ...(video.thumbnail_url ? { source_thumbnail_url: video.thumbnail_url } : {}),
         });
         toast.success("Sessione editor creata — apertura Velox…");
       } catch (err) {

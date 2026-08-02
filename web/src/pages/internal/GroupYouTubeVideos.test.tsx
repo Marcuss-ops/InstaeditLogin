@@ -43,31 +43,22 @@ afterEach(() => {
 });
 
 describe("GroupYouTubeVideos", () => {
-  it("loads the first aggregate page and renders its summary", async () => {
+  it("loads the first recent private-video page", async () => {
     authedFetchMock.mockResolvedValue(
       jsonResponse({
         videos: [],
-        summary: {
-          total_videos: 12,
-          truncated: true,
-          accounts: 4,
-          accounts_with_videos: 3,
-          failed_accounts: 1,
-          invalid_token_accounts: [42],
-        },
+        summary: { total_videos: 12 },
       }),
     );
 
     renderPanel();
 
     await waitFor(() => {
-      expect(screen.getByTestId("group-youtube-summary")).toBeInTheDocument();
+      expect(screen.getByTestId("group-youtube-videos-recency")).toBeInTheDocument();
     });
-    expect(screen.getByText("12")).toBeInTheDocument();
-    expect(screen.getByText("Limite raggiunto")).toBeInTheDocument();
-    expect(screen.getByText(/nessun video trovato nel gruppo/i)).toBeInTheDocument();
+    expect(screen.getByText(/nessun video privato recente/i)).toBeInTheDocument();
     expect(authedFetchMock).toHaveBeenCalledWith(
-      "/api/v1/groups/7/youtube/videos?include_subgroups=true&limit=50&offset=0",
+      "/api/v1/groups/7/youtube/videos?include_subgroups=true&limit=50&offset=0&days=90",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
@@ -95,7 +86,7 @@ describe("GroupYouTubeVideos", () => {
             {
               youtube_video_id: "second-id",
               title: "Second video",
-              privacy_status: "unlisted",
+              privacy_status: "private",
               platform_account_id: 42,
             },
           ],
@@ -119,7 +110,7 @@ describe("GroupYouTubeVideos", () => {
     expect(screen.getByText("First video")).toBeInTheDocument();
     expect(authedFetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/v1/groups/7/youtube/videos?include_subgroups=true&limit=50&offset=1",
+      "/api/v1/groups/7/youtube/videos?include_subgroups=true&limit=50&offset=1&days=90",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(screen.queryByTestId("group-youtube-videos-load-more")).not.toBeInTheDocument();
@@ -131,12 +122,12 @@ describe("GroupYouTubeVideos", () => {
     renderPanel();
 
     await waitFor(() => {
-      expect(screen.getByText(/nessun video trovato nel gruppo/i)).toBeInTheDocument();
+      expect(screen.getByText(/nessun video privato recente/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/non conferma né esclude una pubblicazione/i)).toBeInTheDocument();
+    expect(screen.getByText(/video pubblici e non in elenco non vengono mostrati/i)).toBeInTheDocument();
   });
 
-  it("shows confirmed publication, effective privacy, and both navigation links", async () => {
+  it("does not render published phantom videos", async () => {
     authedFetchMock.mockResolvedValue(
       jsonResponse({
         videos: [
@@ -159,17 +150,9 @@ describe("GroupYouTubeVideos", () => {
     renderPanel();
 
     await waitFor(() => {
-      expect(screen.getByText("Pubblicato su YouTube")).toBeInTheDocument();
+      expect(screen.getByText(/nessun video privato recente/i)).toBeInTheDocument();
     });
-    expect(screen.getByText("Privacy: Pubblico")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /apri su youtube/i })).toHaveAttribute(
-      "href",
-      "https://www.youtube.com/watch?v=RWpq6fdRFak",
-    );
-    expect(screen.getByRole("link", { name: /apri nel canale/i })).toHaveAttribute(
-      "href",
-      "/app/dashboard-channels/42?video=RWpq6fdRFak",
-    );
+    expect(screen.queryByText("Test video")).not.toBeInTheDocument();
   });
 
   it("shows an actionable message when YouTube returns a 502", async () => {

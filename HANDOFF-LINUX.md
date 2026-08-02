@@ -60,7 +60,7 @@ SQL
 ## 4. Crea `.env` con i secret
 
 ```bash
-cp .env.example .env
+cp .env.dev.example .env.dev
 ```
 
 Poi modifica `.env` e riempi **3 campi obbligatori**:
@@ -201,12 +201,12 @@ Vai su `/status` e leggi la ragione (es. `vercel_stale_deploy` vs `unreachable` 
 >
 > **DNS / cert / monitoring**: vedi [docs/OPERATIONS.md §1-§7](./docs/OPERATIONS.md) — record canonici (apex A / app A / api A → `51.91.11.36` / CAA / SPF Resend / DKIM Resend / DMARC), failure-recovery playbook, monitoring baseline + pre-flight "go-live" gate + email deliverability runbook (`no-reply@instaedit.org` via Resend: Gmail inbox test, tracking verification, DMARC progression, `EMAIL_PROVIDER_KEY` capture). Una modifica a DNS / cert / monitoring → prima aggiorna `docs/OPERATIONS.md`, poi l'eventuale cross-ref in `docs/DEPLOY.md`.
 
-> **Email DNS check (read-only)**: `./scripts/email/check-email-deliverability.sh` (idempotent, non muta DNS) — verifica i 3 record Resend (`_spf.resend.com` include + DKIM CNAME + `_dmarc` TXT) prima di invitare utenti. Backend wiring di Resend è deferred (vedi [docs/OPERATIONS.md §7.5](./docs/operations-email.md#75-email_provider_key-capture-protocol)): il `EMAIL_PROVIDER_KEY` vive SOLO nel password manager (`instaedit-login/email/EMAIL_PROVIDER_KEY`, scope = `Sending Access` ONLY) finché `internal/services/email_sender.go` non viene aggiunto. Non pusharlo ancora in `/srv/instaedit/.env.production` (zero readers finché `internal/services/email_sender.go` non viene aggiunto).
+> **Email DNS check (read-only)**: `./scripts/email/check-email-deliverability.sh` (idempotent, non muta DNS) — verifica i 3 record Resend (`_spf.resend.com` include + DKIM CNAME + `_dmarc` TXT) prima di invitare utenti. Backend wiring di Resend è deferred (vedi [docs/operations-email.md §7.5](./docs/operations-email.md#75-email_provider_key-capture-protocol)): il `EMAIL_PROVIDER_KEY` vive SOLO nel password manager (`instaedit-login/email/EMAIL_PROVIDER_KEY`, scope = `Sending Access` ONLY) finché `internal/services/email_sender.go` non viene aggiunto. Non pusharlo ancora in `/srv/instaedit/.env.production` (zero readers finché `internal/services/email_sender.go` non viene aggiunto).
 
 Dopo che il flow locale funziona, per andare in produzione:
 - **Database Postgres**: VPS Compose `postgres` service (image `postgres:17-alpine`, env block in `docker-compose.yml` + bind-mount under `/srv/instaedit/pgdata/`); the historical Fly provisioning flags are archived in `docs/archive/legacy-fly/provision-postgres-runbook.sh`; current provisioning is defined by Docker Compose and `docs/DEPLOY.md`.
 - **Backend**: deploy su VPS via `git pull && docker compose up -d --build` (il container `migrate` applica migrations prima dell'api/worker rollout).
-- **Frontend**: deploy su Vercel (già configurato via `web/vercel.json`).
+- **Frontend**: deploy su Vercel dalla root del repository (configurazione `vercel.json`; `web/` è la workspace Vite).
 - **Vercel env**: `VITE_API_BASE_URL` deve puntare all'URL pubblica del backend.
 - **CORS**: nel backend `.env`, `CORS_ALLOWED_ORIGINS=https://instaedit.org,https://www.instaedit.org`.
 - **Meta redirect URI**: aggiungi `https://api.instaedit.org/api/v1/auth/instagram/callback` alla console Meta.
@@ -236,14 +236,14 @@ Un dev che lancia `TRUNCATE posts CASCADE` su un db condiviso cancella anche i p
 
 **Opzione A — file `.env` per environment (consigliata per setup locale)**:
 ```bash
-cp .env.example .env.dev
+cp .env.dev.example .env.dev
 # modifica .env.dev con i valori dev (Supabase dev, localhost CORS, APP_ENV=dev)
-cp .env.example .env.prod
-# modifica .env.prod con i valori prod (Supabase prod, dominio pubblico CORS, APP_ENV=production)
+cp .env.production.example .env.production
+# modifica .env.production con i valori prod (PostgreSQL/MinIO VPS, dominio pubblico CORS, APP_ENV=production)
 
 # swap in base a cosa vuoi lanciare; la topologia standard resta separata:
 ln -sf .env.dev .env && make run-migrate && make run-api   # dev (worker in un altro terminale)
-ln -sf .env.prod .env && make run-migrate && make run-api  # verifica locale prod-shaped
+ln -sf .env.production .env && make run-migrate && make run-api  # verifica locale prod-shaped
 # cmd/server è solo il wrapper legacy di recovery e non è un percorso di deploy.
 ```
 
@@ -310,9 +310,9 @@ make verify-entrypoint-topology
 # Atteso: api + worker + migrate canonical; cmd/server legacy-only
 ```
 
-### `.env.example` aggiornato
+### `.env.dev.example` aggiornato
 
-La sezione "APP_ENV", "S3 Storage", e "CORS origins" del file `.env.example` è stata aggiornata con esempi dev/prod. Leggi i commenti del file prima di copiare in `.env`.
+Il template `.env.dev.example` contiene APP_ENV, storage MinIO e CORS per lo sviluppo locale. Per production usa `.env.production.example`; copia sempre in un file runtime ignorato prima di inserire i secret.
 
 ---
 
@@ -420,7 +420,9 @@ Se devi cambiare la response shape, aggiorna **entrambi** i test file + il docst
 - `web/scripts/verify-api-base-url.ts` — build-time validator per `VITE_API_BASE_URL`
 - `web/scripts/generate-favicon-ico.mjs` — prebuild ICO generator
 - `README.md` — sezione "Deployment" con i 3 pitfall
-- `.env.example` — template con sezioni dev/prod commentate (sezione 12 di HANDOFF)
+- `.env.dev.example` — template canonico per lo sviluppo locale
+- `.env.test.example` — template canonico per test e CI
+- `.env.production.example` — template canonico per la produzione VPS
 - `HANDOFF-LINUX.md` §13 — contract API (422/400, lenient-auth, dual-shape)
 
 Buon login! 🚀

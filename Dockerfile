@@ -4,7 +4,7 @@
 #   api         — HTTP server only (cmd/api). Local-dev single-process shape.
 #   worker      — 5 background goroutines only (cmd/worker). Local-dev single-process.
 #   migrate     — one-shot pre-deploy migration (cmd/migrate).
-#   server      — legacy single-bundle wrapper (cmd/server) for dev / Railway.
+#   server      — legacy single-bundle wrapper (cmd/server) for local recovery.
 #
 # Build:
 #   docker build --target api         -t instaedit-api         .
@@ -49,7 +49,7 @@ RUN chown -R appuser:appuser /app
 USER appuser
 EXPOSE 8080
 
-# Health check for Railway / container orchestrators
+# Health check for Docker Compose and the host supervisor.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://localhost:8080/api/v1/health || exit 1
 
@@ -57,7 +57,7 @@ CMD ["/app/api"]
 
 # ────────────────────────────────────────────────────────────────────────
 # Stage 4: worker — 5 background goroutines only. No HTTP server.
-# Use with HPA / background-pod patterns (k8s Deployment).
+# Used as the worker service in the self-hosted Compose stack.
 # ────────────────────────────────────────────────────────────────────────
 FROM base AS worker
 COPY --from=builder /out/worker /app/worker
@@ -68,7 +68,7 @@ CMD ["/app/worker"]
 
 # ────────────────────────────────────────────────────────────────────────
 # Stage 5: migrate — one-shot pre-deploy job. No server, no workers.
-# Designed to run as a Railway pre-deploy job / k8s Job / helm hook.
+# Designed to run as the one-shot Compose migration service.
 # Exits 0 on success, 1 on any migration failure.
 # ────────────────────────────────────────────────────────────────────────
 FROM base AS migrate
@@ -81,7 +81,7 @@ CMD ["/app/migrate"]
 # ────────────────────────────────────────────────────────────────────────
 # Stage 6: server — legacy single-bundle wrapper (Blocco #2.1 backward
 # compatibility). Runs API + workers + migrate in one process. Use ONLY
-# for local dev / Railway single-process deploys.
+# for local recovery and development, never as production topology.
 # ────────────────────────────────────────────────────────────────────────
 FROM base AS server
 COPY --from=builder /out/server /app/server
@@ -93,4 +93,3 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget -qO- http://localhost:8080/api/v1/health || exit 1
 
 CMD ["/app/server"]
-

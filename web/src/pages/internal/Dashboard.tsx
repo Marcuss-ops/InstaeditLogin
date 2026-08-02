@@ -2,10 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
-  FileText,
   Link2,
   ArrowRight,
-  CheckCircle2,
   Clock,
   Folder,
 } from "lucide-react";
@@ -48,7 +46,7 @@ type DashboardData = {
   // totalUploads is the DISTINCT count of pending upload_jobs from
   // /uploads/counts — multi-target rows count ONCE (instead of once
   // per target). This is the source for the "Pending uploads" stat.
-  totalUploads: number;
+  privateVideos: number;
   // Per-account pending count + earliest scheduled_at, derived from
   // GET /api/v1/uploads/counts. The dashboard widget renders from
   // this map; the calendar page hits /uploads/by-account separately.
@@ -131,6 +129,18 @@ export function InternalDashboard() {
         }>;
         total_uploads: number;
       };
+      const youtubeAccounts = (accountsData.accounts ?? []).filter((account) => account.platform === "youtube");
+      const privateVideoCounts = await Promise.all(
+        youtubeAccounts.map(async (account) => {
+          try {
+            const response = await authedFetch(`/api/v1/accounts/${account.id}/content?limit=50&privacy=private`, { signal: controller.signal });
+            const data = (await response.json()) as { items?: Array<{ privacy?: string }> };
+            return (data.items ?? []).filter((item) => item.privacy === "private").length;
+          } catch {
+            return 0;
+          }
+        }),
+      );
       let groupSummaries: GroupSummary[] = [];
       try {
         // The aggregate endpoint resolves the active workspace from the
@@ -191,7 +201,7 @@ export function InternalDashboard() {
           accounts: accountsData.accounts ?? [],
           posts: postsData.posts ?? [],
           countMap,
-          totalUploads: countsData.total_uploads ?? 0,
+          privateVideos: privateVideoCounts.reduce((sum, count) => sum + count, 0),
           groupSummaries,
         },
       });
@@ -230,10 +240,7 @@ export function InternalDashboard() {
           posts: state.data.posts.length,
           published: state.data.posts.filter((p) => p.status === "published").length,
           scheduled: state.data.posts.filter((p) => p.status === "queued").length,
-          // totalUploads comes from /uploads/counts (DISTINCT rows, not
-          // per-target expansions) so multi-target uploads count once
-          // even when the JSONB targets array fans out across accounts.
-          queuedUploads: state.data.totalUploads,
+          queuedUploads: state.data.privateVideos,
         }
       : null;
 
@@ -309,11 +316,9 @@ export function InternalDashboard() {
 
         {state.kind === "ready" && stats && (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
               <StatCard label="Connected accounts" value={stats.connected} icon={Link2} to="/app/linking" />
-              <StatCard label="Total posts" value={stats.posts} icon={FileText} to="/app/posts" />
-              <StatCard label="Published" value={stats.published} icon={CheckCircle2} to="/app/posts" />
-              <StatCard label="Pending uploads" value={stats.queuedUploads} icon={Clock} to="/app/uploads/calendar" />
+              <StatCard label="Video privati da pubblicare" value={state.data.privateVideos} icon={Clock} to="/app/calendar?tab=videos" />
             </div>
 
             {(

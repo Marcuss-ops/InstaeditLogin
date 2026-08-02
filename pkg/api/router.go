@@ -16,57 +16,8 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
-	"github.com/Marcuss-ops/InstaeditLogin/pkg/api/contracts"
 	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
-
-// UserWorkspaceHelper is re-exported from pkg/api/contracts (see
-// contracts/users.go for the full godoc). The type alias keeps every
-// existing reference inside pkg/api and internal/* source-compatible
-// while letting the actual interface declaration live in a leaf
-// package. Once all call sites migrate to contracts.UserWorkspaceHelper
-// the alias can collapse in a single cleanup commit.
-type UserWorkspaceHelper = contracts.UserWorkspaceHelper
-
-// repoUserWorkspaceHelper implements UserWorkspaceHelper against the
-// real Postgres repositories. The methods wrap the underlying
-// repository calls and project to a []int64 (one id per row).
-type repoUserWorkspaceHelper struct {
-	workspaceRepo *repository.WorkspaceRepository
-	teamRepo      *repository.TeamRepository
-}
-
-// RepoUserWorkspaceHelper is the production constructor. Exposed
-// because main.go needs to build the helper from the *sql.DB-bound
-// repositories. Kept lowercase-prefixed in type name (private field
-// types) but the constructor is uppercase.
-func RepoUserWorkspaceHelper(w *repository.WorkspaceRepository, t *repository.TeamRepository) UserWorkspaceHelper {
-	return &repoUserWorkspaceHelper{workspaceRepo: w, teamRepo: t}
-}
-
-func (h repoUserWorkspaceHelper) ListOwned(_ context.Context, userID int64) ([]int64, error) {
-	owned, err := h.workspaceRepo.ListByOwner(userID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]int64, 0, len(owned))
-	for _, w := range owned {
-		out = append(out, w.ID)
-	}
-	return out, nil
-}
-
-func (h repoUserWorkspaceHelper) ListMemberships(_ context.Context, userID int64) ([]int64, error) {
-	members, err := h.teamRepo.ListForUser(userID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]int64, 0, len(members))
-	for _, m := range members {
-		out = append(out, m.WorkspaceID)
-	}
-	return out, nil
-}
 
 type Router struct {
 	mux              *chi.Mux
@@ -314,6 +265,10 @@ type Router struct {
 	// cmd/server/main.go via WithYouTubeService(svc); the handler
 	// owns the routing decision.
 	youTubeSvc YouTubeOAuthService
+	// youtubeRevoker is discovered from the concrete YouTube provider when
+	// WithYouTubeService is applied. It is intentionally separate from the
+	// broad validation interface so existing test providers remain compatible.
+	youtubeRevoker YouTubeRevoker
 
 	// nvidiaMetadataSvc is the NVIDIA AI metadata generator.
 	// Optional — when nil, the /generate-metadata endpoint returns
@@ -385,8 +340,6 @@ type Router struct {
 // placeholder import to keep repository wired in this package so the
 // above struct field typechecks.
 
-var _ = repository.RoleAdmin
-
 // Compile-time assertion that *repository.WorkspaceRepository
 // satisfies the extended WorkspaceStore interface (post-P0#4
 // channel surfaces). Caught at go vet time, not at runtime.
@@ -397,130 +350,6 @@ var _ = repository.RoleAdmin
 // would create an import cycle, since pkg/api already imports
 // internal/repository).
 var _ WorkspaceStore = (*repository.WorkspaceRepository)(nil)
-
-// YouTubeOAuthService is the narrow capability-subset of
-// *services.YouTubeOAuthService that the 4-step
-// /accounts/{id}/validate pipeline (introduced in Commit C2) needs.
-// Defined inline in pkg/api to keep tests mockable and avoid pkg/api
-// directly importing internal/services for the interface ONLY (the
-// service struct itself is injected via WithYouTubeService at
-// production wiring time and its exported method-results are
-// referenced via the interface below).
-//
-// The 4 steps map 1:1 onto the four interface methods:
-//   - RefreshOAuthToken      → STEP 1 (refresh-grant via vault.Renew)
-//   - GetTokenInfo          → STEP 2 (introspect access token + scope)
-//   - ValidateChannelBinding → STEP 3 (paginated channels.list bind)
-//   - CanaryUpload          → STEP 4 (optional private video + bind-reconcile)
-//   - ClientID              → STEP 2 aud check (aud must equal the OAuth client
-//     that issued the grant — guards against
-//     Production-vs-Testing token drift)
-type YouTubeOAuthService interface {
-	RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error)
-	GetTokenInfo(ctx context.Context, accessToken string) (*services.YouTubeTokenInfo, error)
-	ValidateChannelBinding(ctx context.Context, accessToken, expectedChannelID string) error
-	CanaryUpload(ctx context.Context, accessToken, expectedChannelID string) (*services.CanaryUploadResult, error)
-	FetchEarnings(ctx context.Context, accessToken, channelID string, days int) ([]repository.AccountMetricPoint, error)
-	ClientID() string
-	// GetYouTubeVideo validates that a video exists on the connected
-	// YouTube channel and returns a narrow summary of its metadata.
-	GetYouTubeVideo(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error)
-	// ListEditableVideos (P0 group videos endpoint) returns one page
-	// of processed private/unlisted videos belonging to channelID.
-	// pageToken="" starts from the first page; subsequent pages are
-	// fetched with the NextPageToken from the previous response. The
-	// service-level filter (privacy != public AND uploadStatus =
-	// processed) already filters out the long tail of public/
-	// uploading/deleted rows the editor flow rejects at create time.
-	ListEditableVideos(ctx context.Context, accessToken, channelID, pageToken string) (*services.YouTubeVideoPage, error)
-	// SetThumbnail uploads a JPEG/PNG image to YouTube and applies it
-	// as the custom thumbnail for the given video. The caller must
-	// supply a valid access token (retrieved from the vault).
-	SetThumbnail(ctx context.Context, accessToken, videoID, mimeType string, body io.Reader, size int64) error
-	// UpdateVideoPrivacy changes the privacy status (and optionally the
-	// snippet title/description) of an existing YouTube video via
-	// videos.update. For scheduled publishing pass a future publishAt and
-	// privacyStatus="private".
-	UpdateVideoPrivacy(ctx context.Context, accessToken, videoID, privacyStatus string, publishAt *time.Time, title, description string) error
-	// PublishThumbnail uploads a thumbnail to YouTube and updates the
-	// video privacy + snippet in a SINGLE videos.update(part=snippet,status)
-	// call. Title / Description are still supported but moved into the
-	// YouTubePublishOptions struct so the signature doesn't grow
-	// unboundedly as more snippet fields (tags / localizations / default
-	// languages) are added.
-	//
-	// Retries transient failures internally and returns the public
-	// YouTube URL on success.
-	PublishThumbnail(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error)
-	// UpsertLocalizations sets (or replaces) one per-language
-	// localization entry on a YouTube video via
-	// videos.update(part=localizations). YouTube expects a single
-	// language per call; the orchestrator loops over the
-	// Translations map calling this once per entry after the
-	// snippet+status update succeeds.
-	//
-	// The lang argument is a BCP-47 code (e.g. "en", "it", "pt-BR");
-	// the orchestrator validates against the YouTubePublishOptions
-	// sanity bounds before invoking the call so quota isn't burned
-	// on a guaranteed-4xx response.
-	UpsertLocalizations(ctx context.Context, accessToken, videoID, lang string, tr models.YouTubeTranslation) error
-}
-
-// YouTubeVideoEditStore is the persistence contract for thumbnail
-// editor sessions. Defined inline in pkg/api so tests can supply a
-// fake; production wiring passes *repository.YouTubeVideoEditRepository.
-type YouTubeVideoEditStore interface {
-	Create(ctx context.Context, edit *models.YouTubeVideoEdit) error
-	FindByID(ctx context.Context, id string) (*models.YouTubeVideoEdit, error)
-	FindByVeloxProjectID(ctx context.Context, projectID string) (*models.YouTubeVideoEdit, error)
-	Update(ctx context.Context, edit *models.YouTubeVideoEdit) error
-	// MarkPublishing (Blocco #5 P0 #2) atomically transitions the row to
-	// status='publishing' WITH desired_privacy + publish_at stamped in the
-	// same statement. CAS predicate (extended form): status IN
-	// ('editing','failed') OR (status='publishing' AND updated_at <
-	// NOW() - make_interval(secs => inFlightTimeout)). The strict
-	// (inFlightTimeout <= 0) branch runs the same SQL minus the
-	// orphan-recovery branch (E1 — Go-level guard). The handler maps
-	// (nil, repository.ErrYouTubeVideoEditNotFound) to HTTP 409
-	// (CAS-loss). Mirrors repository.YouTubeVideoEditRepository.MarkPublishing.
-	MarkPublishing(ctx context.Context, id string, desiredPrivacy string, publishAt *time.Time, inFlightTimeout time.Duration) (*models.YouTubeVideoEdit, error)
-	// AttachThumbnail (Blocco #5 P0 #4) atomically links a verified
-	// media asset (thumbnail) to an editor session. Single UPDATE
-	// statement with CAS predicate `status IN ('editing','failed')` so
-	// concurrent publish requests cannot race the link (a session in
-	// 'publishing' or 'published' state will not match — handler maps
-	// 0-rows to 409). Mirrors
-	// repository.YouTubeVideoEditRepository.AttachThumbnail.
-	AttachThumbnail(ctx context.Context, sessionID, thumbnailMediaID string) (*models.YouTubeVideoEdit, error)
-	// ListByWorkspace feeds the dashboard "code da modificare" widget.
-	// Workspace-scoped + optional AccountID/Statuses filters + bounded
-	// LIMIT. See repository.YouTubeEditorSessionListFilter for the full
-	// semantics; the handler validates ?workspace_id and parses
-	// ?account_id / ?status / ?limit, defaulting the status set to
-	// YouTubeVideoEditNonTerminalStatuses when no ?status= is supplied.
-	ListByWorkspace(ctx context.Context, filter repository.YouTubeEditorSessionListFilter) ([]*models.YouTubeVideoEdit, error)
-	// ListByWorkspaceAccountIDs (P0 group videos endpoint) feeds the
-	// GET /api/v1/groups/{group_id}/youtube/videos join: one SQL
-	// query returns every editor session in the workspace whose
-	// platform_account_id is in the supplied slice. The handler
-	// caller (pkg/api/youtube_group_videos.go) joins the result onto
-	// YouTube's fresh per-channel listing by (account_id, video_id)
-	// tuple. See repository.YouTubeVideoEditRepository.ListByWorkspaceAccountIDs
-	// for the SQL contract + index hint.
-	ListByWorkspaceAccountIDs(ctx context.Context, workspaceID int64, accountIDs []int64) ([]*models.YouTubeVideoEdit, error)
-	// FindOrCreateEditableSession (P0#3 click-idempotency) returns the
-	// open (non-terminal) editor session for the given (workspace,
-	// account, video) triple, or inserts a fresh one.
-	FindOrCreateEditableSession(ctx context.Context, workspaceID int64, platformAccountID int64, youtubeVideoID string, sessionIDHint string, projectIDHint string) (*models.YouTubeVideoEdit, error)
-	// SaveDraft (P2 — Dark Editor auto-save) atomically writes the
-	// operator's mid-edit form values to youtube_video_edits.draft_*
-	// AND stamps dirty_flag=false AND draft_updated_at=NOW().
-	SaveDraft(ctx context.Context, id string, title string, description string, tags []string, defaultLanguage string, defaultAudioLanguage string, translations map[string]models.YouTubeTranslation, desiredPrivacy string, publishAt *time.Time, draftUpdatedAt time.Time) error
-	// MarkPublishedWithActualPrivacy (P0#7) atomically transitions
-	// status='publishing' → 'published' AND stamps actual_privacy +
-	// youtube_sync_status.
-	MarkPublishedWithActualPrivacy(ctx context.Context, id string, actualPrivacy string, syncStatus string) (*models.YouTubeVideoEdit, error)
-}
 
 func NewRouter(
 	capRouter *services.CapabilityRouter,

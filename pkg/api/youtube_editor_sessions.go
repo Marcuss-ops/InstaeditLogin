@@ -194,15 +194,24 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	if err != nil {
 		return nil, fmt.Errorf("find or create editor session: %w", err)
 	}
-	// On the CREATE path, stamp the operator-supplied
-	// SourceThumbnailURL hint. On the REUSE path, leave the row's
-	// existing SourceThumbnailURL untouched (the first click's
-	// operator-typed value wins; subsequent clicks don't overwrite).
-	if persisted.SourceThumbnailURL == "" && in.SourceThumbnailURL != "" {
-		persisted.SourceThumbnailURL = in.SourceThumbnailURL
+	// YouTube's videos.list response is authoritative for the source
+	// thumbnail. This matters for an existing session: older rows can
+	// contain a stale/broken URL, and the Dark Editor will otherwise
+	// keep rendering its grey placeholder forever. Fall back to the
+	// browser hint only when YouTube did not return a thumbnail.
+	//
+	// Do not overwrite an existing value with a less authoritative empty
+	// response or with a second browser hint. A non-empty YouTube URL,
+	// however, is deliberately allowed to repair an old row.
+	sourceThumbnailURL := strings.TrimSpace(video.ThumbnailURL)
+	if sourceThumbnailURL == "" && strings.TrimSpace(persisted.SourceThumbnailURL) == "" {
+		sourceThumbnailURL = strings.TrimSpace(in.SourceThumbnailURL)
+	}
+	if sourceThumbnailURL != "" && strings.TrimSpace(persisted.SourceThumbnailURL) != sourceThumbnailURL {
+		persisted.SourceThumbnailURL = sourceThumbnailURL
 		persisted.UpdatedAt = time.Now().UTC()
 		if updateErr := r.youtubeVideoEditStore.Update(ctx, persisted); updateErr != nil {
-			return nil, fmt.Errorf("update editor session source thumbnail: %w", updateErr)
+			return nil, fmt.Errorf("repair editor session source thumbnail: %w", updateErr)
 		}
 	}
 	return persisted, nil

@@ -20,7 +20,6 @@ package worker
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -255,4 +254,3 @@ func (w *WebhookWorker) markDead(d *repository.WebhookDelivery, lastErr, request
 // _ keeps encoding/json referenced if future versions add JSON
 // request bodies (the current body comes pre-encoded as
 // webhook_events.payload).
-var _ = json.Marshal

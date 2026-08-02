@@ -92,10 +92,11 @@ type YouTubeVideoEdit struct {
 // by the YouTubeOAuthService when validating a video before an editor
 // session is created.
 type YouTubeVideoDetails struct {
-	ID           string `json:"id"`
-	Title        string `json:"title"`
-	ChannelID    string `json:"channel_id"`
-	ThumbnailURL string `json:"thumbnail_url,omitempty"`
-	Privacy      string `json:"privacy"`
-	UploadStatus string `json:"upload_status"`
+	ID           string     `json:"id"`
+	Title        string     `json:"title"`
+	ChannelID    string     `json:"channel_id"`
+	ThumbnailURL string     `json:"thumbnail_url,omitempty"`
+	Privacy      string     `json:"privacy"`
+	UploadStatus string     `json:"upload_status"`
+	PublishedAt  *time.Time `json:"published_at,omitempty"`
 }

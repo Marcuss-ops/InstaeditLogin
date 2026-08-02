@@ -1,7 +1,6 @@
 package api
 
 import (
-	"fmt"
 	"log/slog"
 	"strconv"
 	"time"
@@ -44,8 +43,3 @@ func slogCSVStreamError(section string, err error) {
 		"error", err.Error(),
 	)
 }
-
-// ensureFmtPackageReferenced is a no-op anchor so `fmt` stays
-// imported even when later refactors drop the only call site.
-// (P2 era: writeError / writeJSON in this package still use fmt.)
-var _ = fmt.Sprintf

@@ -30,4 +30,4 @@ const publicHost =
 // fallback keeps a manually built public bundle usable even when the build
 // environment forgot to provide it.
 export const API_BASE_URL: string =
-  configuredApiBaseUrl || (publicHost ? "https://dev.instaedit.org" : "http://localhost:8080");
+  configuredApiBaseUrl || (publicHost ? "https://api.instaedit.org" : "http://localhost:8080");

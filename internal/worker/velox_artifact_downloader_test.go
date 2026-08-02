@@ -133,6 +133,18 @@ func (f *fakeWorkspaceLookup) FindByID(id int64) (*models.Workspace, error) {
 	return f.rows[id], nil
 }
 
+func (f *fakeWorkspaceLookup) FindChannel(_ context.Context, workspaceID, platformAccountID int64) (*models.WorkspaceChannel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	if f.rows[workspaceID] == nil {
+		return nil, nil
+	}
+	return &models.WorkspaceChannel{WorkspaceID: workspaceID, PlatformAccountID: platformAccountID, Enabled: true}, nil
+}
+
 type fakeUploadCreator struct {
 	mu          sync.Mutex
 	jobs        []*models.UploadJob

@@ -163,7 +163,10 @@ func TestUpdateVideoPrivacy_ScheduledPublishing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	publishAt := time.Date(2026, 8, 1, 18, 0, 0, 0, time.UTC)
+	// Keep this test relative to the clock: a hard-coded timestamp eventually
+	// becomes a past publication time and is intentionally cleared by
+	// CoercePrivacyForUpdate.
+	publishAt := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
 	svc := newTestYouTubeService(srv)
 	if err := svc.UpdateVideoPrivacy(t.Context(), "token", "VID123", "private", &publishAt, "", ""); err != nil {
 		t.Fatalf("UpdateVideoPrivacy error: %v", err)
@@ -176,8 +179,9 @@ func TestUpdateVideoPrivacy_ScheduledPublishing(t *testing.T) {
 	if status["privacyStatus"] != "private" {
 		t.Errorf("privacyStatus: want private, got %v", status["privacyStatus"])
 	}
-	if status["publishAt"] != "2026-08-01T18:00:00Z" {
-		t.Errorf("publishAt: want 2026-08-01T18:00:00Z, got %v", status["publishAt"])
+	wantPublishAt := publishAt.UTC().Format(time.RFC3339)
+	if status["publishAt"] != wantPublishAt {
+		t.Errorf("publishAt: want %s, got %v", wantPublishAt, status["publishAt"])
 	}
 }
 

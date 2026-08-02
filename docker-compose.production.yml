@@ -1,0 +1,12 @@
+# InstaEditLogin — production hardening overlay for the self-hosted stack.
+#
+# The base compose file defines the service graph and health-gated migration
+# order. This overlay removes direct host exposure from infrastructure and
+# binds the API only to loopback so public traffic must pass through Caddy.
+
+services:
+  db:
+    ports: []
+
+  # The base stack already binds API to 127.0.0.1 only. Worker and MinIO
+  # have no host ports in the canonical stack.

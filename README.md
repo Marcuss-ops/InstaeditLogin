@@ -46,7 +46,7 @@ git clone https://github.com/Marcuss-ops/InstaeditLogin.git
 cd InstaeditLogin
 
 # 2. Configura le variabili d'ambiente
-cp .env.example .env.dev
+cp .env.dev.example .env.dev
 # Modifica .env.dev con le tue credenziali reali
 # Scommenta le piattaforme che vuoi attivare
 

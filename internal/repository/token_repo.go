@@ -103,9 +103,9 @@ func (r *TokenRepository) SaveTokenTx(ctx context.Context, tx *sql.Tx, token *mo
 // UpdateOAuthConnectionStatus records grant-level refresh health. lastError is
 // an application classification, never a provider response or token value.
 const updateOAuthConnectionStatusSQL = `UPDATE oauth_connections
-	    SET status = $2,
-	        last_refresh_error = NULLIF($3, ''),
-	        last_refresh_at = CASE WHEN $2 = 'active' THEN NOW() ELSE last_refresh_at END,
+	    SET status = $2::text,
+	        last_refresh_error = NULLIF($3::text, ''),
+	        last_refresh_at = CASE WHEN $2::text = 'active' THEN NOW() ELSE last_refresh_at END,
 	        updated_at = NOW()
 	  WHERE id = $1`
 

@@ -152,7 +152,7 @@ describe("usePostTargetStatus", () => {
       { id: 1, post_id: 1, platform_account_id: 9, status: "publishing" },
     ]);
     Object.defineProperty(document, "hidden", { configurable: true, value: false });
-    const { result } = renderHook(() => usePostTargetStatus(1));
+    renderHook(() => usePostTargetStatus(1));
     await advance(0);
     expect(getPostTargetsMock).toHaveBeenCalledTimes(1); // initial fetch only
 

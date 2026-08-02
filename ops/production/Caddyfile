@@ -1,0 +1,14 @@
+# Canonical self-hosted production API reverse proxy.
+# Caddy runs on the host; the React frontend remains on Vercel.
+
+api.instaedit.org {
+	encode zstd gzip
+
+	# Velox callbacks are service-to-service only and must never be exposed
+	# by the public reverse proxy. The API still protects them internally.
+	handle /internal/* {
+		abort
+	}
+
+	reverse_proxy 127.0.0.1:8080
+}

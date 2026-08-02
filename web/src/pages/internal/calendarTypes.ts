@@ -18,6 +18,8 @@ export type ContentMetric = {
 };
 
 export type ContentItem = {
+  account_id?: number;
+  account_name?: string;
   external_id: string;
   title?: string;
   description?: string;

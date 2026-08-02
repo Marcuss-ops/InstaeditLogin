@@ -78,6 +78,11 @@ export type WorkspaceOption = {
   name: string;
 };
 
+export type GroupOption = {
+  id: number;
+  name: string;
+};
+
 export type FetchState =
   | { kind: "loading" }
   | { kind: "ready"; data: SummaryData }
@@ -88,4 +93,3 @@ export const PERIODS = [
   { days: 30, label: "30D" },
   { days: 90, label: "90D" },
 ] as const;
-

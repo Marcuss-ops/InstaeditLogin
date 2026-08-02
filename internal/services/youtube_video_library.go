@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
@@ -48,9 +49,10 @@ type youtubeLibraryVideosResponse struct {
 type youtubeLibraryVideo struct {
 	ID      string `json:"id"`
 	Snippet struct {
-		Title      string `json:"title"`
-		ChannelID  string `json:"channelId"`
-		Thumbnails struct {
+		Title       string `json:"title"`
+		ChannelID   string `json:"channelId"`
+		PublishedAt string `json:"publishedAt"`
+		Thumbnails  struct {
 			Default youtubeLibraryThumbnail `json:"default"`
 			Medium  youtubeLibraryThumbnail `json:"medium"`
 			High    youtubeLibraryThumbnail `json:"high"`
@@ -156,6 +158,10 @@ func (s *YouTubeOAuthService) ListEditableVideos(ctx context.Context, accessToke
 		if thumbnailURL == "" {
 			thumbnailURL = video.Snippet.Thumbnails.Default.URL
 		}
+		var publishedAt *time.Time
+		if parsed, parseErr := time.Parse(time.RFC3339, video.Snippet.PublishedAt); parseErr == nil {
+			publishedAt = &parsed
+		}
 		page.Items = append(page.Items, models.YouTubeVideoDetails{
 			ID:           video.ID,
 			Title:        video.Snippet.Title,
@@ -163,6 +169,7 @@ func (s *YouTubeOAuthService) ListEditableVideos(ctx context.Context, accessToke
 			ThumbnailURL: thumbnailURL,
 			Privacy:      privacy,
 			UploadStatus: uploadStatus,
+			PublishedAt:  publishedAt,
 		})
 	}
 	return page, nil

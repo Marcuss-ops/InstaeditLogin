@@ -26,7 +26,7 @@ describe("InternalLinking", () => {
     vi.resetAllMocks();
   });
 
-  it("renders the linking heading and all 5 provider cards", async () => {
+  it("renders the linking heading and all 6 provider cards", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(async (input: RequestInfo) => {
@@ -52,6 +52,7 @@ describe("InternalLinking", () => {
     expect(screen.getByText("Facebook")).toBeInTheDocument();
     expect(screen.getByText("Instagram")).toBeInTheDocument();
     expect(screen.getByText("Threads")).toBeInTheDocument();
+    expect(screen.getByText("Google Drive")).toBeInTheDocument();
   });
 
   it("shows an error state when accounts cannot be loaded", async () => {
@@ -95,6 +96,6 @@ describe("InternalLinking", () => {
     });
 
     const notConnected = screen.getAllByText("Not connected");
-    expect(notConnected.length).toBe(5);
+    expect(notConnected.length).toBe(6);
   });
 });

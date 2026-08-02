@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
@@ -359,7 +358,6 @@ func (s *SessionsService) Cleanup(ctx context.Context) (CleanupResult, error) {
 
 // _ keeps http imported for the future Set-Cookie helper that
 // the api package implements; suppress the unused import warning.
-var _ = http.MethodPost
 
 // cleanupOrphanSession best-effort-revokes an orphan session row
 // after the access-token signing step failed (C5 hardening).

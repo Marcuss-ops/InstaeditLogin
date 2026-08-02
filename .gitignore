@@ -61,3 +61,6 @@ __pycache__/
 /set_password
 /create-user
 .env*
+!.env.dev.example
+!.env.test.example
+!.env.production.example

@@ -102,7 +102,7 @@ Content-Type: `application/json` (NOT `text/plain`).
 - `VELOX_API_TOKEN` MUST be a 32-char random hex (16-byte secret); rotate via deploy-time env reroll
 - Reverse proxy (Caddy / Cloudflare / nginx) MUST refuse public access to `/internal/v1/*`
 - Docker Compose local: `instaedit-api` consumes the var via `internal/config.Config.VeloxAPIToken`
-- Production (Fly): var is a secret; set via `flyctl secrets set VELOX_API_TOKEN=...` (see `scripts/verify-fly-secrets.sh`)
+- Backend runtime: `VELOX_API_TOKEN` is a server-side secret loaded from the protected Compose environment file; never expose it through Vercel or the browser.
 
 ## Admin · Dead-letter job triage (Task 10/10 — operator runbook)
 

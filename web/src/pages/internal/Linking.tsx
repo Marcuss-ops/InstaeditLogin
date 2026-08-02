@@ -24,6 +24,7 @@ type PlatformAccount = {
   platform: ProviderId;
   platform_user_id: string;
   username: string;
+  avatar_url?: string;
   status: string;
   account_state?: "valid" | "reconnect_required" | "suspended" | "deleted";
   is_publishable?: boolean;
@@ -34,6 +35,27 @@ type FetchState =
   | { kind: "loading" }
   | { kind: "ready"; accounts: PlatformAccount[] }
   | { kind: "error"; message: string };
+
+function AccountAvatar({ account }: { account: PlatformAccount }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const initial = account.username?.charAt(0).toUpperCase() || "?";
+
+  return (
+    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-white/[0.18] to-white/[0.06] flex items-center justify-center text-white shrink-0 text-[11px] font-bold overflow-hidden">
+      {account.avatar_url && !imageFailed ? (
+        <img
+          src={account.avatar_url}
+          alt={`${account.username} avatar`}
+          className="w-full h-full object-cover"
+          referrerPolicy="no-referrer"
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        initial
+      )}
+    </div>
+  );
+}
 
 const LINKABLE_IDS: ProviderId[] = [
   "youtube",
@@ -61,7 +83,34 @@ export function InternalLinking() {
       });
       if (controller.signal.aborted) return;
       const data = (await response.json()) as { accounts: PlatformAccount[] };
-      setState({ kind: "ready", accounts: data.accounts ?? [] });
+      const accounts = data.accounts ?? [];
+      // The list endpoint intentionally stays lightweight. Enrich YouTube
+      // accounts from the detail endpoint so the linking page can render the
+      // channel avatar cached by the provider without exposing OAuth data in
+      // the list contract. A stale/missing provider snapshot only falls back
+      // to the account initial; it must not make the whole linking page fail.
+      const enriched = await Promise.all(
+        accounts.map(async (account) => {
+          if (account.platform !== "youtube" || account.avatar_url) return account;
+          try {
+            const detailResponse = await authedFetch(`/api/v1/accounts/${account.id}`, {
+              signal: controller.signal,
+            });
+            const detail = (await detailResponse.json()) as {
+              resource?: { avatar_url?: string };
+            };
+            return {
+              ...account,
+              avatar_url: detail.resource?.avatar_url,
+            };
+          } catch (err) {
+            if (err instanceof AuthError) throw err;
+            return account;
+          }
+        }),
+      );
+      if (controller.signal.aborted) return;
+      setState({ kind: "ready", accounts: enriched });
     } catch (err) {
       if (controller.signal.aborted) return;
       if (err instanceof AuthError) {
@@ -213,7 +262,7 @@ export function InternalLinking() {
                           </span>
                         )}
                         {isConnected && !hasPublishableAccount && (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/[0.08] border border-amber-400/[0.18] text-amber-300 text-[11px] font-semibold">
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/[0.08] border border-amber-500/[0.15] text-amber-300 text-[11px] font-semibold">
                             Attention required
                           </span>
                         )}
@@ -237,12 +286,10 @@ export function InternalLinking() {
                               <Link
                                 key={account.id}
                                 to={`/app/dashboard-channels/${account.id}`}
-                                className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] transition-colors no-underline"
+                                className={`flex items-center justify-between gap-3 p-3 rounded-xl border transition-colors no-underline ${account.is_publishable === false ? "bg-amber-500/[0.05] border-amber-400/[0.18]" : "bg-white/[0.04] border-white/[0.08] hover:bg-white/[0.08]"}`}
                               >
                                 <div className="flex items-center gap-3 min-w-0">
-                                  <div className="w-8 h-8 rounded-full bg-gradient-to-br flex items-center justify-center text-white shrink-0 text-[11px] font-bold">
-                                    {account.username?.charAt(0).toUpperCase() ?? "?"}
-                                  </div>
+                                  <AccountAvatar account={account} />
                                   <div className="min-w-0">
                                     <p className="text-[13px] font-semibold text-white truncate">
                                       @{account.username}

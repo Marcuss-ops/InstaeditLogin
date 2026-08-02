@@ -10,7 +10,20 @@ export function usePrivateVideos(accountId: string | null, enabled: boolean) {
 
   const loadVideos = useCallback(
     async (cursor?: string) => {
-      if (!accountId) return;
+      let accountIDs: number[] = accountId ? [Number(accountId)] : [];
+      if (!accountId) {
+        const accountsResponse = await authedFetch("/api/v1/accounts");
+        const accountsData = (await accountsResponse.json()) as {
+          accounts?: Array<{ id: number; platform: string; username?: string }>;
+        };
+        accountIDs = (accountsData.accounts ?? [])
+          .filter((account) => account.platform === "youtube")
+          .map((account) => account.id);
+      }
+      if (accountIDs.length === 0) {
+        setVideoState({ kind: "ready", items: [], nextCursor: undefined, isLoadingMore: false });
+        return;
+      }
       const isAppend = !!cursor;
       if (isAppend) {
         setVideoState((prev) =>
@@ -22,16 +35,23 @@ export function usePrivateVideos(accountId: string | null, enabled: boolean) {
         setVideoState({ kind: "loading" });
       }
       try {
-        const url = `/api/v1/accounts/${accountId}/content?limit=20${cursor ? `&cursor=${cursor}` : ""}&privacy=private`;
-        const response = await authedFetch(url);
-        const data = (await response.json()) as ContentPage;
+        const pages = await Promise.all(accountIDs.map(async (id) => {
+          const url = `/api/v1/accounts/${id}/content?limit=20${accountId && cursor ? `&cursor=${cursor}` : ""}&privacy=private`;
+          const response = await authedFetch(url);
+          const data = (await response.json()) as ContentPage;
+          return { id, data };
+        }));
+        const items = pages
+          .flatMap(({ id, data }) => data.items.map((item) => ({ ...item, account_id: id })))
+          .sort((a, b) => String(b.published_at ?? "").localeCompare(String(a.published_at ?? "")));
+        const nextCursor = accountId ? pages[0]?.data.next_cursor : undefined;
         setVideoState((prev) => ({
           kind: "ready",
           items:
             isAppend && prev.kind === "ready"
-              ? [...prev.items, ...data.items]
-              : data.items,
-          nextCursor: data.next_cursor,
+              ? [...prev.items, ...items]
+              : items,
+          nextCursor,
           isLoadingMore: false,
           loadMoreError: undefined,
         }));
@@ -55,7 +75,8 @@ export function usePrivateVideos(accountId: string | null, enabled: boolean) {
 
   const handleEditThumbnail = useCallback(
     async (item: ContentItem) => {
-      if (!accountId) return;
+      const targetAccountId = item.account_id ?? (accountId ? Number(accountId) : null);
+      if (!targetAccountId) return;
       try {
         const wsResp = await authedFetch("/api/v1/workspaces");
         const { workspaces } = (await wsResp.json()) as {
@@ -67,7 +88,7 @@ export function usePrivateVideos(accountId: string | null, enabled: boolean) {
         }
         await createEditorSessionAndOpen({
           workspace_id: workspaces[0].id,
-          platform_account_id: Number(accountId),
+          platform_account_id: targetAccountId,
           youtube_video_id: item.external_id,
         });
         toast.success("Editor session created — opening Velox…");

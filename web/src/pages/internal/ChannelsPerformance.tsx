@@ -1,17 +1,14 @@
 import { Link } from "react-router-dom";
 import {
   BarChart3,
-  TrendingUp,
-  ArrowRight,
   RefreshCw,
   SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { ErrorState } from "../../components/feedback";
 import { useChannelsPerformance } from "./useChannelsPerformance";
-import { formatNumber, TrendChart, TopSubscribersChart } from "./ChannelsPerformanceChart";
+import { formatNumber, TrendChart } from "./ChannelsPerformanceChart";
 import { ChannelsPerformanceKpis } from "./ChannelsPerformanceKpis";
-import { ChannelsPerformanceRankings, RankingCard } from "./ChannelsPerformanceRankings";
 import type { MetricGrowth } from "./channelsPerformanceTypes";
 import { PERIODS } from "./channelsPerformanceTypes";
 
@@ -33,9 +30,8 @@ function GrowthText({ value }: { value: MetricGrowth }) {
 
 export function ChannelsPerformancePage() {
   const {
-    state, period, localFilters, setLocalFilters, workspaces,
-    workspacesLoading, workspacesError, setPeriod, applyFilters,
-    clearFilters, load, topSubscribers,
+    state, period, localFilters, setLocalFilters, groups, setPeriod, applyFilters,
+    clearFilters, load,
   } = useChannelsPerformance();
   return (
     <div className="min-h-full p-8 bg-[#030308] text-[#e8e8ef]">
@@ -83,75 +79,22 @@ export function ChannelsPerformancePage() {
             <span className="text-[13px] font-semibold text-white">Filters</span>
           </div>
           <div className="flex flex-col lg:flex-row lg:items-end gap-3">
-            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="flex flex-col gap-1">
-                <label htmlFor="filter-workspace" className="text-[12px] font-medium text-[#9aa0aa]">
-                  Workspace
-                </label>
+                <label htmlFor="filter-group" className="text-[12px] font-medium text-[#9aa0aa]">Group</label>
                 <select
-                  id="filter-workspace"
-                  value={localFilters.workspace}
-                  onChange={(e) =>
-                    setLocalFilters((prev) => ({ ...prev, workspace: e.target.value }))
-                  }
-                  disabled={workspacesLoading}
-                  className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] text-white focus:outline-none focus:ring-2 focus:ring-white/10 disabled:opacity-50"
-                >
-                  <option value="">All workspaces</option>
-                  {workspaces.map((ws) => (
-                    <option key={ws.id} value={ws.id}>
-                      {ws.name}
-                    </option>
-                  ))}
-                </select>
-                {workspacesError && (
-                  <span className="text-[11px] text-red-400">Unable to load workspaces.</span>
-                )}
-              </div>
-              <div className="flex flex-col gap-1">
-                <label htmlFor="filter-group" className="text-[12px] font-medium text-[#9aa0aa]">
-                  Group
-                </label>
-                <input
                   id="filter-group"
-                  type="text"
                   value={localFilters.group}
                   onChange={(e) =>
                     setLocalFilters((prev) => ({ ...prev, group: e.target.value }))
                   }
-                  placeholder="Group name"
-                  className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] text-white placeholder:text-[#9aa0aa]/60 focus:outline-none focus:ring-2 focus:ring-white/10"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label htmlFor="filter-language" className="text-[12px] font-medium text-[#9aa0aa]">
-                  Language
-                </label>
-                <input
-                  id="filter-language"
-                  type="text"
-                  value={localFilters.language}
-                  onChange={(e) =>
-                    setLocalFilters((prev) => ({ ...prev, language: e.target.value }))
-                  }
-                  placeholder="e.g. en"
-                  className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] text-white placeholder:text-[#9aa0aa]/60 focus:outline-none focus:ring-2 focus:ring-white/10"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label htmlFor="filter-manager" className="text-[12px] font-medium text-[#9aa0aa]">
-                  Manager
-                </label>
-                <input
-                  id="filter-manager"
-                  type="text"
-                  value={localFilters.manager}
-                  onChange={(e) =>
-                    setLocalFilters((prev) => ({ ...prev, manager: e.target.value }))
-                  }
-                  placeholder="Manager name"
-                  className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] text-white placeholder:text-[#9aa0aa]/60 focus:outline-none focus:ring-2 focus:ring-white/10"
-                />
+                  className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] text-white focus:outline-none focus:ring-2 focus:ring-white/10 disabled:opacity-50"
+                >
+                  <option value="">Tutti i gruppi</option>
+                  {groups.map((group) => (
+                    <option key={group.id} value={group.id}>{group.name}</option>
+                  ))}
+                </select>
               </div>
             </div>
             <div className="flex gap-2">
@@ -216,20 +159,6 @@ export function ChannelsPerformancePage() {
               />
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-              <TopSubscribersChart data={topSubscribers} />
-              {state.data.rankings && (
-                <RankingCard
-                  title="Fastest growing (subscribers)"
-                  icon={TrendingUp}
-                  items={state.data.rankings.fastest_growing_subscribers}
-                  valueLabel="percent"
-                />
-              )}
-            </div>
-
-            <ChannelsPerformanceRankings rankings={state.data.rankings} />
-
             {/* Channel table */}
             <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-6">
               <h2 className="text-[16px] font-bold text-white mb-4">All channels</h2>
@@ -282,7 +211,7 @@ export function ChannelsPerformancePage() {
                               to={`/app/accounts/${channel.id}/performance`}
                               className="inline-flex items-center gap-1 text-[12px] font-semibold text-[#9aa0aa] hover:text-white transition-colors no-underline"
                             >
-                              Details <ArrowRight size={12} />
+                              Dettagli
                             </Link>
                           </td>
                         </tr>

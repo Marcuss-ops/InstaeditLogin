@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Zap, Mail, Lock, ArrowRight, Calendar } from "lucide-react";
-import { fetchSession } from "../lib/auth";
+import { clearSessionCache, fetchSession } from "../lib/auth";
 import { API_BASE_URL } from "../lib/api";
 import { isDemoMode } from "../lib/demo";
 import { PROVIDERS } from "../lib/providers";
@@ -49,7 +49,11 @@ export function Login() {
         throw new Error(data.error || "Invalid credentials");
       }
 
-      await fetchSession();
+      clearSessionCache();
+      const session = await fetchSession();
+      if (!session) {
+        throw new Error("Login riuscito, ma la sessione non è stata riconosciuta dal server.");
+      }
       navigate(nextPath);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");

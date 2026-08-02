@@ -71,7 +71,7 @@ export function PrivateVideosPanel({
                     {item.title}
                   </p>
                   <p className="text-[11px] text-[#9aa0aa] truncate mt-0.5">
-                    {item.external_id}
+                    {item.account_name ? `${item.account_name} · ` : ""}{item.external_id}
                   </p>
                 </div>
                 <div className="flex items-center gap-3 text-[11px] text-[#9aa0aa]">

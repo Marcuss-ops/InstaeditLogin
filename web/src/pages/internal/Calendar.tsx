@@ -13,7 +13,7 @@ import type { CalendarTab } from "./calendarTypes";
 export function CalendarPage() {
   const [searchParams] = useSearchParams();
   const accountId = searchParams.get("account_id");
-  const [activeTab, setActiveTab] = useState<CalendarTab>("calendar");
+  const [activeTab, setActiveTab] = useState<CalendarTab>(searchParams.get("tab") === "videos" ? "videos" : "calendar");
   const [view, setView] = useState<CalendarViewMode>("week");
   const [currentDate, setCurrentDate] = useState(new Date());
   const posts = useCalendarPosts();
@@ -58,7 +58,7 @@ export function CalendarPage() {
           </div>
         </div>
 
-        {accountId && (
+        <>
           <div className="flex items-center gap-1 mb-4 shrink-0">
             {[
               { id: "calendar" as const, label: "Calendario", icon: CalendarIcon },
@@ -84,9 +84,9 @@ export function CalendarPage() {
               );
             })}
           </div>
-        )}
+        </>
 
-        {(!accountId || activeTab === "calendar") && (
+        {activeTab === "calendar" && (
           <CalendarToolbar
             view={view}
             setView={setView}
@@ -103,7 +103,7 @@ export function CalendarPage() {
           />
         )}
 
-        {(!accountId || activeTab === "calendar") && (
+        {activeTab === "calendar" && (
           <CalendarPostsPanel
             state={posts.state}
             filteredPosts={posts.filteredPosts}
@@ -115,7 +115,7 @@ export function CalendarPage() {
           />
         )}
 
-        {accountId && activeTab === "videos" && (
+        {activeTab === "videos" && (
           <PrivateVideosPanel
             videoState={videos.videoState}
             loadVideos={videos.loadVideos}

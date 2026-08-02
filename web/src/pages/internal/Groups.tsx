@@ -4,6 +4,7 @@ import {
   Plus,
   RefreshCw,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { authedFetch } from "../../lib/auth";
 import { ErrorState, EmptyState, Skeleton } from "../../components/feedback";
 import { useGroupsData } from "./useGroupsData";
@@ -11,6 +12,7 @@ import { TreeView } from "./GroupsTreeView";
 import { AccountDetailPanel, GroupDetailPanel } from "./GroupsDetailPanels";
 
 export function GroupsPage() {
+  const navigate = useNavigate();
   const {
     state,
     selectedGroupId,
@@ -52,8 +54,26 @@ export function GroupsPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5">
+        <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.025] p-3 sm:flex-row sm:items-center">
+          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+            {state.kind === "loading" && <span className="text-[12px] text-[#9aa0aa]">Caricamento gruppi…</span>}
+            {state.kind === "error" && <span className="text-[12px] text-red-300">{state.message}</span>}
+            {state.kind === "ready" && tree.length === 0 && <span className="text-[12px] text-[#9aa0aa]">Nessun gruppo creato.</span>}
+            {flattenTree(tree).map((node) => (
+              <button key={node.id} type="button" onClick={() => { setSelectedGroupId(node.id); setSelectedAccountId(null); }} className={`shrink-0 rounded-xl px-3 py-2 text-left transition-all ${selectedGroupId === node.id ? "bg-white text-black shadow-lg scale-105" : "text-white/45 hover:bg-white/[0.06] hover:text-white"}`}>
+                <span className={`block truncate ${selectedGroupId === node.id ? "text-[17px] font-bold" : "text-[13px] font-medium"}`}>{node.name}</span>
+                <span className={`block text-[10px] ${selectedGroupId === node.id ? "text-black/55" : "text-white/30"}`}>{node.accounts.length} canali</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <input type="text" value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} placeholder="Nuovo gruppo" className="w-32 rounded-lg border border-white/[0.10] bg-black/20 px-2.5 py-2 text-[12px] text-white outline-none" aria-label="Nuovo gruppo" />
+            <button type="button" onClick={() => void handleCreateGroup()} disabled={!newGroupName.trim() || creatingGroup} className="rounded-lg bg-white px-3 py-2 text-[12px] font-semibold text-black disabled:opacity-50"><Plus size={13} className="inline" /> Crea</button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6">
+          <div className="hidden">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-[14px] font-bold text-white uppercase tracking-wider">Folders</h2>
             </div>
@@ -115,7 +135,7 @@ export function GroupsPage() {
             )}
           </div>
 
-          <div className="lg:col-span-2 surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5 min-h-[300px]">
+          <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5 min-h-[300px]">
             {selectedAccount ? (
               <AccountDetailPanel
                 account={selectedAccount}
@@ -125,7 +145,10 @@ export function GroupsPage() {
             ) : selectedGroup ? (
               <GroupDetailPanel
                 group={selectedGroup}
-                onPickAccount={(id) => setSelectedAccountId(id)}
+                onPickAccount={(id) => {
+                  setSelectedAccountId(id);
+                  navigate(`/app/dashboard-channels/${id}`);
+                }}
                 onCreateSubgroup={(name) => {
                   if (!name.trim()) return;
                   setNewGroupName(name);
@@ -157,4 +180,8 @@ export function GroupsPage() {
       </div>
     </div>
   );
+}
+
+function flattenTree(nodes: import("./groupsTypes").TreeNode[]): import("./groupsTypes").TreeNode[] {
+  return nodes.flatMap((node) => [node, ...flattenTree(node.children)]);
 }

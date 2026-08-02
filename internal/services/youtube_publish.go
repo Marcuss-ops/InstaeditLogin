@@ -308,12 +308,16 @@ func (s *YouTubeOAuthService) buildUploadMetadata(payload models.PublishPayload)
 		status["publishAt"] = payload.PublishAt.UTC().Format(time.RFC3339)
 	}
 
+	snippet := map[string]interface{}{
+		"title":       defaultVideoTitle(payload),
+		"description": payload.Text,
+	}
+	if len(payload.Tags) > 0 {
+		snippet["tags"] = payload.Tags
+	}
 	return map[string]interface{}{
-		"snippet": map[string]string{
-			"title":       defaultVideoTitle(payload),
-			"description": payload.Text,
-		},
-		"status": status,
+		"snippet": snippet,
+		"status":  status,
 	}
 }
 

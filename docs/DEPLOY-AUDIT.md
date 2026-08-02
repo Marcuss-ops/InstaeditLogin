@@ -1,12 +1,17 @@
-# InstaEdit — Deployment Audit (HTTPS · DNS · redirect · hosting)
+# InstaEdit — Deployment Audit (storico)
 
-**Scope:** Block #2 of the broad site-quality plan — verify domain, HTTPS, DNS, redirect rules, and all deployment configuration surfaces: `fly.toml`, `web/vercel.json`, `ops/local/Caddyfile`, and the now-deprecated `ops/vps/Caddyfile` (moved to `ops/legacy/Caddyfile` in this block).
+> La topologia supportata è ibrida: Vercel serve il frontend, mentre
+> Docker Compose, PostgreSQL, MinIO, API, worker e Caddy risiedono sul server
+> proprietario. Fly.io e altri deploy backend esterni non sono supportati.
+> Il contenuto seguente conserva l'audit storico delle configurazioni cloud.
+
+**Scope:** Block #2 of the broad site-quality plan — verify domain, HTTPS, DNS, redirect rules, and all deployment configuration surfaces: `fly.toml`, root `vercel.json`, `ops/local/Caddyfile`, and the now-deprecated `ops/vps/Caddyfile` (moved to `ops/legacy/Caddyfile` in this block).
 
 ## Executive summary
 
 - **HTTPS termination: ✅ covered on every public-facing surface.** Fly (`api.instaedit.org`) uses `force_https = true` + Fly-managed Let's Encrypt. Vercel (`app.instaedit.org` + apex `instaedit.org`) terminates TLS automatically. Local dev (`ops/local/Caddyfile`) uses mkcert + cloudflared.
 - **DNS delegation: ✅ documented canonical records in `docs/DEPLOY.md` §1.5.** Apex `instaedit.org` A → Vercel Anycast `76.76.21.21`. `app.instaedit.org` CNAME → `cname.vercel-dns.com.` (Vercel edge). `api.instaedit.org` CNAME → `instaedit-login.fly.dev.` (Fly). CAA records restrict issuance to LE; SPF + DKIM + DMARC wired for Resend.
-- **Apex 301 redirect to canonical**: **✅ fixed in commit `8271639` on `main`.** Previously only declared via the Vercel dashboard (not auditable in git); now declarative in `web/vercel.json` `redirects[]`. Also redirects `www.instaedit.org` → `app.instaedit.org` (the `www.` variant was previously undocumented).
+- **Apex 301 redirect to canonical**: **✅ fixed in commit `8271639` on `main`.** Previously only declared via the Vercel dashboard (not auditable in git); now declarative in `root vercel.json` `redirects[]`. Also redirects `www.instaedit.org` → `app.instaedit.org` (the `www.` variant was previously undocumented).
 - **Canonical SEO host: ✅ fixed in commit `8271639` on `main`.** `web/index.html` `og:url`, `twitter:url`, JSON-LD `url`, `image`, `author.url` switched from `https://instaedit.org/` (the apex that 301-redirects) to `https://app.instaedit.org/` (the landing surface). `sitemap.xml` was already on this canonical. `<link rel="canonical" href="https://app.instaedit.org/" />` added for browser-level canonicalization.
 - **Legacy VPS Caddy: ✅ moved to `ops/legacy/Caddyfile` (commit `8271639`).** The file describes a `dev.instaedit.org` deployment that pre-dates the current Fly + Vercel architecture. `git mv` preserves history; `docker-compose.yml` inline reference updated to match.
 
@@ -14,8 +19,8 @@
 
 | Surface | Host | Hosted by | TLS | Configuration source |
 | --- | --- | --- | --- | --- |
-| Marketing SPA (apex) | `instaedit.org` | Vercel (A `76.76.21.21`) | Automatic LE (Vercel) | `web/vercel.json` `redirects[]` now enforces 301 → `app.instaedit.org` |
-| Marketing SPA (app) | `app.instaedit.org` | Vercel (CNAME `cname.vercel-dns.com.`) | Automatic LE (Vercel) | `web/vercel.json` framework/rewrites |
+| Marketing SPA (apex) | `instaedit.org` | Vercel (A `76.76.21.21`) | Automatic LE (Vercel) | `root vercel.json` `redirects[]` now enforces 301 → `app.instaedit.org` |
+| Marketing SPA (app) | `app.instaedit.org` | Vercel (CNAME `cname.vercel-dns.com.`) | Automatic LE (Vercel) | `root vercel.json` framework/rewrites |
 | API backend | `api.instaedit.org` | Fly.io (CNAME `instaedit-login.fly.dev.`) | Automatic LE (Fly) | `fly.toml` `[[services]] api`, `force_https=true` |
 | Legacy VPS (no longer on path) | `dev.instaedit.org` | Caddy + LE (manual, kept in repo as archaeology) | Manual LE | `ops/legacy/Caddyfile` (was `ops/vps/Caddyfile`) |
 | Local dev tunnel | `https://:8443` (cloudflared) | mkcert + cloudflared on operator laptop | mkcert (local CA) | `ops/local/Caddyfile` |
@@ -34,8 +39,8 @@ OAuth callback URIs (registered in each provider's developer console) all termin
 - **Live status uncertainty**: `docs/DEPLOY.md` §8.1 records that as of 2026-07-14 the live `api.instaedit.org` was reporting `Server: Caddy` (i.e. not Fly) and may not match the latest deploy. Operator-side investigation required. Captured as open follow-up, not a config fix from this block.
 
 ### Vercel (`app.instaedit.org` + apex `instaedit.org`)
-- `web/vercel.json` `framework: "vite"` — Vite plugin picks up Vite's SPA config. ✅
-- `web/vercel.json` now declares apex `instaedit.org` + `www.instaedit.org → https://app.instaedit.org/$1` 301 redirect before the SPA `/(.*) → /index.html` rewrite (commit `8271639`). ✅
+- `root vercel.json` `framework: "vite"` — Vite plugin picks up Vite's SPA config. ✅
+- `root vercel.json` now declares apex `instaedit.org` + `www.instaedit.org → https://app.instaedit.org/$1` 301 redirect before the SPA `/(.*) → /index.html` rewrite (commit `8271639`). ✅
 - **HSTS not declared** in `vercel.json` `headers[]` — real defect, deferred.
 - Canonical SEO surface (in `web/index.html`): `og:url`, `twitter:url`, JSON-LD fields, `<link rel="canonical">` all reference `https://app.instaedit.org/` (commit `8271639`). ✅
 
@@ -54,8 +59,8 @@ OAuth callback URIs (registered in each provider's developer console) all termin
 
 | Source                          | Destination                      | Surface                       | Where it's declared                                      | Status |
 | ------------------------------- | -------------------------------- | ----------------------------- | ------------------------------------------------------- | ------ |
-| `instaedit.org/(.*)`            | `https://app.instaedit.org/$1`   | Vercel edge (apex)            | `web/vercel.json` `redirects[]` (commit `8271639`)       | ✅     |
-| `www.instaedit.org/(.*)`        | `https://app.instaedit.org/$1`   | Vercel edge                   | `web/vercel.json` `redirects[]` (commit `8271639`)       | ✅ NEW |
+| `instaedit.org/(.*)`            | `https://app.instaedit.org/$1`   | Vercel edge (apex)            | `root vercel.json` `redirects[]` (commit `8271639`)       | ✅     |
+| `www.instaedit.org/(.*)`        | `https://app.instaedit.org/$1`   | Vercel edge                   | `root vercel.json` `redirects[]` (commit `8271639`)       | ✅ NEW |
 | Fly port 80 (`api.instaedit.org`) | `https://api.instaedit.org`    | Fly `[[services]]`            | `fly.toml` `force_https = true`                          | ✅     |
 | `/connections`                    | `/app/linking`                   | React Router                  | `web/src/App.tsx` `<Navigate … replace />`               | ✅     |
 | `*` (unknown route)               | `/`                              | React Router                  | `web/src/App.tsx` `<Route path="*">`                      | ✅     |
@@ -77,7 +82,7 @@ All six updated to `https://app.instaedit.org/…` plus a new `<link rel="canoni
 
 ### B. Apex 301 in source control (REAL defect, **fixed** in `8271639`)
 
-`web/vercel.json` previously had no `redirects[]` block — the apex → app redirect was configured only via the Vercel dashboard (not auditable in git, manual drift risk). Now declarative:
+The root `vercel.json` now declares the redirects in source control; previously the apex → app redirect was configured only via the Vercel dashboard (not auditable in git, manual drift risk):
 - `instaedit.org/(.*) → https://app.intaedit.org/$1` (permanent: true)
 - `www.instaedit.org/(.*) → https://app.instaedit.org/$1` (permanent: true)
 
@@ -89,7 +94,7 @@ Both `has`-match on the `host` so they trigger only for the apex + `www.` hostna
 
 ### D. HSTS / security headers (REAL defect, **deferred**)
 
-No `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, or `Referrer-Policy` declared on any of the four landing surfaces (Fly api, Vercel SPA, legacy VPS, local tunnel). Fly has no native HSTS knob, so the right surface is `web/vercel.json` `headers[]` for the SPA + Fly edge config for the API. Deferred to a dedicated "harden headers" block — needs SPA + API coordination that doesn't fit a 1-commit block.
+No `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, or `Referrer-Policy` declared on any of the four landing surfaces (Fly api, Vercel SPA, legacy VPS, local tunnel). Fly has no native HSTS knob, so the right surface is `root vercel.json` `headers[]` for the SPA + Fly edge config for the API. Deferred to a dedicated "harden headers" block — needs SPA + API coordination that doesn't fit a 1-commit block.
 
 ### E. DNSSEC / CAA records (REAL defect, **registrar-side only**)
 
@@ -111,10 +116,10 @@ Doc itself records that as of 2026-07-14 the live `api.instaedit.org` was respon
 - `[[services]]` api/worker/migrate (migrate commented, doc-only); `[[metrics]]` scrapes api process's `/api/v1/metrics` (worker metrics live in a separate process registry, not exposed here by design).
 - `[[vm]] shape = shared-cpu-1x / 512mb / auto_stop_machines = false` — enforces the no-scale-to-zero contract.
 
-### `web/vercel.json`
+### `root vercel.json`
 
 - `framework: "vite"` picks up Vite plugin conventions.
-- `buildCommand: "npm run build"`, `installCommand: "npm ci"`, `outputDirectory: "dist"`.
+- `installCommand: "npm --prefix web ci"`, `buildCommand: "npm --prefix web run build"`, `outputDirectory: "web/dist"`.
 - `redirects[]` (comments `8271639`): apex + `www.` → `app.instaedit.org/$1` (301, declarative).
 - `rewrites[]`: `/(.*) → /index.html` (SPA fallback).
 

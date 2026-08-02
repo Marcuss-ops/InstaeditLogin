@@ -102,7 +102,7 @@ const (
                   j.attempt_count, j.max_attempts, j.next_attempt_at, j.lease_owner, j.lease_expires_at, j.heartbeat_at,
                   j.progress_bytes, j.total_bytes, j.error_code, j.priority, j.started_at, j.completed_at,
                   j.youtube_session_uri, j.youtube_session_offset, j.youtube_session_expires_at, j.youtube_chunk_size, j.youtube_last_chunk_at,
-                  j.default_privacy_level`
+                  j.default_privacy_level, j.metadata`
 )
 
 // scanUploadJobRows is the *sql.Rows equivalent of scanUploadJob —
@@ -119,6 +119,7 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 	var job models.UploadJob
 	var rawStatus, rawSource string
 	var targetsJSON []byte
+	var metadataJSON []byte
 	var publishAt sql.NullTime
 	var folderID sql.NullString
 	var driveAccountID sql.NullInt64
@@ -171,6 +172,7 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 		&youtubeChunkSize,
 		&youtubeLastChunkAt,
 		&job.DefaultPrivacyLevel,
+		&metadataJSON,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -178,6 +180,7 @@ func scanUploadJobRows(rows *sql.Rows) (*models.UploadJob, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan upload job: %w", err)
 	}
+	job.Metadata = metadataJSON
 
 	job.SourceType = models.UploadJobSource(rawSource)
 	job.Status = models.UploadJobStatus(rawStatus)
@@ -268,6 +271,7 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 	var job models.UploadJob
 	var rawStatus, rawSource string
 	var targetsJSON []byte
+	var metadataJSON []byte
 	var publishAt sql.NullTime
 	var folderID sql.NullString
 	var driveAccountID sql.NullInt64
@@ -320,6 +324,7 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 		&youtubeChunkSize,
 		&youtubeLastChunkAt,
 		&job.DefaultPrivacyLevel,
+		&metadataJSON,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -327,6 +332,7 @@ func scanUploadJob(row *sql.Row) (*models.UploadJob, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan upload job: %w", err)
 	}
+	job.Metadata = metadataJSON
 
 	job.SourceType = models.UploadJobSource(rawSource)
 	job.Status = models.UploadJobStatus(rawStatus)

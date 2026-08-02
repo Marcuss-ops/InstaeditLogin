@@ -10,7 +10,7 @@
  * because the contract (201 vs 202, post+targets shape) is owned by
  * the server; the SDK only validates it parses successfully.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { authedFetchMock } = vi.hoisted(() => ({ authedFetchMock: vi.fn() }));
 

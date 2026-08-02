@@ -80,7 +80,10 @@ func TestPublishTarget_YouTube_ReusesPhase1VideoID_VideosUpdate(t *testing.T) {
 		phase1YTPubRowID int64 = 7777
 	)
 
-	publishAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	// Keep the schedule in the future regardless of when the suite runs.
+	// A fixed historical date made this test fail after 12:00 UTC on the
+	// fixture date, even though the production coercion was correct.
+	publishAt := time.Now().UTC().Add(1 * time.Hour)
 
 	posts := &mockPostStore{
 		claimFn: func(id int64) (bool, error) { return true, nil },

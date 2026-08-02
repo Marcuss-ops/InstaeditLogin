@@ -214,15 +214,11 @@ describe("useUploadMedia", () => {
   });
 
   it("start() aborts any prior in-flight upload before launching a new one", async () => {
-    let rejectFirst: (err: unknown) => void = () => {};
-
     uploadMediaAssetMock
       .mockImplementationOnce(
         async (_f, _o, onProgress) => {
           onProgress?.({ phase: "presign" });
-          await new Promise<unknown>((_resolve, reject) => {
-            rejectFirst = reject;
-          });
+          await new Promise<void>(() => {});
         },
       )
       .mockImplementationOnce(

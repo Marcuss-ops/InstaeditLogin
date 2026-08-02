@@ -2,14 +2,24 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  Edit3,
   ExternalLink,
   Loader2,
   RefreshCw,
   Video,
 } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { ApiError, authedFetch, AuthError } from "../../lib/auth";
 import { EmptyState } from "../../components/feedback/EmptyState";
+import { useToast } from "../../components/toast";
+import {
+  createEditorSessionAndOpen,
+  createYouTubeEditorSession,
+  generateYouTubeMetadata,
+  openEditorInNewTab,
+  type CreateYouTubeEditorSessionResponse,
+  type GeneratedYouTubeMetadata,
+} from "../../features/youtube/api/editorSessionsApi";
 import { cn } from "../../lib/utils";
 
 interface GroupYouTubeVideo {
@@ -20,6 +30,7 @@ interface GroupYouTubeVideo {
   processing_status?: string;
   platform_account_id: number;
   channel_name?: string;
+  language?: string;
   editor_status?: string;
   desired_privacy?: string;
   publish_at?: string;
@@ -28,18 +39,16 @@ interface GroupYouTubeVideo {
   phantom?: boolean;
 }
 
-interface GroupYouTubeVideosSummary {
-  total_videos: number;
-  truncated: boolean;
-  accounts: number;
-  accounts_with_videos: number;
-  failed_accounts: number;
-  invalid_token_accounts?: number[];
-}
+type VideoPreview = {
+  video: GroupYouTubeVideo;
+  metadata: GeneratedYouTubeMetadata | null;
+  session: CreateYouTubeEditorSessionResponse | null;
+  loading: boolean;
+  error: string | null;
+};
 
 interface GroupYouTubeVideosResponse {
   videos?: GroupYouTubeVideo[];
-  summary?: Partial<GroupYouTubeVideosSummary>;
   warnings?: string[];
   has_more?: boolean;
   next_offset?: number;
@@ -51,7 +60,6 @@ type LoadState =
       kind: "ready";
       videos: GroupYouTubeVideo[];
       warnings: string[];
-      summary: GroupYouTubeVideosSummary;
       hasMore: boolean;
       nextOffset: number | null;
       isLoadingMore: boolean;
@@ -59,16 +67,7 @@ type LoadState =
   | { kind: "error"; message: string; upstream: boolean };
 
 const DEFAULT_PAGE_SIZE = 50;
-function normalizeSummary(summary?: Partial<GroupYouTubeVideosSummary>): GroupYouTubeVideosSummary {
-  return {
-    total_videos: summary?.total_videos ?? 0,
-    truncated: summary?.truncated ?? false,
-    accounts: summary?.accounts ?? 0,
-    accounts_with_videos: summary?.accounts_with_videos ?? 0,
-    failed_accounts: summary?.failed_accounts ?? 0,
-    invalid_token_accounts: summary?.invalid_token_accounts ?? [],
-  };
-}
+const RECENCY_OPTIONS = [7, 14, 28, 90] as const;
 
 function privacyLabel(value?: string): string {
   switch (value) {
@@ -149,6 +148,78 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
   const abortRef = useRef<AbortController | null>(null);
   const pollingAttemptsRef = useRef(0);
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  const [recencyDays, setRecencyDays] = useState<number>(90);
+  const [openingVideoID, setOpeningVideoID] = useState<string | null>(null);
+  const [preview, setPreview] = useState<VideoPreview | null>(null);
+  const toast = useToast();
+
+  const openThumbnailEditor = useCallback(async (video: GroupYouTubeVideo) => {
+    if (openingVideoID) return;
+    setOpeningVideoID(video.youtube_video_id);
+    try {
+      // The group is the source of truth for the channel/workspace binding.
+      // Using the first global workspace can point the editor at a valid but
+      // unrelated workspace and produces "account not linked to workspace".
+      const groupResponse = await authedFetch(`/api/v1/groups/${groupId}`);
+      const groupData = (await groupResponse.json()) as { workspace_id?: number };
+      const workspaceID = groupData.workspace_id;
+      if (!workspaceID) throw new Error("Il gruppo non ha un workspace valido.");
+      await createEditorSessionAndOpen({
+        workspace_id: workspaceID,
+        platform_account_id: video.platform_account_id,
+        youtube_video_id: video.youtube_video_id,
+        ...(video.thumbnail_url ? { source_thumbnail_url: video.thumbnail_url } : {}),
+      });
+      toast.success("Dark Editor aperto: il video resta privato finché non scegli di pubblicarlo.");
+    } catch (error) {
+      if (error instanceof AuthError) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : "Impossibile aprire il Dark Editor.");
+    } finally {
+      setOpeningVideoID(null);
+    }
+  }, [groupId, navigate, openingVideoID, toast]);
+
+  const openVideoPreview = useCallback(async (video: GroupYouTubeVideo) => {
+    setPreview({ video, metadata: null, session: null, loading: true, error: null });
+    try {
+      const groupResponse = await authedFetch(`/api/v1/groups/${groupId}`);
+      const groupData = (await groupResponse.json()) as { workspace_id?: number };
+      if (!groupData.workspace_id) throw new Error("Il gruppo non ha un workspace valido.");
+      const session = await createYouTubeEditorSession({
+        workspace_id: groupData.workspace_id,
+        platform_account_id: video.platform_account_id,
+        youtube_video_id: video.youtube_video_id,
+        // Keep the preview/session source identical to the thumbnail
+        // rendered in this list. The editor-session endpoint also
+        // canonicalises this against YouTube and repairs stale rows.
+        ...(video.thumbnail_url ? { source_thumbnail_url: video.thumbnail_url } : {}),
+      });
+      const language = video.language?.trim() || "en";
+      const prompt = [
+        "Genera metadata YouTube per una preview editoriale.",
+        `Titolo originale: ${video.title || "senza titolo"}`,
+        `Canale: ${video.channel_name || "YouTube"}`,
+        `Video ID: ${video.youtube_video_id}`,
+        `Lingua target principale: ${language}`,
+        "Mantieni il significato del titolo e restituisci traduzioni naturali e concise.",
+      ].join("\n");
+      const metadata = await generateYouTubeMetadata(session.velox_project_id, prompt);
+      setPreview((current) => current ? { ...current, session, metadata, loading: false } : current);
+    } catch (error) {
+      if (error instanceof AuthError) {
+        navigate("/login", { replace: true });
+        return;
+      }
+      setPreview((current) => current ? {
+        ...current,
+        loading: false,
+        error: error instanceof Error ? error.message : "Impossibile generare la preview NVIDIA.",
+      } : current);
+    }
+  }, [groupId, navigate]);
 
   const loadVideos = useCallback(
     async (signal: AbortSignal, offset = 0, append = false): Promise<void> => {
@@ -157,6 +228,7 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
           include_subgroups: "true",
           limit: String(DEFAULT_PAGE_SIZE),
           offset: String(offset),
+          days: String(recencyDays),
         });
         const response = await authedFetch(
           `/api/v1/groups/${groupId}/youtube/videos?${params.toString()}`,
@@ -164,15 +236,16 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
         );
         if (signal.aborted) return;
         const data = (await response.json()) as GroupYouTubeVideosResponse;
-        const videos = data.videos ?? [];
-        const summary = normalizeSummary(data.summary);
+        const videos = (data.videos ?? []).filter((video) => {
+          const privacy = String(video.actual_privacy ?? video.privacy_status ?? "").toLowerCase();
+          return privacy === "private" && video.phantom !== true;
+        });
         setState((previous) => {
           const previousVideos = append && previous.kind === "ready" ? previous.videos : [];
           return {
             kind: "ready",
             videos: [...previousVideos, ...videos],
             warnings: data.warnings ?? (append && previous.kind === "ready" ? previous.warnings : []),
-            summary,
             hasMore: data.has_more === true,
             nextOffset: data.has_more === true && data.next_offset != null ? data.next_offset : null,
             isLoadingMore: false,
@@ -196,7 +269,7 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
         });
       }
     },
-    [groupId, navigate],
+    [groupId, navigate, recencyDays],
   );
 
   const refreshVideos = useCallback(
@@ -254,21 +327,35 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
       <div className="flex items-center justify-between gap-3 mb-2">
         <div>
           <h3 className="text-[11px] font-bold uppercase tracking-wider text-[#9aa0aa]">
-            Video YouTube
+            Video privati da pubblicare
           </h3>
           <p className="text-[12px] text-[#9aa0aa] mt-1">
-            Qui vedi se il video è stato pubblicato davvero o se è ancora in verifica.
+            Solo video privati recenti dei canali presenti nel gruppo.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => refreshVideos()}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[11px] font-semibold text-[#cdd2da] hover:bg-white/[0.08] hover:text-white transition-colors"
-          data-testid="group-youtube-videos-refresh"
-        >
-          <RefreshCw size={12} aria-hidden="true" />
-          Aggiorna stato
-        </button>
+        <div className="flex items-center gap-2">
+          <label className="text-[10px] text-[#9aa0aa]" htmlFor="group-video-recency">Periodo</label>
+          <select
+            id="group-video-recency"
+            value={recencyDays}
+            onChange={(event) => {
+              setRecencyDays(Number(event.target.value));
+            }}
+            className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-2 py-1.5 text-[11px] font-semibold text-[#cdd2da]"
+            data-testid="group-youtube-videos-recency"
+          >
+            {RECENCY_OPTIONS.map((days) => <option key={days} value={days}>{days} giorni</option>)}
+          </select>
+          <button
+            type="button"
+            onClick={() => refreshVideos()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[11px] font-semibold text-[#cdd2da] hover:bg-white/[0.08] hover:text-white transition-colors"
+            data-testid="group-youtube-videos-refresh"
+          >
+            <RefreshCw size={12} aria-hidden="true" />
+            Aggiorna
+          </button>
+        </div>
       </div>
 
       {state.kind === "loading" && (
@@ -288,28 +375,6 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
         </div>
       )}
 
-      {state.kind === "ready" && (
-        <div className="mb-2 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="group-youtube-summary">
-          <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-[#9aa0aa]">Video totali</p>
-            <p className="text-[16px] font-bold text-white">{state.summary.total_videos}</p>
-            {state.summary.truncated && <p className="text-[10px] text-amber-200/80">Limite raggiunto</p>}
-          </div>
-          <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-[#9aa0aa]">Canali</p>
-            <p className="text-[16px] font-bold text-white">{state.summary.accounts}</p>
-          </div>
-          <div className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-[#9aa0aa]">Con video</p>
-            <p className="text-[16px] font-bold text-white">{state.summary.accounts_with_videos}</p>
-          </div>
-          <div className="rounded-lg border border-amber-500/15 bg-amber-500/[0.04] px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-amber-200/70">Da verificare</p>
-            <p className="text-[16px] font-bold text-amber-200">{state.summary.failed_accounts}</p>
-          </div>
-        </div>
-      )}
-
       {state.kind === "ready" && state.warnings.length > 0 && (
         <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.05] px-3 py-2 text-[11px] text-amber-200" role="status">
           <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -319,8 +384,8 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
 
       {state.kind === "ready" && state.videos.length === 0 && (
         <EmptyState
-          title="Nessun video trovato nel gruppo"
-          description="Il gruppo contiene account, ma YouTube non ha restituito video visualizzabili. Questo non conferma né esclude una pubblicazione: controlla la pagina del canale o il link della conferma di pubblicazione."
+          title="Nessun video privato recente"
+          description="Non ci sono video privati nei giorni selezionati. Prova ad ampliare il periodo a 90 giorni; i video pubblici e non in elenco non vengono mostrati."
           icon={<Video size={28} />}
           className="p-6 bg-white/[0.02] border-white/[0.08]"
         />
@@ -331,11 +396,19 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
           {state.videos.map((video) => {
             const publication = publicationState(video);
             const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(video.youtube_video_id)}`;
-            const channelUrl = `/app/dashboard-channels/${video.platform_account_id}?video=${encodeURIComponent(video.youtube_video_id)}`;
             return (
               <article
                 key={`${video.platform_account_id}:${video.youtube_video_id}`}
-                className="flex flex-col gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3 sm:flex-row sm:items-center"
+                className="flex cursor-pointer flex-col gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3 transition-colors hover:border-violet-400/30 hover:bg-white/[0.05] sm:flex-row sm:items-center"
+                onClick={() => void openVideoPreview(video)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    void openVideoPreview(video);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
                 data-testid="group-youtube-video"
               >
                 <div className="h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-white/[0.08]">
@@ -362,6 +435,11 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
                     <span className="rounded-full border border-white/[0.10] bg-white/[0.04] px-2 py-0.5 text-[#cdd2da]">
                       Privacy: {privacyLabel(video.actual_privacy ?? video.privacy_status)}
                     </span>
+                    {video.language?.trim() ? (
+                      <span className="rounded-full border border-violet-500/20 bg-violet-500/[0.06] px-2 py-0.5 text-violet-200">
+                        Lingua: {video.language.trim().toUpperCase()}
+                      </span>
+                    ) : null}
                     {video.publish_at && new Date(video.publish_at).getTime() > Date.now() && (
                       <span className="rounded-full border border-blue-500/20 bg-blue-500/[0.06] px-2 py-0.5 text-blue-200">
                         Diventa pubblico il {new Date(video.publish_at).toLocaleString("it-IT")}
@@ -371,12 +449,18 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2 sm:flex-col sm:items-end">
-                  <a href={watchUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-300 hover:text-blue-200 no-underline">
+                  <a href={watchUrl} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()} className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-300 hover:text-blue-200 no-underline">
                     Apri su YouTube <ExternalLink size={12} aria-hidden="true" />
                   </a>
-                  <Link to={channelUrl} className="text-[11px] font-semibold text-[#cdd2da] underline-offset-2 hover:text-white hover:underline">
-                    Apri nel canale
-                  </Link>
+                  <button
+                    type="button"
+                    onClick={(event) => { event.stopPropagation(); void openThumbnailEditor(video); }}
+                    disabled={openingVideoID !== null}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-violet-300 underline-offset-2 hover:text-violet-200 hover:underline disabled:cursor-wait disabled:opacity-60"
+                  >
+                    <Edit3 size={12} aria-hidden="true" />
+                    {openingVideoID === video.youtube_video_id ? "Apertura…" : "Modifica copertina"}
+                  </button>
                 </div>
               </article>
             );
@@ -395,6 +479,63 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
           )}
         </div>
       )}
+
+      {preview && (() => {
+        const language = preview.video.language?.trim().toLowerCase() || "en";
+        const localized = preview.metadata?.translations?.[language];
+        const title = localized?.title || preview.metadata?.title || preview.video.title || "Video senza titolo";
+        const description = localized?.description || preview.metadata?.description || "";
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+            role="presentation"
+            onMouseDown={(event) => { if (event.target === event.currentTarget) setPreview(null); }}
+          >
+            <div role="dialog" aria-modal="true" aria-labelledby="youtube-video-preview-title" className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-white/[0.12] bg-[#11131a] p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-violet-300">Preview localizzata · NVIDIA AI</p>
+                  <h4 id="youtube-video-preview-title" className="mt-1 text-lg font-bold text-white">{preview.video.channel_name || "Video YouTube"}</h4>
+                  <p className="mt-1 text-[11px] text-[#9aa0aa]">Lingua target: {language.toUpperCase()} · {preview.video.youtube_video_id}</p>
+                </div>
+                <button type="button" onClick={() => setPreview(null)} className="rounded-lg px-2 py-1 text-xl text-[#9aa0aa] hover:bg-white/[0.08] hover:text-white" aria-label="Chiudi preview">×</button>
+              </div>
+
+              <div className="grid gap-5 md:grid-cols-[1.15fr_1fr]">
+                <div>
+                  <div className="relative aspect-video overflow-hidden rounded-xl border border-white/[0.10] bg-black">
+                    {preview.video.thumbnail_url ? <img src={preview.video.thumbnail_url} alt="Thumbnail attuale" className="h-full w-full object-cover" /> : null}
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/55 to-transparent px-4 pb-4 pt-12">
+                      <p className="line-clamp-2 text-center text-lg font-black leading-tight text-white drop-shadow-[0_2px_3px_rgba(0,0,0,0.9)]">{preview.loading ? "Generazione preview…" : title}</p>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-[10px] text-[#7f8591]">Preview grafica: la thumbnail originale resta invariata finché non pubblichi.</p>
+                </div>
+
+                <div className="space-y-4">
+                  {preview.loading ? <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-4 text-sm text-[#cdd2da]">NVIDIA sta preparando titolo, descrizione e traduzione…</div> : null}
+                  {preview.error ? <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-4 text-sm text-amber-200">{preview.error}</div> : null}
+                  {!preview.loading && !preview.error ? <>
+                    <div>
+                      <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#9aa0aa]">Titolo tradotto</p>
+                      <p className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3 text-sm font-semibold text-white">{title}</p>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[#9aa0aa]">Descrizione tradotta</p>
+                      <p className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-xl border border-white/[0.08] bg-white/[0.03] p-3 text-xs leading-relaxed text-[#cdd2da]">{description || "Nessuna descrizione generata."}</p>
+                    </div>
+                  </> : null}
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap justify-end gap-2 border-t border-white/[0.08] pt-4">
+                <button type="button" onClick={() => setPreview(null)} className="rounded-lg border border-white/[0.10] px-3 py-2 text-xs font-semibold text-[#cdd2da] hover:bg-white/[0.08]">Chiudi</button>
+                {preview.session ? <button type="button" onClick={() => openEditorInNewTab(preview.session!.editor_url)} className="rounded-lg bg-violet-500 px-3 py-2 text-xs font-bold text-white hover:bg-violet-400">Apri editor copertina</button> : null}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </section>
   );
 }

@@ -422,6 +422,8 @@ type VeloxDeliveryMetadata struct {
 	Title            string   `json:"title"`
 	Description      string   `json:"description"`
 	PrivacyStatus    string   `json:"privacy_status"`
+	FinalPrivacy     string   `json:"final_privacy,omitempty"`
+	RequireThumbnail bool     `json:"require_thumbnail,omitempty"`
 	Language         *string  `json:"language,omitempty"`
 	Timezone         *string  `json:"timezone,omitempty"`
 	Tags             []string `json:"tags,omitempty"`
