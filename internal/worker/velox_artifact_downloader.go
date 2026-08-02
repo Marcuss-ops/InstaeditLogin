@@ -275,24 +275,47 @@ func (d *VeloxArtifactDownloader) processOne(ctx context.Context, delivery *mode
 func (d *VeloxArtifactDownloader) handleFailure(ctx context.Context, delivery *models.ExternalDelivery, err error) {
 	var md errMetadataOnly
 	if errors.As(err, &md) {
-		_ = d.claimStore.MarkBlockedAuth(ctx, delivery.ID, "VELOX_METADATA_ONLY", "delivery has no download_url; metadata-only")
+		if markErr := d.claimStore.MarkBlockedAuth(ctx, delivery.ID, "VELOX_METADATA_ONLY", "delivery has no download_url; metadata-only"); markErr != nil {
+			d.logMarkFailure(delivery.ID, "MarkBlockedAuth", markErr, err)
+		}
 		return
 	}
 
 	var te transientError
 	if !errors.As(err, &te) {
-		_ = d.claimStore.MarkFailed(ctx, delivery.ID, "VELOX_PROCESSING_ERROR", err.Error())
+		if markErr := d.claimStore.MarkFailed(ctx, delivery.ID, "VELOX_PROCESSING_ERROR", err.Error()); markErr != nil {
+			d.logMarkFailure(delivery.ID, "MarkFailed", markErr, err)
+		}
 		return
 	}
 
 	if delivery.AttemptCount >= d.maxAttempts {
-		_ = d.claimStore.MarkDeadLetter(ctx, delivery.ID, "MAX_ATTEMPTS_EXCEEDED", "retry budget exhausted")
+		if markErr := d.claimStore.MarkDeadLetter(ctx, delivery.ID, "MAX_ATTEMPTS_EXCEEDED", "retry budget exhausted"); markErr != nil {
+			d.logMarkFailure(delivery.ID, "MarkDeadLetter", markErr, err)
+		}
 		return
 	}
 
 	backoff := d.retryBackoff(delivery.AttemptCount)
 	nextAttempt := time.Now().Add(backoff)
-	_ = d.claimStore.MarkRetry(ctx, delivery.ID, nextAttempt, "TRANSIENT_ERROR", te.err.Error())
+	if markErr := d.claimStore.MarkRetry(ctx, delivery.ID, nextAttempt, "TRANSIENT_ERROR", te.err.Error()); markErr != nil {
+		d.logMarkFailure(delivery.ID, "MarkRetry", markErr, err)
+	}
+}
+
+// logMarkFailure surfaces a failed state-transition write on the
+// failure-handling path. Historically these were `_ =` discards; a
+// silent mark failure leaves the external_deliveries row leased until
+// the lease reaper reclaims it, so the operator's only signal is this
+// error line. The original processing error is included so the log
+// carries BOTH failure layers.
+func (d *VeloxArtifactDownloader) logMarkFailure(deliveryID string, op string, markErr, originalErr error) {
+	d.logger.Error("velox artifact downloader: failed to persist failure transition; row stays leased until reaper reclaim",
+		"delivery_id", deliveryID,
+		"op", op,
+		"worker_id", d.workerID,
+		"mark_error", markErr,
+		"original_error", originalErr)
 }
 
 func (d *VeloxArtifactDownloader) retryBackoff(attemptCount int) time.Duration {

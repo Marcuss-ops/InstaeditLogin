@@ -155,13 +155,13 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	// Sign S3 PUT and stream.
 	grant, err := w.storage.SignUpload(ctx, job.UserID, key, contentType, sizeBytes, 15*time.Minute)
 	if err != nil {
-		_ = w.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
+		w.markAssetFailed(job.ID, asset.ID, err.Error(), err)
 		return fmt.Errorf("sign s3 upload: %w", err)
 	}
 
 	uploadReq, err := http.NewRequestWithContext(ctx, http.MethodPut, grant.UploadURL, srcBody)
 	if err != nil {
-		_ = w.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
+		w.markAssetFailed(job.ID, asset.ID, err.Error(), err)
 		return fmt.Errorf("build s3 upload request: %w", err)
 	}
 	uploadReq.Header.Set("Content-Type", contentType)
@@ -170,7 +170,7 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	s3Client := &http.Client{Timeout: w.uploadTimeout}
 	uploadResp, err := s3Client.Do(uploadReq)
 	if err != nil {
-		_ = w.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
+		w.markAssetFailed(job.ID, asset.ID, err.Error(), err)
 		return fmt.Errorf("upload to s3: %w", err)
 	}
 	uploadResp.Body.Close()
@@ -182,19 +182,19 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	// paths share this single gate. The defer srcBody.Close() above
 	// covers verifyReader.Close() since `srcBody = verifyReader`.
 	if vErr := verifyReader.Verify(); vErr != nil {
-		_ = w.mediaStore.MarkFailedWithReason(asset.ID, vErr.Error(), vErr)
+		w.markAssetFailed(job.ID, asset.ID, vErr.Error(), vErr)
 		return fmt.Errorf("artifact verification: %w", vErr)
 	}
 	if uploadResp.StatusCode >= 300 {
 		reason := fmt.Sprintf("s3 upload returned %d", uploadResp.StatusCode)
-		_ = w.mediaStore.MarkFailedWithReason(asset.ID, reason, errors.New(reason))
+		w.markAssetFailed(job.ID, asset.ID, reason, errors.New(reason))
 		return fmt.Errorf("%s", reason)
 	}
 
 	// Verify upload.
 	verifiedContentType, verifiedSize, err := w.storage.VerifyUpload(ctx, key)
 	if err != nil {
-		_ = w.mediaStore.MarkFailedWithReason(asset.ID, err.Error(), err)
+		w.markAssetFailed(job.ID, asset.ID, err.Error(), err)
 		return fmt.Errorf("verify s3 upload: %w", err)
 	}
 	// Boundary MIME check: S3-reported content_type must match the
@@ -204,7 +204,7 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	// dashboard can surface the upstream-side regression.
 	if policy.ExpectedMIME != "" && verifiedContentType != policy.ExpectedMIME {
 		reason := fmt.Sprintf("mime mismatch (expected %q, S3 returned %q)", policy.ExpectedMIME, verifiedContentType)
-		_ = w.mediaStore.MarkFailedWithReason(asset.ID, reason, errors.New(reason))
+		w.markAssetFailed(job.ID, asset.ID, reason, errors.New(reason))
 		return fmt.Errorf("%s", reason)
 	}
 	// MarkReady now receives the LOCALLY-COMPUTED SHA — always,
@@ -237,4 +237,24 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 	w.logger.Info("upload worker: ingest done",
 		"pool", "ingest", "job_id", job.ID, "asset_id", asset.ID, "size", verifiedSize)
 	return nil
+}
+
+// markAssetFailed transitions the media asset to failed and, when the
+// bookkeeping write ITSELF fails, logs a loud slog.Error with the job
+// and asset ids instead of silently discarding the error (the
+// historical `_ = w.mediaStore.MarkFailedWithReason(...)` pattern).
+// The caller still returns the ORIGINAL ingest error — that is the
+// failure the tick counter and the retry state machine act on; a
+// failed mark leaves the asset in 'pending' where the asset-cleanup
+// sweep and this error line are the operator's recovery signals.
+func (w *UploadWorker) markAssetFailed(jobID int64, assetID string, reason string, cause error) {
+	if markErr := w.mediaStore.MarkFailedWithReason(assetID, reason, cause); markErr != nil {
+		w.logger.Error("upload worker: failed to mark media asset failed; asset stays pending",
+			"pool", "ingest",
+			"job_id", jobID,
+			"asset_id", assetID,
+			"mark_error", markErr,
+			"original_reason", reason,
+			"original_error", cause)
+	}
 }
