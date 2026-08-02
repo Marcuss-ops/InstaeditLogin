@@ -92,6 +92,131 @@ type UploadsBatchByFolderResponse struct {
 	Note                   string                 `json:"note,omitempty"`
 }
 
+// uploadsBatchPaginationResult carries the outcome of the multi-page
+// scheduling loop back to the handler for response assembly.
+type uploadsBatchPaginationResult struct {
+	entries           []DriveBatchImportItem
+	firstPublish      time.Time
+	pageCount         int
+	partialFailure    bool
+	failedAtPageToken string
+	failedAtPage      int
+}
+
+// runUploadsBatchPagination drives the by-folder auto-pagination:
+// per-page ListFolder + scheduleDriveBatchFiles, advancing the cursor
+// monotonically across pages. Returns ok=false when a terminal
+// response was already written (413 page cap, first-page config-gap
+// 200, first-page empty 200, first-page 502, or a scheduling error).
+// A mid-pagination upstream failure is NOT terminal: it surfaces as
+// partialFailure=true with everything queued so far so the operator
+// can resume manually.
+func (r *Router) runUploadsBatchPagination(
+	w http.ResponseWriter,
+	req *http.Request,
+	userID int64,
+	params driveBatchCommonParams,
+	folderLister services.DriveFolderLister,
+	resolvedDriveID, listingAccessToken string,
+	needsDriveAccount bool,
+	startedAt time.Time,
+) (uploadsBatchPaginationResult, bool) {
+	var out uploadsBatchPaginationResult
+	cursor := startedAt
+	pageToken := ""
+
+	for {
+		out.pageCount++
+		if out.pageCount > driveBatchMaxPages {
+			// We've already queued upload_jobs for the previous
+			// pages — they STAY queued (no rollback). The 413
+			// response surfaces the cap so the SPA can split the
+			// import into smaller chunks (split folder, or break
+			// the source folder into N folders of ≤10k each).
+			writeError(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("folder has more than driveBatchMaxPages=%d pages; split the import into smaller chunks or use the CLI", driveBatchMaxPages))
+			return out, false
+		}
+		files, nextPageToken, err := folderLister.ListFolder(req.Context(), params.FolderID, resolvedDriveID, listingAccessToken, pageToken)
+		if err != nil {
+			// Config gap (server-side GOOGLE_DRIVE_API_KEY missing
+			// AND no per-user Drive grant provided) is detected on
+			// the FIRST page only. The typed sentinel
+			// ErrDriveListRequiresAPIKey surfaces a clean CTA,
+			// not a fatal 5xx — same pattern as handleDriveBatchImport.
+			if errors.Is(err, services.ErrDriveListRequiresAPIKey) && out.pageCount == 1 {
+				writeJSON(w, http.StatusOK, UploadsBatchByFolderResponse{
+					FolderID:               params.FolderID,
+					ScheduledCount:         0,
+					PageCount:              1,
+					Entries:                []DriveBatchImportItem{},
+					NeedsDriveAccount:      needsDriveAccount,
+					NeedsGoogleDriveAPIKey: true,
+					Note:                   "Server is missing GOOGLE_DRIVE_API_KEY (or link a Google Drive account for authenticated listing). Either set GOOGLE_DRIVE_API_KEY in the server env, OR pass drive_account_id in this request body to use your linked Drive account.",
+				})
+				return out, false
+			}
+			// Generic upstream 5xx (the folder lister service
+			// returns the wrapped error after its own retries): if
+			// we already queued entries, surface partial state so
+			// the operator can resume; if this was page 1, full
+			// 502 + log the error.
+			slog.Warn("uploads batch by-folder: upstream page failed",
+				"page_num", out.pageCount,
+				"page_token", pageToken,
+				"folder_id", params.FolderID,
+				"user_id", userID,
+				"error", err)
+			if len(out.entries) > 0 {
+				out.partialFailure = true
+				out.failedAtPage = out.pageCount
+				out.failedAtPageToken = pageToken
+				return out, true
+			}
+			writeError(w, http.StatusBadGateway, "drive folder list failed (see server logs for details)")
+			return out, false
+		}
+
+		if len(files) == 0 {
+			// Empty page: this means either the folder has no
+			// videos at all (page 1) — surface 200 with note —
+			// OR we hit a phantom empty page mid-pagination (rare;
+			// Drive would normally return next_page_token + N>0).
+			// Mid-pagination empty is treated as end-of-folder.
+			if out.pageCount == 1 {
+				writeJSON(w, http.StatusOK, UploadsBatchByFolderResponse{
+					FolderID:          params.FolderID,
+					ScheduledCount:    0,
+					PageCount:         1,
+					Entries:           []DriveBatchImportItem{},
+					Note:              "no videos found in the folder",
+					NeedsDriveAccount: needsDriveAccount,
+				})
+				return out, false
+			}
+			return out, true
+		}
+
+		// Schedule this page's files. Index offset across the WHOLE
+		// folder so the SPA can identify "this is the 47th video
+		// overall" not just "the 27th on page 3".
+		pageEntries, newCursor, ok := r.scheduleDriveBatchFiles(w, userID, params, files, cursor, startedAt, len(out.entries))
+		if !ok {
+			return out, false
+		}
+		cursor = newCursor
+		if out.firstPublish.IsZero() && len(pageEntries) > 0 {
+			out.firstPublish = pageEntries[0].PublishAt
+		}
+		out.entries = append(out.entries, pageEntries...)
+
+		if nextPageToken == "" {
+			return out, true
+		}
+		pageToken = nextPageToken
+	}
+}
+
 // handleUploadsBatchByFolder implements POST /api/v1/uploads/batch/by-folder.
 // Auto-paginates the single-page handleDriveBatchImport equivalent
 // server-side. See UploadsBatchByFolderRequest / Response for the
@@ -220,124 +345,31 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 	// quota for nothing).
 	resolvedDriveID := resolveSharedDriveID(req.Context(), lister, params.FolderID, listingAccessToken, userID, "uploads batch by-folder")
 
-	// Multi-page loop. The cursor advances monotonically across
-	// pages via the LAST entry's scheduled_at on every iteration so
-	// the cumulative stagger is uninterrupted (matching what
-	// cmd/batch-import-drive-folder does after each page).
+	// Multi-page loop — extracted to runUploadsBatchPagination. The
+	// cursor advances monotonically across pages via the LAST entry's
+	// scheduled_at so the cumulative stagger is uninterrupted
+	// (matching what cmd/batch-import-drive-folder does per page).
 	startedAt := time.Now()
-	cursor := startedAt
-	var allEntries []DriveBatchImportItem
-	firstPublish := time.Time{}
-	pageNum := 0
-	pageToken := ""
-	partialFailure := false
-	failedAtPageToken := ""
-	failedAtPage := 0
-
-	for {
-		pageNum++
-		if pageNum > driveBatchMaxPages {
-			// We've already queued upload_jobs for the previous
-			// pages — they STAY queued (no rollback). The 413
-			// response surfaces the cap so the SPA can split the
-			// import into smaller chunks (split folder, or break
-			// the source folder into N folders of ≤10k each).
-			writeError(w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("folder has more than driveBatchMaxPages=%d pages; split the import into smaller chunks or use the CLI", driveBatchMaxPages))
-			return
-		}
-		files, nextPageToken, err := folderLister.ListFolder(req.Context(), params.FolderID, resolvedDriveID, listingAccessToken, pageToken)
-		if err != nil {
-			// Config gap (server-side GOOGLE_DRIVE_API_KEY missing
-			// AND no per-user Drive grant provided) is detected on
-			// the FIRST page only. The typed sentinel
-			// ErrDriveListRequiresAPIKey surfaces a clean CTA,
-			// not a fatal 5xx — same pattern as handleDriveBatchImport.
-			if errors.Is(err, services.ErrDriveListRequiresAPIKey) && pageNum == 1 {
-				writeJSON(w, http.StatusOK, UploadsBatchByFolderResponse{
-					FolderID:               params.FolderID,
-					ScheduledCount:         0,
-					PageCount:              1,
-					Entries:                []DriveBatchImportItem{},
-					NeedsDriveAccount:      needsDriveAccount,
-					NeedsGoogleDriveAPIKey: true,
-					Note:                   "Server is missing GOOGLE_DRIVE_API_KEY (or link a Google Drive account for authenticated listing). Either set GOOGLE_DRIVE_API_KEY in the server env, OR pass drive_account_id in this request body to use your linked Drive account.",
-				})
-				return
-			}
-			// Generic upstream 5xx (the folder lister service
-			// returns the wrapped error after its own retries): if
-			// we already queued entries, surface partial state so
-			// the operator can resume; if this was page 1, full
-			// 502 + log the error.
-			slog.Warn("uploads batch by-folder: upstream page failed",
-				"page_num", pageNum,
-				"page_token", pageToken,
-				"folder_id", params.FolderID,
-				"user_id", userID,
-				"error", err)
-			if len(allEntries) > 0 {
-				partialFailure = true
-				failedAtPage = pageNum
-				failedAtPageToken = pageToken
-				break
-			}
-			writeError(w, http.StatusBadGateway, "drive folder list failed (see server logs for details)")
-			return
-		}
-
-		if len(files) == 0 {
-			// Empty page: this means either the folder has no
-			// videos at all (page 1) — surface 200 with note —
-			// OR we hit a phantom empty page mid-pagination (rare;
-			// Drive would normally return next_page_token + N>0).
-			// Mid-pagination empty is treated as end-of-folder.
-			if pageNum == 1 {
-				writeJSON(w, http.StatusOK, UploadsBatchByFolderResponse{
-					FolderID:          params.FolderID,
-					ScheduledCount:    0,
-					PageCount:         1,
-					Entries:           []DriveBatchImportItem{},
-					Note:              "no videos found in the folder",
-					NeedsDriveAccount: needsDriveAccount,
-				})
-				return
-			}
-			break
-		}
-
-		// Schedule this page's files. Index offset across the WHOLE
-		// folder so the SPA can identify "this is the 47th video
-		// overall" not just "the 27th on page 3".
-		pageEntries, newCursor, ok := r.scheduleDriveBatchFiles(w, userID, params, files, cursor, startedAt, len(allEntries))
-		if !ok {
-			return
-		}
-		cursor = newCursor
-		if firstPublish.IsZero() && len(pageEntries) > 0 {
-			firstPublish = pageEntries[0].PublishAt
-		}
-		allEntries = append(allEntries, pageEntries...)
-
-		if nextPageToken == "" {
-			break
-		}
-		pageToken = nextPageToken
+	pg, ok := r.runUploadsBatchPagination(w, req, userID, params, folderLister, resolvedDriveID, listingAccessToken, needsDriveAccount, startedAt)
+	if !ok {
+		return
 	}
+	allEntries := pg.entries
+	partialFailure := pg.partialFailure
 
 	// Build the flat response.
 	resp := UploadsBatchByFolderResponse{
 		FolderID:          params.FolderID,
 		ScheduledCount:    len(allEntries),
-		PageCount:         pageNum,
+		PageCount:         pg.pageCount,
 		Entries:           allEntries,
 		NeedsDriveAccount: needsDriveAccount,
 		PartialFailure:    partialFailure,
-		FailedAtPageToken: failedAtPageToken,
-		FailedAtPage:      failedAtPage,
+		FailedAtPageToken: pg.failedAtPageToken,
+		FailedAtPage:      pg.failedAtPage,
 	}
 	if len(allEntries) > 0 {
-		resp.FirstPublishAt = firstPublish
+		resp.FirstPublishAt = pg.firstPublish
 		resp.LastScheduledAt = allEntries[len(allEntries)-1].PublishAt
 		resp.TotalRuntimeSeconds = int(allEntries[len(allEntries)-1].PublishAt.Sub(startedAt).Seconds())
 	} else {
@@ -346,7 +378,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 	if partialFailure {
 		resp.Note = fmt.Sprintf(
 			"partial failure on page %d: %d jobs were queued before the upstream error. To resume, re-call POST /api/v1/media/import/drive/folder with page_token=%q and cursor_scheduled_at=%q.",
-			failedAtPage, len(allEntries), failedAtPageToken,
+			pg.failedAtPage, len(allEntries), pg.failedAtPageToken,
 			resp.LastScheduledAt.UTC().Format(time.RFC3339),
 		)
 	}
@@ -355,7 +387,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 		"user_id", userID,
 		"folder_id", params.FolderID,
 		"workspace_id", params.WorkspaceID,
-		"page_count", pageNum,
+		"page_count", pg.pageCount,
 		"video_count", resp.ScheduledCount,
 		"partial_failure", partialFailure,
 		"first_publish_at", resp.FirstPublishAt,
