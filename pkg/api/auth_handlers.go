@@ -68,6 +68,12 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	http.Redirect(w, req, p.GetLoginURLWithOptions(state, options), http.StatusFound)
 }
 
+// handleCallback drives the security-critical OAuth callback flow.
+// The body is decomposed into step methods so each transition is
+// independently testable; each step either returns its result or
+// writes the terminal HTTP response itself and signals the
+// orchestrator to stop (stop=true). The step order, status codes,
+// messages and log lines are identical to the previous monolith.
 func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	provider := req.PathValue("provider")
 	p, ok := r.capabilities.OAuth(provider)
@@ -85,62 +91,14 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing state parameter")
 		return
 	}
-	// P2 — admin connect-link. When the state param is JWT-shaped
-	// (2 dots: header.payload.sig), it was issued by the admin
-	// POST /admin/channels/{channel_id}/connect-link handler and
-	// already carries the expected_channel_id, signed HS256 with
-	// the same secret as the auth JWTs. We re-verify here so the
-	// callback can refuse forged / replayed connect-link state
-	// without involving the CSRF state-cookie row (the connect
-	// flow has the manager browser, not the admin's). The
-	// boolean return is threaded down so the ErrYouTubeChannelMismatch
-	// mapping at the bottom of this handler can switch its status
-	// code from 409 (legacy cookie path) to 422 (P2 connect-link
-	// per the operator's intent).
-	expectedChannelID := ""
-	fromConnectLinkState := false
-	var stateErr error
-	if strings.Count(state, ".") == 2 {
-		claims, sErr := r.auth.VerifyConnectLinkState(state)
-		if sErr != nil {
-			writeError(w, http.StatusBadRequest, "invalid connect-link state: "+sErr.Error())
-			return
-		}
-		// Atomically consume the connect-link jti so the same
-		// signed URL cannot be replayed. Missing/expired/already-
-		// consumed jti are treated as a replay attempt.
-		if r.connectLinkNonceStore != nil {
-			consumeErr := r.connectLinkNonceStore.Consume(claims.ID)
-			if consumeErr != nil {
-				reason := connectLinkConsumeReason(consumeErr)
-				if reason != "" {
-					// Known rejection: log structured diagnostics and
-					// emit a metric so operators can distinguish
-					// missing/expired/consumed links from genuine
-					// failures.
-					slog.WarnContext(req.Context(), "connect-link nonce rejected",
-						"reason", reason,
-						"provider", provider,
-						"expected_channel_id", claims.ExpectedChannelID,
-					)
-					metrics.RecordConnectLinkConsume(reason)
-					writeError(w, http.StatusGone, "connect-link already consumed or expired")
-					return
-				}
-				logAndError(w, req, "could not verify connect-link state", consumeErr)
-				return
-			}
-			metrics.RecordConnectLinkConsume("ok")
-		}
-		expectedChannelID = claims.ExpectedChannelID
-		fromConnectLinkState = true
-	} else {
-		expectedChannelID, stateErr = verifyOAuthState(w, req, provider, state, r.cookieDomain)
-		if stateErr != nil {
-			writeError(w, http.StatusBadRequest, "invalid state: "+stateErr.Error())
-			return
-		}
+
+	// Step 1 — state validation (connect-link JWT or CSRF cookie).
+	expectedChannelID, fromConnectLinkState, stop := r.resolveCallbackState(w, req, provider, state)
+	if stop {
+		return
 	}
+
+	// Step 2 — exchange the authorization code for profile + tokens.
 	profile, tokenData, err := p.HandleCallback(req.Context(), state, code)
 	if err != nil {
 		metrics.RecordOAuthLoginError(provider, metrics.ErrorKind(err))
@@ -163,6 +121,7 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	}
 	userID := identity.UserID()
 
+	// Step 3 — attach platform account(s) to the authenticated user.
 	// Providers that expose AccountDiscoverer (Facebook Pages) expand
 	// one OAuth grant into N platform accounts. For those providers we
 	// discover the pages, create one PlatformAccount per page, and
@@ -170,128 +129,217 @@ func (r *Router) handleCallback(w http.ResponseWriter, req *http.Request) {
 	// single-account attach path.
 	var account *models.PlatformAccount
 	if discoverer, ok := r.capabilities.Discoverer(provider); ok {
-		account, err = r.attachDiscoveredAccounts(req.Context(), userID, provider, discoverer, tokenData, expectedChannelID)
-		if err != nil {
-			// YouTube-only typed errors surface as 409 Conflict so the
-			// SPA knows to ask the operator to disambiguate before
-			// retrying. Other discoverer failures stay 500 (genuine
-			// server / DB problems).
-			if errors.Is(err, ErrYouTubeAmbiguousAuthorization) {
-				writeError(w, http.StatusConflict, err.Error())
-				return
-			}
-			if errors.Is(err, services.ErrOAuthRefreshTokenRequired) {
-				if flagErr := r.markOAuthRefreshTokenRequired(req.Context(), account); flagErr != nil {
-					slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",
-						"platform_account_id", platformAccountIDForLog(account), "error", flagErr)
-					logAndError(w, req, "failed to persist YouTube reauthorization state", flagErr)
-					return
-				}
-				writeError(w, http.StatusUnprocessableEntity, "YouTube reconnection required: grant offline access and retry")
-				return
-			}
-			if errors.Is(err, ErrYouTubeChannelMismatch) {
-				// Task 2/10: best-effort flip
-				// platform_account.status to 'reauth_required'
-				// so the operator dashboard surfaces the
-				// failure immediately. The publish_worker's
-				// next tick will also flip the per-target
-				// rows to PostStatusBlockedAuth via
-				// markPublishBlockedAuth, but we want UI
-				// visibility before the next tick fires.
-				// Soft error: a MarkReauthRequired failure
-				// does NOT prevent the 422/409 writeError
-				// from returning (publish_worker is the
-				// authoritative sweep on a longer horizon).
-				if account != nil && r.userRepo != nil {
-					if flagErr := r.userRepo.MarkReauthRequired(req.Context(), account.ID, "youtube_channel_mismatch", err.Error()); flagErr != nil {
-						slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after youtube channel mismatch",
-							"platform_account_id", account.ID, "error", flagErr)
-					}
-				}
-				// P2 — connect-link refinement: 422 when the state
-				// was a JWT issued by /admin/channels/{id}/connect-link
-				// (the operator bound a specific channel_id via
-				// the admin dashboard; mismatch is a semantic
-				// contradiction, prefer 422). Legacy path
-				// (?expected_channel_id=UC… cookie) keeps 409 for
-				// backwards-compat with operators wired before
-				// the connect-link flow landed.
-				if fromConnectLinkState {
-					writeError(w, http.StatusUnprocessableEntity, err.Error())
-					return
-				}
-				writeError(w, http.StatusConflict, err.Error())
-				return
-			}
-			logAndError(w, req, "failed to attach discovered accounts", err, "provider", provider)
-			return
-		}
+		account, stop = r.callbackAttachDiscovered(w, req, provider, userID, discoverer, tokenData, expectedChannelID, fromConnectLinkState)
 	} else {
-		// Attach to the authenticated user — never auto-create.
-		account, err = r.userRepo.AttachPlatformAccount(userID, profile, provider)
-		if err != nil {
-			if errors.Is(err, repository.ErrAccountAlreadyLinked) {
-				// Operator runbook: the legal owner of the link must
-				// disconnect via DELETE /api/v1/accounts/{id} before
-				// re-link is possible.
-				writeError(w, http.StatusConflict, err.Error())
-				return
-			}
-			logAndError(w, req, "failed to attach platform account", err, "provider", provider)
-			return
-		}
-
-		// Task 1/10 — atomic OAuth finalize. We use the
-		// services.ChannelAuthorizer (wired via WithChannelAuthorizer
-		// in internal/bootstrap.Wire) for the non-discoverer branch
-		// too: passing expectedChannelID="" tells the service to
-		// skip the channels.list(mine=true) YouTube-only pre-tx
-		// guard, but the (UPSERT oauth_connections + INSERT tokens
-		// via SaveTokenTx + UPDATE platform_accounts.status='active')
-		// atomic flow still applies. Any partial failure rolls back
-		// BOTH writes plus the status flip so a process crash
-		// between AttachPlatformAccount (commits row at pending_authorization)
-		// and this AuthorizeChannel call leaves the account in
-		// pending_authorization, never in the legacy "active but
-		// no cipher row" failure mode.
-		//
-		// expectedChannelID "" → no YouTube binder call (binder
-		// may still be wired for other providers' flows). The
-		// service's empty-string short-circuit is the documented
-		// no-op for non-YouTube paths (Facebook Pages, Threads,
-		// TikTok, …).
-		if r.authorizer == nil {
-			// Fail-fast on misconfiguration (mirrors the postStore /
-			// workspaceStore nil-guard pattern). A misconfigured
-			// main.go that forgets WithChannelAuthorizer would never
-			// have been caught by Wire() but would silently leave
-			// platform_accounts in pending_authorization forever
-			// on every callback — the operator's dashboard would
-			// show a stuck "needs reconnect" storm. Fail-fast
-			// surfaces the wiring mistake at first-callback time.
-			logAndError(w, req, "channel authorizer not configured", errors.New("channel authorizer not configured"))
-			return
-		}
-		if _, err := r.authorizer.AuthorizeChannel(req.Context(), account.ID, "", tokenData.Scopes, tokenData); err != nil {
-			if errors.Is(err, services.ErrOAuthRefreshTokenRequired) {
-				if flagErr := r.markOAuthRefreshTokenRequired(req.Context(), account); flagErr != nil {
-					slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",
-						"platform_account_id", platformAccountIDForLog(account), "error", flagErr)
-					logAndError(w, req, "failed to persist YouTube reauthorization state", flagErr)
-					return
-				}
-				writeError(w, http.StatusUnprocessableEntity, "YouTube reconnection required: grant offline access and retry")
-				return
-			}
-			logAndError(w, req, "failed to authorize channel", err, "provider", provider)
-			return
-		}
+		account, stop = r.callbackAttachSingle(w, req, provider, userID, profile, tokenData)
+	}
+	if stop {
+		return
 	}
 
-	// SPRINT 7.1 redirect target: the SPA's account-linking page. No
-	// one-time code is needed — the session cookie validated at the
-	// top of this handler IS the active session.
+	// Step 4 — success: redirect to the SPA (or JSON in CLI/test mode).
+	r.writeCallbackSuccess(w, req, provider, userID, account)
+}
+
+// resolveCallbackState is step 1 of handleCallback: validate the OAuth
+// state parameter and resolve the expected YouTube channel binding.
+//
+// P2 — admin connect-link. When the state param is JWT-shaped
+// (2 dots: header.payload.sig), it was issued by the admin
+// POST /admin/channels/{channel_id}/connect-link handler and
+// already carries the expected_channel_id, signed HS256 with
+// the same secret as the auth JWTs. We re-verify here so the
+// callback can refuse forged / replayed connect-link state
+// without involving the CSRF state-cookie row (the connect
+// flow has the manager browser, not the admin's). The
+// fromConnectLink boolean return is threaded down so the
+// ErrYouTubeChannelMismatch mapping in callbackAttachDiscovered can
+// switch its status code from 409 (legacy cookie path) to 422 (P2
+// connect-link per the operator's intent).
+//
+// On failure it writes the HTTP error itself and returns stop=true.
+func (r *Router) resolveCallbackState(w http.ResponseWriter, req *http.Request, provider, state string) (expectedChannelID string, fromConnectLink bool, stop bool) {
+	if strings.Count(state, ".") == 2 {
+		claims, sErr := r.auth.VerifyConnectLinkState(state)
+		if sErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid connect-link state: "+sErr.Error())
+			return "", false, true
+		}
+		// Atomically consume the connect-link jti so the same
+		// signed URL cannot be replayed. Missing/expired/already-
+		// consumed jti are treated as a replay attempt.
+		if r.connectLinkNonceStore != nil {
+			consumeErr := r.connectLinkNonceStore.Consume(claims.ID)
+			if consumeErr != nil {
+				reason := connectLinkConsumeReason(consumeErr)
+				if reason != "" {
+					// Known rejection: log structured diagnostics and
+					// emit a metric so operators can distinguish
+					// missing/expired/consumed links from genuine
+					// failures.
+					slog.WarnContext(req.Context(), "connect-link nonce rejected",
+						"reason", reason,
+						"provider", provider,
+						"expected_channel_id", claims.ExpectedChannelID,
+					)
+					metrics.RecordConnectLinkConsume(reason)
+					writeError(w, http.StatusGone, "connect-link already consumed or expired")
+					return "", false, true
+				}
+				logAndError(w, req, "could not verify connect-link state", consumeErr)
+				return "", false, true
+			}
+			metrics.RecordConnectLinkConsume("ok")
+		}
+		return claims.ExpectedChannelID, true, false
+	}
+	expectedChannelID, stateErr := verifyOAuthState(w, req, provider, state, r.cookieDomain)
+	if stateErr != nil {
+		writeError(w, http.StatusBadRequest, "invalid state: "+stateErr.Error())
+		return "", false, true
+	}
+	return expectedChannelID, false, false
+}
+
+// callbackAttachDiscovered is the AccountDiscoverer branch of step 3:
+// expand the OAuth grant into N platform accounts and map the typed
+// attach errors onto their HTTP contract. On any error it writes the
+// HTTP response itself and returns stop=true.
+func (r *Router) callbackAttachDiscovered(w http.ResponseWriter, req *http.Request, provider string, userID int64, discoverer services.AccountDiscoverer, tokenData *models.TokenData, expectedChannelID string, fromConnectLinkState bool) (*models.PlatformAccount, bool) {
+	account, err := r.attachDiscoveredAccounts(req.Context(), userID, provider, discoverer, tokenData, expectedChannelID)
+	if err == nil {
+		return account, false
+	}
+	// YouTube-only typed errors surface as 409 Conflict so the
+	// SPA knows to ask the operator to disambiguate before
+	// retrying. Other discoverer failures stay 500 (genuine
+	// server / DB problems).
+	if errors.Is(err, ErrYouTubeAmbiguousAuthorization) {
+		writeError(w, http.StatusConflict, err.Error())
+		return account, true
+	}
+	if errors.Is(err, services.ErrOAuthRefreshTokenRequired) {
+		if flagErr := r.markOAuthRefreshTokenRequired(req.Context(), account); flagErr != nil {
+			slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",
+				"platform_account_id", platformAccountIDForLog(account), "error", flagErr)
+			logAndError(w, req, "failed to persist YouTube reauthorization state", flagErr)
+			return account, true
+		}
+		writeError(w, http.StatusUnprocessableEntity, "YouTube reconnection required: grant offline access and retry")
+		return account, true
+	}
+	if errors.Is(err, ErrYouTubeChannelMismatch) {
+		// Task 2/10: best-effort flip
+		// platform_account.status to 'reauth_required'
+		// so the operator dashboard surfaces the
+		// failure immediately. The publish_worker's
+		// next tick will also flip the per-target
+		// rows to PostStatusBlockedAuth via
+		// markPublishBlockedAuth, but we want UI
+		// visibility before the next tick fires.
+		// Soft error: a MarkReauthRequired failure
+		// does NOT prevent the 422/409 writeError
+		// from returning (publish_worker is the
+		// authoritative sweep on a longer horizon).
+		if account != nil && r.userRepo != nil {
+			if flagErr := r.userRepo.MarkReauthRequired(req.Context(), account.ID, "youtube_channel_mismatch", err.Error()); flagErr != nil {
+				slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after youtube channel mismatch",
+					"platform_account_id", account.ID, "error", flagErr)
+			}
+		}
+		// P2 — connect-link refinement: 422 when the state
+		// was a JWT issued by /admin/channels/{id}/connect-link
+		// (the operator bound a specific channel_id via
+		// the admin dashboard; mismatch is a semantic
+		// contradiction, prefer 422). Legacy path
+		// (?expected_channel_id=UC… cookie) keeps 409 for
+		// backwards-compat with operators wired before
+		// the connect-link flow landed.
+		if fromConnectLinkState {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return account, true
+		}
+		writeError(w, http.StatusConflict, err.Error())
+		return account, true
+	}
+	logAndError(w, req, "failed to attach discovered accounts", err, "provider", provider)
+	return account, true
+}
+
+// callbackAttachSingle is the single-account branch of step 3: attach
+// the platform account to the authenticated user (never auto-create),
+// then run the atomic OAuth finalize. On any error it writes the HTTP
+// response itself and returns stop=true.
+func (r *Router) callbackAttachSingle(w http.ResponseWriter, req *http.Request, provider string, userID int64, profile *models.PlatformProfile, tokenData *models.TokenData) (*models.PlatformAccount, bool) {
+	// Attach to the authenticated user — never auto-create.
+	account, err := r.userRepo.AttachPlatformAccount(userID, profile, provider)
+	if err != nil {
+		if errors.Is(err, repository.ErrAccountAlreadyLinked) {
+			// Operator runbook: the legal owner of the link must
+			// disconnect via DELETE /api/v1/accounts/{id} before
+			// re-link is possible.
+			writeError(w, http.StatusConflict, err.Error())
+			return nil, true
+		}
+		logAndError(w, req, "failed to attach platform account", err, "provider", provider)
+		return nil, true
+	}
+
+	// Task 1/10 — atomic OAuth finalize. We use the
+	// services.ChannelAuthorizer (wired via WithChannelAuthorizer
+	// in internal/bootstrap.Wire) for the non-discoverer branch
+	// too: passing expectedChannelID="" tells the service to
+	// skip the channels.list(mine=true) YouTube-only pre-tx
+	// guard, but the (UPSERT oauth_connections + INSERT tokens
+	// via SaveTokenTx + UPDATE platform_accounts.status='active')
+	// atomic flow still applies. Any partial failure rolls back
+	// BOTH writes plus the status flip so a process crash
+	// between AttachPlatformAccount (commits row at pending_authorization)
+	// and this AuthorizeChannel call leaves the account in
+	// pending_authorization, never in the legacy "active but
+	// no cipher row" failure mode.
+	//
+	// expectedChannelID "" → no YouTube binder call (binder
+	// may still be wired for other providers' flows). The
+	// service's empty-string short-circuit is the documented
+	// no-op for non-YouTube paths (Facebook Pages, Threads,
+	// TikTok, …).
+	if r.authorizer == nil {
+		// Fail-fast on misconfiguration (mirrors the postStore /
+		// workspaceStore nil-guard pattern). A misconfigured
+		// main.go that forgets WithChannelAuthorizer would never
+		// have been caught by Wire() but would silently leave
+		// platform_accounts in pending_authorization forever
+		// on every callback — the operator's dashboard would
+		// show a stuck "needs reconnect" storm. Fail-fast
+		// surfaces the wiring mistake at first-callback time.
+		logAndError(w, req, "channel authorizer not configured", errors.New("channel authorizer not configured"))
+		return nil, true
+	}
+	if _, err := r.authorizer.AuthorizeChannel(req.Context(), account.ID, "", tokenData.Scopes, tokenData); err != nil {
+		if errors.Is(err, services.ErrOAuthRefreshTokenRequired) {
+			if flagErr := r.markOAuthRefreshTokenRequired(req.Context(), account); flagErr != nil {
+				slog.WarnContext(req.Context(), "could not flag platform_account reauth_required after missing YouTube refresh token",
+					"platform_account_id", platformAccountIDForLog(account), "error", flagErr)
+				logAndError(w, req, "failed to persist YouTube reauthorization state", flagErr)
+				return nil, true
+			}
+			writeError(w, http.StatusUnprocessableEntity, "YouTube reconnection required: grant offline access and retry")
+			return nil, true
+		}
+		logAndError(w, req, "failed to authorize channel", err, "provider", provider)
+		return nil, true
+	}
+	return account, false
+}
+
+// writeCallbackSuccess is step 4 of handleCallback: the terminal
+// success response.
+//
+// SPRINT 7.1 redirect target: the SPA's account-linking page. No
+// one-time code is needed — the session cookie validated at the
+// top of the handler IS the active session.
+func (r *Router) writeCallbackSuccess(w http.ResponseWriter, req *http.Request, provider string, userID int64, account *models.PlatformAccount) {
 	if r.frontendURL != "" {
 		q := url.Values{}
 		q.Set("provider", provider)
