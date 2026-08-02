@@ -137,5 +137,6 @@ type deliveryPlanReq struct {
 // deliveryDestinationReq mirrors veloxapi.DeliveryDestination.
 type deliveryDestinationReq struct {
 	ExternalDestinationID string          `json:"external_destination_id" validate:"required,min=1"`
+	PublicationID         string          `json:"publication_id,omitempty"`
 	Metadata              json.RawMessage `json:"metadata"`
 }

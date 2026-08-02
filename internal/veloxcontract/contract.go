@@ -109,6 +109,7 @@ type DeliveryPlan struct {
 // its opaque external_destination_id plus per-delivery metadata.
 type DeliveryDestination struct {
 	ExternalDestinationID string          `json:"external_destination_id"`
+	PublicationID         string          `json:"publication_id,omitempty"`
 	Metadata              json.RawMessage `json:"metadata"`
 }
 

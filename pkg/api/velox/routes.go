@@ -199,7 +199,10 @@ func mapClientError(w http.ResponseWriter, err error) {
 		return
 	}
 	if errors.Is(err, ErrIdempotencyConflict) {
-		writeError(w, http.StatusConflict, "idempotency conflict")
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error_code": "IDEMPOTENCY_CONFLICT",
+			"message":    "idempotency conflict",
+		})
 		return
 	}
 	writeError(w, http.StatusInternalServerError, "upstream call failed")

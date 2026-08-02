@@ -108,7 +108,7 @@ func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		slog.Error("velox bff: create job failed",
 			"workspace_id", wsID, "user_id", userID, "err", err)
-		writeError(w, http.StatusInternalServerError, "upstream call failed")
+		mapClientError(w, err)
 		return
 	}
 	// Defense-in-depth: verify the returned job belongs to the

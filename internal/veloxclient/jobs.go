@@ -70,6 +70,7 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 	for _, d := range req.DeliveryPlan.Destinations {
 		body.DeliveryPlan.Destinations = append(body.DeliveryPlan.Destinations, deliveryDestinationReq{
 			ExternalDestinationID: d.ExternalDestinationID,
+			PublicationID:         d.PublicationID,
 			Metadata:              json.RawMessage(d.Metadata),
 		})
 	}

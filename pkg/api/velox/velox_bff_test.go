@@ -204,6 +204,22 @@ func TestCreateJob_HappyPath(t *testing.T) {
 	}
 }
 
+func TestCreateJob_IdempotencyConflict_409(t *testing.T) {
+	mc := &mockClient{createJobFn: func(context.Context, int64, int64, CreateJobRequest) (*Job, error) {
+		return nil, ErrIdempotencyConflict
+	}}
+	mux := newMux(t, mc, stubAuth)
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"test:job:conflict","project_id":"project_123","render_spec":{"template":"news"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J"}]}}`
+	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", body)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	decoded := decodeBody(t, w)
+	if decoded["error_code"] != "IDEMPOTENCY_CONFLICT" || decoded["message"] != "idempotency conflict" {
+		t.Fatalf("response should identify the idempotency conflict: %s", w.Body.String())
+	}
+}
+
 func TestCreateJob_MissingProjectID_422(t *testing.T) {
 	mc := &mockClient{createJobFn: func(context.Context, int64, int64, CreateJobRequest) (*Job, error) {
 		t.Fatal("client should not be called on validation failure")
