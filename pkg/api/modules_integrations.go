@@ -72,3 +72,47 @@ func (m *IntegrationsModule) Register(mux chi.Router) {
 	mux.Method(http.MethodPatch, "/api/v1/integrations/velox/destinations/{id}",
 		wrap(m.handleUpdateIntegrationVeloxDestination))
 }
+
+// --- Router thin wrappers (test compatibility) ------------------------------
+//
+// Thin *Router forwarders that keep existing unit tests (which call the
+// handlers directly on *Router) compiling while the public module
+// constructors receive typed deps. They delegate to a module instance
+// built from the Router's current fields. See the matching TODO in
+// modules_velox.go: migrate the affected tests and delete these
+// wrappers; do NOT add new production code here.
+
+func (r *Router) integrationsModule() *IntegrationsModule {
+	return NewIntegrationsModule(IntegrationsModuleDeps{
+		ExternalDestinationStore: r.externalDestinations,
+		WorkspaceStore:           r.workspaceStore,
+		UserStore:                r.userRepo,
+		AuditLogStore:            r.auditLogStore,
+		AuthMiddleware:           r.authMiddleware,
+		CSRFMiddleware:           r.csrfMiddleware,
+	}).(*IntegrationsModule)
+}
+
+func (r *Router) registerUserVeloxDestinations(mux chi.Router) {
+	r.integrationsModule().Register(mux)
+}
+
+func (r *Router) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	r.integrationsModule().handleCreateIntegrationVeloxDestination(w, req)
+}
+
+func (r *Router) handleListIntegrationVeloxDestinations(w http.ResponseWriter, req *http.Request) {
+	r.integrationsModule().handleListIntegrationVeloxDestinations(w, req)
+}
+
+func (r *Router) handleGetIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	r.integrationsModule().handleGetIntegrationVeloxDestination(w, req)
+}
+
+func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	r.integrationsModule().handleDeleteIntegrationVeloxDestination(w, req)
+}
+
+func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
+	r.integrationsModule().handleUpdateIntegrationVeloxDestination(w, req)
+}

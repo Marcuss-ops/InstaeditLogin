@@ -99,3 +99,47 @@ func (m *VeloxModule) Register(mux chi.Router) {
 			internalVeloxAuthMiddleware(m.deps.VeloxAPIToken, http.HandlerFunc(m.handleCreateThumbnailSession)))
 	}
 }
+
+// --- Router thin wrappers (test compatibility) ------------------------------
+//
+// The following thin wrappers keep existing unit tests (which call the
+// handlers directly on *Router) compiling while the public module
+// constructors receive typed deps. They simply forward to a module
+// instance built from the Router's current fields.
+//
+// TODO: These wrappers exist only for test compatibility. Migrate the
+// affected tests to use the typed VeloxModule / IntegrationsModule
+// constructors and then delete the wrappers. Do NOT add new production
+// code here; new routes should use the typed modules.
+
+func (r *Router) veloxModule() *VeloxModule {
+	return NewVeloxModule(VeloxModuleDeps{
+		ExternalDestinationStore: r.externalDestinations,
+		ExternalDeliveryStore:    r.externalDeliveries,
+		WorkspaceStore:           r.workspaceStore,
+		UserStore:                r.userRepo,
+		GroupStore:               r.groupStore,
+		VeloxAPIToken:            r.veloxAPIToken,
+		VeloxValidateRateLimiter: r.veloxValidateRateLimiter,
+	}).(*VeloxModule)
+}
+
+func (r *Router) registerInternalVeloxRoutes() {
+	r.veloxModule().Register(r.mux)
+}
+
+func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *http.Request) {
+	r.veloxModule().handleValidateInternalDestination(w, req)
+}
+
+func (r *Router) handleResolveTargetInternalDestination(w http.ResponseWriter, req *http.Request) {
+	r.veloxModule().handleResolveTargetInternalDestination(w, req)
+}
+
+func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.Request) {
+	r.veloxModule().handleCreateInternalDelivery(w, req)
+}
+
+func (r *Router) handleGetInternalDelivery(w http.ResponseWriter, req *http.Request) {
+	r.veloxModule().handleGetInternalDelivery(w, req)
+}

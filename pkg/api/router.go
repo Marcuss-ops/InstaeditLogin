@@ -457,79 +457,17 @@ var _ ContentPipelineStore = (*repository.ContentPipelineRepository)(nil)
 // dereference.
 var _ BookingEventStore = (*repository.BookingEventRepository)(nil)
 
-// The following thin wrappers keep existing unit tests (which call the
-// handlers directly on *Router) compiling while the public module
-// constructors receive typed deps. They simply forward to a module
-// instance built from the Router's current fields.
+// --- Module thin wrappers (test compatibility) -------------------------------
 //
-// TODO: These wrappers exist only for test compatibility. Migrate the
+// The Router→module thin wrappers (veloxModule / integrationsModule /
+// registerInternalVeloxRoutes / registerUserVeloxDestinations and the
+// 9 handle* forwarders) live next to the modules they delegate to,
+// to keep this file focused on the Router struct + construction:
+//
+//	modules_velox.go        — VeloxModule wrappers (internal /internal/v1 routes)
+//	modules_integrations.go — IntegrationsModule wrappers (user /api/v1 routes)
+//
+// TODO: Those wrappers exist only for test compatibility. Migrate the
 // affected tests to use the typed VeloxModule / IntegrationsModule
-// constructors and then delete the wrappers. Do NOT add new production
-// code here; new routes should use the typed modules.
-
-func (r *Router) veloxModule() *VeloxModule {
-	return NewVeloxModule(VeloxModuleDeps{
-		ExternalDestinationStore: r.externalDestinations,
-		ExternalDeliveryStore:    r.externalDeliveries,
-		WorkspaceStore:           r.workspaceStore,
-		UserStore:                r.userRepo,
-		GroupStore:               r.groupStore,
-		VeloxAPIToken:            r.veloxAPIToken,
-		VeloxValidateRateLimiter: r.veloxValidateRateLimiter,
-	}).(*VeloxModule)
-}
-
-func (r *Router) integrationsModule() *IntegrationsModule {
-	return NewIntegrationsModule(IntegrationsModuleDeps{
-		ExternalDestinationStore: r.externalDestinations,
-		WorkspaceStore:           r.workspaceStore,
-		UserStore:                r.userRepo,
-		AuditLogStore:            r.auditLogStore,
-		AuthMiddleware:           r.authMiddleware,
-		CSRFMiddleware:           r.csrfMiddleware,
-	}).(*IntegrationsModule)
-}
-
-func (r *Router) registerInternalVeloxRoutes() {
-	r.veloxModule().Register(r.mux)
-}
-
-func (r *Router) registerUserVeloxDestinations(mux chi.Router) {
-	r.integrationsModule().Register(mux)
-}
-
-func (r *Router) handleValidateInternalDestination(w http.ResponseWriter, req *http.Request) {
-	r.veloxModule().handleValidateInternalDestination(w, req)
-}
-
-func (r *Router) handleResolveTargetInternalDestination(w http.ResponseWriter, req *http.Request) {
-	r.veloxModule().handleResolveTargetInternalDestination(w, req)
-}
-
-func (r *Router) handleCreateInternalDelivery(w http.ResponseWriter, req *http.Request) {
-	r.veloxModule().handleCreateInternalDelivery(w, req)
-}
-
-func (r *Router) handleGetInternalDelivery(w http.ResponseWriter, req *http.Request) {
-	r.veloxModule().handleGetInternalDelivery(w, req)
-}
-
-func (r *Router) handleCreateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
-	r.integrationsModule().handleCreateIntegrationVeloxDestination(w, req)
-}
-
-func (r *Router) handleListIntegrationVeloxDestinations(w http.ResponseWriter, req *http.Request) {
-	r.integrationsModule().handleListIntegrationVeloxDestinations(w, req)
-}
-
-func (r *Router) handleGetIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
-	r.integrationsModule().handleGetIntegrationVeloxDestination(w, req)
-}
-
-func (r *Router) handleDeleteIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
-	r.integrationsModule().handleDeleteIntegrationVeloxDestination(w, req)
-}
-
-func (r *Router) handleUpdateIntegrationVeloxDestination(w http.ResponseWriter, req *http.Request) {
-	r.integrationsModule().handleUpdateIntegrationVeloxDestination(w, req)
-}
+// constructors and then delete them. Do NOT add new production code
+// here; new routes should use the typed modules.
