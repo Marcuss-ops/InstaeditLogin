@@ -78,21 +78,9 @@ func (a *routerEditorSessionAdapter) CreateEditorSession(ctx context.Context, in
 	})
 }
 
-// RunWorkers starts the 9 background goroutines (publish, reconcile,
-// outbox, webhook, metrics, sessions_cleanup, velox_downloader,
-// upload, drive_batch_crawler) under a shared WorkerRegistry. The
-// registry handles startup, heartbeat tracking, supervision, logging,
-// and shutdown. A critical worker that exits with a non-context error
-// aborts the whole process by returning the error from RunWorkers.
-//
-// On cancellation it cancels every goroutine concurrently and waits
-// up to 15s total for their Run loops to drain gracefully.
-func (a *App) RunWorkers(ctx context.Context) error {
-	if a.WorkerRegistry == nil {
-		return fmt.Errorf("RunWorkers called with nil App.WorkerRegistry")
-	}
-
-	// 1. Publish worker driver — queued → publishing transition
+// registerPublishWorker wires goroutine 1: the publish worker driver —
+// queued → publishing transition.
+func (a *App) registerPublishWorker() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "publish",
 		Critical: true,
@@ -174,8 +162,11 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return pw.Run(ctx)
 		},
 	})
+}
 
-	// 2. Reconcile worker — publishing → published | failed transition
+// registerReconcileWorker wires goroutine 2: the reconcile worker —
+// publishing → published | failed transition.
+func (a *App) registerReconcileWorker() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "reconcile",
 		Critical: true,
@@ -193,8 +184,11 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return rw.Run(ctx)
 		},
 	})
+}
 
-	// 3. Outbox dispatcher — materialises publish_jobs audit rows
+// registerOutboxDispatcher wires goroutine 3: the outbox dispatcher —
+// materialises publish_jobs audit rows.
+func (a *App) registerOutboxDispatcher() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "outbox",
 		Critical: true,
@@ -208,8 +202,11 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return ds.Run(ctx)
 		},
 	})
+}
 
-	// 4. Webhook worker — drains webhook_deliveries
+// registerWebhookWorker wires goroutine 4: the webhook worker — drains
+// webhook_deliveries.
+func (a *App) registerWebhookWorker() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "webhook",
 		Critical: true,
@@ -218,8 +215,11 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return ww.Run(ctx)
 		},
 	})
+}
 
-	// 5. Metrics collector — periodic gauges
+// registerMetricsCollector wires goroutine 5: the metrics collector —
+// periodic gauges.
+func (a *App) registerMetricsCollector() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "metrics",
 		Critical: true,
@@ -227,8 +227,11 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return metrics.RunPeriodicCollector(ctx, a.DB, metrics.DefaultCollectorInterval, slog.Default())
 		},
 	})
+}
 
-	// 6. Sessions cleanup worker — retention policy
+// registerSessionsCleanupWorker wires goroutine 6: the sessions cleanup
+// worker — retention policy.
+func (a *App) registerSessionsCleanupWorker() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "sessions_cleanup",
 		Critical: true,
@@ -241,11 +244,14 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return scw.Run(ctx)
 		},
 	})
+}
 
-	// 11. Asset cleanup worker (Blocco Carosello cleanup) -- hard-deletes media_assets whose YouTube
-	// publish pipeline has fully run AND aged past the operator-
-	// configured retention buffer (default 7d). NOT critical: a
-	// transient DB failure here MUST NOT take the process down.
+// registerAssetCleanupWorker wires the asset cleanup worker (Blocco
+// Carosello cleanup) — hard-deletes media_assets whose YouTube publish
+// pipeline has fully run AND aged past the operator-configured
+// retention buffer (default 7d). NOT critical: a transient DB failure
+// here MUST NOT take the process down.
+func (a *App) registerAssetCleanupWorker() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "asset_cleanup",
 		Critical: false,
@@ -259,9 +265,12 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return acw.Run(ctx)
 		},
 	})
+}
 
-	// 7. Velox handoff consumer — polls external_deliveries for accepted
-	// rows and registers each claimed row as an upload_jobs row.
+// registerVeloxDownloader wires goroutine 7: the Velox handoff
+// consumer — polls external_deliveries for accepted rows and registers
+// each claimed row as an upload_jobs row.
+func (a *App) registerVeloxDownloader() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "velox_downloader",
 		Critical: true,
@@ -279,9 +288,12 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return downloader.Run(ctx)
 		},
 	})
+}
 
-	// 8. Upload worker — background import of public or authenticated
-	// Google Drive videos into S3 + posts + publish queue.
+// registerUploadWorker wires goroutine 8: the upload worker —
+// background import of public or authenticated Google Drive videos
+// into S3 + posts + publish queue.
+func (a *App) registerUploadWorker() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "upload",
 		Critical: true,
@@ -347,8 +359,11 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return uw.Run(ctx)
 		},
 	})
+}
 
-	// 9. Drive batch crawler — drains import_batches rows
+// registerDriveBatchCrawler wires goroutine 9: the Drive batch
+// crawler — drains import_batches rows.
+func (a *App) registerDriveBatchCrawler() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "drive_batch_crawler",
 		Critical: true,
@@ -380,15 +395,17 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return dbcc.Run(ctx)
 		},
 	})
+}
 
-	// 10. YouTube processing reconciler — polls
-	// youtube_target_publications rows in 'processed' state that
-	// haven't been linked to an editor session (editor_session_id IS
-	// NULL) and creates the per-target Velox editor session via
-	// Router.CreateEditorSession through the routerEditorSessionAdapter.
-	// 1-per-target contract preserved (every call mints fresh uuids).
-	// MarkEditorSessionCreated's atomic CAS-link guards concurrent
-	// reconciler replicas from double-stamping.
+// registerYouTubeProcessingReconciler wires goroutine 10: the YouTube
+// processing reconciler — polls youtube_target_publications rows in
+// 'processed' state that haven't been linked to an editor session
+// (editor_session_id IS NULL) and creates the per-target Velox editor
+// session via Router.CreateEditorSession through the
+// routerEditorSessionAdapter. 1-per-target contract preserved (every
+// call mints fresh uuids). MarkEditorSessionCreated's atomic CAS-link
+// guards concurrent reconciler replicas from double-stamping.
+func (a *App) registerYouTubeProcessingReconciler() {
 	a.WorkerRegistry.Register(worker.WorkerSpec{
 		Name:     "youtube_processing_reconciler",
 		Critical: true,
@@ -406,6 +423,47 @@ func (a *App) RunWorkers(ctx context.Context) error {
 			return ypr.Run(ctx)
 		},
 	})
+}
+
+// RunWorkers starts the 10 background goroutines (publish, reconcile,
+// outbox, webhook, metrics, sessions_cleanup, asset_cleanup,
+// velox_downloader, upload, drive_batch_crawler,
+// youtube_processing_reconciler) under the shared WorkerRegistry. The
+// registry handles startup, heartbeat tracking, supervision, logging,
+// and shutdown. A critical worker that exits with a non-context error
+// aborts the whole process by returning the error from RunWorkers.
+//
+// The per-worker construction closures live in the register* methods
+// above (one per goroutine, in registration order) so this function
+// stays a thin orchestration loop: register all → StartAll → block on
+// critical-error-or-cancel → StopAll with the shared 15s drain budget.
+//
+// On cancellation it cancels every goroutine concurrently and waits
+// up to 15s total for their Run loops to drain gracefully.
+func (a *App) RunWorkers(ctx context.Context) error {
+	if a.WorkerRegistry == nil {
+		return fmt.Errorf("RunWorkers called with nil App.WorkerRegistry")
+	}
+
+	// Registration order is load-bearing for log/readability parity
+	// with the historical inline blocks — keep new workers appended in
+	// the same numbered order as their register* method comments.
+	registrations := []func(){
+		a.registerPublishWorker,               // 1. publish driver
+		a.registerReconcileWorker,             // 2. reconciler
+		a.registerOutboxDispatcher,            // 3. outbox
+		a.registerWebhookWorker,               // 4. webhook
+		a.registerMetricsCollector,            // 5. metrics
+		a.registerSessionsCleanupWorker,       // 6. sessions_cleanup
+		a.registerAssetCleanupWorker,          //    asset_cleanup (non-critical)
+		a.registerVeloxDownloader,             // 7. velox_downloader
+		a.registerUploadWorker,                // 8. upload
+		a.registerDriveBatchCrawler,           // 9. drive_batch_crawler
+		a.registerYouTubeProcessingReconciler, // 10. youtube_processing_reconciler
+	}
+	for _, register := range registrations {
+		register()
+	}
 
 	slog.Info("10 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler")
 
