@@ -3,13 +3,11 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -39,6 +37,10 @@ import (
 // payloads, and re-trying them after the underlying problem is fixed
 // SHOULD re-run the handler to get a fresh response. Caching them
 // would lock the operator out of re-running after config fixups.
+//
+// The shared validation / authz / jitter / idempotency / scheduling
+// steps live in drive_batch_helpers.go — this handler keeps only the
+// single-page specifics (page_token + cursor_scheduled_at handling).
 func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request) {
 	if r.uploadJobStore == nil {
 		writeError(w, http.StatusNotImplemented, "upload jobs not configured on this server")
@@ -68,105 +70,39 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(body.FolderID) == "" {
-		writeError(w, http.StatusUnprocessableEntity, "folder_id is required")
-		return
+	params := driveBatchCommonParams{
+		FolderID:          body.FolderID,
+		DriveAccountID:    body.DriveAccountID,
+		WorkspaceID:       body.WorkspaceID,
+		FacebookAccountID: body.FacebookAccountID,
+		Title:             body.Title,
+		CaptionPrefix:     body.CaptionPrefix,
+		MinJitterSeconds:  body.MinJitterSeconds,
+		MaxJitterSeconds:  body.MaxJitterSeconds,
 	}
-	if body.WorkspaceID == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "workspace_id is required")
-		return
-	}
-	if body.FacebookAccountID == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "facebook_account_id is required")
-		return
-	}
-	// P0 hardening refactor: the public_drive download path was
-	// removed from the Drive service. Every batch import must
-	// flow through an authenticated Drive account's OAuth grant,
-	// so drive_account_id is now required (was previously optional
-	// for the legacy public-folder path).
-	if body.DriveAccountID == 0 {
-		writeError(w, http.StatusUnprocessableEntity,
-			"drive_account_id is required (the public_drive download path was removed in the Drive pipeline hardening refactor)")
-		return
-	}
-
-	// Default jitter bounds: 3h-4.5h (matches the user-facing spec).
-	if body.MinJitterSeconds == 0 {
-		body.MinJitterSeconds = 3 * 60 * 60
-	}
-	if body.MaxJitterSeconds == 0 {
-		body.MaxJitterSeconds = int(4.5 * 60 * 60)
-	}
-	if body.MinJitterSeconds < 60 {
-		writeError(w, http.StatusUnprocessableEntity, "min_jitter_seconds must be >= 60 (1 minute)")
-		return
-	}
-	if body.MaxJitterSeconds < body.MinJitterSeconds {
-		writeError(w, http.StatusUnprocessableEntity, "max_jitter_seconds must be >= min_jitter_seconds")
+	if !validateDriveBatchCommon(w, &params) {
 		return
 	}
 
 	// Workspace ownership check BEFORE the idempotency cache lookup.
 	// Without this gate, an attacker could send Idempotency-Key=X with
 	// body.WorkspaceID=Y (some other tenant's id) and "steal" that
-	// workspace's cached entries. The (workspace_id, idempotency_key)
-	// UNIQUE on idempotency_records would still return their entry on
-	// hit, leaking their data. Verifying ws.OwnerID == userID first
-	// closes that vector.
-	ws, err := r.workspaceStore.FindByID(body.WorkspaceID)
-	if err != nil {
-		code, msg := mapWorkspaceError(err)
-		writeError(w, code, "workspace lookup: "+msg)
-		return
-	}
-	if ws == nil {
-		writeError(w, http.StatusNotFound, "workspace not found")
-		return
-	}
-	if ws.OwnerID != userID {
-		writeError(w, http.StatusForbidden, "workspace not owned by this user")
+	// workspace's cached entries. See requireOwnedWorkspaceByID.
+	ws, ok := r.requireOwnedWorkspaceByID(w, params.WorkspaceID, userID)
+	if !ok {
 		return
 	}
 
-	// Cache lookup: returns one of {Continue, Replay, Conflict}. The
-	// resource_type discriminator is "drive_batch" so a future replay
-	// will dispatch into the drive_batch branch of
-	// replayIdempotentResource, which reads the side row from
-	// idempotency_batch_replays and writes the cached bytes verbatim.
+	// Cache lookup: replay/conflict/continue. The resource_type
+	// discriminator is "drive_batch" so a future replay dispatches
+	// into the drive_batch branch of replayIdempotentResource.
 	idemKey := strings.TrimSpace(req.Header.Get("Idempotency-Key"))
-	idemOutcome, idemRec, idemErr := idempotencyLookup(r, ws.ID, idemKey, hash, idempotencyResourceTypeDriveBatch)
-	if idemErr != nil {
-		if strings.Contains(idemErr.Error(), "exceeds") {
-			// Idempotency-Key exceeds 255 chars — client-side
-			// contract violation (Stripe-mandated limit).
-			writeError(w, http.StatusBadRequest, idemErr.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "idempotency lookup: "+idemErr.Error())
+	if !r.runIdempotencyGate(w, ws.ID, idemKey, hash, idempotencyResourceTypeDriveBatch) {
 		return
-	}
-	switch idemOutcome {
-	case idempotencyConflict:
-		writeError(w, http.StatusConflict, "idempotency_key_conflict")
-		return
-	case idempotencyReplay:
-		if replayErr := replayIdempotentResource(r, w, idemRec, idemRec.ResponseStatus); replayErr != nil {
-			writeError(w, http.StatusInternalServerError, "idempotency replay: "+replayErr.Error())
-		}
-		return
-	case idempotencyContinue:
-		// Fall through to the rest of the handler.
 	}
 
 	// Facebook target ownership.
-	fbAccount, err := r.userRepo.FindPlatformAccountByID(body.FacebookAccountID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "find facebook account: "+err.Error())
-		return
-	}
-	if fbAccount == nil || fbAccount.UserID != userID || fbAccount.Platform != models.PlatformFacebook {
-		writeError(w, http.StatusNotFound, "facebook page account not found")
+	if !r.requireOwnedFacebookPage(w, params.FacebookAccountID, userID) {
 		return
 	}
 
@@ -193,61 +129,25 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 	// service (ErrDriveListRequiresAPIKey) — no extra state needed here.
 	var listingAccessToken string
 	var needsDriveAccount bool
-	if body.DriveAccountID > 0 {
-		driveAccount, err := r.userRepo.FindPlatformAccountByID(body.DriveAccountID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "find drive account: "+err.Error())
-			return
-		}
-		if driveAccount == nil || driveAccount.UserID != userID || driveAccount.Platform != "google-drive" {
-			writeError(w, http.StatusNotFound, "google drive account not found")
-			return
-		}
-		if r.vault == nil {
-			writeError(w, http.StatusNotImplemented, "credential vault not configured")
-			return
-		}
-		driveProvider, ok := lister.(services.DriveImporter)
+	if params.DriveAccountID > 0 {
+		token, ok := r.resolveDriveListingToken(w, req, userID, params.DriveAccountID, lister)
 		if !ok {
-			writeError(w, http.StatusServiceUnavailable, "google-drive provider does not implement drive import")
 			return
 		}
-		accessToken, err := driveAccessToken(req.Context(), r.vault, driveProvider, driveAccount.ID)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "failed to refresh google drive token: "+err.Error())
-			return
-		}
-		listingAccessToken = accessToken
+		listingAccessToken = token
 	} else {
 		needsDriveAccount = true
 	}
 
-	// Task 6/10 — Shared Drive auto-resolve. Resolve the folder's
-	// driveId for ListFolder's driveID parameter so Shared Drive
-	// folders get `corpora=drive&driveId=…` while My Drive folders
-	// stay on the default corpus. Best-effort by design: a failure
-	// here (network, 404, parse, type-assertion miss) just logs a
-	// warn-level remediation hint and falls back to "" (= pre-T6/10
-	// behaviour, full back-compat). The folder's driveId is stable
-	// for the lifetime of a folder, so this resolution is once per
-	// import — NOT per page — to halve Drive API quota usage.
-	inspector, canInspect := lister.(services.DriveFolderInspector)
-	resolvedDriveID, resolveErr := services.ResolveFolderDriveID(req.Context(), inspector, body.FolderID, listingAccessToken)
-	if resolveErr != nil {
-		slog.Warn("drive batch import: folder metadata fetch failed; falling back to My Drive corpus",
-			"folder_id", body.FolderID,
-			"user_id", userID,
-			"inspector_available", canInspect,
-			"error", resolveErr,
-		)
-		resolvedDriveID = ""
-	}
+	// Task 6/10 — Shared Drive auto-resolve (once per import, not per
+	// page — the folder's driveId is stable for the folder's lifetime).
+	resolvedDriveID := resolveSharedDriveID(req.Context(), lister, params.FolderID, listingAccessToken, userID, "drive batch import")
 
 	// List folder contents — page_token (when present) makes Drive
 	// continue from the previous page instead of returning page 1.
 	// resolvedDriveID is "" for My Drive folders (no driveId scoping)
 	// and a Shared Drive's id for Shared Drive folders (corpora=drive).
-	files, nextPageToken, err := folderLister.ListFolder(req.Context(), body.FolderID, resolvedDriveID, listingAccessToken, body.PageToken)
+	files, nextPageToken, err := folderLister.ListFolder(req.Context(), params.FolderID, resolvedDriveID, listingAccessToken, body.PageToken)
 	if err != nil {
 		// Typed sentinel: missing API key on the server is a deploy
 		// configuration gap (operator-fixable), NOT a transient
@@ -259,7 +159,7 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 		// server logs (don't echo Drive's raw error to the client).
 		if errors.Is(err, services.ErrDriveListRequiresAPIKey) {
 			writeJSON(w, http.StatusOK, DriveBatchImportResponse{
-				FolderID:               body.FolderID,
+				FolderID:               params.FolderID,
 				ScheduledCount:         0,
 				Entries:                []DriveBatchImportItem{},
 				NeedsDriveAccount:      needsDriveAccount,
@@ -268,7 +168,7 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 			})
 			return
 		}
-		slog.Warn("drive batch import: upstream folder list failed", "folder_id", body.FolderID, "error", err)
+		slog.Warn("drive batch import: upstream folder list failed", "folder_id", params.FolderID, "error", err)
 		writeError(w, http.StatusBadGateway, "drive folder list failed (see server logs for details)")
 		return
 	}
@@ -277,7 +177,7 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 		// Empty or non-existent folder. 200 OK so the SPA renders a
 		// productive "no videos found" message instead of an error.
 		writeJSON(w, http.StatusOK, DriveBatchImportResponse{
-			FolderID:          body.FolderID,
+			FolderID:          params.FolderID,
 			ScheduledCount:    0,
 			Entries:           []DriveBatchImportItem{},
 			Note:              "no videos found in the folder (or folder is empty / has zero video files)",
@@ -307,74 +207,20 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 			cursorClampedToNow = true
 			slog.Warn("drive batch import: cursor_scheduled_at was too far in the past, clamped to NOW",
 				"user_id", userID,
-				"folder_id", body.FolderID,
-				"workspace_id", body.WorkspaceID,
+				"folder_id", params.FolderID,
+				"workspace_id", params.WorkspaceID,
 				"supplied_cursor", body.CursorScheduledAt.Format(time.RFC3339),
 				"now", now.Format(time.RFC3339),
 			)
 		}
 	}
-	entries := make([]DriveBatchImportItem, 0, len(files))
-	for idx, f := range files {
-		scheduledAt := cursor
-		if idx > 0 {
-			gap, gapErr := randomDurationInRange(body.MinJitterSeconds, body.MaxJitterSeconds)
-			if gapErr != nil {
-				writeError(w, http.StatusInternalServerError, "jitter rand failed: "+gapErr.Error())
-				return
-			}
-			scheduledAt = cursor.Add(gap)
-		}
-		if scheduledAt.Sub(now) > time.Duration(driveBatchJitterMaxSeconds)*time.Second {
-			scheduledAt = now.Add(time.Duration(driveBatchJitterMaxSeconds) * time.Second)
-		}
-
-		title := body.Title
-		if title == "" {
-			title = f.Name
-		}
-		caption := body.CaptionPrefix
-		if caption == "" {
-			caption = f.Name
-		} else {
-			caption = caption + " — " + f.Name
-		}
-
-		job := &models.UploadJob{
-			UserID:         userID,
-			WorkspaceID:    body.WorkspaceID,
-			SourceType:     models.UploadJobSourceAuthenticatedDrive,
-			DriveAccountID: &body.DriveAccountID,
-			SourceID:       f.ID,
-			// FolderID is the new migration-038 column. Wiring it here so the
-			// dashboard status endpoint can GROUP BY folder and report counts
-			// without scanning the entire upload_jobs table on every poll.
-			FolderID:  &body.FolderID, // pointer so SQL NULL when empty
-			Title:     title,
-			Caption:   caption,
-			Targets:   []int64{body.FacebookAccountID},
-			Status:    models.UploadJobStatusPending,
-			PublishAt: &scheduledAt,
-		}
-		if err := r.uploadJobStore.Create(job); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("create upload job for %s: %v", f.Name, err))
-			return
-		}
-
-		entries = append(entries, DriveBatchImportItem{
-			Index:         idx,
-			DriveFileID:   f.ID,
-			Name:          f.Name,
-			MimeType:      f.MimeType,
-			JobID:         job.ID,
-			PublishAt:     scheduledAt,
-			RelativeHours: scheduledAt.Sub(now).Hours(),
-		})
-		cursor = scheduledAt
+	entries, cursor, ok := r.scheduleDriveBatchFiles(w, userID, params, files, cursor, now, 0)
+	if !ok {
+		return
 	}
 
 	resp := DriveBatchImportResponse{
-		FolderID:            body.FolderID,
+		FolderID:            params.FolderID,
 		ScheduledCount:      len(entries),
 		TotalRuntimeSeconds: int(cursor.Sub(now).Seconds()),
 		FirstPublishAt:      entries[0].PublishAt,
@@ -390,36 +236,15 @@ func (r *Router) handleDriveBatchImport(w http.ResponseWriter, req *http.Request
 
 	slog.Info("drive batch import queued",
 		"user_id", userID,
-		"folder_id", body.FolderID,
-		"workspace_id", body.WorkspaceID,
-		"facebook_account_id", body.FacebookAccountID,
+		"folder_id", params.FolderID,
+		"workspace_id", params.WorkspaceID,
+		"facebook_account_id", params.FacebookAccountID,
 		"video_count", len(entries),
 		"first_publish_at", resp.FirstPublishAt,
 		"last_scheduled_at", resp.LastScheduledAt,
 	)
 
-	// Marshal the response once so the SAME bytes are both written
-	// to the wire (the SPA receives them) and cached for replay
-	// (insertBatchIdempotentRecord stores them verbatim in
-	// idempotency_batch_replays.response_payload). Marshal-once is
-	// stricter than doubling work, and it guarantees a future replay
-	// returns byte-identical JSON even if writeJSON's internals or
-	// json.Marshal's field-ordering rules ever change.
-	respBytes, marshalErr := json.Marshal(resp)
-	if marshalErr != nil {
-		// Should never happen — DriveBatchImportResponse has only
-		// stdlib-compatible field types — but degrade to the
-		// existing writeJSON path and log loudly so an operator
-		// can investigate without losing the response.
-		slog.Warn("drive batch import: response marshal failed; falling back to writeJSON",
-			"folder_id", body.FolderID,
-			"error", marshalErr)
-		writeJSON(w, http.StatusAccepted, resp)
-	} else {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write(respBytes)
-	}
+	respBytes := writeBatchResponseMarshalOnce(w, resp, "drive batch import", params.FolderID)
 
 	// Idempotency-Key post-handler write (LEVEL 1, migrations 021 +
 	// 039). Best-effort: insertBatchIdempotentRecord logs warnings
