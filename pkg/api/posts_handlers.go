@@ -4,10 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -176,187 +174,40 @@ func (r *Router) handleCreatePost(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Read body bytes once + compute hash. Rewinds req.Body so any
-	// downstream json.NewDecoder(req.Body) sees the same payload.
-	bodyBytes, bodyErr := idempotencyReadBody(req)
-	if bodyErr != nil {
-		writeError(w, http.StatusBadRequest, "request body unreadable: "+bodyErr.Error())
+	// Phase 1: read body bytes + hash + decode + schema validation
+	// (workspace_id, status, targets). The body bytes + hash are
+	// reused by the idempotency gate (phase 3).
+	body, bodyBytes, done := decodeCreatePostRequest(w, req)
+	if done {
 		return
 	}
 	hash := idempotencyHash(bodyBytes)
 
-	// Decode the body. We use json.Unmarshal on the bytes slice
-	// (vs json.NewDecoder(req.Body)) because we already have the
-	// bytes — Unmarshal doesn't read from req.Body so rewind
-	// concerns are moot.
-	var body CreatePostRequest
-	if err := json.Unmarshal(bodyBytes, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-	if body.WorkspaceID == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "workspace_id is required")
-		return
-	}
-	if body.Status != "" && !body.Status.IsValid() {
-		writeError(w, http.StatusBadRequest, "status must be one of: draft, queued")
-		return
-	}
-	if len(body.Targets) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "at least one target is required")
-		return
-	}
-	for i, t := range body.Targets {
-		if t.PlatformAccountID == 0 {
-			writeError(w, http.StatusUnprocessableEntity,
-				fmt.Sprintf("targets[%d].platform_account_id is required", i))
-			return
-		}
-	}
-	ws, err := r.workspaceStore.FindByID(body.WorkspaceID)
-	if err != nil {
-		code, msg := mapWorkspaceError(err)
-		writeError(w, code, "workspace lookup: "+msg)
-		return
-	}
-	if ws == nil {
-		writeError(w, http.StatusNotFound, "workspace not found")
-		return
-	}
-	if ws.OwnerID != userID {
-		writeError(w, http.StatusForbidden, "workspace not owned by this user")
+	// Phase 2: workspace lookup + ownership check. Runs BEFORE the
+	// cache replay so a forged cross-tenant (workspace_id, key)
+	// tuple cannot leak another tenant's resource.
+	ws, done := r.lookupCreatePostWorkspace(w, req, userID, body.WorkspaceID)
+	if done {
 		return
 	}
 
-	// Workspace ownership verified. NOW do the idempotency lookup
-	// keyed on (ws.ID, idemKey). Cross-tenant cache hit is
-	// impossible because the (workspace, key) tuple is unique.
-	idemKey := strings.TrimSpace(req.Header.Get("Idempotency-Key"))
-	idemOutcome, idemRec, idemErr := idempotencyLookup(r, ws.ID, idemKey, hash, "post")
-	if idemErr != nil {
-		// 400 on "key too long" is a client-side contract
-		// violation. Everything else (DB errors) is server-side.
-		if strings.Contains(idemErr.Error(), "exceeds") {
-			writeError(w, http.StatusBadRequest, idemErr.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "idempotency lookup: "+idemErr.Error())
-		return
-	}
-	switch idemOutcome {
-	case idempotencyConflict:
-		writeError(w, http.StatusConflict, "idempotency_key_conflict")
-		return
-	case idempotencyReplay:
-		if replayErr := replayIdempotentResource(r, w, idemRec, idemRec.ResponseStatus); replayErr != nil {
-			writeError(w, http.StatusInternalServerError, "idempotency replay: "+replayErr.Error())
-		}
-		return
-	case idempotencyContinue:
-		// Fall through to the rest of the handler.
-	}
-
-	// P1#4 — resolve the canonical publish cursor via the alias
-	// helper (publish_at wins; scheduled_at falls back).
-	publishAt := body.ResolvePublishAt()
-	// Blocco #3 P0 — horizon enforcement on POST /api/v1/posts.
-	// The producer-side heuristic in drive_batch_v2_handlers already
-	// caps the worst-case projected batch horizon; this single-post
-	// endpoint applies the SAME env-driven cap from the user-facing
-	// schedule view so a manual "/posts now + calendar" planning
-	// can never park a post past PUBLISH_HORIZON_DAYS. The 5-second
-	// minimum-future floor and the past-date rejection are NOT
-	// applied here — handleCreatePost's callers include the
-	// "publish immediately" flow (publishAt == nil) which must
-	// pass; the producer-side validation in handleRescheduleUpload
-	// owns the floors for the reschedule path.
-	if publishAt != nil {
-		maxHorizon := time.Now().Add(time.Duration(r.publishHorizonDays()) * 24 * time.Hour)
-		if publishAt.After(maxHorizon) {
-			writeError(w, http.StatusUnprocessableEntity,
-				fmt.Sprintf("publish_at must be within %d days from now (PUBLISH_HORIZON_DAYS)", r.publishHorizonDays()),
-			)
-			return
-		}
-	}
-	status := models.PostStatusDraft
-	if body.Status != "" {
-		status = body.Status
-	} else if publishAt != nil {
-		status = models.PostStatusQueued
-	}
-
-	// Taglio 3.2: resolve media asset_id(s) → trusted internal S3 URL.
-	// The first asset's URL is stored in post.MediaURL; the publish
-	// worker continues to read post.MediaURL so the per-platform
-	// service interfaces don't need to change. The URL is always
-	// the internal S3 URL — no user-controlled URL can ever flow
-	// into the publish pipeline.
-	mediaURL, err := r.resolveFirstMediaURL(userID, body.Content.Media)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	// Phase 3: idempotency gate keyed on (ws.ID, idemKey) — replay /
+	// conflict / continue.
+	idemKey, done := r.applyCreatePostIdempotency(w, req, ws.ID, hash)
+	if done {
 		return
 	}
 
-	post := &models.Post{
-		WorkspaceID: body.WorkspaceID,
-		Title:       body.Content.Title,
-		Caption:     body.Content.Caption,
-		MediaURL:    mediaURL,
-		// P1#4 — ingest_after is server-side DEFAULT NOW() at SQL
-		// level; we leave zero-value here so the SQL DEFAULT fires.
-		// publish_at comes from the body's canonical-or-alias cursor.
-		PublishAt: publishAt,
-		Status:    status,
-	}
-	targets := make([]*models.PostTarget, 0, len(body.Targets))
-	for _, t := range body.Targets {
-		targets = append(targets, &models.PostTarget{
-			PlatformAccountID: t.PlatformAccountID,
-			Status:            models.PostStatusQueued,
-		})
-	}
-
-	if err := r.postStore.Create(post, targets); err != nil {
-		code, msg := mapRepoError(err)
-		writeError(w, code, "failed to create post: "+msg)
+	// Phase 4: canonical publish cursor (publish_at / scheduled_at
+	// alias), PUBLISH_HORIZON_DAYS cap, status promotion.
+	publishAt, status, done := r.resolveCreatePostSchedule(w, req, body)
+	if done {
 		return
 	}
-	// Idempotency-Key post-create write (level 1, migration 021).
-	// Only fires when the request carried the header AND we fell
-	// through to the handler (i.e. no cached hit). Best-effort:
-	// the cache is operator UX, not part of the API contract.
-	insertIdempotentRecord(r, ws.ID, idemKey, "post", post.ID, hash, http.StatusCreated)
-	writeJSON(w, http.StatusCreated, createPostResponse{post: post, targets: targets})
-}
 
-type createPostResponse struct {
-	post    *models.Post
-	targets []*models.PostTarget
-}
-
-func (c createPostResponse) MarshalJSON() ([]byte, error) {
-	// P1#4 — emit BOTH publish_at (canonical) AND scheduled_at
-	// (legacy alias) on the wire so legacy SPA clients continue to
-	// render the calendar until they migrate. The post pointer also
-	// serialises since the marshaler is on the wrapper struct.
-	base := publishAtJSON(c.post.PublishAt)
-	base["id"] = c.post.ID
-	base["workspace_id"] = c.post.WorkspaceID
-	base["title"] = c.post.Title
-	base["caption"] = c.post.Caption
-	base["media_url"] = c.post.MediaURL
-	base["status"] = c.post.Status
-	base["version"] = c.post.Version
-	base["created_at"] = c.post.CreatedAt
-	base["updated_at"] = c.post.UpdatedAt
-	base["post"] = c.post
-	base["targets"] = c.targets
-	return json.Marshal(base)
+	// Phase 5 (terminal): media resolution, persist, idempotency
+	// record, 201 response.
+	r.createPostPersist(w, userID, ws, body, publishAt, status, idemKey, hash)
 }
 
 // handleGetPost fetches a post by id with cross-tenant isolation.
