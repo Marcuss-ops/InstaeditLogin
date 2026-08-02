@@ -54,6 +54,8 @@ type DashboardData = {
   groupSummaries: GroupSummary[];
 };
 
+const PRIVATE_VIDEO_PERIODS = [1, 7, 14, 28, 90] as const;
+
 type FetchState =
   | { kind: "loading" }
   | { kind: "ready"; data: DashboardData }
@@ -97,6 +99,7 @@ export function InternalDashboard() {
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [draggedAccountId, setDraggedAccountId] = useState<number | null>(null);
   const [savingDrop, setSavingDrop] = useState<number | null>(null);
+  const [privateVideoDays, setPrivateVideoDays] = useState<number>(90);
 
   const load = useCallback(async () => {
     abortRef.current?.abort();
@@ -134,8 +137,17 @@ export function InternalDashboard() {
         youtubeAccounts.map(async (account) => {
           try {
             const response = await authedFetch(`/api/v1/accounts/${account.id}/content?limit=50&privacy=private`, { signal: controller.signal });
-            const data = (await response.json()) as { items?: Array<{ privacy?: string }> };
-            return (data.items ?? []).filter((item) => item.privacy === "private").length;
+            const data = (await response.json()) as {
+              items?: Array<{ privacy?: string; published_at?: string }>;
+            };
+            const cutoff = Date.now() - privateVideoDays * 24 * 60 * 60 * 1000;
+            return (data.items ?? []).filter((item) => {
+              if (item.privacy !== "private") return false;
+              const publishedAt = Date.parse(item.published_at ?? "");
+              // Older API responses without a timestamp remain visible in
+              // the default 90-day view; dated items are filtered exactly.
+              return Number.isNaN(publishedAt) || publishedAt >= cutoff;
+            }).length;
           } catch {
             return 0;
           }
@@ -214,7 +226,7 @@ export function InternalDashboard() {
       const message = err instanceof Error ? err.message : "Unable to load dashboard.";
       setState({ kind: "error", message });
     }
-  }, [navigate]);
+  }, [navigate, privateVideoDays]);
 
   useEffect(() => {
     let cancelled = false;
@@ -318,7 +330,34 @@ export function InternalDashboard() {
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
               <StatCard label="Connected accounts" value={stats.connected} icon={Link2} to="/app/linking" />
-              <StatCard label="Video privati da pubblicare" value={state.data.privateVideos} icon={Clock} to="/app/calendar?tab=videos" />
+              <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5">
+                <Link
+                  to={`/app/calendar?group_id=all`}
+                  className="group block no-underline"
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="text-[13px] font-medium text-[#9aa0aa] mb-1">Video privati da pubblicare</p>
+                      <p className="text-[28px] font-extrabold tracking-tight text-white">{state.data.privateVideos}</p>
+                    </div>
+                    <div className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-[#9aa0aa] group-hover:bg-white group-hover:text-[#030308] transition-colors">
+                      <Clock size={20} />
+                    </div>
+                  </div>
+                </Link>
+                <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/[0.08] pt-3">
+                  <label htmlFor="dashboard-private-video-period" className="text-[11px] text-[#9aa0aa]">Periodo video</label>
+                  <select
+                    id="dashboard-private-video-period"
+                    data-testid="dashboard-private-video-period"
+                    value={privateVideoDays}
+                    onChange={(event) => setPrivateVideoDays(Number(event.target.value))}
+                    className="rounded-lg border border-white/[0.10] bg-black/20 px-2.5 py-1.5 text-[12px] font-semibold text-white outline-none"
+                  >
+                    {PRIVATE_VIDEO_PERIODS.map((days) => <option key={days} value={days}>{days} giorni</option>)}
+                  </select>
+                </div>
+              </div>
             </div>
 
             {(

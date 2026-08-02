@@ -29,8 +29,8 @@ export function GroupsPage() {
   } = useGroupsData();
 
   return (
-    <div className="min-h-full p-4 sm:p-6 lg:p-8 bg-[#030308] text-[#e8e8ef]">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-full w-full bg-[#030308] p-4 text-[#e8e8ef] sm:p-6 lg:p-8">
+      <div className="mx-auto w-full max-w-[1600px]">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
           <div>
             <h1 className="text-[24px] sm:text-[28px] font-extrabold tracking-[-0.02em] text-white flex items-center gap-3">
@@ -135,7 +135,7 @@ export function GroupsPage() {
             )}
           </div>
 
-          <div className="surface-card bg-[#1f1f2e] border border-white/[0.12] rounded-2xl p-5 min-h-[300px]">
+          <div className="w-full min-w-0 rounded-2xl border border-white/[0.08] bg-[#0b0c12] p-5 shadow-[0_18px_60px_rgba(0,0,0,0.18)] min-h-[300px]">
             {selectedAccount ? (
               <AccountDetailPanel
                 account={selectedAccount}

@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { type CalendarViewMode } from "./CalendarGrid";
-import type { Workspace } from "./calendarTypes";
+import type { CalendarGroup } from "./calendarTypes";
 
 const viewTabs: { id: CalendarViewMode; label: string; icon: ElementType }[] = [
   { id: "month", label: "Mese", icon: CalendarIcon },
@@ -34,9 +34,9 @@ export function CalendarToolbar({
   formattedDate,
   statusFilter,
   setStatusFilter,
-  workspaceFilter,
-  setWorkspaceFilter,
-  workspaces,
+  groupFilter,
+  setGroupFilter,
+  groups,
   hasActiveFilters,
   clearFilters,
 }: {
@@ -47,9 +47,9 @@ export function CalendarToolbar({
   formattedDate: string;
   statusFilter: string;
   setStatusFilter: (value: string) => void;
-  workspaceFilter: string;
-  setWorkspaceFilter: (value: string) => void;
-  workspaces: Workspace[];
+  groupFilter: string;
+  setGroupFilter: (value: string) => void;
+  groups: CalendarGroup[];
   hasActiveFilters: boolean;
   clearFilters: () => void;
 }) {
@@ -122,18 +122,18 @@ export function CalendarToolbar({
               </option>
             ))}
           </select>
-          {workspaces.length > 0 && (
+          {groups.length > 0 && (
             <select
-              data-testid="calendar-filter-workspace"
-              value={workspaceFilter}
-              onChange={(e) => setWorkspaceFilter(e.target.value)}
+              data-testid="calendar-filter-group"
+              value={groupFilter}
+              onChange={(e) => setGroupFilter(e.target.value)}
               className="px-3 py-2 rounded-xl bg-white/[0.04] border border-white/[0.08] text-[13px] font-medium text-white focus:outline-none focus:border-white/[0.20]"
-              aria-label="Filtra per workspace"
+              aria-label="Seleziona gruppo"
             >
-              <option value="all">Tutti i workspace</option>
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name}
+              <option value="all">Tutti i gruppi</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
                 </option>
               ))}
             </select>

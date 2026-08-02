@@ -9,6 +9,7 @@ export type Post = {
 };
 
 export type Workspace = { id: number; name: string };
+export type CalendarGroup = { id: number; name: string; workspace_id: number };
 
 export type ContentMetric = {
   key: string;
@@ -39,7 +40,7 @@ export type CalendarTab = "calendar" | "videos";
 
 export type FetchState =
   | { kind: "loading" }
-  | { kind: "ready"; posts: Post[]; workspaces: Workspace[] }
+  | { kind: "ready"; posts: Post[]; workspaces: Workspace[]; groups: CalendarGroup[] }
   | { kind: "error"; message: string };
 
 export type VideoState =

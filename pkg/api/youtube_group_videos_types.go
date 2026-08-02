@@ -101,6 +101,7 @@ const groupYouTubeVideosPhantomMaxAge = 90 * 24 * time.Hour
 type groupYouTubeVideoEntry struct {
 	YouTubeVideoID    string     `json:"youtube_video_id"`
 	Title             string     `json:"title"`
+	Description       string     `json:"description,omitempty"`
 	ThumbnailURL      string     `json:"thumbnail_url"`
 	PrivacyStatus     string     `json:"privacy_status"`
 	ProcessingStatus  string     `json:"processing_status"`
@@ -117,7 +118,8 @@ type groupYouTubeVideoEntry struct {
 	EditorURL       *string `json:"editor_url,omitempty"`
 	// EditorStatus: "editing" | "failed" | "publishing" | "published"
 	// when a session exists, else "ready" (no session yet).
-	EditorStatus string `json:"editor_status"`
+	EditorStatus     string  `json:"editor_status"`
+	DraftDescription *string `json:"draft_description,omitempty"`
 	// DesiredPrivacy: what the operator chose on the editor's "Pubblica"
 	// panel (publish flow will use it). Empty when no session exists.
 	DesiredPrivacy string `json:"desired_privacy,omitempty"`

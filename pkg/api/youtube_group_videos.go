@@ -293,6 +293,7 @@ func (r *Router) appendPhantomGroupEntries(
 			VeloxProjectID:    &vid,
 			EditorURL:         &u,
 			EditorStatus:      "published",
+			DraftDescription:  s.DraftDescription,
 			DesiredPrivacy:    s.DesiredPrivacy,
 			PublishAt:         s.PublishAt,
 			ActualPrivacy:     s.ActualPrivacy,

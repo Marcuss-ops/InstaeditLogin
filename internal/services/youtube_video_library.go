@@ -50,6 +50,7 @@ type youtubeLibraryVideo struct {
 	ID      string `json:"id"`
 	Snippet struct {
 		Title       string `json:"title"`
+		Description string `json:"description"`
 		ChannelID   string `json:"channelId"`
 		PublishedAt string `json:"publishedAt"`
 		Thumbnails  struct {
@@ -165,6 +166,7 @@ func (s *YouTubeOAuthService) ListEditableVideos(ctx context.Context, accessToke
 		page.Items = append(page.Items, models.YouTubeVideoDetails{
 			ID:           video.ID,
 			Title:        video.Snippet.Title,
+			Description:  video.Snippet.Description,
 			ChannelID:    video.Snippet.ChannelID,
 			ThumbnailURL: thumbnailURL,
 			Privacy:      privacy,

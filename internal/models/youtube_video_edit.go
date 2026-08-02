@@ -94,6 +94,7 @@ type YouTubeVideoEdit struct {
 type YouTubeVideoDetails struct {
 	ID           string     `json:"id"`
 	Title        string     `json:"title"`
+	Description  string     `json:"description,omitempty"`
 	ChannelID    string     `json:"channel_id"`
 	ThumbnailURL string     `json:"thumbnail_url,omitempty"`
 	Privacy      string     `json:"privacy"`

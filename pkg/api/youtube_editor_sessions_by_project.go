@@ -47,9 +47,10 @@ type youTubeEditorSessionDetail struct {
 	// prefill its form after a fresh POST /internal/v1/thumbnail-sessions.
 	// Pointer + omitempty so a brand-new row (no draft written)
 	// surfaces as a missing field rather than an empty string.
-	DraftTitle *string   `json:"draft_title,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	DraftTitle       *string   `json:"draft_title,omitempty"`
+	DraftDescription *string   `json:"draft_description,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSessionDetail {
@@ -68,6 +69,7 @@ func toYouTubeEditorSessionDetail(edit *models.YouTubeVideoEdit) youTubeEditorSe
 		ActualPrivacy:      edit.ActualPrivacy,
 		YouTubeSyncStatus:  edit.YouTubeSyncStatus,
 		DraftTitle:         edit.DraftTitle,
+		DraftDescription:   edit.DraftDescription,
 		CreatedAt:          edit.CreatedAt,
 		UpdatedAt:          edit.UpdatedAt,
 	}

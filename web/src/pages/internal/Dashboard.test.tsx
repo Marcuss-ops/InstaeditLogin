@@ -67,9 +67,8 @@ describe("InternalDashboard", () => {
     });
 
     expect(screen.getByText("Connected accounts")).toBeInTheDocument();
-    expect(screen.getByText("Total posts")).toBeInTheDocument();
-    expect(screen.getByText("Published")).toBeInTheDocument();
-    expect(screen.getByText("Pending uploads")).toBeInTheDocument();
+    expect(screen.getByText("Video privati da pubblicare")).toBeInTheDocument();
+    expect(screen.getByTestId("dashboard-private-video-period")).toHaveValue("90");
   });
 
   it("shows an error state when data cannot be loaded", async () => {
@@ -169,7 +168,7 @@ describe("InternalDashboard", () => {
       expect(screen.getByRole("heading", { name: /Dashboard/i })).toBeInTheDocument();
     });
 
-    expect(screen.getAllByText("0")).toHaveLength(4);
+    expect(screen.getAllByText("0")).toHaveLength(2);
     expect(screen.getByTestId("dashboard-groups")).toBeInTheDocument();
   });
 });

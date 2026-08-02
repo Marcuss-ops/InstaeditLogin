@@ -40,17 +40,13 @@ beforeEach(() => {
 });
 
 describe("GroupsPage", () => {
-  it("provides a direct link back to the real InstaEditLogin Home", () => {
+  it("does not render a redundant Home link", () => {
     render(
       <MemoryRouter initialEntries={["/app/groups"]}>
         <GroupsPage />
       </MemoryRouter>,
     );
 
-    expect(screen.getByTestId("groups-home-link")).toHaveAttribute(
-      "href",
-      "/app/dashboard",
-    );
-    expect(screen.getByRole("link", { name: /torna alla home/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("groups-home-link")).not.toBeInTheDocument();
   });
 });

@@ -1,23 +1,16 @@
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { Calendar as CalendarIcon, Plus, Video } from "lucide-react";
-import { cn } from "../../lib/utils";
+import { Link } from "react-router-dom";
+import { Calendar as CalendarIcon, Plus } from "lucide-react";
 import { type CalendarViewMode } from "./CalendarGrid";
 import { useCalendarPosts } from "./useCalendarPosts";
-import { usePrivateVideos } from "./usePrivateVideos";
 import { CalendarToolbar } from "./CalendarToolbar";
 import { CalendarPostsPanel } from "./CalendarPostsPanel";
-import { PrivateVideosPanel } from "./PrivateVideosPanel";
-import type { CalendarTab } from "./calendarTypes";
+import { GroupYouTubeVideos } from "./GroupYouTubeVideos";
 
 export function CalendarPage() {
-  const [searchParams] = useSearchParams();
-  const accountId = searchParams.get("account_id");
-  const [activeTab, setActiveTab] = useState<CalendarTab>(searchParams.get("tab") === "videos" ? "videos" : "calendar");
   const [view, setView] = useState<CalendarViewMode>("week");
   const [currentDate, setCurrentDate] = useState(new Date());
   const posts = useCalendarPosts();
-  const videos = usePrivateVideos(accountId, activeTab === "videos");
 
   function shiftDate(delta: number) {
     setCurrentDate((prev) => {
@@ -58,36 +51,7 @@ export function CalendarPage() {
           </div>
         </div>
 
-        <>
-          <div className="flex items-center gap-1 mb-4 shrink-0">
-            {[
-              { id: "calendar" as const, label: "Calendario", icon: CalendarIcon },
-              { id: "videos" as const, label: "Video Privati", icon: Video },
-            ].map((tab) => {
-              const Icon = tab.icon;
-              const active = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setActiveTab(tab.id)}
-                  className={cn(
-                    "flex items-center gap-1.5 px-4 py-2 rounded-xl text-[13px] font-medium transition-all",
-                    active
-                      ? "bg-white/[0.08] text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.1)]"
-                      : "text-[#9aa0aa] hover:text-white hover:bg-white/[0.04]",
-                  )}
-                >
-                  <Icon size={14} />
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-        </>
-
-        {activeTab === "calendar" && (
-          <CalendarToolbar
+        <CalendarToolbar
             view={view}
             setView={setView}
             shiftDate={shiftDate}
@@ -95,16 +59,14 @@ export function CalendarPage() {
             formattedDate={formattedDate}
             statusFilter={posts.statusFilter}
             setStatusFilter={posts.setStatusFilter}
-            workspaceFilter={posts.workspaceFilter}
-            setWorkspaceFilter={posts.setWorkspaceFilter}
-            workspaces={posts.state.kind === "ready" ? posts.state.workspaces : []}
+            groupFilter={posts.groupFilter}
+            setGroupFilter={posts.setGroupFilter}
+            groups={posts.state.kind === "ready" ? posts.state.groups : []}
             hasActiveFilters={posts.hasActiveFilters}
             clearFilters={posts.clearFilters}
           />
-        )}
 
-        {activeTab === "calendar" && (
-          <CalendarPostsPanel
+        <CalendarPostsPanel
             state={posts.state}
             filteredPosts={posts.filteredPosts}
             view={view}
@@ -113,14 +75,11 @@ export function CalendarPage() {
             clearFilters={posts.clearFilters}
             load={posts.load}
           />
-        )}
 
-        {activeTab === "videos" && (
-          <PrivateVideosPanel
-            videoState={videos.videoState}
-            loadVideos={videos.loadVideos}
-            handleEditThumbnail={videos.handleEditThumbnail}
-          />
+        {posts.groupFilter !== "all" && Number.isFinite(Number(posts.groupFilter)) && (
+          <div className="mt-4 shrink-0">
+            <GroupYouTubeVideos groupId={Number(posts.groupFilter)} />
+          </div>
         )}
       </div>
     </div>

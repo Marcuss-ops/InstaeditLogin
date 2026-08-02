@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authedFetch, ApiError, AuthError } from "../../lib/auth";
-import type { FetchState, Post, Workspace } from "./calendarTypes";
+import type { CalendarGroup, FetchState, Post, Workspace } from "./calendarTypes";
 
 export function useCalendarPosts() {
   const navigate = useNavigate();
@@ -11,6 +11,7 @@ export function useCalendarPosts() {
 
   const statusFilter = searchParams.get("status") || "all";
   const workspaceFilter = searchParams.get("workspace_id") || "all";
+  const groupFilter = searchParams.get("group_id") || "all";
 
   const load = useCallback(async () => {
     abortRef.current?.abort();
@@ -19,9 +20,12 @@ export function useCalendarPosts() {
     setState({ kind: "loading" });
 
     try {
-      const [postsResp, workspacesResp] = await Promise.all([
+      const [postsResp, workspacesResp, groupsResp] = await Promise.all([
         authedFetch("/api/v1/posts", { signal: controller.signal }),
         authedFetch("/api/v1/workspaces", { signal: controller.signal }).catch(
+          () => null,
+        ),
+        authedFetch("/api/v1/groups/aggregate", { signal: controller.signal }).catch(
           () => null,
         ),
       ]);
@@ -34,7 +38,12 @@ export function useCalendarPosts() {
         };
         workspaces = wsData.workspaces ?? [];
       }
-      setState({ kind: "ready", posts: data.posts ?? [], workspaces });
+      let groups: CalendarGroup[] = [];
+      if (groupsResp && groupsResp.ok) {
+        const groupsData = (await groupsResp.json()) as { groups?: CalendarGroup[] };
+        groups = groupsData.groups ?? [];
+      }
+      setState({ kind: "ready", posts: data.posts ?? [], workspaces, groups });
     } catch (err) {
       if (controller.signal.aborted) return;
       if (err instanceof AuthError) {
@@ -61,11 +70,15 @@ export function useCalendarPosts() {
           ) {
             return false;
           }
+          if (groupFilter !== "all") {
+            const group = state.groups.find((item) => String(item.id) === groupFilter);
+            if (group && post.workspace_id !== group.workspace_id) return false;
+          }
           return true;
         })
       : [];
 
-  const hasActiveFilters = statusFilter !== "all" || workspaceFilter !== "all";
+  const hasActiveFilters = statusFilter !== "all" || workspaceFilter !== "all" || groupFilter !== "all";
 
   const setStatusFilter = (value: string) => {
     setSearchParams(
@@ -91,12 +104,30 @@ export function useCalendarPosts() {
     );
   };
 
+  const setGroupFilter = (value: string) => {
+    if (typeof window !== "undefined") {
+      if (value === "all") window.localStorage.removeItem("instaedit:last-calendar-group-id");
+      else window.localStorage.setItem("instaedit:last-calendar-group-id", value);
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value === "all") next.delete("group_id");
+        else next.set("group_id", value);
+        next.delete("workspace_id");
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
   const clearFilters = () => {
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete("status");
         next.delete("workspace_id");
+        next.delete("group_id");
         return next;
       },
       { replace: true },
@@ -111,6 +142,8 @@ export function useCalendarPosts() {
     hasActiveFilters,
     setStatusFilter,
     setWorkspaceFilter,
+    groupFilter,
+    setGroupFilter,
     clearFilters,
     load,
   };

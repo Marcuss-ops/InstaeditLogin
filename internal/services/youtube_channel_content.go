@@ -418,6 +418,7 @@ func (s *YouTubeOAuthService) GetYouTubeVideo(ctx context.Context, accessToken, 
 	return &models.YouTubeVideoDetails{
 		ID:           v.ID,
 		Title:        v.Snippet.Title,
+		Description:  v.Snippet.Description,
 		ChannelID:    v.Snippet.ChannelID,
 		ThumbnailURL: youtubeBestThumbnail(v.Snippet.Thumbnails),
 		Privacy:      v.Status.PrivacyStatus,

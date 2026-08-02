@@ -333,8 +333,6 @@ export function AccountDetailPanel({
       <div className="mt-6 flex items-center gap-2 text-[12px] text-[#9aa0aa]">
         <Link2 size={14} />
         Quick jump:
-        <Link className="text-white underline hover:no-underline" to="/app/dashboard">Home InstaEditLogin</Link>
-        <span className="opacity-50">·</span>
         <Link className="text-white underline hover:no-underline" to="/app/posts">All posts</Link>
         <span className="opacity-50">·</span>
         <Link className="text-white underline hover:no-underline" to="/app/compose">Compose new post</Link>

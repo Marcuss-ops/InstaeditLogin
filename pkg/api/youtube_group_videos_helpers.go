@@ -285,6 +285,7 @@ func (r *Router) writeGroupVideosOK(
 			entry := groupYouTubeVideoEntry{
 				YouTubeVideoID:    v.ID,
 				Title:             v.Title,
+				Description:       v.Description,
 				ThumbnailURL:      v.ThumbnailURL,
 				PrivacyStatus:     v.Privacy,
 				ProcessingStatus:  v.UploadStatus,
@@ -306,6 +307,7 @@ func (r *Router) writeGroupVideosOK(
 				entry.EditorStatus = s.Status
 				entry.DesiredPrivacy = s.DesiredPrivacy
 				entry.PublishAt = s.PublishAt
+				entry.DraftDescription = s.DraftDescription
 				// ActualPrivacy is exclusively the value read back from
 				// YouTube. DesiredPrivacy must never be copied here:
 				// doing so would make a newly-opened or pending session

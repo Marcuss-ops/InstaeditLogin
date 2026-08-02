@@ -11,12 +11,16 @@ import {
 } from "./groupsTypes";
 
 export function useGroupsData() {
-  
+    const LAST_GROUP_KEY = "instaedit:last-group-id";
     const navigate = useNavigate();
     const { groupId: routeGroupId } = useParams<{ groupId?: string }>();
     const abortRef = useRef<AbortController | null>(null);
     const [state, setState] = useState<FetchState>({ kind: "loading" });
-    const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+    const [selectedGroupId, setSelectedGroupIdState] = useState<number | null>(() => {
+      if (typeof window === "undefined") return null;
+      const stored = Number(window.localStorage.getItem(LAST_GROUP_KEY));
+      return Number.isFinite(stored) && stored > 0 ? stored : null;
+    });
     const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
     const [newGroupName, setNewGroupName] = useState("");
     const [creatingGroup, setCreatingGroup] = useState(false);
@@ -72,9 +76,12 @@ export function useGroupsData() {
           accountsByGroup,
         });
         const requestedGroupId = Number(routeGroupId);
-        if (Number.isFinite(requestedGroupId) && groups.some((g) => g.id === requestedGroupId)) {
-          setSelectedGroupId(requestedGroupId);
-        }
+        const storedGroupId = typeof window === "undefined" ? NaN : Number(window.localStorage.getItem(LAST_GROUP_KEY));
+        const nextGroupId = Number.isFinite(requestedGroupId) && groups.some((g) => g.id === requestedGroupId)
+          ? requestedGroupId
+          : groups.find((g) => g.id === storedGroupId)?.id ?? groups[0]?.id ?? null;
+        setSelectedGroupIdState(nextGroupId);
+        if (nextGroupId != null) window.localStorage.setItem(LAST_GROUP_KEY, String(nextGroupId));
       } catch (err) {
         if (controller.signal.aborted) return;
         if (err instanceof AuthError) {
@@ -84,7 +91,15 @@ export function useGroupsData() {
         const message = err instanceof ApiError ? err.message : "Unable to load groups.";
         setState({ kind: "error", message });
       }
-    }, [navigate, routeGroupId]);
+  }, [navigate, routeGroupId]);
+
+    const setSelectedGroupId = useCallback((id: number | null) => {
+      setSelectedGroupIdState(id);
+      if (typeof window !== "undefined") {
+        if (id == null) window.localStorage.removeItem(LAST_GROUP_KEY);
+        else window.localStorage.setItem(LAST_GROUP_KEY, String(id));
+      }
+    }, []);
   
     useEffect(() => {
       void load();

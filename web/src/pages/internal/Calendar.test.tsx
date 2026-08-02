@@ -69,6 +69,14 @@ function setupFetchMock() {
           ],
         });
       }
+      if (url.endsWith("/api/v1/groups/aggregate")) {
+        return mockJsonResponse({
+          groups: [
+            { id: 47, workspace_id: 47, name: "WWE" },
+            { id: 99, workspace_id: 99, name: "Client" },
+          ],
+        });
+      }
       return mockJsonResponse({}, false, 404);
     }),
   );
@@ -94,14 +102,14 @@ describe("CalendarPage filter", () => {
     vi.resetAllMocks();
   });
 
-  it("renders the toolbar with status + workspace selects after load", async () => {
+  it("renders the toolbar with status + group selects after load", async () => {
     setupFetchMock();
     renderPage();
 
     await waitFor(() => {
       expect(screen.getByTestId("calendar-filter-status")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("calendar-filter-workspace")).toBeInTheDocument();
+    expect(screen.getByTestId("calendar-filter-group")).toBeInTheDocument();
     const status = screen.getByTestId("calendar-filter-status") as HTMLSelectElement;
     expect(status.value).toBe("all");
   });
@@ -269,35 +277,35 @@ describe("CalendarPage filter", () => {
     ).toBe("[11,33]");
   });
 
-  it("Workspace select change updates the select's current value", async () => {
+  it("Group select change updates the select's current value", async () => {
     setupFetchMock();
     const user = userEvent.setup();
     renderPage();
 
     await waitFor(() =>
-      expect(screen.getByTestId("calendar-filter-workspace")).toBeInTheDocument(),
+      expect(screen.getByTestId("calendar-filter-group")).toBeInTheDocument(),
     );
 
     await user.selectOptions(
-      screen.getByTestId("calendar-filter-workspace"),
+      screen.getByTestId("calendar-filter-group"),
       "47",
     );
 
     await waitFor(() => {
-      const ws = screen.getByTestId("calendar-filter-workspace") as HTMLSelectElement;
-      expect(ws.value).toBe("47");
+      const group = screen.getByTestId("calendar-filter-group") as HTMLSelectElement;
+      expect(group.value).toBe("47");
     });
   });
 
-  it("honors pre-existing status + workspace params on mount", async () => {
+  it("honors pre-existing status + group params on mount", async () => {
     setupFetchMock();
-    renderPage("/app/calendar?status=queued&workspace_id=47");
+    renderPage("/app/calendar?status=queued&group_id=47");
 
     await waitFor(() => {
       const status = screen.getByTestId("calendar-filter-status") as HTMLSelectElement;
-      const ws = screen.getByTestId("calendar-filter-workspace") as HTMLSelectElement;
+      const group = screen.getByTestId("calendar-filter-group") as HTMLSelectElement;
       expect(status.value).toBe("queued");
-      expect(ws.value).toBe("47");
+      expect(group.value).toBe("47");
     });
     expect(screen.queryByText(/Nessun post corrisponde ai filtri/i)).not.toBeInTheDocument();
   });
@@ -305,7 +313,7 @@ describe("CalendarPage filter", () => {
   it("Clear-filters button resets both selects back to 'all' and restores the unfiltered grid", async () => {
     setupFetchMock();
     const user = userEvent.setup();
-    renderPage("/app/calendar?status=queued&workspace_id=99");
+    renderPage("/app/calendar?status=queued&group_id=99");
 
     await waitFor(() =>
       expect(screen.getByTestId("calendar-filter-clear")).toBeInTheDocument(),
@@ -315,9 +323,9 @@ describe("CalendarPage filter", () => {
 
     await waitFor(() => {
       const status = screen.getByTestId("calendar-filter-status") as HTMLSelectElement;
-      const ws = screen.getByTestId("calendar-filter-workspace") as HTMLSelectElement;
+      const group = screen.getByTestId("calendar-filter-group") as HTMLSelectElement;
       expect(status.value).toBe("all");
-      expect(ws.value).toBe("all");
+      expect(group.value).toBe("all");
     });
     // After clearing, all 3 posts come back to CalendarGrid.
     await waitFor(() =>
