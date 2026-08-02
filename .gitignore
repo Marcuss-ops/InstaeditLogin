@@ -60,6 +60,21 @@ __pycache__/
 /oauth-scope-canary
 /set_password
 /create-user
+/worker
+/yttest
+/batch-import-drive-folder
+/published
+
+# Backup / stale files (cleanup 2026-08-02) — never commit editor or
+# script-generated backups; restore from git history instead.
+*.bak
+*.bak2
+*.backup
+*.old
+
+# Database dumps (may contain real data/credentials)
+/backups/
+*.dump
 .env*
 !.env.dev.example
 !.env.test.example
