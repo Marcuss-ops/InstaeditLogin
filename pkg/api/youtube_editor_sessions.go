@@ -2,8 +2,12 @@
 // concern (split-by-concern, 2026-08):
 //
 //	youtube_editor_sessions.go       — session CRUD: CreateEditorSession
-//	                                   helper + handleCreate + handleUpdate +
-//	                                   writeEditorSessionError + helpers
+//	                                   helper + handleCreate + handleUpdate
+//	youtube_editor_sessions_types.go — DTO types (CreateEditorSessionInput,
+//	                                   request/response) + sentinel errors
+//	youtube_editor_sessions_helpers.go — writeEditorSessionError +
+//	                                   compile-time assertion +
+//	                                   userCanAccessWorkspace + editorURLForProject
 //	youtube_editor_sessions_list.go  — handleList… (session list)
 //	youtube_editor_sessions_thumbnail.go — errAttach* sentinels +
 //	                                   attachThumbnailToSession +
@@ -16,7 +20,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -28,53 +31,6 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
-
-// Sentinel errors for CreateEditorSession. The HTTP handler maps them
-// to status codes via errors.Is below; the reconciler worker reads
-// them for retry vs skip decisions.
-var (
-	ErrEditorSessionWorkspaceNotFound     = errors.New("workspace not found")
-	ErrEditorSessionAccountNotFound       = errors.New("youtube account not found")
-	ErrEditorSessionChannelUnlinked       = errors.New("account not linked to workspace")
-	ErrEditorSessionNoValidToken          = errors.New("no valid token found for this account")
-	ErrEditorSessionVideoWrongChannel     = errors.New("video does not belong to selected channel")
-	ErrEditorSessionVideoNotReady         = errors.New("video is not ready for thumbnail editing")
-	ErrEditorSessionVideoAlreadyPub       = errors.New("video is already public; thumbnail editing allowed only for private or unlisted videos")
-	ErrEditorSessionYTServiceUnconfigured = errors.New("youtube service not configured")
-	ErrEditorSessionEditStoreUnconfigured = errors.New("youtube video edit store not configured")
-)
-
-// CreateEditorSessionInput is the canonical input for the editor-session
-// helper. Both the HTTP handler and the youtube_processing_reconciler
-// worker construct this struct; the helper's validates-then-creates
-// flow is identical for both call sites (per-target 1:1 contract
-// preserved at the helper level).
-//
-// Blocco #4 P0: the struct is EXPORTED so the worker in
-// internal/worker can import it without breaking pkg/api's unexported-
-// type boundary.
-type CreateEditorSessionInput struct {
-	WorkspaceID        int64
-	PlatformAccountID  int64
-	YouTubeVideoID     string
-	SourceThumbnailURL string
-}
-
-// createYouTubeEditorSessionRequest is the body accepted by
-// POST /api/v1/youtube/editor-sessions.
-type createYouTubeEditorSessionRequest struct {
-	WorkspaceID        int64  `json:"workspace_id"`
-	PlatformAccountID  int64  `json:"platform_account_id"`
-	YouTubeVideoID     string `json:"youtube_video_id"`
-	SourceThumbnailURL string `json:"source_thumbnail_url,omitempty"`
-}
-
-// createYouTubeEditorSessionResponse is returned on a successful creation.
-type createYouTubeEditorSessionResponse struct {
-	SessionID      string `json:"session_id"`
-	VeloxProjectID string `json:"velox_project_id"`
-	EditorURL      string `json:"editor_url"`
-}
 
 // CreateEditorSession is the central helper for the per-target YouTube
 // thumbnail editor session creation. Both the HTTP handler (POST
@@ -276,73 +232,6 @@ func (r *Router) handleCreateYouTubeEditorSession(w http.ResponseWriter, req *ht
 		VeloxProjectID: edit.VeloxProjectID,
 		EditorURL:      editorURL,
 	})
-}
-
-// writeEditorSessionError maps the helper's typed sentinel errors to
-// HTTP status codes via errors.Is. Extracted so the handler body
-// stays readable and the sentinel → status mapping is testable in
-// isolation in a future PR.
-func (r *Router) writeEditorSessionError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, ErrEditorSessionWorkspaceNotFound):
-		writeError(w, http.StatusNotFound, "workspace not found")
-	case errors.Is(err, ErrEditorSessionAccountNotFound):
-		writeError(w, http.StatusNotFound, "account not found")
-	case errors.Is(err, ErrEditorSessionChannelUnlinked):
-		writeError(w, http.StatusNotFound, "account not linked to workspace")
-	case errors.Is(err, ErrEditorSessionNoValidToken):
-		writeError(w, http.StatusUnauthorized, "no valid token found for this account")
-	case errors.Is(err, ErrEditorSessionYTServiceUnconfigured),
-		errors.Is(err, ErrEditorSessionEditStoreUnconfigured):
-		writeError(w, http.StatusServiceUnavailable, err.Error())
-	case errors.Is(err, ErrEditorSessionVideoWrongChannel):
-		writeError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, ErrEditorSessionVideoNotReady),
-		errors.Is(err, ErrEditorSessionVideoAlreadyPub):
-		writeError(w, http.StatusBadRequest, err.Error())
-	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
-	}
-}
-
-// Compile-time assertion that *api.Router satisfies the narrow
-// interface the reconciler worker depends on (internal/worker/youtube_processing_reconciler.go
-// declares this interface; pkg/api must see this assertion signature-
-// compatible).
-//
-// The reconciler passes the *Router pointer as the EditorSessionCreator
-// implementation; duck typing via the interface satisfies the contract.
-// Without this assertion, a future signature drift on Router.CreateEditorSession
-// would surface at runtime in production rather than at go vet time.
-var _ interface {
-	CreateEditorSession(context.Context, CreateEditorSessionInput) (*models.YouTubeVideoEdit, error)
-} = (*Router)(nil)
-
-// userCanAccessWorkspace reports whether the user owns the workspace.
-// For the editor session creation flow, workspace ownership is the
-// required authorization gate; future iterations may also accept team
-// members via the team store.
-func (r *Router) userCanAccessWorkspace(userID int64, workspace *models.Workspace) bool {
-	if workspace == nil {
-		return false
-	}
-	return workspace.OwnerID == userID
-}
-
-// editorURLForProject returns the canonical editor URL for a newly
-// created project. When an editor URL is configured explicitly it is
-// used; otherwise the frontend URL is used as a fallback.
-func (r *Router) editorURLForProject(projectID string) string {
-	base := r.editorURL
-	if base == "" {
-		base = r.frontendURL
-	}
-	base = strings.TrimRight(base, "/")
-	if base == "" {
-		// Last-resort fallback for test environments.
-		base = "https://editor.instaedit.org"
-	}
-	return fmt.Sprintf("%s/editor/%s", base, projectID)
 }
 
 // handleUpdateYouTubeEditorSession updates a thumbnail editor session.
