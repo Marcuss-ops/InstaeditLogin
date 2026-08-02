@@ -210,21 +210,15 @@ func TestCreateJob(t *testing.T) {
 		if body.IdempotencyKey != "cert-idem-1" {
 			t.Errorf("idempotency_key = %q; want cert-idem-1", body.IdempotencyKey)
 		}
-		if body.WorkspaceID != 42 {
-			t.Errorf("workspace_id = %d; want 42", body.WorkspaceID)
-		}
-		if body.UserID != 99 {
-			t.Errorf("user_id = %d; want 99", body.UserID)
-		}
 		var rawMap map[string]json.RawMessage
 		if err := json.Unmarshal(rawBody, &rawMap); err != nil {
 			t.Fatalf("decode body as map: %v", err)
 		}
-		if _, ok := rawMap["workspace_id"]; !ok {
-			t.Error("workspace_id MUST appear in the request body (added from session)")
+		if _, ok := rawMap["workspace_id"]; ok {
+			t.Error("workspace_id MUST NOT appear in the strict Velox request body")
 		}
-		if _, ok := rawMap["user_id"]; !ok {
-			t.Error("user_id MUST appear in the request body (added from session)")
+		if _, ok := rawMap["user_id"]; ok {
+			t.Error("user_id MUST NOT appear in the strict Velox request body")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
