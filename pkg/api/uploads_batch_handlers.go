@@ -6,16 +6,14 @@
 // round-trip per folder regardless of size (up to driveBatchMaxPages
 // = 50 pages × 200 videos/page = 10,000 entries).
 //
-// Why a separate file instead of refactoring handleDriveBatchImport:
-// handleDriveBatchImport's tests pin very specific HTTP statuses (202 /
-// 200 / 422 / 502 / 404) and JSON shape (cursor_clamped_to_now as an
-// omitempty field, next_page_token always emitted, etc.). Refactoring
-// the existing handler to share a runDriveBatchPage helper risks
-// regressing those tests on subtle marshalling / ordering details.
-// This file duplicates the ~80 listing+scheduling lines so the existing
-// handler stays 100% untouched. The duplication is bounded to one
-// function (foldersByFolderRunPage below) and the two paths will
-// diverge naturally as new endpoint-specific features land.
+// The historically duplicated ~80 listing+scheduling lines now live in
+// drive_batch_helpers.go and are shared with handleDriveBatchImport
+// (validateDriveBatchCommon, requireOwnedWorkspaceByID,
+// runIdempotencyGate, requireOwnedFacebookPage,
+// resolveDriveListingToken, resolveSharedDriveID,
+// scheduleDriveBatchFiles, writeBatchResponseMarshalOnce). This file
+// keeps only the by-folder specifics: the auto-pagination loop, the
+// page cap, and the partial-failure surface.
 package api
 
 import (
@@ -27,7 +25,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
@@ -147,46 +144,17 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(body.FolderID) == "" {
-		writeError(w, http.StatusUnprocessableEntity, "folder_id is required")
-		return
+	params := driveBatchCommonParams{
+		FolderID:          body.FolderID,
+		DriveAccountID:    body.DriveAccountID,
+		WorkspaceID:       body.WorkspaceID,
+		FacebookAccountID: body.FacebookAccountID,
+		Title:             body.Title,
+		CaptionPrefix:     body.CaptionPrefix,
+		MinJitterSeconds:  body.MinJitterSeconds,
+		MaxJitterSeconds:  body.MaxJitterSeconds,
 	}
-	if body.WorkspaceID == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "workspace_id is required")
-		return
-	}
-	if body.FacebookAccountID == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "facebook_account_id is required")
-		return
-	}
-	// P0 hardening refactor: the public_drive download path was
-	// removed from the Drive service. Every batch import must
-	// flow through an authenticated Drive account's OAuth grant,
-	// so drive_account_id is now required (was previously optional
-	// for the legacy public-folder path).
-	if body.DriveAccountID == 0 {
-		writeError(w, http.StatusUnprocessableEntity,
-			"drive_account_id is required (the public_drive download path was removed in the Drive pipeline hardening refactor)")
-		return
-	}
-
-	// Default jitter: 3h-4.5h (matches the user-facing spec + the
-	// single-page endpoint). Anything tighter than 60s collapses
-	// anti-pattern-detection so the floor is enforced.
-	minJitter := body.MinJitterSeconds
-	if minJitter == 0 {
-		minJitter = 3 * 60 * 60
-	}
-	maxJitter := body.MaxJitterSeconds
-	if maxJitter == 0 {
-		maxJitter = int(4.5 * 60 * 60)
-	}
-	if minJitter < 60 {
-		writeError(w, http.StatusUnprocessableEntity, "min_jitter_seconds must be >= 60 (1 minute)")
-		return
-	}
-	if maxJitter < minJitter {
-		writeError(w, http.StatusUnprocessableEntity, "max_jitter_seconds must be >= min_jitter_seconds")
+	if !validateDriveBatchCommon(w, &params) {
 		return
 	}
 
@@ -194,18 +162,8 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 	// lookup (same order as handleDriveBatchImport) so an attacker
 	// can't forge another tenant's workspace_id in body to "steal"
 	// their cached batch via (workspace_id, key) collision.
-	ws, err := r.workspaceStore.FindByID(body.WorkspaceID)
-	if err != nil {
-		code, msg := mapWorkspaceError(err)
-		writeError(w, code, "workspace lookup: "+msg)
-		return
-	}
-	if ws == nil {
-		writeError(w, http.StatusNotFound, "workspace not found")
-		return
-	}
-	if ws.OwnerID != userID {
-		writeError(w, http.StatusForbidden, "workspace not owned by this user")
+	ws, ok := r.requireOwnedWorkspaceByID(w, params.WorkspaceID, userID)
+	if !ok {
 		return
 	}
 
@@ -213,36 +171,12 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 	// or job creation). On hit+match the cached bytes are returned
 	// verbatim; on hit+mismatch we 409; on miss we run.
 	idemKey := strings.TrimSpace(req.Header.Get("Idempotency-Key"))
-	idemOutcome, idemRec, idemErr := idempotencyLookup(r, ws.ID, idemKey, hash, idempotencyResourceTypeDriveBatch)
-	if idemErr != nil {
-		if strings.Contains(idemErr.Error(), "exceeds") {
-			writeError(w, http.StatusBadRequest, idemErr.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "idempotency lookup: "+idemErr.Error())
+	if !r.runIdempotencyGate(w, ws.ID, idemKey, hash, idempotencyResourceTypeDriveBatch) {
 		return
-	}
-	switch idemOutcome {
-	case idempotencyConflict:
-		writeError(w, http.StatusConflict, "idempotency_key_conflict")
-		return
-	case idempotencyReplay:
-		if replayErr := replayIdempotentResource(r, w, idemRec, idemRec.ResponseStatus); replayErr != nil {
-			writeError(w, http.StatusInternalServerError, "idempotency replay: "+replayErr.Error())
-		}
-		return
-	case idempotencyContinue:
-		// fall through to the loop below
 	}
 
 	// Facebook target ownership (the upload_jobs.targets[] entry).
-	fbAccount, err := r.userRepo.FindPlatformAccountByID(body.FacebookAccountID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "find facebook account: "+err.Error())
-		return
-	}
-	if fbAccount == nil || fbAccount.UserID != userID || fbAccount.Platform != models.PlatformFacebook {
-		writeError(w, http.StatusNotFound, "facebook page account not found")
+	if !r.requireOwnedFacebookPage(w, params.FacebookAccountID, userID) {
 		return
 	}
 
@@ -250,34 +184,20 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 	// Drive OAuth grant (body.DriveAccountID>0) or via the server
 	// GOOGLE_DRIVE_API_KEY (only valid for public folders; the
 	// service surfaces ErrDriveListRequiresAPIKey if it's missing).
+	//
+	// NOTE: the token resolution historically ran BEFORE the
+	// provider nil-check on this endpoint (r.capabilities.Get is
+	// called inside resolveDriveListingToken's type assertion with
+	// the raw value fetched below) — the order is preserved.
 	var listingAccessToken string
 	var needsDriveAccount bool
-	if body.DriveAccountID > 0 {
-		driveAccount, err := r.userRepo.FindPlatformAccountByID(body.DriveAccountID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "find drive account: "+err.Error())
-			return
-		}
-		if driveAccount == nil || driveAccount.UserID != userID || driveAccount.Platform != "google-drive" {
-			writeError(w, http.StatusNotFound, "google drive account not found")
-			return
-		}
-		if r.vault == nil {
-			writeError(w, http.StatusNotImplemented, "credential vault not configured")
-			return
-		}
-		lister, _ := r.capabilities.Get("google-drive")
-		driveProvider, ok := lister.(services.DriveImporter)
+	if params.DriveAccountID > 0 {
+		rawLister, _ := r.capabilities.Get("google-drive")
+		token, ok := r.resolveDriveListingToken(w, req, userID, params.DriveAccountID, rawLister)
 		if !ok {
-			writeError(w, http.StatusServiceUnavailable, "google-drive provider does not implement drive import")
 			return
 		}
-		accessToken, err := driveAccessToken(req.Context(), r.vault, driveProvider, driveAccount.ID)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "failed to refresh google drive token: "+err.Error())
-			return
-		}
-		listingAccessToken = accessToken
+		listingAccessToken = token
 	} else {
 		needsDriveAccount = true
 	}
@@ -294,23 +214,11 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	// Task 6/10 — Shared Drive auto-resolve. Resolve the folder's
-	// driveId ONCE before the pagination loop (a folder's driveId
-	// is stable for its lifetime, so per-page resolution would
-	// double the Drive API quota for nothing). Best-effort: on
-	// failure, fall back to the empty driveId (= pre-T6/10 My Drive
-	// corpus behaviour) and log a warn-level remediation hint.
-	inspector, canInspect := lister.(services.DriveFolderInspector)
-	resolvedDriveID, resolveErr := services.ResolveFolderDriveID(req.Context(), inspector, body.FolderID, listingAccessToken)
-	if resolveErr != nil {
-		slog.Warn("uploads batch by-folder: folder metadata fetch failed; falling back to My Drive corpus",
-			"folder_id", body.FolderID,
-			"user_id", userID,
-			"inspector_available", canInspect,
-			"error", resolveErr,
-		)
-		resolvedDriveID = ""
-	}
+	// Task 6/10 — Shared Drive auto-resolve ONCE before the
+	// pagination loop (a folder's driveId is stable for its
+	// lifetime, so per-page resolution would double the Drive API
+	// quota for nothing).
+	resolvedDriveID := resolveSharedDriveID(req.Context(), lister, params.FolderID, listingAccessToken, userID, "uploads batch by-folder")
 
 	// Multi-page loop. The cursor advances monotonically across
 	// pages via the LAST entry's scheduled_at on every iteration so
@@ -338,7 +246,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 				fmt.Sprintf("folder has more than driveBatchMaxPages=%d pages; split the import into smaller chunks or use the CLI", driveBatchMaxPages))
 			return
 		}
-		files, nextPageToken, err := folderLister.ListFolder(req.Context(), body.FolderID, resolvedDriveID, listingAccessToken, pageToken)
+		files, nextPageToken, err := folderLister.ListFolder(req.Context(), params.FolderID, resolvedDriveID, listingAccessToken, pageToken)
 		if err != nil {
 			// Config gap (server-side GOOGLE_DRIVE_API_KEY missing
 			// AND no per-user Drive grant provided) is detected on
@@ -347,7 +255,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 			// not a fatal 5xx — same pattern as handleDriveBatchImport.
 			if errors.Is(err, services.ErrDriveListRequiresAPIKey) && pageNum == 1 {
 				writeJSON(w, http.StatusOK, UploadsBatchByFolderResponse{
-					FolderID:               body.FolderID,
+					FolderID:               params.FolderID,
 					ScheduledCount:         0,
 					PageCount:              1,
 					Entries:                []DriveBatchImportItem{},
@@ -365,7 +273,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 			slog.Warn("uploads batch by-folder: upstream page failed",
 				"page_num", pageNum,
 				"page_token", pageToken,
-				"folder_id", body.FolderID,
+				"folder_id", params.FolderID,
 				"user_id", userID,
 				"error", err)
 			if len(allEntries) > 0 {
@@ -386,7 +294,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 			// Mid-pagination empty is treated as end-of-folder.
 			if pageNum == 1 {
 				writeJSON(w, http.StatusOK, UploadsBatchByFolderResponse{
-					FolderID:          body.FolderID,
+					FolderID:          params.FolderID,
 					ScheduledCount:    0,
 					PageCount:         1,
 					Entries:           []DriveBatchImportItem{},
@@ -401,64 +309,11 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 		// Schedule this page's files. Index offset across the WHOLE
 		// folder so the SPA can identify "this is the 47th video
 		// overall" not just "the 27th on page 3".
-		var pageEntries []DriveBatchImportItem
-		for idx, f := range files {
-			scheduledAt := cursor
-			if idx > 0 {
-				gap, gapErr := randomDurationInRange(minJitter, maxJitter)
-				if gapErr != nil {
-					writeError(w, http.StatusInternalServerError, "jitter rand failed: "+gapErr.Error())
-					return
-				}
-				scheduledAt = cursor.Add(gap)
-			}
-			// Cap forward-looking schedule at driveBatchJitterMaxSeconds
-			// (7 days). Anything beyond would silently collapse a
-			// long batch — clamp + keep going.
-			if scheduledAt.Sub(startedAt) > time.Duration(driveBatchJitterMaxSeconds)*time.Second {
-				scheduledAt = startedAt.Add(time.Duration(driveBatchJitterMaxSeconds) * time.Second)
-			}
-
-			title := body.Title
-			if title == "" {
-				title = f.Name
-			}
-			caption := body.CaptionPrefix
-			if caption == "" {
-				caption = f.Name
-			} else {
-				caption = caption + " — " + f.Name
-			}
-
-			job := &models.UploadJob{
-				UserID:         userID,
-				WorkspaceID:    body.WorkspaceID,
-				SourceType:     models.UploadJobSourceAuthenticatedDrive,
-				DriveAccountID: &body.DriveAccountID,
-				SourceID:       f.ID,
-				FolderID:       &body.FolderID,
-				Title:          title,
-				Caption:        caption,
-				Targets:        []int64{body.FacebookAccountID},
-				Status:         models.UploadJobStatusPending,
-				PublishAt:      &scheduledAt,
-			}
-			if err := r.uploadJobStore.Create(job); err != nil {
-				writeError(w, http.StatusInternalServerError, fmt.Sprintf("create upload job for %s: %v", f.Name, err))
-				return
-			}
-
-			pageEntries = append(pageEntries, DriveBatchImportItem{
-				Index:         len(allEntries) + idx,
-				DriveFileID:   f.ID,
-				Name:          f.Name,
-				MimeType:      f.MimeType,
-				JobID:         job.ID,
-				PublishAt:     scheduledAt,
-				RelativeHours: scheduledAt.Sub(startedAt).Hours(),
-			})
-			cursor = scheduledAt
+		pageEntries, newCursor, ok := r.scheduleDriveBatchFiles(w, userID, params, files, cursor, startedAt, len(allEntries))
+		if !ok {
+			return
 		}
+		cursor = newCursor
 		if firstPublish.IsZero() && len(pageEntries) > 0 {
 			firstPublish = pageEntries[0].PublishAt
 		}
@@ -472,7 +327,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 
 	// Build the flat response.
 	resp := UploadsBatchByFolderResponse{
-		FolderID:          body.FolderID,
+		FolderID:          params.FolderID,
 		ScheduledCount:    len(allEntries),
 		PageCount:         pageNum,
 		Entries:           allEntries,
@@ -498,8 +353,8 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 
 	slog.Info("uploads batch by-folder queued",
 		"user_id", userID,
-		"folder_id", body.FolderID,
-		"workspace_id", body.WorkspaceID,
+		"folder_id", params.FolderID,
+		"workspace_id", params.WorkspaceID,
 		"page_count", pageNum,
 		"video_count", resp.ScheduledCount,
 		"partial_failure", partialFailure,
@@ -507,21 +362,7 @@ func (r *Router) handleUploadsBatchByFolder(w http.ResponseWriter, req *http.Req
 		"last_scheduled_at", resp.LastScheduledAt,
 	)
 
-	// Marshal once so the SAME bytes are both written to the wire
-	// (SPA receives them) and cached for replay (insertBatchIdempotentRecord
-	// stores them verbatim in idempotency_batch_replays.response_payload).
-	// Identical pattern to handleDriveBatchImport's marshal-once.
-	respBytes, marshalErr := json.Marshal(resp)
-	if marshalErr != nil {
-		slog.Warn("uploads batch by-folder: response marshal failed; falling back to writeJSON",
-			"folder_id", body.FolderID,
-			"error", marshalErr)
-		writeJSON(w, http.StatusAccepted, resp)
-	} else {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write(respBytes)
-	}
+	respBytes := writeBatchResponseMarshalOnce(w, resp, "uploads batch by-folder", params.FolderID)
 
 	// Cache ONLY on full success. Partial failures are NOT cached
 	// — the partial response is incomplete (page 3 of 5 was lost)
