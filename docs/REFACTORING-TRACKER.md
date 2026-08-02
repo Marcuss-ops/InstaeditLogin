@@ -11,9 +11,9 @@ refactoring status. Kept in sync with the tooling:
   `make loc-check LOC_AGAINST=none`).
 
 Scan: tracked `go` / `ts` / `tsx` files only (docs, SQL, JSON, YAML excluded).
-83 files are currently above 500 lines; 42 more sit in the 450–500 watchlist.
+80 files are currently above 500 lines; 41 more sit in the 450–500 watchlist.
 
-_Snapshot: 2026-08-01._
+_Snapshot: 2026-08-02._
 
 ## Legend
 
@@ -84,29 +84,26 @@ These are the files that make `make loc-check LOC_AGAINST=none` exit 1 today.
 | `web/src/pages/internal/ContentPublish.tsx` | 622 | da fare | #NNN |
 | `internal/testutil/runtime/runtime_test.go` | 609 | da fare | #NNN |
 
-## 500–600 lines (51 files)
+## 500–600 lines (48 files)
 
 | File | Righe | Stato | Issue |
 |------|------:|-------|-------|
 | `internal/worker/mocks_test.go` | 608 | da fare | #NNN |
-| `internal/auth/jwt.go` | 605 | da fare | #NNN |
-| `pkg/api/uploads_handlers.go` | 604 | da fare | #NNN |
 | `tests/e2e/e2e_harness_fakes.go` | 601 | da fare | #NNN |
 | `web/src/components/booking/BookingModal.tsx` | 600 | da fare | #NNN |
 | `pkg/api/youtube_group_videos_phantom_test.go` | 597 | da fare | #NNN |
-| `pkg/api/admin_channels_handlers.go` | 592 | da fare | #NNN |
 | `pkg/api/internal_velox_e2e_helpers_test.go` | 590 | da fare | #NNN |
 | `pkg/api/account_routes_test.go` | 589 | da fare | #NNN |
+| `cmd/yttest/main.go` | 586 | da fare | #NNN |
 | `pkg/api/posts_handlers.go` | 583 | da fare | #NNN |
 | `internal/models/external_delivery_test.go` | 578 | da fare | #NNN |
 | `pkg/api/internal_velox_callback_dispatcher.go` | 577 | da fare | #NNN |
 | `web/src/pages/internal/DriveBatchImportDialogViews.tsx` | 575 | da fare | #NNN |
-| `internal/services/youtube_oauth.go` | 575 | da fare | #NNN |
 | `pkg/api/common_test_mocks_test.go` | 573 | da fare | #NNN |
 | `internal/outbox/dispatcher.go` | 571 | da fare | #NNN |
+| `pkg/api/youtube_group_videos.go` | 570 | da fare | #NNN |
+| `pkg/api/youtube_editor_sessions.go` | 560 | da fare | #NNN |
 | `internal/providers/registry_test.go` | 553 | da fare | #NNN |
-| `pkg/api/youtube_editor_sessions_by_project.go` | 551 | da fare | #NNN |
-| `pkg/api/youtube_editor_sessions.go` | 551 | da fare | #NNN |
 | `internal/models/external_delivery.go` | 549 | da fare | #NNN |
 | `internal/worker/process_ingest_verify_integration_test.go` | 547 | da fare | #NNN |
 | `web/src/pages/internal/ScheduledByAccount.tsx` | 546 | da fare | #NNN |
@@ -116,11 +113,11 @@ These are the files that make `make loc-check LOC_AGAINST=none` exit 1 today.
 | `pkg/api/drive_batch_uploads_test.go` | 541 | da fare | #NNN |
 | `internal/services/provider_error.go` | 540 | da fare | #NNN |
 | `cmd/test-youtube-upload/main.go` | 540 | da fare | #NNN |
+| `internal/repository/post_repo_retry.go` | 537 | da fare | #NNN |
 | `internal/deliveries/group_expand.go` | 537 | da fare | #NNN |
-| `web/src/pages/internal/GroupYouTubeVideos.tsx` | 536 | da fare | #NNN |
-| `pkg/api/uploads_batch_handlers.go` | 536 | da fare | #NNN |
 | `pkg/api/router.go` | 535 | da fare | #NNN |
 | `internal/repository/platform_account_repo.go` | 534 | da fare | #NNN |
+| `pkg/api/auth_handlers.go` | 532 | da fare | #NNN |
 | `internal/repository/group_repo.go` | 531 | da fare | #NNN |
 | `internal/services/threads_oauth.go` | 528 | da fare | #NNN |
 | `internal/config/config.go` | 528 | da fare | #NNN |
@@ -148,8 +145,8 @@ can push them over. No GitHub issues planned for these yet.
 
 | File | Righe |
 |------|------:|
-| `pkg/api/youtube_group_videos.go` | 500 |
 | `pkg/api/oauth_session_redirect_test.go` | 499 |
+| `internal/bootstrap/workers_wiring.go` | 499 |
 | `internal/services/youtube_oauth_resume_test.go` | 498 |
 | `internal/repository/import_batch_repo.go` | 497 |
 | `internal/repository/outbox_repo_test.go` | 495 |
@@ -163,19 +160,18 @@ can push them over. No GitHub issues planned for these yet.
 | `internal/repository/external_delivery_repo_test.go` | 488 |
 | `web/src/features/channels/hooks/useChannelContent.test.tsx` | 487 |
 | `internal/deliveries/state.go` | 486 |
-| `pkg/api/auth_handlers.go` | 484 |
 | `pkg/api/accounts_performance_assembler.go` | 484 |
 | `pkg/api/account_sync_oauth_test.go` | 484 |
+| `internal/services/provider.go` | 483 |
 | `internal/services/delivery_drive_destination_test.go` | 483 |
 | `pkg/api/velox_types.go` | 481 |
 | `pkg/api/drive_batch_v2_test.go` | 481 |
-| `internal/repository/post_repo_retry.go` | 481 |
 | `pkg/api/accounts_read_handlers.go` | 480 |
 | `internal/credentials/vault_integration_test.go` | 479 |
 | `internal/services/youtube_validate.go` | 478 |
-| `internal/worker/drive_batch_crawler_test_helpers_test.go` | 465 |
 | `pkg/api/youtube_editor_sessions_metadata_test.go` | 476 |
-| `pkg/api/drive_import_handlers.go` | 476 |
+| `web/src/pages/internal/GroupYouTubeVideos.tsx` | 475 |
+| `pkg/api/drive_import_handlers.go` | 475 |
 | `pkg/api/drive_batch_v2_handlers.go` | 472 |
 | `internal/repository/outbox_repo.go` | 472 |
 | `web/src/pages/internal/AccountPerformance.tsx` | 471 |
@@ -183,18 +179,21 @@ can push them over. No GitHub issues planned for these yet.
 | `internal/repository/post_repo_idempotency_test.go` | 469 |
 | `internal/worker/reconcile_worker.go` | 467 |
 | `internal/services/youtube_channel_content.go` | 462 |
+| `internal/worker/drive_batch_crawler_test_helpers_test.go` | 461 |
 | `pkg/api/youtube_editor_sessions_publish_test.go` | 461 |
-| `internal/services/provider.go` | 461 |
 | `pkg/api/workspace_channels_test.go` | 460 |
 | `pkg/api/channel_analytics_service_test.go` | 456 |
 | `pkg/api/media_test.go` | 454 |
 | `internal/repository/post_repo_aggregate.go` | 453 |
 | `internal/veloxclient/client_test.go` | 451 |
 
-**Nota:** `pkg/api/youtube_group_videos.go` (500) e
-`internal/services/tiktok_publish_test.go` (491) sono file già refactoring in
-questa sessione, appena sotto soglia — monitorarli per non farli risalire.
-`internal/worker/drive_batch_crawler_test_helpers_test.go` (465) è il nuovo
+**Nota:** `pkg/api/youtube_group_videos.go` è RISALITO da 500 a 570 righe
+(dopo lo split di ieri era esattamente a 500, sotto soglia) — ora torna `da
+fare` nella tabella 500–600. `internal/repository/post_repo_retry.go` (481 →
+537) e `pkg/api/auth_handlers.go` (484 → 532) sono saliti sopra soglia allo
+stesso modo. `internal/services/tiktok_publish_test.go` (491) resta sotto
+soglia — monitorarlo per non farlo risalire.
+`internal/worker/drive_batch_crawler_test_helpers_test.go` (461) è il nuovo
 helper file dello split del crawler, anch'esso sotto soglia ma in watchlist.
 
 ---
@@ -222,9 +221,15 @@ feature/scenario.
 | `web/src/components/booking/BookingProvider.tsx` | 694 | 8 | context + `BookingModal.tsx` + moduli dedicati |
 | `web/src/pages/internal/ContentPublish.test.tsx` | 676 | — (eliminato) | `ContentPublish.{retryGating,retryFlow,states,crossTab}.test.tsx` + `testUtils.tsx` |
 | `pkg/api/modules.go` | 649 | 40 | un file per modulo |
+| `internal/auth/jwt.go` | 605 | 175 | `jwt_{issue,verify,middleware,random,connectlink}.go` |
+| `pkg/api/uploads_handlers.go` | 604 | 106 | `uploads_{filters,counts,list,schedule}_handlers.go` |
+| `pkg/api/admin_channels_handlers.go` | 592 | 139 | `admin_channels_{connectlink,fleet,import}.go` |
+| `pkg/api/youtube_editor_sessions_by_project.go` | 551 | 220 | `youtube_editor_sessions_by_project_publish.go` (341) |
+| `internal/services/youtube_oauth.go` | 575 | 389 | `youtube_types.go` (184) |
 
-**Nota `pkg/api/youtube_group_videos.go`:** dopo lo split è esattamente a 500
-righe (sotto la soglia `>500`), ma il suo set di file collegati
+**Nota `pkg/api/youtube_group_videos.go`:** lo split originale lo portò a 500
+righe (sotto la soglia), ma oggi è RISALITO a 570 e torna `da fare` (tabella
+500–600 sopra). Il suo set di file collegati
 (`youtube_group_videos_phantom_test.go` 597, `_list_test.go` 517) resta sopra —
 inclusi nelle tabelle sopra.
 
