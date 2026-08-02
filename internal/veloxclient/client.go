@@ -107,6 +107,9 @@ func (c *Client) do(ctx context.Context, method, path string, userID, workspaceI
 	if resp.StatusCode == http.StatusForbidden {
 		return veloxapi.ErrWorkspaceMismatch
 	}
+	if resp.StatusCode == http.StatusConflict {
+		return veloxapi.ErrIdempotencyConflict
+	}
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("veloxclient: %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))

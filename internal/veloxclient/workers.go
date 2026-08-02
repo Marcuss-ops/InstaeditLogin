@@ -14,7 +14,7 @@ import (
 // Permission: editor.project.read.
 func (c *Client) ListWorkers(ctx context.Context, workspaceID, userID int64) ([]veloxapi.Worker, error) {
 	var resp listWorkersResponse
-	if err := c.do(ctx, "GET", "/api/v1/instaedit/workers", userID, workspaceID, []string{ScopeEditorProjectRead}, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", "/api/v1/instaedit/workers", userID, workspaceID, []string{ScopeVeloxWorkersRead}, nil, &resp); err != nil {
 		return nil, err
 	}
 	workers := make([]veloxapi.Worker, 0, len(resp.Workers))
@@ -38,7 +38,7 @@ func (c *Client) ListWorkers(ctx context.Context, workspaceID, userID int64) ([]
 func (c *Client) GetWorker(ctx context.Context, workspaceID, userID int64, workerID string) (*veloxapi.Worker, error) {
 	var resp workerResponse
 	path := fmt.Sprintf("/api/v1/instaedit/workers/%s", url.PathEscape(workerID))
-	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeEditorProjectRead}, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeVeloxWorkersRead}, nil, &resp); err != nil {
 		return nil, err
 	}
 	return &veloxapi.Worker{

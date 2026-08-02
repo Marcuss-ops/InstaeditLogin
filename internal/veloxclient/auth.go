@@ -49,11 +49,17 @@ const (
 //	youtube.session.publish  : publish a thumbnail update to YouTube
 //	                           (Velox POST
 //	                           /internal/v1/editor/sessions/.../publish)
+//
 // The canonical definitions moved to internal/veloxcontract (the
 // shared InstaEdit⇄Velox BFF contract package); the aliases below
 // keep this package's existing references compiling and guarantee
 // the client and the BFF handlers can never drift apart.
 const (
+	ScopeVeloxJobsRead    = veloxcontract.ScopeVeloxJobsRead
+	ScopeVeloxJobsWrite   = veloxcontract.ScopeVeloxJobsWrite
+	ScopeVeloxWorkersRead = veloxcontract.ScopeVeloxWorkersRead
+	ScopeVeloxAssetsRead  = veloxcontract.ScopeVeloxAssetsRead
+
 	ScopeEditorProjectRead     = veloxcontract.ScopeEditorProjectRead
 	ScopeEditorProjectWrite    = veloxcontract.ScopeEditorProjectWrite
 	ScopeEditorAssetUpload     = veloxcontract.ScopeEditorAssetUpload

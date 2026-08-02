@@ -197,14 +197,47 @@ func (d *VeloxCallbackDispatcher) Dispatch(
 	if p.EventID == "" {
 		p.EventID = d.idGen()
 	}
+	if p.ContractVersion == "" {
+		p.ContractVersion = "velox.delivery.event.v1"
+	}
 	if p.SocialDeliveryID == "" {
 		p.SocialDeliveryID = delivery.ID
+	}
+	if p.DeliveryID == "" {
+		p.DeliveryID = delivery.ExternalDeliveryID
+	}
+	if p.Sequence <= 0 {
+		p.Sequence = int64(delivery.AttemptCount)
+		if p.Sequence <= 0 {
+			p.Sequence = 1
+		}
+	}
+	if p.OccurredAt == nil {
+		now := d.clock()
+		p.OccurredAt = &now
 	}
 	if p.ExternalDeliveryID == "" {
 		p.ExternalDeliveryID = delivery.ExternalDeliveryID
 	}
 	if p.Status == "" {
 		p.Status = string(event)
+	}
+	if p.Phase == "" {
+		p.Phase = string(event)
+	}
+	if p.RemoteID == "" && delivery.PlatformMediaID != nil {
+		p.RemoteID = *delivery.PlatformMediaID
+	}
+	if p.RemoteURL == "" && delivery.PlatformURL != nil {
+		p.RemoteURL = *delivery.PlatformURL
+	}
+	if p.ErrorCode == nil && delivery.LastErrorCode != nil {
+		value := *delivery.LastErrorCode
+		p.ErrorCode = &value
+	}
+	if p.ErrorMessage == nil && delivery.LastErrorMessage != nil {
+		value := *delivery.LastErrorMessage
+		p.ErrorMessage = &value
 	}
 
 	body, err := json.Marshal(p)
@@ -240,6 +273,12 @@ func (d *VeloxCallbackDispatcher) Dispatch(
 		req.Header.Set("X-Velox-Event-ID", eventID)
 		req.Header.Set("X-Velox-Timestamp", strconv.FormatInt(ts, 10))
 		req.Header.Set("X-Velox-Signature", "sha256="+signature)
+		// Canonical event headers. Keep the old X-Velox-* aliases during
+		// the bounded migration window so already deployed receivers can
+		// continue to consume retries.
+		req.Header.Set("X-Event-ID", eventID)
+		req.Header.Set("X-Timestamp", strconv.FormatInt(ts, 10))
+		req.Header.Set("X-Signature", "sha256="+signature)
 
 		d.logger.Debug("velox callback: attempt",
 			"event_id", eventID,

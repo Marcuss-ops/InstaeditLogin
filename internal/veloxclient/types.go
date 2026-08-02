@@ -114,14 +114,17 @@ type listDeliveriesResponse struct {
 	Deliveries []deliveryResponse `json:"deliveries"`
 }
 
-// createJobRequest is the body sent TO Velox. workspace_id and
-// user_id are added by InstaEdit from the session identity, both as
-// JWT claims and as explicit body fields so Velox can log/audit the
-// request without needing to parse the JWT.
+// createJobRequest is the body sent TO Velox. workspace_id and user_id
+// are JWT-only identity claims and are deliberately excluded from JSON.
 type createJobRequest struct {
-	ProjectID    string          `json:"project_id" validate:"required,min=1"`
-	WorkspaceID  int64           `json:"workspace_id" validate:"required,gte=1"`
-	UserID       int64           `json:"user_id" validate:"required,gte=1"`
+	ContractVersion string `json:"contract_version"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	ProjectID       string `json:"project_id" validate:"required,min=1"`
+	// Retained as non-wire fields so diagnostics can assert
+	// the signed identity; workspace/user are never serialized into the
+	// BFF→Velox payload.
+	WorkspaceID  int64           `json:"-"`
+	UserID       int64           `json:"-"`
 	RenderSpec   json.RawMessage `json:"render_spec" validate:"required"`
 	DeliveryPlan deliveryPlanReq `json:"delivery_plan" validate:"required"`
 }

@@ -197,10 +197,10 @@ func TestCreateJob_HappyPath(t *testing.T) {
 		return &Job{ID: "job_new", WorkspaceID: wsID, RenderStatus: "QUEUED"}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
-	body := `{"project_id":"project_123","render_spec":{"template":"news"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J","metadata":{"title":"Hi"}}]}}`
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"test:job:1","project_id":"project_123","render_spec":{"template":"news"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J","metadata":{"title":"Hi"}}]}}`
 	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", body)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -210,7 +210,7 @@ func TestCreateJob_MissingProjectID_422(t *testing.T) {
 		return nil, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
-	body := `{"render_spec":{},"delivery_plan":{"destinations":[{"external_destination_id":"x"}]}}`
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"test:job:missing-project","render_spec":{},"delivery_plan":{"destinations":[{"external_destination_id":"x"}]}}`
 	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", body)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d", w.Code)
@@ -220,7 +220,7 @@ func TestCreateJob_MissingProjectID_422(t *testing.T) {
 func TestCreateJob_MissingDestinations_422(t *testing.T) {
 	mc := &mockClient{}
 	mux := newMux(t, mc, stubAuth)
-	body := `{"project_id":"p1","render_spec":{}}`
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"test:job:missing-destinations","project_id":"p1","render_spec":{}}`
 	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", body)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d", w.Code)
@@ -233,7 +233,7 @@ func TestCreateJob_WorkspaceMismatch_404(t *testing.T) {
 		return &Job{ID: "job_x", WorkspaceID: 999}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
-	body := `{"project_id":"p1","render_spec":{},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J","metadata":{"title":"Hi"}}]}}`
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"test:job:workspace-mismatch","project_id":"p1","render_spec":{},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J","metadata":{"title":"Hi"}}]}}`
 	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", body)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for workspace mismatch, got %d", w.Code)

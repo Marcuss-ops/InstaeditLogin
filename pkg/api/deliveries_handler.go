@@ -29,7 +29,7 @@ import (
 // contract_version dispatch (audit T3):
 //
 //  1. Body is parsed as VeloxDeliverContractRequest.
-//  2. If contract_version == "velox-instaedit.v1" → CONTRACT path.
+//  2. If contract_version == "velox-instaedit.v1" → legacy nested CONTRACT path.
 //     Strict validation per validateContractRequest; the contract path
 //     synthesises the legacy row fields so the existing Insert path is
 //     reused unchanged.
@@ -74,7 +74,8 @@ func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *h
 	// Step 2 — DISPATCH: contract_version discriminator (NO auto-detection).
 	var contractReq VeloxDeliverContractRequest
 	if jerr := json.Unmarshal(body, &contractReq); jerr == nil && hasContractVersion(&contractReq) {
-		// CONTRACT PATH — explicit contract_version == "velox-instaedit.v1".
+		// LEGACY NESTED CONTRACT PATH — kept only for bounded migration
+		// compatibility. New Velox callers use velox.delivery.v1.
 		headerIdempotencyKey := strings.TrimSpace(req.Header.Get("Idempotency-Key"))
 		if verr := validateContractRequest(&contractReq, headerIdempotencyKey); verr != nil {
 			writeError(w, http.StatusUnprocessableEntity, verr.Error())
@@ -156,6 +157,10 @@ func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *h
 	if err := json.Unmarshal(body, &veloxReq); err != nil {
 		slog.Warn("velox deliver: json unmarshal failed", "err", err)
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if veloxReq.ContractVersion != "" && veloxReq.ContractVersion != "velox.delivery.v1" {
+		writeError(w, http.StatusUnprocessableEntity, "unsupported contract_version")
 		return
 	}
 

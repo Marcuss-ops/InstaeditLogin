@@ -71,12 +71,22 @@ func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var body CreateJobRequest
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+	decoder := json.NewDecoder(req.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	if body.ProjectID == "" {
 		writeError(w, http.StatusUnprocessableEntity, "validation: project_id is required")
+		return
+	}
+	if body.ContractVersion != "velox.job.v1" {
+		writeError(w, http.StatusUnprocessableEntity, "unsupported contract_version")
+		return
+	}
+	if body.IdempotencyKey == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation: idempotency_key is required")
 		return
 	}
 	if len(body.RenderSpec) == 0 {
@@ -110,7 +120,7 @@ func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
 	}
 	slog.Info("velox bff: job created",
 		"job_id", job.ID, "workspace_id", wsID, "user_id", userID)
-	writeJSON(w, http.StatusCreated, job)
+	writeJSON(w, http.StatusAccepted, job)
 }
 
 // getJob implements GET /api/v1/velox/jobs/{id}.

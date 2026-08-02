@@ -119,6 +119,7 @@ var (
 // missing publish_at serialises back as null in the next
 // GET-equivalent, never as 0001-01-01).
 type VeloxDeliverArtifactRequest struct {
+	ContractVersion       string           `json:"contract_version,omitempty"`
 	ExternalDeliveryID    string           `json:"external_delivery_id"`
 	IdempotencyKey        string           `json:"idempotency_key"`
 	ExternalDestinationID string           `json:"external_destination_id"`
@@ -235,51 +236,51 @@ type VeloxValidateDestinationResponse struct {
 // "scheduled_publish_at" from PublishAt) slot in without breaking
 // existing consumers.
 type VeloxGetDeliveryResponse struct {
-	ID               string     `json:"id"`
+	ID string `json:"id"`
 	// DeliveryID is the spec §8 canonical field; kept alongside the
 	// legacy ID field for backward compat with v0 clients (which
 	// read `id`). Velox clients built against the contract doc read
 	// `delivery_id`. Both fields carry the SAME value (the row's
 	// primary key) so any reference reads work.
-	DeliveryID       string                 `json:"delivery_id"`
-	VeloxJobID       string                 `json:"velox_job_id,omitempty"`
+	DeliveryID string `json:"delivery_id"`
+	VeloxJobID string `json:"velox_job_id,omitempty"`
 	// Target is the resolved FK-chain block per spec §8. Always set
 	// (no omitempty) so the operator UI sees a consistent envelope;
 	// partial-fidelity resolutions return zero values for the
 	// fields whose lookups failed.
-	Target           VeloxGetDeliveryTarget `json:"target"`
-	Status           string                 `json:"status"`
+	Target VeloxGetDeliveryTarget `json:"target"`
+	Status string                 `json:"status"`
 	// PublishStatus is the spec §8 derived 6-value enum
 	// (waiting_thumbnail | ready_to_publish | scheduled | published |
 	// failed). Mapped from models.ExternalDeliveryStatus via
 	// mapExternalDeliveryStatusToPublishStatus in
 	// velox_handlers.go.
-	PublishStatus    string     `json:"publish_status"`
+	PublishStatus string `json:"publish_status"`
 	// ThumbnailStatus mirrors spec §9's 4-value enum (pending |
 	// applied | failed). Defaults to "pending" for in-flight rows
 	// and "applied" only after the row reaches published terminal.
 	// "skipped" is reserved for when metadata.require_thumbnail
 	// is explicitly false in a future schema iteration.
-	ThumbnailStatus  string     `json:"thumbnail_status"`
+	ThumbnailStatus string `json:"thumbnail_status"`
 	// YouTubeVideoID is the spec §8 canonical name for the row's
 	// youtube-side id. Same value as PlatformMediaID when the
 	// status has crossed PRIVATE_UPLOADED; omitted otherwise.
-	YouTubeVideoID   string     `json:"youtube_video_id,omitempty"`
+	YouTubeVideoID string `json:"youtube_video_id,omitempty"`
 	// Privacy is the publisher-side privacy_status mirrored from
 	// the metadata JSONB envelope (private | unlisted | public).
 	// Empty string when metadata is missing or malformed.
-	Privacy          string     `json:"privacy,omitempty"`
-	RetryWaitReason  string     `json:"retry_wait_reason,omitempty"`
-	LastErrorCode    string     `json:"last_error_code,omitempty"`
-	LastErrorMessage string     `json:"last_error_message,omitempty"`
+	Privacy          string `json:"privacy,omitempty"`
+	RetryWaitReason  string `json:"retry_wait_reason,omitempty"`
+	LastErrorCode    string `json:"last_error_code,omitempty"`
+	LastErrorMessage string `json:"last_error_message,omitempty"`
 	// PlatformMediaID is the legacy alias for youtube_video_id
 	// (kept for v0 clients). Always tied to YouTubeVideoID — the
 	// handler populates both from the same source column.
-	PlatformMediaID  string     `json:"platform_media_id,omitempty"`
-	PlatformURL      string     `json:"platform_url,omitempty"`
-	PublishedAt      *time.Time `json:"published_at,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	PlatformMediaID string     `json:"platform_media_id,omitempty"`
+	PlatformURL     string     `json:"platform_url,omitempty"`
+	PublishedAt     *time.Time `json:"published_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // VeloxGetDeliveryTarget is the resolved channel-info block on

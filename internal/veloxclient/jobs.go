@@ -16,7 +16,7 @@ import (
 // additionally filters the returned rows by WorkspaceID as
 // defense-in-depth.
 //
-// Permission: editor.project.read.
+// Permission: velox:jobs:read.
 func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter veloxapi.ListJobsFilter) ([]veloxapi.Job, error) {
 	q := url.Values{}
 	if filter.Status != "" {
@@ -33,7 +33,7 @@ func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter
 	// (Velox scopes by workspace_id); we pass workspaceID as both
 	// sub and workspace_id so the verifier has a non-zero subject.
 	var resp listJobsResponse
-	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeEditorProjectRead}, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeVeloxJobsRead}, nil, &resp); err != nil {
 		return nil, err
 	}
 	jobs := make([]veloxapi.Job, 0, len(resp.Jobs))
@@ -54,13 +54,15 @@ func (c *Client) ListJobs(ctx context.Context, workspaceID, userID int64, filter
 // project_id, render_spec, delivery_plan only; workspace_id and
 // user_id are signed into the JWT, never in the body.
 //
-// Permission: editor.project.write.
+// Permission: velox:jobs:write.
 func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req veloxapi.CreateJobRequest) (*veloxapi.Job, error) {
 	body := createJobRequest{
-		ProjectID:   req.ProjectID,
-		WorkspaceID: workspaceID,
-		UserID:      userID,
-		RenderSpec:  json.RawMessage(req.RenderSpec),
+		ContractVersion: req.ContractVersion,
+		IdempotencyKey:  req.IdempotencyKey,
+		ProjectID:       req.ProjectID,
+		WorkspaceID:     workspaceID,
+		UserID:          userID,
+		RenderSpec:      json.RawMessage(req.RenderSpec),
 		DeliveryPlan: deliveryPlanReq{
 			Destinations: make([]deliveryDestinationReq, 0, len(req.DeliveryPlan.Destinations)),
 		},
@@ -76,7 +78,7 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 		return nil, fmt.Errorf("veloxclient: marshal create job: %w", err)
 	}
 	var resp jobResponse
-	if err := c.do(ctx, "POST", "/api/v1/instaedit/jobs", userID, workspaceID, []string{ScopeEditorProjectWrite}, bytes.NewReader(payload), &resp); err != nil {
+	if err := c.do(ctx, "POST", "/api/v1/instaedit/jobs", userID, workspaceID, []string{ScopeVeloxJobsWrite}, bytes.NewReader(payload), &resp); err != nil {
 		return nil, err
 	}
 	return &veloxapi.Job{
@@ -97,7 +99,7 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 func (c *Client) GetJob(ctx context.Context, workspaceID, userID int64, jobID string) (*veloxapi.JobDetail, error) {
 	var resp jobDetailResponse
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s", url.PathEscape(jobID))
-	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeEditorProjectRead}, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeVeloxJobsRead}, nil, &resp); err != nil {
 		return nil, err
 	}
 	detail := &veloxapi.JobDetail{
@@ -129,7 +131,7 @@ func (c *Client) GetJob(ctx context.Context, workspaceID, userID int64, jobID st
 // Permission: editor.project.write.
 func (c *Client) CancelJob(ctx context.Context, workspaceID, userID int64, jobID string) error {
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s/cancel", url.PathEscape(jobID))
-	return c.doNoBody(ctx, "POST", path, userID, workspaceID, []string{ScopeEditorProjectWrite})
+	return c.doNoBody(ctx, "POST", path, userID, workspaceID, []string{ScopeVeloxJobsWrite})
 }
 
 // ListJobDeliveries implements veloxapi.Client.ListJobDeliveries.
@@ -138,7 +140,7 @@ func (c *Client) CancelJob(ctx context.Context, workspaceID, userID int64, jobID
 func (c *Client) ListJobDeliveries(ctx context.Context, workspaceID, userID int64, jobID string) ([]veloxapi.Delivery, error) {
 	var resp listDeliveriesResponse
 	path := fmt.Sprintf("/api/v1/instaedit/jobs/%s/deliveries", url.PathEscape(jobID))
-	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeEditorProjectRead}, nil, &resp); err != nil {
+	if err := c.do(ctx, "GET", path, userID, workspaceID, []string{ScopeVeloxJobsRead}, nil, &resp); err != nil {
 		return nil, err
 	}
 	deliveries := make([]veloxapi.Delivery, 0, len(resp.Deliveries))

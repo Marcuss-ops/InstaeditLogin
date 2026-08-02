@@ -69,10 +69,18 @@ func (e VeloxCallbackEvent) IsTerminalSuccess() bool {
 // carry that data — e.g. artifact_verified has no
 // platform_media_id yet.
 type VeloxCallbackPayload struct {
+	ContractVersion    string     `json:"contract_version"`
 	EventID            string     `json:"event_id"`
+	DeliveryID         string     `json:"delivery_id,omitempty"`
+	PublicationID      string     `json:"publication_id,omitempty"`
 	SocialDeliveryID   string     `json:"social_delivery_id"`
 	ExternalDeliveryID string     `json:"external_delivery_id"`
+	Sequence           int64      `json:"sequence"`
 	Status             string     `json:"status"`
+	Phase              string     `json:"phase,omitempty"`
+	RemoteID           string     `json:"remote_id,omitempty"`
+	RemoteURL          string     `json:"remote_url,omitempty"`
+	OccurredAt         *time.Time `json:"occurred_at,omitempty"`
 	PlatformMediaID    *string    `json:"platform_media_id,omitempty"`
 	PlatformURL        *string    `json:"platform_url,omitempty"`
 	PublishedAt        *time.Time `json:"published_at,omitempty"`

@@ -33,12 +33,14 @@ import (
 
 // Job is the BFF view of a Velox rendering job.
 type Job struct {
-	ID           string    `json:"id"`
-	WorkspaceID  int64     `json:"-"`
-	ProjectID    string    `json:"project_id,omitempty"`
-	RenderStatus string    `json:"render_status"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                string    `json:"id"`
+	WorkspaceID       int64     `json:"workspace_id"`
+	ProjectID         string    `json:"project_id,omitempty"`
+	RenderStatus      string    `json:"render_status"`
+	PublicationStatus string    `json:"publication_status"`
+	OverallStatus     string    `json:"overall_status"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // Delivery is the BFF view of a social delivery associated with a job.
@@ -48,6 +50,12 @@ type Delivery struct {
 	ExternalDestinationID string `json:"external_destination_id"`
 	SocialDeliveryID      string `json:"social_delivery_id"`
 	Status                string `json:"status"`
+	Phase                 string `json:"phase,omitempty"`
+	Attempt               int    `json:"attempt,omitempty"`
+	NextRetryAt           string `json:"next_retry_at,omitempty"`
+	LastErrorCode         string `json:"last_error_code,omitempty"`
+	LastErrorMessage      string `json:"last_error_message,omitempty"`
+	RetryFrom             string `json:"retry_from,omitempty"`
 	PlatformMediaID       string `json:"platform_media_id,omitempty"`
 	PlatformURL           string `json:"platform_url,omitempty"`
 }
@@ -85,9 +93,11 @@ type Asset struct {
 // workspace_id and user_id are NOT in this body; the handler reads
 // them from the session identity.
 type CreateJobRequest struct {
-	ProjectID    string          `json:"project_id"`
-	RenderSpec   json.RawMessage `json:"render_spec"`
-	DeliveryPlan DeliveryPlan    `json:"delivery_plan"`
+	ContractVersion string          `json:"contract_version"`
+	IdempotencyKey  string          `json:"idempotency_key"`
+	ProjectID       string          `json:"project_id"`
+	RenderSpec      json.RawMessage `json:"render_spec"`
+	DeliveryPlan    DeliveryPlan    `json:"delivery_plan"`
 }
 
 // DeliveryPlan is the nested delivery_plan block of CreateJobRequest.
@@ -145,7 +155,8 @@ var (
 	// ErrWorkspaceMismatch is returned when the upstream Velox
 	// response belongs to a different workspace than the one signed
 	// into the control JWT.
-	ErrWorkspaceMismatch = errors.New("velox: workspace mismatch")
+	ErrWorkspaceMismatch   = errors.New("velox: workspace mismatch")
+	ErrIdempotencyConflict = errors.New("velox: idempotency conflict")
 )
 
 // --- Control-JWT scope taxonomy --------------------------------------------
@@ -173,6 +184,11 @@ var (
 //	                           (Velox POST
 //	                           /internal/v1/editor/sessions/.../publish)
 const (
+	ScopeVeloxJobsRead    = "velox:jobs:read"
+	ScopeVeloxJobsWrite   = "velox:jobs:write"
+	ScopeVeloxWorkersRead = "velox:workers:read"
+	ScopeVeloxAssetsRead  = "velox:assets:read"
+
 	ScopeEditorProjectRead     = "editor.project.read"
 	ScopeEditorProjectWrite    = "editor.project.write"
 	ScopeEditorAssetUpload     = "editor.asset.upload"

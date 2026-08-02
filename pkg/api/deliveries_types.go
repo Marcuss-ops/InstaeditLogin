@@ -8,9 +8,10 @@
 //   - Response types for both paths + the 409 conflict body
 //   - Idempotency-Key regex + parser
 //
-// The new contract carries an explicit contract_version discriminator
-// ("velox-instaedit.v1"); the dispatcher checks this field instead of
-// the old shape-detection heuristic (isVeloxContractRequest).
+// The old nested contract carries an explicit discriminator
+// ("velox-instaedit.v1"). The production canonical wire contract is
+// velox.delivery.v1; the nested shape remains only as a bounded migration
+// adapter and must not be used by new callers.
 package api
 
 import (

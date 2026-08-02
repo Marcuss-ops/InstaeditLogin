@@ -72,7 +72,8 @@ var (
 	// ErrWorkspaceMismatch is returned when the upstream Velox
 	// response belongs to a different workspace than the one signed
 	// into the control JWT.
-	ErrWorkspaceMismatch = veloxcontract.ErrWorkspaceMismatch
+	ErrWorkspaceMismatch   = veloxcontract.ErrWorkspaceMismatch
+	ErrIdempotencyConflict = veloxcontract.ErrIdempotencyConflict
 )
 
 // --- Deps + Register ------------------------------------------------------
@@ -191,10 +192,14 @@ func verifyOwnership(w http.ResponseWriter, resourceWorkspaceID, sessionWorkspac
 }
 
 // mapClientError translates a Client error into an HTTP status + body.
-// ErrNotFound and ErrWorkspaceMismatch → 404; anything else → 500.
+// ErrNotFound and ErrWorkspaceMismatch → 404; idempotency conflicts → 409.
 func mapClientError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrWorkspaceMismatch) {
 		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	if errors.Is(err, ErrIdempotencyConflict) {
+		writeError(w, http.StatusConflict, "idempotency conflict")
 		return
 	}
 	writeError(w, http.StatusInternalServerError, "upstream call failed")
