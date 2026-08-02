@@ -11,13 +11,12 @@ refactoring status. Kept in sync with the tooling:
   `make loc-check LOC_AGAINST=none`).
 
 Scan: tracked `go` / `ts` / `tsx` files only (docs, SQL, JSON, YAML excluded).
-69 files are currently above 500 lines; 43 more sit in the 450–500 watchlist.
+59 files are currently above 500 lines; 44 more sit in the 450–500 watchlist.
 
-_Snapshot: 2026-08-02 (second update today — 11 more files split below
-threshold since the morning snapshot: posts_handlers, velox dispatcher, outbox
-dispatcher, youtube_group_videos, youtube_editor_sessions, accounts_write,
-groups_handlers, group_expand, router, platform_account_repo, ContentPublish,
-BookingModal)._
+_Snapshot: 2026-08-02 (third update today — 9 more files split below
+threshold since the afternoon snapshot: 8 test files >800 lines split by
+scenario + DriveBatchImportDialogViews.tsx. The >800 section is now empty:
+no tracked source file is above 800 lines today. Count dropped 69 → 59)._
 
 ## Legend
 
@@ -44,20 +43,15 @@ gh issue create \
 
 ---
 
-## > 800 lines (8 files) — current `loc-check` strict offenders
+## > 800 lines (0 files)
 
-These are the files that make `make loc-check LOC_AGAINST=none` exit 1 today.
-
-| File | Righe | Stato | Issue |
-|------|------:|-------|-------|
-| `pkg/api/nvidia_metadata_publish_e2e_test.go` | 928 | da fare | #NNN |
-| `tests/e2e/youtube_oauth_browser_e2e_test.go` | 926 | da fare | #NNN |
-| `pkg/api/internal_velox_get_delivery_test.go` | 923 | da fare | #NNN |
-| `internal/database/migrations_integration_test.go` | 901 | da fare | #NNN |
-| `pkg/api/internal_velox_validate_test.go` | 898 | da fare | #NNN |
-| `internal/services/channel_authorization_test.go` | 883 | da fare | #NNN |
-| `pkg/api/auth_routes_callback_test.go` | 865 | da fare | #NNN |
-| `internal/worker/publish_worker_publish_test.go` | 834 | da fare | #NNN |
+The 8 test files that previously sat here (nvidia_metadata_publish_e2e 928,
+youtube_oauth_browser_e2e 926, internal_velox_get_delivery 923,
+migrations_integration 901, internal_velox_validate 898,
+channel_authorization 883, auth_routes_callback 865,
+publish_worker_publish 834) were all split by scenario on 2026-08-02
+(commit `5132462`). No tracked source file is above 800 lines today — the
+`loc-check` strict offenders list is empty.
 
 ## 600–800 lines (25 files)
 
@@ -89,7 +83,7 @@ These are the files that make `make loc-check LOC_AGAINST=none` exit 1 today.
 | `internal/worker/mocks_test.go` | 608 | da fare | #NNN |
 | `tests/e2e/e2e_harness_fakes.go` | 601 | da fare | #NNN |
 
-## 500–600 lines (36 files)
+## 500–600 lines (34 files)
 
 | File | Righe | Stato | Issue |
 |------|------:|-------|-------|
@@ -98,8 +92,6 @@ These are the files that make `make loc-check LOC_AGAINST=none` exit 1 today.
 | `pkg/api/account_routes_test.go` | 589 | da fare | #NNN |
 | `cmd/yttest/main.go` | 586 | da fare | #NNN |
 | `internal/models/external_delivery_test.go` | 578 | da fare | #NNN |
-| `web/src/pages/internal/GroupYouTubeVideos.tsx` | 576 | da fare | #NNN |
-| `web/src/pages/internal/DriveBatchImportDialogViews.tsx` | 575 | da fare | #NNN |
 | `pkg/api/common_test_mocks_test.go` | 573 | da fare | #NNN |
 | `internal/providers/registry_test.go` | 553 | da fare | #NNN |
 | `internal/models/external_delivery.go` | 549 | da fare | #NNN |
@@ -130,7 +122,7 @@ These are the files that make `make loc-check LOC_AGAINST=none` exit 1 today.
 | `scripts/distribute_channels_to_managers/main_test.go` | 502 | da fare | #NNN |
 | `internal/repository/delivery_session_repo.go` | 502 | da fare | #NNN |
 
-## 450–500 lines (43 files) — watchlist (prossimi alla soglia)
+## 450–500 lines (44 files) — watchlist (prossimi alla soglia)
 
 Not yet above 500 but within 50 lines of the threshold. Not gated by
 `loc-check` and not `da fare` yet — monitor them, since a single growth event
@@ -173,24 +165,27 @@ can push them over. No GitHub issues planned for these yet.
 | `internal/repository/post_repo_idempotency_test.go` | 469 |
 | `internal/worker/reconcile_worker.go` | 467 |
 | `web/src/pages/internal/Dashboard.tsx` | 464 |
-| `internal/services/youtube_channel_content.go` | 462 |
+| `internal/services/youtube_channel_content.go` | 463 |
 | `pkg/api/youtube_editor_sessions_publish_test.go` | 461 |
 | `internal/worker/drive_batch_crawler_test_helpers_test.go` | 461 |
 | `pkg/api/workspace_channels_test.go` | 460 |
 | `pkg/api/channel_analytics_service_test.go` | 456 |
+| `tests/e2e/youtube_oauth_browser_e2e_test.go` | 454 |
 | `pkg/api/media_test.go` | 454 |
 | `internal/repository/post_repo_aggregate.go` | 453 |
 | `internal/veloxclient/client_test.go` | 451 |
 
-**Nota:** `web/src/pages/internal/GroupYouTubeVideos.tsx` è RISALITO da 475 a
-576 righe e torna `da fare` nella tabella 500–600. `web/src/pages/internal/
-Dashboard.tsx` (464) è il nuovo ingresso watchlist. I file splittati oggi
-(`internal/outbox/dispatcher.go` 487, `pkg/api/router.go` 473) sono scesi sotto
-soglia e ora vivono in watchlist — monitorarli per non farli risalire.
+**Nota:** `web/src/pages/internal/GroupYouTubeVideos.tsx` e
+`web/src/pages/internal/DriveBatchImportDialogViews.tsx` sono stati splitati
+oggi (159 e 16 righe) e non compaiono più in nessuna tabella — vedi
+Completati. `tests/e2e/youtube_oauth_browser_e2e_test.go` (454) è il nuovo
+ingresso watchlist dopo lo split da 926. I file splitati oggi
+(`internal/outbox/dispatcher.go` 487, `pkg/api/router.go` 473) restano in
+watchlist — monitorarli per non farli risalire.
 `internal/services/tiktok_publish_test.go` (491) resta sotto soglia —
 monitorarlo per non farlo risalire.
-`internal/worker/drive_batch_crawler_test_helpers_test.go` (461) è il nuovo
-helper file dello split del crawler, anch'esso sotto soglia ma in watchlist.
+`internal/worker/drive_batch_crawler_test_helpers_test.go` (461) è l'helper
+file dello split del crawler, anch'esso sotto soglia ma in watchlist.
 
 ---
 
@@ -233,6 +228,16 @@ feature/scenario.
 | `internal/deliveries/group_expand.go` | 537 | 366 | `group_expand_status.go` (181) |
 | `pkg/api/router.go` | 535 | 473 | 13 wrapper velox/integrations → `modules_velox.go` + `modules_integrations.go` |
 | `internal/repository/platform_account_repo.go` | 534 | 135 | `platform_account_{attach,reauth,crud}.go` |
+| `web/src/pages/internal/GroupYouTubeVideos.tsx` | 576 | 159 | `useGroupYouTubeVideos.ts` (246) + `groupYouTubeVideos{Types,Visual}.ts` + `GroupYouTubeVideo{Card,PreviewModal}.tsx` |
+| `web/src/pages/internal/DriveBatchImportDialogViews.tsx` | 575 | 16 | barrel: `driveBatchImport{Form,Views,Primitives,Format}` |
+| `pkg/api/nvidia_metadata_publish_e2e_test.go` | 928 | 383 | `_negative_test.go` (426) + `_helpers_test.go` (149) |
+| `tests/e2e/youtube_oauth_browser_e2e_test.go` | 926 | 454 | `_fakes_test.go` (357) + `_seed_test.go` (145) |
+| `pkg/api/internal_velox_get_delivery_test.go` | 923 | 226 | `_helpers_test.go` (381) + `_spec8_test.go` (336) |
+| `internal/database/migrations_integration_test.go` | 901 | 444 | `_oauth_backfill_test.go` (254) + `_upload_jobs_test.go` (225) |
+| `pkg/api/internal_velox_validate_test.go` | 898 | 249 | `_helpers_test.go` (208) + `_diag_test.go` (129) + `_ratelimit_test.go` (346) |
+| `internal/services/channel_authorization_test.go` | 883 | 245 | `_helpers_test.go` (171) + `_status_test.go` (229) + `_atomic_test.go` (273) |
+| `pkg/api/auth_routes_callback_test.go` | 865 | 279 | `_reauth_test.go` (268) + `_youtube_test.go` (344) |
+| `internal/worker/publish_worker_publish_test.go` | 834 | 345 | `_claim_test.go` (386) + `_error_test.go` (125) |
 
 **Nota `pkg/api/youtube_group_videos.go`:** lo split originale lo portò a 500
 righe (sotto la soglia), poi è RISALITO a 570 (secondo pass di oggi: estrazione
@@ -240,6 +245,10 @@ di `resolveGroupYouTubeAccounts` + `writeGroupVideosOK` in `_helpers.go`) e ora
 è a **304** — definitivamente `fatto`. I suoi file di test collegati
 (`youtube_group_videos_phantom_test.go` 597, `_list_test.go` 517) restano sopra
 — inclusi nelle tabelle sopra.
+
+**Nota sezione >800:** tutti gli 8 file precedentemente sopra 800 sono stati
+splitati per scenario il 2026-08-02 (commit `5132462`); la sezione è ora vuota
+e il count complessivo è sceso da 69 a 59.
 
 ---
 
