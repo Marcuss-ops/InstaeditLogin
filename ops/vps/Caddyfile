@@ -19,6 +19,11 @@ api.instaedit.org {
 }
 
 # ── Backend compatibility hostname ─────────────────────────────────────────
+# dev.instaedit.org is the legacy hostname. Backend paths (API, probes,
+# Dark Editor, S3 media proxy) keep working here; every other path is a
+# legacy SPA route and is permanently redirected (301) to the canonical
+# frontend on Vercel (app.instaedit.org) instead of hitting the API 404.
+# Path is preserved so client-side routing still works on the target.
 dev.instaedit.org {
 	encode gzip
 
@@ -27,11 +32,40 @@ dev.instaedit.org {
 	}
 
 	# Dark Editor (Next.js) under the same base path returned by the API.
+	handle /dark_editor_v2 {
+		reverse_proxy 127.0.0.1:3001
+	}
 	handle /dark_editor_v2/* {
 		reverse_proxy 127.0.0.1:3001
 	}
 
-	# The frontend lives only on app.instaedit.org; every other path here is
-	# handled by the Go API, including /ready and OAuth callbacks.
-	reverse_proxy 127.0.0.1:8080
+	# S3-compatible MinIO proxy for browser uploads and media previews.
+	# Presigned URLs are signed for this public HTTPS host, so preserve it
+	# when forwarding to the host-published MinIO port.
+	handle /instaedit-local/* {
+		reverse_proxy 127.0.0.1:19000 {
+			header_up Host {host}
+		}
+	}
+	handle /instaedit-media/* {
+		reverse_proxy 127.0.0.1:19000 {
+			header_up Host {host}
+		}
+	}
+
+	# API + probes keep working on the legacy hostname (OAuth callbacks,
+	# /ready, health). Explicit handlers are required now that the catch-all
+	# no longer proxies to the Go API.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	handle /ready {
+		reverse_proxy 127.0.0.1:8080
+	}
+
+	# Everything else is a legacy SPA route → canonical frontend on Vercel.
+	handle {
+		redir https://app.instaedit.org{uri} permanent
+	}
 }
