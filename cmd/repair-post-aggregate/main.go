@@ -65,6 +65,9 @@ func run(videoID string) error {
 		return fmt.Errorf("connect database: %w", err)
 	}
 	defer db.Close()
+	if err := database.VerifyInstallationIdentity(context.Background(), db, cfg.Database.ExpectedInstallationUUID); err != nil {
+		return fmt.Errorf("database identity verification failed: %w", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

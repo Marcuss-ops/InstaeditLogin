@@ -24,6 +24,12 @@ type DatabaseConfig struct {
 	DBPassword  string
 	DBName      string
 	DBSSLMode   string
+
+	// ExpectedInstallationUUID pins this process to the PostgreSQL
+	// installation it was configured for. Production and staging
+	// require EXPECTED_DATABASE_INSTALLATION_UUID; local dev may leave
+	// it empty while the migration bootstrap creates the identity row.
+	ExpectedInstallationUUID string
 }
 
 // DSN returns the PostgreSQL connection string.

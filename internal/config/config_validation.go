@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // metricsConfigured returns true only when both metrics basic-auth
@@ -50,6 +52,18 @@ func (c *Config) validate() error {
 	if c.Database.DatabaseURL == "" {
 		if c.Database.DBPassword == "" {
 			return fmt.Errorf("DB_PASSWORD is required (or set DATABASE_URL)")
+		}
+	}
+	// Persistent deployments must pin the process to one known database
+	// installation. The migration creates the singleton identity row;
+	// runtime verification is performed after migrations (or immediately
+	// by API/worker processes). Local dev remains opt-in for convenience.
+	if c.HTTP.AppEnv == "production" || c.HTTP.AppEnv == "staging" {
+		if strings.TrimSpace(c.Database.ExpectedInstallationUUID) == "" {
+			return fmt.Errorf("EXPECTED_DATABASE_INSTALLATION_UUID is required in %s", c.HTTP.AppEnv)
+		}
+		if _, err := uuid.Parse(strings.TrimSpace(c.Database.ExpectedInstallationUUID)); err != nil {
+			return fmt.Errorf("EXPECTED_DATABASE_INSTALLATION_UUID must be a valid UUID")
 		}
 	}
 

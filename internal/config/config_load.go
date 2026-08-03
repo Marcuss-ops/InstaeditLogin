@@ -71,13 +71,14 @@ func Load() (*Config, error) {
 			AppEnv:             getEnv("APP_ENV", "dev"),
 		},
 		Database: DatabaseConfig{
-			DatabaseURL: getEnv("DATABASE_URL", ""),
-			DBHost:      getEnv("DB_HOST", "localhost"),
-			DBPort:      getEnv("DB_PORT", "5432"),
-			DBUser:      getEnv("DB_USER", "instaedit"),
-			DBPassword:  getEnv("DB_PASSWORD", ""),
-			DBName:      getEnv("DB_NAME", "instaedit_login"),
-			DBSSLMode:   getEnv("DB_SSLMODE", "disable"),
+			DatabaseURL:              getEnv("DATABASE_URL", ""),
+			DBHost:                   getEnv("DB_HOST", "localhost"),
+			DBPort:                   getEnv("DB_PORT", "5432"),
+			DBUser:                   getEnv("DB_USER", "instaedit"),
+			DBPassword:               getEnv("DB_PASSWORD", ""),
+			DBName:                   getEnv("DB_NAME", "instaedit_login"),
+			DBSSLMode:                getEnv("DB_SSLMODE", "disable"),
+			ExpectedInstallationUUID: getEnv("EXPECTED_DATABASE_INSTALLATION_UUID", ""),
 		},
 		Worker: WorkerConfig{
 			// P1#6 — YouTube resumable upload tuning. Defaults mirror the

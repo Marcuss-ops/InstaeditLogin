@@ -45,8 +45,12 @@ func main() {
 		}
 	}()
 
-	if err := database.Migrate(app.DB); err != nil {
+	if err := database.MigrateWithExpectedInstallationUUID(app.DB, app.Cfg.Database.ExpectedInstallationUUID); err != nil {
 		slog.Error("migrate: database.Migrate failed", "error", err)
+		os.Exit(1)
+	}
+	if err := database.VerifyInstallationIdentity(nil, app.DB, app.Cfg.Database.ExpectedInstallationUUID); err != nil {
+		slog.Error("migrate: database identity verification failed", "error_class", "DATABASE_IDENTITY_MISMATCH")
 		os.Exit(1)
 	}
 

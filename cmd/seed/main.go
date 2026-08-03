@@ -35,6 +35,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
 		os.Exit(1)
 	}
+	if err := database.VerifyInstallationIdentity(nil, db, cfg.Database.ExpectedInstallationUUID); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed database identity verification: DATABASE_IDENTITY_MISMATCH")
+		os.Exit(1)
+	}
 
 	if _, err := db.Exec(seeds.DevSQL); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to apply seed data: %v\n", err)

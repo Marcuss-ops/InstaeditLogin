@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/bootstrap"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
 )
 
 func main() {
@@ -34,6 +35,10 @@ func main() {
 	app, err := bootstrap.Wire(context.Background())
 	if err != nil {
 		slog.Error("api: wire failed", "error", err)
+		os.Exit(1)
+	}
+	if err := database.VerifyInstallationIdentity(context.Background(), app.DB, app.Cfg.Database.ExpectedInstallationUUID); err != nil {
+		slog.Error("api: database identity verification failed", "error_class", "DATABASE_IDENTITY_MISMATCH")
 		os.Exit(1)
 	}
 	defer func() {

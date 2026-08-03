@@ -11,6 +11,10 @@ import "os"
 func SetDummyMetricsAuth() {
 	os.Setenv("METRICS_BASIC_AUTH_USER", "dummy-metrics-user")
 	os.Setenv("METRICS_BASIC_AUTH_PASS", "dummy-metrics-pass")
+	// Keep config.Load tests valid now that production startup pins the
+	// process to a database installation. Unit tests do not connect to
+	// that database, so this is only a syntactically valid fixture.
+	os.Setenv("EXPECTED_DATABASE_INSTALLATION_UUID", "00000000-0000-4000-8000-000000000001")
 }
 
 // ClearOptionalOAuthEnv masks optional OAuth provider credentials

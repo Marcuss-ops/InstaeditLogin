@@ -71,6 +71,9 @@ func run(email string, grantedBy int64) error {
 		return fmt.Errorf("connect db: %w", err)
 	}
 	defer db.Close()
+	if err := database.VerifyInstallationIdentity(context.Background(), db, cfg.Database.ExpectedInstallationUUID); err != nil {
+		return fmt.Errorf("database identity verification failed: %w", err)
+	}
 
 	repo := repository.NewUserRepository(db)
 

@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 //go:embed migrations/*.sql
@@ -41,7 +43,21 @@ type migrationFile struct {
 // transaction, and the whole run is protected by a PostgreSQL advisory
 // lock to prevent concurrent runners.
 func RunMigrations(db *sql.DB) error {
-	return runMigrationsRange(db, 0)
+	return runMigrationsRange(db, 0, "")
+}
+
+// MigrateWithExpectedInstallationUUID applies migrations while exposing the
+// operator-provided installation UUID to the identity migration. On a new
+// database that UUID seeds the singleton row; on an existing database the
+// row is left untouched and VerifyInstallationIdentity performs the check.
+func MigrateWithExpectedInstallationUUID(db *sql.DB, expectedUUID string) error {
+	expectedUUID = strings.TrimSpace(expectedUUID)
+	if expectedUUID != "" {
+		if _, err := uuid.Parse(expectedUUID); err != nil {
+			return fmt.Errorf("migrations: %w: configured installation UUID is invalid", ErrDatabaseIdentityMismatch)
+		}
+	}
+	return runMigrationsRange(db, 0, expectedUUID)
 }
 
 // RunMigrationsUpTo runs all migrations up to and including the migration
@@ -49,10 +65,10 @@ func RunMigrations(db *sql.DB) error {
 // 001..027). Useful for testing: insert data after N-1 migrations, then
 // apply migration N to verify its behaviour.
 func RunMigrationsUpTo(db *sql.DB, maxSeq int) error {
-	return runMigrationsRange(db, maxSeq)
+	return runMigrationsRange(db, maxSeq, "")
 }
 
-func runMigrationsRange(db *sql.DB, maxSeq int) error {
+func runMigrationsRange(db *sql.DB, maxSeq int, expectedUUID string) error {
 	files, err := loadMigrationFiles(maxSeq)
 	if err != nil {
 		return err
@@ -72,6 +88,16 @@ func runMigrationsRange(db *sql.DB, maxSeq int) error {
 
 	if err := acquireAdvisoryLock(ctx, conn); err != nil {
 		return err
+	}
+	if expectedUUID != "" {
+		if err := verifyExistingInstallationIdentity(ctx, conn, expectedUUID); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx,
+			"SELECT set_config('app.expected_installation_uuid', $1, false)", expectedUUID,
+		); err != nil {
+			return fmt.Errorf("migrations: failed to set installation identity context: %w", err)
+		}
 	}
 	defer func() {
 		_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", advisoryLockKey)
@@ -143,6 +169,39 @@ func loadMigrationFiles(maxSeq int) ([]migrationFile, error) {
 	}
 
 	return files, nil
+}
+
+// verifyExistingInstallationIdentity is the migration preflight. A missing
+// table is the only allowed enrollment state: migration 096 will create it.
+// Once the table exists, the singleton row must exist and match before any
+// pending migration is applied. This prevents a wrong/rebuilt database from
+// receiving further schema changes before the identity mismatch is reported.
+func verifyExistingInstallationIdentity(ctx context.Context, conn *sql.Conn, expectedUUID string) error {
+	var tableExists bool
+	if err := conn.QueryRowContext(ctx,
+		`SELECT to_regclass('public.system_installation') IS NOT NULL`,
+	).Scan(&tableExists); err != nil {
+		return fmt.Errorf("migrations: %w: identity preflight unavailable", ErrDatabaseIdentityMismatch)
+	}
+	if !tableExists {
+		return nil
+	}
+
+	var actualUUID string
+	if err := conn.QueryRowContext(ctx,
+		`SELECT installation_uuid::text FROM system_installation WHERE id = 1`,
+	).Scan(&actualUUID); err != nil {
+		return fmt.Errorf("migrations: %w: existing installation identity is invalid", ErrDatabaseIdentityMismatch)
+	}
+	expected, err := uuid.Parse(expectedUUID)
+	if err != nil {
+		return fmt.Errorf("migrations: %w: configured installation UUID is invalid", ErrDatabaseIdentityMismatch)
+	}
+	actual, err := uuid.Parse(strings.TrimSpace(actualUUID))
+	if err != nil || actual != expected {
+		return fmt.Errorf("migrations: %w: database installation is not the expected installation", ErrDatabaseIdentityMismatch)
+	}
+	return nil
 }
 
 func acquireAdvisoryLock(ctx context.Context, conn *sql.Conn) error {

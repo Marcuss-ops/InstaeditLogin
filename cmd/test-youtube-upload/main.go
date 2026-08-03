@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/bootstrap"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -146,6 +147,10 @@ func main() {
 	app, err := bootstrap.Wire(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "wire failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := database.VerifyInstallationIdentity(ctx, app.DB, app.Cfg.Database.ExpectedInstallationUUID); err != nil {
+		fmt.Fprintln(os.Stderr, "database identity verification failed: DATABASE_IDENTITY_MISMATCH")
 		os.Exit(1)
 	}
 	defer app.DB.Close()

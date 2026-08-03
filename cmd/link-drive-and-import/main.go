@@ -20,6 +20,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/database"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
@@ -98,6 +99,9 @@ func run() error {
 		return fmt.Errorf("open db: %w", err)
 	}
 	defer db.Close()
+	if err := database.VerifyInstallationIdentity(ctx, db, cfg.Database.ExpectedInstallationUUID); err != nil {
+		return fmt.Errorf("database identity verification failed: %w", err)
+	}
 
 	encryptor, err := crypto.NewEncryptor(1, map[uint32]string{1: cfg.EncryptionKey})
 	if err != nil {

@@ -139,6 +139,17 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = db.Close() }()
+	expectedInstallationUUID := strings.TrimSpace(os.Getenv("EXPECTED_DATABASE_INSTALLATION_UUID"))
+	if appEnv == "production" || appEnv == "staging" {
+		if expectedInstallationUUID == "" {
+			fmt.Fprintf(os.Stderr, "EXPECTED_DATABASE_INSTALLATION_UUID is required in APP_ENV=%s\n", appEnv)
+			os.Exit(1)
+		}
+	}
+	if err := database.VerifyInstallationIdentity(context.Background(), db, expectedInstallationUUID); err != nil {
+		fmt.Fprintln(os.Stderr, "database identity verification failed: DATABASE_IDENTITY_MISMATCH")
+		os.Exit(1)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

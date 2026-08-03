@@ -50,8 +50,12 @@ func main() {
 
 	// Migrate: dev wrapper assumes exclusive DB access. Production
 	// deployments run cmd/migrate as a one-shot pre-deploy job.
-	if err := database.Migrate(app.DB); err != nil {
+	if err := database.MigrateWithExpectedInstallationUUID(app.DB, app.Cfg.Database.ExpectedInstallationUUID); err != nil {
 		slog.Error("server: database migrate failed", "error", err)
+		os.Exit(1)
+	}
+	if err := database.VerifyInstallationIdentity(context.Background(), app.DB, app.Cfg.Database.ExpectedInstallationUUID); err != nil {
+		slog.Error("server: database identity verification failed", "error_class", "DATABASE_IDENTITY_MISMATCH")
 		os.Exit(1)
 	}
 
