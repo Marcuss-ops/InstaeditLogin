@@ -37,6 +37,25 @@ func buildProviderWiring(s *wireState) error {
 	}
 	s.channelAuthorizer = services.NewChannelAuthorizationService(s.db, s.enc, s.tokenRepo, ytBinder)
 
+	// YouTubeCredentialResolver is the shared pre-action credential
+	// boundary for livestream and future YouTube workers. It reuses the
+	// existing vault, account/workspace repositories, OAuth capability,
+	// and channel binder; it never persists the returned access token.
+	if ytp, ok := s.capRouter.Get(models.PlatformYouTube); ok {
+		if ytOAuth, typeOK := ytp.(*services.YouTubeOAuthService); typeOK {
+			s.youtubeCredentialResolver = services.NewYouTubeCredentialResolver(services.YouTubeCredentialResolverDeps{
+				Accounts:    s.userRepo,
+				Workspaces:  s.workspaceRepo,
+				Memberships: s.teamRepo,
+				Grants:      s.userRepo,
+				Vault:       s.vault,
+				OAuth:       ytOAuth,
+				Binder:      ytBinder,
+				Logger:      s.logger,
+			})
+		}
+	}
+
 	s.authMgr = auth.NewManager(
 		s.cfg.Auth.JWTSecret,
 		time.Duration(s.cfg.Auth.JWTAccessTTLMinutes)*time.Minute,

@@ -55,6 +55,7 @@ type wireState struct {
 	webhookRepo               *repository.WebhookRepository
 	bookingEventRepo          *repository.BookingEventRepository
 	channelAuthorizer         services.ChannelAuthorizer
+	youtubeCredentialResolver *services.YouTubeCredentialResolver
 }
 
 func buildDatabaseStorage(cfg *config.Config) (*wireState, error) {

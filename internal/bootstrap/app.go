@@ -118,6 +118,10 @@ type App struct {
 	// cleanly. Without this wiring, SIGTERM would let the sweeper
 	// become a zombie until the process is killed.
 	OneTimeCodes api.OneTimeCodeStore
+
+	// YouTubeCredentialResolver is the shared runtime-only credential
+	// boundary for YouTube Live workers and services.
+	YouTubeCredentialResolver *services.YouTubeCredentialResolver
 }
 
 // Wire connects to the database, builds every shared dependency, and
@@ -153,5 +157,6 @@ func Wire(ctx context.Context) (*App, error) {
 		WorkerID: s.workerID, MemoryLimiter: s.memoryLimiter,
 		StorageProvider: s.storageProvider, SessionsSvc: s.sessionsSvc,
 		OneTimeCodes: s.oneTimeCodes, Encryptor: s.enc,
+		YouTubeCredentialResolver: s.youtubeCredentialResolver,
 	}, nil
 }
