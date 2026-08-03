@@ -10,19 +10,31 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
+  Radio,
+  type LucideIcon,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { fetchSession, logout } from "../../lib/auth";
+import { useActiveLiveCount } from "../../hooks/useActiveLiveCount";
 
-const baseNavItems = [
+type NavItem = {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  /** When set, the item renders a badge with the count of actually-live streams. */
+  liveCountBadge?: boolean;
+};
+
+const baseNavItems: NavItem[] = [
   { to: "/app/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/app/performance", label: "Performance", icon: BarChart3 },
   { to: "/app/calendar", label: "Calendar", icon: Calendar },
   { to: "/app/groups", label: "Groups", icon: FolderTree },
+  { to: "/app/livestreams", label: "Live streaming", icon: Radio, liveCountBadge: true },
   { to: "/app/linking", label: "Linking", icon: Link2 },
 ];
 
-const adminNavItem = { to: "/admin/dashboard", label: "Admin", icon: Shield };
+const adminNavItem: NavItem = { to: "/admin/dashboard", label: "Admin", icon: Shield };
 
 export type SidebarProps = {
   collapsed: boolean;
@@ -35,6 +47,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [hovered, setHovered] = useState(false);
   const visualCollapsed = collapsed && !hovered;
+  const activeLives = useActiveLiveCount();
 
   useEffect(() => {
     let mounted = true;
@@ -113,6 +126,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             >
               <Icon size={20} className="shrink-0" />
               {!visualCollapsed && <span className="truncate">{item.label}</span>}
+              {item.liveCountBadge &&
+                !visualCollapsed &&
+                activeLives !== null &&
+                activeLives > 0 && (
+                  <span
+                    className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold leading-none text-white"
+                    title={`${activeLives} ${activeLives === 1 ? "live attiva" : "live attive"}`}
+                  >
+                    {activeLives}
+                  </span>
+                )}
             </Link>
           );
         })}

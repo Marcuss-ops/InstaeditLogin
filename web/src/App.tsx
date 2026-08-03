@@ -70,6 +70,11 @@ const AdminDashboardPage = lazy(() =>
     default: m.AdminDashboardPage,
   })),
 );
+const LiveStreamsPage = lazy(() =>
+  import("./pages/internal/LiveStreams").then((m) => ({
+    default: m.LiveStreamsPage,
+  })),
+);
 
 function RouteLoadingFallback() {
   return (
@@ -215,6 +220,14 @@ function App() {
                 element={
                   <LazyRoute>
                     <GroupsPage />
+                  </LazyRoute>
+                }
+              />
+              <Route
+                path="livestreams"
+                element={
+                  <LazyRoute>
+                    <LiveStreamsPage />
                   </LazyRoute>
                 }
               />
