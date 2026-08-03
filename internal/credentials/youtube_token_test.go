@@ -124,7 +124,11 @@ func TestRenewYouTubeToken_LegacyInvalidGrantIsClassified(t *testing.T) {
 			if tokenType == models.TokenTypeBearer {
 				return nil, errors.New("no token for account 42")
 			}
-			return nil, errors.New("oauth provider: invalid_grant")
+			return nil, &OAuthTokenError{
+				StatusCode:  400,
+				Code:        "invalid_grant",
+				Description: "provider detail must remain redacted",
+			}
 		},
 	}
 
@@ -136,7 +140,7 @@ func TestRenewYouTubeToken_LegacyInvalidGrantIsClassified(t *testing.T) {
 	if len(types) != len(wantTypes) || types[0] != wantTypes[0] || types[1] != wantTypes[1] {
 		t.Fatalf("renew types: want %v, got %v", wantTypes, types)
 	}
-	if strings.Contains(err.Error(), "invalid_grant") {
+	if strings.Contains(err.Error(), "provider detail") {
 		t.Fatalf("redacted classification must not expose provider error text: %v", err)
 	}
 }

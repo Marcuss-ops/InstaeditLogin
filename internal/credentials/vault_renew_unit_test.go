@@ -288,18 +288,27 @@ func TestVault_Renew_NonLongLivedToken_NoRefreshToken_Errors(t *testing.T) {
 	}
 }
 
-// TestClassifyRefreshFailure_InvalidGrantSentinelAndFallback pins the P1
-// classification: the typed ErrInvalidGrant sentinel AND the legacy
-// "invalid_grant" string both map to reauth_required; everything else
-// stays a generic refresh failure.
-func TestClassifyRefreshFailure_InvalidGrantSentinelAndFallback(t *testing.T) {
+// TestClassifyRefreshFailure_InvalidGrantTypedErrors pins the P1
+// classification: both the domain sentinel and the provider's typed
+// OAuthTokenError map to reauth_required; an untyped string that merely
+// mentions invalid_grant does not.
+func TestClassifyRefreshFailure_InvalidGrantTypedErrors(t *testing.T) {
 	status, code := classifyRefreshFailure(fmt.Errorf("wrapped: %w", ErrInvalidGrant))
 	if status != models.AccountStatusReauthRequired || code != "invalid_grant" {
 		t.Errorf("sentinel: want (reauth_required, invalid_grant), got (%q, %q)", status, code)
 	}
-	status, code = classifyRefreshFailure(errors.New("oauth2.googleapis.com: invalid_grant (Token has been expired or revoked.)"))
+	providerErr := &OAuthTokenError{
+		StatusCode:  400,
+		Code:        "invalid_grant",
+		Description: "Token has been expired or revoked.",
+	}
+	status, code = classifyRefreshFailure(providerErr)
 	if status != models.AccountStatusReauthRequired || code != "invalid_grant" {
-		t.Errorf("string fallback: want (reauth_required, invalid_grant), got (%q, %q)", status, code)
+		t.Errorf("typed provider error: want (reauth_required, invalid_grant), got (%q, %q)", status, code)
+	}
+	status, code = classifyRefreshFailure(errors.New("oauth2.googleapis.com: invalid_grant"))
+	if status != "error" || code != "refresh_failed" {
+		t.Errorf("untyped string: want (error, refresh_failed), got (%q, %q)", status, code)
 	}
 	status, code = classifyRefreshFailure(errors.New("upstream 500"))
 	if status != "error" || code != "refresh_failed" {

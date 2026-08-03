@@ -296,27 +296,11 @@ func (r *Router) flagReauthAndRespond(w http.ResponseWriter, ctx context.Context
 		fmt.Sprintf("account validation failed (%s): %s", code, message))
 }
 
-// isInvalidGrantError classifies a vault.Renew / refresh failure as
-// "the operator must re-consent". Substring match on Google's
-// canonical "invalid_grant" error code (RFC 6749 §5.2). Same
-// fragility pattern as isHardRejection4xxStatus in the services
-// package: prefers stable error-shape strings to typed sentinels
-// because the upstream credential vault emits wrapped errors from
-// many sub-layers. Long-term fix: have vault.Renew return a
-// typed sentinel ErrInvalidGrant so callers can switch on errors.Is.
-// Tracked as follow-up; the string match is correct enough for
-// the 4-step pipeline's correctness today.
+// isInvalidGrantError classifies only the typed OAuth grant error. Provider
+// error strings are not stable classification contracts and must never be
+// parsed to decide whether an account needs reauthorization.
 func isInvalidGrantError(err error) bool {
-	if err == nil {
-		return false
-	}
-	// Typed sentinel first (the YouTube service wraps
-	// credentials.ErrInvalidGrant when Google's body says invalid_grant);
-	// the string fallback keeps older refreshers compatible.
-	if errors.Is(err, credentials.ErrInvalidGrant) {
-		return true
-	}
-	return strings.Contains(err.Error(), "invalid_grant")
+	return err != nil && errors.Is(err, credentials.ErrInvalidGrant)
 }
 
 // isGoogleTokenInfoRejection classifies a GetTokenInfo failure as

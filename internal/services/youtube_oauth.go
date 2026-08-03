@@ -327,16 +327,10 @@ func (s *YouTubeOAuthService) postTokenRequest(ctx context.Context, body url.Val
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		if oauthErrorCode(respBody) == "invalid_grant" {
-			// Typed classification: Google's RFC 6749 §5.2 invalid_grant
-			// means the stored grant is revoked/expired (refresh token
-			// revoked, rotated, or garbage-collected). Only the stable
-			// enum value is surfaced — never error_description, which can
-			// carry credential-adjacent material. Callers switch on
-			// errors.Is(err, credentials.ErrInvalidGrant).
-			return nil, fmt.Errorf("token exchange failed (status %d): %w", resp.StatusCode, credentials.ErrInvalidGrant)
-		}
-		return nil, fmt.Errorf("token exchange failed (status %d)", resp.StatusCode)
+		// Preserve the provider's stable OAuth error code in a typed,
+		// redacted error. OAuthTokenError.Unwrap maps invalid_grant to
+		// credentials.ErrInvalidGrant without exposing error_description.
+		return nil, credentials.ParseOAuthTokenError(resp.StatusCode, respBody)
 	}
 
 	var tr youtubeTokenResponse
@@ -344,19 +338,6 @@ func (s *YouTubeOAuthService) postTokenRequest(ctx context.Context, body url.Val
 		return nil, fmt.Errorf("token parse: %w", err)
 	}
 	return &tr, nil
-}
-
-// oauthErrorCode extracts the RFC 6749 §5.2 `error` field from a provider
-// token-endpoint error body. Returns "" when the body is not JSON or the
-// field is absent. Only the stable enum value is ever surfaced to callers.
-func oauthErrorCode(body []byte) string {
-	var envelope struct {
-		Error string `json:"error"`
-	}
-	if len(body) == 0 || json.Unmarshal(body, &envelope) != nil {
-		return ""
-	}
-	return envelope.Error
 }
 
 func (s *YouTubeOAuthService) getUserInfo(ctx context.Context, accessToken string) (*models.PlatformProfile, error) {

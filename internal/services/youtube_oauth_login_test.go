@@ -186,6 +186,16 @@ func TestYouTubeRefresh_InvalidGrantResponse_ClassifiedTyped(t *testing.T) {
 	if !errors.Is(err, credentials.ErrInvalidGrant) {
 		t.Errorf("RefreshOAuthToken: want wrapped credentials.ErrInvalidGrant, got %v", err)
 	}
+	var tokenErr *credentials.OAuthTokenError
+	if !errors.As(err, &tokenErr) {
+		t.Fatalf("RefreshOAuthToken: want OAuthTokenError, got %T: %v", err, err)
+	}
+	if tokenErr.StatusCode != http.StatusBadRequest || tokenErr.Code != "invalid_grant" {
+		t.Errorf("OAuthTokenError metadata: got status=%d code=%q", tokenErr.StatusCode, tokenErr.Code)
+	}
+	if strings.Contains(err.Error(), "Token has been expired or revoked") {
+		t.Errorf("RefreshOAuthToken leaked error_description: %v", err)
+	}
 }
 
 // TestYouTubeRefresh_Other400_NotClassifiedInvalidGrant proves the typed

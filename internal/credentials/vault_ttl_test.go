@@ -33,7 +33,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -65,11 +64,11 @@ func ttlAwareClosure(baseTime time.Time, appMode string, fc *fakeClock) TokenRef
 	return func(_ context.Context, refreshToken string) (*models.TokenData, error) {
 		elapsed := fc.Now().Sub(baseTime)
 		if appMode == "testing" && elapsed >= 7*24*time.Hour {
-			return nil, errors.New(
-				"oauth2: cannot fetch token: 400 Bad Request Response: " +
-					`{"error":"invalid_grant","error_description":"Token has been expired or revoked."}` +
-					" (status 400)",
-			)
+			return nil, &OAuthTokenError{
+				StatusCode:  400,
+				Code:        "invalid_grant",
+				Description: "Token has been expired or revoked.",
+			}
 		}
 		return &models.TokenData{
 			AccessToken:  "fresh-access-at-" + fc.Now().Format(time.RFC3339) + "-" + appMode,
@@ -242,11 +241,15 @@ func TestVault_Renew_TestingMode_T7d_FailsInvalidGrant(t *testing.T) {
 	if got != nil && got.AccessToken != "" {
 		t.Errorf("vault.Renew at T+7d / AppMode=testing MUST NOT return a fresh access_token; got AccessToken=%q", got.AccessToken)
 	}
-	if !strings.Contains(err.Error(), "invalid_grant") {
-		t.Errorf("Testing-mode T+7d error must mention invalid_grant (Google documented shape); Got=%v", err)
+	if !errors.Is(err, ErrInvalidGrant) {
+		t.Errorf("Testing-mode T+7d error must be typed invalid_grant; Got=%v", err)
 	}
-	if !strings.Contains(err.Error(), "(status 400)") {
-		t.Errorf("Testing-mode T+7d error must carry (status 400) prefix so isHardRejection4xxStatus routes to reauth; Got=%v", err)
+	var tokenErr *OAuthTokenError
+	if !errors.As(err, &tokenErr) {
+		t.Fatalf("Testing-mode T+7d error must preserve OAuthTokenError; Got=%v", err)
+	}
+	if tokenErr.StatusCode != 400 || tokenErr.Code != "invalid_grant" {
+		t.Errorf("Testing-mode T+7d error metadata: got status=%d code=%q", tokenErr.StatusCode, tokenErr.Code)
 	}
 }
 

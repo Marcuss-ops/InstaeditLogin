@@ -173,13 +173,10 @@ func (s *GoogleDriveOAuthService) RefreshOAuthToken(ctx context.Context, refresh
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		// Same typed classification as the YouTube path (P1): Google's
-		// RFC 6749 §5.2 invalid_grant means the stored grant is
-		// revoked/expired. Only the stable enum value is surfaced.
-		if oauthErrorCode(respBody) == "invalid_grant" {
-			return nil, fmt.Errorf("google drive refresh failed (status %d): %w", resp.StatusCode, credentials.ErrInvalidGrant)
-		}
-		return nil, fmt.Errorf("google drive refresh failed (status %d)", resp.StatusCode)
+		// Preserve Google's stable OAuth error code in the shared typed,
+		// redacted representation. invalid_grant unwraps to the common
+		// credentials.ErrInvalidGrant sentinel.
+		return nil, fmt.Errorf("google drive refresh: %w", credentials.ParseOAuthTokenError(resp.StatusCode, respBody))
 	}
 	var tr googleDriveTokenResponse
 	if err := json.Unmarshal(respBody, &tr); err != nil {
@@ -220,7 +217,7 @@ func (s *GoogleDriveOAuthService) exchangeCodeForToken(ctx context.Context, code
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token exchange failed (status %d)", resp.StatusCode)
+		return nil, credentials.ParseOAuthTokenError(resp.StatusCode, respBody)
 	}
 	var tr googleDriveTokenResponse
 	if err := json.Unmarshal(respBody, &tr); err != nil {

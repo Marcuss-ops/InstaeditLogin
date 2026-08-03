@@ -38,11 +38,9 @@ func (v *CredentialVault) extractRefreshMaterial(stored *models.Token, tokenType
 }
 
 func classifyRefreshFailure(err error) (status, code string) {
-	// Typed sentinel first (the YouTube/Drive services wrap
-	// ErrInvalidGrant when the provider body says invalid_grant); the
-	// string fallback keeps older call sites and test refreshers that
-	// still emit the literal working.
-	if errors.Is(err, ErrInvalidGrant) || strings.Contains(strings.ToLower(err.Error()), "invalid_grant") {
+	// Provider refreshers must propagate the typed sentinel. Never infer
+	// grant state from an unstable or provider-controlled error string.
+	if err != nil && errors.Is(err, ErrInvalidGrant) {
 		return models.AccountStatusReauthRequired, "invalid_grant"
 	}
 	return "error", "refresh_failed"

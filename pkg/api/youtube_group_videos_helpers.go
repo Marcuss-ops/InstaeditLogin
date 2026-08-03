@@ -108,7 +108,7 @@ func isInvalidYouTubeTokenError(err error) bool {
 		return true
 	}
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"invalid_grant", "status 401", "token expired", "token revoked"} {
+	for _, marker := range []string{"status 401", "token expired", "token revoked"} {
 		if strings.Contains(message, marker) {
 			return true
 		}

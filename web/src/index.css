@@ -308,6 +308,45 @@ html {
     animation: glow-breathe 4s ease-in-out infinite;
   }
 
+  /* =====================================================================
+   * GOLD GRADIENT TEXT + BREATHE — used for "multiple languages." in
+   * the Features scale card. Brighter amber than the plain inline
+   * gradient so the phrase pops against the dark card; the drop-shadow
+   * breathes like the red `.text-glow` treatment elsewhere on the page.
+   * ================================================================== */
+  .text-gradient-gold {
+    background: linear-gradient(135deg, #fde68a 0%, #fbbf24 45%, #f97316 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  @keyframes gold-breathe {
+    0%, 100% { filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.30)); }
+    50%      { filter: drop-shadow(0 0 20px rgba(251, 146, 60, 0.55)); }
+  }
+
+  .text-glow-gold {
+    animation: gold-breathe 4s ease-in-out infinite;
+  }
+
+  /* =====================================================================
+   * PROGRESS FILL — auto-dub status strip in the Features scale card.
+   * Base state is 0% wide; `.progress-fill-play` is added when the
+   * chart card scrolls into view so the bar fills in front of the user
+   * (delayed 0.5s to run after the chart lines have drawn).
+   * ================================================================== */
+  @keyframes progress-fill {
+    to { width: 100%; }
+  }
+
+  .progress-fill {
+    width: 0%;
+  }
+  .progress-fill-play {
+    animation: progress-fill 1.6s cubic-bezier(0.16, 1, 0.3, 1) 0.5s forwards;
+  }
+
   /* Honor user motion preferences — disable drift/pulse/fade-up so the
    * page is still readable for vestibular-sensitive visitors. The fade-up
    * exit state still "lands" instantly, no flash. */
@@ -321,11 +360,16 @@ html {
     .animate-float-y,
     .line-draw,
     .text-gradient-animated,
-    .text-glow {
+    .text-glow,
+    .text-glow-gold,
+    .progress-fill-play {
       animation: none !important;
       opacity: 1 !important;
       transform: none !important;
       stroke-dashoffset: 0 !important;
+    }
+    .progress-fill {
+      width: 100% !important;
     }
   }
 }

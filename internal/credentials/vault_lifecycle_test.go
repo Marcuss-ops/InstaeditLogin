@@ -71,13 +71,20 @@ func TestVault_Lifecycle_InvalidGrantMarksGrantReauthRequired(t *testing.T) {
 		WithArgs(accountID, models.AccountStatusReauthRequired, "invalid_grant").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	providerErr := errors.New("google token endpoint: invalid_grant (provider detail must not be persisted)")
+	providerErr := &OAuthTokenError{
+		StatusCode:  400,
+		Code:        "invalid_grant",
+		Description: "provider detail must not be persisted",
+	}
 	_, err := v.Renew(context.Background(), accountID, models.TokenTypeBearer,
 		func(context.Context, string) (*models.TokenData, error) {
 			return nil, providerErr
 		})
-	if err == nil || !errors.Is(err, providerErr) {
-		t.Fatalf("Renew error: want wrapped invalid_grant, got %v", err)
+	if err == nil || !errors.Is(err, ErrInvalidGrant) {
+		t.Fatalf("Renew error: want typed invalid_grant, got %v", err)
+	}
+	if errors.Is(err, providerErr) == false {
+		t.Fatalf("Renew error: want provider error preserved through wrapping, got %v", err)
 	}
 	if store.statusCalls != 1 {
 		t.Fatalf("grant status calls: want 1, got %d", store.statusCalls)

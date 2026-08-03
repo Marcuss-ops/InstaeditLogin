@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"net/http"
@@ -160,8 +161,8 @@ func TestIsInvalidYouTubeTokenError_DoesNotClassifyVaultOutage(t *testing.T) {
 	if isInvalidYouTubeTokenError(errors.New("vault: database unavailable")) {
 		t.Fatal("database outage must not mark an account for reauthentication")
 	}
-	if !isInvalidYouTubeTokenError(errors.New("oauth2: invalid_grant (token revoked)")) {
-		t.Fatal("invalid_grant must mark an account for reauthentication")
+	if !isInvalidYouTubeTokenError(fmt.Errorf("refresh failed: %w", credentials.ErrInvalidGrant)) {
+		t.Fatal("typed invalid_grant must mark an account for reauthentication")
 	}
 }
 
@@ -202,7 +203,7 @@ func TestGroupYouTubeVideos_InvalidTokenClassification(t *testing.T) {
 		message string
 		want    bool
 	}{
-		{message: "oauth: invalid_grant", want: true},
+		{message: "oauth: invalid_grant", want: false},
 		{message: "youtube list: status 401", want: true},
 		{message: "youtube list: status 500", want: false},
 		{message: "context deadline exceeded", want: false},
