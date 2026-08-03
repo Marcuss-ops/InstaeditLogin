@@ -13,9 +13,9 @@ import (
 )
 
 // TestRealBFFControlPath exercises Browser → InstaEdit BFF → Velox's
-// canonical /api/v1/instaedit/jobs boundary with the real HTTP client and
-// signed control JWT. The upstream is intentionally a narrow HTTP fake: it
-// proves the wire/auth ownership without requiring a running Velox process.
+// canonical /api/v1/jobs boundary with the real HTTP client and signed
+// control JWT. The upstream is intentionally a narrow HTTP fake: it proves
+// the wire/auth ownership without requiring a running Velox process.
 func TestRealBFFControlPath(t *testing.T) {
 	const secret = "01234567890123456789012345678901"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,9 +46,14 @@ func TestRealBFFControlPath(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode upstream body: %v", err)
 		}
-		for _, forbidden := range []string{"workspace_id", "user_id"} {
+		for _, forbidden := range []string{"workspace_id", "user_id", "project_id", "render_spec"} {
 			if _, present := body[forbidden]; present {
-				t.Fatalf("%s must be JWT-only, body=%#v", forbidden, body)
+				t.Fatalf("%s must be absent from canonical body, body=%#v", forbidden, body)
+			}
+		}
+		for _, required := range []string{"job_type", "template_id", "template_version", "video_name", "spec", "output", "delivery_plan"} {
+			if _, present := body[required]; !present {
+				t.Fatalf("canonical field %s missing from body=%#v", required, body)
 			}
 		}
 		if body["contract_version"] != "velox.job.v1" || body["idempotency_key"] != "instaedit:workspace_42:request_abc" {
@@ -57,7 +62,7 @@ func TestRealBFFControlPath(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": "job_123", "workspace_id": testWSID, "project_id": "project_123", "render_status": "PENDING",
+			"id": "job_123", "workspace_id": testWSID, "render_status": "PENDING",
 		})
 	}))
 	defer upstream.Close()
@@ -65,7 +70,8 @@ func TestRealBFFControlPath(t *testing.T) {
 	client := veloxclient.New(upstream.URL, secret)
 	mux := chi.NewRouter()
 	Register(mux, Deps{Client: client, AuthMiddleware: stubAuth})
-	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", `{"contract_version":"velox.job.v1","idempotency_key":"instaedit:workspace_42:request_abc","project_id":"project_123","render_spec":{"scenes":[{"text":"hello"}],"voiceover_paths":["velox-asset://audio"]},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_abc","metadata":{"title":"Hello"}}]}}`)
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"instaedit:workspace_42:request_abc","job_type":"scene.composite.v1","template_id":"audit.canonical","template_version":17,"video_name":"CANONICAL AUDIT","spec":{"scenes":[{"id":"one","text":"hello"}]},"output":{"width":1280,"height":720,"fps":24,"format":"mp4"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_abc","metadata":{"title":"Hello"}}]}}`
+	w := do(t, mux, http.MethodPost, "/api/v1/jobs", body)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("BFF status = %d, body=%s", w.Code, w.Body.String())
 	}

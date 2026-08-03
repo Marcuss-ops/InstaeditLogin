@@ -17,9 +17,8 @@ type JobOutput struct {
 }
 
 // JobSubmissionRequest is the strict canonical velox.job.v1 envelope used
-// by POST /api/v1/jobs. It deliberately has no legacy project_id or
-// render_spec fields; the existing /api/v1/velox/jobs route keeps using
-// CreateJobRequest during migration.
+// by POST /api/v1/jobs. It deliberately has no project_id or render_spec
+// compatibility fields.
 type JobSubmissionRequest struct {
 	ContractVersion string          `json:"contract_version"`
 	IdempotencyKey  string          `json:"idempotency_key"`

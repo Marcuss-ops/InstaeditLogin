@@ -3,7 +3,6 @@ package veloxjobs
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
@@ -39,44 +38,28 @@ func (c *submissionClient) GetAsset(context.Context, int64, int64, string) (*vel
 	return nil, nil
 }
 
-func TestSubmitLegacyPreservesRenderSpecAndForwardsThroughClient(t *testing.T) {
+func TestSubmitCanonicalForwardsCompiledSpec(t *testing.T) {
 	client := &submissionClient{job: &veloxcontract.Job{ID: "job_1", WorkspaceID: 42}}
-	service := NewSubmissionService(client, NewDefaultRegistry())
-	req := veloxcontract.CreateJobRequest{
+	service := NewJobSubmissionService(client, NewDefaultRegistry())
+	req := veloxcontract.JobSubmissionRequest{
 		ContractVersion: "velox.job.v1",
-		IdempotencyKey:  "legacy-1",
-		ProjectID:       "project-1",
-		RenderSpec:      json.RawMessage(`{"scenes":[{"text":"hello"}],"voiceover_paths":["asset://voice"]}`),
+		IdempotencyKey:  "canonical-1",
+		JobType:         "scene.composite.v1",
+		TemplateID:      "template-1",
+		TemplateVersion: 1,
+		VideoName:       "Canonical video",
+		Spec:            json.RawMessage(`{"scenes":[{"id":"one","text":"hello"}]}`),
+		Output:          &veloxcontract.JobOutput{Width: 1920, Height: 1080, FPS: 30, Format: "mp4"},
 		DeliveryPlan:    veloxcontract.DeliveryPlan{Destinations: []veloxcontract.DeliveryDestination{{ExternalDestinationID: "dest-1"}}},
 	}
-	result, err := service.SubmitLegacy(context.Background(), 42, 7, req)
+	result, err := service.SubmitCanonical(context.Background(), 42, 7, req)
 	if err != nil {
-		t.Fatalf("SubmitLegacy: %v", err)
+		t.Fatalf("SubmitCanonical: %v", err)
 	}
-	if result == nil || !result.Legacy || result.Job.ID != "job_1" {
+	if result == nil || result.Job.ID != "job_1" || result.JobType != req.JobType {
 		t.Fatalf("unexpected result: %+v", result)
 	}
-	if string(client.received.RenderSpec) != string(req.RenderSpec) {
-		t.Fatalf("legacy render_spec changed: got %s want %s", client.received.RenderSpec, req.RenderSpec)
-	}
-	if result.JobType != "legacy.render.v1" || result.Estimate.RenderUnits <= 0 {
-		t.Fatalf("legacy canonical pipeline metadata missing: %+v", result)
-	}
-}
-
-func TestSubmitLegacyRejectsInvalidRequestBeforeClient(t *testing.T) {
-	client := &submissionClient{job: &veloxcontract.Job{ID: "should-not-happen", WorkspaceID: 42}}
-	service := NewSubmissionService(client, NewDefaultRegistry())
-	_, err := service.SubmitLegacy(context.Background(), 42, 7, veloxcontract.CreateJobRequest{
-		ContractVersion: "velox.job.v1",
-		IdempotencyKey:  "legacy-invalid",
-		ProjectID:       "project-1",
-		RenderSpec:      json.RawMessage(`{}`),
-	})
-	if !errors.Is(err, ErrInvalidSubmission) {
-		t.Fatalf("error = %v, want ErrInvalidSubmission", err)
-	}
-	if client.received.ProjectID != "" {
-		t.Fatal("client should not receive invalid legacy request")
+	if len(client.received.Spec) == 0 || string(client.received.Spec) != string(req.Spec) {
+		t.Fatalf("canonical spec was not forwarded as expected: got %s want %s", client.received.Spec, req.Spec)
 	}
 }

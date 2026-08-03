@@ -12,7 +12,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxjobs"
-	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // listJobs implements GET /api/v1/velox/jobs.
@@ -63,78 +62,6 @@ func (b *bff) listJobs(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"jobs": safe,
 	})
-}
-
-// createJob implements POST /api/v1/velox/jobs.
-//
-// The body carries the canonical Velox job contract, project_id,
-// render_spec and delivery_plan.
-// workspace_id and user_id are read from the session identity and
-// forwarded to Velox via the signed Client call — they NEVER come
-// from the browser body.
-func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
-	outcome := metrics.LegacyJobOutcomeValidation
-	defer func() {
-		metrics.RecordLegacyJobEndpointUsage(metrics.LegacyJobEndpointVeloxJobs, outcome)
-	}()
-	wsID, userID, ok := b.requireIdentity(w, req)
-	if !ok {
-		outcome = metrics.LegacyJobOutcomeAuth
-		return
-	}
-	var body CreateJobRequest
-	decoder := json.NewDecoder(req.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&body); err != nil {
-		outcome = metrics.LegacyJobOutcomeBadRequest
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
-		return
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		outcome = metrics.LegacyJobOutcomeBadRequest
-		if err == nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON: multiple values")
-		} else {
-			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
-		}
-		return
-	}
-	result, err := b.submission.SubmitLegacy(req.Context(), wsID, userID, body)
-	if err != nil {
-		if errors.Is(err, veloxjobs.ErrInvalidSubmission) {
-			outcome = metrics.LegacyJobOutcomeValidation
-			writeError(w, http.StatusUnprocessableEntity, "validation: "+err.Error())
-			return
-		}
-		if errors.Is(err, veloxjobs.ErrNilJob) {
-			outcome = metrics.LegacyJobOutcomeUpstream
-			writeError(w, http.StatusInternalServerError, "upstream call failed")
-			return
-		}
-		if errors.Is(err, ErrWorkspaceMismatch) || errors.Is(err, ErrNotFound) {
-			outcome = metrics.LegacyJobOutcomeMismatch
-		} else {
-			outcome = metrics.LegacyJobOutcomeUpstream
-		}
-		slog.Error("velox bff: create job failed",
-			"workspace_id", wsID, "user_id", userID, "err", err)
-		mapClientError(w, err)
-		return
-	}
-	job := result.Job
-	// Defense-in-depth: verify the returned job belongs to the
-	// caller's workspace before returning 201. A misconfigured Velox
-	// could return a job stamped with a different workspace; reject
-	// it rather than leak a cross-tenant resource id.
-	if !verifyOwnership(w, job.WorkspaceID, wsID) {
-		outcome = metrics.LegacyJobOutcomeMismatch
-		return
-	}
-	outcome = metrics.LegacyJobOutcomeAccepted
-	slog.Info("velox bff: job created",
-		"job_id", job.ID, "workspace_id", wsID, "user_id", userID)
-	writeJSON(w, http.StatusAccepted, job)
 }
 
 // createCanonicalJob implements POST /api/v1/jobs with the strict

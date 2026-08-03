@@ -54,8 +54,7 @@ type (
 	Worker = veloxcontract.Worker
 	// Asset is the BFF view of a Velox artifact.
 	Asset = veloxcontract.Asset
-	// CreateJobRequest is the shared job body for the legacy BFF and
-	// canonical POST /api/v1/jobs routes.
+	// CreateJobRequest is the client DTO used by the canonical POST /api/v1/jobs route.
 	CreateJobRequest = veloxcontract.CreateJobRequest
 	// JobOutput is the canonical output block of velox.job.v1.
 	JobOutput = veloxcontract.JobOutput
@@ -104,7 +103,6 @@ type Deps struct {
 // Route table (explicit only — no catch-all):
 //
 //	GET    /api/v1/velox/jobs
-//	POST   /api/v1/velox/jobs       (legacy BFF-compatible path)
 //	POST   /api/v1/jobs             (canonical velox.job.v1 path)
 //	GET    /api/v1/velox/jobs/{id}
 //	POST   /api/v1/velox/jobs/{id}/cancel
@@ -129,7 +127,6 @@ func Register(mux chi.Router, deps Deps) {
 	wrap := deps.wrap
 
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs", wrap(b.listJobs))
-	mux.Method(http.MethodPost, "/api/v1/velox/jobs", wrap(b.createJob))
 	mux.Method(http.MethodPost, "/api/v1/jobs", wrap(b.createCanonicalJob))
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs/{id}", wrap(b.getJob))
 	mux.Method(http.MethodPost, "/api/v1/velox/jobs/{id}/cancel", wrap(b.cancelJob))

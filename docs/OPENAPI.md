@@ -71,9 +71,8 @@ endpoints. For the full recursive schema and all four examples, see
 `api/openapi.yaml` (`VeloxSceneSpec`, `VeloxSlideshowSpec`, and the
 `Velox*Job` examples).
 
-The existing `POST /api/v1/velox/jobs` route is migration-only and accepts
-the legacy `project_id` + `render_spec` adapter. New producers should use
-`POST /api/v1/jobs`.
+The former migration-only `POST /api/v1/velox/jobs` route has been removed.
+All producers must use `POST /api/v1/jobs`.
 
 ### Canonical job responses
 

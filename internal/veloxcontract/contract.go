@@ -89,11 +89,9 @@ type Asset struct {
 	DownloadURL string `json:"download_url,omitempty"`
 }
 
-// CreateJobRequest is the shared client DTO for job creation. The
-// HTTP legacy route POST /api/v1/velox/jobs decodes this type, but its
-// custom unmarshaler rejects canonical-only fields so a canonical and
-// legacy payload cannot be silently mixed. The canonical route adapts
-// JobSubmissionRequest into this DTO after strict validation.
+// CreateJobRequest is the shared client DTO for canonical job creation.
+// The canonical route adapts JobSubmissionRequest into this DTO after
+// strict validation.
 // workspace_id and user_id are NOT in this body; the handler reads
 // them from the session identity.
 type CreateJobRequest struct {
@@ -101,7 +99,7 @@ type CreateJobRequest struct {
 	IdempotencyKey  string `json:"idempotency_key"`
 
 	// Canonical velox.job.v1 fields. They are pointers/raw JSON so the
-	// legacy BFF payload can continue to omit them during migration.
+	// client can preserve exact presence and nested JSON semantics.
 	JobType         string          `json:"job_type,omitempty"`
 	TemplateID      string          `json:"template_id,omitempty"`
 	TemplateVersion int             `json:"template_version,omitempty"`
@@ -109,17 +107,16 @@ type CreateJobRequest struct {
 	Spec            json.RawMessage `json:"spec,omitempty"`
 	Output          *JobOutput      `json:"output,omitempty"`
 
-	// Legacy BFF fields. These remain wire-compatible for
-	// /api/v1/velox/jobs until callers migrate to /api/v1/jobs.
+	// Downstream response-compatible fields retained by the shared client
+	// DTO until the Velox InstaEdit handler consumes the canonical envelope
+	// directly.
 	ProjectID    string          `json:"project_id,omitempty"`
 	RenderSpec   json.RawMessage `json:"render_spec,omitempty"`
 	DeliveryPlan DeliveryPlan    `json:"delivery_plan"`
 }
 
-// UnmarshalJSON keeps the migration boundary explicit. CreateJobRequest
-// remains the internal DTO accepted by the Velox client, but the legacy
-// HTTP endpoint must not accept canonical fields and then treat them as
-// optional data. Canonical callers use JobSubmissionRequest instead.
+// UnmarshalJSON keeps the canonical client DTO strict and prevents
+// accidental mixing of envelope shapes at the client boundary.
 func (r *CreateJobRequest) UnmarshalJSON(data []byte) error {
 	type plain CreateJobRequest
 	var envelope struct {
@@ -144,7 +141,7 @@ func (r *CreateJobRequest) UnmarshalJSON(data []byte) error {
 		"output":           envelope.Output,
 	} {
 		if len(value) != 0 {
-			return errors.New("canonical field " + name + " is not allowed on the legacy job endpoint")
+			return errors.New("canonical field " + name + " cannot be decoded into the client DTO")
 		}
 	}
 	*r = CreateJobRequest(*envelope.plain)
