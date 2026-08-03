@@ -193,6 +193,82 @@ func TestMigration094_ThumbnailProjectModuleReferencesAndConstraints(t *testing.
 	}
 }
 
+func TestMigration097_AllowsDuplicateSnapshotHashesForExplicitRestore(t *testing.T) {
+	db, cleanup := postgres.StartTestPostgres(t)
+	defer cleanup()
+
+	if err := RunMigrationsUpTo(db, 97); err != nil {
+		t.Fatalf("RunMigrationsUpTo(97): %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO users (id, email, name)
+		VALUES (9701, 'thumbnail-097@example.test', 'Thumbnail 097')
+	`); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO workspaces (id, name, owner_id)
+		VALUES (9701, 'Thumbnail 097 workspace', 9701)
+	`); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO thumbnail_projects
+		    (id, workspace_id, created_by, name, canvas_width, canvas_height)
+		VALUES ('thumbproj-097-a', 9701, 9701, 'Restore test', 1920, 1080)
+	`); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+
+	var hashConstraintExists bool
+	if err := db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1
+			  FROM pg_constraint
+			 WHERE conrelid = 'thumbnail_project_revisions'::regclass
+			   AND conname = 'thumbnail_project_revisions_project_hash_uq'
+		)
+	`).Scan(&hashConstraintExists); err != nil {
+		t.Fatalf("check hash constraint: %v", err)
+	}
+	if hashConstraintExists {
+		t.Fatal("migration 097 left the snapshot hash uniqueness constraint in place")
+	}
+
+	const revisionInsert = `
+		INSERT INTO thumbnail_project_revisions
+		    (id, project_id, revision_number, schema_version, snapshot_json,
+		     snapshot_sha256, renderer_version, created_by)
+		VALUES ($1, 'thumbproj-097-a', $2, 1, '{"canvas":{},"objects":[]}'::jsonb,
+		        decode(repeat('aa', 32), 'hex'), 'renderer-1', 9701)
+	`
+	if _, err := db.Exec(revisionInsert, "thumbrev-097-a", 1); err != nil {
+		t.Fatalf("insert original revision: %v", err)
+	}
+	if _, err := db.Exec(revisionInsert, "thumbrev-097-restore", 2); err != nil {
+		t.Fatalf("insert restored revision with duplicate hash: %v", err)
+	}
+
+	var revisions int
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		  FROM thumbnail_project_revisions
+		 WHERE project_id = 'thumbproj-097-a'
+		   AND snapshot_sha256 = decode(repeat('aa', 32), 'hex')
+	`).Scan(&revisions); err != nil {
+		t.Fatalf("count duplicate-hash revisions: %v", err)
+	}
+	if revisions != 2 {
+		t.Fatalf("duplicate-hash revision count = %d, want 2", revisions)
+	}
+
+	if _, err := db.Exec(revisionInsert, "thumbrev-097-duplicate-number", 2); err == nil {
+		t.Fatal("migration 097 incorrectly removed revision-number uniqueness")
+	} else if !strings.Contains(err.Error(), "thumbnail_project_revisions_project_revision_uq") {
+		t.Fatalf("duplicate revision number error does not mention expected constraint: %v", err)
+	}
+}
+
 func TestMigration094_RollsBackAllChangesWhenMigrationFails(t *testing.T) {
 	db, cleanup := postgres.StartTestPostgres(t)
 	defer cleanup()

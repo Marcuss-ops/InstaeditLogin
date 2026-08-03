@@ -19,7 +19,7 @@ func TestThumbnailProjectRepository_SaveSnapshot_DeduplicatesWithoutAdvancingVer
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT version, status`).WithArgs(int64(7), "thumbproj_test").
 		WillReturnRows(sqlmock.NewRows([]string{"version", "status"}).AddRow(2, "draft"))
-	mock.ExpectQuery(`SELECT id, project_id, revision_number`).WithArgs("thumbproj_test", sqlmock.AnyArg()).
+	mock.ExpectQuery(`SELECT id, project_id, revision_number.*ORDER BY revision_number DESC LIMIT 1`).WithArgs("thumbproj_test", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "revision_number", "schema_version", "snapshot_json", "snapshot_sha256", "renderer_version", "created_by", "created_at"}).
 			AddRow("thumbrev_existing", "thumbproj_test", 1, 1, []byte(`{"canvas":{},"objects":[]}`), make([]byte, 32), "renderer-1", 11, now))
 	mock.ExpectCommit()
