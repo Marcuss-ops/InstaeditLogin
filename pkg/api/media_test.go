@@ -28,6 +28,10 @@ type mockMediaStore struct {
 	errOnFind    error
 	errOnMarkRdy error
 	errOnList    error
+	// visibleInWorkspace maps workspaceID → userIDs whose ready media
+	// is resolvable by that workspace. Empty by default (nothing
+	// visible) so cross-workspace blocking is the safe default.
+	visibleInWorkspace map[int64][]int64
 }
 
 func newMockMediaStore() *mockMediaStore {
@@ -113,6 +117,32 @@ func (m *mockMediaStore) ListReadyByUser(_ context.Context, userID int64, limit 
 	}
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
+	}
+	return out, nil
+}
+
+// ListVisibleInWorkspace mimics the repo's workspace-membership filter:
+// ready, non-expired assets in mediaIDs whose owner is in the mock's
+// per-workspace allowlist (visibleInWorkspace).
+func (m *mockMediaStore) ListVisibleInWorkspace(_ context.Context, workspaceID int64, mediaIDs []string) ([]models.MediaAsset, error) {
+	if m.errOnList != nil {
+		return nil, m.errOnList
+	}
+	allowedSet := make(map[int64]bool)
+	for _, uid := range m.visibleInWorkspace[workspaceID] {
+		allowedSet[uid] = true
+	}
+	wanted := make(map[string]bool, len(mediaIDs))
+	for _, id := range mediaIDs {
+		wanted[id] = true
+	}
+	var out []models.MediaAsset
+	for _, a := range m.assets {
+		if a.Status == models.MediaAssetStatusReady &&
+			!time.Now().After(a.ExpiresAt) &&
+			wanted[a.ID] && allowedSet[a.UserID] {
+			out = append(out, *a)
+		}
 	}
 	return out, nil
 }

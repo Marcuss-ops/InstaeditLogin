@@ -36,6 +36,7 @@
 import { authedFetch, ApiError } from "../../../lib/auth";
 import type {
   ProjectVersionConflict,
+  ResolvedProjectMedia,
   ThumbnailExport,
   ThumbnailProject,
   ThumbnailProjectAssignment,
@@ -342,6 +343,34 @@ export async function createThumbnailAssignments(
     | undefined;
   if (Array.isArray(data)) return data;
   return data?.items ?? [];
+}
+
+// ─── Media resolver ────────────────────────────────────────────────
+
+export interface ResolveThumbnailProjectMediaResponse {
+  items?: ResolvedProjectMedia[];
+}
+
+/**
+ * POST /api/v1/thumbnail-projects/{id}/media/resolve — resolves the
+ * snapshot's media_id references to short-lived presigned GET URLs.
+ * Server-authoritative (never local blobs); cross-workspace, not-ready,
+ * or expired assets are omitted by the server, so an absent media_id in
+ * the result means "unresolvable" — the editor must not fall back to a
+ * local blob.
+ */
+export async function resolveThumbnailProjectMedia(
+  workspaceId: number,
+  projectId: string,
+  mediaIds: string[],
+  init: RequestInit = {},
+): Promise<ResolvedProjectMedia[]> {
+  const resp = await authedFetch(
+    withWorkspace(`${projectPath(projectId)}/media/resolve`, workspaceId),
+    { method: "POST", body: JSON.stringify({ media_ids: mediaIds }), ...init },
+  );
+  const data = (await resp.json()) as ResolveThumbnailProjectMediaResponse;
+  return data.items ?? [];
 }
 
 // ─── 409 PROJECT_VERSION_CONFLICT helpers ─────────────────────────

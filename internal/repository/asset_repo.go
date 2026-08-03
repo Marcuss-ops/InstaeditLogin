@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/lib/pq"
+
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
@@ -138,6 +140,55 @@ func (r *MediaAssetRepository) ListReadyByUser(ctx context.Context, userID int64
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate media assets: %w", err)
+	}
+	return result, nil
+}
+
+// ListVisibleInWorkspace returns the ready, non-expired media assets
+// among mediaIDs that are visible to the workspace: the asset owner is
+// the workspace owner OR a workspace member. Missing, foreign,
+// not-ready, or expired assets are simply omitted — the same
+// membership semantics CreateAsset enforces for thumbnail project
+// assets, so a snapshot can never resolve a cross-workspace image.
+// Backs the thumbnail media resolver endpoint.
+func (r *MediaAssetRepository) ListVisibleInWorkspace(ctx context.Context, workspaceID int64, mediaIDs []string) ([]models.MediaAsset, error) {
+	if workspaceID <= 0 {
+		return nil, fmt.Errorf("list visible media assets: invalid workspace id %d", workspaceID)
+	}
+	if len(mediaIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+mediaAssetColumns+`
+		   FROM media_assets ma
+		  WHERE ma.id = ANY($2::uuid[])
+		    AND ma.status = $3
+		    AND ma.expires_at > NOW()
+		    AND EXISTS (
+			    SELECT 1 FROM workspaces w
+			     WHERE w.id = $1 AND (
+				     w.owner_id = ma.user_id OR EXISTS (
+					     SELECT 1 FROM workspace_members wm
+					      WHERE wm.workspace_id = w.id AND wm.user_id = ma.user_id
+				     )
+			     )
+		    )
+		  ORDER BY ma.created_at DESC, ma.id`,
+		workspaceID, pq.Array(mediaIDs), string(models.MediaAssetStatusReady))
+	if err != nil {
+		return nil, fmt.Errorf("list visible media assets: %w", err)
+	}
+	defer rows.Close()
+	var result []models.MediaAsset
+	for rows.Next() {
+		asset, scanErr := scanMediaAsset(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan visible media asset: %w", scanErr)
+		}
+		result = append(result, *asset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate visible media assets: %w", err)
 	}
 	return result, nil
 }

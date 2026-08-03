@@ -49,8 +49,6 @@ const maxRenderImageAssetBytes = 32 << 20
 // or unresolvable media reference) from infrastructure failures.
 var (
 	errRenderMediaNotFound = errors.New("thumbnail render: media asset not found")
-	errRenderMediaNotReady = errors.New("thumbnail render: media asset is not ready")
-	errRenderMediaExpired  = errors.New("thumbnail render: media asset is expired")
 	errRenderMediaFetch    = errors.New("thumbnail render: failed to fetch media asset bytes")
 )
 
@@ -169,7 +167,7 @@ func (r *Router) handleRenderThumbnailProject(w http.ResponseWriter, req *http.R
 		if o.Type != "image" || !o.Visible {
 			continue
 		}
-		data, rerr := r.fetchRenderMediaBytes(req.Context(), userID, o.MediaID)
+		data, rerr := r.fetchRenderMediaBytes(req.Context(), workspaceID, o.MediaID)
 		if rerr != nil {
 			writeRenderMediaError(w, rerr)
 			return
@@ -279,25 +277,21 @@ func (r *Router) handleRenderThumbnailProject(w http.ResponseWriter, req *http.R
 }
 
 // fetchRenderMediaBytes downloads the bytes of a ready, non-expired
-// media asset owned by userID via a fresh presigned GET URL.
-func (r *Router) fetchRenderMediaBytes(ctx context.Context, userID int64, mediaID string) ([]byte, error) {
-	asset, err := r.mediaStore.FindByID(mediaID)
+// media asset visible to the workspace via a fresh presigned GET URL.
+// Workspace membership (owner OR member) is enforced by the repository
+// filter — the SAME semantics as the media resolver — so an image the
+// editor can display is always renderable (a member-shared image never
+// fails at render time). Missing/foreign/not-ready/expired assets are
+// indistinguishable, so cross-workspace rows leak nothing.
+func (r *Router) fetchRenderMediaBytes(ctx context.Context, workspaceID int64, mediaID string) ([]byte, error) {
+	assets, err := r.mediaStore.ListVisibleInWorkspace(ctx, workspaceID, []string{mediaID})
 	if err != nil {
 		return nil, fmt.Errorf("%w: lookup %s: %v", errRenderMediaFetch, mediaID, err)
 	}
-	if asset == nil {
+	if len(assets) == 0 {
 		return nil, fmt.Errorf("%w: %s", errRenderMediaNotFound, mediaID)
 	}
-	if asset.UserID != userID {
-		// Do not leak existence across users/workspaces.
-		return nil, fmt.Errorf("%w: %s", errRenderMediaNotFound, mediaID)
-	}
-	if asset.Status != models.MediaAssetStatusReady {
-		return nil, fmt.Errorf("%w: %s (status=%s)", errRenderMediaNotReady, mediaID, asset.Status)
-	}
-	if time.Now().After(asset.ExpiresAt) {
-		return nil, fmt.Errorf("%w: %s", errRenderMediaExpired, mediaID)
-	}
+	asset := &assets[0]
 	url, err := r.storageProvider.GetObject(ctx, asset.UploadKey, renderMediaFetchTTL)
 	if err != nil {
 		return nil, fmt.Errorf("%w: sign %s: %v", errRenderMediaFetch, mediaID, err)
@@ -333,10 +327,7 @@ func (r *Router) fetchRenderMediaBytes(ctx context.Context, userID int64, mediaI
 // whether a foreign asset exists.
 func writeRenderMediaError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errRenderMediaNotFound),
-		errors.Is(err, errRenderMediaNotReady),
-		errors.Is(err, errRenderMediaExpired),
-		errors.Is(err, errRenderMediaFetch):
+	case errors.Is(err, errRenderMediaNotFound), errors.Is(err, errRenderMediaFetch):
 		writeError(w, http.StatusUnprocessableEntity, "thumbnail render: referenced media asset is unavailable")
 	default:
 		writeError(w, http.StatusUnprocessableEntity, err.Error())

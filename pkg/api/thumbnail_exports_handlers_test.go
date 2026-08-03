@@ -144,6 +144,7 @@ func TestThumbnailRender_ImageObjectResolvedFromMediaStore(t *testing.T) {
 		SizeBytes: int64(len(redPNG)), Status: models.MediaAssetStatusReady,
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
+	media.visibleInWorkspace = map[int64][]int64{7: {1}}
 	store := &thumbnailProjectTestStore{
 		project: defaultRenderProject(),
 		revision: &models.ThumbnailProjectRevision{
@@ -173,6 +174,8 @@ func TestThumbnailRender_ImageFromAnotherUserIsRejected(t *testing.T) {
 		UploadKey: "uploads/999/img.png", ContentType: "image/png",
 		SizeBytes: 8, Status: models.MediaAssetStatusReady, ExpiresAt: time.Now().Add(time.Hour),
 	}
+	// User 999 is neither the workspace owner nor a member → blocked.
+	media.visibleInWorkspace = map[int64][]int64{7: {1}}
 	store := &thumbnailProjectTestStore{
 		project: defaultRenderProject(),
 		revision: &models.ThumbnailProjectRevision{
@@ -188,6 +191,39 @@ func TestThumbnailRender_ImageFromAnotherUserIsRejected(t *testing.T) {
 	r.Setup().ServeHTTP(w, req)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("want 422 for foreign media, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestThumbnailRender_MemberSharedImageRenders(t *testing.T) {
+	// A workspace member (user 2) uploaded the image; the workspace
+	// allowlist includes the member, so the render must succeed — the
+	// same membership semantics as the media resolver. Without this,
+	// the editor could display an image the renderer refuses.
+	redPNG := encodeTestPNG(t, 4, 4, 0, 255, 0)
+	media := newMockMediaStore()
+	media.assets["11111111-1111-4111-8111-111111111111"] = &models.MediaAsset{
+		ID: "11111111-1111-4111-8111-111111111111", UserID: 2,
+		UploadKey: "uploads/2/img.png", ContentType: "image/png",
+		SizeBytes: int64(len(redPNG)), Status: models.MediaAssetStatusReady,
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	media.visibleInWorkspace = map[int64][]int64{7: {1, 2}}
+	store := &thumbnailProjectTestStore{
+		project: defaultRenderProject(),
+		revision: &models.ThumbnailProjectRevision{
+			ID: "rev-1", ProjectID: "thumbproj_test", RevisionNumber: 1, SchemaVersion: 1,
+			SnapshotJSON:    json.RawMessage(`{"canvas":{"width":64,"height":64,"background":"#000"},"objects":[{"id":"i1","type":"image","media_id":"11111111-1111-4111-8111-111111111111","x":8,"y":8,"width":32,"height":32}]}`),
+			RendererVersion: "renderer-1",
+		},
+	}
+	r := thumbnailRenderRouter(t, store, media, newMockStorageProvider(), workspaceOwnerStore(1),
+		stubRoundTripper{status: http.StatusOK, body: redPNG})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_test/render?workspace_id=7", bytes.NewBufferString(`{}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201 for member-shared media, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

@@ -137,6 +137,20 @@ export interface ThumbnailProjectAssignment {
   updated_at: string;
 }
 
+/**
+ * One media reference resolved by the server (never a local blob). The
+ * editor resolves every snapshot media_id through the media resolver
+ * endpoint; the URL is a short-lived presigned GET.
+ */
+export interface ResolvedProjectMedia {
+  media_id: string;
+  /** Short-lived presigned GET URL (15 min). */
+  url: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+}
+
 /** Error body the server returns on optimistic-concurrency conflicts. */
 export interface ProjectVersionConflict {
   code: "PROJECT_VERSION_CONFLICT";

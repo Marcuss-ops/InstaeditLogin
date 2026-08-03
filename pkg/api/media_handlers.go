@@ -34,6 +34,12 @@ type MediaStore interface {
 	// assets newest-first (bounded by limit). Backs the Media Library
 	// endpoint (GET /api/v1/media) and the live wizard's step 3.
 	ListReadyByUser(ctx context.Context, userID int64, limit int) ([]models.MediaAsset, error)
+	// ListVisibleInWorkspace returns the ready, non-expired media
+	// assets among mediaIDs that are visible to the workspace (owned
+	// by the workspace owner or by a workspace member). Missing,
+	// foreign, not-ready, or expired assets are omitted. Backs the
+	// thumbnail media resolver: cross-workspace assets never resolve.
+	ListVisibleInWorkspace(ctx context.Context, workspaceID int64, mediaIDs []string) ([]models.MediaAsset, error)
 }
 
 // WithMediaStore injects the media-asset repository into the router.

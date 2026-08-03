@@ -39,6 +39,7 @@ import {
   listThumbnailRevisions,
   parseProjectVersionConflict,
   renderThumbnailProject,
+  resolveThumbnailProjectMedia,
   restoreThumbnailRevision,
   saveThumbnailSnapshot,
   toProjectVersionConflictError,
@@ -349,6 +350,47 @@ describe("createThumbnailAssignments", () => {
       targets: [{ platform_account_id: 1, youtube_video_id: "v" }],
     });
     expect(assignments).toEqual([ASSIGNMENT]);
+  });
+});
+
+// ─── Media resolver ───────────────────────────────────────────────
+
+describe("resolveThumbnailProjectMedia", () => {
+  it("POSTs media_ids to /media/resolve with workspace_id and returns items", async () => {
+    authedFetchMock.mockResolvedValue(
+      jsonResponse({
+        items: [
+          {
+            media_id: "00000000-0000-4000-8000-000000000001",
+            url: "https://cdn.example/x?X-Amz-Signature=abc",
+            content_type: "image/jpeg",
+            size_bytes: 2048,
+            created_at: "2026-08-03T00:00:00Z",
+          },
+        ],
+      }),
+    );
+    const items = await resolveThumbnailProjectMedia(7, "thumbproj_1", [
+      "00000000-0000-4000-8000-000000000001",
+    ]);
+    const [path, init] = authedFetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe(
+      "/api/v1/thumbnail-projects/thumbproj_1/media/resolve?workspace_id=7",
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      media_ids: ["00000000-0000-4000-8000-000000000001"],
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toContain("X-Amz-Signature");
+  });
+
+  it("returns [] when the server omits items", async () => {
+    authedFetchMock.mockResolvedValue(jsonResponse({}));
+    const items = await resolveThumbnailProjectMedia(7, "thumbproj_1", [
+      "00000000-0000-4000-8000-000000000001",
+    ]);
+    expect(items).toEqual([]);
   });
 });
 
