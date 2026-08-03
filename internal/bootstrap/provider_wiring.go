@@ -43,6 +43,7 @@ func buildProviderWiring(s *wireState) error {
 	// and channel binder; it never persists the returned access token.
 	if ytp, ok := s.capRouter.Get(models.PlatformYouTube); ok {
 		if ytOAuth, typeOK := ytp.(*services.YouTubeOAuthService); typeOK {
+			s.youtubeLiveGateway = services.NewYouTubeLiveGatewayForService(ytOAuth)
 			s.youtubeCredentialResolver = services.NewYouTubeCredentialResolver(services.YouTubeCredentialResolverDeps{
 				Accounts:    s.userRepo,
 				Workspaces:  s.workspaceRepo,

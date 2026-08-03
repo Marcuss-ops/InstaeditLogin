@@ -122,6 +122,7 @@ type App struct {
 	// YouTubeCredentialResolver is the shared runtime-only credential
 	// boundary for YouTube Live workers and services.
 	YouTubeCredentialResolver *services.YouTubeCredentialResolver
+	YouTubeLiveGateway        services.YouTubeLiveGateway
 }
 
 // Wire connects to the database, builds every shared dependency, and
@@ -158,5 +159,6 @@ func Wire(ctx context.Context) (*App, error) {
 		StorageProvider: s.storageProvider, SessionsSvc: s.sessionsSvc,
 		OneTimeCodes: s.oneTimeCodes, Encryptor: s.enc,
 		YouTubeCredentialResolver: s.youtubeCredentialResolver,
+		YouTubeLiveGateway:        s.youtubeLiveGateway,
 	}, nil
 }
