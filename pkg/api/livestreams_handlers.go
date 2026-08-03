@@ -102,6 +102,71 @@ func parseOptionalRFC3339(s *string) (*time.Time, error) {
 	return &t, nil
 }
 
+// validateLivestreamCategory accepts an empty value (no category) or
+// a known YouTube numeric category id (e.g. "24" = Entertainment).
+// YouTube remains the authority at broadcast creation time; this is a
+// local sanity gate so the wizard's select never round-trips a bogus id.
+func validateLivestreamCategory(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	if !models.ValidLivestreamCategory(s) {
+		return "", fmt.Errorf("category must be a known YouTube category id (or empty)")
+	}
+	return s, nil
+}
+
+// validateLivestreamLanguage accepts an empty value or an ISO 639-1 /
+// BCP-47 language code (light sanity gate; YouTube validates fully).
+func validateLivestreamLanguage(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	if utf8.RuneCountInString(s) > models.LivestreamLanguageMaxRunes {
+		return "", fmt.Errorf("language must be at most %d characters", models.LivestreamLanguageMaxRunes)
+	}
+	if err := models.CheckBCP47Like("language", s); err != nil {
+		return "", err
+	}
+	return s, nil
+}
+
+// validateLivestreamLatency accepts an empty value (→ default normal)
+// or one of normal / low / ultraLow.
+func validateLivestreamLatency(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return models.LivestreamLatencyNormal, nil
+	}
+	if !models.ValidLivestreamLatency(s) {
+		return "", fmt.Errorf("latency_preference must be one of normal, low, ultraLow")
+	}
+	return s, nil
+}
+
+// normalizeLivestreamThumbnail trims and bounds the optional cover
+// asset id. An empty/absent value yields nil (no cover). The
+// authoritative existence / readiness / ownership check happens at
+// prepare time in the worker; here we only run a length sanity gate.
+// TODO(livestream-worker): validate the referenced media_assets row
+// (exists, status=ready, owned by the workspace user) like
+// resolveMediaAssets does, before mapping it onto the broadcast.
+func normalizeLivestreamThumbnail(s *string) (*string, error) {
+	if s == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*s)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if utf8.RuneCountInString(trimmed) > 64 {
+		return nil, errors.New("thumbnail_media_id is too long")
+	}
+	return &trimmed, nil
+}
+
 // livestreamLiveScopes are the OAuth scopes that unlock the YouTube
 // Live Streaming API. New grants always include youtube.force-ssl;
 // grants issued before the scope cleanup may only carry youtube. Both
@@ -367,6 +432,42 @@ func (r *Router) handleCreateLivestream(w http.ResponseWriter, req *http.Request
 	if payload.AutoRestart != nil {
 		autoRestart = *payload.AutoRestart
 	}
+	category, err := validateLivestreamCategory(payload.Category)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	language, err := validateLivestreamLanguage(payload.Language)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	latency, err := validateLivestreamLatency(payload.LatencyPreference)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	thumbnail, err := normalizeLivestreamThumbnail(payload.ThumbnailMediaID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	madeForKids := false
+	if payload.MadeForKids != nil {
+		madeForKids = *payload.MadeForKids
+	}
+	dvrEnabled := false
+	if payload.DVREnabled != nil {
+		dvrEnabled = *payload.DVREnabled
+	}
+	autoStart := false
+	if payload.AutoStart != nil {
+		autoStart = *payload.AutoStart
+	}
+	autoStop := false
+	if payload.AutoStop != nil {
+		autoStop = *payload.AutoStop
+	}
 
 	now := time.Now().UTC()
 	ls := &models.Livestream{
@@ -385,6 +486,14 @@ func (r *Router) handleCreateLivestream(w http.ResponseWriter, req *http.Request
 		Resolution:        resolution,
 		FrameRate:         frameRate,
 		AutoRestart:       autoRestart,
+		Category:          category,
+		MadeForKids:       madeForKids,
+		Language:          language,
+		ThumbnailMediaID:  thumbnail,
+		DVREnabled:        dvrEnabled,
+		AutoStart:         autoStart,
+		AutoStop:          autoStop,
+		LatencyPreference: latency,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -516,6 +625,50 @@ func (r *Router) handlePatchLivestream(w http.ResponseWriter, req *http.Request)
 	}
 	if payload.AutoRestart != nil {
 		ls.AutoRestart = *payload.AutoRestart
+	}
+	if payload.Category != nil {
+		category, err := validateLivestreamCategory(*payload.Category)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		ls.Category = category
+	}
+	if payload.MadeForKids != nil {
+		ls.MadeForKids = *payload.MadeForKids
+	}
+	if payload.Language != nil {
+		language, err := validateLivestreamLanguage(*payload.Language)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		ls.Language = language
+	}
+	if payload.ThumbnailMediaID != nil {
+		thumbnail, err := normalizeLivestreamThumbnail(payload.ThumbnailMediaID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		ls.ThumbnailMediaID = thumbnail
+	}
+	if payload.DVREnabled != nil {
+		ls.DVREnabled = *payload.DVREnabled
+	}
+	if payload.AutoStart != nil {
+		ls.AutoStart = *payload.AutoStart
+	}
+	if payload.AutoStop != nil {
+		ls.AutoStop = *payload.AutoStop
+	}
+	if payload.LatencyPreference != nil {
+		latency, err := validateLivestreamLatency(*payload.LatencyPreference)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		ls.LatencyPreference = latency
 	}
 	if ls.ScheduleType == models.LivestreamScheduleScheduled && ls.ScheduledStartAt == nil {
 		writeError(w, http.StatusBadRequest, "scheduled_start_at is required when schedule_type is scheduled")

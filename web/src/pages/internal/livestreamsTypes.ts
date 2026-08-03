@@ -24,6 +24,18 @@ export type LivestreamRow = {
   resolution: string; // 720p30 | 1080p30
   frame_rate: number;
   auto_restart: boolean;
+  /** YouTube numeric category id (empty = none). */
+  category: string;
+  made_for_kids: boolean;
+  /** ISO 639-1 / BCP-47 code (empty = none). */
+  language: string;
+  /** media_assets.id of the uploaded cover (wizard Carica immagine). */
+  thumbnail_media_id?: string | null;
+  dvr_enabled: boolean;
+  auto_start: boolean;
+  auto_stop: boolean;
+  /** normal | low | ultraLow */
+  latency_preference: string;
   created_at: string;
   updated_at: string;
 };
@@ -67,3 +79,90 @@ export type LivestreamSummary = {
   reconnecting: number;
   errors: number;
 };
+
+/**
+ * Step-2 wizard form state (Configurazione YouTube). Lifted to the
+ * page so back → forward preserves the entries; steps 3–5 (contenuti,
+ * riproduzione, riepilogo) consume it when they land.
+ */
+export type LivestreamStep2Form = {
+  title: string;
+  description: string;
+  privacy: "private" | "unlisted" | "public";
+  category: string; // YouTube numeric id, "" = none
+  madeForKids: boolean;
+  language: string; // ISO 639-1 code, "" = none
+  thumbnailMediaId: string | null;
+  dvr: boolean;
+  autoStart: boolean;
+  autoStop: boolean;
+  latency: "normal" | "low" | "ultraLow";
+};
+
+export const EMPTY_STEP2_FORM: LivestreamStep2Form = {
+  title: "",
+  description: "",
+  privacy: "unlisted",
+  category: "",
+  madeForKids: false,
+  language: "",
+  thumbnailMediaId: null,
+  dvr: false,
+  autoStart: false,
+  autoStop: false,
+  latency: "normal",
+};
+
+/**
+ * Known YouTube video category ids (videoCategories.list, default
+ * global region). Static list for the wizard select — YouTube remains
+ * the authority at broadcast creation time.
+ */
+export const YOUTUBE_CATEGORIES: Array<{ id: string; label: string }> = [
+  { id: "1", label: "Film e animazione" },
+  { id: "2", label: "Auto e veicoli" },
+  { id: "10", label: "Musica" },
+  { id: "15", label: "Animali domestici" },
+  { id: "17", label: "Sport" },
+  { id: "18", label: "Cortometraggi" },
+  { id: "19", label: "Viaggi e eventi" },
+  { id: "20", label: "Gaming" },
+  { id: "21", label: "Video blog" },
+  { id: "22", label: "Persone e blog" },
+  { id: "23", label: "Commedia" },
+  { id: "24", label: "Intrattenimento" },
+  { id: "25", label: "Notizie e politica" },
+  { id: "26", label: "Istruzione e tutorial" },
+  { id: "27", label: "Educazione" },
+  { id: "28", label: "Scienza e tecnologia" },
+  { id: "29", label: "Non profit e attivismo" },
+  { id: "42", label: "Shorts" },
+];
+
+/**
+ * ISO 639-1 languages offered by the wizard (matches the app's
+ * language-flag set plus the most common YouTube live languages).
+ */
+export const LIVESTREAM_LANGUAGES: Array<{ code: string; label: string }> = [
+  { code: "it", label: "Italiano" },
+  { code: "en", label: "Inglese" },
+  { code: "es", label: "Spagnolo" },
+  { code: "fr", label: "Francese" },
+  { code: "de", label: "Tedesco" },
+  { code: "pl", label: "Polacco" },
+  { code: "ru", label: "Russo" },
+  { code: "id", label: "Indonesiano" },
+  { code: "tr", label: "Turco" },
+  { code: "hi", label: "Hindi" },
+];
+
+/** liveBroadcast.contentDetails.latencyPreference options. */
+export const LATENCY_OPTIONS: Array<{
+  value: "normal" | "low" | "ultraLow";
+  label: string;
+  description: string;
+}> = [
+  { value: "normal", label: "Normale", description: "Latenza standard, qualità massima" },
+  { value: "low", label: "Bassa", description: "~10s di ritardo, per interazioni live" },
+  { value: "ultraLow", label: "Ultra bassa", description: "~5s di ritardo, per gaming e sport" },
+];

@@ -1762,7 +1762,9 @@ components:
       type: object
       required: [id, workspace_id, platform_account_id, title, privacy_status,
                  playback_mode, schedule_type, desired_state, actual_state,
-                 resolution, frame_rate, auto_restart, created_at, updated_at]
+                 resolution, frame_rate, auto_restart, category, made_for_kids,
+                 language, dvr_enabled, auto_start, auto_stop,
+                 latency_preference, created_at, updated_at]
       properties:
         id: { type: string, example: ls_01HXY_DoNotUse }
         workspace_id: { type: integer, format: int64 }
@@ -1787,6 +1789,20 @@ components:
           enum: [720p30, 1080p30]
         frame_rate: { type: integer, enum: [30] }
         auto_restart: { type: boolean }
+        category: { type: string, description: YouTube numeric category id (empty = none) }
+        made_for_kids: { type: boolean, description: liveBroadcast.status.madeForKids (COPPA) }
+        language: { type: string, description: ISO 639-1 / BCP-47 code (empty = none) }
+        thumbnail_media_id:
+          type: string
+          nullable: true
+          description: media_assets.id of the uploaded cover (wizard Carica immagine).
+        dvr_enabled: { type: boolean, description: liveBroadcast.contentDetails.enableDvr }
+        auto_start: { type: boolean, description: liveBroadcast.contentDetails.enableAutoStart }
+        auto_stop: { type: boolean, description: liveBroadcast.contentDetails.enableAutoStop }
+        latency_preference:
+          type: string
+          enum: [normal, low, ultraLow]
+          description: liveBroadcast.contentDetails.latencyPreference
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     LivestreamCreateRequest:
@@ -1819,6 +1835,33 @@ components:
         auto_restart:
           type: boolean
           default: true
+        category:
+          type: string
+          description: YouTube numeric category id (empty = none)
+        made_for_kids:
+          type: boolean
+          default: false
+        language:
+          type: string
+          description: ISO 639-1 / BCP-47 code (empty = none)
+        thumbnail_media_id:
+          type: string
+          description: |
+            media_assets.id of the cover. Omit to leave unchanged; send
+            an empty string to clear it.
+        dvr_enabled:
+          type: boolean
+          default: false
+        auto_start:
+          type: boolean
+          default: false
+        auto_stop:
+          type: boolean
+          default: false
+        latency_preference:
+          type: string
+          enum: [normal, low, ultraLow]
+          default: normal
     LivestreamPatchRequest:
       type: object
       description: |
@@ -1847,6 +1890,24 @@ components:
           type: integer
           enum: [30]
         auto_restart: { type: boolean }
+        category:
+          type: string
+          description: YouTube numeric category id (empty = none)
+        made_for_kids: { type: boolean }
+        language:
+          type: string
+          description: ISO 639-1 / BCP-47 code (empty = none)
+        thumbnail_media_id:
+          type: string
+          description: |
+            media_assets.id of the cover. Omit to leave unchanged; send
+            an empty string to clear it.
+        dvr_enabled: { type: boolean }
+        auto_start: { type: boolean }
+        auto_stop: { type: boolean }
+        latency_preference:
+          type: string
+          enum: [normal, low, ultraLow]
     LivestreamChannelListResponse:
       type: object
       required: [channels]

@@ -38,14 +38,20 @@ func NewLivestreamRepository(db *sql.DB) *LivestreamRepository {
 const livestreamColumns = `id, workspace_id, platform_account_id, created_by, title,
 description, privacy_status, playback_mode, schedule_type, scheduled_start_at,
 desired_state, actual_state, youtube_broadcast_id, youtube_stream_id,
-resolution, frame_rate, auto_restart, created_at, updated_at`
+resolution, frame_rate, auto_restart,
+category, made_for_kids, language, thumbnail_media_id,
+dvr_enabled, auto_start, auto_stop, latency_preference,
+created_at, updated_at`
 
 func scanLivestream(row interface{ Scan(...any) error }) (*models.Livestream, error) {
 	ls := &models.Livestream{}
 	if err := row.Scan(&ls.ID, &ls.WorkspaceID, &ls.PlatformAccountID, &ls.CreatedBy, &ls.Title,
 		&ls.Description, &ls.PrivacyStatus, &ls.PlaybackMode, &ls.ScheduleType, &ls.ScheduledStartAt,
 		&ls.DesiredState, &ls.ActualState, &ls.YouTubeBroadcastID, &ls.YouTubeStreamID,
-		&ls.Resolution, &ls.FrameRate, &ls.AutoRestart, &ls.CreatedAt, &ls.UpdatedAt); err != nil {
+		&ls.Resolution, &ls.FrameRate, &ls.AutoRestart,
+		&ls.Category, &ls.MadeForKids, &ls.Language, &ls.ThumbnailMediaID,
+		&ls.DVREnabled, &ls.AutoStart, &ls.AutoStop, &ls.LatencyPreference,
+		&ls.CreatedAt, &ls.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return ls, nil
@@ -63,12 +69,17 @@ func (r *LivestreamRepository) Create(ctx context.Context, ls *models.Livestream
 			(id, workspace_id, platform_account_id, created_by, title, description,
 			 privacy_status, playback_mode, schedule_type, scheduled_start_at,
 			 desired_state, actual_state, youtube_broadcast_id, youtube_stream_id,
-			 resolution, frame_rate, auto_restart)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+			 resolution, frame_rate, auto_restart,
+			 category, made_for_kids, language, thumbnail_media_id,
+			 dvr_enabled, auto_start, auto_stop, latency_preference)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+		        $18, $19, $20, $21, $22, $23, $24, $25)`,
 		ls.ID, ls.WorkspaceID, ls.PlatformAccountID, ls.CreatedBy, ls.Title, ls.Description,
 		ls.PrivacyStatus, ls.PlaybackMode, ls.ScheduleType, ls.ScheduledStartAt,
 		ls.DesiredState, ls.ActualState, ls.YouTubeBroadcastID, ls.YouTubeStreamID,
-		ls.Resolution, ls.FrameRate, ls.AutoRestart)
+		ls.Resolution, ls.FrameRate, ls.AutoRestart,
+		ls.Category, ls.MadeForKids, ls.Language, ls.ThumbnailMediaID,
+		ls.DVREnabled, ls.AutoStart, ls.AutoStop, ls.LatencyPreference)
 	if err != nil {
 		return fmt.Errorf("insert livestream: %w", err)
 	}
@@ -117,10 +128,15 @@ func (r *LivestreamRepository) Update(ctx context.Context, ls *models.Livestream
 		UPDATE livestreams SET
 			title = $2, description = $3, privacy_status = $4, playback_mode = $5,
 			schedule_type = $6, scheduled_start_at = $7, resolution = $8,
-			frame_rate = $9, auto_restart = $10, updated_at = NOW()
+			frame_rate = $9, auto_restart = $10, category = $11,
+			made_for_kids = $12, language = $13, thumbnail_media_id = $14,
+			dvr_enabled = $15, auto_start = $16, auto_stop = $17,
+			latency_preference = $18, updated_at = NOW()
 		WHERE id = $1`,
 		ls.ID, ls.Title, ls.Description, ls.PrivacyStatus, ls.PlaybackMode,
-		ls.ScheduleType, ls.ScheduledStartAt, ls.Resolution, ls.FrameRate, ls.AutoRestart)
+		ls.ScheduleType, ls.ScheduledStartAt, ls.Resolution, ls.FrameRate, ls.AutoRestart,
+		ls.Category, ls.MadeForKids, ls.Language, ls.ThumbnailMediaID,
+		ls.DVREnabled, ls.AutoStart, ls.AutoStop, ls.LatencyPreference)
 	if err != nil {
 		return fmt.Errorf("update livestream: %w", err)
 	}

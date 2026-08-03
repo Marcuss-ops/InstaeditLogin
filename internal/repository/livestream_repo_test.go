@@ -27,9 +27,21 @@ func livestreamFixture() *models.Livestream {
 		Resolution:        models.LivestreamResolution1080p,
 		FrameRate:         models.LivestreamFrameRate,
 		AutoRestart:       true,
+		Category:          "24",
+		MadeForKids:       false,
+		Language:          "it",
+		ThumbnailMediaID:  strPtr("thumb-123"),
+		DVREnabled:        true,
+		AutoStart:         false,
+		AutoStop:          true,
+		LatencyPreference: models.LivestreamLatencyLow,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
+}
+
+func strPtr(s string) *string {
+	return &s
 }
 
 func TestLivestreamRepository_Create(t *testing.T) {
@@ -44,7 +56,9 @@ func TestLivestreamRepository_Create(t *testing.T) {
 		WithArgs(ls.ID, ls.WorkspaceID, ls.PlatformAccountID, ls.CreatedBy, ls.Title, ls.Description,
 			ls.PrivacyStatus, ls.PlaybackMode, ls.ScheduleType, sqlmock.AnyArg(),
 			ls.DesiredState, ls.ActualState, ls.YouTubeBroadcastID, ls.YouTubeStreamID,
-			ls.Resolution, ls.FrameRate, ls.AutoRestart).
+			ls.Resolution, ls.FrameRate, ls.AutoRestart,
+			ls.Category, ls.MadeForKids, ls.Language, ls.ThumbnailMediaID,
+			ls.DVREnabled, ls.AutoStart, ls.AutoStop, ls.LatencyPreference).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	repo := NewLivestreamRepository(db)
@@ -83,11 +97,17 @@ func TestLivestreamRepository_FindByID(t *testing.T) {
 		"id", "workspace_id", "platform_account_id", "created_by", "title", "description",
 		"privacy_status", "playback_mode", "schedule_type", "scheduled_start_at",
 		"desired_state", "actual_state", "youtube_broadcast_id", "youtube_stream_id",
-		"resolution", "frame_rate", "auto_restart", "created_at", "updated_at",
+		"resolution", "frame_rate", "auto_restart",
+		"category", "made_for_kids", "language", "thumbnail_media_id",
+		"dvr_enabled", "auto_start", "auto_stop", "latency_preference",
+		"created_at", "updated_at",
 	}).AddRow(ls.ID, ls.WorkspaceID, ls.PlatformAccountID, ls.CreatedBy, ls.Title, ls.Description,
 		ls.PrivacyStatus, ls.PlaybackMode, ls.ScheduleType, nil,
 		ls.DesiredState, ls.ActualState, "", "",
-		ls.Resolution, ls.FrameRate, ls.AutoRestart, ls.CreatedAt, ls.UpdatedAt)
+		ls.Resolution, ls.FrameRate, ls.AutoRestart,
+		ls.Category, ls.MadeForKids, ls.Language, ls.ThumbnailMediaID,
+		ls.DVREnabled, ls.AutoStart, ls.AutoStop, ls.LatencyPreference,
+		ls.CreatedAt, ls.UpdatedAt)
 	mock.ExpectQuery(`SELECT id, workspace_id`).WithArgs(ls.ID).WillReturnRows(rows)
 
 	repo := NewLivestreamRepository(db)
@@ -137,11 +157,17 @@ func TestLivestreamRepository_ListByWorkspace(t *testing.T) {
 		"id", "workspace_id", "platform_account_id", "created_by", "title", "description",
 		"privacy_status", "playback_mode", "schedule_type", "scheduled_start_at",
 		"desired_state", "actual_state", "youtube_broadcast_id", "youtube_stream_id",
-		"resolution", "frame_rate", "auto_restart", "created_at", "updated_at",
+		"resolution", "frame_rate", "auto_restart",
+		"category", "made_for_kids", "language", "thumbnail_media_id",
+		"dvr_enabled", "auto_start", "auto_stop", "latency_preference",
+		"created_at", "updated_at",
 	}).AddRow(ls.ID, ls.WorkspaceID, ls.PlatformAccountID, ls.CreatedBy, ls.Title, ls.Description,
 		ls.PrivacyStatus, ls.PlaybackMode, ls.ScheduleType, nil,
 		ls.DesiredState, ls.ActualState, "", "",
-		ls.Resolution, ls.FrameRate, ls.AutoRestart, ls.CreatedAt, ls.UpdatedAt)
+		ls.Resolution, ls.FrameRate, ls.AutoRestart,
+		ls.Category, ls.MadeForKids, ls.Language, ls.ThumbnailMediaID,
+		ls.DVREnabled, ls.AutoStart, ls.AutoStop, ls.LatencyPreference,
+		ls.CreatedAt, ls.UpdatedAt)
 	mock.ExpectQuery(`SELECT id, workspace_id`).WithArgs(int64(7)).WillReturnRows(rows)
 
 	repo := NewLivestreamRepository(db)
@@ -168,7 +194,9 @@ func TestLivestreamRepository_Update(t *testing.T) {
 
 	mock.ExpectExec(`UPDATE livestreams SET`).
 		WithArgs(ls.ID, ls.Title, ls.Description, ls.PrivacyStatus, ls.PlaybackMode,
-			ls.ScheduleType, sqlmock.AnyArg(), ls.Resolution, ls.FrameRate, ls.AutoRestart).
+			ls.ScheduleType, sqlmock.AnyArg(), ls.Resolution, ls.FrameRate, ls.AutoRestart,
+			ls.Category, ls.MadeForKids, ls.Language, ls.ThumbnailMediaID,
+			ls.DVREnabled, ls.AutoStart, ls.AutoStop, ls.LatencyPreference).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	repo := NewLivestreamRepository(db)

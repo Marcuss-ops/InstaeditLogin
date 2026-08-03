@@ -36,6 +36,17 @@ type createLivestreamRequest struct {
 	Resolution        string  `json:"resolution,omitempty"`
 	FrameRate         int     `json:"frame_rate,omitempty"`
 	AutoRestart       *bool   `json:"auto_restart,omitempty"`
+	// YouTube broadcast metadata (wizard step 2). All optional with
+	// documented defaults; the worker maps them onto the liveBroadcast
+	// resource at prepare time.
+	Category          string  `json:"category,omitempty"`
+	MadeForKids       *bool   `json:"made_for_kids,omitempty"`
+	Language          string  `json:"language,omitempty"`
+	ThumbnailMediaID  *string `json:"thumbnail_media_id,omitempty"`
+	DVREnabled        *bool   `json:"dvr_enabled,omitempty"`
+	AutoStart         *bool   `json:"auto_start,omitempty"`
+	AutoStop          *bool   `json:"auto_stop,omitempty"`
+	LatencyPreference string  `json:"latency_preference,omitempty"`
 }
 
 // patchLivestreamRequest is the body accepted by
@@ -56,6 +67,17 @@ type patchLivestreamRequest struct {
 	Resolution       *string `json:"resolution,omitempty"`
 	FrameRate        *int    `json:"frame_rate,omitempty"`
 	AutoRestart      *bool   `json:"auto_restart,omitempty"`
+	// YouTube broadcast metadata (wizard step 2). thumbnail_media_id
+	// semantics mirror scheduled_start_at: omit to leave unchanged,
+	// send "" to clear, or a media asset id to set.
+	Category          *string `json:"category,omitempty"`
+	MadeForKids       *bool   `json:"made_for_kids,omitempty"`
+	Language          *string `json:"language,omitempty"`
+	ThumbnailMediaID  *string `json:"thumbnail_media_id,omitempty"` // "" clears
+	DVREnabled        *bool   `json:"dvr_enabled,omitempty"`
+	AutoStart         *bool   `json:"auto_start,omitempty"`
+	AutoStop          *bool   `json:"auto_stop,omitempty"`
+	LatencyPreference *string `json:"latency_preference,omitempty"`
 	// desired_state / actual_state are worker-owned; a request that
 	// attempts to set them is rejected by the handler.
 	DesiredState *string `json:"desired_state,omitempty"`
@@ -84,6 +106,14 @@ type livestreamResponse struct {
 	Resolution        string     `json:"resolution"`
 	FrameRate         int        `json:"frame_rate"`
 	AutoRestart       bool       `json:"auto_restart"`
+	Category          string     `json:"category"`
+	MadeForKids       bool       `json:"made_for_kids"`
+	Language          string     `json:"language"`
+	ThumbnailMediaID  *string    `json:"thumbnail_media_id,omitempty"`
+	DVREnabled        bool       `json:"dvr_enabled"`
+	AutoStart         bool       `json:"auto_start"`
+	AutoStop          bool       `json:"auto_stop"`
+	LatencyPreference string     `json:"latency_preference"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
@@ -133,6 +163,14 @@ func toLivestreamResponse(ls *models.Livestream) livestreamResponse {
 		Resolution:        ls.Resolution,
 		FrameRate:         ls.FrameRate,
 		AutoRestart:       ls.AutoRestart,
+		Category:          ls.Category,
+		MadeForKids:       ls.MadeForKids,
+		Language:          ls.Language,
+		ThumbnailMediaID:  ls.ThumbnailMediaID,
+		DVREnabled:        ls.DVREnabled,
+		AutoStart:         ls.AutoStart,
+		AutoStop:          ls.AutoStop,
+		LatencyPreference: ls.LatencyPreference,
 		CreatedAt:         ls.CreatedAt,
 		UpdatedAt:         ls.UpdatedAt,
 	}

@@ -1,4 +1,11 @@
-import type { LivestreamRow, LivestreamSummary, LivestreamTab } from "./livestreamsTypes";
+import {
+  LATENCY_OPTIONS,
+  LIVESTREAM_LANGUAGES,
+  YOUTUBE_CATEGORIES,
+  type LivestreamRow,
+  type LivestreamSummary,
+  type LivestreamTab,
+} from "./livestreamsTypes";
 
 export type Tone = "success" | "warning" | "info" | "neutral" | "danger";
 
@@ -189,6 +196,23 @@ export function privacyLabel(privacy: string): string {
     default:
       return privacy || "—";
   }
+}
+
+export function categoryLabel(id: string): string {
+  if (!id) return "Nessuna categoria";
+  const found = YOUTUBE_CATEGORIES.find((c) => c.id === id);
+  return found ? found.label : id;
+}
+
+export function languageLabel(code: string): string {
+  if (!code) return "Non impostata";
+  const found = LIVESTREAM_LANGUAGES.find((l) => l.code === code);
+  return found ? found.label : code;
+}
+
+export function latencyLabel(value: string): string {
+  const found = LATENCY_OPTIONS.find((o) => o.value === value);
+  return found ? found.label : value || "Normale";
 }
 
 export function formatScheduledAt(iso: string): string {

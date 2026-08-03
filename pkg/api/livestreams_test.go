@@ -193,6 +193,18 @@ func TestCreateLivestream_HappyPath(t *testing.T) {
 	if captured.FrameRate != 30 || captured.Resolution != "1080p30" || !captured.AutoRestart {
 		t.Errorf("defaults not applied: %+v", captured)
 	}
+	// Wizard step-2 metadata defaults: no category, no language, no
+	// cover, not made for kids, DVR/auto-start/auto-stop off, latency
+	// normal.
+	if captured.Category != "" || captured.Language != "" || captured.ThumbnailMediaID != nil {
+		t.Errorf("metadata defaults not applied: %+v", captured)
+	}
+	if captured.MadeForKids || captured.DVREnabled || captured.AutoStart || captured.AutoStop {
+		t.Errorf("metadata booleans should default false: %+v", captured)
+	}
+	if captured.LatencyPreference != models.LivestreamLatencyNormal {
+		t.Errorf("latency default: want normal, got %q", captured.LatencyPreference)
+	}
 
 	var resp livestreamResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -200,6 +212,66 @@ func TestCreateLivestream_HappyPath(t *testing.T) {
 	}
 	if resp.ID != captured.ID || resp.ActualState != "draft" {
 		t.Errorf("response mismatch: %+v", resp)
+	}
+}
+
+func TestCreateLivestream_MetadataFieldsPersisted(t *testing.T) {
+	var captured *models.Livestream
+	lsStore := &mockLivestreamStore{
+		createFn: func(ctx context.Context, ls *models.Livestream) error {
+			captured = ls
+			return nil
+		},
+	}
+	r := livestreamTestRouter(lsStore, livestreamTestAccount(), 1)
+
+	thumb := "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+	payload := validLivestreamPayload()
+	payload["category"] = "24"
+	payload["made_for_kids"] = true
+	payload["language"] = "it"
+	payload["thumbnail_media_id"] = thumb
+	payload["dvr_enabled"] = true
+	payload["auto_start"] = true
+	payload["auto_stop"] = false
+	payload["latency_preference"] = "low"
+
+	w := doLivestreamRequest(t, r, http.MethodPost, "/api/v1/livestreams", payload)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	if captured == nil {
+		t.Fatal("livestream was not persisted")
+	}
+	if captured.Category != "24" {
+		t.Errorf("category: got %q", captured.Category)
+	}
+	if !captured.MadeForKids {
+		t.Error("made_for_kids should be true")
+	}
+	if captured.Language != "it" {
+		t.Errorf("language: got %q", captured.Language)
+	}
+	if captured.ThumbnailMediaID == nil || *captured.ThumbnailMediaID != thumb {
+		t.Errorf("thumbnail_media_id: got %v", captured.ThumbnailMediaID)
+	}
+	if !captured.DVREnabled || !captured.AutoStart || captured.AutoStop {
+		t.Errorf("contentDetails booleans: %+v", captured)
+	}
+	if captured.LatencyPreference != models.LivestreamLatencyLow {
+		t.Errorf("latency: got %q", captured.LatencyPreference)
+	}
+
+	// The response echoes the same metadata.
+	var resp livestreamResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Category != "24" || resp.Language != "it" || resp.LatencyPreference != "low" {
+		t.Errorf("response metadata mismatch: %+v", resp)
+	}
+	if resp.ThumbnailMediaID == nil || *resp.ThumbnailMediaID != thumb {
+		t.Errorf("response thumbnail_media_id: got %v", resp.ThumbnailMediaID)
 	}
 }
 
@@ -228,6 +300,10 @@ func TestCreateLivestream_ValidationErrors(t *testing.T) {
 		{name: "bad schedule", mutate: func(p map[string]any) { p["schedule_type"] = "whenever" }, wantMsg: "schedule_type"},
 		{name: "bad resolution", mutate: func(p map[string]any) { p["resolution"] = "4k60" }, wantMsg: "resolution"},
 		{name: "bad frame rate", mutate: func(p map[string]any) { p["frame_rate"] = 60 }, wantMsg: "frame_rate"},
+		{name: "bad category", mutate: func(p map[string]any) { p["category"] = "9999" }, wantMsg: "category"},
+		{name: "bad language", mutate: func(p map[string]any) { p["language"] = "not a lang" }, wantMsg: "language"},
+		{name: "bad latency", mutate: func(p map[string]any) { p["latency_preference"] = "ultra" }, wantMsg: "latency_preference"},
+		{name: "thumbnail too long", mutate: func(p map[string]any) { p["thumbnail_media_id"] = strings.Repeat("a", 80) }, wantMsg: "thumbnail_media_id"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -398,6 +474,19 @@ func TestListLivestreams_HappyPath(t *testing.T) {
 	if resp.Items[0].ChannelName != "testchannel" {
 		t.Errorf("channel_name: want testchannel (account username), got %q", resp.Items[0].ChannelName)
 	}
+	// Wizard step-2 metadata round-trips through the list envelope.
+	if resp.Items[0].Category != "24" || resp.Items[0].Language != "it" {
+		t.Errorf("metadata fields missing from list response: %+v", resp.Items[0])
+	}
+	if resp.Items[0].ThumbnailMediaID == nil || *resp.Items[0].ThumbnailMediaID != "thumb-123" {
+		t.Errorf("thumbnail_media_id missing from list response: %+v", resp.Items[0])
+	}
+	if !resp.Items[0].DVREnabled || !resp.Items[0].AutoStop || resp.Items[0].AutoStart {
+		t.Errorf("contentDetails booleans missing from list response: %+v", resp.Items[0])
+	}
+	if resp.Items[0].LatencyPreference != models.LivestreamLatencyLow {
+		t.Errorf("latency_preference missing from list response: %+v", resp.Items[0])
+	}
 }
 
 func livestreamFixtureResponse() *models.Livestream {
@@ -416,6 +505,14 @@ func livestreamFixtureResponse() *models.Livestream {
 		Resolution:        models.LivestreamResolution1080p,
 		FrameRate:         30,
 		AutoRestart:       true,
+		Category:          "24",
+		MadeForKids:       false,
+		Language:          "it",
+		ThumbnailMediaID:  strPtr("thumb-123"),
+		DVREnabled:        true,
+		AutoStart:         false,
+		AutoStop:          true,
+		LatencyPreference: models.LivestreamLatencyLow,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -638,6 +735,73 @@ func TestPatchLivestream_HappyPath(t *testing.T) {
 	}
 	if updated.PlaybackMode != models.LivestreamPlaybackLoopContinuous {
 		t.Errorf("untouched field should survive: %+v", updated)
+	}
+}
+
+func TestPatchLivestream_MetadataFields(t *testing.T) {
+	ls := livestreamFixtureResponse()
+	var updated *models.Livestream
+	lsStore := &mockLivestreamStore{
+		findByIDFn: func(ctx context.Context, id string) (*models.Livestream, error) {
+			return ls, nil
+		},
+		updateFn: func(ctx context.Context, row *models.Livestream) error {
+			updated = row
+			return nil
+		},
+	}
+	r := livestreamTestRouter(lsStore, livestreamTestAccount(), 1)
+
+	w := doLivestreamRequest(t, r, http.MethodPatch, "/api/v1/livestreams/"+ls.ID, map[string]any{
+		"category":           "20",
+		"made_for_kids":      true,
+		"language":           "en",
+		"dvr_enabled":        false,
+		"auto_start":         true,
+		"auto_stop":          false,
+		"latency_preference": "ultraLow",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if updated == nil {
+		t.Fatal("updated row is nil")
+	}
+	if updated.Category != "20" || updated.Language != "en" || updated.LatencyPreference != "ultraLow" {
+		t.Errorf("patched metadata wrong: %+v", updated)
+	}
+	if !updated.MadeForKids || !updated.AutoStart || updated.AutoStop || updated.DVREnabled {
+		t.Errorf("patched booleans wrong: %+v", updated)
+	}
+	// Untouched thumbnail survives.
+	if updated.ThumbnailMediaID == nil || *updated.ThumbnailMediaID != "thumb-123" {
+		t.Errorf("untouched thumbnail should survive: %+v", updated)
+	}
+}
+
+func TestPatchLivestream_ClearsThumbnail(t *testing.T) {
+	ls := livestreamFixtureResponse()
+	var updated *models.Livestream
+	lsStore := &mockLivestreamStore{
+		findByIDFn: func(ctx context.Context, id string) (*models.Livestream, error) {
+			return ls, nil
+		},
+		updateFn: func(ctx context.Context, row *models.Livestream) error {
+			updated = row
+			return nil
+		},
+	}
+	r := livestreamTestRouter(lsStore, livestreamTestAccount(), 1)
+
+	// Empty string clears the cover (same semantics as scheduled_start_at).
+	w := doLivestreamRequest(t, r, http.MethodPatch, "/api/v1/livestreams/"+ls.ID, map[string]any{
+		"thumbnail_media_id": "",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if updated.ThumbnailMediaID != nil {
+		t.Errorf("thumbnail_media_id should be cleared, got %v", updated.ThumbnailMediaID)
 	}
 }
 
