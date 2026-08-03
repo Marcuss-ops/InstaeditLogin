@@ -14,6 +14,11 @@ export type LivestreamSummary = {
 
 const POLL_INTERVAL_MS = 30_000;
 
+export function livestreamsURL(workspaceID: number): string {
+  const params = new URLSearchParams({ workspace_id: String(workspaceID) });
+  return `${API_BASE_URL}/api/v1/livestreams?${params}`;
+}
+
 /**
  * Count how many rows are actually live.
  *
@@ -52,13 +57,31 @@ export function useActiveLiveCount(): number | null {
     const refresh = async () => {
       if (document.visibilityState === "hidden") return;
       try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/livestreams`, {
+        const meResponse = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
           credentials: "include",
         });
-        if (!response.ok) return; // endpoint not deployed yet → keep badge hidden
+        if (!meResponse.ok) {
+          if (!cancelled) setCount(null);
+          return; // not authenticated → badge must stay hidden
+        }
+        const me = (await meResponse.json()) as { workspace_id?: number };
+        const workspaceID = me.workspace_id;
+        if (typeof workspaceID !== "number" || !Number.isInteger(workspaceID) || workspaceID <= 0) {
+          if (!cancelled) setCount(null);
+          return;
+        }
+
+        const response = await fetch(livestreamsURL(workspaceID), {
+          credentials: "include",
+        });
+        if (!response.ok) {
+          if (!cancelled) setCount(null);
+          return; // endpoint unavailable → keep badge hidden
+        }
         const payload: unknown = await response.json();
         if (!cancelled) setCount(countActiveLives(payload));
       } catch {
+        if (!cancelled) setCount(null);
         // Never toast for a sidebar hint; a missing backend is expected
         // until the livestream module lands.
       }
