@@ -40,6 +40,11 @@ type ThumbnailProjectStore interface {
 	// DeleteAsset removes one (project, media_id, role) link; a missing row
 	// surfaces ErrThumbnailProjectAssetNotFound.
 	DeleteAsset(ctx context.Context, workspaceID int64, projectID, mediaID, role string) error
+	// CreateAssignment links a ready export of the workspace to a YouTube
+	// video whose account is a workspace channel. Duplicate
+	// (export, platform_account, video) tuples surface
+	// ErrThumbnailAssignmentConflict.
+	CreateAssignment(ctx context.Context, assignment *models.ThumbnailAssignment) error
 }
 
 type createThumbnailProjectRequest struct {

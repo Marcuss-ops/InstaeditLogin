@@ -42,6 +42,49 @@ func TestThumbnailProjectRepository_CreateExportValidatesBeforeSQL(t *testing.T)
 	}
 }
 
+func TestThumbnailProjectRepository_CreateAssignmentMapsUniqueViolation(t *testing.T) {
+	db, mock := newThumbnailProjectMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	assignment := &models.ThumbnailAssignment{
+		WorkspaceID: 7, ProjectID: "project-1", ExportID: "export-1", PlatformAccountID: 4,
+		Platform: "youtube", YouTubeVideoID: "video-1",
+	}
+	mock.ExpectExec(`INSERT INTO thumbnail_assignments`).
+		WillReturnError(errors.New(`pq: duplicate key value violates unique constraint "thumbnail_assignments_export_account_video_uq"`))
+	err := repo.CreateAssignment(context.Background(), assignment)
+	if !errors.Is(err, repository.ErrThumbnailAssignmentConflict) {
+		t.Fatalf("want conflict sentinel, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestThumbnailProjectRepository_CreateAssignmentMapsFKViolations(t *testing.T) {
+	messages := map[string]string{
+		"workspace channel": `pq: insert or update on table "thumbnail_assignments" violates foreign key constraint "thumbnail_assignments_workspace_account_fk"`,
+		"platform mismatch": `pq: insert or update on table "thumbnail_assignments" violates foreign key constraint "thumbnail_assignments_workspace_account_platform_fk"`,
+	}
+	for name, msg := range messages {
+		t.Run(name, func(t *testing.T) {
+			db, mock := newThumbnailProjectMockDB(t)
+			repo := repository.NewThumbnailProjectRepository(db)
+			assignment := &models.ThumbnailAssignment{
+				WorkspaceID: 7, ProjectID: "project-1", ExportID: "export-1", PlatformAccountID: 4,
+				Platform: "youtube", YouTubeVideoID: "video-1",
+			}
+			mock.ExpectExec(`INSERT INTO thumbnail_assignments`).WillReturnError(errors.New(msg))
+			err := repo.CreateAssignment(context.Background(), assignment)
+			if !errors.Is(err, repository.ErrThumbnailProjectInvalid) {
+				t.Fatalf("want invalid sentinel, got %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestThumbnailProjectRepository_CreateAssignmentValidatesBeforeSQL(t *testing.T) {
 	db, mock := newThumbnailProjectMockDB(t)
 	repo := repository.NewThumbnailProjectRepository(db)

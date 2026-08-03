@@ -327,13 +327,15 @@ describe("getThumbnailExport", () => {
 // ─── Assignments ──────────────────────────────────────────────────
 
 describe("createThumbnailAssignments", () => {
-  it("POSTs targets to /api/v1/thumbnail-exports/{export_id}/assignments", async () => {
+  it("POSTs targets to /api/v1/thumbnail-exports/{export_id}/assignments with workspace_id", async () => {
     authedFetchMock.mockResolvedValue(jsonResponse({ items: [ASSIGNMENT] }));
-    const assignments = await createThumbnailAssignments("thumbexp_1", {
+    const assignments = await createThumbnailAssignments(7, "thumbexp_1", {
       targets: [{ platform_account_id: 381, youtube_video_id: "abc123" }],
     });
     const [path, init] = authedFetchMock.mock.calls[0] as [string, RequestInit];
-    expect(path).toBe("/api/v1/thumbnail-exports/thumbexp_1/assignments");
+    expect(path).toBe(
+      "/api/v1/thumbnail-exports/thumbexp_1/assignments?workspace_id=7",
+    );
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({
       targets: [{ platform_account_id: 381, youtube_video_id: "abc123" }],
@@ -343,7 +345,7 @@ describe("createThumbnailAssignments", () => {
 
   it("accepts a bare array response as well", async () => {
     authedFetchMock.mockResolvedValue(jsonResponse([ASSIGNMENT]));
-    const assignments = await createThumbnailAssignments("thumbexp_1", {
+    const assignments = await createThumbnailAssignments(7, "thumbexp_1", {
       targets: [{ platform_account_id: 1, youtube_video_id: "v" }],
     });
     expect(assignments).toEqual([ASSIGNMENT]);

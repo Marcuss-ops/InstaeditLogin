@@ -175,5 +175,10 @@ var (
 	ErrThumbnailProjectAssetNotFound = errors.New("thumbnail project asset not found")
 	ErrThumbnailExportNotFound       = errors.New("thumbnail export not found")
 	ErrThumbnailAssignmentNotFound   = errors.New("thumbnail assignment not found")
-	ErrThumbnailDomainConflict       = errors.New("thumbnail project domain conflict")
+	// ErrThumbnailAssignmentConflict is returned when a thumbnail
+	// assignment would violate the (export_id, platform_account_id,
+	// youtube_video_id) uniqueness constraint — the same video is already
+	// assigned to this export. Maps to 409 at the API layer.
+	ErrThumbnailAssignmentConflict = errors.New("thumbnail assignment already exists")
+	ErrThumbnailDomainConflict     = errors.New("thumbnail project domain conflict")
 )

@@ -43,6 +43,9 @@ type thumbnailProjectTestStore struct {
 	createdAsset    *models.ThumbnailProjectAsset
 	lastDeleteMedia string
 	lastDeleteRole  string
+	// Assignment surfaces for the assignment endpoint.
+	assignmentErr      error
+	createdAssignments []models.ThumbnailAssignment
 }
 
 func (s *thumbnailProjectTestStore) Create(_ context.Context, project *models.ThumbnailProject) error {
@@ -126,6 +129,16 @@ func (s *thumbnailProjectTestStore) DeleteAsset(_ context.Context, _ int64, _ st
 		return s.deleteAssetErr
 	}
 	s.lastDeleteMedia, s.lastDeleteRole = mediaID, role
+	return nil
+}
+func (s *thumbnailProjectTestStore) CreateAssignment(_ context.Context, assignment *models.ThumbnailAssignment) error {
+	if s.assignmentErr != nil {
+		return s.assignmentErr
+	}
+	if assignment.ID == "" {
+		assignment.ID = "thumbassign_test"
+	}
+	s.createdAssignments = append(s.createdAssignments, *assignment)
 	return nil
 }
 
@@ -419,6 +432,121 @@ func TestThumbnailProjects_DeleteAssetMissingIs404(t *testing.T) {
 	store := &thumbnailProjectTestStore{deleteAssetErr: repository.ErrThumbnailProjectAssetNotFound}
 	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/thumbnail-projects/thumbproj_test/assets/00000000-0000-4000-8000-000000000001?workspace_id=7&role=background", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+func readyAssignmentExport() *models.ThumbnailExport {
+	return &models.ThumbnailExport{
+		ID: "thumbexp_1", ProjectID: "thumbproj_test", RevisionID: "thumbrev_1",
+		MediaID: "00000000-0000-4000-8000-000000000001", ContentType: "image/png",
+		Width: 1920, Height: 1080, FileSize: 10, SHA256: make([]byte, 32),
+		RendererVersion: "go-canvas-v1", Status: models.ThumbnailProjectExportStatusReady,
+	}
+}
+
+func TestThumbnailProjects_AddAssignmentRequiresWorkspaceQuery(t *testing.T) {
+	r := thumbnailProjectRouter(t, &thumbnailProjectTestStore{}, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-exports/thumbexp_1/assignments", bytes.NewBufferString(`{"targets":[{"platform_account_id":381,"youtube_video_id":"abc123"}]}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for missing workspace_id, got %d", w.Code)
+	}
+}
+
+func TestThumbnailProjects_AddAssignmentLinksReadyExport(t *testing.T) {
+	store := &thumbnailProjectTestStore{export: readyAssignmentExport()}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	body := `{"targets":[{"platform_account_id":381,"youtube_video_id":"abc123"},{"platform_account_id":382,"youtube_video_id":"def456","target_language":"it"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-exports/thumbexp_1/assignments?workspace_id=7", bytes.NewBufferString(body))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var response thumbnailAssignmentListResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) != 2 || len(store.createdAssignments) != 2 {
+		t.Fatalf("want 2 assignments, got %d (store %d)", len(response.Items), len(store.createdAssignments))
+	}
+	first := store.createdAssignments[0]
+	if first.WorkspaceID != 7 || first.ProjectID != "thumbproj_test" || first.ExportID != "thumbexp_1" || first.PlatformAccountID != 381 || first.YouTubeVideoID != "abc123" || first.Platform != "youtube" {
+		t.Fatalf("unexpected assignment: %+v", first)
+	}
+	if store.createdAssignments[1].TargetLanguage == nil || *store.createdAssignments[1].TargetLanguage != "it" {
+		t.Fatalf("target_language not propagated: %+v", store.createdAssignments[1])
+	}
+}
+
+func TestThumbnailProjects_AddAssignmentEmptyTargetsIs400(t *testing.T) {
+	store := &thumbnailProjectTestStore{export: readyAssignmentExport()}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-exports/thumbexp_1/assignments?workspace_id=7", bytes.NewBufferString(`{"targets":[]}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for empty targets, got %d", w.Code)
+	}
+}
+
+func TestThumbnailProjects_AddAssignmentNonReadyExportIs422(t *testing.T) {
+	export := readyAssignmentExport()
+	export.Status = models.ThumbnailProjectExportStatusRendering
+	store := &thumbnailProjectTestStore{export: export}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-exports/thumbexp_1/assignments?workspace_id=7", bytes.NewBufferString(`{"targets":[{"platform_account_id":381,"youtube_video_id":"abc123"}]}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422 for non-ready export, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(store.createdAssignments) != 0 {
+		t.Fatalf("no assignment should be created for non-ready export")
+	}
+}
+
+func TestThumbnailProjects_AddAssignmentCrossWorkspaceIs404(t *testing.T) {
+	r := thumbnailProjectRouter(t, &thumbnailProjectTestStore{export: readyAssignmentExport()}, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 99}, nil }})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-exports/thumbexp_1/assignments?workspace_id=7", bytes.NewBufferString(`{"targets":[{"platform_account_id":381,"youtube_video_id":"abc123"}]}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for cross-workspace assignment, got %d", w.Code)
+	}
+}
+
+func TestThumbnailProjects_AddAssignmentDuplicateIs409(t *testing.T) {
+	store := &thumbnailProjectTestStore{export: readyAssignmentExport(), assignmentErr: repository.ErrThumbnailAssignmentConflict}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-exports/thumbexp_1/assignments?workspace_id=7", bytes.NewBufferString(`{"targets":[{"platform_account_id":381,"youtube_video_id":"abc123"}]}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body["code"] != "ASSIGNMENT_ALREADY_EXISTS" {
+		t.Fatalf("unexpected conflict body: %s", w.Body.String())
+	}
+}
+
+func TestThumbnailProjects_AddAssignmentExportNotFoundIs404(t *testing.T) {
+	store := &thumbnailProjectTestStore{findExportErr: repository.ErrThumbnailExportNotFound}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-exports/thumbexp_1/assignments?workspace_id=7", bytes.NewBufferString(`{"targets":[{"platform_account_id":381,"youtube_video_id":"abc123"}]}`))
 	withBearerJWT(t, req, 1)
 	w := httptest.NewRecorder()
 	r.Setup().ServeHTTP(w, req)

@@ -319,19 +319,21 @@ export interface CreateThumbnailAssignmentsRequest {
  * POST /api/v1/thumbnail-exports/{export_id}/assignments — links an
  * EXISTING ready export to one or more YouTube videos. The export
  * exists before any assignment; the original project is never
- * modified.
- *
- * Note: contract-first client — the backend endpoint is the next
- * server step; the response shape follows the `{ items: [...] }`
- * list convention (with an array fallback).
+ * modified. The export and each platform account must belong to the
+ * workspace (server-enforced); duplicate (export, account, video)
+ * targets answer 409 ASSIGNMENT_ALREADY_EXISTS.
  */
 export async function createThumbnailAssignments(
+  workspaceId: number,
   exportId: string,
   body: CreateThumbnailAssignmentsRequest,
   init: RequestInit = {},
 ): Promise<ThumbnailProjectAssignment[]> {
   const resp = await authedFetch(
-    `${EXPORTS_PATH}/${encodeURIComponent(exportId)}/assignments`,
+    withWorkspace(
+      `${EXPORTS_PATH}/${encodeURIComponent(exportId)}/assignments`,
+      workspaceId,
+    ),
     { method: "POST", body: JSON.stringify(body), ...init },
   );
   const data = (await resp.json()) as

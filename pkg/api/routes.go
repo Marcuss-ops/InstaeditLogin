@@ -150,6 +150,7 @@ func (r *Router) Setup() http.Handler {
 		r.handleAddThumbnailProjectAsset,
 		r.handleListThumbnailProjectAssets,
 		r.handleDeleteThumbnailProjectAsset,
+		r.handleCreateThumbnailAssignments,
 	))
 	reg.Register(NewMediaModule(MediaModuleDeps{
 		RateLimitSvc:       r.rateLimitSvc,

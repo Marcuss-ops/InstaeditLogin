@@ -12,26 +12,27 @@ import (
 // workspace ownership checks; no YouTube/provider dependency is captured
 // here.
 type ThumbnailProjectsModule struct {
-	protected   func(http.HandlerFunc) http.HandlerFunc
-	create      http.HandlerFunc
-	list        http.HandlerFunc
-	get         http.HandlerFunc
-	update      http.HandlerFunc
-	snapshot    http.HandlerFunc
-	revisions   http.HandlerFunc
-	revision    http.HandlerFunc
-	restore     http.HandlerFunc
-	archive     http.HandlerFunc
-	delete      http.HandlerFunc
-	render      http.HandlerFunc
-	getExport   http.HandlerFunc
-	addAsset    http.HandlerFunc
-	listAssets  http.HandlerFunc
-	deleteAsset http.HandlerFunc
+	protected        func(http.HandlerFunc) http.HandlerFunc
+	create           http.HandlerFunc
+	list             http.HandlerFunc
+	get              http.HandlerFunc
+	update           http.HandlerFunc
+	snapshot         http.HandlerFunc
+	revisions        http.HandlerFunc
+	revision         http.HandlerFunc
+	restore          http.HandlerFunc
+	archive          http.HandlerFunc
+	delete           http.HandlerFunc
+	render           http.HandlerFunc
+	getExport        http.HandlerFunc
+	addAsset         http.HandlerFunc
+	listAssets       http.HandlerFunc
+	deleteAsset      http.HandlerFunc
+	createAssignment http.HandlerFunc
 }
 
-func NewThumbnailProjectsModule(protected func(http.HandlerFunc) http.HandlerFunc, create, list, get, update, snapshot, revisions, revision, restore, archive, delete, render, getExport, addAsset, listAssets, deleteAsset http.HandlerFunc) RouteModule {
-	return &ThumbnailProjectsModule{protected: protected, create: create, list: list, get: get, update: update, snapshot: snapshot, revisions: revisions, revision: revision, restore: restore, archive: archive, delete: delete, render: render, getExport: getExport, addAsset: addAsset, listAssets: listAssets, deleteAsset: deleteAsset}
+func NewThumbnailProjectsModule(protected func(http.HandlerFunc) http.HandlerFunc, create, list, get, update, snapshot, revisions, revision, restore, archive, delete, render, getExport, addAsset, listAssets, deleteAsset, createAssignment http.HandlerFunc) RouteModule {
+	return &ThumbnailProjectsModule{protected: protected, create: create, list: list, get: get, update: update, snapshot: snapshot, revisions: revisions, revision: revision, restore: restore, archive: archive, delete: delete, render: render, getExport: getExport, addAsset: addAsset, listAssets: listAssets, deleteAsset: deleteAsset, createAssignment: createAssignment}
 }
 
 var _ RouteModule = (*ThumbnailProjectsModule)(nil)
@@ -60,4 +61,8 @@ func (m *ThumbnailProjectsModule) Register(mux chi.Router) {
 	mux.Method(http.MethodPost, "/api/v1/thumbnail-projects/{id}/assets", m.protected(m.addAsset))
 	mux.Method(http.MethodGet, "/api/v1/thumbnail-projects/{id}/assets", m.protected(m.listAssets))
 	mux.Method(http.MethodDelete, "/api/v1/thumbnail-projects/{id}/assets/{media_id}", m.protected(m.deleteAsset))
+	// Optional YouTube destination for an existing ready export. The
+	// export exists before any assignment and the original project is
+	// never modified; the workspace guard is enforced handler-side.
+	mux.Method(http.MethodPost, "/api/v1/thumbnail-exports/{export_id}/assignments", m.protected(m.createAssignment))
 }

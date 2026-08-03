@@ -354,7 +354,21 @@ func (r *ThumbnailProjectRepository) CreateAssignment(ctx context.Context, assig
 		assignment.Platform, assignment.YouTubeVideoID, assignment.TargetLanguage, assignment.Status, createdAt, updatedAt,
 		models.ThumbnailProjectStatusDeleted)
 	if err != nil {
-		return fmt.Errorf("create thumbnail assignment: %w", err)
+		// Constraint names come from migration 094. Mapping the unique
+		// and composite-FK violations to typed sentinels keeps the API
+		// layer from leaking raw Postgres messages (and turns the
+		// duplicate-assignment case into a recoverable 409).
+		message := err.Error()
+		switch {
+		case strings.Contains(message, "thumbnail_assignments_export_account_video_uq"):
+			return fmt.Errorf("%w: assignment already exists for this export/account/video", ErrThumbnailAssignmentConflict)
+		case strings.Contains(message, "thumbnail_assignments_workspace_account_fk"):
+			return fmt.Errorf("%w: platform account is not linked to this workspace", ErrThumbnailProjectInvalid)
+		case strings.Contains(message, "thumbnail_assignments_workspace_account_platform_fk"):
+			return fmt.Errorf("%w: platform account is not a youtube account", ErrThumbnailProjectInvalid)
+		default:
+			return fmt.Errorf("create thumbnail assignment: %w", err)
+		}
 	}
 	n, err := result.RowsAffected()
 	if err != nil {
