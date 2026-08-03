@@ -116,10 +116,22 @@ paths:
       summary: Submit one canonical Velox render job.
       description: |
         Creates one asynchronous render job using the stable
-        `velox.job.v1` envelope. Editorial variation belongs in
-        `template_id` and `spec`; new video genres do not create new
-        endpoints. Workspace and user identity are taken from the
-        authenticated request context and are never accepted in the body.
+        `velox.job.v1` envelope. `job_type` selects the technical
+        validator/compiler, while `template_id` and `template_version`
+        select the editorial recipe. New video genres and editorial
+        templates do not create new endpoints. Workspace and user identity
+        are taken from the authenticated request context and are never
+        accepted in the body.
+
+        The public typed variants documented here are
+        `scene.composite.v1`, `clip.stock.v1`, `scene.image.v1`, and
+        `slideshow.v1`. Their `spec` objects are closed recursively:
+        unknown fields are rejected with `422 Unprocessable Entity`.
+        `template_id` is data in this envelope, not a URL path segment.
+
+        The migration-only `/api/v1/velox/jobs` route remains the legacy
+        `project_id` + `render_spec` adapter. New callers MUST use this
+        canonical endpoint.
       security:
         - JwtCookie: []
       requestBody:
@@ -128,6 +140,15 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/VeloxJobSubmissionRequest'
+            examples:
+              sceneComposite:
+                $ref: '#/components/examples/VeloxSceneCompositeJob'
+              clipStock:
+                $ref: '#/components/examples/VeloxClipStockJob'
+              sceneImage:
+                $ref: '#/components/examples/VeloxSceneImageJob'
+              slideshow:
+                $ref: '#/components/examples/VeloxSlideshowJob'
       responses:
         '202':
           description: Job accepted for asynchronous rendering.
@@ -1620,11 +1641,288 @@ components:
         overall_status: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    # The central technical registry currently exposes four public typed
+    # modes. Editorial template ids are values in the envelope, not paths.
+    VeloxAssetRef:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        asset_id: { type: string }
+        uri: { type: string, description: 'Portable asset URI, for example velox-asset://audio-01.' }
+        url: { type: string, format: uri }
+        local_path:
+          type: string
+          description: 'Accepted only when it is a portable velox-asset:// URI; filesystem paths are rejected by the adapter.'
+        type: { type: string }
+        duration_ms: { type: integer, minimum: 0 }
+        start_ms: { type: integer, minimum: 0 }
+        end_ms: { type: integer, minimum: 0 }
+        fallback: { type: boolean }
+
+    VeloxTransition:
+      type: object
+      additionalProperties: false
+      properties:
+        type: { type: string }
+        duration_ms: { type: integer, minimum: 0 }
+
+    VeloxSceneSpec:
+      type: object
+      additionalProperties: false
+      required: [scenes]
+      description: |
+        Closed scene collection used by `scene.composite.v1`,
+        `clip.stock.v1`, and `scene.image.v1`. The same endpoint and
+        envelope are used for all three modes; `job_type` selects the
+        technical validator/compiler.
+      properties:
+        scenes:
+          type: array
+          items:
+            $ref: '#/components/schemas/VeloxScene'
+
+    VeloxScene:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        text: { type: string }
+        title: { type: string }
+        duration_ms: { type: integer, minimum: 0 }
+        start_ms: { type: integer, minimum: 0 }
+        end_ms: { type: integer, minimum: 0 }
+        assets:
+          $ref: '#/components/schemas/VeloxSceneAssets'
+        audio:
+          $ref: '#/components/schemas/VeloxSceneAudio'
+        timeline:
+          $ref: '#/components/schemas/VeloxTimeline'
+        visual_slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/VeloxVisualSlot'
+        visual_assignments:
+          type: array
+          items:
+            $ref: '#/components/schemas/VeloxVisualAssignment'
+        layers:
+          type: array
+          items:
+            $ref: '#/components/schemas/VeloxLayer'
+        subtitles:
+          type: array
+          items:
+            $ref: '#/components/schemas/VeloxSubtitle'
+        transition:
+          $ref: '#/components/schemas/VeloxTransition'
+        bindings:
+          $ref: '#/components/schemas/VeloxBindings'
+        primary_clip:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        stock:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        image:
+          $ref: '#/components/schemas/VeloxAssetRef'
+
+    VeloxSceneAssets:
+      type: object
+      additionalProperties: false
+      properties:
+        primary_clip:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        stock:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        image:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        additional:
+          type: array
+          items:
+            $ref: '#/components/schemas/VeloxAssetRef'
+
+    VeloxSceneAudio:
+      type: object
+      additionalProperties: false
+      properties:
+        voiceover:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        music:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        ducking: { type: number, format: double }
+
+    VeloxTimeline:
+      type: object
+      additionalProperties: false
+      properties:
+        start_ms: { type: integer, minimum: 0 }
+        end_ms: { type: integer, minimum: 0 }
+        duration_ms: { type: integer, minimum: 0 }
+
+    VeloxVisualSlot:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        asset:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        layer: { type: string }
+        x: { type: number, format: double }
+        y: { type: number, format: double }
+        width: { type: number, format: double }
+        height: { type: number, format: double }
+
+    VeloxVisualAssignment:
+      type: object
+      additionalProperties: false
+      properties:
+        slot: { type: string }
+        binding: { type: string }
+        asset:
+          $ref: '#/components/schemas/VeloxAssetRef'
+
+    VeloxLayer:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        type: { type: string }
+        text: { type: string }
+        asset:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        opacity: { type: number, format: double }
+        start_ms: { type: integer, minimum: 0 }
+        end_ms: { type: integer, minimum: 0 }
+
+    VeloxSubtitle:
+      type: object
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        start_ms: { type: integer, minimum: 0 }
+        end_ms: { type: integer, minimum: 0 }
+        style: { type: string }
+        language: { type: string }
+
+    VeloxBindings:
+      type: object
+      additionalProperties: false
+      properties:
+        clip:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        stock:
+          $ref: '#/components/schemas/VeloxAssetRef'
+        voiceover:
+          $ref: '#/components/schemas/VeloxAssetRef'
+
+    VeloxSlideshowSpec:
+      type: object
+      additionalProperties: false
+      required: [images]
+      description: Closed image sequence used by `slideshow.v1`.
+      properties:
+        images:
+          type: array
+          items:
+            $ref: '#/components/schemas/VeloxSlideshowImage'
+
+    VeloxSlideshowImage:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        asset_id: { type: string }
+        uri: { type: string, description: 'Portable asset URI, for example velox-asset://image-01.' }
+        url: { type: string, format: uri }
+        local_path:
+          type: string
+          description: 'Accepted only when it is a portable velox-asset:// URI.'
+        text: { type: string }
+        duration_ms: { type: integer, minimum: 0 }
+        start_ms: { type: integer, minimum: 0 }
+        end_ms: { type: integer, minimum: 0 }
+        zoom: { type: number, format: double }
+        pan_x: { type: number, format: double }
+        pan_y: { type: number, format: double }
+        transition:
+          $ref: '#/components/schemas/VeloxTransition'
+
     VeloxJobSubmissionRequest:
       type: object
       additionalProperties: false
       required: [contract_version, idempotency_key, job_type, template_id,
                  template_version, video_name, spec, output, delivery_plan]
+      description: |
+        Canonical `velox.job.v1` envelope. Keep this object stable as
+        editorial templates grow; add a template value rather than a
+        template-specific endpoint.
+      example:
+        contract_version: velox.job.v1
+        idempotency_key: five-boxers-it-001
+        job_type: scene.composite.v1
+        template_id: documentary.clip-stock
+        template_version: 1
+        video_name: Five legendary boxers
+        spec:
+          scenes:
+            - id: intro
+              text: Cinque pugili leggendari
+              duration_ms: 4000
+              assets:
+                primary_clip:
+                  asset_id: asset-clip-intro
+              audio:
+                voiceover:
+                  uri: velox-asset://voiceover-intro
+              timeline:
+                duration_ms: 4000
+              visual_slots:
+                - id: intro
+                  asset:
+                    asset_id: asset-clip-intro
+        output:
+          width: 1920
+          height: 1080
+          fps: 30
+          format: mp4
+        delivery_plan:
+          destinations:
+            - external_destination_id: extdst_01J
+      x-job-type-specs:
+        scene.composite.v1: '#/components/schemas/VeloxSceneSpec'
+        clip.stock.v1: '#/components/schemas/VeloxSceneSpec'
+        scene.image.v1: '#/components/schemas/VeloxSceneSpec'
+        slideshow.v1: '#/components/schemas/VeloxSlideshowSpec'
+      # OpenAPI 3.1 conditional schemas make the registry selection
+      # explicit to tooling as well as to the runtime validator.
+      allOf:
+        - if:
+            properties:
+              job_type: { const: scene.composite.v1 }
+          then:
+            properties:
+              spec:
+                $ref: '#/components/schemas/VeloxSceneSpec'
+        - if:
+            properties:
+              job_type: { const: clip.stock.v1 }
+          then:
+            properties:
+              spec:
+                $ref: '#/components/schemas/VeloxSceneSpec'
+        - if:
+            properties:
+              job_type: { const: scene.image.v1 }
+          then:
+            properties:
+              spec:
+                $ref: '#/components/schemas/VeloxSceneSpec'
+        - if:
+            properties:
+              job_type: { const: slideshow.v1 }
+          then:
+            properties:
+              spec:
+                $ref: '#/components/schemas/VeloxSlideshowSpec'
       properties:
         contract_version:
           type: string
@@ -1635,7 +1933,16 @@ components:
           maxLength: 255
         job_type:
           type: string
-          minLength: 1
+          enum:
+            - scene.composite.v1
+            - clip.stock.v1
+            - scene.image.v1
+            - slideshow.v1
+          description: |
+            Technical renderer mode resolved by the central registry.
+            Editorial formats belong in `template_id`, never in a new
+            endpoint. The four public typed modes above share this
+            canonical endpoint.
         template_id:
           type: string
           minLength: 1
@@ -1646,8 +1953,13 @@ components:
           type: string
           minLength: 1
         spec:
-          type: object
-          additionalProperties: true
+          description: |
+            Job-type-specific closed specification. The selected
+            `job_type` determines which branch applies; the server
+            rejects unknown fields recursively with HTTP 422.
+          oneOf:
+            - $ref: '#/components/schemas/VeloxSceneSpec'
+            - $ref: '#/components/schemas/VeloxSlideshowSpec'
         output:
           type: object
           additionalProperties: false
@@ -1675,6 +1987,93 @@ components:
                   metadata:
                     type: object
                     additionalProperties: true
+
+  examples:
+    VeloxSceneCompositeJob:
+      summary: Composite documentary job
+      description: Editorial documentary content uses the shared job endpoint; the template is not a path.
+      value:
+        contract_version: velox.job.v1
+        idempotency_key: five-boxers-it-001
+        job_type: scene.composite.v1
+        template_id: documentary.clip-stock
+        template_version: 1
+        video_name: Five legendary boxers
+        spec:
+          scenes:
+            - id: intro
+              text: Cinque pugili leggendari
+              duration_ms: 4000
+              assets:
+                primary_clip:
+                  asset_id: asset-clip-intro
+              audio:
+                voiceover:
+                  uri: velox-asset://voiceover-intro
+              timeline:
+                duration_ms: 4000
+        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
+        delivery_plan:
+          destinations: [{ external_destination_id: extdst_01J }]
+    VeloxClipStockJob:
+      summary: Clip plus stock fallback job
+      value:
+        contract_version: velox.job.v1
+        idempotency_key: clip-stock-001
+        job_type: clip.stock.v1
+        template_id: documentary.clip-stock
+        template_version: 1
+        video_name: Profile video
+        spec:
+          scenes:
+            - id: scene-1
+              primary_clip: { asset_id: asset-clip-1 }
+              stock: { asset_id: asset-stock-1, fallback: true }
+              bindings:
+                clip: { asset_id: asset-clip-1 }
+                stock: { asset_id: asset-stock-1 }
+        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
+        delivery_plan:
+          destinations: [{ external_destination_id: extdst_01J }]
+    VeloxSceneImageJob:
+      summary: Image-led scene job
+      value:
+        contract_version: velox.job.v1
+        idempotency_key: scene-image-001
+        job_type: scene.image.v1
+        template_id: biography.images.v1
+        template_version: 1
+        video_name: Biography images
+        spec:
+          scenes:
+            - id: scene-1
+              image: { asset_id: asset-image-1 }
+              text: Biography
+        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
+        delivery_plan:
+          destinations: [{ external_destination_id: extdst_01J }]
+    VeloxSlideshowJob:
+      summary: Image slideshow job
+      value:
+        contract_version: velox.job.v1
+        idempotency_key: slideshow-001
+        job_type: slideshow.v1
+        template_id: motivational.images.v1
+        template_version: 1
+        video_name: Motivational slideshow
+        spec:
+          images:
+            - id: image-1
+              asset_id: asset-image-1
+              duration_ms: 3000
+              zoom: 1.05
+            - id: image-2
+              uri: velox-asset://image-2
+              duration_ms: 3000
+              transition: { type: fade, duration_ms: 500 }
+        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
+        delivery_plan:
+          destinations: [{ external_destination_id: extdst_01J }]
 
     # ────── YouTube editor session publish contract ──────────
     YouTubeEditorSessionPublishRequest:

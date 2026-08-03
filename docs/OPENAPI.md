@@ -1,6 +1,6 @@
 # InstaEditLogin — OpenAPI Equivalent
 
-This document provides an OpenAPI-style description of the public API. A formal `openapi.yaml` can be generated from this file in the future.
+This document provides the human-readable companion to the formal `api/openapi.yaml` specification. The canonical Velox job contract is documented in both places; keep endpoint and schema changes synchronized.
 
 ## Info
 
@@ -17,6 +17,69 @@ This document provides an OpenAPI-style description of the public API. A formal 
 ## Authentication
 
 Most endpoints require a `Authorization: Bearer <jwt>` header. The JWT is issued after OAuth callback.
+
+## Canonical Velox jobs
+
+### POST /jobs
+
+With the `/api/v1` server base, this is `POST /api/v1/jobs`. It is the
+single endpoint for asynchronous Velox render-job creation. The request
+uses the stable `velox.job.v1` envelope:
+
+```json
+{
+  "contract_version": "velox.job.v1",
+  "idempotency_key": "five-boxers-it-001",
+  "job_type": "scene.composite.v1",
+  "template_id": "documentary.clip-stock",
+  "template_version": 1,
+  "video_name": "Five legendary boxers",
+  "spec": {
+    "scenes": [
+      {
+        "id": "intro",
+        "text": "Cinque pugili leggendari",
+        "assets": {
+          "primary_clip": {"asset_id": "asset-clip-intro"}
+        },
+        "audio": {
+          "voiceover": {"uri": "velox-asset://voiceover-intro"}
+        },
+        "timeline": {"duration_ms": 4000}
+      }
+    ]
+  },
+  "output": {"width": 1920, "height": 1080, "fps": 30, "format": "mp4"},
+  "delivery_plan": {
+    "destinations": [{"external_destination_id": "extdst_01J"}]
+  }
+}
+```
+
+`job_type` selects the technical registry entry and must be one of:
+
+- `scene.composite.v1`
+- `clip.stock.v1`
+- `scene.image.v1`
+- `slideshow.v1`
+
+The first three use a closed `spec.scenes` schema; `slideshow.v1` uses a
+closed `spec.images` schema. Unknown fields are rejected recursively with
+`422 Unprocessable Entity`. `template_id` and `template_version` select the
+editorial recipe; editorial templates never become URL paths or separate
+endpoints. For the full recursive schema and all four examples, see
+`api/openapi.yaml` (`VeloxSceneSpec`, `VeloxSlideshowSpec`, and the
+`Velox*Job` examples).
+
+The existing `POST /api/v1/velox/jobs` route is migration-only and accepts
+the legacy `project_id` + `render_spec` adapter. New producers should use
+`POST /api/v1/jobs`.
+
+### Canonical job responses
+
+- `202 Accepted` — job queued for asynchronous rendering
+- `409 Conflict` — idempotency conflict from the same key with a different payload
+- `422 Unprocessable Entity` — invalid envelope, unknown `job_type`, invalid typed spec, or unknown nested field
 
 ## Common Responses
 
