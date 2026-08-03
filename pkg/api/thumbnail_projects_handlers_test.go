@@ -36,6 +36,13 @@ type thumbnailProjectTestStore struct {
 	lastExportSHA     []byte
 	lastExportFileSz  int64
 	lastExportVersion string
+	// Asset surfaces for the asset endpoints.
+	assets          []models.ThumbnailProjectAsset
+	assetErr        error
+	deleteAssetErr  error
+	createdAsset    *models.ThumbnailProjectAsset
+	lastDeleteMedia string
+	lastDeleteRole  string
 }
 
 func (s *thumbnailProjectTestStore) Create(_ context.Context, project *models.ThumbnailProject) error {
@@ -99,6 +106,26 @@ func (s *thumbnailProjectTestStore) UpdateExportStatus(_ context.Context, _ int6
 	if s.export != nil {
 		s.export.Status = status
 	}
+	return nil
+}
+func (s *thumbnailProjectTestStore) CreateAsset(_ context.Context, _ int64, asset *models.ThumbnailProjectAsset) error {
+	if s.assetErr != nil {
+		return s.assetErr
+	}
+	if asset.CreatedAt.IsZero() {
+		asset.CreatedAt = time.Now().UTC()
+	}
+	s.createdAsset = asset
+	return nil
+}
+func (s *thumbnailProjectTestStore) ListAssets(_ context.Context, _ int64, _ string) ([]models.ThumbnailProjectAsset, error) {
+	return s.assets, nil
+}
+func (s *thumbnailProjectTestStore) DeleteAsset(_ context.Context, _ int64, _ string, mediaID, role string) error {
+	if s.deleteAssetErr != nil {
+		return s.deleteAssetErr
+	}
+	s.lastDeleteMedia, s.lastDeleteRole = mediaID, role
 	return nil
 }
 
@@ -254,6 +281,149 @@ func TestThumbnailProjects_RestoreReturnsNewRevision(t *testing.T) {
 	}
 	if result.RevisionID != "rev-new" || result.RevisionNumber != 2 || result.Version != 3 {
 		t.Fatalf("unexpected restore result: %+v", result)
+	}
+}
+
+func TestThumbnailProjects_AddAssetRequiresWorkspaceQuery(t *testing.T) {
+	r := thumbnailProjectRouter(t, &thumbnailProjectTestStore{}, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_test/assets", bytes.NewBufferString(`{"media_id":"00000000-0000-4000-8000-000000000001","role":"background"}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for missing workspace_id, got %d", w.Code)
+	}
+}
+
+func TestThumbnailProjects_AddAssetLinksMediaToProject(t *testing.T) {
+	store := &thumbnailProjectTestStore{}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	body := `{"media_id":"00000000-0000-4000-8000-000000000001","role":"logo","object_id":"text-1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_test/assets?workspace_id=7", bytes.NewBufferString(body))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body.String())
+	}
+	if store.createdAsset == nil || store.createdAsset.ProjectID != "thumbproj_test" || store.createdAsset.Role != "logo" || store.createdAsset.MediaID != "00000000-0000-4000-8000-000000000001" || store.createdAsset.ObjectID == nil || *store.createdAsset.ObjectID != "text-1" {
+		t.Fatalf("unexpected created asset: %+v", store.createdAsset)
+	}
+}
+
+func TestThumbnailProjects_AddAssetDuplicateIs409(t *testing.T) {
+	store := &thumbnailProjectTestStore{assetErr: repository.ErrThumbnailDomainConflict}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_test/assets?workspace_id=7", bytes.NewBufferString(`{"media_id":"00000000-0000-4000-8000-000000000001","role":"background"}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body["code"] != "ASSET_ALREADY_LINKED" {
+		t.Fatalf("unexpected conflict body: %s", w.Body.String())
+	}
+}
+
+func TestThumbnailProjects_AddAssetInvalidRoleIs422(t *testing.T) {
+	store := &thumbnailProjectTestStore{assetErr: fmt.Errorf("%w: unsupported role", repository.ErrThumbnailProjectInvalid)}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_test/assets?workspace_id=7", bytes.NewBufferString(`{"media_id":"00000000-0000-4000-8000-000000000001","role":"bogus"}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestThumbnailProjects_AddAssetCrossWorkspaceIs404(t *testing.T) {
+	r := thumbnailProjectRouter(t, &thumbnailProjectTestStore{}, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 99}, nil }})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/thumbnail-projects/thumbproj_test/assets?workspace_id=7", bytes.NewBufferString(`{"media_id":"00000000-0000-4000-8000-000000000001","role":"background"}`))
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for cross-workspace asset add, got %d", w.Code)
+	}
+}
+
+func TestThumbnailProjects_ListAssetsReturnsItems(t *testing.T) {
+	asset := models.ThumbnailProjectAsset{ProjectID: "thumbproj_test", MediaID: "00000000-0000-4000-8000-000000000001", Role: "background"}
+	store := &thumbnailProjectTestStore{assets: []models.ThumbnailProjectAsset{asset}}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/thumbnail-projects/thumbproj_test/assets?workspace_id=7", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var response thumbnailProjectAssetListResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) != 1 || response.Items[0].MediaID != asset.MediaID {
+		t.Fatalf("unexpected list: %+v", response.Items)
+	}
+}
+
+func TestThumbnailProjects_ListAssetsEmptyIsEmptyArray(t *testing.T) {
+	store := &thumbnailProjectTestStore{}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/thumbnail-projects/thumbproj_test/assets?workspace_id=7", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var response thumbnailProjectAssetListResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Items == nil || len(response.Items) != 0 {
+		t.Fatalf("want empty items array, got %#v", response.Items)
+	}
+}
+
+func TestThumbnailProjects_DeleteAssetRequiresRole(t *testing.T) {
+	r := thumbnailProjectRouter(t, &thumbnailProjectTestStore{}, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/thumbnail-projects/thumbproj_test/assets/00000000-0000-4000-8000-000000000001?workspace_id=7", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for missing role, got %d", w.Code)
+	}
+}
+
+func TestThumbnailProjects_DeleteAssetRemovesLink(t *testing.T) {
+	store := &thumbnailProjectTestStore{}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/thumbnail-projects/thumbproj_test/assets/00000000-0000-4000-8000-000000000001?workspace_id=7&role=background", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d: %s", w.Code, w.Body.String())
+	}
+	if store.lastDeleteMedia != "00000000-0000-4000-8000-000000000001" || store.lastDeleteRole != "background" {
+		t.Fatalf("delete scope mismatch: media=%q role=%q", store.lastDeleteMedia, store.lastDeleteRole)
+	}
+}
+
+func TestThumbnailProjects_DeleteAssetMissingIs404(t *testing.T) {
+	store := &thumbnailProjectTestStore{deleteAssetErr: repository.ErrThumbnailProjectAssetNotFound}
+	r := thumbnailProjectRouter(t, store, &mockWorkspaceStore{findByIDFn: func(id int64) (*models.Workspace, error) { return &models.Workspace{ID: id, OwnerID: 1}, nil }})
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/thumbnail-projects/thumbproj_test/assets/00000000-0000-4000-8000-000000000001?workspace_id=7&role=background", nil)
+	withBearerJWT(t, req, 1)
+	w := httptest.NewRecorder()
+	r.Setup().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", w.Code)
 	}
 }
 

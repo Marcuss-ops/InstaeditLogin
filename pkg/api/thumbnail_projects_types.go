@@ -29,6 +29,17 @@ type ThumbnailProjectStore interface {
 	// 'failed' and, on ready, advances the project's latest_export_id and
 	// preview_media_id pointers in the same transaction.
 	UpdateExportStatus(ctx context.Context, workspaceID int64, exportID, status, lastError string, sha256 []byte, fileSize int64, rendererVersion string) error
+	// CreateAsset links a ready media asset owned by (or shared with) the
+	// workspace to a project with a typed role (background/foreground/logo/
+	// overlay/reference/font). Duplicate (project, media_id, role) links
+	// surface ErrThumbnailDomainConflict.
+	CreateAsset(ctx context.Context, workspaceID int64, asset *models.ThumbnailProjectAsset) error
+	// ListAssets returns the workspace-scoped project's media links ordered
+	// by creation.
+	ListAssets(ctx context.Context, workspaceID int64, projectID string) ([]models.ThumbnailProjectAsset, error)
+	// DeleteAsset removes one (project, media_id, role) link; a missing row
+	// surfaces ErrThumbnailProjectAssetNotFound.
+	DeleteAsset(ctx context.Context, workspaceID int64, projectID, mediaID, role string) error
 }
 
 type createThumbnailProjectRequest struct {
@@ -70,4 +81,14 @@ type thumbnailProjectRevisionListResponse struct {
 
 type thumbnailProjectRevisionDetailResponse struct {
 	Revision models.ThumbnailProjectRevision `json:"revision"`
+}
+
+type createThumbnailProjectAssetRequest struct {
+	MediaID  string  `json:"media_id"`
+	Role     string  `json:"role"`
+	ObjectID *string `json:"object_id,omitempty"`
+}
+
+type thumbnailProjectAssetListResponse struct {
+	Items []models.ThumbnailProjectAsset `json:"items"`
 }
