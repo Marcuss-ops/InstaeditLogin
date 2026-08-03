@@ -31,6 +31,11 @@ func NewRefreshSweepRepository(db *sql.DB) *RefreshSweepRepository {
 // so gauge, sweep and log all agree on the same horizon.
 const refreshSweepTTLWindowDays = 7
 
+// Keep short-lived provider access tokens usable between user actions. The
+// refresh token can remain valid for months, but its access token typically
+// expires in about one hour.
+const refreshSweepAccessTokenWindowMinutes = 15
+
 // RefreshSweepLockID is the Postgres advisory-lock key that
 // single-flights the token refresh sweep across replicas — the same
 // mechanism the metrics collector uses (pkg/metrics/collector.go::
@@ -69,6 +74,13 @@ const SQLListDormantRefreshGrants = `SELECT oc.id            AS oauth_connection
        OR (oc.last_refresh_at < NOW() - ($1 || ' days')::interval)
        OR (oc.expires_at IS NOT NULL
            AND oc.expires_at <= NOW() + $2::interval)
+       OR EXISTS (
+           SELECT 1
+             FROM tokens t
+            WHERE t.platform_account_id = pa.id
+              AND t.access_token_expires_at IS NOT NULL
+              AND t.access_token_expires_at <= NOW() + $3::interval
+       )
         )
   ORDER BY oc.id, pa.id`
 
@@ -90,6 +102,9 @@ const SQLListDormantRefreshGrants = `SELECT oc.id            AS oauth_connection
 //     c) expires_at is within refreshSweepTTLWindowDays of now —
 //     the provider gave the grant an explicit TTL (Google's
 //     refresh_token_expires_in) and it is about to lapse.
+//     d) the short-lived access token is expired or expires within
+//     refreshSweepAccessTokenWindowMinutes, so API calls never use
+//     a stale bearer while the refresh token is still healthy.
 //
 // horizonDays is the inactivity lookahead; the publish worker's
 // default sweep horizon is 120 days (~4 months, leaving a 2-month
@@ -120,7 +135,9 @@ type sweepQueryer interface {
 func queryDormantRefreshGrants(ctx context.Context, q sweepQueryer, horizonDays int) ([]models.DormantRefreshGrant, error) {
 	rows, err := q.QueryContext(ctx,
 		SQLListDormantRefreshGrants,
-		horizonDays, fmt.Sprintf("%d days", refreshSweepTTLWindowDays),
+		horizonDays,
+		fmt.Sprintf("%d days", refreshSweepTTLWindowDays),
+		fmt.Sprintf("%d minutes", refreshSweepAccessTokenWindowMinutes),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("refresh sweep: list dormant grants: %w", err)

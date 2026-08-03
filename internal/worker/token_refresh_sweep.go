@@ -57,10 +57,9 @@ import (
 
 // DefaultTokenRefreshSweepInterval is the fallback tick interval.
 // Production cadence comes from cfg.Worker.TokenRefreshSweepIntervalSeconds
-// (env: TOKEN_REFRESH_SWEEP_INTERVAL_SECONDS, default 86400s = 24h).
-// Daily is ample: the risk horizon is ~6 months, so even a weekly
-// cadence would keep every grant inside the activity window.
-const DefaultTokenRefreshSweepInterval = 24 * time.Hour
+// (env: TOKEN_REFRESH_SWEEP_INTERVAL_SECONDS, default 900s = 15m).
+// The sweep also renews access tokens inside the 15-minute expiry window.
+const DefaultTokenRefreshSweepInterval = 15 * time.Minute
 
 // DefaultTokenRefreshSweepHorizonDays is the inactivity lookahead:
 // a grant whose last_refresh_at (or created_at when never refreshed)
@@ -100,7 +99,7 @@ type TokenRefreshSweepWorker struct {
 }
 
 // NewTokenRefreshSweepWorker wires the dependencies. interval <= 0
-// falls back to DefaultTokenRefreshSweepInterval (24h); horizonDays
+// falls back to DefaultTokenRefreshSweepInterval (15m); horizonDays
 // <= 0 falls back to DefaultTokenRefreshSweepHorizonDays (120).
 // nil logger inherits slog.Default(). store and vault must be
 // non-nil — a nil will panic on the first tick (fail-fast for

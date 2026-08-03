@@ -147,7 +147,7 @@ func TestTokenRefreshSweep_Tick_RenewsWiredProvidersAndSkipsOthers(t *testing.T)
 	if h.renewCalls[1].probeResult != "drive-fresh" {
 		t.Errorf("drive renew: refresher probe want drive-fresh, got %q", h.renewCalls[1].probeResult)
 	}
-	// Defaults applied: 24h interval, 120d horizon passed to the store.
+	// Defaults applied: 15m interval, 120d horizon passed to the store.
 	if h.store.gotHorizon != DefaultTokenRefreshSweepHorizonDays {
 		t.Errorf("store horizon: want %d, got %d", DefaultTokenRefreshSweepHorizonDays, h.store.gotHorizon)
 	}

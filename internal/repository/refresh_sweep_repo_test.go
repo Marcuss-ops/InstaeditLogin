@@ -27,7 +27,8 @@ func newMockSweepDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 
 // TestRefreshSweep_ListDormantGrants_SelectsAtRiskGrants pins the
 // happy path: the horizon (120d) flows through as $1, the 7-day TTL
-// window as $2, and every returned row is scanned into
+// window as $2, the 15-minute access-token window as $3, and every
+// returned row is scanned into
 // models.DormantRefreshGrant preserving provider + both ids.
 func TestRefreshSweep_ListDormantGrants_SelectsAtRiskGrants(t *testing.T) {
 	db, mock := newMockSweepDB(t)
@@ -37,7 +38,7 @@ func TestRefreshSweep_ListDormantGrants_SelectsAtRiskGrants(t *testing.T) {
 		AddRow(int64(1), int64(10), "youtube").
 		AddRow(int64(2), int64(20), "google-drive")
 	mock.ExpectQuery(repository.SQLListDormantRefreshGrants).
-		WithArgs(120, "7 days").
+		WithArgs(120, "7 days", "15 minutes").
 		WillReturnRows(rows)
 
 	grants, err := repo.ListDormantRefreshGrants(context.Background(), 120)
@@ -75,7 +76,7 @@ func TestRefreshSweep_ListDormantGrants_Empty(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{"oauth_connection_id", "platform_account_id", "provider"})
 	mock.ExpectQuery(repository.SQLListDormantRefreshGrants).
-		WithArgs(150, "7 days").
+		WithArgs(150, "7 days", "15 minutes").
 		WillReturnRows(rows)
 
 	grants, err := repo.ListDormantRefreshGrants(context.Background(), 150)
@@ -100,7 +101,7 @@ func TestRefreshSweep_ListDormantGrants_ZeroHorizonUsesDefault(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{"oauth_connection_id", "platform_account_id", "provider"})
 	mock.ExpectQuery(repository.SQLListDormantRefreshGrants).
-		WithArgs(repository.DefaultRefreshSweepHorizonDays, "7 days").
+		WithArgs(repository.DefaultRefreshSweepHorizonDays, "7 days", "15 minutes").
 		WillReturnRows(rows)
 
 	if _, err := repo.ListDormantRefreshGrants(context.Background(), 0); err != nil {
@@ -118,7 +119,7 @@ func TestRefreshSweep_ListDormantGrants_QueryError(t *testing.T) {
 	repo := repository.NewRefreshSweepRepository(db)
 
 	mock.ExpectQuery(repository.SQLListDormantRefreshGrants).
-		WithArgs(120, "7 days").
+		WithArgs(120, "7 days", "15 minutes").
 		WillReturnError(sql.ErrConnDone)
 
 	if _, err := repo.ListDormantRefreshGrants(context.Background(), 120); err == nil {
@@ -148,7 +149,7 @@ func TestRefreshSweep_SingleFlighted_WinsLock_SelectsAndCommits(t *testing.T) {
 		WithArgs(repository.RefreshSweepLockID).
 		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_xact_lock"}).AddRow(true))
 	mock.ExpectQuery(repository.SQLListDormantRefreshGrants).
-		WithArgs(120, "7 days").
+		WithArgs(120, "7 days", "15 minutes").
 		WillReturnRows(rows)
 	mock.ExpectCommit()
 

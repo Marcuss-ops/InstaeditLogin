@@ -288,7 +288,8 @@ type WorkerConfig struct {
 	// refresh older than TokenRefreshSweepHorizonDays, or provider
 	// TTL within 7 days) so Google's ~6-month refresh-token
 	// inactivity garbage collection never kills a rarely-publishing
-	// channel. Default 86400 (24h): the risk horizon is ~6 months,
+	// channel. Default 900 (15m): access tokens expire hourly and are
+	// proactively renewed before they become unusable,
 	// so even a weekly cadence would keep every grant inside the
 	// activity window. Env TOKEN_REFRESH_SWEEP_INTERVAL_SECONDS.
 	TokenRefreshSweepIntervalSeconds int
