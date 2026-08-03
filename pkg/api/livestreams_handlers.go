@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -130,8 +131,11 @@ func (r *Router) handleListLivestreams(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	resp := listLivestreamsResponse{Items: make([]livestreamResponse, 0, len(items))}
+	names := r.livestreamChannelNames(req.Context(), items)
 	for i := range items {
-		resp.Items = append(resp.Items, toLivestreamResponse(&items[i]))
+		row := toLivestreamResponse(&items[i])
+		row.ChannelName = names[row.PlatformAccountID]
+		resp.Items = append(resp.Items, row)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -253,7 +257,9 @@ func (r *Router) handleCreateLivestream(w http.ResponseWriter, req *http.Request
 		writeError(w, http.StatusInternalServerError, "create livestream: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, toLivestreamResponse(ls))
+	resp := toLivestreamResponse(ls)
+	resp.ChannelName = account.Username
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +280,9 @@ func (r *Router) handleGetLivestream(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, toLivestreamResponse(ls))
+	row := toLivestreamResponse(ls)
+	row.ChannelName = r.livestreamChannelNames(req.Context(), []models.Livestream{*ls})[ls.PlatformAccountID]
+	writeJSON(w, http.StatusOK, row)
 }
 
 // ---------------------------------------------------------------------------
@@ -392,7 +400,9 @@ func (r *Router) handlePatchLivestream(w http.ResponseWriter, req *http.Request)
 		writeError(w, http.StatusNotFound, "livestream not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, toLivestreamResponse(updated))
+	row := toLivestreamResponse(updated)
+	row.ChannelName = r.livestreamChannelNames(req.Context(), []models.Livestream{*updated})[updated.PlatformAccountID]
+	writeJSON(w, http.StatusOK, row)
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +473,28 @@ func (r *Router) livestreamChannel(req *http.Request, workspaceID, accountID int
 		return nil, errors.New("account not linked to workspace")
 	}
 	return account, nil
+}
+
+// livestreamChannelNames resolves the display name of the YouTube
+// channel backing each livestream row. Unknown accounts (or a missing
+// userRepo, e.g. a partially wired test router) yield an empty name;
+// the frontend falls back to "Canale #id".
+func (r *Router) livestreamChannelNames(ctx context.Context, items []models.Livestream) map[int64]string {
+	names := make(map[int64]string)
+	if r.userRepo == nil {
+		return names
+	}
+	for i := range items {
+		id := items[i].PlatformAccountID
+		if _, seen := names[id]; seen {
+			continue
+		}
+		account, err := r.userRepo.FindPlatformAccountByID(id)
+		if err == nil && account != nil {
+			names[id] = account.Username
+		}
+	}
+	return names
 }
 
 // loadLivestreamForIdentity loads the {id} URL param row and verifies

@@ -65,11 +65,14 @@ type patchLivestreamRequest struct {
 // livestreamResponse is the public shape of a livestream row. The
 // YouTube resource references (broadcast/stream ids) and the stream
 // name/key are deliberately excluded — the stream name is a technical
-// credential that must never reach the frontend.
+// credential that must never reach the frontend. ChannelName is the
+// display name of the bound YouTube channel, resolved by the handlers
+// from the platform account (empty when the account cannot be loaded).
 type livestreamResponse struct {
 	ID                string     `json:"id"`
 	WorkspaceID       int64      `json:"workspace_id"`
 	PlatformAccountID int64      `json:"platform_account_id"`
+	ChannelName       string     `json:"channel_name"`
 	Title             string     `json:"title"`
 	Description       string     `json:"description"`
 	PrivacyStatus     string     `json:"privacy_status"`

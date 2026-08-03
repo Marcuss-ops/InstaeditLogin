@@ -337,6 +337,11 @@ func TestListLivestreams_HappyPath(t *testing.T) {
 	if len(resp.Items) != 1 || resp.Items[0].ID != ls.ID || resp.Items[0].ActualState != models.LivestreamStateLive {
 		t.Fatalf("unexpected items: %+v", resp.Items)
 	}
+	// The control-center page renders the channel name on every live
+	// card; it is resolved from the platform account by the handler.
+	if resp.Items[0].ChannelName != "testchannel" {
+		t.Errorf("channel_name: want testchannel (account username), got %q", resp.Items[0].ChannelName)
+	}
 }
 
 func livestreamFixtureResponse() *models.Livestream {
