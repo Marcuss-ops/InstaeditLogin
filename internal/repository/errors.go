@@ -171,4 +171,9 @@ var (
 	// ErrThumbnailProjectRevisionNotFound is returned when a revision is not
 	// visible within the requested workspace/project scope.
 	ErrThumbnailProjectRevisionNotFound = errors.New("thumbnail project revision not found")
+
+	ErrThumbnailProjectAssetNotFound = errors.New("thumbnail project asset not found")
+	ErrThumbnailExportNotFound       = errors.New("thumbnail export not found")
+	ErrThumbnailAssignmentNotFound   = errors.New("thumbnail assignment not found")
+	ErrThumbnailDomainConflict       = errors.New("thumbnail project domain conflict")
 )
