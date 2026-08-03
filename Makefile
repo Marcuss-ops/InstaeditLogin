@@ -1,4 +1,4 @@
-.PHONY: dev stop seed lint lint-check backend-test test-integration \
+.PHONY: dev web-dev stop seed lint lint-check backend-test test-integration \
         verify-entrypoint-topology \
         run-api run-worker run-migrate run-server run-server-api-only \
         docker-build-migrate-only \
@@ -17,11 +17,17 @@
 # is required, use `make run-server` or `docker compose --profile legacy up`
 # deliberately and plan its removal using `make verify-entrypoint-topology`.
 dev:
-	docker compose --env-file .env.dev up --build
+	INSTAEDIT_ENV_FILE=.env.dev docker compose --env-file .env.dev up --build
+
+# Start the Vite frontend against the canonical local Compose API port.
+# The backend is published on API_HOST_PORT (8081 in .env.dev) so it can
+# coexist with a host-side recovery server on :8080.
+web-dev:
+	VITE_API_BASE_URL=http://localhost:8081 npm --prefix web run dev
 
 # Stop the development stack
 stop:
-	docker compose down
+	INSTAEDIT_ENV_FILE=.env.dev docker compose --env-file .env.dev down
 
 # Apply development seed data (requires a running database and .env.dev)
 seed:

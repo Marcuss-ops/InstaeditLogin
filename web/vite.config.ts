@@ -80,7 +80,9 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        // The canonical local Compose stack publishes the API on 8081;
+        // keep an override for developers running the legacy host server.
+        target: process.env.VITE_DEV_API_TARGET ?? 'http://localhost:8081',
         changeOrigin: true,
       },
     },

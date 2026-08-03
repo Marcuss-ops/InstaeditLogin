@@ -5,7 +5,7 @@
  * a standalone CLI script via `npm run check:env`. The goal is to catch
  * obvious misconfigurations BEFORE the deployment goes live — the most
  * common one being a `VITE_API_BASE_URL` that still points at
- * http://localhost:8080 or has been left empty (which caused the recurring
+ * http://localhost:8081 or has been left empty (which caused the recurring
  * `vercel DEPLOYMENT_NOT_FOUND` 404 the moment a user clicked an OAuth button).
  *
  * Behavior is context-aware, driven by VERCEL_ENV (Vercel-injected at build
@@ -116,7 +116,7 @@ export function validateApiBaseUrl(env: Env = process.env): ValidationResult {
       level: "warn",
       context,
       messages: [
-        "VITE_API_BASE_URL is empty. Login buttons will fall back to http://localhost:8080 (probably what you want during initial dev).",
+        "VITE_API_BASE_URL is empty. Login buttons will fall back to http://localhost:8081 (the canonical local Compose API).",
       ],
     };
   }
