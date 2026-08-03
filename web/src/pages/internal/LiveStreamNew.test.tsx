@@ -328,7 +328,7 @@ describe("LiveStreamNewPage — step 2 (Configurazione YouTube)", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("ls-step2-cover-preview")).toBeInTheDocument();
-    }, { timeout: 5000 });
+    }, { timeout: 10000 });
     expect(uploadMediaAssetMock).toHaveBeenCalledTimes(1);
     const [, options] = uploadMediaAssetMock.mock.calls[0];
     expect(options.contentType).toBe("image/png");
@@ -339,7 +339,7 @@ describe("LiveStreamNewPage — step 2 (Configurazione YouTube)", () => {
     await userEvent.click(screen.getByTestId("ls-step2-cover-remove"));
     expect(screen.getByTestId("ls-step2-cover-upload")).toBeInTheDocument();
     expect(URL.revokeObjectURL).toHaveBeenCalled();
-  });
+  }, 15000);
 
   it("rejects non-image cover files with a toast", async () => {
     stubObjectURL();

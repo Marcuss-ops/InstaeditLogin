@@ -21,6 +21,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 // vi.mock declarations BEFORE the page import so module-init binds
@@ -213,7 +214,7 @@ describe("DashboardChannelsPage", () => {
     setAccountEndpoint();
     renderAt("/app/dashboard-channels/123");
     await screen.findByTestId("channel-video-filter-all");
-    fireEvent.click(screen.getByTestId("channel-video-filter-private"));
+    await userEvent.click(screen.getByTestId("channel-video-filter-private"));
     // After the chip click the URI must contain ?privacy=private.
     // The MemoryRouter + setSearchParams push is observable through
     // window.location (MemoryRouter uses history.pushState).
