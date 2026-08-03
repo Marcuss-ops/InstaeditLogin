@@ -100,15 +100,30 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	if r.vault == nil {
 		return nil, ErrEditorSessionNoValidToken
 	}
-	token, err := r.vault.Get(ctx, account.ID, models.TokenTypeBearer)
+	// Renew first (P0): CreateEditorSession is the FIRST step of the
+	// thumbnail-batch chain and makes a remote GetYouTubeVideo call, so
+	// an expired access token must be refreshed automatically from the
+	// stored grant instead of failing the batch item (vault.Get returns
+	// an "expired" error for stale tokens). The Get bearer → long_lived
+	// → short_lived fallback remains only for historical tokens written
+	// by older releases / migrations. youTubeSvc is still optional at
+	// this point (its nil-check is below), so the refresher is only
+	// used when the service is wired.
+	var token *models.OAuthToken
+	if r.youTubeSvc != nil {
+		token, err = r.vault.Renew(ctx, account.ID, models.TokenTypeBearer, r.youTubeSvc.RefreshOAuthToken)
+	}
+	if err != nil || token == nil {
+		token, err = r.vault.Get(ctx, account.ID, models.TokenTypeBearer)
+	}
 	if err != nil {
 		token, err = r.vault.Get(ctx, account.ID, models.TokenTypeLongLived)
-		if err != nil {
-			token, err = r.vault.Get(ctx, account.ID, models.TokenTypeShortLived)
-			if err != nil {
-				return nil, ErrEditorSessionNoValidToken
-			}
-		}
+	}
+	if err != nil {
+		token, err = r.vault.Get(ctx, account.ID, models.TokenTypeShortLived)
+	}
+	if err != nil {
+		return nil, ErrEditorSessionNoValidToken
 	}
 	if r.youTubeSvc == nil {
 		return nil, ErrEditorSessionYTServiceUnconfigured

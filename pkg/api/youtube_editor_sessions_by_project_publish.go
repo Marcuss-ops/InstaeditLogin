@@ -149,16 +149,24 @@ func (r *Router) executePublishYouTubeEditorSession(
 		return
 	}
 
-	token, err := r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeBearer)
+	// Renew first (P0): an expired access token is refreshed
+	// automatically from the stored grant (r.youTubeSvc is guaranteed
+	// non-nil here — the 503 guard above). The Get bearer → long_lived
+	// → short_lived fallback remains only for historical tokens written
+	// by older releases / migrations.
+	token, err := r.vault.Renew(ctx, edit.PlatformAccountID, models.TokenTypeBearer, r.youTubeSvc.RefreshOAuthToken)
+	if err != nil {
+		token, err = r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeBearer)
+	}
 	if err != nil {
 		token, err = r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeLongLived)
-		if err != nil {
-			token, err = r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeShortLived)
-			if err != nil {
-				writeError(w, http.StatusUnauthorized, "no valid token found for this account")
-				return
-			}
-		}
+	}
+	if err != nil {
+		token, err = r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeShortLived)
+	}
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "no valid token found for this account")
+		return
 	}
 
 	downloadURL, err := r.storageProvider.GetObject(ctx, asset.UploadKey, 5*time.Minute)

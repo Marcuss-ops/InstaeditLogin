@@ -314,7 +314,15 @@ func (r *Router) ensurePrivateYouTubeBatchVideo(ctx context.Context, edit *model
 	if edit == nil || r.vault == nil || r.youTubeSvc == nil {
 		return errors.New("YouTube validation is not configured")
 	}
-	token, err := r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeBearer)
+	// Renew first (P0): an expired access token is refreshed
+	// automatically from the stored grant, so a stale token can never
+	// fail the whole batch and force the operator to reconnect. The
+	// Get bearer → long_lived → short_lived fallback remains only for
+	// historical tokens written by older releases / migrations.
+	token, err := r.vault.Renew(ctx, edit.PlatformAccountID, models.TokenTypeBearer, r.youTubeSvc.RefreshOAuthToken)
+	if err != nil {
+		token, err = r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeBearer)
+	}
 	if err != nil {
 		token, err = r.vault.Get(ctx, edit.PlatformAccountID, models.TokenTypeLongLived)
 	}

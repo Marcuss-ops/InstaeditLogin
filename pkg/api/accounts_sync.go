@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
@@ -36,18 +37,30 @@ func (r *Router) handleSyncAccount(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Retrieve the access token from the vault.
-	token, err := r.vault.Get(req.Context(), account.ID, models.TokenTypeBearer)
+	// Refresh first (P0): an expired access token is renewed
+	// automatically from the stored grant via the platform's OAuth
+	// provider when one is wired. The Get bearer → long_lived →
+	// short_lived fallback remains only for platforms without a
+	// refresher or historical tokens written by older releases.
+	var token *models.OAuthToken
+	var err error
+	if refresher, ok := r.capabilities.OAuth(account.Platform); ok {
+		token, err = r.vault.Renew(req.Context(), account.ID, models.TokenTypeBearer, refresher.RefreshOAuthToken)
+	} else {
+		err = errors.New("no OAuth refresher wired for platform " + account.Platform)
+	}
 	if err != nil {
-		// Fall back to other token types.
+		token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeBearer)
+	}
+	if err != nil {
 		token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeLongLived)
-		if err != nil {
-			token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
-			if err != nil {
-				writeError(w, http.StatusUnauthorized, "no valid token found for this account")
-				return
-			}
-		}
+	}
+	if err != nil {
+		token, err = r.vault.Get(req.Context(), account.ID, models.TokenTypeShortLived)
+	}
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "no valid token found for this account")
+		return
 	}
 
 	details, err := detailsProvider.GetAccountDetails(req.Context(), token.AccessToken, account.PlatformUserID)
