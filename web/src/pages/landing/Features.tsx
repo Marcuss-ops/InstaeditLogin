@@ -5,9 +5,7 @@ import {
   DollarSign,
   Zap,
   Languages,
-  TrendingUp,
   Mic,
-  CheckCircle2,
 } from "lucide-react";
 import { IconSchedule } from "../../components/landing/icons";
 
@@ -204,68 +202,41 @@ export function Features() {
           </div>
 
           {/* ---------------- Scale to multiple languages ---------------- */}
-          <div className="surface-card p-7 lg:p-8 relative overflow-hidden lg:col-span-3 animate-fade-up animation-delay-300 hover:border-amber-400/40 transition-all duration-300 bg-[radial-gradient(circle_at_top_right,rgba(234,179,8,0.16),transparent_45%)] shadow-[0_20px_50px_rgba(0,0,0,0.45)] hover:shadow-[0_24px_70px_-12px_rgba(251,146,60,0.28)]">
-            <div aria-hidden="true" className="absolute -bottom-24 -right-24 w-72 h-72 rounded-full bg-amber-500/30 blur-3xl pointer-events-none" />
-            <div aria-hidden="true" className="absolute -top-28 -right-28 w-64 h-64 rounded-full bg-amber-400/15 blur-3xl pointer-events-none" />
+          <div className="surface-card p-7 lg:p-8 relative overflow-hidden lg:col-span-3 animate-fade-up animation-delay-300 hover:border-white/20 transition-all duration-300 bg-[radial-gradient(circle_at_88%_18%,rgba(96,165,250,0.10),transparent_34%)] shadow-[0_20px_50px_rgba(0,0,0,0.32)]">
             <div className="relative grid lg:grid-cols-2 gap-8 lg:gap-10 items-center">
               <div>
-                <div className="inline-flex w-11 h-11 rounded-xl items-center justify-center ring-1 ring-amber-400/50 surface-glass text-amber-300 mb-4 bg-gradient-to-br from-amber-400/25 to-orange-500/10 shadow-[0_0_28px_rgba(251,191,36,0.45)]">
+                <div className="inline-flex w-10 h-10 rounded-full items-center justify-center ring-1 ring-white/15 bg-white/[0.06] text-blue-300 mb-5">
                   <Globe className="w-5 h-5" />
                 </div>
                 <h3 className="text-display-3 text-white mb-3">
                   Scale to{" "}
-                  <span className="text-gradient-gold text-glow-gold">
-                    multiple languages.
-                  </span>
+                  <span className="text-zinc-400">multiple languages.</span>
                 </h3>
-                <p className="text-sm text-zinc-300 leading-relaxed max-w-[52ch]">
+                <p className="text-sm text-zinc-400 leading-relaxed max-w-[50ch]">
                   Expand your channel portfolio to Spanish, Portuguese, French,
                   German and more &mdash; all powered by AI translation and
-                  localization. Reach global audiences without learning a new
-                  language, and watch Tier-1 views compound across every region.
+                  localization. Reach global audiences without learning a new language.
                 </p>
-                <ul className="mt-5 space-y-2.5">
-                  <li className="flex items-center gap-2.5 text-sm text-zinc-200 group transition-colors hover:text-white">
-                    <span className="inline-flex w-5 h-5 items-center justify-center rounded-md bg-amber-400/10 ring-1 ring-amber-400/40 text-amber-300 shrink-0">
-                      <Zap className="w-3 h-3" />
-                    </span>
-                    1-Click AI Translation &amp; Voice Cloning
-                  </li>
-                  <li className="flex items-center gap-2.5 text-sm text-zinc-200 group transition-colors hover:text-white">
-                    <span className="inline-flex w-5 h-5 items-center justify-center rounded-md bg-emerald-400/10 ring-1 ring-emerald-400/40 text-emerald-300 shrink-0">
-                      <Languages className="w-3 h-3" />
-                    </span>
-                    Reach US, EU &amp; LATAM markets instantly
-                  </li>
-                  <li className="flex items-center gap-2.5 text-sm text-zinc-200 group transition-colors hover:text-white">
-                    <span className="inline-flex w-5 h-5 items-center justify-center rounded-md bg-violet-400/10 ring-1 ring-violet-400/40 text-violet-300 shrink-0">
-                      <Mic className="w-3 h-3" />
-                    </span>
-                    Voice-cloned dubbing keeps your tone &amp; energy
-                  </li>
+                <ul className="mt-6 grid gap-3 text-sm text-zinc-300 sm:grid-cols-2 lg:grid-cols-1">
+                  <li className="flex items-center gap-2.5"><Zap className="w-4 h-4 text-blue-300 shrink-0" /> One-click translation and voice cloning</li>
+                  <li className="flex items-center gap-2.5"><Languages className="w-4 h-4 text-blue-300 shrink-0" /> Reach US, EU and LATAM markets</li>
+                  <li className="flex items-center gap-2.5"><Mic className="w-4 h-4 text-blue-300 shrink-0" /> Keep your tone in every language</li>
                 </ul>
               </div>
 
-              {/* Growth chart + live-pipeline feel */}
-              <div ref={chartRef} className="relative surface-glass rounded-xl border border-white/10 p-5 pt-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-                {/* Floating stat badge — +340% Views via AI Translation */}
-                <div className="absolute -top-3.5 right-4 z-10 inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-400 to-orange-500 px-3 py-1 text-[11px] font-bold text-[#201204] shadow-[0_0_24px_rgba(251,146,60,0.55)] animate-float-y">
-                  <TrendingUp className="w-3.5 h-3.5" />
-                  +340% Views via AI Translation
+              {/* Quiet analytics visual: one clear metric, one chart, one legend. */}
+              <div ref={chartRef} className="relative rounded-2xl border border-white/[0.10] bg-black/20 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                <div className="mb-6 flex items-end justify-between gap-4">
+                  <div>
+                    <div className="text-[11px] font-medium text-zinc-500">Audience growth</div>
+                    <div className="mt-1 text-2xl font-semibold tracking-[-0.04em] text-white">+340%</div>
+                  </div>
+                  <div className="text-right text-[11px] text-zinc-500">via AI translation<br /><span className="text-zinc-300">last 12 months</span></div>
                 </div>
 
                 {/* Interactive language pills — click to focus a market */}
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                    Global views / month
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-                    Live growth
-                  </span>
-                </div>
                 <div
-                  className="flex flex-wrap items-center gap-2 mb-4"
+                  className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2"
                   role="group"
                   aria-label="Filter the growth chart by language"
                 >
@@ -278,20 +249,14 @@ export function Features() {
                         onClick={() => toggleLang(s.key)}
                         aria-pressed={!off}
                         title={off ? `Show ${s.label} again` : `Hide ${s.label}`}
-                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium border transition-all duration-300 cursor-pointer ${
+                        className={`inline-flex items-center gap-1.5 text-[11px] font-medium transition-opacity duration-300 cursor-pointer ${
                           off
-                            ? "border-white/10 bg-white/[0.03] text-zinc-500"
-                            : "text-zinc-100 bg-white/[0.06]"
+                            ? "text-zinc-600 opacity-60"
+                            : "text-zinc-300"
                         }`}
-                        style={
-                          off
-                            ? undefined
-                            : { borderColor: `${s.color}66`, boxShadow: `0 0 16px -4px ${s.color}80` }
-                        }
                       >
-                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
-                        {s.flag} {s.label}
-                        {s.autoDubbed && <span className="text-zinc-400">· auto-dub</span>}
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: s.color }} />
+                        {s.label}
                       </button>
                     );
                   })}
@@ -303,40 +268,12 @@ export function Features() {
                   role="img"
                   aria-label="Views growth across English, Spanish and German channels"
                 >
-                  <defs>
-                    {LANG_SERIES.map((s) => (
-                      <linearGradient key={s.key} id={`lngArea-${s.key}`} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={s.color} stopOpacity="0.3" />
-                        <stop offset="100%" stopColor={s.color} stopOpacity="0" />
-                      </linearGradient>
-                    ))}
-                    <filter id="dotGlow" x="-80%" y="-80%" width="260%" height="260%">
-                      <feGaussianBlur stdDeviation="3" result="blur" />
-                      <feMerge>
-                        <feMergeNode in="blur" />
-                        <feMergeNode in="SourceGraphic" />
-                      </feMerge>
-                    </filter>
-                  </defs>
-
                   {/* gridlines */}
                   {[45, 85, 125].map((y) => (
                     <line key={y} x1="25" y1={y} x2="425" y2={y} stroke="rgba(255,255,255,0.09)" strokeDasharray="3 5" />
                   ))}
                   {/* baseline */}
                   <line x1="25" y1="162" x2="425" y2="162" stroke="rgba(255,255,255,0.14)" />
-
-                  {/* area fills — element opacity dims with the pills; the
-                      gradient stopOpacity is the full-strength ceiling */}
-                  {LANG_SERIES.map((s) => (
-                    <path
-                      key={`${s.key}-area`}
-                      d={`${smoothPath(s.points)} L425 162 L25 162 Z`}
-                      fill={`url(#lngArea-${s.key})`}
-                      opacity={isDimmed(s.key) ? 0.15 : 1}
-                      className="transition-opacity duration-500"
-                    />
-                  ))}
 
                   {/* lines — draw-on when the card scrolls into view */}
                   {LANG_SERIES.map((s, idx) => (
@@ -345,14 +282,13 @@ export function Features() {
                       d={smoothPath(s.points)}
                       fill="none"
                       stroke={s.color}
-                      strokeWidth="3"
+                      strokeWidth="2.25"
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       pathLength={1}
                       opacity={isDimmed(s.key) ? 0.15 : 1}
                       style={{
                         animationDelay: `${0.3 + idx * 0.15}s`,
-                        filter: `drop-shadow(0 0 5px ${s.color})`,
                       }}
                       className={`line-draw ${chartInView ? "line-draw-play" : ""} transition-opacity duration-500`}
                     />
@@ -364,10 +300,9 @@ export function Features() {
                     const off = isDimmed(s.key);
                     return (
                       <g key={s.key} opacity={off ? 0.2 : 1} className="transition-opacity duration-500">
-                        <circle cx={x} cy={y} r="8" fill={s.color} opacity="0.25" filter="url(#dotGlow)" />
-                        <circle cx={x} cy={y} r="3.5" fill={s.color} />
+                        <circle cx={x} cy={y} r="3" fill={s.color} />
                         <text
-                          x={x - 8}
+                          x={x - 9}
                           y={y - 10}
                           fontSize="11"
                           fontWeight="700"
@@ -377,7 +312,7 @@ export function Features() {
                           strokeWidth={4}
                           paintOrder="stroke"
                         >
-                          {s.flag} {s.delta}
+                          {s.delta}
                         </text>
                       </g>
                     );
@@ -397,27 +332,9 @@ export function Features() {
                   ))}
                 </div>
 
-                {/* Auto-dub pipeline status — the "software in action" proof */}
-                <div className="mt-4 flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2.5">
-                  <Bot className="w-4 h-4 text-amber-300 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2 text-[11px]">
-                      <span className="text-zinc-300 font-medium truncate">
-                        Auto-dubbing Spanish + German tracks
-                      </span>
-                      <span className="inline-flex items-center gap-1 text-emerald-300 font-semibold tabular-nums shrink-0">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Done in 4.2s
-                      </span>
-                    </div>
-                    <div className="mt-1.5 h-1 rounded-full bg-white/10 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500 progress-fill ${
-                          chartInView ? "progress-fill-play" : ""
-                        }`}
-                      />
-                    </div>
-                  </div>
+                <div className="mt-4 flex items-center justify-between border-t border-white/[0.08] pt-3 text-[11px] text-zinc-500">
+                  <span>English · Spanish · German</span>
+                  <span className="text-zinc-300">AI localized</span>
                 </div>
               </div>
             </div>
