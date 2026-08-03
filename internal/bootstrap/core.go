@@ -58,6 +58,7 @@ type Core struct {
 	youtubeThumbnailBatchRepo *repository.YouTubeThumbnailBatchRepository
 	livestreamRepo            *repository.LivestreamRepository
 	thumbnailProjectRepo      *repository.ThumbnailProjectRepository
+	thumbnailProjectService   *services.ThumbnailProjectService
 }
 
 // WireCore builds the shared runtime dependencies used by every binary.
@@ -122,6 +123,7 @@ func WireCore(ctx context.Context) (*Core, error) {
 	youtubeThumbnailBatchRepo := repository.NewYouTubeThumbnailBatchRepository(db)
 	livestreamRepo := repository.NewLivestreamRepository(db)
 	thumbnailProjectRepo := repository.NewThumbnailProjectRepository(db)
+	thumbnailProjectService := services.NewThumbnailProjectService(thumbnailProjectRepo)
 
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
 
@@ -184,5 +186,6 @@ func WireCore(ctx context.Context) (*Core, error) {
 		youtubeThumbnailBatchRepo: youtubeThumbnailBatchRepo,
 		livestreamRepo:            livestreamRepo,
 		thumbnailProjectRepo:      thumbnailProjectRepo,
+		thumbnailProjectService:   thumbnailProjectService,
 	}, nil
 }

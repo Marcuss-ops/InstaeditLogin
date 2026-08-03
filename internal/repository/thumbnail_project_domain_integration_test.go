@@ -103,9 +103,11 @@ func TestThumbnailProjectRepository_IntegrationAssetsExportsAssignments(t *testi
 	if _, err := repo.FindExport(context.Background(), 9942, export.ID); err == nil {
 		t.Fatal("cross-workspace export lookup unexpectedly succeeded")
 	}
-	if _, err := repo.ListAssignments(context.Background(), 9942, project.ID); err != nil {
-		// A missing tenant scope is expected to return an empty list or a
-		// not-found/invalid error, but never the assignment.
-		return
+	crossAssignments, err := repo.ListAssignments(context.Background(), 9942, project.ID)
+	if err != nil {
+		t.Fatalf("cross-workspace assignment list returned infrastructure error: %v", err)
+	}
+	if len(crossAssignments) != 0 {
+		t.Fatalf("cross-workspace assignment list leaked %d rows", len(crossAssignments))
 	}
 }

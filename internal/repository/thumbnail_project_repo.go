@@ -123,17 +123,30 @@ func (r *ThumbnailProjectRepository) Create(ctx context.Context, project *models
 	if project.UpdatedAt.IsZero() {
 		project.UpdatedAt = project.CreatedAt
 	}
-	_, err := r.db.ExecContext(ctx,
+	result, err := r.db.ExecContext(ctx,
 		`INSERT INTO thumbnail_projects
 			(id, workspace_id, created_by, name, description, canvas_width,
 			 canvas_height, status, version, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		 SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+		   FROM workspaces w
+		  WHERE w.id = $2
+		    AND (w.owner_id = $3 OR EXISTS (
+				SELECT 1 FROM workspace_members wm
+				 WHERE wm.workspace_id = w.id AND wm.user_id = $3
+			))`,
 		project.ID, project.WorkspaceID, project.CreatedBy, strings.TrimSpace(project.Name),
 		project.Description, project.CanvasWidth, project.CanvasHeight, project.Status,
 		project.Version, project.CreatedAt, project.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("create thumbnail project: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("create thumbnail project rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: creator is not a member of workspace", ErrThumbnailProjectNotFound)
 	}
 	return nil
 }

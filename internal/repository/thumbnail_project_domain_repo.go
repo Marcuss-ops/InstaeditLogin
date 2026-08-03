@@ -106,7 +106,8 @@ func (r *ThumbnailProjectRepository) DeleteAsset(ctx context.Context, workspaceI
 		DELETE FROM thumbnail_project_assets a
 		 USING thumbnail_projects p
 		 WHERE a.project_id = p.id AND p.workspace_id = $1 AND p.id = $2
-	   AND a.media_id = $3::uuid AND a.role = $4`, workspaceID, projectID, mediaID, role)
+	   AND p.status <> $5
+	   AND a.media_id = $3::uuid AND a.role = $4	`, workspaceID, projectID, mediaID, role, models.ThumbnailProjectStatusDeleted)
 	if err != nil {
 		return fmt.Errorf("delete thumbnail project asset: %w", err)
 	}
@@ -311,7 +312,8 @@ func (r *ThumbnailProjectRepository) ListAssignments(ctx context.Context, worksp
 		  FROM thumbnail_assignments a
 		 WHERE a.project_id = $2
 		   AND a.workspace_id = $1
-		 ORDER BY a.created_at DESC, a.id`, workspaceID, projectID)
+		   AND EXISTS (SELECT 1 FROM thumbnail_projects p WHERE p.id = a.project_id AND p.status <> $3)
+		 ORDER BY a.created_at DESC, a.id`, workspaceID, projectID, models.ThumbnailProjectStatusDeleted)
 	if err != nil {
 		return nil, fmt.Errorf("list thumbnail assignments: %w", err)
 	}
@@ -351,7 +353,8 @@ func (r *ThumbnailProjectRepository) UpdateAssignmentStatus(ctx context.Context,
 	}
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE thumbnail_assignments SET status = $1, updated_at = NOW()
-		 WHERE id = $2 AND workspace_id = $3`, normalizedStatus, assignmentID, workspaceID)
+		 WHERE id = $2 AND workspace_id = $3
+		   AND EXISTS (SELECT 1 FROM thumbnail_projects p WHERE p.id = thumbnail_assignments.project_id AND p.status <> $4)`, normalizedStatus, assignmentID, workspaceID, models.ThumbnailProjectStatusDeleted)
 	if err != nil {
 		return fmt.Errorf("update thumbnail assignment: %w", err)
 	}

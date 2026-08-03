@@ -48,6 +48,26 @@ func TestThumbnailProjectRepository_CreateIsProviderIndependent(t *testing.T) {
 	}
 }
 
+func TestThumbnailProjectRepository_CreateRejectsCreatorOutsideWorkspace(t *testing.T) {
+	db, mock := newThumbnailProjectMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	mock.ExpectExec(`INSERT INTO thumbnail_projects`).
+		WithArgs("thumbproj_test", int64(7), int64(99), "Cover", "", 1920, 1080,
+			models.ThumbnailProjectStatusDraft, int64(1), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	err := repo.Create(context.Background(), &models.ThumbnailProject{
+		ID: "thumbproj_test", WorkspaceID: 7, CreatedBy: 99, Name: "Cover",
+		CanvasWidth: 1920, CanvasHeight: 1080,
+	})
+	if !errors.Is(err, repository.ErrThumbnailProjectNotFound) {
+		t.Fatalf("want scoped creator rejection, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestThumbnailProjectRepository_FindScopesByWorkspace(t *testing.T) {
 	db, mock := newThumbnailProjectMockDB(t)
 	repo := repository.NewThumbnailProjectRepository(db)
