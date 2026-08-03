@@ -93,11 +93,23 @@ type Asset struct {
 // workspace_id and user_id are NOT in this body; the handler reads
 // them from the session identity.
 type CreateJobRequest struct {
-	ContractVersion string          `json:"contract_version"`
-	IdempotencyKey  string          `json:"idempotency_key"`
-	ProjectID       string          `json:"project_id"`
-	RenderSpec      json.RawMessage `json:"render_spec"`
-	DeliveryPlan    DeliveryPlan    `json:"delivery_plan"`
+	ContractVersion string `json:"contract_version"`
+	IdempotencyKey  string `json:"idempotency_key"`
+
+	// Canonical velox.job.v1 fields. They are pointers/raw JSON so the
+	// legacy BFF payload can continue to omit them during migration.
+	JobType         string          `json:"job_type,omitempty"`
+	TemplateID      string          `json:"template_id,omitempty"`
+	TemplateVersion int             `json:"template_version,omitempty"`
+	VideoName       string          `json:"video_name,omitempty"`
+	Spec            json.RawMessage `json:"spec,omitempty"`
+	Output          *JobOutput      `json:"output,omitempty"`
+
+	// Legacy BFF fields. These remain wire-compatible for
+	// /api/v1/velox/jobs until callers migrate to /api/v1/jobs.
+	ProjectID    string          `json:"project_id,omitempty"`
+	RenderSpec   json.RawMessage `json:"render_spec,omitempty"`
+	DeliveryPlan DeliveryPlan    `json:"delivery_plan"`
 }
 
 // DeliveryPlan is the nested delivery_plan block of CreateJobRequest.

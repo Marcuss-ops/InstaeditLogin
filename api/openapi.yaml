@@ -69,6 +69,8 @@ tags:
     description: OAuth hosted flow + API-key management.
   - name: Posts
     description: Universal-publishing API (`targets[]` discriminated union).
+  - name: Jobs
+    description: Canonical asynchronous Velox render-job submission.
   - name: PostTargets
     description: Async state of a single post target.
   - name: Velox Internal
@@ -97,6 +99,45 @@ tags:
       (prepare/start/stop/restart) land with the encoder worker.
 
 paths:
+
+  /jobs:
+    post:
+      tags: [Jobs]
+      operationId: jobsCreate
+      summary: Submit one canonical Velox render job.
+      description: |
+        Creates one asynchronous render job using the stable
+        `velox.job.v1` envelope. Editorial variation belongs in
+        `template_id` and `spec`; new video genres do not create new
+        endpoints. Workspace and user identity are taken from the
+        authenticated request context and are never accepted in the body.
+      security:
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VeloxJobSubmissionRequest'
+      responses:
+        '202':
+          description: Job accepted for asynchronous rendering.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VeloxJob'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntityError'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
   # ───────────── Auth ───────────────────────────────────────────────────────
 
@@ -1518,6 +1559,74 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+
+    VeloxJob:
+      type: object
+      required: [id, workspace_id, render_status, created_at, updated_at]
+      properties:
+        id: { type: string }
+        workspace_id: { type: integer, format: int64 }
+        project_id: { type: string }
+        render_status: { type: string }
+        publication_status: { type: string }
+        overall_status: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    VeloxJobSubmissionRequest:
+      type: object
+      additionalProperties: false
+      required: [contract_version, idempotency_key, job_type, template_id,
+                 template_version, video_name, spec, output, delivery_plan]
+      properties:
+        contract_version:
+          type: string
+          const: velox.job.v1
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 255
+        job_type:
+          type: string
+          minLength: 1
+        template_id:
+          type: string
+          minLength: 1
+        template_version:
+          type: integer
+          minimum: 1
+        video_name:
+          type: string
+          minLength: 1
+        spec:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: false
+          required: [width, height, fps, format]
+          properties:
+            width: { type: integer, minimum: 1 }
+            height: { type: integer, minimum: 1 }
+            fps: { type: integer, minimum: 1 }
+            format: { type: string, minLength: 1 }
+        delivery_plan:
+          type: object
+          additionalProperties: false
+          required: [destinations]
+          properties:
+            destinations:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                required: [external_destination_id]
+                properties:
+                  external_destination_id: { type: string, minLength: 1 }
+                  publication_id: { type: string }
+                  metadata:
+                    type: object
+                    additionalProperties: true
 
     # ────── YouTube editor session publish contract ──────────
     YouTubeEditorSessionPublishRequest:

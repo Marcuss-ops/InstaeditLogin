@@ -53,8 +53,13 @@ type (
 	Worker = veloxcontract.Worker
 	// Asset is the BFF view of a Velox artifact.
 	Asset = veloxcontract.Asset
-	// CreateJobRequest is the body for POST /api/v1/velox/jobs.
+	// CreateJobRequest is the shared job body for the legacy BFF and
+	// canonical POST /api/v1/jobs routes.
 	CreateJobRequest = veloxcontract.CreateJobRequest
+	// JobOutput is the canonical output block of velox.job.v1.
+	JobOutput = veloxcontract.JobOutput
+	// JobSubmissionRequest names the canonical velox.job.v1 envelope.
+	JobSubmissionRequest = veloxcontract.JobSubmissionRequest
 	// DeliveryPlan is the nested delivery_plan block of CreateJobRequest.
 	DeliveryPlan = veloxcontract.DeliveryPlan
 	// DeliveryDestination references an InstaEdit-managed destination.
@@ -95,7 +100,8 @@ type Deps struct {
 // Route table (explicit only — no catch-all):
 //
 //	GET    /api/v1/velox/jobs
-//	POST   /api/v1/velox/jobs
+//	POST   /api/v1/velox/jobs       (legacy BFF-compatible path)
+//	POST   /api/v1/jobs             (canonical velox.job.v1 path)
 //	GET    /api/v1/velox/jobs/{id}
 //	POST   /api/v1/velox/jobs/{id}/cancel
 //	GET    /api/v1/velox/jobs/{id}/deliveries
@@ -114,6 +120,7 @@ func Register(mux chi.Router, deps Deps) {
 
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs", wrap(b.listJobs))
 	mux.Method(http.MethodPost, "/api/v1/velox/jobs", wrap(b.createJob))
+	mux.Method(http.MethodPost, "/api/v1/jobs", wrap(b.createCanonicalJob))
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs/{id}", wrap(b.getJob))
 	mux.Method(http.MethodPost, "/api/v1/velox/jobs/{id}/cancel", wrap(b.cancelJob))
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs/{id}/deliveries", wrap(b.listJobDeliveries))

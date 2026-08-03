@@ -40,6 +40,8 @@ package veloxclient
 import (
 	"encoding/json"
 	"time"
+
+	veloxapi "github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
 )
 
 // jobResponse is the Velox master's representation of a job. The
@@ -118,11 +120,19 @@ type listDeliveriesResponse struct {
 // user_id are signed into the control JWT and are intentionally absent
 // from this strict wire body.
 type createJobRequest struct {
-	ContractVersion string          `json:"contract_version" validate:"required"`
-	IdempotencyKey  string          `json:"idempotency_key" validate:"required"`
-	ProjectID       string          `json:"project_id" validate:"required,min=1"`
-	RenderSpec      json.RawMessage `json:"render_spec" validate:"required"`
-	DeliveryPlan    deliveryPlanReq `json:"delivery_plan" validate:"required"`
+	ContractVersion string `json:"contract_version" validate:"required"`
+	IdempotencyKey  string `json:"idempotency_key" validate:"required"`
+
+	JobType         string              `json:"job_type,omitempty"`
+	TemplateID      string              `json:"template_id,omitempty"`
+	TemplateVersion int                 `json:"template_version,omitempty"`
+	VideoName       string              `json:"video_name,omitempty"`
+	Spec            json.RawMessage     `json:"spec,omitempty"`
+	Output          *veloxapi.JobOutput `json:"output,omitempty"`
+
+	ProjectID    string          `json:"project_id,omitempty"`
+	RenderSpec   json.RawMessage `json:"render_spec,omitempty"`
+	DeliveryPlan deliveryPlanReq `json:"delivery_plan" validate:"required"`
 }
 
 // deliveryPlanReq mirrors veloxapi.DeliveryPlan for the outbound body.

@@ -2,6 +2,7 @@ package velox
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -95,14 +96,6 @@ func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation: project_id is required")
 		return
 	}
-	if body.ContractVersion != "velox.job.v1" {
-		writeError(w, http.StatusUnprocessableEntity, "unsupported contract_version")
-		return
-	}
-	if body.IdempotencyKey == "" {
-		writeError(w, http.StatusUnprocessableEntity, "validation: idempotency_key is required")
-		return
-	}
 	if len(body.RenderSpec) == 0 {
 		writeError(w, http.StatusUnprocessableEntity, "validation: render_spec is required")
 		return
@@ -134,6 +127,50 @@ func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
 	}
 	slog.Info("velox bff: job created",
 		"job_id", job.ID, "workspace_id", wsID, "user_id", userID)
+	writeJSON(w, http.StatusAccepted, job)
+}
+
+// createCanonicalJob implements POST /api/v1/jobs with the strict
+// canonical velox.job.v1 envelope. It reuses the existing client call
+// only after adapting the canonical request to the shared client DTO.
+func (b *bff) createCanonicalJob(w http.ResponseWriter, req *http.Request) {
+	wsID, userID, ok := b.requireIdentity(w, req)
+	if !ok {
+		return
+	}
+	var body JobSubmissionRequest
+	decoder := json.NewDecoder(req.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON: multiple values")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		}
+		return
+	}
+	if err := body.ValidateCanonical(); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation: "+err.Error())
+		return
+	}
+	job, err := b.deps.Client.CreateJob(req.Context(), wsID, userID, body.AsCreateJobRequest())
+	if err != nil {
+		slog.Error("velox bff: canonical job create failed",
+			"workspace_id", wsID, "user_id", userID, "err", err)
+		mapClientError(w, err)
+		return
+	}
+	if !verifyOwnership(w, job.WorkspaceID, wsID) {
+		return
+	}
+	slog.Info("velox bff: canonical job created",
+		"job_id", job.ID, "workspace_id", wsID, "user_id", userID,
+		"job_type", body.JobType, "template_id", body.TemplateID)
 	writeJSON(w, http.StatusAccepted, job)
 }
 

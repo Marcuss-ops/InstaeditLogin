@@ -59,6 +59,12 @@ func (c *Client) CreateJob(ctx context.Context, workspaceID, userID int64, req v
 	body := createJobRequest{
 		ContractVersion: req.ContractVersion,
 		IdempotencyKey:  req.IdempotencyKey,
+		JobType:         req.JobType,
+		TemplateID:      req.TemplateID,
+		TemplateVersion: req.TemplateVersion,
+		VideoName:       req.VideoName,
+		Spec:            json.RawMessage(req.Spec),
+		Output:          req.Output,
 		ProjectID:       req.ProjectID,
 		RenderSpec:      json.RawMessage(req.RenderSpec),
 		DeliveryPlan: deliveryPlanReq{
