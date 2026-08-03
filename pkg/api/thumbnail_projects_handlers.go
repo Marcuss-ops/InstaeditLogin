@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -52,6 +53,53 @@ func parseThumbnailProjectID(w http.ResponseWriter, req *http.Request) (string, 
 		return "", false
 	}
 	return id, true
+}
+
+func parseThumbnailRevisionID(w http.ResponseWriter, req *http.Request) (string, bool) {
+	id := strings.TrimSpace(chi.URLParam(req, "revision_id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "thumbnail project revision id is required")
+		return "", false
+	}
+	return id, true
+}
+
+// parseVersionPrecondition accepts both the JSON base_version contract and
+// If-Match values emitted by browser clients: \"version-7\", \"7\", or 7.
+func parseVersionPrecondition(w http.ResponseWriter, req *http.Request, bodyVersion int64) (int64, bool) {
+	header := strings.TrimSpace(req.Header.Get("If-Match"))
+	if header == "" {
+		if bodyVersion <= 0 {
+			writeError(w, http.StatusBadRequest, "base_version is required and must be positive")
+			return 0, false
+		}
+		return bodyVersion, true
+	}
+	header = strings.Trim(header, "\\\"")
+	header = strings.TrimPrefix(header, "version-")
+	version, err := strconv.ParseInt(header, 10, 64)
+	if err != nil || version <= 0 {
+		writeError(w, http.StatusBadRequest, "If-Match must contain a positive project version")
+		return 0, false
+	}
+	if bodyVersion > 0 && bodyVersion != version {
+		writeError(w, http.StatusBadRequest, "If-Match and base_version must match")
+		return 0, false
+	}
+	return version, true
+}
+
+func mapThumbnailRevisionError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, repository.ErrThumbnailProjectConflict):
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "PROJECT_VERSION_CONFLICT", "error": err.Error()})
+	case errors.Is(err, repository.ErrThumbnailProjectNotFound), errors.Is(err, repository.ErrThumbnailProjectRevisionNotFound):
+		writeError(w, http.StatusNotFound, "thumbnail project revision not found")
+	case errors.Is(err, repository.ErrThumbnailProjectInvalid):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func (r *Router) handleCreateThumbnailProject(w http.ResponseWriter, req *http.Request) {
@@ -205,6 +253,138 @@ func (r *Router) handleUpdateThumbnailProject(w http.ResponseWriter, req *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, project)
+}
+
+func (r *Router) handleSaveThumbnailProjectSnapshot(w http.ResponseWriter, req *http.Request) {
+	if r.thumbnailProjectStore == nil {
+		writeError(w, http.StatusNotImplemented, "thumbnail projects not configured on this server")
+		return
+	}
+	workspaceID, ok := parseThumbnailWorkspaceQuery(w, req)
+	if !ok {
+		return
+	}
+	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID)
+	if !ok {
+		return
+	}
+	projectID, ok := parseThumbnailProjectID(w, req)
+	if !ok {
+		return
+	}
+	var body thumbnailProjectSnapshotRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 8<<20)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid thumbnail snapshot body")
+		return
+	}
+	baseVersion, ok := parseVersionPrecondition(w, req, body.BaseVersion)
+	if !ok {
+		return
+	}
+	result, err := r.thumbnailProjectStore.SaveSnapshot(req.Context(), workspaceID, projectID, models.ThumbnailProjectSnapshot{
+		SchemaVersion: body.SchemaVersion, SnapshotJSON: body.Snapshot,
+		RendererVersion: body.RendererVersion, BaseVersion: baseVersion,
+	}, userID)
+	if err != nil {
+		mapThumbnailRevisionError(w, err)
+		return
+	}
+	w.Header().Set("ETag", fmt.Sprintf("\"version-%d\"", result.Version))
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (r *Router) handleListThumbnailProjectRevisions(w http.ResponseWriter, req *http.Request) {
+	if r.thumbnailProjectStore == nil {
+		writeError(w, http.StatusNotImplemented, "thumbnail projects not configured on this server")
+		return
+	}
+	workspaceID, ok := parseThumbnailWorkspaceQuery(w, req)
+	if !ok {
+		return
+	}
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+		return
+	}
+	projectID, ok := parseThumbnailProjectID(w, req)
+	if !ok {
+		return
+	}
+	items, err := r.thumbnailProjectStore.ListRevisions(req.Context(), workspaceID, projectID)
+	if err != nil {
+		mapThumbnailRevisionError(w, err)
+		return
+	}
+	if items == nil {
+		items = []models.ThumbnailProjectRevision{}
+	}
+	writeJSON(w, http.StatusOK, thumbnailProjectRevisionListResponse{Items: items})
+}
+
+func (r *Router) handleGetThumbnailProjectRevision(w http.ResponseWriter, req *http.Request) {
+	if r.thumbnailProjectStore == nil {
+		writeError(w, http.StatusNotImplemented, "thumbnail projects not configured on this server")
+		return
+	}
+	workspaceID, ok := parseThumbnailWorkspaceQuery(w, req)
+	if !ok {
+		return
+	}
+	if _, ok := r.thumbnailProjectWorkspace(w, req, workspaceID); !ok {
+		return
+	}
+	projectID, ok := parseThumbnailProjectID(w, req)
+	if !ok {
+		return
+	}
+	revisionID, ok := parseThumbnailRevisionID(w, req)
+	if !ok {
+		return
+	}
+	revision, err := r.thumbnailProjectStore.FindRevision(req.Context(), workspaceID, projectID, revisionID)
+	if err != nil {
+		mapThumbnailRevisionError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, thumbnailProjectRevisionDetailResponse{Revision: *revision})
+}
+
+func (r *Router) handleRestoreThumbnailProjectRevision(w http.ResponseWriter, req *http.Request) {
+	if r.thumbnailProjectStore == nil {
+		writeError(w, http.StatusNotImplemented, "thumbnail projects not configured on this server")
+		return
+	}
+	workspaceID, ok := parseThumbnailWorkspaceQuery(w, req)
+	if !ok {
+		return
+	}
+	userID, ok := r.thumbnailProjectWorkspace(w, req, workspaceID)
+	if !ok {
+		return
+	}
+	projectID, ok := parseThumbnailProjectID(w, req)
+	if !ok {
+		return
+	}
+	revisionID, ok := parseThumbnailRevisionID(w, req)
+	if !ok {
+		return
+	}
+	var body thumbnailProjectRestoreRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1<<20)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid thumbnail restore body")
+		return
+	}
+	baseVersion, ok := parseVersionPrecondition(w, req, body.BaseVersion)
+	if !ok {
+		return
+	}
+	result, err := r.thumbnailProjectStore.RestoreRevision(req.Context(), workspaceID, projectID, revisionID, baseVersion, userID, body.RendererVersion)
+	if err != nil {
+		mapThumbnailRevisionError(w, err)
+		return
+	}
+	w.Header().Set("ETag", fmt.Sprintf("\"version-%d\"", result.Version))
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (r *Router) handleArchiveThumbnailProject(w http.ResponseWriter, req *http.Request) {

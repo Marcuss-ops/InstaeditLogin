@@ -1489,6 +1489,47 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
         '422': { $ref: '#/components/responses/UnprocessableEntityError' }
+    put:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectsSaveSnapshot
+      summary: Save the current canvas as an immutable revision.
+      description: |
+        Saves a canonical JSON canvas snapshot and advances the project
+        version atomically. `If-Match` may be `"version-N"` (or the
+        body `base_version` may be used). Repeating the same snapshot
+        hash is deduplicated and does not create another revision.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: If-Match
+          in: header
+          required: false
+          schema: { type: string }
+          description: Optimistic version, for example `"version-7"`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ThumbnailProjectSnapshotRequest' }
+      responses:
+        '200':
+          description: Saved or deduplicated immutable revision.
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ThumbnailProjectSnapshotResult' }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409':
+          description: PROJECT_VERSION_CONFLICT; another tab saved a newer version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/UnprocessableEntityError' }
     delete:
       tags: [Thumbnail Projects]
       operationId: thumbnailProjectsDelete
@@ -1507,6 +1548,107 @@ paths:
         '401': { $ref: '#/components/responses/UnauthorizedError' }
         '404': { $ref: '#/components/responses/NotFoundError' }
         '409': { $ref: '#/components/responses/ConflictError' }
+  /api/v1/thumbnail-projects/{id}/revisions:
+    get:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectsRevisionsList
+      summary: List immutable canvas revisions.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: workspace_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Revisions newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ThumbnailProjectRevisionListResponse' }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /api/v1/thumbnail-projects/{id}/revisions/{revision_id}:
+    get:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectsRevisionGet
+      summary: Fetch one immutable canvas revision.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: revision_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: workspace_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Immutable revision.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ThumbnailProjectRevisionDetailResponse' }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+  /api/v1/thumbnail-projects/{id}/restore/{revision_id}:
+    post:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectsRevisionRestore
+      summary: Restore a revision as a new immutable revision.
+      description: Restoring is an explicit history event and therefore always creates a new revision, even when the snapshot hash already exists.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: revision_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: workspace_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: If-Match
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ThumbnailProjectRestoreRequest' }
+      responses:
+        '200':
+          description: New revision created from the selected source revision.
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ThumbnailProjectSnapshotResult' }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409': { $ref: '#/components/responses/ConflictError' }
+        '422': { $ref: '#/components/responses/UnprocessableEntityError' }
   /api/v1/thumbnail-projects/{id}/archive:
     post:
       tags: [Thumbnail Projects]
@@ -2221,6 +2363,57 @@ components:
         canvas_width: { type: integer, minimum: 1, maximum: 16384 }
         canvas_height: { type: integer, minimum: 1, maximum: 16384 }
         status: { type: string, enum: [draft, ready, archived] }
+    ThumbnailProjectSnapshotRequest:
+      type: object
+      required: [schema_version, snapshot, renderer_version, base_version]
+      properties:
+        schema_version: { type: integer, minimum: 1 }
+        snapshot: { type: object }
+        renderer_version: { type: string, minLength: 1 }
+        base_version: { type: integer, format: int64, minimum: 1 }
+    ThumbnailProjectRestoreRequest:
+      type: object
+      required: [base_version]
+      properties:
+        base_version: { type: integer, format: int64, minimum: 1 }
+        renderer_version: { type: string }
+    ThumbnailProjectSnapshotResult:
+      type: object
+      required: [project_id, revision_id, revision_number, version, saved_at, snapshot_sha256]
+      properties:
+        project_id: { type: string }
+        revision_id: { type: string }
+        revision_number: { type: integer, format: int64 }
+        version: { type: integer, format: int64 }
+        saved_at: { type: string, format: date-time }
+        snapshot_sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        deduplicated: { type: boolean }
+        revision: { $ref: '#/components/schemas/ThumbnailProjectRevision' }
+    ThumbnailProjectRevision:
+      type: object
+      required: [id, project_id, revision_number, schema_version, snapshot_json, snapshot_sha256, renderer_version, created_by, created_at]
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        revision_number: { type: integer, format: int64 }
+        schema_version: { type: integer, minimum: 1 }
+        snapshot_json: { type: object }
+        snapshot_sha256: { type: string, format: byte }
+        renderer_version: { type: string }
+        created_by: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+    ThumbnailProjectRevisionListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ThumbnailProjectRevision' }
+    ThumbnailProjectRevisionDetailResponse:
+      type: object
+      required: [revision]
+      properties:
+        revision: { $ref: '#/components/schemas/ThumbnailProjectRevision' }
 
     # ────── Media Library (live wizard step 3) ──────────────────────
     MediaLibraryItem:

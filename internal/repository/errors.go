@@ -167,4 +167,8 @@ var (
 	// ErrThumbnailProjectInvalid marks caller validation failures that the
 	// API maps to 422 rather than treating them as infrastructure errors.
 	ErrThumbnailProjectInvalid = errors.New("invalid thumbnail project")
+
+	// ErrThumbnailProjectRevisionNotFound is returned when a revision is not
+	// visible within the requested workspace/project scope.
+	ErrThumbnailProjectRevisionNotFound = errors.New("thumbnail project revision not found")
 )

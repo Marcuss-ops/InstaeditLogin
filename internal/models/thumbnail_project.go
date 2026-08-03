@@ -60,6 +60,28 @@ type ThumbnailProjectRevision struct {
 	CreatedAt       time.Time       `json:"created_at"`
 }
 
+// ThumbnailProjectSnapshot is the immutable payload accepted by the snapshot
+// endpoint. SnapshotJSON must be a JSON object; the repository canonicalizes
+// it before hashing and persisting it.
+type ThumbnailProjectSnapshot struct {
+	SchemaVersion   int             `json:"schema_version"`
+	SnapshotJSON    json.RawMessage `json:"snapshot"`
+	RendererVersion string          `json:"renderer_version"`
+	BaseVersion     int64           `json:"base_version"`
+}
+
+// ThumbnailProjectSnapshotResult is returned after a save or restore.
+type ThumbnailProjectSnapshotResult struct {
+	ProjectID      string                    `json:"project_id"`
+	RevisionID     string                    `json:"revision_id"`
+	RevisionNumber int64                     `json:"revision_number"`
+	Version        int64                     `json:"version"`
+	SavedAt        time.Time                 `json:"saved_at"`
+	SnapshotSHA256 string                    `json:"snapshot_sha256"`
+	Revision       *ThumbnailProjectRevision `json:"revision,omitempty"`
+	Deduplicated   bool                      `json:"deduplicated,omitempty"`
+}
+
 // ThumbnailProjectAsset links a project object to a persistent media asset.
 type ThumbnailProjectAsset struct {
 	ProjectID string    `json:"project_id"`

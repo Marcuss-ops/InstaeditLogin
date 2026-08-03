@@ -139,6 +139,10 @@ func (r *Router) Setup() http.Handler {
 		r.handleListThumbnailProjects,
 		r.handleGetThumbnailProject,
 		r.handleUpdateThumbnailProject,
+		r.handleSaveThumbnailProjectSnapshot,
+		r.handleListThumbnailProjectRevisions,
+		r.handleGetThumbnailProjectRevision,
+		r.handleRestoreThumbnailProjectRevision,
 		r.handleArchiveThumbnailProject,
 		r.handleDeleteThumbnailProject,
 	))
