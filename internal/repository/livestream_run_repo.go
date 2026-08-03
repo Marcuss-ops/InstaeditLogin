@@ -77,8 +77,21 @@ const SQLAdvanceLivestreamRunConfigurationVersion = `UPDATE livestream_runs
    AND configuration_version = $2
 RETURNING configuration_version`
 
-// SQLUpdateLivestreamRunStatus updates observed state while retaining the
-// worker lease and checking both ownership and the configuration snapshot.
+// SQLTransitionLivestreamRun updates observed state while retaining the
+// worker lease, configuration snapshot, and expected current state.
+const SQLTransitionLivestreamRun = `UPDATE livestream_runs
+   SET status     = $1,
+       updated_at = NOW()
+ WHERE id                    = $2
+   AND worker_id              = $3
+   AND configuration_version = $4
+   AND status                 = $5
+   AND lease_expires_at      > NOW()
+RETURNING ` + livestreamRunColumns
+
+// SQLUpdateLivestreamRunStatus is the legacy status update projection. New
+// state-machine callers should use SQLTransitionLivestreamRun through
+// TransitionStatus so the expected current state is checked atomically.
 const SQLUpdateLivestreamRunStatus = `UPDATE livestream_runs
    SET status     = $1,
        updated_at = NOW()
@@ -264,8 +277,29 @@ func (r *LivestreamRunRepository) AdvanceConfigurationVersion(ctx context.Contex
 	return next, nil
 }
 
-// UpdateStatus applies an observed state transition only for the current
-// worker lease and configuration snapshot.
+// TransitionStatus applies a validated observed-state transition only for
+// the current worker lease, configuration snapshot, and expected current
+// state. The SQL CAS prevents two workers from advancing the same run.
+func (r *LivestreamRunRepository) TransitionStatus(ctx context.Context, runID, workerID string, expectedVersion int64, from, to models.LivestreamActualState) (*models.LivestreamRun, error) {
+	if runID == "" || workerID == "" || expectedVersion <= 0 {
+		return nil, errors.New("livestream run TransitionStatus: invalid ownership or version")
+	}
+	if !models.CanTransitionActualState(from, to) {
+		return nil, fmt.Errorf("%w: %s -> %s", models.ErrInvalidLivestreamActualTransition, from, to)
+	}
+	row := r.db.QueryRowContext(ctx, SQLTransitionLivestreamRun, to, runID, workerID, expectedVersion, from)
+	run, err := scanLivestreamRun(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: run_id=%s", models.ErrLivestreamRunLeaseLost, runID)
+		}
+		return nil, fmt.Errorf("livestream run TransitionStatus: %w", err)
+	}
+	return run, nil
+}
+
+// UpdateStatus is retained for compatibility with existing callers. New
+// state-machine code should use TransitionStatus, which validates the edge.
 func (r *LivestreamRunRepository) UpdateStatus(ctx context.Context, runID, workerID string, expectedVersion int64, status models.LivestreamRunStatus) (*models.LivestreamRun, error) {
 	if runID == "" || workerID == "" || expectedVersion <= 0 {
 		return nil, errors.New("livestream run UpdateStatus: invalid ownership or version")

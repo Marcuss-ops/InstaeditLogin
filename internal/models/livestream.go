@@ -134,8 +134,10 @@ type Livestream struct {
 	ScheduleType     string
 	ScheduledStartAt *time.Time
 
-	DesiredState string
-	ActualState  string
+	DesiredState         string
+	ActualState          string
+	DesiredGeneration    int64
+	ConfigurationVersion int64
 
 	// YouTube resource references; filled by the worker once the
 	// broadcast/stream are created. streamName / stream key are NEVER
