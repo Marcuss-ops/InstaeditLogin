@@ -171,11 +171,21 @@ func (r *Router) CreateEditorSession(ctx context.Context, in CreateEditorSession
 	// Do not overwrite an existing value with a less authoritative empty
 	// response or with a second browser hint. A non-empty YouTube URL,
 	// however, is deliberately allowed to repair an old row.
-	sourceThumbnailURL := strings.TrimSpace(video.ThumbnailURL)
-	if sourceThumbnailURL == "" && strings.TrimSpace(persisted.SourceThumbnailURL) == "" {
-		sourceThumbnailURL = strings.TrimSpace(in.SourceThumbnailURL)
+	videoThumbnailURL := safeEditorAssetURL(video.ThumbnailURL)
+	persistedRawThumbnailURL := strings.TrimSpace(persisted.SourceThumbnailURL)
+	sourceThumbnailURL := videoThumbnailURL
+	if sourceThumbnailURL == "" && persistedRawThumbnailURL == "" {
+		sourceThumbnailURL = safeEditorAssetURL(in.SourceThumbnailURL)
 	}
-	if sourceThumbnailURL != "" && strings.TrimSpace(persisted.SourceThumbnailURL) != sourceThumbnailURL {
+	// Repair legacy rows that contain a local browser URL as well as stale
+	// remote URLs. Never return file://, blob:, or data: to the editor.
+	persistedThumbnailURL := safeEditorAssetURL(persistedRawThumbnailURL)
+	if sourceThumbnailURL == "" {
+		sourceThumbnailURL = persistedThumbnailURL
+	}
+	if persistedRawThumbnailURL != persistedThumbnailURL ||
+		(videoThumbnailURL != "" && persistedThumbnailURL != videoThumbnailURL) ||
+		(persistedRawThumbnailURL == "" && sourceThumbnailURL != persistedThumbnailURL) {
 		persisted.SourceThumbnailURL = sourceThumbnailURL
 		persisted.UpdatedAt = time.Now().UTC()
 		if updateErr := r.youtubeVideoEditStore.Update(ctx, persisted); updateErr != nil {

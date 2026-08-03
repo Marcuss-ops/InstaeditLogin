@@ -5,10 +5,26 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
+
+// safeEditorAssetURL accepts only remotely fetchable thumbnail URLs. Browser
+// local URLs (file:, blob:, and data:) cannot be consumed by the editor server
+// and can trigger browser security errors when returned from an HTTPS page.
+func safeEditorAssetURL(raw string) string {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" {
+		return ""
+	}
+	parsed, err := url.Parse(candidate)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	return candidate
+}
 
 // writeEditorSessionError maps the helper's typed sentinel errors to
 // HTTP status codes via errors.Is. Extracted so the handler body
