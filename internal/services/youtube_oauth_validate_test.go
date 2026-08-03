@@ -26,11 +26,12 @@ func TestYouTubeGetTokenInfo_HappyPath(t *testing.T) {
 			t.Errorf("tokeninfo endpoint got access_token=%q, want fresh-access-token", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"aud":"%s","azp":"%s","scope":"%s %s openid email profile","expires_in":3599,"access_type":"offline","email":"operator@example.com"}`,
+		fmt.Fprintf(w, `{"aud":"%s","azp":"%s","scope":"%s %s %s openid email profile","expires_in":3599,"access_type":"offline","email":"operator@example.com"}`,
 			"test-youtube-client-id",
 			"test-youtube-client-id",
 			"https://www.googleapis.com/auth/youtube.upload",
 			"https://www.googleapis.com/auth/youtube.readonly",
+			"https://www.googleapis.com/auth/youtube.force-ssl",
 		)
 	})
 	srv := httptest.NewServer(mux)
@@ -52,6 +53,9 @@ func TestYouTubeGetTokenInfo_HappyPath(t *testing.T) {
 	}
 	if !info.HasReadonly {
 		t.Errorf("HasReadonly: want true, got false (Scope=%q)", info.Scope)
+	}
+	if !info.HasForceSSL {
+		t.Errorf("HasForceSSL: want true, got false (Scope=%q)", info.Scope)
 	}
 	if info.ExpiresIn != 3599*time.Second {
 		t.Errorf("ExpiresIn: got %s, want 3599s", info.ExpiresIn)
@@ -161,6 +165,33 @@ func TestYouTubeGetTokenInfo_SurfaceAllContractShapes(t *testing.T) {
 		}
 		if info.HasReadonly {
 			t.Errorf("HasReadonly on upload-only token: want false, got true (the handler needs readonly for channels.list)")
+		}
+		if info.HasForceSSL {
+			t.Errorf("HasForceSSL on upload-only token: want false, got true")
+		}
+	})
+
+	t.Run("missing_force_ssl_scope_keeps_HasForceSSL_false", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/oauth2/v3/tokeninfo", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, `{"aud":"test-youtube-client-id","scope":"https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly openid email profile","expires_in":300}`)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		info, err := svc.GetTokenInfo(context.Background(), "no-force-ssl-token")
+		if err != nil {
+			t.Fatalf("scope-missing: unexpected error: %v", err)
+		}
+		if !info.HasUpload {
+			t.Errorf("HasUpload: want true, got false")
+		}
+		if !info.HasReadonly {
+			t.Errorf("HasReadonly: want true, got false")
+		}
+		if info.HasForceSSL {
+			t.Errorf("HasForceSSL on token without force-ssl: want false, got true (handler would let it through step 2 incorrectly)")
 		}
 	})
 }

@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
@@ -161,6 +165,102 @@ func TestHandleValidateAccount_CrossTenant_404(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("cross-tenant Validate: want 404 (NOT 200, NOT 403), got %d: %s", w.Code, w.Body.String())
 	}
+}
+
+// TestHandleValidateAccount_YouTube_MissingForceSSL_ReauthRequired pins
+// the P0 force-ssl check in the 4-step YouTube pipeline: a grant with
+// upload+readonly but WITHOUT youtube.force-ssl must be rejected with
+// 422 + status='reauth_required' — it would pass the old check but then
+// fail on thumbnails.set, videos.update, metadata writes and livestream.
+//
+// The test uses a real YouTubeOAuthService with a transport that rewrites
+// all requests to a local test server returning the no-force-ssl scope.
+func TestHandleValidateAccount_YouTube_MissingForceSSL_ReauthRequired(t *testing.T) {
+	account := &models.PlatformAccount{
+		ID:             42,
+		UserID:         1,
+		Platform:       models.PlatformYouTube,
+		PlatformUserID: "UC123",
+		Username:       "testchannel",
+		Status:         models.AccountStatusActive,
+	}
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return account, nil
+		},
+		markReauthRequiredFn: func(ctx context.Context, accountID int64, code, message string) error {
+			return nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "fresh-token", TokenType: tokenType}, nil
+		},
+	}
+
+	// Server returns tokeninfo with upload+readonly but NO force-ssl.
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"aud":"test-youtube-client-id","azp":"test-youtube-client-id","scope":"https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly openid email profile","expires_in":600}`)
+	}))
+	defer tokenSrv.Close()
+
+	tokenSrvURL, _ := url.Parse(tokenSrv.URL)
+	cfg := &config.Config{
+		Auth: config.AuthConfig{
+			YouTubeClientID:     "test-youtube-client-id",
+			YouTubeClientSecret: "secret-01234567890123456789012345678901",
+			YouTubeRedirectURI:  "http://localhost/callback",
+		},
+	}
+	realSvc, svcErr := services.NewYouTubeOAuthService(cfg, services.ProviderDependencies{
+		HTTPClient: &http.Client{Transport: &urlRewriter{base: tokenSrvURL}},
+	})
+	if svcErr != nil {
+		t.Fatalf("NewYouTubeOAuthService: %v", svcErr)
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		store,
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		WithYouTubeService(realSvc),
+		WithCredentialVault(vault),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/42/validate", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("want 422 (reauth_required) when force-ssl scope is missing, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "tokeninfo_scope_missing") {
+		t.Errorf("response must indicate tokeninfo_scope_missing, got: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "HasForceSSL=false") {
+		t.Errorf("response must mention HasForceSSL=false, got: %s", w.Body.String())
+	}
+}
+
+// urlRewriter is a test RoundTripper that rewrites every request's
+// Host/Scheme to point at a single test server base URL (mirrors the
+// rewriteRoundTripper used in internal/services tests).
+type urlRewriter struct {
+	base *url.URL
+}
+
+func (rt *urlRewriter) RoundTrip(req *http.Request) (*http.Response, error) {
+	rewritten := req.Clone(req.Context())
+	rewritten.URL.Scheme = rt.base.Scheme
+	rewritten.URL.Host = rt.base.Host
+	return http.DefaultTransport.RoundTrip(rewritten)
 }
 
 // TestHandleReconnectAccount_Happy verifies status flips to

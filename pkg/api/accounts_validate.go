@@ -145,9 +145,22 @@ func (r *Router) handleValidateAccount(w http.ResponseWriter, req *http.Request)
 			fmt.Sprintf("tokeninfo.aud=%q cfg.Auth.YouTubeClientID=%q", info.Aud, r.youTubeSvc.ClientID()))
 		return
 	}
-	if !info.HasUpload || !info.HasReadonly {
+	// Full scope check: every YouTube operation that touches a remote
+	// resource requires exactly one of the three canonical scopes.
+	//   read_channel       → youtube.readonly
+	//   upload_video       → youtube.upload
+	//   update_thumbnail   → youtube.force-ssl
+	//   update_metadata    → youtube.force-ssl
+	//   manage_livestream  → youtube.force-ssl
+	// A grant that passes upload+readonly but lacks force-ssl would
+	// validate successfully but then fail on thumbnails.set,
+	// videos.update, metadata/privacy writes and Live Streaming API
+	// calls — the operator would see a cryptic 4xx instead of a clear
+	// reauth signal. Require all three to match the canonical grant.
+	if !info.HasUpload || !info.HasReadonly || !info.HasForceSSL {
 		r.flagReauthAndRespond(w, ctx, account, identity, "tokeninfo_scope_missing",
-			fmt.Sprintf("HasUpload=%v HasReadonly=%v scope=%q", info.HasUpload, info.HasReadonly, info.Scope))
+			fmt.Sprintf("HasUpload=%v HasReadonly=%v HasForceSSL=%v scope=%q",
+				info.HasUpload, info.HasReadonly, info.HasForceSSL, info.Scope))
 		return
 	}
 

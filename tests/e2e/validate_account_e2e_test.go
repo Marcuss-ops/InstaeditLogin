@@ -90,7 +90,7 @@ func (s *stubYouTubeOAuthService) GetTokenInfo(ctx context.Context, at string) (
 		return &services.YouTubeTokenInfo{
 			Aud: "stub-client-id", Azp: "stub-client-id", Scope: "openid email profile https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.force-ssl",
 			ExpiresIn: 3600, Email: "manager@example.com",
-			HasUpload: true, HasReadonly: true,
+			HasUpload: true, HasReadonly: true, HasForceSSL: true,
 		}, nil
 	}
 	return s.getInfoFn(ctx, at)
