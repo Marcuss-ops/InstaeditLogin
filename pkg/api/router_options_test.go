@@ -16,12 +16,12 @@ import (
 // The contract the test pins:
 //
 //   - WithGroupStore absent        → chi has no route at /api/v1/groups
-//                                    → 404 "page not found"
+//     → 404 "page not found"
 //   - WithGroupStore(some impl)    → chi mounts the auth-protected
-//                                    stack at /api/v1/groups
-//                                    → any response other than 404
-//                                    (typically 401 without a session,
-//                                    or 200/400 once a JWT is wired)
+//     stack at /api/v1/groups
+//     → any response other than 404
+//     (typically 401 without a session,
+//     or 200/400 once a JWT is wired)
 //
 // Why this matters: AuthModule.Register in pkg/api/modules.go gates
 // the /api/v1/groups route on `if m.deps.GroupStore != nil`. A future

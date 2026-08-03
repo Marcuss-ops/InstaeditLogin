@@ -33,6 +33,7 @@
 //     the SQL CHECK allows.
 //
 // SAFETY INVARIANT — central to the spec:
+//
 //	From PRIVATE_UPLOADED onward ALL subsequent errors MUST leave the
 //	video's YouTube-side privacy at "private". This invariant is
 //	enforced by the PrivacyFloor + EnforcePrivacyInvariant helpers
@@ -85,6 +86,7 @@ func (s *DeliveryState) UnmarshalJSON(data []byte) error {
 	*s = candidate
 	return nil
 }
+
 // DeliveryState is the named state in the publishing pipeline.
 type DeliveryState string
 
@@ -223,8 +225,8 @@ func (s DeliveryState) IsRetryable() bool {
 var transitionMap = map[DeliveryState]map[DeliveryState]bool{
 	DeliveryStateDeliveryQueued: {
 		DeliveryStateTargetValidating: true,
-		DeliveryStateBlockedTarget:   true,
-		DeliveryStateCancelled:       true,
+		DeliveryStateBlockedTarget:    true,
+		DeliveryStateCancelled:        true,
 	},
 	DeliveryStateTargetValidating: {
 		DeliveryStateTargetValidated: true,
@@ -238,16 +240,16 @@ var transitionMap = map[DeliveryState]map[DeliveryState]bool{
 		DeliveryStateCancelled:        true,
 	},
 	DeliveryStateMediaDownloading: {
-		DeliveryStateMediaVerified:  true,
-		DeliveryStateMediaInvalid:   true,
-		DeliveryStateBlockedAuth:    true,
-		DeliveryStateCancelled:      true,
+		DeliveryStateMediaVerified: true,
+		DeliveryStateMediaInvalid:  true,
+		DeliveryStateBlockedAuth:   true,
+		DeliveryStateCancelled:     true,
 	},
 	DeliveryStateMediaVerified: {
 		DeliveryStatePrivateUploadQueued: true,
-		DeliveryStateMediaInvalid:         true,
-		DeliveryStateBlockedAuth:          true,
-		DeliveryStateCancelled:            true,
+		DeliveryStateMediaInvalid:        true,
+		DeliveryStateBlockedAuth:         true,
+		DeliveryStateCancelled:           true,
 	},
 	// Pre-boundary: CANCELLED is legal here even though the
 	// upload has been initiated — the YouTube-side row either
@@ -322,8 +324,8 @@ func (s DeliveryState) CanTransitionTo(target DeliveryState) bool {
 // PrivacyFloor determines the YouTube-side privacy that any
 // transition must enforce from the current state.
 //
-//   Pre-PRIVATE_UPLOADED:  "" (no in-band privacy gate)
-//   Post-PRIVATE_UPLOADED: "private"  (mandatory from here on)
+//	Pre-PRIVATE_UPLOADED:  "" (no in-band privacy gate)
+//	Post-PRIVATE_UPLOADED: "private"  (mandatory from here on)
 //
 // Callers MUST consult this helper BEFORE issuing videos.update or
 // transitioning toward PUBLISHED; refuse the operation if the floor
@@ -375,19 +377,19 @@ func (s DeliveryState) EnforcePrivacyInvariant(finalPrivacy string) error {
 // forward-state row of the spec §10 matrix.
 var happyPathSuccessor = map[DeliveryState]DeliveryState{
 	// Happy-path forward (14).
-	DeliveryStateDeliveryQueued:       DeliveryStateTargetValidating,
-	DeliveryStateTargetValidating:     DeliveryStateTargetValidated,
-	DeliveryStateTargetValidated:      DeliveryStateMediaDownloading,
-	DeliveryStateMediaDownloading:     DeliveryStateMediaVerified,
-	DeliveryStateMediaVerified:        DeliveryStatePrivateUploadQueued,
-	DeliveryStatePrivateUploadQueued:  DeliveryStatePrivateUploading,
-	DeliveryStatePrivateUploading:     DeliveryStatePrivateUploaded,
-	DeliveryStatePrivateUploaded:      DeliveryStateThumbnailPending,
-	DeliveryStateThumbnailPending:     DeliveryStateThumbnailUploading,
-	DeliveryStateThumbnailUploading:   DeliveryStateThumbnailApplied,
-	DeliveryStateThumbnailApplied:     DeliveryStateReadyToPublish,
-	DeliveryStateReadyToPublish:       DeliveryStatePublishing,
-	DeliveryStatePublishing:           DeliveryStatePublished,
+	DeliveryStateDeliveryQueued:      DeliveryStateTargetValidating,
+	DeliveryStateTargetValidating:    DeliveryStateTargetValidated,
+	DeliveryStateTargetValidated:     DeliveryStateMediaDownloading,
+	DeliveryStateMediaDownloading:    DeliveryStateMediaVerified,
+	DeliveryStateMediaVerified:       DeliveryStatePrivateUploadQueued,
+	DeliveryStatePrivateUploadQueued: DeliveryStatePrivateUploading,
+	DeliveryStatePrivateUploading:    DeliveryStatePrivateUploaded,
+	DeliveryStatePrivateUploaded:     DeliveryStateThumbnailPending,
+	DeliveryStateThumbnailPending:    DeliveryStateThumbnailUploading,
+	DeliveryStateThumbnailUploading:  DeliveryStateThumbnailApplied,
+	DeliveryStateThumbnailApplied:    DeliveryStateReadyToPublish,
+	DeliveryStateReadyToPublish:      DeliveryStatePublishing,
+	DeliveryStatePublishing:          DeliveryStatePublished,
 	// Terminals: empty-string successor (preserves Next()=="" semantics).
 	DeliveryStatePublished:           "",
 	DeliveryStateBlockedTarget:       "",

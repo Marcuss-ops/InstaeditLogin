@@ -82,10 +82,10 @@ func (g *MetadataGenerator) Generate(ctx context.Context, prompt string) (*NVIDI
 // nvidiaChatRequest is the OpenAI-compatible chat completion request
 // body sent to NVIDIA's API endpoint.
 type nvidiaChatRequest struct {
-	Model       string             `json:"model"`
-	Messages    []nvidiaChatMsg    `json:"messages"`
-	Temperature float64            `json:"temperature"`
-	MaxTokens   int                `json:"max_tokens"`
+	Model          string                `json:"model"`
+	Messages       []nvidiaChatMsg       `json:"messages"`
+	Temperature    float64               `json:"temperature"`
+	MaxTokens      int                   `json:"max_tokens"`
 	ResponseFormat *nvidiaResponseFormat `json:"response_format,omitempty"`
 }
 
@@ -131,8 +131,8 @@ Return ONLY the JSON object. No markdown, no explanation, no code fences.`
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: prompt},
 		},
-		Temperature: 0.3,
-		MaxTokens:   2048,
+		Temperature:    0.3,
+		MaxTokens:      2048,
 		ResponseFormat: &nvidiaResponseFormat{Type: "json_object"},
 	}
 

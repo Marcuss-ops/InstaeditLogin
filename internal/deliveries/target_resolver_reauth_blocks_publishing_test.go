@@ -55,9 +55,9 @@ func TestTargetResolver_ReauthRequired_BlocksPublishing(t *testing.T) {
 			WorkspaceStore: &catalogWorkspaceStore{
 				workspace: &models.Workspace{ID: workspaceID, Name: "Editorial"},
 				channels: []models.WorkspaceChannel{{
-					WorkspaceID:      workspaceID,
+					WorkspaceID:       workspaceID,
 					PlatformAccountID: platformAccountID,
-					Enabled:          bindingEnabled,
+					Enabled:           bindingEnabled,
 				}},
 			},
 			UserStore: &catalogUserStore{accounts: map[int64]*models.PlatformAccount{
@@ -76,12 +76,12 @@ func TestTargetResolver_ReauthRequired_BlocksPublishing(t *testing.T) {
 	}
 
 	cases := []struct {
-		name              string
-		pa                *models.PlatformAccount
-		bindingEnabled    bool
-		wantErrorCode     string
-		wantEnabled       bool // catalog.Enabled (binding-level)
-		wantCapabilities  bool // any of upload_video / set_thumbnail / publish / schedule
+		name             string
+		pa               *models.PlatformAccount
+		bindingEnabled   bool
+		wantErrorCode    string
+		wantEnabled      bool // catalog.Enabled (binding-level)
+		wantCapabilities bool // any of upload_video / set_thumbnail / publish / schedule
 	}{
 		{
 			name:             "reauth_required_via_status_enum_blocks_publishing",
@@ -92,8 +92,8 @@ func TestTargetResolver_ReauthRequired_BlocksPublishing(t *testing.T) {
 			wantCapabilities: false,
 		},
 		{
-			name:             "reauth_required_via_timestamp_blocks_publishing",
-			pa:               clonePlatformAccount(activeAccount, func(p *models.PlatformAccount) {
+			name: "reauth_required_via_timestamp_blocks_publishing",
+			pa: clonePlatformAccount(activeAccount, func(p *models.PlatformAccount) {
 				now := time.Now().UTC()
 				p.ReauthRequiredAt = &now
 				// status stays 'active' but the dual-signal gate flips on the timestamp

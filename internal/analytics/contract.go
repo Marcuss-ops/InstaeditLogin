@@ -109,14 +109,14 @@ type Period struct {
 // when the account's OAuth scope + analytics granularity actually
 // surface them — the contract MUST NOT silently coerce them to 0.
 type Summary struct {
-	Views                 int64    `json:"views"`
-	WatchTimeMinutes      int64    `json:"watch_time_minutes"`
-	SubscribersGained     int64    `json:"subscribers_gained"`
-	SubscribersLost       int64    `json:"subscribers_lost"`
-	SubscribersNet        int64    `json:"subscribers_net"`
-	EstimatedRevenueCents *int64   `json:"estimated_revenue_cents,omitempty"`
-	VideosPublished       int64    `json:"videos_published"`
-	AverageViewsPerVideo  float64  `json:"average_views_per_video"`
+	Views                 int64   `json:"views"`
+	WatchTimeMinutes      int64   `json:"watch_time_minutes"`
+	SubscribersGained     int64   `json:"subscribers_gained"`
+	SubscribersLost       int64   `json:"subscribers_lost"`
+	SubscribersNet        int64   `json:"subscribers_net"`
+	EstimatedRevenueCents *int64  `json:"estimated_revenue_cents,omitempty"`
+	VideosPublished       int64   `json:"videos_published"`
+	AverageViewsPerVideo  float64 `json:"average_views_per_video"`
 	// Optional analytics — populated only when the source data
 	// genuinely supports them. Missing values render as "no data"
 	// in the frontend rather than a misleading zero.

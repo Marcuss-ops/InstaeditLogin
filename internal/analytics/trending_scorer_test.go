@@ -170,7 +170,9 @@ func TestScorer_NaNGrowthPercentageSanitised(t *testing.T) {
 // TestScorer_GrowingLessCascadeReal pins the deterministic
 // tiebreak stack end-to-end via GrowingLessForTest. Each tier of
 // the cascade —
-//   TrendScore DESC  →  ViewsInPeriod DESC  →  PublishedAt ASC  →  VideoID ASC
+//
+//	TrendScore DESC  →  ViewsInPeriod DESC  →  PublishedAt ASC  →  VideoID ASC
+//
 // is exercised with hand-crafted inputs that bypass ScoreGrowing's
 // formula recomputation, so a regression to ANY tier surfaces as a
 // test failure on the SPECIFIC tier (the table-driven subtests).

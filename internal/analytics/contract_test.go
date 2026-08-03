@@ -78,8 +78,8 @@ func responseFixture(t *testing.T) ChannelPerformanceResponse {
 			// The contract requires percentage_change to be PRESENT
 			// whenever previous != 0 — negative deltas are valid
 			// comparisons and MUST NOT be flattened to nil/omitted.
-			EstimatedRevenue: MetricComparison{CurrentValue: 1234, PreviousValue: 4000, AbsoluteChange: -2766, PercentageChange: &pctNeg},
-			VideosPublished:  MetricComparison{CurrentValue: 5, PreviousValue: 4, AbsoluteChange: 1, PercentageChange: &pct},
+			EstimatedRevenue:     MetricComparison{CurrentValue: 1234, PreviousValue: 4000, AbsoluteChange: -2766, PercentageChange: &pctNeg},
+			VideosPublished:      MetricComparison{CurrentValue: 5, PreviousValue: 4, AbsoluteChange: 1, PercentageChange: &pct},
 			AverageViewsPerVideo: MetricComparison{CurrentValue: 20000, PreviousValue: 16000, AbsoluteChange: 4000, PercentageChange: &pct},
 		},
 		DailySeries: []DailyPoint{

@@ -178,9 +178,9 @@ func TestHandleListGroups_NoQueryFallsBackToJWTWorkspace(t *testing.T) {
 // — see TestHandleListGroups_ExplicitQueryCrossOwner_404 below.
 func TestHandleListGroups_ExplicitQueryOverridesIdentity(t *testing.T) {
 	const (
-		userID       = int64(1)
-		jwtWS        = int64(1)  // JWT carries wsID=1
-		explicitWS   = int64(7)  // Caller asks ?workspace_id=7 (also owned by user 1)
+		userID     = int64(1)
+		jwtWS      = int64(1) // JWT carries wsID=1
+		explicitWS = int64(7) // Caller asks ?workspace_id=7 (also owned by user 1)
 	)
 	var capturedWS int64
 	gStore := &mockGroupStore{
@@ -214,9 +214,9 @@ func TestHandleListGroups_ExplicitQueryOverridesIdentity(t *testing.T) {
 // into 404.
 func TestHandleListGroups_ExplicitQueryCrossOwner_404(t *testing.T) {
 	const (
-		userID     = int64(1)
-		jwtWS      = int64(1)  // JWT wsID=1
-		foreignWS  = int64(99) // Caller asks ?workspace_id=99 (owned by user 999)
+		userID    = int64(1)
+		jwtWS     = int64(1)  // JWT wsID=1
+		foreignWS = int64(99) // Caller asks ?workspace_id=99 (owned by user 999)
 	)
 	gStore := &mockGroupStore{
 		listByWorkspaceFn: func(workspaceID int64) ([]models.Group, error) {
