@@ -203,6 +203,7 @@ func runDeliver(t *testing.T, dst ExternalDestinationStore, del ExternalDelivery
 // call fixtureValidBody then string-replace the offending slice.
 func fixtureValidBody() []byte {
 	return []byte(`{
+		"contract_version":     "velox.delivery.v1",
 		"external_delivery_id": "delivery_8cc0f",
 		"idempotency_key":      "delivery_8cc0f|dest_12",
 		"external_destination_id": "extdst_01JABC",
@@ -344,6 +345,30 @@ func TestDeliver_InvalidJSON(t *testing.T) {
 // -----------------------------------------------------------------------
 // Field-level validation tests — fast-fail chain
 // -----------------------------------------------------------------------
+
+// TestDeliver_RejectsNonCanonicalContractVersions confirms the endpoint
+// fails closed for an omitted, retired, or unknown contract version.
+func TestDeliver_RejectsNonCanonicalContractVersions(t *testing.T) {
+	for _, version := range []string{"", "velox-instaedit.v1", "velox.delivery.v0"} {
+		t.Run("version="+version, func(t *testing.T) {
+			dst := &mockExternalDestinations{}
+			del := &mockExternalDeliveries{}
+			body := strings.Replace(string(fixtureValidBody()),
+				`"contract_version":     "velox.delivery.v1"`,
+				`"contract_version":     "`+version+`"`, 1)
+			w := runDeliver(t, dst, del, testDeliverAPIToken,
+				[]byte(body), "Bearer "+testDeliverAPIToken)
+			if w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("contract_version=%q: want 422, got %d (body=%q)",
+					version, w.Code, w.Body.String())
+			}
+			if del.InsertCalls != 0 {
+				t.Fatalf("contract_version=%q: InsertCalls=%d; want 0",
+					version, del.InsertCalls)
+			}
+		})
+	}
+}
 
 // TestDeliver_MissingIdempotencyKey confirms 422 fires before any
 // other field validation when idempotency_key is empty.

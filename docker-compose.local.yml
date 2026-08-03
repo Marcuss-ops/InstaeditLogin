@@ -10,8 +10,24 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
   api:
-    ports:
-      - "127.0.0.1:8081:8080"
+    environment:
+      APP_ENV: dev
+      APP_MODE: dev
+
+  worker:
+    environment:
+      APP_ENV: dev
+      APP_MODE: dev
+
+  migrate:
+    environment:
+      APP_ENV: dev
+      APP_MODE: dev
+
+  server:
+    environment:
+      APP_ENV: dev
+      APP_MODE: dev
 networks:
   media-backend:
     internal: true

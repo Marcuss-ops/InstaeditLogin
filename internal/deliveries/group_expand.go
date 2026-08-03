@@ -23,7 +23,7 @@ import (
 
 // DeliverySet is the aggregator row for N child deliveries expanded
 // from a single group_id delivery. One row per accepted
-// `VeloxDeliverContractRequest` with `destination.target_type=group`.
+// the canonical Velox delivery request with `destination.target_type=group`.
 //
 // Persisted in `delivery_sets` (pending migration
 // `057_external_delivery_sets.sql`); the fields below are the
@@ -97,7 +97,7 @@ type DeliveryInserter interface {
 }
 
 // ChildDeliveryParams is the per-child deliverable-record input.
-// Mirrors the VeloxContractRequest shape post-group-expansion: only
+// Mirrors the canonical Velox delivery shape post-group-expansion: only
 // the `destination.platform_account_id` differs per child, all
 // other fields are inherited from the parent group's request.
 //
@@ -129,9 +129,9 @@ type DeliverySetRecorder interface {
 }
 
 // ExpandForGroupParams is the canonical input shape for
-// ExpandForGroup, derived from VeloxDeliverContractRequest but
+// ExpandForGroup, derived from the flat Velox delivery request but
 // scoped to the group expansion call. Field names mirror the
-// existing contract struct (snake_case JSON outside of this Go
+// canonical delivery request (snake_case JSON outside of this Go
 // package).
 type ExpandForGroupParams struct {
 	System      string
@@ -144,8 +144,8 @@ type ExpandForGroupParams struct {
 }
 
 // Validate enforces the structural rules before ExpandForGroup does
-// any repo work. Mirror of the validateContractRequest gate in
-// `pkg/api/deliveries_create.go::validateContractRequest` —
+// any repo work. Mirror of the delivery validation gate in
+// `pkg/api/deliveries_handler.go` —
 // callers SHOULD call this before invoking ExpandForGroup to fail
 // fast on malformed input rather than after a list+insert round
 // trip.
@@ -197,7 +197,7 @@ func (p *ExpandForGroupParams) Validate() error {
 //     active accounts; wrapped DB errors otherwise.
 //
 // The function is the SPEC'D GROUP ENTRY POINT for
-// `VeloxDeliverContractRequest` with
+// a canonical Velox delivery request with
 // `destination.target_type=group`. Once the per-child Insert has
 // succeeded, each child is treated by the existing
 // single-delivery worker pipeline (download → private upload →
@@ -353,8 +353,8 @@ func deriveSetID(p ExpandForGroupParams) string {
 // future binding change accidentally zeroes WILL surface as a
 // deterministic-id mismatch at ExpandForGroup time.
 //
-// Format: `velox-<16 hex chars>` matches the existing
-// `deliveries_create.go::synthesizeContractDeliveryID` contract.
+// Format: `velox-<16 hex chars>` is the stable child-delivery ID
+// format used by the canonical delivery expansion path.
 func deriveChildID(p ExpandForGroupParams, accountID int64) string {
 	h := sha256.Sum256([]byte(strings.Join([]string{
 		"child",

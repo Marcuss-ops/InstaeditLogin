@@ -1,7 +1,4 @@
-// Package api — shared persistence helper for POST /internal/v1/deliveries.
-//
-// Part of the split of deliveries_create.go (audit T3: versioned contract).
-// Used by both the contract path and the legacy path after validation.
+// Package api — persistence helper for POST /internal/v1/deliveries.
 //
 // Performs Insert under pg_advisory_xact_lock and emits the 3-way outcome
 // (fresh / same-SHA replay / different-SHA 409).
@@ -19,8 +16,8 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
 
-// persistInternalDelivery is the shared post-validation insert used by
-// both contract and legacy paths. Performs:
+// persistInternalDelivery is the post-validation insert for the canonical
+// Velox delivery path. Performs:
 //
 //  1. Mint a social_delivery_id (sdel_01J... ULID-shaped).
 //  2. Run ExternalDeliveryStore.Insert under pg_advisory_xact_lock.
@@ -32,7 +29,7 @@ import (
 //  4. On ErrIdempotencyConflict: emit a structured 409 with the
 //     conflict body (the same across both paths so callers can
 //     pattern-match on it).
-func (m *VeloxModule) persistInternalDelivery(w http.ResponseWriter, ctx context.Context, body []byte, veloxReq *VeloxDeliverArtifactRequest, isContractPath bool) {
+func (m *VeloxModule) persistInternalDelivery(w http.ResponseWriter, ctx context.Context, body []byte, veloxReq *VeloxDeliverArtifactRequest) {
 	mintedID, err := services.GenerateVeloxDeliveryID()
 	if err != nil {
 		slog.Error("velox deliver: id mint failed", "err", err)
@@ -63,8 +60,7 @@ func (m *VeloxModule) persistInternalDelivery(w http.ResponseWriter, ctx context
 	if elapsed > 300*time.Millisecond {
 		slog.Warn("velox deliver: insert slow",
 			"elapsed_ms", elapsed.Milliseconds(),
-			"idempotency_key", veloxReq.IdempotencyKey,
-			"is_contract_path", isContractPath)
+			"idempotency_key", veloxReq.IdempotencyKey)
 	}
 
 	if err != nil {
@@ -76,7 +72,6 @@ func (m *VeloxModule) persistInternalDelivery(w http.ResponseWriter, ctx context
 			slog.Info("velox deliver: replay with different sha rejected",
 				"idempotency_key", veloxReq.IdempotencyKey,
 				"existing_social_delivery_id", existingID,
-				"is_contract_path", isContractPath,
 			)
 			writeJSON(w, http.StatusConflict, VeloxDeliverArtifactConflictResponse{
 				Error:          "idempotency_key_conflict",
@@ -87,8 +82,7 @@ func (m *VeloxModule) persistInternalDelivery(w http.ResponseWriter, ctx context
 		}
 		slog.Error("velox deliver: insert failed",
 			"err", err,
-			"idempotency_key", veloxReq.IdempotencyKey,
-			"is_contract_path", isContractPath)
+			"idempotency_key", veloxReq.IdempotencyKey)
 		writeError(w, http.StatusInternalServerError, "delivery persist failed")
 		return
 	}
@@ -99,17 +93,8 @@ func (m *VeloxModule) persistInternalDelivery(w http.ResponseWriter, ctx context
 		"idempotency_key", veloxReq.IdempotencyKey,
 		"already_exists", alreadyExists,
 		"elapsed_ms", elapsed.Milliseconds(),
-		"is_contract_path", isContractPath,
 	)
 
-	if isContractPath {
-		writeJSON(w, http.StatusAccepted, VeloxDeliverContractResponse{
-			DeliveryID: inserted.ID,
-			Status:     "accepted",
-			Duplicate:  alreadyExists,
-		})
-		return
-	}
 	writeJSON(w, http.StatusAccepted, VeloxDeliverArtifactResponse{
 		SocialDeliveryID: inserted.ID,
 		Status:           "accepted",

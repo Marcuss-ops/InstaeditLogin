@@ -452,7 +452,10 @@ func (r *MediaAssetRepository) DeleteEligibleAssets(ctx context.Context, retenti
 	res, err := r.db.ExecContext(ctx,
 		`DELETE FROM media_assets ma
 		 USING upload_jobs uj, post_targets pt, youtube_target_publications ytp
-		 WHERE ma.id = uj.asset_id
+			-- upload_jobs.asset_id is legacy TEXT while media_assets.id is UUID.
+			-- Compare in the stable textual representation so cleanup works on
+			-- existing installations without an invalid TEXT→UUID cast.
+			WHERE ma.id::text = uj.asset_id
 		   AND uj.post_id = pt.post_id
 		   AND uj.id = ytp.upload_job_id
 		   AND ytp.youtube_upload_status = 'youtube_uploaded'

@@ -265,6 +265,7 @@ starting services. The command must receive the production environment file:
 ```bash
 cd /opt/instaedit/InstaeditLogin
 export INSTAEDIT_ENV_FILE=/opt/instaedit/secrets/.env.production
+export INSTAEDIT_YOUTUBE_ENV_FILE=/etc/instaeditlogin-youtube.env
 
 docker compose \
   --env-file "$INSTAEDIT_ENV_FILE" \

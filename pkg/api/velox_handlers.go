@@ -15,16 +15,8 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
-// NOTE — handleCreateInternalDelivery was relocated to
-// `pkg/api/deliveries_create.go` (out of `pkg/api/internal/` because
-// Go's internal-visibility rule prevents a file in the internal
-// subtree from referencing symbols in its parent package; the
-// handler shares types like VeloxModule, writeError, sha256HexRegex,
-// mimeAllowlist that live in a sibling file). Imports above are
-// pruned to the GET/validate handlers + option functions in this
-// file only. New types added by the relocation live in
-// `deliveries_create.go` (VeloxDeliverContractRequest,
-// VeloxDeliverContractResponse, VeloxContractIdempotencyKeyRegex).
+// NOTE — handleCreateInternalDelivery lives in deliveries_handler.go.
+// This file contains the GET delivery and destination-validation handlers.
 //
 // NOTE — handleGetInternalDelivery has been extended in-place
 // (NOT relocated) to populate the spec §8 fields
@@ -49,15 +41,11 @@ import (
 // webhook 5xx storm).
 //
 // Wire shape — see VeloxGetDeliveryResponse in velox_types.go.
-// The handler populates BOTH v0 legacy fields (id|status|
-// retry_wait_reason|platform_media_id|platform_url|published_at|last_*)
-// AND spec §8 fields (delivery_id|velox_job_id|target{
+// The handler populates the reconciliation fields (delivery_id|velox_job_id|target{
 // platform_account_id,channel_id,channel_name,enabled}|
 // publish_status|thumbnail_status|youtube_video_id|privacy).
 //
-// A v0 client reading `id` + `status` gets the v0 view unchanged.
-// A v1 / §8 client reading `delivery_id` + `target` + `publish_status`
-// gets the contract view. One GET, two compatible shapes.
+// Velox clients read `delivery_id` + `target` + `publish_status`.
 //
 // 404 is reserved for "id never accepted" — distinct from "we
 // accepted then lost it" semantics. We deliberately collapse

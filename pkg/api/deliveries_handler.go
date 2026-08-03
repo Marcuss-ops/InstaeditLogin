@@ -1,8 +1,7 @@
 // Package api — handler for POST /internal/v1/deliveries.
 //
-// Part of the split of deliveries_create.go (audit T3: versioned contract).
-// Dispatches between the versioned contract path and the legacy path using
-// the explicit contract_version discriminator — no auto-detection heuristics.
+// The endpoint accepts one wire contract only: the flat
+// VeloxDeliverArtifactRequest with contract_version=velox.delivery.v1.
 package api
 
 import (
@@ -13,7 +12,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/deliveries"
@@ -23,22 +21,8 @@ import (
 )
 
 // handleCreateInternalDelivery implements POST /internal/v1/deliveries
-// for the Velox integration contract.
-//
-// Relocated from pkg/api/velox_handlers.go. Extended with explicit
-// contract_version dispatch (audit T3):
-//
-//  1. Body is parsed as VeloxDeliverContractRequest.
-//  2. If contract_version == "velox-instaedit.v1" → legacy nested CONTRACT path.
-//     Strict validation per validateContractRequest; the contract path
-//     synthesises the legacy row fields so the existing Insert path is
-//     reused unchanged.
-//  3. Otherwise → LEGACY path (existing validation chain verbatim,
-//     destination lookup + MergeVeloxDestinationMetadata + Parse+Validate).
-//
-// Both paths converge on persistInternalDelivery which mints the
-// social_delivery_id, runs Insert under pg_advisory_xact_lock, and
-// emits the 3-way outcome (fresh / replay / different-SHA 409).
+// for the Velox integration contract. The request is decoded and
+// validated once, then persisted through the single canonical path.
 func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *http.Request) {
 	if m.deps.ExternalDeliveryStore == nil {
 		writeError(w, http.StatusNotImplemented, "internal velox delivery store not configured")
@@ -71,95 +55,14 @@ func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *h
 		return
 	}
 
-	// Step 2 — DISPATCH: contract_version discriminator (NO auto-detection).
-	var contractReq VeloxDeliverContractRequest
-	if jerr := json.Unmarshal(body, &contractReq); jerr == nil && hasContractVersion(&contractReq) {
-		// LEGACY NESTED CONTRACT PATH — kept only for bounded migration
-		// compatibility. New Velox callers use velox.delivery.v1.
-		headerIdempotencyKey := strings.TrimSpace(req.Header.Get("Idempotency-Key"))
-		if verr := validateContractRequest(&contractReq, headerIdempotencyKey); verr != nil {
-			writeError(w, http.StatusUnprocessableEntity, verr.Error())
-			return
-		}
-		// Synthesise legacy row fields from the contract body so
-		// the existing Insert path is reused unchanged.
-		metadata := map[string]any{
-			"title":              contractReq.Publication.Title,
-			"description":        contractReq.Publication.Description,
-			"privacy_status":     contractReq.Publication.InitialPrivacy,
-			"final_privacy":      contractReq.Publication.FinalPrivacy,
-			"require_thumbnail":  contractReq.Publication.RequireThumbnail,
-			"target_account_ids": []int64{},
-			"language":           "",
-			"duration_seconds":   contractReq.Media.DurationSeconds,
-			"platform":           contractReq.Destination.Platform,
-			"target_type":        contractReq.Destination.TargetType,
-		}
-		if len(contractReq.Publication.Tags) > 0 {
-			metadata["tags"] = contractReq.Publication.Tags
-		}
-		if contractReq.Destination.PlatformAccountID > 0 {
-			metadata["target_account_ids"] = []int64{contractReq.Destination.PlatformAccountID}
-		}
-		if contractReq.Destination.GroupID > 0 {
-			metadata["group_id"] = contractReq.Destination.GroupID
-		}
-		metaBytes, mErr := json.Marshal(metadata)
-		if mErr != nil {
-			slog.Error("velox deliver contract: metadata marshal failed", "err", mErr)
-			writeError(w, http.StatusInternalServerError, "metadata marshal failed")
-			return
-		}
-		downloadURL := contractReq.Media.DownloadURL
-		veloxReq := &VeloxDeliverArtifactRequest{
-			ExternalDeliveryID:    synthesizeContractDeliveryID(&contractReq),
-			IdempotencyKey:        headerIdempotencyKey,
-			ExternalDestinationID: synthesizeContractDestinationID(&contractReq.Destination),
-			Artifact: VeloxArtifactRef{
-				ArtifactID:  contractReq.Source.ArtifactID,
-				SHA256:      contractReq.Media.SHA256,
-				SizeBytes:   contractReq.Media.SizeBytes,
-				MimeType:    contractReq.Media.MimeType,
-				DownloadURL: &downloadURL,
-			},
-			Metadata:  metaBytes,
-			PublishAt: contractReq.Publication.PublishAt,
-		}
-		// The versioned contract has no opaque destination ID in its wire
-		// shape, so validate its direct target before accepting the durable
-		// delivery. This keeps the contract path fail-closed just like the
-		// legacy opaque-destination path below.
-		if m.deps.WorkspaceStore != nil && m.deps.UserStore != nil {
-			resolved, resolveErr := m.resolver().Resolve(ctx, deliveries.ResolveRequest{
-				WorkspaceID: contractReq.Destination.WorkspaceID,
-				Platform:    contractReq.Destination.Platform,
-				Target: deliveries.TargetDescriptor{
-					Type:              contractReq.Destination.TargetType,
-					PlatformAccountID: contractReq.Destination.PlatformAccountID,
-					GroupID:           contractReq.Destination.GroupID,
-				},
-			})
-			if resolveErr != nil || resolved == nil || !resolved.Valid {
-				if resolveErr != nil {
-					slog.Error("velox deliver contract: destination validation failed", "err", resolveErr)
-				}
-				writeError(w, http.StatusUnprocessableEntity, "validation: destination is not publishable")
-				return
-			}
-		}
-		m.persistInternalDelivery(w, ctx, body, veloxReq, true /* isContractPath */)
-		return
-	}
-
-	// LEGACY PATH — verbatim validation chain from the original
-	// pkg/api/velox_handlers.go::handleCreateInternalDelivery.
+	// Step 2 — decode and require the sole supported wire version.
 	var veloxReq VeloxDeliverArtifactRequest
 	if err := json.Unmarshal(body, &veloxReq); err != nil {
 		slog.Warn("velox deliver: json unmarshal failed", "err", err)
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if veloxReq.ContractVersion != "" && veloxReq.ContractVersion != "velox.delivery.v1" {
+	if veloxReq.ContractVersion != ContractVersionDelivery {
 		writeError(w, http.StatusUnprocessableEntity, "unsupported contract_version")
 		return
 	}
@@ -223,7 +126,7 @@ func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *h
 		return
 	}
 
-	// Re-resolve the opaque destination at acceptance time.  Discovery and
+	// Re-resolve the opaque destination at acceptance time. Discovery and
 	// job-submit checks can be minutes old by the time rendering finishes;
 	// this closes the window where an operator disables a channel after job
 	// creation but before the resulting artifact is accepted for publishing.
@@ -253,5 +156,5 @@ func (m *VeloxModule) handleCreateInternalDelivery(w http.ResponseWriter, req *h
 		return
 	}
 
-	m.persistInternalDelivery(w, ctx, body, &veloxReq, false /* isContractPath */)
+	m.persistInternalDelivery(w, ctx, body, &veloxReq)
 }

@@ -131,42 +131,42 @@ any child fails — see §12.
 
 ---
 
-## 3. Source block (artifact provenance)
+## 3. Delivery provenance fields
 
-Carried in every `/internal/v1/deliveries` request body. Identifier
-metadata — the actual bytes travel over the `media.download_url` link
-defined in §4.
+These values are carried as top-level fields of the canonical flat
+`VeloxDeliverArtifactRequest`; `source` is not a nested HTTP envelope.
+The actual bytes travel over the artifact's `download_url`.
 
 ```json
 {
-  "source": {
-    "system": "velox",
-    "job_id": "job_123",
-    "task_id": "task_456",
-    "artifact_id": "artifact_abc"
-  }
+  "external_delivery_id": "delivery_789",
+  "idempotency_key": "delivery_789|destination_12",
+  "external_destination_id": "extdst_01JABC",
+  "artifact": { "artifact_id": "artifact_abc" }
 }
 ```
 
-| Field         | Type   | Required | Notes                                                                              |
-| ------------- | ------ | -------- | ---------------------------------------------------------------------------------- |
-| `system`      | string | yes      | Always `"velox"`. Identifies the producer for audit + retry context.               |
-| `job_id`      | string | yes      | Top-level PipelineGen job id.                                                      |
-| `task_id`     | string | yes      | Worker task inside the job (e.g. scene-compositor step).                           |
-| `artifact_id` | string | yes      | The rendered video artifact id. Used in `Idempotency-Key` (§7.2) and audit logs.   |
+| Field                       | Type   | Required | Notes                                                                            |
+| --------------------------- | ------ | -------- | -------------------------------------------------------------------------------- |
+| `external_delivery_id`      | string | yes      | Stable producer delivery identifier.                                             |
+| `idempotency_key`           | string | yes      | Stable across retries; the request body is hashed for replay protection.         |
+| `external_destination_id`   | string | yes      | Opaque destination resolved by InstaEdit.                                         |
+| `artifact.artifact_id`      | string | yes      | Rendered artifact identifier used for ingest and audit correlation.               |
 
 ---
 
-## 4. Media block (artifact transport)
+## 4. Artifact fields (artifact transport)
+
+The canonical flat request places transport fields under `artifact`.
 
 ```json
 {
-  "media": {
+  "artifact": {
+    "artifact_id": "artifact_abc",
     "download_url": "https://velox.example/internal/artifacts/abc?token=...&expires=...",
     "sha256": "cc3cfb49...",
     "size_bytes": 1915469,
-    "mime_type": "video/mp4",
-    "duration_seconds": 180.4
+    "mime_type": "video/mp4"
   }
 }
 ```
@@ -177,7 +177,7 @@ defined in §4.
 | `sha256`          | lowercase hex | yes   | SHA-256 of the raw bytes; lowercase hex; no `sha256:` prefix.                                       |
 | `size_bytes`      | int64       | yes      | Strict equality required on ingest. Mismatch → `MEDIA_INVALID`.                                    |
 | `mime_type`       | string      | yes      | Currently `video/mp4`. Consumer rejects anything else.                                              |
-| `duration_seconds`| float       | yes      | Two-decimal precision. Consumer re-derives via ffprobe; ±0.5s drift is a `MEDIA_INVALID`.          |
+| `duration_seconds`| —           | no       | Not part of the canonical flat delivery DTO; duration probing is performed by the consumer.         |
 
 ### 4.1 Verification chain
 
@@ -207,31 +207,30 @@ Any failure transitions the delivery to `MEDIA_INVALID`. The video is
 
 ---
 
-## 5. Publication block (user-facing metadata)
+## 5. Publication metadata
+
+Publication fields are carried in the flat request's `metadata` JSON
+object, alongside the artifact and opaque destination identifiers.
 
 ```json
 {
-  "publication": {
+  "metadata": {
     "title": "Titolo del video",
     "description": "Descrizione del video",
     "tags": ["wwe", "wrestling"],
-    "initial_privacy": "private",
-    "final_privacy": "public",
-    "require_thumbnail": true,
-    "publish_at": "2026-07-30T18:00:00Z"
-  }
+    "privacy_status": "private"
+  },
+  "publish_at": "2026-07-30T18:00:00Z"
 }
 ```
 
-| Field            | Type                                  | Required | Notes                                                                                              |
-| ---------------- | ------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `title`          | string ≤100                           | yes      | YouTube maximum 100 chars. Producer must truncate silently if over.                                |
-| `description`    | string ≤5000                          | yes      | YouTube maximum 5000 chars. Producer must truncate silently if over.                                |
-| `tags`           | string\[\]                            | no       | Joined with `,` on upload. Alpha-only deduplication + length cap (≤30 chars per tag, ≤500 total). |
-| `initial_privacy`| `"private"`                           | yes      | Always. Hard-coded invariant.                                                                       |
-| `final_privacy`  | `"public"` \| `"unlisted"` \| `"private"` | yes    | Settled-state privacy.                                                                              |
-| `require_thumbnail` | bool                              | yes      | If `true`, blocks the public transition until `thumbnails.set` succeeds.                           |
-| `publish_at`     | RFC3339 datetime                      | no       | If present, video is scheduled via `videos.update(status=private, publishAt=…)`.                  |
+| Field                   | Type                                  | Required | Notes                                                                                              |
+| ----------------------- | ------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `metadata.title`        | string ≤100                           | yes      | YouTube title; producer supplies the value in the metadata object.                                |
+| `metadata.description`  | string ≤5000                          | yes      | YouTube description; producer supplies the value in the metadata object.                          |
+| `metadata.tags`         | string\[\]                            | no       | Joined with `,` on upload; bounded by the consumer metadata validator.                             |
+| `metadata.privacy_status` | `"private"` \| `"unlisted"` \| `"public"` | yes | Current publisher privacy intent; acceptance starts from private.                              |
+| `publish_at`            | RFC3339 datetime                      | no       | Optional scheduling hint forwarded to the publisher.                                               |
 
 ---
 
@@ -356,40 +355,36 @@ Producer-side accept of a rendered artifact. Idempotent on
 
 ### 7.1 Request
 
+The endpoint accepts exactly one envelope: the flat artifact request
+with the explicit `contract_version` discriminator. The retired
+`velox-instaedit.v1` nested `source`/`media`/`destination`/`publication`
+envelope and an omitted version are rejected with `422`.
+
 ```http
 POST /internal/v1/deliveries
 Authorization: Bearer <VELOX_API_TOKEN>
-Idempotency-Key: velox-job_123-artifact_abc-youtube-account_381
+Idempotency-Key: delivery_789|destination_12
 Content-Type: application/json
 
 {
-  "source": {
-    "system": "velox",
-    "job_id": "job_123",
-    "task_id": "task_456",
-    "artifact_id": "artifact_abc"
-  },
-  "media": {
-    "download_url": "https://velox.example/internal/artifacts/abc?token=...&expires=...",
+  "contract_version": "velox.delivery.v1",
+  "external_delivery_id": "delivery_789",
+  "idempotency_key": "delivery_789|destination_12",
+  "external_destination_id": "extdst_01JABC",
+  "artifact": {
+    "artifact_id": "artifact_abc",
     "sha256": "cc3cfb49...",
     "size_bytes": 1915469,
     "mime_type": "video/mp4",
-    "duration_seconds": 180.4
+    "download_url": "https://velox.example/internal/artifacts/abc?token=...&expires=..."
   },
-  "destination": {
-    "workspace_id": 12,
-    "platform": "youtube",
-    "target_type": "channel",
-    "platform_account_id": 381
-  },
-  "publication": {
+  "metadata": {
     "title": "Titolo del video",
     "description": "Descrizione del video",
     "tags": ["wwe", "wrestling"],
-    "initial_privacy": "private",
-    "final_privacy": "public",
-    "require_thumbnail": true
-  }
+    "privacy_status": "private"
+  },
+  "publish_at": "2026-07-30T18:00:00Z"
 }
 ```
 
@@ -410,17 +405,17 @@ Producer MUST keep the key stable across retries. Consumer computes
 `sha256(raw_body)` and INSERTs under a `pg_advisory_xact_lock` so
 concurrent replays serialise.
 
-- Same key + same body SHA → existing row reused; `duplicate=true`.
-- Same key + different body → `409 IDEMPOTENCY_BODY_CHANGED`.
+- Same key + same body SHA → existing row reused; `already_exists=true`.
+- Same key + different body → `409 idempotency_key_conflict`.
 - Different key + same body → fresh insertion.
 
 ### 7.3 Fresh insertion — response (HTTP 202)
 
 ```json
 {
-  "delivery_id": "delivery_789",
-  "status": "PRIVATE_UPLOADING",
-  "duplicate": false
+  "social_delivery_id": "sdel_01JABC",
+  "status": "accepted",
+  "already_exists": false
 }
 ```
 
@@ -428,10 +423,9 @@ concurrent replays serialise.
 
 ```json
 {
-  "delivery_id": "delivery_789",
-  "status": "PRIVATE_UPLOADED",
-  "duplicate": true,
-  "youtube_video_id": "AbCd1234"
+  "social_delivery_id": "sdel_01JABC",
+  "status": "accepted",
+  "already_exists": true
 }
 ```
 
@@ -439,10 +433,9 @@ concurrent replays serialise.
 
 ```json
 {
-  "delivery_id": "delivery_790",
-  "status": "PRIVATE_UPLOAD_QUEUED",
-  "duplicate": false,
-  "publish_at": "2026-07-30T18:00:00Z"
+  "social_delivery_id": "sdel_01JDEF",
+  "status": "accepted",
+  "already_exists": false
 }
 ```
 
@@ -477,7 +470,7 @@ Field reference:
 | Field              | Type                                                      | Notes                                                                  |
 | ------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `delivery_id`      | string                                                    | Opaque; matches the value returned by §7.                              |
-| `velox_job_id`     | string                                                    | Mirrors `source.job_id`. Allows Velox to correlate without joins.      |
+| `velox_job_id`     | string                                                    | Mirrors the producer's external delivery correlation.                  |
 | `target.platform_account_id` | int64                                            | Resolved account (never a group aggregate id).                         |
 | `target.channel_id` | string                                                   | YouTube channel id actually bound to the token used for upload.       |
 | `target.channel_name` | string                                                 | Diagnostic only; subject to rename. Not a selection key.               |

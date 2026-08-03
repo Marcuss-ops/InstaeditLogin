@@ -425,6 +425,7 @@ func buildE2EDeliveryBody(t *testing.T, sha string, _ []byte) []byte {
 		sha = e2eValidSHA
 	}
 	body := fmt.Sprintf(`{
+		"contract_version":      "velox.delivery.v1",
 		"external_delivery_id": "%s",
 		"idempotency_key":       "%s",
 		"external_destination_id": "%s",

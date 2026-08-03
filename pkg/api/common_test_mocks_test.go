@@ -284,6 +284,9 @@ type mockUserStore struct {
 	// the number of still-active sibling channels sharing the account's
 	// grant. Default 0 (single-account grants) unless overridden.
 	countActiveOnConnectionFn func(ctx context.Context, oauthConnectionID, excludeAccountID int64) (int64, error)
+	// disconnectPlatformAccountFn models the production atomic shared-grant
+	// operation without widening the UserStore compatibility interface.
+	disconnectPlatformAccountFn func(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)
 }
 
 func (m *mockUserStore) AttachPlatformAccount(userID int64, profile *models.PlatformProfile, platform string) (*models.PlatformAccount, error) {
@@ -378,6 +381,13 @@ func (m *mockUserStore) CountActiveAccountsOnConnection(ctx context.Context, oau
 		return m.countActiveOnConnectionFn(ctx, oauthConnectionID, excludeAccountID)
 	}
 	return 0, nil
+}
+
+func (m *mockUserStore) DisconnectPlatformAccount(ctx context.Context, accountID int64) (bool, bool, error) {
+	if m.disconnectPlatformAccountFn != nil {
+		return m.disconnectPlatformAccountFn(ctx, accountID)
+	}
+	return false, false, nil
 }
 
 // mockWorkspaceStore implements WorkspaceStore with configurable function fields.

@@ -39,6 +39,16 @@ func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identi
 	})
 }
 
+// secureDisconnectStore atomically marks one account disconnected and decides
+// whether its OAuth grant has any active siblings left. Production's
+// repository implementation serializes this operation with the same
+// per-grant advisory-lock discipline used by credential refreshes. The
+// optional interface keeps lightweight test stores and legacy integrations
+// source-compatible; they use the guarded fallback below.
+type secureDisconnectStore interface {
+	DisconnectPlatformAccount(ctx context.Context, accountID int64) (lastOnGrant bool, handled bool, err error)
+}
+
 // handleDeleteAccount soft-disconnects a platform account. Steps:
 //
 //  1. loadOwnAccountByID (auth + ownership + 404 on cross-tenant).
@@ -80,17 +90,11 @@ func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identi
 // publishable surface without touching workspace_channels rows (the
 // audit row stays for compliance).
 //
-// The sibling-count → revoke decision is NOT atomic with the later
-// vault.Revoke (a small TOCTOU window). The failure direction is
-// SAFE: two concurrent disconnects of sibling channels both see the
-// other as an active sibling and both skip the revoke — the grant
-// tokens are orphaned but never deleted out from under a live
-// channel. Do NOT turn this into "revoke on a stale count" without
-// taking the per-grant advisory lock (the one vault.Renew uses)
-// around the count + revoke pair.
-//
-// Remote-revoke failure is non-fatal: the local disconnect still
-// completes (the account row flips to 'disconnected' either way).
+// Production performs the status transition and sibling decision in one
+// transaction under a per-grant advisory lock. This prevents concurrent
+// disconnects from both observing an active sibling and orphaning the last
+// grant. Remote-revoke failure remains non-fatal: the local disconnect has
+// already committed and the local vault cleanup still runs.
 func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
 	id, ok := parsePathIDAsInt64(w, req, "id")
 	if !ok {
@@ -102,17 +106,28 @@ func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
 	}
 	ctx := req.Context()
 
-	// Shared-grant awareness: only revoke the grant when this account
-	// is the LAST active channel on it. A count error is a fail-closed
-	// 500 — we must never delete (or keep) grant tokens on a guess.
+	// Shared-grant awareness: production atomically disconnects this row
+	// and decides whether it is the last active channel. Test/legacy stores
+	// without the optional operation use the original fail-closed count path.
 	lastOnGrant := false
-	if account.OAuthConnectionID != nil {
-		activeSiblings, err := r.userRepo.CountActiveAccountsOnConnection(ctx, *account.OAuthConnectionID, account.ID)
+	handledDisconnect := false
+	if secureStore, ok := r.userRepo.(secureDisconnectStore); ok {
+		var err error
+		lastOnGrant, handledDisconnect, err = secureStore.DisconnectPlatformAccount(ctx, account.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to inspect shared grant: "+err.Error())
+			writeError(w, http.StatusInternalServerError, "failed to disconnect account: "+err.Error())
 			return
 		}
-		lastOnGrant = activeSiblings == 0
+	}
+	if !handledDisconnect {
+		if account.OAuthConnectionID != nil {
+			activeSiblings, err := r.userRepo.CountActiveAccountsOnConnection(ctx, *account.OAuthConnectionID, account.ID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to inspect shared grant: "+err.Error())
+				return
+			}
+			lastOnGrant = activeSiblings == 0
+		}
 	}
 
 	if lastOnGrant {
@@ -140,13 +155,22 @@ func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	account.Status = models.AccountStatusDisconnected
-	account.ConnectedAt = nil
-	account.LastErrorCode = "DISCONNECTED"
-	account.LastErrorMessage = "account disconnected by user"
-	if err := r.userRepo.UpdatePlatformAccount(account); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update account: "+err.Error())
-		return
+	if !handledDisconnect {
+		account.Status = models.AccountStatusDisconnected
+		account.ConnectedAt = nil
+		account.LastErrorCode = "DISCONNECTED"
+		account.LastErrorMessage = "account disconnected by user"
+		if err := r.userRepo.UpdatePlatformAccount(account); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update account: "+err.Error())
+			return
+		}
+	} else {
+		// Keep the in-memory object consistent for audit metadata and any
+		// response middleware even though the repository already committed it.
+		account.Status = models.AccountStatusDisconnected
+		account.ConnectedAt = nil
+		account.LastErrorCode = "DISCONNECTED"
+		account.LastErrorMessage = "account disconnected by user"
 	}
 	r.auditAccountEvent(ctx, "account.disconnected", identity, account)
 	w.WriteHeader(http.StatusNoContent)

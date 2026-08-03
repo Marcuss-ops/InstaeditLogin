@@ -3359,12 +3359,17 @@ components:
     VeloxDeliverArtifactRequest:
       type: object
       required:
+        - contract_version
         - external_delivery_id
         - idempotency_key
         - external_destination_id
         - artifact
         - metadata
       properties:
+        contract_version:
+          type: string
+          const: velox.delivery.v1
+          description: Sole accepted delivery wire contract version.
         external_delivery_id:
           type: string
         idempotency_key:

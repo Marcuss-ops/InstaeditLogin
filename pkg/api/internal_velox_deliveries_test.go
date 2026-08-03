@@ -518,6 +518,7 @@ func newPostVeloxTestRouter(t *testing.T, deliveries ExternalDeliveryStore, dest
 func buildValidVeloxDeliveryRequest(t *testing.T, idempotencyKey, externalDeliveryID string) []byte {
 	t.Helper()
 	payload := map[string]any{
+		"contract_version":        ContractVersionDelivery,
 		"external_delivery_id":    externalDeliveryID,
 		"idempotency_key":         idempotencyKey,
 		"external_destination_id": "extdst_01JABC",

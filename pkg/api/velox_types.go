@@ -86,6 +86,10 @@ var (
 	_ ExternalDeliveryStore    = (*repository.ExternalDeliveryRepository)(nil)
 )
 
+// ContractVersionDelivery is the only wire contract accepted by
+// POST /internal/v1/deliveries.
+const ContractVersionDelivery = "velox.delivery.v1"
+
 // VeloxDeliverArtifactRequest is the request body shape for
 // POST /internal/v1/deliveries. Mirrors the user's spec from
 // the architectural doc:
