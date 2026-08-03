@@ -51,6 +51,21 @@ func TestRegistryRejectsIncompleteDefinition(t *testing.T) {
 	}
 }
 
+func TestRegistryRejectsDuplicateAndFinalizedRegistration(t *testing.T) {
+	r := NewRegistry()
+	def := Definition{JobType: "custom.v1", Validator: testValidator{}, Compiler: testCompiler{}, CostEstimator: testEstimator{}}
+	if err := r.Register(def); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Register(def); !errors.Is(err, ErrDuplicateJobType) {
+		t.Fatalf("duplicate Register error = %v, want ErrDuplicateJobType", err)
+	}
+	r.Finalize()
+	if err := r.Register(Definition{JobType: "other.v1", Validator: testValidator{}, Compiler: testCompiler{}, CostEstimator: testEstimator{}}); !errors.Is(err, ErrRegistryFinalized) {
+		t.Fatalf("finalized Register error = %v, want ErrRegistryFinalized", err)
+	}
+}
+
 func TestRegistryUnknownJobType(t *testing.T) {
 	_, err := NewDefaultRegistry().Resolve("unknown.v1")
 	if !errors.Is(err, ErrUnknownJobType) {
@@ -97,5 +112,12 @@ func TestDefaultRegistryRejectsMissingTechnicalArray(t *testing.T) {
 	}
 	if err := def.Validator.Validate(json.RawMessage(`{"scenes":[]}`)); err == nil {
 		t.Fatal("expected slideshow validator to require images")
+	}
+	composite, err := NewDefaultRegistry().Resolve("scene.composite.v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := composite.Validator.Validate(json.RawMessage(`{"scenes":[null]}`)); err == nil {
+		t.Fatal("expected null scene to be rejected")
 	}
 }

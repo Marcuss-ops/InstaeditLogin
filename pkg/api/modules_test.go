@@ -16,6 +16,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxjobs"
 	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
 
@@ -320,5 +321,24 @@ func TestVeloxBFFModule_SkipsWhenClientNil(t *testing.T) {
 
 	if len(mux.Routes()) != 0 {
 		t.Fatalf("expected no routes when Client is nil, got %d", len(mux.Routes()))
+	}
+}
+
+func TestVeloxBFFModule_UsesInjectedJobRegistry(t *testing.T) {
+	mux := chi.NewRouter()
+	mod := NewVeloxBFFModule(VeloxBFFModuleDeps{
+		Client:         &fakeVeloxClient{},
+		JobRegistry:    veloxjobs.NewRegistry(),
+		AuthMiddleware: fakeIdentityMiddleware,
+	})
+	mod.Register(mux)
+
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"module-registry","job_type":"scene.composite.v1","template_id":"template","template_version":1,"video_name":"name","spec":{"scenes":[]},"output":{"width":1920,"height":1080,"fps":30,"format":"mp4"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J"}]}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("injected empty registry must reject the known default type, got %d: %s", w.Code, w.Body.String())
 	}
 }

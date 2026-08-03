@@ -181,7 +181,8 @@ func (b *bff) createCanonicalJob(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation: compile spec: "+err.Error())
 		return
 	}
-	if _, err := definition.CostEstimator.Estimate(compiled.Spec, body.Output); err != nil {
+	estimate, err := definition.CostEstimator.Estimate(compiled.Spec, body.Output)
+	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "validation: estimate spec: "+err.Error())
 		return
 	}
@@ -198,7 +199,9 @@ func (b *bff) createCanonicalJob(w http.ResponseWriter, req *http.Request) {
 	}
 	slog.Info("velox bff: canonical job created",
 		"job_id", job.ID, "workspace_id", wsID, "user_id", userID,
-		"job_type", body.JobType, "template_id", body.TemplateID)
+		"job_type", body.JobType, "template_id", body.TemplateID,
+		"render_units", estimate.RenderUnits,
+		"estimated_duration_ms", estimate.EstimatedDurationMS)
 	writeJSON(w, http.StatusAccepted, job)
 }
 
