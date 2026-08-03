@@ -109,6 +109,14 @@ func (w *PublishWorker) prepareCredentials(ctx context.Context, target *models.P
 		}
 		res, canErr := uploader.CanaryUpload(ctx, oauthToken.AccessToken, account.PlatformUserID)
 		if canErr != nil || res == nil || res.UploadedChannelID != account.PlatformUserID {
+			// ErrYouTubeCanaryInvalidMedia: the canary payload
+			// (application/octet-stream) was rejected as invalid media.
+			// The token and grant are fine — do NOT block auth.
+			if errors.Is(canErr, services.ErrYouTubeCanaryInvalidMedia) {
+				w.logger.Warn("canary invalid media; skipping pre-flight for this tick",
+					"target_id", target.ID, "platform_account_id", account.ID, "error", canErr)
+				return nil, fmt.Errorf("canary pre-flight: %w", canErr)
+			}
 			w.logger.Warn("canary channel mismatch; flagging target blocked_auth",
 				"target_id", target.ID, "platform_account_id", account.ID)
 			return nil, &blockedAuthError{reason: "canary pre-flight: channel mismatch"}

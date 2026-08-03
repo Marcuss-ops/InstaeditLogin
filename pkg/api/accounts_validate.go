@@ -184,6 +184,15 @@ func (r *Router) handleValidateAccount(w http.ResponseWriter, req *http.Request)
 				r.flagReauthAndRespond(w, ctx, account, identity, "canary_rejected", err.Error())
 				return
 			}
+			// ErrYouTubeCanaryInvalidMedia: the canary payload
+			// (application/octet-stream) was rejected as invalid media.
+			// The token and grant are fine, so this is a TRANSIENT
+			// signal — NOT reauth_required. The operator dashboard
+			// sees "canary invalid media" but the account stays active.
+			if errors.Is(err, services.ErrYouTubeCanaryInvalidMedia) {
+				writeError(w, http.StatusUnprocessableEntity, "canary invalid media: "+err.Error())
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "youtube canary upload failed: "+err.Error())
 			return
 		}

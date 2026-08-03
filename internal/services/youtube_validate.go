@@ -267,20 +267,43 @@ const canaryUploadContentType = "application/octet-stream"
 
 // ErrYouTubeCanaryRejected is the canonical sentinel for hard 4xx
 // rejections from the canary upload path (videos.insert init OR PUT
-// chunk PUT). Distinct from ErrYouTubeChannelMismatch so the handler
-// can produce a different audit-log message ("canary upload rejected
-// by YouTube" vs "canary landed on the wrong channel"), but the
-// runbook is identical (status='reauth_required'). Transient 5xx
-// errors are NOT wrapped in this sentinel — they remain plain
-// wrapped so the handler treats them as transient (next-sync retry).
+// chunk PUT) that indicate a GRANT-LEVEL or AUTH-LEVEL failure
+// requiring reauthorisation. Specifically:
 //
-// IMPORTANT: only 4xx codes SUPPRESSED in isHardRejection4xxStatus
-// escalate to this sentinel. Rate-limit 429, Locked 423, every 5xx,
-// plus decode / network / ctx-cancelled errors all stay on the
-// transient branch — that's the deliberate choice the user's
-// 200-channel YouTube OAuth plan asks for (transient blip ≠ grant
-// drift ≠ reauth).
-var ErrYouTubeCanaryRejected = errors.New("youtube canary upload was rejected by videos.insert (4xx)")
+//	401 — YouTube-side token rejection mid-upload (operator must re-consent)
+//	403 — forbidden / Brand Account re-bound silently
+//	404 — session URI lost or grant revoked by Google
+//	408 — rare; request timeout sent by YouTube
+//	409 — channel / quota state conflict
+//	410 — gone; channel may have been deleted
+//	422 — unprocessable; metadata valid but refused
+//	451 — legal / jurisdictional unavailability
+//
+// These all escalate to ErrYouTubeCanaryRejected and the handler
+// flags the account reauth_required.
+//
+// HTTP 400 is deliberately EXCLUDED because YouTube returns 400 for
+// invalid media payload (the canary uses application/octet-stream,
+// not a real MP4) — a 400 means the token and grant are fine but
+// the media format is wrong. That's a separate sentinel
+// (ErrYouTubeCanaryInvalidMedia) so the handler can distinguish
+// "invalid canary media" (transient, retry later) from "grant
+// revoked" (reauth_required).
+//
+// Rate-limit 429, Locked 423, every 5xx, plus decode / network /
+// ctx-cancelled errors all stay on the transient branch — that's
+// the deliberate choice the user's 200-channel YouTube OAuth plan
+// asks for (transient blip ≠ grant drift ≠ reauth).
+var ErrYouTubeCanaryRejected = errors.New("youtube canary upload was rejected by videos.insert (auth-level 4xx)")
+
+// ErrYouTubeCanaryInvalidMedia is the sentinel for a 400 response
+// during the canary upload — the most common outcome when the canary
+// body is application/octet-stream (not a real MP4). A 400 means
+// YouTube saw the request but rejected the media format; the token
+// and grant are perfectly valid. The handler treats this as a
+// TRANSIENT signal (not reauth_required) — the operator dashboard
+// logs "canary invalid media" but the account stays active.
+var ErrYouTubeCanaryInvalidMedia = errors.New("youtube canary: invalid media payload (400)")
 
 // statusCodeRegexp captures the (status N) triplet embedded in the
 // upstream wrapped errors emitted by initiateResumableSession and
@@ -299,10 +322,19 @@ var statusCodeRegexp = regexp.MustCompile(`\(status (\d+)\)`)
 
 // isHardRejection4xxStatus inspects the wrapped error returned by
 // initiateResumableSession or putChunk (the two upstream callers
-// CanaryUpload delegates to) and returns true iff it represents a
-// HARD 4xx rejection that should be flagged ErrYouTubeCanaryRejected
-// (handler → 422 + reauth) versus a TRANSIENT response that should
-// remain plain wrapped (handler → next-sync-retry).
+// CanaryUpload delegates to) and returns:
+//
+//	(hardRejection=true, isInvalidMedia=false) — auth-level 4xx
+//	    (401, 403, 404, 408, 409, 410, 422, 451) → escalate to
+//	    ErrYouTubeCanaryRejected (handler → 422 + reauth).
+//	(hardRejection=false, isInvalidMedia=true) — HTTP 400 →
+//	    escalate to ErrYouTubeCanaryInvalidMedia (handler → transient,
+//	    NOT reauth). The canary media is application/octet-stream,
+//	    not a real MP4; 400 means the grant is fine but the payload
+//	    is wrong.
+//	(hardRejection=false, isInvalidMedia=false) — transient
+//	    (5xx, 429, 423, decode, network, ctx-cancelled) → stay
+//	    plain wrapped (handler → next-sync retry).
 //
 // Why regex on err.Error() rather than typed sentinels from the
 // upstream methods: initiateResumableSession / putChunk are
@@ -314,9 +346,8 @@ var statusCodeRegexp = regexp.MustCompile(`\(status (\d+)\)`)
 // outside the table falls through to the transient branch by
 // default.
 //
-// Enumerated reauth statuses (4xx-not-429-or-423):
+// Enumerated reauth statuses (4xx-not-429-or-423, NOT 400):
 //
-//	400 — bad request / malformed metadata
 //	401 — YouTube-side token rejection mid-upload (operator must re-consent)
 //	403 — forbidden / Brand Account re-bound silently
 //	404 — session URI lost or grant revoked by Google
@@ -325,6 +356,12 @@ var statusCodeRegexp = regexp.MustCompile(`\(status (\d+)\)`)
 //	410 — gone; channel may have been deleted
 //	422 — unprocessable; metadata valid but refused
 //	451 — legal / jurisdictional unavailability
+//
+// 400 is deliberately EXCLUDED — it means invalid media, not
+// invalid grant. The canary uploads application/octet-stream;
+// YouTube correctly rejects it with 400 (invalid media format).
+// The token is fine, the grant is fine — the operator should NOT
+// be forced to reconnect.
 //
 // Transient-by-default (NOT in table):
 //
@@ -337,19 +374,23 @@ var statusCodeRegexp = regexp.MustCompile(`\(status (\d+)\)`)
 // initiateResumableSession and putChunk so CanaryUpload can switch
 // on errors.Is instead of regex. Tracked as a follow-up; the
 // regex shape is correct for the 4-step pipeline today.
-func isHardRejection4xxStatus(err error) bool {
+func isHardRejection4xxStatus(err error) (hardRejection, isInvalidMedia bool) {
 	if err == nil {
-		return false
+		return false, false
 	}
 	m := statusCodeRegexp.FindStringSubmatch(err.Error())
 	if len(m) != 2 {
-		return false
+		return false, false
+	}
+	// 400 is invalid media, NOT a grant-level rejection.
+	if m[1] == "400" {
+		return false, true
 	}
 	switch m[1] {
-	case "400", "401", "403", "404", "408", "409", "410", "422", "451":
-		return true
+	case "401", "403", "404", "408", "409", "410", "422", "451":
+		return true, false
 	}
-	return false
+	return false, false
 }
 
 // CanaryUploadResult captures the canary's outcome for the handler
@@ -434,14 +475,17 @@ func (s *YouTubeOAuthService) CanaryUpload(ctx context.Context, accessToken, exp
 	uploadURL, err := s.initiateResumableSession(ctx, accessToken, metadata, canaryUploadSize, canaryUploadContentType)
 	if err != nil {
 		// initiateResumableSession returns plain wrapped errors today;
-		// re-promote HARSH rejections (4xx-not-429/codes) to
-		// ErrYouTubeCanaryRejected so the handler routes them. The
-		// classifier is regex-based (see isHardRejection4xxStatus)
-		// so 429 / Locked / decode / network / 5xx stay transient
-		// and don't accidentally escalate to reauth.
+		// re-promote HARSH rejections (auth-level 4xx) to
+		// ErrYouTubeCanaryRejected and media-level 400 to
+		// ErrYouTubeCanaryInvalidMedia. The classifier is regex-based
+		// (see isHardRejection4xxStatus) so 429 / Locked / decode /
+		// network / 5xx stay transient and don't accidentally escalate
+		// to reauth.
 		wrapped := fmt.Errorf("youtube canary: initiate session: %w", err)
-		if isHardRejection4xxStatus(err) {
+		if hard, invalidMedia := isHardRejection4xxStatus(err); hard {
 			wrapped = fmt.Errorf("%w: %w", ErrYouTubeCanaryRejected, err)
+		} else if invalidMedia {
+			wrapped = fmt.Errorf("%w: %w", ErrYouTubeCanaryInvalidMedia, err)
 		}
 		return nil, wrapped
 	}
@@ -455,8 +499,10 @@ func (s *YouTubeOAuthService) CanaryUpload(ctx context.Context, accessToken, exp
 		// escalated to ErrYouTubeCanaryRejected). 5xx, 429, 423,
 		// and any 4xx-suppressed reauth list per isHardRejection4xxStatus.
 		wrapped := fmt.Errorf("youtube canary: upload chunk put: %w", putErr)
-		if isHardRejection4xxStatus(putErr) {
+		if hard, invalidMedia := isHardRejection4xxStatus(putErr); hard {
 			wrapped = fmt.Errorf("%w: %w", ErrYouTubeCanaryRejected, putErr)
+		} else if invalidMedia {
+			wrapped = fmt.Errorf("%w: %w", ErrYouTubeCanaryInvalidMedia, putErr)
 		}
 		return nil, wrapped
 	}

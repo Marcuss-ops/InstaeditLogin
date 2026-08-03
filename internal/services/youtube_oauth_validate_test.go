@@ -347,7 +347,7 @@ func TestYouTubeCanaryUpload_AllContractShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("initiate_4xx_returns_canary_rejected_sentinel", func(t *testing.T) {
+	t.Run("initiate_400_returns_canary_invalid_media_sentinel", func(t *testing.T) {
 		const expectedChannel = "UCexpectedChannelID"
 		mux := http.NewServeMux()
 		mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
@@ -360,10 +360,64 @@ func TestYouTubeCanaryUpload_AllContractShapes(t *testing.T) {
 
 		_, err := svc.CanaryUpload(context.Background(), "fresh-access-token", expectedChannel)
 		if err == nil {
-			t.Fatal("canary init 4xx: expected error, got nil")
+			t.Fatal("canary init 400: expected error, got nil")
+		}
+		if !errors.Is(err, ErrYouTubeCanaryInvalidMedia) {
+			t.Errorf("init 400 MUST wrap ErrYouTubeCanaryInvalidMedia so handler routes to transient (NOT reauth); got %v", err)
+		}
+		if errors.Is(err, ErrYouTubeCanaryRejected) {
+			t.Errorf("init 400 MUST NOT wrap ErrYouTubeCanaryRejected (400 is invalid media, not grant rejection); got %v", err)
+		}
+	})
+
+	t.Run("initiate_401_returns_canary_rejected_sentinel", func(t *testing.T) {
+		const expectedChannel = "UCexpectedChannelID"
+		mux := http.NewServeMux()
+		mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":{"message":"invalid credentials"}}`)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		_, err := svc.CanaryUpload(context.Background(), "fresh-access-token", expectedChannel)
+		if err == nil {
+			t.Fatal("canary init 401: expected error, got nil")
 		}
 		if !errors.Is(err, ErrYouTubeCanaryRejected) {
-			t.Errorf("init 4xx MUST wrap ErrYouTubeCanaryRejected so handler routes to 422; got %v", err)
+			t.Errorf("init 401 MUST wrap ErrYouTubeCanaryRejected so handler routes to 422; got %v", err)
+		}
+		if errors.Is(err, ErrYouTubeCanaryInvalidMedia) {
+			t.Errorf("init 401 MUST NOT wrap ErrYouTubeCanaryInvalidMedia (401 is auth-level, not media); got %v", err)
+		}
+	})
+
+	t.Run("put_400_returns_canary_invalid_media_sentinel", func(t *testing.T) {
+		const expectedChannel = "UCexpectedChannelID"
+		mux := http.NewServeMux()
+		mux.HandleFunc("/upload/youtube/v3/videos", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "/canary-session")
+		})
+		mux.HandleFunc("/canary-session", func(w http.ResponseWriter, r *http.Request) {
+			// 400 — invalid media. putChunk formats this as
+			// 'unexpected PUT response (status 400): ...'.
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"message":"invalid media"}}`)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		svc := newTestYouTubeService(srv)
+
+		_, err := svc.CanaryUpload(context.Background(), "fresh-access-token", expectedChannel)
+		if err == nil {
+			t.Fatal("canary PUT 400: expected error, got nil")
+		}
+		if !errors.Is(err, ErrYouTubeCanaryInvalidMedia) {
+			t.Errorf("put 400 MUST wrap ErrYouTubeCanaryInvalidMedia so handler routes to transient (NOT reauth); got %v", err)
+		}
+		if errors.Is(err, ErrYouTubeCanaryRejected) {
+			t.Errorf("put 400 MUST NOT wrap ErrYouTubeCanaryRejected (400 is invalid media, not grant rejection); got %v", err)
 		}
 	})
 
@@ -392,6 +446,9 @@ func TestYouTubeCanaryUpload_AllContractShapes(t *testing.T) {
 		}
 		if errors.Is(err, ErrYouTubeChannelMismatch) {
 			t.Errorf("put 5xx MUST NOT wrap ErrYouTubeChannelMismatch (channel drift is unrelated to a 503); got %v", err)
+		}
+		if errors.Is(err, ErrYouTubeCanaryInvalidMedia) {
+			t.Errorf("put 5xx MUST NOT wrap ErrYouTubeCanaryInvalidMedia (503 is a server error, not invalid media); got %v", err)
 		}
 		if !strings.Contains(err.Error(), "503") && !strings.Contains(err.Error(), "server error") {
 			t.Errorf("put 5xx error must preserve the underlying transient signal for the handler log; got %v", err)
@@ -468,11 +525,9 @@ func TestYouTubeCanaryUpload_AllContractShapes(t *testing.T) {
 // initiateResumableSession or putChunk's format string would
 // silently break the classifier without a compile error. This test
 // pins the upstream shape for every status code the canary cares
-// about — 400, 401, 403, 404, 408, 409, 410, 422 (reauth-bound),
-// 429 + 423 + 5xx (transient, stay on next-sync retry), and 451
-// (reauth). Adding a new enum value to the helper requires adding a
-// matching case here AND a code-site change; the production logic
-// is derived from this test via the matching table.
+// about — 400 (invalid media, NOT reauth), 401, 403, 404, 408, 409,
+// 410, 422 (reauth-bound), 429 + 423 + 5xx (transient, stay on
+// next-sync retry), and 451 (reauth).
 //
 // The test exercises BOTH upstream message shapes the classifier
 // could encounter:
@@ -489,56 +544,62 @@ func TestYouTubeCanaryUpload_AllContractShapes(t *testing.T) {
 // production code stays ignorant of the testbed.
 func TestIsHardRejection4xxStatus_UpstreamFormatLocked(t *testing.T) {
 	cases := []struct {
-		name string
-		err  error
-		want bool
+		name             string
+		err              error
+		wantHard         bool
+		wantInvalidMedia bool
 	}{
-		// reauth-bound — explicit enumerated table
-		{"initiate_400_bad_metadata", fmt.Errorf("init session failed (status 400): bad metadata"), true},
-		{"initiate_401_token", fmt.Errorf("init session failed (status 401): bad token"), true},
-		{"initiate_403_forbidden", fmt.Errorf("init session failed (status 403): forbidden"), true},
-		{"initiate_404_gone", fmt.Errorf("init session failed (status 404): resource not found"), true},
-		{"initiate_408_timeout", fmt.Errorf("init session failed (status 408): request timeout"), true},
-		{"initiate_409_conflict", fmt.Errorf("init session failed (status 409): channel state conflict"), true},
-		{"initiate_410_permanent_gone", fmt.Errorf("init session failed (status 410): channel deleted"), true},
-		{"initiate_422_unprocessable", fmt.Errorf("init session failed (status 422): metadata refused"), true},
-		{"initiate_451_legal_block", fmt.Errorf("init session failed (status 451): jurisdictional unavailable"), true},
+		// 400 is invalid media, NOT a grant-level rejection
+		{"initiate_400_bad_metadata", fmt.Errorf("init session failed (status 400): bad metadata"), false, true},
+		{"put_400_unexpected", fmt.Errorf("unexpected PUT response (status 400): bad request body"), false, true},
+
+		// reauth-bound — explicit enumerated table (ALL except 400)
+		{"initiate_401_token", fmt.Errorf("init session failed (status 401): bad token"), true, false},
+		{"initiate_403_forbidden", fmt.Errorf("init session failed (status 403): forbidden"), true, false},
+		{"initiate_404_gone", fmt.Errorf("init session failed (status 404): resource not found"), true, false},
+		{"initiate_408_timeout", fmt.Errorf("init session failed (status 408): request timeout"), true, false},
+		{"initiate_409_conflict", fmt.Errorf("init session failed (status 409): channel state conflict"), true, false},
+		{"initiate_410_permanent_gone", fmt.Errorf("init session failed (status 410): channel deleted"), true, false},
+		{"initiate_422_unprocessable", fmt.Errorf("init session failed (status 422): metadata refused"), true, false},
+		{"initiate_451_legal_block", fmt.Errorf("init session failed (status 451): jurisdictional unavailable"), true, false},
 
 		// putChunk 4xx matched against the SAME table
-		{"put_400_unexpected", fmt.Errorf("unexpected PUT response (status 400): bad request body"), true},
-		{"put_401_unexpected", fmt.Errorf("unexpected PUT response (status 401): token revoked mid-upload"), true},
-		{"put_403_unexpected", fmt.Errorf("unexpected PUT response (status 403): forbidden"), true},
-		{"put_404_unexpected", fmt.Errorf("unexpected PUT response (status 404): session uri dead"), true},
-		{"put_422_unexpected", fmt.Errorf("unexpected PUT response (status 422): metadata refused"), true},
+		{"put_401_unexpected", fmt.Errorf("unexpected PUT response (status 401): token revoked mid-upload"), true, false},
+		{"put_403_unexpected", fmt.Errorf("unexpected PUT response (status 403): forbidden"), true, false},
+		{"put_404_unexpected", fmt.Errorf("unexpected PUT response (status 404): session uri dead"), true, false},
+		{"put_422_unexpected", fmt.Errorf("unexpected PUT response (status 422): metadata refused"), true, false},
 
 		// transient — explicitly NOT in the table, must stay on next-sync retry
-		{"initiate_429_rate_limit", fmt.Errorf("init session failed (status 429): quota exceeded"), false},
-		{"initiate_423_locked", fmt.Errorf("init session failed (status 423): channel locked"), false},
-		{"initiate_500_internal", fmt.Errorf("init session failed (status 500): google internal"), false},
-		{"initiate_502_bad_gateway", fmt.Errorf("init session failed (status 502): upstream bad"), false},
-		{"initiate_503_unavailable", fmt.Errorf("init session failed (status 503): unavailable"), false},
-		{"initiate_504_gateway_timeout", fmt.Errorf("init session failed (status 504): upstream timeout"), false},
+		{"initiate_429_rate_limit", fmt.Errorf("init session failed (status 429): quota exceeded"), false, false},
+		{"initiate_423_locked", fmt.Errorf("init session failed (status 423): channel locked"), false, false},
+		{"initiate_500_internal", fmt.Errorf("init session failed (status 500): google internal"), false, false},
+		{"initiate_502_bad_gateway", fmt.Errorf("init session failed (status 502): upstream bad"), false, false},
+		{"initiate_503_unavailable", fmt.Errorf("init session failed (status 503): unavailable"), false, false},
+		{"initiate_504_gateway_timeout", fmt.Errorf("init session failed (status 504): upstream timeout"), false, false},
 
-		{"put_429_rate_limit", fmt.Errorf("rate limited (status 429, retry_after=2s)"), false},
-		{"put_503_server_error_with_retry_after", fmt.Errorf("server error (status 503, retry_after=5s)"), false},
-		{"put_500_server_error_bare", fmt.Errorf("server error (status 500)"), false},
-		{"put_429_unexpected_put_response", fmt.Errorf("unexpected PUT response (status 429): malformed"), false},
+		{"put_429_rate_limit", fmt.Errorf("rate limited (status 429, retry_after=2s)"), false, false},
+		{"put_503_server_error_with_retry_after", fmt.Errorf("server error (status 503, retry_after=5s)"), false, false},
+		{"put_500_server_error_bare", fmt.Errorf("server error (status 500)"), false, false},
+		{"put_429_unexpected_put_response", fmt.Errorf("unexpected PUT response (status 429): malformed"), false, false},
 
 		// no (status N) substring — decode / network / ctx-cancellation
-		{"put_200_decode_body", fmt.Errorf("failed to parse upload completion response: %w", fmt.Errorf("bad json")), false},
-		{"network_dial_failure", fmt.Errorf("dial tcp: lookup google: no such host"), false},
-		{"ctx_canceled", fmt.Errorf("context canceled"), false},
-		{"nil_error_safety", nil, false},
+		{"put_200_decode_body", fmt.Errorf("failed to parse upload completion response: %w", fmt.Errorf("bad json")), false, false},
+		{"network_dial_failure", fmt.Errorf("dial tcp: lookup google: no such host"), false, false},
+		{"ctx_canceled", fmt.Errorf("context canceled"), false, false},
+		{"nil_error_safety", nil, false, false},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isHardRejection4xxStatus(tc.err); got != tc.want {
+			gotHard, gotInvalidMedia := isHardRejection4xxStatus(tc.err)
+			if gotHard != tc.wantHard || gotInvalidMedia != tc.wantInvalidMedia {
 				if tc.err != nil {
-					t.Errorf("isHardRejection4xxStatus(%q) = %v, want %v", tc.err.Error(), got, tc.want)
+					t.Errorf("isHardRejection4xxStatus(%q) = (%v, %v), want (%v, %v)",
+						tc.err.Error(), gotHard, gotInvalidMedia, tc.wantHard, tc.wantInvalidMedia)
 				} else {
-					t.Errorf("isHardRejection4xxStatus(nil) = %v, want %v", got, tc.want)
+					t.Errorf("isHardRejection4xxStatus(nil) = (%v, %v), want (%v, %v)",
+						gotHard, gotInvalidMedia, tc.wantHard, tc.wantInvalidMedia)
 				}
 			}
 		})
