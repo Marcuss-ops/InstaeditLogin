@@ -37,7 +37,7 @@ const LANG_SERIES = [
     autoDubbed: false,
     delta: "+57%",
     points: [
-      [25, 107.9], [95, 100.4], [165, 93.9], [235, 89.3], [305, 83.7], [375, 78.1],
+      [25, 107.9], [105, 100.4], [185, 93.9], [265, 89.3], [345, 83.7], [425, 78.1],
     ],
   },
   {
@@ -48,7 +48,7 @@ const LANG_SERIES = [
     autoDubbed: true,
     delta: "+173%",
     points: [
-      [25, 117.1], [95, 103.2], [165, 87.4], [235, 70.7], [305, 56.8], [375, 42.9],
+      [25, 117.1], [105, 103.2], [185, 87.4], [265, 70.7], [345, 56.8], [425, 42.9],
     ],
   },
   {
@@ -59,7 +59,7 @@ const LANG_SERIES = [
     autoDubbed: true,
     delta: "+250%",
     points: [
-      [25, 121.8], [95, 106], [165, 89.3], [235, 68.9], [305, 47.5], [375, 26.1],
+      [25, 121.8], [105, 106], [185, 89.3], [265, 68.9], [345, 47.5], [425, 26.1],
     ],
   },
 ] as const;
@@ -247,7 +247,7 @@ export function Features() {
               </div>
 
               {/* Growth chart + live-pipeline feel */}
-              <div ref={chartRef} className="relative surface-glass rounded-xl border border-white/10 p-5 pt-6">
+              <div ref={chartRef} className="relative surface-glass rounded-xl border border-white/10 p-5 pt-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
                 {/* Floating stat badge — +340% Views via AI Translation */}
                 <div className="absolute -top-3.5 right-4 z-10 inline-flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-400 to-orange-500 px-3 py-1 text-[11px] font-bold text-[#201204] shadow-[0_0_24px_rgba(251,146,60,0.55)] animate-float-y">
                   <TrendingUp className="w-3.5 h-3.5" />
@@ -255,6 +255,15 @@ export function Features() {
                 </div>
 
                 {/* Interactive language pills — click to focus a market */}
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                    Global views / month
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                    Live growth
+                  </span>
+                </div>
                 <div
                   className="flex flex-wrap items-center gap-2 mb-4"
                   role="group"
@@ -312,17 +321,17 @@ export function Features() {
 
                   {/* gridlines */}
                   {[45, 85, 125].map((y) => (
-                    <line key={y} x1="25" y1={y} x2="375" y2={y} stroke="rgba(255,255,255,0.09)" strokeDasharray="3 5" />
+                    <line key={y} x1="25" y1={y} x2="425" y2={y} stroke="rgba(255,255,255,0.09)" strokeDasharray="3 5" />
                   ))}
                   {/* baseline */}
-                  <line x1="25" y1="162" x2="375" y2="162" stroke="rgba(255,255,255,0.14)" />
+                  <line x1="25" y1="162" x2="425" y2="162" stroke="rgba(255,255,255,0.14)" />
 
                   {/* area fills — element opacity dims with the pills; the
                       gradient stopOpacity is the full-strength ceiling */}
                   {LANG_SERIES.map((s) => (
                     <path
                       key={`${s.key}-area`}
-                      d={`${smoothPath(s.points)} L375 162 L25 162 Z`}
+                      d={`${smoothPath(s.points)} L425 162 L25 162 Z`}
                       fill={`url(#lngArea-${s.key})`}
                       opacity={isDimmed(s.key) ? 0.15 : 1}
                       className="transition-opacity duration-500"
@@ -358,10 +367,11 @@ export function Features() {
                         <circle cx={x} cy={y} r="8" fill={s.color} opacity="0.25" filter="url(#dotGlow)" />
                         <circle cx={x} cy={y} r="3.5" fill={s.color} />
                         <text
-                          x={x + 12}
+                          x={x - 8}
                           y={y - 10}
                           fontSize="11"
                           fontWeight="700"
+                          textAnchor="end"
                           fill={s.color}
                           stroke="#0d0e15"
                           strokeWidth={4}
