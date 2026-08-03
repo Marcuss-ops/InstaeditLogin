@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { LiveStreamNewPage } from "./LiveStreamNew";
@@ -324,7 +324,7 @@ describe("LiveStreamNewPage — step 2 (Configurazione YouTube)", () => {
     await advanceToStep2();
 
     const file = new File(["fake-image-bytes"], "cover.png", { type: "image/png" });
-    fireEvent.change(screen.getByTestId("ls-step2-cover-file"), { target: { files: [file] } });
+    await userEvent.upload(screen.getByTestId("ls-step2-cover-file"), file);
 
     await waitFor(() => {
       expect(screen.getByTestId("ls-step2-cover-preview")).toBeInTheDocument();
@@ -346,7 +346,7 @@ describe("LiveStreamNewPage — step 2 (Configurazione YouTube)", () => {
     await advanceToStep2();
 
     const file = new File(["fake"], "video.mp4", { type: "video/mp4" });
-    fireEvent.change(screen.getByTestId("ls-step2-cover-file"), { target: { files: [file] } });
+    await userEvent.upload(screen.getByTestId("ls-step2-cover-file"), file);
 
     await waitFor(() => {
       expect(uploadMediaAssetMock).not.toHaveBeenCalled();
