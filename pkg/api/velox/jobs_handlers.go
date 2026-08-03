@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -61,7 +62,8 @@ func (b *bff) listJobs(w http.ResponseWriter, req *http.Request) {
 
 // createJob implements POST /api/v1/velox/jobs.
 //
-// The body carries project_id, render_spec and delivery_plan only.
+// The body carries the canonical Velox job contract, project_id,
+// render_spec and delivery_plan.
 // workspace_id and user_id are read from the session identity and
 // forwarded to Velox via the signed Client call — they NEVER come
 // from the browser body.
@@ -75,6 +77,18 @@ func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(body.ContractVersion) == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation: contract_version is required")
+		return
+	}
+	if body.ContractVersion != "velox.job.v1" {
+		writeError(w, http.StatusUnprocessableEntity, "validation: unsupported contract_version")
+		return
+	}
+	if strings.TrimSpace(body.IdempotencyKey) == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation: idempotency_key is required")
 		return
 	}
 	if body.ProjectID == "" {

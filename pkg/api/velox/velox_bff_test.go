@@ -194,10 +194,13 @@ func TestCreateJob_HappyPath(t *testing.T) {
 		if r.ProjectID != "project_123" {
 			t.Fatalf("project_id mismatch: %s", r.ProjectID)
 		}
+		if r.ContractVersion != "velox.job.v1" || r.IdempotencyKey != "cert-idem-1" {
+			t.Fatalf("contract fields mismatch: version=%q idempotency=%q", r.ContractVersion, r.IdempotencyKey)
+		}
 		return &Job{ID: "job_new", WorkspaceID: wsID, RenderStatus: "QUEUED"}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
-	body := `{"contract_version":"velox.job.v1","idempotency_key":"test:job:1","project_id":"project_123","render_spec":{"template":"news"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J","metadata":{"title":"Hi"}}]}}`
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"cert-idem-1","project_id":"project_123","render_spec":{"template":"news"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J","metadata":{"title":"Hi"}}]}}`
 	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", body)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
@@ -249,7 +252,7 @@ func TestCreateJob_WorkspaceMismatch_404(t *testing.T) {
 		return &Job{ID: "job_x", WorkspaceID: 999}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
-	body := `{"contract_version":"velox.job.v1","idempotency_key":"test:job:workspace-mismatch","project_id":"p1","render_spec":{},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J","metadata":{"title":"Hi"}}]}}`
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"cert-idem-mismatch","project_id":"p1","render_spec":{},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J","metadata":{"title":"Hi"}}]}}`
 	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", body)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for workspace mismatch, got %d", w.Code)

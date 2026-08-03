@@ -204,15 +204,21 @@ func TestCreateJob(t *testing.T) {
 		if body.ProjectID != "project_123" {
 			t.Errorf("project_id = %q; want project_123", body.ProjectID)
 		}
+		if body.ContractVersion != "velox.job.v1" {
+			t.Errorf("contract_version = %q; want velox.job.v1", body.ContractVersion)
+		}
+		if body.IdempotencyKey != "cert-idem-1" {
+			t.Errorf("idempotency_key = %q; want cert-idem-1", body.IdempotencyKey)
+		}
 		var rawMap map[string]json.RawMessage
 		if err := json.Unmarshal(rawBody, &rawMap); err != nil {
 			t.Fatalf("decode body as map: %v", err)
 		}
 		if _, ok := rawMap["workspace_id"]; ok {
-			t.Error("workspace_id must remain JWT-only and absent from the request body")
+			t.Error("workspace_id MUST NOT appear in the strict Velox request body")
 		}
 		if _, ok := rawMap["user_id"]; ok {
-			t.Error("user_id must remain JWT-only and absent from the request body")
+			t.Error("user_id MUST NOT appear in the strict Velox request body")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -222,8 +228,10 @@ func TestCreateJob(t *testing.T) {
 
 	c := newTestClient(t, srv)
 	job, err := c.CreateJob(context.Background(), 42, 99, veloxapi.CreateJobRequest{
-		ProjectID:  "project_123",
-		RenderSpec: json.RawMessage(`{"template":"news"}`),
+		ContractVersion: "velox.job.v1",
+		IdempotencyKey:  "cert-idem-1",
+		ProjectID:       "project_123",
+		RenderSpec:      json.RawMessage(`{"template":"news"}`),
 		DeliveryPlan: veloxapi.DeliveryPlan{
 			Destinations: []veloxapi.DeliveryDestination{
 				{ExternalDestinationID: "extdst_01J", Metadata: json.RawMessage(`{"title":"Hi"}`)},

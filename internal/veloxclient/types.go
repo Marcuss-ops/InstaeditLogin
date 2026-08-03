@@ -114,19 +114,15 @@ type listDeliveriesResponse struct {
 	Deliveries []deliveryResponse `json:"deliveries"`
 }
 
-// createJobRequest is the body sent TO Velox. workspace_id and user_id
-// are JWT-only identity claims and are deliberately excluded from JSON.
+// createJobRequest is the body sent TO Velox. workspace_id and
+// user_id are signed into the control JWT and are intentionally absent
+// from this strict wire body.
 type createJobRequest struct {
-	ContractVersion string `json:"contract_version"`
-	IdempotencyKey  string `json:"idempotency_key"`
-	ProjectID       string `json:"project_id" validate:"required,min=1"`
-	// Retained as non-wire fields so diagnostics can assert
-	// the signed identity; workspace/user are never serialized into the
-	// BFF→Velox payload.
-	WorkspaceID  int64           `json:"-"`
-	UserID       int64           `json:"-"`
-	RenderSpec   json.RawMessage `json:"render_spec" validate:"required"`
-	DeliveryPlan deliveryPlanReq `json:"delivery_plan" validate:"required"`
+	ContractVersion string          `json:"contract_version" validate:"required"`
+	IdempotencyKey  string          `json:"idempotency_key" validate:"required"`
+	ProjectID       string          `json:"project_id" validate:"required,min=1"`
+	RenderSpec      json.RawMessage `json:"render_spec" validate:"required"`
+	DeliveryPlan    deliveryPlanReq `json:"delivery_plan" validate:"required"`
 }
 
 // deliveryPlanReq mirrors veloxapi.DeliveryPlan for the outbound body.
