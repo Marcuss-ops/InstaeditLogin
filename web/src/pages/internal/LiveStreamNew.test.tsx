@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -8,6 +8,10 @@ import type { LivestreamChannel } from "./livestreamsTypes";
 const { uploadMediaAssetMock } = vi.hoisted(() => ({
   uploadMediaAssetMock: vi.fn(),
 }));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 vi.mock("../../features/publishing/api/mediaApi", () => ({
   uploadMediaAsset: uploadMediaAssetMock,
@@ -320,6 +324,7 @@ describe("LiveStreamNewPage — step 2 (Configurazione YouTube)", () => {
 
   it("uploads a cover image through the presign pipeline and shows a preview", async () => {
     stubObjectURL();
+    vi.spyOn(crypto.subtle, "digest").mockResolvedValue(new Uint8Array(32).buffer);
     uploadMediaAssetMock.mockResolvedValue({ id: "asset-cover-1" });
     await advanceToStep2();
 
