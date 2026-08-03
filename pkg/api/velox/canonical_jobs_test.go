@@ -29,6 +29,32 @@ func TestCreateCanonicalJob_HappyPath(t *testing.T) {
 	}
 }
 
+func TestCreateCanonicalJob_IdempotencyConflict409(t *testing.T) {
+	calls := 0
+	mc := &mockClient{createJobFn: func(_ context.Context, _, _ int64, req CreateJobRequest) (*Job, error) {
+		calls++
+		if req.IdempotencyKey != "canonical-idempotency-1" {
+			t.Fatalf("idempotency key = %q", req.IdempotencyKey)
+		}
+		return nil, ErrIdempotencyConflict
+	}}
+	mux := newMux(t, mc, stubAuth)
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"canonical-idempotency-1","job_type":"scene.composite.v1","template_id":"template","template_version":1,"video_name":"name","spec":{"scenes":[]},"output":{"width":1920,"height":1080,"fps":30,"format":"mp4"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J"}]}}`
+	for i := 0; i < 2; i++ {
+		w := do(t, mux, http.MethodPost, "/api/v1/jobs", body)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("attempt %d: expected 409, got %d: %s", i+1, w.Code, w.Body.String())
+		}
+		decoded := decodeBody(t, w)
+		if decoded["error_code"] != "IDEMPOTENCY_CONFLICT" {
+			t.Fatalf("attempt %d: unexpected conflict body: %s", i+1, w.Body.String())
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("client calls = %d, want 2 with the same forwarded idempotency key", calls)
+	}
+}
+
 func TestCreateCanonicalJob_UnknownField400(t *testing.T) {
 	mc := &mockClient{}
 	mux := newMux(t, mc, stubAuth)
