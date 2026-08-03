@@ -252,6 +252,12 @@ type mockYouTubeOAuthServiceForEditor struct {
 	publishThumbnailFn    func(ctx context.Context, accessToken, videoID string, thumbnailData []byte, mimeType, privacyStatus string, publishAt *time.Time, opts models.YouTubePublishOptions) (string, error)
 	upsertLocalizationsFn func(ctx context.Context, accessToken, videoID, lang string, tr models.YouTubeTranslation) error
 	listEditableVideosFn  func(ctx context.Context, accessToken, channelID, pageToken string) (*services.YouTubeVideoPage, error)
+	// validateChannelBindingFn (P0 — batch cross-channel guard) lets
+	// tests simulate the grant→channel binding probe. The default is
+	// fail-loud ("not implemented") so any test that exercises a path
+	// reaching ValidateChannelBinding must explicitly opt in — a
+	// silent nil success could mask guard gaps in future tests.
+	validateChannelBindingFn func(ctx context.Context, accessToken, expectedChannelID string) error
 }
 
 func (m *mockYouTubeOAuthServiceForEditor) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
@@ -263,6 +269,9 @@ func (m *mockYouTubeOAuthServiceForEditor) GetTokenInfo(ctx context.Context, acc
 }
 
 func (m *mockYouTubeOAuthServiceForEditor) ValidateChannelBinding(ctx context.Context, accessToken, expectedChannelID string) error {
+	if m.validateChannelBindingFn != nil {
+		return m.validateChannelBindingFn(ctx, accessToken, expectedChannelID)
+	}
 	return errors.New("not implemented")
 }
 

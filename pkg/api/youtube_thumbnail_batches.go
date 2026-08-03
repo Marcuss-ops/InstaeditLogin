@@ -311,10 +311,19 @@ func (r *Router) processYouTubeThumbnailBatch(ctx context.Context, batchID strin
 }
 
 func (r *Router) ensurePrivateYouTubeBatchVideo(ctx context.Context, edit *models.YouTubeVideoEdit) error {
-	if edit == nil || r.vault == nil || r.youTubeSvc == nil {
+	if edit == nil || r.vault == nil || r.youTubeSvc == nil || r.userRepo == nil {
 		return errors.New("YouTube validation is not configured")
 	}
-	// Renew first (P0): an expired access token is refreshed
+	// Resolve the EXPECTED channel. With shared Google grants
+	// (migrations 084/085) the token alone proves nothing about WHICH
+	// channel the payload targets, so the batch must verify the video
+	// belongs to the exact channel selected in the payload — never
+	// just to a sibling that happens to share the same grant.
+	account, err := r.userRepo.FindPlatformAccountByID(edit.PlatformAccountID)
+	if err != nil || account == nil || account.Platform != models.PlatformYouTube {
+		return errors.New("batch channel not found")
+	}
+	// 1. Renew first (P0): an expired access token is refreshed
 	// automatically from the stored grant, so a stale token can never
 	// fail the whole batch and force the operator to reconnect. The
 	// Get bearer → long_lived → short_lived fallback remains only for
@@ -332,11 +341,26 @@ func (r *Router) ensurePrivateYouTubeBatchVideo(ctx context.Context, edit *model
 	if err != nil {
 		return errors.New("no valid token found for this account")
 	}
+	// 2. The grant must be bound to the expected channel
+	// (channels.list mine=true). Access to several sibling channels is
+	// not enough — the operator targeted THIS channel.
+	if err := r.youTubeSvc.ValidateChannelBinding(ctx, token.AccessToken, account.PlatformUserID); err != nil {
+		return fmt.Errorf("validate YouTube channel binding: %w", err)
+	}
+	// 3. Fetch the video under the same token (also proves the grant
+	// can see it at all). The error string lands on the operator
+	// dashboard via truncateError, so name the actual step.
 	video, err := r.youTubeSvc.GetYouTubeVideo(ctx, token.AccessToken, edit.YouTubeVideoID)
 	if err != nil {
-		return fmt.Errorf("validate YouTube privacy: %w", err)
+		return fmt.Errorf("fetch batch video: %w", err)
 	}
-	if video == nil || strings.ToLower(strings.TrimSpace(video.Privacy)) != "private" {
+	// 4. The video MUST belong to the selected channel — not merely to
+	// a sibling sharing the grant. This is the P0 cross-channel guard.
+	if video == nil || video.ChannelID != account.PlatformUserID {
+		return errors.New("batch video does not belong to the selected channel")
+	}
+	// 5. Only private videos may be modified by the batch.
+	if strings.ToLower(strings.TrimSpace(video.Privacy)) != "private" {
 		return errors.New("batch thumbnail updates are allowed only for private videos")
 	}
 	return nil

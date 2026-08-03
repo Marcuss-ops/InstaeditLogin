@@ -1,11 +1,18 @@
 package api
 
-// Thumbnail-batch token-renewal tests (P0): the batch's private-video
-// check (ensurePrivateYouTubeBatchVideo) and the editor-session publish
-// (executePublishYouTubeEditorSession) MUST renew the access token via
-// vault.Renew when the stored bearer is expired — previously they called
-// vault.Get and a stale access token failed the whole batch, forcing the
-// operator to reconnect the channel for no reason.
+// Thumbnail-batch security tests (P0):
+//  1. Token renewal — the batch's private-video check
+//     (ensurePrivateYouTubeBatchVideo) and the editor-session publish
+//     (executePublishYouTubeEditorSession) MUST renew the access token
+//     via vault.Renew when the stored bearer is expired — previously
+//     they called vault.Get and a stale access token failed the whole
+//     batch, forcing the operator to reconnect the channel for no
+//     reason.
+//  2. Cross-channel ownership — with shared Google grants (084/085) a
+//     payload can name platform_account A but a youtube_video_id owned
+//     by sibling channel B on the same grant. The batch MUST verify
+//     video.channel_id == platform_account.platform_user_id (after
+//     ValidateChannelBinding) and block before any modification.
 import (
 	"bytes"
 	"context"
@@ -13,6 +20,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +55,9 @@ func TestEnsurePrivateYouTubeBatchVideo_RenewsExpiredAccessToken(t *testing.T) {
 
 	var youTubeGotToken string
 	youTubeSvc := &mockYouTubeOAuthServiceForEditor{
+		validateChannelBindingFn: func(ctx context.Context, accessToken, expectedChannelID string) error {
+			return nil // the grant is bound to UC123
+		},
 		getVideoFn: func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
 			youTubeGotToken = accessToken
 			return &models.YouTubeVideoDetails{ID: videoID, ChannelID: "UC123", Privacy: "private", UploadStatus: "processed"}, nil
@@ -55,7 +66,11 @@ func TestEnsurePrivateYouTubeBatchVideo_RenewsExpiredAccessToken(t *testing.T) {
 
 	r := mustNewRouterWithDefaults(
 		services.NewCapabilityRouter(),
-		&mockUserStore{},
+		&mockUserStore{
+			findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+				return &models.PlatformAccount{ID: 42, Platform: models.PlatformYouTube, PlatformUserID: "UC123", Status: models.AccountStatusActive}, nil
+			},
+		},
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		nil,
@@ -109,6 +124,9 @@ func TestEnsurePrivateYouTubeBatchVideo_RenewFailure_FallsBackToLegacyTokens(t *
 
 	var youTubeGotToken string
 	youTubeSvc := &mockYouTubeOAuthServiceForEditor{
+		validateChannelBindingFn: func(ctx context.Context, accessToken, expectedChannelID string) error {
+			return nil // the grant is bound to UC123
+		},
 		getVideoFn: func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
 			youTubeGotToken = accessToken
 			return &models.YouTubeVideoDetails{ID: videoID, ChannelID: "UC123", Privacy: "private", UploadStatus: "processed"}, nil
@@ -117,7 +135,11 @@ func TestEnsurePrivateYouTubeBatchVideo_RenewFailure_FallsBackToLegacyTokens(t *
 
 	r := mustNewRouterWithDefaults(
 		services.NewCapabilityRouter(),
-		&mockUserStore{},
+		&mockUserStore{
+			findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+				return &models.PlatformAccount{ID: 42, Platform: models.PlatformYouTube, PlatformUserID: "UC123", Status: models.AccountStatusActive}, nil
+			},
+		},
 		auth.NewManager(testJWTSecret, 24),
 		"",
 		nil,
@@ -137,6 +159,113 @@ func TestEnsurePrivateYouTubeBatchVideo_RenewFailure_FallsBackToLegacyTokens(t *
 	}
 	if youTubeGotToken != "legacy-long-lived-token" {
 		t.Errorf("YouTube got access token %q, want %q (the legacy long_lived token must be used)", youTubeGotToken, "legacy-long-lived-token")
+	}
+}
+
+// TestEnsurePrivateYouTubeBatchVideo_OtherChannelVideo_BlockedBeforeUpload
+// is the P0 cross-channel guard: with shared Google grants (084/085) a
+// payload can name platform_account A but a youtube_video_id owned by a
+// sibling channel B on the same grant. The batch MUST verify the video
+// belongs to the exact selected channel (video.channel_id ==
+// platform_account.platform_user_id) and block BEFORE any thumbnail
+// work — even though the token has full access to both channels.
+func TestEnsurePrivateYouTubeBatchVideo_OtherChannelVideo_BlockedBeforeUpload(t *testing.T) {
+	var bindingCheckCalled bool
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "fresh-access-token", TokenType: tokenType}, nil
+		},
+	}
+	// The grant really IS bound to the selected channel (channels.list
+	// succeeds) — that is not enough. The video still belongs to a
+	// DIFFERENT channel sharing the same grant.
+	youTubeSvc := &mockYouTubeOAuthServiceForEditor{
+		validateChannelBindingFn: func(ctx context.Context, accessToken, expectedChannelID string) error {
+			bindingCheckCalled = true
+			if expectedChannelID != "UC123" {
+				t.Errorf("ValidateChannelBinding: want expectedChannelID UC123 (the SELECTED channel), got %q", expectedChannelID)
+			}
+			return nil
+		},
+		getVideoFn: func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
+			// The video belongs to WWE Insider France (sibling), not the
+			// selected WWE Insider Italia channel.
+			return &models.YouTubeVideoDetails{ID: videoID, ChannelID: "UCSIBLING99", Privacy: "private", UploadStatus: "processed"}, nil
+		},
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{
+			findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+				return &models.PlatformAccount{ID: 42, Platform: models.PlatformYouTube, PlatformUserID: "UC123", Status: models.AccountStatusActive}, nil
+			},
+		},
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		WithYouTubeService(youTubeSvc),
+		WithCredentialVault(vault),
+	)
+
+	edit := &models.YouTubeVideoEdit{PlatformAccountID: 42, YouTubeVideoID: "ytvideo-france-123"}
+	err := r.ensurePrivateYouTubeBatchVideo(context.Background(), edit)
+	if err == nil {
+		t.Fatal("ensurePrivateYouTubeBatchVideo: want error when the video belongs to a sibling channel, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not belong to the selected channel") {
+		t.Errorf("want cross-channel ownership error, got: %v", err)
+	}
+	if !bindingCheckCalled {
+		t.Error("ValidateChannelBinding must run BEFORE the ownership check (binding passes but ownership fails)")
+	}
+}
+
+// TestEnsurePrivateYouTubeBatchVideo_ChannelBindingFailure_Blocked pins
+// the binding leg of the same guard: when the grant is not bound to the
+// expected channel at all (ValidateChannelBinding fails), the batch must
+// stop immediately — the token grants access to sibling channels only.
+func TestEnsurePrivateYouTubeBatchVideo_ChannelBindingFailure_Blocked(t *testing.T) {
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "fresh-access-token", TokenType: tokenType}, nil
+		},
+	}
+	var videoFetched bool
+	youTubeSvc := &mockYouTubeOAuthServiceForEditor{
+		validateChannelBindingFn: func(ctx context.Context, accessToken, expectedChannelID string) error {
+			return errors.New("channel binding mismatch: expected UC123, grant bound to UCSIBLING99")
+		},
+		getVideoFn: func(ctx context.Context, accessToken, videoID string) (*models.YouTubeVideoDetails, error) {
+			videoFetched = true
+			return &models.YouTubeVideoDetails{ID: videoID, ChannelID: "UC123", Privacy: "private", UploadStatus: "processed"}, nil
+		},
+	}
+
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		&mockUserStore{
+			findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+				return &models.PlatformAccount{ID: 42, Platform: models.PlatformYouTube, PlatformUserID: "UC123", Status: models.AccountStatusActive}, nil
+			},
+		},
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil,
+		WithYouTubeService(youTubeSvc),
+		WithCredentialVault(vault),
+	)
+
+	edit := &models.YouTubeVideoEdit{PlatformAccountID: 42, YouTubeVideoID: "ytvideo123"}
+	err := r.ensurePrivateYouTubeBatchVideo(context.Background(), edit)
+	if err == nil {
+		t.Fatal("ensurePrivateYouTubeBatchVideo: want error on channel binding failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "channel binding") {
+		t.Errorf("want channel binding error, got: %v", err)
+	}
+	if videoFetched {
+		t.Error("GetYouTubeVideo MUST NOT run after a binding failure — no video read on a misbound grant")
 	}
 }
 
