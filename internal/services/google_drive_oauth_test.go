@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 )
 
 func TestGoogleDriveOAuthService_Name(t *testing.T) {
@@ -447,6 +448,41 @@ func TestHandleCallback_AcceptsCorrectScope(t *testing.T) {
 	}
 	if token.AccessToken != "fake-access-abc" {
 		t.Errorf("token.AccessToken = %q; want fake-access-abc", token.AccessToken)
+	}
+}
+
+// TestGoogleDriveRefresh_InvalidGrantResponse_ClassifiedTyped pins the P1
+// treatment on the Drive refresh path: Google's REAL 400 +
+// {"error":"invalid_grant"} must surface as credentials.ErrInvalidGrant
+// through the actual refresh transport (same bug as YouTube had: the
+// body was previously discarded, defeating vault classification).
+func TestGoogleDriveRefresh_InvalidGrantResponse_ClassifiedTyped(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"Token has been expired or revoked."}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	base, _ := url.Parse(srv.URL)
+	svc := &GoogleDriveOAuthService{
+		cfg: &config.Config{
+			Auth: config.AuthConfig{
+				GoogleDriveClientID:     "client-id",
+				GoogleDriveClientSecret: "secret-01234567890123456789012345678901",
+				GoogleDriveRedirectURI:  "http://localhost/callback",
+			},
+		},
+		httpClient: &http.Client{Transport: &rewriteRoundTripper{inner: http.DefaultTransport, base: base}},
+	}
+
+	_, err := svc.RefreshOAuthToken(t.Context(), "stale-refresh-token")
+	if err == nil {
+		t.Fatal("RefreshOAuthToken: want error for invalid_grant response, got nil")
+	}
+	if !errors.Is(err, credentials.ErrInvalidGrant) {
+		t.Errorf("RefreshOAuthToken: want wrapped credentials.ErrInvalidGrant, got %v", err)
 	}
 }
 

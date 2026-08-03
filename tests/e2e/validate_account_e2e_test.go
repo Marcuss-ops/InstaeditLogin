@@ -427,9 +427,13 @@ func TestValidateAccount_E2E_Step1_RefreshInvalidGrant_422(t *testing.T) {
 	defer h.Close()
 
 	vh := buildValidateRouterHarness(t, h)
-	// Override the vault stub: simulate Google returning invalid_grant.
+	// Override the vault stub: simulate Google returning invalid_grant the
+	// way production now does — the YouTube service's postTokenRequest
+	// wraps the 400 body's RFC 6749 error code in the typed
+	// credentials.ErrInvalidGrant sentinel (P1 fix), and the handler
+	// classifies it via errors.Is in isInvalidGrantError.
 	vh.vault.renewFn = func(_ context.Context, _ int64, _ string, _ credentials.TokenRefresher) (*models.OAuthToken, error) {
-		return nil, fmt.Errorf("oauth2.googleapis.com: invalid_grant (Token has been expired or revoked.)")
+		return nil, fmt.Errorf("youtube refresh: token exchange failed (status 400): %w", credentials.ErrInvalidGrant)
 	}
 	w := sendValidateRequest(t, vh, `{}`)
 

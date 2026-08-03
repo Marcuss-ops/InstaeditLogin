@@ -1,6 +1,6 @@
 // Package metrics — collector.go (SPRINT 6.1 — Observability with SLO).
 //
-// Periodic metric collector goroutine. Refreshes the 5 production
+// Periodic metric collector goroutine. Refreshes the 6 production
 // gauges from Phase 1's metric definitions:
 //
 //	publish_queue_depth            (Gauge, no labels)
@@ -8,6 +8,7 @@
 //	publish_targets_by_status      (GaugeVec{status})
 //	dead_letter_count              (GaugeVec{source})
 //	database_pool_usage            (GaugeVec{state})
+//	refresh_tokens_near_expiry     (Gauge, no labels)
 //
 // Lifecycle: RunPeriodicCollector is a blocking loop driven by a
 // time.Ticker; ctx-cancellable; integrates with cmd/server/main.go's
@@ -15,7 +16,8 @@
 // reconcile worker, outbox dispatcher, and webhook worker.
 //
 // Multi-replica safety: the DB-backed gauges (queue_depth /
-// queue_lag_seconds / targets_by_status / dead_letter_count) are
+// queue_lag_seconds / targets_by_status / dead_letter_count /
+// refresh_tokens_near_expiry) are
 // single-flighted across replicas by acquiring a PostgreSQL
 // advisory xact lock (pg_try_advisory_xact_lock(CollectorLockID))
 // inside the collect tx. If the lock is held by another replica,
@@ -77,6 +79,18 @@ const DefaultCollectorInterval = 10 * time.Second
 // because it's runtime-derived from string hashes, not a hard-coded
 // literal).
 const CollectorLockID int64 = 7283948576
+
+// refreshTokensNearExpiryWindowSQL is the SQL lookahead for the
+// refresh_tokens_near_expiry gauge. Kept in sync with the two other
+// places that define the same 7-day horizon so log, metric, and
+// dashboard always agree on one number:
+//
+//   - internal/credentials/vault_refresh.go::refreshGrantExpiryWarningWindow
+//     (the vault.Renew WARN emitted when a stored refresh grant is
+//     within 7 days of its provider-issued expiry), and
+//   - internal/repository/admin_ops.go::ConnectionsPerSubject's 7d
+//     default expireWindow (the admin health "Token rotation" view).
+const refreshTokensNearExpiryWindowSQL = "7 days"
 
 // knownTargetStatuses is the canonical post_targets.status value-set
 // that targets_by_status{status} tracks. Pre-set to 0 every tick +
@@ -165,7 +179,8 @@ func RunPeriodicCollector(ctx context.Context, db *sql.DB, interval time.Duratio
 //  5. targets_by_status (pre-set 6 statuses to 0, overwrite observed)
 //  6. dead_letter_count (pre-set 3 sources to 0, overwrite observed;
 //     webhook source is best-effort — table may not exist pre-migration 030)
-//  7. commit tx (lock auto-released)
+//  7. refresh_tokens_near_expiry (single aggregate query)
+//  8. commit tx (lock auto-released)
 //
 // nil *sql.DB: returns an error WITHOUT logging internally — the
 // caller (RunPeriodicCollector) logs the WARN. Avoids double-logging
@@ -205,11 +220,15 @@ func collectPoolGauges(db *sql.DB) {
 	SetDatabasePoolUsage(PoolStateWait, int(stats.WaitCount))
 }
 
-// collectDBGaugesXact runs the 4 DB-backed gauges inside a single
+// collectDBGaugesXact runs the 5 DB-backed gauges inside a single
 // transaction single-flighted by pg_try_advisory_xact_lock.
 // Webhook DLQ count is best-effort — the webhook_deliveries table
 // may not exist on pre-migration-030 databases; a missing-table
-// error is logged at DEBUG and the rest of the tick proceeds.
+// error is logged at DEBUG and the rest of the tick proceeds. The
+// refresh_tokens_near_expiry count is best-effort for the same
+// reason: tokens.refresh_token_expires_at was added by migration
+// 083, so a pre-083 database skips that series (DEBUG) instead of
+// aborting the tick.
 func collectDBGaugesXact(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -227,7 +246,7 @@ func collectDBGaugesXact(ctx context.Context, db *sql.DB, logger *slog.Logger) e
 		return fmt.Errorf("acquire advisory lock: %w", err)
 	}
 	if !gotLock {
-		// Another replica is collecting this tick — skip the 4 DB
+		// Another replica is collecting this tick — skip the 5 DB
 		// queries so we don't multiply load by N replicas.
 		return nil
 	}
@@ -319,6 +338,37 @@ func collectDBGaugesXact(ctx context.Context, db *sql.DB, logger *slog.Logger) e
 			"error", err)
 	} else {
 		SetDeadLetterCount(DeadLetterSourceWebhook, nWebhook)
+	}
+
+	// 5. refresh_tokens_near_expiry — OAuth refresh grants whose
+	// provider-issued expiry (tokens.refresh_token_expires_at) is
+	// within the 7-day lookahead window OR already in the past.
+	// COUNT(DISTINCT oauth_connection_id) rather than COUNT(*): the
+	// tokens table is keyed by (oauth_connection_id, token_type), so a
+	// single grant can have both the canonical bearer row and a legacy
+	// long_lived row (migrations 082/083/085 backfill the same expiry)
+	// — DISTINCT makes the gauge count grants at risk, not rows.
+	// The window matches the vault.Renew WARN horizon, so a grant
+	// counted here is one the vault has started warning about.
+	//
+	// Best-effort (mirrors the webhook DLQ block above):
+	// tokens.refresh_token_expires_at was added by migration 083, so
+	// a pre-083 database has no such column and would otherwise WARN
+	// every 10s forever + abort the tick. On such a database the
+	// series simply stays absent until the migration lands — the
+	// same "older DBs emit fewer gauges" contract as webhook DLQ.
+	var refreshNearExpiry int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT oauth_connection_id)
+		   FROM tokens
+		  WHERE refresh_token_expires_at IS NOT NULL
+		    AND refresh_token_expires_at <= NOW() + $1::interval`,
+		refreshTokensNearExpiryWindowSQL,
+	).Scan(&refreshNearExpiry); err != nil {
+		logger.Debug("refresh_tokens_near_expiry skipped (column may not exist on pre-migration-083 database)",
+			"error", err)
+	} else {
+		SetRefreshTokensNearExpiry(refreshNearExpiry)
 	}
 
 	if err := tx.Commit(); err != nil {

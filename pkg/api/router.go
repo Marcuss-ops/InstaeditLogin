@@ -16,6 +16,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxjobs"
 	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
 
@@ -216,6 +217,9 @@ type Router struct {
 	// internal/veloxclient and signs a short-lived JWT with
 	// VELOX_CONTROL_JWT_SECRET before calling the Velox master.
 	veloxBFFClient veloxapi.Client
+	// veloxJobRegistry resolves the technical job_type definitions used by
+	// the canonical POST /api/v1/jobs boundary.
+	veloxJobRegistry *veloxjobs.Registry
 
 	// veloxBFFCSRFMiddleware (P2 Velox BFF) wraps the user-facing
 	// /api/v1/velox/* routes with the project's canonical CSRF

@@ -1,7 +1,7 @@
 # =========================================================
-# API AUDIT SUMMARY (1 dropped, 24 kept endpoints)
+# API AUDIT SUMMARY (1 dropped, 25 kept endpoints)
 # =========================================================
-# KEPT: 24 PUBLIC_INTER_SERVICE paths across:
+# KEPT: 25 PUBLIC_INTER_SERVICE paths across:
 #   * Auth          — /auth/exchange, /auth/logout, /auth/me,
 #                     /auth/{provider}/callback, /auth/{provider}/login
 #   * Auth/API key  — /api-keys, /api-keys/{id}, /api-keys/{id}/rotate
@@ -14,7 +14,9 @@
 #                     /internal/v1/destinations/{id}/validate
 #   * YouTube       — /api/v1/youtube/editor-sessions/{id}/thumbnail
 #   * Livestreams   — /api/v1/livestreams (GET/POST),
-#                     /api/v1/livestreams/{id} (GET/PATCH/DELETE)
+#                     /api/v1/livestreams/channels (GET — wizard
+#                     preflight), /api/v1/livestreams/{id}
+#                     (GET/PATCH/DELETE)
 #
 # DROPPED: 1 path
 #   * /auth/{provider}/start  (INTERNAL_EXPERIMENTAL)
@@ -1255,6 +1257,45 @@ paths:
         '503':
           $ref: '#/components/responses/ServiceUnavailableError'
 
+  /api/v1/livestreams/channels:
+    get:
+      tags: [Livestreams]
+      operationId: livestreamsChannels
+      summary: Creation-wizard preflight for the workspace's YouTube channels.
+      description: |
+        Returns every YouTube channel linked to the workspace with
+        the data the wizard needs to gate channel selection:
+        `oauth_ready` (a valid grant exists), `live_enabled` (the
+        grant carries a YouTube live scope — youtube or
+        youtube.force-ssl), `last_verified_at` (the account's last
+        validation) and `active_lives` (rows currently in state
+        `live`). Channels without the live scope stay listed so the
+        UI can explain why they are blocked; the create endpoint
+        enforces the same guard server-side.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Preflight rows for the workspace's YouTube channels.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivestreamChannelListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+
   /api/v1/livestreams/{id}:
     parameters:
       - in: path
@@ -1806,6 +1847,38 @@ components:
           type: integer
           enum: [30]
         auto_restart: { type: boolean }
+    LivestreamChannelListResponse:
+      type: object
+      required: [channels]
+      properties:
+        channels:
+          type: array
+          items: { $ref: '#/components/schemas/LivestreamChannel' }
+    LivestreamChannel:
+      type: object
+      required: [platform_account_id, username, platform_user_id,
+                 account_state, oauth_ready, live_enabled, active_lives]
+      properties:
+        platform_account_id: { type: integer, format: int64 }
+        username: { type: string }
+        platform_user_id: { type: string }
+        account_state:
+          type: string
+          enum: [valid, reconnect_required, suspended, deleted]
+        oauth_ready:
+          type: boolean
+          description: A valid OAuth grant exists for the channel.
+        live_enabled:
+          type: boolean
+          description: |
+            The grant carries a YouTube live scope (youtube or
+            youtube.force-ssl). Scope presence is a necessary
+            condition; the authoritative liveStreamingNotEnabled
+            check still happens on broadcast creation.
+        last_verified_at: { type: string, format: date-time, nullable: true }
+        active_lives:
+          type: integer
+          description: Livestream rows currently in state `live` for this channel.
     LivestreamListResponse:
       type: object
       required: [items]

@@ -3,11 +3,15 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
@@ -156,6 +160,57 @@ func TestYouTubeLoginURL_LoginHint(t *testing.T) {
 
 	if got := parsed.Query().Get("login_hint"); got != "user@example.com" {
 		t.Errorf("login_hint: want user@example.com, got %q", got)
+	}
+}
+
+// TestYouTubeRefresh_InvalidGrantResponse_ClassifiedTyped is the P1
+// regression test: Google's REAL 400 + {"error":"invalid_grant"} response
+// must surface as credentials.ErrInvalidGrant through the actual
+// postTokenRequest path. Previously the body was discarded and only
+// "token exchange failed (status 400)" surfaced, defeating every
+// downstream classification (vault status, RenewYouTubeToken, /validate).
+func TestYouTubeRefresh_InvalidGrantResponse_ClassifiedTyped(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":"invalid_grant","error_description":"Token has been expired or revoked."}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	_, err := svc.RefreshOAuthToken(context.Background(), "stale-refresh-token")
+	if err == nil {
+		t.Fatal("RefreshOAuthToken: want error for invalid_grant response, got nil")
+	}
+	if !errors.Is(err, credentials.ErrInvalidGrant) {
+		t.Errorf("RefreshOAuthToken: want wrapped credentials.ErrInvalidGrant, got %v", err)
+	}
+}
+
+// TestYouTubeRefresh_Other400_NotClassifiedInvalidGrant proves the typed
+// classification fires ONLY for invalid_grant: a 400 with any other RFC
+// 6749 error code must keep the plain error shape (no sentinel, status
+// retained) so infrastructure failures stay distinguishable.
+func TestYouTubeRefresh_Other400_NotClassifiedInvalidGrant(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":"invalid_client","error_description":"unauthorized client"}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	svc := newTestYouTubeService(srv)
+
+	_, err := svc.RefreshOAuthToken(context.Background(), "stale-refresh-token")
+	if err == nil {
+		t.Fatal("RefreshOAuthToken: want error for 400 response, got nil")
+	}
+	if errors.Is(err, credentials.ErrInvalidGrant) {
+		t.Errorf("RefreshOAuthToken: invalid_client must NOT be classified as ErrInvalidGrant, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "status 400") {
+		t.Errorf("error must still carry the HTTP status; got %v", err)
 	}
 }
 

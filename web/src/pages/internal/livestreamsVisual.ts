@@ -228,3 +228,24 @@ export function scheduleLabel(row: LivestreamRow): string {
 export function durationLabel(_row: LivestreamRow): string {
   return "—";
 }
+
+/**
+ * Relative "ultima verifica" label for the creation wizard.
+ * Null/absent values render "Mai verificato" — deliberately distinct
+ * from a date so missing data is visible instead of silently claiming
+ * a recent check.
+ */
+export function formatLastVerified(value?: string | null): string {
+  if (!value) return "Mai verificato";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Mai verificato";
+  const elapsedMs = Date.now() - date.getTime();
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 1) return "Ora";
+  if (minutes < 60) return `${minutes} min fa`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h fa`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} gg fa`;
+  return date.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+}

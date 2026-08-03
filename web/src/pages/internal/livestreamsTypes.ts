@@ -32,6 +32,27 @@ export type LivestreamsResponse = {
   items: LivestreamRow[];
 };
 
+/**
+ * Per-channel preflight row from GET /api/v1/livestreams/channels
+ * (creation-wizard step 1). LiveEnabled means the persisted grant
+ * carries a YouTube live scope (youtube / youtube.force-ssl) — the
+ * necessary condition for the Live Streaming API.
+ */
+export type LivestreamChannel = {
+  platform_account_id: number;
+  username: string;
+  platform_user_id: string;
+  account_state: "valid" | "reconnect_required" | "suspended" | "deleted" | string;
+  oauth_ready: boolean;
+  live_enabled: boolean;
+  last_verified_at?: string | null;
+  active_lives: number;
+};
+
+export type LivestreamChannelsResponse = {
+  channels: LivestreamChannel[];
+};
+
 export type LivestreamTab =
   | "all"
   | "live"

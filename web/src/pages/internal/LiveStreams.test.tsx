@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { LiveStreamsPage } from "./LiveStreams";
-import { toastBus } from "../../components/toast/toast-bus";
 import type { LivestreamRow } from "./livestreamsTypes";
 import { matchesTab, stateLabel, summarize } from "./livestreamsVisual";
 
@@ -62,6 +62,16 @@ function fixtureRows(): LivestreamRow[] {
   ];
 }
 
+function renderPage() {
+  return render(
+    <MemoryRouter>
+      <Routes>
+        <Route path="/" element={<LiveStreamsPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 describe("LiveStreamsPage", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -70,7 +80,7 @@ describe("LiveStreamsPage", () => {
   it("renders the header, summary counts and live cards", async () => {
     vi.stubGlobal("fetch", mockFetch(fixtureRows()));
 
-    render(<LiveStreamsPage />);
+    renderPage();
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /Live streaming/i })).toBeInTheDocument();
@@ -94,7 +104,7 @@ describe("LiveStreamsPage", () => {
   it("filters cards by tab", async () => {
     vi.stubGlobal("fetch", mockFetch(fixtureRows()));
 
-    render(<LiveStreamsPage />);
+    renderPage();
     await waitFor(() => {
       expect(screen.getAllByTestId("livestream-card")).toHaveLength(6);
     });
@@ -115,21 +125,20 @@ describe("LiveStreamsPage", () => {
   it("shows the empty state with a CTA when no livestreams exist", async () => {
     vi.stubGlobal("fetch", mockFetch([]));
 
-    render(<LiveStreamsPage />);
+    renderPage();
 
     await waitFor(() => {
       expect(screen.getByText("Nessuna live configurata")).toBeInTheDocument();
     });
     expect(screen.getByText(/Trasmetti un video o una playlist preregistrata/)).toBeInTheDocument();
-
-    await userEvent.click(screen.getByTestId("livestreams-empty-cta"));
-    expect(toastBus.__sizeForTests()).toBe(1);
+    // The CTA now opens the creation wizard.
+    expect(screen.getByTestId("livestreams-empty-cta")).toHaveAttribute("href", "/app/livestreams/new");
   });
 
   it("shows an error state with retry when the list cannot be loaded", async () => {
     vi.stubGlobal("fetch", mockFetch(null, true));
 
-    render(<LiveStreamsPage />);
+    renderPage();
 
     await waitFor(() => {
       expect(screen.getByText("Impossibile caricare le live")).toBeInTheDocument();
@@ -141,7 +150,7 @@ describe("LiveStreamsPage", () => {
     const fetchMock = mockFetch([row({ id: "ls_live", actual_state: "live", desired_state: "live" })]);
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<LiveStreamsPage />);
+    renderPage();
     await waitFor(() => {
       expect(screen.getAllByTestId("livestream-card")).toHaveLength(1);
     });
@@ -166,7 +175,7 @@ describe("LiveStreamsPage", () => {
     const fetchMock = mockFetch([row({ id: "ls_live", actual_state: "live" })]);
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<LiveStreamsPage />);
+    renderPage();
     await waitFor(() => {
       expect(screen.getAllByTestId("livestream-card")).toHaveLength(1);
     });

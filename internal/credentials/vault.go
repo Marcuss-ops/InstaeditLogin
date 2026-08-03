@@ -25,11 +25,23 @@ package credentials
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/crypto"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
+
+// ErrInvalidGrant is the typed classification for a provider OAuth
+// response that says the stored grant is revoked or expired (RFC 6749
+// §5.2 error=invalid_grant — Google returns this when a refresh token was
+// revoked, rotated, or garbage-collected). Providers wrap it into their
+// RefreshOAuthToken errors so vault classification (classifyRefreshFailure,
+// RenewYouTubeToken) and the HTTP layer can switch on errors.Is instead of
+// parsing provider bodies. It intentionally carries no upstream text or
+// credential material.
+var ErrInvalidGrant = errors.New("oauth grant requires reauthorization")
 
 // TokenRefresher is the narrow function signature the vault uses to call
 // a platform's refresh endpoint. It is intentionally a plain function
@@ -147,13 +159,17 @@ type CredentialVault struct {
 	// package-private on purpose: callers in cmd/server should never
 	// need to swap it.
 	clock func() time.Time
+	// logger is the optional slog sink for vault observability signals
+	// (e.g. the refresh-grant near-expiry warning in Renew). Production
+	// defaults to slog.Default(); tests may substitute a buffer logger.
+	logger *slog.Logger
 }
 
 // NewCredentialVault constructs a vault. All three dependencies are
 // required; a nil in any slot will surface as a panic on the first
 // method call (fail-fast for misconfigured main.go).
 func NewCredentialVault(encryptor *crypto.Encryptor, db *sql.DB, store TokenStore) *CredentialVault {
-	return &CredentialVault{encryptor: encryptor, db: db, store: store, clock: time.Now}
+	return &CredentialVault{encryptor: encryptor, db: db, store: store, clock: time.Now, logger: slog.Default()}
 }
 
 // SetClock overrides the vault's "now" source. Intended for tests that

@@ -555,6 +555,120 @@ func TestPublishTarget_YouTube_ChannelCheck_Transient_FailsTargetWithoutFlagging
 	_ = err
 }
 
+// TestPublishTarget_YouTube_RevokedGrant_InvalidGrantSentinel_MarksReauthAndBlocksTarget
+// is the P1 end-to-end chain at the worker layer: Google revoked the
+// refresh token, so the real YouTube service surfaces the typed
+// credentials.ErrInvalidGrant sentinel (wrapped by postTokenRequest),
+// RenewYouTubeToken maps it to ErrYouTubeInvalidGrant, and the worker
+// must:
+//  1. mark the platform_account reauth_required via markYouTubeGrantReauth
+//     (code="invalid_grant" → the dashboard "Ricollega YouTube" CTA);
+//  2. transition the post_target to blocked_auth (NOT failed) so the row
+//     drops out of the tick filter with the operator-dashboard code;
+//  3. never reach Publish;
+//  4. attempt ONLY the canonical bearer refresh (no long_lived fallback
+//     for invalid_grant).
+func TestPublishTarget_YouTube_RevokedGrant_InvalidGrantSentinel_MarksReauthAndBlocksTarget(t *testing.T) {
+	var order []string
+	posts := &mockPostStore{
+		claimFn: func(id int64) (bool, error) { return true, nil },
+		findByIDFn: func(id int64) (*models.Post, error) {
+			order = append(order, "findByID")
+			return &models.Post{ID: 100, Caption: "x", MediaURL: "https://cdn.example.com/v.mp4"}, nil
+		},
+	}
+	users := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			order = append(order, "findAccount")
+			return &models.PlatformAccount{
+				ID:             10,
+				Platform:       models.PlatformYouTube,
+				PlatformUserID: "UCrevokedChan",
+				Status:         models.AccountStatusActive,
+			}, nil
+		},
+		markReauthRequiredFn: func(ctx context.Context, id int64, code, message string) error {
+			order = append(order, "markReauth")
+			return nil
+		},
+	}
+	svc := &mockProvider{
+		baseMockProvider: baseMockProvider{platform: models.PlatformYouTube},
+		publishFn: func(ctx context.Context, accessToken, platformUserID string, payload models.PublishPayload) (*models.PublishResult, error) {
+			t.Error("Publish MUST NOT be reached when the refresh grant is revoked")
+			return nil, nil
+		},
+	}
+	var renewTypes []string
+	vault := &mockCredentialVault{
+		renewFn: func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error) {
+			order = append(order, "renew")
+			renewTypes = append(renewTypes, tokenType)
+			// Shape the production error: Google 400 + invalid_grant body
+			// → postTokenRequest wraps credentials.ErrInvalidGrant.
+			return nil, fmt.Errorf("youtube refresh: token exchange failed (status 400): %w", credentials.ErrInvalidGrant)
+		},
+	}
+	origUpdate := posts.updateStatusFn
+	posts.updateStatusFn = func(t *models.PostTarget) error {
+		order = append(order, "updateStatus")
+		if origUpdate != nil {
+			return origUpdate(t)
+		}
+		return nil
+	}
+	w := newTestWorker(posts, users, models.PlatformYouTube, svc, vault)
+
+	if err := w.publishTarget(context.Background(), scheduledTarget()); err == nil {
+		t.Fatal("publishTarget must return an error when the refresh grant is revoked")
+	}
+
+	// 1. Only the canonical bearer refresh was attempted — invalid_grant
+	//    must NOT fall back to the legacy long_lived row.
+	if len(renewTypes) != 1 || renewTypes[0] != models.TokenTypeBearer {
+		t.Fatalf("renew types: want only [%q], got %v", models.TokenTypeBearer, renewTypes)
+	}
+	// 2. The channel was marked reauth_required with the stable code.
+	if users.markReauthRequiredCalls != 1 {
+		t.Errorf("MarkReauthRequired calls: want 1, got %d", users.markReauthRequiredCalls)
+	}
+	if users.lastMarkReauthAccountID != 10 {
+		t.Errorf("MarkReauthRequired account id: want 10, got %d", users.lastMarkReauthAccountID)
+	}
+	if users.lastMarkReauthCode != YouTubeReauthCode {
+		t.Errorf("MarkReauthRequired code: want %q, got %q", YouTubeReauthCode, users.lastMarkReauthCode)
+	}
+	// 3. Target → blocked_auth (NOT failed) with the dashboard code.
+	if posts.updateCalls != 1 {
+		t.Fatalf("UpdateStatus calls: want 1, got %d", posts.updateCalls)
+	}
+	if posts.updateTargets[0].Status != models.PostStatusBlockedAuth {
+		t.Errorf("final status: want blocked_auth, got %q", posts.updateTargets[0].Status)
+	}
+	if posts.updateTargets[0].LastErrorCode != "blocked_auth" {
+		t.Errorf("LastErrorCode: want %q (operator-dashboard filter), got %q", "blocked_auth", posts.updateTargets[0].LastErrorCode)
+	}
+	// 4. Publish never ran, and no idempotency key was stamped for a
+	//    blocked-auth refusal (mirrors the channel-mismatch path).
+	if svc.publishCalls != 0 {
+		t.Errorf("Publish calls: want 0, got %d", svc.publishCalls)
+	}
+	if posts.setKeyCalls != 0 {
+		t.Errorf("SetProviderIdempotencyKey calls on invalid_grant: want 0 (no key stamped for blocked-auth refused publishes), got %d", posts.setKeyCalls)
+	}
+	// 5. Order: the account reauth flag lands BEFORE the target terminal
+	//    transition (same MED-1 sequencing the channel-mismatch path pins).
+	want := []string{"findByID", "findAccount", "renew", "markReauth", "updateStatus"}
+	if len(order) != len(want) {
+		t.Fatalf("call order: want %v, got %v", want, order)
+	}
+	for i, step := range want {
+		if order[i] != step {
+			t.Errorf("step[%d]: want %q, got %q (full order: %v)", i, step, order[i], order)
+		}
+	}
+}
+
 // TestPublishTarget_YouTube_ChannelBindingMismatch_IncrementsMetric (P0 #2)
 // is the table-driven coverage of the
 // youtube_publish_channel_mismatch_total counter. The metric MUST

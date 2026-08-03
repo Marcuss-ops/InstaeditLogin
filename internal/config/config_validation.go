@@ -197,6 +197,22 @@ func (c *Config) validate() error {
 			return fmt.Errorf("YOUTUBE_UPLOAD_BACKOFF_CAP_MS (%d) must be >= YOUTUBE_UPLOAD_BACKOFF_BASE_MS (%d)", c.Worker.YouTubeUploadBackoffCapMs, c.Worker.YouTubeUploadBackoffBaseMs)
 		}
 	}
+	// Token refresh sweep knobs — active only when a Google provider
+	// (YouTube or Drive) is wired; a Google-less deployment has
+	// nothing to renew. Positive required: a 0 interval would spin
+	// the ticker hot-loop (and DDoS the token endpoint), a 0
+	// horizon would renew every active grant on every tick.
+	// Operators wanting to effectively disable the sweep set a very
+	// large value (e.g. 86400*365) — the explicit-default shape
+	// mirrors AssetCleanupIntervalSeconds.
+	if c.Auth.YouTubeClientID != "" || c.Auth.GoogleDriveClientID != "" {
+		if c.Worker.TokenRefreshSweepIntervalSeconds <= 0 {
+			return fmt.Errorf("TOKEN_REFRESH_SWEEP_INTERVAL_SECONDS must be a positive integer (got %d); set to a large value (e.g. 86400) to effectively disable the sweep, not 0", c.Worker.TokenRefreshSweepIntervalSeconds)
+		}
+		if c.Worker.TokenRefreshSweepHorizonDays <= 0 {
+			return fmt.Errorf("TOKEN_REFRESH_SWEEP_HORIZON_DAYS must be a positive integer (got %d); set to a large value (e.g. 365) to effectively disable proactive renewal, not 0", c.Worker.TokenRefreshSweepHorizonDays)
+		}
+	}
 	if err := c.validateOptionalPlatform("GOOGLE_DRIVE", c.Auth.GoogleDriveClientID, c.Auth.GoogleDriveClientSecret); err != nil {
 		return err
 	}

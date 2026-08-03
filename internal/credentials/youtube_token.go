@@ -30,7 +30,7 @@ func RenewYouTubeToken(
 		return canonical, nil
 	}
 
-	if strings.Contains(strings.ToLower(canonicalErr.Error()), "invalid_grant") {
+	if errors.Is(canonicalErr, ErrInvalidGrant) || strings.Contains(strings.ToLower(canonicalErr.Error()), "invalid_grant") {
 		// Preserve only a typed, redacted classification for callers. The
 		// provider response may contain credential-adjacent material and
 		// must not cross the credential package boundary.
@@ -52,7 +52,7 @@ func RenewYouTubeToken(
 	if legacyErr == nil {
 		return legacy, nil
 	}
-	if strings.Contains(strings.ToLower(legacyErr.Error()), "invalid_grant") {
+	if errors.Is(legacyErr, ErrInvalidGrant) || strings.Contains(strings.ToLower(legacyErr.Error()), "invalid_grant") {
 		// The legacy compatibility row is still the same Google grant;
 		// preserve the reauthorization signal instead of hiding it behind
 		// the generic renewal error.

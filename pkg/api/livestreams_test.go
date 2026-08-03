@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
@@ -76,6 +78,20 @@ func livestreamTestAccount() *models.PlatformAccount {
 }
 
 func livestreamTestRouter(lsStore *mockLivestreamStore, account *models.PlatformAccount, ownerID int64) *Router {
+	return livestreamTestRouterWithVault(lsStore, account, ownerID, &mockCredentialVault{
+		getFn: func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
+			if account != nil && platformAccountID == account.ID {
+				return &models.OAuthToken{TokenType: tokenType, Scopes: []string{"https://www.googleapis.com/auth/youtube.force-ssl"}}, nil
+			}
+			return nil, nil
+		},
+	})
+}
+
+// livestreamTestRouterWithVault wires a custom vault so the scope guard
+// in handleCreateLivestream is exercised (and so tests can simulate a
+// grant without the live scope, or a missing/expired grant).
+func livestreamTestRouterWithVault(lsStore *mockLivestreamStore, account *models.PlatformAccount, ownerID int64, vault credentials.VaultAPI) *Router {
 	store := &mockUserStore{
 		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
 			if account != nil && id == account.ID {
@@ -103,9 +119,9 @@ func livestreamTestRouter(lsStore *mockLivestreamStore, account *models.Platform
 		store,
 		auth.NewManager(testJWTSecret, 24),
 		"",
-		nil,
-		WithWorkspaceStore(wsStore),
+		nil, WithWorkspaceStore(wsStore),
 		WithLivestreamStore(lsStore),
+		WithCredentialVault(vault),
 	)
 }
 
@@ -297,6 +313,46 @@ func TestCreateLivestream_WorkspaceNotOwned(t *testing.T) {
 	}
 }
 
+func TestCreateLivestream_RejectsMissingLiveScope(t *testing.T) {
+	account := livestreamTestAccount()
+	vault := &mockCredentialVault{
+		getFn: func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
+			if platformAccountID == account.ID {
+				// Grant exists but carries no YouTube live scope.
+				return &models.OAuthToken{TokenType: tokenType, Scopes: []string{"https://www.googleapis.com/auth/youtube.readonly"}}, nil
+			}
+			return nil, nil
+		},
+	}
+	r := livestreamTestRouterWithVault(&mockLivestreamStore{}, account, 1, vault)
+
+	w := doLivestreamRequest(t, r, http.MethodPost, "/api/v1/livestreams", validLivestreamPayload())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "live streaming") {
+		t.Errorf("body should mention live streaming, got %s", w.Body.String())
+	}
+}
+
+func TestCreateLivestream_RejectsUnavailableGrant(t *testing.T) {
+	account := livestreamTestAccount()
+	vault := &mockCredentialVault{
+		getFn: func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
+			return nil, errors.New("token expired")
+		},
+	}
+	r := livestreamTestRouterWithVault(&mockLivestreamStore{}, account, 1, vault)
+
+	w := doLivestreamRequest(t, r, http.MethodPost, "/api/v1/livestreams", validLivestreamPayload())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "grant") {
+		t.Errorf("body should mention the grant, got %s", w.Body.String())
+	}
+}
+
 func TestCreateLivestream_RequiresAuth(t *testing.T) {
 	r := livestreamTestRouter(&mockLivestreamStore{}, livestreamTestAccount(), 1)
 	raw, _ := json.Marshal(validLivestreamPayload())
@@ -376,6 +432,119 @@ func TestListLivestreams_RequiresWorkspaceID(t *testing.T) {
 func TestListLivestreams_WorkspaceNotOwned(t *testing.T) {
 	r := livestreamTestRouter(&mockLivestreamStore{}, livestreamTestAccount(), 2)
 	w := doLivestreamRequest(t, r, http.MethodGet, "/api/v1/livestreams?workspace_id=7", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestListLivestreamChannels_HappyPath(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	lastValidated := now.Add(-2 * time.Minute)
+
+	validYT := livestreamTestAccount() // id 42
+	validYT.Username = "WWE Insider Italia"
+	validYT.LastValidatedAt = &lastValidated
+	scopeLessYT := &models.PlatformAccount{ID: 43, UserID: 1, Platform: models.PlatformYouTube, PlatformUserID: "UC-scopeless", Username: "Old Channel", Status: models.AccountStatusActive}
+	instagram := &models.PlatformAccount{ID: 44, UserID: 1, Platform: models.PlatformInstagram, PlatformUserID: "ig-1", Username: "IG", Status: models.AccountStatusActive}
+
+	accounts := map[int64]*models.PlatformAccount{
+		42: validYT, 43: scopeLessYT, 44: instagram,
+	}
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return accounts[id], nil
+		},
+	}
+	wsStore := &mockWorkspaceStore{
+		findByIDFn: func(id int64) (*models.Workspace, error) {
+			return &models.Workspace{ID: livestreamTestWorkspaceID, OwnerID: 1, Name: "Test Workspace"}, nil
+		},
+		listChannelsFn: func(ctx context.Context, workspaceID int64) ([]models.WorkspaceChannel, error) {
+			return []models.WorkspaceChannel{
+				{WorkspaceID: workspaceID, PlatformAccountID: 42, Enabled: true},
+				{WorkspaceID: workspaceID, PlatformAccountID: 43, Enabled: true},
+				{WorkspaceID: workspaceID, PlatformAccountID: 44, Enabled: true},
+			}, nil
+		},
+	}
+	vault := &mockCredentialVault{
+		getFn: func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error) {
+			switch platformAccountID {
+			case 42:
+				return &models.OAuthToken{TokenType: tokenType, Scopes: []string{"https://www.googleapis.com/auth/youtube.force-ssl"}}, nil
+			case 43:
+				return &models.OAuthToken{TokenType: tokenType, Scopes: []string{"https://www.googleapis.com/auth/youtube.readonly"}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+	lsStore := &mockLivestreamStore{
+		listByWorkspaceFn: func(ctx context.Context, workspaceID int64) ([]models.Livestream, error) {
+			return []models.Livestream{
+				{ID: "ls_live1", WorkspaceID: workspaceID, PlatformAccountID: 42, ActualState: models.LivestreamStateLive},
+				{ID: "ls_live2", WorkspaceID: workspaceID, PlatformAccountID: 42, ActualState: models.LivestreamStateLive},
+				{ID: "ls_sched", WorkspaceID: workspaceID, PlatformAccountID: 42, ActualState: models.LivestreamStateScheduled},
+			}, nil
+		},
+	}
+	r := mustNewRouterWithDefaults(
+		services.NewCapabilityRouter(),
+		store,
+		auth.NewManager(testJWTSecret, 24),
+		"",
+		nil, WithWorkspaceStore(wsStore),
+		WithLivestreamStore(lsStore),
+		WithCredentialVault(vault),
+	)
+
+	w := doLivestreamRequest(t, r, http.MethodGet, "/api/v1/livestreams/channels?workspace_id=7", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp listLivestreamChannelsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	// The Instagram account is filtered out; both YouTube channels stay
+	// visible so the UI can explain why the scope-less one is blocked.
+	if len(resp.Channels) != 2 {
+		t.Fatalf("channels: want 2 (non-YouTube filtered), got %+v", resp.Channels)
+	}
+	byID := map[int64]livestreamChannelResponse{}
+	for _, c := range resp.Channels {
+		byID[c.PlatformAccountID] = c
+	}
+	first := byID[42]
+	if !first.OAuthReady || !first.LiveEnabled {
+		t.Errorf("account 42: want oauth_ready+live_enabled, got %+v", first)
+	}
+	if first.ActiveLives != 2 {
+		t.Errorf("account 42 active_lives: want 2 (scheduled excluded), got %d", first.ActiveLives)
+	}
+	if first.LastVerifiedAt == nil || !first.LastVerifiedAt.Equal(lastValidated) {
+		t.Errorf("account 42 last_verified_at: want %v, got %v", lastValidated, first.LastVerifiedAt)
+	}
+	if first.Username != "WWE Insider Italia" {
+		t.Errorf("account 42 username: got %q", first.Username)
+	}
+	second := byID[43]
+	if !second.OAuthReady || second.LiveEnabled {
+		t.Errorf("account 43: want oauth_ready but live_enabled=false, got %+v", second)
+	}
+}
+
+func TestListLivestreamChannels_RequiresWorkspaceID(t *testing.T) {
+	r := livestreamTestRouter(&mockLivestreamStore{}, livestreamTestAccount(), 1)
+	w := doLivestreamRequest(t, r, http.MethodGet, "/api/v1/livestreams/channels", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestListLivestreamChannels_WorkspaceNotOwned(t *testing.T) {
+	r := livestreamTestRouter(&mockLivestreamStore{}, livestreamTestAccount(), 2)
+	w := doLivestreamRequest(t, r, http.MethodGet, "/api/v1/livestreams/channels?workspace_id=7", nil)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
 	}

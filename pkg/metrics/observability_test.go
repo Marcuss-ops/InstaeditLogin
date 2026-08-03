@@ -64,6 +64,7 @@ func TestObservability_MetricNamesRegistered(t *testing.T) {
 	publishTargetsByStatus.WithLabelValues("__registration_probe__").Set(0)
 	deadLetterCount.WithLabelValues("__registration_probe__").Set(0)
 	databasePoolUsage.WithLabelValues("__registration_probe__").Set(0)
+	refreshTokensNearExpiry.Set(0)
 	publishAttempts.WithLabelValues("__registration_probe__", "test").Add(0)
 	providerLatency.WithLabelValues("__registration_probe__", OperationPublish).Observe(0)
 	providerRateLimits.WithLabelValues("__registration_probe__").Add(0)
@@ -83,6 +84,7 @@ func TestObservability_MetricNamesRegistered(t *testing.T) {
 		"publish_targets_by_status",
 		"dead_letter_count",
 		"database_pool_usage",
+		"refresh_tokens_near_expiry",
 		// Per-event counters
 		"publish_attempts_total",
 		"provider_rate_limits_total",
@@ -110,6 +112,7 @@ func TestObservability_GaugesHaveNoTotalSuffix(t *testing.T) {
 	gauges := []string{
 		"publish_queue_depth", "publish_queue_lag_seconds",
 		"publish_targets_by_status", "dead_letter_count", "database_pool_usage",
+		"refresh_tokens_near_expiry",
 	}
 	for _, name := range gauges {
 		mf, ok := mfs[name]

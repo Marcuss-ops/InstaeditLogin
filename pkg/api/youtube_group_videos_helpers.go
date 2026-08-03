@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
@@ -101,6 +103,9 @@ func filterRecentYouTubeVideos(items []models.YouTubeVideoDetails, days int) []m
 func isInvalidYouTubeTokenError(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, credentials.ErrInvalidGrant) {
+		return true
 	}
 	message := strings.ToLower(err.Error())
 	for _, marker := range []string{"invalid_grant", "status 401", "token expired", "token revoked"} {

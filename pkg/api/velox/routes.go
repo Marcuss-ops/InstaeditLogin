@@ -30,6 +30,7 @@ import (
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxcontract"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxjobs"
 )
 
 // --- Shared contract (re-exported) ----------------------------------------
@@ -68,6 +69,8 @@ type (
 	ListJobsFilter = veloxcontract.ListJobsFilter
 	// Client is the contract the BFF handlers depend on.
 	Client = veloxcontract.Client
+	// JobRegistry resolves canonical technical job types.
+	JobRegistry = veloxjobs.Registry
 )
 
 var (
@@ -89,6 +92,7 @@ var (
 // matching AdminModule / VeloxModule).
 type Deps struct {
 	Client         Client
+	JobRegistry    *veloxjobs.Registry
 	AuthMiddleware func(http.Handler) http.Handler
 	CSRFMiddleware func(http.Handler) http.Handler
 }
@@ -114,6 +118,9 @@ type Deps struct {
 func Register(mux chi.Router, deps Deps) {
 	if deps.Client == nil {
 		return
+	}
+	if deps.JobRegistry == nil {
+		deps.JobRegistry = veloxjobs.NewDefaultRegistry()
 	}
 	b := &bff{deps: deps}
 	wrap := deps.wrap

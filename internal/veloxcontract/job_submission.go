@@ -79,10 +79,30 @@ type canonicalDeliveryPlan struct {
 	Destinations []canonicalDeliveryDestination `json:"destinations"`
 }
 
+func (p *canonicalDeliveryPlan) UnmarshalJSON(data []byte) error {
+	type plain canonicalDeliveryPlan
+	var decoded plain
+	if err := decodeStrict(data, &decoded); err != nil {
+		return err
+	}
+	*p = canonicalDeliveryPlan(decoded)
+	return nil
+}
+
 type canonicalDeliveryDestination struct {
 	ExternalDestinationID string          `json:"external_destination_id"`
 	PublicationID         string          `json:"publication_id,omitempty"`
 	Metadata              json.RawMessage `json:"metadata"`
+}
+
+func (d *canonicalDeliveryDestination) UnmarshalJSON(data []byte) error {
+	type plain canonicalDeliveryDestination
+	var decoded plain
+	if err := decodeStrict(data, &decoded); err != nil {
+		return err
+	}
+	*d = canonicalDeliveryDestination(decoded)
+	return nil
 }
 
 func decodeStrict(data []byte, target any) error {

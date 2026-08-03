@@ -484,6 +484,102 @@ func TestHandleDeleteAccount_NoSession_401(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteAccount_YouTube_RemoteRevoke_BeforeLocalCleanup pins
+// the P2 wiring: for a YouTube account with a YouTubeRevoker wired, the
+// decoded refresh token is revoked on Google's endpoint BEFORE the local
+// vault.Revoke deletes the token material.
+func TestHandleDeleteAccount_YouTube_RemoteRevoke_BeforeLocalCleanup(t *testing.T) {
+	svc := &mockProvider{platform: "youtube"}
+	owner := ownedAccountFixture(1, "youtube")
+
+	var remoteRevokeCalls int
+	var revokedToken string
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		revokeFn: func(ctx context.Context, platformAccountID int64) error {
+			return nil
+		},
+		getRefreshTokenFn: func(ctx context.Context, platformAccountID int64) (string, error) {
+			return "yt-decoded-refresh-token", nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	r.youtubeRevoker = &fakeYouTubeRevoker{
+		revokeFn: func(ctx context.Context, token string) error {
+			remoteRevokeCalls++
+			revokedToken = token
+			return nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("want 204 No Content, got %d: %s", w.Code, w.Body.String())
+	}
+	if remoteRevokeCalls != 1 {
+		t.Fatalf("remote YouTube revoke: want 1 call, got %d", remoteRevokeCalls)
+	}
+	if revokedToken != "yt-decoded-refresh-token" {
+		t.Errorf("remote revoke token: want yt-decoded-refresh-token, got %q", revokedToken)
+	}
+}
+
+// TestHandleDeleteAccount_YouTube_RemoteRevokeFailure_Still204 proves the
+// remote revoke is best-effort: a provider-side failure must NOT block the
+// local disconnect (vault.Revoke still runs and the account row flips).
+func TestHandleDeleteAccount_YouTube_RemoteRevokeFailure_Still204(t *testing.T) {
+	svc := &mockProvider{platform: "youtube"}
+	owner := ownedAccountFixture(1, "youtube")
+
+	var localRevokeCalled bool
+	store := &mockUserStore{
+		findPlatformAccountFn: func(id int64) (*models.PlatformAccount, error) {
+			return owner, nil
+		},
+		updatePlatformAccountFn: func(a *models.PlatformAccount) error {
+			return nil
+		},
+	}
+	vault := &mockCredentialVault{
+		revokeFn: func(ctx context.Context, platformAccountID int64) error {
+			localRevokeCalled = true
+			return nil
+		},
+		getRefreshTokenFn: func(ctx context.Context, platformAccountID int64) (string, error) {
+			return "yt-decoded-refresh-token", nil
+		},
+	}
+	r := newTestRouter(svc, store, "", WithCredentialVault(vault))
+	r.youtubeRevoker = &fakeYouTubeRevoker{
+		revokeFn: func(ctx context.Context, token string) error {
+			return fmt.Errorf("google revoke 400")
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/21", nil)
+	w := httptest.NewRecorder()
+	withBearerJWT(t, req, 1)
+	r.Setup().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("remote-revoke failure must still yield 204, got %d: %s", w.Code, w.Body.String())
+	}
+	if !localRevokeCalled {
+		t.Error("local vault.Revoke must run even when the remote revoke fails")
+	}
+}
+
 // TestHandleGetAccount_WithSnapshot_ResourceIncluded proves that when a
 // snapshot exists, the GET /accounts/{id} response includes a "resource"
 // field with the cached details.

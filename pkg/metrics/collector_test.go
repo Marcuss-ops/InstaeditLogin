@@ -293,3 +293,62 @@ func TestSetTargetsByStatus_FamilyRegistered(t *testing.T) {
 		t.Errorf("publish_targets_by_status{status=queued}: missing after SetTargetsByStatus(\"queued\", 7)")
 	}
 }
+
+// TestSetRefreshTokensNearExpiry_FamilyRegistered ensures the
+// refresh_tokens_near_expiry family is registered with prometheus
+// AND that the setter writes the expected gauge value. This pins the
+// "refresh_tokens_near_expiry appears in the observability collector"
+// contract: the periodic collector calls SetRefreshTokensNearExpiry
+// once per tick inside collectDBGaugesXact, and a plain Gauge with a
+// value of 0 (or N) must materialize in /metrics output.
+func TestSetRefreshTokensNearExpiry_FamilyRegistered(t *testing.T) {
+	// No Reset needed: a plain Gauge holds a single series and Set
+	// overwrites it; the previous value from the registration test is
+	// irrelevant because Set replaces it wholesale.
+	SetRefreshTokensNearExpiry(3)
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	var found *dto.MetricFamily
+	for _, mf := range families {
+		if mf.GetName() == "refresh_tokens_near_expiry" {
+			found = mf
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("refresh_tokens_near_expiry: not present in gatherer after SetRefreshTokensNearExpiry call")
+	}
+	if found.GetType() != dto.MetricType_GAUGE {
+		t.Errorf("refresh_tokens_near_expiry: want gauge type, got %v", found.GetType())
+	}
+	metrics := found.GetMetric()
+	if len(metrics) != 1 {
+		t.Fatalf("refresh_tokens_near_expiry: want exactly 1 series (no labels), got %d", len(metrics))
+	}
+	if got := metrics[0].GetGauge().GetValue(); got != 3 {
+		t.Errorf("refresh_tokens_near_expiry: want 3 after SetRefreshTokensNearExpiry(3), got %v", got)
+	}
+}
+
+// TestSetRefreshTokensNearExpiry_ZeroEmitsSeries pins the pre-set-0
+// contract: even with no grants at risk the series MUST be present in
+// the scrape (a missing series silently breaks dashboards — same
+// rationale as the other periodic gauges).
+func TestSetRefreshTokensNearExpiry_ZeroEmitsSeries(t *testing.T) {
+	SetRefreshTokensNearExpiry(0)
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	var found bool
+	for _, mf := range families {
+		if mf.GetName() == "refresh_tokens_near_expiry" && len(mf.GetMetric()) == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("refresh_tokens_near_expiry: series missing after SetRefreshTokensNearExpiry(0) — zero must still emit")
+	}
+}

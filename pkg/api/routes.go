@@ -37,6 +37,7 @@ func (r *Router) Setup() http.Handler {
 	}))
 	reg.Register(NewVeloxBFFModule(VeloxBFFModuleDeps{
 		Client:         r.veloxBFFClient,
+		JobRegistry:    r.veloxJobRegistry,
 		AuthMiddleware: r.veloxBFFAuthMiddleware,
 		CSRFMiddleware: r.veloxBFFCSRFMiddleware,
 	}))
@@ -290,6 +291,11 @@ func (r *Router) Setup() http.Handler {
 	// {items: [...]} — the sidebar badge counts actual_state == "live".
 	var listLivestreamsHandler http.Handler = http.HandlerFunc(r.handleListLivestreams)
 	r.mux.Method(http.MethodGet, "/api/v1/livestreams", r.protected(listLivestreamsHandler.ServeHTTP))
+
+	// GET /api/v1/livestreams/channels — creation-wizard preflight.
+	// Registered before /{id} so the static segment wins.
+	var listLivestreamChannelsHandler http.Handler = http.HandlerFunc(r.handleListLivestreamChannels)
+	r.mux.Method(http.MethodGet, "/api/v1/livestreams/channels", r.protected(listLivestreamChannelsHandler.ServeHTTP))
 
 	var createLivestreamHandler http.Handler = http.HandlerFunc(r.handleCreateLivestream)
 	if r.csrfMiddleware != nil {

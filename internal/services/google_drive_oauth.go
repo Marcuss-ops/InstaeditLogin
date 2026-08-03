@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/config"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
@@ -142,8 +143,13 @@ func (s *GoogleDriveOAuthService) HandleCallback(ctx context.Context, state, cod
 	}, nil
 }
 
-// RefreshOAuthToken refreshes a Google Drive access token.
-func (s *GoogleDriveOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+// RefreshOAuthToken refreshes a Google Drive access token. The
+// named err return powers the shared RecordTokenRefreshMetrics defer
+// (same pattern as the YouTube path) so the periodic token-refresh
+// sweep and the delivery path emit token_refresh_success_total /
+// token_refresh_error_total for google-drive.
+func (s *GoogleDriveOAuthService) RefreshOAuthToken(ctx context.Context, refreshToken string) (result *models.TokenData, err error) {
+	defer RecordTokenRefreshMetrics(models.PlatformGoogleDrive, &err)
 	if refreshToken == "" {
 		return nil, fmt.Errorf("google drive refresh: empty refresh token")
 	}
@@ -167,6 +173,12 @@ func (s *GoogleDriveOAuthService) RefreshOAuthToken(ctx context.Context, refresh
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		// Same typed classification as the YouTube path (P1): Google's
+		// RFC 6749 §5.2 invalid_grant means the stored grant is
+		// revoked/expired. Only the stable enum value is surfaced.
+		if oauthErrorCode(respBody) == "invalid_grant" {
+			return nil, fmt.Errorf("google drive refresh failed (status %d): %w", resp.StatusCode, credentials.ErrInvalidGrant)
+		}
 		return nil, fmt.Errorf("google drive refresh failed (status %d)", resp.StatusCode)
 	}
 	var tr googleDriveTokenResponse

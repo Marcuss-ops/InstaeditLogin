@@ -10,6 +10,12 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
+// refreshGrantExpiryWarningWindow is the lookahead before a provider-issued
+// refresh-token expiry at which Renew emits a warning. It matches the 7-day
+// default window used by the admin token-rotation health view so operators
+// see a single consistent horizon.
+const refreshGrantExpiryWarningWindow = 7 * 24 * time.Hour
+
 // Renew returns a fresh token or refreshes it under the per-grant advisory
 // lock, preserving the existing error classification and status updates.
 func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, tokenType string, refresher TokenRefresher) (*models.OAuthToken, error) {
@@ -70,6 +76,25 @@ func (v *CredentialVault) Renew(ctx context.Context, platformAccountID int64, to
 	}
 	if stored == nil {
 		return nil, fmt.Errorf("vault: no stored token for account %d (oauth_connection=%d)", platformAccountID, oauthConnectionID)
+	}
+
+	// P3 observability: warn when the stored refresh grant is close to its
+	// provider-issued expiry so operators can reconnect before Google
+	// garbage-collects it. Access-token freshness is decided above; this is
+	// a pure signal that never alters the refresh path. Deliberately
+	// slow-path only: a fresh access token returns early without reading
+	// the stored row, and the refresh grant is only exercised once the
+	// access token goes stale anyway.
+	if stored.RefreshTokenExpiresAt != nil {
+		if remaining := stored.RefreshTokenExpiresAt.Sub(v.clock()); remaining <= refreshGrantExpiryWarningWindow {
+			if v.logger != nil {
+				v.logger.Warn("oauth refresh grant is nearing provider expiry",
+					"platform_account_id", platformAccountID,
+					"oauth_connection_id", oauthConnectionID,
+					"refresh_token_expires_in_hours", int64(remaining.Hours()),
+				)
+			}
+		}
 	}
 
 	// We own the refresh. Read the stored row is already in `stored`

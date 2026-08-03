@@ -15,6 +15,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -58,12 +59,12 @@ func (r *Router) auditAccountEvent(ctx context.Context, eventType string, identi
 // transition is needed (Taglio 1.4 contract is implicit failure via
 // worker, not synchronous transition via handler).
 //
-// Best-effort remote revoke at the provider is NOT attempted here:
-// no Revoker capability interface exists today. A future Taglio 1.4
-// follow-up adds internal/services/provider.go's Revoker interface
-// plus a concrete implementation per provider that supports it
-// (Meta has /me/permissions; Twitter has POST oauth2/invalidate_token;
-// Google has https://oauth2.googleapis.com/revoke).
+// Best-effort remote revoke at the provider: for YouTube the Router's
+// youtubeRevoker (discovered from the concrete provider at wiring time)
+// revokes the decoded refresh token on Google's
+// https://oauth2.googleapis.com/revoke endpoint BEFORE the local
+// vault.Revoke deletes the token material. Remote-revoke failure is
+// non-fatal — the local disconnect still completes.
 func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
 	id, ok := parsePathIDAsInt64(w, req, "id")
 	if !ok {
@@ -72,6 +73,21 @@ func (r *Router) handleDeleteAccount(w http.ResponseWriter, req *http.Request) {
 	account, identity, ok := r.loadOwnAccountByID(w, req, id)
 	if !ok {
 		return
+	}
+	// Best-effort remote revocation at the provider BEFORE the local
+	// vault.Revoke (which deletes the token material needed to revoke).
+	// Google's oauth2.googleapis.com/revoke accepts the refresh token;
+	// the YouTubeRevoker contract requires exactly that decoded value.
+	// A remote-revoke failure must not block the disconnect.
+	if account.Platform == models.PlatformYouTube && r.youtubeRevoker != nil {
+		if reader, ok := r.vault.(RefreshTokenReader); ok {
+			if refreshToken, rerr := reader.GetRefreshToken(req.Context(), account.ID); rerr == nil && refreshToken != "" {
+				if revErr := r.youtubeRevoker.Revoke(req.Context(), refreshToken); revErr != nil {
+					slog.WarnContext(req.Context(), "best-effort remote YouTube token revoke failed (continuing with local disconnect)",
+						"platform_account_id", account.ID, "error", revErr)
+				}
+			}
+		}
 	}
 	if err := r.vault.Revoke(req.Context(), account.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "vault revoke failed: "+err.Error())

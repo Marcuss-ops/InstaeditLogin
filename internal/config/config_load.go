@@ -105,6 +105,11 @@ func Load() (*Config, error) {
 			SessionCleanupIntervalSeconds:  getEnvInt("SESSION_CLEANUP_INTERVAL_SECONDS", 300),
 			AssetCleanupIntervalSeconds:    getEnvInt("ASSET_CLEANUP_INTERVAL_SECONDS", 86400),
 			UploadWorkerIntervalSeconds:    getEnvInt("UPLOAD_WORKER_INTERVAL_SECONDS", 30),
+			// Token refresh sweep — daily cadence + 4-month inactivity
+			// horizon (2 months of margin under Google's ~6-month
+			// refresh-token inactivity GC).
+			TokenRefreshSweepIntervalSeconds: getEnvInt("TOKEN_REFRESH_SWEEP_INTERVAL_SECONDS", 86400),
+			TokenRefreshSweepHorizonDays:     getEnvInt("TOKEN_REFRESH_SWEEP_HORIZON_DAYS", 120),
 			// P1 step 2 — worker pool config (see struct comment above).
 			UploadIngestConcurrency:        getEnvInt("UPLOAD_INGEST_CONCURRENCY", 3),
 			YouTubeUploadConcurrency:       getEnvInt("YOUTUBE_UPLOAD_CONCURRENCY", 4),

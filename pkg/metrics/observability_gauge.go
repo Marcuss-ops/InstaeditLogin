@@ -21,3 +21,12 @@ func SetDatabasePoolUsage(state string, count int) {
 	}
 	databasePoolUsage.WithLabelValues(state).Set(float64(count))
 }
+
+// SetRefreshTokensNearExpiry writes the refresh_tokens_near_expiry
+// gauge. Called by the periodic collector once per tick inside the
+// single-flighted tx. Zero is a valid value (no grants at risk) and
+// MUST be written every tick so the series always emits — the
+// same pre-set-0 rationale as the other periodic gauges.
+func SetRefreshTokensNearExpiry(count int) {
+	refreshTokensNearExpiry.Set(float64(count))
+}

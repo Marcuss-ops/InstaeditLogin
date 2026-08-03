@@ -167,6 +167,25 @@ func (b *bff) createCanonicalJob(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation: "+err.Error())
 		return
 	}
+	definition, err := b.deps.JobRegistry.Resolve(body.JobType)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation: unknown job_type")
+		return
+	}
+	if err := definition.Validator.Validate(body.Spec); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation: spec: "+err.Error())
+		return
+	}
+	compiled, err := definition.Compiler.Compile(body.Spec)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation: compile spec: "+err.Error())
+		return
+	}
+	if _, err := definition.CostEstimator.Estimate(compiled.Spec, body.Output); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation: estimate spec: "+err.Error())
+		return
+	}
+	body.Spec = compiled.Spec
 	job, err := b.deps.Client.CreateJob(req.Context(), wsID, userID, body.AsCreateJobRequest())
 	if err != nil {
 		slog.Error("velox bff: canonical job create failed",

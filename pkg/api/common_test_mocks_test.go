@@ -107,10 +107,11 @@ func (m *mockProvider) Publish(ctx context.Context, accessToken, platformUserID 
 // a services.OAuthProvider interface — the vault no longer knows
 // about per-platform types.
 type mockCredentialVault struct {
-	saveFn   func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error
-	getFn    func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error)
-	renewFn  func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error)
-	revokeFn func(ctx context.Context, platformAccountID int64) error
+	saveFn            func(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error
+	getFn             func(ctx context.Context, platformAccountID int64, tokenType string) (*models.OAuthToken, error)
+	renewFn           func(ctx context.Context, accountID int64, tokenType string, refresh credentials.TokenRefresher) (*models.OAuthToken, error)
+	revokeFn          func(ctx context.Context, platformAccountID int64) error
+	getRefreshTokenFn func(ctx context.Context, platformAccountID int64) (string, error)
 }
 
 func (m *mockCredentialVault) Save(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
@@ -144,6 +145,28 @@ func (m *mockCredentialVault) Revoke(ctx context.Context, platformAccountID int6
 }
 func (m *mockCredentialVault) Rotate(ctx context.Context, platformAccountID int64, tokenData *models.TokenData) error {
 	return m.Save(ctx, platformAccountID, tokenData)
+}
+
+// GetRefreshToken implements the optional RefreshTokenReader capability
+// the account-disconnect flow uses to revoke a YouTube grant remotely.
+func (m *mockCredentialVault) GetRefreshToken(ctx context.Context, platformAccountID int64) (string, error) {
+	if m.getRefreshTokenFn != nil {
+		return m.getRefreshTokenFn(ctx, platformAccountID)
+	}
+	return "", fmt.Errorf("GetRefreshToken not implemented in this test mock (override via mockCredentialVault.getRefreshTokenFn)")
+}
+
+// fakeYouTubeRevoker implements the narrow YouTubeRevoker capability used
+// by the account-disconnect flow tests.
+type fakeYouTubeRevoker struct {
+	revokeFn func(ctx context.Context, token string) error
+}
+
+func (f *fakeYouTubeRevoker) Revoke(ctx context.Context, token string) error {
+	if f.revokeFn != nil {
+		return f.revokeFn(ctx, token)
+	}
+	return nil
 }
 
 // fakeChannelAuthorizer (Task 1/10 test seam) is the no-op

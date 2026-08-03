@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/auth"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 )
@@ -286,6 +287,12 @@ func (r *Router) flagReauthAndRespond(w http.ResponseWriter, ctx context.Context
 func isInvalidGrantError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// Typed sentinel first (the YouTube service wraps
+	// credentials.ErrInvalidGrant when Google's body says invalid_grant);
+	// the string fallback keeps older refreshers compatible.
+	if errors.Is(err, credentials.ErrInvalidGrant) {
+		return true
 	}
 	return strings.Contains(err.Error(), "invalid_grant")
 }

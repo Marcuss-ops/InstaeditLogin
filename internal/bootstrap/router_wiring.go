@@ -13,6 +13,7 @@ import (
 	"github.com/Marcuss-ops/InstaeditLogin/internal/repository"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/services"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxclient"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxjobs"
 	"github.com/Marcuss-ops/InstaeditLogin/pkg/api"
 	"github.com/getsentry/sentry-go"
 )
@@ -97,6 +98,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		// (nil-guard pattern matching the other feature flags). The auth
 		// + CSRF middlewares mirror the destinations route wiring so the
 		// /api/v1/velox/* chain is: auth → CSRF → handler.
+		api.WithVeloxJobRegistry(veloxjobs.NewDefaultRegistry()),
 		func() api.RouterOption {
 			vc := veloxclient.New(s.cfg.Velox.VeloxControlURL, s.cfg.Velox.VeloxControlJWTSecret)
 			if vc == nil {

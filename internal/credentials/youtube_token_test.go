@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -89,6 +90,29 @@ func TestRenewYouTubeToken_LegacyFallbackIsTemporaryAndRedacted(t *testing.T) {
 		if strings.Contains(logs.String(), forbidden) {
 			t.Errorf("log contains forbidden credential material %q: %s", forbidden, logs.String())
 		}
+	}
+}
+
+// TestRenewYouTubeToken_InvalidGrantSentinelIsClassified pins the P1
+// chain end-to-end at the vault layer: a refresher error wrapping the
+// typed ErrInvalidGrant sentinel must map to ErrYouTubeInvalidGrant
+// (the signal the publish worker switches on), with NO fallback to the
+// legacy long_lived row.
+func TestRenewYouTubeToken_InvalidGrantSentinelIsClassified(t *testing.T) {
+	var types []string
+	vault := &youtubeTokenVaultStub{
+		renewFn: func(_ context.Context, _ int64, tokenType string, _ TokenRefresher) (*models.OAuthToken, error) {
+			types = append(types, tokenType)
+			return nil, fmt.Errorf("wrapped: %w", ErrInvalidGrant)
+		},
+	}
+
+	_, err := RenewYouTubeToken(context.Background(), vault, 42, nil, nil)
+	if !errors.Is(err, ErrYouTubeInvalidGrant) {
+		t.Fatalf("error: want ErrYouTubeInvalidGrant via sentinel, got %v", err)
+	}
+	if len(types) != 1 || types[0] != models.TokenTypeBearer {
+		t.Fatalf("renew types: want only [%q] (no legacy fallback on invalid_grant), got %v", models.TokenTypeBearer, types)
 	}
 }
 

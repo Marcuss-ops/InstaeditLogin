@@ -277,6 +277,21 @@ type WorkerConfig struct {
 	YouTubeGroupVideosCacheTTLSeconds int
 	// YouTubeGroupVideosDefaultPageSize is the default response page size.
 	YouTubeGroupVideosDefaultPageSize int
+	// TokenRefreshSweepIntervalSeconds is the cadence of the token
+	// refresh sweep worker — renews dormant OAuth grants (last
+	// refresh older than TokenRefreshSweepHorizonDays, or provider
+	// TTL within 7 days) so Google's ~6-month refresh-token
+	// inactivity garbage collection never kills a rarely-publishing
+	// channel. Default 86400 (24h): the risk horizon is ~6 months,
+	// so even a weekly cadence would keep every grant inside the
+	// activity window. Env TOKEN_REFRESH_SWEEP_INTERVAL_SECONDS.
+	TokenRefreshSweepIntervalSeconds int
+	// TokenRefreshSweepHorizonDays is the inactivity lookahead: a
+	// grant whose last_refresh_at (or created_at when never
+	// refreshed) is older than this is renewed. Default 120 (~4
+	// months — 2 months of margin under Google's 6-month GC). Env
+	// TOKEN_REFRESH_SWEEP_HORIZON_DAYS.
+	TokenRefreshSweepHorizonDays int
 	// PublishHorizonDays (Blocco #2 P0) caps how far in the future a
 	// user/operator can schedule a publish. Used by:
 	//   - uploads_handlers.go::handleRescheduleUpload (drag-drop reject

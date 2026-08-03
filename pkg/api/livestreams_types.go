@@ -92,6 +92,28 @@ type listLivestreamsResponse struct {
 	Items []livestreamResponse `json:"items"`
 }
 
+// livestreamChannelResponse is the per-channel preflight row for the
+// creation wizard (GET /api/v1/livestreams/channels). OAuthReady and
+// LiveEnabled are derived from the persisted grant: LiveEnabled means
+// the grant carries a YouTube live scope (youtube or youtube.force-ssl),
+// which is the necessary condition for the Live Streaming API — the
+// authoritative liveStreamingNotEnabled check still happens on
+// broadcast creation. LastVerifiedAt is the account's last_validated_at.
+type livestreamChannelResponse struct {
+	PlatformAccountID int64        `json:"platform_account_id"`
+	Username          string       `json:"username"`
+	PlatformUserID    string       `json:"platform_user_id"`
+	AccountState      AccountState `json:"account_state"`
+	OAuthReady        bool         `json:"oauth_ready"`
+	LiveEnabled       bool         `json:"live_enabled"`
+	LastVerifiedAt    *time.Time   `json:"last_verified_at,omitempty"`
+	ActiveLives       int          `json:"active_lives"`
+}
+
+type listLivestreamChannelsResponse struct {
+	Channels []livestreamChannelResponse `json:"channels"`
+}
+
 func toLivestreamResponse(ls *models.Livestream) livestreamResponse {
 	if ls == nil {
 		return livestreamResponse{}

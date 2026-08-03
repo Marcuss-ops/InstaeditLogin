@@ -154,6 +154,24 @@ const (
 	TokenTypeBearer     = "bearer"
 )
 
+// DormantRefreshGrant is one row of the periodic token-refresh
+// sweep selection: an OAuth grant whose provider-issued refresh
+// token is at risk of garbage-collection (Google's 6-month
+// inactivity policy) or already within its expiry window.
+//
+// PlatformAccountID is the account the sweep renews (vault.Renew
+// resolves the grant from it); Provider is the platform key the
+// sweep uses to pick the right provider refresher (youtube /
+// google-drive). Multiple PlatformAccountIDs may share one
+// OAuthConnectionID (a YouTube grant spanning channels) — the
+// sweep renews per account, and the vault's per-grant advisory
+// lock keeps concurrent renewals of the same grant serialised.
+type DormantRefreshGrant struct {
+	OAuthConnectionID int64
+	PlatformAccountID int64
+	Provider          string
+}
+
 // OAuthToken represents a decrypted token ready for API use.
 type OAuthToken struct {
 	// AccessToken is decrypted runtime material and must never cross an

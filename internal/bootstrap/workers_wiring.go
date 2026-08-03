@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/outbox"
 	"github.com/Marcuss-ops/InstaeditLogin/internal/outbox/processors"
@@ -397,6 +398,42 @@ func (a *App) registerDriveBatchCrawler() {
 	})
 }
 
+// registerTokenRefreshSweepWorker wires goroutine 11: the token
+// refresh sweep — renews dormant OAuth grants before Google
+// garbage-collects them (~6-month inactivity policy). NON-critical:
+// a transient failure here must not take the process down (maintenance
+// task, same classification as asset_cleanup). Refreshers are wired
+// only for the Google providers present in the CapabilityRouter; a
+// deployment without YouTube/Drive simply runs an idle sweep.
+func (a *App) registerTokenRefreshSweepWorker() {
+	a.WorkerRegistry.Register(worker.WorkerSpec{
+		Name:     "token_refresh_sweep",
+		Critical: false,
+		Run: func(ctx context.Context) error {
+			refreshers := map[string]credentials.TokenRefresher{}
+			if ytp, ok := a.CapRouter.Get(models.PlatformYouTube); ok {
+				if ytSvc, typeOK := ytp.(*services.YouTubeOAuthService); typeOK {
+					refreshers[models.PlatformYouTube] = ytSvc.RefreshOAuthToken
+				}
+			}
+			if gdp, ok := a.CapRouter.Get(models.PlatformGoogleDrive); ok {
+				if gdSvc, typeOK := gdp.(*services.GoogleDriveOAuthService); typeOK {
+					refreshers[models.PlatformGoogleDrive] = gdSvc.RefreshOAuthToken
+				}
+			}
+			sw := worker.NewTokenRefreshSweepWorker(
+				repository.NewRefreshSweepRepository(a.DB),
+				a.Vault,
+				refreshers,
+				time.Duration(a.Cfg.Worker.TokenRefreshSweepIntervalSeconds)*time.Second,
+				a.Cfg.Worker.TokenRefreshSweepHorizonDays,
+				slog.Default(),
+			)
+			return sw.Run(ctx)
+		},
+	})
+}
+
 // registerYouTubeProcessingReconciler wires goroutine 10: the YouTube
 // processing reconciler — polls youtube_target_publications rows in
 // 'processed' state that haven't been linked to an editor session
@@ -425,13 +462,14 @@ func (a *App) registerYouTubeProcessingReconciler() {
 	})
 }
 
-// RunWorkers starts the 10 background goroutines (publish, reconcile,
+// RunWorkers starts the 11 background goroutines (publish, reconcile,
 // outbox, webhook, metrics, sessions_cleanup, asset_cleanup,
 // velox_downloader, upload, drive_batch_crawler,
-// youtube_processing_reconciler) under the shared WorkerRegistry. The
-// registry handles startup, heartbeat tracking, supervision, logging,
-// and shutdown. A critical worker that exits with a non-context error
-// aborts the whole process by returning the error from RunWorkers.
+// youtube_processing_reconciler, token_refresh_sweep) under the
+// shared WorkerRegistry. The registry handles startup, heartbeat
+// tracking, supervision, logging, and shutdown. A critical worker
+// that exits with a non-context error aborts the whole process by
+// returning the error from RunWorkers.
 //
 // The per-worker construction closures live in the register* methods
 // above (one per goroutine, in registration order) so this function
@@ -460,12 +498,13 @@ func (a *App) RunWorkers(ctx context.Context) error {
 		a.registerUploadWorker,                // 8. upload
 		a.registerDriveBatchCrawler,           // 9. drive_batch_crawler
 		a.registerYouTubeProcessingReconciler, // 10. youtube_processing_reconciler
+		a.registerTokenRefreshSweepWorker,     // 11. token_refresh_sweep (non-critical)
 	}
 	for _, register := range registrations {
 		register()
 	}
 
-	slog.Info("10 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler")
+	slog.Info("11 background workers registered: publish / reconcile / outbox / webhook / metrics / sessions_cleanup / velox_downloader / upload / drive_batch_crawler / youtube_processing_reconciler / token_refresh_sweep")
 
 	criticalErrCh := a.WorkerRegistry.StartAll(ctx)
 

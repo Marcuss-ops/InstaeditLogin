@@ -1,14 +1,19 @@
 package credentials
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
+	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/models"
 )
 
 func TestVault_Renew_FastPath_FreshToken_NoLockAcquisition(t *testing.T) {
@@ -280,6 +285,107 @@ func TestVault_Renew_NonLongLivedToken_NoRefreshToken_Errors(t *testing.T) {
 	}
 	if store.saveCalls.Load() != 0 {
 		t.Errorf("SaveToken must NOT be called when refresh material is unavailable; got %d", store.saveCalls.Load())
+	}
+}
+
+// TestClassifyRefreshFailure_InvalidGrantSentinelAndFallback pins the P1
+// classification: the typed ErrInvalidGrant sentinel AND the legacy
+// "invalid_grant" string both map to reauth_required; everything else
+// stays a generic refresh failure.
+func TestClassifyRefreshFailure_InvalidGrantSentinelAndFallback(t *testing.T) {
+	status, code := classifyRefreshFailure(fmt.Errorf("wrapped: %w", ErrInvalidGrant))
+	if status != models.AccountStatusReauthRequired || code != "invalid_grant" {
+		t.Errorf("sentinel: want (reauth_required, invalid_grant), got (%q, %q)", status, code)
+	}
+	status, code = classifyRefreshFailure(errors.New("oauth2.googleapis.com: invalid_grant (Token has been expired or revoked.)"))
+	if status != models.AccountStatusReauthRequired || code != "invalid_grant" {
+		t.Errorf("string fallback: want (reauth_required, invalid_grant), got (%q, %q)", status, code)
+	}
+	status, code = classifyRefreshFailure(errors.New("upstream 500"))
+	if status != "error" || code != "refresh_failed" {
+		t.Errorf("generic: want (error, refresh_failed), got (%q, %q)", status, code)
+	}
+}
+
+// TestVault_Renew_NearRefreshExpiry_Warns pins the P3 signal: when the
+// stored refresh grant is within the 7-day warning window, Renew emits a
+// warning that names the account (never the token material).
+func TestVault_Renew_NearRefreshExpiry_Warns(t *testing.T) {
+	v, mock, store := newTestVault(t)
+	const accountID int64 = 8
+
+	var logs bytes.Buffer
+	v.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	tok := newEncryptedToken(t, v, accountID, -1*time.Minute, "old-refresh")
+	near := time.Now().Add(3 * 24 * time.Hour)
+	tok.RefreshTokenExpiresAt = &near
+	store.seedToken(tok)
+	expectOauthConnLookup(mock, accountID, accountID)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`).
+		WithArgs(accountID).
+		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(accountID))
+	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
+		WithArgs(accountID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+	expectOauthConnLookup(mock, accountID, accountID)
+
+	_, err := v.Renew(context.Background(), accountID, models.TokenTypeBearer, func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+		return &models.TokenData{AccessToken: "fresh", TokenType: "bearer", ExpiresIn: 3600}, nil
+	})
+	if err != nil {
+		t.Fatalf("Renew: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("sqlmock expectations: %v", err)
+	}
+	if !strings.Contains(logs.String(), "refresh grant is nearing") {
+		t.Errorf("expected near-expiry warning in logs; got %q", logs.String())
+	}
+	if strings.Contains(logs.String(), "old-refresh") {
+		t.Errorf("warning must not contain token material; got %q", logs.String())
+	}
+}
+
+// TestVault_Renew_DistantRefreshExpiry_NoWarning pins the P3 lookahead
+// boundary: a refresh grant with >7 days remaining must NOT warn.
+func TestVault_Renew_DistantRefreshExpiry_NoWarning(t *testing.T) {
+	v, mock, store := newTestVault(t)
+	const accountID int64 = 9
+
+	var logs bytes.Buffer
+	v.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	tok := newEncryptedToken(t, v, accountID, -1*time.Minute, "old-refresh")
+	far := time.Now().Add(30 * 24 * time.Hour)
+	tok.RefreshTokenExpiresAt = &far
+	store.seedToken(tok)
+	expectOauthConnLookup(mock, accountID, accountID)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT oauth_connection_id FROM platform_accounts WHERE id = $1 AND oauth_connection_id IS NOT NULL FOR UPDATE`).
+		WithArgs(accountID).
+		WillReturnRows(sqlmock.NewRows([]string{"oauth_connection_id"}).AddRow(accountID))
+	mock.ExpectExec("SELECT pg_advisory_xact_lock($1)").
+		WithArgs(accountID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+	expectOauthConnLookup(mock, accountID, accountID)
+
+	_, err := v.Renew(context.Background(), accountID, models.TokenTypeBearer, func(ctx context.Context, refreshToken string) (*models.TokenData, error) {
+		return &models.TokenData{AccessToken: "fresh", TokenType: "bearer", ExpiresIn: 3600}, nil
+	})
+	if err != nil {
+		t.Fatalf("Renew: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("sqlmock expectations: %v", err)
+	}
+	if strings.Contains(logs.String(), "refresh grant is nearing") {
+		t.Errorf("distant refresh expiry must NOT warn; got %q", logs.String())
 	}
 }
 

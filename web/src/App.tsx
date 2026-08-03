@@ -75,6 +75,11 @@ const LiveStreamsPage = lazy(() =>
     default: m.LiveStreamsPage,
   })),
 );
+const LiveStreamNewPage = lazy(() =>
+  import("./pages/internal/LiveStreamNew").then((m) => ({
+    default: m.LiveStreamNewPage,
+  })),
+);
 
 function RouteLoadingFallback() {
   return (
@@ -228,6 +233,14 @@ function App() {
                 element={
                   <LazyRoute>
                     <LiveStreamsPage />
+                  </LazyRoute>
+                }
+              />
+              <Route
+                path="livestreams/new"
+                element={
+                  <LazyRoute>
+                    <LiveStreamNewPage />
                   </LazyRoute>
                 }
               />

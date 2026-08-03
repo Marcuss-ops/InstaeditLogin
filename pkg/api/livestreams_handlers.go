@@ -102,6 +102,125 @@ func parseOptionalRFC3339(s *string) (*time.Time, error) {
 	return &t, nil
 }
 
+// livestreamLiveScopes are the OAuth scopes that unlock the YouTube
+// Live Streaming API. New grants always include youtube.force-ssl;
+// grants issued before the scope cleanup may only carry youtube. Both
+// the full Google URLs and the bare scope names are accepted.
+var livestreamLiveScopes = []string{
+	"https://www.googleapis.com/auth/youtube",
+	"https://www.googleapis.com/auth/youtube.force-ssl",
+	"youtube",
+	"youtube.force-ssl",
+}
+
+// livestreamHasLiveScope reports whether the grant token carries a
+// YouTube live scope. A nil token is never live-enabled.
+func livestreamHasLiveScope(token *models.OAuthToken) bool {
+	if token == nil {
+		return false
+	}
+	for _, granted := range token.Scopes {
+		s := strings.TrimSpace(granted)
+		for _, wanted := range livestreamLiveScopes {
+			if s == wanted {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// livestreamTokenForAccount returns the account's bearer grant token,
+// falling back to the legacy token types. Errors signal a missing or
+// expired credential (an active account whose access token expired
+// needs a reconnect).
+func (r *Router) livestreamTokenForAccount(ctx context.Context, accountID int64) (*models.OAuthToken, error) {
+	if r.vault == nil {
+		return nil, errors.New("vault not configured")
+	}
+	for _, tokenType := range []string{models.TokenTypeBearer, models.TokenTypeLongLived, models.TokenTypeShortLived} {
+		token, err := r.vault.Get(ctx, accountID, tokenType)
+		if err == nil && token != nil {
+			return token, nil
+		}
+	}
+	return nil, errors.New("no valid token found for this account")
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/livestreams/channels — creation-wizard preflight
+// ---------------------------------------------------------------------------
+
+// handleListLivestreamChannels returns the workspace's YouTube channels
+// with the preflight data the creation wizard needs: OAuth grant state,
+// live scope presence, last validation and how many live streams are
+// currently running on each channel. Channels without the live scope
+// are still listed (the UI explains why they are blocked); the create
+// endpoint enforces the same scope guard server-side.
+func (r *Router) handleListLivestreamChannels(w http.ResponseWriter, req *http.Request) {
+	identity := auth.IdentityFromContext(req.Context())
+	if identity == nil || identity.UserID() <= 0 {
+		writeError(w, http.StatusUnauthorized, "missing user identity")
+		return
+	}
+	if r.livestreamStore == nil || r.workspaceStore == nil || r.userRepo == nil || r.vault == nil {
+		writeError(w, http.StatusServiceUnavailable, "livestream store not configured")
+		return
+	}
+	workspaceID, err := strconv.ParseInt(req.URL.Query().Get("workspace_id"), 10, 64)
+	if err != nil || workspaceID <= 0 {
+		writeError(w, http.StatusBadRequest, "workspace_id query parameter is required")
+		return
+	}
+	if !r.workspaceOwnedBy(identity, workspaceID) {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	// One vault.Get per channel (a decrypt each) is acceptable for the
+	// bounded workspace channel set; revisit only if channel counts
+	// grow into the hundreds.
+	channels, err := r.workspaceStore.ListChannels(req.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list workspace channels: "+err.Error())
+		return
+	}
+
+	// Active-live counts per account from the same rows the sidebar
+	// badge consumes (actual_state == "live").
+	liveCounts := map[int64]int{}
+	if streams, listErr := r.livestreamStore.ListByWorkspace(req.Context(), workspaceID); listErr == nil {
+		for i := range streams {
+			if streams[i].ActualState == models.LivestreamStateLive {
+				liveCounts[streams[i].PlatformAccountID]++
+			}
+		}
+	}
+
+	resp := listLivestreamChannelsResponse{Channels: make([]livestreamChannelResponse, 0, len(channels))}
+	for _, ch := range channels {
+		account, accountErr := r.userRepo.FindPlatformAccountByID(ch.PlatformAccountID)
+		if accountErr != nil || account == nil || account.Platform != models.PlatformYouTube {
+			continue
+		}
+		state, _ := classifyAccountStatus(account.Status)
+		item := livestreamChannelResponse{
+			PlatformAccountID: account.ID,
+			Username:          account.Username,
+			PlatformUserID:    account.PlatformUserID,
+			AccountState:      state,
+			LastVerifiedAt:    account.LastValidatedAt,
+			ActiveLives:       liveCounts[account.ID],
+		}
+		if token, tokenErr := r.livestreamTokenForAccount(req.Context(), account.ID); tokenErr == nil {
+			item.OAuthReady = true
+			item.LiveEnabled = livestreamHasLiveScope(token)
+		}
+		resp.Channels = append(resp.Channels, item)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/v1/livestreams
 // ---------------------------------------------------------------------------
@@ -182,6 +301,22 @@ func (r *Router) handleCreateLivestream(w http.ResponseWriter, req *http.Request
 	if account.Status != models.AccountStatusActive {
 		writeError(w, http.StatusBadRequest, "the channel is not active; reconnect it before creating a live")
 		return
+	}
+	// Live-scope guard: a grant without a YouTube live scope cannot
+	// create broadcasts. Missing/expired grants are surfaced as a
+	// reconnect requirement (defence in depth on top of the status
+	// check above — an active row can still carry an expired access
+	// token or a grant stripped of the live scope).
+	if r.vault != nil {
+		token, tokenErr := r.livestreamTokenForAccount(req.Context(), account.ID)
+		if tokenErr != nil {
+			writeError(w, http.StatusBadRequest, "the channel OAuth grant is unavailable; reconnect the channel before creating a live")
+			return
+		}
+		if !livestreamHasLiveScope(token) {
+			writeError(w, http.StatusBadRequest, "the channel grant does not include YouTube live streaming; reconnect the channel with live permissions")
+			return
+		}
 	}
 
 	title, err := normalizeLivestreamTitle(payload.Title)

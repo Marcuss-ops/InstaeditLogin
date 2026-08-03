@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
@@ -10,7 +11,6 @@ import {
 } from "lucide-react";
 import { EmptyState } from "../../components/feedback/EmptyState";
 import { ErrorState, Skeleton } from "../../components/feedback";
-import { toastBus } from "../../components/toast/toast-bus";
 import { cn } from "../../lib/utils";
 import { useLivestreams } from "./useLivestreams";
 import { LiveStreamCard } from "./LiveStreamCard";
@@ -40,10 +40,6 @@ export function LiveStreamsPage() {
   const summary = summarize(items);
   const visible = items.filter((row) => matchesTab(row, tab));
 
-  const createLive = () => {
-    toastBus.push("info", "Il wizard di creazione live arriva con il prossimo step.");
-  };
-
   return (
     <div className="min-h-full bg-[#030308] p-8 text-[#e8e8ef]">
       <div className="mx-auto max-w-6xl">
@@ -57,15 +53,14 @@ export function LiveStreamsPage() {
               Gestisci live attive, programmate e trasmissioni 24/7.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={createLive}
+          <Link
+            to="/app/livestreams/new"
             data-testid="livestreams-create-cta"
-            className="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-4 py-2.5 text-[13px] font-bold text-white shadow-[0_4px_20px_rgba(139,92,246,0.35)] transition-colors hover:bg-violet-400"
+            className="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-4 py-2.5 text-[13px] font-bold text-white no-underline shadow-[0_4px_20px_rgba(139,92,246,0.35)] transition-colors hover:bg-violet-400"
           >
             <Plus size={16} aria-hidden="true" />
             Crea nuova live
-          </button>
+          </Link>
         </header>
 
         {/* Summary cards */}
@@ -152,15 +147,14 @@ export function LiveStreamsPage() {
             title="Nessuna live configurata"
             description="Trasmetti un video o una playlist preregistrata direttamente dal tuo server."
             cta={
-              <button
-                type="button"
-                onClick={createLive}
+              <Link
+                to="/app/livestreams/new"
                 data-testid="livestreams-empty-cta"
-                className="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-4 py-2 text-[13px] font-bold text-white transition-colors hover:bg-violet-400"
+                className="inline-flex items-center gap-2 rounded-xl bg-violet-500 px-4 py-2 text-[13px] font-bold text-white no-underline transition-colors hover:bg-violet-400"
               >
                 <Plus size={16} aria-hidden="true" />
                 Crea la prima live
-              </button>
+              </Link>
             }
             className="bg-[#1f1f2e] border-white/[0.12]"
           />

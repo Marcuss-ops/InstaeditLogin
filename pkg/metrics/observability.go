@@ -162,6 +162,34 @@ var (
 		[]string{"state"},
 	)
 
+	// refreshTokensNearExpiry counts OAuth refresh grants whose
+	// provider-issued expiry (tokens.refresh_token_expires_at) falls
+	// within the 7-day lookahead window OR is already in the past
+	// (already-expired grants still need a reconnect — they're the
+	// most urgent cohort). Same horizon as the vault.Renew warning
+	// (internal/credentials/vault_refresh.go) and the admin health
+	// "Token rotation" view, so the metric, the log line, and the
+	// dashboard always agree on one number.
+	//
+	// The metric is a plain Gauge with NO provider label: the value
+	// is a fleet-wide count, matching the other periodic gauges
+	// (queue_depth, targets_by_status) where the global sum is the
+	// SLO signal. Per-provider splits belong to the admin health
+	// view (ConnectionsPerSubject), not this gauge.
+	//
+	// INTENTIONAL: the count includes grants whose expiry is ALREADY
+	// in the past, not just "near" it — a grant past its provider
+	// TTL is the most urgent reconnect cohort. An alert on this
+	// gauge firing for already-expired grants is correct behaviour,
+	// not a bug; do not add an `AND refresh_token_expires_at >= NOW()`
+	// filter without revisiting the reconnection workflow.
+	refreshTokensNearExpiry = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "refresh_tokens_near_expiry",
+			Help: "OAuth refresh grants whose refresh_token_expires_at is within the 7-day warning window or already past it. Sampled every 10s by the metrics collector goroutine; each unit is a grant that needs reconnecting before the provider garbage-collects the refresh token.",
+		},
+	)
+
 	// ------------------------------------------------------------------
 	// Per-event counters — incremented inline by callers.
 	// ------------------------------------------------------------------
@@ -418,6 +446,7 @@ func init() {
 		publishTargetsByStatus,
 		deadLetterCount,
 		databasePoolUsage,
+		refreshTokensNearExpiry,
 		publishAttempts,
 		providerLatency,
 		providerRateLimits,

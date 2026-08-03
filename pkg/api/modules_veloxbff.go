@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxjobs"
 	veloxapi "github.com/Marcuss-ops/InstaeditLogin/pkg/api/velox"
 )
 
@@ -12,6 +13,7 @@ import (
 // BFF module needs to mount its routes.
 type VeloxBFFModuleDeps struct {
 	Client         veloxapi.Client
+	JobRegistry    *veloxjobs.Registry
 	AuthMiddleware func(http.Handler) http.Handler
 	CSRFMiddleware func(http.Handler) http.Handler
 }
@@ -37,6 +39,7 @@ func (m *VeloxBFFModule) Register(mux chi.Router) {
 	}
 	veloxapi.Register(mux, veloxapi.Deps{
 		Client:         m.deps.Client,
+		JobRegistry:    m.deps.JobRegistry,
 		AuthMiddleware: m.deps.AuthMiddleware,
 		CSRFMiddleware: m.deps.CSRFMiddleware,
 	})
@@ -50,6 +53,13 @@ func (m *VeloxBFFModule) Register(mux chi.Router) {
 // VELOX_CONTROL_JWT_SECRET.
 func WithVeloxBFFClient(c veloxapi.Client) RouterOption {
 	return func(r *Router) { r.veloxBFFClient = c }
+}
+
+// WithVeloxJobRegistry wires the central technical job-type registry used
+// by POST /api/v1/jobs. When omitted, the BFF module uses the default
+// built-in registry for backwards-compatible test and local wiring.
+func WithVeloxJobRegistry(registry *veloxjobs.Registry) RouterOption {
+	return func(r *Router) { r.veloxJobRegistry = registry }
 }
 
 // WithVeloxBFFAuthMiddleware wires the JWT auth middleware for the

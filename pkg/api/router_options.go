@@ -91,7 +91,16 @@ func WithApiKeyStore(s ApiKeyStore) RouterOption {
 // option. Required for the 4-step pipeline on YouTube; optional for
 // any other platform (no change in behaviour).
 func WithYouTubeService(svc YouTubeOAuthService) RouterOption {
-	return func(r *Router) { r.youTubeSvc = svc }
+	return func(r *Router) {
+		r.youTubeSvc = svc
+		// Discover the narrower YouTubeRevoker capability (used by the
+		// account disconnect flow) at wiring time. Kept separate from the
+		// broad validation interface so existing test providers remain
+		// compatible.
+		if revoker, ok := svc.(YouTubeRevoker); ok {
+			r.youtubeRevoker = revoker
+		}
+	}
 }
 
 // WithUserStore wires the user-store on the Router. The store satisfies
