@@ -5,6 +5,7 @@ import {
   type LivestreamRow,
   type LivestreamSummary,
   type LivestreamTab,
+  type MediaLibraryItem,
 } from "./livestreamsTypes";
 
 export type Tone = "success" | "warning" | "info" | "neutral" | "danger";
@@ -272,4 +273,80 @@ export function formatLastVerified(value?: string | null): string {
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days} gg fa`;
   return date.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+}
+
+/**
+ * Media Library helpers — live wizard step 3.
+ */
+
+/**
+ * Formats a probe duration (seconds) as `MM:SS` / `H:MM:SS`.
+ * Null/absent values render "—" (not probed).
+ */
+export function formatMediaDuration(seconds?: number | null): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) {
+    return "—";
+  }
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * Resolution label (`1920×1080`) from the probe. Missing half of the
+ * pair renders the present half; neither → "—".
+ */
+export function formatMediaResolution(width?: number | null, height?: number | null): string {
+  if (typeof width === "number" && typeof height === "number" && width > 0 && height > 0) {
+    return `${width}×${height}`;
+  }
+  if (typeof width === "number" && width > 0) return `${width}px`;
+  if (typeof height === "number" && height > 0) return `${height}px`;
+  return "—";
+}
+
+/**
+ * FPS label from the probe. Rounds friendly values (29.97 → 30).
+ */
+export function formatMediaFps(fps?: number | null): string {
+  if (typeof fps !== "number" || !Number.isFinite(fps) || fps <= 0) {
+    return "—";
+  }
+  if (Math.abs(fps - Math.round(fps)) < 0.01) {
+    return `${Math.round(fps)} fps`;
+  }
+  return `${fps.toFixed(2)} fps`;
+}
+
+/**
+ * Audio presence label for the media row.
+ */
+export function formatMediaAudio(hasAudio?: boolean | null): string {
+  if (hasAudio == null) return "—";
+  return hasAudio ? "Sì" : "No";
+}
+
+/**
+ * Compatibility metadata for the live wizard badge.
+ *   - ready                → "Pronto per live" (verde)
+ *   - needs_normalization  → "Da normalizzare" (ambra) — off-profile,
+ *     blocked from selection until normalised
+ *   - unknown              → "Da verificare" (neutro) — never probed
+ */
+export function compatibilityMeta(
+  compat: MediaLibraryItem["live_compatibility"],
+): { label: string; tone: Tone; hint: string } {
+  switch (compat) {
+    case "ready":
+      return { label: "Pronto per live", tone: "success", hint: "Profilo canonico 1080p30 / 720p30 con audio" };
+    case "needs_normalization":
+      return { label: "Da normalizzare", tone: "warning", hint: "Risoluzione, FPS o audio fuori profilo" };
+    default:
+      return { label: "Da verificare", tone: "neutral", hint: "Non ancora analizzato (ffprobe in coda)" };
+  }
 }

@@ -234,9 +234,46 @@ func (w *UploadWorker) processIngestJob(ctx context.Context, job *models.UploadJ
 		return fmt.Errorf("mark ingested: %w", err)
 	}
 
+	// Best-effort ffprobe pass (migration 092) — runs AFTER the job
+	// transition so a probe failure can never fail the ingest. A
+	// missing ffprobe binary or a probe error leaves the asset's
+	// probe columns NULL (the live wizard then shows compatibility
+	// as "unknown", never a hard failure).
+	w.probeReadyAsset(ctx, asset.ID, key)
+
 	w.logger.Info("upload worker: ingest done",
 		"pool", "ingest", "job_id", job.ID, "asset_id", asset.ID, "size", verifiedSize)
 	return nil
+}
+
+// probeReadyAsset is the best-effort ffprobe pass over the
+// just-ingested object. Errors are logged, never returned: the
+// ingest job has already transitioned (MarkIngested) and a probe
+// failure must not bounce the job back into the pool. The probe runs
+// against a short-lived presigned GET URL minted by the storage
+// provider (the worker never reads the private bucket directly).
+func (w *UploadWorker) probeReadyAsset(ctx context.Context, assetID, key string) {
+	if w.prober == nil {
+		return
+	}
+	url, err := w.storage.GetObject(ctx, key, 15*time.Minute)
+	if err != nil {
+		w.logger.Debug("upload worker: probe skip (mint presigned url)", "asset_id", assetID, "error", err)
+		return
+	}
+	probe, err := w.prober.Probe(ctx, url)
+	if err != nil {
+		if errors.Is(err, ErrProbeUnavailable) {
+			w.logger.Debug("upload worker: ffprobe unavailable; probe columns stay NULL", "asset_id", assetID)
+		} else {
+			w.logger.Warn("upload worker: media probe failed (best-effort)", "asset_id", assetID, "error", err)
+		}
+		return
+	}
+	probe.ProbedAt = time.Now()
+	if err := w.mediaStore.SaveProbe(assetID, probe); err != nil {
+		w.logger.Warn("upload worker: persist media probe failed (best-effort)", "asset_id", assetID, "error", err)
+	}
 }
 
 // markAssetFailed transitions the media asset to failed and, when the

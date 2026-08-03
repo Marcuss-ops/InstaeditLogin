@@ -30,6 +30,10 @@ type MediaStore interface {
 	// you have a typed `err` and want to preserve its value across
 	// the MarkFailed boundary.
 	MarkFailedWithReason(id, reason string, cause error) error
+	// ListReadyByUser returns the caller's ready, non-expired media
+	// assets newest-first (bounded by limit). Backs the Media Library
+	// endpoint (GET /api/v1/media) and the live wizard's step 3.
+	ListReadyByUser(ctx context.Context, userID int64, limit int) ([]models.MediaAsset, error)
 }
 
 // WithMediaStore injects the media-asset repository into the router.

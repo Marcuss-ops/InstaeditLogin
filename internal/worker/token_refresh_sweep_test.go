@@ -15,21 +15,24 @@ import (
 )
 
 // sweepStoreStub is a TokenRefreshSweepStore with a fixed grant list
-// (or error) and a recorder for the horizon the worker passed.
+// (or error), a single-flight outcome (won), and a recorder for the
+// horizon the worker passed. won=true by default (the harness sets
+// it), matching the production winner.
 type sweepStoreStub struct {
 	grants     []models.DormantRefreshGrant
 	err        error
+	won        bool
 	gotHorizon int
 	calls      int
 }
 
-func (s *sweepStoreStub) ListDormantRefreshGrants(_ context.Context, horizonDays int) ([]models.DormantRefreshGrant, error) {
+func (s *sweepStoreStub) ListDormantRefreshGrantsSingleFlighted(_ context.Context, horizonDays int) ([]models.DormantRefreshGrant, bool, error) {
 	s.calls++
 	s.gotHorizon = horizonDays
 	if s.err != nil {
-		return nil, s.err
+		return nil, false, s.err
 	}
-	return s.grants, nil
+	return s.grants, s.won, nil
 }
 
 // newSweepTestLogger discards log output so the test surface stays
@@ -74,7 +77,7 @@ func newSweepHarness(t *testing.T, grants []models.DormantRefreshGrant, renewOut
 	// it, and a variable's scope only begins after its own := statement.
 	var h *testSweepHarness
 	h = &testSweepHarness{
-		store: &sweepStoreStub{grants: grants},
+		store: &sweepStoreStub{grants: grants, won: true},
 		vault: &mockCredentialVault{
 			renewFn: func(_ context.Context, accountID int64, tokenType string, refresher credentials.TokenRefresher) (*models.OAuthToken, error) {
 				call := renewCall{accountID: accountID, tokenType: tokenType, refresher: refresher}
@@ -150,6 +153,35 @@ func TestTokenRefreshSweep_Tick_RenewsWiredProvidersAndSkipsOthers(t *testing.T)
 	}
 	if h.worker.interval != DefaultTokenRefreshSweepInterval {
 		t.Errorf("worker interval: want %v, got %v", DefaultTokenRefreshSweepInterval, h.worker.interval)
+	}
+	if h.store.calls != 1 {
+		t.Errorf("store.ListDormantRefreshGrantsSingleFlighted calls: want 1, got %d", h.store.calls)
+	}
+}
+
+// TestTokenRefreshSweep_Tick_AnotherReplicaHoldsLock_SkipsPass pins
+// the single-flight contract: when the store reports won=false (a
+// replica holds the pg_try_advisory_xact_lock), the sweep skips the
+// ENTIRE pass — no renewals — so N replicas never fan out N identical
+// renewal passes. The selection IS attempted (the lock probe costs
+// one query), but nothing downstream runs.
+func TestTokenRefreshSweep_Tick_AnotherReplicaHoldsLock_SkipsPass(t *testing.T) {
+	grants := []models.DormantRefreshGrant{
+		{OAuthConnectionID: 1, PlatformAccountID: 10, Provider: models.PlatformYouTube},
+		{OAuthConnectionID: 2, PlatformAccountID: 20, Provider: models.PlatformGoogleDrive},
+	}
+	h := newSweepHarness(t, grants, nil)
+	h.store.won = false
+
+	h.worker.tick(context.Background())
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.renewCalls) != 0 {
+		t.Errorf("Renew calls: want 0 when another replica owns the pass, got %d", len(h.renewCalls))
+	}
+	if h.store.calls != 1 {
+		t.Errorf("store selection calls: want 1 (the lock probe), got %d", h.store.calls)
 	}
 }
 
@@ -246,30 +278,39 @@ func TestTokenRefreshSweep_Run_CtxCancel(t *testing.T) {
 }
 
 // TestTokenRefreshSweep_LogsNeverContainTokenMaterial pins the
-// redaction contract at the sweep surface: the worker logs only ids +
-// classified errors — a renew error carrying raw provider text must
-// be replaced by the credentials package's typed classification
-// (which contains no token bytes).
+// redaction contract at the sweep surface for BOTH Google providers:
+// the worker logs only ids + classified errors. The youtube path goes
+// through RenewYouTubeToken's redacted ErrYouTubeInvalidGrant; the
+// drive path surfaces the vault's "refresh failed" wrap of the
+// Drive error (status code only, no Google body). Neither must leak
+// raw provider text or token bytes.
 func TestTokenRefreshSweep_LogsNeverContainTokenMaterial(t *testing.T) {
 	grants := []models.DormantRefreshGrant{
 		{OAuthConnectionID: 1, PlatformAccountID: 10, Provider: models.PlatformYouTube},
+		{OAuthConnectionID: 2, PlatformAccountID: 20, Provider: models.PlatformGoogleDrive},
 	}
 	var buf strings.Builder
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 	h := newSweepHarness(t, grants, func(accountID int64) error {
-		return fmt.Errorf("youtube refresh failed (status 400): %w", credentials.ErrInvalidGrant)
+		// Both providers fail with the exact production error shapes:
+		// only the RFC enum is surfaced, never the Google body.
+		if accountID == 10 {
+			return fmt.Errorf("youtube refresh failed (status 400): %w", credentials.ErrInvalidGrant)
+		}
+		return fmt.Errorf("google drive refresh failed (status 400): %w", credentials.ErrInvalidGrant)
 	})
 	h.worker.logger = logger
 
 	h.worker.tick(context.Background())
 
 	out := buf.String()
-	for _, forbidden := range []string{"invalid_grant", "supersecrettoken"} {
+	for _, forbidden := range []string{"invalid_grant", "supersecrettoken", "ya29.tokenvalue"} {
 		if strings.Contains(out, forbidden) {
 			t.Errorf("sweep log leaked raw error material %q: %s", forbidden, out)
 		}
 	}
-	if !strings.Contains(out, "renew failed") {
-		t.Errorf("expected a renew-failed WARN line, got: %s", out)
+	// Both renewals failed → two WARN lines expected.
+	if got := strings.Count(out, "renew failed"); got != 2 {
+		t.Errorf("expected 2 renew-failed WARN lines (youtube + drive), got %d: %s", got, out)
 	}
 }

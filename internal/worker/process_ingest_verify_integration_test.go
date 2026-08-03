@@ -166,6 +166,7 @@ type fakeMediaStore struct {
 	created         []*models.MediaAsset
 	markReadyCalls  []markReadyCall
 	markFailedCalls []markFailedAssetCall
+	saveProbeCalls  int
 }
 
 // markReadyCall mirrors the production MarkReady(id, sha256 string,
@@ -217,6 +218,12 @@ func (f *fakeMediaStore) MarkFailed(id, reason string) error {
 }
 func (f *fakeMediaStore) MarkFailedWithReason(id, reason string, _ error) error {
 	return f.MarkFailed(id, reason)
+}
+func (f *fakeMediaStore) SaveProbe(_ string, _ *models.MediaProbe) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.saveProbeCalls++
+	return nil
 }
 
 // fakeStorage drives SignUpload to a httptest.Server URL; the server

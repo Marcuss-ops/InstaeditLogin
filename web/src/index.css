@@ -239,6 +239,35 @@ html {
     background-size: 200% 100%;
   }
 
+  /* =====================================================================
+   * LANGUAGES CHART (Features.tsx) — SVG line draw-on + floating stat
+   * badge. pathLength={1} normalises every polyline so stroke-dasharray:
+   * 1 animates a clean left-to-right draw; reduced-motion forces the
+   * final state (lines fully visible, badge static).
+   * ================================================================== */
+  @keyframes drawLine {
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes float-y {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-5px); }
+  }
+
+  /* Base state = hidden (offset 1). `.line-draw-play` is added by an
+     IntersectionObserver when the chart scrolls into view, so the
+     draw-on actually happens in front of the user instead of firing
+     at mount below the fold. */
+  .line-draw {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+  }
+  .line-draw-play {
+    animation: drawLine 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  .animate-float-y {
+    animation: float-y 5s ease-in-out infinite;
+  }
+
   .animation-delay-100 { animation-delay: 100ms; }
   .animation-delay-200 { animation-delay: 200ms; }
   .animation-delay-300 { animation-delay: 300ms; }
@@ -289,11 +318,14 @@ html {
     .animate-drift-rev,
     .animate-pulse-glow,
     .animate-shimmer,
+    .animate-float-y,
+    .line-draw,
     .text-gradient-animated,
     .text-glow {
       animation: none !important;
       opacity: 1 !important;
       transform: none !important;
+      stroke-dashoffset: 0 !important;
     }
   }
 }

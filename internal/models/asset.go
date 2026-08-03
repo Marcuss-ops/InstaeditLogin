@@ -92,6 +92,19 @@ type MediaAsset struct {
 	ExpiresAt    time.Time        `json:"expires_at"`
 	CreatedAt    time.Time        `json:"created_at"`
 	UpdatedAt    time.Time        `json:"updated_at"`
+
+	// ffprobe-derived metadata (migration 092). Pointer fields are
+	// nil until the upload worker probes the asset; VideoCodec /
+	// AudioCodec default to '' until then. See models.MediaProbe for
+	// the probe shape + the live-compatibility predicate.
+	DurationSeconds *float64   `json:"duration_seconds,omitempty"`
+	Width           *int       `json:"width,omitempty"`
+	Height          *int       `json:"height,omitempty"`
+	FPS             *float64   `json:"fps,omitempty"`
+	HasAudio        *bool      `json:"has_audio,omitempty"`
+	VideoCodec      string     `json:"video_codec,omitempty"`
+	AudioCodec      string     `json:"audio_codec,omitempty"`
+	ProbedAt        *time.Time `json:"probed_at,omitempty"`
 }
 
 // ArtifactVerificationPolicy is the worker / API path integrity

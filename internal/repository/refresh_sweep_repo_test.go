@@ -128,3 +128,93 @@ func TestRefreshSweep_ListDormantGrants_QueryError(t *testing.T) {
 		t.Errorf("unmet expectations: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------
+// Single-flighted selection (ListDormantRefreshGrantsSingleFlighted)
+// ---------------------------------------------------------------------
+
+// TestRefreshSweep_SingleFlighted_WinsLock_SelectsAndCommits pins the
+// winner path: the tx acquires pg_try_advisory_xact_lock(RefreshSweepLockID),
+// runs the selection INSIDE the lock tx, commits, and reports won=true
+// with the selected grants.
+func TestRefreshSweep_SingleFlighted_WinsLock_SelectsAndCommits(t *testing.T) {
+	db, mock := newMockSweepDB(t)
+	repo := repository.NewRefreshSweepRepository(db)
+
+	rows := sqlmock.NewRows([]string{"oauth_connection_id", "platform_account_id", "provider"}).
+		AddRow(int64(1), int64(10), "youtube")
+	mock.ExpectBegin()
+	mock.ExpectQuery(repository.SQLRefreshSweepSingleFlightLock).
+		WithArgs(repository.RefreshSweepLockID).
+		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_xact_lock"}).AddRow(true))
+	mock.ExpectQuery(repository.SQLListDormantRefreshGrants).
+		WithArgs(120, "7 days").
+		WillReturnRows(rows)
+	mock.ExpectCommit()
+
+	grants, won, err := repo.ListDormantRefreshGrantsSingleFlighted(context.Background(), 120)
+	if err != nil {
+		t.Fatalf("ListDormantRefreshGrantsSingleFlighted: %v", err)
+	}
+	if !won {
+		t.Error("want won=true on the winning replica, got false")
+	}
+	if len(grants) != 1 || grants[0].PlatformAccountID != 10 {
+		t.Errorf("want 1 grant (account 10), got %+v", grants)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// TestRefreshSweep_SingleFlighted_LockHeldByOtherReplica_Skips pins
+// the fan-out guard: when pg_try_advisory_xact_lock returns false
+// (another replica owns the tick), the method returns won=false with
+// NO grants and NO selection query — the tx is rolled back (which
+// auto-releases the lock). This is the whole point of the
+// single-flight: losers must not run the SELECT.
+func TestRefreshSweep_SingleFlighted_LockHeldByOtherReplica_Skips(t *testing.T) {
+	db, mock := newMockSweepDB(t)
+	repo := repository.NewRefreshSweepRepository(db)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(repository.SQLRefreshSweepSingleFlightLock).
+		WithArgs(repository.RefreshSweepLockID).
+		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_xact_lock"}).AddRow(false))
+	mock.ExpectRollback()
+
+	grants, won, err := repo.ListDormantRefreshGrantsSingleFlighted(context.Background(), 120)
+	if err != nil {
+		t.Fatalf("ListDormantRefreshGrantsSingleFlighted: %v", err)
+	}
+	if won {
+		t.Error("want won=false when the lock is held by another replica, got true")
+	}
+	if len(grants) != 0 {
+		t.Errorf("want 0 grants on a lost tick (SELECT must not run), got %+v", grants)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// TestRefreshSweep_SingleFlighted_LockQueryError pins the lock-acquire
+// failure path: a DB error on pg_try_advisory_xact_lock surfaces
+// wrapped (never swallowed as a silent skip).
+func TestRefreshSweep_SingleFlighted_LockQueryError(t *testing.T) {
+	db, mock := newMockSweepDB(t)
+	repo := repository.NewRefreshSweepRepository(db)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(repository.SQLRefreshSweepSingleFlightLock).
+		WithArgs(repository.RefreshSweepLockID).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	if _, _, err := repo.ListDormantRefreshGrantsSingleFlighted(context.Background(), 120); err == nil {
+		t.Fatal("want error, got nil")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}

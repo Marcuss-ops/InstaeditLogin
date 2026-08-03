@@ -56,6 +56,11 @@ type UploadMediaStore interface {
 	// line. Replaces the historical `_ = store.MarkFailed(id, err.Error())`
 	// pattern that silently lost errors on the failure-of-the-failure.
 	MarkFailedWithReason(id, reason string, cause error) error
+	// SaveProbe persists the ffprobe-derived technical metadata
+	// (duration, resolution, FPS, audio, codecs — migration 092) for
+	// a ready asset. Best-effort by contract: the ingest probe must
+	// never fail a job, so callers ignore errors.
+	SaveProbe(id string, probe *models.MediaProbe) error
 }
 
 // UploadPostStore is the narrow post repository interface.
@@ -195,6 +200,7 @@ type UploadWorker struct {
 	deliveryVerifier ExternalDeliveryVerifier
 	ytPubStore       UploadYouTubeTargetPubStore
 	resolver         services.MediaDownloadResolver
+	prober           MediaProber
 	interval         time.Duration
 	logger           *slog.Logger
 	uploadTimeout    time.Duration
@@ -262,6 +268,15 @@ func (w *UploadWorker) SetYouTubeTargetPublishStore(store UploadYouTubeTargetPub
 // production ensures every publisher signs from the owned, ready asset.
 func (w *UploadWorker) SetMediaDownloadResolver(resolver services.MediaDownloadResolver) {
 	w.resolver = resolver
+}
+
+// SetMediaProber wires the optional ffprobe pass (migration 092).
+// When nil (or never called) the ingest path skips probing entirely:
+// the asset's probe columns stay NULL and the asset remains fully
+// usable — the live wizard simply shows compatibility as "unknown"
+// instead of "Pronto per live".
+func (w *UploadWorker) SetMediaProber(prober MediaProber) {
+	w.prober = prober
 }
 
 // YouTubeTargetPublishStore returns the wired per-target publication

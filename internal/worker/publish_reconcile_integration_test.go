@@ -51,6 +51,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -326,15 +327,32 @@ func seedTestFixtures(t *testing.T, db *sql.DB, enc *crypto.Encryptor) (workspac
 	// oauth_connection_id, so first create the connection for the seed
 	// platform account.
 	var oauthConnID int64
+	// Migration 084 replaced migration 043's UNIQUE (user_id, provider,
+	// provider_resource_id) table constraint with partial unique indexes,
+	// so the historical ON CONFLICT target no longer exists (42P10). A
+	// fresh testcontainer DB never conflicts; fall back to a lookup so the
+	// seed stays idempotent regardless.
 	if err := db.QueryRow(
 		`WITH pa AS (SELECT user_id, platform, platform_user_id FROM platform_accounts WHERE id = $1)
 		 INSERT INTO oauth_connections (user_id, provider, provider_resource_id)
 		 SELECT user_id, platform, platform_user_id FROM pa
-		 ON CONFLICT (user_id, provider, provider_resource_id) DO UPDATE SET provider = EXCLUDED.provider
+		 ON CONFLICT DO NOTHING
 		 RETURNING id`,
 		platformAccountID,
 	).Scan(&oauthConnID); err != nil {
-		t.Fatalf("seed oauth_connection: %v", err)
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("seed oauth_connection: %v", err)
+		}
+		if err := db.QueryRow(
+			`SELECT oc.id FROM oauth_connections oc
+			 JOIN platform_accounts pa
+			   ON pa.user_id = oc.user_id AND pa.platform = oc.provider
+			  AND pa.platform_user_id = oc.provider_resource_id
+			 WHERE pa.id = $1`,
+			platformAccountID,
+		).Scan(&oauthConnID); err != nil {
+			t.Fatalf("seed oauth_connection lookup: %v", err)
+		}
 	}
 	if _, err := db.Exec(
 		`UPDATE platform_accounts SET oauth_connection_id = $1 WHERE id = $2`,

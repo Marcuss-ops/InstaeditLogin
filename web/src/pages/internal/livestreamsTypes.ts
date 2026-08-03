@@ -81,6 +81,35 @@ export type LivestreamSummary = {
 };
 
 /**
+ * One row of GET /api/v1/media — the Media Library entry the live
+ * wizard's step 3 renders. Probe fields stay null until the upload
+ * worker probes the asset (ffprobe); `live_compatibility` is derived
+ * server-side so the frontend never re-implements the profile check.
+ */
+export type MediaLibraryItem = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+  /** Short-lived presigned GET URL (15 min) for `<video>` preview. */
+  preview_url?: string;
+  duration_seconds?: number | null;
+  width?: number | null;
+  height?: number | null;
+  fps?: number | null;
+  has_audio?: boolean | null;
+  video_codec?: string;
+  audio_codec?: string;
+  probed_at?: string | null;
+  live_compatibility: "ready" | "needs_normalization" | "unknown";
+};
+
+export type MediaLibraryResponse = {
+  items: MediaLibraryItem[];
+};
+
+/**
  * Step-2 wizard form state (Configurazione YouTube). Lifted to the
  * page so back → forward preserves the entries; steps 3–5 (contenuti,
  * riproduzione, riepilogo) consume it when they land.

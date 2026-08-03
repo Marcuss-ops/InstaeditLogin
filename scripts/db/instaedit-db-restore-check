@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+#
+# Weekly PostgreSQL restore verification for the VPS Compose database.
+#
+# The script never writes to instaedit_login. It restores the newest verified
+# custom-format dump into a temporary database inside instaedit-db, compares
+# non-sensitive row counts, and drops the temporary database on every exit.
+# It is installed root-only at /usr/local/sbin/instaedit-db-restore-check.
+#
+# Exit status:
+#   0 = restore and checks passed
+#   1 = preflight, restore, count, or cleanup failure
+#   2 = another backup/restore operation currently holds the lock
+#
+set -Eeuo pipefail
+
+CONTAINER="${INSTAEDIT_DB_CONTAINER:-instaedit-db}"
+LIVE_DB="${INSTAEDIT_LIVE_DB:-instaedit_login}"
+DB_OWNER="${INSTAEDIT_DB_OWNER:-instaedit}"
+BACKUP_DIR="${INSTAEDIT_BACKUP_DIR:-/srv/instaedit-backups/postgres}"
+LOCK_FILE="${INSTAEDIT_RESTORE_LOCK:-/run/lock/instaedit-db-backup.lock}"
+
+# Keep this list deliberately small and stable. Counts are operational
+# metadata only; no emails, token material, or row contents are read.
+TABLES=(users workspaces platform_accounts oauth_connections tokens posts media_assets)
+
+valid_identifier() {
+    [[ "$1" =~ ^[a-z_][a-z0-9_]*$ ]]
+}
+
+TEMP_DB=""
+TEMP_DB_CREATED=0
+CLEANUP_DONE=0
+
+log() {
+    printf '%s restore-check: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
+}
+
+fail() {
+    log "FAIL: $*" >&2
+    exit 1
+}
+
+psql_db() {
+    local database="$1"
+    shift
+    docker exec -u postgres "$CONTAINER" psql -X -v ON_ERROR_STOP=1 -q -U "$DB_OWNER" -d "$database" "$@"
+}
+
+cleanup() {
+    local rc=$?
+    if (( CLEANUP_DONE == 1 )); then
+        return "$rc"
+    fi
+    CLEANUP_DONE=1
+    if [[ "$TEMP_DB_CREATED" == 1 ]]; then
+        # Terminate only sessions connected to our generated temporary DB,
+        # then drop exactly that database. Never interpolate user input here.
+        if ! docker exec -u postgres "$CONTAINER" psql -X -v ON_ERROR_STOP=1 -q -U "$DB_OWNER" -d postgres \
+            -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$TEMP_DB' AND pid <> pg_backend_pid();" \
+            >/dev/null 2>&1; then
+            log "FAIL: could not terminate temporary database sessions" >&2
+            rc=1
+        fi
+        if ! docker exec -u postgres "$CONTAINER" dropdb -U "$DB_OWNER" --if-exists --maintenance-db=postgres "$TEMP_DB" \
+            >/dev/null 2>&1; then
+            log "FAIL: could not drop temporary database: $TEMP_DB" >&2
+            rc=1
+        elif docker exec -u postgres "$CONTAINER" psql -X -qAt -U "$DB_OWNER" -d postgres \
+            -c "SELECT 1 FROM pg_database WHERE datname = '$TEMP_DB';" | grep -q 1; then
+            log "FAIL: temporary database still exists: $TEMP_DB" >&2
+            rc=1
+        else
+            log "temporary database cleanup verified: $TEMP_DB"
+        fi
+    fi
+    return "$rc"
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+
+# A shared non-blocking lock prevents the restore from racing the daily dump.
+# The backup script already uses this lock path.
+mkdir -p "$(dirname "$LOCK_FILE")"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    log "another backup/restore operation holds $LOCK_FILE"
+    exit 2
+fi
+
+command -v docker >/dev/null 2>&1 || fail "docker is not installed"
+command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is not installed"
+command -v flock >/dev/null 2>&1 || fail "flock is not installed"
+[[ -d "$BACKUP_DIR" ]] || fail "backup directory is unavailable"
+valid_identifier "$LIVE_DB" || fail "invalid live database identifier"
+valid_identifier "$DB_OWNER" || fail "invalid database owner identifier"
+
+docker inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -qx true || \
+    fail "PostgreSQL container is not running"
+
+docker exec -u postgres "$CONTAINER" pg_isready -q -U "$DB_OWNER" || fail "PostgreSQL is not ready"
+
+# Select the newest dump whose matching SHA256SUMS manifest exists and
+# verifies. A corrupt or half-written newest dump is skipped in favor of an
+# older verified dump; if none verifies, the drill fails closed.
+DUMP=""
+MANIFEST=""
+while IFS= read -r candidate; do
+    stamp="${candidate##*/instaedit_login_}"
+    stamp="${stamp%.dump}"
+    manifest="$BACKUP_DIR/SHA256SUMS_${stamp}"
+    [[ -f "$manifest" ]] || continue
+    if (cd "$BACKUP_DIR" && sha256sum --check "$manifest" 2>&1 | \
+        grep -q "instaedit_login_${stamp}.dump: OK"); then
+        DUMP="$candidate"
+        MANIFEST="$manifest"
+        break
+    fi
+done < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name 'instaedit_login_*.dump' -printf '%T@ %p\n' | sort -nr | sed 's/^[^ ]* //')
+
+[[ -n "$DUMP" ]] || fail "no verified custom-format dump is available"
+docker exec -i -u postgres "$CONTAINER" pg_restore -U "$DB_OWNER" --list < "$DUMP" >/dev/null 2>&1 || \
+    fail "selected dump is not readable by pg_restore"
+log "selected verified dump: $(basename "$DUMP")"
+
+# Capture source counts immediately before restore. A concurrent write can
+# cause a legitimate snapshot drift; in that case the drill reports the
+# mismatch rather than claiming a false pass.
+declare -A SOURCE_COUNTS=()
+for table in "${TABLES[@]}"; do
+    exists=$(psql_db "$LIVE_DB" -tA -c "SELECT to_regclass('public.$table') IS NOT NULL;")
+    [[ "$exists" == "t" ]] || fail "required source table is missing: $table"
+    count=$(psql_db "$LIVE_DB" -tA -c "SELECT count(*) FROM public.$table;")
+    [[ "$count" =~ ^[0-9]+$ ]] || fail "invalid source count for $table"
+    SOURCE_COUNTS["$table"]="$count"
+done
+
+# Names are generated locally and restricted to [a-z0-9_], so the SQL
+# identifier cannot be used for injection. The timestamp makes retries and
+# concurrent manual runs distinguishable even though the lock normally stops
+# overlap.
+TEMP_DB="instaedit_restore_check_$(date -u +%Y%m%d%H%M%S)_$RANDOM"
+[[ "$TEMP_DB" =~ ^[a-z0-9_]+$ ]] || fail "generated temporary database name is invalid"
+if ! psql_db postgres -c "CREATE DATABASE \"$TEMP_DB\" OWNER \"$DB_OWNER\";"; then
+    fail "could not create isolated temporary database"
+fi
+TEMP_DB_CREATED=1
+log "created isolated temporary database: $TEMP_DB"
+
+# Restore as the postgres container user. --exit-on-error turns a partial
+# restore into a failed drill instead of allowing count checks to mask it.
+if ! docker exec -i -u postgres "$CONTAINER" pg_restore \
+    -U "$DB_OWNER" --exit-on-error --no-owner --no-acl --dbname="$TEMP_DB" < "$DUMP"; then
+    fail "pg_restore failed"
+fi
+log "pg_restore completed"
+
+for table in "${TABLES[@]}"; do
+    restored=$(psql_db "$TEMP_DB" -tA -c "SELECT count(*) FROM public.$table;")
+    [[ "$restored" =~ ^[0-9]+$ ]] || fail "invalid restored count for $table"
+    # The dump is a point-in-time snapshot and the live DB may legitimately
+    # have gained rows after it was created. Reject rows that appear in the
+    # restore but not in the live DB; when the live table was non-empty also
+    # wrong-database restores without producing false failures from normal
+    # post-backup inserts.
+    if (( restored > SOURCE_COUNTS[$table] )); then
+        fail "row count exceeds live count for $table (live=${SOURCE_COUNTS[$table]} restored=$restored)"
+    fi
+    log "count invariant passed: $table live=${SOURCE_COUNTS[$table]} restored=$restored"
+done
+
+# A restored installation identity must be present when the source dump has
+# it. This is a structural check, not a UUID/value disclosure.
+identity_exists=$(psql_db "$TEMP_DB" -tA -c "SELECT to_regclass('public.system_installation') IS NOT NULL;")
+if [[ "$identity_exists" == "t" ]]; then
+    identity_rows=$(psql_db "$TEMP_DB" -tA -c "SELECT count(*) FROM public.system_installation WHERE id = 1;")
+    [[ "$identity_rows" == "1" ]] || fail "system installation identity singleton is incomplete"
+    log "installation identity singleton check passed"
+fi
+
+log "PASS: restore verification succeeded; dump=$(basename "$DUMP") manifest=$(basename "$MANIFEST")"
+exit 0

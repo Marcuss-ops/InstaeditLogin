@@ -66,6 +66,14 @@ func (r *MediaAssetRepository) Create(asset *models.MediaAsset) error {
 	return nil
 }
 
+// mediaAssetColumns is the full select list including the ffprobe
+// columns (migration 092). Probe fields are scanned into the pointer
+// fields directly (NULL → nil).
+const mediaAssetColumns = `id, user_id, upload_key, bucket, content_type, size_bytes, status,
+COALESCE(sha256, '') AS sha256, COALESCE(error_message, '') AS error_message,
+expires_at, created_at, updated_at,
+duration_seconds, width, height, fps, has_audio, video_codec, audio_codec, probed_at`
+
 // FindByID returns the asset for the given UUID. Matches the codebase
 // convention: (nil, nil) on not-found, no sql.ErrNoRows leaking out.
 func scanMediaAsset(row interface{ Scan(...any) error }) (*models.MediaAsset, error) {
@@ -74,6 +82,8 @@ func scanMediaAsset(row interface{ Scan(...any) error }) (*models.MediaAsset, er
 		&asset.ID, &asset.UserID, &asset.UploadKey, &asset.Bucket, &asset.ContentType,
 		&asset.SizeBytes, &asset.Status, &asset.SHA256, &asset.ErrorMessage,
 		&asset.ExpiresAt, &asset.CreatedAt, &asset.UpdatedAt,
+		&asset.DurationSeconds, &asset.Width, &asset.Height, &asset.FPS, &asset.HasAudio,
+		&asset.VideoCodec, &asset.AudioCodec, &asset.ProbedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -86,16 +96,73 @@ func scanMediaAsset(row interface{ Scan(...any) error }) (*models.MediaAsset, er
 
 func (r *MediaAssetRepository) FindByID(id string) (*models.MediaAsset, error) {
 	asset, err := scanMediaAsset(r.db.QueryRow(
-		`SELECT id, user_id, upload_key, bucket, content_type, size_bytes, status,
-		        COALESCE(sha256, '') AS sha256,
-		        COALESCE(error_message, '') AS error_message,
-		        expires_at, created_at, updated_at
+		`SELECT `+mediaAssetColumns+`
 		 FROM media_assets WHERE id = $1`, id,
 	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to find media asset by id: %w", err)
 	}
 	return asset, nil
+}
+
+// ListReadyByUser returns the caller's ready, non-expired media assets
+// newest-first, bounded by limit. Used by the Media Library endpoint
+// (GET /api/v1/media) and the live wizard's step 3. A partial index on
+// (user_id, status, created_at DESC) keeps the scan cheap.
+func (r *MediaAssetRepository) ListReadyByUser(ctx context.Context, userID int64, limit int) ([]models.MediaAsset, error) {
+	if userID <= 0 {
+		return nil, fmt.Errorf("list media assets: invalid user id %d", userID)
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+mediaAssetColumns+`
+		 FROM media_assets
+		 WHERE user_id = $1 AND status = $2 AND expires_at > NOW()
+		 ORDER BY created_at DESC, id
+		 LIMIT $3`,
+		userID, string(models.MediaAssetStatusReady), limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list media assets: %w", err)
+	}
+	defer rows.Close()
+	var result []models.MediaAsset
+	for rows.Next() {
+		asset, scanErr := scanMediaAsset(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan media asset: %w", scanErr)
+		}
+		result = append(result, *asset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate media assets: %w", err)
+	}
+	return result, nil
+}
+
+// SaveProbe persists the ffprobe-derived metadata for an asset
+// (migration 092). Best-effort by design: the worker calls it after
+// the probe succeeds and ignores errors (a probe failure must never
+// fail an ingest job).
+func (r *MediaAssetRepository) SaveProbe(id string, probe *models.MediaProbe) error {
+	if probe == nil {
+		return nil
+	}
+	_, err := r.db.Exec(
+		`UPDATE media_assets
+		    SET duration_seconds = $1, width = $2, height = $3, fps = $4,
+		        has_audio = $5, video_codec = $6, audio_codec = $7,
+		        probed_at = $8, updated_at = $8
+		  WHERE id = $9`,
+		probe.DurationSeconds, probe.Width, probe.Height, probe.FPS,
+		probe.HasAudio, probe.VideoCodec, probe.AudioCodec, probe.ProbedAt, id,
+	)
+	if err != nil {
+		return fmt.Errorf("save media probe: %w", err)
+	}
+	return nil
 }
 
 // FindForPost resolves a media asset only when it belongs to the post's
@@ -111,7 +178,9 @@ func (r *MediaAssetRepository) FindForPost(ctx context.Context, workspaceID int6
 	}
 	asset, err := scanMediaAsset(r.db.QueryRowContext(ctx,
 		`SELECT ma.id, ma.user_id, ma.upload_key, ma.bucket, ma.content_type, ma.size_bytes, ma.status,
-		        COALESCE(ma.sha256, ''), COALESCE(ma.error_message, ''), ma.expires_at, ma.created_at, ma.updated_at
+		        COALESCE(ma.sha256, ''), COALESCE(ma.error_message, ''), ma.expires_at, ma.created_at, ma.updated_at,
+		        ma.duration_seconds, ma.width, ma.height, ma.fps, ma.has_audio,
+		        ma.video_codec, ma.audio_codec, ma.probed_at
 		 FROM media_assets ma
 		 WHERE (
 			($2 <> '' AND ma.id = NULLIF($2, '')::uuid)
@@ -144,7 +213,9 @@ func (r *MediaAssetRepository) FindByUploadKey(ctx context.Context, workspaceID 
 	}
 	asset, err := scanMediaAsset(r.db.QueryRowContext(ctx,
 		`SELECT ma.id, ma.user_id, ma.upload_key, ma.bucket, ma.content_type, ma.size_bytes, ma.status,
-		        COALESCE(ma.sha256, ''), COALESCE(ma.error_message, ''), ma.expires_at, ma.created_at, ma.updated_at
+		        COALESCE(ma.sha256, ''), COALESCE(ma.error_message, ''), ma.expires_at, ma.created_at, ma.updated_at,
+		        ma.duration_seconds, ma.width, ma.height, ma.fps, ma.has_audio,
+		        ma.video_codec, ma.audio_codec, ma.probed_at
 		 FROM media_assets ma
 		 WHERE ma.upload_key = $2
 		 AND EXISTS (

@@ -2450,93 +2450,6 @@ components:
             720p30 with audio); `needs_normalization` = probed but
             off-profile; `unknown` = never probed.
 
-  examples:
-    VeloxSceneCompositeJob:
-      summary: Composite documentary job
-      description: Editorial documentary content uses the shared job endpoint; the template is not a path.
-      value:
-        contract_version: velox.job.v1
-        idempotency_key: five-boxers-it-001
-        job_type: scene.composite.v1
-        template_id: documentary.clip-stock
-        template_version: 1
-        video_name: Five legendary boxers
-        spec:
-          scenes:
-            - id: intro
-              text: Cinque pugili leggendari
-              duration_ms: 4000
-              assets:
-                primary_clip:
-                  asset_id: asset-clip-intro
-              audio:
-                voiceover:
-                  uri: velox-asset://voiceover-intro
-              timeline:
-                duration_ms: 4000
-        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
-        delivery_plan:
-          destinations: [{ external_destination_id: extdst_01J }]
-    VeloxClipStockJob:
-      summary: Clip plus stock fallback job
-      value:
-        contract_version: velox.job.v1
-        idempotency_key: clip-stock-001
-        job_type: clip.stock.v1
-        template_id: documentary.clip-stock
-        template_version: 1
-        video_name: Profile video
-        spec:
-          scenes:
-            - id: scene-1
-              primary_clip: { asset_id: asset-clip-1 }
-              stock: { asset_id: asset-stock-1, fallback: true }
-              bindings:
-                clip: { asset_id: asset-clip-1 }
-                stock: { asset_id: asset-stock-1 }
-        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
-        delivery_plan:
-          destinations: [{ external_destination_id: extdst_01J }]
-    VeloxSceneImageJob:
-      summary: Image-led scene job
-      value:
-        contract_version: velox.job.v1
-        idempotency_key: scene-image-001
-        job_type: scene.image.v1
-        template_id: biography.images.v1
-        template_version: 1
-        video_name: Biography images
-        spec:
-          scenes:
-            - id: scene-1
-              image: { asset_id: asset-image-1 }
-              text: Biography
-        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
-        delivery_plan:
-          destinations: [{ external_destination_id: extdst_01J }]
-    VeloxSlideshowJob:
-      summary: Image slideshow job
-      value:
-        contract_version: velox.job.v1
-        idempotency_key: slideshow-001
-        job_type: slideshow.v1
-        template_id: motivational.images.v1
-        template_version: 1
-        video_name: Motivational slideshow
-        spec:
-          images:
-            - id: image-1
-              asset_id: asset-image-1
-              duration_ms: 3000
-              zoom: 1.05
-            - id: image-2
-              uri: velox-asset://image-2
-              duration_ms: 3000
-              transition: { type: fade, duration_ms: 500 }
-        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
-        delivery_plan:
-          destinations: [{ external_destination_id: extdst_01J }]
-
     # ────── YouTube editor session publish contract ──────────
     YouTubeEditorSessionPublishRequest:
       type: object
@@ -3593,3 +3506,91 @@ components:
         `pkg/api/internal_velox.go`. Both `error` and `code`
         carry the same string so a peer can pattern-match on
         either key without coupling to the message prose.
+
+  examples:
+    VeloxSceneCompositeJob:
+      summary: Composite documentary job
+      description: Editorial documentary content uses the shared job endpoint; the template is not a path.
+      value:
+        contract_version: velox.job.v1
+        idempotency_key: five-boxers-it-001
+        job_type: scene.composite.v1
+        template_id: documentary.clip-stock
+        template_version: 1
+        video_name: Five legendary boxers
+        spec:
+          scenes:
+            - id: intro
+              text: Cinque pugili leggendari
+              duration_ms: 4000
+              assets:
+                primary_clip:
+                  asset_id: asset-clip-intro
+              audio:
+                voiceover:
+                  uri: velox-asset://voiceover-intro
+              timeline:
+                duration_ms: 4000
+        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
+        delivery_plan:
+          destinations: [{ external_destination_id: extdst_01J }]
+    VeloxClipStockJob:
+      summary: Clip plus stock fallback job
+      value:
+        contract_version: velox.job.v1
+        idempotency_key: clip-stock-001
+        job_type: clip.stock.v1
+        template_id: documentary.clip-stock
+        template_version: 1
+        video_name: Profile video
+        spec:
+          scenes:
+            - id: scene-1
+              primary_clip: { asset_id: asset-clip-1 }
+              stock: { asset_id: asset-stock-1, fallback: true }
+              bindings:
+                clip: { asset_id: asset-clip-1 }
+                stock: { asset_id: asset-stock-1 }
+        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
+        delivery_plan:
+          destinations: [{ external_destination_id: extdst_01J }]
+    VeloxSceneImageJob:
+      summary: Image-led scene job
+      value:
+        contract_version: velox.job.v1
+        idempotency_key: scene-image-001
+        job_type: scene.image.v1
+        template_id: biography.images.v1
+        template_version: 1
+        video_name: Biography images
+        spec:
+          scenes:
+            - id: scene-1
+              image: { asset_id: asset-image-1 }
+              text: Biography
+        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
+        delivery_plan:
+          destinations: [{ external_destination_id: extdst_01J }]
+    VeloxSlideshowJob:
+      summary: Image slideshow job
+      value:
+        contract_version: velox.job.v1
+        idempotency_key: slideshow-001
+        job_type: slideshow.v1
+        template_id: motivational.images.v1
+        template_version: 1
+        video_name: Motivational slideshow
+        spec:
+          images:
+            - id: image-1
+              asset_id: asset-image-1
+              duration_ms: 3000
+              zoom: 1.05
+            - id: image-2
+              uri: velox-asset://image-2
+              duration_ms: 3000
+              transition: { type: fade, duration_ms: 500 }
+        output: { width: 1920, height: 1080, fps: 30, format: mp4 }
+        delivery_plan:
+          destinations: [{ external_destination_id: extdst_01J }]
+

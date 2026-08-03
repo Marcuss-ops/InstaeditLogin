@@ -21,6 +21,9 @@ type MediaModuleDeps struct {
 	DriveBatchV2Status http.HandlerFunc
 	DriveBatchStatus   http.HandlerFunc
 	CompleteMedia      http.HandlerFunc
+	// ListMedia backs GET /api/v1/media — the Media Library list
+	// (ready assets + ffprobe metadata + live compatibility).
+	ListMedia http.HandlerFunc
 }
 
 // MediaModule mounts the presigned-upload and Drive-import routes.
@@ -48,4 +51,5 @@ func (m *MediaModule) Register(mux chi.Router) {
 	mux.Method(http.MethodGet, "/api/v1/media/import/drive/folder/async/{id}", m.deps.Protected(m.deps.DriveBatchV2Status))
 	mux.Method(http.MethodGet, "/api/v1/media/import/drive/batch/status", m.deps.Protected(m.deps.DriveBatchStatus))
 	mux.Method(http.MethodPost, "/api/v1/media/{id}/complete", m.deps.Protected(m.deps.CompleteMedia))
+	mux.Method(http.MethodGet, "/api/v1/media", m.deps.Protected(m.deps.ListMedia))
 }

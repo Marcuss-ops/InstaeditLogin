@@ -26,6 +26,14 @@
 //     automatically flagged reauth_required — the desired side
 //     effect: the operator's dashboard surfaces the dead channel
 //     BEFORE a publish fails.
+//   - The SELECT is single-flighted across replicas with
+//     pg_try_advisory_xact_lock (the metrics collector's mechanism,
+//     dedicated RefreshSweepLockID): the store reports won=false
+//     when another replica owns the tick, and the sweep skips the
+//     whole pass — N replicas never fan out N identical SELECTs.
+//     The lock covers the selection only; a renewal re-attempt in
+//     the post-commit window is neutralised by the vault's per-grant
+//     advisory lock (never a double provider call).
 //   - Refreshers are a per-provider map injected at bootstrap; a
 //     grant whose provider has no wired refresher is skipped
 //     silently (the sweep only covers wired Google providers).
@@ -40,6 +48,7 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/Marcuss-ops/InstaeditLogin/internal/credentials"
@@ -64,8 +73,13 @@ const DefaultTokenRefreshSweepHorizonDays = 120
 // TokenRefreshSweepStore selects the at-risk grants. Defined inline
 // (not in repository) so the worker is unit-testable with a fake
 // without touching the database — the SessionCleaner pattern.
+//
+// The selection is single-flighted across replicas (the repository
+// acquires pg_try_advisory_xact_lock inside the selection tx): the
+// store reports won=false when another replica owns this tick's
+// pass, and the worker skips WITHOUT renewing anything.
 type TokenRefreshSweepStore interface {
-	ListDormantRefreshGrants(ctx context.Context, horizonDays int) ([]models.DormantRefreshGrant, error)
+	ListDormantRefreshGrantsSingleFlighted(ctx context.Context, horizonDays int) (grants []models.DormantRefreshGrant, won bool, err error)
 }
 
 // TokenRefreshSweepWorker periodically renews dormant grants.
@@ -149,11 +163,22 @@ func (w *TokenRefreshSweepWorker) Run(ctx context.Context) error {
 // through the vault, log outcomes. Per-account failures are isolated
 // (logged, sweep continues); a selection error aborts the pass with
 // a WARN (retried at the next interval).
+//
+// Single-flight: the store reports won=false when another replica
+// holds the sweep lock (pg_try_advisory_xact_lock) — the pass is
+// skipped entirely (Debug, not WARN: this is the EXPECTED outcome on
+// every replica but the winner).
 func (w *TokenRefreshSweepWorker) tick(ctx context.Context) {
-	grants, err := w.store.ListDormantRefreshGrants(ctx, w.horizonDays)
+	grants, won, err := w.store.ListDormantRefreshGrantsSingleFlighted(ctx, w.horizonDays)
 	if err != nil {
 		w.logger.Warn("token refresh sweep tick failed (will retry at next interval)",
 			"error", err)
+		return
+	}
+	if !won {
+		// Another replica owns this tick's pass — skip so N replicas
+		// never fan out N identical SELECTs + renewal passes.
+		w.logger.Debug("token refresh sweep tick skipped (another replica holds the single-flight lock)")
 		return
 	}
 	if len(grants) == 0 {
@@ -162,7 +187,19 @@ func (w *TokenRefreshSweepWorker) tick(ctx context.Context) {
 	w.logger.Info("token refresh sweep selecting dormant grants", "count", len(grants))
 
 	renewed, skipped, failed := 0, 0, 0
+	// seenOID dedups multi-channel grants: one oauth_connection can
+	// back N platform_accounts rows, and the refresh token is stored
+	// per (oauth_connection_id, token_type) — renewing via the FIRST
+	// account of the grant refreshes it for ALL siblings. The vault's
+	// per-grant advisory lock makes a second renew harmless, but the
+	// dedup saves N-1 redundant lock acquisitions + lookups per tick.
+	seenOID := make(map[int64]bool, len(grants))
 	for _, g := range grants {
+		if seenOID[g.OAuthConnectionID] {
+			skipped++ // same grant already renewed this pass
+			continue
+		}
+		seenOID[g.OAuthConnectionID] = true
 		refresher, ok := w.refreshers[g.Provider]
 		if !ok {
 			skipped++
@@ -214,5 +251,6 @@ func providerKeys(m map[string]credentials.TokenRefresher) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return keys
 }

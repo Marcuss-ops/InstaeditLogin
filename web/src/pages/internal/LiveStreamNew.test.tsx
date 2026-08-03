@@ -49,6 +49,56 @@ function mockFetch(channels: LivestreamChannel[] | null, error = false) {
   });
 }
 
+/** Media Library fixture — one ready, one needs_normalization, one unknown. */
+function mediaItem(
+  id: string,
+  compat: "ready" | "needs_normalization" | "unknown",
+  overrides: Partial<import("./livestreamsTypes").MediaLibraryItem> = {},
+): import("./livestreamsTypes").MediaLibraryItem {
+  return {
+    id,
+    filename: `${id}.mp4`,
+    content_type: "video/mp4",
+    size_bytes: 1024 * 1024,
+    created_at: new Date().toISOString(),
+    preview_url: `https://cdn.test/${id}.mp4`,
+    duration_seconds: 845,
+    width: 1920,
+    height: 1080,
+    fps: 30,
+    has_audio: true,
+    video_codec: "h264",
+    audio_codec: "aac",
+    probed_at: new Date().toISOString(),
+    live_compatibility: compat,
+    ...overrides,
+  };
+}
+
+const fixtureMedia = (): import("./livestreamsTypes").MediaLibraryItem[] => [
+  mediaItem("video-01", "ready"),
+  mediaItem("video-02", "ready", { filename: "video-02.mp4", width: 1280, height: 720, duration_seconds: 500 }),
+  mediaItem("video-vfr", "needs_normalization", { fps: 23.976, duration_seconds: 120, width: 854, height: 480 }),
+  mediaItem("video-silent", "unknown", { probed_at: null, has_audio: null, duration_seconds: null, width: null, height: null, fps: null }),
+];
+
+function mockFetchWithMedia(channels: LivestreamChannel[], media: import("./livestreamsTypes").MediaLibraryItem[], mediaError = false) {
+  return vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.endsWith("/api/v1/auth/me")) {
+      return mockJsonResponse({ workspace_id: 7 });
+    }
+    if (url.includes("/api/v1/livestreams/channels")) {
+      return mockJsonResponse({ channels });
+    }
+    if (url.includes("/api/v1/media")) {
+      if (mediaError) return mockJsonResponse({ error: "boom" }, false, 500);
+      return mockJsonResponse({ items: media });
+    }
+    return mockJsonResponse({}, false, 404);
+  });
+}
+
 function renderPage() {
   return render(
     <MemoryRouter>
@@ -314,5 +364,120 @@ describe("LiveStreamNewPage — step 2 (Configurazione YouTube)", () => {
     await userEvent.click(screen.getByTestId("ls-step2-cover-source-dark"));
     expect(screen.getByTestId("ls-step2-cover-dark")).toBeInTheDocument();
     expect(screen.getByText(/arriva nel secondo rilascio delle live/)).toBeInTheDocument();
+  });
+});
+
+describe("LiveStreamNewPage — step 3 (Contenuti / Media Library)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    uploadMediaAssetMock.mockReset();
+  });
+
+  /** Select channel 42 → step 2 → title → Continua → step 3. */
+  async function advanceToStep3(media: import("./livestreamsTypes").MediaLibraryItem[] = fixtureMedia(), mediaError = false) {
+    vi.stubGlobal("fetch", mockFetchWithMedia(fixtureChannels(), media, mediaError));
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("livestream-new-channel-42")).toBeInTheDocument();
+    });
+    await userEvent.click(screen.getByTestId("livestream-new-channel-42"));
+    await userEvent.click(screen.getByTestId("livestream-new-continue"));
+    await waitFor(() => {
+      expect(screen.getByTestId("livestream-new-step2")).toBeInTheDocument();
+    });
+    await userEvent.type(screen.getByTestId("ls-step2-title"), "WWE News 24/7");
+    await userEvent.click(screen.getByTestId("livestream-new-continue"));
+    await waitFor(() => {
+      expect(screen.getByTestId("livestream-new-step3")).toBeInTheDocument();
+    });
+  }
+
+  it("renders the Media Library with metadata and compatibility badges", async () => {
+    await advanceToStep3();
+
+    expect(screen.getByText(/Passaggio 3 di 5/)).toBeInTheDocument();
+    expect(screen.getByTestId("livestream-new-step-badge-3")).toBeInTheDocument();
+    expect(screen.getByTestId("ls-step3-list")).toBeInTheDocument();
+
+    expect(screen.getByText("video-01.mp4")).toBeInTheDocument();
+    expect(screen.getByText("video-02.mp4")).toBeInTheDocument();
+    expect(screen.getByText("video-vfr.mp4")).toBeInTheDocument();
+    expect(screen.getByText("video-silent.mp4")).toBeInTheDocument();
+
+    // Metadata: duration, resolution, FPS, audio.
+    expect(screen.getByText("14:05")).toBeInTheDocument(); // 845s
+    expect(screen.getByText("8:20")).toBeInTheDocument(); // 500s (720p row)
+    expect(screen.getByText("1920×1080")).toBeInTheDocument();
+    expect(screen.getByText("1280×720")).toBeInTheDocument();
+    expect(screen.getByText("854×480")).toBeInTheDocument();
+    expect(screen.getAllByText("30 fps")).toHaveLength(2);
+    expect(screen.getByText("23.98 fps")).toBeInTheDocument();
+    expect(screen.getAllByText("Sì").length).toBeGreaterThanOrEqual(3);
+
+    // Compatibility badges: 2 ready, 1 needs_normalization, 1 unknown.
+    expect(screen.getAllByText("Pronto per live")).toHaveLength(2);
+    expect(screen.getByText("Da normalizzare")).toBeInTheDocument();
+    expect(screen.getByText("Da verificare")).toBeInTheDocument();
+    expect(screen.getAllByText(/Bloccato — da normalizzare/)).toHaveLength(2);
+  });
+
+  it("keeps Continua blocked until a compatible video is selected", async () => {
+    await advanceToStep3();
+
+    expect(screen.getByTestId("livestream-new-continue")).toBeDisabled();
+    expect(screen.getByText(/Seleziona almeno un video compatibile/)).toBeInTheDocument();
+
+    // Incompatible rows cannot be selected.
+    await userEvent.click(screen.getByTestId("ls-step3-item-video-vfr"));
+    expect(screen.getByTestId("livestream-new-continue")).toBeDisabled();
+    expect(screen.queryByTestId("ls-step3-order-video-vfr")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("ls-step3-item-video-01"));
+    expect(screen.getByTestId("livestream-new-continue")).toBeEnabled();
+    expect(screen.getByTestId("ls-step3-order-video-01")).toBeInTheDocument();
+    expect(screen.getByText("1 video selezionato")).toBeInTheDocument();
+  });
+
+  it("keeps selection ordered and lets the user deselect", async () => {
+    await advanceToStep3();
+
+    await userEvent.click(screen.getByTestId("ls-step3-item-video-01"));
+    await userEvent.click(screen.getByTestId("ls-step3-item-video-02"));
+    expect(screen.getByTestId("ls-step3-order-video-01")).toHaveTextContent("1");
+    expect(screen.getByTestId("ls-step3-order-video-02")).toHaveTextContent("2");
+    expect(screen.getByText("2 video selezionati")).toBeInTheDocument();
+
+    // Deselect the first → the second becomes position 1 (no gap).
+    await userEvent.click(screen.getByTestId("ls-step3-item-video-01"));
+    expect(screen.queryByTestId("ls-step3-order-video-01")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ls-step3-order-video-02")).toHaveTextContent("1");
+  });
+
+  it("preserves the media selection across back → forward", async () => {
+    await advanceToStep3();
+    await userEvent.click(screen.getByTestId("ls-step3-item-video-02"));
+
+    await userEvent.click(screen.getByTestId("livestream-new-step3-back"));
+    expect(screen.getByTestId("livestream-new-step-badge-2")).toBeInTheDocument();
+    expect(screen.getByTestId("ls-step2-title")).toHaveValue("WWE News 24/7");
+
+    await userEvent.click(screen.getByTestId("livestream-new-continue"));
+    await waitFor(() => {
+      expect(screen.getByTestId("livestream-new-step3")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("ls-step3-order-video-02")).toHaveTextContent("1");
+    expect(screen.getByText("1 video selezionato")).toBeInTheDocument();
+  });
+
+  it("shows the empty state when the Media Library has no videos", async () => {
+    await advanceToStep3([]);
+    expect(screen.getByText("Nessun video nella Media Library")).toBeInTheDocument();
+    expect(screen.getByTestId("livestream-new-continue")).toBeDisabled();
+  });
+
+  it("shows an error state with retry when the Media Library cannot load", async () => {
+    await advanceToStep3(fixtureMedia(), true);
+    expect(screen.getByTestId("ls-step3-retry")).toBeInTheDocument();
+    expect(screen.getByTestId("livestream-new-continue")).toBeDisabled();
   });
 });

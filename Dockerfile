@@ -34,9 +34,15 @@ RUN CGO_ENABLED=0 GOOS=linux \
 # ────────────────────────────────────────────────────────────────────────
 # Stage 2: Base — alpine + ca-certificates + non-root user (shared by all
 # final stages below).
+#
+# ffmpeg (with the ffprobe binary) is installed here — the upload
+# worker probes every ingested asset (migration 092) to populate
+# duration/resolution/FPS/audio for the live-streaming wizard. The
+# probe is best-effort: a missing binary is a soft skip, never a
+# job failure.
 # ────────────────────────────────────────────────────────────────────────
 FROM alpine:3.21 AS base
-RUN apk --no-cache add ca-certificates wget && \
+RUN apk --no-cache add ca-certificates wget ffmpeg && \
     adduser -D -g '' appuser
 WORKDIR /app
 

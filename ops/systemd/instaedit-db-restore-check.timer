@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly InstaEdit PostgreSQL restore verification timer
+
+[Timer]
+OnCalendar=Sun *-*-* 05:15:00
+RandomizedDelaySec=900
+Persistent=true
+Unit=instaedit-db-restore-check.service
+
+[Install]
+WantedBy=timers.target

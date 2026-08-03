@@ -22,11 +22,12 @@ import (
 // tests. Mirrors the pattern of mockPostStore / mockWorkspaceStore.
 type mockMediaStore struct {
 	assets map[string]*models.MediaAsset
-	// errOnCreate / errOnFind / errOnMark let each test inject a
-	// specific failure without rebuilding the mock.
+	// errOnCreate / errOnFind / errOnMark / errOnList let each test
+	// inject a specific failure without rebuilding the mock.
 	errOnCreate  error
 	errOnFind    error
 	errOnMarkRdy error
+	errOnList    error
 }
 
 func newMockMediaStore() *mockMediaStore {
@@ -95,6 +96,25 @@ func (m *mockMediaStore) MarkFailed(id, reason string) error {
 func (m *mockMediaStore) MarkFailedWithReason(id, reason string, cause error) error {
 	_ = cause // cause is logged in production; not asserted in the happy-path tests.
 	return m.MarkFailed(id, reason)
+}
+
+// ListReadyByUser returns the mock's ready assets newest-first. The
+// mock keeps insertion order; sorting is exercised against the real
+// repository in sqlmock tests.
+func (m *mockMediaStore) ListReadyByUser(_ context.Context, userID int64, limit int) ([]models.MediaAsset, error) {
+	if m.errOnList != nil {
+		return nil, m.errOnList
+	}
+	var out []models.MediaAsset
+	for _, a := range m.assets {
+		if a.UserID == userID && a.Status == models.MediaAssetStatusReady {
+			out = append(out, *a)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // --- mockStorageProvider -----------------------------------------------------

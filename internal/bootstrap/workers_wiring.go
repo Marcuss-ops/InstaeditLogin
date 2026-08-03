@@ -357,6 +357,12 @@ func (a *App) registerUploadWorker() {
 				assetsAdapter{repo: mediaAssetRepoForResolver},
 				slog.Default(),
 			))
+			// Migration 092 — wire the ffprobe pass so every asset the
+			// upload worker ingests gets duration/resolution/FPS/audio
+			// probed (the live wizard's compatibility badge reads from
+			// these columns). Best-effort by design: a missing ffprobe
+			// binary or a probe error never fails the ingest.
+			uw.SetMediaProber(worker.NewFFprobeProber())
 			return uw.Run(ctx)
 		},
 	})
@@ -410,16 +416,24 @@ func (a *App) registerTokenRefreshSweepWorker() {
 		Name:     "token_refresh_sweep",
 		Critical: false,
 		Run: func(ctx context.Context) error {
+			// Refreshers are discovered via the OAuthProvider capability
+			// (NOT a concrete type assertion): both YouTubeOAuthService
+			// and GoogleDriveOAuthService satisfy it, and the router's
+			// Register() type-asserts the capability at registration
+			// time, so a provider-shape change surfaces at boot wiring
+			// instead of silently leaving the refresher map empty.
 			refreshers := map[string]credentials.TokenRefresher{}
-			if ytp, ok := a.CapRouter.Get(models.PlatformYouTube); ok {
-				if ytSvc, typeOK := ytp.(*services.YouTubeOAuthService); typeOK {
-					refreshers[models.PlatformYouTube] = ytSvc.RefreshOAuthToken
-				}
+			if oauth, ok := a.CapRouter.OAuth(models.PlatformYouTube); ok {
+				refreshers[models.PlatformYouTube] = oauth.RefreshOAuthToken
 			}
-			if gdp, ok := a.CapRouter.Get(models.PlatformGoogleDrive); ok {
-				if gdSvc, typeOK := gdp.(*services.GoogleDriveOAuthService); typeOK {
-					refreshers[models.PlatformGoogleDrive] = gdSvc.RefreshOAuthToken
-				}
+			if oauth, ok := a.CapRouter.OAuth(models.PlatformGoogleDrive); ok {
+				refreshers[models.PlatformGoogleDrive] = oauth.RefreshOAuthToken
+			}
+			if len(refreshers) == 0 {
+				// Not an error: a deployment without Google providers
+				// simply idles. Logged so a MISWIRE (provider registered
+				// but OAuth capability missing) is visible at boot.
+				a.Logger.Info("token refresh sweep: no Google OAuth providers wired — sweep will idle")
 			}
 			sw := worker.NewTokenRefreshSweepWorker(
 				repository.NewRefreshSweepRepository(a.DB),
