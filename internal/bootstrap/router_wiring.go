@@ -118,6 +118,15 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 				SameSite:     http.SameSiteNoneMode,
 			}, next)
 		}),
+		api.WithAuthMiddleware(s.authMgr.Middleware),
+		api.WithCsrfMiddleware(func(next http.Handler) http.Handler {
+			return auth.NewCSRF(auth.CSRFConfig{
+				Secure:       true,
+				Path:         "/",
+				CookieDomain: s.cfg.HTTP.CookieDomain,
+				SameSite:     http.SameSiteNoneMode,
+			}, next)
+		}),
 		api.WithCookieSecure(true),
 		// csrf_token cookie Domain (Blocco #2.4): threaded from
 		// cfg.HTTP.CookieDomain (COOKIE_DOMAIN env var). Empty stays
@@ -150,6 +159,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		api.WithYouTubeVideoEditStore(s.youtubeVideoEditRepo),
 		api.WithYouTubeThumbnailBatchStore(s.youtubeThumbnailBatchRepo),
 		api.WithLivestreamStore(s.livestreamRepo),
+		api.WithThumbnailProjectStore(s.thumbnailProjectRepo),
 		api.WithContentPipelineStore(s.contentPipelineRepo),
 		api.WithEditorURL(s.cfg.HTTP.EditorURL),
 		// Blocco #2 P0 — wire the env-driven publish-horizon +

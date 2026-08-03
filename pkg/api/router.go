@@ -21,19 +21,20 @@ import (
 )
 
 type Router struct {
-	mux              *chi.Mux
-	capabilities     *services.CapabilityRouter
-	userRepo         UserStore
-	workspaceStore   WorkspaceStore
-	postStore        PostStore
-	storageProvider  StorageProvider
-	mediaStore       MediaStore
-	auditLogStore    AuditLogStore
-	auth             *auth.Manager
-	apiKeyAuth       *auth.Authenticator
-	apiKeyStore      ApiKeyStore
-	idempotencyStore IdempotencyStore
-	vault            credentials.VaultAPI
+	mux                   *chi.Mux
+	capabilities          *services.CapabilityRouter
+	userRepo              UserStore
+	workspaceStore        WorkspaceStore
+	thumbnailProjectStore ThumbnailProjectStore
+	postStore             PostStore
+	storageProvider       StorageProvider
+	mediaStore            MediaStore
+	auditLogStore         AuditLogStore
+	auth                  *auth.Manager
+	apiKeyAuth            *auth.Authenticator
+	apiKeyStore           ApiKeyStore
+	idempotencyStore      IdempotencyStore
+	vault                 credentials.VaultAPI
 	// authorizer (Task 1/10) is the SINGLE gate that flips a
 	// platform_account to status='active' AND writes the encrypted
 	// token row, atomically. Replaces the pre-atomic FinalizeAttach +
@@ -361,6 +362,7 @@ type Router struct {
 // would create an import cycle, since pkg/api already imports
 // internal/repository).
 var _ WorkspaceStore = (*repository.WorkspaceRepository)(nil)
+var _ ThumbnailProjectStore = (*repository.ThumbnailProjectRepository)(nil)
 
 func NewRouter(
 	capRouter *services.CapabilityRouter,

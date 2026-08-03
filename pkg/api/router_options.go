@@ -31,6 +31,13 @@ func WithWorkspaceStore(repo WorkspaceStore) RouterOption {
 	return func(r *Router) { r.workspaceStore = repo }
 }
 
+// WithThumbnailProjectStore wires the autonomous thumbnail project store.
+// It is independent from YouTube editor-session persistence and optional
+// until the database migration is deployed.
+func WithThumbnailProjectStore(store ThumbnailProjectStore) RouterOption {
+	return func(r *Router) { r.thumbnailProjectStore = store }
+}
+
 func WithPostStore(repo PostStore) RouterOption {
 	return func(r *Router) { r.postStore = repo }
 }

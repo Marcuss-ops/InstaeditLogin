@@ -84,6 +84,7 @@ func WireAPI(core *Core) (http.Handler, error) {
 		api.WithYouTubeVideoEditStore(core.youtubeVideoEditRepo),
 		api.WithYouTubeThumbnailBatchStore(core.youtubeThumbnailBatchRepo),
 		api.WithLivestreamStore(core.livestreamRepo),
+		api.WithThumbnailProjectStore(core.thumbnailProjectRepo),
 		api.WithAdminStore(repository.NewAdminRepository(core.DB)),
 		api.WithImportBatchStore(core.importBatchRepo),
 		api.WithConnectionStateStore(&connectionStateStoreWrapper{core.connectionStateRepo}),
@@ -95,6 +96,15 @@ func WireAPI(core *Core) (http.Handler, error) {
 		api.WithVeloxBFFClient(veloxClient(cfg)),
 		api.WithVeloxBFFAuthMiddleware(core.authMgr.Middleware),
 		api.WithVeloxBFFCSRFMiddleware(func(next http.Handler) http.Handler {
+			return auth.NewCSRF(auth.CSRFConfig{
+				Secure:       true,
+				Path:         "/",
+				CookieDomain: cfg.HTTP.CookieDomain,
+				SameSite:     http.SameSiteNoneMode,
+			}, next)
+		}),
+		api.WithAuthMiddleware(core.authMgr.Middleware),
+		api.WithCsrfMiddleware(func(next http.Handler) http.Handler {
 			return auth.NewCSRF(auth.CSRFConfig{
 				Secure:       true,
 				Path:         "/",

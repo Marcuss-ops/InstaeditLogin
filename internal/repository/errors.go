@@ -153,4 +153,18 @@ var (
 	// YouTubeVideoEditRepository.Update when no row matches the
 	// supplied id. Maps to HTTP 404 at the API layer.
 	ErrYouTubeVideoEditNotFound = errors.New("youtube video edit not found")
+
+	// ErrThumbnailProjectConflict is returned when a project update or
+	// lifecycle transition loses its optimistic-concurrency race.
+	ErrThumbnailProjectConflict = errors.New("thumbnail project version conflict")
+
+	// ErrThumbnailProjectNotFound is returned by strict project writes when
+	// the scoped row does not exist. Workspace-scoped reads use the
+	// repository's (nil, nil) convention so cross-workspace rows remain
+	// indistinguishable from missing rows.
+	ErrThumbnailProjectNotFound = errors.New("thumbnail project not found")
+
+	// ErrThumbnailProjectInvalid marks caller validation failures that the
+	// API maps to 422 rather than treating them as infrastructure errors.
+	ErrThumbnailProjectInvalid = errors.New("invalid thumbnail project")
 )

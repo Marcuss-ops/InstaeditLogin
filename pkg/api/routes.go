@@ -133,6 +133,15 @@ func (r *Router) Setup() http.Handler {
 			RotateApiKey:                  r.handleRotateApiKey,
 		},
 	}))
+	reg.Register(NewThumbnailProjectsModule(
+		r.protected,
+		r.handleCreateThumbnailProject,
+		r.handleListThumbnailProjects,
+		r.handleGetThumbnailProject,
+		r.handleUpdateThumbnailProject,
+		r.handleArchiveThumbnailProject,
+		r.handleDeleteThumbnailProject,
+	))
 	reg.Register(NewMediaModule(MediaModuleDeps{
 		RateLimitSvc:       r.rateLimitSvc,
 		Protected:          r.protected,
@@ -144,6 +153,7 @@ func (r *Router) Setup() http.Handler {
 		DriveBatchV2Status: r.handleDriveBatchV2Status,
 		DriveBatchStatus:   r.handleDriveBatchStatus,
 		CompleteMedia:      r.handleCompleteMedia,
+		ListMedia:          r.handleListMediaAssets,
 	}))
 	reg.Register(NewPublishingModule(PublishingModuleDeps{
 		RateLimitSvc:         r.rateLimitSvc,

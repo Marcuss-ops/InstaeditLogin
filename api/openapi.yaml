@@ -92,6 +92,8 @@ tags:
       for the actual rendering work; this tag covers the
       InstaEdit-side session lifecycle (create / link thumbnail /
       publish).
+  - name: Thumbnail Projects
+    description: Autonomous workspace-scoped graphic projects. Creation and editing do not require YouTube, channels, videos, OAuth, or platform accounts.
   - name: Livestreams
     description: |
       YouTube live-streaming configuration CRUD (self-hosted encoder
@@ -1388,6 +1390,192 @@ paths:
         '404':
           $ref: '#/components/responses/NotFoundError'
 
+  # ────── Autonomous Thumbnail Projects ──────────────────────────
+  /api/v1/thumbnail-projects:
+    get:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectsList
+      summary: List autonomous thumbnail projects in a workspace.
+      description: Projects are workspace-scoped and do not require a channel, video, OAuth grant, or YouTube account.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Non-deleted projects, newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ThumbnailProjectListResponse' }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+    post:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectsCreate
+      summary: Create an autonomous thumbnail project.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ThumbnailProjectCreateRequest' }
+      responses:
+        '201':
+          description: Draft project created immediately; no YouTube dependency.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ThumbnailProject' }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '422': { $ref: '#/components/responses/UnprocessableEntityError' }
+  /api/v1/thumbnail-projects/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: workspace_id
+        in: query
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectsGet
+      summary: Open an autonomous thumbnail project.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: Project metadata and current revision pointers.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ThumbnailProject' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+    patch:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectsUpdate
+      summary: Update project metadata with optimistic versioning.
+      description: The request version must match the server version; stale updates return 409 without last-write-wins.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ThumbnailProjectUpdateRequest' }
+      responses:
+        '200':
+          description: Updated project with incremented version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ThumbnailProject' }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409':
+          description: PROJECT_VERSION_CONFLICT; another tab already saved a newer version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/UnprocessableEntityError' }
+    delete:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectsDelete
+      summary: Soft-delete a project while preserving its history and exports.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: version
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '204': { description: Project marked deleted. }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409': { $ref: '#/components/responses/ConflictError' }
+  /api/v1/thumbnail-projects/{id}/archive:
+    post:
+      tags: [Thumbnail Projects]
+      operationId: thumbnailProjectsArchive
+      summary: Archive a project without deleting revisions or exports.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: workspace_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+        - name: version
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '204': { description: Project archived. }
+        '400': { $ref: '#/components/responses/BadRequestError' }
+        '401': { $ref: '#/components/responses/UnauthorizedError' }
+        '404': { $ref: '#/components/responses/NotFoundError' }
+        '409': { $ref: '#/components/responses/ConflictError' }
+
+  # ────── Media Library (live wizard step 3) ──────────────────────
+  /api/v1/media:
+    get:
+      tags: [Media]
+      operationId: mediaLibraryList
+      summary: List the caller's ready media assets with ffprobe metadata.
+      description: |
+        Returns the caller's ready, non-expired media assets
+        newest-first as `{items: [...]}`. Each row carries the
+        ffprobe-derived metadata (migration 092 — duration,
+        resolution, FPS, audio, codecs) plus a server-derived
+        `live_compatibility` flag (`ready` / `needs_normalization` /
+        `unknown`) that drives the live wizard's compatibility
+        badge. `preview_url` is a short-lived presigned GET URL the
+        wizard uses to render `<video preload="metadata">`.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+          description: Max rows to return (default 100).
+      responses:
+        '200':
+          description: Ready assets.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/MediaLibraryItem' }
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '501':
+          description: Media storage not configured on this server.
+
   # ON 2026-07-27 (commit 8097e30-equivalent local) the path
   # /api/v1/groups/{group_id}/youtube/videos + the
   # GroupYouTubeVideoEntry + GroupYouTubeVideosResponse schemas
@@ -1987,6 +2175,87 @@ components:
                   metadata:
                     type: object
                     additionalProperties: true
+
+    # ────── Autonomous Thumbnail Projects ──────────────────────────
+    ThumbnailProject:
+      type: object
+      required: [id, workspace_id, created_by, name, description, canvas_width, canvas_height, status, version, created_at, updated_at]
+      properties:
+        id: { type: string }
+        workspace_id: { type: integer, format: int64 }
+        created_by: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: string }
+        canvas_width: { type: integer, minimum: 1, maximum: 16384 }
+        canvas_height: { type: integer, minimum: 1, maximum: 16384 }
+        status: { type: string, enum: [draft, ready, archived, deleted] }
+        current_revision_id: { type: string, nullable: true }
+        preview_media_id: { type: string, format: uuid, nullable: true }
+        latest_export_id: { type: string, nullable: true }
+        version: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ThumbnailProjectListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ThumbnailProject' }
+    ThumbnailProjectCreateRequest:
+      type: object
+      required: [workspace_id, name, canvas_width, canvas_height]
+      properties:
+        workspace_id: { type: integer, format: int64, minimum: 1 }
+        name: { type: string, minLength: 1 }
+        description: { type: string }
+        canvas_width: { type: integer, minimum: 1, maximum: 16384 }
+        canvas_height: { type: integer, minimum: 1, maximum: 16384 }
+    ThumbnailProjectUpdateRequest:
+      type: object
+      required: [version]
+      properties:
+        version: { type: integer, format: int64, minimum: 1 }
+        name: { type: string, minLength: 1 }
+        description: { type: string }
+        canvas_width: { type: integer, minimum: 1, maximum: 16384 }
+        canvas_height: { type: integer, minimum: 1, maximum: 16384 }
+        status: { type: string, enum: [draft, ready, archived] }
+
+    # ────── Media Library (live wizard step 3) ──────────────────────
+    MediaLibraryItem:
+      type: object
+      description: |
+        One row of GET /api/v1/media — the Media Library entry the
+        live wizard's step 3 renders. Probe fields stay null until
+        the upload worker probes the asset; `live_compatibility` is
+        derived server-side from the probe.
+      required: [id, filename, content_type, size_bytes, created_at,
+                 live_compatibility]
+      properties:
+        id: { type: string, format: uuid }
+        filename: { type: string }
+        content_type: { type: string }
+        size_bytes: { type: integer, format: int64, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        preview_url:
+          type: string
+          description: Short-lived presigned GET URL (15 min) for `<video>` preview.
+        duration_seconds: { type: number, format: double, nullable: true }
+        width: { type: integer, nullable: true }
+        height: { type: integer, nullable: true }
+        fps: { type: number, format: double, nullable: true }
+        has_audio: { type: boolean, nullable: true }
+        video_codec: { type: string }
+        audio_codec: { type: string }
+        probed_at: { type: string, format: date-time, nullable: true }
+        live_compatibility:
+          type: string
+          enum: [ready, needs_normalization, unknown]
+          description: |
+            `ready` = matches a canonical live profile (1080p30 /
+            720p30 with audio); `needs_normalization` = probed but
+            off-profile; `unknown` = never probed.
 
   examples:
     VeloxSceneCompositeJob:
