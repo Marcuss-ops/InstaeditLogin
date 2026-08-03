@@ -91,7 +91,7 @@ func Load() (*Config, error) {
 			YouTubeDailyQuotaLimit:            getEnvInt("YOUTUBE_DAILY_QUOTA_LIMIT", 300),
 			YouTubeGroupVideosMaxAccounts:     getEnvInt("YOUTUBE_GROUP_VIDEOS_MAX_ACCOUNTS", 200),
 			YouTubeGroupVideosMaxVideos:       getEnvInt("YOUTUBE_GROUP_VIDEOS_MAX_VIDEOS", 500),
-			YouTubeGroupVideosCacheTTLSeconds: getEnvInt("YOUTUBE_GROUP_VIDEOS_CACHE_TTL_SECONDS", 30),
+			YouTubeGroupVideosCacheTTLSeconds: getEnvInt("YOUTUBE_GROUP_VIDEOS_CACHE_TTL_SECONDS", 300),
 			YouTubeGroupVideosDefaultPageSize: getEnvInt("YOUTUBE_GROUP_VIDEOS_DEFAULT_PAGE_SIZE", 50),
 			// Blocco #2 P0 — publish horizon + retention buffer are
 			// env-driven. Defaults (30 days / 7 days) match the user-facing

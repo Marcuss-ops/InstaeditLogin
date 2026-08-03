@@ -51,7 +51,7 @@ export function GroupYouTubeVideos({ groupId }: { groupId: number }) {
           </select>
           <button
             type="button"
-            onClick={() => refreshVideos()}
+            onClick={() => refreshVideos(true, true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[11px] font-semibold text-[#cdd2da] hover:bg-white/[0.08] hover:text-white transition-colors"
             data-testid="group-youtube-videos-refresh"
           >

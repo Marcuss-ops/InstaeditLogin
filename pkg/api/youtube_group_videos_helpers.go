@@ -277,12 +277,10 @@ func (r *Router) writeGroupVideosOK(
 		if chName == "" {
 			chName = lookup.account.PlatformUserID
 		}
-		language := ""
-		if lookup.account.Metadata != nil {
-			if value, ok := lookup.account.Metadata["language"].(string); ok {
-				language = strings.TrimSpace(value)
-			}
-		}
+		// Propagate the account's configured language to every video row.
+		// The Groups UI uses this value for the flag; an empty value makes
+		// the frontend fall back to English for every channel.
+		language := accountLanguage(lookup.account)
 		for _, v := range res.items {
 			unconfirmed := "unconfirmed"
 			entry := groupYouTubeVideoEntry{

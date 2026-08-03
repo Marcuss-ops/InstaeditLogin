@@ -19,6 +19,8 @@ const samplePages = [
     id: 9,
     platform: "facebook",
     username: "caleb-foster",
+    status: "active",
+    is_publishable: true,
     created_at: "2026-07-10T00:00:00Z",
   },
 ];
@@ -27,6 +29,8 @@ const sampleYouTube = [
     id: 5,
     platform: "youtube",
     username: "my-channel",
+    status: "active",
+    is_publishable: true,
     created_at: "2026-07-10T00:00:00Z",
   },
 ];
@@ -35,6 +39,8 @@ const sampleDrives = [
     id: 21,
     platform: "google-drive",
     username: "caleb-foster",
+    status: "active",
+    is_publishable: true,
     created_at: "2026-07-10T00:00:00Z",
   },
 ];

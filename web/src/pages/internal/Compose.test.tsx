@@ -86,7 +86,7 @@ describe("InternalCompose", () => {
         }
         if (url.endsWith("/api/v1/accounts")) {
           return mockJsonResponse({
-            accounts: [{ id: 10, platform: "instagram", username: "demo" }],
+            accounts: [{ id: 10, platform: "instagram", username: "demo", status: "active", is_publishable: true }],
           });
         }
         return mockJsonResponse({}, false, 404);

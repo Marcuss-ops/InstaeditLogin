@@ -70,11 +70,11 @@ func TestFetchCachedAccountEditableVideos_UsesShortLivedCache(t *testing.T) {
 	}
 	cfg := YouTubeGroupVideosConfig{MaxVideos: 10, CacheTTL: time.Minute}.normalized()
 
-	first, err := r.fetchCachedAccountEditableVideos(context.Background(), account, cfg)
+	first, err := r.fetchCachedAccountEditableVideos(context.Background(), account, cfg, false)
 	if err != nil {
 		t.Fatalf("first fetch: %v", err)
 	}
-	second, err := r.fetchCachedAccountEditableVideos(context.Background(), account, cfg)
+	second, err := r.fetchCachedAccountEditableVideos(context.Background(), account, cfg, false)
 	if err != nil {
 		t.Fatalf("second fetch: %v", err)
 	}
@@ -83,6 +83,37 @@ func TestFetchCachedAccountEditableVideos_UsesShortLivedCache(t *testing.T) {
 	}
 	if len(first) != 1 || len(second) != 1 || first[0].ID != second[0].ID {
 		t.Fatalf("cached results differ: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestFetchCachedAccountEditableVideos_ForceRefreshBypassesCache(t *testing.T) {
+	account := &models.PlatformAccount{ID: 44, Platform: models.PlatformYouTube, PlatformUserID: "UC-force"}
+	var listCalls int
+	ytSvc := &mockYouTubeOAuthServiceForEditor{
+		listEditableVideosFn: func(context.Context, string, string, string) (*services.YouTubeVideoPage, error) {
+			listCalls++
+			return &services.YouTubeVideoPage{Items: []models.YouTubeVideoDetails{{ID: fmt.Sprintf("video-%d", listCalls)}}}, nil
+		},
+	}
+	r := &Router{
+		vault: &mockCredentialVault{getFn: func(context.Context, int64, string) (*models.OAuthToken, error) {
+			return &models.OAuthToken{AccessToken: "access-token"}, nil
+		}},
+		youTubeSvc: ytSvc,
+	}
+	cfg := YouTubeGroupVideosConfig{MaxVideos: 10, CacheTTL: time.Minute}.normalized()
+	if _, err := r.fetchCachedAccountEditableVideos(context.Background(), account, cfg, false); err != nil {
+		t.Fatalf("initial fetch: %v", err)
+	}
+	items, err := r.fetchCachedAccountEditableVideos(context.Background(), account, cfg, true)
+	if err != nil {
+		t.Fatalf("forced fetch: %v", err)
+	}
+	if listCalls != 2 {
+		t.Fatalf("YouTube list calls: got %d, want 2", listCalls)
+	}
+	if got := items[0].ID; got != "video-2" {
+		t.Fatalf("forced fetch returned %q, want video-2", got)
 	}
 }
 
@@ -109,7 +140,7 @@ func TestFetchCachedAccountEditableVideos_SharesConcurrentMiss(t *testing.T) {
 	results := make(chan error, 2)
 	for range 2 {
 		go func() {
-			_, err := r.fetchCachedAccountEditableVideos(context.Background(), account, cfg)
+			_, err := r.fetchCachedAccountEditableVideos(context.Background(), account, cfg, false)
 			results <- err
 		}()
 	}

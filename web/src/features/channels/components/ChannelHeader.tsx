@@ -26,7 +26,6 @@ import { ArrowLeft, ExternalLink, RefreshCw, Loader2, Video } from "lucide-react
 import { cn } from "../../../lib/utils";
 import type { ChannelAccount } from "../types";
 import { getStatusTone } from "../types";
-import { accountStateLabel } from "../../../types/uploads";
 
 export interface ChannelHeaderProps {
   /** Undefined while the parent page is loading the channel. */
@@ -52,6 +51,17 @@ export function ChannelHeader({
   const isLoaded = account != null;
   const resource = account?.resource;
   const statusTone = getStatusTone(account?.status);
+  const statusLabel = account
+    ? account.account_state === "valid"
+      ? "ACTIVE"
+      : account.account_state === "reconnect_required"
+        ? "RECONNECT_REQUIRED"
+        : account.account_state === "suspended"
+          ? "SUSPENDED"
+          : account.account_state === "deleted"
+            ? "DELETED"
+            : account.status.trim().replace(/\s+/g, "_").toUpperCase()
+    : "";
 
   return (
     <div
@@ -119,7 +129,7 @@ export function ChannelHeader({
                   )}
                   data-testid="channel-header-status"
                 >
-                  {accountStateLabel(account!)}
+                  {statusLabel}
                 </span>
               )}
             </div>

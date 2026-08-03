@@ -45,7 +45,10 @@ func (c YouTubeGroupVideosConfig) normalized() YouTubeGroupVideosConfig {
 		c.CacheTTL = 0
 	}
 	if c.CacheTTL == 0 {
-		c.CacheTTL = 30 * time.Second
+		// Keep private-video reads cached long enough that opening or
+		// revisiting a group does not spend YouTube quota repeatedly.
+		// Deployments may still override this with the env-backed value.
+		c.CacheTTL = 5 * time.Minute
 	}
 	if c.DefaultPageSize <= 0 {
 		c.DefaultPageSize = 50

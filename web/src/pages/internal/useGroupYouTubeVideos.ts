@@ -120,7 +120,7 @@ export function useGroupYouTubeVideos(groupId: number) {
   }, [draftDescription, draftTitle, groupId, navigate, preview, savingMetadata, toast]);
 
   const loadVideos = useCallback(
-    async (signal: AbortSignal, offset = 0, append = false): Promise<void> => {
+    async (signal: AbortSignal, offset = 0, append = false, forceRefresh = false): Promise<void> => {
       try {
         const params = new URLSearchParams({
           include_subgroups: "true",
@@ -128,6 +128,7 @@ export function useGroupYouTubeVideos(groupId: number) {
           offset: String(offset),
           days: String(recencyDays),
         });
+        if (forceRefresh) params.set("refresh", "true");
         const response = await authedFetch(
           `/api/v1/groups/${groupId}/youtube/videos?${params.toString()}`,
           { signal },
@@ -176,7 +177,7 @@ export function useGroupYouTubeVideos(groupId: number) {
   );
 
   const refreshVideos = useCallback(
-    (resetPolling = true): void => {
+    (resetPolling = true, forceRefresh = false): void => {
       if (resetPolling) pollingAttemptsRef.current = 0;
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -184,7 +185,7 @@ export function useGroupYouTubeVideos(groupId: number) {
       if (resetPolling) {
         setState({ kind: "loading" });
       }
-      void loadVideos(controller.signal);
+      void loadVideos(controller.signal, 0, false, forceRefresh);
     },
     [loadVideos],
   );
@@ -203,7 +204,7 @@ export function useGroupYouTubeVideos(groupId: number) {
   }, [loadVideos, state]);
 
   useEffect(() => {
-    refreshVideos();
+    refreshVideos(false);
     return () => abortRef.current?.abort();
   }, [refreshVideos]);
 

@@ -30,30 +30,30 @@ var youtubeGroupVideosInflight = struct {
 }{entries: make(map[string]*youtubeGroupVideosInflightEntry)}
 
 // fetchCachedAccountEditableVideos renews the canonical YouTube bearer grant
-// and returns the
-// first page of private/unlisted/processed videos. Error semantics:
+// and returns the first page of private/unlisted/processed videos. Error semantics:
 // (nil, err) for any failure mode (no token / channel mismatches /
 // transport) — the handler skips the account and surfaces the err
 // in the warnings[] / 502 envelope.
-func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *models.PlatformAccount, cfg YouTubeGroupVideosConfig) ([]models.YouTubeVideoDetails, error) {
-	key := fmt.Sprintf("%p:%d:%s:%d", r, acc.ID, acc.PlatformUserID, cfg.MaxVideos)
+func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *models.PlatformAccount, cfg YouTubeGroupVideosConfig, forceRefresh bool) ([]models.YouTubeVideoDetails, error) {
+	cacheKey := fmt.Sprintf("%d:%s:%d", acc.ID, acc.PlatformUserID, cfg.MaxVideos)
+	// The cache is router-local, while the in-flight map is process-global.
+	// Keep the router identity only on the latter so two independently
+	// configured routers never share an upstream result or token context.
+	inflightKey := fmt.Sprintf("%p:%s", r, cacheKey)
 	now := time.Now()
-	r.youtubeGroupVideosCacheMu.Lock()
-	for cacheKey, entry := range r.youtubeGroupVideosCache {
-		if !entry.expiresAt.After(now) {
-			delete(r.youtubeGroupVideosCache, cacheKey)
+	if !forceRefresh {
+		r.youtubeGroupVideosCacheMu.Lock()
+		cached, ok := r.youtubeGroupVideosCache[cacheKey]
+		if ok && cached.expiresAt.After(now) {
+			items := append([]models.YouTubeVideoDetails(nil), cached.items...)
+			r.youtubeGroupVideosCacheMu.Unlock()
+			return items, nil
 		}
-	}
-	cached, ok := r.youtubeGroupVideosCache[key]
-	if ok && cached.expiresAt.After(now) {
-		items := append([]models.YouTubeVideoDetails(nil), cached.items...)
 		r.youtubeGroupVideosCacheMu.Unlock()
-		return items, nil
 	}
-	r.youtubeGroupVideosCacheMu.Unlock()
 
 	youtubeGroupVideosInflight.Lock()
-	if pending, exists := youtubeGroupVideosInflight.entries[key]; exists {
+	if pending, exists := youtubeGroupVideosInflight.entries[inflightKey]; exists {
 		youtubeGroupVideosInflight.Unlock()
 		select {
 		case <-pending.done:
@@ -63,11 +63,11 @@ func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *mode
 		}
 	}
 	pending := &youtubeGroupVideosInflightEntry{done: make(chan struct{})}
-	youtubeGroupVideosInflight.entries[key] = pending
+	youtubeGroupVideosInflight.entries[inflightKey] = pending
 	youtubeGroupVideosInflight.Unlock()
 	defer func() {
 		youtubeGroupVideosInflight.Lock()
-		delete(youtubeGroupVideosInflight.entries, key)
+		delete(youtubeGroupVideosInflight.entries, inflightKey)
 		close(pending.done)
 		youtubeGroupVideosInflight.Unlock()
 	}()
@@ -87,7 +87,7 @@ func (r *Router) fetchCachedAccountEditableVideos(ctx context.Context, acc *mode
 		if r.youtubeGroupVideosCache == nil {
 			r.youtubeGroupVideosCache = make(map[string]youtubeGroupVideosCacheEntry)
 		}
-		r.youtubeGroupVideosCache[key] = youtubeGroupVideosCacheEntry{
+		r.youtubeGroupVideosCache[cacheKey] = youtubeGroupVideosCacheEntry{
 			items:     append([]models.YouTubeVideoDetails(nil), items...),
 			expiresAt: time.Now().Add(cfg.CacheTTL),
 		}

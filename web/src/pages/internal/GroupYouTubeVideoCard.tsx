@@ -60,7 +60,7 @@ export function GroupYouTubeVideoCard({
               🔒
               <span className="sr-only">{publication.label}</span>
             </span>
-            <span title={`Lingua: ${(video.language?.trim() || "en").toUpperCase()}`} className="inline-flex h-7 min-w-[30px] items-center justify-center rounded-lg border border-violet-500/20 bg-violet-500/[0.10] px-2 text-[15px]">{languageFlag(video.language)}</span>
+            <span title={`Lingua: ${(video.language?.trim() || "non impostata").toUpperCase()}`} className="inline-flex h-7 min-w-[30px] items-center justify-center rounded-lg border border-violet-500/20 bg-violet-500/[0.10] px-2 text-[15px]">{languageFlag(video.language)}</span>
             {formatPublishAt(video.publish_at) && (
               <span className="rounded-lg border border-blue-500/20 bg-blue-500/[0.08] px-2 py-1 text-[10px] font-semibold text-blue-200" title="Orario di pubblicazione programmato">
                 {formatPublishAt(video.publish_at)}

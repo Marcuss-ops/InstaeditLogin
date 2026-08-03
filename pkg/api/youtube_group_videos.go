@@ -148,7 +148,8 @@ func (r *Router) handleListGroupYouTubeVideos(w http.ResponseWriter, req *http.R
 
 	// 6. Fan-out: per-account YouTube listing (bounded concurrency +
 	// per-account timeout).
-	resultsByAccount, sortedAccountIDs := r.fanOutGroupYouTubeVideos(req, accountLookup, cfg)
+	forceRefresh := strings.EqualFold(strings.TrimSpace(req.URL.Query().Get("refresh")), "true")
+	resultsByAccount, sortedAccountIDs := r.fanOutGroupYouTubeVideos(req, accountLookup, cfg, forceRefresh)
 	if !r.writeGroupVideosOK(w, req, resultsByAccount, sortedAccountIDs, accountLookup, sessions, sessionMap, recencyDays, cfg, offset, limit) {
 		return
 	}
@@ -163,6 +164,7 @@ func (r *Router) fanOutGroupYouTubeVideos(
 	req *http.Request,
 	accountLookup map[int64]groupAccountEntry,
 	cfg YouTubeGroupVideosConfig,
+	forceRefresh bool,
 ) (map[int64]groupFetchResult, []int64) {
 	accountIDs := make([]int64, 0, len(accountLookup))
 	for aid := range accountLookup {
@@ -181,7 +183,7 @@ func (r *Router) fanOutGroupYouTubeVideos(
 			defer func() { <-sem }()
 			ctx, cancel := context.WithTimeout(req.Context(), groupYouTubeVideosPerAccountTimeout)
 			defer cancel()
-			items, ferr := r.fetchCachedAccountEditableVideos(ctx, acc, cfg)
+			items, ferr := r.fetchCachedAccountEditableVideos(ctx, acc, cfg, forceRefresh)
 			if ferr != nil {
 				results <- groupFetchResult{
 					accountID:    aid,
@@ -289,6 +291,7 @@ func (r *Router) appendPhantomGroupEntries(
 			ProcessingStatus:  "processed",
 			PlatformAccountID: s.PlatformAccountID,
 			ChannelName:       chName,
+			Language:          accountLanguage(accountLookup[s.PlatformAccountID].account),
 			EditorSessionID:   &sid,
 			VeloxProjectID:    &vid,
 			EditorURL:         &u,

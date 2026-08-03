@@ -22,9 +22,9 @@ func TestListGroupYouTubeVideos_HappyPath(t *testing.T) {
 		ID:             42,
 		UserID:         1,
 		Platform:       models.PlatformYouTube,
-		PlatformUserID: "UC123",
-		Username:       "testchannel",
-		Status:         models.AccountStatusActive,
+		PlatformUserID: "UC123", Username: "testchannel",
+		Status:   models.AccountStatusActive,
+		Metadata: models.Metadata{"language": "pl"},
 	}
 	group := &models.Group{ID: 3, WorkspaceID: workspace.ID, Name: "Marketing"}
 
@@ -118,6 +118,12 @@ func TestListGroupYouTubeVideos_HappyPath(t *testing.T) {
 	if got.ChannelName != "testchannel" {
 		t.Errorf("channel_name: want testchannel (Username), got %q", got.ChannelName)
 	}
+	if got.Language != "pl" {
+		t.Errorf("language: want pl from account metadata, got %q", got.Language)
+	}
+	if got.Language != "pl" {
+		t.Errorf("language: want pl from account metadata, got %q", got.Language)
+	}
 	if got.EditorSessionID == nil || *got.EditorSessionID != "session-existing" {
 		t.Errorf("editor_session_id: want session-existing, got %v", got.EditorSessionID)
 	}
@@ -157,9 +163,9 @@ func TestListGroupYouTubeVideos_JoinMissesReady(t *testing.T) {
 		ID:             42,
 		UserID:         1,
 		Platform:       models.PlatformYouTube,
-		PlatformUserID: "UC123",
-		Username:       "testchannel",
-		Status:         models.AccountStatusActive,
+		PlatformUserID: "UC123", Username: "testchannel",
+		Status:   models.AccountStatusActive,
+		Metadata: models.Metadata{"language": "pl"},
 	}
 	group := &models.Group{ID: 3, WorkspaceID: workspace.ID, Name: "Marketing"}
 
