@@ -172,9 +172,9 @@ func TestListJobsFilterQuery(t *testing.T) {
 	}
 }
 
-// TestCreateJob verifies the client POSTs the body with
-// workspace_id and user_id added from the session identity (in
-// addition to the JWT claims) and converts the response.
+// TestCreateJob verifies the client POSTs the strict job body without
+// workspace_id or user_id (those identities are carried by the JWT)
+// and converts the response.
 func TestCreateJob(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
