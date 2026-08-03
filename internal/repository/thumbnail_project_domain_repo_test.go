@@ -57,6 +57,30 @@ func TestThumbnailProjectRepository_CreateAssignmentValidatesBeforeSQL(t *testin
 	}
 }
 
+func TestThumbnailProjectRepository_UpdateExportStatusValidatesWorkspace(t *testing.T) {
+	db, mock := newThumbnailProjectMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	err := repo.UpdateExportStatus(context.Background(), 0, "export-1", models.ThumbnailProjectExportStatusReady, "", make([]byte, 32), 10, "renderer-1")
+	if !errors.Is(err, repository.ErrThumbnailProjectInvalid) {
+		t.Fatalf("want invalid workspace error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestThumbnailProjectRepository_UpdateExportStatusValidatesFailedError(t *testing.T) {
+	db, mock := newThumbnailProjectMockDB(t)
+	repo := repository.NewThumbnailProjectRepository(db)
+	err := repo.UpdateExportStatus(context.Background(), 7, "export-1", " failed ", " ", nil, 0, " renderer-1 ")
+	if !errors.Is(err, repository.ErrThumbnailProjectInvalid) {
+		t.Fatalf("want invalid failed status error, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestThumbnailProjectRepository_FindExportScopesByWorkspace(t *testing.T) {
 	db, mock := newThumbnailProjectMockDB(t)
 	repo := repository.NewThumbnailProjectRepository(db)

@@ -20,6 +20,15 @@ type ThumbnailProjectStore interface {
 	ListRevisions(ctx context.Context, workspaceID int64, projectID string) ([]models.ThumbnailProjectRevision, error)
 	FindRevision(ctx context.Context, workspaceID int64, projectID, revisionID string) (*models.ThumbnailProjectRevision, error)
 	RestoreRevision(ctx context.Context, workspaceID int64, projectID, revisionID string, baseVersion, createdBy int64, rendererVersion string) (*models.ThumbnailProjectSnapshotResult, error)
+	// CreateExport persists a rendered export bound to a revision of the
+	// same project and a ready media asset owned by the workspace.
+	CreateExport(ctx context.Context, workspaceID int64, export *models.ThumbnailExport) error
+	// FindExport returns a workspace-scoped export by id.
+	FindExport(ctx context.Context, workspaceID int64, exportID string) (*models.ThumbnailExport, error)
+	// UpdateExportStatus transitions a 'rendering' export to 'ready' or
+	// 'failed' and, on ready, advances the project's latest_export_id and
+	// preview_media_id pointers in the same transaction.
+	UpdateExportStatus(ctx context.Context, workspaceID int64, exportID, status, lastError string, sha256 []byte, fileSize int64, rendererVersion string) error
 }
 
 type createThumbnailProjectRequest struct {

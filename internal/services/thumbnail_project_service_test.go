@@ -83,6 +83,16 @@ func (s *thumbnailProjectServiceStore) ListAssignments(context.Context, int64, s
 func (s *thumbnailProjectServiceStore) UpdateAssignmentStatus(context.Context, int64, string, string) error {
 	return nil
 }
+func (s *thumbnailProjectServiceStore) UpdateExportStatus(context.Context, int64, string, string, string, []byte, int64, string) error {
+	return nil
+}
+
+func TestThumbnailProjectServiceUpdateExportStatusRequiresWorkspace(t *testing.T) {
+	service := NewThumbnailProjectService(&thumbnailProjectServiceStore{})
+	if err := service.UpdateExportStatus(context.Background(), 0, "export", models.ThumbnailProjectExportStatusReady, "", make([]byte, 32), 10, "renderer-1"); !errors.Is(err, repository.ErrThumbnailProjectInvalid) {
+		t.Fatalf("want invalid workspace error, got %v", err)
+	}
+}
 
 func TestThumbnailProjectServiceCreateRequiresWorkspace(t *testing.T) {
 	store := &thumbnailProjectServiceStore{}

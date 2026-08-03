@@ -68,10 +68,16 @@ func TestThumbnailProjectRepository_IntegrationAssetsExportsAssignments(t *testi
 	export := &models.ThumbnailExport{
 		ProjectID: project.ID, RevisionID: revision.RevisionID, MediaID: asset.MediaID,
 		ContentType: models.ThumbnailProjectExportContentTypePNG, Width: 1920, Height: 1080,
-		FileSize: 32, SHA256: make([]byte, 32), RendererVersion: "renderer-1", Status: models.ThumbnailProjectExportStatusReady,
+		FileSize: 32, SHA256: make([]byte, 32), RendererVersion: "renderer-1", Status: models.ThumbnailProjectExportStatusRendering,
 	}
 	if err := repo.CreateExport(context.Background(), 9941, export); err != nil {
 		t.Fatalf("CreateExport: %v", err)
+	}
+	if err := repo.UpdateExportStatus(context.Background(), 9941, export.ID, " READY ", "", make([]byte, 32), 32, " renderer-1 "); err != nil {
+		t.Fatalf("UpdateExportStatus ready: %v", err)
+	}
+	if err := repo.UpdateExportStatus(context.Background(), 9941, export.ID, models.ThumbnailProjectExportStatusFailed, "should not transition", make([]byte, 32), 32, "renderer-1"); err == nil {
+		t.Fatal("terminal ready export unexpectedly transitioned to failed")
 	}
 	foundExport, err := repo.FindExport(context.Background(), 9941, export.ID)
 	if err != nil || foundExport == nil {
@@ -83,6 +89,24 @@ func TestThumbnailProjectRepository_IntegrationAssetsExportsAssignments(t *testi
 	}
 	if latestExport != export.ID || previewMedia != asset.MediaID {
 		t.Fatalf("project pointers not updated: latest=%s preview=%s", latestExport, previewMedia)
+	}
+
+	failedExport := &models.ThumbnailExport{
+		ProjectID: project.ID, RevisionID: revision.RevisionID, MediaID: asset.MediaID,
+		ContentType: models.ThumbnailProjectExportContentTypePNG, Width: 1920, Height: 1080,
+		FileSize: 32, SHA256: make([]byte, 32), RendererVersion: "renderer-1", Status: models.ThumbnailProjectExportStatusRendering,
+	}
+	if err := repo.CreateExport(context.Background(), 9941, failedExport); err != nil {
+		t.Fatalf("CreateExport failed case: %v", err)
+	}
+	if err := repo.UpdateExportStatus(context.Background(), 9941, failedExport.ID, " failed ", " renderer crashed ", nil, 0, " renderer-2 "); err != nil {
+		t.Fatalf("UpdateExportStatus failed: %v", err)
+	}
+	if err := repo.CreateAssignment(context.Background(), &models.ThumbnailAssignment{
+		WorkspaceID: 9941, ProjectID: project.ID, ExportID: failedExport.ID, PlatformAccountID: 9941,
+		YouTubeVideoID: "video-failed-9941",
+	}); err == nil {
+		t.Fatal("assignment to failed export unexpectedly succeeded")
 	}
 
 	assignment := &models.ThumbnailAssignment{

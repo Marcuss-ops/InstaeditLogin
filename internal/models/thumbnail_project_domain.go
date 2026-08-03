@@ -105,7 +105,12 @@ func (e *ThumbnailExport) NormalizeAndValidate() error {
 		e.Status = ThumbnailProjectExportStatusRendering
 	}
 	switch e.Status {
-	case ThumbnailProjectExportStatusRendering, ThumbnailProjectExportStatusReady, ThumbnailProjectExportStatusFailed:
+	case ThumbnailProjectExportStatusRendering, ThumbnailProjectExportStatusReady:
+	case ThumbnailProjectExportStatusFailed:
+		if strings.TrimSpace(e.LastError) == "" {
+			return fmt.Errorf("failed export last_error is required")
+		}
+		e.LastError = strings.TrimSpace(e.LastError)
 	default:
 		return fmt.Errorf("unsupported thumbnail export status %q", e.Status)
 	}
@@ -131,6 +136,33 @@ func ValidateThumbnailProjectAssignmentStatus(status string) error {
 		return fmt.Errorf("unsupported thumbnail assignment status %q", status)
 	}
 	return nil
+}
+
+// NormalizeThumbnailProjectExportStatus validates a render lifecycle update
+// and returns its canonical status.
+func NormalizeThumbnailProjectExportStatus(status, lastError string, sha256 []byte, fileSize int64, rendererVersion string) (string, error) {
+	status = strings.ToLower(strings.TrimSpace(status))
+	rendererVersion = strings.TrimSpace(rendererVersion)
+	switch status {
+	case ThumbnailProjectExportStatusRendering:
+	case ThumbnailProjectExportStatusReady:
+		if len(sha256) != 32 {
+			return "", fmt.Errorf("ready export sha256 must contain exactly 32 bytes")
+		}
+		if fileSize < 0 {
+			return "", fmt.Errorf("ready export file_size cannot be negative")
+		}
+	case ThumbnailProjectExportStatusFailed:
+		if strings.TrimSpace(lastError) == "" {
+			return "", fmt.Errorf("failed export last_error is required")
+		}
+	default:
+		return "", fmt.Errorf("unsupported thumbnail export status %q", status)
+	}
+	if rendererVersion == "" {
+		return "", fmt.Errorf("renderer_version is required")
+	}
+	return status, nil
 }
 
 // NormalizeAndValidate prepares an optional YouTube destination assignment.

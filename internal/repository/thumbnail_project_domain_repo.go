@@ -205,6 +205,71 @@ func (r *ThumbnailProjectRepository) CreateExport(ctx context.Context, workspace
 	return nil
 }
 
+// UpdateExportStatus completes a render without allowing a project or export
+// to escape its workspace. Ready exports require a verified SHA-256 and size;
+// failed exports retain the diagnostic error and cannot be assigned. The
+// export transition and project preview pointer update are one transaction.
+func (r *ThumbnailProjectRepository) UpdateExportStatus(ctx context.Context, workspaceID int64, exportID, status, lastError string, sha256 []byte, fileSize int64, rendererVersion string) error {
+	normalizedError := strings.TrimSpace(lastError)
+	normalizedRenderer := strings.TrimSpace(rendererVersion)
+	normalizedStatus, err := models.NormalizeThumbnailProjectExportStatus(status, normalizedError, sha256, fileSize, normalizedRenderer)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrThumbnailProjectInvalid, err)
+	}
+	exportID = strings.TrimSpace(exportID)
+	if workspaceID <= 0 || exportID == "" {
+		return fmt.Errorf("%w: workspace_id and export_id are required", ErrThumbnailProjectInvalid)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("update thumbnail export status begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var projectID, mediaID string
+	err = tx.QueryRowContext(ctx, `
+		UPDATE thumbnail_exports e
+		   SET status = $1,
+		       last_error = $2,
+		       sha256 = CASE WHEN $1 = 'ready' THEN $3 ELSE e.sha256 END,
+		       file_size = CASE WHEN $1 = 'ready' THEN $4 ELSE e.file_size END,
+		       renderer_version = CASE WHEN $5 <> '' THEN $5 ELSE e.renderer_version END
+		 WHERE e.id = $6
+		   AND e.status = 'rendering'
+		   AND EXISTS (
+			   SELECT 1 FROM thumbnail_projects p
+			    WHERE p.id = e.project_id AND p.workspace_id = $7 AND p.status <> $8
+		   )
+		 RETURNING e.project_id, e.media_id`,
+		normalizedStatus, normalizedError, sha256, fileSize, normalizedRenderer, exportID, workspaceID,
+		models.ThumbnailProjectStatusDeleted).Scan(&projectID, &mediaID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: export is missing, outside workspace, or has an invalid lifecycle transition", ErrThumbnailExportNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("update thumbnail export status: %w", err)
+	}
+	if normalizedStatus == models.ThumbnailProjectExportStatusReady {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE thumbnail_projects
+			   SET latest_export_id = $1, preview_media_id = $2::uuid, updated_at = NOW()
+			 WHERE id = $3 AND workspace_id = $4`, exportID, mediaID, projectID, workspaceID); err != nil {
+			return fmt.Errorf("update thumbnail preview pointer: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("update thumbnail export status commit: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 func (r *ThumbnailProjectRepository) FindExport(ctx context.Context, workspaceID int64, exportID string) (*models.ThumbnailExport, error) {
 	exportID = strings.TrimSpace(exportID)
 	if workspaceID <= 0 || exportID == "" {

@@ -31,6 +31,7 @@ type ThumbnailProjectStore interface {
 	CreateAssignment(context.Context, *models.ThumbnailAssignment) error
 	ListAssignments(context.Context, int64, string) ([]models.ThumbnailAssignment, error)
 	UpdateAssignmentStatus(context.Context, int64, string, string) error
+	UpdateExportStatus(context.Context, int64, string, string, string, []byte, int64, string) error
 }
 
 var _ ThumbnailProjectStore = (*repository.ThumbnailProjectRepository)(nil)
@@ -145,6 +146,13 @@ func (s *ThumbnailProjectService) CreateExport(ctx context.Context, workspaceID 
 	return s.store.CreateExport(ctx, workspaceID, export)
 }
 
+func (s *ThumbnailProjectService) UpdateExportStatus(ctx context.Context, workspaceID int64, exportID, status, lastError string, sha256 []byte, fileSize int64, rendererVersion string) error {
+	if err := s.validateWorkspace(workspaceID); err != nil {
+		return err
+	}
+	return s.store.UpdateExportStatus(ctx, workspaceID, strings.TrimSpace(exportID), status, lastError, sha256, fileSize, rendererVersion)
+}
+
 func (s *ThumbnailProjectService) CreateAssignment(ctx context.Context, assignment *models.ThumbnailAssignment) error {
 	if assignment == nil {
 		return fmt.Errorf("%w: assignment is required", repository.ErrThumbnailProjectInvalid)
@@ -166,6 +174,13 @@ func (s *ThumbnailProjectService) ListAssets(ctx context.Context, workspaceID in
 		return nil, err
 	}
 	return s.store.ListAssets(ctx, workspaceID, strings.TrimSpace(projectID))
+}
+
+func (s *ThumbnailProjectService) FindExport(ctx context.Context, workspaceID int64, exportID string) (*models.ThumbnailExport, error) {
+	if err := s.validateWorkspace(workspaceID); err != nil {
+		return nil, err
+	}
+	return s.store.FindExport(ctx, workspaceID, strings.TrimSpace(exportID))
 }
 
 func (s *ThumbnailProjectService) ListExports(ctx context.Context, workspaceID int64, projectID string) ([]models.ThumbnailExport, error) {

@@ -293,7 +293,11 @@ func (r *ThumbnailProjectRepository) SaveSnapshot(ctx context.Context, workspace
 		return nil, fmt.Errorf("%w: expected=%d current=%d", ErrThumbnailProjectConflict, snapshot.BaseVersion, version)
 	}
 	existing := &models.ThumbnailProjectRevision{}
-	err = tx.QueryRowContext(ctx, `SELECT id, project_id, revision_number, schema_version, snapshot_json, snapshot_sha256, renderer_version, created_by, created_at FROM thumbnail_project_revisions WHERE project_id = $1 AND snapshot_sha256 = $2 ORDER BY revision_number DESC LIMIT 1`, projectID, hash).Scan(&existing.ID, &existing.ProjectID, &existing.RevisionNumber, &existing.SchemaVersion, &existing.SnapshotJSON, &existing.SnapshotSHA256, &existing.RendererVersion, &existing.CreatedBy, &existing.CreatedAt)
+	err = tx.QueryRowContext(ctx, `SELECT r.id, r.project_id, r.revision_number, r.schema_version, r.snapshot_json, r.snapshot_sha256, r.renderer_version, r.created_by, r.created_at
+		FROM thumbnail_project_revisions r
+		JOIN thumbnail_projects p ON p.current_revision_id = r.id
+		WHERE r.project_id = $1 AND r.snapshot_sha256 = $2
+		ORDER BY r.revision_number DESC LIMIT 1`, projectID, hash).Scan(&existing.ID, &existing.ProjectID, &existing.RevisionNumber, &existing.SchemaVersion, &existing.SnapshotJSON, &existing.SnapshotSHA256, &existing.RendererVersion, &existing.CreatedBy, &existing.CreatedAt)
 	if err == nil {
 		if err = tx.Commit(); err != nil {
 			return nil, err

@@ -24,6 +24,17 @@ type thumbnailProjectTestStore struct {
 	snapshot    *models.ThumbnailProjectSnapshotResult
 	revisions   []models.ThumbnailProjectRevision
 	revision    *models.ThumbnailProjectRevision
+	// Export surfaces for the render/export endpoints.
+	createExportErr   error
+	updateExportErr   error
+	createdExport     *models.ThumbnailExport
+	export            *models.ThumbnailExport
+	findExportErr     error
+	lastExportStatus  string
+	lastExportError   string
+	lastExportSHA     []byte
+	lastExportFileSz  int64
+	lastExportVersion string
 }
 
 func (s *thumbnailProjectTestStore) Create(_ context.Context, project *models.ThumbnailProject) error {
@@ -60,6 +71,34 @@ func (s *thumbnailProjectTestStore) FindRevision(_ context.Context, _ int64, _, 
 }
 func (s *thumbnailProjectTestStore) RestoreRevision(_ context.Context, _ int64, _, _ string, _, _ int64, _ string) (*models.ThumbnailProjectSnapshotResult, error) {
 	return s.snapshot, s.snapshotErr
+}
+func (s *thumbnailProjectTestStore) CreateExport(_ context.Context, _ int64, export *models.ThumbnailExport) error {
+	if s.createExportErr != nil {
+		return s.createExportErr
+	}
+	if export.ID == "" {
+		export.ID = "thumbexp_test"
+	}
+	export.CreatedAt = time.Now().UTC()
+	s.createdExport = export
+	return nil
+}
+func (s *thumbnailProjectTestStore) FindExport(_ context.Context, _ int64, _ string) (*models.ThumbnailExport, error) {
+	return s.export, s.findExportErr
+}
+func (s *thumbnailProjectTestStore) UpdateExportStatus(_ context.Context, _ int64, _ string, status, lastError string, sha256 []byte, fileSize int64, rendererVersion string) error {
+	if s.updateExportErr != nil {
+		return s.updateExportErr
+	}
+	s.lastExportStatus = status
+	s.lastExportError = lastError
+	s.lastExportSHA = sha256
+	s.lastExportFileSz = fileSize
+	s.lastExportVersion = rendererVersion
+	if s.export != nil {
+		s.export.Status = status
+	}
+	return nil
 }
 
 func thumbnailProjectRouter(t *testing.T, store *thumbnailProjectTestStore, ws *mockWorkspaceStore) *Router {
