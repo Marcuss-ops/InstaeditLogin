@@ -104,6 +104,13 @@ paths:
     post:
       tags: [Jobs]
       operationId: jobsCreate
+      servers:
+        - url: https://api.instaeditlogin.example/api/v1
+          description: Production canonical API base
+        - url: https://api-staging.instaeditlogin.example/api/v1
+          description: Staging canonical API base
+        - url: http://localhost:8080/api/v1
+          description: Local canonical API base
       summary: Submit one canonical Velox render job.
       description: |
         Creates one asynchronous render job using the stable

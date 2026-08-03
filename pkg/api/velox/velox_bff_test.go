@@ -268,6 +268,50 @@ func TestCreateJob_InvalidJSON_400(t *testing.T) {
 	}
 }
 
+func TestCreateJob_RejectsCanonicalFieldsOnLegacyRoute_400(t *testing.T) {
+	called := false
+	mc := &mockClient{createJobFn: func(context.Context, int64, int64, CreateJobRequest) (*Job, error) {
+		called = true
+		return nil, nil
+	}}
+	mux := newMux(t, mc, stubAuth)
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"legacy-canonical-mix","project_id":"project_123","render_spec":{},"job_type":"scene.composite.v1","delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J"}]}}`
+	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for canonical fields on legacy route, got %d: %s", w.Code, w.Body.String())
+	}
+	if called {
+		t.Fatal("legacy client should not be called for a mixed contract")
+	}
+}
+
+func TestCreateJob_RejectsTrailingJSON_400(t *testing.T) {
+	mc := &mockClient{}
+	mux := newMux(t, mc, stubAuth)
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"legacy-trailing","project_id":"project_123","render_spec":{},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J"}]}} {"extra":true}`
+	w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for trailing JSON, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreateJob_RejectsNestedUnknownFields_400(t *testing.T) {
+	for _, field := range []string{"delivery_plan", "destination"} {
+		t.Run(field, func(t *testing.T) {
+			mc := &mockClient{}
+			mux := newMux(t, mc, stubAuth)
+			body := `{"contract_version":"velox.job.v1","idempotency_key":"legacy-nested","project_id":"project_123","render_spec":{},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J","unexpected_destination":true}],"unexpected_plan":true}}`
+			if field == "delivery_plan" {
+				body = strings.Replace(body, `,"unexpected_destination":true`, "", 1)
+			}
+			w := do(t, mux, http.MethodPost, "/api/v1/velox/jobs", body)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 for nested unknown %s, got %d: %s", field, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestGetJob_HappyPath(t *testing.T) {
 	mc := &mockClient{getJobFn: func(_ context.Context, wsID, uid int64, id string) (*JobDetail, error) {
 		if id != "job_1" {

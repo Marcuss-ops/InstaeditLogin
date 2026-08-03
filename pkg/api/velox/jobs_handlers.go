@@ -80,6 +80,15 @@ func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON: multiple values")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		}
+		return
+	}
 	if strings.TrimSpace(body.ContractVersion) == "" {
 		writeError(w, http.StatusUnprocessableEntity, "validation: contract_version is required")
 		return

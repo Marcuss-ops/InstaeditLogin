@@ -89,7 +89,11 @@ type Asset struct {
 	DownloadURL string `json:"download_url,omitempty"`
 }
 
-// CreateJobRequest is the body for POST /api/v1/velox/jobs. The
+// CreateJobRequest is the shared client DTO for job creation. The
+// HTTP legacy route POST /api/v1/velox/jobs decodes this type, but its
+// custom unmarshaler rejects canonical-only fields so a canonical and
+// legacy payload cannot be silently mixed. The canonical route adapts
+// JobSubmissionRequest into this DTO after strict validation.
 // workspace_id and user_id are NOT in this body; the handler reads
 // them from the session identity.
 type CreateJobRequest struct {
@@ -112,9 +116,57 @@ type CreateJobRequest struct {
 	DeliveryPlan DeliveryPlan    `json:"delivery_plan"`
 }
 
+// UnmarshalJSON keeps the migration boundary explicit. CreateJobRequest
+// remains the internal DTO accepted by the Velox client, but the legacy
+// HTTP endpoint must not accept canonical fields and then treat them as
+// optional data. Canonical callers use JobSubmissionRequest instead.
+func (r *CreateJobRequest) UnmarshalJSON(data []byte) error {
+	type plain CreateJobRequest
+	var envelope struct {
+		*plain
+		JobType         json.RawMessage `json:"job_type"`
+		TemplateID      json.RawMessage `json:"template_id"`
+		TemplateVersion json.RawMessage `json:"template_version"`
+		VideoName       json.RawMessage `json:"video_name"`
+		Spec            json.RawMessage `json:"spec"`
+		Output          json.RawMessage `json:"output"`
+	}
+	envelope.plain = new(plain)
+	if err := decodeStrict(data, &envelope); err != nil {
+		return err
+	}
+	for name, value := range map[string]json.RawMessage{
+		"job_type":         envelope.JobType,
+		"template_id":      envelope.TemplateID,
+		"template_version": envelope.TemplateVersion,
+		"video_name":       envelope.VideoName,
+		"spec":             envelope.Spec,
+		"output":           envelope.Output,
+	} {
+		if len(value) != 0 {
+			return errors.New("canonical field " + name + " is not allowed on the legacy job endpoint")
+		}
+	}
+	*r = CreateJobRequest(*envelope.plain)
+	return nil
+}
+
 // DeliveryPlan is the nested delivery_plan block of CreateJobRequest.
 type DeliveryPlan struct {
 	Destinations []DeliveryDestination `json:"destinations"`
+}
+
+// UnmarshalJSON keeps nested legacy payloads strict as well as the
+// top-level envelope. This prevents silently dropping misspelled delivery
+// fields during the migration.
+func (p *DeliveryPlan) UnmarshalJSON(data []byte) error {
+	type plain DeliveryPlan
+	var decoded plain
+	if err := decodeStrict(data, &decoded); err != nil {
+		return err
+	}
+	*p = DeliveryPlan(decoded)
+	return nil
 }
 
 // DeliveryDestination references an InstaEdit-managed destination by
@@ -123,6 +175,18 @@ type DeliveryDestination struct {
 	ExternalDestinationID string          `json:"external_destination_id"`
 	PublicationID         string          `json:"publication_id,omitempty"`
 	Metadata              json.RawMessage `json:"metadata"`
+}
+
+// UnmarshalJSON applies the same unknown-field policy to each delivery
+// destination object.
+func (d *DeliveryDestination) UnmarshalJSON(data []byte) error {
+	type plain DeliveryDestination
+	var decoded plain
+	if err := decodeStrict(data, &decoded); err != nil {
+		return err
+	}
+	*d = DeliveryDestination(decoded)
+	return nil
 }
 
 // ListJobsFilter carries optional query parameters for GET /api/v1/velox/jobs.
