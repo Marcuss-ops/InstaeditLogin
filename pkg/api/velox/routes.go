@@ -122,7 +122,10 @@ func Register(mux chi.Router, deps Deps) {
 	if deps.JobRegistry == nil {
 		deps.JobRegistry = veloxjobs.NewDefaultRegistry()
 	}
-	b := &bff{deps: deps}
+	b := &bff{
+		deps:       deps,
+		submission: veloxjobs.NewJobSubmissionService(deps.Client, deps.JobRegistry),
+	}
 	wrap := deps.wrap
 
 	mux.Method(http.MethodGet, "/api/v1/velox/jobs", wrap(b.listJobs))
@@ -154,7 +157,8 @@ func (d Deps) wrap(h http.HandlerFunc) http.Handler {
 // bff holds the deps for all handlers. Methods on *bff are the
 // handler functions registered by Register.
 type bff struct {
-	deps Deps
+	deps       Deps
+	submission *veloxjobs.JobSubmissionService
 }
 
 // --- Local helpers --------------------------------------------------------

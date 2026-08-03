@@ -75,7 +75,7 @@ func TestRegistryUnknownJobType(t *testing.T) {
 
 func TestDefaultRegistryNamesStable(t *testing.T) {
 	got := NewDefaultRegistry().Names()
-	want := []string{"audio.mux.v1", "clip.stock.v1", "microcut.batch.v1", "scene.composite.v1", "scene.image.v1", "slideshow.v1"}
+	want := []string{"audio.mux.v1", "clip.stock.v1", "legacy.render.v1", "microcut.batch.v1", "scene.composite.v1", "scene.image.v1", "slideshow.v1"}
 	if len(got) != len(want) {
 		t.Fatalf("Names = %v, want %v", got, want)
 	}
@@ -83,6 +83,16 @@ func TestDefaultRegistryNamesStable(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("Names = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestLegacyRenderDefinitionValidates(t *testing.T) {
+	def, err := NewDefaultRegistry().Resolve("legacy.render.v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := def.Validator.Validate(json.RawMessage(`{"legacy_render_spec":{"template":"news"}}`)); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
 }
 

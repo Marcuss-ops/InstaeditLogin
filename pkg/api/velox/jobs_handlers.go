@@ -2,6 +2,7 @@ package velox
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,9 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/Marcuss-ops/InstaeditLogin/internal/veloxjobs"
+	"github.com/Marcuss-ops/InstaeditLogin/pkg/metrics"
 )
 
 // listJobs implements GET /api/v1/velox/jobs.
@@ -69,19 +73,26 @@ func (b *bff) listJobs(w http.ResponseWriter, req *http.Request) {
 // forwarded to Velox via the signed Client call — they NEVER come
 // from the browser body.
 func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
+	outcome := metrics.LegacyJobOutcomeValidation
+	defer func() {
+		metrics.RecordLegacyJobEndpointUsage(metrics.LegacyJobEndpointVeloxJobs, outcome)
+	}()
 	wsID, userID, ok := b.requireIdentity(w, req)
 	if !ok {
+		outcome = metrics.LegacyJobOutcomeAuth
 		return
 	}
 	var body CreateJobRequest
 	decoder := json.NewDecoder(req.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
+		outcome = metrics.LegacyJobOutcomeBadRequest
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
+		outcome = metrics.LegacyJobOutcomeBadRequest
 		if err == nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON: multiple values")
 		} else {
@@ -89,51 +100,38 @@ func (b *bff) createJob(w http.ResponseWriter, req *http.Request) {
 		}
 		return
 	}
-	if strings.TrimSpace(body.ContractVersion) == "" {
-		writeError(w, http.StatusUnprocessableEntity, "validation: contract_version is required")
-		return
-	}
-	if body.ContractVersion != "velox.job.v1" {
-		writeError(w, http.StatusUnprocessableEntity, "validation: unsupported contract_version")
-		return
-	}
-	if strings.TrimSpace(body.IdempotencyKey) == "" {
-		writeError(w, http.StatusUnprocessableEntity, "validation: idempotency_key is required")
-		return
-	}
-	if body.ProjectID == "" {
-		writeError(w, http.StatusUnprocessableEntity, "validation: project_id is required")
-		return
-	}
-	if len(body.RenderSpec) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "validation: render_spec is required")
-		return
-	}
-	if len(body.DeliveryPlan.Destinations) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "validation: delivery_plan.destinations must be non-empty")
-		return
-	}
-	for i, d := range body.DeliveryPlan.Destinations {
-		if d.ExternalDestinationID == "" {
-			writeError(w, http.StatusUnprocessableEntity,
-				"validation: delivery_plan.destinations["+strconv.Itoa(i)+"].external_destination_id is required")
+	result, err := b.submission.SubmitLegacy(req.Context(), wsID, userID, body)
+	if err != nil {
+		if errors.Is(err, veloxjobs.ErrInvalidSubmission) {
+			outcome = metrics.LegacyJobOutcomeValidation
+			writeError(w, http.StatusUnprocessableEntity, "validation: "+err.Error())
 			return
 		}
-	}
-	job, err := b.deps.Client.CreateJob(req.Context(), wsID, userID, body)
-	if err != nil {
+		if errors.Is(err, veloxjobs.ErrNilJob) {
+			outcome = metrics.LegacyJobOutcomeUpstream
+			writeError(w, http.StatusInternalServerError, "upstream call failed")
+			return
+		}
+		if errors.Is(err, ErrWorkspaceMismatch) || errors.Is(err, ErrNotFound) {
+			outcome = metrics.LegacyJobOutcomeMismatch
+		} else {
+			outcome = metrics.LegacyJobOutcomeUpstream
+		}
 		slog.Error("velox bff: create job failed",
 			"workspace_id", wsID, "user_id", userID, "err", err)
 		mapClientError(w, err)
 		return
 	}
+	job := result.Job
 	// Defense-in-depth: verify the returned job belongs to the
 	// caller's workspace before returning 201. A misconfigured Velox
 	// could return a job stamped with a different workspace; reject
 	// it rather than leak a cross-tenant resource id.
 	if !verifyOwnership(w, job.WorkspaceID, wsID) {
+		outcome = metrics.LegacyJobOutcomeMismatch
 		return
 	}
+	outcome = metrics.LegacyJobOutcomeAccepted
 	slog.Info("velox bff: job created",
 		"job_id", job.ID, "workspace_id", wsID, "user_id", userID)
 	writeJSON(w, http.StatusAccepted, job)
@@ -163,37 +161,25 @@ func (b *bff) createCanonicalJob(w http.ResponseWriter, req *http.Request) {
 		}
 		return
 	}
-	if err := body.ValidateCanonical(); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation: "+err.Error())
-		return
-	}
-	definition, err := b.deps.JobRegistry.Resolve(body.JobType)
+	result, err := b.submission.SubmitCanonical(req.Context(), wsID, userID, body)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation: unknown job_type")
-		return
-	}
-	if err := definition.Validator.Validate(body.Spec); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation: spec: "+err.Error())
-		return
-	}
-	compiled, err := definition.Compiler.Compile(body.Spec)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation: compile spec: "+err.Error())
-		return
-	}
-	estimate, err := definition.CostEstimator.Estimate(compiled.Spec, body.Output)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation: estimate spec: "+err.Error())
-		return
-	}
-	body.Spec = compiled.Spec
-	job, err := b.deps.Client.CreateJob(req.Context(), wsID, userID, body.AsCreateJobRequest())
-	if err != nil {
+		if errors.Is(err, veloxjobs.ErrInvalidSubmission) {
+			message := err.Error()
+			if strings.Contains(message, "unknown velox job_type") {
+				message = "validation: unknown job_type"
+			} else {
+				message = "validation: " + message
+			}
+			writeError(w, http.StatusUnprocessableEntity, message)
+			return
+		}
 		slog.Error("velox bff: canonical job create failed",
 			"workspace_id", wsID, "user_id", userID, "err", err)
 		mapClientError(w, err)
 		return
 	}
+	job := result.Job
+	estimate := result.Estimate
 	if !verifyOwnership(w, job.WorkspaceID, wsID) {
 		return
 	}

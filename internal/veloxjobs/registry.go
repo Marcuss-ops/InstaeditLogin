@@ -161,14 +161,19 @@ func NewDefaultRegistry() *Registry {
 	for _, jobType := range []string{
 		"audio.mux.v1",
 		"clip.stock.v1",
+		"legacy.render.v1",
 		"microcut.batch.v1",
 		"scene.composite.v1",
 		"scene.image.v1",
 		"slideshow.v1",
 	} {
+		validator := Validator(objectSpecValidator{requiredArray: requiredArrayFor(jobType)})
+		if jobType == "legacy.render.v1" {
+			validator = legacySpecValidator{}
+		}
 		definition := Definition{
 			JobType:       jobType,
-			Validator:     objectSpecValidator{requiredArray: requiredArrayFor(jobType)},
+			Validator:     validator,
 			Compiler:      canonicalJSONCompiler{jobType: jobType},
 			CostEstimator: profileCostEstimator{jobType: jobType},
 		}
@@ -224,6 +229,23 @@ func (v objectSpecValidator) Validate(spec json.RawMessage) error {
 		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 			return fmt.Errorf("spec.%s[%d] must be a JSON value", v.requiredArray, i)
 		}
+	}
+	return nil
+}
+
+type legacySpecValidator struct{}
+
+func (legacySpecValidator) Validate(spec json.RawMessage) error {
+	trimmed := bytes.TrimSpace(spec)
+	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
+		return errors.New("spec must be a valid JSON object")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &object); err != nil {
+		return fmt.Errorf("spec object: %w", err)
+	}
+	if raw, ok := object["legacy_render_spec"]; !ok || len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return errors.New("spec.legacy_render_spec is required")
 	}
 	return nil
 }
