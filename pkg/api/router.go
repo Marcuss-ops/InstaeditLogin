@@ -290,6 +290,10 @@ type Router struct {
 	// youtubeThumbnailBatchStore persists idempotent batch thumbnail
 	// applications and their progress.
 	youtubeThumbnailBatchStore YouTubeThumbnailBatchStore
+	// livestreamStore persists livestream configurations + state rows
+	// for the livestream module. Wired via WithLivestreamStore; when
+	// nil, the /api/v1/livestreams/* endpoints return 503.
+	livestreamStore LivestreamStore
 
 	// contentPipelineStore (Blocco Carosello) backs the unified
 	// GET /api/v1/content/{id}/pipeline endpoint. Single workspace-
@@ -446,6 +450,11 @@ var _ YouTubeOAuthService = (*services.YouTubeOAuthService)(nil)
 // Compile-time assertion that *repository.YouTubeVideoEditRepository
 // satisfies the YouTubeVideoEditStore interface.
 var _ YouTubeVideoEditStore = (*repository.YouTubeVideoEditRepository)(nil)
+
+// Compile-time assertion that *repository.LivestreamRepository
+// satisfies the LivestreamStore interface (catches signature drift at
+// go vet time, not at runtime).
+var _ LivestreamStore = (*repository.LivestreamRepository)(nil)
 
 // Compile-time assertion that *repository.ContentPipelineRepository
 // satisfies the ContentPipelineStore interface (catches signature

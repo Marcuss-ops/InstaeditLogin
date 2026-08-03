@@ -56,6 +56,7 @@ type Core struct {
 	connectLinkNonceRepo      *repository.ConnectLinkNonceRepository
 	youtubeVideoEditRepo      *repository.YouTubeVideoEditRepository
 	youtubeThumbnailBatchRepo *repository.YouTubeThumbnailBatchRepository
+	livestreamRepo            *repository.LivestreamRepository
 }
 
 // WireCore builds the shared runtime dependencies used by every binary.
@@ -118,6 +119,7 @@ func WireCore(ctx context.Context) (*Core, error) {
 	connectLinkNonceRepo := repository.NewConnectLinkNonceRepository(db)
 	youtubeVideoEditRepo := repository.NewYouTubeVideoEditRepository(db)
 	youtubeThumbnailBatchRepo := repository.NewYouTubeThumbnailBatchRepository(db)
+	livestreamRepo := repository.NewLivestreamRepository(db)
 
 	vault := credentials.NewCredentialVault(enc, db, tokenRepo)
 
@@ -178,5 +180,6 @@ func WireCore(ctx context.Context) (*Core, error) {
 		connectLinkNonceRepo:      connectLinkNonceRepo,
 		youtubeVideoEditRepo:      youtubeVideoEditRepo,
 		youtubeThumbnailBatchRepo: youtubeThumbnailBatchRepo,
+		livestreamRepo:            livestreamRepo,
 	}, nil
 }

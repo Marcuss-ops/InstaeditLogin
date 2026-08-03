@@ -355,6 +355,15 @@ func WithYouTubeThumbnailBatchStore(store YouTubeThumbnailBatchStore) RouterOpti
 	}
 }
 
+// WithLivestreamStore wires livestream configuration persistence.
+// When nil, the /api/v1/livestreams/* endpoints return 503 (matches
+// the nil-store feature-flag pattern).
+func WithLivestreamStore(store LivestreamStore) RouterOption {
+	return func(r *Router) {
+		r.livestreamStore = store
+	}
+}
+
 // WithContentPipelineStore wires the consolidated read-side repo
 // used by GET /api/v1/content/{id}/pipeline. When nil, the route
 // returns 503 (matches the rest of the nil-store feature flags).

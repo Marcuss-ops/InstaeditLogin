@@ -282,6 +282,36 @@ func (r *Router) Setup() http.Handler {
 	var getYouTubeThumbnailBatchHandler http.Handler = http.HandlerFunc(r.handleGetYouTubeThumbnailBatch)
 	r.mux.Method(http.MethodGet, "/api/v1/youtube/thumbnail-batches/{batch_id}", r.protected(getYouTubeThumbnailBatchHandler.ServeHTTP))
 
+	// Livestream module — configuration CRUD base. A POST creates a
+	// live CONFIGURATION in state draft; the state machine
+	// (desired_state/actual_state) is worker-owned and the control
+	// endpoints (prepare/start/stop/restart) land with the encoder
+	// worker. GET /api/v1/livestreams returns the workspace's rows as
+	// {items: [...]} — the sidebar badge counts actual_state == "live".
+	var listLivestreamsHandler http.Handler = http.HandlerFunc(r.handleListLivestreams)
+	r.mux.Method(http.MethodGet, "/api/v1/livestreams", r.protected(listLivestreamsHandler.ServeHTTP))
+
+	var createLivestreamHandler http.Handler = http.HandlerFunc(r.handleCreateLivestream)
+	if r.csrfMiddleware != nil {
+		createLivestreamHandler = r.csrfMiddleware(createLivestreamHandler)
+	}
+	r.mux.Method(http.MethodPost, "/api/v1/livestreams", r.protected(createLivestreamHandler.ServeHTTP))
+
+	var getLivestreamHandler http.Handler = http.HandlerFunc(r.handleGetLivestream)
+	r.mux.Method(http.MethodGet, "/api/v1/livestreams/{id}", r.protected(getLivestreamHandler.ServeHTTP))
+
+	var patchLivestreamHandler http.Handler = http.HandlerFunc(r.handlePatchLivestream)
+	if r.csrfMiddleware != nil {
+		patchLivestreamHandler = r.csrfMiddleware(patchLivestreamHandler)
+	}
+	r.mux.Method(http.MethodPatch, "/api/v1/livestreams/{id}", r.protected(patchLivestreamHandler.ServeHTTP))
+
+	var deleteLivestreamHandler http.Handler = http.HandlerFunc(r.handleDeleteLivestream)
+	if r.csrfMiddleware != nil {
+		deleteLivestreamHandler = r.csrfMiddleware(deleteLivestreamHandler)
+	}
+	r.mux.Method(http.MethodDelete, "/api/v1/livestreams/{id}", r.protected(deleteLivestreamHandler.ServeHTTP))
+
 	// Blocco Carosello — unified pipeline view endpoint. Aggregates
 	// Drive + storage + per-target YouTube publish + Velox editor
 	// state into a single response that the SPA timeline UI consumes

@@ -147,6 +147,7 @@ func buildRouterWiring(s *wireState) (*api.Router, *sentry.Hub, error) {
 		api.WithRouterAnalyticsClock(analyticsClock),
 		api.WithYouTubeVideoEditStore(s.youtubeVideoEditRepo),
 		api.WithYouTubeThumbnailBatchStore(s.youtubeThumbnailBatchRepo),
+		api.WithLivestreamStore(s.livestreamRepo),
 		api.WithContentPipelineStore(s.contentPipelineRepo),
 		api.WithEditorURL(s.cfg.HTTP.EditorURL),
 		// Blocco #2 P0 — wire the env-driven publish-horizon +

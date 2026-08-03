@@ -1,7 +1,7 @@
 # =========================================================
-# API AUDIT SUMMARY (1 dropped, 22 kept endpoints)
+# API AUDIT SUMMARY (1 dropped, 24 kept endpoints)
 # =========================================================
-# KEPT: 22 PUBLIC_INTER_SERVICE paths across:
+# KEPT: 24 PUBLIC_INTER_SERVICE paths across:
 #   * Auth          — /auth/exchange, /auth/logout, /auth/me,
 #                     /auth/{provider}/callback, /auth/{provider}/login
 #   * Auth/API key  — /api-keys, /api-keys/{id}, /api-keys/{id}/rotate
@@ -13,6 +13,8 @@
 #                     /internal/v1/deliveries/{id},
 #                     /internal/v1/destinations/{id}/validate
 #   * YouTube       — /api/v1/youtube/editor-sessions/{id}/thumbnail
+#   * Livestreams   — /api/v1/livestreams (GET/POST),
+#                     /api/v1/livestreams/{id} (GET/PATCH/DELETE)
 #
 # DROPPED: 1 path
 #   * /auth/{provider}/start  (INTERNAL_EXPERIMENTAL)
@@ -86,6 +88,13 @@ tags:
       for the actual rendering work; this tag covers the
       InstaEdit-side session lifecycle (create / link thumbnail /
       publish).
+  - name: Livestreams
+    description: |
+      YouTube live-streaming configuration CRUD (self-hosted encoder
+      module). A row is a workspace-scoped live configuration bound
+      to exactly one YouTube channel. `desired_state` /
+      `actual_state` are worker-owned; the control endpoints
+      (prepare/start/stop/restart) land with the encoder worker.
 
 paths:
 
@@ -1129,6 +1138,146 @@ paths:
           $ref: '#/components/responses/InternalError'
 
 
+  # ───────────── Livestreams (configuration CRUD) ─────────────────────────
+  /api/v1/livestreams:
+    get:
+      tags: [Livestreams]
+      operationId: livestreamsList
+      summary: List livestream configurations in a workspace.
+      description: |
+        Returns the workspace's livestream rows newest-first as
+        `{items: [...]}`. The caller MUST own the workspace
+        (404 otherwise — the id is not echoed to avoid leaking
+        workspace existence). `actual_state` drives the sidebar
+        live-count badge; only `live` rows are counted.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Livestream rows for the workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivestreamListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+    post:
+      tags: [Livestreams]
+      operationId: livestreamsCreate
+      summary: Create a live configuration (state draft).
+      description: |
+        Validates workspace ownership, the YouTube channel (platform
+        + workspace linkage + active status), title, privacy,
+        playback and schedule enums. The row is created in `draft` —
+        creating a configuration does NOT start a broadcast.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LivestreamCreateRequest'
+      responses:
+        '201':
+          description: Configuration created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Livestream'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailableError'
+
+  /api/v1/livestreams/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+        description: Livestream id (`ls_...`).
+    get:
+      tags: [Livestreams]
+      operationId: livestreamsGet
+      summary: Fetch a single livestream configuration.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '200':
+          description: The livestream row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Livestream'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    patch:
+      tags: [Livestreams]
+      operationId: livestreamsPatch
+      summary: Partially update the operator-owned configuration fields.
+      description: |
+        Read-modify-write on title, description, privacy_status,
+        playback_mode, schedule_type, scheduled_start_at, resolution,
+        frame_rate and auto_restart. `desired_state` /
+        `actual_state` are worker-owned and rejected with 400.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LivestreamPatchRequest'
+      responses:
+        '200':
+          description: Updated livestream row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Livestream'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    delete:
+      tags: [Livestreams]
+      operationId: livestreamsDelete
+      summary: Delete a livestream configuration.
+      security:
+        - ApiKeyAuth: []
+        - JwtCookie: []
+      responses:
+        '204':
+          description: Configuration deleted.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
   # ON 2026-07-27 (commit 8097e30-equivalent local) the path
   # /api/v1/groups/{group_id}/youtube/videos + the
   # GroupYouTubeVideoEntry + GroupYouTubeVideosResponse schemas
@@ -1228,6 +1377,12 @@ components:
             $ref: '#/components/schemas/Error'
     InternalError:
       description: Server-side error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ServiceUnavailableError:
+      description: Backing store/service not configured on this server.
       content:
         application/json:
           schema:
@@ -1423,6 +1578,124 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    # ────── Livestreams ────────────────────────────────────────────────
+    LivestreamState:
+      type: string
+      description: |
+        Worker-owned state-machine alphabet, used by both
+        `desired_state` (operator intent) and `actual_state`
+        (observed truth).
+      enum:
+        - draft
+        - preparing
+        - ready
+        - scheduled
+        - starting
+        - waiting_for_ingest
+        - testing
+        - live
+        - degraded
+        - reconnecting
+        - stopping
+        - completed
+        - failed
+        - cancelled
+    Livestream:
+      type: object
+      required: [id, workspace_id, platform_account_id, title, privacy_status,
+                 playback_mode, schedule_type, desired_state, actual_state,
+                 resolution, frame_rate, auto_restart, created_at, updated_at]
+      properties:
+        id: { type: string, example: ls_01HXY_DoNotUse }
+        workspace_id: { type: integer, format: int64 }
+        platform_account_id: { type: integer, format: int64 }
+        title: { type: string, maxLength: 100 }
+        description: { type: string, maxLength: 5000 }
+        privacy_status:
+          type: string
+          enum: [private, unlisted, public]
+        playback_mode:
+          type: string
+          enum: [loop_continuous, play_once]
+        schedule_type:
+          type: string
+          enum: [manual, now, scheduled, recurring]
+        scheduled_start_at: { type: string, format: date-time, nullable: true }
+        desired_state: { $ref: '#/components/schemas/LivestreamState' }
+        actual_state: { $ref: '#/components/schemas/LivestreamState' }
+        resolution:
+          type: string
+          enum: [720p30, 1080p30]
+        frame_rate: { type: integer, enum: [30] }
+        auto_restart: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    LivestreamCreateRequest:
+      type: object
+      required: [workspace_id, platform_account_id, title, privacy_status,
+                 playback_mode, schedule_type]
+      properties:
+        workspace_id: { type: integer, format: int64, minimum: 1 }
+        platform_account_id: { type: integer, format: int64, minimum: 1 }
+        title: { type: string, maxLength: 100 }
+        description: { type: string, maxLength: 5000 }
+        privacy_status:
+          type: string
+          enum: [private, unlisted, public]
+        playback_mode:
+          type: string
+          enum: [loop_continuous, play_once]
+        schedule_type:
+          type: string
+          enum: [manual, now, scheduled, recurring]
+        scheduled_start_at: { type: string, format: date-time }
+        resolution:
+          type: string
+          enum: [720p30, 1080p30]
+          default: 1080p30
+        frame_rate:
+          type: integer
+          enum: [30]
+          default: 30
+        auto_restart:
+          type: boolean
+          default: true
+    LivestreamPatchRequest:
+      type: object
+      description: |
+        Partial update; only the provided fields change.
+        `desired_state` / `actual_state` are rejected (400).
+        `scheduled_start_at` semantics: omit to leave it unchanged,
+        send an empty string to clear it, or an RFC3339 timestamp to
+        set it (JSON null is treated as "not provided").
+      properties:
+        title: { type: string, maxLength: 100 }
+        description: { type: string, maxLength: 5000 }
+        privacy_status:
+          type: string
+          enum: [private, unlisted, public]
+        playback_mode:
+          type: string
+          enum: [loop_continuous, play_once]
+        schedule_type:
+          type: string
+          enum: [manual, now, scheduled, recurring]
+        scheduled_start_at: { type: string, format: date-time }
+        resolution:
+          type: string
+          enum: [720p30, 1080p30]
+        frame_rate:
+          type: integer
+          enum: [30]
+        auto_restart: { type: boolean }
+    LivestreamListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Livestream' }
 
     # ────── Errors (canonical envelope, Taglio 5.x design) ──────────
     Error:

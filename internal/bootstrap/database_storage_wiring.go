@@ -43,6 +43,7 @@ type wireState struct {
 	connectLinkNonceRepo      *repository.ConnectLinkNonceRepository
 	youtubeVideoEditRepo      *repository.YouTubeVideoEditRepository
 	youtubeThumbnailBatchRepo *repository.YouTubeThumbnailBatchRepository
+	livestreamRepo            *repository.LivestreamRepository
 	contentPipelineRepo       *repository.ContentPipelineRepository
 	vault                     credentials.VaultAPI
 	capRouter                 *services.CapabilityRouter
@@ -127,6 +128,7 @@ func buildDatabaseStorage(cfg *config.Config) (*wireState, error) {
 	s.connectLinkNonceRepo = repository.NewConnectLinkNonceRepository(s.db)
 	s.youtubeVideoEditRepo = repository.NewYouTubeVideoEditRepository(s.db)
 	s.youtubeThumbnailBatchRepo = repository.NewYouTubeThumbnailBatchRepository(s.db)
+	s.livestreamRepo = repository.NewLivestreamRepository(s.db)
 	// Blocco Carosello — consolidated read-side fan-out for
 	// GET /api/v1/content/{id}/pipeline (4 round-trips regardless of
 	// target fan-out size). Wired via WithContentPipelineStore.
