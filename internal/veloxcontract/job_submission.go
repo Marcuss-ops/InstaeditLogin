@@ -34,8 +34,9 @@ type JobSubmissionRequest struct {
 
 // UnmarshalJSON keeps strictness at the canonical boundary. The outer
 // decoder rejects unknown envelope fields; the nested output and delivery
-// plan objects are decoded with the same rule. Spec intentionally remains
-// an opaque job-type-specific JSON object for the future registry.
+// plan objects are decoded with the same rule. Spec remains a raw
+// job-type-specific JSON object at this envelope layer; the central registry
+// applies the typed validator after envelope decoding.
 func (r *JobSubmissionRequest) UnmarshalJSON(data []byte) error {
 	type plain JobSubmissionRequest
 	var envelope plain
@@ -139,8 +140,8 @@ func (r JobSubmissionRequest) AsCreateJobRequest() CreateJobRequest {
 }
 
 // ValidateCanonical validates the strict top-level velox.job.v1 contract.
-// The nested Spec remains opaque until a job-type-specific validator is
-// introduced by the central registry.
+// The nested Spec is validated by the central job-type registry after this
+// envelope-level validation completes.
 func (r JobSubmissionRequest) ValidateCanonical() error {
 	if r.ContractVersion != "velox.job.v1" {
 		return fmt.Errorf("contract_version must be %q", "velox.job.v1")

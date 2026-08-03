@@ -45,6 +45,31 @@ func TestCreateCanonicalJob_RegistryValidatesSpec422(t *testing.T) {
 	}
 }
 
+func TestCreateCanonicalJob_TypedValidatorsRejectNestedUnknownFields422(t *testing.T) {
+	for _, test := range []struct {
+		jobType string
+		spec    string
+	}{
+		{"scene.composite.v1", `{"scenes":[{"id":"one","assets":{"unexpected":true}}]}`},
+		{"clip.stock.v1", `{"scenes":[{"id":"one","bindings":{"unexpected":true}}]}`},
+		{"scene.image.v1", `{"scenes":[{"id":"one","subtitles":[{"text":"hello","unexpected":true}]}]}`},
+		{"slideshow.v1", `{"images":[{"id":"one","transition":{"type":"fade","unexpected":true}}]}`},
+	} {
+		t.Run(test.jobType, func(t *testing.T) {
+			mc := &mockClient{createJobFn: func(context.Context, int64, int64, CreateJobRequest) (*Job, error) {
+				t.Fatal("client should not be called when a nested spec field is unknown")
+				return nil, nil
+			}}
+			mux := newMux(t, mc, stubAuth)
+			body := `{"contract_version":"velox.job.v1","idempotency_key":"typed-nested-unknown","job_type":"` + test.jobType + `","template_id":"template","template_version":1,"video_name":"name","spec":` + test.spec + `,"output":{"width":1920,"height":1080,"fps":30,"format":"mp4"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J"}]}}`
+			w := do(t, mux, http.MethodPost, "/api/v1/jobs", body)
+			if w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestCreateCanonicalJob_CompilerNormalizesForwardedSpec(t *testing.T) {
 	var received CreateJobRequest
 	mc := &mockClient{createJobFn: func(_ context.Context, _, _ int64, req CreateJobRequest) (*Job, error) {
@@ -52,7 +77,7 @@ func TestCreateCanonicalJob_CompilerNormalizesForwardedSpec(t *testing.T) {
 		return &Job{ID: "job_compiled", WorkspaceID: testWSID}, nil
 	}}
 	mux := newMux(t, mc, stubAuth)
-	body := `{"contract_version":"velox.job.v1","idempotency_key":"compile-spec","job_type":"scene.composite.v1","template_id":"template","template_version":1,"video_name":"name","spec":{"scenes":[{"id":"one"}],"z":1},"output":{"width":1920,"height":1080,"fps":30,"format":"mp4"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J"}]}}`
+	body := `{"contract_version":"velox.job.v1","idempotency_key":"compile-spec","job_type":"scene.composite.v1","template_id":"template","template_version":1,"video_name":"name","spec":{"scenes":[{"id":"one","text":"hello"}]},"output":{"width":1920,"height":1080,"fps":30,"format":"mp4"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J"}]}}`
 	w := do(t, mux, http.MethodPost, "/api/v1/jobs", body)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
@@ -61,7 +86,28 @@ func TestCreateCanonicalJob_CompilerNormalizesForwardedSpec(t *testing.T) {
 	if err := json.Unmarshal(received.Spec, &normalized); err != nil {
 		t.Fatalf("compiled spec is invalid JSON: %v", err)
 	}
-	if string(normalized["z"]) != "1" {
-		t.Fatalf("compiled spec lost fields: %s", received.Spec)
+	if _, ok := normalized["scenes"]; !ok {
+		t.Fatalf("compiled spec lost scenes: %s", received.Spec)
+	}
+}
+
+func TestCreateCanonicalJob_TypedValidatorsRejectUnknownSpecFields422(t *testing.T) {
+	for _, jobType := range []string{"scene.composite.v1", "clip.stock.v1", "scene.image.v1", "slideshow.v1"} {
+		t.Run(jobType, func(t *testing.T) {
+			mc := &mockClient{createJobFn: func(context.Context, int64, int64, CreateJobRequest) (*Job, error) {
+				t.Fatal("client should not be called when spec contains an unknown field")
+				return nil, nil
+			}}
+			mux := newMux(t, mc, stubAuth)
+			spec := `{"scenes":[{"id":"one"}],"unknown_field":true}`
+			if jobType == "slideshow.v1" {
+				spec = `{"images":[{"id":"one"}],"unknown_field":true}`
+			}
+			body := `{"contract_version":"velox.job.v1","idempotency_key":"typed-unknown","job_type":"` + jobType + `","template_id":"template","template_version":1,"video_name":"name","spec":` + spec + `,"output":{"width":1920,"height":1080,"fps":30,"format":"mp4"},"delivery_plan":{"destinations":[{"external_destination_id":"extdst_01J"}]}}`
+			w := do(t, mux, http.MethodPost, "/api/v1/jobs", body)
+			if w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }

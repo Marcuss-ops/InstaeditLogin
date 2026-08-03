@@ -168,7 +168,10 @@ func NewDefaultRegistry() *Registry {
 		"slideshow.v1",
 	} {
 		validator := Validator(objectSpecValidator{requiredArray: requiredArrayFor(jobType)})
-		if jobType == "legacy.render.v1" {
+		switch jobType {
+		case "scene.composite.v1", "clip.stock.v1", "scene.image.v1", "slideshow.v1":
+			validator = typedSpecValidator{jobType: jobType}
+		case "legacy.render.v1":
 			validator = legacySpecValidator{}
 		}
 		definition := Definition{
